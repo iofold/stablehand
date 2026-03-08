@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.ctxmill/
+*.tsbuildinfo
+.tmp/
+pnpm-debug.log*
+*.local
+.vite/
+coverage/
+data/
+.claude/
+package-lock.json

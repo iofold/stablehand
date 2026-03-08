@@ -1,0 +1,36 @@
+domain: finance
+version: 1
+entries:
+  - topic: portfolio-management
+    facts:
+      - A well-diversified portfolio typically holds 10-30 positions across different sectors
+      - Rebalancing should occur quarterly or when allocations drift more than 5% from targets
+      - Cash reserves of 5-15% provide flexibility for opportunistic buying
+      - Dollar-cost averaging reduces the impact of volatility on large purchases
+
+  - topic: risk-metrics
+    facts:
+      - Risk scores range from 1 (conservative) to 10 (aggressive)
+      - A moderate growth portfolio targets 60-70% equities, 20-30% fixed income, 5-10% alternatives
+      - Beta measures a stock's volatility relative to the overall market (beta=1 means market-average)
+      - Sharpe ratio above 1.0 indicates good risk-adjusted returns
+
+  - topic: order-types
+    facts:
+      - Market orders execute immediately at the current best available price
+      - Limit orders execute only at the specified price or better
+      - Stop-loss orders trigger a market sell when price drops to a specified level
+      - All trade executions require explicit user confirmation (HITL approval)
+
+  - topic: market-hours
+    facts:
+      - US stock markets are open Monday-Friday 9:30 AM - 4:00 PM ET
+      - Pre-market trading is available 4:00 AM - 9:30 AM ET
+      - After-hours trading is available 4:00 PM - 8:00 PM ET
+      - Market holidays include New Year's Day, MLK Day, Presidents' Day, Good Friday, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving, and Christmas
+
+  - topic: sector-classification
+    facts:
+      - GICS has 11 sectors: Energy, Materials, Industrials, Consumer Discretionary, Consumer Staples, Healthcare, Financials, IT, Communication Services, Utilities, Real Estate
+      - Technology sector includes software, hardware, semiconductors, and IT services
+      - Sector rotation strategies shift allocations based on economic cycle phases

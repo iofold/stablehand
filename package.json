@@ -1,0 +1,25 @@
+{
+  "name": "ctxmill-monorepo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @ctxmill/ui dev",
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4",
+    "zod": "^3.25.76"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+domain: marketing
+version: 1
+entries:
+  - topic: conversion-funnel
+    facts:
+      - A standard B2B funnel: Visitors -> Leads -> MQLs -> SQLs -> Opportunities -> Closed Won
+      - Healthy visitor-to-lead conversion rate is 2-5% for B2B SaaS
+      - MQL-to-SQL conversion above 30% indicates good lead qualification
+      - Overall funnel conversion (visitor to customer) of 0.5-1.0% is typical for B2B
+
+  - topic: channel-performance
+    facts:
+      - Content/SEO typically has the lowest CAC but longest time to results (3-6 months)
+      - Paid search delivers fastest results but CAC increases as you scale spend
+      - Email marketing has highest ROI among digital channels (average 36:1)
+      - Social media effectiveness varies by platform; LinkedIn outperforms for B2B
+      - Display ads serve brand awareness; direct conversion ROAS is typically lower
+
+  - topic: key-metrics
+    facts:
+      - CAC (Customer Acquisition Cost) = total marketing spend / new customers acquired
+      - ROAS (Return on Ad Spend) = revenue generated / ad spend
+      - LTV:CAC ratio above 3:1 indicates healthy unit economics
+      - MRR (Monthly Recurring Revenue) growth rate should exceed churn rate
+      - Blended CAC includes all channels; per-channel CAC helps optimize allocation
+
+  - topic: reporting
+    facts:
+      - Weekly reports focus on campaign-level metrics and short-term trends
+      - Monthly reports include channel mix analysis and budget recommendations
+      - Quarterly reports cover strategic themes, LTV analysis, and forecasting
+      - Always include period-over-period comparisons for context
+      - Reports should be editable so stakeholders can add commentary

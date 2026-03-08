@@ -1,0 +1,34 @@
+#!/usr/bin/env node
+import { basename, resolve } from 'node:path';
+import { parseArgs } from 'node:util';
+import { scaffold } from './scaffold.js';
+
+const { positionals } = parseArgs({
+  allowPositionals: true,
+  options: {
+    template: { type: 'string', default: 'default' },
+    'no-interactive': { type: 'boolean', default: false },
+  },
+  strict: false,
+});
+
+const projectName = positionals[0];
+if (!projectName) {
+  console.error('Usage: create-ctxmill <project-name> [--template <name>]');
+  process.exit(1);
+}
+
+const projectDir = resolve(projectName);
+const packageName = basename(projectDir);
+console.log(`\nCreating CTXMill project: ${packageName}\n`);
+
+scaffold({ projectDir, packageName });
+
+console.log(`  Created ${projectName}/`);
+console.log('');
+console.log('  Next steps:');
+console.log(`    cd ${projectName}`);
+console.log('    echo "ANTHROPIC_API_KEY=sk-ant-..." > .env');
+console.log('    npm install');
+console.log('    npx ctxmill dev');
+console.log('');
