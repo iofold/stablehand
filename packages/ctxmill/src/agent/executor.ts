@@ -1,81 +1,36 @@
 import { randomUUID } from 'node:crypto';
 import { createDeepAgent } from 'deepagents';
-import { ChatAnthropic } from '@langchain/anthropic';
-import { ChatOpenAI } from '@langchain/openai';
 import { tool as lcTool } from '@langchain/core/tools';
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { AgentDefinition, Message } from '../types.js';
 import type { AGUIEvent } from '../events/types.js';
 import type { ToolCall } from '../tool/types.js';
 import type { KnowledgeStore } from '../knowledge/types.js';
+import type { LLMProvider } from '../llm/types.js';
 import { LocalFunctionExecutor } from '../tool/executor.js';
-
-interface AgentExecutorConfig {
-  apiKey: string;
-  baseUrl?: string;
-  model: string;
-  provider?: 'anthropic' | 'openai';
-}
-
-/**
- * Interrupt state: when a tool requires approval, the executor yields
- * a CUSTOM interrupt event and pauses. The caller must resolve the interrupt
- * by calling `resolveInterrupt` before the generator continues.
- */
-interface PendingInterrupt {
-  toolCall: ToolCall;
-  resolve: (approved: boolean) => void;
-  promise: Promise<boolean>;
-}
+import type { InterruptManager } from '../orchestrator/interrupt.js';
+import { extractA2UIBlocks } from '../a2ui/extract.js';
 
 export class AgentExecutor {
-  private chatModel: BaseChatModel | string;
+  private chatModel: unknown;
   private toolExecutor: LocalFunctionExecutor;
   private knowledgeStore: KnowledgeStore;
-  private model: string;
-  private provider: 'anthropic' | 'openai';
-  private pendingInterrupt: PendingInterrupt | null = null;
+  private interruptManager: InterruptManager | null;
 
   constructor(
-    config: AgentExecutorConfig,
+    llmProvider: LLMProvider,
     toolExecutor: LocalFunctionExecutor,
     knowledgeStore: KnowledgeStore,
+    interruptManager?: InterruptManager,
   ) {
-    if (
-      config.provider === 'anthropic' ||
-      config.model.includes('claude')
-    ) {
-      this.chatModel = new ChatAnthropic({
-        model: config.model,
-        apiKey: config.apiKey,
-        ...(config.baseUrl
-          ? { clientOptions: { baseURL: config.baseUrl } }
-          : {}),
-      });
-    } else {
-      // For OpenAI-compatible providers (Cloudflare AI Gateway, OpenRouter, etc.)
-      this.chatModel = new ChatOpenAI({
-        model: config.model,
-        apiKey: config.apiKey,
-        configuration: {
-          baseURL: config.baseUrl,
-        },
-      });
+    if (!llmProvider.getChatModel) {
+      throw new Error(
+        'AgentExecutor requires an LLMProvider that implements getChatModel()',
+      );
     }
+    this.chatModel = llmProvider.getChatModel();
     this.toolExecutor = toolExecutor;
     this.knowledgeStore = knowledgeStore;
-    this.model = config.model;
-    this.provider = config.provider || 'anthropic';
-  }
-
-  /**
-   * Resolve a pending HITL interrupt.
-   */
-  resolveInterrupt(approved: boolean): void {
-    if (this.pendingInterrupt) {
-      this.pendingInterrupt.resolve(approved);
-      this.pendingInterrupt = null;
-    }
+    this.interruptManager = interruptManager ?? null;
   }
 
   /**
@@ -89,14 +44,16 @@ export class AgentExecutor {
   async *run(
     agentDef: AgentDefinition,
     messages: Message[],
+    agentId?: string,
   ): AsyncGenerator<AGUIEvent> {
     const runId = randomUUID();
+    const knowledgeKey = agentId || agentDef.name;
 
     yield { type: 'RUN_STARTED', timestamp: Date.now(), runId };
 
     try {
-      // Render knowledge into system prompt
-      const knowledge = await this.knowledgeStore.render(agentDef.name);
+      // Render knowledge into system prompt (use DB agent ID for consistency with storage)
+      const knowledge = await this.knowledgeStore.render(knowledgeKey);
       const systemPrompt = agentDef.systemPrompt.replace(
         '{{knowledge}}',
         knowledge || 'No learned knowledge yet.',
@@ -104,11 +61,11 @@ export class AgentExecutor {
 
       // Build the tool context once for the entire run
       const ctx = {
-        agentId: agentDef.name,
+        agentId: knowledgeKey,
         conversationId: runId,
         knowledge: {
           query: async (opts: { text: string; limit?: number }) => {
-            const items = await this.knowledgeStore.list(agentDef.name);
+            const items = await this.knowledgeStore.list(knowledgeKey);
             // Simple keyword matching for Level 1
             const filtered = items.filter((item) =>
               item.content.toLowerCase().includes(opts.text.toLowerCase()),
@@ -128,9 +85,8 @@ export class AgentExecutor {
       // including HITL interrupt support
       const lcTools = this.buildLangChainTools(ctx, runId) as any[];
 
-      // Use the configured chat model — agent-level model overrides are only
-      // applied when the provider matches (don't try ChatAnthropic with an OpenAI key)
-      const chatModel: BaseChatModel | string = this.chatModel;
+      // Use the chat model obtained from the LLMProvider
+      const chatModel = this.chatModel;
 
       // Create the deep agent — cast to `any` to avoid TS2589
       // ("Type instantiation is excessively deep") caused by the
@@ -201,14 +157,14 @@ export class AgentExecutor {
               if (tc.name) {
                 // End text block if one is open before starting tool call
                 if (textStarted) {
-                  const a2uiPayload = detectA2UI(currentTextContent);
-                  if (a2uiPayload) {
+                  const a2uiBlocks = extractA2UIBlocks(currentTextContent);
+                  for (const block of a2uiBlocks) {
                     yield {
                       type: 'CUSTOM',
                       timestamp: Date.now(),
                       runId,
                       subtype: 'a2ui',
-                      payload: a2uiPayload,
+                      payload: block,
                     };
                   }
                   yield {
@@ -248,14 +204,14 @@ export class AgentExecutor {
         if (event === 'on_chat_model_end') {
           // End text if started
           if (textStarted) {
-            const a2uiPayload = detectA2UI(currentTextContent);
-            if (a2uiPayload) {
+            const a2uiBlocks = extractA2UIBlocks(currentTextContent);
+            for (const block of a2uiBlocks) {
               yield {
                 type: 'CUSTOM',
                 timestamp: Date.now(),
                 runId,
                 subtype: 'a2ui',
-                payload: a2uiPayload,
+                payload: block,
               };
             }
             yield {
@@ -330,14 +286,14 @@ export class AgentExecutor {
 
       // Ensure any trailing text block is closed
       if (textStarted) {
-        const a2uiPayload = detectA2UI(currentTextContent);
-        if (a2uiPayload) {
+        const a2uiBlocks = extractA2UIBlocks(currentTextContent);
+        for (const block of a2uiBlocks) {
           yield {
             type: 'CUSTOM',
             timestamp: Date.now(),
             runId,
             subtype: 'a2ui',
-            payload: a2uiPayload,
+            payload: block,
           };
         }
         yield {
@@ -379,37 +335,25 @@ export class AgentExecutor {
     return toolDefs.map((def) => {
       return lcTool(
         async (args: Record<string, unknown>) => {
-          // HITL: if the tool requires approval, create an interrupt and wait
+          // HITL: if the tool requires approval, delegate to InterruptManager
           if (def.requiresApproval) {
-            const toolCall: ToolCall = {
-              id: randomUUID(),
-              name: def.name,
-              arguments: args,
-            };
+            if (this.interruptManager) {
+              const toolCallId = randomUUID();
+              const resolution = await this.interruptManager.waitForApproval(
+                ctx.agentId,
+                toolCallId,
+                def.name,
+                args as Record<string, unknown>,
+              );
 
-            let resolveInterrupt!: (approved: boolean) => void;
-            const interruptPromise = new Promise<boolean>((resolve) => {
-              resolveInterrupt = resolve;
-            });
-
-            this.pendingInterrupt = {
-              toolCall,
-              resolve: resolveInterrupt,
-              promise: interruptPromise,
-            };
-
-            // The HITL interrupt event is emitted in the run() generator
-            // via the on_tool_start event detection. Here we just block
-            // until resolved. In practice the caller sees the CUSTOM interrupt
-            // event from the stream and calls resolveInterrupt().
-            // NOTE: Since we cannot yield AG-UI events from inside a tool
-            // handler, the HITL mechanism here relies on the caller detecting
-            // tool_start for requiresApproval tools and calling resolveInterrupt.
-            const approved = await interruptPromise;
-
-            if (!approved) {
-              throw new Error('Tool call was rejected by the user.');
+              if (resolution.action !== 'approve') {
+                const reason = resolution.action === 'timeout'
+                  ? 'Tool call approval timed out.'
+                  : 'Tool call was rejected by the user.';
+                throw new Error(reason);
+              }
             }
+            // If no interruptManager, auto-approve for backward compatibility
           }
 
           const toolCall: ToolCall = {
@@ -434,30 +378,3 @@ export class AgentExecutor {
   }
 }
 
-/**
- * Detect A2UI JSON payload in text content.
- * Looks for a JSON object with `component` and `props` fields.
- */
-function detectA2UI(
-  text: string,
-): { component: string; props: Record<string, unknown> } | null {
-  // Try to find a JSON block in the text
-  const jsonPattern = /\{[\s\S]*"component"\s*:\s*"[^"]+?"[\s\S]*"props"\s*:\s*\{[\s\S]*?\}[\s\S]*?\}/;
-  const match = text.match(jsonPattern);
-  if (!match) return null;
-
-  try {
-    const parsed = JSON.parse(match[0]);
-    if (
-      typeof parsed.component === 'string' &&
-      typeof parsed.props === 'object' &&
-      parsed.props !== null
-    ) {
-      return { component: parsed.component, props: parsed.props };
-    }
-  } catch {
-    // Not valid JSON
-  }
-
-  return null;
-}

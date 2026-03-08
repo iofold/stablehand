@@ -190,3 +190,56 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe('Module integration', () => {
+  it('container creates all services with interface types', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'integration-module-'));
+    try {
+      const container = await createContainer(
+        {
+          preset: 'local',
+          database: {
+            type: 'sqlite',
+            path: 'data.db',
+          },
+          llm: {
+            provider: 'anthropic',
+            model: 'claude-sonnet-4-6',
+            apiKey: 'test-key-not-used',
+          },
+        },
+        dir,
+      );
+
+      // All services exist
+      expect(container.knowledgeStore).toBeDefined();
+      expect(container.contextProvider).toBeDefined();
+      expect(container.llmProvider).toBeDefined();
+      expect(container.learningPipeline).toBeDefined();
+      expect(container.toolExecutor).toBeDefined();
+      expect(container.agentExecutor).toBeDefined();
+      expect(container.eventBus).toBeDefined();
+      expect(container.sseManager).toBeDefined();
+      expect(container.interruptManager).toBeDefined();
+      expect(container.runRegistry).toBeDefined();
+
+      // Interface methods exist — KnowledgeStore
+      expect(typeof container.knowledgeStore.add).toBe('function');
+      expect(typeof container.knowledgeStore.render).toBe('function');
+
+      // Interface methods exist — LLMProvider
+      expect(typeof container.llmProvider.invoke).toBe('function');
+      expect(typeof container.llmProvider.healthy).toBe('function');
+
+      // Interface methods exist — LearningPipeline
+      expect(typeof container.learningPipeline.process).toBe('function');
+      expect(typeof container.learningPipeline.getKnowledge).toBe('function');
+
+      // Interface methods exist — ContextProvider
+      expect(typeof container.contextProvider.query).toBe('function');
+      expect(typeof container.contextProvider.healthy).toBe('function');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

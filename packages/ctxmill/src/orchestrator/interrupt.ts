@@ -11,7 +11,7 @@ export interface PendingInterrupt {
 }
 
 export interface InterruptResolution {
-  action: 'approve' | 'reject';
+  action: 'approve' | 'reject' | 'timeout';
   data?: unknown;
 }
 
@@ -21,6 +21,7 @@ export class InterruptManager {
     {
       resolve: (value: InterruptResolution) => void;
       info: PendingInterrupt;
+      timeoutId?: ReturnType<typeof setTimeout>;
     }
   >();
 
@@ -33,18 +34,37 @@ export class InterruptManager {
     toolCallId: string,
     toolName: string,
     args: Record<string, unknown>,
+    timeoutMs: number = 300_000,
   ): Promise<InterruptResolution> {
     // If there is already a pending interrupt for this agent, reject it
     const existing = this.pending.get(agentId);
     if (existing) {
+      if (existing.timeoutId) clearTimeout(existing.timeoutId);
       existing.resolve({ action: 'reject', data: 'Superseded by new interrupt' });
       this.pending.delete(agentId);
     }
 
     return new Promise<InterruptResolution>((resolve) => {
+      const wrappedResolve = (value: InterruptResolution) => {
+        const entry = this.pending.get(agentId);
+        if (entry?.timeoutId) clearTimeout(entry.timeoutId);
+        resolve(value);
+      };
+
+      const timeoutId = timeoutMs > 0
+        ? setTimeout(() => {
+            const entry = this.pending.get(agentId);
+            if (entry) {
+              this.pending.delete(agentId);
+              resolve({ action: 'timeout', data: `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes` });
+            }
+          }, timeoutMs)
+        : undefined;
+
       this.pending.set(agentId, {
-        resolve,
+        resolve: wrappedResolve,
         info: { toolCallId, toolName, args, createdAt: Date.now() },
+        timeoutId,
       });
     });
   }
@@ -53,9 +73,10 @@ export class InterruptManager {
    * Resolve a pending interrupt with the user's decision.
    * Returns true if there was a pending interrupt, false otherwise.
    */
-  resolve(agentId: string, action: 'approve' | 'reject', data?: unknown): boolean {
+  resolve(agentId: string, action: 'approve' | 'reject' | 'timeout', data?: unknown): boolean {
     const entry = this.pending.get(agentId);
     if (!entry) return false;
+    if (entry.timeoutId) clearTimeout(entry.timeoutId);
     entry.resolve({ action, data });
     this.pending.delete(agentId);
     return true;
@@ -80,6 +101,7 @@ export class InterruptManager {
    */
   shutdown(): void {
     for (const [, entry] of this.pending) {
+      if (entry.timeoutId) clearTimeout(entry.timeoutId);
       entry.resolve({ action: 'reject', data: 'Server shutting down' });
     }
     this.pending.clear();

@@ -237,7 +237,8 @@ export function FileExplorer({ agentId, onFileSelect, selectedFile }: FileExplor
         setTree((prev) =>
           updateNode(prev, node.path, { children, loaded: true, loading: false }),
         );
-      } catch {
+      } catch (err) {
+        console.debug('[FileExplorer] Failed to load directory:', err);
         setTree((prev) => updateNode(prev, node.path, { loading: false }));
       }
     },

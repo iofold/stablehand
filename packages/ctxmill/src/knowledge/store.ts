@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { KnowledgeItem, KnowledgeStore, KnowledgeSearchOptions, KnowledgeSearchResult, KnowledgeStats } from './types.js';
@@ -16,26 +16,42 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
   private loadFromDisk(): void {
     const filePath = join(this.persistPath, 'items.json');
     if (existsSync(filePath)) {
-      const data = JSON.parse(readFileSync(filePath, 'utf-8')) as SerializedKnowledgeItem[];
-      for (const raw of data) {
-        const item: KnowledgeItem = {
-          ...raw,
-          createdAt: new Date(raw.createdAt),
-          updatedAt: new Date(raw.updatedAt),
-        };
-        this.items.set(item.id, item);
+      try {
+        const parsed: unknown = JSON.parse(readFileSync(filePath, 'utf-8'));
+        if (!Array.isArray(parsed)) {
+          console.warn('[KnowledgeStore] Expected array in items.json, got', typeof parsed, '— starting empty');
+          return;
+        }
+        const data = parsed as SerializedKnowledgeItem[];
+        for (const raw of data) {
+          const item: KnowledgeItem = {
+            ...raw,
+            createdAt: new Date(raw.createdAt),
+            updatedAt: new Date(raw.updatedAt),
+          };
+          this.items.set(item.id, item);
+        }
+      } catch (err) {
+        console.error('[KnowledgeStore] Failed to load from disk (corrupt file?):', err);
+        // Start with empty Map instead of crashing
       }
     }
   }
 
   private saveToDisk(): void {
     const filePath = join(this.persistPath, 'items.json');
-    const serialized: SerializedKnowledgeItem[] = [...this.items.values()].map((item) => ({
-      ...item,
-      createdAt: item.createdAt.toISOString(),
-      updatedAt: item.updatedAt.toISOString(),
-    }));
-    writeFileSync(filePath, JSON.stringify(serialized, null, 2));
+    const tmpPath = filePath + '.tmp';
+    try {
+      const serialized: SerializedKnowledgeItem[] = [...this.items.values()].map((item) => ({
+        ...item,
+        createdAt: item.createdAt.toISOString(),
+        updatedAt: item.updatedAt.toISOString(),
+      }));
+      writeFileSync(tmpPath, JSON.stringify(serialized, null, 2));
+      renameSync(tmpPath, filePath);
+    } catch (err) {
+      console.error('[KnowledgeStore] Failed to save:', err);
+    }
   }
 
   async add(

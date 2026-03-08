@@ -19,36 +19,36 @@ export function DashboardPage() {
   const agents = useAgentsStore((s) => s.agents);
   const loading = useAgentsStore((s) => s.loading);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
-  const startPolling = useAgentsStore((s) => s.startPolling);
   const cancelRun = useAgentsStore((s) => s.cancelRun);
 
   const navigate = useNavigate();
   const [activeRuns, setActiveRuns] = useState<AgentRun[]>([]);
 
-  useEffect(() => {
-    fetchAgents();
-    const stop = startPolling();
-    return stop;
-  }, [fetchAgents, startPolling]);
-
-  // Poll active runs
+  // Single consolidated polling interval for both agents and active runs
   useEffect(() => {
     let mounted = true;
-    async function load() {
+
+    async function poll() {
+      try {
+        await fetchAgents();
+      } catch (err) {
+        console.debug('[Dashboard] Agent fetch failed:', err);
+      }
       try {
         const runs = await fetchAllActiveRuns();
         if (mounted) setActiveRuns(Array.isArray(runs) ? runs : []);
-      } catch {
-        // ignore — endpoint may not be available yet
+      } catch (err) {
+        console.debug('[Dashboard] Active runs poll failed:', err);
       }
     }
-    load();
-    const id = setInterval(load, 5000);
+
+    poll();
+    const id = setInterval(poll, 5000);
     return () => {
       mounted = false;
       clearInterval(id);
     };
-  }, []);
+  }, [fetchAgents]);
 
   const stats = useMemo(() => {
     const totalTools = agents.reduce((sum, a) => sum + a.tools.length, 0);

@@ -4,10 +4,11 @@ import { agentRoutes, runsRoutes } from './routes/agents.js';
 import { catalogRoutes } from './routes/catalogs.js';
 import { SSEManager } from './sse.js';
 import { InterruptManager } from './interrupt.js';
+import { AgentRunService } from './agent-run-service.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { AgentExecutor } from '../agent/executor.js';
 import type { AgentDefinition } from '../types.js';
-import type { DefaultLearningPipeline } from '../learning/pipeline.js';
+import type { LearningPipeline } from '../learning/types.js';
 import type { KnowledgeStore } from '../knowledge/types.js';
 import { RunRegistry } from './run-registry.js';
 
@@ -19,7 +20,7 @@ export interface ServerOptions {
   /** Map of agent ID → AgentDefinition for registered agents. */
   agents: Map<string, AgentDefinition>;
   runRegistry?: RunRegistry;
-  learningPipeline?: DefaultLearningPipeline;
+  learningPipeline?: LearningPipeline;
   knowledgeStore?: KnowledgeStore;
 }
 
@@ -35,8 +36,12 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
   const app = Fastify({ logger: true });
 
-  // CORS — allow all origins in development
-  await app.register(cors, { origin: true });
+  // CORS — configurable via CORS_ORIGINS env var, defaults to dev ports
+  await app.register(cors, {
+    origin: process.env.CORS_ORIGINS
+      ? process.env.CORS_ORIGINS.split(',')
+      : ['http://localhost:5173', 'http://localhost:3000'],
+  });
 
   // Shared infrastructure
   const sse = new SSEManager();
@@ -53,8 +58,17 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     timestamp: new Date().toISOString(),
   }));
 
+  // ── AgentRunService ──────────────────────────────────────
+  const agentRunService = new AgentRunService({
+    executor,
+    sse,
+    db,
+    runRegistry,
+    learningPipeline,
+  });
+
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, executor, agents, runRegistry, learningPipeline, knowledgeStore });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, executor, agents, runRegistry, learningPipeline, knowledgeStore, agentRunService });
   await app.register(runsRoutes, { prefix: '/api/runs', runRegistry });
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
 

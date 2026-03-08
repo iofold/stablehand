@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  fetchAgents as apiFetchAgents,
   startBackgroundRun as apiStartRun,
   cancelRun as apiCancelRun,
   fetchRuns as apiFetchRuns,
@@ -52,9 +53,9 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
   fetchAgents: async () => {
     set({ loading: true });
     try {
-      const res = await fetch('/api/agents');
-      const data = await res.json();
-      set({ agents: data.agents || data, loading: false });
+      const data = await apiFetchAgents();
+      const agents = Array.isArray(data) ? data : (data?.agents ?? []);
+      set({ agents, loading: false });
     } catch (err) {
       set({ error: String(err), loading: false });
     }

@@ -8,9 +8,28 @@ import type { RunRegistry } from '../run-registry.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { AgentExecutor } from '../../agent/executor.js';
 import type { AgentDefinition, Message } from '../../types.js';
-import type { DefaultLearningPipeline } from '../../learning/pipeline.js';
+import type { LearningPipeline } from '../../learning/types.js';
 import type { KnowledgeStore } from '../../knowledge/types.js';
+import type { AgentRunService } from '../agent-run-service.js';
 import { TraceCollector } from '../../learning/trace.js';
+
+/** Patterns that should never be exposed via the file browsing API. */
+const BLOCKED_PATTERNS = ['.env', '.git', '.ctxmill', 'credentials', '.pem', '.key', '.secret'];
+
+/** Check if a filename or path segment matches any blocked pattern. */
+function isBlockedPath(name: string): boolean {
+  const lower = name.toLowerCase();
+  return BLOCKED_PATTERNS.some((pattern) => lower.includes(pattern));
+}
+
+/** Build a safe error response — only include details in development mode. */
+function safeError(message: string, err: unknown): { error: string; detail?: string } {
+  console.error(`[agents] endpoint error:`, err);
+  if (process.env.NODE_ENV === 'development') {
+    return { error: message, detail: String(err) };
+  }
+  return { error: 'Internal error' };
+}
 
 /** Shared application context injected via plugin options. */
 export interface AgentRouteOptions {
@@ -21,15 +40,16 @@ export interface AgentRouteOptions {
   /** Map of agent ID → AgentDefinition for registered agents. */
   agents: Map<string, AgentDefinition>;
   runRegistry: RunRegistry;
-  learningPipeline?: DefaultLearningPipeline;
+  learningPipeline?: LearningPipeline;
   knowledgeStore?: KnowledgeStore;
+  agentRunService: AgentRunService;
 }
 
 export async function agentRoutes(
   app: FastifyInstance,
   opts: AgentRouteOptions,
 ): Promise<void> {
-  const { db, sse, interrupts, executor, agents, runRegistry, learningPipeline, knowledgeStore } = opts;
+  const { db, sse, interrupts, executor, agents, runRegistry, learningPipeline, knowledgeStore, agentRunService } = opts;
 
   // ── GET /api/agents — List all agents ──────────────────
 
@@ -119,7 +139,7 @@ export async function agentRoutes(
       });
 
       // Create an interactive run in the registry + DB
-      const run = runRegistry.startRun(id, conversationId, 'interactive');
+      const run = await runRegistry.startRun(id, conversationId, 'interactive');
 
       // Broadcast a user message event via SSE
       sse.broadcast(id, {
@@ -156,72 +176,15 @@ export async function agentRoutes(
           createdAt: new Date(m.createdAt),
         }));
 
-        // Fire-and-forget: iterate the async generator, broadcast events, save result.
-        void (async () => {
-          let assistantContent = '';
-          const traceCollector = new TraceCollector(id, conversationId, body.content);
-          try {
-            for await (const event of executor.run(agentDef, messages)) {
-              sse.broadcast(id, event as Record<string, unknown>);
-
-              // Accumulate assistant text content for persistence
-              if (event.type === 'TEXT_MESSAGE_CONTENT' && 'content' in event) {
-                assistantContent += (event as unknown as { content: string }).content;
-              }
-
-              // Collect trace steps from tool events
-              if (event.type === 'TOOL_CALL_START' && 'toolName' in event) {
-                traceCollector.addStep('tool_call', (event as any).toolName, 0, { toolCallId: (event as any).toolCallId });
-              }
-              if (event.type === 'TOOL_CALL_RESULT' && 'result' in event) {
-                traceCollector.addStep('tool_result', String((event as any).result).slice(0, 500), (event as any).durationMs ?? 0, { toolCallId: (event as any).toolCallId });
-              }
-            }
-
-            // Persist the assistant reply if any text was generated
-            if (assistantContent.length > 0) {
-              await db.addMessage({
-                agentId: id,
-                conversationId,
-                role: 'assistant',
-                content: assistantContent,
-              });
-            }
-
-            // Complete the run successfully
-            runRegistry.completeRun(run.id);
-
-            // Trigger learning pipeline (never block or fail the main run)
-            if (learningPipeline && assistantContent.length > 0) {
-              try {
-                const trace = traceCollector.finalize('success');
-                await learningPipeline.process(trace);
-              } catch (learningErr) {
-                console.error('Learning pipeline error:', learningErr);
-              }
-            }
-          } catch (err) {
-            sse.broadcast(id, {
-              type: 'RUN_ERROR',
-              timestamp: Date.now(),
-              runId: conversationId,
-              error: String(err),
-            });
-
-            // Complete the run with error
-            runRegistry.completeRun(run.id, String(err));
-
-            // Trigger learning pipeline even on failure to learn from errors
-            if (learningPipeline) {
-              try {
-                const trace = traceCollector.finalize('failure');
-                await learningPipeline.process(trace);
-              } catch (learningErr) {
-                console.error('Learning pipeline error:', learningErr);
-              }
-            }
-          }
-        })();
+        // Delegate to AgentRunService (fire-and-forget)
+        void agentRunService.executeRun({
+          agentDef,
+          messages,
+          agentId: id,
+          conversationId,
+          runId: run.id,
+          taskDescription: body.content,
+        });
       }
 
       return reply.status(201).send({
@@ -259,7 +222,7 @@ export async function agentRoutes(
       const conversationId = conv.id;
 
       // Create a run in the registry + DB
-      const run = runRegistry.startRun(id, conversationId, 'background', body.task);
+      const run = await runRegistry.startRun(id, conversationId, 'background', body.task);
 
       // Update agent status to 'running'
       await db.updateAgentStatus(id, 'running');
@@ -294,67 +257,15 @@ export async function agentRoutes(
           createdAt: new Date(m.createdAt),
         }));
 
-        void (async () => {
-          let assistantContent = '';
-          const traceCollector = new TraceCollector(id, run.id, body.task);
-          try {
-            for await (const event of executor.run(agentDef, messages)) {
-              sse.broadcast(id, event as Record<string, unknown>);
-
-              if (event.type === 'TEXT_MESSAGE_CONTENT' && 'content' in event) {
-                assistantContent += (event as unknown as { content: string }).content;
-              }
-
-              // Collect trace steps from tool events
-              if (event.type === 'TOOL_CALL_START' && 'toolName' in event) {
-                traceCollector.addStep('tool_call', (event as any).toolName, 0, { toolCallId: (event as any).toolCallId });
-              }
-              if (event.type === 'TOOL_CALL_RESULT' && 'result' in event) {
-                traceCollector.addStep('tool_result', String((event as any).result).slice(0, 500), (event as any).durationMs ?? 0, { toolCallId: (event as any).toolCallId });
-              }
-            }
-
-            if (assistantContent.length > 0) {
-              await db.addMessage({
-                agentId: id,
-                conversationId,
-                role: 'assistant',
-                content: assistantContent,
-              });
-            }
-
-            runRegistry.completeRun(run.id);
-
-            // Trigger learning pipeline (never block or fail the main run)
-            if (learningPipeline && assistantContent.length > 0) {
-              try {
-                const trace = traceCollector.finalize('success');
-                await learningPipeline.process(trace);
-              } catch (learningErr) {
-                console.error('Learning pipeline error:', learningErr);
-              }
-            }
-          } catch (err) {
-            sse.broadcast(id, {
-              type: 'RUN_ERROR',
-              timestamp: Date.now(),
-              runId: run.id,
-              error: String(err),
-            });
-
-            runRegistry.completeRun(run.id, String(err));
-
-            // Trigger learning pipeline even on failure
-            if (learningPipeline) {
-              try {
-                const trace = traceCollector.finalize('failure');
-                await learningPipeline.process(trace);
-              } catch (learningErr) {
-                console.error('Learning pipeline error:', learningErr);
-              }
-            }
-          }
-        })();
+        // Delegate to AgentRunService (fire-and-forget)
+        void agentRunService.executeRun({
+          agentDef,
+          messages,
+          agentId: id,
+          conversationId,
+          runId: run.id,
+          taskDescription: body.task ?? 'background run',
+        });
       }
 
       return reply.status(201).send({
@@ -381,7 +292,7 @@ export async function agentRoutes(
         return reply.status(404).send({ error: 'Agent not found', agentId: id });
       }
 
-      const cancelled = runRegistry.cancelRun(runId);
+      const cancelled = await runRegistry.cancelRun(runId);
       if (!cancelled) {
         return reply.status(404).send({ error: 'Run not found', runId });
       }
@@ -579,34 +490,45 @@ export async function agentRoutes(
         createdAt: Date.now(),
       });
 
-      // Trigger a learning pipeline run with the feedback (fire-and-forget)
+      // Trigger a learning pipeline run with the feedback (awaited)
       if (learningPipeline) {
-        void (async () => {
-          try {
-            // Build a minimal trace from the conversation
-            const messages = await db.getMessages(body.conversationId!);
-            const userMsg = messages.find((m) => m.role === 'user');
-            const trace = new TraceCollector(
-              id,
-              body.conversationId!,
-              userMsg?.content ?? 'feedback-triggered',
-            ).finalize(body.type === 'thumbs_up' ? 'success' : 'failure');
+        try {
+          // Build a minimal trace from the conversation
+          const messages = await db.getMessages(body.conversationId!);
+          const userMsg = messages.find((m) => m.role === 'user');
+          const trace = new TraceCollector(
+            id,
+            body.conversationId!,
+            userMsg?.content ?? 'feedback-triggered',
+          ).finalize(body.type === 'thumbs_up' ? 'success' : 'failure');
 
-            const feedbackSignal = {
-              id: feedbackId,
-              traceId: body.conversationId!,
-              agentId: id,
-              source: 'human' as const,
-              type: 'thumbs' as const,
-              value: body.type === 'thumbs_up' ? 1 : -1,
-              createdAt: new Date(),
-            };
+          const feedbackSignal = {
+            id: feedbackId,
+            traceId: body.conversationId!,
+            agentId: id,
+            source: 'human' as const,
+            type: 'thumbs' as const,
+            value: body.type === 'thumbs_up' ? 1 : -1,
+            createdAt: new Date(),
+          };
 
-            await learningPipeline.process(trace, [feedbackSignal]);
-          } catch (err) {
-            console.error('Learning pipeline error (feedback):', err);
-          }
-        })();
+          const result = await learningPipeline.process(trace, [feedbackSignal]);
+
+          return reply.status(201).send({
+            feedbackId: feedback.id,
+            type: body.type,
+            learningTriggered: true,
+            insightsGenerated: result.insights.length,
+          });
+        } catch (err) {
+          console.error('Learning pipeline error (feedback):', err);
+          return reply.status(201).send({
+            feedbackId: feedback.id,
+            type: body.type,
+            learningTriggered: true,
+            learningError: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
       return reply.status(201).send({
@@ -829,7 +751,7 @@ export async function agentRoutes(
         const dirEntries = await readdir(targetDir, { withFileTypes: true });
         const entries = await Promise.all(
           dirEntries
-            .filter((e) => !e.name.startsWith('.') && e.name !== 'node_modules')
+            .filter((e) => !e.name.startsWith('.') && e.name !== 'node_modules' && !isBlockedPath(e.name))
             .map(async (e) => {
               const entryPath = join(targetDir, e.name);
               let size = 0;
@@ -849,7 +771,7 @@ export async function agentRoutes(
 
         return reply.send({ entries });
       } catch (err) {
-        return reply.status(400).send({ error: 'Cannot read directory', detail: String(err) });
+        return reply.status(400).send(safeError('Cannot read directory', err));
       }
     },
   );
@@ -885,6 +807,12 @@ export async function agentRoutes(
         return reply.status(403).send({ error: 'Path outside project directory' });
       }
 
+      // Block sensitive file patterns
+      const pathSegments = query.path.split('/');
+      if (pathSegments.some((seg) => isBlockedPath(seg))) {
+        return reply.status(403).send({ error: 'Access to this file is forbidden' });
+      }
+
       try {
         const fileStat = await stat(targetFile);
 
@@ -908,7 +836,7 @@ export async function agentRoutes(
           size: fileStat.size,
         });
       } catch (err) {
-        return reply.status(400).send({ error: 'Cannot read file', detail: String(err) });
+        return reply.status(400).send(safeError('Cannot read file', err));
       }
     },
   );

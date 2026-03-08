@@ -6,10 +6,15 @@
     "dev": "pnpm --filter @ctxmill/ui dev",
     "build": "pnpm -r build",
     "test": "vitest run",
-    "lint": "pnpm -r lint",
+    "lint": "eslint packages/ tests/",
+    "test:e2e": "playwright test",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.58.2",
+    "eslint": "^10.0.3",
+    "typescript-eslint": "^8.56.1",
     "vitest": "^3.2.4",
     "zod": "^3.25.76"
   },

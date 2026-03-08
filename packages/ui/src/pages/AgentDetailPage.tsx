@@ -104,8 +104,8 @@ export function AgentDetailPage() {
     try {
       const runs = await storeFetchRuns(id);
       setAllRuns(Array.isArray(runs) ? runs : []);
-    } catch {
-      // endpoint may not exist yet
+    } catch (err) {
+      console.debug('[AgentDetail] Failed to load runs:', err);
     } finally {
       setRunsLoading(false);
     }
@@ -134,8 +134,8 @@ export function AgentDetailPage() {
         setKnowledgeItems(Array.isArray(items) ? items : []);
         setKnowledgeStats(stats && typeof stats === 'object' ? stats as KnowledgeStats : { total: 0, categories: {} });
       })
-      .catch(() => {
-        // endpoint may not exist yet
+      .catch((err) => {
+        console.debug('[AgentDetail] Failed to load knowledge:', err);
       })
       .finally(() => {
         if (mounted) setKnowledgeLoading(false);

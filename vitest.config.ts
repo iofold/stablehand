@@ -9,5 +9,10 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts', 'packages/ctxmill/**/*.test.ts'],
+    server: {
+      deps: {
+        inline: [/@langchain\//],
+      },
+    },
   },
 });

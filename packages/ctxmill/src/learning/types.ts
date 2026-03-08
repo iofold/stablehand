@@ -40,10 +40,15 @@ export interface Insight {
   confidence: number;
 }
 
+export interface LearningResult {
+  insights: Insight[];
+  errors: string[];
+}
+
 export interface LearningPipeline {
   process(
     trace: ExecutionTrace,
     feedback?: FeedbackSignal[],
-  ): Promise<Insight[]>;
+  ): Promise<LearningResult>;
   getKnowledge(agentId: string): Promise<string>;
 }

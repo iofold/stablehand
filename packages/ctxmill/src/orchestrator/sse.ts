@@ -1,5 +1,17 @@
 import type { FastifyReply } from 'fastify';
 
+const MAX_QUEUE_SIZE = 100;
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_HEARTBEAT_FAILURES = 3;
+
+interface ConnectionState {
+  queue: string[];
+  draining: boolean;
+  lastEventTime: number;
+  consecutiveHeartbeatFailures: number;
+  agentId: string;
+}
+
 /**
  * Manages SSE connections per agent, broadcasting AG-UI events
  * and sending periodic heartbeats to keep connections alive.
@@ -8,6 +20,7 @@ export class SSEManager {
   private connections = new Map<string, Set<FastifyReply>>();
   private heartbeatIntervals = new Map<FastifyReply, NodeJS.Timeout>();
   private lastActivityMap = new Map<string, number>();
+  private connectionState = new Map<FastifyReply, ConnectionState>();
 
   /**
    * Subscribe a client connection to an agent's event stream.
@@ -19,13 +32,71 @@ export class SSEManager {
     }
     this.connections.get(agentId)!.add(reply);
 
+    // Initialize per-connection state
+    const state: ConnectionState = {
+      queue: [],
+      draining: false,
+      lastEventTime: Date.now(),
+      consecutiveHeartbeatFailures: 0,
+      agentId,
+    };
+    this.connectionState.set(reply, state);
+
+    // Listen for errors on the raw stream
+    reply.raw.on('error', () => this.unsubscribe(agentId, reply));
+
+    // Listen for drain to flush queued items
+    reply.raw.on('drain', () => {
+      const st = this.connectionState.get(reply);
+      if (!st) return;
+      if (st.queue.length === 0) {
+        st.draining = false;
+        return;
+      }
+      while (st.queue.length > 0) {
+        const item = st.queue[0];
+        const ok = reply.raw.write(item);
+        st.queue.shift();
+        if (!ok) {
+          // Back-pressured again, wait for next drain
+          return;
+        }
+      }
+      st.draining = false;
+    });
+
     // Send heartbeat comment every 15s to keep connection alive
     const interval = setInterval(() => {
+      const st = this.connectionState.get(reply);
       try {
         reply.raw.write(': heartbeat\n\n');
-      } catch {
-        // Connection may have closed; cleanup will handle it
-        this.unsubscribe(agentId, reply);
+        // Reset consecutive failures on success
+        if (st) {
+          st.consecutiveHeartbeatFailures = 0;
+        }
+
+        // Check idle timeout: idle > 5 minutes with no active runs
+        if (st && Date.now() - st.lastEventTime > IDLE_TIMEOUT_MS) {
+          console.info('[SSE] Closing idle connection for agent', agentId);
+          this.unsubscribe(agentId, reply);
+          try {
+            reply.raw.end();
+          } catch {
+            // ignore
+          }
+          return;
+        }
+      } catch (err) {
+        console.warn('[SSE] Heartbeat failed for agent', agentId, err);
+        if (st) {
+          st.consecutiveHeartbeatFailures++;
+          if (st.consecutiveHeartbeatFailures >= MAX_HEARTBEAT_FAILURES) {
+            this.unsubscribe(agentId, reply);
+          }
+        } else {
+          // No state means we should clean up
+          this.unsubscribe(agentId, reply);
+        }
       }
     }, 15_000);
     this.heartbeatIntervals.set(reply, interval);
@@ -47,6 +118,7 @@ export class SSEManager {
       clearInterval(interval);
       this.heartbeatIntervals.delete(reply);
     }
+    this.connectionState.delete(reply);
   }
 
   /**
@@ -58,8 +130,36 @@ export class SSEManager {
     this.lastActivityMap.set(agentId, Date.now());
     const data = `data: ${JSON.stringify(event)}\n\n`;
     for (const reply of clients) {
+      const state = this.connectionState.get(reply);
+      if (state) {
+        state.lastEventTime = Date.now();
+      }
+
+      // If there's already a backlog or we're back-pressured, queue directly
+      if (state && (state.queue.length > 0 || state.draining)) {
+        if (state.queue.length >= MAX_QUEUE_SIZE) {
+          console.warn('[SSE] Disconnecting slow client');
+          this.unsubscribe(agentId, reply);
+          try {
+            reply.raw.end();
+          } catch {
+            // ignore
+          }
+        } else {
+          state.queue.push(data);
+        }
+        continue;
+      }
+
       try {
-        reply.raw.write(data);
+        const ok = reply.raw.write(data);
+        if (ok === false && state) {
+          // Kernel buffer full. The data was accepted by Node's internal buffer
+          // but we should queue future writes until 'drain' fires.
+          // Push a sentinel so queue.length > 0 triggers queueing for next events.
+          // The drain handler will clear it.
+          state.draining = true;
+        }
       } catch {
         this.unsubscribe(agentId, reply);
       }
@@ -110,5 +210,6 @@ export class SSEManager {
     }
     this.connections.clear();
     this.heartbeatIntervals.clear();
+    this.connectionState.clear();
   }
 }

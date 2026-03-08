@@ -1,61 +1,26 @@
-import { ChatAnthropic } from '@langchain/anthropic';
-import { ChatOpenAI } from '@langchain/openai';
-import { HumanMessage } from '@langchain/core/messages';
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import type { LLMProvider } from '../llm/types.js';
 import type { ExecutionTrace, FeedbackSignal, Insight } from './types.js';
 
-export interface ReflectorConfig {
-  apiKey: string;
-  baseUrl?: string;
-  model?: string;
-  provider?: 'anthropic' | 'openai';
-}
+const CONFIDENCE_THRESHOLD = 0.3;
 
 export class SimpleReflector {
-  private chatModel: BaseChatModel;
+  private llmProvider: LLMProvider;
 
-  constructor(config: ReflectorConfig) {
-    const model = config.model ?? 'claude-sonnet-4-6';
-    const isOpenAI = config.provider === 'openai' || (!model.includes('claude') && config.provider !== 'anthropic');
-
-    if (isOpenAI) {
-      this.chatModel = new ChatOpenAI({
-        model,
-        apiKey: config.apiKey,
-        maxTokens: 1024,
-        configuration: {
-          baseURL: config.baseUrl,
-        },
-      });
-    } else {
-      this.chatModel = new ChatAnthropic({
-        model,
-        apiKey: config.apiKey,
-        maxTokens: 1024,
-        ...(config.baseUrl
-          ? { clientOptions: { baseURL: config.baseUrl } }
-          : {}),
-      });
-    }
+  constructor(llmProvider: LLMProvider) {
+    this.llmProvider = llmProvider;
   }
 
   async process(
     trace: ExecutionTrace,
     feedback?: FeedbackSignal[],
   ): Promise<Insight[]> {
-    if (!trace.steps.length) return [];
+    if (!trace.steps.length && !trace.taskDescription) return [];
 
     const prompt = this.buildReflectionPrompt(trace, feedback);
 
-    const response = await this.chatModel.invoke([
-      new HumanMessage(prompt),
-    ]);
+    const response = await this.llmProvider.invoke(prompt);
 
-    const text =
-      typeof response.content === 'string'
-        ? response.content
-        : '';
-    return this.parseInsights(text);
+    return this.parseInsights(response.content);
   }
 
   private buildReflectionPrompt(
@@ -106,30 +71,53 @@ Respond with ONLY a JSON array of objects with { "content", "category", "confide
       }
     }
 
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(cleaned) as unknown;
-      if (!Array.isArray(parsed)) return [];
-
-      const insights: Insight[] = [];
-      for (const item of parsed) {
-        if (
-          typeof item === 'object' &&
-          item !== null &&
-          typeof (item as Record<string, unknown>).content === 'string' &&
-          typeof (item as Record<string, unknown>).category === 'string' &&
-          typeof (item as Record<string, unknown>).confidence === 'number'
-        ) {
-          const { content, category, confidence } = item as Insight;
-          insights.push({
-            content,
-            category,
-            confidence: Math.max(0, Math.min(1, confidence)),
-          });
-        }
-      }
-      return insights;
+      parsed = JSON.parse(cleaned);
     } catch {
-      return [];
+      console.warn('[Reflector] Failed to parse LLM response:', cleaned.substring(0, 200));
+
+      // Fallback: try extracting JSON array by finding first [ and last ]
+      const firstBracket = cleaned.indexOf('[');
+      const lastBracket = cleaned.lastIndexOf(']');
+      if (firstBracket !== -1 && lastBracket > firstBracket) {
+        try {
+          parsed = JSON.parse(cleaned.slice(firstBracket, lastBracket + 1));
+        } catch {
+          console.warn('[Reflector] Fallback JSON extraction also failed');
+          return [];
+        }
+      } else {
+        return [];
+      }
     }
+
+    if (!Array.isArray(parsed)) return [];
+
+    const insights: Insight[] = [];
+    for (const item of parsed) {
+      if (
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as Record<string, unknown>).content === 'string' &&
+        typeof (item as Record<string, unknown>).category === 'string' &&
+        typeof (item as Record<string, unknown>).confidence === 'number'
+      ) {
+        const { content, category, confidence } = item as Insight;
+        const clampedConfidence = Math.max(0, Math.min(1, confidence));
+
+        if (clampedConfidence < CONFIDENCE_THRESHOLD) {
+          console.log(`[Reflector] Rejected low-confidence insight (${clampedConfidence}): ${content.substring(0, 100)}`);
+          continue;
+        }
+
+        insights.push({
+          content,
+          category,
+          confidence: clampedConfidence,
+        });
+      }
+    }
+    return insights;
   }
 }

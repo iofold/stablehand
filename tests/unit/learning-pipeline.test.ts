@@ -147,9 +147,10 @@ describe('DefaultLearningPipeline', () => {
       ]);
       const pipeline = new DefaultLearningPipeline(mockReflector, store);
 
-      const insights = await pipeline.process(makeTrace());
-      expect(insights).toHaveLength(1);
-      expect(insights[0].content).toBe('Check inputs first');
+      const result = await pipeline.process(makeTrace());
+      expect(result.insights).toHaveLength(1);
+      expect(result.insights[0].content).toBe('Check inputs first');
+      expect(result.errors).toHaveLength(0);
     });
   });
 
@@ -186,7 +187,8 @@ describe('DefaultLearningPipeline', () => {
       const pipeline = new DefaultLearningPipeline(mockReflector, store);
 
       const result = await pipeline.process(makeTrace());
-      expect(result).toEqual(insights);
+      expect(result.insights).toEqual(insights);
+      expect(result.errors).toEqual([]);
     });
 
     it('should handle empty insights gracefully', async () => {
@@ -194,7 +196,8 @@ describe('DefaultLearningPipeline', () => {
       const pipeline = new DefaultLearningPipeline(mockReflector, store);
 
       const result = await pipeline.process(makeTrace());
-      expect(result).toEqual([]);
+      expect(result.insights).toEqual([]);
+      expect(result.errors).toEqual([]);
 
       const items = await store.list('agent-1');
       expect(items).toHaveLength(0);

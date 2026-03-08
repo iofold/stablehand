@@ -72,13 +72,14 @@ export class RunRegistry {
 
   /**
    * Create and register a new run. Persists to DB if available.
+   * In-memory state is updated first for graceful degradation if DB fails.
    */
-  startRun(
+  async startRun(
     agentId: string,
     conversationId: string,
     mode: RunMode,
     taskDescription?: string,
-  ): AgentRun {
+  ): Promise<AgentRun> {
     const run: AgentRun = {
       id: randomUUID(),
       agentId,
@@ -90,19 +91,20 @@ export class RunRegistry {
     };
     this.runs.set(run.id, run);
 
-    // Fire-and-forget DB persistence
     if (this.db) {
-      void this.db.createRun({
-        id: run.id,
-        agentId,
-        conversationId,
-        status: run.status,
-        mode,
-        startedAt: run.startedAt,
-        taskDescription,
-      }).catch(() => {
-        // DB write is best-effort; in-memory map is the source of truth during runtime
-      });
+      try {
+        await this.db.createRun({
+          id: run.id,
+          agentId,
+          conversationId,
+          status: run.status,
+          mode,
+          startedAt: run.startedAt,
+          taskDescription,
+        });
+      } catch (err) {
+        console.error('[RunRegistry] DB write failed:', err);
+      }
     }
 
     return run;
@@ -110,8 +112,9 @@ export class RunRegistry {
 
   /**
    * Mark a run as completed (or errored if an error string is provided).
+   * In-memory state is updated first for graceful degradation if DB fails.
    */
-  completeRun(runId: string, error?: string): AgentRun | undefined {
+  async completeRun(runId: string, error?: string): Promise<AgentRun | undefined> {
     const run = this.runs.get(runId);
     if (!run) return undefined;
 
@@ -120,11 +123,15 @@ export class RunRegistry {
     if (error) run.error = error;
 
     if (this.db) {
-      void this.db.updateRun(runId, {
-        status: run.status,
-        completedAt: run.completedAt,
-        error: run.error,
-      }).catch(() => {});
+      try {
+        await this.db.updateRun(runId, {
+          status: run.status,
+          completedAt: run.completedAt,
+          error: run.error,
+        });
+      } catch (err) {
+        console.error('[RunRegistry] DB write failed:', err);
+      }
     }
 
     return run;
@@ -132,8 +139,9 @@ export class RunRegistry {
 
   /**
    * Mark a run as cancelled.
+   * In-memory state is updated first for graceful degradation if DB fails.
    */
-  cancelRun(runId: string): AgentRun | undefined {
+  async cancelRun(runId: string): Promise<AgentRun | undefined> {
     const run = this.runs.get(runId);
     if (!run) return undefined;
 
@@ -141,10 +149,14 @@ export class RunRegistry {
     run.completedAt = Date.now();
 
     if (this.db) {
-      void this.db.updateRun(runId, {
-        status: 'cancelled',
-        completedAt: run.completedAt,
-      }).catch(() => {});
+      try {
+        await this.db.updateRun(runId, {
+          status: 'cancelled',
+          completedAt: run.completedAt,
+        });
+      } catch (err) {
+        console.error('[RunRegistry] DB write failed:', err);
+      }
     }
 
     return run;

@@ -340,29 +340,39 @@ export class DatabaseRepository {
     avgSteps: number;
     recentCount: number;
   }> {
-    const traces = await this.db
-      .select()
+    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+
+    // Aggregate by outcome in SQL
+    const outcomeRows = await this.db
+      .select({
+        outcome: sql<string>`coalesce(${schema.executionTraces.outcome}, 'unknown')`.as('outcome'),
+        count: sql<number>`count(*)`.as('count'),
+      })
+      .from(schema.executionTraces)
+      .where(eq(schema.executionTraces.agentId, agentId))
+      .groupBy(sql`coalesce(${schema.executionTraces.outcome}, 'unknown')`);
+
+    const byOutcome: Record<string, number> = {};
+    let total = 0;
+    for (const row of outcomeRows) {
+      byOutcome[row.outcome] = row.count;
+      total += row.count;
+    }
+
+    // Avg steps via JSON array length + recent count in a single query
+    const [statsRow] = await this.db
+      .select({
+        avgSteps: sql<number>`coalesce(avg(json_array_length(${schema.executionTraces.steps})), 0)`.as('avg_steps'),
+        recentCount: sql<number>`sum(case when ${schema.executionTraces.startedAt} >= ${oneDayAgo} then 1 else 0 end)`.as('recent_count'),
+      })
       .from(schema.executionTraces)
       .where(eq(schema.executionTraces.agentId, agentId));
 
-    const byOutcome: Record<string, number> = {};
-    let totalSteps = 0;
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    let recentCount = 0;
-
-    for (const trace of traces) {
-      const outcome = trace.outcome ?? 'unknown';
-      byOutcome[outcome] = (byOutcome[outcome] ?? 0) + 1;
-      const steps = trace.steps as unknown[];
-      totalSteps += Array.isArray(steps) ? steps.length : 0;
-      if (trace.startedAt >= oneDayAgo) recentCount++;
-    }
-
     return {
-      total: traces.length,
+      total,
       byOutcome,
-      avgSteps: traces.length > 0 ? Math.round(totalSteps / traces.length) : 0,
-      recentCount,
+      avgSteps: Math.round(statsRow?.avgSteps ?? 0),
+      recentCount: statsRow?.recentCount ?? 0,
     };
   }
 
@@ -379,17 +389,34 @@ export class DatabaseRepository {
     byType: Record<string, number>;
     recentCount: number;
   }> {
-    const signals = await this.getFeedbackForAgent(agentId);
-    const byType: Record<string, number> = {};
     const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    let recentCount = 0;
 
-    for (const signal of signals) {
-      byType[signal.type] = (byType[signal.type] ?? 0) + 1;
-      if (signal.createdAt >= oneDayAgo) recentCount++;
+    // Aggregate by type in SQL
+    const typeRows = await this.db
+      .select({
+        type: schema.feedbackSignals.type,
+        count: sql<number>`count(*)`.as('count'),
+      })
+      .from(schema.feedbackSignals)
+      .where(eq(schema.feedbackSignals.agentId, agentId))
+      .groupBy(schema.feedbackSignals.type);
+
+    const byType: Record<string, number> = {};
+    let total = 0;
+    for (const row of typeRows) {
+      byType[row.type] = row.count;
+      total += row.count;
     }
 
-    return { total: signals.length, byType, recentCount };
+    // Recent count in SQL
+    const [recentRow] = await this.db
+      .select({
+        recentCount: sql<number>`count(*)`.as('recent_count'),
+      })
+      .from(schema.feedbackSignals)
+      .where(sql`${schema.feedbackSignals.agentId} = ${agentId} AND ${schema.feedbackSignals.createdAt} >= ${oneDayAgo}`);
+
+    return { total, byType, recentCount: recentRow?.recentCount ?? 0 };
   }
 
   // ── Conversation Analysis ──────────────────────────────
@@ -420,32 +447,33 @@ export class DatabaseRepository {
     totalFeedback: number;
     avgRunDuration: number;
   }> {
-    const runs = await this.getRunsForAgent(agentId);
-    const conversationCount = await this.getConversationCount(agentId);
-    const knowledgeCount = await this.getKnowledgeCount(agentId);
-    const traceStats = await this.getTraceStats(agentId);
-    const feedbackStats = await this.getFeedbackStats(agentId);
+    // Aggregate run stats in SQL instead of loading all rows
+    const [runStats] = await this.db
+      .select({
+        totalRuns: sql<number>`count(*)`.as('total_runs'),
+        completedRuns: sql<number>`sum(case when ${schema.agentRuns.status} = 'completed' then 1 else 0 end)`.as('completed_runs'),
+        failedRuns: sql<number>`sum(case when ${schema.agentRuns.status} = 'error' then 1 else 0 end)`.as('failed_runs'),
+        avgRunDuration: sql<number>`coalesce(avg(case when ${schema.agentRuns.completedAt} is not null and ${schema.agentRuns.startedAt} is not null then ${schema.agentRuns.completedAt} - ${schema.agentRuns.startedAt} end), 0)`.as('avg_run_duration'),
+      })
+      .from(schema.agentRuns)
+      .where(eq(schema.agentRuns.agentId, agentId));
 
-    let totalDuration = 0;
-    let completedWithDuration = 0;
-    for (const run of runs) {
-      if (run.completedAt && run.startedAt) {
-        totalDuration += run.completedAt - run.startedAt;
-        completedWithDuration++;
-      }
-    }
+    const [conversationCount, knowledgeCount, traceStats, feedbackStats] = await Promise.all([
+      this.getConversationCount(agentId),
+      this.getKnowledgeCount(agentId),
+      this.getTraceStats(agentId),
+      this.getFeedbackStats(agentId),
+    ]);
 
     return {
-      totalRuns: runs.length,
-      completedRuns: runs.filter((r) => r.status === 'completed').length,
-      failedRuns: runs.filter((r) => r.status === 'error').length,
+      totalRuns: runStats?.totalRuns ?? 0,
+      completedRuns: runStats?.completedRuns ?? 0,
+      failedRuns: runStats?.failedRuns ?? 0,
       totalConversations: conversationCount,
       totalKnowledge: knowledgeCount,
       totalTraces: traceStats.total,
       totalFeedback: feedbackStats.total,
-      avgRunDuration: completedWithDuration > 0
-        ? Math.round(totalDuration / completedWithDuration)
-        : 0,
+      avgRunDuration: Math.round(runStats?.avgRunDuration ?? 0),
     };
   }
 }

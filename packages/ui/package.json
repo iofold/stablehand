@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "test": "vitest run"
   },
   "dependencies": {
     "react": "^19.0.0",
@@ -21,7 +22,8 @@
     "lucide-react": "^0.468.0",
     "clsx": "^2.1.0",
     "tailwind-merge": "^3.5.0",
-    "class-variance-authority": "^0.7.0"
+    "class-variance-authority": "^0.7.0",
+    "@ctxmill/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

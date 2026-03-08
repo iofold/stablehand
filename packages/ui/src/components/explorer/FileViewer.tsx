@@ -52,8 +52,8 @@ export function FileViewer({ agentId, filePath, onClose }: FileViewerProps) {
       await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard not available
+    } catch (err) {
+      console.debug('[FileViewer] Clipboard write failed:', err);
     }
   };
 

@@ -27,8 +27,8 @@ export function FeedbackButtons({ agentId, messageId, conversationId }: Feedback
       if (resp.ok) {
         setFeedback(type === 'thumbs_up' ? 'up' : 'down');
       }
-    } catch {
-      // Silently fail — feedback is non-critical
+    } catch (err) {
+      console.warn('[Feedback] Submission failed:', err);
     } finally {
       setSubmitting(false);
     }

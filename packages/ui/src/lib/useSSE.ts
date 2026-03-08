@@ -43,8 +43,8 @@ export function useSSE(agentId: string | undefined) {
         }
 
         handleSSEEvent(data);
-      } catch {
-        // Ignore malformed events
+      } catch (err) {
+        console.debug('[SSE] Failed to parse event:', err);
       }
     },
     [handleSSEEvent, setPending, agentId],

@@ -11,3 +11,8 @@ coverage/
 data/
 .claude/
 package-lock.json
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/

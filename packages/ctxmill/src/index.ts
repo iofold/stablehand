@@ -60,8 +60,8 @@ export type {
   FeedbackSignal,
   Insight,
   LearningPipeline,
+  LearningResult,
 } from './learning/types.js';
 export { TraceCollector } from './learning/trace.js';
 export { SimpleReflector } from './learning/reflector.js';
-export type { ReflectorConfig } from './learning/reflector.js';
 export { DefaultLearningPipeline } from './learning/pipeline.js';

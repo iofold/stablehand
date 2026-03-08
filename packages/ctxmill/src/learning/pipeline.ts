@@ -1,4 +1,4 @@
-import type { ExecutionTrace, FeedbackSignal, Insight, LearningPipeline } from './types.js';
+import type { ExecutionTrace, FeedbackSignal, LearningPipeline, LearningResult } from './types.js';
 import type { KnowledgeStore } from '../knowledge/types.js';
 import type { SimpleReflector } from './reflector.js';
 import type { DatabaseRepository } from '../database/repository.js';
@@ -17,7 +17,9 @@ export class DefaultLearningPipeline implements LearningPipeline {
   async process(
     trace: ExecutionTrace,
     feedback?: FeedbackSignal[],
-  ): Promise<Insight[]> {
+  ): Promise<LearningResult> {
+    const errors: string[] = [];
+
     // Persist the trace to DB
     if (this.db) {
       try {
@@ -32,23 +34,30 @@ export class DefaultLearningPipeline implements LearningPipeline {
           outcome: trace.outcome,
         });
       } catch (err) {
-        console.error('Failed to save trace to DB:', err);
+        console.error('[LearningPipeline] Trace save failed for', trace.id, err);
+        errors.push(`Trace save failed for ${trace.id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
     const insights = await this.reflector.process(trace, feedback);
 
     for (const insight of insights) {
-      await this.knowledgeStore.add({
-        agentId: trace.agentId,
-        content: insight.content,
-        category: insight.category,
-        source: 'reflector',
-        effectiveness: 0, // neutral until proven
-      });
+      try {
+        await this.knowledgeStore.add({
+          agentId: trace.agentId,
+          content: insight.content,
+          category: insight.category,
+          source: 'reflector',
+          effectiveness: 0, // neutral until proven
+        });
+      } catch (err) {
+        const msg = `Knowledge store add failed for insight "${insight.content.substring(0, 50)}": ${err instanceof Error ? err.message : String(err)}`;
+        console.error('[LearningPipeline]', msg);
+        errors.push(msg);
+      }
     }
 
-    return insights;
+    return { insights, errors };
   }
 
   async getKnowledge(agentId: string): Promise<string> {

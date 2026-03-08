@@ -90,8 +90,8 @@ export function ChatPage() {
         }));
 
         loadMessages(parsed);
-      } catch {
-        // Silently fail — show empty state
+      } catch (err) {
+        console.debug('[ChatPage] Failed to load conversation history:', err);
       }
     }
 

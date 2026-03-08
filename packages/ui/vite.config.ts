@@ -5,7 +5,10 @@ import { resolve } from 'node:path';
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { '@': resolve(__dirname, 'src') },
+    alias: {
+      '@': resolve(__dirname, 'src'),
+      '@ctxmill/shared': resolve(__dirname, '../shared/src/index.ts'),
+    },
   },
   server: {
     port: parseInt(process.env.CTXMILL_UI_PORT || '3101', 10),
