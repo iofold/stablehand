@@ -2,18 +2,13 @@ import { ChatAnthropic } from '@langchain/anthropic';
 import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { LLMProvider, LLMProviderConfig, LLMResponse, LLMStreamChunk } from './types.js';
+import { getErrorMessage, isHttpError } from '../util/errors.js';
 
 /** Minimal interface for a chat model that can invoke messages. */
 export interface ChatModel {
   invoke(messages: unknown[], options?: Record<string, unknown>): Promise<{ content: string | unknown[]; usage_metadata?: { input_tokens?: number; output_tokens?: number } }>;
 }
 
-/** Check if an error carries one of the given HTTP status codes. */
-function isHttpError(err: unknown, codes: number[]): boolean {
-  if (err == null || typeof err !== 'object') return false;
-  const status = (err as Record<string, unknown>).status ?? (err as Record<string, unknown>).statusCode;
-  return typeof status === 'number' && codes.includes(status);
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -25,6 +20,8 @@ export class LangChainLLMProvider implements LLMProvider {
   _model: ChatModel;
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
+
+
 
   constructor(config: LLMProviderConfig);
   constructor(config: LLMProviderConfig, model: ChatModel);
@@ -87,7 +84,7 @@ export class LangChainLLMProvider implements LLMProvider {
         }
 
         if (attempt < this.maxRetries) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = getErrorMessage(err);
           console.warn(`[LLM] Retry attempt ${attempt + 1}/${this.maxRetries}: ${message}`);
           await sleep(Math.pow(2, attempt) * 1000);
         }

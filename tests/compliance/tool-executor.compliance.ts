@@ -196,39 +196,37 @@ export function runToolExecutorCompliance(
   /* ---------- execute – unknown tool ---------- */
 
   describe('execute – unknown tool', () => {
-    it('returns error for a tool that is not registered', async () => {
-      const result = await executor.execute(
-        { id: 'call-miss', name: 'nonexistent', arguments: {} },
-        ctx,
-      );
-      expect(result.error).toBeDefined();
-      expect(result.error).toContain('nonexistent');
-      expect(result.result).toBe('');
-      expect(result.durationMs).toBe(0);
+    it('throws for a tool that is not registered', async () => {
+      await expect(
+        executor.execute(
+          { id: 'call-miss', name: 'nonexistent', arguments: {} },
+          ctx,
+        ),
+      ).rejects.toThrow(/unknown tool/i);
     });
   });
 
   /* ---------- execute – validation errors ---------- */
 
   describe('execute – input validation', () => {
-    it('rejects input that fails Zod validation', async () => {
+    it('throws on input that fails Zod validation', async () => {
       executor.register(createEchoTool());
-      const result = await executor.execute(
-        { id: 'call-bad', name: 'echo', arguments: { value: 42 } },
-        ctx,
-      );
-      expect(result.error).toBeDefined();
-      expect(result.result).toBe('');
+      await expect(
+        executor.execute(
+          { id: 'call-bad', name: 'echo', arguments: { value: 42 } },
+          ctx,
+        ),
+      ).rejects.toThrow(/input validation failed/i);
     });
 
-    it('rejects missing required fields', async () => {
+    it('throws on missing required fields', async () => {
       executor.register(createEchoTool());
-      const result = await executor.execute(
-        { id: 'call-missing', name: 'echo', arguments: {} },
-        ctx,
-      );
-      expect(result.error).toBeDefined();
-      expect(result.result).toBe('');
+      await expect(
+        executor.execute(
+          { id: 'call-missing', name: 'echo', arguments: {} },
+          ctx,
+        ),
+      ).rejects.toThrow(/input validation failed/i);
     });
 
     it('validates complex schemas (nested objects, arrays)', async () => {
@@ -252,12 +250,13 @@ export function runToolExecutorCompliance(
       );
       expect(good.error).toBeUndefined();
 
-      // Invalid: negative count
-      const bad = await executor.execute(
-        { id: 'c-bad', name: 'complex', arguments: { name: 'test', count: -1 } },
-        ctx,
-      );
-      expect(bad.error).toBeDefined();
+      // Invalid: negative count — should throw
+      await expect(
+        executor.execute(
+          { id: 'c-bad', name: 'complex', arguments: { name: 'test', count: -1 } },
+          ctx,
+        ),
+      ).rejects.toThrow(/input validation failed/i);
     });
   });
 

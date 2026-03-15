@@ -9,6 +9,7 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts', 'packages/ctxmill/**/*.test.ts'],
+    setupFiles: ['./tests/setup-strict.ts'],
     server: {
       deps: {
         inline: [/@langchain\//],

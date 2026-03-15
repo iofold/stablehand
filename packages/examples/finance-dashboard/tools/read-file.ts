@@ -10,8 +10,8 @@ export default defineTool({
     path: z.string().describe('Relative file path to read'),
   }),
   async handler({ path: filePath }, ctx) {
-    // Sandbox to project directory
-    const basePath = process.cwd();
+    // Sandbox to workspace directory (session-scoped when isolation is active)
+    const basePath = ctx.workspaceDir;
     const resolved = resolve(basePath, filePath);
     if (!resolved.startsWith(basePath)) {
       return 'Error: Cannot read files outside the project directory';

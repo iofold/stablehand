@@ -28,28 +28,28 @@ export function ApprovalCard({ title, description, action, details, onApprove, o
     <div
       data-testid="approval-card"
       className={cn(
-        'rounded-lg border p-5 transition-colors',
-        status === 'pending' && 'border-zinc-700 bg-zinc-900',
-        status === 'approved' && 'border-emerald-700/50 bg-emerald-950/20',
-        status === 'rejected' && 'border-rose-700/50 bg-rose-950/20',
+        'border border-surface-700 rounded-lg bg-surface-800 p-4 transition-colors',
+        status === 'pending' && 'border-l-2 border-l-accent-400',
+        status === 'approved' && 'border-l-2 border-l-status-success',
+        status === 'rejected' && 'border-l-2 border-l-status-error',
       )}
     >
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
-          <h3 className="text-base font-semibold text-zinc-100">{title}</h3>
-          <p className="mt-1 text-sm text-zinc-400">{description}</p>
+          <h3 className="text-sm font-medium text-surface-200">{title}</h3>
+          <p className="mt-1 text-sm text-surface-400">{description}</p>
 
-          <div className="mt-3 rounded-md bg-zinc-800 px-3 py-2">
-            <p className="text-xs font-medium uppercase tracking-wider text-zinc-500 mb-1">Action</p>
-            <p className="text-sm text-zinc-200 font-mono">{action}</p>
+          <div className="mt-3 rounded-md bg-surface-800 px-3 py-2 border border-surface-700/50">
+            <p className="text-xs font-medium uppercase tracking-wider text-surface-500 mb-1">Action</p>
+            <p className="text-sm text-surface-200 font-mono">{action}</p>
           </div>
 
           {details && Object.keys(details).length > 0 && (
             <div className="mt-3 space-y-1">
               {Object.entries(details).map(([key, value]) => (
                 <div key={key} className="flex items-baseline gap-2 text-sm">
-                  <span className="text-zinc-500 font-medium">{key}:</span>
-                  <span className="text-zinc-300">{String(value)}</span>
+                  <span className="text-surface-500 font-medium">{key}:</span>
+                  <span className="text-surface-300">{String(value)}</span>
                 </div>
               ))}
             </div>
@@ -77,18 +77,16 @@ export function ApprovalCard({ title, description, action, details, onApprove, o
             data-testid="approve-button"
             type="button"
             onClick={handleApprove}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-emerald-500 transition-colors"
+            className="btn-primary"
           >
-            <Check className="h-4 w-4" />
             Approve
           </button>
           <button
             type="button"
             data-testid="reject-button"
             onClick={handleReject}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 border border-zinc-700 hover:bg-zinc-700 transition-colors"
+            className="text-sm text-status-error hover:text-red-300 transition-colors"
           >
-            <X className="h-4 w-4" />
             Reject
           </button>
         </div>

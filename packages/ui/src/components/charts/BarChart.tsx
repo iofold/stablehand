@@ -16,7 +16,7 @@ interface BarChartProps {
   orientation?: 'vertical' | 'horizontal';
 }
 
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+const COLORS = ['#2dd4bf', '#14b8a6', '#a1a1aa', '#22c55e', '#eab308', '#ef4444'];
 
 export function BarChart({
   title,
@@ -29,7 +29,7 @@ export function BarChart({
   const isHorizontal = orientation === 'horizontal';
 
   return (
-    <div data-testid="a2ui-bar-chart" className="card p-4">
+    <div data-testid="a2ui-bar-chart" className="w-full h-full bg-transparent">
       {title && (
         <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
       )}
@@ -37,32 +37,34 @@ export function BarChart({
         <RechartsBarChart
           data={data}
           layout={isHorizontal ? 'vertical' : 'horizontal'}
+          margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
         >
-          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+          <CartesianGrid stroke="#3f3f46" strokeOpacity={0.2} vertical={false} />
           {isHorizontal ? (
             <>
-              <XAxis type="number" stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+              <XAxis type="number" stroke="#3f3f46" tick={{ fill: '#71717a', fontSize: 12 }} />
               <YAxis
                 type="category"
                 dataKey={xKey}
-                stroke="#64748b"
-                tick={{ fill: '#94a3b8', fontSize: 11 }}
+                stroke="#3f3f46"
+                tick={{ fill: '#71717a', fontSize: 12 }}
                 width={80}
               />
             </>
           ) : (
             <>
-              <XAxis dataKey={xKey} stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} />
-              <YAxis stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+              <XAxis dataKey={xKey} stroke="#3f3f46" tick={{ fill: '#71717a', fontSize: 12 }} />
+              <YAxis stroke="#3f3f46" tick={{ fill: '#71717a', fontSize: 12 }} />
             </>
           )}
           <Tooltip
+            cursor={{ stroke: '#3f3f46', fill: '#3f3f46', fillOpacity: 0.1 }}
             contentStyle={{
-              backgroundColor: '#1e293b',
-              border: '1px solid #334155',
-              borderRadius: '8px',
-              color: '#e2e8f0',
-              fontSize: 12,
+              backgroundColor: '#27272a',
+              border: '1px solid #3f3f46',
+              borderRadius: '6px',
+              fontSize: '13px',
+              color: '#d4d4d8',
             }}
           />
           {yKeys.map((key, i) => (
@@ -70,7 +72,7 @@ export function BarChart({
               key={key}
               dataKey={key}
               fill={COLORS[i % COLORS.length]}
-              radius={[4, 4, 0, 0]}
+              radius={isHorizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]}
             />
           ))}
         </RechartsBarChart>

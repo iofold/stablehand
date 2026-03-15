@@ -1,4 +1,6 @@
 import type { FastifyReply } from 'fastify';
+import { randomUUID } from 'node:crypto';
+import type { TypedEventBus } from '../events/bus.js';
 
 const MAX_QUEUE_SIZE = 100;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -10,6 +12,7 @@ interface ConnectionState {
   lastEventTime: number;
   consecutiveHeartbeatFailures: number;
   agentId: string;
+  clientId: string;
 }
 
 /**
@@ -21,6 +24,11 @@ export class SSEManager {
   private heartbeatIntervals = new Map<FastifyReply, NodeJS.Timeout>();
   private lastActivityMap = new Map<string, number>();
   private connectionState = new Map<FastifyReply, ConnectionState>();
+  private eventBus?: TypedEventBus;
+
+  constructor(eventBus?: TypedEventBus) {
+    this.eventBus = eventBus;
+  }
 
   /**
    * Subscribe a client connection to an agent's event stream.
@@ -33,14 +41,25 @@ export class SSEManager {
     this.connections.get(agentId)!.add(reply);
 
     // Initialize per-connection state
+    const clientId = randomUUID();
     const state: ConnectionState = {
       queue: [],
       draining: false,
       lastEventTime: Date.now(),
       consecutiveHeartbeatFailures: 0,
       agentId,
+      clientId,
     };
     this.connectionState.set(reply, state);
+
+    // Emit client connected event
+    if (this.eventBus) {
+      this.eventBus.emit('client.connected', {
+        agentId,
+        clientId,
+        timestamp: Date.now(),
+      });
+    }
 
     // Listen for errors on the raw stream
     reply.raw.on('error', () => this.unsubscribe(agentId, reply));
@@ -81,8 +100,8 @@ export class SSEManager {
           this.unsubscribe(agentId, reply);
           try {
             reply.raw.end();
-          } catch {
-            // ignore
+          } catch (endErr) {
+            console.debug('[SSE] Failed to end idle connection for agent', agentId, endErr);
           }
           return;
         }
@@ -109,6 +128,7 @@ export class SSEManager {
    * Unsubscribe a client connection from an agent's event stream.
    */
   unsubscribe(agentId: string, reply: FastifyReply): void {
+    const state = this.connectionState.get(reply);
     this.connections.get(agentId)?.delete(reply);
     if (this.connections.get(agentId)?.size === 0) {
       this.connections.delete(agentId);
@@ -119,6 +139,15 @@ export class SSEManager {
       this.heartbeatIntervals.delete(reply);
     }
     this.connectionState.delete(reply);
+
+    // Emit client disconnected event
+    if (this.eventBus && state) {
+      this.eventBus.emit('client.disconnected', {
+        agentId,
+        clientId: state.clientId,
+        timestamp: Date.now(),
+      });
+    }
   }
 
   /**
@@ -142,8 +171,8 @@ export class SSEManager {
           this.unsubscribe(agentId, reply);
           try {
             reply.raw.end();
-          } catch {
-            // ignore
+          } catch (endErr) {
+            console.debug('[SSE] Failed to end slow client connection', endErr);
           }
         } else {
           state.queue.push(data);
@@ -160,7 +189,8 @@ export class SSEManager {
           // The drain handler will clear it.
           state.draining = true;
         }
-      } catch {
+      } catch (writeErr) {
+        console.debug('[SSE] Write failed for agent', agentId, '— client likely disconnected', writeErr);
         this.unsubscribe(agentId, reply);
       }
     }
@@ -203,8 +233,8 @@ export class SSEManager {
         this.unsubscribe(agentId, reply);
         try {
           reply.raw.end();
-        } catch {
-          // ignore
+        } catch (endErr) {
+          console.debug('[SSE] Failed to end connection during shutdown for agent', agentId, endErr);
         }
       }
     }

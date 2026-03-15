@@ -53,10 +53,14 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     await expect(agentName).not.toBeEmpty();
 
     // ---------------------------------------------------------------
-    // 2. Pick agent — click first agent card, navigate to chat
+    // 2. Pick agent — click first agent card, navigate to detail then chat
     // ---------------------------------------------------------------
     await firstCard.click();
-    await expect(page).toHaveURL(/\/agents\/[^/]+\/chat/);
+    await expect(page).toHaveURL(/\/agents\/[^/]+$/);
+
+    // Navigate to chat from agent detail page
+    const chatUrl = page.url() + '/chat';
+    await page.goto(chatUrl);
 
     // ---------------------------------------------------------------
     // 3. Chat — type message, submit, see user bubble
@@ -72,8 +76,8 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     await expect(sendButton).toBeEnabled();
     await sendButton.click();
 
-    // User bubble should appear
-    const userBubble = page.getByTestId('message-bubble-user').first();
+    // User bubble should appear (use last() since prior conversations may exist)
+    const userBubble = page.getByTestId('message-bubble-user').last();
     await expect(userBubble).toBeVisible({ timeout: 5_000 });
     await expect(userBubble).toContainText(userMessage);
 
@@ -84,7 +88,7 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
       timeout: RESPONSE_TIMEOUT,
     });
 
-    const assistantBubble = page.getByTestId('message-bubble-assistant').first();
+    const assistantBubble = page.getByTestId('message-bubble-assistant').last();
     await expect(assistantBubble).toBeVisible();
 
     // The response should contain non-empty text
@@ -119,8 +123,8 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     // 6. Agent detail — navigate to agent overview page
     // ---------------------------------------------------------------
     // Extract agent ID from current chat URL
-    const chatUrl = page.url();
-    const agentIdMatch = chatUrl.match(/\/agents\/([^/]+)/);
+    const currentUrl = page.url();
+    const agentIdMatch = currentUrl.match(/\/agents\/([^/]+)/);
     expect(agentIdMatch).not.toBeNull();
     const agentId = agentIdMatch![1];
 

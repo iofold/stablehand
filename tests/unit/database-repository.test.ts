@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createDatabase } from '../../packages/ctxmill/src/database/connection.js';
+import { createSqliteDatabase } from '../../packages/ctxmill/src/database/connection.js';
 import { runMigrations } from '../../packages/ctxmill/src/database/migrations.js';
 import { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 
@@ -9,7 +9,7 @@ describe('DatabaseRepository', () => {
   let sqliteRaw: import('better-sqlite3').Database;
 
   beforeEach(() => {
-    const { db, sqlite } = createDatabase(':memory:');
+    const { db, sqlite } = createSqliteDatabase(':memory:');
     sqliteRaw = sqlite;
     runMigrations(sqlite);
     repo = new DatabaseRepository(db);
@@ -30,12 +30,17 @@ describe('DatabaseRepository', () => {
       const tableNames = tables.map((t) => t.name).sort();
       expect(tableNames).toEqual([
         'agent_runs',
+        'agent_versions',
         'agents',
         'conversations',
+        'event_store',
+        'event_triggers',
         'execution_traces',
         'feedback_signals',
         'knowledge_items',
         'messages',
+        'scheduled_events',
+        'suspended_runs',
       ]);
     });
 
@@ -47,7 +52,7 @@ describe('DatabaseRepository', () => {
       const tables = sqliteRaw
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         .all() as { name: string }[];
-      expect(tables.length).toBe(7);
+      expect(tables.length).toBe(12);
     });
   });
 

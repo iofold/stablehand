@@ -12,7 +12,7 @@ export default defineTool({
     fileExtensions: z.array(z.string()).optional().describe('File extensions to include, e.g. [".ts", ".json"]'),
   }),
   async handler({ pattern, directory, fileExtensions }, ctx) {
-    const basePath = process.cwd();
+    const basePath = ctx.workspaceDir;
     const searchDir = resolve(basePath, directory);
     if (!searchDir.startsWith(basePath)) {
       return 'Error: Cannot search outside the project';

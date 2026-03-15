@@ -62,6 +62,7 @@ export interface ApiInterruptPayload {
   toolName: string;
   args: Record<string, unknown>;
   toolCallId: string;
+  runId?: string;
 }
 
 /** POST /api/agents/:id/feedback request body */
@@ -81,6 +82,49 @@ export interface ApiKnowledgeItem {
   relevance: number;
 }
 
+// ── Skill types (Agent Skills Standard / SKILL.md format) ───────────
+
+/** Parsed YAML frontmatter from a SKILL.md file */
+export interface SkillFrontmatter {
+  name: string;
+  description: string;
+  license?: string;
+  compatibility?: string;
+  metadata?: Record<string, unknown>;
+  'allowed-tools'?: string;
+}
+
+/** Lightweight manifest entry returned by skill discovery */
+export interface SkillManifestEntry {
+  name: string;
+  description: string;
+  path: string;
+  source: 'project' | 'personal' | 'plugin' | 'marketplace';
+}
+
+/** Full skill data including parsed SKILL.md and directory contents */
+export interface LoadedSkill extends SkillManifestEntry {
+  frontmatter: SkillFrontmatter;
+  instructions: string;
+  scripts: string[];
+  references: string[];
+  assets: string[];
+}
+
+/** Result of validating a loaded skill */
+export interface SkillValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+/** Legacy skill (raw .ts/.js file without SKILL.md) */
+export interface LegacySkill {
+  name: string;
+  filename: string;
+  content: string;
+  legacy: true;
+}
+
 /** Knowledge stats as returned by GET /api/agents/:id/knowledge/stats */
 export interface ApiKnowledgeStats {
   totalItems: number;
@@ -88,4 +132,9 @@ export interface ApiKnowledgeStats {
   recentItems: number;
   oldestItem?: string;
   newestItem?: string;
+}
+
+/** Shared knowledge item with agentId field */
+export interface ApiSharedKnowledgeItem extends ApiKnowledgeItem {
+  agentId: string;
 }

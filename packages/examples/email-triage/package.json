@@ -1,0 +1,20 @@
+{
+  "name": "@ctxmill/example-email-triage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Email triage example for CTXMill - event-driven multi-agent email classification and routing",
+  "type": "module",
+  "scripts": {
+    "dev": "ctxmill dev",
+    "build": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ctxmill": "workspace:*",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

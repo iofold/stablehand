@@ -1,11 +1,7 @@
 import { create } from 'zustand';
+import type { ApiInterruptPayload } from '@ctxmill/shared';
 
-interface InterruptPayload {
-  agentId: string;
-  toolName: string;
-  args: Record<string, unknown>;
-  toolCallId: string;
-}
+type InterruptPayload = ApiInterruptPayload;
 
 interface InterruptStore {
   pending: InterruptPayload | null;

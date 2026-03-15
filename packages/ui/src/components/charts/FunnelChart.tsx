@@ -10,7 +10,7 @@ interface FunnelChartProps {
   stages: FunnelStage[];
 }
 
-const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#f43f5e', '#06b6d4'];
+const COLORS = ['#2dd4bf', '#14b8a6', '#a1a1aa', '#22c55e', '#eab308', '#ef4444'];
 
 export function FunnelChart({ title, stages }: FunnelChartProps) {
   const layout = useMemo(() => {
@@ -28,7 +28,7 @@ export function FunnelChart({ title, stages }: FunnelChartProps) {
 
   if (!layout || stages.length === 0) {
     return (
-      <div data-testid="a2ui-funnel-chart" className="card p-4">
+      <div data-testid="a2ui-funnel-chart" className="w-full h-full bg-transparent p-4">
         <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
         <p className="text-surface-400 text-sm">No data available</p>
       </div>
@@ -44,7 +44,7 @@ export function FunnelChart({ title, stages }: FunnelChartProps) {
   };
 
   return (
-    <div data-testid="a2ui-funnel-chart" className="card p-4">
+    <div data-testid="a2ui-funnel-chart" className="w-full h-full bg-transparent p-4">
       <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
       <svg viewBox={`0 0 ${width} ${totalHeight}`} className="w-full" style={{ maxHeight: totalHeight }}>
         {stages.map((stage, i) => {
@@ -75,7 +75,7 @@ export function FunnelChart({ title, stages }: FunnelChartProps) {
                 {stage.value.toLocaleString()}
               </text>
               {conversionPercent && (
-                <text x={centerX} y={y + stageHeight + gapHeight / 2 + 4} textAnchor="middle" fill="#94a3b8" fontSize={10}>
+                <text x={centerX} y={y + stageHeight + gapHeight / 2 + 4} textAnchor="middle" fill="#71717a" fontSize={12}>
                   {conversionPercent}% conversion
                 </text>
               )}

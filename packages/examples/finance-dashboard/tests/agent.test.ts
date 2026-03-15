@@ -1,4 +1,13 @@
 import { describe, it, expect } from 'vitest';
+import type { ToolContext } from 'ctxmill';
+
+/** Minimal mock ToolContext with workspaceDir set to process.cwd() */
+const mockCtx: ToolContext = {
+  agentId: 'test',
+  conversationId: 'test',
+  workspaceDir: process.cwd(),
+  knowledge: { query: async () => ({ items: [] }) },
+};
 
 describe('finance-analyst agent', () => {
   it('should export a valid agent definition', async () => {
@@ -62,33 +71,33 @@ describe('finance-analyst agent', () => {
   it('read-file should read file contents', async () => {
     const { default: tool } = await import('../tools/read-file');
     expect(tool.name).toBe('read-file');
-    const result = await tool.handler({ path: 'package.json' }, {} as any);
+    const result = await tool.handler({ path: 'package.json' }, mockCtx as any);
     expect(result).toContain('name');
   });
 
   it('read-file should block path traversal', async () => {
     const { default: tool } = await import('../tools/read-file');
-    const result = await tool.handler({ path: '../../../../../../etc/passwd' }, {} as any);
+    const result = await tool.handler({ path: '../../../../../../etc/passwd' }, mockCtx as any);
     expect(result).toContain('Error');
   });
 
   it('list-directory should list entries', async () => {
     const { default: tool } = await import('../tools/list-directory');
     expect(tool.name).toBe('list-directory');
-    const result = await tool.handler({ path: '.' }, {} as any);
+    const result = await tool.handler({ path: '.' }, mockCtx as any);
     expect(result).toContain('tools');
   });
 
   it('list-directory should block path traversal', async () => {
     const { default: tool } = await import('../tools/list-directory');
-    const result = await tool.handler({ path: '../../../../../../' }, {} as any);
+    const result = await tool.handler({ path: '../../../../../../' }, mockCtx as any);
     expect(result).toContain('Error');
   });
 
   it('search-files should find matches', async () => {
     const { default: tool } = await import('../tools/search-files');
     expect(tool.name).toBe('search-files');
-    const result = await tool.handler({ pattern: 'defineTool', directory: 'tools', fileExtensions: ['.ts'] }, {} as any);
+    const result = await tool.handler({ pattern: 'defineTool', directory: 'tools', fileExtensions: ['.ts'] }, mockCtx as any);
     expect(result).toContain('Found');
     expect(result).toContain('defineTool');
   });

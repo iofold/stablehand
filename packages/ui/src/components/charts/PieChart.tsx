@@ -7,7 +7,7 @@ import {
   Legend,
 } from 'recharts';
 
-const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4'];
+const COLORS = ['#2dd4bf', '#14b8a6', '#a1a1aa', '#22c55e', '#eab308', '#ef4444'];
 
 interface PieChartProps {
   title?: string;
@@ -25,7 +25,7 @@ export function PieChart({
   donut = false,
 }: PieChartProps) {
   return (
-    <div data-testid="a2ui-pie-chart" className="card p-4">
+    <div data-testid="a2ui-pie-chart" className="w-full h-full bg-transparent">
       {title && (
         <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
       )}
@@ -39,12 +39,12 @@ export function PieChart({
             cy="50%"
             innerRadius={donut ? 60 : 0}
             outerRadius={100}
-            strokeWidth={2}
-            stroke="#0f172a"
+            strokeWidth={1}
+            stroke="#3f3f46"
             label={({ name, percent }) =>
               `${name} ${(percent * 100).toFixed(0)}%`
             }
-            labelLine={{ stroke: '#64748b' }}
+            labelLine={{ stroke: '#3f3f46' }}
           >
             {data.map((_, index) => (
               <Cell key={index} fill={COLORS[index % COLORS.length]} />
@@ -52,14 +52,15 @@ export function PieChart({
           </Pie>
           <Tooltip
             contentStyle={{
-              backgroundColor: '#1e293b',
-              border: '1px solid #334155',
-              borderRadius: '8px',
-              color: '#e2e8f0',
-              fontSize: 12,
+              backgroundColor: '#27272a',
+              border: '1px solid #3f3f46',
+              borderRadius: '6px',
+              color: '#d4d4d8',
+              fontSize: '13px',
             }}
+            itemStyle={{ color: '#d4d4d8' }}
           />
-          <Legend />
+          <Legend formatter={(value) => <span className="text-xs text-surface-500">{value}</span>} />
         </RechartsPieChart>
       </ResponsiveContainer>
     </div>

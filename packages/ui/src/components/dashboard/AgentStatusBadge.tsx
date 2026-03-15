@@ -4,12 +4,12 @@ interface AgentStatusBadgeProps {
   status: string;
 }
 
-const statusConfig: Record<string, { label: string; color: string; pulse: boolean }> = {
-  created: { label: 'Created', color: 'bg-surface-500 text-surface-200', pulse: false },
-  booting: { label: 'Booting', color: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30', pulse: true },
-  running: { label: 'Running', color: 'bg-green-500/20 text-green-300 border-green-500/30', pulse: true },
-  suspended: { label: 'Suspended', color: 'bg-blue-500/20 text-blue-300 border-blue-500/30', pulse: false },
-  error: { label: 'Error', color: 'bg-red-500/20 text-red-300 border-red-500/30', pulse: false },
+const statusConfig: Record<string, { label: string; color: string }> = {
+  created: { label: 'Created', color: 'bg-surface-500' },
+  booting: { label: 'Booting', color: 'bg-status-warning' },
+  running: { label: 'Running', color: 'bg-status-success' },
+  suspended: { label: 'Suspended', color: 'bg-surface-500' },
+  error: { label: 'Error', color: 'bg-status-error' },
 };
 
 export function AgentStatusBadge({ status }: AgentStatusBadgeProps) {
@@ -17,17 +17,9 @@ export function AgentStatusBadge({ status }: AgentStatusBadgeProps) {
 
   return (
     <span
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-wide',
-        config.color,
-      )}
+      className="inline-flex items-center gap-2 text-xs font-medium text-surface-400"
     >
-      {config.pulse && (
-        <span className="relative flex h-2 w-2">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-40" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-current" />
-        </span>
-      )}
+      <span className={cn('h-1.5 w-1.5 rounded-full', config.color)} />
       {config.label}
     </span>
   );

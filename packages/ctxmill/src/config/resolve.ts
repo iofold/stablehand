@@ -43,6 +43,26 @@ export function resolveConfig(userConfig: CTXMillConfig): ResolvedConfig {
     base.llm.baseUrl = process.env.ANTHROPIC_BASE_URL || process.env.OPENAI_BASE_URL || '';
   }
 
+  // ── Validate required config ────────────────────────────
+  // Database URL must be set for non-local presets
+  if (preset !== 'local') {
+    if (!base.database.url || base.database.url.startsWith('env:')) {
+      throw new Error(
+        `Configuration error: database.url is required for the "${preset}" preset. ` +
+        `Set the DATABASE_URL environment variable or provide database.url in your config.`,
+      );
+    }
+  }
+
+  // LLM API key is always required
+  if (!base.llm.apiKey) {
+    throw new Error(
+      'Configuration error: no LLM API key found. ' +
+      'Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable, ' +
+      'or provide llm.apiKey in your config.',
+    );
+  }
+
   return base;
 }
 

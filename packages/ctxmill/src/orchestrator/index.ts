@@ -6,5 +6,8 @@ export type { PendingInterrupt, InterruptResolution } from './interrupt.js';
 export { agentRoutes, runsRoutes } from './routes/agents.js';
 export type { AgentRouteOptions, RunsRouteOptions } from './routes/agents.js';
 export { catalogRoutes } from './routes/catalogs.js';
+export { eventRoutes } from './routes/events.js';
+export type { EventRouteOptions } from './routes/events.js';
 export { RunRegistry } from './run-registry.js';
 export type { AgentRun, RunStatus, RunMode } from './run-registry.js';
+export { SSEBroadcaster } from './sse-broadcaster.js';

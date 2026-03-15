@@ -55,22 +55,20 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
 
   const inputClasses = (name: string) =>
     cn(
-      'w-full rounded-lg border bg-zinc-800 px-3 py-2 text-sm text-zinc-200',
-      'focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500',
-      'placeholder:text-zinc-600',
-      errors[name] ? 'border-rose-500' : 'border-zinc-700',
+      'input-base w-full',
+      errors[name] && 'border-status-error focus:border-status-error focus:ring-status-error/50',
     );
 
   return (
-    <div data-testid="field-request-form" className="rounded-lg border border-zinc-700 bg-zinc-900 p-5">
-      <h3 className="text-base font-semibold text-zinc-100 mb-4">{title}</h3>
+    <div data-testid="field-request-form" className="rounded-lg border border-surface-700 bg-surface-900 p-5">
+      <h3 className="text-base font-semibold text-surface-100 mb-4">{title}</h3>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {fields.map((field) => (
           <div key={field.name}>
-            <label className="block text-sm font-medium text-zinc-300 mb-1.5">
+            <label className="text-label block mb-1.5">
               {field.label}
-              {field.required && <span className="text-rose-400 ml-1">*</span>}
+              {field.required && <span className="text-status-error ml-1">*</span>}
             </label>
 
             {field.type === 'textarea' ? (
@@ -94,7 +92,7 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
                     </option>
                   ))}
                 </select>
-                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500 pointer-events-none" />
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-500 pointer-events-none" />
               </div>
             ) : (
               <input
@@ -106,7 +104,7 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
             )}
 
             {errors[field.name] && (
-              <p className="mt-1 text-xs text-rose-400">This field is required</p>
+              <p className="mt-1 text-xs text-status-error">This field is required</p>
             )}
           </div>
         ))}
@@ -114,7 +112,7 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
         <button
           data-testid="submit-button"
           type="submit"
-          className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-500 transition-colors"
+          className="btn-primary"
         >
           {submitLabel}
         </button>

@@ -8,21 +8,6 @@ export interface A2UIPayload {
   [key: string]: unknown;
 }
 
-// Internal event bus events
-export type InternalEventType =
-  | 'agent.created'
-  | 'agent.status_changed'
-  | 'agent.message_received'
-  | 'tool.call_started'
-  | 'tool.call_completed'
-  | 'tool.call_failed'
-  | 'trace.captured'
-  | 'feedback.received'
-  | 'insight.extracted'
-  | 'knowledge.updated';
-
-export interface InternalEvent {
-  type: InternalEventType;
-  timestamp: Date;
-  payload: Record<string, unknown>;
-}
+// Internal event types are now defined by the EventMap in bus.ts.
+// Re-export for backward compatibility.
+export type { EventMap, EventName } from './bus.js';

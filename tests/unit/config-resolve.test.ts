@@ -10,9 +10,11 @@ describe('Config Resolution', () => {
     process.env = { ...originalEnv };
     delete process.env.DATABASE_URL;
     delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.OPENAI_API_KEY;
     delete process.env.ANTHROPIC_BASE_URL;
     delete process.env.OPENAI_BASE_URL;
+    // Provide a default API key so validation passes (tests that check env var
+    // resolution explicitly override or delete this as needed)
+    process.env.OPENAI_API_KEY = 'sk-test-default';
   });
 
   afterEach(() => {

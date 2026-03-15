@@ -8,9 +8,12 @@ import { CandlestickChart } from '@/components/charts/CandlestickChart';
 import { FunnelChart } from '@/components/charts/FunnelChart';
 import { SankeyDiagram } from '@/components/charts/SankeyDiagram';
 import { KnowledgeGraphView } from '@/components/charts/KnowledgeGraphView';
-import { ApprovalCard } from '@/components/hitl/ApprovalCard';
-import { EditableDocument } from '@/components/hitl/EditableDocument';
-import { FieldRequestForm } from '@/components/hitl/FieldRequestForm';
+import { LineChart } from '@/components/charts/LineChart';
+import { AreaChart } from '@/components/charts/AreaChart';
+import { ScatterChart } from '@/components/charts/ScatterChart';
+import { RadarChart } from '@/components/charts/RadarChart';
+import { Treemap } from '@/components/charts/Treemap';
+import { NetworkGraph } from '@/components/charts/NetworkGraph';
 
 type AnyProps = Record<string, unknown>;
 
@@ -52,10 +55,10 @@ registerCatalog('charts', {
   FunnelChart: c(FunnelChart),
   SankeyDiagram: c(SankeyDiagram),
   KnowledgeGraphView: c(KnowledgeGraphView),
-});
-
-registerCatalog('hitl', {
-  ApprovalCard: c(ApprovalCard),
-  EditableDocument: c(EditableDocument),
-  FieldRequestForm: c(FieldRequestForm),
+  LineChart: c(LineChart),
+  AreaChart: c(AreaChart),
+  ScatterChart: c(ScatterChart),
+  RadarChart: c(RadarChart),
+  Treemap: c(Treemap),
+  NetworkGraph: c(NetworkGraph),
 });

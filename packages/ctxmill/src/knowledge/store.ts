@@ -84,7 +84,7 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
   }
 
   async search(agentId: string, options: KnowledgeSearchOptions): Promise<KnowledgeSearchResult> {
-    let filtered: KnowledgeItem[] = [];
+    const filtered: KnowledgeItem[] = [];
     for (const item of this.items.values()) {
       if (item.agentId !== agentId) continue;
       if (options.category && item.category !== options.category) continue;
@@ -201,6 +201,30 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     }
 
     return lines.join('\n');
+  }
+
+  // ── Shared knowledge stubs (InMemoryKnowledgeStore has no shared concept) ──
+
+  async listShared(): Promise<KnowledgeItem[]> {
+    return [];
+  }
+
+  async addShared(
+    item: Omit<KnowledgeItem, 'id' | 'createdAt' | 'updatedAt' | 'agentId'>,
+  ): Promise<KnowledgeItem> {
+    return this.add({ ...item, agentId: '__shared__' });
+  }
+
+  async searchShared(options: KnowledgeSearchOptions): Promise<KnowledgeSearchResult> {
+    return this.search('__shared__', options);
+  }
+
+  async sharedStats(): Promise<KnowledgeStats> {
+    return { totalItems: 0, categories: {}, recentItems: 0 };
+  }
+
+  async searchAll(options: KnowledgeSearchOptions): Promise<KnowledgeSearchResult> {
+    return this.search('', options);
   }
 }
 

@@ -48,7 +48,7 @@ export function CandlestickChart({ title, data }: CandlestickChartProps) {
 
   if (!layout || data.length === 0) {
     return (
-      <div data-testid="a2ui-candlestick-chart" className="card p-4">
+      <div data-testid="a2ui-candlestick-chart" className="w-full h-full bg-transparent p-4">
         <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
         <p className="text-surface-400 text-sm">No data available</p>
       </div>
@@ -65,7 +65,7 @@ export function CandlestickChart({ title, data }: CandlestickChartProps) {
   );
 
   return (
-    <div data-testid="a2ui-candlestick-chart" className="card p-4">
+    <div data-testid="a2ui-candlestick-chart" className="w-full h-full bg-transparent p-4">
       <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
       <svg
         viewBox={`0 0 ${width} ${totalHeight + 24}`}
@@ -79,15 +79,15 @@ export function CandlestickChart({ title, data }: CandlestickChartProps) {
               x2={width - 10}
               y1={scaleY(tick)}
               y2={scaleY(tick)}
-              stroke="#334155"
-              strokeDasharray="3 3"
+              stroke="#3f3f46"
+              strokeOpacity={0.2}
             />
             <text
               x={paddingX - 6}
-              y={scaleY(tick) + 3}
+              y={scaleY(tick) + 4}
               textAnchor="end"
-              fill="#94a3b8"
-              fontSize={10}
+              fill="#71717a"
+              fontSize={12}
             >
               {tick.toFixed(2)}
             </text>
@@ -97,7 +97,7 @@ export function CandlestickChart({ title, data }: CandlestickChartProps) {
         {data.map((d, i) => {
           const x = paddingX + i * step;
           const isUp = d.close >= d.open;
-          const color = isUp ? '#10b981' : '#ef4444';
+          const color = isUp ? '#22c55e' : '#ef4444';
           const bodyTop = scaleY(Math.max(d.open, d.close));
           const bodyBottom = scaleY(Math.min(d.open, d.close));
           const bodyHeight = Math.max(1, bodyBottom - bodyTop);
@@ -123,7 +123,7 @@ export function CandlestickChart({ title, data }: CandlestickChartProps) {
           if (d.volume == null) return null;
           const x = paddingX + i * step;
           const isUp = d.close >= d.open;
-          const color = isUp ? '#10b98166' : '#ef444466';
+          const color = isUp ? '#22c55e' : '#ef4444';
           const volY = scaleVolY(d.volume);
           return (
             <rect
@@ -133,6 +133,7 @@ export function CandlestickChart({ title, data }: CandlestickChartProps) {
               width={barWidth}
               height={volumeBase - volY}
               fill={color}
+              fillOpacity={0.1}
               rx={1}
             />
           );
@@ -142,7 +143,7 @@ export function CandlestickChart({ title, data }: CandlestickChartProps) {
           if (data.length <= 10 || i % Math.ceil(data.length / 8) === 0) {
             const x = paddingX + i * step;
             return (
-              <text key={`date-${i}`} x={x} y={totalHeight + 18} textAnchor="middle" fill="#94a3b8" fontSize={9}>
+              <text key={`date-${i}`} x={x} y={totalHeight + 18} textAnchor="middle" fill="#71717a" fontSize={12}>
                 {d.date}
               </text>
             );

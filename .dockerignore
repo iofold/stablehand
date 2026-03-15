@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+**/.ctxmill
+**/dist
+*.png
+**/*.png
+.tmp
+playwright-report
+test-results
+.git
+data
+.playwright-mcp
+**/.playwright-mcp
+*.bak
+docs/screenshots
+my-images

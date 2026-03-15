@@ -1,15 +1,19 @@
 import type { ToolCall } from './tool/types.js';
 import type { A2UIPayload } from './events/types.js';
+import type { AgentModelConfig } from './harness/types.js';
 
 // Agent types
 export interface AgentDefinition {
   name: string;
-  model: string;
+  model: string;                    // kept for backward compat
+  harness?: string;                 // 'langgraph' | 'openai-agents' | 'claude-agents' | 'pi-agent' | 'vercel-ai'
+  modelConfig?: AgentModelConfig;
   tools: string[];
   systemPrompt: string;
   description?: string;
   metadata?: Record<string, unknown>;
   mode?: 'interactive' | 'background' | 'both';
+  workspaceDir?: string;
 }
 
 // Agent runtime state

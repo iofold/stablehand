@@ -10,8 +10,10 @@ import {
   File,
   Loader2,
   AlertCircle,
+  Plus,
+  X,
 } from 'lucide-react';
-import { listFiles } from '@/lib/api';
+import { listFiles, createFile } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 interface FileEntry {
@@ -32,6 +34,10 @@ interface FileExplorerProps {
   agentId: string;
   onFileSelect: (path: string) => void;
   selectedFile?: string | null;
+  /** When provided, files are served from the session overlay instead of base workspace */
+  runId?: string;
+  /** Called after a file is created so the parent can react (e.g. select the new file) */
+  onFileCreated?: (path: string) => void;
 }
 
 function getFileIcon(name: string) {
@@ -105,12 +111,11 @@ function TreeItem({
           }
         }}
         className={cn(
-          'group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs transition-colors',
-          'hover:bg-surface-700/50',
-          isSelected && 'bg-brand-600/15 text-brand-300',
-          !isSelected && 'text-surface-300',
+          'group flex w-full items-center gap-1.5 rounded-md px-3 py-2 text-left text-sm cursor-pointer',
+          'hover:bg-surface-800 hover:text-surface-200',
+          isSelected ? 'bg-surface-800 text-surface-100' : 'text-surface-400',
         )}
-        style={{ paddingLeft: `${depth * 16 + 6}px` }}
+        style={{ paddingLeft: `${depth * 16 + 12}px` }}
       >
         {/* Chevron for directories */}
         {isDir ? (
@@ -118,9 +123,9 @@ function TreeItem({
             {node.loading ? (
               <Loader2 className="h-3 w-3 animate-spin text-surface-500" />
             ) : node.expanded ? (
-              <ChevronDown className="h-3 w-3 text-surface-500" />
+              <ChevronDown className="h-3.5 w-3.5 text-surface-600" />
             ) : (
-              <ChevronRight className="h-3 w-3 text-surface-500" />
+              <ChevronRight className="h-3.5 w-3.5 text-surface-600" />
             )}
           </span>
         ) : (
@@ -130,17 +135,17 @@ function TreeItem({
         {/* Icon */}
         <Icon
           className={cn(
-            'h-3.5 w-3.5 flex-shrink-0',
+            'h-4 w-4 flex-shrink-0',
             isDir
-              ? 'text-amber-400/80'
+              ? 'text-surface-600'
               : isSelected
-                ? 'text-brand-400'
+                ? 'text-surface-100'
                 : 'text-surface-500 group-hover:text-surface-400',
           )}
         />
 
         {/* Name */}
-        <span className="truncate font-mono text-[11px]">{node.name}</span>
+        <span className="truncate font-mono">{node.name}</span>
       </button>
 
       {/* Children */}
@@ -150,8 +155,8 @@ function TreeItem({
           {node.children.map((child) => (
             <div key={child.path} className="relative">
               <div
-                className="absolute top-0 bottom-0 border-l border-surface-700/40"
-                style={{ left: `${(depth + 1) * 16 + 10}px` }}
+                className="absolute top-0 bottom-0 border-l border-surface-700/50"
+                style={{ left: `${(depth + 1) * 16 + 20}px` }}
               />
               <TreeItem
                 node={child}
@@ -168,43 +173,44 @@ function TreeItem({
   );
 }
 
-export function FileExplorer({ agentId, onFileSelect, selectedFile }: FileExplorerProps) {
+export function FileExplorer({ agentId, onFileSelect, selectedFile, runId, onFileCreated }: FileExplorerProps) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [rootLoading, setRootLoading] = useState(true);
+  const [showNewFile, setShowNewFile] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
+  const [newFileContent, setNewFileContent] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   // Load root directory on mount
-  useEffect(() => {
-    let mounted = true;
-    async function loadRoot() {
-      setRootLoading(true);
-      setError(null);
-      try {
-        const data = await listFiles(agentId, '.');
-        if (!mounted) return;
-        const entries: FileEntry[] = data.entries || [];
-        const sorted = sortEntries(entries);
-        setTree(
-          sorted.map((e) => ({
-            ...e,
-            path: e.name,
-            children: e.type === 'directory' ? [] : undefined,
-            loaded: false,
-            expanded: false,
-            loading: false,
-          })),
-        );
-      } catch (err) {
-        if (mounted) setError(String(err));
-      } finally {
-        if (mounted) setRootLoading(false);
-      }
+  const loadRoot = useCallback(async () => {
+    setRootLoading(true);
+    setError(null);
+    try {
+      const data = await listFiles(agentId, '.', runId);
+      const entries: FileEntry[] = data.entries || [];
+      const sorted = sortEntries(entries);
+      setTree(
+        sorted.map((e) => ({
+          ...e,
+          path: e.name,
+          children: e.type === 'directory' ? [] : undefined,
+          loaded: false,
+          expanded: false,
+          loading: false,
+        })),
+      );
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setRootLoading(false);
     }
+  }, [agentId, runId]);
+
+  useEffect(() => {
     loadRoot();
-    return () => {
-      mounted = false;
-    };
-  }, [agentId]);
+  }, [loadRoot]);
 
   const handleToggle = useCallback(
     async (node: TreeNode) => {
@@ -223,7 +229,7 @@ export function FileExplorer({ agentId, onFileSelect, selectedFile }: FileExplor
       // Load children
       setTree((prev) => updateNode(prev, node.path, { loading: true, expanded: true }));
       try {
-        const data = await listFiles(agentId, node.path);
+        const data = await listFiles(agentId, node.path, runId);
         const entries: FileEntry[] = data.entries || [];
         const sorted = sortEntries(entries);
         const children: TreeNode[] = sorted.map((e) => ({
@@ -242,16 +248,118 @@ export function FileExplorer({ agentId, onFileSelect, selectedFile }: FileExplor
         setTree((prev) => updateNode(prev, node.path, { loading: false }));
       }
     },
-    [agentId],
+    [agentId, runId],
   );
 
+  const handleCreateFile = async () => {
+    if (!newFileName.trim()) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await createFile(agentId, newFileName.trim(), newFileContent);
+      setShowNewFile(false);
+      setNewFileName('');
+      setNewFileContent('');
+      // Refresh the tree and select the new file
+      await loadRoot();
+      onFileCreated?.(newFileName.trim());
+      onFileSelect(newFileName.trim());
+    } catch (err) {
+      setCreateError(String(err));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
-    <div data-testid="file-explorer" className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center gap-2 border-b border-surface-700/40 px-3 py-2">
-        <Folder className="h-3.5 w-3.5 text-surface-400" />
-        <span className="text-xs font-medium text-surface-300">Explorer</span>
-      </div>
+    <div data-testid="file-explorer" className="flex h-full flex-col bg-surface-850 border-r border-surface-700">
+      {/* Header with New File button */}
+      {!runId && (
+        <div className="flex items-center justify-between border-b border-surface-700 px-3 py-2">
+          <span className="text-xs font-medium text-surface-400">Files</span>
+          <button
+            type="button"
+            data-testid="new-file-btn"
+            onClick={() => setShowNewFile(true)}
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
+            title="New file"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>New</span>
+          </button>
+        </div>
+      )}
+
+      {/* New File Modal */}
+      {showNewFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowNewFile(false)}>
+          <div
+            className="w-full max-w-lg rounded-lg border border-surface-700 bg-surface-900 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-surface-700 px-4 py-3">
+              <h3 className="text-sm font-semibold text-surface-200">Create New File</h3>
+              <button
+                type="button"
+                onClick={() => setShowNewFile(false)}
+                className="rounded-md p-1 text-surface-500 hover:bg-surface-800 hover:text-surface-300"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3 p-4">
+              <div>
+                <label className="block text-xs font-medium text-surface-400 mb-1">File path</label>
+                <input
+                  data-testid="new-file-path"
+                  type="text"
+                  value={newFileName}
+                  onChange={(e) => setNewFileName(e.target.value)}
+                  placeholder="e.g. src/utils.ts"
+                  className="w-full rounded-md border border-surface-700 bg-surface-850 px-3 py-2 font-mono text-sm text-surface-200 placeholder:text-surface-600 focus:border-surface-500 focus:outline-none"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-surface-400 mb-1">Content</label>
+                <textarea
+                  data-testid="new-file-content"
+                  value={newFileContent}
+                  onChange={(e) => setNewFileContent(e.target.value)}
+                  placeholder="File contents..."
+                  rows={12}
+                  className="w-full rounded-md border border-surface-700 bg-surface-850 px-3 py-2 font-mono text-sm text-surface-200 placeholder:text-surface-600 focus:border-surface-500 focus:outline-none resize-y"
+                />
+              </div>
+              {createError && (
+                <div className="flex items-center gap-2 text-xs text-red-400">
+                  <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span>{createError}</span>
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowNewFile(false)}
+                  className="rounded-md px-3 py-1.5 text-sm text-surface-400 hover:text-surface-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  data-testid="create-file-submit"
+                  onClick={handleCreateFile}
+                  disabled={!newFileName.trim() || creating}
+                  className="flex items-center gap-1.5 rounded-md bg-surface-700 px-3 py-1.5 text-sm font-medium text-surface-200 hover:bg-surface-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {creating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tree */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-1 py-1">

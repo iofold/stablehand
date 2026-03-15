@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "resolveJsonModule": true
+  },
+  "include": ["agents/**/*.ts", "tools/**/*.ts", "ctxmill.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}

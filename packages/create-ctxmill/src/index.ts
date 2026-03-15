@@ -6,7 +6,6 @@ import { scaffold } from './scaffold.js';
 const { positionals } = parseArgs({
   allowPositionals: true,
   options: {
-    template: { type: 'string', default: 'default' },
     'no-interactive': { type: 'boolean', default: false },
   },
   strict: false,
@@ -14,7 +13,7 @@ const { positionals } = parseArgs({
 
 const projectName = positionals[0];
 if (!projectName) {
-  console.error('Usage: create-ctxmill <project-name> [--template <name>]');
+  console.error('Usage: create-ctxmill <project-name>');
   process.exit(1);
 }
 

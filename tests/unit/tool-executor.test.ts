@@ -70,27 +70,24 @@ describe('LocalFunctionExecutor', () => {
     expect(parsed.echo).toBe('hello');
   });
 
-  it('should return error for unknown tool', async () => {
-    const result = await executor.execute(
-      { id: 'call-1', name: 'unknown-tool', arguments: {} },
-      mockCtx,
-    );
-
-    expect(result.error).toBe('Unknown tool: unknown-tool');
-    expect(result.result).toBe('');
-    expect(result.durationMs).toBe(0);
+  it('should throw for unknown tool', async () => {
+    await expect(
+      executor.execute(
+        { id: 'call-1', name: 'unknown-tool', arguments: {} },
+        mockCtx,
+      ),
+    ).rejects.toThrow(/unknown tool/i);
   });
 
-  it('should return error for invalid input (Zod validation)', async () => {
+  it('should throw for invalid input (Zod validation)', async () => {
     executor.register(createTool());
 
-    const result = await executor.execute(
-      { id: 'call-1', name: 'test-tool', arguments: { value: 123 } }, // value should be string
-      mockCtx,
-    );
-
-    expect(result.error).toBeDefined();
-    expect(result.result).toBe('');
+    await expect(
+      executor.execute(
+        { id: 'call-1', name: 'test-tool', arguments: { value: 123 } }, // value should be string
+        mockCtx,
+      ),
+    ).rejects.toThrow(/input validation failed/i);
   });
 
   it('should return error when handler throws', async () => {
@@ -154,12 +151,13 @@ describe('LocalFunctionExecutor', () => {
     );
     expect(valid.error).toBeUndefined();
 
-    // Invalid: negative count
-    const invalid = await executor.execute(
-      { id: 'c2', name: 'complex-tool', arguments: { name: 'test', count: -1 } },
-      mockCtx,
-    );
-    expect(invalid.error).toBeDefined();
+    // Invalid: negative count — should throw
+    await expect(
+      executor.execute(
+        { id: 'c2', name: 'complex-tool', arguments: { name: 'test', count: -1 } },
+        mockCtx,
+      ),
+    ).rejects.toThrow(/input validation failed/i);
   });
 
   it('should replace tools when registered with same name', () => {

@@ -33,12 +33,13 @@ export function useSSE(agentId: string | undefined) {
         const data = JSON.parse(event.data);
 
         // Route interrupt events to the interrupt store
-        if (data.type === 'CUSTOM' && data.subtype === 'interrupt') {
+        if (data.type === 'CUSTOM' && data.subtype === 'interrupted') {
           setPending({
             agentId: data.agentId ?? agentId ?? '',
             toolName: data.toolName ?? '',
             args: data.args ?? {},
             toolCallId: data.toolCallId ?? '',
+            runId: data.runId,
           });
         }
 

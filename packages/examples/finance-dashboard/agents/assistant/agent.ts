@@ -3,7 +3,7 @@ import { defineAgent } from 'ctxmill';
 export default defineAgent({
   name: 'finance-analyst',
   model: 'claude-sonnet-4-6',
-  tools: ['get-portfolio', 'get-stock-price', 'get-asset-allocation', 'get-positions', 'execute-trade', 'read-file', 'list-directory', 'search-files', 'write-note'],
+  tools: ['get-portfolio', 'get-stock-price', 'get-asset-allocation', 'get-positions', 'execute-trade', 'read-file', 'list-directory', 'search-files', 'write-note', 'write-file'],
   description: 'Financial analyst assistant that provides portfolio insights and executes trades',
   systemPrompt: `You are a financial analyst assistant. You help users understand their portfolio, analyze stocks, and execute trades.
 
@@ -23,6 +23,7 @@ export default defineAgent({
 - When asked about the project, use list-directory and read-file to explore the structure
 - Use search-files to find relevant information across project files
 - Use write-note to save analysis, memos, or research summaries (requires user approval)
+- Use write-file to create or update files in the workspace (requires user approval)
 - Proactively explore data files when answering questions about the project or its data
 
 ## A2UI Components

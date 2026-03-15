@@ -1,6 +1,7 @@
 export { TraceCollector } from './trace.js';
 export { SimpleReflector } from './reflector.js';
 export { DefaultLearningPipeline } from './pipeline.js';
+export { LearningEventSubscriber } from './event-subscriber.js';
 export type {
   ExecutionTrace,
   TraceStep,

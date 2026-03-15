@@ -1,0 +1,26 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: langgraph-helper
+  displayName: LangGraph Helper
+  description: General assistant using LangGraph harness
+  labels:
+    example: kitchen-sink
+    harness: langgraph
+spec:
+  harness: langgraph
+  model:
+    provider: openai
+    id: gpt-5-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+    temperature: 0.3
+  instructions: |
+    You are a helpful assistant that can perform calculations and check weather.
+    Always be concise and accurate. You are powered by the LangGraph harness.
+  tools:
+    - ref: calculator
+    - ref: weather
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 60
+    maxTokensPerRun: 4000

@@ -1,14 +1,4 @@
 import { useState } from 'react';
-import {
-  Loader2,
-  CheckCircle2,
-  XCircle,
-  ChevronDown,
-  ChevronRight,
-  Terminal,
-  Clock,
-  Play,
-} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ToolCallState } from '@/stores/conversation';
 
@@ -19,142 +9,79 @@ interface ToolCallCardProps {
 export function ToolCallCard({ toolCall }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(false);
 
-  let parsedArgs: string | undefined;
+  let parsedArgsStr = '';
+  let formattedArgs = '';
   try {
     if (toolCall.args) {
-      parsedArgs = JSON.stringify(JSON.parse(toolCall.args), null, 2);
+      const parsed = JSON.parse(toolCall.args);
+      parsedArgsStr = JSON.stringify(parsed);
+      formattedArgs = JSON.stringify(parsed, null, 2);
     }
   } catch {
-    parsedArgs = toolCall.args;
+    parsedArgsStr = toolCall.args || '';
+    formattedArgs = toolCall.args || '';
   }
+
+  const truncatedArgs = parsedArgsStr.length > 50 
+    ? parsedArgsStr.substring(0, 50) + '...' 
+    : parsedArgsStr;
 
   const isRunning = toolCall.status === 'running' || toolCall.status === 'pending';
   const isComplete = toolCall.status === 'complete';
   const isError = toolCall.status === 'error';
 
-  const statusConfig = {
-    pending: {
-      icon: <Clock className="h-3.5 w-3.5 text-surface-400" />,
-      label: 'Queued',
-      labelClass: 'text-surface-500',
-      borderClass: 'border-surface-700/40',
-      bgClass: 'bg-surface-800/40',
-    },
-    running: {
-      icon: <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-400" />,
-      label: 'Running',
-      labelClass: 'text-brand-400',
-      borderClass: 'border-brand-500/20',
-      bgClass: 'bg-brand-950/20',
-    },
-    complete: {
-      icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />,
-      label: 'Complete',
-      labelClass: 'text-emerald-400',
-      borderClass: 'border-emerald-800/20',
-      bgClass: 'bg-surface-800/30',
-    },
-    error: {
-      icon: <XCircle className="h-3.5 w-3.5 text-red-400" />,
-      label: 'Failed',
-      labelClass: 'text-red-400',
-      borderClass: 'border-red-800/30',
-      bgClass: 'bg-red-950/10',
-    },
-  };
+  let dotColor = 'bg-surface-600';
+  let dotAnimation = '';
 
-  const config = statusConfig[toolCall.status];
+  if (isRunning) {
+    dotColor = 'bg-yellow-500';
+    dotAnimation = 'animate-pulse';
+  } else if (isComplete) {
+    dotColor = 'bg-green-500';
+  } else if (isError) {
+    dotColor = 'bg-red-500';
+  }
 
   return (
-    <div
-      data-testid="tool-call-card"
-      className={cn(
-        'ml-10 my-1 rounded-lg border text-sm animate-fade-in transition-colors',
-        config.borderClass,
-        config.bgClass,
-      )}
-    >
-      {/* Header */}
+    <div data-testid="tool-call-card" className="my-1 text-sm font-mono">
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-surface-700/20 transition-colors rounded-lg group"
+        className="flex items-center gap-2 text-left group hover:opacity-80 transition-opacity w-full"
       >
-        <div className={cn(
-          'flex h-5 w-5 items-center justify-center rounded',
-          isRunning ? 'bg-brand-600/15' : isError ? 'bg-red-600/10' : 'bg-surface-700/40',
-        )}>
-          <Terminal className={cn(
-            'h-3 w-3',
-            isRunning ? 'text-brand-400' : isError ? 'text-red-400' : 'text-surface-400',
-          )} />
-        </div>
-
-        <div className="flex flex-1 items-center gap-2 min-w-0">
-          <span
-            data-testid="tool-call-name"
-            className="font-mono text-xs text-surface-200 truncate"
-          >
-            {toolCall.name}
-          </span>
-          <span className={cn('text-[10px] font-medium', config.labelClass)}>
-            {config.label}
-          </span>
-        </div>
-
-        {config.icon}
-
+        <div className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', dotColor, dotAnimation)} />
+        <span className={cn('truncate', expanded ? 'text-surface-400' : 'text-surface-500')}>
+          {expanded ? '▾' : '▸'} <span data-testid="tool-call-name">{toolCall.name}</span>({truncatedArgs})
+        </span>
         {toolCall.status === 'complete' && (
           <span data-testid="tool-call-complete" className="sr-only">complete</span>
         )}
-
-        <div className="text-surface-600 group-hover:text-surface-400 transition-colors">
-          {expanded ? (
-            <ChevronDown className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5" />
-          )}
-        </div>
       </button>
 
-      {/* Expandable details */}
       {expanded && (
-        <div className="border-t border-surface-700/30 px-3 py-2.5 space-y-2.5">
-          {parsedArgs && (
+        <div className="mt-2 ml-3.5 space-y-2">
+          {formattedArgs && (
             <div>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Play className="h-2.5 w-2.5 text-surface-500" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-surface-500">
-                  Arguments
-                </span>
-              </div>
-              <pre className="bg-surface-900/80 border border-surface-700/30 rounded-md p-2.5 text-xs text-surface-300 overflow-x-auto font-mono leading-relaxed">
-                {parsedArgs}
+              <div className="text-[10px] text-surface-500 mb-1 uppercase tracking-wider">Arguments</div>
+              <pre className="bg-surface-950 border border-surface-700 rounded-md p-2 text-xs font-mono text-surface-400 overflow-x-auto">
+                {formattedArgs}
               </pre>
             </div>
           )}
+          
           {toolCall.result && (
             <div>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-emerald-500/80">
-                  Result
-                </span>
-              </div>
-              <pre className="bg-surface-900/80 border border-surface-700/30 rounded-md p-2.5 text-xs text-surface-300 overflow-x-auto max-h-48 font-mono leading-relaxed">
+              <div className="text-[10px] text-surface-500 mb-1 uppercase tracking-wider">Result</div>
+              <pre className="bg-surface-950 border border-surface-700 rounded-md p-2 text-xs font-mono text-surface-400 overflow-x-auto max-h-48">
                 {toolCall.result}
               </pre>
             </div>
           )}
+          
           {toolCall.error && (
             <div>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <XCircle className="h-2.5 w-2.5 text-red-400" />
-                <span className="text-[10px] font-medium uppercase tracking-wider text-red-400">
-                  Error
-                </span>
-              </div>
-              <pre className="bg-red-950/30 border border-red-800/20 rounded-md p-2.5 text-xs text-red-300 overflow-x-auto font-mono leading-relaxed">
+              <div className="text-[10px] text-red-500/80 mb-1 uppercase tracking-wider">Error</div>
+              <pre className="bg-surface-950 border border-red-900/50 rounded-md p-2 text-xs font-mono text-red-400 overflow-x-auto">
                 {toolCall.error}
               </pre>
             </div>

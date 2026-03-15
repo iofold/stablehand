@@ -1,22 +1,16 @@
 import { create } from 'zustand';
+import type { ApiAgentRun } from '@ctxmill/shared';
 import {
   fetchAgents as apiFetchAgents,
   startBackgroundRun as apiStartRun,
   cancelRun as apiCancelRun,
   fetchRuns as apiFetchRuns,
+  createAgent as apiCreateAgent,
+  updateAgent as apiUpdateAgent,
+  deleteAgent as apiDeleteAgent,
 } from '@/lib/api';
 
-export interface AgentRun {
-  id: string;
-  agentId: string;
-  conversationId: string;
-  status: 'queued' | 'running' | 'completed' | 'error' | 'cancelled';
-  mode: 'interactive' | 'background';
-  startedAt: number;
-  completedAt?: number;
-  error?: string;
-  taskDescription?: string;
-}
+export type AgentRun = ApiAgentRun;
 
 export interface Agent {
   id: string;
@@ -32,6 +26,11 @@ export interface Agent {
   activeRuns?: number;
   runs?: AgentRun[];
   systemPrompt?: string;
+  subagents?: string[];
+  skills?: string[];
+  knowledgeItems?: number;
+  workspaceDir?: string;
+  metadata?: Record<string, unknown>;
 }
 
 interface AgentsStore {
@@ -39,7 +38,24 @@ interface AgentsStore {
   loading: boolean;
   error: string | null;
   fetchAgents: () => Promise<void>;
-  updateAgent: (id: string, updates: Partial<Agent>) => void;
+  updateAgentLocal: (id: string, updates: Partial<Agent>) => void;
+  createAgent: (data: {
+    name: string;
+    model: string;
+    systemPrompt: string;
+    tools: string[];
+    description?: string;
+    metadata?: Record<string, unknown>;
+  }) => Promise<Agent>;
+  updateAgent: (id: string, data: Partial<{
+    name: string;
+    model: string;
+    systemPrompt: string;
+    tools: string[];
+    description?: string;
+    metadata?: Record<string, unknown>;
+  }>) => Promise<Agent>;
+  deleteAgent: (id: string) => Promise<void>;
   startPolling: () => () => void;
   startBackgroundRun: (agentId: string, task: string) => Promise<void>;
   cancelRun: (agentId: string, runId: string) => Promise<void>;
@@ -51,19 +67,49 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
   loading: false,
   error: null,
   fetchAgents: async () => {
-    set({ loading: true });
+    const isInitial = get().agents.length === 0;
+    if (isInitial) set({ loading: true });
     try {
       const data = await apiFetchAgents();
-      const agents = Array.isArray(data) ? data : (data?.agents ?? []);
+      const agents: Agent[] = Array.isArray(data) ? data : ((data as Record<string, unknown>)?.agents as Agent[] ?? []);
       set({ agents, loading: false });
     } catch (err) {
       set({ error: String(err), loading: false });
     }
   },
-  updateAgent: (id, updates) =>
+  updateAgentLocal: (id, updates) =>
     set((state) => ({
       agents: state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)),
     })),
+  createAgent: async (data) => {
+    try {
+      const agent = await apiCreateAgent(data) as Agent;
+      get().fetchAgents();
+      return agent;
+    } catch (err) {
+      console.error('[agents] createAgent failed:', err);
+      throw err;
+    }
+  },
+  updateAgent: async (id, data) => {
+    try {
+      const agent = await apiUpdateAgent(id, data) as Agent;
+      get().fetchAgents();
+      return agent;
+    } catch (err) {
+      console.error('[agents] updateAgent failed:', err);
+      throw err;
+    }
+  },
+  deleteAgent: async (id) => {
+    try {
+      await apiDeleteAgent(id);
+      get().fetchAgents();
+    } catch (err) {
+      console.error('[agents] deleteAgent failed:', err);
+      throw err;
+    }
+  },
   startPolling: () => {
     const id = setInterval(() => {
       const store = useAgentsStore.getState();
@@ -72,15 +118,30 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
     return () => clearInterval(id);
   },
   startBackgroundRun: async (agentId, task) => {
-    await apiStartRun(agentId, task);
-    await get().fetchAgents();
+    try {
+      await apiStartRun(agentId, task);
+      await get().fetchAgents();
+    } catch (err) {
+      console.error('[agents] startBackgroundRun failed:', err);
+      throw err;
+    }
   },
   cancelRun: async (agentId, runId) => {
-    await apiCancelRun(agentId, runId);
-    await get().fetchAgents();
+    try {
+      await apiCancelRun(agentId, runId);
+      await get().fetchAgents();
+    } catch (err) {
+      console.error('[agents] cancelRun failed:', err);
+      throw err;
+    }
   },
   fetchRuns: async (agentId) => {
-    const runs = await apiFetchRuns(agentId);
-    return runs as AgentRun[];
+    try {
+      const runs = await apiFetchRuns(agentId);
+      return runs as AgentRun[];
+    } catch (err) {
+      console.error('[agents] fetchRuns failed:', err);
+      throw err;
+    }
   },
 }));

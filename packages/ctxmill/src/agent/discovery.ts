@@ -1,8 +1,12 @@
 import { glob } from 'glob';
 import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import type { AgentDefinition } from '../types.js';
 import type { ToolDefinition } from '../tool/types.js';
+import type { AgentManifest } from '../manifest/types.js';
+import { parseManifestString } from '../manifest/parser.js';
+import { validateManifest } from '../manifest/validate.js';
 
 /**
  * Auto-discover agent definitions from a directory.
@@ -43,4 +47,19 @@ export async function discoverTools(toolsDir: string): Promise<ToolDefinition[]>
   }
 
   return tools;
+}
+
+export async function discoverManifests(agentsDir: string): Promise<AgentManifest[]> {
+  const files = await glob('*/agent.{yaml,yml}', { cwd: agentsDir });
+  const manifests: AgentManifest[] = [];
+
+  for (const file of files) {
+    const fullPath = join(agentsDir, file);
+    const content = await readFile(fullPath, 'utf-8');
+    const raw = parseManifestString(content);
+    const manifest = validateManifest(raw);
+    manifests.push(manifest);
+  }
+
+  return manifests;
 }

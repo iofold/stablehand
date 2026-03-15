@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { submitFeedback } from '@/lib/api';
 
 interface FeedbackButtonsProps {
   agentId: string;
@@ -11,22 +12,24 @@ interface FeedbackButtonsProps {
 export function FeedbackButtons({ agentId, messageId, conversationId }: FeedbackButtonsProps) {
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+
+  useEffect(() => {
+    if (!showToast) return;
+    const timer = setTimeout(() => setShowToast(false), 2000);
+    return () => clearTimeout(timer);
+  }, [showToast]);
 
   const sendFeedback = async (type: 'thumbs_up' | 'thumbs_down') => {
     setSubmitting(true);
     try {
-      const resp = await fetch(`/api/agents/${agentId}/feedback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversationId: conversationId || 'unknown',
-          messageId,
-          type,
-        }),
+      await submitFeedback(agentId, {
+        conversationId: conversationId || 'unknown',
+        messageId,
+        type,
       });
-      if (resp.ok) {
-        setFeedback(type === 'thumbs_up' ? 'up' : 'down');
-      }
+      setFeedback(type === 'thumbs_up' ? 'up' : 'down');
+      setShowToast(true);
     } catch (err) {
       console.warn('[Feedback] Submission failed:', err);
     } finally {
@@ -35,22 +38,22 @@ export function FeedbackButtons({ agentId, messageId, conversationId }: Feedback
   };
 
   return (
-    <div data-testid="feedback-buttons" className="flex items-center gap-1 mt-1">
+    <div data-testid="feedback-buttons" className="relative flex items-center gap-2 mt-1">
       <button
         type="button"
         data-testid="thumbs-up"
         disabled={submitting || feedback !== null}
         onClick={() => sendFeedback('thumbs_up')}
         className={cn(
-          'rounded-md p-1 transition-colors',
+          'transition-colors',
           feedback === 'up'
-            ? 'text-green-400 bg-green-500/10'
-            : 'text-surface-500 hover:text-green-400 hover:bg-green-500/10',
+            ? 'text-accent-400'
+            : 'text-surface-400 hover:text-surface-200',
           (submitting || feedback !== null) && feedback !== 'up' && 'opacity-30 cursor-not-allowed',
         )}
         title="Helpful"
       >
-        <ThumbsUp className="h-3.5 w-3.5" />
+        <ThumbsUp className="h-4 w-4" />
       </button>
       <button
         type="button"
@@ -58,16 +61,23 @@ export function FeedbackButtons({ agentId, messageId, conversationId }: Feedback
         disabled={submitting || feedback !== null}
         onClick={() => sendFeedback('thumbs_down')}
         className={cn(
-          'rounded-md p-1 transition-colors',
+          'transition-colors',
           feedback === 'down'
-            ? 'text-red-400 bg-red-500/10'
-            : 'text-surface-500 hover:text-red-400 hover:bg-red-500/10',
+            ? 'text-accent-400'
+            : 'text-surface-400 hover:text-surface-200',
           (submitting || feedback !== null) && feedback !== 'down' && 'opacity-30 cursor-not-allowed',
         )}
         title="Not helpful"
       >
-        <ThumbsDown className="h-3.5 w-3.5" />
+        <ThumbsDown className="h-4 w-4" />
       </button>
+
+      {/* Post-feedback toast */}
+      {showToast && (
+        <span className="ml-2 text-[11px] text-surface-400 animate-fade-in">
+          Feedback saved — agent will learn from this
+        </span>
+      )}
     </div>
   );
 }

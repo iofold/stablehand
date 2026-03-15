@@ -88,8 +88,8 @@ export function RunDetailPage() {
       className="flex h-screen flex-col bg-surface-950"
     >
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-surface-700/40 bg-surface-900/90 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-5xl items-center gap-3 px-4 sm:px-6">
+      <header className="sticky top-0 z-30 border-b border-surface-700 bg-surface-850">
+        <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-6">
           {/* Back */}
           <button
             type="button"
@@ -102,15 +102,15 @@ export function RunDetailPage() {
 
           {/* Agent identity */}
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600/20 ring-1 ring-brand-500/30">
-              <Bot className="h-4 w-4 text-brand-400" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-600/20 ring-1 ring-accent-500/30">
+              <Bot className="h-4 w-4 text-accent-400" />
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold text-surface-100 leading-tight">
+              <h1 className="truncate text-sm font-semibold text-surface-200 leading-tight">
                 {agent?.name ?? 'Agent'}
               </h1>
               {agent && (
-                <div className="flex items-center gap-1.5 text-[11px] text-surface-500 leading-tight">
+                <div className="flex items-center gap-1.5 text-[11px] text-surface-400 leading-tight">
                   <Cpu className="h-3 w-3 flex-shrink-0" />
                   <span className="truncate font-mono">{agent.model}</span>
                 </div>
@@ -134,8 +134,8 @@ export function RunDetailPage() {
 
         {/* Task description bar */}
         {run?.taskDescription && (
-          <div className="border-t border-surface-700/30 bg-surface-800/40">
-            <div className="mx-auto max-w-5xl px-4 sm:px-6 py-2">
+          <div className="border-t border-surface-700 bg-surface-850">
+            <div className="mx-auto max-w-7xl px-6 py-2">
               <p className="text-xs text-surface-400">
                 <span className="font-medium text-surface-300">Task:</span>{' '}
                 {run.taskDescription}
@@ -149,7 +149,7 @@ export function RunDetailPage() {
       <div className="flex flex-1 flex-col overflow-hidden">
         {loading && (
           <div className="flex flex-1 items-center justify-center">
-            <Loader2 className="h-6 w-6 text-brand-400 animate-spin" />
+            <Loader2 className="h-6 w-6 text-accent-400 animate-spin" />
           </div>
         )}
 
@@ -160,7 +160,7 @@ export function RunDetailPage() {
         )}
 
         {!loading && !error && (
-          <div data-testid="run-messages" className="flex-1 overflow-hidden">
+          <div data-testid="run-messages" className="mx-auto w-full max-w-7xl flex-1 overflow-hidden px-6 py-5 space-y-6">
             <ChatThread
               messages={messages}
               streamingContent=""

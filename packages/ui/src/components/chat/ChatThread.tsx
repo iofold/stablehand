@@ -21,6 +21,8 @@ export interface ChatThreadProps {
   a2uiBlocks?: A2UIBlockType[];
   agentName?: string;
   agentTools?: string[];
+  agentId?: string;
+  conversationId?: string;
 }
 
 const SUGGESTED_PROMPTS = [
@@ -38,6 +40,8 @@ export function ChatThread({
   a2uiBlocks = [],
   agentName,
   agentTools = [],
+  agentId,
+  conversationId,
 }: ChatThreadProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -68,10 +72,10 @@ export function ChatThread({
         {/* Hero */}
         <div className="flex flex-col items-center gap-5 max-w-lg text-center mb-10">
           <div className="relative">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-600/30 to-brand-800/20 ring-1 ring-brand-500/20 glow-sm">
-              <Sparkles className="h-7 w-7 text-brand-400" />
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-surface-800 ring-1 ring-accent-500/20 ">
+              <Sparkles className="h-7 w-7 text-accent-400" />
             </div>
-            <div className="absolute -inset-3 rounded-3xl bg-brand-500/5 blur-xl -z-10" />
+            <div className="absolute -inset-3 rounded-3xl bg-accent-500/5 blur-xl -z-10" />
           </div>
           <div>
             <h2 className="text-xl font-semibold text-surface-100 tracking-tight">
@@ -109,10 +113,10 @@ export function ChatThread({
             <button
               key={label}
               type="button"
-              className="group flex items-center gap-3 rounded-xl border border-surface-700/40 bg-surface-800/40 px-4 py-3 text-left transition-all hover:bg-surface-800/80 hover:border-surface-600/60 hover:shadow-lg hover:shadow-brand-500/5"
+              className="group flex items-center gap-3 rounded-lg border border-surface-700/40 bg-surface-800/40 px-4 py-3 text-left transition-all hover:bg-surface-800/80 hover:border-surface-600/60"
             >
-              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-700/50 group-hover:bg-brand-600/15 transition-colors">
-                <Icon className="h-4 w-4 text-surface-400 group-hover:text-brand-400 transition-colors" />
+              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-surface-700/50 group-hover:bg-accent-600/15 transition-colors">
+                <Icon className="h-4 w-4 text-surface-400 group-hover:text-accent-400 transition-colors" />
               </div>
               <div className="min-w-0">
                 <div className="text-sm font-medium text-surface-200 group-hover:text-surface-100 transition-colors">
@@ -140,7 +144,7 @@ export function ChatThread({
         <div className="mx-auto max-w-3xl space-y-1">
           {messages.map((msg) => (
             <div key={msg.id} className="space-y-1">
-              <MessageBubble message={msg} />
+              <MessageBubble message={msg} agentId={agentId} conversationId={conversationId} />
               {msg.toolCalls?.map((tc) => (
                 <ToolCallCard key={tc.id} toolCall={tc} />
               ))}
@@ -177,7 +181,7 @@ export function ChatThread({
           {isStreaming && !streamingContent && activeToolCalls.length === 0 && (
             <div className="flex items-start gap-3 py-3 animate-fade-in">
               <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-surface-800 ring-1 ring-surface-700/50">
-                <Sparkles className="h-3.5 w-3.5 text-brand-400" />
+                <Sparkles className="h-3.5 w-3.5 text-accent-400" />
               </div>
               <div className="flex items-center gap-1 pt-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-surface-400 animate-[pulse_1.4s_ease-in-out_infinite]" />
@@ -199,7 +203,7 @@ export function ChatThread({
           className={cn(
             'absolute bottom-4 left-1/2 -translate-x-1/2 z-10',
             'flex items-center gap-1.5 rounded-full bg-surface-800/90 border border-surface-700/60 px-3 py-1.5',
-            'text-xs text-surface-300 shadow-lg backdrop-blur-sm',
+            'text-xs text-surface-300  ',
             'hover:bg-surface-700 transition-all animate-fade-in',
           )}
         >

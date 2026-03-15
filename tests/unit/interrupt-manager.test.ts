@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
+import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 
 describe('InterruptManager', () => {
   let manager: InterruptManager;
@@ -15,23 +16,23 @@ describe('InterruptManager', () => {
   // ORC-17: waitForApproval returns a promise, resolve completes it
   describe('ORC-17: waitForApproval and resolve', () => {
     it('should return a promise from waitForApproval', () => {
-      const promise = manager.waitForApproval('agent-1', 'tc-1', 'bash', { cmd: 'rm -rf /' });
+      const promise = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'rm -rf /' });
       expect(promise).toBeInstanceOf(Promise);
     });
 
-    it('should mark agent as having a pending interrupt', () => {
-      manager.waitForApproval('agent-1', 'tc-1', 'bash', { cmd: 'ls' });
-      expect(manager.hasPending('agent-1')).toBe(true);
+    it('should mark run as having a pending interrupt', () => {
+      manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+      expect(manager.hasPending('run-1')).toBe(true);
     });
 
-    it('should not have pending for unknown agent', () => {
+    it('should not have pending for unknown run', () => {
       expect(manager.hasPending('unknown')).toBe(false);
     });
 
     it('should resolve promise when approved', async () => {
-      const promise = manager.waitForApproval('agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+      const promise = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
 
-      const resolved = manager.resolve('agent-1', 'approve');
+      const resolved = manager.resolve('run-1', 'approve');
       expect(resolved).toBe(true);
 
       const result = await promise;
@@ -39,9 +40,9 @@ describe('InterruptManager', () => {
     });
 
     it('should resolve promise when rejected', async () => {
-      const promise = manager.waitForApproval('agent-1', 'tc-1', 'bash', { cmd: 'rm -rf /' });
+      const promise = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'rm -rf /' });
 
-      manager.resolve('agent-1', 'reject', 'Too dangerous');
+      manager.resolve('run-1', 'reject', 'Too dangerous');
 
       const result = await promise;
       expect(result.action).toBe('reject');
@@ -49,22 +50,22 @@ describe('InterruptManager', () => {
     });
 
     it('should return false when resolving non-existent interrupt', () => {
-      const resolved = manager.resolve('no-agent', 'approve');
+      const resolved = manager.resolve('no-run', 'approve');
       expect(resolved).toBe(false);
     });
 
     it('should clear pending after resolve', () => {
-      manager.waitForApproval('agent-1', 'tc-1', 'bash', { cmd: 'ls' });
-      expect(manager.hasPending('agent-1')).toBe(true);
+      manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+      expect(manager.hasPending('run-1')).toBe(true);
 
-      manager.resolve('agent-1', 'approve');
-      expect(manager.hasPending('agent-1')).toBe(false);
+      manager.resolve('run-1', 'approve');
+      expect(manager.hasPending('run-1')).toBe(false);
     });
 
     it('should return pending interrupt info via getPending', () => {
-      manager.waitForApproval('agent-1', 'tc-1', 'write_file', { path: '/tmp/test.txt' });
+      manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'write_file', { path: '/tmp/test.txt' });
 
-      const pending = manager.getPending('agent-1');
+      const pending = manager.getPending('run-1');
       expect(pending).toBeDefined();
       expect(pending!.toolCallId).toBe('tc-1');
       expect(pending!.toolName).toBe('write_file');
@@ -72,16 +73,16 @@ describe('InterruptManager', () => {
       expect(pending!.createdAt).toBeTypeOf('number');
     });
 
-    it('should return undefined from getPending for unknown agent', () => {
+    it('should return undefined from getPending for unknown run', () => {
       expect(manager.getPending('unknown')).toBeUndefined();
     });
   });
 
   // Superseding behavior
   describe('superseding interrupts', () => {
-    it('should reject previous interrupt when a new one is created for the same agent', async () => {
-      const promise1 = manager.waitForApproval('agent-1', 'tc-1', 'bash', { cmd: 'ls' });
-      const promise2 = manager.waitForApproval('agent-1', 'tc-2', 'bash', { cmd: 'pwd' });
+    it('should reject previous interrupt when a new one is created for the same run', async () => {
+      const promise1 = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+      const promise2 = manager.waitForApproval('run-1', 'agent-1', 'tc-2', 'bash', { cmd: 'pwd' });
 
       // First promise should have been rejected with 'Superseded by new interrupt'
       const result1 = await promise1;
@@ -89,11 +90,11 @@ describe('InterruptManager', () => {
       expect(result1.data).toBe('Superseded by new interrupt');
 
       // Second interrupt is the active one
-      const pending = manager.getPending('agent-1');
+      const pending = manager.getPending('run-1');
       expect(pending!.toolCallId).toBe('tc-2');
 
       // Resolve the second one
-      manager.resolve('agent-1', 'approve');
+      manager.resolve('run-1', 'approve');
       const result2 = await promise2;
       expect(result2.action).toBe('approve');
     });
@@ -102,8 +103,8 @@ describe('InterruptManager', () => {
   // Shutdown behavior
   describe('shutdown', () => {
     it('should reject all pending interrupts on shutdown', async () => {
-      const promise1 = manager.waitForApproval('agent-1', 'tc-1', 'bash', { cmd: 'ls' });
-      const promise2 = manager.waitForApproval('agent-2', 'tc-2', 'read', { path: '/' });
+      const promise1 = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+      const promise2 = manager.waitForApproval('run-2', 'agent-2', 'tc-2', 'read', { path: '/' });
 
       manager.shutdown();
 
@@ -117,32 +118,146 @@ describe('InterruptManager', () => {
     });
 
     it('should have no pending interrupts after shutdown', () => {
-      manager.waitForApproval('agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+      manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
       manager.shutdown();
-      expect(manager.hasPending('agent-1')).toBe(false);
+      expect(manager.hasPending('run-1')).toBe(false);
     });
   });
 
-  // Multiple agents
+  // Multiple agents — now keyed by runId
   describe('multiple agents', () => {
-    it('should handle concurrent interrupts for different agents independently', async () => {
-      const p1 = manager.waitForApproval('agent-1', 'tc-1', 'bash', { cmd: 'ls' });
-      const p2 = manager.waitForApproval('agent-2', 'tc-2', 'read', { path: '/etc' });
+    it('should handle concurrent interrupts for different runs independently', async () => {
+      const p1 = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+      const p2 = manager.waitForApproval('run-2', 'agent-2', 'tc-2', 'read', { path: '/etc' });
 
-      expect(manager.hasPending('agent-1')).toBe(true);
-      expect(manager.hasPending('agent-2')).toBe(true);
+      expect(manager.hasPending('run-1')).toBe(true);
+      expect(manager.hasPending('run-2')).toBe(true);
 
-      manager.resolve('agent-1', 'approve');
+      manager.resolve('run-1', 'approve');
       const r1 = await p1;
       expect(r1.action).toBe('approve');
 
-      // agent-2 still pending
-      expect(manager.hasPending('agent-2')).toBe(true);
+      // run-2 still pending
+      expect(manager.hasPending('run-2')).toBe(true);
 
-      manager.resolve('agent-2', 'reject', 'No access');
+      manager.resolve('run-2', 'reject', 'No access');
       const r2 = await p2;
       expect(r2.action).toBe('reject');
       expect(r2.data).toBe('No access');
+    });
+  });
+
+  // Concurrent runs of the same agent (the core fix)
+  describe('concurrent runs of same agent', () => {
+    it('should allow two concurrent interrupts for the same agent with different runIds', async () => {
+      const p1 = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+      const p2 = manager.waitForApproval('run-2', 'agent-1', 'tc-2', 'bash', { cmd: 'pwd' });
+
+      // Both should be pending (keyed by runId, not agentId)
+      expect(manager.hasPending('run-1')).toBe(true);
+      expect(manager.hasPending('run-2')).toBe(true);
+
+      // Resolve run-1; run-2 should be unaffected
+      manager.resolve('run-1', 'approve');
+      const r1 = await p1;
+      expect(r1.action).toBe('approve');
+
+      // run-2 still pending
+      expect(manager.hasPending('run-2')).toBe(true);
+
+      // Resolve run-2
+      manager.resolve('run-2', 'reject', 'Denied');
+      const r2 = await p2;
+      expect(r2.action).toBe('reject');
+      expect(r2.data).toBe('Denied');
+    });
+
+    it('resolving run-1 does not affect run-2 pending interrupt', async () => {
+      const p1 = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'deploy', { target: 'prod' });
+      const p2 = manager.waitForApproval('run-2', 'agent-1', 'tc-2', 'deploy', { target: 'staging' });
+
+      // Resolve run-1
+      manager.resolve('run-1', 'approve');
+      const r1 = await p1;
+      expect(r1.action).toBe('approve');
+      expect(manager.hasPending('run-1')).toBe(false);
+
+      // run-2 is completely unaffected
+      expect(manager.hasPending('run-2')).toBe(true);
+      const pending2 = manager.getPending('run-2');
+      expect(pending2).toBeDefined();
+      expect(pending2!.toolCallId).toBe('tc-2');
+      expect(pending2!.toolName).toBe('deploy');
+      expect(pending2!.args).toEqual({ target: 'staging' });
+
+      // Resolve run-2
+      manager.resolve('run-2', 'approve');
+      const r2 = await p2;
+      expect(r2.action).toBe('approve');
+    });
+  });
+
+  // Event bus emissions
+  describe('event bus emissions', () => {
+    it('waitForApproval emits run.interrupted event', async () => {
+      const bus = new TypedEventBus();
+      const busManager = new InterruptManager(bus);
+      const events: any[] = [];
+      bus.on('run.interrupted', (payload) => events.push(payload));
+
+      busManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+
+      // Allow microtasks to flush
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(events).toHaveLength(1);
+      expect(events[0].runId).toBe('run-1');
+      expect(events[0].agentId).toBe('agent-1');
+      expect(events[0].toolCallId).toBe('tc-1');
+      expect(events[0].toolName).toBe('bash');
+      expect(events[0].args).toEqual({ cmd: 'ls' });
+      expect(events[0].timestamp).toBeTypeOf('number');
+
+      busManager.shutdown();
+    });
+
+    it('resolve emits run.interrupt_resolved event', async () => {
+      const bus = new TypedEventBus();
+      const busManager = new InterruptManager(bus);
+      const events: any[] = [];
+      bus.on('run.interrupt_resolved', (payload) => events.push(payload));
+
+      busManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
+      busManager.resolve('run-1', 'approve', undefined, 'agent-1');
+
+      expect(events).toHaveLength(1);
+      expect(events[0].runId).toBe('run-1');
+      expect(events[0].agentId).toBe('agent-1');
+      expect(events[0].action).toBe('approve');
+      expect(events[0].timestamp).toBeTypeOf('number');
+
+      busManager.shutdown();
+    });
+
+    it('timeout emits run.interrupt_resolved with action timeout', async () => {
+      vi.useFakeTimers();
+      const bus = new TypedEventBus();
+      const busManager = new InterruptManager(bus);
+      const events: any[] = [];
+      bus.on('run.interrupt_resolved', (payload) => events.push(payload));
+
+      busManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 1000);
+
+      vi.advanceTimersByTime(1000);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].runId).toBe('run-1');
+      expect(events[0].agentId).toBe('agent-1');
+      expect(events[0].action).toBe('timeout');
+      expect(events[0].timestamp).toBeTypeOf('number');
+
+      busManager.shutdown();
+      vi.useRealTimers();
     });
   });
 });

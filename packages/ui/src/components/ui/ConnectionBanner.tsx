@@ -1,5 +1,5 @@
-import { WifiOff } from 'lucide-react';
 import { useSSEStatus } from '@/lib/useSSE';
+import { cn } from '@/lib/utils';
 
 /**
  * Shows a banner when SSE connection is lost.
@@ -10,17 +10,21 @@ export function ConnectionBanner() {
 
   if (!status || status === 'connected') return null;
 
+  const isConnecting = status === 'connecting';
+
   return (
     <div
       data-testid="connection-lost-banner"
-      className="flex items-center justify-center gap-2 bg-amber-600/90 px-4 py-2 text-sm font-medium text-white"
+      className={cn(
+        "bg-surface-850 border-b px-4 py-2",
+        isConnecting ? "border-surface-700" : "border-status-warning/30"
+      )}
     >
-      <WifiOff className="h-4 w-4" />
-      <span>
-        {status === 'connecting'
+      <div className={cn("text-surface-400 text-xs", isConnecting && "animate-pulse")}>
+        {isConnecting
           ? 'Connecting to agent stream...'
           : 'Connection lost, reconnecting...'}
-      </span>
+      </div>
     </div>
   );
 }

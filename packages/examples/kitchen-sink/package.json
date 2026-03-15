@@ -1,0 +1,20 @@
+{
+  "name": "@ctxmill/example-kitchen-sink",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Kitchen sink example: 5 agents x 5 harnesses with shared tools",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ctxmill": "workspace:*",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.1.1",
+    "typescript": "^5.8.3",
+    "yaml": "^2.7.0"
+  }
+}

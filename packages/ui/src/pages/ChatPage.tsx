@@ -2,15 +2,7 @@ import { useEffect, useCallback, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
-  Bot,
   Radio,
-  Cpu,
-  Wrench,
-  Circle,
-  Wifi,
-  WifiOff,
-  FolderOpen,
-  PanelLeftClose,
 } from 'lucide-react';
 import { ChatThread } from '@/components/chat/ChatThread';
 import { ChatInput } from '@/components/chat/ChatInput';
@@ -48,8 +40,10 @@ export function ChatPage() {
   const clearInterrupt = useInterruptStore((s) => s.clear);
   const sseStatus = useSSEStatus();
 
+  const [error, setError] = useState<string | null>(null);
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | undefined>();
 
   useSSE(id);
 
@@ -76,18 +70,46 @@ export function ChatPage() {
         const latest = sorted[0];
         const convId = (latest.id as string) || (latest.conversationId as string);
         if (!convId) return;
+        if (mounted) setConversationId(convId);
 
         const msgs = await fetchMessages(id!, convId);
         if (!mounted || !Array.isArray(msgs) || msgs.length === 0) return;
 
-        const parsed = msgs.map((m: Record<string, unknown>, i: number) => ({
-          id: (m.id as string) || `msg-${i}`,
-          role: ((m.role as string) || 'assistant') as 'user' | 'assistant' | 'system' | 'tool',
-          content: (m.content as string) || '',
-          toolCalls: m.toolCalls as Message['toolCalls'],
-          a2uiBlocks: m.a2uiBlocks as Message['a2uiBlocks'],
-          createdAt: (m.createdAt as string) || new Date().toISOString(),
-        }));
+        const parsed = msgs.map((m: Record<string, unknown>, i: number) => {
+          // Reconstruct a2uiBlocks from DB's a2uiPayload field, or parse from content
+          let blocks = (m.a2uiBlocks || m.a2uiPayload) as Message['a2uiBlocks'];
+          if (!blocks && m.role === 'assistant' && m.content) {
+            const content = m.content as string;
+            const extracted: Array<{ id: string; component: string; props: Record<string, unknown> }> = [];
+            const pattern = /\{\s*"component"\s*:\s*"[^"]+"\s*,\s*"props"\s*:\s*\{[\s\S]*?\}\s*\}/g;
+            let match;
+            while ((match = pattern.exec(content)) !== null) {
+              try {
+                const p = JSON.parse(match[0]);
+                if (typeof p.component === 'string' && p.props) {
+                  extracted.push({ id: `a2ui-${i}-${extracted.length}`, component: p.component, props: p.props });
+                }
+              } catch { /* skip */ }
+            }
+            if (extracted.length > 0) blocks = extracted;
+          }
+          // Normalize: if blocks came from DB as array of {component, props}, add ids
+          if (Array.isArray(blocks)) {
+            blocks = blocks.map((b: any, bi: number) => ({
+              id: b.id || `a2ui-${i}-${bi}`,
+              component: b.component,
+              props: b.props,
+            }));
+          }
+          return {
+            id: (m.id as string) || `msg-${i}`,
+            role: ((m.role as string) || 'assistant') as 'user' | 'assistant' | 'system' | 'tool',
+            content: (m.content as string) || '',
+            toolCalls: m.toolCalls as Message['toolCalls'],
+            a2uiBlocks: blocks,
+            createdAt: (m.createdAt as string) || new Date().toISOString(),
+          };
+        });
 
         loadMessages(parsed);
       } catch (err) {
@@ -107,40 +129,70 @@ export function ChatPage() {
   const handleSend = useCallback(
     async (content: string) => {
       if (!id) return;
+      setError(null);
       addUserMessage(content);
-      await sendMessage(id, content);
+      try {
+        await sendMessage(id, content, conversationId);
+      } catch (err) {
+        console.error('[Chat] Failed to send message:', err);
+        setError(err instanceof Error ? err.message : String(err));
+      }
     },
-    [id, addUserMessage],
+    [id, addUserMessage, conversationId],
   );
 
   const handleApprove = useCallback(async () => {
     if (!id) return;
-    await sendInterrupt(id, 'approve');
-    clearInterrupt();
-  }, [id, clearInterrupt]);
+    setError(null);
+    try {
+      await sendInterrupt(id, 'approve', undefined, interrupt?.runId);
+      clearInterrupt();
+    } catch (err) {
+      console.error('[Chat] Failed to send approval:', err);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [id, clearInterrupt, interrupt?.runId]);
 
   const handleReject = useCallback(async () => {
     if (!id) return;
-    await sendInterrupt(id, 'reject');
-    clearInterrupt();
-  }, [id, clearInterrupt]);
+    setError(null);
+    try {
+      await sendInterrupt(id, 'reject', undefined, interrupt?.runId);
+      clearInterrupt();
+    } catch (err) {
+      console.error('[Chat] Failed to send rejection:', err);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [id, clearInterrupt, interrupt?.runId]);
 
   const handleDocSubmit = useCallback(
     async (content: string) => {
       if (!id) return;
-      await sendInterrupt(id, 'submit', { content });
-      clearInterrupt();
+      setError(null);
+      try {
+        await sendInterrupt(id, 'submit', { content }, interrupt?.runId);
+        clearInterrupt();
+      } catch (err) {
+        console.error('[Chat] Failed to submit document:', err);
+        setError(err instanceof Error ? err.message : String(err));
+      }
     },
-    [id, clearInterrupt],
+    [id, clearInterrupt, interrupt?.runId],
   );
 
   const handleFormSubmit = useCallback(
     async (values: Record<string, string>) => {
       if (!id) return;
-      await sendInterrupt(id, 'submit', values);
-      clearInterrupt();
+      setError(null);
+      try {
+        await sendInterrupt(id, 'submit', values, interrupt?.runId);
+        clearInterrupt();
+      } catch (err) {
+        console.error('[Chat] Failed to submit form:', err);
+        setError(err instanceof Error ? err.message : String(err));
+      }
     },
-    [id, clearInterrupt],
+    [id, clearInterrupt, interrupt?.runId],
   );
 
   const handleFileSelect = useCallback((path: string) => {
@@ -159,7 +211,7 @@ export function ChatPage() {
       <ConnectionBanner />
 
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-surface-700/40 bg-surface-900/90 backdrop-blur-md">
+      <header className="sticky top-0 z-30 border-b border-surface-700 bg-surface-850">
         <div className="mx-auto flex h-14 items-center gap-3 px-4 sm:px-6">
           {/* Back */}
           <button
@@ -171,74 +223,29 @@ export function ChatPage() {
             <ArrowLeft className="h-4 w-4" />
           </button>
 
-          {/* Explorer toggle */}
-          <button
-            type="button"
-            data-testid="toggle-explorer"
-            onClick={() => setExplorerOpen((prev) => !prev)}
-            className={cn(
-              'rounded-lg p-1.5 transition-colors',
-              explorerOpen
-                ? 'bg-brand-600/15 text-brand-400 hover:bg-brand-600/25'
-                : 'text-surface-400 hover:bg-surface-800 hover:text-surface-200',
-            )}
-            title={explorerOpen ? 'Hide file explorer' : 'Show file explorer'}
-          >
-            {explorerOpen ? (
-              <PanelLeftClose className="h-4 w-4" />
-            ) : (
-              <FolderOpen className="h-4 w-4" />
-            )}
-          </button>
-
           {/* Agent identity */}
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="relative flex-shrink-0">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600/20 ring-1 ring-brand-500/30">
-                <Bot className="h-4 w-4 text-brand-400" />
-              </div>
-              <span
-                className={cn(
-                  'absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-surface-900',
-                  connectionDot,
-                )}
-              />
-            </div>
-            <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold text-surface-100 leading-tight">
-                {agent?.name ?? 'Agent'}
-              </h1>
-              {agent && (
-                <div className="flex items-center gap-1.5 text-[11px] text-surface-500 leading-tight">
-                  <Cpu className="h-3 w-3 flex-shrink-0" />
-                  <span className="truncate font-mono">{agent.model}</span>
-                </div>
+            <h1 className="truncate text-sm font-semibold text-surface-200 leading-tight">
+              {agent?.name ?? 'Agent'}
+            </h1>
+            {agent && (
+              <span className="truncate font-mono text-sm text-surface-500">
+                {agent.model}
+              </span>
+            )}
+            <span
+              className={cn(
+                'h-2 w-2 rounded-full',
+                connectionDot,
               )}
-            </div>
+            />
           </div>
-
-          {/* Tools badge */}
-          {agent && agent.tools.length > 0 && (
-            <div className="ml-auto hidden sm:flex items-center gap-1.5">
-              <div className="flex items-center gap-1 rounded-md bg-surface-800 border border-surface-700/50 px-2 py-1">
-                <Wrench className="h-3 w-3 text-surface-400" />
-                <span className="text-[11px] font-medium text-surface-400">
-                  {agent.tools.length} tool{agent.tools.length !== 1 ? 's' : ''}
-                </span>
-              </div>
-            </div>
-          )}
 
           {/* Streaming indicator */}
           {isStreaming && (
-            <div
-              className={cn(
-                'flex items-center gap-1.5 rounded-full bg-brand-600/10 border border-brand-500/20 px-2.5 py-1',
-                agent?.tools.length ? '' : 'ml-auto',
-              )}
-            >
-              <Radio className="h-3 w-3 text-brand-400 animate-pulse" />
-              <span className="text-[11px] font-medium text-brand-400">Live</span>
+            <div className="ml-auto flex items-center gap-1.5 rounded-full bg-accent-600/10 border border-accent-500/20 px-2.5 py-1">
+              <Radio className="h-3 w-3 text-accent-400 animate-pulse" />
+              <span className="text-[11px] font-medium text-accent-400">Live</span>
             </div>
           )}
         </div>
@@ -288,6 +295,8 @@ export function ChatPage() {
             a2uiBlocks={a2uiBlocks}
             agentName={agent?.name}
             agentTools={agent?.tools}
+            agentId={id}
+            conversationId={conversationId}
           />
 
           {/* HITL interrupt components */}
@@ -321,6 +330,16 @@ export function ChatPage() {
             </div>
           )}
 
+          {error && (
+            <div
+              data-testid="chat-error"
+              className="mx-auto w-full max-w-3xl px-4 pb-1"
+            >
+              <div className="rounded-md bg-red-900/30 border border-red-700/40 px-3 py-2 text-sm text-red-400">
+                {error}
+              </div>
+            </div>
+          )}
           <ChatInput onSend={handleSend} disabled={isStreaming} />
         </div>
       </div>

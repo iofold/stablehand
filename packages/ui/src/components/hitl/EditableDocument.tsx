@@ -17,44 +17,54 @@ export function EditableDocument({ title, content, format, onSubmit, onCancel }:
   };
 
   return (
-    <div data-testid="editable-document" className="rounded-lg border border-zinc-700 bg-zinc-900 p-5">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-base font-semibold text-zinc-100">{title}</h3>
-        {format && (
-          <span className="rounded-md bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400 font-mono">
-            {format}
-          </span>
-        )}
-      </div>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/80 animate-fade-in"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div
+        data-testid="editable-document"
+        className="relative w-full max-w-2xl mx-4 rounded-lg border border-surface-700 bg-surface-850 animate-slide-up"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="flex items-center justify-between border-b border-surface-700/40 px-6 py-4">
+          <h2 className="text-lg font-semibold text-surface-100">{title}</h2>
+          {format && (
+            <span className="rounded-md bg-surface-800 px-2 py-0.5 text-xs text-surface-400 font-mono">
+              {format}
+            </span>
+          )}
+        </div>
 
-      <textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        className={cn(
-          'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 text-sm text-zinc-200',
-          'font-mono leading-relaxed resize-y min-h-[200px]',
-          'focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500',
-          'placeholder:text-zinc-600',
-        )}
-        rows={12}
-      />
+        <div className="p-6">
+          <textarea
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="input-base w-full resize-y min-h-[200px] font-mono leading-relaxed"
+            rows={12}
+          />
+        </div>
 
-      <div className="mt-4 flex items-center gap-3">
-        <button
-          data-testid="submit-button"
-          type="button"
-          onClick={handleSubmit}
-          className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-500 transition-colors"
-        >
-          Submit
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="inline-flex items-center rounded-lg bg-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 border border-zinc-700 hover:bg-zinc-700 transition-colors"
-        >
-          Cancel
-        </button>
+        <div className="flex items-center justify-end gap-6 border-t border-surface-700/40 px-6 py-4">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="text-sm font-medium text-surface-400 hover:text-surface-200 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            data-testid="submit-button"
+            type="button"
+            onClick={handleSubmit}
+            className="btn-primary"
+          >
+            Save
+          </button>
+        </div>
       </div>
     </div>
   );

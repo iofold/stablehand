@@ -17,17 +17,6 @@ interface KnowledgeGraphViewProps {
   edges: GraphEdge[];
 }
 
-const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
-const groupColorMap: Record<string, string> = {};
-
-function getGroupColor(group: string | undefined): string {
-  if (!group) return '#3b82f6';
-  if (!groupColorMap[group]) {
-    groupColorMap[group] = PALETTE[Object.keys(groupColorMap).length % PALETTE.length];
-  }
-  return groupColorMap[group];
-}
-
 interface NodePosition {
   x: number;
   y: number;
@@ -197,7 +186,7 @@ export function KnowledgeGraphView({ nodes, edges }: KnowledgeGraphViewProps) {
   }, []);
 
   return (
-    <div data-testid="a2ui-knowledge-graph" className="card p-4 overflow-hidden">
+    <div data-testid="a2ui-knowledge-graph" className="w-full h-full bg-transparent p-4 overflow-hidden">
       <svg
         ref={svgRef}
         viewBox="0 0 800 600"
@@ -218,9 +207,9 @@ export function KnowledgeGraphView({ nodes, edges }: KnowledgeGraphViewProps) {
             const my = (source.y + target.y) / 2;
             return (
               <g key={`edge-${i}`}>
-                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="#475569" strokeWidth={1.5} opacity={0.6} />
+                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="#3f3f46" strokeWidth={1.5} opacity={0.4} />
                 {edge.label && (
-                  <text x={mx} y={my - 6} textAnchor="middle" fill="#94a3b8" fontSize={9}>
+                  <text x={mx} y={my - 6} textAnchor="middle" fill="#a1a1aa" fontSize={11}>
                     {edge.label}
                   </text>
                 )}
@@ -230,12 +219,16 @@ export function KnowledgeGraphView({ nodes, edges }: KnowledgeGraphViewProps) {
           {nodes.map((n) => {
             const pos = positions.get(n.id);
             if (!pos) return null;
-            const color = getGroupColor(n.group);
+            const isActive = dragging === n.id;
             return (
               <g key={n.id} onMouseDown={(e) => handleMouseDown(e, n.id)} style={{ cursor: 'pointer' }}>
-                <circle cx={pos.x} cy={pos.y} r={18} fill={color} opacity={0.85} />
-                <circle cx={pos.x} cy={pos.y} r={18} fill="none" stroke={color} strokeWidth={2} />
-                <text x={pos.x} y={pos.y + 30} textAnchor="middle" fill="#e2e8f0" fontSize={10} fontWeight={500}>
+                <circle
+                  cx={pos.x} cy={pos.y} r={18}
+                  fill={isActive ? "#134e4a" : "#27272a"}
+                  stroke={isActive ? "#2dd4bf" : "#3f3f46"}
+                  strokeWidth={2}
+                />
+                <text x={pos.x} y={pos.y + 30} textAnchor="middle" fill="#a1a1aa" fontSize={11} fontWeight={500}>
                   {n.label}
                 </text>
               </g>

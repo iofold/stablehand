@@ -16,3 +16,15 @@ package-lock.json
 test-results/
 playwright-report/
 blob-report/
+.playwright-mcp/
+
+# Artifacts
+*.png
+.mcp.json
+*.bak
+agent.md
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal

@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-import { tool as lcTool } from '@langchain/core/tools';
 import type { ToolDefinition, ToolCall, ToolResult, ToolContext } from './types.js';
 import { zodToJsonSchema } from '../util/zod-to-json-schema.js';
 
@@ -21,25 +19,14 @@ export class LocalFunctionExecutor {
   async execute(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
     const tool = this.tools.get(call.name);
     if (!tool) {
-      return {
-        callId: call.id,
-        name: call.name,
-        result: '',
-        error: `Unknown tool: ${call.name}`,
-        durationMs: 0,
-      };
+      const available = Array.from(this.tools.keys()).join(', ');
+      throw new Error(`Unknown tool: "${call.name}". Available tools: ${available}`);
     }
 
     // Validate input with Zod
     const parsed = tool.input.safeParse(call.arguments);
     if (!parsed.success) {
-      return {
-        callId: call.id,
-        name: call.name,
-        result: '',
-        error: parsed.error.message,
-        durationMs: 0,
-      };
+      throw new Error(`Tool "${call.name}" input validation failed: ${parsed.error.message}`);
     }
 
     const start = performance.now();
@@ -60,30 +47,6 @@ export class LocalFunctionExecutor {
         durationMs: performance.now() - start,
       };
     }
-  }
-
-  /**
-   * Convert registered tools to langchain StructuredTool[] format
-   * for use with deepagents / LangGraph.
-   */
-  toLangChainTools(ctx: ToolContext) {
-    return Array.from(this.tools.values()).map((def) => {
-      return lcTool(
-        async (args: Record<string, unknown>) => {
-          const result = await this.execute(
-            { id: randomUUID(), name: def.name, arguments: args },
-            ctx,
-          );
-          if (result.error) throw new Error(result.error);
-          return result.result;
-        },
-        {
-          name: def.name,
-          description: def.description,
-          schema: def.input,
-        },
-      );
-    });
   }
 
   /**

@@ -17,7 +17,7 @@ interface SankeyDiagramProps {
   links: SankeyLink[];
 }
 
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16'];
+const COLORS = ['#2dd4bf', '#14b8a6', '#a1a1aa', '#22c55e', '#eab308', '#ef4444'];
 
 export function SankeyDiagram({ title, nodes, links }: SankeyDiagramProps) {
   const layout = useMemo(() => {
@@ -124,7 +124,7 @@ export function SankeyDiagram({ title, nodes, links }: SankeyDiagramProps) {
 
   if (!layout) {
     return (
-      <div data-testid="a2ui-sankey-diagram" className="card p-4">
+      <div data-testid="a2ui-sankey-diagram" className="w-full h-full bg-transparent p-4">
         <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
         <p className="text-surface-400 text-sm">No data available</p>
       </div>
@@ -134,11 +134,11 @@ export function SankeyDiagram({ title, nodes, links }: SankeyDiagramProps) {
   const { width, height, nodePositions, linkPaths, nodeWidth } = layout;
 
   return (
-    <div data-testid="a2ui-sankey-diagram" className="card p-4">
+    <div data-testid="a2ui-sankey-diagram" className="w-full h-full bg-transparent p-4">
       <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ maxHeight: height }}>
         {linkPaths.map((lp, i) =>
-          lp ? <path key={`link-${i}`} d={lp.d} fill={lp.color} opacity={0.35} /> : null,
+          lp ? <path key={`link-${i}`} d={lp.d} fill={lp.color} opacity={0.1} /> : null,
         )}
         {nodes.map((n, i) => {
           const pos = nodePositions.get(n.id);
@@ -147,7 +147,7 @@ export function SankeyDiagram({ title, nodes, links }: SankeyDiagramProps) {
           return (
             <g key={n.id}>
               <rect className="sankey-node" x={pos.x} y={pos.y} width={nodeWidth} height={pos.h} fill={color} rx={3} />
-              <text x={pos.x + nodeWidth + 6} y={pos.y + pos.h / 2 + 4} fill="#e2e8f0" fontSize={11}>
+              <text x={pos.x + nodeWidth + 6} y={pos.y + pos.h / 2 + 4} fill="#71717a" fontSize={12}>
                 {n.label}
               </text>
             </g>

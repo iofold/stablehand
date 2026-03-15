@@ -19,9 +19,7 @@ import { test, expect } from '@playwright/test';
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Default agent id used by the dev seed / fixture. Override via AGENT_ID env. */
-const AGENT_ID = process.env.AGENT_ID ?? 'explorer';
-const CHAT_URL = `/agents/${AGENT_ID}/chat`;
+const API = 'http://localhost:3001';
 
 /** Timeout for waiting on an assistant response (LLM latency). */
 const RESPONSE_TIMEOUT = 60_000;
@@ -31,11 +29,27 @@ const RESPONSE_TIMEOUT = 60_000;
 // ---------------------------------------------------------------------------
 
 test.describe('Chat conversation flow', () => {
+  let initialUserBubbleCount = 0;
+  let initialAssistantBubbleCount = 0;
+
   test.beforeEach(async ({ page }) => {
-    await page.goto(CHAT_URL);
+    // Fetch agent ID from API
+    const res = await page.request.get(`${API}/api/agents`);
+    const agents = await res.json();
+    const agentId = agents[0].id;
+
+    await page.goto(`/agents/${agentId}/chat`);
 
     // Wait for the chat input to be visible (page fully loaded)
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+
+    // Allow a brief settle for conversation history to load
+    // (networkidle cannot be used because the SSE connection stays open)
+    await page.waitForTimeout(500);
+
+    // Record initial message counts (from previous conversations)
+    initialUserBubbleCount = await page.getByTestId('message-bubble-user').count();
+    initialAssistantBubbleCount = await page.getByTestId('message-bubble-assistant').count();
   });
 
   // ---- 1. Navigate to the chat page ----
@@ -64,10 +78,10 @@ test.describe('Chat conversation flow', () => {
     // Submit
     await sendButton.click();
 
-    // The user message bubble should appear
-    const userBubble = page.getByTestId('message-bubble-user');
-    await expect(userBubble.first()).toBeVisible({ timeout: 5_000 });
-    await expect(userBubble.first()).toContainText(userMessage);
+    // The new user message bubble should appear (use last() to avoid old messages)
+    const userBubbles = page.getByTestId('message-bubble-user');
+    await expect(userBubbles.last()).toBeVisible({ timeout: 5_000 });
+    await expect(userBubbles.last()).toContainText(userMessage);
   });
 
   // ---- 3 & 4. Wait for assistant response and assert content ----
@@ -78,8 +92,8 @@ test.describe('Chat conversation flow', () => {
     await chatInput.fill('Say hello in one sentence.');
     await chatInput.press('Enter');
 
-    // Wait for user bubble to appear first
-    await expect(page.getByTestId('message-bubble-user').first()).toBeVisible({ timeout: 5_000 });
+    // Wait for the new user bubble to appear
+    await expect(page.getByTestId('message-bubble-user').last()).toBeVisible({ timeout: 5_000 });
 
     // Wait for the assistant response. The run-finished marker appears when
     // streaming completes and at least one message exists.
@@ -87,12 +101,12 @@ test.describe('Chat conversation flow', () => {
       timeout: RESPONSE_TIMEOUT,
     });
 
-    // At least one assistant bubble should now be present
+    // At least one new assistant bubble should now be present
     const assistantBubbles = page.getByTestId('message-bubble-assistant');
-    await expect(assistantBubbles.first()).toBeVisible();
+    await expect(assistantBubbles.last()).toBeVisible();
 
     // The response should contain some non-empty text
-    const text = await assistantBubbles.first().innerText();
+    const text = await assistantBubbles.last().innerText();
     expect(text.trim().length).toBeGreaterThan(0);
   });
 
@@ -124,7 +138,7 @@ test.describe('Chat conversation flow', () => {
     } else {
       // No tool calls — that's OK, just ensure assistant responded
       const assistantBubbles = page.getByTestId('message-bubble-assistant');
-      await expect(assistantBubbles.first()).toBeVisible();
+      await expect(assistantBubbles.last()).toBeVisible();
     }
   });
 
@@ -135,10 +149,10 @@ test.describe('Chat conversation flow', () => {
     await chatInput.fill('Ping');
     await chatInput.press('Enter');
 
-    // User bubble should appear (message was sent)
-    const userBubble = page.getByTestId('message-bubble-user');
-    await expect(userBubble.first()).toBeVisible({ timeout: 5_000 });
-    await expect(userBubble.first()).toContainText('Ping');
+    // New user bubble should appear (use last() to get the one we just sent)
+    const userBubbles = page.getByTestId('message-bubble-user');
+    await expect(userBubbles.last()).toBeVisible({ timeout: 5_000 });
+    await expect(userBubbles.last()).toContainText('Ping');
 
     // Input should be cleared after send
     await expect(chatInput).toHaveValue('');
@@ -148,13 +162,16 @@ test.describe('Chat conversation flow', () => {
   test('does not send on Shift+Enter (inserts newline)', async ({ page }) => {
     const chatInput = page.getByTestId('chat-input');
 
+    // Record current count before typing
+    const beforeCount = await page.getByTestId('message-bubble-user').count();
+
     await chatInput.fill('line one');
     await chatInput.press('Shift+Enter');
     await chatInput.type('line two');
 
-    // Message should NOT have been sent — no user bubble yet
-    const userBubbles = page.getByTestId('message-bubble-user');
-    expect(await userBubbles.count()).toBe(0);
+    // Message should NOT have been sent — count should remain the same
+    const afterCount = await page.getByTestId('message-bubble-user').count();
+    expect(afterCount).toBe(beforeCount);
 
     // Textarea should contain both lines
     const value = await chatInput.inputValue();
@@ -164,29 +181,35 @@ test.describe('Chat conversation flow', () => {
 
   // ---- Multiple messages in sequence ----
   test('supports multiple messages in a conversation', async ({ page }) => {
+    test.setTimeout(120_000);
     const chatInput = page.getByTestId('chat-input');
+    const expectedUserCount = initialUserBubbleCount + 2;
 
     // First message
     await chatInput.fill('What is 2 + 2?');
     await chatInput.press('Enter');
 
-    await expect(page.getByTestId('run-finished')).toBeAttached({
-      timeout: RESPONSE_TIMEOUT,
-    });
+    // Wait for the first assistant response by watching the assistant bubble count increase.
+    // We cannot rely on run-finished here because it may already be attached from a prior test.
+    await expect(async () => {
+      const count = await page.getByTestId('message-bubble-assistant').count();
+      expect(count).toBeGreaterThanOrEqual(initialAssistantBubbleCount + 1);
+    }).toPass({ timeout: RESPONSE_TIMEOUT });
 
     // Second message
     await chatInput.fill('Now add 3 to that result.');
     await chatInput.press('Enter');
 
-    await expect(page.getByTestId('message-bubble-user')).toHaveCount(2, {
-      timeout: 5_000,
-    });
+    // Wait for both new user messages (initial + 2 new)
+    await expect(async () => {
+      const count = await page.getByTestId('message-bubble-user').count();
+      expect(count).toBeGreaterThanOrEqual(expectedUserCount);
+    }).toPass({ timeout: 15_000 });
 
     // Wait for second assistant response
-    // run-finished re-appears after streaming ends; we wait for at least 2
-    // assistant bubbles to confirm the second response arrived.
-    await expect(page.getByTestId('message-bubble-assistant').nth(1)).toBeVisible({
-      timeout: RESPONSE_TIMEOUT,
-    });
+    await expect(async () => {
+      const count = await page.getByTestId('message-bubble-assistant').count();
+      expect(count).toBeGreaterThanOrEqual(initialAssistantBubbleCount + 2);
+    }).toPass({ timeout: RESPONSE_TIMEOUT });
   });
 });

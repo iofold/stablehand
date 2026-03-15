@@ -1,0 +1,26 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: vercel-helper
+  displayName: Vercel AI SDK Helper
+  description: General assistant using Vercel AI SDK harness
+  labels:
+    example: kitchen-sink
+    harness: vercel-ai
+spec:
+  harness: vercel-ai
+  model:
+    provider: openai
+    id: gpt-5-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+    temperature: 0.5
+  instructions: |
+    You are a helpful assistant that can perform calculations and check weather.
+    Always be concise and accurate. You are powered by the Vercel AI SDK harness.
+  tools:
+    - ref: calculator
+    - ref: weather
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 60
+    maxTokensPerRun: 4000

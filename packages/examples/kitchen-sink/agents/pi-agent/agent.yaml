@@ -1,0 +1,26 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: pi-helper
+  displayName: PI Agent Helper
+  description: General assistant using PI Agent harness
+  labels:
+    example: kitchen-sink
+    harness: pi-agent
+spec:
+  harness: pi-agent
+  model:
+    provider: openai
+    id: gpt-5-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+    temperature: 0.2
+  instructions: |
+    You are a helpful assistant that can perform calculations and check weather.
+    Always be concise and accurate. You are powered by the PI Agent harness.
+  tools:
+    - ref: calculator
+    - ref: weather
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 60
+    maxTokensPerRun: 4000

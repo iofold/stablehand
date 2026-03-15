@@ -1,0 +1,26 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: openai-helper
+  displayName: OpenAI Agents Helper
+  description: General assistant using OpenAI Agents SDK harness
+  labels:
+    example: kitchen-sink
+    harness: openai-agents
+spec:
+  harness: openai-agents
+  model:
+    provider: openai
+    id: gpt-5-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+    temperature: 0.4
+  instructions: |
+    You are a helpful assistant that can perform calculations and check weather.
+    Always be concise and accurate. You are powered by the OpenAI Agents SDK harness.
+  tools:
+    - ref: calculator
+    - ref: weather
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 60
+    maxTokensPerRun: 4000

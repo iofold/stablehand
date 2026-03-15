@@ -1,19 +1,8 @@
 import { create } from 'zustand';
+import type { ApiToolCallState, ApiA2UIBlock } from '@ctxmill/shared';
 
-export interface ToolCallState {
-  id: string;
-  name: string;
-  args: string;
-  result?: string;
-  error?: string;
-  status: 'pending' | 'running' | 'complete' | 'error';
-}
-
-export interface A2UIBlock {
-  id: string;
-  component: string;
-  props: Record<string, unknown>;
-}
+export type ToolCallState = ApiToolCallState;
+export type A2UIBlock = ApiA2UIBlock;
 
 export interface Message {
   id: string;

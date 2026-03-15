@@ -13,8 +13,7 @@ import { test, expect } from '@playwright/test';
  *   3. Chat (empty) – /agents/:id/chat
  */
 
-/** Default agent id used by the dev seed / fixture. Override via AGENT_ID env. */
-const AGENT_ID = process.env.AGENT_ID ?? 'explorer';
+const API = 'http://localhost:3001';
 
 test.describe('Visual regression', () => {
   test('dashboard page', async ({ page }) => {
@@ -28,8 +27,12 @@ test.describe('Visual regression', () => {
   });
 
   test('agent detail page', async ({ page }) => {
-    // Navigate directly to the agent detail route
-    await page.goto(`/agents/${AGENT_ID}`);
+    // Fetch agent ID from API
+    const res = await page.request.get(`${API}/api/agents`);
+    const agents = await res.json();
+    const agentId = agents[0].id;
+
+    await page.goto(`/agents/${agentId}`);
     await page.waitForLoadState('networkidle');
 
     // Wait for the agent name heading to render
@@ -39,8 +42,12 @@ test.describe('Visual regression', () => {
   });
 
   test('chat page empty state', async ({ page }) => {
-    await page.goto(`/agents/${AGENT_ID}/chat`);
-    await page.waitForLoadState('networkidle');
+    const res = await page.request.get(`${API}/api/agents`);
+    const agents = await res.json();
+    const agentId = agents[0].id;
+
+    await page.goto(`/agents/${agentId}/chat`);
+    await page.waitForLoadState('domcontentloaded');
 
     // Chat page should show the input area
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 10_000 });

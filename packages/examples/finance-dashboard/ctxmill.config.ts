@@ -1,6 +1,7 @@
 import { defineConfig } from 'ctxmill';
 
 export default defineConfig({
+  preset: 'local',
   name: 'finance-dashboard',
   version: '0.1.0',
   agents: ['agents/assistant'],

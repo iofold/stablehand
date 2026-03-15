@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { SSEManager } from '../../packages/ctxmill/src/orchestrator/sse.js';
+import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import { EventEmitter } from 'node:events';
 
 // ── Mock FastifyReply ────────────────────────────────────────────
@@ -379,6 +380,45 @@ describe('SSEManager', () => {
       expect(manager.getClientCount('agent-1')).toBe(0);
 
       vi.restoreAllMocks();
+    });
+  });
+
+  // Event bus emissions
+  describe('event bus emissions', () => {
+    it('subscribe emits client.connected event', () => {
+      const bus = new TypedEventBus();
+      const busManager = new SSEManager(bus);
+      const events: any[] = [];
+      bus.on('client.connected', (payload) => events.push(payload));
+
+      const reply = createMockReply();
+      busManager.subscribe('agent-1', reply);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].agentId).toBe('agent-1');
+      expect(events[0].clientId).toBeTypeOf('string');
+      expect(events[0].clientId.length).toBeGreaterThan(0);
+      expect(events[0].timestamp).toBeTypeOf('number');
+
+      busManager.shutdown();
+    });
+
+    it('client disconnect emits client.disconnected event', () => {
+      const bus = new TypedEventBus();
+      const busManager = new SSEManager(bus);
+      const events: any[] = [];
+      bus.on('client.disconnected', (payload) => events.push(payload));
+
+      const reply = createMockReply();
+      busManager.subscribe('agent-1', reply);
+      busManager.unsubscribe('agent-1', reply);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].agentId).toBe('agent-1');
+      expect(events[0].clientId).toBeTypeOf('string');
+      expect(events[0].timestamp).toBeTypeOf('number');
+
+      busManager.shutdown();
     });
   });
 });

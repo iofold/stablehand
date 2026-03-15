@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { allowConsoleErrors } from '../setup-strict.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -12,6 +13,8 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
   let app: FastifyInstance;
   let container: AppContainer;
   let dataDir: string;
+
+  beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-test-'));
@@ -192,6 +195,8 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
 });
 
 describe('Module integration', () => {
+  beforeEach(() => { allowConsoleErrors(); });
+
   it('container creates all services with interface types', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'integration-module-'));
     try {

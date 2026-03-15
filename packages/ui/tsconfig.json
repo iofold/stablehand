@@ -1,17 +1,17 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2024",
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
     "jsx": "react-jsx",
     "noEmit": true,
+    "rootDir": "src",
+    "outDir": "dist",
     "isolatedModules": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]

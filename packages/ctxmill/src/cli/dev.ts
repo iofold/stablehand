@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { FastifyInstance } from 'fastify';
@@ -11,13 +11,15 @@ import type { CTXMillConfig } from '../config/types.js';
 import type { AgentDefinition } from '../types.js';
 import type { ToolDefinition } from '../tool/types.js';
 
+import { ensureAgentWorkspace, seedAgentWorkspace } from '../workspace/ensure.js';
+
 export async function startDev() {
   const cwd = process.cwd();
 
-  // Load config
-  let config: { preset: string } = { preset: 'local' };
+  // Load config — env var override takes precedence
+  let config: { preset: string } = { preset: process.env.CTXMILL_PRESET || 'local' };
   const configPath = join(cwd, 'ctxmill.config.ts');
-  if (existsSync(configPath)) {
+  if (!process.env.CTXMILL_PRESET && existsSync(configPath)) {
     const mod = await import(pathToFileURL(configPath).href);
     config = mod.default;
   }
@@ -164,29 +166,33 @@ export async function startDev() {
       });
     }
   }
-  console.log(`  \x1b[32m✓\x1b[0m Registered ${agentDefs.length} agent(s), ${toolDefs.length} tool(s)`);
 
-  // Build agent map (DB id → definition) for the server
-  // The route looks up by DB-generated UUID, so we need to map DB IDs to definitions.
-  const agentMap = new Map<string, AgentDefinition>();
-  const dbAgents = await container.db.listAgents();
-  for (const def of agentDefs) {
-    const dbAgent = dbAgents.find((a) => a.name === def.name);
-    if (dbAgent) {
-      agentMap.set(dbAgent.id, def);
+  // Ensure workspace directories for all registered agents
+  const allDbAgents = await container.db.listAgents();
+  for (const dbAgent of allDbAgents) {
+    const workspaceDir = ensureAgentWorkspace(dataDir, dbAgent.id);
+    seedAgentWorkspace(workspaceDir);
+    if (dbAgent.workspaceDir !== workspaceDir) {
+      await container.db.updateAgent(dbAgent.id, { workspaceDir });
     }
   }
+
+  console.log(`  \x1b[32m✓\x1b[0m Registered ${agentDefs.length} agent(s), ${toolDefs.length} tool(s)`);
 
   // ── Start Fastify orchestrator ───────────────────────
   const server: FastifyInstance = await createServer({
     db: container.db,
     executor: container.agentExecutor,
-    agents: agentMap,
     port: apiPort,
     host: '0.0.0.0',
     runRegistry: container.runRegistry,
     learningPipeline: container.learningPipeline,
     knowledgeStore: container.knowledgeStore,
+    eventBus: container.eventBus,
+    dataDir,
+    triggerManager: container.triggerManager,
+    sse: container.sseManager,
+    interrupts: container.interruptManager,
   });
   await server.listen({ port: apiPort, host: '0.0.0.0' });
   console.log(`  \x1b[32mAPI:\x1b[0m  http://localhost:${apiPort}`);
@@ -248,7 +254,10 @@ export async function startDev() {
     if (viteProcess) {
       viteProcess.kill('SIGTERM');
     }
+    container.sseBroadcaster.shutdown();
+    container.learningSubscriber.shutdown();
     await server.close();
+    await container.close();
     process.exit(0);
   };
 

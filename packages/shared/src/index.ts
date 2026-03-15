@@ -11,4 +11,9 @@ export type {
   ApiFeedbackRequest,
   ApiKnowledgeItem,
   ApiKnowledgeStats,
+  SkillFrontmatter,
+  SkillManifestEntry,
+  LoadedSkill,
+  SkillValidationResult,
+  LegacySkill,
 } from './api.js';

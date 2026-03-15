@@ -1,0 +1,26 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: claude-helper
+  displayName: Claude Agents Helper
+  description: General assistant using Claude Agents SDK harness
+  labels:
+    example: kitchen-sink
+    harness: claude-agents
+spec:
+  harness: claude-agents
+  model:
+    provider: anthropic
+    id: claude-sonnet-4-6
+    apiKeyRef: "$secret:ANTHROPIC_API_KEY"
+    temperature: 0.3
+  instructions: |
+    You are a helpful assistant that can perform calculations and check weather.
+    Always be concise and accurate. You are powered by the Claude Agents SDK harness.
+  tools:
+    - ref: calculator
+    - ref: weather
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 60
+    maxTokensPerRun: 4000

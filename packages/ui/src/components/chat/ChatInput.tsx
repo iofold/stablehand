@@ -46,14 +46,14 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const canSend = value.trim().length > 0 && !disabled;
 
   return (
-    <div className="border-t border-surface-700/40 bg-surface-900/80 backdrop-blur-md">
-      <div className="mx-auto max-w-3xl px-4 py-3">
+    <div className="border-t border-surface-700 bg-surface-850 px-4 py-3">
+      <div className="mx-auto max-w-3xl">
         <div
           className={cn(
-            'relative flex items-end gap-2 rounded-xl border bg-surface-800/80 transition-all duration-200',
+            'relative flex items-end gap-2 bg-surface-800 border border-surface-700 rounded-lg transition-all duration-200',
             isFocused
-              ? 'border-brand-500/50 ring-1 ring-brand-500/20 shadow-lg shadow-brand-500/5'
-              : 'border-surface-700/50',
+              ? 'border-accent-500'
+              : '',
             disabled && 'opacity-60',
           )}
         >
@@ -69,8 +69,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             rows={1}
             placeholder={disabled ? 'Agent is thinking...' : 'Message the agent...'}
             className={cn(
-              'flex-1 resize-none bg-transparent px-4 py-3 text-sm text-surface-100',
-              'placeholder:text-surface-500 focus:outline-none',
+              'flex-1 resize-none bg-transparent px-4 py-3 text-sm text-surface-200 placeholder-surface-500 focus:outline-none',
               'min-h-[44px] max-h-[200px]',
               disabled && 'cursor-not-allowed',
             )}
@@ -88,13 +87,13 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
               onClick={handleSend}
               disabled={!canSend}
               className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200',
+                'flex items-center justify-center rounded-md px-3 py-2 transition-all duration-200',
                 canSend
-                  ? 'bg-brand-600 text-white hover:bg-brand-500 shadow-sm shadow-brand-600/30'
+                  ? 'bg-accent-600 text-white hover:bg-accent-500'
                   : 'bg-surface-700/50 text-surface-500',
               )}
             >
-              <Send className="h-3.5 w-3.5" />
+              <Send className="h-4 w-4" />
             </button>
           </div>
         </div>

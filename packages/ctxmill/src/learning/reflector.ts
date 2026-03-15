@@ -6,6 +6,7 @@ const CONFIDENCE_THRESHOLD = 0.3;
 export class SimpleReflector {
   private llmProvider: LLMProvider;
 
+
   constructor(llmProvider: LLMProvider) {
     this.llmProvider = llmProvider;
   }

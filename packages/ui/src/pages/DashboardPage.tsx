@@ -1,14 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Cpu,
-  Bot,
-  Wrench,
-  Activity,
-  Radio,
-  Users,
-  X,
-} from 'lucide-react';
+import { X } from 'lucide-react';
 import { useAgentsStore } from '@/stores/agents';
 import type { AgentRun } from '@/stores/agents';
 import { Dashboard } from '@/components/dashboard/Dashboard';
@@ -43,7 +35,7 @@ export function DashboardPage() {
     }
 
     poll();
-    const id = setInterval(poll, 5000);
+    const id = setInterval(poll, 30_000);
     return () => {
       mounted = false;
       clearInterval(id);
@@ -72,138 +64,123 @@ export function DashboardPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-surface-950">
-      {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-surface-700/50 bg-surface-900/80 backdrop-blur-sm">
-        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-6">
-          <div className="flex items-center gap-2.5">
-            <Cpu className="h-5 w-5 text-brand-400" />
-            <h1 className="text-lg font-bold tracking-tight text-surface-100">
-              CTXMill
-            </h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-40" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-green-400" />
-            </span>
-            <span className="text-xs text-surface-400">System Online</span>
-          </div>
-        </div>
-      </header>
-
       {/* Content */}
-      <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-8">
-        {/* Hero section with gradient accent */}
-        <div className="relative mb-8 overflow-hidden rounded-2xl border border-surface-700/40 bg-gradient-to-br from-surface-800/90 via-surface-800/70 to-surface-900/90 p-6 sm:p-8">
-          {/* Decorative gradient orb */}
-          <div className="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-brand-500/[0.07] blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-10 -left-10 h-40 w-40 rounded-full bg-brand-400/[0.05] blur-2xl" />
-
-          <div className="relative">
-            <h2 className="text-2xl font-semibold tracking-tight text-surface-50">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-5 space-y-8">
+        {/* Hero section */}
+        <div>
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight text-surface-200">
               Agent Dashboard
             </h2>
             <p className="mt-1.5 text-sm text-surface-400 max-w-lg">
-              Monitor, manage, and interact with your agentic workflows. Each
-              agent runs in an isolated sandbox with its own tools and knowledge.
+              Manage your agentic workflows.
             </p>
           </div>
 
           {/* Stats row */}
-          <div className="relative mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatTile
-              icon={<Bot className="h-4 w-4" />}
-              label="Total Agents"
-              value={loading ? '--' : String(agents.length)}
-              accent="text-brand-400"
-            />
-            <StatTile
-              icon={<Activity className="h-4 w-4" />}
-              label="Active"
-              value={loading ? '--' : String(stats.activeAgents)}
-              accent="text-green-400"
-            />
-            <StatTile
-              icon={<Wrench className="h-4 w-4" />}
-              label="Tools Loaded"
-              value={loading ? '--' : String(stats.totalTools)}
-              accent="text-amber-400"
-            />
-            <StatTile
-              icon={<Users className="h-4 w-4" />}
-              label="Connections"
-              value={loading ? '--' : String(stats.totalConnections)}
-              accent="text-purple-400"
-            />
+          <div className="mt-6 flex flex-col sm:flex-row items-stretch divide-y sm:divide-y-0 sm:divide-x divide-surface-700">
+            <div className="flex-1 p-4 first:pl-0">
+              <p className="text-label">Total Agents</p>
+              <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
+                {loading ? '--' : agents.length}
+              </p>
+            </div>
+            <div className="flex-1 p-4">
+              <p className="text-label">Active</p>
+              <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
+                {loading ? '--' : stats.activeAgents}
+              </p>
+            </div>
+            <div className="flex-1 p-4">
+              <p className="text-label">Tools Loaded</p>
+              <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
+                {loading ? '--' : stats.totalTools}
+              </p>
+            </div>
+            <div className="flex-1 p-4">
+              <p className="text-label">Connections</p>
+              <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
+                {loading ? '--' : stats.totalConnections}
+              </p>
+            </div>
           </div>
         </div>
 
-        {/* SSE status bar */}
-        <div className="mb-6 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-medium text-surface-300">Agents</h3>
-            {!loading && (
-              <span className="rounded-full bg-surface-800 px-2 py-0.5 text-[11px] font-medium text-surface-400 border border-surface-700/50">
-                {agents.length}
-              </span>
-            )}
+        <div>
+          <div className="mb-4 flex items-center gap-2">
+            <h3 className="text-label">Agents {!loading && `(${agents.length})`}</h3>
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-surface-500">
-            <Radio className="h-3 w-3 text-green-400 animate-pulse-slow" />
-            <span>SSE Connected</span>
-          </div>
-        </div>
 
-        <Dashboard agents={agents} loading={loading} />
+          <Dashboard agents={agents} loading={loading} />
+        </div>
 
         {/* Active Runs Section */}
         {activeRuns.length > 0 && (
-          <div data-testid="active-runs-section" className="mt-8 animate-fade-in">
+          <div data-testid="active-runs-section" className="animate-fade-in">
             <div className="mb-4 flex items-center gap-2">
-              <h3 className="text-sm font-medium text-surface-300">Active Runs</h3>
+              <h3 className="text-sm font-medium text-surface-400">Active Runs</h3>
               <span className="rounded-full bg-green-500/15 border border-green-500/30 px-2 py-0.5 text-[10px] font-medium text-green-300">
                 {activeRuns.length}
               </span>
             </div>
-            <div className="space-y-2">
-              {activeRuns.map((run) => (
-                <div
-                  key={run.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => navigate(`/agents/${run.agentId}/runs/${run.id}`)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      navigate(`/agents/${run.agentId}/runs/${run.id}`);
-                    }
-                  }}
-                  className="flex items-center gap-3 rounded-lg border border-surface-700/40 bg-surface-800/60 px-4 py-3 text-sm cursor-pointer hover:border-brand-500/40 hover:bg-surface-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-                >
-                  <RunStatusBadge status={run.status} />
-                  <span className="font-medium text-surface-200 min-w-0 truncate">
-                    {agentNameMap[run.agentId] || run.agentId}
-                  </span>
-                  <span className="flex-1 min-w-0 truncate text-surface-400 text-xs">
-                    {run.taskDescription || '--'}
-                  </span>
-                  <span className="flex-shrink-0 text-[11px] text-surface-500 tabular-nums">
-                    {formatDuration(run.startedAt)}
-                  </span>
-                  <button
-                    type="button"
-                    data-testid="cancel-run-button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleCancelRun(run);
-                    }}
-                    className="flex-shrink-0 rounded-md p-1 text-surface-500 transition-colors hover:text-red-400 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                    title="Cancel run"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
+            <div className="border border-surface-700 rounded-lg overflow-hidden bg-surface-800/30">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-surface-800/50">
+                    <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Agent Name</th>
+                    <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Status</th>
+                    <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Task Description</th>
+                    <th className="px-4 py-3 text-label border-b border-surface-700 font-medium text-right">Duration</th>
+                    <th className="px-4 py-3 border-b border-surface-700"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-700/50">
+                  {activeRuns.map((run) => (
+                    <tr
+                      key={run.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => navigate(`/agents/${run.agentId}/runs/${run.id}`)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          navigate(`/agents/${run.agentId}/runs/${run.id}`);
+                        }
+                      }}
+                      className="hover:bg-surface-800/50 cursor-pointer transition-colors focus-visible:outline-none focus-visible:bg-surface-800/50 group"
+                    >
+                      <td className="px-4 py-3 text-sm font-medium text-surface-200">
+                        {agentNameMap[run.agentId] || run.agentId}
+                      </td>
+                      <td className="px-4 py-3">
+                        <RunStatusBadge status={run.status} />
+                      </td>
+                      <td className="px-4 py-3 text-sm text-surface-400">
+                        <div className="max-w-[200px] sm:max-w-xs md:max-w-md truncate">
+                          {run.taskDescription || '--'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-surface-400 tabular-nums text-right">
+                        {formatDuration(run.startedAt)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          data-testid="cancel-run-button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCancelRun(run);
+                          }}
+                          className="rounded-md p-1.5 text-surface-500 transition-colors hover:text-red-400 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                          title="Cancel run"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -212,31 +189,7 @@ export function DashboardPage() {
   );
 }
 
-function StatTile({
-  icon,
-  label,
-  value,
-  accent,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  accent: string;
-}) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-surface-700/30 bg-surface-900/60 px-4 py-3">
-      <div className={`flex-shrink-0 ${accent}`}>{icon}</div>
-      <div className="min-w-0">
-        <p className="text-lg font-semibold tabular-nums text-surface-100 leading-tight">
-          {value}
-        </p>
-        <p className="text-[11px] text-surface-500 leading-tight mt-0.5">
-          {label}
-        </p>
-      </div>
-    </div>
-  );
-}
+
 
 function formatDuration(startedAt: number): string {
   const elapsed = Math.max(0, Date.now() - startedAt);

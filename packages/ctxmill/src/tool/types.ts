@@ -5,6 +5,8 @@ export interface ToolDefinition<TInput extends z.ZodType = z.ZodType> {
   description: string;
   input: TInput;
   requiresApproval?: boolean;
+  secrets?: string[];
+  timeout?: number;
   handler: (input: z.infer<TInput>, ctx: ToolContext) => Promise<string>;
 }
 
@@ -26,6 +28,9 @@ export interface ToolResult {
 export interface ToolContext {
   agentId: string;
   conversationId: string;
+  workspaceDir: string;
+  /** Session-scoped execution environment (if available). */
+  env?: import('../workspace/types.js').ExecutionEnvironment;
   knowledge: {
     query: (opts: {
       text: string;
@@ -34,4 +39,6 @@ export interface ToolContext {
       items: Array<{ id: string; content: string; score: number }>;
     }>;
   };
+  /** Event bus for emitting custom events (available to built-in tools). */
+  eventBus?: import('../events/bus.js').TypedEventBus;
 }

@@ -17,7 +17,7 @@ test.describe('Dashboard', () => {
     await expect(agentName).not.toBeEmpty();
   });
 
-  test('clicking agent card navigates to chat', async ({ page }) => {
+  test('clicking agent card navigates to agent detail', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -26,7 +26,7 @@ test.describe('Dashboard', () => {
 
     await firstCard.click();
 
-    // Agent card navigates to /agents/:id/chat
-    await expect(page).toHaveURL(/\/agents\/[^/]+\/chat/);
+    // Agent card navigates to /agents/:id
+    await expect(page).toHaveURL(/\/agents\/[^/]+$/);
   });
 });

@@ -63,6 +63,13 @@ export interface KnowledgeStore {
   update(id: string, updates: Partial<KnowledgeItem>): Promise<KnowledgeItem>;
   remove(id: string): Promise<void>;
   render(agentId: string): Promise<string>;
+
+  // Shared / cross-agent knowledge methods
+  listShared(): Promise<KnowledgeItem[]>;
+  addShared(item: Omit<KnowledgeItem, 'id' | 'createdAt' | 'updatedAt' | 'agentId'>): Promise<KnowledgeItem>;
+  searchShared(options: KnowledgeSearchOptions): Promise<KnowledgeSearchResult>;
+  sharedStats(): Promise<KnowledgeStats>;
+  searchAll(options: KnowledgeSearchOptions): Promise<KnowledgeSearchResult>;
 }
 
 // Context provider interface

@@ -7,10 +7,12 @@ describe('TypedEventBus', () => {
     const handler = vi.fn();
 
     bus.on('agent.created', handler);
-    bus.emit('agent.created', { agentId: 'test-agent' });
+    bus.emit('agent.created', { agentId: 'test-agent', name: 'Test', timestamp: 0 });
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith({ agentId: 'test-agent' });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'test-agent', name: 'Test' }),
+    );
   });
 
   it('should support multiple handlers for same event', () => {
@@ -18,9 +20,16 @@ describe('TypedEventBus', () => {
     const handler1 = vi.fn();
     const handler2 = vi.fn();
 
-    bus.on('tool.call_started', handler1);
-    bus.on('tool.call_started', handler2);
-    bus.emit('tool.call_started', { agentId: 'a', toolName: 'get-data', callId: 'c1' });
+    bus.on('run.tool_started', handler1);
+    bus.on('run.tool_started', handler2);
+    bus.emit('run.tool_started', {
+      runId: 'r1',
+      agentId: 'a',
+      toolCallId: 'c1',
+      toolName: 'get-data',
+      args: {},
+      timestamp: 0,
+    });
 
     expect(handler1).toHaveBeenCalledTimes(1);
     expect(handler2).toHaveBeenCalledTimes(1);
@@ -31,11 +40,11 @@ describe('TypedEventBus', () => {
     const handler = vi.fn();
 
     bus.on('agent.created', handler);
-    bus.emit('agent.created', { agentId: 'a1' });
+    bus.emit('agent.created', { agentId: 'a1', name: 'A1', timestamp: 0 });
     expect(handler).toHaveBeenCalledTimes(1);
 
     bus.off('agent.created', handler);
-    bus.emit('agent.created', { agentId: 'a2' });
+    bus.emit('agent.created', { agentId: 'a2', name: 'A2', timestamp: 0 });
     expect(handler).toHaveBeenCalledTimes(1); // still 1, not called again
   });
 
@@ -43,22 +52,34 @@ describe('TypedEventBus', () => {
     const bus = new TypedEventBus();
     const handler = vi.fn();
 
-    bus.on('tool.call_completed', handler);
-    bus.emit('tool.call_completed', { agentId: 'a', callId: 'c1', durationMs: 42 });
+    bus.on('run.tool_result', handler);
+    bus.emit('run.tool_result', {
+      runId: 'r1',
+      agentId: 'a',
+      toolCallId: 'c1',
+      toolName: 'test-tool',
+      result: 'ok',
+      durationMs: 42,
+      timestamp: 0,
+    });
 
-    expect(handler).toHaveBeenCalledWith({ agentId: 'a', callId: 'c1', durationMs: 42 });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'a', toolCallId: 'c1', durationMs: 42 }),
+    );
   });
 
   it('should support once() for single-fire handlers', () => {
     const bus = new TypedEventBus();
     const handler = vi.fn();
 
-    bus.once('knowledge.updated', handler);
-    bus.emit('knowledge.updated', { agentId: 'a', itemId: 'k1' });
-    bus.emit('knowledge.updated', { agentId: 'a', itemId: 'k2' });
+    bus.once('learning.knowledge_updated', handler);
+    bus.emit('learning.knowledge_updated', { agentId: 'a', itemId: 'k1', category: 'strategy', timestamp: 0 });
+    bus.emit('learning.knowledge_updated', { agentId: 'a', itemId: 'k2', category: 'strategy', timestamp: 0 });
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith({ agentId: 'a', itemId: 'k1' });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'a', itemId: 'k1' }),
+    );
   });
 
   it('should removeAllListeners for a specific event', () => {
@@ -67,11 +88,11 @@ describe('TypedEventBus', () => {
     const handler2 = vi.fn();
 
     bus.on('agent.created', handler1);
-    bus.on('agent.status_changed', handler2);
+    bus.on('agent.deleted', handler2);
 
     bus.removeAllListeners('agent.created');
-    bus.emit('agent.created', { agentId: 'a' });
-    bus.emit('agent.status_changed', { agentId: 'a', from: 'idle', to: 'running' });
+    bus.emit('agent.created', { agentId: 'a', name: 'A', timestamp: 0 });
+    bus.emit('agent.deleted', { agentId: 'a', timestamp: 0 });
 
     expect(handler1).not.toHaveBeenCalled();
     expect(handler2).toHaveBeenCalledTimes(1);
@@ -83,11 +104,19 @@ describe('TypedEventBus', () => {
     const handler2 = vi.fn();
 
     bus.on('agent.created', handler1);
-    bus.on('tool.call_failed', handler2);
+    bus.on('run.completed', handler2);
 
     bus.removeAllListeners();
-    bus.emit('agent.created', { agentId: 'a' });
-    bus.emit('tool.call_failed', { agentId: 'a', callId: 'c', error: 'oops' });
+    bus.emit('agent.created', { agentId: 'a', name: 'A', timestamp: 0 });
+    bus.emit('run.completed', {
+      runId: 'r1',
+      agentId: 'a',
+      conversationId: 'c1',
+      status: 'error',
+      error: 'oops',
+      durationMs: 0,
+      timestamp: 0,
+    });
 
     expect(handler1).not.toHaveBeenCalled();
     expect(handler2).not.toHaveBeenCalled();
@@ -97,7 +126,14 @@ describe('TypedEventBus', () => {
     const bus = new TypedEventBus();
     // Should not throw
     expect(() => {
-      bus.emit('trace.captured', { traceId: 't1', agentId: 'a' });
+      bus.emit('learning.trace_captured', {
+        traceId: 't1',
+        runId: 'r1',
+        agentId: 'a',
+        stepCount: 3,
+        outcome: 'success',
+        timestamp: 0,
+      });
     }).not.toThrow();
   });
 });

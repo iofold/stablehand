@@ -10,7 +10,7 @@ export default defineTool({
     path: z.string().default('.').describe('Directory path relative to project root'),
   }),
   async handler({ path: dirPath }, ctx) {
-    const basePath = process.cwd();
+    const basePath = ctx.workspaceDir;
     const resolved = resolve(basePath, dirPath);
     if (!resolved.startsWith(basePath)) {
       return 'Error: Cannot access directories outside the project';

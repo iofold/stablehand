@@ -11,7 +11,7 @@ import {
   Legend,
 } from 'recharts';
 
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+const COLORS = ['#2dd4bf', '#14b8a6', '#a1a1aa', '#22c55e', '#eab308', '#ef4444'];
 
 interface TimeSeriesChartProps {
   title?: string;
@@ -32,29 +32,30 @@ export function TimeSeriesChart({
   const ChartComponent = chartType === 'area' ? AreaChart : LineChart;
 
   return (
-    <div data-testid="a2ui-time-series-chart" className="card p-4">
+    <div data-testid="a2ui-time-series-chart" className="w-full h-full bg-transparent">
       {title && (
         <h3 className="text-sm font-semibold text-surface-200 mb-4">{title}</h3>
       )}
       <ResponsiveContainer width="100%" height={300}>
-        <ChartComponent data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+        <ChartComponent data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+          <CartesianGrid stroke="#3f3f46" strokeOpacity={0.2} vertical={false} />
           <XAxis
             dataKey={xKey}
-            stroke="#64748b"
-            tick={{ fill: '#94a3b8', fontSize: 11 }}
+            stroke="#3f3f46"
+            tick={{ fill: '#71717a', fontSize: 12 }}
           />
-          <YAxis stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+          <YAxis stroke="#3f3f46" tick={{ fill: '#71717a', fontSize: 12 }} />
           <Tooltip
+            cursor={{ stroke: '#3f3f46' }}
             contentStyle={{
-              backgroundColor: '#1e293b',
-              border: '1px solid #334155',
-              borderRadius: '8px',
-              color: '#e2e8f0',
-              fontSize: 12,
+              backgroundColor: '#27272a',
+              border: '1px solid #3f3f46',
+              borderRadius: '6px',
+              color: '#d4d4d8',
+              fontSize: '13px',
             }}
           />
-          {yKeys.length > 1 && <Legend />}
+          {yKeys.length > 1 && <Legend formatter={(value) => <span className="text-xs text-surface-500">{value}</span>} />}
           {yKeys.map((key, i) =>
             chartType === 'area' ? (
               <Area
@@ -63,7 +64,7 @@ export function TimeSeriesChart({
                 dataKey={key}
                 stroke={COLORS[i % COLORS.length]}
                 fill={COLORS[i % COLORS.length]}
-                fillOpacity={0.15}
+                fillOpacity={0.1}
                 strokeWidth={2}
               />
             ) : (
@@ -74,7 +75,7 @@ export function TimeSeriesChart({
                 stroke={COLORS[i % COLORS.length]}
                 strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 4 }}
+                activeDot={{ r: 4, fill: COLORS[i % COLORS.length], stroke: '#27272a', strokeWidth: 2 }}
               />
             ),
           )}

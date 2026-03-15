@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { TraceCollector } from '../../packages/ctxmill/src/learning/trace.js';
 import { DefaultLearningPipeline } from '../../packages/ctxmill/src/learning/pipeline.js';
 import { InMemoryKnowledgeStore } from '../../packages/ctxmill/src/knowledge/store.js';
+import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import type { ExecutionTrace, FeedbackSignal, Insight } from '../../packages/ctxmill/src/learning/types.js';
 import type { SimpleReflector } from '../../packages/ctxmill/src/learning/reflector.js';
 
@@ -258,6 +259,73 @@ describe('DefaultLearningPipeline', () => {
       const lowIdx = rendered.indexOf('Low');
       expect(highIdx).toBeLessThan(medIdx);
       expect(medIdx).toBeLessThan(lowIdx);
+    });
+  });
+
+  // Event bus emissions
+  describe('event bus emissions', () => {
+    it('process() emits learning.trace_captured after trace save', async () => {
+      const bus = new TypedEventBus();
+      const events: any[] = [];
+      bus.on('learning.trace_captured', (payload) => events.push(payload));
+
+      const mockReflector = createMockReflector([]);
+      const mockDb = {
+        saveTrace: vi.fn().mockResolvedValue(undefined),
+      } as any;
+      const pipeline = new DefaultLearningPipeline(mockReflector, store, mockDb, bus);
+
+      const trace = makeTrace();
+      await pipeline.process(trace);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].traceId).toBe('trace-1');
+      expect(events[0].runId).toBe('run-1');
+      expect(events[0].agentId).toBe('agent-1');
+      expect(events[0].stepCount).toBe(2);
+      expect(events[0].outcome).toBe('success');
+      expect(events[0].timestamp).toBeTypeOf('number');
+    });
+
+    it('process() emits learning.insight_extracted when insights found', async () => {
+      const bus = new TypedEventBus();
+      const events: any[] = [];
+      bus.on('learning.insight_extracted', (payload) => events.push(payload));
+
+      const insights: Insight[] = [
+        { content: 'Insight A', category: 'strategy', confidence: 0.8 },
+        { content: 'Insight B', category: 'fact', confidence: 0.6 },
+      ];
+      const mockReflector = createMockReflector(insights);
+      const pipeline = new DefaultLearningPipeline(mockReflector, store, undefined, bus);
+
+      await pipeline.process(makeTrace());
+
+      expect(events).toHaveLength(1);
+      expect(events[0].traceId).toBe('trace-1');
+      expect(events[0].agentId).toBe('agent-1');
+      expect(events[0].insightCount).toBe(2);
+    });
+
+    it('process() emits learning.knowledge_updated for each stored insight', async () => {
+      const bus = new TypedEventBus();
+      const events: any[] = [];
+      bus.on('learning.knowledge_updated', (payload) => events.push(payload));
+
+      const insights: Insight[] = [
+        { content: 'Insight A', category: 'strategy', confidence: 0.8 },
+        { content: 'Insight B', category: 'fact', confidence: 0.6 },
+      ];
+      const mockReflector = createMockReflector(insights);
+      const pipeline = new DefaultLearningPipeline(mockReflector, store, undefined, bus);
+
+      await pipeline.process(makeTrace());
+
+      expect(events).toHaveLength(2);
+      expect(events[0].agentId).toBe('agent-1');
+      expect(events[0].category).toBe('strategy');
+      expect(events[0].itemId).toBeTypeOf('string');
+      expect(events[1].category).toBe('fact');
     });
   });
 });

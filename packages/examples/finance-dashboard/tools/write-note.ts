@@ -11,8 +11,11 @@ export default defineTool({
     content: z.string().describe('Content to write'),
   }),
   requiresApproval: true,
+  // Note: When session isolation is active, notes are written to the session
+  // overlay. They are only visible in this session until promoted to base.
+  // This is intentional — session-scoped notes support exploratory workflows.
   async handler({ filename, content }, ctx) {
-    const basePath = process.cwd();
+    const basePath = ctx.workspaceDir;
     const notesDir = resolve(basePath, 'notes');
     const filePath = resolve(notesDir, filename);
     if (!filePath.startsWith(notesDir)) {
