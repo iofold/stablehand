@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { ChatThread } from '@/components/chat/ChatThread';
 import { ChatInput } from '@/components/chat/ChatInput';
+import { ErrorMessage } from '@/components/chat/ErrorMessage';
 import { ApprovalCard } from '@/components/hitl/ApprovalCard';
 import { EditableDocument } from '@/components/hitl/EditableDocument';
 import { FieldRequestForm } from '@/components/hitl/FieldRequestForm';
@@ -13,16 +14,16 @@ import { FileExplorer } from '@/components/explorer/FileExplorer';
 import { FileViewer } from '@/components/explorer/FileViewer';
 import { ConnectionBanner } from '@/components/ui/ConnectionBanner';
 import { useConversationStore } from '@/stores/conversation';
-import type { Message } from '@/stores/conversation';
+import { normalizeConversationMessage } from '@/stores/conversation';
 import { useInterruptStore } from '@/stores/interrupt';
 import { useAgentsStore } from '@/stores/agents';
 import { useSSE, useSSEStatus } from '@/lib/useSSE';
-import { sendMessage, sendInterrupt, fetchConversations, fetchMessages } from '@/lib/api';
+import { sendMessage, sendInterrupt, fetchMessages, fetchConversations, fetchRuns } from '@/lib/api';
 import { cn } from '@/lib/utils';
 // ConnectionBanner reads status from the shared SSE store internally
 
 export function ChatPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id, conversationId: urlConversationId } = useParams<{ id: string; conversationId?: string }>();
   const navigate = useNavigate();
   const agents = useAgentsStore((s) => s.agents);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
@@ -34,6 +35,7 @@ export function ChatPage() {
     a2uiBlocks,
     addUserMessage,
     loadMessages,
+    setActiveConversation,
     reset,
   } = useConversationStore();
   const interrupt = useInterruptStore((s) => s.pending);
@@ -41,9 +43,11 @@ export function ChatPage() {
   const sseStatus = useSSEStatus();
 
   const [error, setError] = useState<string | null>(null);
+  const [pastRunError, setPastRunError] = useState<string | null>(null);
+  const [lastFailedContent, setLastFailedContent] = useState<string | null>(null);
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [conversationId, setConversationId] = useState<string | undefined>();
+  const [conversationId, setConversationId] = useState<string | undefined>(urlConversationId);
 
   useSSE(id);
 
@@ -51,67 +55,82 @@ export function ChatPage() {
     if (agents.length === 0) fetchAgents();
   }, [agents.length, fetchAgents]);
 
-  // Load conversation history on mount
   useEffect(() => {
-    if (!id) return;
+    reset();
+    if (!id) {
+      setConversationId(undefined);
+      loadMessages([]);
+      return;
+    }
+
     let mounted = true;
+
+    setConversationId(urlConversationId);
+    setActiveConversation(urlConversationId ?? null);
+    loadMessages([]);
+    setPastRunError(null);
 
     async function loadHistory() {
       try {
-        const conversations = await fetchConversations(id!);
-        if (!mounted || !Array.isArray(conversations) || conversations.length === 0) return;
+        let convId = urlConversationId;
 
-        // Sort by most recent and pick the latest
-        const sorted = [...conversations].sort(
-          (a: Record<string, unknown>, b: Record<string, unknown>) =>
-            ((b.updatedAt as number) || (b.createdAt as number) || 0) -
-            ((a.updatedAt as number) || (a.createdAt as number) || 0),
-        );
-        const latest = sorted[0];
-        const convId = (latest.id as string) || (latest.conversationId as string);
-        if (!convId) return;
-        if (mounted) setConversationId(convId);
+        if (!convId) {
+          const convs = await fetchConversations(id!) as Array<{ id: string }>;
+          if (!mounted) return;
+          if (Array.isArray(convs) && convs.length > 0) {
+            convId = convs[0].id;
+          }
+        }
 
-        const msgs = await fetchMessages(id!, convId);
-        if (!mounted || !Array.isArray(msgs) || msgs.length === 0) return;
+        if (!convId) {
+          setConversationId(undefined);
+          setActiveConversation(null);
+          loadMessages([]);
+        } else {
+          setConversationId(convId);
+          setActiveConversation(convId);
 
-        const parsed = msgs.map((m: Record<string, unknown>, i: number) => {
-          // Reconstruct a2uiBlocks from DB's a2uiPayload field, or parse from content
-          let blocks = (m.a2uiBlocks || m.a2uiPayload) as Message['a2uiBlocks'];
-          if (!blocks && m.role === 'assistant' && m.content) {
-            const content = m.content as string;
-            const extracted: Array<{ id: string; component: string; props: Record<string, unknown> }> = [];
-            const pattern = /\{\s*"component"\s*:\s*"[^"]+"\s*,\s*"props"\s*:\s*\{[\s\S]*?\}\s*\}/g;
-            let match;
-            while ((match = pattern.exec(content)) !== null) {
-              try {
-                const p = JSON.parse(match[0]);
-                if (typeof p.component === 'string' && p.props) {
-                  extracted.push({ id: `a2ui-${i}-${extracted.length}`, component: p.component, props: p.props });
-                }
-              } catch { /* skip */ }
+          const msgs = await fetchMessages(id!, convId);
+          if (!mounted) return;
+          if (!Array.isArray(msgs) || msgs.length === 0) {
+            loadMessages([]);
+          } else {
+            const parsed = msgs.map((m: Record<string, unknown>, i: number) =>
+              normalizeConversationMessage(m, `msg-${i}`),
+            );
+
+            if (mounted) {
+              loadMessages(parsed);
             }
-            if (extracted.length > 0) blocks = extracted;
           }
-          // Normalize: if blocks came from DB as array of {component, props}, add ids
-          if (Array.isArray(blocks)) {
-            blocks = blocks.map((b: any, bi: number) => ({
-              id: b.id || `a2ui-${i}-${bi}`,
-              component: b.component,
-              props: b.props,
-            }));
-          }
-          return {
-            id: (m.id as string) || `msg-${i}`,
-            role: ((m.role as string) || 'assistant') as 'user' | 'assistant' | 'system' | 'tool',
-            content: (m.content as string) || '',
-            toolCalls: m.toolCalls as Message['toolCalls'],
-            a2uiBlocks: blocks,
-            createdAt: (m.createdAt as string) || new Date().toISOString(),
-          };
-        });
+        }
 
-        loadMessages(parsed);
+        if (mounted) {
+          try {
+            const runs = await fetchRuns(id!);
+            if (mounted && Array.isArray(runs)) {
+              const hasActiveRun = runs.some((r: Record<string, unknown>) => r.status === 'running' || r.status === 'queued');
+              if (hasActiveRun) {
+                useConversationStore.setState({ isStreaming: true });
+              }
+
+              if (convId) {
+                const convRuns = runs.filter((r: Record<string, unknown>) => r.conversationId === convId);
+                convRuns.sort((a: any, b: any) => (b.startedAt || 0) - (a.startedAt || 0));
+                const lastRun = convRuns[0];
+                if (lastRun && (lastRun.status === 'failed' || lastRun.status === 'error') && lastRun.error) {
+                  setPastRunError(lastRun.error as string);
+                } else {
+                  setPastRunError(null);
+                }
+              } else {
+                setPastRunError(null);
+              }
+            }
+          } catch (err) {
+            console.debug('[ChatPage] Failed to fetch runs:', err);
+          }
+        }
       } catch (err) {
         console.debug('[ChatPage] Failed to load conversation history:', err);
       }
@@ -122,7 +141,7 @@ export function ChatPage() {
       mounted = false;
       reset();
     };
-  }, [id, loadMessages, reset]);
+  }, [id, urlConversationId, loadMessages, setActiveConversation, reset]);
 
   const agent = agents.find((a) => a.id === id);
 
@@ -130,15 +149,22 @@ export function ChatPage() {
     async (content: string) => {
       if (!id) return;
       setError(null);
+      setPastRunError(null);
+      setLastFailedContent(null);
       addUserMessage(content);
       try {
-        await sendMessage(id, content, conversationId);
+        const response = await sendMessage(id, content, conversationId);
+        if (response?.conversationId && !conversationId) {
+          setConversationId(response.conversationId);
+          setActiveConversation(response.conversationId);
+        }
       } catch (err) {
         console.error('[Chat] Failed to send message:', err);
         setError(err instanceof Error ? err.message : String(err));
+        setLastFailedContent(content);
       }
     },
-    [id, addUserMessage, conversationId],
+    [id, addUserMessage, conversationId, setActiveConversation],
   );
 
   const handleApprove = useCallback(async () => {
@@ -214,14 +240,14 @@ export function ChatPage() {
       <header className="sticky top-0 z-30 border-b border-surface-700 bg-surface-850">
         <div className="mx-auto flex h-14 items-center gap-3 px-4 sm:px-6">
           {/* Back */}
-          <button
-            type="button"
-            data-testid="back-button"
-            onClick={() => navigate('/')}
-            className="rounded-lg p-1.5 text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
+           <button
+             type="button"
+             data-testid="back-button"
+             onClick={() => navigate(-1)}
+             className="rounded-lg p-1.5 text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
+           >
+             <ArrowLeft className="h-4 w-4" />
+           </button>
 
           {/* Agent identity */}
           <div className="flex items-center gap-2.5 min-w-0">
@@ -230,7 +256,7 @@ export function ChatPage() {
             </h1>
             {agent && (
               <span className="truncate font-mono text-sm text-surface-500">
-                {agent.model}
+                {(agent.harnessConfig as Record<string, unknown>)?.model as string}
               </span>
             )}
             <span
@@ -297,6 +323,7 @@ export function ChatPage() {
             agentTools={agent?.tools}
             agentId={id}
             conversationId={conversationId}
+            pastRunError={pastRunError}
           />
 
           {/* HITL interrupt components */}
@@ -335,9 +362,12 @@ export function ChatPage() {
               data-testid="chat-error"
               className="mx-auto w-full max-w-3xl px-4 pb-1"
             >
-              <div className="rounded-md bg-red-900/30 border border-red-700/40 px-3 py-2 text-sm text-red-400">
-                {error}
-              </div>
+              <ErrorMessage
+                summary="Failed to send message"
+                details={error}
+                onRetry={lastFailedContent ? () => handleSend(lastFailedContent) : undefined}
+                onDismiss={() => { setError(null); setLastFailedContent(null); }}
+              />
             </div>
           )}
           <ChatInput onSend={handleSend} disabled={isStreaming} />

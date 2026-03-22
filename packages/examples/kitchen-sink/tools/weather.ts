@@ -5,16 +5,23 @@ export default defineTool({
   name: 'weather',
   description: 'Look up current weather for a city (mock data)',
   input: z.object({
-    city: z.string(),
+    location: z.string().describe('City or location name'),
+    units: z.enum(['celsius', 'fahrenheit']).default('fahrenheit').optional().describe('Temperature units'),
   }),
-  handler: async (input) => {
-    const cities: Record<string, string> = {
-      'new york': '72\u00b0F, Partly Cloudy',
-      'london': '58\u00b0F, Overcast',
-      'tokyo': '68\u00b0F, Clear',
-      'sydney': '75\u00b0F, Sunny',
+  handler: async (rawInput) => {
+    const input = rawInput as {
+      location: string;
+      units?: 'celsius' | 'fahrenheit';
     };
-    const weather = cities[input.city.toLowerCase()] ?? '65\u00b0F, Fair';
-    return `Weather in ${input.city}: ${weather}`;
+    const cities: Record<string, { f: string; c: string }> = {
+      'new york': { f: '72°F, Partly Cloudy', c: '22°C, Partly Cloudy' },
+      'london': { f: '58°F, Overcast', c: '14°C, Overcast' },
+      'tokyo': { f: '68°F, Clear', c: '20°C, Clear' },
+      'sydney': { f: '75°F, Sunny', c: '24°C, Sunny' },
+    };
+    const units = input.units || 'fahrenheit';
+    const key = units === 'celsius' ? 'c' : 'f';
+    const weather = cities[input.location.toLowerCase()]?.[key] ?? (units === 'celsius' ? '18°C, Fair' : '65°F, Fair');
+    return `Weather in ${input.location}: ${weather}`;
   },
 });

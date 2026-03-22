@@ -1,12 +1,11 @@
-import { pgTable, text, bigint, boolean, doublePrecision, serial, index, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, text, bigint, boolean, doublePrecision, serial, integer, index, jsonb } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
 
 export const agents = pgTable('agents', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   name: text('name').notNull(),
-  model: text('model').notNull(),
-  harness: text('harness').default('langgraph'),
-  modelConfig: text('model_config'),
+  harness: text('harness').notNull(),
+  harnessConfig: text('harness_config').notNull(),
   systemPrompt: text('system_prompt').notNull(),
   tools: jsonb('tools').notNull().$type<string[]>(),
   description: text('description'),
@@ -14,6 +13,7 @@ export const agents = pgTable('agents', {
   status: text('status').notNull().default('created'),
   manifest: jsonb('manifest').$type<Record<string, unknown>>(),
   version: bigint('version', { mode: 'number' }).default(1),
+  callbackUrl: text('callback_url'),
   metadata: jsonb('metadata').$type<Record<string, unknown>>(),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
@@ -79,8 +79,14 @@ export const agentRuns = pgTable('agent_runs', {
   completedAt: bigint('completed_at', { mode: 'number' }),
   error: text('error'),
   sessionDir: text('session_dir'),
+  pausedAt: bigint('paused_at', { mode: 'number' }),
+  pausedReason: text('paused_reason'),
+  resumedAt: bigint('resumed_at', { mode: 'number' }),
+  retryCount: integer('retry_count').default(0),
+  maxRetries: integer('max_retries').default(0),
 }, (table) => ({
   agentStartedIdx: index('idx_agent_runs_agent_started').on(table.agentId, table.startedAt),
+  statusIdx: index('idx_agent_runs_status').on(table.status),
 }));
 
 export const eventStore = pgTable('event_store', {
@@ -145,6 +151,26 @@ export const agentVersions = pgTable('agent_versions', {
   agentVersionIdx: index('idx_agent_versions_agent_version').on(table.agentId, table.version),
 }));
 
+export const pendingInterrupts = pgTable('pending_interrupts', {
+  id: text('id').primaryKey(),
+  runId: text('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id').notNull().references(() => agents.id),
+  toolCallId: text('tool_call_id').notNull(),
+  toolName: text('tool_name').notNull(),
+  args: jsonb('args').notNull().$type<Record<string, unknown>>().default({}),
+  timeoutMs: integer('timeout_ms').notNull().default(300000),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  expiresAt: bigint('expires_at', { mode: 'number' }).notNull(),
+  resolvedAt: bigint('resolved_at', { mode: 'number' }),
+  resolvedAction: text('resolved_action'),
+  resolvedData: jsonb('resolved_data').$type<unknown>(),
+  status: text('status').notNull().default('pending'),
+}, (table) => ({
+  runIdx: index('idx_interrupts_run').on(table.runId),
+  agentIdx: index('idx_interrupts_agent').on(table.agentId),
+  statusExpiresIdx: index('idx_interrupts_status').on(table.status, table.expiresAt),
+}));
+
 export const feedbackSignals = pgTable('feedback_signals', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   traceId: text('trace_id').notNull(),
@@ -156,3 +182,75 @@ export const feedbackSignals = pgTable('feedback_signals', {
 }, (table) => ({
   agentCreatedIdx: index('idx_feedback_signals_agent_created').on(table.agentId, table.createdAt),
 }));
+
+export const sandboxSessions = pgTable('sandbox_sessions', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  conversationId: text('conversation_id').notNull().references(() => conversations.id),
+  agentId: text('agent_id').notNull().references(() => agents.id),
+  containerName: text('container_name'),
+  containerId: text('container_id'),
+  status: text('status').notNull().default('ACTIVE'),
+  harnessName: text('harness_name').notNull(),
+  checkpointRef: text('checkpoint_ref'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  lastActivityAt: bigint('last_activity_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+}, (table) => ({
+  conversationIdx: index('idx_sandbox_sessions_conversation').on(table.conversationId),
+  agentIdx: index('idx_sandbox_sessions_agent').on(table.agentId),
+  statusIdx: index('idx_sandbox_sessions_status').on(table.status),
+  lastActivityIdx: index('idx_sandbox_sessions_last_activity').on(table.lastActivityAt),
+}));
+
+export const agentCheckpoints = pgTable('agent_checkpoints', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  sessionId: text('session_id').notNull().references(() => sandboxSessions.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id').notNull(),
+  checkpointVersion: integer('checkpoint_version').notNull().default(2),
+  checkpointData: jsonb('checkpoint_data').notNull().$type<Record<string, unknown>>(),
+  harnessState: jsonb('harness_state').$type<Record<string, unknown>>(),
+  workspaceRef: text('workspace_ref'),
+  suspendReason: text('suspend_reason'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+}, (table) => ({
+  sessionIdx: index('idx_checkpoints_session_id').on(table.sessionId),
+  agentIdx: index('idx_checkpoints_agent_id').on(table.agentId),
+}));
+
+export const callbackOutbox = pgTable('callback_outbox', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  agentId: text('agent_id').notNull().references(() => agents.id),
+  runId: text('run_id').references(() => agentRuns.id),
+  callbackUrl: text('callback_url').notNull(),
+  eventType: text('event_type').notNull(),
+  payload: jsonb('payload').notNull().$type<Record<string, unknown>>().default({}),
+  status: text('status').notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  maxAttempts: integer('max_attempts').notNull().default(5),
+  nextAttemptAt: bigint('next_attempt_at', { mode: 'number' }).notNull(),
+  lastAttemptAt: bigint('last_attempt_at', { mode: 'number' }),
+  lastError: text('last_error'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  deliveredAt: bigint('delivered_at', { mode: 'number' }),
+}, (table) => ({
+  statusIdx: index('idx_outbox_status').on(table.status, table.nextAttemptAt),
+  agentIdx: index('idx_outbox_agent').on(table.agentId),
+}));
+
+export const webhooks = pgTable('webhooks', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+  url: text('url').notNull(),
+  events: jsonb('events').notNull().$type<string[]>(),
+  secret: text('secret'),
+  active: boolean('active').notNull().default(true),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+}, (table) => ({
+  agentIdx: index('idx_webhooks_agent').on(table.agentId),
+}));
+
+export type SandboxSessionRow = typeof sandboxSessions.$inferSelect;
+export type SandboxSessionInsert = typeof sandboxSessions.$inferInsert;
+export type AgentCheckpointRow = typeof agentCheckpoints.$inferSelect;
+export type AgentCheckpointInsert = typeof agentCheckpoints.$inferInsert;

@@ -23,19 +23,36 @@ export function useSSEStatus(): SSEStatus {
 
 export function useSSE(agentId: string | undefined) {
   const eventSourceRef = useRef<EventSource | null>(null);
+  const mountedRef = useRef(false);
+  const latestAgentIdRef = useRef(agentId);
   const handleSSEEvent = useConversationStore((s) => s.handleSSEEvent);
   const setPending = useInterruptStore((s) => s.setPending);
   const setStatus = useSSEStatusStore((s) => s.setStatus);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    latestAgentIdRef.current = agentId;
+  }, [agentId]);
+
   const handleEvent = useCallback(
     (event: MessageEvent) => {
+      if (!mountedRef.current) return;
+
       try {
         const data = JSON.parse(event.data);
+        if (event.lastEventId) {
+          data._eventId = event.lastEventId;
+        }
 
-        // Route interrupt events to the interrupt store
         if (data.type === 'CUSTOM' && data.subtype === 'interrupted') {
           setPending({
-            agentId: data.agentId ?? agentId ?? '',
+            agentId: data.agentId ?? latestAgentIdRef.current ?? '',
             toolName: data.toolName ?? '',
             args: data.args ?? {},
             toolCallId: data.toolCallId ?? '',
@@ -48,31 +65,50 @@ export function useSSE(agentId: string | undefined) {
         console.debug('[SSE] Failed to parse event:', err);
       }
     },
-    [handleSSEEvent, setPending, agentId],
+    [handleSSEEvent, setPending],
   );
 
   useEffect(() => {
-    if (!agentId) return;
+    if (!agentId) {
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
+      if (mountedRef.current) {
+        setStatus('disconnected');
+      }
+      return;
+    }
 
     setStatus('connecting');
     const es = createSSEConnection(agentId);
     eventSourceRef.current = es;
 
     es.onopen = () => {
+      if (!mountedRef.current || eventSourceRef.current !== es) return;
       setStatus('connected');
     };
 
-    es.onmessage = handleEvent;
+    es.onmessage = (event) => {
+      if (!mountedRef.current || eventSourceRef.current !== es) return;
+      handleEvent(event);
+    };
 
     es.onerror = () => {
+      if (!mountedRef.current || eventSourceRef.current !== es) return;
       setStatus('disconnected');
       // EventSource will auto-reconnect
     };
 
     return () => {
+      es.onopen = null;
+      es.onmessage = null;
+      es.onerror = null;
       es.close();
-      eventSourceRef.current = null;
-      setStatus('disconnected');
+      if (eventSourceRef.current === es) {
+        eventSourceRef.current = null;
+      }
+      if (mountedRef.current) {
+        setStatus('disconnected');
+      }
     };
   }, [agentId, handleEvent, setStatus]);
 

@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, renameSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdirSync, existsSync, renameSync, writeFileSync, readdirSync, chownSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 /**
@@ -27,11 +27,11 @@ export function ensureAgentWorkspace(dataDir: string, agentId: string): string {
     if (existsSync(oldNotes)) renameSync(oldNotes, join(baseDir, 'notes'));
   }
 
-  // Ensure directories exist
-  mkdirSync(join(baseDir, 'workspace'), { recursive: true });
-  mkdirSync(join(baseDir, 'skills'), { recursive: true });
-  mkdirSync(join(baseDir, 'notes'), { recursive: true });
-  mkdirSync(sessionsDir, { recursive: true });
+  // Ensure directories exist with ctxmill user ownership (UID 1000)
+  for (const dir of [join(baseDir, 'workspace'), join(baseDir, 'skills'), join(baseDir, 'notes'), sessionsDir]) {
+    mkdirSync(dir, { recursive: true });
+    try { chownSync(dir, 1000, 1000); } catch { /* non-root orchestrator — skip chown */ }
+  }
 
   return resolve(join(baseDir, 'workspace'));
 }
@@ -87,4 +87,17 @@ export function seedAgentWorkspace(workspaceDir: string): void {
     };
     writeFileSync(portfolioPath, JSON.stringify(portfolio), 'utf-8');
   }
+
+  chownRecursive(workspaceDir, 1000, 1000);
+}
+
+function chownRecursive(dir: string, uid: number, gid: number): void {
+  try {
+    chownSync(dir, uid, gid);
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      chownSync(full, uid, gid);
+      if (entry.isDirectory()) chownRecursive(full, uid, gid);
+    }
+  } catch { /* non-root process — skip chown */ }
 }

@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 
-type RunStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled';
+type RunStatus = 'queued' | 'running' | 'paused' | 'completed' | 'error' | 'cancelled' | 'suspended';
 
 interface RunStatusBadgeProps {
   status: RunStatus;
@@ -10,9 +10,11 @@ interface RunStatusBadgeProps {
 const config: Record<RunStatus, { color: string }> = {
   queued: { color: 'bg-surface-500' },
   running: { color: 'bg-status-success' },
+  paused: { color: 'bg-status-warning' },
   completed: { color: 'bg-status-success' },
   error: { color: 'bg-status-error' },
   cancelled: { color: 'bg-surface-500' },
+  suspended: { color: 'bg-surface-500' },
 };
 
 export function RunStatusBadge({ status, className }: RunStatusBadgeProps) {
@@ -26,7 +28,10 @@ export function RunStatusBadge({ status, className }: RunStatusBadgeProps) {
         className,
       )}
     >
-      <span className={cn('h-1.5 w-1.5 rounded-full', color)} />
+      <span
+        className={cn('h-1.5 w-1.5 rounded-full', color)}
+        aria-label={`Run status: ${status}`}
+      />
       {status}
     </span>
   );

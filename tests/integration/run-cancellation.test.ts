@@ -98,59 +98,57 @@ describe('Run Cancellation with AbortSignal', () => {
       // Track how many events the executor actually yielded before abort
       const yieldedEvents: string[] = [];
 
-      // Mock executor that yields events slowly — checks signal between yields
-      const mockExecutor = {
-        run: vi.fn().mockImplementation(function* (_def: any, _msgs: any, _aid: any, _rid: any, signal?: AbortSignal) {
-          // Use a sync generator wrapped in async iteration by the caller
-          // Yield first chunk
-          yieldedEvents.push('chunk-1');
-          return (async function* () {
-            yield { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'will-be-ignored', messageId: 'm1', content: 'Hello ' };
+      // Mock SandboxRunService that yields events slowly — checks signal between yields
+      const mockSandboxRunService = {
+        executeSessionTurn: vi.fn().mockImplementation(
+          (_def: any, _conversationId: any, _msgs: any, _turnId: any, signal?: AbortSignal) => {
+            yieldedEvents.length = 0; // reset
+            return (async function* () {
+              yieldedEvents.push('chunk-1');
+              yield {
+                type: 'MESSAGE_COMMITTED',
+                timestamp: Date.now(),
+                runId: run.id,
+                role: 'assistant',
+                content: 'Hello ',
+                turnId: run.id,
+                messageSeq: 1,
+              };
 
-            // Small delay to allow cancellation to propagate
-            await settle(20);
+              await settle(30);
+              if (signal?.aborted) return;
 
-            if (signal?.aborted) return;
+              yieldedEvents.push('chunk-2');
+              yield {
+                type: 'MESSAGE_COMMITTED',
+                timestamp: Date.now(),
+                runId: run.id,
+                role: 'assistant',
+                content: 'World ',
+                turnId: run.id,
+                messageSeq: 2,
+              };
 
-            yieldedEvents.push('chunk-2');
-            yield { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'will-be-ignored', messageId: 'm1', content: 'World ' };
+              await settle(30);
+              if (signal?.aborted) return;
 
-            await settle(20);
-
-            if (signal?.aborted) return;
-
-            yieldedEvents.push('chunk-3');
-            yield { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'will-be-ignored', messageId: 'm1', content: 'Final' };
-          })();
-        }),
-        getEnvironmentFactory: vi.fn().mockReturnValue(null),
+              yieldedEvents.push('chunk-3');
+              yield {
+                type: 'MESSAGE_COMMITTED',
+                timestamp: Date.now(),
+                runId: run.id,
+                role: 'assistant',
+                content: 'Final',
+                turnId: run.id,
+                messageSeq: 3,
+              };
+            })();
+          },
+        ),
       };
 
-      // Fix: mockExecutor.run should return the async generator directly
-      mockExecutor.run = vi.fn().mockImplementation(
-        (_def: any, _msgs: any, _aid: any, _rid: any, signal?: AbortSignal) => {
-          yieldedEvents.length = 0; // reset
-          return (async function* () {
-            yieldedEvents.push('chunk-1');
-            yield { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'r', messageId: 'm1', content: 'Hello ' };
-
-            await settle(30);
-            if (signal?.aborted) return;
-
-            yieldedEvents.push('chunk-2');
-            yield { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'r', messageId: 'm1', content: 'World ' };
-
-            await settle(30);
-            if (signal?.aborted) return;
-
-            yieldedEvents.push('chunk-3');
-            yield { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'r', messageId: 'm1', content: 'Final' };
-          })();
-        },
-      );
-
       const service = new AgentRunService({
-        executor: mockExecutor as any,
+        sandboxRunService: mockSandboxRunService as any,
         sse: mockSSE as any,
         db: mockDB as any,
         runRegistry: registry,
@@ -314,7 +312,7 @@ describe('Run Cancellation with AbortSignal', () => {
     it('active runs count reflects cancellation correctly', async () => {
       const run1 = await registry.startRun('agent-1', 'conv-1', 'interactive');
       const run2 = await registry.startRun('agent-1', 'conv-2', 'interactive');
-      const _run3 = await registry.startRun('agent-1', 'conv-3', 'interactive');
+      await registry.startRun('agent-1', 'conv-3', 'interactive');
 
       expect(registry.getActiveRuns('agent-1')).toHaveLength(3);
 

@@ -8,6 +8,7 @@ import {
   createAgent as apiCreateAgent,
   updateAgent as apiUpdateAgent,
   deleteAgent as apiDeleteAgent,
+  type HttpToolDefinition,
 } from '@/lib/api';
 
 export type AgentRun = ApiAgentRun;
@@ -18,19 +19,26 @@ export interface Agent {
   status: string;
   description?: string;
   tools: string[];
-  model: string;
+  httpTools?: HttpToolDefinition[];
+  nativeTools?: { allowlist?: string[]; blocklist?: string[] } | null;
+  workspaceContent?: { files?: Array<{ src: string; dest: string }>; skills?: boolean | string[] } | null;
+  harness: string;
+  harnessConfig: Record<string, unknown>;
+  callbackUrl?: string | null;
   sseClients?: number;
   conversationCount?: number;
   hasPendingInterrupt?: boolean;
   lastActivity?: number;
   activeRuns?: number;
+  totalRuns?: number;
   runs?: AgentRun[];
   systemPrompt?: string;
-  subagents?: string[];
-  skills?: string[];
+
   knowledgeItems?: number;
-  workspaceDir?: string;
-  metadata?: Record<string, unknown>;
+  workspaceDir?: string | null;
+  metadata?: Record<string, unknown> | null;
+  manifest?: Record<string, unknown> | null;
+  version?: number;
 }
 
 interface AgentsStore {
@@ -41,19 +49,25 @@ interface AgentsStore {
   updateAgentLocal: (id: string, updates: Partial<Agent>) => void;
   createAgent: (data: {
     name: string;
-    model: string;
+    harness: string;
+    harnessConfig: Record<string, unknown>;
     systemPrompt: string;
     tools: string[];
     description?: string;
     metadata?: Record<string, unknown>;
+    callbackUrl?: string | null;
+    httpTools?: HttpToolDefinition[];
   }) => Promise<Agent>;
   updateAgent: (id: string, data: Partial<{
     name: string;
-    model: string;
+    harness: string;
+    harnessConfig: Record<string, unknown>;
     systemPrompt: string;
     tools: string[];
     description?: string;
     metadata?: Record<string, unknown>;
+    callbackUrl?: string | null;
+    httpTools?: HttpToolDefinition[];
   }>) => Promise<Agent>;
   deleteAgent: (id: string) => Promise<void>;
   startPolling: () => () => void;

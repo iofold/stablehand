@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ctxmill
       POSTGRES_DB: ctxmill
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -23,13 +23,22 @@ services:
     environment:
       DATABASE_URL: postgres://ctxmill:ctxmill@postgres:5432/ctxmill
       CTXMILL_PRESET: docker
+      CTXMILL_UI_MODE: disabled
       NODE_ENV: production
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      CORS_ORIGINS: http://localhost:3101,http://localhost:3000
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3200,http://127.0.0.1:3200}
+      CTXMILL_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-ctxmill}_ctxmill-data
     ports:
-      - "${API_PORT:-3001}:3001"
+      - "${API_PORT:-3002}:3001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ctxmill-data:/app/project/.ctxmill
+    networks:
+      - default
+      - ctxmill-agents
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,10 +50,27 @@ services:
       dockerfile: Dockerfile
       target: ui
     ports:
-      - "${UI_PORT:-3101}:80"
+      - "${UI_PORT:-3200}:80"
     depends_on:
       - orchestrator
     restart: unless-stopped
+
+  egress-proxy:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile.egress-proxy
+    environment:
+      CTXMILL_ALLOWED_EGRESS_DOMAINS: ${CTXMILL_ALLOWED_EGRESS_DOMAINS:-}
+    networks:
+      - ctxmill-agents
+    profiles:
+      - sandbox
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 3128 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
 
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -58,5 +84,43 @@ services:
     profiles:
       - debug
 
+  # ── Sandbox harness images ──────────────────────────────────────────────────
+  # These services exist only for building sandbox images via:
+  # They are NOT started by `docker compose up` (profiles: ["sandbox-build"]).
+  # The orchestrator spawns sandbox containers dynamically via the Docker socket.
+  #
+  # To clean up orphan sandbox containers after `docker compose down`:
+  #   docker ps -aq --filter "label=ctxmill.sandbox=true" | xargs -r docker rm -f
+
+  sandbox-langgraph:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+      target: harness-langgraph
+    image: ctxmill/harness-langgraph:latest
+    profiles: ["sandbox-build"]
+
+  sandbox-claude-agents:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+      target: harness-claude-agents
+    image: ctxmill/harness-claude-agents:latest
+    profiles: ["sandbox-build"]
+
+  sandbox-pi-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+      target: harness-pi-agent
+    image: ctxmill/harness-pi-agent:latest
+    profiles: ["sandbox-build"]
+
 volumes:
   pgdata:
+  ctxmill-data:
+
+networks:
+  ctxmill-agents:
+    driver: bridge
+    name: ctxmill-agents

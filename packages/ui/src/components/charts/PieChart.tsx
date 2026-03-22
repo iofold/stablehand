@@ -60,7 +60,7 @@ export function PieChart({
             }}
             itemStyle={{ color: '#d4d4d8' }}
           />
-          <Legend formatter={(value) => <span className="text-xs text-surface-500">{value}</span>} />
+          <Legend formatter={(value) => <span className="text-xs text-surface-400">{value}</span>} />
         </RechartsPieChart>
       </ResponsiveContainer>
     </div>

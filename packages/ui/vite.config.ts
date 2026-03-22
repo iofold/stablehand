@@ -11,10 +11,13 @@ export default defineConfig({
     },
   },
   server: {
-    port: parseInt(process.env.CTXMILL_UI_PORT || '3101', 10),
+    port: parseInt(process.env.CTXMILL_UI_PORT || '3200', 10),
     host: '0.0.0.0',
     proxy: {
-      '/api': { target: `http://localhost:${process.env.CTXMILL_PORT || '3001'}`, changeOrigin: true },
+      '/api': {
+        target: process.env.CTXMILL_API_ORIGIN || 'http://orchestrator:3001',
+        changeOrigin: true,
+      },
     },
   },
 });

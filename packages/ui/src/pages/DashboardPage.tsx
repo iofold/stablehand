@@ -123,8 +123,8 @@ export function DashboardPage() {
                 {activeRuns.length}
               </span>
             </div>
-            <div className="border border-surface-700 rounded-lg overflow-hidden bg-surface-800/30">
-              <table className="w-full text-left border-collapse">
+            <div className="border border-surface-700 rounded-lg overflow-x-auto bg-surface-800/30">
+              <table className="w-full text-left border-collapse min-w-[600px]">
                 <thead>
                   <tr className="bg-surface-800/50">
                     <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Agent Name</th>
@@ -171,7 +171,7 @@ export function DashboardPage() {
                             e.stopPropagation();
                             handleCancelRun(run);
                           }}
-                          className="rounded-md p-1.5 text-surface-500 transition-colors hover:text-red-400 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                          className="rounded-md p-1.5 text-surface-400 transition-colors hover:text-red-400 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
                           title="Cancel run"
                         >
                           <X className="h-3.5 w-3.5" />

@@ -4,32 +4,20 @@ export default defineConfig({
   testDir: 'tests/e2e',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: 'html',
+  reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report-docker' }]],
+  timeout: 120_000,
   use: {
-    baseURL: 'http://localhost:3101',
-    trace: 'on-first-retry',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3200',
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
   },
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-    },
-  ],
-  webServer: [
-    {
-      command: 'pnpm --filter @ctxmill/example-finance-dashboard dev',
-      url: 'http://localhost:3001/health',
-      reuseExistingServer: !process.env.CI,
-      timeout: 60000,
-    },
-    {
-      command: 'pnpm --filter @ctxmill/ui dev',
-      url: 'http://localhost:3101',
-      reuseExistingServer: !process.env.CI,
-      timeout: 30000,
     },
   ],
 });

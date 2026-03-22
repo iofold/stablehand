@@ -1,25 +1,41 @@
 apiVersion: ctxmill.io/v1
 kind: Agent
 metadata:
-  name: langgraph-helper
-  displayName: LangGraph Helper
-  description: General assistant using LangGraph harness
+  name: langgraph-analyst
+  displayName: LangGraph Analyst
+  description: >-
+    Chain-starter analyst agent. Performs calculations and weather checks,
+    then emits "analysis.complete" to hand off to the reviewer.
   labels:
     example: kitchen-sink
     harness: langgraph
+    chain-role: analyst
+    chain-order: "1"
 spec:
   harness: langgraph
-  model:
+  harnessConfig:
     provider: openai
-    id: gpt-5-mini
+    model: gpt-5-mini
     apiKeyRef: "$secret:OPENAI_API_KEY"
-    temperature: 0.3
   instructions: |
-    You are a helpful assistant that can perform calculations and check weather.
+    You are the Analyst in a multi-agent chain. Your role:
+    1. Use the calculator and weather tools to gather data and perform analysis.
+    2. Summarize your findings clearly.
+    3. When your analysis is complete, use the emit-event tool to emit an
+       "analysis.complete" event with your findings in the payload under the
+       key "analysis".
+
     Always be concise and accurate. You are powered by the LangGraph harness.
   tools:
     - ref: calculator
     - ref: weather
+    - ref: emit-event
+    - ref: list-directory
+    - ref: search-files
+    - ref: execute-trade
+  nativeTools:
+    blocklist:
+      - execute
   mode: interactive
   resources:
     maxRunDurationSeconds: 60

@@ -8,11 +8,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');
 
 const agents = [
-  { dir: 'langgraph-agent', harness: 'langgraph', provider: 'openai', model: 'gpt-5-mini', harnessLabel: 'LangGraph' },
-  { dir: 'openai-agent', harness: 'openai-agents', provider: 'openai', model: 'gpt-5-mini', harnessLabel: 'OpenAI Agents SDK' },
-  { dir: 'claude-agent', harness: 'claude-agents', provider: 'anthropic', model: 'claude-sonnet-4-6', harnessLabel: 'Claude Agents SDK' },
-  { dir: 'vercel-agent', harness: 'vercel-ai', provider: 'openai', model: 'gpt-5-mini', harnessLabel: 'Vercel AI SDK' },
-  { dir: 'pi-agent', harness: 'pi-agent', provider: 'openai', model: 'gpt-5-mini', harnessLabel: 'PI Agent' },
+  { dir: 'langgraph-agent', harness: 'langgraph', provider: 'openai', model: 'gpt-5-mini', harnessLabel: 'LangGraph', expectedTools: ['calculator', 'weather', 'emit-event', 'list-directory', 'search-files', 'execute-trade'] },
+  { dir: 'claude-agent', harness: 'claude-agents', provider: 'anthropic', model: 'claude-sonnet-4-6', harnessLabel: 'Writer', expectedTools: ['emit-event'] },
+  { dir: 'pi-agent', harness: 'pi-agent', provider: 'openai', model: 'gpt-5-mini', harnessLabel: 'PI Agent', expectedTools: ['emit-event'] },
 ];
 
 async function loadManifest(dir: string) {
@@ -22,7 +20,7 @@ async function loadManifest(dir: string) {
 }
 
 describe('manifest to AgentDefinition conversion', () => {
-  for (const { dir, harness, provider, model, harnessLabel } of agents) {
+  for (const { dir, harness, provider, model, harnessLabel, expectedTools } of agents) {
     describe(dir, () => {
       it('converts to AgentDefinition with correct harness', async () => {
         const manifest = await loadManifest(dir);
@@ -31,27 +29,29 @@ describe('manifest to AgentDefinition conversion', () => {
         expect(definition.harness).toBe(harness);
       });
 
-      it('converts model config correctly', async () => {
+      it('converts harness config correctly', async () => {
         const manifest = await loadManifest(dir);
         const definition = manifestToDefinition(manifest);
+        const harnessConfig = (definition.harnessConfig ?? {}) as {
+          provider?: string;
+          model?: string;
+        };
 
-        expect(definition.model).toBe(model);
-        expect(definition.modelConfig?.provider).toBe(provider);
-        expect(definition.modelConfig?.model).toBe(model);
+        expect(harnessConfig.provider).toBe(provider);
+        expect(harnessConfig.model).toBe(model);
       });
 
       it('converts tools as string array', async () => {
         const manifest = await loadManifest(dir);
         const definition = manifestToDefinition(manifest);
 
-        expect(definition.tools).toEqual(['calculator', 'weather']);
+        expect(definition.tools).toEqual(expectedTools);
       });
 
       it('converts instructions to systemPrompt', async () => {
         const manifest = await loadManifest(dir);
         const definition = manifestToDefinition(manifest);
 
-        expect(definition.systemPrompt).toContain('helpful assistant');
         expect(definition.systemPrompt).toContain(harnessLabel);
       });
 

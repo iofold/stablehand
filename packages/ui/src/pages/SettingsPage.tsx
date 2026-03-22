@@ -86,9 +86,9 @@ export function SettingsPage() {
           </div>
         ) : error && !config ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Settings className="h-8 w-8 text-surface-600 mb-3" />
+            <Settings className="h-8 w-8 text-surface-400 mb-3" />
             <p className="text-sm text-surface-400">{error}</p>
-            <p className="text-xs text-surface-500 mt-1">
+            <p className="text-xs text-surface-400 mt-1">
               The configuration API may not be available yet.
             </p>
           </div>
@@ -100,7 +100,7 @@ export function SettingsPage() {
                 <Cpu className="h-5 w-5 text-accent-400" />
                 <div>
                   <h3 className="text-sm font-semibold text-surface-100">LLM Configuration</h3>
-                  <p className="text-xs text-surface-500">Language model provider settings</p>
+                  <p className="text-xs text-surface-400">Language model provider settings</p>
                 </div>
               </div>
               <div className="divide-y divide-surface-700/50">
@@ -116,7 +116,7 @@ export function SettingsPage() {
                 <Server className="h-5 w-5 text-accent-400" />
                 <div>
                   <h3 className="text-sm font-semibold text-surface-100">System Info</h3>
-                  <p className="text-xs text-surface-500">Runtime and environment details</p>
+                  <p className="text-xs text-surface-400">Runtime and environment details</p>
                 </div>
               </div>
               <div className="divide-y divide-surface-700/50">
@@ -135,7 +135,7 @@ export function SettingsPage() {
                 <Database className="h-5 w-5 text-accent-400" />
                 <div>
                   <h3 className="text-sm font-semibold text-surface-100">Agent Defaults</h3>
-                  <p className="text-xs text-surface-500">Default configuration for new agents</p>
+                  <p className="text-xs text-surface-400">Default configuration for new agents</p>
                 </div>
               </div>
               <div className="divide-y divide-surface-700/50">
@@ -174,7 +174,7 @@ function ConfigRow({
         className={
           value
             ? `text-sm text-surface-200 ${mono ? 'font-mono text-xs' : ''}`
-            : 'text-xs text-surface-500 italic'
+            : 'text-xs text-surface-400 italic'
         }
       >
         {value || 'Not configured'}

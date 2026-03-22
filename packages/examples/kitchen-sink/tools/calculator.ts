@@ -9,7 +9,12 @@ export default defineTool({
     a: z.number(),
     b: z.number(),
   }),
-  handler: async (input) => {
+  handler: async (rawInput) => {
+    const input = rawInput as {
+      operation: 'add' | 'subtract' | 'multiply' | 'divide';
+      a: number;
+      b: number;
+    };
     const { operation, a, b } = input;
     let result: number;
     switch (operation) {

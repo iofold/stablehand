@@ -93,7 +93,7 @@ describe('SSEManager', () => {
       const event = { type: 'TEXT_MESSAGE_START', messageId: 'msg-1' };
       manager.broadcast('agent-1', event);
 
-      const expectedData = `data: ${JSON.stringify(event)}\n\n`;
+      const expectedData = `id: agent-1-1\ndata: ${JSON.stringify(event)}\n\n`;
       expect(getRaw(reply1).write).toHaveBeenCalledWith(expectedData);
       expect(getRaw(reply2).write).toHaveBeenCalledWith(expectedData);
       expect(getRaw(reply3).write).toHaveBeenCalledWith(expectedData);
@@ -236,9 +236,15 @@ describe('SSEManager', () => {
       getRaw(reply).write.mockReturnValue(true);
       getRaw(reply).emit('drain');
 
-      // event-2 should have been flushed
-      const expectedData = `data: ${JSON.stringify({ type: 'event-2' })}\n\n`;
-      expect(getRaw(reply).write).toHaveBeenCalledWith(expectedData);
+      expect(getRaw(reply).write).toHaveBeenCalledTimes(2);
+      expect(getRaw(reply).write).toHaveBeenNthCalledWith(
+        1,
+        `id: agent-1-1\ndata: ${JSON.stringify({ type: 'event-1' })}\n\n`,
+      );
+      expect(getRaw(reply).write).toHaveBeenNthCalledWith(
+        2,
+        `id: agent-1-2\ndata: ${JSON.stringify({ type: 'event-2' })}\n\n`,
+      );
     });
 
     it('should disconnect slow client when queue exceeds 100 items', () => {

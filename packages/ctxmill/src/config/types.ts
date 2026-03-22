@@ -1,4 +1,4 @@
-export type Preset = 'local' | 'docker' | 'production';
+export type Preset = 'docker';
 
 export interface CTXMillConfig {
   /** Project name */
@@ -15,12 +15,13 @@ export interface CTXMillConfig {
   /** UI component whitelist */
   ui?: { components?: string[] };
   execution?: {
-    type: 'local' | 'docker' | 'firecracker';
+    type: 'docker';
     warmPool?: number;
+    /** Maximum number of concurrent sandbox containers. Default: 20, env: CTXMILL_MAX_CONTAINERS */
+    maxGlobalContainers?: number;
   };
   database?: {
-    type: 'sqlite' | 'postgres';
-    path?: string;
+    type?: 'postgres';
     url?: string;
     extensions?: string[];
   };
@@ -33,7 +34,7 @@ export interface CTXMillConfig {
   orchestration?: { eventBus?: boolean; reconciliation?: boolean };
   observability?: { sink?: string; sinks?: string[]; path?: string };
   llm?: {
-    provider: 'anthropic' | 'openai';
+    provider: 'anthropic' | 'openai' | 'google';
     model: string;
     apiKey?: string;
     baseUrl?: string;
@@ -42,8 +43,8 @@ export interface CTXMillConfig {
 
 // Resolved config (all fields required after preset expansion)
 export interface ResolvedConfig {
-  execution: { type: 'local' | 'docker' | 'firecracker'; warmPool: number };
-  database: { type: 'sqlite' | 'postgres'; path: string; url: string };
+  execution: { type: 'docker'; warmPool: number; maxGlobalContainers: number };
+  database: { type: 'postgres'; url: string };
   knowledge: { providers: string[] };
   tools: { executors: string[] };
   security: { preset: string };

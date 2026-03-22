@@ -50,7 +50,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
         className="flex items-center gap-2 text-left group hover:opacity-80 transition-opacity w-full"
       >
         <div className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', dotColor, dotAnimation)} />
-        <span className={cn('truncate', expanded ? 'text-surface-400' : 'text-surface-500')}>
+        <span className={cn('truncate', expanded ? 'text-surface-400' : 'text-surface-400')}>
           {expanded ? '▾' : '▸'} <span data-testid="tool-call-name">{toolCall.name}</span>({truncatedArgs})
         </span>
         {toolCall.status === 'complete' && (
@@ -62,7 +62,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
         <div className="mt-2 ml-3.5 space-y-2">
           {formattedArgs && (
             <div>
-              <div className="text-[10px] text-surface-500 mb-1 uppercase tracking-wider">Arguments</div>
+              <div className="text-[10px] text-surface-400 mb-1 uppercase tracking-wider">Arguments</div>
               <pre className="bg-surface-950 border border-surface-700 rounded-md p-2 text-xs font-mono text-surface-400 overflow-x-auto">
                 {formattedArgs}
               </pre>
@@ -71,7 +71,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
           
           {toolCall.result && (
             <div>
-              <div className="text-[10px] text-surface-500 mb-1 uppercase tracking-wider">Result</div>
+              <div className="text-[10px] text-surface-400 mb-1 uppercase tracking-wider">Result</div>
               <pre className="bg-surface-950 border border-surface-700 rounded-md p-2 text-xs font-mono text-surface-400 overflow-x-auto max-h-48">
                 {toolCall.result}
               </pre>

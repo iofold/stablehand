@@ -55,7 +55,7 @@ export function TimeSeriesChart({
               fontSize: '13px',
             }}
           />
-          {yKeys.length > 1 && <Legend formatter={(value) => <span className="text-xs text-surface-500">{value}</span>} />}
+          {yKeys.length > 1 && <Legend formatter={(value) => <span className="text-xs text-surface-400">{value}</span>} />}
           {yKeys.map((key, i) =>
             chartType === 'area' ? (
               <Area

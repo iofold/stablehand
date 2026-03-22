@@ -1,6 +1,14 @@
 import type { AgentRun } from '@/stores/agents';
 
-export type TabId = 'overview' | 'knowledge' | 'runs' | 'tools' | 'files' | 'subagents';
+export type TabId = 'overview' | 'knowledge' | 'sessions' | 'tools' | 'files' | 'secrets';
+
+export interface Session {
+  conversationId: string;
+  startedAt: number;
+  messageCount: number;
+  lastMessageAt: number;
+  runs: AgentRun[];
+}
 
 export interface KnowledgeItem {
   id: string;
@@ -51,10 +59,10 @@ export interface Trace {
 export const TABS: { id: TabId; label: string; icon: string; testId?: string }[] = [
   { id: 'overview', label: 'Overview', icon: 'LayoutDashboard' },
   { id: 'knowledge', label: 'Knowledge', icon: 'Brain', testId: 'knowledge-tab' },
-  { id: 'runs', label: 'Runs', icon: 'Clock', testId: 'runs-tab' },
+  { id: 'sessions', label: 'Sessions', icon: 'Clock', testId: 'sessions-tab' },
   { id: 'tools', label: 'Tools', icon: 'Wrench', testId: 'tools-tab' },
   { id: 'files', label: 'Files', icon: 'FolderOpen', testId: 'files-tab' },
-  { id: 'subagents', label: 'Subagents', icon: 'GitBranch', testId: 'subagents-tab' },
+  { id: 'secrets', label: 'Secrets', icon: 'KeyRound', testId: 'secrets-tab' },
 ];
 
 /** Format a timestamp for display */

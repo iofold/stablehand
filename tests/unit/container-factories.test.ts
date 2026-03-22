@@ -22,7 +22,7 @@ import type { ResolvedConfig } from '../../packages/ctxmill/src/config/types.js'
 function makeConfig(overrides?: Partial<ResolvedConfig>): ResolvedConfig {
   return {
     execution: { type: 'local', warmPool: 0 },
-    database: { type: 'sqlite', path: 'data.db', url: '' },
+    database: { type: 'postgres', url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
     knowledge: { providers: ['memory'] },
     tools: { executors: [] },
     security: { preset: 'local' },

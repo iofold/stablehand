@@ -50,21 +50,21 @@ export function createKnowledgeStoreFromConfig(
 
 /**
  * Create an LLMProvider from resolved config.
+ * Returns null if no global LLM API key or model is configured
+ * (learning pipeline will be disabled).
  */
-export function createLLMProviderFromConfig(config: ResolvedConfig): LLMProvider {
+export function createLLMProviderFromConfig(config: ResolvedConfig): LLMProvider | null {
   const { provider, apiKey, model, baseUrl } = config.llm;
+
+  if (!apiKey || !model) {
+    console.warn('[Factory] Global LLM reflector is disabled because apiKey or model is not configured. Agent harnesses resolve their own keys from the secrets pipeline.');
+    return null;
+  }
 
   const validProviders = ['anthropic', 'openai'] as const;
   if (!validProviders.includes(provider as (typeof validProviders)[number])) {
     throw new Error(`Invalid LLM provider: ${provider}. Must be one of: ${validProviders.join(', ')}`);
   }
-  if (!apiKey) {
-    throw new Error('LLM apiKey must not be empty');
-  }
-  if (!model) {
-    throw new Error('LLM model must not be empty');
-  }
-
   return createLLMProvider({
     apiKey,
     baseUrl: baseUrl || undefined,
@@ -86,28 +86,10 @@ function isFuseAvailable(): boolean {
   }
 }
 
-/**
- * Create an EnvironmentFactory based on execution type and runtime capabilities.
- *
- * - `docker` / `firecracker`: prefer FuseOverlayFactory (Level 2+ will swap to Docker/FC)
- * - `local`: auto-detect fuse-overlayfs; fall back to MockOverlayFactory
- *
- * MockOverlayFactory is always the safe default — no OS dependencies required.
- */
-export function createEnvironmentFactory(executionType: string): EnvironmentFactory {
-  if (executionType === 'docker' || executionType === 'firecracker') {
-    if (isFuseAvailable()) {
-      return new FuseOverlayFactory();
-    }
-    // Fall back to mock if fuse is not available even in higher execution tiers
-    console.warn('[EnvironmentFactory] fuse-overlayfs not available, falling back to mock overlay');
-    return new MockOverlayFactory();
-  }
-
-  // local execution: auto-detect
+export function createEnvironmentFactory(_executionType: string): EnvironmentFactory {
   if (isFuseAvailable()) {
     return new FuseOverlayFactory();
   }
-
+  console.warn('[EnvironmentFactory] fuse-overlayfs not available, falling back to mock overlay');
   return new MockOverlayFactory();
 }

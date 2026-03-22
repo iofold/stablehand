@@ -108,7 +108,7 @@ export function KnowledgePage() {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-xl font-semibold text-surface-100">Knowledge Library</h1>
-          <p className="text-sm text-surface-500 mt-1">
+          <p className="text-sm text-surface-400 mt-1">
             Shared knowledge accessible across all agents
           </p>
         </div>
@@ -170,7 +170,7 @@ export function KnowledgePage() {
       {/* Search & filter */}
       <div className="flex items-center gap-3 flex-wrap mb-6">
         <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-500" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-400" />
           <input
             type="text"
             value={searchQuery}
@@ -214,12 +214,12 @@ export function KnowledgePage() {
 
       {/* Knowledge items list */}
       {loading ? (
-        <div className="text-center py-12 text-surface-500 text-sm">Loading knowledge...</div>
+        <div className="text-center py-12 text-surface-400 text-sm">Loading knowledge...</div>
       ) : items.length === 0 ? (
         <div className="text-center py-16">
           <Brain className="mx-auto h-10 w-10 text-surface-700 mb-3" />
           <p className="text-surface-400 font-medium">No knowledge items yet</p>
-          <p className="text-surface-600 text-sm mt-1">
+          <p className="text-surface-400 text-sm mt-1">
             {viewMode === 'shared'
               ? 'Add shared knowledge that all agents can access.'
               : 'No knowledge items found across any agents.'}
@@ -240,7 +240,7 @@ export function KnowledgePage() {
                   <p className="mt-1 text-sm text-surface-400 line-clamp-2">
                     {item.content}
                   </p>
-                  <div className="mt-2 flex items-center gap-3 text-xs text-surface-500">
+                  <div className="mt-2 flex items-center gap-3 text-xs text-surface-400">
                     {item.category && <span>{item.category}</span>}
                     {item.agentId && item.agentId !== '__shared__' && (
                       <span className="text-accent-500/70">agent: {item.agentId.slice(0, 8)}</span>
@@ -254,7 +254,7 @@ export function KnowledgePage() {
                   <button
                     type="button"
                     onClick={() => handleDelete(item.id)}
-                    className="opacity-0 group-hover:opacity-100 p-1.5 text-surface-600 hover:text-red-400 transition-all"
+                    className="opacity-0 group-hover:opacity-100 p-1.5 text-surface-400 hover:text-red-400 transition-all"
                     title="Delete knowledge item"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -275,7 +275,7 @@ export function KnowledgePage() {
               <button
                 type="button"
                 onClick={() => setShowAddModal(false)}
-                className="p-1 text-surface-500 hover:text-surface-300 transition-colors"
+                className="p-1 text-surface-400 hover:text-surface-300 transition-colors"
               >
                 <X className="h-5 w-5" />
               </button>

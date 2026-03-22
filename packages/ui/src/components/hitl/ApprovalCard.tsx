@@ -40,7 +40,7 @@ export function ApprovalCard({ title, description, action, details, onApprove, o
           <p className="mt-1 text-sm text-surface-400">{description}</p>
 
           <div className="mt-3 rounded-md bg-surface-800 px-3 py-2 border border-surface-700/50">
-            <p className="text-xs font-medium uppercase tracking-wider text-surface-500 mb-1">Action</p>
+            <p className="text-xs font-medium uppercase tracking-wider text-surface-400 mb-1">Action</p>
             <p className="text-sm text-surface-200 font-mono">{action}</p>
           </div>
 
@@ -48,7 +48,7 @@ export function ApprovalCard({ title, description, action, details, onApprove, o
             <div className="mt-3 space-y-1">
               {Object.entries(details).map(([key, value]) => (
                 <div key={key} className="flex items-baseline gap-2 text-sm">
-                  <span className="text-surface-500 font-medium">{key}:</span>
+                  <span className="text-surface-400 font-medium">{key}:</span>
                   <span className="text-surface-300">{String(value)}</span>
                 </div>
               ))}

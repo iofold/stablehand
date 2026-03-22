@@ -12,13 +12,26 @@ export class ManifestService {
     this.db = db;
   }
 
+  private parseHarnessConfig(harnessConfigJson: string): Record<string, unknown> {
+    try {
+      const parsed = JSON.parse(harnessConfigJson);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch (_err) {
+      return {};
+    }
+
+    return {};
+  }
+
   async importManifest(
     content: string,
-    opts?: { changedBy?: string; changeNote?: string },
+    opts?: { changedBy?: string; changeNote?: string; projectDir?: string },
   ): Promise<{ agentId: string; created: boolean; manifest: AgentManifest }> {
     const raw = parseManifestString(content);
     const manifest = validateManifest(raw);
-    const def = manifestToDefinition(manifest);
+    const def = manifestToDefinition(manifest, { projectDir: opts?.projectDir });
 
     const agents = await this.db.listAgents();
     const existing = agents.find((a) => a.name === manifest.metadata.name);
@@ -26,8 +39,8 @@ export class ManifestService {
     if (existing) {
       await this.db.updateAgent(existing.id, {
         name: def.name,
-        model: def.model,
         harness: def.harness,
+        harnessConfig: JSON.stringify(def.harnessConfig),
         systemPrompt: def.systemPrompt,
         tools: def.tools,
         description: def.description,
@@ -43,8 +56,8 @@ export class ManifestService {
 
     const agent = await this.db.createAgent({
       name: def.name,
-      model: def.model,
       harness: def.harness,
+      harnessConfig: JSON.stringify(def.harnessConfig),
       systemPrompt: def.systemPrompt,
       tools: def.tools,
       description: def.description,
@@ -67,8 +80,8 @@ export class ManifestService {
     } else {
       const def: AgentDefinition = {
         name: agent.name,
-        model: agent.model,
-        harness: agent.harness ?? undefined,
+        harness: agent.harness,
+        harnessConfig: this.parseHarnessConfig(agent.harnessConfig),
         systemPrompt: agent.systemPrompt,
         tools: agent.tools,
         description: agent.description ?? undefined,
@@ -84,10 +97,10 @@ export class ManifestService {
   async updateManifest(
     agentId: string,
     manifest: AgentManifest,
-    opts?: { changedBy?: string; changeNote?: string },
+    opts?: { changedBy?: string; changeNote?: string; projectDir?: string },
   ): Promise<void> {
     validateManifest(manifest);
-    const def = manifestToDefinition(manifest);
+    const def = manifestToDefinition(manifest, { projectDir: opts?.projectDir });
 
     const agent = await this.db.getAgent(agentId);
     if (!agent) {
@@ -96,8 +109,8 @@ export class ManifestService {
 
     await this.db.updateAgent(agentId, {
       name: def.name,
-      model: def.model,
       harness: def.harness,
+      harnessConfig: JSON.stringify(def.harnessConfig),
       systemPrompt: def.systemPrompt,
       tools: def.tools,
       description: def.description,

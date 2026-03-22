@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -26,10 +26,10 @@ import { useAgentKnowledge } from '@/hooks/useAgentKnowledge';
 import {
   AgentOverviewTab,
   AgentKnowledgeTab,
-  AgentRunsTab,
+  AgentSessionsTab,
   AgentToolsTab,
   AgentFilesTab,
-  AgentSubagentsTab,
+  AgentSecretsTab,
 } from '@/components/agent';
 import type { TabId } from '@/components/agent';
 
@@ -40,10 +40,10 @@ import type { TabId } from '@/components/agent';
 const TABS: { id: TabId; label: string; testId?: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'knowledge', label: 'Knowledge', testId: 'knowledge-tab' },
-  { id: 'runs', label: 'Runs', testId: 'runs-tab' },
+  { id: 'sessions', label: 'Sessions', testId: 'sessions-tab' },
   { id: 'tools', label: 'Tools', testId: 'tools-tab' },
   { id: 'files', label: 'Files', testId: 'files-tab' },
-  { id: 'subagents', label: 'Subagents', testId: 'subagents-tab' },
+  { id: 'secrets', label: 'Secrets', testId: 'secrets-tab' },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -85,6 +85,15 @@ export function AgentDetailPage() {
   } = useAgentDetail(id, activeTab);
 
   const { filteredRuns, totalRuns, activeRunsCount } = useAgentRuns(allRuns, runsFilter);
+
+  const recentSessions = useMemo(() => {
+    const seen = new Map<string, (typeof allRuns)[number]>();
+    for (const run of allRuns) {
+      const key = run.conversationId || run.id;
+      if (!seen.has(key)) seen.set(key, run);
+    }
+    return Array.from(seen.values()).slice(0, 10);
+  }, [allRuns]);
 
   const {
     knowledgeItems,
@@ -133,13 +142,13 @@ export function AgentDetailPage() {
       <div className="flex items-center justify-center h-screen bg-surface-950">
         <div className="text-center">
           <h2 className="text-xl font-semibold text-surface-300 mb-2">Agent not found</h2>
-          <p className="text-surface-500 mb-4">The agent you are looking for does not exist.</p>
-          <button
-            onClick={() => navigate('/')}
-            className="px-4 py-2 bg-accent-600 text-white rounded-lg hover:bg-accent-500 transition-colors"
-          >
-            Back to Dashboard
-          </button>
+          <p className="text-surface-400 mb-4">The agent you are looking for does not exist.</p>
+           <button
+             onClick={() => navigate(-1)}
+             className="px-4 py-2 bg-accent-600 text-white rounded-lg hover:bg-accent-500 transition-colors"
+           >
+             Back to Dashboard
+           </button>
         </div>
       </div>
     );
@@ -150,20 +159,20 @@ export function AgentDetailPage() {
   /* ---------------------------------------------------------------- */
 
   return (
-    <div className="flex min-h-screen flex-col bg-surface-950">
+    <div className="flex min-h-screen min-w-0 flex-col bg-surface-950">
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-surface-700 bg-surface-850">
         <div className="mx-auto max-w-7xl px-6">
           <div className="flex h-16 items-center gap-4">
-            {/* Back button */}
-            <button
-              type="button"
-              data-testid="back-button"
-              onClick={() => navigate('/')}
-              className="text-surface-400 hover:text-surface-200 transition-colors"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
+             {/* Back button */}
+             <button
+               type="button"
+               data-testid="back-button"
+               onClick={() => navigate(-1)}
+               className="text-surface-400 hover:text-surface-200 transition-colors"
+             >
+               <ArrowLeft className="h-4 w-4" />
+             </button>
 
             {/* Agent identity */}
             <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -185,8 +194,13 @@ export function AgentDetailPage() {
                     <span className="capitalize">{agent.status}</span>
                   </div>
                 </div>
-                <div className="font-mono text-sm text-surface-500">
-                  {agent.model}
+                <div className="flex items-center gap-2 font-mono text-sm text-surface-400">
+                  {agent.harness && (
+                    <span className="rounded bg-surface-700/60 px-1.5 py-0.5 text-[11px] font-medium text-surface-200 uppercase tracking-wider">
+                      {agent.harness}
+                    </span>
+                  )}
+                  {(agent.harnessConfig as Record<string, unknown>)?.model as string}
                 </div>
               </div>
             </div>
@@ -234,7 +248,7 @@ export function AgentDetailPage() {
                 onChange={(e) => setRunTask(e.target.value)}
                 placeholder="Describe the task..."
                 autoFocus
-                className="flex-1 rounded-lg border border-surface-600/40 bg-surface-800/60 px-3 py-2 text-sm text-surface-200 placeholder-surface-600 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/30"
+                className="flex-1 rounded-lg border border-surface-600/40 bg-surface-800/60 px-3 py-2 text-sm text-surface-200 placeholder-surface-400 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/30"
               />
               <button
                 type="submit"
@@ -250,8 +264,8 @@ export function AgentDetailPage() {
 
       {/* Tab navigation */}
       <nav className="border-b border-surface-700 bg-surface-850">
-        <div className="mx-auto max-w-7xl px-6">
-          <div className="flex overflow-x-auto">
+        <div className="mx-auto min-w-0 max-w-7xl px-6">
+          <div className="flex overflow-x-auto overflow-y-hidden">
             {TABS.map((tab) => {
               const isActive = activeTab === tab.id;
               return (
@@ -261,7 +275,7 @@ export function AgentDetailPage() {
                   data-testid={tab.testId}
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    'px-4 py-2.5 text-sm transition-colors border-b-2 -mb-px',
+                    'shrink-0 px-4 py-2.5 text-sm transition-colors border-b-2 -mb-px',
                     isActive
                       ? 'text-surface-100 border-accent-400'
                       : 'text-surface-400 hover:text-surface-200 border-transparent',
@@ -276,7 +290,7 @@ export function AgentDetailPage() {
       </nav>
 
       {/* Tab content */}
-      <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-5 space-y-6">
+      <main className="mx-auto w-full max-w-7xl flex-1 min-w-0 px-6 py-5 space-y-6">
         {activeTab === 'overview' && (
           <AgentOverviewTab
             agent={agent}
@@ -285,8 +299,10 @@ export function AgentDetailPage() {
             toolsCount={toolsCount}
             knowledgeTotal={overviewKnowledgeStats.totalItems ?? 0}
             sseClients={sseClients}
-            recentRuns={allRuns.slice(0, 10)}
-            onNavigateRun={(runId) => navigate(`/agents/${id}/runs/${runId}`)}
+            recentSessions={recentSessions}
+            onNavigateSession={(runId) => {
+              setActiveTab('sessions');
+            }}
             knowledgeStats={overviewKnowledgeStats}
             recentKnowledgeItems={overviewKnowledgeItems}
             traceStats={traceStats}
@@ -306,8 +322,8 @@ export function AgentDetailPage() {
           />
         )}
 
-        {activeTab === 'runs' && (
-          <AgentRunsTab
+        {activeTab === 'sessions' && (
+          <AgentSessionsTab
             runs={filteredRuns}
             loading={runsLoading}
             filter={runsFilter}
@@ -318,11 +334,12 @@ export function AgentDetailPage() {
               setSessionRunId(runId);
               setActiveTab('files');
             }}
+            onContinueChat={(conversationId) => navigate(`/agents/${id}/chat/${conversationId}`)}
           />
         )}
 
         {activeTab === 'tools' && id && (
-          <AgentToolsTab tools={agent.tools} skills={(agent.skills ?? agent.metadata?.skills as string[] | undefined) ?? []} agentId={id} />
+          <AgentToolsTab tools={agent.tools} agentId={id} nativeTools={agent.nativeTools} />
         )}
 
         {activeTab === 'files' && id && (
@@ -345,8 +362,8 @@ export function AgentDetailPage() {
           </div>
         )}
 
-        {activeTab === 'subagents' && (
-          <AgentSubagentsTab agent={agent} agents={agents} />
+        {activeTab === 'secrets' && id && (
+          <AgentSecretsTab agentId={id} />
         )}
       </main>
 

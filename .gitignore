@@ -15,11 +15,15 @@ package-lock.json
 # Playwright
 test-results/
 playwright-report/
+playwright-report-docker/
 blob-report/
 .playwright-mcp/
 
 # Artifacts
 *.png
+console-errors.txt
+chat-current.md
+*-page-loaded.md
 .mcp.json
 *.bak
 agent.md

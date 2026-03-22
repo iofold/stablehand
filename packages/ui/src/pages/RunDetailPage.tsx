@@ -11,6 +11,7 @@ import { ChatThread } from '@/components/chat/ChatThread';
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { useAgentsStore } from '@/stores/agents';
 import type { AgentRun } from '@/stores/agents';
+import { normalizeConversationMessage } from '@/stores/conversation';
 import type { Message } from '@/stores/conversation';
 import { fetchRuns, fetchMessages } from '@/lib/api';
 
@@ -51,14 +52,9 @@ export function RunDetailPage() {
           if (mounted) {
             setMessages(
               Array.isArray(msgs)
-                ? msgs.map((m: Record<string, unknown>, i: number) => ({
-                    id: (m.id as string) || `msg-${i}`,
-                    role: (m.role as Message['role']) || 'assistant',
-                    content: (m.content as string) || '',
-                    toolCalls: m.toolCalls as Message['toolCalls'],
-                    a2uiBlocks: m.a2uiBlocks as Message['a2uiBlocks'],
-                    createdAt: (m.createdAt as string) || new Date().toISOString(),
-                  }))
+                ? msgs.map((m: Record<string, unknown>, i: number) =>
+                    normalizeConversationMessage(m, `msg-${i}`),
+                  )
                 : [],
             );
           }
@@ -85,20 +81,20 @@ export function RunDetailPage() {
   return (
     <div
       data-testid="run-detail-page"
-      className="flex h-screen flex-col bg-surface-950"
+      className="flex h-screen min-w-0 flex-col overflow-hidden bg-surface-950"
     >
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-surface-700 bg-surface-850">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-6">
-          {/* Back */}
-          <button
-            type="button"
-            data-testid="back-button"
-            onClick={() => navigate('/')}
-            className="rounded-lg p-1.5 text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
+           {/* Back */}
+           <button
+             type="button"
+             data-testid="back-button"
+             onClick={() => navigate(-1)}
+             className="rounded-lg p-1.5 text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
+           >
+             <ArrowLeft className="h-4 w-4" />
+           </button>
 
           {/* Agent identity */}
           <div className="flex items-center gap-2.5 min-w-0">
@@ -112,7 +108,7 @@ export function RunDetailPage() {
               {agent && (
                 <div className="flex items-center gap-1.5 text-[11px] text-surface-400 leading-tight">
                   <Cpu className="h-3 w-3 flex-shrink-0" />
-                  <span className="truncate font-mono">{agent.model}</span>
+                  <span className="truncate font-mono">{(agent.harnessConfig as Record<string, unknown>)?.model as string}</span>
                 </div>
               )}
             </div>
@@ -136,17 +132,19 @@ export function RunDetailPage() {
         {run?.taskDescription && (
           <div className="border-t border-surface-700 bg-surface-850">
             <div className="mx-auto max-w-7xl px-6 py-2">
-              <p className="text-xs text-surface-400">
-                <span className="font-medium text-surface-300">Task:</span>{' '}
-                {run.taskDescription}
-              </p>
+              <div className="max-h-24 overflow-y-auto">
+                <p className="break-words whitespace-pre-wrap text-xs text-surface-400">
+                  <span className="font-medium text-surface-300">Task:</span>{' '}
+                  {run.taskDescription}
+                </p>
+              </div>
             </div>
           </div>
         )}
       </header>
 
       {/* Content */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {loading && (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="h-6 w-6 text-accent-400 animate-spin" />
@@ -160,7 +158,10 @@ export function RunDetailPage() {
         )}
 
         {!loading && !error && (
-          <div data-testid="run-messages" className="mx-auto w-full max-w-7xl flex-1 overflow-hidden px-6 py-5 space-y-6">
+          <div
+            data-testid="run-messages"
+            className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-6 py-5"
+          >
             <ChatThread
               messages={messages}
               streamingContent=""

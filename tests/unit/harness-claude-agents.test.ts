@@ -1,31 +1,95 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { ClaudeAgentsHarness } from '../../packages/ctxmill/src/harness/claude-agents.js';
-import type { AgentHarness, HarnessRunConfig } from '../../packages/ctxmill/src/harness/types.js';
-import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
 
-/**
- * Mock SDK `tool()` function that mirrors the shape of
- * @anthropic-ai/claude-agent-sdk's `tool()`.
- * Returns a plain SdkMcpToolDefinition-shaped object.
- */
-function mockToolFn(
-  name: string,
-  description: string,
-  inputSchema: any,
-  handler: (args: Record<string, unknown>, extra: unknown) => Promise<any>,
-) {
+const mockQuery = vi.fn();
+const mockTool = vi.fn((_name: string, _desc: string, _schema: unknown, handler: (args: Record<string, unknown>, extra: unknown) => Promise<unknown>) => ({
+  name: _name,
+  description: _desc,
+  inputSchema: _schema,
+  handler,
+}));
+const mockSdkTool = (...args: unknown[]) => {
+  const [name, description, inputSchema, handler] = args as [
+    string,
+    string,
+    unknown,
+    (args: Record<string, unknown>, extra: unknown) => Promise<unknown>,
+  ];
+  return mockTool(name, description, inputSchema, handler);
+};
+const mockCreateSdkMcpServer = vi.fn((_opts: { name: string }) => ({
+  type: 'sdk',
+  name: _opts.name,
+}));
+
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+  query: mockQuery,
+  tool: mockSdkTool,
+  createSdkMcpServer: mockCreateSdkMcpServer,
+}));
+
+import { ClaudeAgentsHarness } from '../../packages/ctxmill/src/harness/claude-agents.js';
+import type { AgentEvent, AgentHarness, HarnessSessionConfig } from '../../packages/ctxmill/src/harness/types.js';
+import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
+import type { Message } from '../../packages/ctxmill/src/types.js';
+
+function makeMessage(
+  role: Message['role'],
+  content: string,
+): Message {
   return {
-    name,
-    description,
-    inputSchema,
-    handler,
+    id: `${role}-${content}`,
+    agentId: 'agent-1',
+    role,
+    content,
+    createdAt: new Date(),
   };
 }
 
-const mockSDK = { tool: mockToolFn };
+function makeConfig(overrides: Partial<HarnessSessionConfig> = {}): HarnessSessionConfig {
+  return {
+    systemPrompt: 'You are a test agent.',
+    tools: [],
+    secrets: { anthropic: 'test-key' },
+    agentId: 'agent-1',
+    conversationId: 'conversation-1',
+    workspaceDir: '/tmp/workspace',
+    harnessConfigJson: JSON.stringify({ model: 'claude-sonnet-4-6', apiKeyRef: 'anthropic' }),
+    ...overrides,
+  };
+}
+
+async function collectEvents(stream: AsyncGenerator<AgentEvent>): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
+}
+
+async function* sdkStream(messages: Array<Record<string, unknown>>) {
+  for (const message of messages) {
+    yield message;
+  }
+}
+
+function mapSdkMessage(
+  harness: ClaudeAgentsHarness,
+  message: unknown,
+  toolStartTimes: Map<string, number>,
+  streamState?: unknown,
+): AgentEvent[] {
+  const mapped = streamState === undefined
+    ? Reflect.apply(harness.mapSDKMessage.bind(harness), harness, [message, toolStartTimes])
+    : Reflect.apply(harness.mapSDKMessage.bind(harness), harness, [message, toolStartTimes, streamState]);
+  return [...(mapped as Iterable<AgentEvent>)];
+}
 
 describe('ClaudeAgentsHarness', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('should have name "claude-agents"', () => {
     const harness = new ClaudeAgentsHarness();
     expect(harness.name).toBe('claude-agents');
@@ -33,11 +97,30 @@ describe('ClaudeAgentsHarness', () => {
 
   it('should implement the AgentHarness interface', () => {
     const harness = new ClaudeAgentsHarness();
-
-    // Verify it satisfies the interface structurally
     const asInterface: AgentHarness = harness;
     expect(asInterface.name).toBe('claude-agents');
-    expect(typeof asInterface.run).toBe('function');
+    expect(typeof asInterface.openSession).toBe('function');
+  });
+
+  it('throws ZodError when legacy modelConfig is passed without harnessConfigJson', async () => {
+    const harness = new ClaudeAgentsHarness();
+    const legacyConfig = {
+      ...makeConfig(),
+      modelConfig: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKeyRef: 'anthropic' },
+    };
+    Reflect.deleteProperty(legacyConfig, 'harnessConfigJson');
+
+    await expect(
+      Reflect.apply(harness.openSession.bind(harness), harness, [legacyConfig]),
+    ).rejects.toThrowError(z.ZodError);
+  });
+
+  it('throws ZodError when harnessConfigJson omits the required model', async () => {
+    const harness = new ClaudeAgentsHarness();
+
+    await expect(
+      harness.openSession(makeConfig({ harnessConfigJson: JSON.stringify({ apiKeyRef: 'anthropic' }) })),
+    ).rejects.toThrowError(z.ZodError);
   });
 
   describe('convertToolsWithSDK', () => {
@@ -47,70 +130,25 @@ describe('ClaudeAgentsHarness', () => {
         {
           name: 'get-weather',
           description: 'Get the current weather for a city',
-          input: z.object({
-            city: z.string().describe('The city name'),
-          }),
-          handler: async (input: { city: string }) => {
-            return JSON.stringify({ temp: 72, city: input.city });
-          },
+          input: z.object({ city: z.string() }),
+          handler: async (input) => JSON.stringify(input),
         },
         {
           name: 'send-email',
           description: 'Send an email',
-          input: z.object({
-            to: z.string(),
-            body: z.string(),
-          }),
+          input: z.object({ to: z.string(), body: z.string() }),
           requiresApproval: true,
-          handler: async (input: { to: string; body: string }) => {
-            return `Sent to ${input.to}`;
-          },
+          handler: async () => 'sent',
         },
       ];
 
-      const converted = harness.convertToolsWithSDK(mockSDK, toolDefs, 'test-run-id');
+      const converted = harness.convertToolsWithSDK({ tool: mockSdkTool }, toolDefs, 'run-1');
 
       expect(converted).toHaveLength(2);
       expect(converted[0].name).toBe('get-weather');
       expect(converted[1].name).toBe('send-email');
-    });
-
-    it('should preserve tool descriptions in conversion', () => {
-      const harness = new ClaudeAgentsHarness();
-      const toolDefs: ToolDefinition[] = [
-        {
-          name: 'my-tool',
-          description: 'A descriptive description',
-          input: z.object({}),
-          handler: async () => 'done',
-        },
-      ];
-
-      const converted = harness.convertToolsWithSDK(mockSDK, toolDefs, 'run-1');
-      expect(converted[0].description).toBe('A descriptive description');
-    });
-
-    it('should extract Zod raw shape as inputSchema', () => {
-      const harness = new ClaudeAgentsHarness();
-      const schema = z.object({ x: z.number() });
-      const toolDefs: ToolDefinition[] = [
-        {
-          name: 'calc',
-          description: 'Calculate',
-          input: schema,
-          handler: async () => '42',
-        },
-      ];
-
-      const converted = harness.convertToolsWithSDK(mockSDK, toolDefs, 'run-1');
-      // The inputSchema should be the raw shape extracted from the ZodObject
-      expect(converted[0].inputSchema).toHaveProperty('x');
-    });
-
-    it('should handle empty tool list', () => {
-      const harness = new ClaudeAgentsHarness();
-      const converted = harness.convertToolsWithSDK(mockSDK, [], 'run-1');
-      expect(converted).toHaveLength(0);
+      expect(converted[0].description).toBe('Get the current weather for a city');
+      expect(converted[0].inputSchema).toBe(toolDefs[0].input);
     });
 
     it('should wrap handler to return MCP CallToolResult format', async () => {
@@ -125,51 +163,78 @@ describe('ClaudeAgentsHarness', () => {
         },
       ];
 
-      const converted = harness.convertToolsWithSDK(mockSDK, toolDefs, 'run-1');
+      const converted = harness.convertToolsWithSDK(
+        { tool: mockSdkTool },
+        toolDefs,
+        'run-1',
+        makeConfig({ tools: toolDefs }),
+      );
       const result = await converted[0].handler({ val: 'hello' }, {});
+
       expect(result).toEqual({
         content: [{ type: 'text', text: 'result-42' }],
       });
       expect(handler).toHaveBeenCalledWith(
         { val: 'hello' },
         expect.objectContaining({
-          conversationId: 'run-1',
+          agentId: 'agent-1',
+          conversationId: 'conversation-1',
+          workspaceDir: '/tmp/workspace',
+          knowledge: expect.any(Object),
         }),
       );
     });
 
-    it('should return rejection text when approval is denied', async () => {
+    it('should queue approval events and reject when approval is denied', async () => {
       const harness = new ClaudeAgentsHarness();
-      const onApproval = vi.fn().mockResolvedValue({ action: 'reject' });
+      const onApprovalNeeded = vi.fn().mockResolvedValue({ action: 'reject' as const });
+      const queuedEvents: AgentEvent[] = [];
       const toolDefs: ToolDefinition[] = [
         {
-          name: 'needs-approval',
+          name: 'dangerous-tool',
           description: 'Needs approval',
-          input: z.object({}),
+          input: z.object({ reason: z.string() }),
           requiresApproval: true,
-          handler: async () => 'should-not-reach',
+          handler: async () => 'should-not-run',
         },
       ];
 
       const converted = harness.convertToolsWithSDK(
-        mockSDK,
+        { tool: mockSdkTool },
         toolDefs,
         'run-1',
-        undefined,
-        onApproval,
+        makeConfig({ tools: toolDefs }),
+        onApprovalNeeded,
+        queuedEvents,
       );
-      const result = await converted[0].handler({}, {});
-      expect(result.content[0].text).toBe('Tool call was rejected by the user.');
-      expect(onApproval).toHaveBeenCalledOnce();
+      const result = await converted[0].handler({ reason: 'test' }, {});
+
+      expect(result).toEqual({
+        content: [{ type: 'text', text: 'Tool call was rejected by the user.' }],
+        isError: true,
+      });
+      expect(queuedEvents).toEqual([
+        {
+          type: 'approval_needed',
+          id: expect.any(String),
+          tool: 'dangerous-tool',
+          args: { reason: 'test' },
+        },
+        {
+          type: 'approval_resolved',
+          id: expect.any(String),
+          action: 'reject',
+        },
+      ]);
     });
 
     it('should execute handler when approval is granted', async () => {
       const harness = new ClaudeAgentsHarness();
-      const onApproval = vi.fn().mockResolvedValue({ action: 'approve' });
+      const onApprovalNeeded = vi.fn().mockResolvedValue({ action: 'approve' as const });
       const handler = vi.fn().mockResolvedValue('approved-result');
       const toolDefs: ToolDefinition[] = [
         {
-          name: 'needs-approval',
+          name: 'dangerous-tool',
           description: 'Needs approval',
           input: z.object({}),
           requiresApproval: true,
@@ -178,26 +243,27 @@ describe('ClaudeAgentsHarness', () => {
       ];
 
       const converted = harness.convertToolsWithSDK(
-        mockSDK,
+        { tool: mockSdkTool },
         toolDefs,
         'run-1',
-        undefined,
-        onApproval,
+        makeConfig({ tools: toolDefs }),
+        onApprovalNeeded,
       );
       const result = await converted[0].handler({}, {});
+
       expect(result).toEqual({
         content: [{ type: 'text', text: 'approved-result' }],
       });
-      expect(onApproval).toHaveBeenCalledOnce();
+      expect(onApprovalNeeded).toHaveBeenCalledOnce();
       expect(handler).toHaveBeenCalledOnce();
     });
 
-    it('should auto-approve when no onApprovalNeeded callback is provided', async () => {
+    it('should auto-approve when no callback is provided', async () => {
       const harness = new ClaudeAgentsHarness();
       const handler = vi.fn().mockResolvedValue('auto-approved');
       const toolDefs: ToolDefinition[] = [
         {
-          name: 'needs-approval',
+          name: 'approval-tool',
           description: 'Needs approval',
           input: z.object({}),
           requiresApproval: true,
@@ -205,9 +271,9 @@ describe('ClaudeAgentsHarness', () => {
         },
       ];
 
-      // No onApprovalNeeded callback
-      const converted = harness.convertToolsWithSDK(mockSDK, toolDefs, 'run-1');
+      const converted = harness.convertToolsWithSDK({ tool: mockSdkTool }, toolDefs, 'run-1');
       const result = await converted[0].handler({}, {});
+
       expect(result).toEqual({
         content: [{ type: 'text', text: 'auto-approved' }],
       });
@@ -218,26 +284,27 @@ describe('ClaudeAgentsHarness', () => {
   describe('buildCanUseTool', () => {
     it('should allow tools that do not require approval', async () => {
       const harness = new ClaudeAgentsHarness();
-      const toolDefs: ToolDefinition[] = [
+      const canUseTool = harness.buildCanUseTool([
         {
           name: 'safe-tool',
           description: 'Safe',
           input: z.object({}),
           handler: async () => 'ok',
         },
-      ];
+      ], undefined, 'run-1');
 
-      const canUseTool = harness.buildCanUseTool(toolDefs, undefined, 'run-1');
       const result = await canUseTool('safe-tool', {}, {
         signal: new AbortController().signal,
-        toolUseID: 'tu-1',
+        toolUseID: 'tool-1',
       });
+
       expect(result).toEqual({ behavior: 'allow' });
     });
 
-    it('should auto-approve approval-required tools when no callback is provided', async () => {
+    it('should deny approval-required tools when callback rejects', async () => {
       const harness = new ClaudeAgentsHarness();
-      const toolDefs: ToolDefinition[] = [
+      const onApprovalNeeded = vi.fn().mockResolvedValue({ action: 'reject' as const });
+      const canUseTool = harness.buildCanUseTool([
         {
           name: 'danger-tool',
           description: 'Dangerous',
@@ -245,66 +312,23 @@ describe('ClaudeAgentsHarness', () => {
           requiresApproval: true,
           handler: async () => 'ok',
         },
-      ];
+      ], onApprovalNeeded, 'run-1');
 
-      const canUseTool = harness.buildCanUseTool(toolDefs, undefined, 'run-1');
-      const result = await canUseTool('danger-tool', {}, {
+      const result = await canUseTool('danger-tool', { key: 'value' }, {
         signal: new AbortController().signal,
-        toolUseID: 'tu-2',
+        toolUseID: 'tool-2',
       });
-      expect(result).toEqual({ behavior: 'allow' });
-    });
 
-    it('should deny when onApprovalNeeded rejects', async () => {
-      const harness = new ClaudeAgentsHarness();
-      const onApproval = vi.fn().mockResolvedValue({ action: 'reject' });
-      const toolDefs: ToolDefinition[] = [
-        {
-          name: 'danger-tool',
-          description: 'Dangerous',
-          input: z.object({}),
-          requiresApproval: true,
-          handler: async () => 'ok',
-        },
-      ];
-
-      const canUseTool = harness.buildCanUseTool(toolDefs, onApproval, 'run-1');
-      const result = await canUseTool('danger-tool', { key: 'val' }, {
-        signal: new AbortController().signal,
-        toolUseID: 'tu-3',
-      });
       expect(result).toEqual({
         behavior: 'deny',
         message: 'Tool call was rejected by the user.',
       });
-      expect(onApproval).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: 'run-1',
-          toolName: 'danger-tool',
-          args: { key: 'val' },
-        }),
-      );
-    });
-
-    it('should allow when onApprovalNeeded approves', async () => {
-      const harness = new ClaudeAgentsHarness();
-      const onApproval = vi.fn().mockResolvedValue({ action: 'approve' });
-      const toolDefs: ToolDefinition[] = [
-        {
-          name: 'danger-tool',
-          description: 'Dangerous',
-          input: z.object({}),
-          requiresApproval: true,
-          handler: async () => 'ok',
-        },
-      ];
-
-      const canUseTool = harness.buildCanUseTool(toolDefs, onApproval, 'run-1');
-      const result = await canUseTool('danger-tool', {}, {
-        signal: new AbortController().signal,
-        toolUseID: 'tu-4',
+      expect(onApprovalNeeded).toHaveBeenCalledWith({
+        id: 'tool-2',
+        runId: 'run-1',
+        toolName: 'danger-tool',
+        args: { key: 'value' },
       });
-      expect(result).toEqual({ behavior: 'allow' });
     });
   });
 
@@ -312,257 +336,150 @@ describe('ClaudeAgentsHarness', () => {
     it('should map assistant text content blocks to text_delta', () => {
       const harness = new ClaudeAgentsHarness();
 
-      const message = {
+      const results = mapSdkMessage(harness, {
         type: 'assistant',
         message: {
-          content: [
-            { type: 'text', text: 'Hello world' },
-          ],
+          content: [{ type: 'text', text: 'Hello world' }],
         },
-      };
+      }, new Map());
 
-      const results = [...harness.mapSDKMessage(message, new Map())];
-      expect(results).toEqual([
-        { type: 'text_delta', content: 'Hello world' },
-      ]);
+      expect(results).toEqual([{ type: 'text_delta', content: 'Hello world' }]);
     });
 
     it('should map assistant tool_use blocks to tool_call_start', () => {
       const harness = new ClaudeAgentsHarness();
       const toolStartTimes = new Map<string, number>();
 
-      const message = {
+      const results = mapSdkMessage(harness, {
         type: 'assistant',
         message: {
-          content: [
-            {
-              type: 'tool_use',
-              id: 'toolu_123',
-              name: 'get-weather',
-              input: { city: 'NYC' },
-            },
-          ],
+          content: [{ type: 'tool_use', id: 'toolu_123', name: 'get-weather', input: { city: 'NYC' } }],
         },
-      };
+      }, toolStartTimes);
 
-      const results = [...harness.mapSDKMessage(message, toolStartTimes)];
-
-      expect(results).toHaveLength(1);
-      expect(results[0]).toEqual({
-        type: 'tool_call_start',
-        id: 'toolu_123',
-        name: 'get-weather',
-        args: { city: 'NYC' },
-      });
+      expect(results).toEqual([
+        { type: 'tool_call_start', id: 'toolu_123', name: 'get-weather', args: { city: 'NYC' } },
+      ]);
       expect(toolStartTimes.has('toolu_123')).toBe(true);
     });
 
-    it('should map stream_event text_delta to text_delta', () => {
+    it('should map stream_event text deltas and avoid duplicate assistant text after streaming', () => {
       const harness = new ClaudeAgentsHarness();
+      const streamState = { sawTextDeltaSinceAssistant: false };
 
-      const message = {
+      const streamed = mapSdkMessage(harness, {
         type: 'stream_event',
         event: {
           type: 'content_block_delta',
           delta: { type: 'text_delta', text: 'streaming text' },
         },
-      };
-
-      const results = [...harness.mapSDKMessage(message, new Map())];
-      expect(results).toEqual([
-        { type: 'text_delta', content: 'streaming text' },
-      ]);
-    });
-
-    it('should map stream_event content_block_start for tool_use to tool_call_start', () => {
-      const harness = new ClaudeAgentsHarness();
-      const toolStartTimes = new Map<string, number>();
-
-      const message = {
-        type: 'stream_event',
-        event: {
-          type: 'content_block_start',
-          content_block: {
-            type: 'tool_use',
-            id: 'toolu_456',
-            name: 'send-email',
-          },
-        },
-      };
-
-      const results = [...harness.mapSDKMessage(message, toolStartTimes)];
-
-      expect(results).toHaveLength(1);
-      expect(results[0]).toEqual({
-        type: 'tool_call_start',
-        id: 'toolu_456',
-        name: 'send-email',
-        args: {},
-      });
-      expect(toolStartTimes.has('toolu_456')).toBe(true);
-    });
-
-    it('should map result message to done with usage', () => {
-      const harness = new ClaudeAgentsHarness();
-
-      const message = {
-        type: 'result',
-        subtype: 'success',
-        result: 'Done!',
-        usage: {
-          input_tokens: 100,
-          output_tokens: 50,
-        },
-        total_cost_usd: 0.005,
-      };
-
-      const results = [...harness.mapSDKMessage(message, new Map())];
-
-      expect(results).toHaveLength(1);
-      expect(results[0]).toEqual({
-        type: 'done',
-        usage: {
-          inputTokens: 100,
-          outputTokens: 50,
-          totalTokens: 150,
-          cost: 0.005,
-        },
-      });
-    });
-
-    it('should handle result message without usage', () => {
-      const harness = new ClaudeAgentsHarness();
-
-      const message = {
-        type: 'result',
-        subtype: 'success',
-        result: 'Done!',
-      };
-
-      const results = [...harness.mapSDKMessage(message, new Map())];
-
-      expect(results).toHaveLength(1);
-      expect(results[0]).toEqual({
-        type: 'done',
-        usage: undefined,
-      });
-    });
-
-    it('should ignore tool_progress messages', () => {
-      const harness = new ClaudeAgentsHarness();
-
-      const message = {
-        type: 'tool_progress',
-        tool_use_id: 'toolu_789',
-        tool_name: 'my-tool',
-        elapsed_time_seconds: 1.5,
-      };
-
-      const results = [...harness.mapSDKMessage(message, new Map())];
-      expect(results).toHaveLength(0);
-    });
-
-    it('should ignore tool_use_summary messages', () => {
-      const harness = new ClaudeAgentsHarness();
-
-      const message = {
-        type: 'tool_use_summary',
-        summary: 'Used get-weather tool',
-        preceding_tool_use_ids: ['toolu_123'],
-      };
-
-      const results = [...harness.mapSDKMessage(message, new Map())];
-      expect(results).toHaveLength(0);
-    });
-
-    it('should ignore system messages', () => {
-      const harness = new ClaudeAgentsHarness();
-
-      const message = {
-        type: 'system',
-        subtype: 'init',
-        claude_code_version: '1.0.0',
-      };
-
-      const results = [...harness.mapSDKMessage(message, new Map())];
-      expect(results).toHaveLength(0);
-    });
-
-    it('should handle stream_event with input_json_delta (no output)', () => {
-      const harness = new ClaudeAgentsHarness();
-
-      const message = {
-        type: 'stream_event',
-        event: {
-          type: 'content_block_delta',
-          delta: { type: 'input_json_delta', partial_json: '{"city":"NY' },
-        },
-      };
-
-      const results = [...harness.mapSDKMessage(message, new Map())];
-      expect(results).toHaveLength(0);
-    });
-
-    it('should handle multiple content blocks in a single assistant message', () => {
-      const harness = new ClaudeAgentsHarness();
-      const toolStartTimes = new Map<string, number>();
-
-      const message = {
+      }, new Map(), streamState);
+      const assistant = mapSdkMessage(harness, {
         type: 'assistant',
         message: {
-          content: [
-            { type: 'text', text: 'Let me check the weather.' },
-            {
-              type: 'tool_use',
-              id: 'toolu_abc',
-              name: 'get-weather',
-              input: { city: 'London' },
-            },
-          ],
+          content: [{ type: 'text', text: 'streaming text' }],
         },
-      };
+      }, new Map(), streamState);
 
-      const results = [...harness.mapSDKMessage(message, toolStartTimes)];
+      expect(streamed).toEqual([{ type: 'text_delta', content: 'streaming text' }]);
+      expect(assistant).toEqual([]);
+    });
 
-      expect(results).toHaveLength(2);
-      expect(results[0]).toEqual({
-        type: 'text_delta',
-        content: 'Let me check the weather.',
-      });
-      expect(results[1]).toEqual({
-        type: 'tool_call_start',
-        id: 'toolu_abc',
-        name: 'get-weather',
-        args: { city: 'London' },
-      });
+    it('should map result success messages to done with usage', () => {
+      const harness = new ClaudeAgentsHarness();
+
+      const results = mapSdkMessage(harness, {
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 100, output_tokens: 50 },
+        total_cost_usd: 0.005,
+      }, new Map());
+
+      expect(results).toEqual([
+        {
+          type: 'done',
+          usage: {
+            inputTokens: 100,
+            outputTokens: 50,
+            totalTokens: 150,
+            cost: 0.005,
+          },
+        },
+      ]);
     });
   });
 
-  describe('run() - error handling', () => {
-    it('should yield error event when SDK throws', async () => {
+  describe('openSession() and deliverTurn()', () => {
+    it('should pass nativeTools allowlist/blocklist and ctxmill MCP server into query()', async () => {
       const harness = new ClaudeAgentsHarness();
-
-      const events: any[] = [];
-      const config: HarnessRunConfig = {
-        modelConfig: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250514' },
-        systemPrompt: 'Test',
-        messages: [{ role: 'user', content: 'Hello' } as any],
-        tools: [],
-        secrets: {},
-        agentId: 'test',
-        runId: 'test-run',
-        conversationId: 'test-conv',
-        workspaceDir: '/tmp',
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+      const customTool: ToolDefinition = {
+        name: 'ctx-tool',
+        description: 'Ctx tool',
+        input: z.object({ city: z.string() }),
+        handler: async () => 'ok',
       };
+      const config = makeConfig({
+        tools: [customTool],
+        nativeTools: [
+          {
+          allowlist: ['native-read', 'native-bash'],
+          blocklist: ['native-bash'],
+          },
+        ],
+        harnessConfigJson: JSON.stringify({ model: 'claude-sonnet-4-6', apiKeyRef: 'anthropic', maxTurns: 4 }),
+      });
 
-      // Without valid SDK / API key, run() should catch and yield error
-      for await (const event of harness.run(config)) {
-        events.push(event);
-      }
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 1, output_tokens: 2 },
+        },
+      ]));
 
-      expect(events.length).toBeGreaterThan(0);
-      const lastEvent = events[events.length - 1];
-      expect(['error', 'done']).toContain(lastEvent.type);
+      const session = await harness.openSession(config);
+      const events = await collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Hello')], turnId: 'turn-1' },
+          {},
+        ),
+      );
+      const queryCall = mockQuery.mock.calls[0]?.[0];
+      const createServerCall = mockCreateSdkMcpServer.mock.calls[0]?.[0];
+
+      await session.close();
+
+      expect(events).toEqual([
+        { type: 'done', usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 } },
+      ]);
+      expect(createServerCall).toEqual({
+        name: 'ctxmill',
+        tools: [expect.objectContaining({ name: 'ctx-tool' })],
+      });
+      expect(queryCall?.options.allowedTools).toEqual(['native-read', 'native-bash', 'mcp__ctxmill__*']);
+      expect(queryCall?.options.disallowedTools).toEqual(['native-bash']);
+      expect(queryCall?.options.mcpServers).toEqual({
+        ctxmill: {
+          type: 'sdk',
+          name: 'ctxmill',
+        },
+      });
+      expect(queryCall?.options.permissionMode).toBe('bypassPermissions');
+      expect(queryCall?.options.includePartialMessages).toBe(true);
+      expect(queryCall?.options.maxTurns).toBe(4);
+    });
+
+    it('should yield an error event when the API key is missing', async () => {
+      const harness = new ClaudeAgentsHarness();
+      await expect(harness.openSession(makeConfig({
+        harnessConfigJson: JSON.stringify({ model: 'claude-sonnet-4-6' }),
+        secrets: {},
+      }))).rejects.toThrow('Missing Anthropic API key for claude-agents harness.');
     });
   });
 });

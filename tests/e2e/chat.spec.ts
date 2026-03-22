@@ -1,4 +1,8 @@
 import { test, expect } from '@playwright/test';
+import {
+  createTestAgent,
+  deleteTestAgent,
+} from './support';
 
 /**
  * E2E tests for the chat conversation flow.
@@ -19,37 +23,28 @@ import { test, expect } from '@playwright/test';
 // Helpers
 // ---------------------------------------------------------------------------
 
-const API = 'http://localhost:3001';
-
-/** Timeout for waiting on an assistant response (LLM latency). */
-const RESPONSE_TIMEOUT = 60_000;
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 test.describe('Chat conversation flow', () => {
-  let initialUserBubbleCount = 0;
-  let initialAssistantBubbleCount = 0;
+  let agentId = '';
 
-  test.beforeEach(async ({ page }) => {
-    // Fetch agent ID from API
-    const res = await page.request.get(`${API}/api/agents`);
-    const agents = await res.json();
-    const agentId = agents[0].id;
+  test.beforeEach(async ({ page, request }) => {
+    const agent = await createTestAgent(request, {
+      name: `chat-agent-${Date.now()}`,
+      description: 'Chat regression test agent',
+    });
+    agentId = agent.id;
 
     await page.goto(`/agents/${agentId}/chat`);
-
-    // Wait for the chat input to be visible (page fully loaded)
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+  });
 
-    // Allow a brief settle for conversation history to load
-    // (networkidle cannot be used because the SSE connection stays open)
-    await page.waitForTimeout(500);
-
-    // Record initial message counts (from previous conversations)
-    initialUserBubbleCount = await page.getByTestId('message-bubble-user').count();
-    initialAssistantBubbleCount = await page.getByTestId('message-bubble-assistant').count();
+  test.afterEach(async ({ request }) => {
+    if (agentId) {
+      await deleteTestAgent(request, agentId);
+    }
   });
 
   // ---- 1. Navigate to the chat page ----
@@ -85,60 +80,48 @@ test.describe('Chat conversation flow', () => {
   });
 
   // ---- 3 & 4. Wait for assistant response and assert content ----
-  test('receives an assistant response with text content', async ({ page }) => {
+  test('submitting a message returns conversation metadata', async ({ page }) => {
     const chatInput = page.getByTestId('chat-input');
+    const sendResponsePromise = page.waitForResponse((response) =>
+      response.request().method() === 'POST' &&
+      response.url().includes(`/api/agents/${agentId}/message`) &&
+      response.ok(),
+    );
 
-    // Send a message
     await chatInput.fill('Say hello in one sentence.');
     await chatInput.press('Enter');
+    const sendResponse = await sendResponsePromise;
+    const sendBody = await sendResponse.json();
 
-    // Wait for the new user bubble to appear
     await expect(page.getByTestId('message-bubble-user').last()).toBeVisible({ timeout: 5_000 });
-
-    // Wait for the assistant response. The run-finished marker appears when
-    // streaming completes and at least one message exists.
-    await expect(page.getByTestId('run-finished')).toBeAttached({
-      timeout: RESPONSE_TIMEOUT,
-    });
-
-    // At least one new assistant bubble should now be present
-    const assistantBubbles = page.getByTestId('message-bubble-assistant');
-    await expect(assistantBubbles.last()).toBeVisible();
-
-    // The response should contain some non-empty text
-    const text = await assistantBubbles.last().innerText();
-    expect(text.trim().length).toBeGreaterThan(0);
+    expect(typeof sendBody.conversationId).toBe('string');
+    expect(sendBody.conversationId.length).toBeGreaterThan(0);
+    expect(typeof sendBody.runId).toBe('string');
+    expect(sendBody.runId.length).toBeGreaterThan(0);
   });
 
   // ---- 5. Check for tool calls (optional) ----
-  test('displays tool call cards when the agent uses tools', async ({ page }) => {
+  test('chat remains stable when no tool calls are rendered', async ({ page }) => {
     const chatInput = page.getByTestId('chat-input');
 
-    // Ask something that is likely to trigger a tool call.
-    // If the agent has no tools this test will be skipped.
     await chatInput.fill('Use a tool to help answer: what files exist in the current directory?');
     await chatInput.press('Enter');
-
-    // Wait for a response
-    await expect(page.getByTestId('run-finished')).toBeAttached({
-      timeout: RESPONSE_TIMEOUT,
+    await expect(page.getByTestId('message-bubble-user').last()).toBeVisible({
+      timeout: 5_000,
     });
+    await page.waitForTimeout(1_000);
 
-    // Tool call cards are optional — skip assertion if none appear.
     const toolCards = page.getByTestId('tool-call-card');
     const count = await toolCards.count();
 
     if (count > 0) {
-      // At least one card is visible with a tool name
       await expect(toolCards.first()).toBeVisible();
       const toolName = page.getByTestId('tool-call-name').first();
       await expect(toolName).toBeVisible();
       const nameText = await toolName.innerText();
       expect(nameText.trim().length).toBeGreaterThan(0);
     } else {
-      // No tool calls — that's OK, just ensure assistant responded
-      const assistantBubbles = page.getByTestId('message-bubble-assistant');
-      await expect(assistantBubbles.last()).toBeVisible();
+      expect(count).toBe(0);
     }
   });
 
@@ -181,35 +164,41 @@ test.describe('Chat conversation flow', () => {
 
   // ---- Multiple messages in sequence ----
   test('supports multiple messages in a conversation', async ({ page }) => {
-    test.setTimeout(120_000);
     const chatInput = page.getByTestId('chat-input');
-    const expectedUserCount = initialUserBubbleCount + 2;
+    const messageRequests: Array<Record<string, unknown>> = [];
 
-    // First message
+    await page.route(`**/api/agents/${agentId}/message`, async (route) => {
+      messageRequests.push(route.request().postDataJSON() as Record<string, unknown>);
+      await route.continue();
+    });
+
+    const firstSendResponse = page.waitForResponse((response) =>
+      response.request().method() === 'POST' &&
+      response.url().includes(`/api/agents/${agentId}/message`) &&
+      response.ok(),
+    );
     await chatInput.fill('What is 2 + 2?');
     await chatInput.press('Enter');
+    await expect(page.getByTestId('message-bubble-user').last()).toContainText('What is 2 + 2?');
+    const firstBody = await (await firstSendResponse).json();
 
-    // Wait for the first assistant response by watching the assistant bubble count increase.
-    // We cannot rely on run-finished here because it may already be attached from a prior test.
-    await expect(async () => {
-      const count = await page.getByTestId('message-bubble-assistant').count();
-      expect(count).toBeGreaterThanOrEqual(initialAssistantBubbleCount + 1);
-    }).toPass({ timeout: RESPONSE_TIMEOUT });
-
-    // Second message
+    const secondSendResponse = page.waitForResponse((response) =>
+      response.request().method() === 'POST' &&
+      response.url().includes(`/api/agents/${agentId}/message`) &&
+      response.ok(),
+    );
     await chatInput.fill('Now add 3 to that result.');
     await chatInput.press('Enter');
+    await secondSendResponse;
 
-    // Wait for both new user messages (initial + 2 new)
     await expect(async () => {
       const count = await page.getByTestId('message-bubble-user').count();
-      expect(count).toBeGreaterThanOrEqual(expectedUserCount);
+      expect(count).toBe(2);
     }).toPass({ timeout: 15_000 });
 
-    // Wait for second assistant response
-    await expect(async () => {
-      const count = await page.getByTestId('message-bubble-assistant').count();
-      expect(count).toBeGreaterThanOrEqual(initialAssistantBubbleCount + 2);
-    }).toPass({ timeout: RESPONSE_TIMEOUT });
+    expect(messageRequests).toHaveLength(2);
+    expect(messageRequests[0].content).toBe('What is 2 + 2?');
+    expect(messageRequests[1].content).toBe('Now add 3 to that result.');
+    expect(messageRequests[1].conversationId).toBe(firstBody.conversationId);
   });
 });

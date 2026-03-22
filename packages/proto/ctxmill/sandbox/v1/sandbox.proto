@@ -1,0 +1,252 @@
+syntax = "proto3";
+package ctxmill.sandbox.v1;
+
+import "google/protobuf/struct.proto";
+
+service HarnessService {
+  rpc OpenSession(OpenSessionRequest) returns (OpenSessionResponse);
+  rpc DeliverTurn(DeliverTurnRequest) returns (stream SessionEvent);
+  rpc SuspendSession(SuspendSessionRequest) returns (SuspendSessionResponse);
+  rpc KillSession(KillSessionRequest) returns (KillSessionResponse);
+}
+
+service OrchestratorService {
+  rpc RequestTool(RequestToolRequest) returns (RequestToolResponse);
+  rpc EmitEvent(EmitEventRequest) returns (EmitEventResponse);
+  rpc RefreshSecrets(RefreshSecretsRequest) returns (RefreshSecretsResponse);
+}
+
+message OpenSessionRequest {
+  oneof bootstrap {
+    FreshBootstrap fresh = 1;
+    RestoreBootstrap restore = 2;
+  }
+}
+
+message FreshBootstrap {
+  string agent_id = 1;
+  string conversation_id = 2;
+  string harness_name = 3;
+  string harness_config_json = 4;
+  reserved 5;
+  string system_prompt = 6;
+  repeated ToolMetadata tools = 7;
+  string workspace_dir = 8;
+}
+
+message RestoreBootstrap {
+  SessionCheckpoint session_checkpoint = 1;
+}
+
+message OpenSessionResponse {
+  string session_id = 1;
+  string status = 2;
+}
+
+message DeliverTurnRequest {
+  string session_id = 1;
+  repeated Message messages = 2;
+  string turn_id = 3;
+}
+
+message SessionEvent {
+  oneof payload {
+    AgentEvent ag_ui_event = 1;
+    MessageCommitted message_committed = 2;
+    TurnCompleted turn_completed = 3;
+    TurnFailed turn_failed = 4;
+  }
+}
+
+message MessageCommitted {
+  string role = 1;
+  string content = 2;
+  repeated ToolCall tool_calls = 3;
+  optional string tool_call_id = 4;
+  string turn_id = 5;
+  uint64 message_seq = 6;
+}
+
+message TurnCompleted {
+  string turn_id = 1;
+}
+
+message TurnFailed {
+  string turn_id = 1;
+  string error_message = 2;
+}
+
+message SuspendSessionRequest {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message SuspendSessionResponse {
+  SessionCheckpoint session_checkpoint = 1;
+}
+
+message Cursor {
+  uint64 next_message_seq = 1;
+  optional string last_completed_turn_id = 2;
+}
+
+message RunnerState {
+  string status = 1;
+  repeated PendingRequest pending_requests = 2;
+}
+
+message PendingRequest {
+  string type = 1;
+  string id = 2;
+  string payload_json = 3;
+}
+
+message WorkspaceRef {
+  string strategy = 1;
+  string reference = 2;
+}
+
+message SessionCheckpoint {
+  int32 checkpoint_version = 1;
+  string session_id = 2;
+  string conversation_id = 3;
+  string harness_name = 4;
+  Cursor cursor = 5;
+  RunnerState runner_state = 6;
+  WorkspaceRef workspace_ref = 7;
+  google.protobuf.Struct harness_state = 8;
+}
+
+message KillSessionRequest {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message KillSessionResponse {
+  string final_status = 1;
+}
+
+message RequestToolRequest {
+  string run_id = 1;
+  string agent_id = 2;
+  string tool_name = 3;
+  string args_json = 4;
+  string request_id = 5;
+}
+
+message RequestToolResponse {
+  string request_id = 1;
+  string result = 2;
+  optional string error = 3;
+}
+
+message EmitEventRequest {
+  string run_id = 1;
+  string event_type = 2;
+  string payload_json = 3;
+}
+
+message EmitEventResponse {}
+
+message RefreshSecretsRequest {
+  string run_id = 1;
+  string agent_id = 2;
+}
+
+message RefreshSecretsResponse {
+  bool success = 1;
+  optional string error = 2;
+  string secrets_path = 3;
+}
+
+message NativeToolConfig {
+  repeated string allowlist = 1;
+  repeated string blocklist = 2;
+}
+
+message Message {
+  string id = 1;
+  string role = 2;
+  string content = 3;
+  repeated ToolCall tool_calls = 4;
+  optional string tool_call_id = 5;
+  optional string name = 6;
+}
+
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments_json = 3;
+}
+
+message ToolMetadata {
+  string name = 1;
+  string description = 2;
+  string input_schema_json = 3;
+  ToolLocation location = 4;
+}
+
+enum ToolLocation {
+  TOOL_LOCATION_UNSPECIFIED = 0;
+  TOOL_LOCATION_SANDBOX = 1;
+  TOOL_LOCATION_ORCHESTRATOR = 2;
+}
+
+message AgentEvent {
+  oneof event {
+    TextDelta text_delta = 1;
+    ToolCallStart tool_call_start = 2;
+    ToolCallEnd tool_call_end = 3;
+    ApprovalNeeded approval_needed = 4;
+    ApprovalResolved approval_resolved = 5;
+    ErrorEvent error = 6;
+    DoneEvent done = 7;
+  }
+}
+
+message TextDelta {
+  string content = 1;
+}
+
+message ToolCallStart {
+  string id = 1;
+  string name = 2;
+  string args_json = 3;
+}
+
+message ToolCallEnd {
+  string id = 1;
+  string result = 2;
+  optional string error = 3;
+  int64 duration_ms = 4;
+}
+
+message ApprovalNeeded {
+  string id = 1;
+  string tool_name = 2;
+  string args_json = 3;
+}
+
+message ApprovalResolved {
+  string id = 1;
+  string action = 2;
+}
+
+message ErrorEvent {
+  string message = 1;
+  optional string stack_trace = 2;
+  string category = 3;
+}
+
+message DoneEvent {
+  optional string result = 1;
+  optional TokenUsage usage = 2;
+  bool interrupted = 3;
+}
+
+message TokenUsage {
+  int64 input_tokens = 1;
+  int64 output_tokens = 2;
+  int64 total_tokens = 3;
+  optional double cost = 4;
+}

@@ -14,6 +14,8 @@ import { ScatterChart } from '@/components/charts/ScatterChart';
 import { RadarChart } from '@/components/charts/RadarChart';
 import { Treemap } from '@/components/charts/Treemap';
 import { NetworkGraph } from '@/components/charts/NetworkGraph';
+import { normalizeA2UIComponentName } from '@/lib/a2ui';
+import { hitlBlockAdapters } from './HitlBlockAdapters';
 
 type AnyProps = Record<string, unknown>;
 
@@ -22,6 +24,7 @@ const registry = new Map<string, ComponentType<AnyProps>>();
 export function registerCatalog(name: string, components: Record<string, ComponentType<AnyProps>>) {
   for (const [key, component] of Object.entries(components)) {
     registry.set(`${name}:${key}`, component);
+    registry.set(`ctxmill.${name}:${key}`, component);
     // Also register without prefix for convenience
     if (!registry.has(key)) {
       registry.set(key, component);
@@ -34,7 +37,7 @@ export function registerComponent(name: string, component: ComponentType<AnyProp
 }
 
 export function resolve(componentName: string): ComponentType<AnyProps> | undefined {
-  return registry.get(componentName);
+  return registry.get(componentName) ?? registry.get(normalizeA2UIComponentName(componentName));
 }
 
 export function listRegistered(): string[] {
@@ -62,3 +65,5 @@ registerCatalog('charts', {
   Treemap: c(Treemap),
   NetworkGraph: c(NetworkGraph),
 });
+
+registerCatalog('hitl', hitlBlockAdapters);

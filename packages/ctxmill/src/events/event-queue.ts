@@ -17,7 +17,7 @@ export interface EventQueue {
 }
 
 /**
- * SQLite-backed EventQueue implementation.
+ * Database-backed EventQueue implementation.
  *
  * - enqueue(): persists to event_store via db.saveEvent(), emits on bus, returns seq as string
  * - subscribe(): delegates to bus.on(), returns unsubscribe function
@@ -27,7 +27,7 @@ export interface EventQueue {
  * - Internal: 30s polling loop for scheduled_events (fires due events onto bus)
  * - shutdown(): clears polling interval
  */
-export class SQLiteEventQueue implements EventQueue {
+export class EventQueueImpl implements EventQueue {
   private bus: TypedEventBus;
   private db: DatabaseRepository;
   private pollingInterval: ReturnType<typeof setInterval> | null = null;
@@ -81,7 +81,7 @@ export class SQLiteEventQueue implements EventQueue {
     return rows.map((row) => ({
       cursor: row.seq,
       type: row.type,
-      payload: JSON.parse(row.payload),
+      payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
       createdAt: row.createdAt,
     }));
   }
@@ -98,7 +98,7 @@ export class SQLiteEventQueue implements EventQueue {
     this.pollingInterval = setInterval(() => {
       if (this.shuttingDown) return;
       this.pollScheduledEvents().catch((err) =>
-        console.error('[SQLiteEventQueue] polling error:', err),
+        console.error('[EventQueueImpl] polling error:', err),
       );
     }, 30_000);
   }
@@ -107,11 +107,11 @@ export class SQLiteEventQueue implements EventQueue {
     const dueEvents = await this.db.getScheduledEventsDue(Date.now());
     for (const event of dueEvents) {
       try {
-        const payload = JSON.parse(event.payload);
+        const payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
         this.bus.emit(event.type as EventName, payload);
         await this.db.markScheduledEventCompleted(event.id);
       } catch (err) {
-        console.error(`[SQLiteEventQueue] error firing scheduled event ${event.id}:`, err);
+        console.error(`[EventQueueImpl] error firing scheduled event ${event.id}:`, err);
       }
     }
   }

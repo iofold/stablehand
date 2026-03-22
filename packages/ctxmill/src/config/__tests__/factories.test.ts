@@ -4,13 +4,13 @@ import type { ResolvedConfig } from '../types.js';
 
 function makeConfig(overrides: Partial<ResolvedConfig['llm']> = {}): ResolvedConfig {
   return {
-    execution: { type: 'local', warmPool: 0 },
-    database: { type: 'sqlite', path: ':memory:', url: '' },
-    knowledge: { providers: ['memory'] },
-    tools: { executors: [] },
-    security: { preset: 'local' },
-    learning: { strategy: 'simple', async: false },
-    orchestration: { eventBus: false, reconciliation: false },
+    execution: { type: 'docker', warmPool: 0, maxGlobalContainers: 20 },
+    database: { type: 'postgres', url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
+    knowledge: { providers: ['pgvector'] },
+    tools: { executors: ['local', 'mcp'] },
+    security: { preset: 'docker' },
+    learning: { strategy: 'ace', async: false },
+    orchestration: { eventBus: true, reconciliation: false },
     observability: { sink: 'console', path: '' },
     llm: {
       provider: 'openai',
@@ -30,14 +30,16 @@ describe('createLLMProviderFromConfig', () => {
     );
   });
 
-  it('throws if apiKey is empty', () => {
+  it('returns null if apiKey is empty (learning pipeline disabled)', () => {
     const config = makeConfig({ apiKey: '' });
-    expect(() => createLLMProviderFromConfig(config)).toThrow(/apiKey/);
+    const provider = createLLMProviderFromConfig(config);
+    expect(provider).toBeNull();
   });
 
   it('throws if model is empty', () => {
     const config = makeConfig({ model: '' });
-    expect(() => createLLMProviderFromConfig(config)).toThrow(/model/);
+    const provider = createLLMProviderFromConfig(config);
+    expect(provider).toBeNull();
   });
 
   it('accepts valid anthropic config', () => {

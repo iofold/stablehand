@@ -224,3 +224,107 @@ export function makeAgentCreatedEvent(
     ...overrides,
   };
 }
+
+export function makeRunResumedEvent(
+  overrides?: Partial<EventMap['run.resumed']>,
+): EventMap['run.resumed'] {
+  return {
+    runId: 'run-test-1',
+    agentId: 'agent-test-1',
+    triggeredBy: 'feedback.received',
+    suspendedDurationMs: 5000,
+    timestamp: Date.now(),
+    ...overrides,
+  };
+}
+
+// ── Suspended Run Helpers ───────────────────────────────────────
+
+export interface SuspendedRunRow {
+  id: string;
+  agentRunId: string;
+  agentId: string;
+  waitEventType: string;
+  waitSelector: string;
+  waitExpiresAt: number | null;
+  snapshotState: string;
+  createdAt: number;
+}
+
+export function makeSuspendedRunRow(
+  overrides?: Partial<SuspendedRunRow>,
+): SuspendedRunRow {
+  return {
+    id: 'sr-1',
+    agentRunId: 'run-1',
+    agentId: 'agent-1',
+    waitEventType: 'feedback.received',
+    waitSelector: JSON.stringify({ agentId: 'agent-1', type: 'thumbs_up' }),
+    waitExpiresAt: null,
+    snapshotState: JSON.stringify({ conversationId: 'conv-1' }),
+    createdAt: Date.now() - 5000,
+    ...overrides,
+  };
+}
+
+export function createMockSuspendDb(
+  rows: Record<string, SuspendedRunRow[]> = {},
+) {
+  const suspendedRuns = new Map<string, SuspendedRunRow>();
+
+  for (const eventRows of Object.values(rows)) {
+    for (const row of eventRows) {
+      suspendedRuns.set(row.id, row);
+    }
+  }
+
+  return {
+    getSuspendedRunsByEventType: vi.fn().mockImplementation((eventType: string) => {
+      return Promise.resolve(rows[eventType] ?? []);
+    }),
+    deleteSuspendedRun: vi.fn().mockImplementation((id: string) => {
+      suspendedRuns.delete(id);
+      for (const arr of Object.values(rows)) {
+        const idx = arr.findIndex((r) => r.id === id);
+        if (idx !== -1) arr.splice(idx, 1);
+      }
+      return Promise.resolve(undefined);
+    }),
+    expireOldSuspendedRuns: vi.fn().mockResolvedValue(0),
+    createSuspendedRun: vi.fn().mockImplementation((data: SuspendedRunRow) => {
+      suspendedRuns.set(data.id, data);
+      const eventType = data.waitEventType;
+      if (!rows[eventType]) rows[eventType] = [];
+      rows[eventType].push(data);
+      return Promise.resolve(undefined);
+    }),
+    _store: suspendedRuns,
+  };
+}
+
+export function createMockTriggerDb(initialTriggers: Array<{
+  id: string;
+  agentId: string;
+  eventType: string;
+  selector?: Record<string, unknown> | null;
+  taskTemplate: string;
+  enabled: boolean;
+  createdAt: string;
+}> = []) {
+  const triggers = new Map(initialTriggers.map((t) => [t.id, { ...t }]));
+
+  return {
+    getTriggers: vi.fn().mockImplementation(() => {
+      return Promise.resolve(Array.from(triggers.values()));
+    }),
+    saveTrigger: vi.fn().mockImplementation((data: any) => {
+      triggers.set(data.id, { ...data });
+      return Promise.resolve(undefined);
+    }),
+    deleteTrigger: vi.fn().mockImplementation((id: string) => {
+      triggers.delete(id);
+      return Promise.resolve(undefined);
+    }),
+    _store: triggers,
+  };
+}

@@ -33,7 +33,7 @@ describe('Session lifecycle (full flow)', () => {
     container = await createContainer(
       {
         preset: 'local',
-        database: { type: 'sqlite', path: 'data.db' },
+        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
         llm: {
           provider: 'anthropic',
           model: 'claude-sonnet-4-6',
@@ -45,7 +45,7 @@ describe('Session lifecycle (full flow)', () => {
 
     app = await createServer({
       db: container.db,
-      executor: container.agentExecutor,
+      agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
@@ -61,15 +61,16 @@ describe('Session lifecycle (full flow)', () => {
   });
 
   /**
-   * Helper: create an agent via HTTP, return its id and workspace path.
-   */
+    * Helper: create an agent via HTTP, return its id and workspace path.
+    */
   async function createAgent(name: string) {
     const res = await app.inject({
       method: 'POST',
       url: '/api/agents',
       payload: {
         name,
-        model: 'test-model',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
         systemPrompt: 'Lifecycle test agent',
         tools: [],
       },

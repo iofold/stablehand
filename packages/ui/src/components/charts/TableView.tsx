@@ -69,7 +69,7 @@ export function TableView({ title, columns, data, pageSize = 10 }: TableViewProp
                   <div className="flex items-center gap-1">
                     {col.label}
                     {col.sortable !== false && sortKey === col.key && (
-                      <span className="text-surface-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                      <span className="text-surface-400">{sortDir === 'asc' ? '↑' : '↓'}</span>
                     )}
                   </div>
                 </th>

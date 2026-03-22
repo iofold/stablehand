@@ -67,7 +67,7 @@ export function useAgentDetail(id: string | undefined, activeTab: TabId): UseAge
 
   const agent = agents.find((a) => a.id === id);
 
-  // Fetch runs when Runs or Overview tab is active
+  // Fetch runs when Sessions or Overview tab is active
   const loadRuns = useCallback(async () => {
     if (!id) return;
     setRunsLoading(true);
@@ -83,12 +83,12 @@ export function useAgentDetail(id: string | undefined, activeTab: TabId): UseAge
   }, [id, storeFetchRuns]);
 
   useEffect(() => {
-    if (activeTab === 'runs' || activeTab === 'overview') loadRuns();
+    if (activeTab === 'sessions' || activeTab === 'overview') loadRuns();
   }, [activeTab, loadRuns]);
 
-  // Fetch traces when Runs tab is active
+  // Fetch traces when Sessions tab is active
   useEffect(() => {
-    if (activeTab !== 'runs' || !id) return;
+    if (activeTab !== 'sessions' || !id) return;
     let mounted = true;
     setError(null);
 

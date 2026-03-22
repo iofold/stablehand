@@ -2,7 +2,15 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { TypedEventBus } from '../events/bus.js';
 
-export type RunStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled';
+export type RunStatus =
+  | 'queued'
+  | 'running'
+  | 'paused'
+  | 'suspended'
+  | 'checkpointed'
+  | 'completed'
+  | 'error'
+  | 'cancelled';
 export type RunMode = 'interactive' | 'background';
 
 /** Default maximum concurrent runs allowed per agent. */
@@ -10,8 +18,8 @@ export const MAX_CONCURRENT_RUNS_PER_AGENT = 3;
 
 /** Options for startRun. */
 export interface StartRunOptions {
-  /** Override the default max concurrent runs per agent. */
   maxConcurrent?: number;
+  sessionId?: string;
 }
 
 /** Options for the RunRegistry constructor. */
@@ -26,14 +34,19 @@ export interface AgentRun {
   id: string;
   agentId: string;
   conversationId: string;
+  sessionId?: string;
   status: RunStatus;
   mode: RunMode;
   startedAt: number;
   completedAt?: number;
   error?: string;
   taskDescription?: string;
-  /** Path to this run's session overlay directory. */
   sessionDir?: string;
+  pausedAt?: number;
+  pausedReason?: string;
+  resumedAt?: number;
+  retryCount?: number;
+  maxRetries?: number;
 }
 
 /**
@@ -103,8 +116,11 @@ export class RunRegistry {
 
   /**
    * Load all runs from the database into memory.
-   * Runs that were active (queued / running) before a restart are marked as
-   * errored because they cannot be resumed.
+   *
+   * Restart recovery strategy:
+   * - `running` runs are marked as `error` — they were interrupted mid-execution
+   * - `paused` runs remain `paused` — they are durable and can be resumed
+   * - `queued` runs remain `queued` — they can be retried
    */
   async loadFromDb(db?: DatabaseRepository): Promise<void> {
     const repo = db ?? this.db;
@@ -118,6 +134,7 @@ export class RunRegistry {
         id: row.id,
         agentId: row.agentId,
         conversationId: row.conversationId ?? '',
+        sessionId: (row as any).sessionId ?? undefined,
         status: row.status as RunStatus,
         mode: (row.mode ?? 'interactive') as RunMode,
         startedAt: row.startedAt,
@@ -125,10 +142,16 @@ export class RunRegistry {
         error: row.error ?? undefined,
         taskDescription: row.taskDescription ?? undefined,
         sessionDir: row.sessionDir ?? undefined,
+        pausedAt: (row as any).pausedAt ?? undefined,
+        pausedReason: (row as any).pausedReason ?? undefined,
+        resumedAt: (row as any).resumedAt ?? undefined,
+        retryCount: (row as any).retryCount ?? undefined,
+        maxRetries: (row as any).maxRetries ?? undefined,
       };
 
-      // Mark stale active runs as errored
-      if (run.status === 'queued' || run.status === 'running') {
+      // Only `running` runs are interrupted by a restart — mark them as error.
+      // `paused` and `queued` runs are durable and survive restarts.
+      if (run.status === 'running') {
         run.status = 'error';
         run.completedAt = Date.now();
         run.error = 'Server restarted during execution';
@@ -139,6 +162,8 @@ export class RunRegistry {
           error: run.error,
         });
       }
+      // `paused` and `suspended` runs stay in their state — they can be resumed later
+      // `queued` runs stay queued — they can be picked up again
 
       this.runs.set(run.id, run);
     }
@@ -169,6 +194,7 @@ export class RunRegistry {
       id: randomUUID(),
       agentId,
       conversationId,
+      sessionId: options?.sessionId,
       status: 'running',
       mode,
       startedAt: Date.now(),
@@ -305,9 +331,10 @@ export class RunRegistry {
 
   /**
    * Get all active (non-terminal) runs, optionally filtered by agent.
+   * Includes queued, running, and paused runs.
    */
   getActiveRuns(agentId?: string): AgentRun[] {
-    const activeStatuses: RunStatus[] = ['queued', 'running'];
+    const activeStatuses: RunStatus[] = ['queued', 'running', 'paused', 'suspended', 'checkpointed'];
     const results: AgentRun[] = [];
     for (const run of this.runs.values()) {
       if (!activeStatuses.includes(run.status)) continue;
@@ -351,5 +378,168 @@ export class RunRegistry {
         this.recordPersistFailure('updateSessionDir', runId, err);
       }
     }
+  }
+
+  /**
+   * Pause a running run. Records reason and timestamp.
+   * Only runs in `running` status can be paused.
+   */
+  async pauseRun(runId: string, reason: string): Promise<AgentRun | undefined> {
+    const run = this.runs.get(runId);
+    if (!run) return undefined;
+
+    if (run.status !== 'running') {
+      return undefined;
+    }
+
+    run.status = 'paused';
+    run.pausedAt = Date.now();
+    run.pausedReason = reason;
+
+    if (this.db) {
+      try {
+        await this.db.updateRun(runId, {
+          status: 'paused',
+          pausedAt: run.pausedAt,
+          pausedReason: run.pausedReason,
+        } as any);
+      } catch (err) {
+        this.recordPersistFailure('pauseRun', runId, err);
+      }
+    }
+
+    if (this.eventBus) {
+      this.eventBus.emit('run.completed', {
+        runId,
+        agentId: run.agentId,
+        conversationId: run.conversationId,
+        status: 'cancelled' as const, // closest available event status for paused
+        durationMs: (run.pausedAt ?? Date.now()) - run.startedAt,
+        timestamp: run.pausedAt ?? Date.now(),
+      });
+    }
+
+    return run;
+  }
+
+  /**
+   * Suspend a running run. Sets status to 'suspended' for checkpoint-based
+   * suspend/resume. Records reason and timestamp.
+   * Only runs in `running` status can be suspended.
+   */
+  async suspendRun(runId: string, reason: string): Promise<AgentRun | undefined> {
+    const run = this.runs.get(runId);
+    if (!run) return undefined;
+
+    if (run.status !== 'running') {
+      return undefined;
+    }
+
+    run.status = 'suspended';
+    run.pausedAt = Date.now();
+    run.pausedReason = reason;
+
+    if (this.db) {
+      try {
+        await this.db.updateRun(runId, {
+          status: 'suspended',
+          pausedAt: run.pausedAt,
+          pausedReason: run.pausedReason,
+        } as any);
+      } catch (err) {
+        this.recordPersistFailure('suspendRun', runId, err);
+      }
+    }
+
+    if (this.eventBus) {
+      this.eventBus.emit('run.completed', {
+        runId,
+        agentId: run.agentId,
+        conversationId: run.conversationId,
+        status: 'cancelled' as const, // closest available event status for suspended
+        durationMs: (run.pausedAt ?? Date.now()) - run.startedAt,
+        timestamp: run.pausedAt ?? Date.now(),
+      });
+    }
+
+    return run;
+  }
+
+  /**
+   * Resume a paused or suspended run. Sets status back to running and records resume time.
+   * Only runs in `paused` or `suspended` status can be resumed.
+   */
+  async resumeRun(runId: string): Promise<AgentRun | undefined> {
+    const run = this.runs.get(runId);
+    if (!run) return undefined;
+
+    if (run.status !== 'paused' && run.status !== 'suspended' && run.status !== 'checkpointed') {
+      return undefined;
+    }
+
+    run.status = 'running';
+    run.resumedAt = Date.now();
+
+    // Re-create an AbortController for the resumed run
+    this.abortControllers.set(runId, new AbortController());
+
+    if (this.db) {
+      try {
+        await this.db.updateRun(runId, {
+          status: 'running',
+          resumedAt: run.resumedAt,
+        } as any);
+      } catch (err) {
+        this.recordPersistFailure('resumeRun', runId, err);
+      }
+    }
+
+    if (this.eventBus) {
+      this.eventBus.emit('run.started', {
+        runId,
+        agentId: run.agentId,
+        conversationId: run.conversationId,
+        mode: run.mode,
+        taskDescription: run.taskDescription ?? '',
+        timestamp: run.resumedAt ?? Date.now(),
+      });
+    }
+
+    return run;
+  }
+
+  /**
+   * Get all runs matching a given status, optionally filtered by agent.
+   */
+  getRunsByStatus(status: RunStatus, agentId?: string): AgentRun[] {
+    const results: AgentRun[] = [];
+    for (const run of this.runs.values()) {
+      if (run.status !== status) continue;
+      if (agentId && run.agentId !== agentId) continue;
+      results.push(run);
+    }
+    return results;
+  }
+
+  getActiveRunsForAgent(agentId: string): AgentRun[] {
+    return this.getActiveRuns(agentId);
+  }
+
+  getRunsBySession(sessionId: string): AgentRun[] {
+    const results: AgentRun[] = [];
+    for (const run of this.runs.values()) {
+      if (run.sessionId === sessionId) results.push(run);
+    }
+    return results;
+  }
+
+  getActiveRunForConversation(conversationId: string): AgentRun | undefined {
+    const activeStatuses: RunStatus[] = ['queued', 'running', 'paused', 'suspended', 'checkpointed'];
+    for (const run of this.runs.values()) {
+      if (run.conversationId === conversationId && activeStatuses.includes(run.status)) {
+        return run;
+      }
+    }
+    return undefined;
   }
 }

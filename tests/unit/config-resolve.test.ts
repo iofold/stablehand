@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { resolveConfig } from '../../packages/ctxmill/src/config/resolve.js';
 import { presets } from '../../packages/ctxmill/src/config/presets.js';
 
@@ -6,14 +6,11 @@ describe('Config Resolution', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
-    // Isolate environment for each test
     process.env = { ...originalEnv };
-    delete process.env.DATABASE_URL;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_BASE_URL;
     delete process.env.OPENAI_BASE_URL;
-    // Provide a default API key so validation passes (tests that check env var
-    // resolution explicitly override or delete this as needed)
+    process.env.DATABASE_URL = 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill';
     process.env.OPENAI_API_KEY = 'sk-test-default';
   });
 
@@ -21,91 +18,81 @@ describe('Config Resolution', () => {
     process.env = originalEnv;
   });
 
-  // CFG-01: preset 'local' resolves all defaults
-  describe('CFG-01: local preset defaults', () => {
-    it('should resolve database.type to sqlite', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.database.type).toBe('sqlite');
+  describe('CFG-01: docker preset defaults', () => {
+    it('should resolve database.type to postgres', () => {
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.database.type).toBe('postgres');
     });
 
-    it('should resolve database.path to .ctxmill/data.db', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.database.path).toBe('.ctxmill/data.db');
+    it('should resolve execution.type to docker', () => {
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.execution.type).toBe('docker');
     });
 
-    it('should resolve execution.type to local', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.execution.type).toBe('local');
+    it('should resolve knowledge providers to pgvector', () => {
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.knowledge.providers).toEqual(['pgvector']);
     });
 
-    it('should resolve knowledge providers to memory', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.knowledge.providers).toEqual(['memory']);
-    });
-
-    it('should resolve learning strategy to simple', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.learning.strategy).toBe('simple');
+    it('should resolve learning strategy to ace', () => {
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.learning.strategy).toBe('ace');
       expect(config.learning.async).toBe(false);
     });
 
-    it('should resolve observability sink to file', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.observability.sink).toBe('file');
-      expect(config.observability.path).toBe('.ctxmill/audit.ndjson');
+    it('should resolve observability sink to postgres', () => {
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.observability.sink).toBe('postgres');
     });
 
-    it('should resolve orchestration with eventBus and reconciliation disabled', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.orchestration.eventBus).toBe(false);
+    it('should resolve orchestration with eventBus enabled', () => {
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.orchestration.eventBus).toBe(true);
       expect(config.orchestration.reconciliation).toBe(false);
     });
 
-    it('should resolve LLM defaults', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.llm.provider).toBe('anthropic');
-      expect(config.llm.model).toBe('claude-sonnet-4-6');
+    it('should resolve LLM provider without a default model', () => {
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.llm.provider).toBe('openai');
+      expect(config.llm.model).toBe('');
     });
 
-    it('should resolve tools executors to local', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.tools.executors).toEqual(['local']);
+    it('should resolve tools executors to local and mcp', () => {
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.tools.executors).toEqual(['local', 'mcp']);
     });
 
-    it('should resolve security preset to local', () => {
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.security.preset).toBe('local');
+    it('should resolve security preset to docker', () => {
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.security.preset).toBe('docker');
     });
   });
 
-  // CFG-02: Override specific subsystem within preset
   describe('CFG-02: subsystem overrides', () => {
-    it('should override database type while keeping other local defaults', () => {
+    it('should override database url while keeping other docker defaults', () => {
       const config = resolveConfig({
-        preset: 'local',
-        database: { type: 'postgres', url: 'postgres://localhost/test' },
+        preset: 'docker',
+        database: { url: 'postgres://localhost/test' },
       });
       expect(config.database.type).toBe('postgres');
       expect(config.database.url).toBe('postgres://localhost/test');
-      // Other sections remain at local defaults
-      expect(config.execution.type).toBe('local');
-      expect(config.learning.strategy).toBe('simple');
+      expect(config.execution.type).toBe('docker');
+      expect(config.learning.strategy).toBe('ace');
     });
 
-    it('should override learning strategy within local preset', () => {
+    it('should override learning strategy within docker preset', () => {
       const config = resolveConfig({
-        preset: 'local',
-        learning: { strategy: 'ace', async: true },
+        preset: 'docker',
+        learning: { strategy: 'simple', async: true },
       });
-      expect(config.learning.strategy).toBe('ace');
+      expect(config.learning.strategy).toBe('simple');
       expect(config.learning.async).toBe(true);
-      // Other defaults preserved
-      expect(config.database.type).toBe('sqlite');
+      expect(config.database.type).toBe('postgres');
     });
 
     it('should override LLM model within preset', () => {
       const config = resolveConfig({
-        preset: 'local',
+        preset: 'docker',
         llm: { provider: 'openai', model: 'gpt-4o', apiKey: 'sk-test' },
       });
       expect(config.llm.provider).toBe('openai');
@@ -115,15 +102,12 @@ describe('Config Resolution', () => {
 
     it('should override multiple subsystems simultaneously', () => {
       const config = resolveConfig({
-        preset: 'local',
-        execution: { type: 'docker', warmPool: 2 },
-        orchestration: { eventBus: true, reconciliation: false },
+        preset: 'docker',
+        orchestration: { eventBus: false, reconciliation: true },
       });
-      expect(config.execution.type).toBe('docker');
-      expect(config.execution.warmPool).toBe(2);
-      expect(config.orchestration.eventBus).toBe(true);
-      // Untouched sections keep defaults
-      expect(config.database.type).toBe('sqlite');
+      expect(config.orchestration.eventBus).toBe(false);
+      expect(config.orchestration.reconciliation).toBe(true);
+      expect(config.database.type).toBe('postgres');
     });
 
     it('should resolve env: references in database URL from environment', () => {
@@ -132,41 +116,41 @@ describe('Config Resolution', () => {
       expect(config.database.url).toBe('postgres://user:pass@db:5432/ctxmill');
     });
 
-    it('should resolve LLM apiKey from ANTHROPIC_API_KEY env var', () => {
-      process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key';
-      const config = resolveConfig({ preset: 'local' });
-      expect(config.llm.apiKey).toBe('sk-ant-test-key');
-    });
-
-    it('should resolve LLM apiKey from OPENAI_API_KEY env var as fallback', () => {
+    it('should resolve LLM apiKey from OPENAI_API_KEY env var', () => {
       process.env.OPENAI_API_KEY = 'sk-openai-test-key';
-      const config = resolveConfig({ preset: 'local' });
+      const config = resolveConfig({ preset: 'docker' });
       expect(config.llm.apiKey).toBe('sk-openai-test-key');
     });
 
+    it('should not resolve LLM apiKey from ANTHROPIC_API_KEY (harnesses resolve their own keys)', () => {
+      delete process.env.OPENAI_API_KEY;
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key';
+      const config = resolveConfig({ preset: 'docker' });
+      expect(config.llm.apiKey).toBe('');
+    });
+
     it('should not mutate the preset object', () => {
-      const before = JSON.parse(JSON.stringify(presets.local));
+      const before = JSON.parse(JSON.stringify(presets.docker));
       resolveConfig({
-        preset: 'local',
-        database: { type: 'postgres', url: 'postgres://localhost/test' },
+        preset: 'docker',
+        database: { url: 'postgres://localhost/test' },
       });
-      expect(presets.local.database.type).toBe(before.database.type);
+      expect(presets.docker.database.type).toBe(before.database.type);
+    });
+
+    it('should throw if DATABASE_URL is not set', () => {
+      delete process.env.DATABASE_URL;
+      expect(() => resolveConfig({
+        preset: 'docker',
+      })).toThrow(/database.url is required/);
     });
   });
 
-  // CFG-08: Migrations run idempotently (tested at config level - no crash on double resolve)
   describe('CFG-08: idempotent resolution', () => {
     it('should produce identical results when resolved twice with the same input', () => {
-      const input = { preset: 'local' as const };
+      const input = { preset: 'docker' as const };
       const first = resolveConfig(input);
       const second = resolveConfig(input);
-      expect(first).toEqual(second);
-    });
-
-    it('should produce identical results for docker preset resolved twice', () => {
-      process.env.DATABASE_URL = 'postgres://localhost/test';
-      const first = resolveConfig({ preset: 'docker' });
-      const second = resolveConfig({ preset: 'docker' });
       expect(first).toEqual(second);
     });
   });

@@ -1,0 +1,27 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: stress-chain-responder
+  displayName: Stress Chain Responder
+  description: >-
+    Chain responder — receives stress.tools.complete, emits stress.chain.done.
+  labels:
+    example: stress-test
+    harness: pi-agent
+spec:
+  harness: pi-agent
+  model:
+    provider: openai
+    id: gpt-5.4
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+  instructions: |
+    You received a chain event from another agent. Acknowledge receipt by using emit-event to emit type='stress.chain.done' with payload containing the received data plus {responder: 'stress-chain-responder'}.
+  tools:
+    - ref: emit-event
+  nativeTools:
+    allowlist:
+      - read
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 120
+    maxTokensPerRun: 8000

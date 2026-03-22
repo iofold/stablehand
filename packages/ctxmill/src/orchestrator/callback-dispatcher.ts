@@ -1,0 +1,151 @@
+import { randomUUID } from 'node:crypto';
+import type { DatabaseRepository, CallbackOutboxRow } from '../database/repository.js';
+
+/** Retry delay schedule in milliseconds: attempt 1 -> immediate, 2 -> 5s, 3 -> 30s, 4 -> 5min, 5 -> 30min. */
+const RETRY_DELAYS_MS = [0, 5_000, 30_000, 5 * 60_000, 30 * 60_000];
+
+/** Compute the delay for a given attempt number (1-based). */
+export function getRetryDelay(attempt: number): number {
+  if (attempt <= 0) return 0;
+  const idx = Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1);
+  return RETRY_DELAYS_MS[idx];
+}
+
+export interface EnqueueCallbackOpts {
+  agentId: string;
+  runId?: string;
+  callbackUrl: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Durable callback/webhook outbox dispatcher.
+ *
+ * Enqueues callbacks into a persistent outbox table and delivers them via
+ * HTTP POST with exponential-backoff retry. Failed deliveries are retried
+ * up to `maxAttempts` times before being marked as permanently failed.
+ */
+export class CallbackDispatcher {
+  private db: DatabaseRepository;
+  private pollIntervalMs: number;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private running = false;
+
+  /** Pluggable fetch for testing. Defaults to global fetch. */
+  fetchFn: (url: string, init: RequestInit) => Promise<Response>;
+
+  constructor(db: DatabaseRepository, pollIntervalMs = 5000) {
+    this.db = db;
+    this.pollIntervalMs = pollIntervalMs;
+    this.fetchFn = globalThis.fetch.bind(globalThis);
+  }
+
+  /**
+   * Enqueue a callback for delivery.
+   * Returns the outbox entry ID.
+   */
+  async enqueue(opts: EnqueueCallbackOpts): Promise<string> {
+    const id = randomUUID();
+    const now = Date.now();
+    await this.db.enqueueCallback({
+      id,
+      agentId: opts.agentId,
+      runId: opts.runId ?? null,
+      callbackUrl: opts.callbackUrl,
+      eventType: opts.eventType,
+      payload: opts.payload,
+      status: 'pending',
+      attempts: 0,
+      maxAttempts: 5,
+      nextAttemptAt: now,
+      lastAttemptAt: null,
+      lastError: null,
+      createdAt: now,
+      deliveredAt: null,
+    });
+    return id;
+  }
+
+  /**
+   * Start the background polling loop that processes pending callbacks.
+   */
+  start(): void {
+    if (this.timer) return;
+    this.running = true;
+    this.timer = setInterval(() => {
+      this.processPending().catch((err) =>
+        console.error('[CallbackDispatcher] poll error:', err),
+      );
+    }, this.pollIntervalMs);
+    console.log(`[CallbackDispatcher] started (poll every ${this.pollIntervalMs}ms)`);
+  }
+
+  /**
+   * Stop the background polling loop.
+   */
+  stop(): void {
+    this.running = false;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    console.log('[CallbackDispatcher] stopped');
+  }
+
+  /**
+   * Process all pending callbacks whose next_attempt_at is in the past.
+   * Returns the number of entries processed.
+   */
+  async processPending(): Promise<number> {
+    const now = Date.now();
+    const pending = await this.db.getPendingCallbacks(50, now);
+    let processed = 0;
+
+    for (const entry of pending) {
+      await this.deliver(entry);
+      processed++;
+    }
+
+    return processed;
+  }
+
+  /**
+   * Attempt to deliver a single callback entry.
+   * On success: marks as delivered.
+   * On failure: increments attempts and schedules next retry (or marks as failed).
+   */
+  private async deliver(entry: CallbackOutboxRow): Promise<boolean> {
+    try {
+      const response = await this.fetchFn(entry.callbackUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Agent-Id': entry.agentId,
+          'X-Event-Type': entry.eventType,
+          'X-Delivery-Id': entry.id,
+        },
+        body: JSON.stringify(entry.payload),
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (response.ok) {
+        await this.db.markCallbackDelivered(entry.id);
+        return true;
+      }
+
+      // Non-2xx response
+      const errorText = `HTTP ${response.status}: ${response.statusText}`;
+      const nextAttempt = entry.attempts + 1;
+      const delay = getRetryDelay(nextAttempt + 1);
+      await this.db.markCallbackFailed(entry.id, errorText, Date.now() + delay);
+      return false;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const nextAttempt = entry.attempts + 1;
+      const delay = getRetryDelay(nextAttempt + 1);
+      await this.db.markCallbackFailed(entry.id, errorMsg, Date.now() + delay);
+      return false;
+    }
+  }
+}

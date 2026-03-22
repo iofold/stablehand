@@ -19,7 +19,7 @@ function makeTool(overrides?: Partial<ToolDefinition>): ToolDefinition {
     name: 'echo',
     description: 'Echo back the input',
     input: z.object({ text: z.string() }),
-    handler: async (input: { text: string }) => input.text,
+    handler: async (input: unknown) => (input as { text: string }).text,
     ...overrides,
   };
 }

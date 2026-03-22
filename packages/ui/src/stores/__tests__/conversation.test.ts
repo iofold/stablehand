@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useConversationStore } from '../conversation';
+import { normalizeConversationMessage, useConversationStore } from '../conversation';
 
 function getStore() {
   return useConversationStore.getState();
@@ -148,11 +148,11 @@ describe('conversation store', () => {
       type: 'CUSTOM',
       subtype: 'a2ui',
       id: 'b1',
-      payload: { component: 'Chart', props: { data: [1, 2, 3] } },
+      payload: { component: 'ctxmill.charts:MetricCard', props: { title: 'Users', value: 12 } },
     });
 
     expect(getStore().a2uiBlocks).toHaveLength(1);
-    expect(getStore().a2uiBlocks[0].component).toBe('Chart');
+    expect(getStore().a2uiBlocks[0].component).toBe('MetricCard');
   });
 
   // ── handleSSEEvent: RUN_FINISHED ───────────────────────────────
@@ -171,6 +171,25 @@ describe('conversation store', () => {
     expect(state.currentRunId).toBeNull();
     expect(state.messages).toHaveLength(1);
     expect(state.messages[0].content).toBe('partial');
+  });
+
+  it('RUN_FINISHED preserves pending A2UI blocks', () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
+    handleSSEEvent({ type: 'TEXT_MESSAGE_START', role: 'assistant' });
+    handleSSEEvent({
+      type: 'CUSTOM',
+      subtype: 'a2ui',
+      id: 'b1',
+      payload: { component: 'ctxmill.hitl:ApprovalCard', props: { title: 'Approve', description: 'Review', action: 'deploy' } },
+    });
+    handleSSEEvent({ type: 'RUN_FINISHED' });
+
+    const state = getStore();
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].a2uiBlocks).toHaveLength(1);
+    expect(state.messages[0].a2uiBlocks?.[0].component).toBe('ApprovalCard');
   });
 
   it('RUN_FINISHED with no streaming content does not add empty message', () => {
@@ -196,6 +215,64 @@ describe('conversation store', () => {
     expect(state.messages).toHaveLength(1);
     expect(state.messages[0].role).toBe('system');
     expect(state.messages[0].content).toContain('Something broke');
+  });
+
+  it('normalizeConversationMessage uses stored A2UI payload and canonicalizes names', () => {
+    const message = normalizeConversationMessage({
+      id: 'm1',
+      role: 'assistant',
+      content: 'hello',
+      a2uiPayload: [
+        { component: 'ctxmill.charts:MetricCard', props: { title: 'Users', value: 42 } },
+      ],
+    }, 'fallback');
+
+    expect(message.a2uiBlocks).toHaveLength(1);
+    expect(message.a2uiBlocks?.[0].component).toBe('MetricCard');
+    expect(message.a2uiBlocks?.[0].id).toBe('m1-a2ui-0');
+  });
+
+  it('normalizeConversationMessage adapts persisted backend toolCalls shape', () => {
+    const message = normalizeConversationMessage({
+      id: 'm2',
+      role: 'assistant',
+      content: '',
+      createdAt: 1710000000000,
+      toolCalls: [
+        {
+          id: 'tc-1',
+          name: 'search',
+          arguments: { query: 'ctxmill' },
+        },
+        {
+          id: 'tc-2',
+          toolName: 'write_file',
+          argumentsJson: '{"path":"/tmp/out.txt"}',
+          error: 'permission denied',
+          status: 'failed',
+        },
+      ],
+    }, 'fallback');
+
+    expect(message.createdAt).toBe(new Date(1710000000000).toISOString());
+    expect(message.toolCalls).toEqual([
+      {
+        id: 'tc-1',
+        name: 'search',
+        args: '{"query":"ctxmill"}',
+        result: undefined,
+        error: undefined,
+        status: 'complete',
+      },
+      {
+        id: 'tc-2',
+        name: 'write_file',
+        args: '{"path":"/tmp/out.txt"}',
+        result: undefined,
+        error: 'permission denied',
+        status: 'error',
+      },
+    ]);
   });
 
   // ── handleSSEEvent: TOOL_CALL_RESULT with error ────────────────

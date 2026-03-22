@@ -1,64 +1,65 @@
-import { eq, sql, gt, lt, and, inArray, isNotNull } from 'drizzle-orm';
-import type { DrizzleDb, DbDialect } from './connection.js';
-import * as sqliteSchema from './schema-sqlite.js';
+import { eq, sql, gt, lt, and, desc, asc, inArray, isNotNull } from 'drizzle-orm';
+import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 
-// Use SQLite schema for type inference (both schemas have identical shapes)
-type schema = typeof sqliteSchema;
-type AgentInsert = typeof sqliteSchema.agents.$inferInsert;
-type AgentSelect = typeof sqliteSchema.agents.$inferSelect;
-type ConversationSelect = typeof sqliteSchema.conversations.$inferSelect;
-type MessageInsert = typeof sqliteSchema.messages.$inferInsert;
-type MessageSelect = typeof sqliteSchema.messages.$inferSelect;
-type KnowledgeInsert = typeof sqliteSchema.knowledgeItems.$inferInsert;
-type KnowledgeSelect = typeof sqliteSchema.knowledgeItems.$inferSelect;
-type TraceInsert = typeof sqliteSchema.executionTraces.$inferInsert;
-type TraceSelect = typeof sqliteSchema.executionTraces.$inferSelect;
-type FeedbackInsert = typeof sqliteSchema.feedbackSignals.$inferInsert;
-type FeedbackSelect = typeof sqliteSchema.feedbackSignals.$inferSelect;
-type RunInsert = typeof sqliteSchema.agentRuns.$inferInsert;
-type RunSelect = typeof sqliteSchema.agentRuns.$inferSelect;
-type SuspendedRunInsert = typeof sqliteSchema.suspendedRuns.$inferInsert;
-export type SuspendedRunRow = typeof sqliteSchema.suspendedRuns.$inferSelect;
-type ScheduledEventInsert = typeof sqliteSchema.scheduledEvents.$inferInsert;
-export type ScheduledEventRow = typeof sqliteSchema.scheduledEvents.$inferSelect;
-type TriggerInsert = typeof sqliteSchema.eventTriggers.$inferInsert;
-type TriggerSelect = typeof sqliteSchema.eventTriggers.$inferSelect;
-type VersionInsert = typeof sqliteSchema.agentVersions.$inferInsert;
-type VersionSelect = typeof sqliteSchema.agentVersions.$inferSelect;
+type AgentInsert = typeof pgSchema.agents.$inferInsert;
+type AgentSelect = typeof pgSchema.agents.$inferSelect;
+type ConversationSelect = typeof pgSchema.conversations.$inferSelect;
+type MessageInsert = typeof pgSchema.messages.$inferInsert;
+type MessageSelect = typeof pgSchema.messages.$inferSelect;
+type KnowledgeInsert = typeof pgSchema.knowledgeItems.$inferInsert;
+type KnowledgeSelect = typeof pgSchema.knowledgeItems.$inferSelect;
+type TraceInsert = typeof pgSchema.executionTraces.$inferInsert;
+type TraceSelect = typeof pgSchema.executionTraces.$inferSelect;
+type FeedbackInsert = typeof pgSchema.feedbackSignals.$inferInsert;
+type FeedbackSelect = typeof pgSchema.feedbackSignals.$inferSelect;
+type RunInsert = typeof pgSchema.agentRuns.$inferInsert;
+type RunSelect = typeof pgSchema.agentRuns.$inferSelect;
+type SuspendedRunInsert = typeof pgSchema.suspendedRuns.$inferInsert;
+export type SuspendedRunRow = typeof pgSchema.suspendedRuns.$inferSelect;
+type ScheduledEventInsert = typeof pgSchema.scheduledEvents.$inferInsert;
+export type ScheduledEventRow = typeof pgSchema.scheduledEvents.$inferSelect;
+type TriggerInsert = typeof pgSchema.eventTriggers.$inferInsert;
+type TriggerSelect = typeof pgSchema.eventTriggers.$inferSelect;
+type VersionInsert = typeof pgSchema.agentVersions.$inferInsert;
+type VersionSelect = typeof pgSchema.agentVersions.$inferSelect;
+type InterruptInsert = typeof pgSchema.pendingInterrupts.$inferInsert;
+export type InterruptRow = typeof pgSchema.pendingInterrupts.$inferSelect;
+type CallbackOutboxInsert = typeof pgSchema.callbackOutbox.$inferInsert;
+export type CallbackOutboxRow = typeof pgSchema.callbackOutbox.$inferSelect;
+type WebhookInsert = typeof pgSchema.webhooks.$inferInsert;
+export type WebhookRow = typeof pgSchema.webhooks.$inferSelect;
+export type SandboxSessionRow = typeof pgSchema.sandboxSessions.$inferSelect;
+
+export interface Checkpoint {
+  id: string;
+  runId: string;
+  agentId: string;
+  version: number;
+  checkpointData: Record<string, unknown>;
+  workspaceRef: string | null;
+  suspendReason: string | null;
+  createdAt: Date;
+}
+
+export interface CheckpointV2 {
+  id: string;
+  sessionId: string;
+  agentId: string;
+  checkpointVersion: number;
+  checkpointData: Record<string, unknown>;
+  harnessState: Record<string, unknown> | null;
+  workspaceRef: string | null;
+  suspendReason: string | null;
+  createdAt: number;
+}
 
 export class DatabaseRepository {
-  // Typed as `any` internally because DrizzleDb is a union of SQLite | PG
-  // and TypeScript cannot call methods whose signatures differ across union members.
-  // All public methods are fully typed via their return signatures.
   private db: any;
-  private dialect: DbDialect;
-  private schema: any;
+  private schema = pgSchema;
 
-  constructor(db: DrizzleDb, dialect: DbDialect = 'sqlite') {
+  constructor(db: DrizzleDb) {
     this.db = db;
-    this.dialect = dialect;
-    // Use the schema matching the dialect so Drizzle maps columns correctly
-    this.schema = dialect === 'postgres' ? pgSchema : sqliteSchema;
-  }
-
-  /**
-   * Run a transaction that works with both SQLite (sync) and PostgreSQL (async).
-   * SQLite's better-sqlite3 adapter rejects async callbacks, so we use a sync
-   * wrapper for SQLite and an async one for PG.
-   */
-  private async runTransaction<T>(fn: (tx: any) => T | Promise<T>): Promise<T> {
-    if (this.dialect === 'postgres') {
-      return this.db.transaction(async (tx: any) => fn(tx));
-    }
-    // SQLite: callback must be synchronous
-    return this.db.transaction((tx: any) => fn(tx));
-  }
-
-  private jsonArrayLength(col: any) {
-    return this.dialect === 'postgres'
-      ? sql`jsonb_array_length(${col})`
-      : sql`json_array_length(${col})`;
   }
 
   // ── Agents ──────────────────────────────────────────────
@@ -96,51 +97,32 @@ export class DatabaseRepository {
 
   /**
    * Delete an agent and all its related data in a single transaction.
-   * Order: messages → conversations → runs → traces → feedback → knowledge → events → agent
+   * Order: messages -> conversations -> runs -> traces -> feedback -> knowledge -> events -> agent
    */
   async deleteAgentCascade(agentId: string): Promise<void> {
-    if (this.dialect === 'postgres') {
-      await this.db.transaction(async (tx: any) => {
-        const conversations = await tx
-          .select({ id: this.schema.conversations.id })
-          .from(this.schema.conversations)
-          .where(eq(this.schema.conversations.agentId, agentId));
-        const conversationIds = conversations.map((c: any) => c.id);
-        if (conversationIds.length > 0) {
-          await tx.delete(this.schema.messages).where(inArray(this.schema.messages.conversationId, conversationIds));
-        }
-        // Delete agentRuns before conversations because agentRuns.conversationId references conversations.id
-        await tx.delete(this.schema.agentRuns).where(eq(this.schema.agentRuns.agentId, agentId));
-        await tx.delete(this.schema.conversations).where(eq(this.schema.conversations.agentId, agentId));
-        await tx.delete(this.schema.executionTraces).where(eq(this.schema.executionTraces.agentId, agentId));
-        await tx.delete(this.schema.feedbackSignals).where(eq(this.schema.feedbackSignals.agentId, agentId));
-        await tx.delete(this.schema.knowledgeItems).where(eq(this.schema.knowledgeItems.agentId, agentId));
-        await tx.delete(this.schema.eventStore).where(eq(this.schema.eventStore.agentId, agentId));
-        await tx.delete(this.schema.eventTriggers).where(eq(this.schema.eventTriggers.agentId, agentId));
-        await tx.delete(this.schema.agents).where(eq(this.schema.agents.id, agentId));
-      });
-    } else {
-      this.db.transaction((tx: any) => {
-        const conversations = tx
-          .select({ id: this.schema.conversations.id })
-          .from(this.schema.conversations)
-          .where(eq(this.schema.conversations.agentId, agentId))
-          .all();
-        const conversationIds = conversations.map((c: any) => c.id);
-        if (conversationIds.length > 0) {
-          tx.delete(this.schema.messages).where(inArray(this.schema.messages.conversationId, conversationIds)).run();
-        }
-        // Delete agentRuns before conversations because agentRuns.conversationId references conversations.id
-        tx.delete(this.schema.agentRuns).where(eq(this.schema.agentRuns.agentId, agentId)).run();
-        tx.delete(this.schema.conversations).where(eq(this.schema.conversations.agentId, agentId)).run();
-        tx.delete(this.schema.executionTraces).where(eq(this.schema.executionTraces.agentId, agentId)).run();
-        tx.delete(this.schema.feedbackSignals).where(eq(this.schema.feedbackSignals.agentId, agentId)).run();
-        tx.delete(this.schema.knowledgeItems).where(eq(this.schema.knowledgeItems.agentId, agentId)).run();
-        tx.delete(this.schema.eventStore).where(eq(this.schema.eventStore.agentId, agentId)).run();
-        tx.delete(this.schema.eventTriggers).where(eq(this.schema.eventTriggers.agentId, agentId)).run();
-        tx.delete(this.schema.agents).where(eq(this.schema.agents.id, agentId)).run();
-      });
-    }
+    await this.db.transaction(async (tx: any) => {
+      const conversations = await tx
+        .select({ id: this.schema.conversations.id })
+        .from(this.schema.conversations)
+        .where(eq(this.schema.conversations.agentId, agentId));
+      const conversationIds = conversations.map((c: any) => c.id);
+      if (conversationIds.length > 0) {
+        await tx.delete(this.schema.messages).where(inArray(this.schema.messages.conversationId, conversationIds));
+      }
+    await tx.delete(this.schema.agentCheckpoints).where(eq(this.schema.agentCheckpoints.agentId, agentId));
+    await tx.delete(this.schema.sandboxSessions).where(eq(this.schema.sandboxSessions.agentId, agentId));
+      // Delete callback_outbox before agentRuns because callback_outbox.run_id references agent_runs.id
+      await tx.delete(this.schema.callbackOutbox).where(eq(this.schema.callbackOutbox.agentId, agentId));
+      // Delete agentRuns before conversations because agentRuns.conversationId references conversations.id
+      await tx.delete(this.schema.agentRuns).where(eq(this.schema.agentRuns.agentId, agentId));
+      await tx.delete(this.schema.conversations).where(eq(this.schema.conversations.agentId, agentId));
+      await tx.delete(this.schema.executionTraces).where(eq(this.schema.executionTraces.agentId, agentId));
+      await tx.delete(this.schema.feedbackSignals).where(eq(this.schema.feedbackSignals.agentId, agentId));
+      await tx.delete(this.schema.knowledgeItems).where(eq(this.schema.knowledgeItems.agentId, agentId));
+      await tx.delete(this.schema.eventStore).where(eq(this.schema.eventStore.agentId, agentId));
+      await tx.delete(this.schema.eventTriggers).where(eq(this.schema.eventTriggers.agentId, agentId));
+      await tx.delete(this.schema.agents).where(eq(this.schema.agents.id, agentId));
+    });
   }
 
   async updateAgentStatus(id: string, status: string): Promise<AgentSelect | undefined> {
@@ -173,28 +155,14 @@ export class DatabaseRepository {
   }
 
   async addMessage(data: MessageInsert): Promise<MessageSelect> {
-    if (this.dialect === 'postgres') {
-      return this.db.transaction(async (tx: any) => {
-        const rows = await tx.insert(this.schema.messages).values(data).returning();
-        const message = rows[0];
-        if (!message) throw new Error('Expected insert to return a row but got undefined');
-        if (data.conversationId) {
-          await tx.update(this.schema.conversations)
-            .set({ updatedAt: Date.now() })
-            .where(eq(this.schema.conversations.id, data.conversationId));
-        }
-        return message;
-      });
-    }
-    return this.db.transaction((tx: any) => {
-      const rows = tx.insert(this.schema.messages).values(data).returning().all();
+    return this.db.transaction(async (tx: any) => {
+      const rows = await tx.insert(this.schema.messages).values(data).returning();
       const message = rows[0];
       if (!message) throw new Error('Expected insert to return a row but got undefined');
       if (data.conversationId) {
-        tx.update(this.schema.conversations)
+        await tx.update(this.schema.conversations)
           .set({ updatedAt: Date.now() })
-          .where(eq(this.schema.conversations.id, data.conversationId))
-          .run();
+          .where(eq(this.schema.conversations.id, data.conversationId));
       }
       return message;
     });
@@ -203,6 +171,7 @@ export class DatabaseRepository {
   async getMessages(conversationId: string): Promise<MessageSelect[]> {
     return this.db.query.messages.findMany({
       where: eq(this.schema.messages.conversationId, conversationId),
+      orderBy: (messages: any) => [asc(messages.createdAt), asc(messages.id)],
     });
   }
 
@@ -353,7 +322,7 @@ export class DatabaseRepository {
 
   async getActiveRuns(): Promise<RunSelect[]> {
     return this.db.query.agentRuns.findMany({
-      where: inArray(this.schema.agentRuns.status, ['queued', 'running']),
+      where: inArray(this.schema.agentRuns.status, ['queued', 'running', 'paused', 'suspended']),
     });
   }
 
@@ -374,6 +343,26 @@ export class DatabaseRepository {
     return this.db.query.agentRuns.findMany({
       where: (runs: any, { and }: any) =>
         and(eq(runs.agentId, agentId), eq(runs.status, status)),
+    });
+  }
+
+  /**
+   * Get all runs with a given status (across all agents).
+   */
+  async getRunsByStatusGlobal(status: string): Promise<RunSelect[]> {
+    return this.db.query.agentRuns.findMany({
+      where: eq(this.schema.agentRuns.status, status),
+    });
+  }
+
+  /**
+   * Get active (non-terminal) runs for a specific agent.
+   * Includes queued, running, and paused.
+   */
+  async getActiveRunsForAgent(agentId: string): Promise<RunSelect[]> {
+    return this.db.query.agentRuns.findMany({
+      where: (runs: any, { and: a, inArray: ia }: any) =>
+        a(eq(runs.agentId, agentId), ia(runs.status, ['queued', 'running', 'paused'])),
     });
   }
 
@@ -481,7 +470,7 @@ export class DatabaseRepository {
     // Avg steps via JSON array length + recent count in a single query
     const [statsRow] = await this.db
       .select({
-        avgSteps: sql<number>`coalesce(avg(${this.jsonArrayLength(this.schema.executionTraces.steps)}), 0)`.as('avg_steps'),
+        avgSteps: sql<number>`coalesce(avg(jsonb_array_length(${this.schema.executionTraces.steps})), 0)`.as('avg_steps'),
         recentCount: sql<number>`sum(case when ${this.schema.executionTraces.startedAt} >= ${oneDayAgo} then 1 else 0 end)`.as('recent_count'),
       })
       .from(this.schema.executionTraces)
@@ -523,8 +512,9 @@ export class DatabaseRepository {
     const byType: Record<string, number> = {};
     let total = 0;
     for (const row of typeRows) {
-      byType[row.type] = row.count;
-      total += row.count;
+      const count = Number(row.count);
+      byType[row.type] = count;
+      total += count;
     }
 
     // Recent count in SQL
@@ -535,7 +525,7 @@ export class DatabaseRepository {
       .from(this.schema.feedbackSignals)
       .where(sql`${this.schema.feedbackSignals.agentId} = ${agentId} AND ${this.schema.feedbackSignals.createdAt} >= ${oneDayAgo}`);
 
-    return { total, byType, recentCount: recentRow?.recentCount ?? 0 };
+    return { total, byType, recentCount: Number(recentRow?.recentCount ?? 0) };
   }
 
   // ── Conversation Analysis ──────────────────────────────
@@ -722,8 +712,9 @@ export class DatabaseRepository {
     const byType: Record<string, number> = {};
     let total = 0;
     for (const row of typeRows) {
-      byType[row.type] = row.count;
-      total += row.count;
+      const count = Number(row.count);
+      byType[row.type] = count;
+      total += count;
     }
 
     // Top agents
@@ -744,12 +735,12 @@ export class DatabaseRepository {
       .from(this.schema.eventStore)
       .where(gt(this.schema.eventStore.createdAt, fiveMinAgo));
 
-    const recentRate = Math.round(((rateRow?.count ?? 0) / 5) * 10) / 10; // events per minute
+    const recentRate = Math.round((Number(rateRow?.count ?? 0) / 5) * 10) / 10; // events per minute
 
     return {
       total,
       byType,
-      topAgents: agentRows,
+      topAgents: agentRows.map((r: { agentId: string | null; count: number }) => ({ agentId: r.agentId, count: Number(r.count) })),
       recentRate,
     };
   }
@@ -859,17 +850,10 @@ export class DatabaseRepository {
     const newVersion = (agent.version ?? 0) + 1;
 
     const versionData = { agentId, version: newVersion, manifest, changedBy: changedBy ?? null, changeNote: changeNote ?? null, createdAt: Date.now() };
-    if (this.dialect === 'postgres') {
-      await this.db.transaction(async (tx: any) => {
-        await tx.update(this.schema.agents).set({ manifest, version: newVersion, updatedAt: Date.now() }).where(eq(this.schema.agents.id, agentId));
-        await tx.insert(this.schema.agentVersions).values(versionData);
-      });
-    } else {
-      this.db.transaction((tx: any) => {
-        tx.update(this.schema.agents).set({ manifest, version: newVersion, updatedAt: Date.now() }).where(eq(this.schema.agents.id, agentId)).run();
-        tx.insert(this.schema.agentVersions).values(versionData).run();
-      });
-    }
+    await this.db.transaction(async (tx: any) => {
+      await tx.update(this.schema.agents).set({ manifest, version: newVersion, updatedAt: Date.now() }).where(eq(this.schema.agents.id, agentId));
+      await tx.insert(this.schema.agentVersions).values(versionData);
+    });
   }
 
   async getAgentManifest(agentId: string): Promise<Record<string, unknown> | null> {
@@ -891,5 +875,388 @@ export class DatabaseRepository {
         eq(this.schema.agentVersions.version, version),
       ),
     });
+  }
+
+  // ── Pending Interrupts (Durable HITL) ──────────────────
+
+  async savePendingInterrupt(data: InterruptInsert): Promise<InterruptRow> {
+    const [row] = await this.db
+      .insert(this.schema.pendingInterrupts)
+      .values(data)
+      .onConflictDoUpdate({
+        target: this.schema.pendingInterrupts.id,
+        set: {
+          toolCallId: data.toolCallId,
+          toolName: data.toolName,
+          args: data.args,
+          timeoutMs: data.timeoutMs,
+          expiresAt: data.expiresAt,
+          status: data.status ?? 'pending',
+        },
+      })
+      .returning();
+    if (!row) {
+      throw new Error('Expected insert to return a row but got undefined');
+    }
+    return row;
+  }
+
+  async getPendingInterrupt(id: string): Promise<InterruptRow | undefined> {
+    return this.db.query.pendingInterrupts.findFirst({
+      where: eq(this.schema.pendingInterrupts.id, id),
+    });
+  }
+
+  async getPendingInterruptsForAgent(agentId: string): Promise<InterruptRow[]> {
+    return this.db.query.pendingInterrupts.findMany({
+      where: and(
+        eq(this.schema.pendingInterrupts.agentId, agentId),
+        eq(this.schema.pendingInterrupts.status, 'pending'),
+      ),
+    });
+  }
+
+  async resolveInterrupt(
+    id: string,
+    action: string,
+    data?: unknown,
+  ): Promise<InterruptRow | undefined> {
+    const [updated] = await this.db
+      .update(this.schema.pendingInterrupts)
+      .set({
+        status: 'resolved',
+        resolvedAt: Date.now(),
+        resolvedAction: action,
+        resolvedData: data ?? null,
+      })
+      .where(eq(this.schema.pendingInterrupts.id, id))
+      .returning();
+    return updated;
+  }
+
+  async cleanupExpiredInterrupts(beforeTime: number): Promise<number> {
+    const deleted = await this.db
+      .delete(this.schema.pendingInterrupts)
+      .where(
+        and(
+          eq(this.schema.pendingInterrupts.status, 'pending'),
+          lt(this.schema.pendingInterrupts.expiresAt, beforeTime),
+        ),
+      )
+      .returning({ id: this.schema.pendingInterrupts.id });
+    return deleted.length;
+  }
+
+  // ── Callback Outbox ──────────────────────────────────────
+
+  async enqueueCallback(data: CallbackOutboxInsert): Promise<CallbackOutboxRow> {
+    const [row] = await this.db
+      .insert(this.schema.callbackOutbox)
+      .values(data)
+      .returning();
+    if (!row) {
+      throw new Error('Expected insert to return a row but got undefined');
+    }
+    return row;
+  }
+
+  async getPendingCallbacks(limit: number, beforeTime: number): Promise<CallbackOutboxRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.callbackOutbox)
+      .where(
+        and(
+          eq(this.schema.callbackOutbox.status, 'pending'),
+          lt(this.schema.callbackOutbox.nextAttemptAt, beforeTime),
+        ),
+      )
+      .orderBy(this.schema.callbackOutbox.nextAttemptAt)
+      .limit(limit);
+  }
+
+  async markCallbackDelivered(id: string): Promise<void> {
+    await this.db
+      .update(this.schema.callbackOutbox)
+      .set({
+        status: 'delivered',
+        deliveredAt: Date.now(),
+      })
+      .where(eq(this.schema.callbackOutbox.id, id));
+  }
+
+  async markCallbackFailed(id: string, error: string, nextAttemptAt?: number): Promise<void> {
+    // Get current row to check attempts
+    const [current] = await this.db
+      .select()
+      .from(this.schema.callbackOutbox)
+      .where(eq(this.schema.callbackOutbox.id, id));
+    if (!current) return;
+
+    const newAttempts = current.attempts + 1;
+    const isFinal = newAttempts >= current.maxAttempts;
+
+    await this.db
+      .update(this.schema.callbackOutbox)
+      .set({
+        attempts: newAttempts,
+        lastAttemptAt: Date.now(),
+        lastError: error,
+        status: isFinal ? 'failed' : 'pending',
+        nextAttemptAt: isFinal ? current.nextAttemptAt : (nextAttemptAt ?? Date.now()),
+      })
+      .where(eq(this.schema.callbackOutbox.id, id));
+  }
+
+  async getCallbacksForAgent(agentId: string): Promise<CallbackOutboxRow[]> {
+    return this.db.query.callbackOutbox.findMany({
+      where: eq(this.schema.callbackOutbox.agentId, agentId),
+    });
+  }
+
+  async createWebhook(data: WebhookInsert): Promise<WebhookRow> {
+    const [row] = await this.db.insert(this.schema.webhooks).values(data).returning();
+    if (!row) {
+      throw new Error('Expected insert to return a row but got undefined');
+    }
+    return row;
+  }
+
+  async listWebhooks(agentId: string): Promise<WebhookRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.webhooks)
+      .where(and(eq(this.schema.webhooks.agentId, agentId), eq(this.schema.webhooks.active, true)));
+  }
+
+  async deleteWebhook(id: string): Promise<boolean> {
+    const deleted = await this.db
+      .delete(this.schema.webhooks)
+      .where(eq(this.schema.webhooks.id, id))
+      .returning({ id: this.schema.webhooks.id });
+    return deleted.length > 0;
+  }
+
+  async getWebhooksForAgent(agentId: string): Promise<WebhookRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.webhooks)
+      .where(and(eq(this.schema.webhooks.agentId, agentId), eq(this.schema.webhooks.active, true)));
+  }
+
+  // ── Sandbox Sessions ───────────────────────────────────────
+
+  async createSandboxSession(session: {
+    id?: string;
+    conversationId: string;
+    agentId: string;
+    containerName?: string;
+    containerId?: string;
+    status?: string;
+    harnessName: string;
+    checkpointRef?: string;
+  }): Promise<SandboxSessionRow> {
+    const [row] = await this.db
+      .insert(this.schema.sandboxSessions)
+      .values({
+        ...(session.id !== undefined ? { id: session.id } : {}),
+        conversationId: session.conversationId,
+        agentId: session.agentId,
+        containerName: session.containerName ?? null,
+        containerId: session.containerId ?? null,
+        status: session.status ?? 'ACTIVE',
+        harnessName: session.harnessName,
+        checkpointRef: session.checkpointRef ?? null,
+      })
+      .returning();
+    if (!row) throw new Error('Expected insert to return a row but got undefined');
+    return row;
+  }
+
+  async getSandboxSession(id: string): Promise<SandboxSessionRow | null> {
+    const rows = await this.db
+      .select()
+      .from(this.schema.sandboxSessions)
+      .where(eq(this.schema.sandboxSessions.id, id))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async getSandboxSessionByConversation(conversationId: string): Promise<SandboxSessionRow | null> {
+    const rows = await this.db
+      .select()
+      .from(this.schema.sandboxSessions)
+      .where(eq(this.schema.sandboxSessions.conversationId, conversationId))
+      .orderBy(desc(this.schema.sandboxSessions.createdAt))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async updateSandboxSessionStatus(
+    id: string,
+    status: string,
+    extra?: { containerName?: string; containerId?: string; checkpointRef?: string },
+  ): Promise<void> {
+    await this.db
+      .update(this.schema.sandboxSessions)
+      .set({
+        status,
+        updatedAt: Date.now(),
+        lastActivityAt: Date.now(),
+        ...(extra?.containerName !== undefined ? { containerName: extra.containerName } : {}),
+        ...(extra?.containerId !== undefined ? { containerId: extra.containerId } : {}),
+        ...(extra?.checkpointRef !== undefined ? { checkpointRef: extra.checkpointRef } : {}),
+      })
+      .where(eq(this.schema.sandboxSessions.id, id));
+  }
+
+  async deleteSandboxSession(id: string): Promise<void> {
+    await this.db
+      .delete(this.schema.sandboxSessions)
+      .where(eq(this.schema.sandboxSessions.id, id));
+  }
+
+  async getActiveSandboxSessions(): Promise<SandboxSessionRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.sandboxSessions)
+      .where(inArray(this.schema.sandboxSessions.status, ['ACTIVE', 'FROZEN']));
+  }
+
+  async getSandboxSessionsByAgent(agentId: string): Promise<SandboxSessionRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.sandboxSessions)
+      .where(eq(this.schema.sandboxSessions.agentId, agentId));
+  }
+
+  async createCheckpoint(checkpoint: {
+    runId: string;
+    agentId: string;
+    version?: number;
+    checkpointData: Record<string, unknown>;
+    workspaceRef?: string;
+    suspendReason?: string;
+  }): Promise<{ id: string }> {
+    const existingSession = await this.getSandboxSession(checkpoint.runId);
+    if (!existingSession) {
+      const run = await this.db.query.agentRuns.findFirst({
+        where: eq(this.schema.agentRuns.id, checkpoint.runId),
+      });
+      if (!run?.conversationId) {
+        throw new Error(`Cannot create checkpoint without sandbox session or run conversation for ${checkpoint.runId}`);
+      }
+
+      const harnessName = typeof checkpoint.checkpointData.harnessName === 'string'
+        ? checkpoint.checkpointData.harnessName
+        : 'unknown';
+
+      await this.createSandboxSession({
+        id: checkpoint.runId,
+        conversationId: run.conversationId,
+        agentId: checkpoint.agentId,
+        harnessName,
+        status: 'FROZEN',
+      });
+    }
+
+    return this.createCheckpointV2({
+      sessionId: checkpoint.runId,
+      agentId: checkpoint.agentId,
+      checkpointVersion: checkpoint.version,
+      checkpointData: checkpoint.checkpointData,
+      workspaceRef: checkpoint.workspaceRef,
+      suspendReason: checkpoint.suspendReason,
+    });
+  }
+
+  async getCheckpoint(runId: string): Promise<Checkpoint | null> {
+    const row = await this.getCheckpointV2(runId);
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      runId: row.sessionId,
+      agentId: row.agentId,
+      version: row.checkpointVersion,
+      checkpointData: row.checkpointData,
+      workspaceRef: row.workspaceRef,
+      suspendReason: row.suspendReason,
+      createdAt: new Date(row.createdAt),
+    };
+  }
+
+  async deleteCheckpoints(runId: string): Promise<number> {
+    return this.deleteCheckpointsForSession(runId);
+  }
+
+  // ── Checkpoints v2 (Session-based) ────────────────────────
+
+  async createCheckpointV2(checkpoint: {
+    sessionId: string;
+    agentId: string;
+    checkpointVersion?: number;
+    checkpointData: Record<string, unknown>;
+    harnessState?: Record<string, unknown>;
+    workspaceRef?: string;
+    suspendReason?: string;
+  }): Promise<{ id: string }> {
+    const [row] = await this.db
+      .insert(this.schema.agentCheckpoints)
+      .values({
+        sessionId: checkpoint.sessionId,
+        agentId: checkpoint.agentId,
+        checkpointVersion: checkpoint.checkpointVersion ?? 2,
+        checkpointData: checkpoint.checkpointData,
+        harnessState: checkpoint.harnessState ?? null,
+        workspaceRef: checkpoint.workspaceRef ?? null,
+        suspendReason: checkpoint.suspendReason ?? null,
+      })
+      .returning({ id: this.schema.agentCheckpoints.id });
+    if (!row) throw new Error('Expected insert to return a row but got undefined');
+    return row;
+  }
+
+  async getCheckpointV2(sessionId: string): Promise<CheckpointV2 | null> {
+    const rows = await this.db
+      .select()
+      .from(this.schema.agentCheckpoints)
+      .where(eq(this.schema.agentCheckpoints.sessionId, sessionId))
+      .orderBy(desc(this.schema.agentCheckpoints.createdAt))
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      sessionId: row.sessionId,
+      agentId: row.agentId,
+      checkpointVersion: row.checkpointVersion,
+      checkpointData: row.checkpointData,
+      harnessState: row.harnessState,
+      workspaceRef: row.workspaceRef,
+      suspendReason: row.suspendReason,
+      createdAt: row.createdAt,
+    };
+  }
+
+  async deleteCheckpointsForSession(sessionId: string): Promise<number> {
+    const deleted = await this.db
+      .delete(this.schema.agentCheckpoints)
+      .where(eq(this.schema.agentCheckpoints.sessionId, sessionId))
+      .returning({ id: this.schema.agentCheckpoints.id });
+    return deleted.length;
+  }
+
+  async getCheckpointSize(sessionId: string): Promise<number> {
+    const [row] = await this.db
+      .select({
+        totalSize: sql<number>`coalesce(sum(pg_column_size(${this.schema.agentCheckpoints.checkpointData})), 0)`.as('total_size'),
+      })
+      .from(this.schema.agentCheckpoints)
+      .where(eq(this.schema.agentCheckpoints.sessionId, sessionId));
+    return Number(row?.totalSize ?? 0);
   }
 }

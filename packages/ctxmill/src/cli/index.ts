@@ -16,8 +16,8 @@ switch (command) {
 CTXMill - Build vertical AI products
 
 Commands:
-  ctxmill dev          Start development server (API + UI)
-  ctxmill chat         Chat with agent in terminal
+  ctxmill dev          Start the orchestrator process (container entrypoint)
+  ctxmill chat         Chat with agent in terminal via the running Docker stack
 
 Options:
   --help               Show help

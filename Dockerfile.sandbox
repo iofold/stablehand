@@ -1,0 +1,160 @@
+# =============================================================================
+# Dockerfile.sandbox — Multi-stage build for CTXMill sandbox containers.
+#
+# Each harness type gets its own final image sharing a common base layer.
+#
+# Build a specific harness image:
+#   docker build --target harness-langgraph      -t ctxmill/harness-langgraph      -f Dockerfile.sandbox .
+#   docker build --target harness-claude-agents -t ctxmill/harness-claude-agents -f Dockerfile.sandbox .
+#   docker build --target harness-pi-agent       -t ctxmill/harness-pi-agent       -f Dockerfile.sandbox .
+# =============================================================================
+
+# ── Stage 1: Build (compile TypeScript) ──────────────────────────────────────
+FROM node:22-slim AS build
+
+RUN corepack enable && corepack prepare pnpm@10.12.4 --activate
+
+WORKDIR /app
+
+# Copy workspace config and lockfile first for layer caching
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
+
+# Copy package.json and tsconfig files to resolve workspace dependencies
+COPY packages/shared/package.json packages/shared/tsconfig.json packages/shared/
+COPY packages/ctxmill/package.json packages/ctxmill/tsconfig.json packages/ctxmill/
+COPY packages/proto/package.json packages/proto/tsconfig.build.json packages/proto/
+
+# Copy example and other package.json files so pnpm workspace resolution works
+COPY packages/examples/ packages/examples/
+COPY packages/create-ctxmill/package.json packages/create-ctxmill/
+COPY packages/ui/package.json packages/ui/
+
+# Install all dependencies (including devDependencies for building)
+RUN pnpm install --frozen-lockfile
+
+# Copy source code for packages needed by the sandbox daemon
+COPY packages/shared/src/ packages/shared/src/
+COPY packages/ctxmill/src/ packages/ctxmill/src/
+COPY packages/proto/ packages/proto/
+
+# Build shared first (composite project, used by ctxmill)
+RUN cd packages/shared && npx tsc --build
+
+# Build proto (compile .ts to .js for Node 22 strip-only mode)
+RUN cd packages/proto && npx tsc -p tsconfig.build.json
+
+# Build ctxmill (includes sandbox daemon)
+RUN pnpm --filter ctxmill build
+
+
+# ── Stage 2: harness-base (shared runtime for all harness images) ────────────
+FROM node:22-slim AS harness-base
+
+# Install system dependencies:
+#   - Python 3 + pip: needed for LangGraph Python interop
+#   - git, curl, ca-certificates: general utilities for agent operation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 \
+      python3-pip \
+      python3-venv \
+      git \
+      curl \
+      ca-certificates \
+      tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN userdel -r node 2>/dev/null || true && \
+    groupadd -f -g 1000 ctxmill && \
+    useradd -u 1000 -g 1000 -m -s /bin/bash ctxmill
+
+# Enable pnpm
+RUN corepack enable && corepack prepare pnpm@10.12.4 --activate
+
+WORKDIR /app
+
+# Copy workspace config for pnpm to resolve workspace packages
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+
+# Copy package.json files needed for workspace resolution
+COPY packages/shared/package.json packages/shared/
+COPY packages/ctxmill/package.json packages/ctxmill/
+COPY packages/proto/package.json packages/proto/
+
+# Copy stub package.json files so pnpm workspace resolution doesn't fail
+COPY packages/examples/ packages/examples/
+COPY packages/create-ctxmill/package.json packages/create-ctxmill/
+COPY packages/ui/package.json packages/ui/
+
+# Install production dependencies only (shamefully-hoist for SDK lazy imports)
+RUN pnpm install --frozen-lockfile --prod --shamefully-hoist \
+    && npm install -g @anthropic-ai/claude-code
+
+# Copy compiled output from the build stage
+COPY --from=build /app/packages/shared/dist/ packages/shared/dist/
+COPY --from=build /app/packages/ctxmill/dist/ packages/ctxmill/dist/
+COPY --from=build /app/packages/proto/ packages/proto/
+
+# Ensure ctxmill user owns the app directory
+RUN chown -R ctxmill:ctxmill /app
+
+# /workspace may be bind-mounted at runtime; pre-create for harnesses that need cwd before mount
+RUN mkdir -p /workspace && chown ctxmill:ctxmill /workspace
+# /run/secrets tmpfs is configured at container creation time
+
+EXPOSE 50051
+
+USER ctxmill
+
+
+# ── Stage 3: harness-langgraph ───────────────────────────────────────────────
+# SDK deps: deepagents, @langchain/core, @langchain/openai, @langchain/anthropic, langchain
+# Python deps: langchain, langchain-openai, langchain-anthropic, langgraph
+FROM harness-base AS harness-langgraph
+
+# Switch to root to install Python packages
+USER root
+
+# Install Python LangGraph + LangChain packages in a virtualenv
+RUN python3 -m venv /opt/langgraph-venv && \
+    /opt/langgraph-venv/bin/pip install --no-cache-dir \
+      langchain \
+      langchain-openai \
+      langchain-anthropic \
+      langgraph
+
+ENV PATH="/opt/langgraph-venv/bin:$PATH"
+
+# Install Node.js LangGraph harness dependencies
+# These are already in ctxmill's package.json dependencies, but we ensure
+# they're present via pnpm's shamefully-hoist in the base layer:
+#   deepagents, @langchain/core, @langchain/openai, @langchain/anthropic, langchain
+
+RUN chown -R ctxmill:ctxmill /app
+
+USER ctxmill
+WORKDIR /app
+
+ENTRYPOINT ["node", "packages/ctxmill/dist/sandbox/daemon.js"]
+
+
+# ── Stage 4: harness-claude-agents ───────────────────────────────────────────
+# SDK deps: @anthropic-ai/claude-agent-sdk
+FROM harness-base AS harness-claude-agents
+
+USER root
+RUN printf '#!/bin/sh\nexec /usr/local/bin/node "$@"\n' > /usr/local/bin/claude-wrapper && chmod +x /usr/local/bin/claude-wrapper
+ENV HOME=/home/ctxmill
+ENV CLAUDE_CODE_PATH=/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js
+USER ctxmill
+WORKDIR /app
+
+ENTRYPOINT ["tini", "--", "node", "packages/ctxmill/dist/sandbox/daemon.js"]
+
+
+# ── Stage 5: harness-pi-agent ───────────────────────────────────────────────
+# SDK deps: @mariozechner/pi-coding-agent, @mariozechner/pi-ai
+FROM harness-base AS harness-pi-agent
+
+WORKDIR /app
+
+ENTRYPOINT ["node", "packages/ctxmill/dist/sandbox/daemon.js"]

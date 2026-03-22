@@ -1,6 +1,6 @@
 // Public API - factory functions
 export { defineConfig } from './config/index.js';
-export { defineAgent, AgentExecutor } from './agent/index.js';
+export { defineAgent } from './agent/index.js';
 export { defineTool, LocalFunctionExecutor } from './tool/index.js';
 
 // Event bus
@@ -12,6 +12,7 @@ export { discoverAgents, discoverTools, discoverManifests } from './agent/discov
 // Core types
 export type {
   AgentDefinition,
+  AgentResourceLimits,
   AgentStatus,
   Agent,
   Message,
@@ -39,7 +40,7 @@ export type {
 } from './events/types.js';
 export type { PersistEventFn } from './events/bus.js';
 export { waitForEvent, EventTimeoutError } from './events/wait-for-event.js';
-export { SQLiteEventQueue } from './events/event-queue.js';
+export { EventQueueImpl, EventQueueImpl as SQLiteEventQueue } from './events/event-queue.js';
 export type { EventQueue } from './events/event-queue.js';
 
 // Event trigger system
@@ -88,14 +89,15 @@ export { DefaultLearningPipeline } from './learning/pipeline.js';
 
 // Harness types and implementations
 export type {
-  AgentHarness, AgentEvent, AgentModelConfig, HarnessRunConfig,
+  AgentHarness, AgentEvent,
   HarnessRegistry, ApprovalRequest, ApprovalResponse, TokenUsage,
-  ResolvedSecrets,
+  ResolvedSecrets, HarnessSession, HarnessSessionConfig, HarnessTurnInput,
+  HarnessTurnContext, HarnessExportedState, HarnessRestorePoint,
 } from './harness/index.js';
-export { DefaultHarnessRegistry, LangGraphHarness, OpenAIAgentsHarness, ClaudeAgentsHarness, PIAgentHarness } from './harness/index.js';
+export { DefaultHarnessRegistry, LangGraphHarness, ClaudeAgentsHarness, PIAgentHarness } from './harness/index.js';
 export type { ToolProvider, ToolRegistry } from './tool/provider.js';
-export { LocalToolProvider, MCPToolProvider, ComposioToolProvider } from './tool/providers/index.js';
-export type { MCPTransportConfig, ComposioConfig } from './tool/providers/index.js';
+export { LocalToolProvider, MCPToolProvider, ComposioToolProvider, HTTPToolProvider } from './tool/providers/index.js';
+export type { MCPTransportConfig, ComposioConfig, HttpEndpointConfig, HttpAuthConfig } from './tool/providers/index.js';
 export { DefaultToolRegistry } from './tool/registry.js';
 export type { SecretProvider } from './secrets/index.js';
 

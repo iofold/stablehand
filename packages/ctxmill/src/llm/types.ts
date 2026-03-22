@@ -4,7 +4,7 @@ export interface LLMProviderConfig {
   apiKey: string;
   baseUrl?: string;
   model: string;
-  provider: 'anthropic' | 'openai';
+  provider: 'anthropic' | 'openai' | 'google';
   /** Timeout in milliseconds for each LLM call (default: 60000). */
   timeoutMs?: number;
   /** Maximum number of retry attempts for transient failures (default: 3). */
@@ -22,8 +22,8 @@ export interface LLMStreamChunk {
 }
 
 /**
- * Abstraction over LLM providers. Both the AgentExecutor and the
- * SimpleReflector consume this instead of directly importing LangChain.
+ * Abstraction over LLM providers. The SimpleReflector and sandbox harnesses
+ * consume this instead of directly importing LangChain.
  */
 export interface LLMProvider extends ServiceModule {
   invoke(prompt: string, systemPrompt?: string): Promise<LLMResponse>;

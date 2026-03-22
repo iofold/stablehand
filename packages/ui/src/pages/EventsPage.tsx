@@ -340,9 +340,9 @@ export function EventsPage() {
           </div>
         ) : events.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Activity className="h-8 w-8 text-surface-600 mb-3" />
+            <Activity className="h-8 w-8 text-surface-400 mb-3" />
             <p className="text-sm text-surface-400">No events found</p>
-            <p className="text-xs text-surface-500 mt-1">
+            <p className="text-xs text-surface-400 mt-1">
               Events will appear here as agents process tasks.
             </p>
           </div>
@@ -519,7 +519,7 @@ function EventRow({
         }}
         className="hover:bg-surface-800/50 cursor-pointer transition-colors focus-visible:outline-none focus-visible:bg-surface-800/50"
       >
-        <td className="px-3 py-3 text-surface-500">
+        <td className="px-3 py-3 text-surface-400">
           {isExpanded ? (
             <ChevronDown className="h-3.5 w-3.5" />
           ) : (
@@ -552,7 +552,7 @@ function EventRow({
             {extractSummary(event.payload)}
           </div>
         </td>
-        <td className="px-4 py-3 text-xs text-surface-500 tabular-nums text-right">
+        <td className="px-4 py-3 text-xs text-surface-400 tabular-nums text-right">
           #{event.seq}
         </td>
       </tr>
@@ -562,11 +562,11 @@ function EventRow({
             <div className="space-y-2">
               <div className="flex items-center gap-4 text-xs text-surface-400">
                 <span>
-                  <span className="text-surface-500">Agent ID:</span>{' '}
+                  <span className="text-surface-400">Agent ID:</span>{' '}
                   <span className="font-mono">{event.agentId}</span>
                 </span>
                 <span>
-                  <span className="text-surface-500">Timestamp:</span>{' '}
+                  <span className="text-surface-400">Timestamp:</span>{' '}
                   <span className="tabular-nums">
                     {new Date(event.createdAt).toISOString()}
                   </span>

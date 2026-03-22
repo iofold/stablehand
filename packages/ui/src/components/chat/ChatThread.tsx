@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { ToolCallCard } from './ToolCallCard';
+import { ErrorMessage } from './ErrorMessage';
 import { A2UIBlock } from '@/components/a2ui/A2UIBlock';
 import { cn } from '@/lib/utils';
 import type { Message, ToolCallState, A2UIBlock as A2UIBlockType } from '@/stores/conversation';
@@ -23,6 +24,7 @@ export interface ChatThreadProps {
   agentTools?: string[];
   agentId?: string;
   conversationId?: string;
+  pastRunError?: string | null;
 }
 
 const SUGGESTED_PROMPTS = [
@@ -42,6 +44,7 @@ export function ChatThread({
   agentTools = [],
   agentId,
   conversationId,
+  pastRunError,
 }: ChatThreadProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -50,15 +53,20 @@ export function ChatThread({
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
     setAutoScroll(atBottom);
   }, []);
 
   useEffect(() => {
+    void messages;
+    void streamingContent;
+    void toolCalls.size;
+    void a2uiBlocks.length;
+    void pastRunError;
     if (autoScroll) {
-      endRef.current?.scrollIntoView({ behavior: 'smooth' });
+      endRef.current?.scrollIntoView({ behavior: isStreaming ? 'instant' : 'smooth' });
     }
-  }, [messages, streamingContent, autoScroll, toolCalls.size, a2uiBlocks.length]);
+  }, [messages, streamingContent, autoScroll, isStreaming, toolCalls.size, a2uiBlocks.length, pastRunError]);
 
   const scrollToBottom = useCallback(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -94,12 +102,12 @@ export function ChatThread({
                   key={tool}
                   className="inline-flex items-center gap-1 rounded-md bg-surface-800/80 border border-surface-700/40 px-2 py-0.5 text-[11px] font-mono text-surface-400"
                 >
-                  <Zap className="h-2.5 w-2.5 text-surface-500" />
+                  <Zap className="h-2.5 w-2.5 text-surface-400" />
                   {tool}
                 </span>
               ))}
               {agentTools.length > 8 && (
-                <span className="inline-flex items-center rounded-md bg-surface-800/80 border border-surface-700/40 px-2 py-0.5 text-[11px] text-surface-500">
+                <span className="inline-flex items-center rounded-md bg-surface-800/80 border border-surface-700/40 px-2 py-0.5 text-[11px] text-surface-400">
                   +{agentTools.length - 8} more
                 </span>
               )}
@@ -122,7 +130,7 @@ export function ChatThread({
                 <div className="text-sm font-medium text-surface-200 group-hover:text-surface-100 transition-colors">
                   {label}
                 </div>
-                <div className="text-xs text-surface-500 truncate">{prompt}</div>
+                <div className="text-xs text-surface-400 truncate">{prompt}</div>
               </div>
             </button>
           ))}
@@ -135,7 +143,7 @@ export function ChatThread({
   const activeToolCalls = Array.from(toolCalls.values()) as ToolCallState[];
 
   return (
-    <div className="relative flex-1 overflow-hidden">
+    <div className="relative flex-1 min-h-0 overflow-hidden">
       <div
         ref={containerRef}
         onScroll={handleScroll}
@@ -188,6 +196,15 @@ export function ChatThread({
                 <span className="h-1.5 w-1.5 rounded-full bg-surface-400 animate-[pulse_1.4s_ease-in-out_0.2s_infinite]" />
                 <span className="h-1.5 w-1.5 rounded-full bg-surface-400 animate-[pulse_1.4s_ease-in-out_0.4s_infinite]" />
               </div>
+            </div>
+          )}
+
+          {!isStreaming && pastRunError && (
+            <div className="py-2 animate-fade-in">
+              <ErrorMessage
+                summary="Run failed"
+                details={pastRunError}
+              />
             </div>
           )}
 

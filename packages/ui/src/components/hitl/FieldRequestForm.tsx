@@ -92,7 +92,7 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
                     </option>
                   ))}
                 </select>
-                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-500 pointer-events-none" />
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-400 pointer-events-none" />
               </div>
             ) : (
               <input

@@ -1,5 +1,4 @@
-import type { AgentDefinition } from '../types.js';
-import type { AgentModelConfig } from '../harness/types.js';
+import type { AgentDefinition, AgentResourceLimits } from '../types.js';
 import type { AgentManifest, ManifestToolRef } from './types.js';
 
 function toolRefToName(toolRef: ManifestToolRef): string {
@@ -8,29 +7,78 @@ function toolRefToName(toolRef: ManifestToolRef): string {
   return toolRef.inline.name;
 }
 
-export function manifestToDefinition(manifest: AgentManifest): AgentDefinition {
-  const { metadata, spec } = manifest;
+function resolveHarnessConfig(spec: AgentManifest['spec']): Record<string, unknown> {
+  if (spec.harnessConfig) {
+    return { ...spec.harnessConfig };
+  }
 
-  const modelConfig: AgentModelConfig = {
+  if (!spec.model) {
+    throw new Error('Manifest spec requires model or harnessConfig');
+  }
+
+  return {
     provider: spec.model.provider,
     model: spec.model.id,
-    baseUrl: spec.model.baseUrl,
-    apiKeyRef: spec.model.apiKeyRef,
-    temperature: spec.model.temperature,
-    maxTokens: spec.model.maxTokens,
-    topP: spec.model.topP,
-    reasoning: spec.model.reasoning,
+    ...(spec.model.baseUrl ? { baseUrl: spec.model.baseUrl } : {}),
+    ...(spec.model.apiKeyRef ? { apiKeyRef: spec.model.apiKeyRef } : {}),
+    ...(spec.model.temperature !== undefined ? { temperature: spec.model.temperature } : {}),
+    ...(spec.model.maxTokens !== undefined ? { maxTokens: spec.model.maxTokens } : {}),
+    ...(spec.model.topP !== undefined ? { topP: spec.model.topP } : {}),
+    ...(spec.model.reasoning ? { reasoning: spec.model.reasoning } : {}),
   };
+}
+
+export function manifestToDefinition(
+  manifest: AgentManifest,
+  context?: { projectDir?: string },
+): AgentDefinition {
+  const { metadata, spec } = manifest;
+  const harnessConfig = resolveHarnessConfig(spec);
+
+  // Extract sandbox resource limits from manifest resources if present
+  let resourceLimits: AgentResourceLimits | undefined;
+  if (spec.resources?.sandbox) {
+    const s = spec.resources.sandbox;
+    resourceLimits = {
+      ...(s.cpus !== undefined ? { cpus: s.cpus } : {}),
+      ...(s.memoryMb !== undefined ? { memoryMb: s.memoryMb } : {}),
+      ...(s.pidsLimit !== undefined ? { pidsLimit: s.pidsLimit } : {}),
+      ...(s.timeoutSec !== undefined ? { timeoutSec: s.timeoutSec } : {}),
+    };
+    // Only set if at least one field is present
+    if (Object.keys(resourceLimits).length === 0) {
+      resourceLimits = undefined;
+    }
+  }
 
   return {
     name: metadata.name,
-    model: spec.model.id,
     harness: spec.harness,
-    modelConfig,
+    harnessConfig,
     tools: spec.tools?.map(toolRefToName) ?? [],
     systemPrompt: spec.instructions,
     description: metadata.description,
     mode: spec.mode,
+    ...(context?.projectDir ? { projectDir: context.projectDir } : {}),
+    ...(spec.nativeTools
+      ? {
+          nativeTools: {
+            ...(spec.nativeTools.allowlist ? { allowlist: spec.nativeTools.allowlist } : {}),
+            ...(spec.nativeTools.blocklist ? { blocklist: spec.nativeTools.blocklist } : {}),
+          },
+        }
+      : {}),
+    ...(spec.workspace?.content
+      ? {
+          workspaceContent: {
+            ...(spec.workspace.content.files ? { files: spec.workspace.content.files } : {}),
+            ...(spec.workspace.content.skills !== undefined
+              ? { skills: spec.workspace.content.skills }
+              : {}),
+          },
+        }
+      : {}),
+    ...(resourceLimits ? { resourceLimits } : {}),
   };
 }
 
@@ -38,8 +86,46 @@ export function definitionToManifest(
   def: AgentDefinition,
   existingLabels?: Record<string, string>,
 ): AgentManifest {
-  const provider = def.modelConfig?.provider ?? 'openai';
-  const modelId = def.modelConfig?.model ?? def.model;
+  const provider = typeof def.harnessConfig.provider === 'string'
+    ? def.harnessConfig.provider
+    : 'openai';
+  const modelId = typeof def.harnessConfig.model === 'string'
+    ? def.harnessConfig.model
+    : 'gpt-5-mini';
+  const baseUrl = typeof def.harnessConfig.baseUrl === 'string'
+    ? def.harnessConfig.baseUrl
+    : undefined;
+  const apiKeyRef = typeof def.harnessConfig.apiKeyRef === 'string'
+    ? def.harnessConfig.apiKeyRef
+    : undefined;
+  const temperature = typeof def.harnessConfig.temperature === 'number'
+    ? def.harnessConfig.temperature
+    : undefined;
+  const maxTokens = typeof def.harnessConfig.maxTokens === 'number'
+    ? def.harnessConfig.maxTokens
+    : undefined;
+  const topP = typeof def.harnessConfig.topP === 'number'
+    ? def.harnessConfig.topP
+    : undefined;
+  const reasoning = def.harnessConfig.reasoning === 'off'
+    || def.harnessConfig.reasoning === 'low'
+    || def.harnessConfig.reasoning === 'medium'
+    || def.harnessConfig.reasoning === 'high'
+    ? def.harnessConfig.reasoning
+    : undefined;
+
+  // Build resources section, including sandbox limits if present
+  const resources: Record<string, unknown> = {};
+  if (def.resourceLimits) {
+    const sandbox: Record<string, unknown> = {};
+    if (def.resourceLimits.cpus !== undefined) sandbox.cpus = def.resourceLimits.cpus;
+    if (def.resourceLimits.memoryMb !== undefined) sandbox.memoryMb = def.resourceLimits.memoryMb;
+    if (def.resourceLimits.pidsLimit !== undefined) sandbox.pidsLimit = def.resourceLimits.pidsLimit;
+    if (def.resourceLimits.timeoutSec !== undefined) sandbox.timeoutSec = def.resourceLimits.timeoutSec;
+    if (Object.keys(sandbox).length > 0) {
+      resources.sandbox = sandbox;
+    }
+  }
 
   return {
     apiVersion: 'ctxmill.io/v1',
@@ -52,20 +138,34 @@ export function definitionToManifest(
         : {}),
     },
     spec: {
-      harness: def.harness ?? 'langgraph',
-      model: {
+      harness: def.harness,
+      ...(def.nativeTools ? { nativeTools: def.nativeTools } : {}),
+      harnessConfig: {
         provider,
-        id: modelId,
-        ...(def.modelConfig?.baseUrl ? { baseUrl: def.modelConfig.baseUrl } : {}),
-        ...(def.modelConfig?.apiKeyRef ? { apiKeyRef: def.modelConfig.apiKeyRef } : {}),
-        ...(def.modelConfig?.temperature !== undefined ? { temperature: def.modelConfig.temperature } : {}),
-        ...(def.modelConfig?.maxTokens !== undefined ? { maxTokens: def.modelConfig.maxTokens } : {}),
-        ...(def.modelConfig?.topP !== undefined ? { topP: def.modelConfig.topP } : {}),
-        ...(def.modelConfig?.reasoning ? { reasoning: def.modelConfig.reasoning } : {}),
+        model: modelId,
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(apiKeyRef ? { apiKeyRef } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
+        ...(topP !== undefined ? { topP } : {}),
+        ...(reasoning ? { reasoning } : {}),
       },
       instructions: def.systemPrompt,
       tools: def.tools.map((t) => ({ ref: t })),
       ...(def.mode ? { mode: def.mode } : {}),
+      ...(def.workspaceContent
+        ? {
+            workspace: {
+              content: {
+                ...(def.workspaceContent.files ? { files: def.workspaceContent.files } : {}),
+                ...(def.workspaceContent.skills !== undefined
+                  ? { skills: def.workspaceContent.skills }
+                  : {}),
+              },
+            },
+          }
+        : {}),
+      ...(Object.keys(resources).length > 0 ? { resources: resources as any } : {}),
     },
   };
 }

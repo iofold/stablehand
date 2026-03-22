@@ -1,16 +1,38 @@
 import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import { join } from 'node:path';
+import { z } from 'zod';
 import { createDeepAgent } from 'deepagents';
 import { tool as lcTool } from '@langchain/core/tools';
 import type { BaseLanguageModel } from '@langchain/core/language_models/base';
 import type { StreamEvent } from '@langchain/core/types/stream';
-import type { AgentHarness, AgentEvent, HarnessRunConfig } from './types.js';
-import type { ToolCall } from '../tool/types.js';
-import type { LLMProvider } from '../llm/types.js';
-import { LocalFunctionExecutor } from '../tool/executor.js';
-import type { KnowledgeStore } from '../knowledge/types.js';
-import type { InterruptManager } from '../orchestrator/interrupt.js';
-import type { EnvironmentFactory, ExecutionEnvironment } from '../workspace/types.js';
-import { normalizeStreamTextDeltas } from '../agent/executor.js';
+import type {
+  AgentHarness,
+  AgentEvent,
+  HarnessSession,
+  HarnessSessionConfig,
+  HarnessRestorePoint,
+  HarnessTurnInput,
+  HarnessTurnContext,
+  HarnessExportedState,
+  ApprovalRequest,
+} from './types.js';
+import type { Message } from '../types.js';
+import { createStubKnowledgeContext, resolveSecretRef, normalizeStreamTextDeltas } from './shared.js';
+
+export const LangGraphConfigSchema = z.object({
+  provider: z.enum(['openai', 'anthropic', 'google']).default('openai'),
+  model: z.string().min(1),
+  apiKeyRef: z.string().optional(),
+  baseUrl: z.string().refine((value) => URL.canParse(value)).optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  maxTokens: z.number().int().positive().optional(),
+  topP: z.number().min(0).max(1).optional(),
+  reasoning: z.enum(['off', 'low', 'medium', 'high']).optional(),
+  subagents: z.array(z.record(z.string(), z.unknown())).optional(),
+});
+
+export type LangGraphConfig = z.infer<typeof LangGraphConfigSchema>;
 
 /**
  * Minimal interface for a deep agent that supports streamEvents.
@@ -27,119 +49,116 @@ interface StreamableAgent {
 /**
  * LangGraph/deepagents harness adapter.
  *
- * Extracts the core agent execution logic that was previously embedded in
- * AgentExecutor.run() and yields normalized AgentEvent instances.
+ * Implements the session-factory AgentHarness interface. LangGraph is stateless
+ * (creates a fresh deepagents/LangChain agent per turn). The session adapter
+ * keeps an internal transcript array and passes the FULL history to the SDK
+ * on each turn.
  */
 export class LangGraphHarness implements AgentHarness {
   readonly name = 'langgraph';
+  readonly configSchema = LangGraphConfigSchema;
 
-  private chatModel: BaseLanguageModel;
-  private toolExecutor: LocalFunctionExecutor;
-  private knowledgeStore: KnowledgeStore;
-  private interruptManager: InterruptManager | null;
-  private envFactory: EnvironmentFactory | null;
-
-  constructor(
-    llmProvider: LLMProvider,
-    toolExecutor: LocalFunctionExecutor,
-    knowledgeStore: KnowledgeStore,
-    interruptManager?: InterruptManager,
-    envFactory?: EnvironmentFactory,
-  ) {
-    if (!llmProvider.getChatModel) {
-      throw new Error(
-        'LangGraphHarness requires an LLMProvider that implements getChatModel()',
-      );
+  async openSession(config: HarnessSessionConfig, restore?: HarnessRestorePoint): Promise<HarnessSession> {
+    const session = new LangGraphSession(config);
+    if (restore) {
+      session.restoreTranscript(restore.messages);
     }
-    this.chatModel = llmProvider.getChatModel() as BaseLanguageModel;
-    this.toolExecutor = toolExecutor;
-    this.knowledgeStore = knowledgeStore;
-    this.interruptManager = interruptManager ?? null;
-    this.envFactory = envFactory ?? null;
+    return session;
+  }
+}
+
+class LangGraphSession implements HarnessSession {
+  private transcript: Message[] = [];
+  private readonly harnessConfig: LangGraphConfig;
+
+  constructor(private readonly config: HarnessSessionConfig) {
+    this.harnessConfig = LangGraphConfigSchema.parse(
+      JSON.parse(z.string().parse(config.harnessConfigJson)),
+    );
   }
 
-  /** Get the configured EnvironmentFactory (if any). */
-  getEnvironmentFactory(): EnvironmentFactory | null {
-    return this.envFactory;
+  restoreTranscript(messages: Message[]): void {
+    this.transcript = [...messages];
   }
 
-  async *run(config: HarnessRunConfig): AsyncGenerator<AgentEvent> {
-    const { agentId, runId, messages, tools, workspaceDir } = config;
-    const knowledgeKey = agentId;
+  async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<AgentEvent> {
+    const { agentId, conversationId, workspaceDir, tools, systemPrompt } = this.config;
 
     try {
-      // Render knowledge into system prompt
-      const knowledge = await this.knowledgeStore.render(knowledgeKey);
-      const systemPrompt = config.systemPrompt.replace(
-        '{{knowledge}}',
-        knowledge || 'No learned knowledge yet.',
-      );
+      this.transcript.push(...input.messages);
 
-      // Create session environment if factory is available
-      let env: ExecutionEnvironment | undefined;
-      if (this.envFactory && workspaceDir) {
-        const { join } = await import('node:path');
-        const sessionsDir = join(workspaceDir, '..', '..', 'sessions');
-        env = this.envFactory.create(workspaceDir, runId, sessionsDir);
-        await env.setup();
-      }
+      // Step 1: Resolve the chat model from config + secrets
+      const chatModel = await this.buildModelFromConfig();
 
-      // Build the tool context once for the entire run
+      // Step 2: Build tool execution context
       const ctx = {
-        agentId: knowledgeKey,
-        conversationId: runId,
-        workspaceDir: env?.workspacePath ?? workspaceDir ?? process.cwd(),
-        env,
-        eventBus: config.eventBus ?? undefined,
-        knowledge: {
-          query: async (opts: { text: string; limit?: number }) => {
-            const items = await this.knowledgeStore.list(knowledgeKey);
-            const filtered = items.filter((item) =>
-              item.content.toLowerCase().includes(opts.text.toLowerCase()),
-            );
-            return {
-              items: filtered.slice(0, opts.limit || 5).map((item) => ({
-                id: item.id,
-                content: item.content,
-                score: 1.0,
-              })),
-            };
-          },
-        },
+        agentId,
+        conversationId,
+        instanceId: input.turnId,
+        workspaceDir: workspaceDir ?? process.cwd(),
+        knowledge: createStubKnowledgeContext(),
       };
 
-      // Build langchain tools that wrap our tool definitions
-      const lcTools = this.buildLangChainTools(ctx, runId, tools);
+      // Step 3: Determine effective approval callback (turn-level takes precedence)
+      const onApprovalNeeded = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
 
-      // Create the deep agent
-      const agent = createDeepAgent({
-        model: this.chatModel,
+      // Step 4: Build langchain tools that wrap our tool definitions
+      const lcTools = this.buildLangChainTools(ctx, input.turnId, tools, onApprovalNeeded);
+
+      // Step 5: Create the deep agent with LocalShellBackend for full filesystem/shell capabilities
+      const { LocalShellBackend } = await import('deepagents');
+      const backend = new LocalShellBackend({
+        rootDir: workspaceDir ?? process.cwd(),
+        inheritEnv: true,
+      });
+
+      const workDir = workspaceDir ?? process.cwd();
+      const skillsDir = join(workDir, '.ctxmill', 'skills');
+      let skills: string[] | undefined;
+      try {
+        await fs.access(skillsDir);
+        skills = [skillsDir];
+      } catch { /* skills dir doesn't exist — skip */ }
+
+      const subagents = this.harnessConfig.subagents;
+
+      const allBlocklisted = this.config.nativeTools?.flatMap((c) => c.blocklist ?? []) ?? [];
+
+      const deepAgentParams: Record<string, unknown> = {
+        model: chatModel,
         tools: lcTools,
         systemPrompt,
-      }) as unknown as StreamableAgent;
+        backend,
+      };
+      if (skills) deepAgentParams.skills = skills;
+      if (subagents) deepAgentParams.subagents = subagents;
+      if (allBlocklisted.length > 0) {
+        deepAgentParams.middleware = [this.createToolBlocklistMiddleware(allBlocklisted)];
+      }
 
-      // Convert messages to the format deepagents expects
-      const langchainMessages = messages
+      const agent = createDeepAgent(deepAgentParams as Parameters<typeof createDeepAgent>[0]) as unknown as StreamableAgent;
+
+      // Step 6: Convert full transcript to deepagents message format
+      const langchainMessages = this.transcript
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
         }));
 
-      // Stream events from the agent
+      // Step 7: Stream events from the agent, accumulating assistant text for transcript
       const eventStream = agent.streamEvents(
         { messages: langchainMessages },
         { version: 'v2' },
       );
 
       let currentToolCallId: string | null = null;
-      let currentToolCallName: string | null = null;
-      const toolRunIdToInfo = new Map<string, { toolCallId: string; toolName: string; startTime: number }>();
+      const toolRunIdToInfo = new Map<string, { toolCallId: string; startTime: number }>();
+      let assistantText = '';
 
       for await (const ev of eventStream) {
         const event = ev.event;
         const data = ev.data;
-        const evName = ev.name;
 
         if (event === 'on_chat_model_stream') {
           const chunk = data.chunk;
@@ -147,6 +166,7 @@ export class LangGraphHarness implements AgentHarness {
 
           // Yield text deltas
           for (const textDelta of normalizeStreamTextDeltas(chunk.content)) {
+            assistantText += textDelta;
             yield { type: 'text_delta', content: textDelta };
           }
 
@@ -158,7 +178,6 @@ export class LangGraphHarness implements AgentHarness {
                 // New tool call starting
                 const tcId = tc.id || randomUUID();
                 currentToolCallId = tcId;
-                currentToolCallName = tc.name;
                 yield {
                   type: 'tool_call_start',
                   id: tcId,
@@ -171,30 +190,23 @@ export class LangGraphHarness implements AgentHarness {
         }
 
         if (event === 'on_chat_model_end') {
-          // Clear current tool call tracking after chat model ends
-          if (currentToolCallId) {
-            // Don't clear currentToolCallId yet — on_tool_start needs it
-          }
+          // currentToolCallId is consumed by on_tool_start below; no action needed here
         }
 
         if (event === 'on_tool_start') {
           const toolCallId = currentToolCallId || randomUUID();
-          const toolName = evName || 'unknown';
           const toolRunId: string | undefined = ev.run_id;
           if (toolRunId) {
             toolRunIdToInfo.set(toolRunId, {
               toolCallId,
-              toolName,
               startTime: Date.now(),
             });
           }
           // Now safe to clear — the mapping is saved
           currentToolCallId = null;
-          currentToolCallName = null;
         }
 
         if (event === 'on_tool_end') {
-          const toolName = evName || 'unknown';
           const toolRunId: string | undefined = ev.run_id;
           const info = toolRunId ? toolRunIdToInfo.get(toolRunId) : undefined;
           const toolCallId = info?.toolCallId || randomUUID();
@@ -222,72 +234,145 @@ export class LangGraphHarness implements AgentHarness {
         }
       }
 
+      if (assistantText.length > 0) {
+        this.transcript.push({
+          id: randomUUID(),
+          agentId,
+          role: 'assistant',
+          content: assistantText,
+          createdAt: new Date(),
+        });
+
+        yield {
+          type: 'message_committed' as const,
+          role: 'assistant' as const,
+          content: assistantText,
+          turnId: `turn-${randomUUID().slice(0, 8)}`,
+          messageSeq: this.transcript.length - 1,
+        };
+      }
+
       yield { type: 'done' };
     } catch (err) {
+      console.error('[langgraph] deliverTurn error:', err);
       yield { type: 'error', error: String(err) };
+    }
+  }
+
+  async exportState(): Promise<HarnessExportedState> {
+    return {
+      stateVersion: '1',
+      payload: { transcript: this.transcript },
+    };
+  }
+
+  async close(): Promise<void> {
+    // Stateless — deepagents creates a fresh agent per turn, nothing to tear down
+  }
+
+  private createToolBlocklistMiddleware(blocklist: string[]): Record<string, unknown> {
+    const blocked: ReadonlySet<string> = new Set(blocklist);
+    return {
+      name: 'ctxmill-tool-blocklist',
+      beforeToolCall: (call: { name: string }) => {
+        if (blocked.has(call.name)) {
+          return { blocked: true, reason: `Tool '${call.name}' is blocklisted by nativeTools config` };
+        }
+        return { blocked: false };
+      },
+    };
+  }
+
+  private async buildModelFromConfig(): Promise<BaseLanguageModel> {
+    const { secrets } = this.config;
+    const { provider, model, apiKeyRef, baseUrl, temperature, maxTokens } = this.harnessConfig;
+    const resolvedApiKey = apiKeyRef
+      ? resolveSecretRef(apiKeyRef, secrets)
+      : provider === 'anthropic'
+        ? (secrets.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY)
+        : provider === 'google'
+          ? (secrets.GOOGLE_API_KEY ?? process.env.GOOGLE_API_KEY)
+          : (secrets.OPENAI_API_KEY ?? process.env.OPENAI_API_KEY);
+
+    if (provider === 'anthropic') {
+      const { ChatAnthropic } = await import('@langchain/anthropic');
+      return new ChatAnthropic({
+        anthropicApiKey: resolvedApiKey || undefined,
+        anthropicApiUrl: baseUrl || undefined,
+        model,
+        modelName: model,
+        ...(temperature != null ? { temperature } : {}),
+        ...(maxTokens != null ? { maxTokens } : {}),
+      }) as unknown as BaseLanguageModel;
+    } else if (provider === 'google') {
+      const { ChatGoogleGenerativeAI } = await import('@langchain/google-genai');
+      return new ChatGoogleGenerativeAI({
+        apiKey: resolvedApiKey || undefined,
+        model,
+        ...(temperature != null ? { temperature } : {}),
+        ...(maxTokens != null ? { maxOutputTokens: maxTokens } : {}),
+      }) as unknown as BaseLanguageModel;
+    } else {
+      const { ChatOpenAI } = await import('@langchain/openai');
+      return new ChatOpenAI({
+        apiKey: resolvedApiKey || undefined,
+        configuration: baseUrl ? { baseURL: baseUrl } : undefined,
+        modelName: model,
+        ...(temperature != null ? { temperature } : {}),
+        ...(maxTokens != null ? { maxTokens } : {}),
+      }) as unknown as BaseLanguageModel;
     }
   }
 
   /**
    * Build langchain tool wrappers around the provided tool definitions.
-   * Wraps each tool with HITL interrupt logic when requiresApproval is set.
+   * Wraps each tool with HITL interrupt logic when requiresApproval is set,
+   * using the onApprovalNeeded callback.
    */
   private buildLangChainTools(
     ctx: {
       agentId: string;
       conversationId: string;
+      instanceId?: string;
       workspaceDir: string;
-      eventBus?: import('../events/bus.js').TypedEventBus;
       knowledge: {
         query: (opts: { text: string; limit?: number }) => Promise<{
           items: Array<{ id: string; content: string; score: number }>;
         }>;
       };
     },
-    runId: string,
+    turnId: string,
     toolDefs: import('../tool/types.js').ToolDefinition[],
+    onApprovalNeeded: import('./types.js').ApprovalCallback | undefined,
   ) {
     return toolDefs.map((def) => {
       return lcTool(
         async (args: Record<string, unknown>) => {
-          // HITL: if the tool requires approval, delegate to InterruptManager
+          // HITL: if the tool requires approval, delegate to onApprovalNeeded callback
           if (def.requiresApproval) {
-            if (this.interruptManager) {
-              const toolCallId = randomUUID();
-              const resolution = await this.interruptManager.waitForApproval(
-                runId,
-                ctx.agentId,
-                toolCallId,
-                def.name,
-                args as Record<string, unknown>,
-              );
-
-              if (resolution.action !== 'approve') {
-                const reason = resolution.action === 'timeout'
-                  ? 'Tool call approval timed out.'
-                  : 'Tool call was rejected by the user.';
-                throw new Error(reason);
+            if (onApprovalNeeded) {
+              const req: ApprovalRequest = {
+                id: randomUUID(),
+                runId: turnId,
+                toolName: def.name,
+                args: args as Record<string, unknown>,
+              };
+              const res = await onApprovalNeeded(req);
+              if (res.action !== 'approve') {
+                throw new Error('Tool call was rejected by the user.');
               }
             }
-            // If no interruptManager, auto-approve for backward compatibility
+            // If no onApprovalNeeded callback, auto-approve for backward compatibility
           }
 
-          const toolCall: ToolCall = {
-            id: randomUUID(),
-            name: def.name,
-            arguments: args,
-          };
-
-          const result = await this.toolExecutor.execute(toolCall, ctx);
-          if (result.error) {
-            throw new Error(result.error);
-          }
-          return result.result;
+          // Execute the tool via its handler directly (no LocalFunctionExecutor needed)
+          const result = await def.handler(args, ctx);
+          return result;
         },
         {
           name: def.name,
           description: def.description,
-          schema: def.input,
+          schema: def.input as import('zod').ZodType,
         },
       );
     });

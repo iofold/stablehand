@@ -1,275 +1,303 @@
-# CTX Factory -- Architecture Synthesis
+# CTXMill Architecture
 
-## 1. System Purpose
+> Status: Current shipped architecture as of 2026-03-17.
+> Future sandbox work is tracked separately in [docs/plans/2026-03-17-sandbox-execution-requirements.md](/path/to/stablehand/docs/plans/2026-03-17-sandbox-execution-requirements.md).
 
-CTX Factory is a self-hosted agentic infrastructure stack that decouples agent orchestration from untrusted code execution. It uses Firecracker microVMs for zero-compute suspension (snapshot/resume) and a unified adapter layer supporting multiple agent frameworks (LangGraph, Letta, Raw SDK). The system enables agents to pause mid-execution when waiting for external events (human feedback, async tool results), snapshot the VM to disk, and resume from exactly that state when the event arrives -- paying zero compute cost during the wait.
+## Purpose
 
----
+CTXMill is a self-hosted framework for running tool-using agents behind a Fastify API and a React UI. The current repo ships a Docker-first stack with:
 
-## 2. Architecture Overview
+- A Node.js orchestrator process
+- PostgreSQL persistence
+- A multi-harness agent runtime
+- SSE streaming to the UI
+- HITL interrupt handling
+- Event-triggered background runs
+- Session-scoped workspace overlays
 
-### Bounded Contexts (5)
+Agent harnesses execute inside Docker containers managed by the sandbox subsystem. The orchestrator creates a container per run, communicates with the in-container gRPC daemon, and streams events back to the UI. Firecracker-based sandboxing is not implemented yet.
 
-| Context | Responsibility | Runs In |
-|---------|---------------|---------|
-| **Agent Lifecycle** | Agent CRUD, FSM status transitions, tool request lifecycle, idempotency keys | Orchestrator process |
-| **Execution Infrastructure** | Firecracker VM lifecycle, snapshot/resume, resume health check, warm pool | Orchestrator process |
-| **Knowledge** | Vector search (pgvector), graph search (AGE/Cypher), full-text search | Orchestrator process |
-| **Policy** | RBAC, input validation, SQL injection detection -- pure function library, Fastify middleware | Orchestrator process |
-| **Sandbox** | FastAPI server, framework adapters (LangGraph/Letta/Raw), tool call bridge (HTTP back to orchestrator) | Inside Firecracker microVM |
+## Deploy Shape
 
-### Key Architectural Patterns
+The supported workflow in this repo is `docker compose`.
 
-- **Modular monolith**: Single Orchestrator process with logical module separation; no microservices
-- **In-process event bus**: Node.js EventEmitter (typed) for hot-path coordination (e.g., tool.completed -> resume agent)
-- **Reconciliation loop**: setInterval (30s) scans for stuck states as a safety net (Kubernetes-inspired)
-- **No central orchestration service**: Each bounded context handles its own step via events
-- **202 + Snapshot + Resume**: Agent hits async tool -> 202 Accepted -> VM snapshot -> external processing -> webhook resume
-- **Dependency injection**: Three execution modes (dry-run, integration, production) swap implementations at the executor layer
-
-### Component Interaction Diagram
-
-```
-+-------------------------------------------------------------------+
-|                   CTX FACTORY (Single Deploy)                     |
-|                                                                   |
-|  +---------------------+  events  +---------------------------+   |
-|  | AGENT LIFECYCLE      |<-------->| EXECUTION INFRASTRUCTURE  |   |
-|  |                      |          |                           |   |
-|  | - Agent CRUD + FSM   |          | - VM lifecycle (FC API)   |   |
-|  | - Tool Requests      |          | - Snapshot/resume         |   |
-|  | - Idempotency keys   |          | - Resume health check     |   |
-|  +---------------------+          | - Warm pool               |   |
-|          |                         +---------------------------+   |
-|          | events                              |                   |
-|          v                                     | HTTP (retry+bkoff)|
-|  +---------------------+          +---------------------------+   |
-|  | KNOWLEDGE            |          | SANDBOX (Python, in-VM)   |   |
-|  |                      |          |                           |   |
-|  | - Vector search      |          | - FastAPI resume endpoint |   |
-|  | - Graph search (AGE) |          | - Framework adapters      |   |
-|  | - Full-text search   |          |   (LangGraph/Letta/Raw)   |   |
-|  +---------------------+          | - Tool call bridge (HTTP)  |   |
-|                                    +---------------------------+   |
-|  [Policy Middleware] -- Fastify onRequest hooks, not a service     |
-|  [Event Bus] -- Node.js EventEmitter (typed)                      |
-|  [Reconciliation Loop] -- setInterval safety net (30s)            |
-|  [API Gateway] -- Fastify routes (composition root, no logic)     |
-+-------------------------------------------------------------------+
+```text
++---------------------------+       HTTP/SSE       +----------------------+
+| UI (React, nginx)         | <------------------> | Orchestrator         |
+| - dashboard               |                      | - Fastify API        |
+| - chat                    |                      | - SSE + HITL         |
+| - knowledge               |                      | - triggers / runs    |
+| - triggers / flow / files |                      +----------+-----------+
++---------------------------+                      |          |
+                                                   | postgres | Docker socket
+                                                   v          v
+                                        +----------------+  +-------------------+
+                                        | PostgreSQL     |  | Sandbox Containers|
+                                        | - agents       |  | - one per run     |
+                                        | - runs / msgs  |  | - gRPC daemon     |
+                                        | - events       |  | - harness code    |
+                                        | - triggers     |  | - tool proxy      |
+                                        | - secrets      |  | - workspace       |
+                                        +----------------+  +-------------------+
 ```
 
-### Module Dependency Rules
+## Main Runtime Components
 
-1. **Agent Lifecycle** -> Postgres (direct), Event Bus (publish)
-2. **Execution Infrastructure** -> Firecracker API (unix socket), Event Bus (listen + publish)
-3. **Knowledge** -> Postgres with pgvector + AGE (direct)
-4. **Policy** -> nothing (pure function library, injected config)
-5. **Sandbox** -> Orchestrator HTTP API (outbound tool calls only)
-6. No module imports from another module's internals -- communicate via events or API layer
+### 1. Orchestrator
 
----
+The orchestrator is a Fastify server that wires together the database, SSE manager, interrupt manager, run registry, knowledge routes, trigger routes, and agent execution services.
 
-## 3. Tech Stack
+Relevant code:
 
-| Component | Technology | Version | Rationale |
-|-----------|-----------|---------|-----------|
-| Orchestrator runtime | Node.js | 22 LTS (22.18+) | Native TS type-stripping, ESM stable |
-| Language | TypeScript | 5.8+ | `erasableSyntaxOnly` flag support |
-| HTTP framework | Fastify | 5.x | 30-80k req/s, built-in Ajv validation, plugin ecosystem |
-| DB driver | postgres.js | 3.x | Lightest driver (~7kb), zero binary deps |
-| ORM | Drizzle ORM | latest | Native pgvector support, raw SQL escape hatch for AGE |
-| Validation | Zod | 3.24+ | Runtime schema validation for API inputs |
-| Logging | Pino | 9.6+ | High-performance structured logging |
-| Database | PostgreSQL | 16.x | Best AGE + pgvector compatibility |
-| Vector search | pgvector | 0.8.2 | Latest stable, HNSW index support |
-| Graph DB | Apache AGE | 1.6.0 (PG16) | Cypher queries in Postgres, stable release |
-| Hypervisor | Firecracker | 1.14.1 | Direct API (no Moru), snapshot/resume, sub-200ms boot |
-| Networking | CNI + tc-redirect-tap | -- | Battle-tested (Kata/firecracker-containerd), no NAT-on-NAT |
-| Sandbox runtime | Python | 3.12.x | Debian-slim base (not Alpine -- musl breaks wheels) |
-| Sandbox framework | FastAPI + uvicorn | 0.115+ / 0.34+ | Async, Pydantic validation, low memory (~45MB RSS) |
-| Sandbox HTTP client | httpx | 0.28+ | Async HTTP for tool call bridge |
-| Sandbox rootfs | Debian-slim (bookworm) | -- | 1GB ext4, 512MB VM RAM |
-| Agent framework 1 | LangGraph | 0.3+ | Checkpoint-based interrupt/resume |
-| Agent framework 2 | Letta | 0.6+ | Background mode with run_id/seq_id resume |
-| Unit tests (Node) | Vitest | 3.0+ | Native ESM + TS, fast |
-| Unit tests (Python) | pytest + pytest-asyncio | 8.3+ / 0.25+ | Async test support |
-| Contract tests | Pact | -- | Cross-language consumer-driven contracts (TS <-> Python) |
-| Property testing | fast-check | -- | Policy engine fuzzing |
-| YAML fixtures | yaml (npm) | -- | Tool simulation test data |
-| Integration tests | TestContainers | -- | Docker-based integration |
-| Policy/security | LLM Guard (Protect AI) | -- | SQL injection detection, PII masking |
-| Overlay FS | overlayfs + devmapper | -- | Shared base rootfs + per-agent writable layer |
-| Clock sync | chrony | -- | NTP sync on VM resume |
+- [server.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/server.ts)
+- [agent-run-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/agent-run-service.ts)
+- [routes/agents.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents.ts)
 
----
+### 2. Multi-Harness Agent Execution
 
-## 4. Key Architecture Decisions
+Agents are executed through a harness registry. The shipped harness adapters are:
 
-| # | Decision |
-|---|----------|
-| D1 | **Drop Moru, use Firecracker API directly** -- Moru is abandoned (5 stars, 4 months stale) |
-| D2 | **MCP inside sandbox only, plain REST for orchestrator-sandbox** -- MCP is LLM-to-tool, not service-to-service |
-| D3 | **Reduce to 5 bounded contexts (from 10)** -- eliminates God Service anti-pattern in orchestration |
-| D4 | **In-process event bus + reconciliation loop** -- no central coordinator, Kubernetes-style self-healing |
-| D5 | **Debian-slim sandbox base (not Alpine)** -- musl breaks Python wheels, 50x slower builds |
-| D6 | **AGE 1.6.0 + pgvector 0.8.2** -- 1.5.0-rc0 is a release candidate, not stable |
-| D7 | **LLM Guard for PII/SQL validation** -- 2.5M+ downloads, battle-tested; NeMo Guardrails is wrong abstraction |
-| D8 | **Mandatory resume health check** -- NTP sync, connection retry (3x/50ms), entropy reseed, daemon verify |
-| D9 | **Idempotency keys on all tool calls** -- LangGraph re-executes entire nodes on resume |
-| D10 | **Pact contract tests for orchestrator-sandbox** -- cross-language TS/Python boundary, no shared types |
-| D11 | **CNI + tc-redirect-tap for VM networking** -- Kata/firecracker-containerd pattern, no Docker bridge |
-| D12 | **Overlay filesystem for agent state** -- shared immutable base + per-agent writable upper dir |
+- LangGraph
+- OpenAI Agents
+- Claude Agents
+- Vercel AI
+- PI Agent
 
----
+Relevant code:
 
-## 5. Technology Exclusions
+- [harness/index.ts](/path/to/stablehand/packages/ctxmill/src/harness/index.ts)
+- [agent-run-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/agent-run-service.ts)
+- [container.ts](/path/to/stablehand/packages/ctxmill/src/config/container.ts)
 
-| # | Excluded Tech | Rationale |
-|---|--------------|-----------|
-| E1 | **Kata Containers** | No snapshot API access, no userfaultfd, no checkpoint/restore -- hard blockers for suspend-to-disk |
-| E2 | **firecracker-containerd** | Self-described "very early state", no snapshot/restore API integration, must bypass containerd anyway |
-| E3 | **Moru** | Abandoned -- 5 GitHub stars, single developer, 4+ months without commits, E2B fork with minimal divergence |
+### 3. Tool Execution
 
----
+Tools are registered centrally and executed through the local tool executor. The repo also ships provider abstractions for local, MCP, Composio, and HTTP-backed tools.
 
-## 6. Known Pitfalls
+Relevant code:
 
-| # | Pitfall | Severity |
-|---|---------|----------|
-| 1 | **Connection reset after VM resume** -- mandatory retry loop (3x, 50ms backoff) on all orchestrator->sandbox calls | High |
-| 2 | **Clock drift causing crypto/TLS failures** -- force NTP sync in resume health check before accepting requests | High |
-| 3 | **UFFD handler crash = Firecracker infinite hang** -- watchdog process monitoring handler, kills FC on death | Critical |
-| 4 | **LangGraph node re-execution on resume** -- idempotency keys on all tool calls, check-before-execute | High |
-| 5 | **Memory bloat inflating snapshot size** -- trim page cache (madvise MADV_DONTNEED) before snapshotting | Medium |
-| 6 | **Filesystem errors on cross-machine restore** -- identical disk paths across hosts, or overlayfs abstraction | Medium |
-| 7 | **Snapshot invalidation on rootfs change** -- track rootfs version, discard snapshots when base image changes | Medium |
-| 8 | **TCP connections don't survive resume** -- all in-VM services must handle reconnection gracefully | High |
-| 9 | **AMD CPU TSC bug (nanosleep hangs)** -- verify Firecracker >= 1.14.1 (includes fix), test on AMD hardware | Low |
-| 10 | **Multiple interrupts per LangGraph node** -- one interrupt per node, chain nodes for multi-interrupt flows | Medium |
+- [tool/executor.ts](/path/to/stablehand/packages/ctxmill/src/tool/executor.ts)
+- [tool/providers/index.ts](/path/to/stablehand/packages/ctxmill/src/tool/providers/index.ts)
+- [tool/registry.ts](/path/to/stablehand/packages/ctxmill/src/tool/registry.ts)
 
----
+### 4. Event Bus and Triggers
 
-## 7. Testing Architecture
+CTXMill uses a typed in-process event bus. It persists events, powers SSE broadcasting, feeds the learning pipeline, drives suspended-run matching, and can fire background runs through persisted event triggers.
 
-### Three Execution Modes
+The TypedEventBus emits the following events:
 
-| Mode | VMs | Tools | Policy | Time | LLM |
-|------|-----|-------|--------|------|-----|
-| **dry-run** | MockVMManager (in-memory) | Canned responses (YAML fixtures) | Real (always) | TestTimeProvider (skippable) | Fake (GenericFakeChatModel) |
-| **integration** | Docker containers | Mock external APIs | Real | Real | Real (recorded/replayed via vcrpy) |
-| **production** | Firecracker VMs | Real services | Real | Real | Real |
+- `run.started` — Run begins execution
+- `run.text_chunk` — Streaming text delta from harness
+- `run.tool_started` — Tool call initiated
+- `run.tool_result` — Tool call completed
+- `run.interrupted` — HITL approval needed
+- `run.interrupt_resolved` — HITL approval/rejection received
+- `run.completed` — Run finished (completed, error, or cancelled)
+- `run.resumed` — Suspended run resumed after event match
+- `learning.trace_captured` — Execution trace saved for reflection
+- `learning.insight_extracted` — Reflector produced new insights
+- `learning.knowledge_updated` — Knowledge store updated from learning
+- `feedback.received` — User thumbs up/down on a run
+- `agent.created` — New agent registered
+- `agent.deleted` — Agent removed
+- `client.connected` — SSE client connected
+- `client.disconnected` — SSE client disconnected
+- `trigger.fired` — Event trigger matched and fired background run
+- `custom` — User-emitted custom event via emit-event tool
 
-Swap happens at the **executor layer** (not API/controller layer) via DI container. Policy engine always runs real logic, even in dry-run.
+Relevant code:
 
-### Key Testing Patterns
+- [events/bus.ts](/path/to/stablehand/packages/ctxmill/src/events/bus.ts)
+- [events/trigger-manager.ts](/path/to/stablehand/packages/ctxmill/src/events/trigger-manager.ts)
+- [sse-broadcaster.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sse-broadcaster.ts)
 
-- **VMManager interface**: Swappable between FirecrackerVMManager and MockVMManager; mock simulates latency, connection reset, clock drift, packet loss
-- **TestTimeProvider**: Inspired by Temporal's TestWorkflowEnvironment; `advanceBy(30 minutes)` fires all timers instantly; `sleep()` creates pending timers resolved by time advancement
-- **MockToolRegistry**: Loads canned responses from YAML fixtures; records call trajectory for assertion (strict, unordered, subset, superset modes)
-- **Pact contracts**: Consumer (Orchestrator/TS) defines expectations, provider (Sandbox/Python) verifies against contract JSON
-- **Policy fuzzing**: fast-check generates adversarial tool arguments; YAML regression suites (FTW-inspired); shadow mode for new rules
-- **Deterministic simulation** (future): FoundationDB/Antithesis-style single-process deterministic event loop with fault injection
+### 5. HITL and Suspend/Resume
 
-### Testing Pyramid
+HITL is implemented through interrupt records and UI responses. Suspend/resume today means run-level bookkeeping: a run can wait on a matching event and later be marked resumed. This is not VM or process snapshot restoration.
 
-| Layer | Runs When | Duration Target | What's Mocked |
-|-------|-----------|-----------------|---------------|
-| Unit | Every push | < 30s | Everything external |
-| Component | Every push | < 2 min | VMs, tools, LLM, time |
-| Contract (Pact) | Every push | < 1 min | No live services |
-| Integration | PR merge | < 10 min | Real Docker sandbox, recorded LLM |
-| E2E | Nightly | < 30 min | Nothing (or only external APIs) |
-| Policy fuzzing | Nightly | < 15 min | Only tool execution |
+Relevant code:
 
----
+- [interrupt.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/interrupt.ts)
+- [suspended-run-matcher.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/suspended-run-matcher.ts)
+- [routes/agents.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents.ts)
 
-## 8. Module Boundaries & Interfaces
+### 6. Workspace Isolation
 
-### Agent Lifecycle
+Each run can execute against a session-scoped workspace abstraction. The shipped implementations are:
 
-- **Exposes**: Agent CRUD, FSM transitions (created->booting->running->suspending->suspended->resuming->running), tool request create/resolve/fail/list, `findSuspendedWithCompletedTools()` query
-- **Consumes**: Postgres (direct), Event Bus (publishes `tool.completed`, `tool.failed`)
-- **Events emitted**: `agent.suspend_requested`, `agent.resume_ready`
+- `MockOverlayEnvironment`
+- `FuseOverlayEnvironment`
 
-### Execution Infrastructure
+Sandbox containers use FUSE overlays for workspace isolation when `fuse-overlayfs` is available, falling back to a mock overlay otherwise.
 
-- **Exposes**: `VMManager` interface (create, start, stop, destroy, snapshot, resume, connect, status), resume health check sequence
-- **Consumes**: Firecracker REST API (unix socket), Event Bus
-- **Events emitted**: `vm.snapshot_completed`, `vm.resumed`, `vm.health_check_passed`
+Relevant code:
 
-### Knowledge
+- [workspace/types.ts](/path/to/stablehand/packages/ctxmill/src/workspace/types.ts)
+- [workspace/mock-overlay.ts](/path/to/stablehand/packages/ctxmill/src/workspace/mock-overlay.ts)
+- [workspace/fuse-overlay.ts](/path/to/stablehand/packages/ctxmill/src/workspace/fuse-overlay.ts)
+- [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
 
-- **Exposes**: Store chunks (with optional embedding), full-text search (`to_tsvector`), vector similarity search (`<=>`), graph entity CRUD (AGE Cypher)
-- **Consumes**: Postgres with pgvector + AGE
-- **Constraint**: All queries scoped to `agent_id` (no cross-agent data leakage)
+### 7. Knowledge and Learning
 
-### Policy
+The repo ships:
 
-- **Exposes**: `PolicyEngine.evaluate(toolCall)` -> `{allowed, reason}`, Fastify `onRequest` middleware returning 403 on violation
-- **Consumes**: Injectable config (policy rules), LLM Guard for SQL/PII checks
-- **Constraint**: Pure function library, zero I/O, always runs real logic (never mocked)
+- A `KnowledgeStore` abstraction
+- An in-memory knowledge store
+- A Mem0-backed store
+- A simple context provider
+- A learning pipeline that stores traces, reflects on them, and writes insights back into knowledge
 
-### Sandbox (in-VM)
+The Docker preset currently selects `pgvector`, but the factory still falls back to the in-memory knowledge store because a pgvector-backed knowledge store is not wired into the shipped runtime yet.
 
-- **Exposes**: `GET /health`, `POST /resume` (accepts `ResumePayload`, delegates to active adapter)
-- **Consumes**: Orchestrator HTTP API (`POST /tools/call` via tool bridge)
-- **Adapters**: LangGraph (`Command(resume=...)` with `thread_id`), Letta (REST API to agent inbox), Raw SDK (JSON state serialize/restore)
-- **Constraint**: No imports from orchestrator codebase; physically separate
+Relevant code:
 
-### Coordination (Event Wiring)
+- [knowledge/store.ts](/path/to/stablehand/packages/ctxmill/src/knowledge/store.ts)
+- [knowledge/mem0-store.ts](/path/to/stablehand/packages/ctxmill/src/knowledge/mem0-store.ts)
+- [learning/pipeline.ts](/path/to/stablehand/packages/ctxmill/src/learning/pipeline.ts)
+- [learning/event-subscriber.ts](/path/to/stablehand/packages/ctxmill/src/learning/event-subscriber.ts)
+- [config/presets.ts](/path/to/stablehand/packages/ctxmill/src/config/presets.ts)
+- [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
 
-- **Listeners**: `tool.completed` -> check if agent suspended -> emit `agent.resume_ready`; `agent.resume_ready` -> find snapshot -> resume VM -> emit `vm.resumed`; `vm.resumed` -> transition agent to running -> POST /resume to sandbox
-- **Reconciliation**: `setInterval(30s)` calls `findSuspendedWithCompletedTools()`, emits `agent.resume_ready` for each stuck agent
+### 8. Sandbox Infrastructure
 
-### Testability Interfaces (Ports)
+All harness execution routes through the sandbox subsystem. The orchestrator creates a Docker container per run, injects secrets via tmpfs, waits for gRPC health, sends a `StartRun` RPC, and streams `AgentEvent` responses back. The subsystem also handles tool call proxying, checkpoint/resume for HITL, pause management, timeout enforcement, and orphan cleanup.
 
-- `VMManager` -- create/start/stop/destroy/snapshot/resume/connect/status
-- `TimeProvider` -- now()/sleep()/registerTimer()/advanceBy()
-- `ToolExecutorRegistry` -- register/execute/has/list
-- `EventBus` -- on()/emit() with typed events
-- `AppContainer` -- DI container resolving implementations per execution mode
+Relevant code:
 
----
+- [sandbox/container-manager.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/container-manager.ts)
+- [sandbox/daemon.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/daemon.ts)
+- [sandbox/runner.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/runner.ts)
+- [sandbox/tool-proxy.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/tool-proxy.ts)
+- [sandbox/checkpoint.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/checkpoint.ts)
+- [sandbox/pause-manager.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/pause-manager.ts)
+- [sandbox/proto-convert.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/proto-convert.ts)
+- [orchestrator/sandbox-run-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-run-service.ts)
 
-## 9. E2E Scenarios
+### 9. A2UI Block Extraction
 
-| # | Scenario |
-|---|----------|
-| 1 | **Tool Call Flow**: Create agent -> POST /tools/call -> 202 -> resolve -> verify `tool.completed` event |
-| 2 | **Full Agent Lifecycle**: created -> booting -> running -> suspending -> suspended -> (tool completes) -> resuming -> running -> terminated |
-| 3 | **Policy Enforcement**: Allowed tool -> 202; denied tool -> 403; SQL injection -> 403; constraint violation -> 403; unknown tool -> 403 |
-| 4 | **Idempotency**: Same idempotency key returns same request_id; different key creates new request |
-| 5 | **Reconciliation Safety Net**: Suspended agent + completed tool -> manual reconcile -> `agent.resume_ready` emitted |
-| 6 | **Resume Health Check** (privileged): Boot VM -> snapshot -> resume -> first health check fails (connection reset) -> retry succeeds -> clock within 2s of host |
-| 7 | **Dry-Run Full Lifecycle**: MockVMManager + MockToolRegistry + TestTimeProvider; zero Firecracker processes; full event bus trace captured |
-| 8 | **Time-Skipping Wait-for-Event**: Agent waits 24h -> advance 12h (instant) -> still suspended -> signal event -> resumes -> wall-clock < 500ms |
+Agent responses can contain structured visual blocks (charts, tables, metric cards). The A2UI extractor parses these from agent output for rendering in the frontend.
 
----
+Relevant code:
 
-## 10. Task Overview
+- [a2ui/extract.ts](/path/to/stablehand/packages/ctxmill/src/a2ui/extract.ts)
 
-| # | Task Name | Bounded Context |
-|---|-----------|----------------|
-| 1 | Project Scaffolding & Docker Compose | Infrastructure |
-| 2 | Postgres Image (pgvector 0.8.2 + AGE 1.6.0) | Infrastructure |
-| 3 | Orchestrator Skeleton + Event Bus | Cross-cutting |
-| 4 | Database Client | Cross-cutting |
-| 5 | Agent Service (CRUD + FSM) | Agent Lifecycle |
-| 6 | Tool Request Service (idempotency) | Agent Lifecycle |
-| 7 | Policy Middleware (RBAC + injection detection) | Policy |
-| 8 | VM Manager (Firecracker API wrapper) | Execution Infrastructure |
-| 9 | Event-Driven Coordination Wiring | Cross-cutting (Coordination) |
-| 10 | API Routes (composition root) | API Gateway |
-| 11 | Sandbox FastAPI Server | Sandbox |
-| 12 | Framework Adapters (LangGraph, Letta, Raw SDK) | Sandbox |
-| 13 | Tool Call Bridge (Sandbox -> Orchestrator) | Sandbox |
-| 14 | Sandbox Rootfs Build Pipeline | Execution Infrastructure |
-| 15 | CNI Network Configuration | Execution Infrastructure |
-| 16 | Knowledge Context -- Context Service | Knowledge |
-| 17 | Contract Tests (Pact, Orchestrator <-> Sandbox) | Testing |
-| 18 | End-to-End Integration Tests (8 scenarios) | Testing |
-| 19 | Testability Interfaces & Execution Modes | Cross-cutting (Ports) |
-| 20 | MockVMManager & VM Simulation | Testing |
-| 21 | TestTimeProvider & Time-Skipping | Testing |
-| 22 | MockToolRegistry & YAML Test Fixtures | Testing |
-| 23 | Policy Fuzzing & Regression Suite | Testing |
+### 10. LLM Abstraction Layer
+
+A provider-agnostic LLM interface used by the learning reflector and other subsystems that need direct LLM access outside of harness execution.
+
+Relevant code:
+
+- [llm/factory.ts](/path/to/stablehand/packages/ctxmill/src/llm/factory.ts)
+- [llm/langchain.ts](/path/to/stablehand/packages/ctxmill/src/llm/langchain.ts)
+- [llm/types.ts](/path/to/stablehand/packages/ctxmill/src/llm/types.ts)
+
+### 11. Skills Loader
+
+Loads skill definitions in SKILL.md format (frontmatter + markdown body) for agent tool augmentation.
+
+Relevant code:
+
+- [skills/loader.ts](/path/to/stablehand/packages/ctxmill/src/skills/loader.ts)
+
+### 12. Configuration and DI
+
+The `docker` execution preset, component factories, and the dependency injection container that wires runtime services together.
+
+Relevant code:
+
+- [config/presets.ts](/path/to/stablehand/packages/ctxmill/src/config/presets.ts)
+- [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
+- [config/container.ts](/path/to/stablehand/packages/ctxmill/src/config/container.ts)
+
+### 13. Proto Package
+
+Protocol Buffer definitions for sandbox gRPC communication. Defines the `HarnessService` and `OrchestratorService` with streaming RPCs for agent execution, tool results, suspend, and kill operations.
+
+Relevant code:
+
+- [sandbox.proto](/path/to/stablehand/packages/proto/ctxmill/sandbox/v1/sandbox.proto)
+
+## Request and Run Flow
+
+### Interactive message flow
+
+1. The UI posts a message to the orchestrator.
+2. The orchestrator creates or reuses a conversation, starts a run, and invokes the selected agent harness.
+3. The harness yields streamed events.
+4. The run service persists messages, tool calls, and run state.
+5. SSE broadcasts stream updates to subscribed clients.
+6. If the run requests approval, the run is interrupted and later resumed when the user responds.
+
+### Triggered background flow
+
+1. An event is emitted on the bus.
+2. The trigger manager matches persisted triggers for that event type.
+3. A background run is created for the target agent.
+4. The same run service handles execution, persistence, SSE, and learning side effects.
+
+## Persistence Model
+
+PostgreSQL is the current system of record for:
+
+- `agents` — Agent definitions (name, model, harness, tools, status)
+- `conversations` — Chat conversation sessions per agent
+- `messages` — Individual messages within conversations
+- `knowledgeItems` — Agent-specific knowledge entries
+- `executionTraces` — Run execution trace data (steps, outcome)
+- `agentRuns` — Run lifecycle (status, timing, errors, session, pause/resume)
+- `eventStore` — Persisted event log
+- `suspendedRuns` — Runs waiting on external events
+- `scheduledEvents` — Time-based scheduled event delivery
+- `eventTriggers` — Event-driven agent trigger rules
+- `agentVersions` — Agent manifest version history
+- `pendingInterrupts` — HITL approval requests in progress
+- `feedbackSignals` — User feedback on traces
+- `agentCheckpoints` — Sandbox checkpoint/resume state
+- `callbackOutbox` — Outbound webhook delivery queue with retry
+- `webhooks` — Registered webhook endpoints per agent
+
+Relevant code:
+
+- [schema-pg.ts](/path/to/stablehand/packages/ctxmill/src/database/schema-pg.ts)
+- [repository.ts](/path/to/stablehand/packages/ctxmill/src/database/repository.ts)
+- [migrations.ts](/path/to/stablehand/packages/ctxmill/src/database/migrations.ts)
+
+## UI Surface
+
+The shipped frontend is broader than a basic dashboard/chat shell. It includes:
+
+- Dashboard
+- Chat
+- Agent detail
+- Run detail
+- Events
+- Tools
+- Agent flow
+- Knowledge
+- Triggers
+- Settings
+- Overview, Knowledge, Runs, Tools, Files, Subagents, and Secrets tabs inside agent detail
+
+Relevant code:
+
+- [App.tsx](/path/to/stablehand/packages/ui/src/App.tsx)
+- [Sidebar.tsx](/path/to/stablehand/packages/ui/src/components/ui/Sidebar.tsx)
+- [AgentDetailPage.tsx](/path/to/stablehand/packages/ui/src/pages/AgentDetailPage.tsx)
+
+## Current Limitations
+
+- Harnesses execute inside Docker containers (one container per run).
+- `pgvector` and `AGE` are not part of the active shipped knowledge path.
+- The learning pipeline is optional and is disabled when no global learning LLM key is configured.
+- Suspend/resume is event-driven run resumption, not compute snapshot restoration.
+- Shared knowledge APIs are present, but the default in-memory fallback does not provide full shared-search behavior.
+
+## Roadmap Boundary
+
+If a document describes any of the following as current behavior, treat it as future-state planning unless it explicitly says otherwise:
+
+- Firecracker microVM execution
+- VM snapshots or exact process-state resume
+- AGE-backed graph knowledge search
+- A fully wired pgvector-backed knowledge store
+
+That future work is tracked in plan documents, especially [2026-03-17-sandbox-execution-requirements.md](/path/to/stablehand/docs/plans/2026-03-17-sandbox-execution-requirements.md).

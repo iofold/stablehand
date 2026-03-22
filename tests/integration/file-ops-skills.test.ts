@@ -24,7 +24,7 @@ describe('File operations, Skills, and Feedback API', () => {
     container = await createContainer(
       {
         preset: 'local',
-        database: { type: 'sqlite', path: 'data.db' },
+        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
         llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
       },
       dataDir,
@@ -34,7 +34,7 @@ describe('File operations, Skills, and Feedback API', () => {
 
     app = await createServer({
       db: container.db,
-      executor: container.agentExecutor,
+      agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
@@ -49,7 +49,8 @@ describe('File operations, Skills, and Feedback API', () => {
       url: '/api/agents',
       payload: {
         name: 'file-ops-skills-test-agent',
-        model: 'test-model',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
         systemPrompt: 'You are a test agent.',
         tools: [],
       },
@@ -313,7 +314,6 @@ describe('File operations, Skills, and Feedback API', () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body.skills).toEqual([]);
-      expect(body.legacySkills).toEqual([]);
     });
   });
 

@@ -26,8 +26,7 @@ describe('Session API lifecycle', () => {
       {
         preset: 'local',
         database: {
-          type: 'sqlite',
-          path: 'data.db',
+          url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
         },
         llm: {
           provider: 'anthropic',
@@ -42,7 +41,7 @@ describe('Session API lifecycle', () => {
 
     app = await createServer({
       db: container.db,
-      executor: container.agentExecutor,
+      agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
@@ -57,7 +56,8 @@ describe('Session API lifecycle', () => {
       url: '/api/agents',
       payload: {
         name: 'session-test-agent',
-        model: 'test-model',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
         systemPrompt: 'You are a test agent.',
         tools: [],
       },

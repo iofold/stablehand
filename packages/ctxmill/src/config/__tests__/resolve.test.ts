@@ -17,44 +17,46 @@ describe('resolveConfig validation', () => {
     process.env = originalEnv;
   });
 
-  it('throws if database URL resolves to empty string for non-local preset', () => {
-    // docker preset expects env:DATABASE_URL but we haven't set it
+  it('throws if database URL resolves to empty string', () => {
+    // All presets now require DATABASE_URL
     process.env.OPENAI_API_KEY = 'sk-test';
     expect(() => resolveConfig({ preset: 'docker' })).toThrow(/database.*url/i);
   });
 
-  it('throws if no LLM API key is available', () => {
-    // local preset, no API keys in env
-    expect(() => resolveConfig({ preset: 'local' })).toThrow(/api.?key/i);
+  it('succeeds with empty llm.apiKey when no OPENAI_API_KEY set (learning pipeline disabled)', () => {
+    process.env.DATABASE_URL = 'postgres://localhost/test';
+    const config = resolveConfig({ preset: 'docker' });
+    expect(config.llm.apiKey).toBe('');
   });
 
   it('succeeds with a valid OPENAI_API_KEY', () => {
+    process.env.DATABASE_URL = 'postgres://localhost/test';
     process.env.OPENAI_API_KEY = 'sk-test-valid-key';
-    const config = resolveConfig({ preset: 'local' });
+    const config = resolveConfig({ preset: 'docker' });
     expect(config.llm.apiKey).toBe('sk-test-valid-key');
   });
 
-  it('succeeds with a valid ANTHROPIC_API_KEY', () => {
+  it('does not use ANTHROPIC_API_KEY for global LLM config (harnesses resolve their own keys)', () => {
+    process.env.DATABASE_URL = 'postgres://localhost/test';
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key';
-    const config = resolveConfig({ preset: 'local' });
-    expect(config.llm.apiKey).toBe('sk-ant-test-key');
+    const config = resolveConfig({ preset: 'docker' });
+    expect(config.llm.apiKey).toBe('');
   });
 
-  it('throws if database URL still contains env: prefix for non-local preset', () => {
+  it('throws if database URL still contains env: prefix', () => {
     // Simulate a case where the env var name itself is wrong
     process.env.OPENAI_API_KEY = 'sk-test';
     expect(() =>
       resolveConfig({
         preset: 'docker',
-        database: { type: 'postgres', url: 'env:NONEXISTENT_VAR' },
+        database: { url: 'env:NONEXISTENT_VAR' },
       }),
     ).toThrow(/database.*url/i);
   });
 
-  it('does not throw for local preset with empty database URL', () => {
+  it('throws for docker preset without DATABASE_URL', () => {
     process.env.OPENAI_API_KEY = 'sk-test';
-    // local preset has url: '' which is fine
-    const config = resolveConfig({ preset: 'local' });
-    expect(config.database.url).toBe('');
+    expect(() => resolveConfig({ preset: 'docker' })).toThrow(/database.*url/i);
   });
+
 });

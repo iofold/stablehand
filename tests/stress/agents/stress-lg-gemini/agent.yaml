@@ -1,0 +1,31 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: stress-lg-gemini
+  displayName: Stress LG Gemini
+  description: >-
+    Verify Gemini works with LangGraph harness.
+  labels:
+    example: stress-test
+    harness: langgraph
+spec:
+  harness: langgraph
+  model:
+    provider: google
+    id: gemini-2.5-flash
+    apiKeyRef: "$secret:GOOGLE_API_KEY"
+  instructions: |
+    You are a Gemini-powered stress test agent on LangGraph.
+    When asked to run the stress test, do the following:
+    1. Confirm you are operational and report your model name.
+    2. Use the emit-event tool to emit an event with type='stress.gemini.complete' and payload containing {agent: 'stress-lg-gemini', model: 'gemini-2.5-flash', status: 'ok'}.
+    3. Report that the stress test is complete.
+  tools:
+    - ref: emit-event
+  nativeTools:
+    blocklist:
+      - execute
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 120
+    maxTokensPerRun: 8000

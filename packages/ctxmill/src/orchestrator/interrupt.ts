@@ -1,9 +1,13 @@
 /**
  * Manages HITL (Human-in-the-Loop) interrupts for agent tool calls
  * that require user approval before proceeding.
+ *
+ * Supports optional Postgres persistence via DatabaseRepository for
+ * durable interrupts that survive server restarts.
  */
 
 import type { TypedEventBus } from '../events/bus.js';
+import type { DatabaseRepository } from '../database/repository.js';
 
 export interface PendingInterrupt {
   toolCallId: string;
@@ -28,9 +32,28 @@ export class InterruptManager {
     }
   >();
   private eventBus?: TypedEventBus;
+  private db?: DatabaseRepository;
 
-  constructor(eventBus?: TypedEventBus) {
+  constructor(eventBus?: TypedEventBus, db?: DatabaseRepository) {
     this.eventBus = eventBus;
+    this.db = db;
+  }
+
+  /**
+   * Load stale pending interrupts from the database on startup.
+   * Resolves any that have already expired as 'timeout' and
+   * returns info about those still pending (for monitoring).
+   */
+  async loadFromDb(): Promise<void> {
+    if (!this.db) return;
+
+    // Clean up expired interrupts
+    const now = Date.now();
+    try {
+      await this.db.cleanupExpiredInterrupts(now);
+    } catch (err) {
+      console.error('[InterruptManager] failed to cleanup expired interrupts:', err);
+    }
   }
 
   /**
@@ -56,6 +79,27 @@ export class InterruptManager {
       this.pending.delete(runId);
     }
 
+    const now = Date.now();
+    const expiresAt = now + timeoutMs;
+
+    // Persist to DB (fire-and-forget, don't block the Promise creation)
+    if (this.db) {
+      this.db.savePendingInterrupt({
+        id: runId,
+        runId,
+        agentId,
+        toolCallId,
+        toolName,
+        args,
+        timeoutMs,
+        createdAt: now,
+        expiresAt,
+        status: 'pending',
+      }).catch((err) => {
+        console.error('[InterruptManager] failed to persist pending interrupt:', err);
+      });
+    }
+
     return new Promise<InterruptResolution>((resolve) => {
       const wrappedResolve = (value: InterruptResolution) => {
         const entry = this.pending.get(runId);
@@ -69,6 +113,13 @@ export class InterruptManager {
             if (entry) {
               this.pending.delete(runId);
               resolve({ action: 'timeout', data: `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes` });
+
+              // Update DB status
+              if (this.db) {
+                this.db.resolveInterrupt(runId, 'timeout', `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes`).catch((err) => {
+                  console.error('[InterruptManager] failed to persist timeout resolution:', err);
+                });
+              }
 
               if (this.eventBus) {
                 this.eventBus.emit('run.interrupt_resolved', {
@@ -85,7 +136,7 @@ export class InterruptManager {
 
       this.pending.set(runId, {
         resolve: wrappedResolve,
-        info: { toolCallId, toolName, args, createdAt: Date.now() },
+        info: { toolCallId, toolName, args, createdAt: now },
         agentId,
         timeoutId,
       });
@@ -99,7 +150,7 @@ export class InterruptManager {
           toolName,
           args,
           interruptId: runId,
-          timestamp: Date.now(),
+          timestamp: now,
         });
       }
     });
@@ -115,6 +166,13 @@ export class InterruptManager {
     if (entry.timeoutId) clearTimeout(entry.timeoutId);
     entry.resolve({ action, data });
     this.pending.delete(runId);
+
+    // Persist resolution to DB
+    if (this.db) {
+      this.db.resolveInterrupt(runId, action, data).catch((err) => {
+        console.error('[InterruptManager] failed to persist interrupt resolution:', err);
+      });
+    }
 
     if (this.eventBus) {
       this.eventBus.emit('run.interrupt_resolved', {
@@ -154,12 +212,32 @@ export class InterruptManager {
   }
 
   /**
+   * Get all pending interrupts for a given agent from the in-memory map.
+   */
+  getPendingForAgent(agentId: string): Array<{ runId: string; info: PendingInterrupt }> {
+    const results: Array<{ runId: string; info: PendingInterrupt }> = [];
+    for (const [runId, entry] of this.pending) {
+      if (entry.agentId === agentId) {
+        results.push({ runId, info: entry.info });
+      }
+    }
+    return results;
+  }
+
+  /**
    * Reject all pending interrupts. Call on server shutdown.
    */
   shutdown(): void {
-    for (const [, entry] of this.pending) {
+    for (const [runId, entry] of this.pending) {
       if (entry.timeoutId) clearTimeout(entry.timeoutId);
       entry.resolve({ action: 'reject', data: 'Server shutting down' });
+
+      // Mark as resolved in DB
+      if (this.db) {
+        this.db.resolveInterrupt(runId, 'reject', 'Server shutting down').catch((err) => {
+          console.error('[InterruptManager] failed to persist shutdown resolution:', err);
+        });
+      }
     }
     this.pending.clear();
   }

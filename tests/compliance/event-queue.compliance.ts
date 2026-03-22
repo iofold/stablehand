@@ -19,6 +19,8 @@ export interface EventQueueComplianceOptions {
   createQueue: () => EventQueue | Promise<EventQueue>;
   /** Optional cleanup after each test. */
   cleanup?: () => Promise<void>;
+  /** Skip tests that use fake timers (incompatible with async DB backends). */
+  skipTimerTests?: boolean;
 }
 
 // ── Compliance suite ────────────────────────────────────────────
@@ -292,7 +294,7 @@ export function eventQueueComplianceSuite(opts: EventQueueComplianceOptions): vo
       expect(id.length).toBeGreaterThan(0);
     });
 
-    it('scheduled event fires after wake time', async () => {
+    (opts.skipTimerTests ? it.skip : it)('scheduled event fires after wake time', async () => {
       // Shut down the queue created with real timers, recreate with fake timers
       await queue.shutdown();
       vi.useFakeTimers();
@@ -335,7 +337,7 @@ export function eventQueueComplianceSuite(opts: EventQueueComplianceOptions): vo
   // ── shutdown contract ─────────────────────────────────────────
 
   describe('EventQueue shutdown contract', () => {
-    it('shutdown stops polling and cleans up', async () => {
+    (opts.skipTimerTests ? it.skip : it)('shutdown stops polling and cleans up', async () => {
       // Shut down the queue created with real timers, recreate with fake timers
       await queue.shutdown();
       vi.useFakeTimers();

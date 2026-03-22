@@ -1,0 +1,211 @@
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { allowConsoleErrors } from '../setup-strict.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+
+import { createContainer } from '../../packages/ctxmill/src/config/container.js';
+import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
+import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
+import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
+import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js';
+import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
+import { LocalToolProvider } from '../../packages/ctxmill/src/tool/providers/local.js';
+import { emitEventTool } from '../../packages/ctxmill/src/tool/builtin/emit-event.js';
+
+interface ToolTestSuccessResponse {
+  success: true;
+  result: string;
+  durationMs: number;
+}
+
+interface ToolTestErrorResponse {
+  success: false;
+  error: string;
+  durationMs: number;
+}
+
+describe('POST /api/catalogs/tools/test', () => {
+  let app: FastifyInstance;
+  let container: AppContainer;
+  let dataDir: string;
+
+  beforeEach(() => { allowConsoleErrors(); });
+
+  beforeAll(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-tool-tester-'));
+
+    container = await createContainer(
+      {
+        preset: 'local',
+        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
+        llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
+      },
+      dataDir,
+    );
+
+    const toolExecutor = new LocalFunctionExecutor();
+    toolExecutor.register(emitEventTool);
+    toolExecutor.register({
+      name: 'empty-input-tool',
+      description: 'Test tool with optional empty object input.',
+      input: z.object({}),
+      handler: async (input) => `received ${Object.keys(input as Record<string, unknown>).length} keys`,
+    });
+
+    const toolRegistry = new DefaultToolRegistry();
+    toolRegistry.addProvider(new LocalToolProvider(toolExecutor));
+    await toolRegistry.refresh();
+
+    const envFactory = new MockOverlayFactory();
+
+    app = await createServer({
+      db: container.db,
+      agentRunService: container.agentRunService,
+      runRegistry: container.runRegistry,
+      eventBus: container.eventBus,
+      dataDir,
+      envFactory,
+      toolDefinitionRegistry: toolRegistry,
+    });
+
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await container.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('returns success with result and durationMs for a valid tool', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/catalogs/tools/test',
+      payload: {
+        toolName: 'emit-event',
+        input: {
+          type: 'tool.tester.event',
+          payload: { ok: true },
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as ToolTestSuccessResponse;
+    expect(body.success).toBe(true);
+    expect(typeof body.result).toBe('string');
+    expect(body.result.length).toBeGreaterThan(0);
+    expect(typeof body.durationMs).toBe('number');
+    expect(body.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns Tool not found for unknown tool names', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/catalogs/tools/test',
+      payload: {
+        toolName: 'missing-tool',
+        input: {},
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as ToolTestErrorResponse;
+    expect(body).toEqual({
+      success: false,
+      error: 'Tool not found: missing-tool',
+      durationMs: 0,
+    });
+  });
+
+  it('returns 400 for missing toolName', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/catalogs/tools/test',
+      payload: { input: {} },
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    const body = res.json() as ToolTestErrorResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toContain('Invalid request body');
+    expect(body.durationMs).toBe(0);
+  });
+
+  it('returns 400 for an empty request body', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/catalogs/tools/test',
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    const body = res.json() as ToolTestErrorResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toContain('Invalid request body');
+    expect(body.durationMs).toBe(0);
+  });
+
+  it('uses an empty object default when input is omitted', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/catalogs/tools/test',
+      payload: {
+        toolName: 'empty-input-tool',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as ToolTestSuccessResponse;
+    expect(body.success).toBe(true);
+    expect(body.result).toBe('received 0 keys');
+    expect(body.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns the expected success response shape', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/catalogs/tools/test',
+      payload: {
+        toolName: 'empty-input-tool',
+        input: {},
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as ToolTestSuccessResponse;
+    expect(body).toEqual({
+      success: true,
+      result: 'received 0 keys',
+      durationMs: expect.any(Number),
+    });
+  });
+
+  it('returns the expected error response shape when tool execution fails', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/catalogs/tools/test',
+      payload: {
+        toolName: 'emit-event',
+        input: {},
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as ToolTestErrorResponse;
+    expect(body.success).toBe(false);
+    expect(body.error).toContain('input validation failed');
+    expect(typeof body.durationMs).toBe('number');
+    expect(body.durationMs).toBeGreaterThanOrEqual(0);
+  });
+});

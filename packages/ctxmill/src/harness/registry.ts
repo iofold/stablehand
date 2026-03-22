@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { AgentHarness, HarnessRegistry } from './types.js';
 
 export class DefaultHarnessRegistry implements HarnessRegistry {
@@ -15,6 +16,14 @@ export class DefaultHarnessRegistry implements HarnessRegistry {
       );
     }
     return h;
+  }
+
+  getConfigSchema(name: string): z.ZodType {
+    const harness = this.harnesses.get(name);
+    if (!harness) {
+      throw new Error(`Unknown harness: ${name}`);
+    }
+    return harness.configSchema;
   }
 
   list(): string[] {

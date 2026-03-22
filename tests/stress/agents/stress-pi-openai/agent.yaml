@@ -1,0 +1,32 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: stress-pi-openai
+  displayName: Stress PI OpenAI
+  description: >-
+    PI Agent harness with frontier OpenAI.
+  labels:
+    example: stress-test
+    harness: pi-agent
+spec:
+  harness: pi-agent
+  model:
+    provider: openai
+    id: gpt-5.4
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+  instructions: |
+    You are a PI Agent stress test running GPT-5.4.
+    When asked to run the stress test, do the following:
+    1. Confirm you are operational and report your model name.
+    2. Use the emit-event tool to emit an event with type='stress.pi.complete' and payload containing {agent: 'stress-pi-openai', model: 'gpt-5.4', status: 'ok'}.
+    3. Report that the stress test is complete.
+  tools:
+    - ref: emit-event
+  nativeTools:
+    allowlist:
+      - read
+      - bash
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 120
+    maxTokensPerRun: 8000

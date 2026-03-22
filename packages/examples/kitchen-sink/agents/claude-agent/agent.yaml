@@ -1,25 +1,43 @@
 apiVersion: ctxmill.io/v1
 kind: Agent
 metadata:
-  name: claude-helper
-  displayName: Claude Agents Helper
-  description: General assistant using Claude Agents SDK harness
+  name: claude-writer
+  displayName: Claude Writer
+  description: >-
+    Writer agent. Receives the analysis and writes a polished
+    final report, then emits "report.ready".
   labels:
     example: kitchen-sink
     harness: claude-agents
+    chain-role: writer
+    chain-order: "2"
 spec:
   harness: claude-agents
-  model:
+  harnessConfig:
     provider: anthropic
-    id: claude-sonnet-4-6
+    model: claude-sonnet-4-6
     apiKeyRef: "$secret:ANTHROPIC_API_KEY"
     temperature: 0.3
   instructions: |
-    You are a helpful assistant that can perform calculations and check weather.
-    Always be concise and accurate. You are powered by the Claude Agents SDK harness.
+    You are the Writer in a multi-agent chain. Your role:
+    1. Receive an analysis from the Analyst agent.
+    2. Write a clear, polished final report based on the analysis.
+    3. Format the report with sections: Summary, Key Findings, Recommendations.
+    4. When the report is ready, use the emit-event tool to emit a
+       "report.ready" event with the full report in the payload under the
+       key "report".
+
+    Always write clearly and professionally.
   tools:
-    - ref: calculator
-    - ref: weather
+    - ref: emit-event
+  nativeTools:
+    allowlist:
+      - Read
+      - Write
+      - Edit
+      - Bash
+      - Grep
+      - Glob
   mode: interactive
   resources:
     maxRunDurationSeconds: 60

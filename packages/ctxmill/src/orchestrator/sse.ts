@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { TypedEventBus } from '../events/bus.js';
 
 const MAX_QUEUE_SIZE = 100;
+const MAX_EVENT_HISTORY = 50;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_HEARTBEAT_FAILURES = 3;
 
@@ -13,6 +14,13 @@ interface ConnectionState {
   consecutiveHeartbeatFailures: number;
   agentId: string;
   clientId: string;
+  /** Last event ID this client has acknowledged (via Last-Event-ID on reconnect). */
+  lastEventId?: string;
+}
+
+interface HistoryEntry {
+  id: string;
+  event: Record<string, unknown>;
 }
 
 /**
@@ -24,6 +32,8 @@ export class SSEManager {
   private heartbeatIntervals = new Map<FastifyReply, NodeJS.Timeout>();
   private lastActivityMap = new Map<string, number>();
   private connectionState = new Map<FastifyReply, ConnectionState>();
+  private eventHistory = new Map<string, HistoryEntry[]>();
+  private eventSeq = 0;
   private eventBus?: TypedEventBus;
 
   constructor(eventBus?: TypedEventBus) {
@@ -34,13 +44,7 @@ export class SSEManager {
    * Subscribe a client connection to an agent's event stream.
    * Sets up heartbeat and cleanup on disconnect.
    */
-  subscribe(agentId: string, reply: FastifyReply): void {
-    if (!this.connections.has(agentId)) {
-      this.connections.set(agentId, new Set());
-    }
-    this.connections.get(agentId)!.add(reply);
-
-    // Initialize per-connection state
+  subscribe(agentId: string, reply: FastifyReply, lastEventId?: string): void {
     const clientId = randomUUID();
     const state: ConnectionState = {
       queue: [],
@@ -49,8 +53,32 @@ export class SSEManager {
       consecutiveHeartbeatFailures: 0,
       agentId,
       clientId,
+      lastEventId,
     };
     this.connectionState.set(reply, state);
+
+    const history = this.eventHistory.get(agentId) ?? [];
+    try {
+      let replaying = !lastEventId;
+      for (const entry of history) {
+        if (!replaying) {
+          if (entry.id === lastEventId) {
+            replaying = true;
+          }
+          continue;
+        }
+        reply.raw.write(`id: ${entry.id}\ndata: ${JSON.stringify(entry.event)}\n\n`);
+      }
+    } catch (writeErr) {
+      console.debug('[SSE] Failed to replay history for agent', agentId, writeErr);
+      this.connectionState.delete(reply);
+      return;
+    }
+
+    if (!this.connections.has(agentId)) {
+      this.connections.set(agentId, new Set());
+    }
+    this.connections.get(agentId)!.add(reply);
 
     // Emit client connected event
     if (this.eventBus) {
@@ -154,10 +182,25 @@ export class SSEManager {
    * Broadcast an AG-UI event to all clients subscribed to an agent.
    */
   broadcast(agentId: string, event: Record<string, unknown>): void {
+    this.lastActivityMap.set(agentId, Date.now());
+
+    this.eventSeq++;
+    const eventId = `${agentId}-${this.eventSeq}`;
+
+    if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
+      this.eventHistory.delete(agentId);
+    } else {
+      const history = this.eventHistory.get(agentId) ?? [];
+      history.push({ id: eventId, event });
+      if (history.length > MAX_EVENT_HISTORY) {
+        history.splice(0, history.length - MAX_EVENT_HISTORY);
+      }
+      this.eventHistory.set(agentId, history);
+    }
+
     const clients = this.connections.get(agentId);
     if (!clients || clients.size === 0) return;
-    this.lastActivityMap.set(agentId, Date.now());
-    const data = `data: ${JSON.stringify(event)}\n\n`;
+    const data = `id: ${eventId}\ndata: ${JSON.stringify(event)}\n\n`;
     for (const reply of clients) {
       const state = this.connectionState.get(reply);
       if (state) {
@@ -241,5 +284,6 @@ export class SSEManager {
     this.connections.clear();
     this.heartbeatIntervals.clear();
     this.connectionState.clear();
+    this.eventHistory.clear();
   }
 }

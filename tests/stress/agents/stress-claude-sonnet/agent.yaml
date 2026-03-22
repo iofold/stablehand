@@ -1,0 +1,35 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: stress-claude-sonnet
+  displayName: Stress Claude Sonnet
+  description: >-
+    Claude Agents harness with Sonnet — uses native tools to write+execute code.
+  labels:
+    example: stress-test
+    harness: claude-agents
+spec:
+  harness: claude-agents
+  model:
+    provider: anthropic
+    id: claude-sonnet-4-6
+    apiKeyRef: "$secret:ANTHROPIC_API_KEY"
+  instructions: |
+    You are a Claude stress test agent that validates code writing and execution.
+    When given a task, you MUST use your tools to complete it.
+    You have access to Read, Write, Edit, Bash, Glob, and Grep tools.
+    Always execute the code you write to verify it works.
+  tools:
+    - ref: emit-event
+  nativeTools:
+    allowlist:
+      - Read
+      - Write
+      - Edit
+      - Bash
+      - Grep
+      - Glob
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 180
+    maxTokensPerRun: 16000

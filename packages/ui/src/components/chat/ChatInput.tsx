@@ -69,7 +69,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             rows={1}
             placeholder={disabled ? 'Agent is thinking...' : 'Message the agent...'}
             className={cn(
-              'flex-1 resize-none bg-transparent px-4 py-3 text-sm text-surface-200 placeholder-surface-500 focus:outline-none',
+              'flex-1 resize-none bg-transparent px-4 py-3 text-sm text-surface-200 placeholder-surface-400 focus:outline-none',
               'min-h-[44px] max-h-[200px]',
               disabled && 'cursor-not-allowed',
             )}
@@ -77,7 +77,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           <div className="flex items-center gap-1.5 pr-2 pb-2">
             {/* Keyboard hint */}
             {!disabled && value.trim() && (
-              <div className="hidden sm:flex items-center gap-1 text-[10px] text-surface-500 mr-1">
+              <div className="hidden sm:flex items-center gap-1 text-[10px] text-surface-400 mr-1">
                 <CornerDownLeft className="h-3 w-3" />
               </div>
             )}
@@ -90,7 +90,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
                 'flex items-center justify-center rounded-md px-3 py-2 transition-all duration-200',
                 canSend
                   ? 'bg-accent-600 text-white hover:bg-accent-500'
-                  : 'bg-surface-700/50 text-surface-500',
+                  : 'bg-surface-700/50 text-surface-400',
               )}
             >
               <Send className="h-4 w-4" />
@@ -98,7 +98,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           </div>
         </div>
         <div className="mt-1.5 flex items-center justify-center">
-          <p className="text-[10px] text-surface-600">
+          <p className="text-[10px] text-surface-400">
             {disabled ? 'Streaming response...' : 'Press Enter to send, Shift+Enter for new line'}
           </p>
         </div>

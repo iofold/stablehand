@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
-import { readdir, readFile, writeFile, mkdir, rename } from 'node:fs/promises';
-import { join, basename, extname } from 'node:path';
+import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { join, basename } from 'node:path';
 import matter from 'gray-matter';
 import type {
   SkillFrontmatter,
@@ -184,61 +184,4 @@ export async function updateSkillMd(
   await writeFile(join(skillDir, 'SKILL.md'), content, 'utf-8');
 
   return loadSkill(skillDir);
-}
-
-// ── Migration ───────────────────────────────────────────────────────
-
-/**
- * Migrate a legacy .ts/.js skill file into the Agent Skills directory format.
- * Creates a skill directory, moves the file to scripts/, and generates SKILL.md.
- */
-export async function migrateSkill(filePath: string, skillsDir: string): Promise<LoadedSkill> {
-  const ext = extname(filePath);
-  const name = basename(filePath, ext).replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-  const skillDir = join(skillsDir, name);
-
-  await mkdir(join(skillDir, 'scripts'), { recursive: true });
-
-  // Move the original file into scripts/
-  const destPath = join(skillDir, 'scripts', basename(filePath));
-  await rename(filePath, destPath);
-
-  // Generate SKILL.md
-  const instructions = `This skill was migrated from a legacy script file.\n\nSee \`scripts/${basename(filePath)}\` for the implementation.`;
-  const fm: SkillFrontmatter = {
-    name,
-    description: `Migrated from ${basename(filePath)}`,
-  };
-  const content = matter.stringify(instructions, fm);
-  await writeFile(join(skillDir, 'SKILL.md'), content, 'utf-8');
-
-  return loadSkill(skillDir);
-}
-
-// ── Legacy detection ────────────────────────────────────────────────
-
-/**
- * Discover legacy skill files (loose .ts/.js without SKILL.md) in a skills directory.
- */
-export async function discoverLegacySkills(
-  skillsDir: string,
-): Promise<Array<{ name: string; filename: string; content: string }>> {
-  if (!existsSync(skillsDir)) return [];
-
-  const entries = await readdir(skillsDir, { withFileTypes: true });
-  const results: Array<{ name: string; filename: string; content: string }> = [];
-
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.js')) continue;
-
-    const content = await readFile(join(skillsDir, entry.name), 'utf-8');
-    results.push({
-      name: entry.name.replace(/\.[tj]s$/, ''),
-      filename: entry.name,
-      content,
-    });
-  }
-
-  return results;
 }

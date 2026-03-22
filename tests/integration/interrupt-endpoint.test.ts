@@ -31,7 +31,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     container = await createContainer(
       {
         preset: 'local',
-        database: { type: 'sqlite', path: 'data.db' },
+        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
         llm: {
           provider: 'anthropic',
           model: 'claude-sonnet-4-6',
@@ -43,7 +43,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
 
     app = await createServer({
       db: container.db,
-      executor: container.agentExecutor,
+      agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
@@ -65,7 +65,8 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
       url: '/api/agents',
       payload: {
         name,
-        model: 'test-model',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
         systemPrompt: 'Interrupt test agent',
         tools: [],
       },
@@ -76,7 +77,10 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
 
   it('valid approve action resolves the pending interrupt', async () => {
     const agentId = await createAgent('approve-test');
-    const runId = `run-approve-${Date.now()}`;
+
+    // Register a run in the RunRegistry so the ownership check passes
+    const registeredRun = await container.runRegistry.startRun(agentId, 'conv-approve', 'interactive', 'test');
+    const runId = registeredRun.id;
 
     // Create a pending interrupt keyed by runId
     const pendingPromise = app.interrupts.waitForApproval(
@@ -100,7 +104,10 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
 
   it('valid reject action resolves the pending interrupt', async () => {
     const agentId = await createAgent('reject-test');
-    const runId = `run-reject-${Date.now()}`;
+
+    // Register a run in the RunRegistry so the ownership check passes
+    const registeredRun = await container.runRegistry.startRun(agentId, 'conv-reject', 'interactive', 'test');
+    const runId = registeredRun.id;
 
     const pendingPromise = app.interrupts.waitForApproval(
       runId, agentId, 'tc-2', 'deleteTool', { id: '42' }, 0,
@@ -121,7 +128,10 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
 
   it('submit action maps to approve with data passed through', async () => {
     const agentId = await createAgent('submit-test');
-    const runId = `run-submit-${Date.now()}`;
+
+    // Register a run in the RunRegistry so the ownership check passes
+    const registeredRun = await container.runRegistry.startRun(agentId, 'conv-submit', 'interactive', 'test');
+    const runId = registeredRun.id;
 
     const pendingPromise = app.interrupts.waitForApproval(
       runId, agentId, 'tc-3', 'editDocument', { docId: 'abc' }, 0,
@@ -170,13 +180,31 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     expect(res.json().error).toMatch(/action is required/);
   });
 
-  it('returns 404 when no pending interrupt exists', async () => {
+  it('returns 404 when no pending interrupt exists (runId not in registry)', async () => {
     const agentId = await createAgent('no-pending-test');
 
     const res = await app.inject({
       method: 'POST',
       url: `/api/agents/${agentId}/interrupt`,
       payload: { action: 'approve', runId: 'nonexistent-run' },
+    });
+
+    // Ownership check rejects unknown runIds with 404
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toMatch(/Run not found/);
+    expect(res.json().runId).toBe('nonexistent-run');
+  });
+
+  it('returns 404 when run exists but no pending interrupt', async () => {
+    const agentId = await createAgent('no-pending-test-2');
+
+    // Register a run so ownership check passes, but don't create an interrupt
+    const registeredRun = await container.runRegistry.startRun(agentId, 'conv-no-pending', 'interactive', 'test');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/agents/${agentId}/interrupt`,
+      payload: { action: 'approve', runId: registeredRun.id },
     });
 
     expect(res.statusCode).toBe(404);
@@ -186,7 +214,10 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
 
   it('uses runId as resolve key when provided', async () => {
     const agentId = await createAgent('runid-key-test');
-    const runId = `run-key-${Date.now()}`;
+
+    // Register a run in the RunRegistry so the ownership check passes
+    const registeredRun = await container.runRegistry.startRun(agentId, 'conv-key', 'interactive', 'test');
+    const runId = registeredRun.id;
 
     // Interrupt is keyed by runId
     const pendingPromise = app.interrupts.waitForApproval(
@@ -209,22 +240,13 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
   it('falls back to agentId as resolve key when runId is omitted', async () => {
     const agentId = await createAgent('fallback-key-test');
 
-    // Register the interrupt keyed by agentId (simulating legacy behavior)
-    const pendingPromise = app.interrupts.waitForApproval(
-      agentId, agentId, 'tc-5', 'tool', {}, 0,
-    );
-
-    // POST without runId — endpoint should fall back to using agentId
     const res = await app.inject({
       method: 'POST',
       url: `/api/agents/${agentId}/interrupt`,
       payload: { action: 'approve' },
     });
 
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ resolved: true, action: 'approve' });
-
-    const resolution = await pendingPromise;
-    expect(resolution.action).toBe('approve');
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/runId is required/);
   });
 });

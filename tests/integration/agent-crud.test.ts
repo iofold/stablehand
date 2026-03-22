@@ -3,7 +3,6 @@ import { allowConsoleErrors } from '../setup-strict.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { FastifyInstance } from 'fastify';
 
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
@@ -12,13 +11,14 @@ import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-ov
 
 const VALID_AGENT = {
   name: 'test-agent',
-  model: 'test-model',
+  harness: 'langgraph',
+  harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
   systemPrompt: 'You are a test agent.',
   tools: ['tool-a', 'tool-b'],
 };
 
 describe('Agent CRUD & related endpoints', () => {
-  let app: FastifyInstance;
+  let app: Awaited<ReturnType<typeof createServer>>;
   let container: AppContainer;
   let dataDir: string;
 
@@ -29,8 +29,8 @@ describe('Agent CRUD & related endpoints', () => {
 
     container = await createContainer(
       {
-        preset: 'local',
-        database: { type: 'sqlite', path: 'data.db' },
+        preset: 'docker',
+        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
         llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
       },
       dataDir,
@@ -40,9 +40,10 @@ describe('Agent CRUD & related endpoints', () => {
 
     app = await createServer({
       db: container.db,
-      executor: container.agentExecutor,
+      agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
+      harnessRegistry: container.harnessRegistry,
       dataDir,
       envFactory,
     });
@@ -73,24 +74,31 @@ describe('Agent CRUD & related endpoints', () => {
       const body = res.json();
       expect(body.id).toBeDefined();
       expect(body.name).toBe('create-valid');
-      expect(body.model).toBe(VALID_AGENT.model);
+      expect(body.harness).toBe(VALID_AGENT.harness);
+      expect(body.harnessConfig).toEqual(VALID_AGENT.harnessConfig);
       expect(body.tools).toEqual(VALID_AGENT.tools);
+      expect(body).not.toHaveProperty('model');
     });
 
     it('rejects missing name', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/agents',
-        payload: { model: 'x', systemPrompt: 'x', tools: [] },
+        payload: {
+          harness: 'langgraph',
+          harnessConfig: VALID_AGENT.harnessConfig,
+          systemPrompt: 'x',
+          tools: [],
+        },
       });
       expect(res.statusCode).toBe(400);
     });
 
-    it('rejects missing model', async () => {
+    it('rejects missing harnessConfig', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/agents',
-        payload: { name: 'x', systemPrompt: 'x', tools: [] },
+        payload: { name: 'x', harness: 'langgraph', systemPrompt: 'x', tools: [] },
       });
       expect(res.statusCode).toBe(400);
     });
@@ -99,7 +107,7 @@ describe('Agent CRUD & related endpoints', () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/agents',
-        payload: { name: 'x', model: 'x', tools: [] },
+        payload: { name: 'x', harness: 'langgraph', harnessConfig: VALID_AGENT.harnessConfig, tools: [] },
       });
       expect(res.statusCode).toBe(400);
     });
@@ -108,7 +116,7 @@ describe('Agent CRUD & related endpoints', () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/agents',
-        payload: { name: 'x', model: 'x', systemPrompt: 'x' },
+        payload: { name: 'x', harness: 'langgraph', harnessConfig: VALID_AGENT.harnessConfig, systemPrompt: 'x' },
       });
       expect(res.statusCode).toBe(400);
     });
@@ -117,9 +125,41 @@ describe('Agent CRUD & related endpoints', () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/agents',
-        payload: { name: 'x', model: 'x', systemPrompt: 'x', tools: 'not-array' },
+        payload: {
+          name: 'x',
+          harness: 'langgraph',
+          harnessConfig: VALID_AGENT.harnessConfig,
+          systemPrompt: 'x',
+          tools: 'not-array',
+        },
       });
       expect(res.statusCode).toBe(400);
+    });
+
+    it('rejects invalid harnessConfig for the selected harness', async () => {
+      const res = await createAgent({
+        name: 'invalid-harness-config',
+        harnessConfig: { provider: 'invalid', model: 'gpt-5-mini' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      const body = res.json();
+      expect(body.error).toContain('Invalid harnessConfig');
+      expect(Array.isArray(body.details)).toBe(true);
+    });
+
+    it('rejects legacy model field payloads', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/agents',
+        payload: {
+          ...VALID_AGENT,
+          model: 'gpt-5-mini',
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('no longer supported');
     });
   });
 
@@ -143,14 +183,16 @@ describe('Agent CRUD & related endpoints', () => {
       expect(res.json().name).toBe('renamed-agent');
     });
 
-    it('updates model only', async () => {
+    it('updates harnessConfig only', async () => {
       const res = await app.inject({
         method: 'PUT',
         url: `/api/agents/${agentId}`,
-        payload: { model: 'new-model' },
+        payload: {
+          harnessConfig: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().model).toBe('new-model');
+      expect(res.json().harnessConfig).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6' });
     });
 
     it('updates multiple fields', async () => {
@@ -175,6 +217,42 @@ describe('Agent CRUD & related endpoints', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it('rejects harness change without harnessConfig', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/agents/${agentId}`,
+        payload: { harness: 'claude-agents' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('harnessConfig is required');
+    });
+
+    it('rejects mismatched harnessConfig when changing harness', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/agents/${agentId}`,
+        payload: {
+          harness: 'claude-agents',
+          harnessConfig: { provider: 'openai' },
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('Invalid harnessConfig');
+    });
+
+    it('rejects legacy model field updates', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/agents/${agentId}`,
+        payload: { model: 'new-model' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('no longer supported');
+    });
+
     it('rejects update on non-existent agent', async () => {
       const res = await app.inject({
         method: 'PUT',
@@ -182,6 +260,46 @@ describe('Agent CRUD & related endpoints', () => {
         payload: { name: 'nope' },
       });
       expect(res.statusCode).toBe(404);
+    });
+  });
+
+  describe('GET /api/agents/:id', () => {
+    it('returns parsed harnessConfig and omits legacy model fields', async () => {
+      const created = await createAgent({ name: 'detail-agent' });
+      const agentId = created.json().id;
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/agents/${agentId}`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.harness).toBe('langgraph');
+      expect(body.harnessConfig).toEqual(VALID_AGENT.harnessConfig);
+      expect(body).not.toHaveProperty('model');
+      expect(body).not.toHaveProperty('modelConfig');
+    });
+  });
+
+  describe('GET /api/agents', () => {
+    it('returns parsed harnessConfig in list responses and omits legacy model fields', async () => {
+      await createAgent({ name: 'list-agent' });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/agents',
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(Array.isArray(body)).toBe(true);
+
+      const agent = body.find((entry: Record<string, unknown>) => entry.name === 'list-agent');
+      expect(agent).toBeDefined();
+      expect(agent?.harnessConfig).toEqual(VALID_AGENT.harnessConfig);
+      expect(agent).not.toHaveProperty('model');
+      expect(agent).not.toHaveProperty('modelConfig');
     });
   });
 

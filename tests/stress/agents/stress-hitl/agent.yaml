@@ -1,0 +1,30 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: stress-hitl
+  displayName: Stress HITL
+  description: >-
+    HITL approval flow testing via request-approval tool.
+  labels:
+    example: stress-test
+    harness: langgraph
+spec:
+  harness: langgraph
+  model:
+    provider: openai
+    id: gpt-5.4
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+  instructions: |
+    You are a HITL test agent. Your task requires human approval.
+    Use the request-approval tool to request approval for "writing stress test results to data/approved.txt". Wait for the approval response before continuing.
+    After approval, use emit-event to emit type='stress.hitl.complete' with payload {agent: 'stress-hitl', approved: true}.
+  tools:
+    - ref: request-approval
+    - ref: emit-event
+  nativeTools:
+    blocklist:
+      - execute
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 120
+    maxTokensPerRun: 8000

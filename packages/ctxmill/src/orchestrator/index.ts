@@ -11,3 +11,5 @@ export type { EventRouteOptions } from './routes/events.js';
 export { RunRegistry } from './run-registry.js';
 export type { AgentRun, RunStatus, RunMode } from './run-registry.js';
 export { SSEBroadcaster } from './sse-broadcaster.js';
+export { CallbackDispatcher } from './callback-dispatcher.js';
+export type { EnqueueCallbackOpts } from './callback-dispatcher.js';

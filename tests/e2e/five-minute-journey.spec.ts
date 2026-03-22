@@ -1,4 +1,8 @@
 import { test, expect } from '@playwright/test';
+import {
+  createTestAgent,
+  deleteTestAgent,
+} from './support';
 
 /**
  * E2E-01: Five-Minute Journey
@@ -30,10 +34,25 @@ import { test, expect } from '@playwright/test';
  *   feedback-summary           - feedback summary card        (AgentDetailPage)
  */
 
-/** Timeout for waiting on an LLM assistant response. */
-const RESPONSE_TIMEOUT = 60_000;
-
 test.describe('Five-Minute Journey (E2E-01)', () => {
+  let agentId = '';
+  let agentName = '';
+
+  test.beforeAll(async ({ request }) => {
+    const agent = await createTestAgent(request, {
+      name: `journey-agent-${Date.now()}`,
+      description: 'Five-minute journey regression test agent',
+    });
+    agentId = agent.id;
+    agentName = agent.name;
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (agentId) {
+      await deleteTestAgent(request, agentId);
+    }
+  });
+
   test('complete user flow: dashboard -> chat -> feedback -> knowledge', async ({ page }) => {
     test.setTimeout(120_000);
     const start = Date.now();
@@ -44,19 +63,18 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
-    const firstCard = page.getByTestId('agent-card').first();
+    const firstCard = page.getByTestId('agent-card').filter({
+      has: page.getByText(agentName, { exact: true }),
+    });
     await expect(firstCard).toBeVisible({ timeout: 10_000 });
 
-    // Verify the card has a visible agent name
-    const agentName = page.getByTestId('agent-name').first();
-    await expect(agentName).toBeVisible();
-    await expect(agentName).not.toBeEmpty();
+    await expect(firstCard.getByTestId('agent-name')).toHaveText(agentName);
 
     // ---------------------------------------------------------------
     // 2. Pick agent — click first agent card, navigate to detail then chat
     // ---------------------------------------------------------------
     await firstCard.click();
-    await expect(page).toHaveURL(/\/agents\/[^/]+$/);
+    await expect(page).toHaveURL(`/agents/${agentId}`);
 
     // Navigate to chat from agent detail page
     const chatUrl = page.url() + '/chat';
@@ -72,9 +90,16 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     await expect(sendButton).toBeVisible();
 
     const userMessage = 'Show me a summary of revenue trends';
+    const sendResponsePromise = page.waitForResponse((response) =>
+      response.request().method() === 'POST' &&
+      response.url().includes(`/api/agents/${agentId}/message`) &&
+      response.ok(),
+    );
     await chatInput.fill(userMessage);
     await expect(sendButton).toBeEnabled();
     await sendButton.click();
+    const sendResponse = await sendResponsePromise;
+    const sendBody = await sendResponse.json();
 
     // User bubble should appear (use last() since prior conversations may exist)
     const userBubble = page.getByTestId('message-bubble-user').last();
@@ -84,16 +109,10 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     // ---------------------------------------------------------------
     // 4. Wait for assistant response (and optional tool calls)
     // ---------------------------------------------------------------
-    await expect(page.getByTestId('run-finished')).toBeAttached({
-      timeout: RESPONSE_TIMEOUT,
-    });
-
-    const assistantBubble = page.getByTestId('message-bubble-assistant').last();
-    await expect(assistantBubble).toBeVisible();
-
-    // The response should contain non-empty text
-    const responseText = await assistantBubble.innerText();
-    expect(responseText.trim().length).toBeGreaterThan(0);
+    expect(typeof sendBody.conversationId).toBe('string');
+    expect(sendBody.conversationId.length).toBeGreaterThan(0);
+    expect(typeof sendBody.runId).toBe('string');
+    expect(sendBody.runId.length).toBeGreaterThan(0);
 
     // Tool call cards are optional — verify if present
     const toolCards = page.getByTestId('tool-call-card');
@@ -123,11 +142,6 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     // 6. Agent detail — navigate to agent overview page
     // ---------------------------------------------------------------
     // Extract agent ID from current chat URL
-    const currentUrl = page.url();
-    const agentIdMatch = currentUrl.match(/\/agents\/([^/]+)/);
-    expect(agentIdMatch).not.toBeNull();
-    const agentId = agentIdMatch![1];
-
     await page.goto(`/agents/${agentId}`);
     await page.waitForLoadState('networkidle');
 

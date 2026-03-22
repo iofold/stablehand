@@ -1,0 +1,31 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: stress-pi-gemini
+  displayName: Stress PI Gemini
+  description: >-
+    PI Agent harness with Gemini.
+  labels:
+    example: stress-test
+    harness: pi-agent
+spec:
+  harness: pi-agent
+  model:
+    provider: google
+    id: gemini-2.5-flash
+    apiKeyRef: "$secret:GOOGLE_API_KEY"
+  instructions: |
+    You are a Gemini-powered PI Agent stress test.
+    When asked to run the stress test, do the following:
+    1. Confirm you are operational and report your model name.
+    2. Use the emit-event tool to emit an event with type='stress.pi-gemini.complete' and payload containing {agent: 'stress-pi-gemini', model: 'gemini-2.5-flash', status: 'ok'}.
+    3. Report that the stress test is complete.
+  tools:
+    - ref: emit-event
+  nativeTools:
+    allowlist:
+      - read
+  mode: interactive
+  resources:
+    maxRunDurationSeconds: 120
+    maxTokensPerRun: 8000

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  Wrench,
   ShieldCheck,
   Sparkles,
   Pencil,
@@ -17,14 +16,29 @@ import {
   createSkill,
   updateSkill,
   deleteSkill,
+  fetchCatalogTools,
   type LoadedSkill,
   type LegacySkill,
+  type CatalogTool,
 } from '@/lib/api';
 
 export interface AgentToolsTabProps {
   tools: string[];
-  skills: string[];
   agentId: string;
+  nativeTools?: { allowlist?: string[]; blocklist?: string[] } | null;
+}
+
+function sourceBadgeClass(source?: string): string {
+  switch (source) {
+    case 'local':
+      return 'bg-teal-500/10 border-teal-500/20 text-teal-400';
+    case 'mcp':
+      return 'bg-violet-500/10 border-violet-500/20 text-violet-400';
+    case 'composio':
+      return 'bg-amber-500/10 border-amber-500/20 text-amber-400';
+    default:
+      return 'bg-surface-700/30 border-surface-600/30 text-surface-400';
+  }
 }
 
 function normalizeLoadedSkill(skill: LoadedSkill): LoadedSkill {
@@ -38,7 +52,7 @@ function normalizeLoadedSkill(skill: LoadedSkill): LoadedSkill {
   };
 }
 
-export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTabProps) {
+export function AgentToolsTab({ tools = [], agentId, nativeTools }: AgentToolsTabProps) {
   const [loadedSkills, setLoadedSkills] = useState<LoadedSkill[]>([]);
   const [legacySkills, setLegacySkills] = useState<LegacySkill[]>([]);
   const [showSkillForm, setShowSkillForm] = useState(false);
@@ -46,6 +60,9 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
   const [newSkillDescription, setNewSkillDescription] = useState('');
   const [newSkillInstructions, setNewSkillInstructions] = useState('');
   const [creatingSkill, setCreatingSkill] = useState(false);
+
+  const [catalogTools, setCatalogTools] = useState<Map<string, CatalogTool>>(new Map());
+  const [catalogLoading, setCatalogLoading] = useState(true);
 
   // Edit state
   const [editingSkill, setEditingSkill] = useState<string | null>(null);
@@ -75,6 +92,31 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
   useEffect(() => {
     loadSkills();
   }, [agentId]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadCatalog = async () => {
+      try {
+        setCatalogLoading(true);
+        const tools = await fetchCatalogTools();
+        if (mounted) {
+          const map = new Map<string, CatalogTool>();
+          tools.forEach(t => map.set(t.name, t));
+          setCatalogTools(map);
+        }
+      } catch {
+        if (mounted) {
+          setCatalogTools(new Map());
+        }
+      } finally {
+        if (mounted) {
+          setCatalogLoading(false);
+        }
+      }
+    };
+    loadCatalog();
+    return () => { mounted = false; };
+  }, []);
 
   const handleCreateSkill = async () => {
     if (!newSkillName.trim() || !newSkillDescription.trim() || !newSkillInstructions.trim()) return;
@@ -145,32 +187,63 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
 
   return (
     <div data-testid="tools-explorer" className="space-y-8">
+      {nativeTools && (nativeTools.allowlist?.length || nativeTools.blocklist?.length) ? (
+        <div className="p-3 bg-surface-800/50 rounded-lg border border-surface-700">
+          <h3 className="text-sm font-semibold text-surface-200 mb-2">
+            SDK Native Tools &mdash; {nativeTools.allowlist ? 'Allowlist' : 'Blocklist'}
+          </h3>
+          <div className="flex flex-wrap gap-1.5">
+            {(nativeTools.allowlist ?? nativeTools.blocklist ?? []).map((t) => (
+              <span key={t} className={`px-2 py-0.5 text-xs rounded-full font-mono ${
+                nativeTools.allowlist ? 'bg-accent/10 text-accent' : 'bg-red-500/10 text-red-400'
+              }`}>
+                {t}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {/* Tools section */}
       <div className="space-y-4">
       {tools.length === 0 ? (
         <div className="text-center py-16">
           <p className="text-surface-400 font-medium">No tools configured</p>
-          <p className="text-surface-600 text-sm mt-1">Configure tools in the agent definition to grant it capabilities.</p>
+          <p className="text-surface-400 text-sm mt-1">Configure tools in the agent definition to grant it capabilities.</p>
+        </div>
+      ) : catalogLoading ? (
+        <div className="text-center py-16">
+          <p className="text-surface-400 text-sm animate-pulse">Loading tool details...</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {tools.map((tool) => (
-            <div
-              key={tool}
-              data-testid="tool-detail-card"
-              className="border border-surface-700 rounded-lg bg-surface-800 px-4 py-3 transition-colors hover:border-surface-600"
-            >
-              <div className="flex flex-col">
-                <h4 className="font-mono text-sm font-medium text-surface-200">{tool}</h4>
+          {tools.map((tool) => {
+            const catalogEntry = catalogTools.get(tool);
+            return (
+              <div
+                key={tool}
+                data-testid="tool-detail-card"
+                className="border border-surface-700 rounded-lg bg-surface-800 px-4 py-3 transition-colors hover:border-surface-600 flex flex-col gap-2"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <h4 className="font-mono text-sm font-bold text-surface-200 break-all">{tool}</h4>
+                  <span className={`shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${sourceBadgeClass(catalogEntry?.source)}`}>
+                    {catalogEntry?.source || 'unknown'}
+                  </span>
+                </div>
+                {catalogEntry?.description && (
+                  <p className="text-xs text-surface-400 line-clamp-2" title={catalogEntry.description}>
+                    {catalogEntry.description}
+                  </p>
+                )}
                 {isHITL(tool) && (
-                  <div className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-300">
+                  <div className="mt-1 flex items-center gap-1.5 text-[11px] text-amber-300">
                     <ShieldCheck className="h-3 w-3" />
                     <span>Requires approval (HITL)</span>
                   </div>
                 )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       </div>
@@ -199,21 +272,21 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
               placeholder="skill-name (lowercase, hyphens only)"
               value={newSkillName}
               onChange={(e) => setNewSkillName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))}
-              className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-600 focus:outline-none focus:border-accent-500/50"
+              className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-400 focus:outline-none focus:border-accent-500/50"
             />
             <input
               type="text"
               placeholder="Short description"
               value={newSkillDescription}
               onChange={(e) => setNewSkillDescription(e.target.value)}
-              className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-600 focus:outline-none focus:border-accent-500/50"
+              className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-400 focus:outline-none focus:border-accent-500/50"
             />
             <textarea
               placeholder="Instructions (markdown)..."
               value={newSkillInstructions}
               onChange={(e) => setNewSkillInstructions(e.target.value)}
               rows={6}
-              className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-600 focus:outline-none focus:border-accent-500/50 resize-none"
+              className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-400 focus:outline-none focus:border-accent-500/50 resize-none"
             />
             <button
               type="button"
@@ -242,7 +315,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
                       <button
                         type="button"
                         onClick={() => { setEditingSkill(null); setEditDescription(''); setEditInstructions(''); }}
-                        className="text-surface-500 hover:text-surface-300 transition-colors"
+                        className="text-surface-400 hover:text-surface-300 transition-colors"
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -252,7 +325,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
                       value={editDescription}
                       onChange={(e) => setEditDescription(e.target.value)}
                       placeholder="Description"
-                      className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-600 focus:outline-none focus:border-accent-500/50"
+                      className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-400 focus:outline-none focus:border-accent-500/50"
                     />
                     <textarea
                       value={editInstructions}
@@ -311,7 +384,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
                         <div className="flex items-center gap-2">
                           <h4 className="font-mono text-sm font-medium text-surface-200">{skill.name}</h4>
                           {skill.frontmatter?.['allowed-tools'] && (
-                            <span className="text-[10px] text-surface-500 bg-surface-700/50 px-1.5 py-0.5 rounded">
+                            <span className="text-[10px] text-surface-400 bg-surface-700/50 px-1.5 py-0.5 rounded">
                               {skill.frontmatter['allowed-tools'].split(' ').length} tools
                             </span>
                           )}
@@ -323,7 +396,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
                           type="button"
                           onClick={() => handleEditSkill(skill)}
                           title="Edit skill"
-                          className="p-1 text-surface-500 hover:text-accent-400 transition-colors"
+                          className="p-1 text-surface-400 hover:text-accent-400 transition-colors"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
@@ -331,7 +404,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
                           type="button"
                           onClick={() => { setConfirmDelete(skill.name); setEditingSkill(null); }}
                           title="Delete skill"
-                          className="p-1 text-surface-500 hover:text-red-400 transition-colors"
+                          className="p-1 text-surface-400 hover:text-red-400 transition-colors"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -339,7 +412,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
                     </div>
 
                     {/* Directory contents summary */}
-                    <div className="mt-2 flex items-center gap-3 text-[11px] text-surface-500">
+                    <div className="mt-2 flex items-center gap-3 text-[11px] text-surface-400">
                       {skill.scripts.length > 0 && (
                         <span className="flex items-center gap-1">
                           <FileCode className="h-3 w-3" />
@@ -365,7 +438,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
                       <button
                         type="button"
                         onClick={() => toggleExpand(skill.name)}
-                        className="mt-2 flex items-center gap-1 text-[11px] text-surface-500 hover:text-surface-300 transition-colors"
+                        className="mt-2 flex items-center gap-1 text-[11px] text-surface-400 hover:text-surface-300 transition-colors"
                       >
                         {expandedSkill === skill.name ? (
                           <ChevronDown className="h-3 w-3" />
@@ -390,7 +463,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
         {/* Legacy skills (backward compat) */}
         {legacySkills.length > 0 && (
           <div className="space-y-2">
-            <p className="text-[11px] text-surface-500 uppercase tracking-wide">Legacy Skills</p>
+            <p className="text-[11px] text-surface-400 uppercase tracking-wide">Legacy Skills</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {legacySkills.map((skill) => (
                 <div
@@ -400,7 +473,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
                   <div className="flex items-start justify-between">
                     <div>
                       <h4 className="font-mono text-sm font-medium text-surface-200">{skill.name}</h4>
-                      <div className="mt-1 text-[11px] text-surface-500 font-mono truncate">
+                      <div className="mt-1 text-[11px] text-surface-400 font-mono truncate">
                         {skill.filename}
                       </div>
                     </div>
@@ -414,7 +487,7 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
                         }
                       }}
                       title="Delete legacy skill"
-                      className="p-1 text-surface-500 hover:text-red-400 transition-colors"
+                      className="p-1 text-surface-400 hover:text-red-400 transition-colors"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -426,25 +499,9 @@ export function AgentToolsTab({ tools = [], skills = [], agentId }: AgentToolsTa
           </div>
         )}
 
-        {/* Fallback: show skill names from agent definition when no files loaded */}
-        {loadedSkills.length === 0 && legacySkills.length === 0 && skills.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {skills.map((skill) => (
-              <span
-                key={skill}
-                className="inline-flex items-center gap-1.5 rounded-full border border-accent-500/20 bg-accent-600/10 px-3 py-1 text-xs font-medium text-accent-300"
-              >
-                <Sparkles className="h-3 w-3 text-accent-400" />
-                {skill}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {/* Empty state */}
-        {loadedSkills.length === 0 && legacySkills.length === 0 && skills.length === 0 && (
-          <p className="text-sm text-surface-500">
-            No skills configured. Skills are higher-level capabilities that compose tools.
+        {loadedSkills.length === 0 && legacySkills.length === 0 && (
+          <p className="text-sm text-surface-400">
+            No workspace skills configured. Use the form above to create SKILL.md files.
           </p>
         )}
       </div>

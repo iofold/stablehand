@@ -54,7 +54,7 @@ export function AgentKnowledgeTab({
       {/* Search & filter */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-500" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-400" />
           <input
             type="text"
             value={search}
@@ -99,7 +99,7 @@ export function AgentKnowledgeTab({
       <div className="rounded-lg border border-surface-700/40 bg-surface-900/40 p-4 flex items-center justify-between">
         <div>
           <p className="text-sm font-medium text-surface-300">Shared Knowledge</p>
-          <p className="text-xs text-surface-500 mt-0.5">Knowledge shared across all agents is also available to this agent at runtime.</p>
+          <p className="text-xs text-surface-400 mt-0.5">Knowledge shared across all agents is also available to this agent at runtime.</p>
         </div>
         <Link
           to="/knowledge"
@@ -112,12 +112,12 @@ export function AgentKnowledgeTab({
 
       {/* Knowledge items list */}
       {loading ? (
-        <div className="text-center py-12 text-surface-500 text-sm">Loading knowledge...</div>
+        <div className="text-center py-12 text-surface-400 text-sm">Loading knowledge...</div>
       ) : items.length === 0 ? (
         <div className="text-center py-16">
           <Brain className="mx-auto h-10 w-10 text-surface-700 mb-3" />
           <p className="text-surface-400 font-medium">No knowledge items yet</p>
-          <p className="text-surface-600 text-sm mt-1">This agent has not learned anything yet.</p>
+          <p className="text-surface-400 text-sm mt-1">This agent has not learned anything yet.</p>
         </div>
       ) : (
         <div className="space-y-0">
@@ -132,7 +132,7 @@ export function AgentKnowledgeTab({
               <p className="mt-1 text-sm text-surface-400 line-clamp-2">
                 {item.content}
               </p>
-              <div className="mt-2 flex items-center gap-3 text-xs text-surface-500">
+              <div className="mt-2 flex items-center gap-3 text-xs text-surface-400">
                 {item.category && <span>{item.category}</span>}
                 {item.createdAt && (
                   <span>{new Date(item.createdAt).toLocaleDateString()}</span>

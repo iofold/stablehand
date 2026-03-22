@@ -32,7 +32,7 @@ function jsonSchemaPropertyToZod(prop: Record<string, unknown>): z.ZodTypeAny {
       if (properties) {
         return buildZodObject(properties, (prop.required as string[]) ?? []);
       }
-      return z.record(z.unknown());
+      return z.record(z.string(), z.unknown());
     }
     default:
       return z.unknown();
@@ -132,8 +132,8 @@ export class MCPToolProvider implements ToolProvider {
           name: mcpTool.name,
           description: mcpTool.description ?? '',
           input: zodInput,
-          handler: async (input: Record<string, unknown>, _ctx: ToolContext) => {
-            return this.execute(mcpTool.name, input, _ctx);
+          handler: async (input: unknown, _ctx: ToolContext) => {
+            return this.execute(mcpTool.name, input as Record<string, unknown>, _ctx);
           },
         };
         return def;

@@ -1,7 +1,7 @@
 export { AgentOverviewTab } from './AgentOverviewTab';
 export { AgentKnowledgeTab } from './AgentKnowledgeTab';
-export { AgentRunsTab } from './AgentRunsTab';
+export { AgentSessionsTab } from './AgentRunsTab';
 export { AgentToolsTab } from './AgentToolsTab';
 export { AgentFilesTab } from './AgentFilesTab';
-export { AgentSubagentsTab } from './AgentSubagentsTab';
+export { AgentSecretsTab } from './AgentSecretsTab';
 export type { TabId } from './types';

@@ -319,14 +319,14 @@ export function TriggersPage() {
           </div>
         ) : error ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Zap className="h-8 w-8 text-surface-600 mb-3" />
+            <Zap className="h-8 w-8 text-surface-400 mb-3" />
             <p className="text-sm text-surface-400">{error}</p>
           </div>
         ) : filteredTriggers.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Zap className="h-8 w-8 text-surface-600 mb-3" />
+            <Zap className="h-8 w-8 text-surface-400 mb-3" />
             <p className="text-sm text-surface-400">No triggers found</p>
-            <p className="text-xs text-surface-500 mt-1">
+            <p className="text-xs text-surface-400 mt-1">
               Create a trigger to automate responses to events.
             </p>
           </div>
@@ -390,7 +390,7 @@ export function TriggersPage() {
                     <button
                       type="button"
                       onClick={() => openEditModal(trigger)}
-                      className="rounded-md p-1.5 text-surface-500 transition-colors hover:text-surface-200 hover:bg-surface-700"
+                      className="rounded-md p-1.5 text-surface-400 transition-colors hover:text-surface-200 hover:bg-surface-700"
                       title="Edit trigger"
                     >
                       <Pencil className="h-3.5 w-3.5" />
@@ -416,7 +416,7 @@ export function TriggersPage() {
                       <button
                         type="button"
                         onClick={() => setDeletingId(trigger.id)}
-                        className="rounded-md p-1.5 text-surface-500 transition-colors hover:text-red-400 hover:bg-red-500/10"
+                        className="rounded-md p-1.5 text-surface-400 transition-colors hover:text-red-400 hover:bg-red-500/10"
                         title="Delete trigger"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -447,7 +447,7 @@ export function TriggersPage() {
               <button
                 type="button"
                 onClick={closeModal}
-                className="rounded-md p-1 text-surface-500 hover:text-surface-200 transition-colors"
+                className="rounded-md p-1 text-surface-400 hover:text-surface-200 transition-colors"
               >
                 <X className="h-5 w-5" />
               </button>

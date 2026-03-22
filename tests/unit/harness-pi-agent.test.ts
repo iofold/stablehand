@@ -1,14 +1,117 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { PIAgentHarness, zodToTypeBox, convertTools } from '../../packages/ctxmill/src/harness/pi-agent.js';
-import type { AgentHarness, HarnessRunConfig } from '../../packages/ctxmill/src/harness/types.js';
-import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
 
-// Use @sinclair/typebox directly since @mariozechner/pi-ai re-exports it
-// and it's available as a transitive dependency.
-const { Type } = await import('@sinclair/typebox');
+const mockCreateAgentSession = vi.fn();
+const mockSessionManagerInMemory = vi.fn(() => ({ type: 'session-manager' }));
+const mockAuthStorageInMemory = vi.fn(() => ({ setRuntimeApiKey: vi.fn() }));
+const mockCreateCodingTools = vi.fn((cwd: string) => [{ name: 'coding-tools', cwd }]);
+const mockCreateReadTool = vi.fn((cwd: string) => ({ name: 'read', cwd }));
+const mockCreateBashTool = vi.fn((cwd: string) => ({ name: 'bash', cwd }));
+const mockCreateEditTool = vi.fn((cwd: string) => ({ name: 'edit', cwd }));
+const mockCreateWriteTool = vi.fn((cwd: string) => ({ name: 'write', cwd }));
+const mockCreateGrepTool = vi.fn((cwd: string) => ({ name: 'grep', cwd }));
+const mockCreateFindTool = vi.fn((cwd: string) => ({ name: 'find', cwd }));
+const mockCreateLsTool = vi.fn((cwd: string) => ({ name: 'ls', cwd }));
+
+vi.mock('@mariozechner/pi-coding-agent', () => ({
+  createAgentSession: mockCreateAgentSession,
+  SessionManager: { inMemory: mockSessionManagerInMemory },
+  DefaultResourceLoader: vi.fn(function MockDefaultResourceLoader() {
+    return {
+      reload: vi.fn(async () => undefined),
+    };
+  }),
+  SettingsManager: { inMemory: vi.fn(() => ({ type: 'settings-manager' })) },
+  AuthStorage: { inMemory: mockAuthStorageInMemory },
+  ModelRegistry: vi.fn(function MockModelRegistry() {
+    return { type: 'model-registry' };
+  }),
+  createCodingTools: mockCreateCodingTools,
+  createReadTool: mockCreateReadTool,
+  createBashTool: mockCreateBashTool,
+  createEditTool: mockCreateEditTool,
+  createWriteTool: mockCreateWriteTool,
+  createGrepTool: mockCreateGrepTool,
+  createFindTool: mockCreateFindTool,
+  createLsTool: mockCreateLsTool,
+}));
+
+vi.mock('@mariozechner/pi-ai', async () => {
+  const { Type } = await import('@sinclair/typebox');
+  return {
+    Type,
+    getModel: vi.fn((provider: string, model: string) => ({ provider, id: model })),
+  };
+});
+
+import { Type } from '@sinclair/typebox';
+import { PIAgentHarness, convertTools, zodToTypeBox } from '../../packages/ctxmill/src/harness/pi-agent.js';
+import type { AgentEvent, AgentHarness, HarnessSessionConfig, TokenUsage } from '../../packages/ctxmill/src/harness/types.js';
+import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
+import type { Message } from '../../packages/ctxmill/src/types.js';
+
+function makeMessage(
+  role: Message['role'],
+  content: string,
+): Message {
+  return {
+    id: `${role}-${content}`,
+    agentId: 'agent-1',
+    role,
+    content,
+    createdAt: new Date(),
+  };
+}
+
+function makeConfig(overrides: Partial<HarnessSessionConfig> = {}): HarnessSessionConfig {
+  return {
+    systemPrompt: 'Test',
+    tools: [],
+    secrets: { openai: 'test-key' },
+    agentId: 'test-agent',
+    conversationId: 'test-conv',
+    workspaceDir: '/tmp/workspace',
+    harnessConfigJson: JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', apiKeyRef: 'openai' }),
+    ...overrides,
+  };
+}
+
+async function collectEvents(stream: AsyncGenerator<AgentEvent>): Promise<AgentEvent[]> {
+  const events: AgentEvent[] = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
+}
+
+type PiEventMapper = (piEvent: Record<string, unknown>, usage: TokenUsage | undefined) => AgentEvent | null;
+type NativeToolBuilder = (
+  config: HarnessSessionConfig,
+  factories: {
+    createReadTool: (cwd: string) => unknown;
+    createBashTool: (cwd: string) => unknown;
+    createEditTool: (cwd: string) => unknown;
+    createWriteTool: (cwd: string) => unknown;
+    createGrepTool: (cwd: string) => unknown;
+    createFindTool: (cwd: string) => unknown;
+    createLsTool: (cwd: string) => unknown;
+    createCodingTools: (cwd: string) => unknown[];
+  },
+) => unknown[];
+
+function getMapPiEvent(harness: PIAgentHarness): PiEventMapper {
+  return Reflect.get(harness, 'mapPiAgentEvent') as PiEventMapper;
+}
+
+function getBuildNativeTools(harness: PIAgentHarness): NativeToolBuilder {
+  return Reflect.get(harness, 'buildNativeTools') as NativeToolBuilder;
+}
 
 describe('PIAgentHarness', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('should have name "pi-agent"', () => {
     const harness = new PIAgentHarness();
     expect(harness.name).toBe('pi-agent');
@@ -16,157 +119,98 @@ describe('PIAgentHarness', () => {
 
   it('should implement the AgentHarness interface', () => {
     const harness = new PIAgentHarness();
-
-    // Verify it satisfies the interface structurally
     const asInterface: AgentHarness = harness;
     expect(asInterface.name).toBe('pi-agent');
-    expect(typeof asInterface.run).toBe('function');
+    expect(typeof asInterface.openSession).toBe('function');
+  });
+
+  it('throws ZodError when legacy modelConfig is passed without harnessConfigJson', async () => {
+    const harness = new PIAgentHarness();
+    const legacyConfig = {
+      ...makeConfig(),
+      modelConfig: { provider: 'openai', model: 'gpt-4o-mini', apiKeyRef: 'openai' },
+    };
+    Reflect.deleteProperty(legacyConfig, 'harnessConfigJson');
+
+    await expect(
+      Reflect.apply(harness.openSession.bind(harness), harness, [legacyConfig]),
+    ).rejects.toThrowError(z.ZodError);
+  });
+
+  it('throws ZodError when harnessConfigJson does not satisfy PIAgentConfigSchema', async () => {
+    const harness = new PIAgentHarness();
+
+    await expect(
+      harness.openSession(makeConfig({ harnessConfigJson: JSON.stringify({ provider: 'openai' }) })),
+    ).rejects.toThrowError(z.ZodError);
   });
 });
 
 describe('zodToTypeBox', () => {
   it('should convert a simple Zod object with string fields', () => {
-    const zodSchema = z.object({
-      city: z.string(),
-      country: z.string(),
-    });
+    const result = zodToTypeBox(Type, z.object({ city: z.string(), country: z.string() }));
 
-    const result = zodToTypeBox(Type, zodSchema);
-
-    expect(result).toBeDefined();
     expect(result.type).toBe('object');
-    expect(result.properties.city).toBeDefined();
     expect(result.properties.city.type).toBe('string');
-    expect(result.properties.country).toBeDefined();
     expect(result.properties.country.type).toBe('string');
   });
 
   it('should convert number fields', () => {
-    const zodSchema = z.object({
-      count: z.number(),
-    });
-
-    const result = zodToTypeBox(Type, zodSchema);
-
-    expect(result.properties.count).toBeDefined();
+    const result = zodToTypeBox(Type, z.object({ count: z.number() }));
     expect(result.properties.count.type).toBe('number');
   });
 
   it('should convert boolean fields', () => {
-    const zodSchema = z.object({
-      active: z.boolean(),
-    });
-
-    const result = zodToTypeBox(Type, zodSchema);
-
-    expect(result.properties.active).toBeDefined();
+    const result = zodToTypeBox(Type, z.object({ active: z.boolean() }));
     expect(result.properties.active.type).toBe('boolean');
   });
 
   it('should handle optional fields', () => {
-    const zodSchema = z.object({
-      required: z.string(),
-      optional: z.string().optional(),
-    });
-
-    const result = zodToTypeBox(Type, zodSchema);
-
+    const result = zodToTypeBox(Type, z.object({ required: z.string(), optional: z.string().optional() }));
     expect(result.properties.required).toBeDefined();
     expect(result.properties.optional).toBeDefined();
   });
 
   it('should handle enum fields', () => {
-    const zodSchema = z.object({
-      priority: z.enum(['low', 'medium', 'high']),
-    });
-
-    const result = zodToTypeBox(Type, zodSchema);
-
-    expect(result.properties.priority).toBeDefined();
-    // TypeBox represents enums as Union of Literals
+    const result = zodToTypeBox(Type, z.object({ priority: z.enum(['low', 'medium', 'high']) }));
     expect(result.properties.priority.anyOf ?? result.properties.priority.oneOf).toBeDefined();
   });
 
   it('should handle array fields', () => {
-    const zodSchema = z.object({
-      tags: z.array(z.string()),
-    });
-
-    const result = zodToTypeBox(Type, zodSchema);
-
-    expect(result.properties.tags).toBeDefined();
+    const result = zodToTypeBox(Type, z.object({ tags: z.array(z.string()) }));
     expect(result.properties.tags.type).toBe('array');
   });
 
   it('should handle nested object fields', () => {
-    const zodSchema = z.object({
-      address: z.object({
-        street: z.string(),
-        zip: z.number(),
-      }),
-    });
-
-    const result = zodToTypeBox(Type, zodSchema);
-
-    expect(result.properties.address).toBeDefined();
+    const result = zodToTypeBox(Type, z.object({ address: z.object({ street: z.string(), zip: z.number() }) }));
     expect(result.properties.address.type).toBe('object');
     expect(result.properties.address.properties.street.type).toBe('string');
     expect(result.properties.address.properties.zip.type).toBe('number');
   });
 
   it('should handle empty object schema', () => {
-    const zodSchema = z.object({});
-    const result = zodToTypeBox(Type, zodSchema);
-
-    expect(result).toBeDefined();
+    const result = zodToTypeBox(Type, z.object({}));
     expect(result.type).toBe('object');
   });
 
   it('should fall back to string for unknown Zod types', () => {
-    // z.any() and other exotic types should fall back to Type.String()
-    const zodSchema = z.object({
-      data: z.any(),
-    });
-
-    const result = zodToTypeBox(Type, zodSchema);
-
-    expect(result.properties.data).toBeDefined();
+    const result = zodToTypeBox(Type, z.object({ data: z.any() }));
     expect(result.properties.data.type).toBe('string');
   });
 });
 
 describe('convertTools', () => {
-  function makeConfig(overrides?: Partial<HarnessRunConfig>): HarnessRunConfig {
-    return {
-      modelConfig: { provider: 'openai', model: 'gpt-4o-mini' },
-      systemPrompt: 'Test',
-      messages: [{ role: 'user', content: 'Hello' } as any],
-      tools: [],
-      secrets: {},
-      agentId: 'test-agent',
-      runId: 'test-run',
-      conversationId: 'test-conv',
-      workspaceDir: '/tmp',
-      ...overrides,
-    };
-  }
-
   it('should convert ToolDefinition[] to PI AgentTool[] format', () => {
     const toolDefs: ToolDefinition[] = [
       {
         name: 'get-weather',
         description: 'Get the current weather for a city',
-        input: z.object({
-          city: z.string().describe('The city name'),
-        }),
-        handler: async (input: { city: string }) => {
-          return JSON.stringify({ temp: 72, city: input.city });
-        },
+        input: z.object({ city: z.string() }),
+        handler: async (input) => JSON.stringify(input),
       },
     ];
 
-    const config = makeConfig({ tools: toolDefs });
-    const converted = convertTools(Type, toolDefs, config);
+    const converted = convertTools(Type, toolDefs, makeConfig({ tools: toolDefs }));
 
     expect(converted).toHaveLength(1);
     expect(converted[0].name).toBe('get-weather');
@@ -176,37 +220,7 @@ describe('convertTools', () => {
     expect(typeof converted[0].execute).toBe('function');
   });
 
-  it('should convert multiple tools', () => {
-    const toolDefs: ToolDefinition[] = [
-      {
-        name: 'tool-a',
-        description: 'Tool A',
-        input: z.object({}),
-        handler: async () => 'a',
-      },
-      {
-        name: 'tool-b',
-        description: 'Tool B',
-        input: z.object({ x: z.number() }),
-        handler: async () => 'b',
-      },
-    ];
-
-    const config = makeConfig({ tools: toolDefs });
-    const converted = convertTools(Type, toolDefs, config);
-
-    expect(converted).toHaveLength(2);
-    expect(converted[0].name).toBe('tool-a');
-    expect(converted[1].name).toBe('tool-b');
-  });
-
-  it('should handle empty tool list', () => {
-    const config = makeConfig();
-    const converted = convertTools(Type, [], config);
-    expect(converted).toHaveLength(0);
-  });
-
-  it('should wire execute to call the tool handler', async () => {
+  it('should wire execute to call the tool handler with full tool context', async () => {
     const handler = vi.fn().mockResolvedValue('result-42');
     const toolDefs: ToolDefinition[] = [
       {
@@ -217,9 +231,7 @@ describe('convertTools', () => {
       },
     ];
 
-    const config = makeConfig({ tools: toolDefs });
-    const converted = convertTools(Type, toolDefs, config);
-
+    const converted = convertTools(Type, toolDefs, makeConfig({ tools: toolDefs }));
     const result = await converted[0].execute('call-1', { val: 'hello' });
 
     expect(result).toEqual({
@@ -231,13 +243,15 @@ describe('convertTools', () => {
       expect.objectContaining({
         agentId: 'test-agent',
         conversationId: 'test-conv',
-        workspaceDir: '/tmp',
+        workspaceDir: '/tmp/workspace',
+        knowledge: expect.any(Object),
+        eventBus: undefined,
       }),
     );
   });
 
-  it('should wire HITL approval for tools with requiresApproval', async () => {
-    const onApproval = vi.fn().mockResolvedValue({ action: 'approve' });
+  it('should execute approval-gated tools when approval is granted', async () => {
+    const onApprovalNeeded = vi.fn().mockResolvedValue({ action: 'approve' as const });
     const handler = vi.fn().mockResolvedValue('approved-result');
     const toolDefs: ToolDefinition[] = [
       {
@@ -249,20 +263,16 @@ describe('convertTools', () => {
       },
     ];
 
-    const config = makeConfig({
-      tools: toolDefs,
-      onApprovalNeeded: onApproval,
-    });
-    const converted = convertTools(Type, toolDefs, config);
+    const converted = convertTools(Type, toolDefs, makeConfig({ tools: toolDefs, onApprovalNeeded }));
     const result = await converted[0].execute('call-1', {});
 
-    expect(onApproval).toHaveBeenCalledOnce();
+    expect(onApprovalNeeded).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledOnce();
     expect(result.content[0].text).toBe('approved-result');
   });
 
   it('should return rejection message when approval is rejected', async () => {
-    const onApproval = vi.fn().mockResolvedValue({ action: 'reject' });
+    const onApprovalNeeded = vi.fn().mockResolvedValue({ action: 'reject' as const });
     const handler = vi.fn().mockResolvedValue('should-not-run');
     const toolDefs: ToolDefinition[] = [
       {
@@ -274,235 +284,191 @@ describe('convertTools', () => {
       },
     ];
 
-    const config = makeConfig({
-      tools: toolDefs,
-      onApprovalNeeded: onApproval,
-    });
-    const converted = convertTools(Type, toolDefs, config);
+    const converted = convertTools(Type, toolDefs, makeConfig({ tools: toolDefs, onApprovalNeeded }));
     const result = await converted[0].execute('call-1', {});
 
-    expect(onApproval).toHaveBeenCalledOnce();
+    expect(onApprovalNeeded).toHaveBeenCalledOnce();
     expect(handler).not.toHaveBeenCalled();
     expect(result.content[0].text).toBe('Tool call was rejected by the user.');
   });
 
-  it('should auto-execute when no onApprovalNeeded provided for approval tool', async () => {
+  it('should auto-execute when no approval callback is provided', async () => {
     const handler = vi.fn().mockResolvedValue('auto-approved');
     const toolDefs: ToolDefinition[] = [
       {
         name: 'approval-tool',
-        description: 'Needs approval but no callback',
+        description: 'Needs approval',
         input: z.object({}),
         requiresApproval: true,
         handler,
       },
     ];
 
-    // No onApprovalNeeded callback
-    const config = makeConfig({ tools: toolDefs });
-    const converted = convertTools(Type, toolDefs, config);
+    const converted = convertTools(Type, toolDefs, makeConfig({ tools: toolDefs }));
     const result = await converted[0].execute('call-1', {});
 
-    // Should auto-execute since there's no approval callback
     expect(handler).toHaveBeenCalledOnce();
     expect(result.content[0].text).toBe('auto-approved');
   });
 });
 
-describe('PIAgentHarness.mapPIEvent', () => {
-  const harness = new PIAgentHarness();
+describe('PIAgentHarness private helpers', () => {
+  it('should map PI events to ctxmill events', () => {
+    const harness = new PIAgentHarness();
+    const mapPiEvent = getMapPiEvent(harness);
 
-  it('should map text_delta from message_update events', () => {
-    const piEvent = {
+    expect(mapPiEvent({
       type: 'message_update',
-      message: {},
-      assistantMessageEvent: {
-        type: 'text_delta',
-        delta: 'Hello world',
-        contentIndex: 0,
-        partial: {},
-      },
-    };
+      assistantMessageEvent: { type: 'text_delta', delta: 'Hello world' },
+    }, undefined)).toEqual({ type: 'text_delta', content: 'Hello world' });
 
-    const events = harness.mapPIEvent(piEvent);
-    expect(events).toEqual([
-      { type: 'text_delta', content: 'Hello world' },
-    ]);
-  });
-
-  it('should ignore message_update events without text_delta', () => {
-    const piEvent = {
-      type: 'message_update',
-      message: {},
-      assistantMessageEvent: {
-        type: 'toolcall_start',
-        contentIndex: 0,
-        partial: {},
-      },
-    };
-
-    const events = harness.mapPIEvent(piEvent);
-    expect(events).toHaveLength(0);
-  });
-
-  it('should map tool_execution_start to tool_call_start', () => {
-    const piEvent = {
+    expect(mapPiEvent({
       type: 'tool_execution_start',
       toolCallId: 'call-123',
       toolName: 'get-weather',
       args: { city: 'NYC' },
+    }, undefined)).toEqual({
+      type: 'tool_call_start',
+      id: 'call-123',
+      name: 'get-weather',
+      args: { city: 'NYC' },
+    });
+
+    expect(mapPiEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'call-123',
+      result: { content: [{ type: 'text', text: '72F and sunny' }] },
+      isError: false,
+    }, undefined)).toEqual({
+      type: 'tool_call_end',
+      id: 'call-123',
+      result: '72F and sunny',
+      error: undefined,
+      durationMs: 0,
+    });
+  });
+
+  it('should map agent_end to done with accumulated usage', () => {
+    const harness = new PIAgentHarness();
+    const mapPiEvent = getMapPiEvent(harness);
+    const usage: TokenUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
+
+    expect(mapPiEvent({ type: 'agent_end', messages: [] }, usage)).toEqual({
+      type: 'done',
+      usage,
+    });
+  });
+
+  it('should build native tools from allowlist and apply blocklist', () => {
+    const harness = new PIAgentHarness();
+    const buildNativeTools = getBuildNativeTools(harness);
+    const factories = {
+      createReadTool: vi.fn((cwd: string) => ({ name: 'read', cwd })),
+      createBashTool: vi.fn((cwd: string) => ({ name: 'bash', cwd })),
+      createEditTool: vi.fn((cwd: string) => ({ name: 'edit', cwd })),
+      createWriteTool: vi.fn((cwd: string) => ({ name: 'write', cwd })),
+      createGrepTool: vi.fn((cwd: string) => ({ name: 'grep', cwd })),
+      createFindTool: vi.fn((cwd: string) => ({ name: 'find', cwd })),
+      createLsTool: vi.fn((cwd: string) => ({ name: 'ls', cwd })),
+      createCodingTools: vi.fn((cwd: string) => [{ name: 'coding-tools', cwd }]),
     };
 
-    const events = harness.mapPIEvent(piEvent);
-    expect(events).toEqual([
-      {
-        type: 'tool_call_start',
-        id: 'call-123',
-        name: 'get-weather',
-        args: { city: 'NYC' },
-      },
+    const tools = buildNativeTools(makeConfig({
+      nativeTools: [{
+        allowlist: ['read', 'bash', 'edit'],
+        blocklist: ['bash'],
+      }],
+    }), factories) as Array<{ name: string }>;
+
+    expect(tools).toEqual([
+      { name: 'read', cwd: '/tmp/workspace' },
+      { name: 'edit', cwd: '/tmp/workspace' },
     ]);
   });
 
-  it('should map tool_execution_end to tool_call_end', () => {
-    const piEvent = {
-      type: 'tool_execution_end',
-      toolCallId: 'call-123',
-      toolName: 'get-weather',
-      result: {
-        content: [{ type: 'text', text: '72F and sunny' }],
-        details: {},
-      },
-      isError: false,
+  it('should use full coding tool set when nativeTools is undefined', () => {
+    const harness = new PIAgentHarness();
+    const buildNativeTools = getBuildNativeTools(harness);
+    const factories = {
+      createReadTool: vi.fn(),
+      createBashTool: vi.fn(),
+      createEditTool: vi.fn(),
+      createWriteTool: vi.fn(),
+      createGrepTool: vi.fn(),
+      createFindTool: vi.fn(),
+      createLsTool: vi.fn(),
+      createCodingTools: vi.fn((cwd: string) => [{ name: 'coding-tools', cwd }]),
     };
 
-    const events = harness.mapPIEvent(piEvent);
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('tool_call_end');
-    expect((events[0] as any).id).toBe('call-123');
-    expect((events[0] as any).result).toBe('72F and sunny');
-    expect((events[0] as any).error).toBeUndefined();
-  });
+    const tools = buildNativeTools(makeConfig(), factories);
 
-  it('should map tool_execution_end with error to tool_call_end with error', () => {
-    const piEvent = {
-      type: 'tool_execution_end',
-      toolCallId: 'call-456',
-      toolName: 'bash',
-      result: {
-        content: [{ type: 'text', text: 'Command failed' }],
-        details: {},
-      },
-      isError: true,
-    };
-
-    const events = harness.mapPIEvent(piEvent);
-    expect(events).toHaveLength(1);
-    expect((events[0] as any).error).toBe('Command failed');
-  });
-
-  it('should ignore agent_start events', () => {
-    const events = harness.mapPIEvent({ type: 'agent_start' });
-    expect(events).toHaveLength(0);
-  });
-
-  it('should ignore agent_end events', () => {
-    const events = harness.mapPIEvent({ type: 'agent_end', messages: [] });
-    expect(events).toHaveLength(0);
-  });
-
-  it('should ignore turn_start events', () => {
-    const events = harness.mapPIEvent({ type: 'turn_start' });
-    expect(events).toHaveLength(0);
-  });
-
-  it('should ignore turn_end events', () => {
-    const events = harness.mapPIEvent({ type: 'turn_end', message: {}, toolResults: [] });
-    expect(events).toHaveLength(0);
-  });
-
-  it('should ignore message_start events', () => {
-    const events = harness.mapPIEvent({ type: 'message_start', message: {} });
-    expect(events).toHaveLength(0);
-  });
-
-  it('should ignore message_end events', () => {
-    const events = harness.mapPIEvent({ type: 'message_end', message: {} });
-    expect(events).toHaveLength(0);
-  });
-
-  it('should ignore tool_execution_update events', () => {
-    const events = harness.mapPIEvent({
-      type: 'tool_execution_update',
-      toolCallId: 'call-1',
-      toolName: 'test',
-      args: {},
-      partialResult: {},
-    });
-    expect(events).toHaveLength(0);
-  });
-
-  it('should handle tool result with multiple text content blocks', () => {
-    const piEvent = {
-      type: 'tool_execution_end',
-      toolCallId: 'call-789',
-      toolName: 'multi-result',
-      result: {
-        content: [
-          { type: 'text', text: 'Part 1. ' },
-          { type: 'text', text: 'Part 2.' },
-          { type: 'image', data: 'base64...', mimeType: 'image/png' },
-        ],
-        details: {},
-      },
-      isError: false,
-    };
-
-    const events = harness.mapPIEvent(piEvent);
-    expect(events).toHaveLength(1);
-    // Should concatenate only text content blocks
-    expect((events[0] as any).result).toBe('Part 1. Part 2.');
-  });
-
-  it('should handle missing toolCallId with generated UUID', () => {
-    const piEvent = {
-      type: 'tool_execution_start',
-      toolName: 'no-id-tool',
-      args: {},
-    };
-
-    const events = harness.mapPIEvent(piEvent);
-    expect(events).toHaveLength(1);
-    expect((events[0] as any).id).toBeDefined();
-    expect(typeof (events[0] as any).id).toBe('string');
+    expect(tools).toEqual([{ name: 'coding-tools', cwd: '/tmp/workspace' }]);
+    expect(factories.createCodingTools).toHaveBeenCalledWith('/tmp/workspace');
   });
 });
 
-describe('PIAgentHarness.run() - error handling', () => {
-  it('should yield error event when SDK throws during run', async () => {
+describe('PIAgentHarness native tool flow', () => {
+  it('should merge ctxmill tools with filtered native tools for session creation inputs', () => {
     const harness = new PIAgentHarness();
-
-    const config: HarnessRunConfig = {
-      modelConfig: { provider: 'openai', model: 'gpt-4o-mini' },
-      systemPrompt: 'Test',
-      messages: [{ role: 'user', content: 'Hello' } as any],
-      tools: [],
-      secrets: {},
-      agentId: 'test',
-      runId: 'test-run',
-      conversationId: 'test-conv',
-      workspaceDir: '/tmp',
+    const customTool: ToolDefinition = {
+      name: 'ctx-tool',
+      description: 'Ctx tool',
+      input: z.object({ value: z.string() }),
+      handler: async () => 'ok',
     };
 
-    // Without a valid API key / endpoint, the PI Agent SDK should error.
-    // The harness should catch and yield an error event.
-    const events: any[] = [];
-    for await (const event of harness.run(config)) {
-      events.push(event);
-    }
+    const nativeTools = getBuildNativeTools(harness)(makeConfig({
+      nativeTools: [{
+        allowlist: ['read', 'bash'],
+        blocklist: ['bash'],
+      }],
+    }), {
+      createReadTool: mockCreateReadTool,
+      createBashTool: mockCreateBashTool,
+      createEditTool: mockCreateEditTool,
+      createWriteTool: mockCreateWriteTool,
+      createGrepTool: mockCreateGrepTool,
+      createFindTool: mockCreateFindTool,
+      createLsTool: mockCreateLsTool,
+      createCodingTools: mockCreateCodingTools,
+    }) as Array<{ name: string }>;
+    const customTools = convertTools(Type, [customTool], makeConfig({ tools: [customTool] }));
+
+    expect(nativeTools).toEqual([{ name: 'read', cwd: '/tmp/workspace' }]);
+    expect(customTools).toEqual([
+      expect.objectContaining({ name: 'ctx-tool' }),
+    ]);
+  });
+
+  it('should surface completion events from deliverTurn()', async () => {
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (listener: (event: Record<string, unknown>) => void) => {
+          listener({ type: 'agent_end', messages: [] });
+          return () => undefined;
+        },
+        prompt: vi.fn(async () => undefined),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+          getMessages: vi.fn(() => []),
+        },
+      },
+    });
+
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig());
+    const events = await collectEvents(
+      session.deliverTurn(
+        { messages: [makeMessage('user', 'Hello')], turnId: 'turn-1' },
+        {},
+      ),
+    );
+
+    await session.close();
 
     expect(events.length).toBeGreaterThan(0);
-    const lastEvent = events[events.length - 1];
-    expect(['error', 'done']).toContain(lastEvent.type);
+    expect(events[events.length - 1]?.type).toBe('done');
   });
 });

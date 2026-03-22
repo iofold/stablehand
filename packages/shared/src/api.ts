@@ -1,3 +1,15 @@
+/** Resource limits for sandbox containers as returned in agent API responses. */
+export interface ApiAgentResourceLimits {
+  /** CPU allocation in fractional cores. Range: 0.5 - 4.0, default: 1.0 */
+  cpus?: number;
+  /** Memory limit in MiB. Range: 256 - 4096, default: 512 */
+  memoryMb?: number;
+  /** PID limit for the container. Range: 64 - 512, default: 256 */
+  pidsLimit?: number;
+  /** Run timeout in seconds. Range: 60 - 3600, default: 600 */
+  timeoutSec?: number;
+}
+
 /** Agent as returned by GET /api/agents and GET /api/agents/:id */
 export interface ApiAgent {
   id: string;
@@ -5,12 +17,21 @@ export interface ApiAgent {
   status: string;
   description?: string;
   tools: string[];
-  model: string;
+  harness: string;
+  harnessConfig: Record<string, unknown>;
+  workspaceDir?: string | null;
+  callbackUrl?: string | null;
+  /** Per-agent resource limits for sandbox containers. */
+  resourceLimits?: ApiAgentResourceLimits | null;
+  metadata?: Record<string, unknown> | null;
+  manifest?: Record<string, unknown> | null;
+  version?: number;
   sseClients?: number;
   conversationCount?: number;
   hasPendingInterrupt?: boolean;
   lastActivity?: number;
   activeRuns?: number;
+  totalRuns?: number;
   runs?: ApiAgentRun[];
   systemPrompt?: string;
 }
@@ -20,7 +41,7 @@ export interface ApiAgentRun {
   id: string;
   agentId: string;
   conversationId: string;
-  status: 'queued' | 'running' | 'completed' | 'error' | 'cancelled';
+  status: 'queued' | 'running' | 'paused' | 'suspended' | 'completed' | 'error' | 'cancelled';
   mode: 'interactive' | 'background';
   startedAt: number;
   completedAt?: number;
@@ -137,4 +158,30 @@ export interface ApiKnowledgeStats {
 /** Shared knowledge item with agentId field */
 export interface ApiSharedKnowledgeItem extends ApiKnowledgeItem {
   agentId: string;
+}
+
+// ── Sandbox Session types ───────────────────────────────────────
+
+export type SandboxSessionStatus = 'ACTIVE' | 'FROZEN' | 'CHECKPOINTED' | 'RESTORING';
+
+/** Persistent sandbox session as returned by sandbox session APIs. */
+export interface ApiSandboxSession {
+  id: string;
+  conversationId: string;
+  agentId: string;
+  status: SandboxSessionStatus;
+  containerName?: string;
+  harnessName: string;
+  createdAt: string;
+  lastActivityAt: string;
+}
+
+/** Session turn as returned by sandbox session turn APIs. */
+export interface ApiSessionTurn {
+  turnId: string;
+  sessionId: string;
+  status: 'pending' | 'in_flight' | 'completed' | 'error';
+  messageCount: number;
+  startedAt?: string;
+  completedAt?: string;
 }

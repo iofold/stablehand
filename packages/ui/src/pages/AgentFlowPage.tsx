@@ -195,11 +195,11 @@ export function AgentFlowPage() {
           </div>
         ) : !graphData ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <GitBranch className="h-8 w-8 text-surface-600 mb-3" />
+            <GitBranch className="h-8 w-8 text-surface-400 mb-3" />
             <p className="text-sm text-surface-400">
               No agent flows configured.
             </p>
-            <p className="text-xs text-surface-500 mt-1">
+            <p className="text-xs text-surface-400 mt-1">
               Create event triggers to connect agents.
             </p>
           </div>
@@ -238,7 +238,7 @@ export function AgentFlowPage() {
                     <button
                       type="button"
                       onClick={() => setSelectedNode(null)}
-                      className="text-surface-500 hover:text-surface-300 transition-colors"
+                      className="text-surface-400 hover:text-surface-300 transition-colors"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -248,7 +248,7 @@ export function AgentFlowPage() {
                   {selectedAgent ? (
                     <div className="space-y-4">
                       <div>
-                        <p className="text-[11px] font-medium text-surface-500 uppercase tracking-wider mb-1">
+                        <p className="text-[11px] font-medium text-surface-400 uppercase tracking-wider mb-1">
                           Agent
                         </p>
                         <button
@@ -261,7 +261,7 @@ export function AgentFlowPage() {
                       </div>
                       {selectedTriggers.length > 0 && (
                         <div>
-                          <p className="text-[11px] font-medium text-surface-500 uppercase tracking-wider mb-2">
+                          <p className="text-[11px] font-medium text-surface-400 uppercase tracking-wider mb-2">
                             Triggers ({selectedTriggers.length})
                           </p>
                           <div className="space-y-2">
@@ -279,7 +279,7 @@ export function AgentFlowPage() {
                                       'rounded-full px-1.5 py-0.5 text-[10px] font-medium',
                                       t.enabled !== false
                                         ? 'bg-green-500/10 text-green-400'
-                                        : 'bg-surface-700/50 text-surface-500',
+                                        : 'bg-surface-700/50 text-surface-400',
                                     )}
                                   >
                                     {t.enabled !== false ? 'active' : 'disabled'}
@@ -298,7 +298,7 @@ export function AgentFlowPage() {
                     </div>
                   ) : (
                     <div className="text-center py-8">
-                      <p className="text-xs text-surface-500">
+                      <p className="text-xs text-surface-400">
                         Select an agent node to view details.
                       </p>
                     </div>
@@ -306,7 +306,7 @@ export function AgentFlowPage() {
 
                   {/* Summary */}
                   <div className="mt-6 pt-4 border-t border-surface-700">
-                    <p className="text-[11px] font-medium text-surface-500 uppercase tracking-wider mb-2">
+                    <p className="text-[11px] font-medium text-surface-400 uppercase tracking-wider mb-2">
                       Summary
                     </p>
                     <div className="space-y-1.5 text-xs text-surface-400">

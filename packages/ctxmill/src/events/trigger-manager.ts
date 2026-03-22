@@ -213,7 +213,8 @@ export class EventTriggerManager {
       eventPayload._triggerDepth = payload._triggerDepth;
     }
 
-    // Emit through our internal handler directly
+    this.eventBus.emit(type as never, eventPayload as never);
+
     this.handleEvent(type, eventPayload).catch((err) =>
       console.error(`[EventTriggerManager] error handling custom event ${type}:`, err),
     );

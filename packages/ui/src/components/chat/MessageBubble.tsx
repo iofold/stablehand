@@ -3,7 +3,9 @@ import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
 import { cn } from '@/lib/utils';
 import type { Message } from '@/stores/conversation';
+import { stripEmbeddedA2UIBlocks } from '@/lib/a2ui';
 import { FeedbackButtons } from './FeedbackButtons';
+import { ErrorMessage } from './ErrorMessage';
 
 interface MessageBubbleProps {
   message: Message;
@@ -29,9 +31,48 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
 
   /* ── System / error message ── */
   if (isSystem) {
+    // Detect error messages (from RUN_ERROR SSE events, prefixed with "Error: ")
+    const isError = message.content.startsWith('Error: ');
+    if (isError) {
+      const rawError = message.content.slice('Error: '.length);
+      // Try to extract a status code from JSON-like content
+      let statusCode: number | undefined;
+      let details: string | undefined;
+      let summary = rawError;
+      try {
+        const parsed = JSON.parse(rawError);
+        if (typeof parsed === 'object' && parsed !== null) {
+          statusCode = typeof parsed.statusCode === 'number' ? parsed.statusCode : (typeof parsed.status === 'number' ? parsed.status : undefined);
+          summary = parsed.message || parsed.error || 'An error occurred';
+          details = rawError;
+        }
+      } catch {
+        // Not JSON — check for common HTTP status patterns like "404: ..." or "(404)"
+        const statusMatch = rawError.match(/^(\d{3})\b[:\s]*/);
+        if (statusMatch) {
+          statusCode = parseInt(statusMatch[1], 10);
+          summary = rawError.slice(statusMatch[0].length) || rawError;
+        }
+        // If the raw error is very long (likely a blob), put it in details
+        if (rawError.length > 120) {
+          details = rawError;
+          summary = 'An error occurred';
+        }
+      }
+      return (
+        <div className="py-2 max-w-[85%] animate-fade-in">
+          <ErrorMessage
+            summary={summary}
+            statusCode={statusCode}
+            details={details}
+          />
+        </div>
+      );
+    }
+
     return (
       <div className="flex justify-center py-2 animate-fade-in">
-        <div className="text-surface-500 text-sm italic text-center max-w-[85%] break-words">
+        <div className="text-surface-400 text-sm italic text-center max-w-[85%] break-words">
           {message.content}
         </div>
       </div>
@@ -40,13 +81,12 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
 
   /* ── Assistant message ── */
   // Always strip A2UI JSON payloads from content (they render as separate components)
-  const cleanContent = message.content
-    .replace(/\{\s*"component"\s*:\s*"[^"]+"\s*,\s*"props"\s*:\s*\{[\s\S]*?\}\s*\}/g, '')
-    .trim();
+  const cleanContent = stripEmbeddedA2UIBlocks(message.content);
 
-  // Don't render empty assistant messages (only had A2UI payloads)
   const hasTextContent = cleanContent.length > 0;
 
+  // A2UI blocks are rendered by ChatThread alongside this bubble,
+  // so skip the text bubble only when there's truly nothing to show.
   if (!hasTextContent) return null;
 
   return (

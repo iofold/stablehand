@@ -1,19 +1,42 @@
 import type { ToolCall } from './tool/types.js';
 import type { A2UIPayload } from './events/types.js';
-import type { AgentModelConfig } from './harness/types.js';
+
+// Resource limit configuration for sandbox containers
+export interface AgentResourceLimits {
+  /** CPU allocation in fractional cores. Range: 0.5 - 4.0, default: 1.0 */
+  cpus?: number;
+  /** Memory limit in MiB. Range: 256 - 4096, default: 512 */
+  memoryMb?: number;
+  /** PID limit for the container. Range: 64 - 512, default: 256 */
+  pidsLimit?: number;
+  /** Run timeout in seconds. Range: 60 - 3600, default: 600 */
+  timeoutSec?: number;
+}
+
+export interface NativeToolConfig {
+  allowlist?: string[];
+  blocklist?: string[];
+}
 
 // Agent types
 export interface AgentDefinition {
   name: string;
-  model: string;                    // kept for backward compat
-  harness?: string;                 // 'langgraph' | 'openai-agents' | 'claude-agents' | 'pi-agent' | 'vercel-ai'
-  modelConfig?: AgentModelConfig;
+  harness: string;
+  harnessConfig: Record<string, unknown>;
   tools: string[];
+  nativeTools?: NativeToolConfig;
   systemPrompt: string;
   description?: string;
   metadata?: Record<string, unknown>;
   mode?: 'interactive' | 'background' | 'both';
   workspaceDir?: string;
+  workspaceContent?: {
+    files?: Array<{ src: string; dest: string }>;
+    skills?: boolean | string[];
+  };
+  /** Directory where agent manifest was loaded from. Used to resolve relative paths. */
+  projectDir?: string;
+  resourceLimits?: AgentResourceLimits;
 }
 
 // Agent runtime state

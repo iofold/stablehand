@@ -13,6 +13,21 @@ export interface PromoteResult {
   deleted: number;
 }
 
+export interface HttpToolDefinition {
+  name: string;
+  description: string;
+  endpoint: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  inputSchema?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  timeout?: number;
+  authentication?: {
+    type: 'bearer' | 'api-key' | 'none';
+    token?: string;
+    apiKey?: string;
+  };
+}
+
 // ── Internal fetch helpers ───────────────────────────────────────────
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -120,8 +135,16 @@ export async function submitFeedback(
 
 // ── Mutation operations (throw on !res.ok) ─────────────────────────
 
-export async function sendMessage(agentId: string, content: string, conversationId?: string) {
-  return apiMutate(`${API_BASE}/agents/${agentId}/message`, 'POST', { content, conversationId });
+export async function sendMessage(
+  agentId: string,
+  content: string,
+  conversationId?: string,
+): Promise<{ messageId: string; conversationId: string }> {
+  return apiMutate<{ messageId: string; conversationId: string }>(
+    `${API_BASE}/agents/${agentId}/message`,
+    'POST',
+    { content, conversationId },
+  );
 }
 
 export async function sendInterrupt(agentId: string, action: string, data?: unknown, runId?: string) {
@@ -165,37 +188,50 @@ export async function readFile(agentId: string, path: string, runId?: string): P
   return apiFetch<ReadFileResponse>(`${API_BASE}/agents/${agentId}/files/read?${params}`);
 }
 
-export async function createFile(agentId: string, path: string, content: string) {
-  return apiMutate<{ path: string; size: number }>(`${API_BASE}/agents/${agentId}/files`, 'POST', { path, content });
+export async function createFile(agentId: string, path: string, content: string, runId?: string) {
+  const params = new URLSearchParams();
+  if (runId) params.set('runId', runId);
+  const url = `${API_BASE}/agents/${agentId}/files${params.size > 0 ? `?${params}` : ''}`;
+  return apiMutate<{ path: string; size: number }>(url, 'POST', { path, content });
 }
 
-export async function updateFile(agentId: string, path: string, content: string) {
-  return apiMutate<{ path: string; size: number }>(`${API_BASE}/agents/${agentId}/files`, 'PUT', { path, content });
+export async function updateFile(agentId: string, path: string, content: string, runId?: string) {
+  const params = new URLSearchParams();
+  if (runId) params.set('runId', runId);
+  const url = `${API_BASE}/agents/${agentId}/files${params.size > 0 ? `?${params}` : ''}`;
+  return apiMutate<{ path: string; size: number }>(url, 'PUT', { path, content });
 }
 
-export async function deleteFile(agentId: string, path: string): Promise<void> {
+export async function deleteFile(agentId: string, path: string, runId?: string): Promise<void> {
   const params = new URLSearchParams({ path });
+  if (runId) params.set('runId', runId);
   await apiFetch(`${API_BASE}/agents/${agentId}/files?${params}`, { method: 'DELETE' });
 }
 
 export async function createAgent(data: {
   name: string;
-  model: string;
+  harness: string;
+  harnessConfig: Record<string, unknown>;
   systemPrompt: string;
   tools: string[];
   description?: string;
   metadata?: Record<string, unknown>;
+  callbackUrl?: string | null;
+  httpTools?: HttpToolDefinition[];
 }) {
   return apiMutate(`${API_BASE}/agents`, 'POST', data);
 }
 
 export async function updateAgent(id: string, data: Partial<{
   name: string;
-  model: string;
+  harness: string;
+  harnessConfig: Record<string, unknown>;
   systemPrompt: string;
   tools: string[];
   description?: string;
   metadata?: Record<string, unknown>;
+  callbackUrl?: string | null;
+  httpTools?: HttpToolDefinition[];
 }>) {
   return apiMutate(`${API_BASE}/agents/${id}`, 'PUT', data);
 }
@@ -259,6 +295,20 @@ export async function updateSkill(
 
 export async function deleteSkill(agentId: string, skillName: string): Promise<void> {
   await apiFetch(`${API_BASE}/agents/${agentId}/skills/${encodeURIComponent(skillName)}`, { method: 'DELETE' });
+}
+
+// ── Agent Secrets operations ──────────────────────────────────────────
+
+export async function fetchSecretKeys(agentId: string): Promise<{ keys: string[] }> {
+  return apiFetch<{ keys: string[] }>(`${API_BASE}/agents/${agentId}/secrets`);
+}
+
+export async function setSecret(agentId: string, key: string, value: string): Promise<{ key: string }> {
+  return apiMutate<{ key: string }>(`${API_BASE}/agents/${agentId}/secrets`, 'POST', { key, value });
+}
+
+export async function deleteSecret(agentId: string, key: string): Promise<void> {
+  await apiFetch(`${API_BASE}/agents/${agentId}/secrets/${encodeURIComponent(key)}`, { method: 'DELETE' });
 }
 
 export async function deleteAgent(id: string): Promise<void> {
@@ -337,6 +387,15 @@ export interface CatalogTool {
 
 export async function fetchCatalogTools(): Promise<CatalogTool[]> {
   return apiFetch<CatalogTool[]>(`${API_BASE}/catalogs/tools`);
+}
+
+export async function testTool(toolName: string, input?: Record<string, unknown>): Promise<{
+  success: boolean;
+  result?: string;
+  error?: string;
+  durationMs: number;
+}> {
+  return apiMutate(`${API_BASE}/catalogs/tools/test`, 'POST', { toolName, input });
 }
 
 // ── Config operations ───────────────────────────────────────────────

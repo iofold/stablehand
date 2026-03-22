@@ -38,7 +38,7 @@ export async function discoverTools(toolsDir: string): Promise<ToolDefinition[]>
   const tools: ToolDefinition[] = [];
 
   for (const file of files) {
-    if (file.endsWith('.test.ts') || file.endsWith('.spec.ts')) continue;
+    if (file === 'index.ts' || file.endsWith('.test.ts') || file.endsWith('.spec.ts')) continue;
     const fullPath = join(toolsDir, file);
     const mod = await import(pathToFileURL(fullPath).href);
     if (mod.default) {

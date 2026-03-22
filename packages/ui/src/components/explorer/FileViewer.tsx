@@ -87,7 +87,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
     setSaving(true);
     setSaveError(null);
     try {
-      const result = await updateFile(agentId, filePath, editContent);
+      const result = await updateFile(agentId, filePath, editContent, runId);
       setContent(editContent);
       setSize(result.size);
       setEditing(false);
@@ -102,7 +102,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      await deleteFile(agentId, filePath);
+      await deleteFile(agentId, filePath, runId);
       onFileDeleted?.(filePath);
       onClose();
     } catch (err) {
@@ -114,7 +114,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
   };
 
   const fileName = filePath.split('/').pop() ?? filePath;
-  const isReadOnly = !!runId;
+  const isReadOnly = false;
 
   return (
     <div data-testid="file-viewer" className="flex h-full flex-col">
@@ -127,7 +127,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
           </span>
         </div>
         {content !== null && (
-          <span className="flex-shrink-0 font-mono text-[10px] text-surface-500">
+          <span className="flex-shrink-0 font-mono text-[10px] text-surface-400">
             {formatSize(size)}
           </span>
         )}
@@ -138,7 +138,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
             type="button"
             data-testid="file-edit-btn"
             onClick={handleEdit}
-            className="flex-shrink-0 rounded-md p-1.5 text-surface-500 transition-colors hover:bg-surface-800 hover:text-surface-300"
+            className="flex-shrink-0 rounded-md p-1.5 text-surface-400 transition-colors hover:bg-surface-800 hover:text-surface-300"
             title="Edit file"
           >
             <Pencil className="h-3.5 w-3.5" />
@@ -174,7 +174,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
             type="button"
             data-testid="file-delete-btn"
             onClick={() => setShowDeleteConfirm(true)}
-            className="flex-shrink-0 rounded-md p-1.5 text-surface-500 transition-colors hover:bg-red-900/30 hover:text-red-400"
+            className="flex-shrink-0 rounded-md p-1.5 text-surface-400 transition-colors hover:bg-red-900/30 hover:text-red-400"
             title="Delete file"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -185,7 +185,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
           type="button"
           onClick={handleCopy}
           className={cn(
-            'flex-shrink-0 rounded-md p-1.5 text-surface-500 transition-colors',
+            'flex-shrink-0 rounded-md p-1.5 text-surface-400 transition-colors',
             'hover:bg-surface-800 hover:text-surface-300',
           )}
           title="Copy content"
@@ -196,7 +196,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
           type="button"
           data-testid="file-viewer-close"
           onClick={onClose}
-          className="flex-shrink-0 rounded-md p-1.5 text-surface-500 transition-colors hover:bg-surface-800 hover:text-surface-300"
+          className="flex-shrink-0 rounded-md p-1.5 text-surface-400 transition-colors hover:bg-surface-800 hover:text-surface-300"
           title="Close"
         >
           <X className="h-4 w-4" />
@@ -243,7 +243,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
       <div className="flex-1 overflow-auto bg-surface-950">
         {loading && (
           <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-5 w-5 animate-spin text-surface-500" />
+            <Loader2 className="h-5 w-5 animate-spin text-surface-400" />
           </div>
         )}
         {error && (
@@ -261,7 +261,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
         {!loading && !error && content !== null && !editing && (
           <div className="flex min-h-full font-mono text-sm leading-relaxed">
             {/* Line Numbers */}
-            <div className="flex-shrink-0 border-r border-surface-800 bg-surface-900/20 px-4 py-4 text-right text-surface-600 select-none">
+            <div className="flex-shrink-0 border-r border-surface-800 bg-surface-900/20 px-4 py-4 text-right text-surface-400 select-none">
               {content.split('\n').map((_, i) => (
                 <div key={i + 1}>{i + 1}</div>
               ))}

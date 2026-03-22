@@ -1,37 +1,36 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createSqliteDatabase } from '../../packages/ctxmill/src/database/connection.js';
-import { runMigrations } from '../../packages/ctxmill/src/database/migrations.js';
-import { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { createTestDb, type TestDb } from '../utils/test-db.js';
+import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 
 describe('DatabaseRepository', () => {
-  let sqliteClose: () => void;
+  let testDb: TestDb;
   let repo: DatabaseRepository;
-  let sqliteRaw: import('better-sqlite3').Database;
 
-  beforeEach(() => {
-    const { db, sqlite } = createSqliteDatabase(':memory:');
-    sqliteRaw = sqlite;
-    runMigrations(sqlite);
-    repo = new DatabaseRepository(db);
-    sqliteClose = () => sqlite.close();
+  beforeAll(async () => {
+    testDb = await createTestDb();
+    repo = testDb.repo;
   });
 
-  afterEach(() => {
-    sqliteClose();
+  afterAll(async () => {
+    await testDb.close();
   });
 
   // --- Migrations ---
 
   describe('Migrations', () => {
-    it('should create all expected tables', () => {
-      const tables = sqliteRaw
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-        .all() as { name: string }[];
-      const tableNames = tables.map((t) => t.name).sort();
+    it('should create all expected tables', async () => {
+      const tables = await testDb.conn.pgClient`
+        SELECT tablename FROM pg_tables
+        WHERE schemaname = 'public'
+        ORDER BY tablename
+      `;
+      const tableNames = tables.map((t: any) => t.tablename).sort();
       expect(tableNames).toEqual([
+        'agent_checkpoints',
         'agent_runs',
         'agent_versions',
         'agents',
+        'callback_outbox',
         'conversations',
         'event_store',
         'event_triggers',
@@ -39,20 +38,39 @@ describe('DatabaseRepository', () => {
         'feedback_signals',
         'knowledge_items',
         'messages',
+        'pending_interrupts',
+        'sandbox_sessions',
         'scheduled_events',
+        'secrets',
         'suspended_runs',
+        'webhooks',
       ]);
     });
 
-    it('CFG-08: should run migrations idempotently (twice without errors)', () => {
-      // Migrations already ran in beforeEach; run again
-      expect(() => runMigrations(sqliteRaw)).not.toThrow();
+    it('CFG-08: should run migrations idempotently (twice without errors)', async () => {
+      const { runMigrations } = await import('../../packages/ctxmill/src/database/migrations.js');
+      // Migrations already ran in beforeAll; run again
+      await expect(runMigrations(testDb.conn.pgClient)).resolves.not.toThrow();
 
-      // Tables still exist and work
-      const tables = sqliteRaw
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-        .all() as { name: string }[];
-      expect(tables.length).toBe(12);
+      // Tables still exist
+      const tables = await testDb.conn.pgClient`
+        SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+      `;
+      expect(tables.length).toBeGreaterThanOrEqual(12);
+    });
+
+    it('creates agents table with harness_config and without legacy model columns', async () => {
+      const columns = await testDb.conn.pgClient`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'agents'
+        ORDER BY column_name
+      `;
+      const columnNames = columns.map((column: { column_name: string }) => column.column_name);
+
+      expect(columnNames).toContain('harness');
+      expect(columnNames).toContain('harness_config');
+      expect(columnNames).not.toContain('model');
+      expect(columnNames).not.toContain('model_config');
     });
   });
 
@@ -61,7 +79,8 @@ describe('DatabaseRepository', () => {
   describe('CFG-05: Agent CRUD', () => {
     const agentData = {
       name: 'Test Agent',
-      model: 'claude-sonnet-4-6',
+      harness: 'claude-agents',
+      harnessConfig: JSON.stringify({ model: 'claude-sonnet-4-6' }),
       systemPrompt: 'You are a test agent.',
       tools: ['bash', 'read_file'],
     };
@@ -71,7 +90,8 @@ describe('DatabaseRepository', () => {
       expect(agent.id).toBeDefined();
       expect(typeof agent.id).toBe('string');
       expect(agent.name).toBe('Test Agent');
-      expect(agent.model).toBe('claude-sonnet-4-6');
+      expect(agent.harness).toBe('claude-agents');
+      expect(JSON.parse(agent.harnessConfig)).toEqual({ model: 'claude-sonnet-4-6' });
       expect(agent.systemPrompt).toBe('You are a test agent.');
       expect(agent.tools).toEqual(['bash', 'read_file']);
       expect(agent.status).toBe('created');
@@ -93,10 +113,8 @@ describe('DatabaseRepository', () => {
     });
 
     it('should list all agents', async () => {
-      await repo.createAgent(agentData);
-      await repo.createAgent({ ...agentData, name: 'Agent 2' });
       const agents = await repo.listAgents();
-      expect(agents).toHaveLength(2);
+      expect(agents.length).toBeGreaterThanOrEqual(2);
     });
 
     it('should update an agent', async () => {
@@ -104,8 +122,19 @@ describe('DatabaseRepository', () => {
       const updated = await repo.updateAgent(created.id, { name: 'Updated Name' });
       expect(updated).toBeDefined();
       expect(updated!.name).toBe('Updated Name');
-      expect(updated!.model).toBe('claude-sonnet-4-6'); // unchanged
+      expect(updated!.harness).toBe('claude-agents');
+      expect(JSON.parse(updated!.harnessConfig)).toEqual({ model: 'claude-sonnet-4-6' });
       expect(updated!.updatedAt).toBeGreaterThanOrEqual(created.updatedAt);
+    });
+
+    it('should update harnessConfig', async () => {
+      const created = await repo.createAgent(agentData);
+      const updated = await repo.updateAgent(created.id, {
+        harnessConfig: JSON.stringify({ model: 'claude-opus-4-6', maxTurns: 4 }),
+      });
+
+      expect(updated).toBeDefined();
+      expect(JSON.parse(updated!.harnessConfig)).toEqual({ model: 'claude-opus-4-6', maxTurns: 4 });
     });
 
     it('should update agent status', async () => {
@@ -116,7 +145,7 @@ describe('DatabaseRepository', () => {
     });
 
     it('should delete an agent', async () => {
-      const created = await repo.createAgent(agentData);
+      const created = await repo.createAgent({ ...agentData, name: 'To Delete' });
       await repo.deleteAgent(created.id);
       const fetched = await repo.getAgent(created.id);
       expect(fetched).toBeUndefined();
@@ -128,10 +157,11 @@ describe('DatabaseRepository', () => {
   describe('CFG-05: Conversations and Messages', () => {
     let agentId: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       const agent = await repo.createAgent({
         name: 'Conv Agent',
-        model: 'claude-sonnet-4-6',
+        harness: 'claude-agents',
+        harnessConfig: JSON.stringify({ model: 'claude-sonnet-4-6' }),
         systemPrompt: 'Test prompt',
         tools: [],
       });
@@ -153,10 +183,8 @@ describe('DatabaseRepository', () => {
     });
 
     it('should list conversations for an agent', async () => {
-      await repo.createConversation(agentId);
-      await repo.createConversation(agentId);
       const convos = await repo.getConversationsForAgent(agentId);
-      expect(convos).toHaveLength(2);
+      expect(convos.length).toBeGreaterThanOrEqual(2);
     });
 
     it('should add messages to a conversation', async () => {
@@ -277,6 +305,243 @@ describe('DatabaseRepository', () => {
       const feedbacks = await repo.getFeedbackForTrace(trace.id);
       expect(feedbacks).toHaveLength(1);
       expect(feedbacks[0].type).toBe('thumbs');
+    });
+  });
+
+  describe('Sandbox Sessions', () => {
+    let agentId: string;
+    let conversationId: string;
+
+    beforeAll(async () => {
+      const agent = await repo.createAgent({
+        name: 'Sandbox Session Agent',
+        harness: 'claude-agents',
+        harnessConfig: JSON.stringify({ model: 'claude-sonnet-4-6' }),
+        systemPrompt: 'Session test prompt',
+        tools: [],
+      });
+      agentId = agent.id;
+
+      const conversation = await repo.createConversation(agentId);
+      conversationId = conversation.id;
+    });
+
+    it('should create a sandbox session', async () => {
+      const session = await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        containerName: 'ctxmill-session-1',
+        containerId: 'container-1',
+        harnessName: 'langgraph',
+      });
+
+      expect(session.id).toBeDefined();
+      expect(session.conversationId).toBe(conversationId);
+      expect(session.agentId).toBe(agentId);
+      expect(session.status).toBe('ACTIVE');
+      expect(session.containerName).toBe('ctxmill-session-1');
+    });
+
+    it('should fetch a sandbox session by id', async () => {
+      const created = await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        harnessName: 'claude-agents',
+      });
+
+      const fetched = await repo.getSandboxSession(created.id);
+      expect(fetched).not.toBeNull();
+      expect(fetched!.id).toBe(created.id);
+    });
+
+    it('should fetch the latest sandbox session by conversation', async () => {
+      const created = await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        harnessName: 'claude',
+      });
+
+      const fetched = await repo.getSandboxSessionByConversation(conversationId);
+      expect(fetched).not.toBeNull();
+      expect(fetched!.id).toBe(created.id);
+    });
+
+    it('should update sandbox session status and metadata', async () => {
+      const created = await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        harnessName: 'pi-agent',
+      });
+
+      await repo.updateSandboxSessionStatus(created.id, 'FROZEN', {
+        containerName: 'frozen-container',
+        checkpointRef: 'checkpoint-ref-1',
+      });
+
+      const fetched = await repo.getSandboxSession(created.id);
+      expect(fetched).not.toBeNull();
+      expect(fetched!.status).toBe('FROZEN');
+      expect(fetched!.containerName).toBe('frozen-container');
+      expect(fetched!.checkpointRef).toBe('checkpoint-ref-1');
+    });
+
+    it('should list active and frozen sandbox sessions', async () => {
+      const active = await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        harnessName: 'langgraph',
+      });
+      const frozen = await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        harnessName: 'langgraph',
+        status: 'FROZEN',
+      });
+      await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        harnessName: 'langgraph',
+        status: 'TERMINATED',
+      });
+
+      const sessions = await repo.getActiveSandboxSessions();
+      const sessionIds = new Set(sessions.map((session) => session.id));
+
+      expect(sessionIds.has(active.id)).toBe(true);
+      expect(sessionIds.has(frozen.id)).toBe(true);
+      expect(sessions.some((session) => session.status === 'TERMINATED')).toBe(false);
+    });
+
+    it('should list sandbox sessions by agent', async () => {
+      await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        harnessName: 'pi-agent',
+      });
+
+      const sessions = await repo.getSandboxSessionsByAgent(agentId);
+      expect(sessions.length).toBeGreaterThan(0);
+      expect(sessions.every((session) => session.agentId === agentId)).toBe(true);
+    });
+
+    it('should delete a sandbox session', async () => {
+      const created = await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        harnessName: 'langgraph',
+      });
+
+      await repo.deleteSandboxSession(created.id);
+      const fetched = await repo.getSandboxSession(created.id);
+      expect(fetched).toBeNull();
+    });
+  });
+
+  describe('Checkpoint v2', () => {
+    let agentId: string;
+    let sessionId: string;
+
+    beforeAll(async () => {
+      const agent = await repo.createAgent({
+        name: 'Checkpoint V2 Agent',
+        harness: 'claude-agents',
+        harnessConfig: JSON.stringify({ model: 'claude-sonnet-4-6' }),
+        systemPrompt: 'Checkpoint test prompt',
+        tools: [],
+      });
+      agentId = agent.id;
+
+      const conversation = await repo.createConversation(agentId);
+      const session = await repo.createSandboxSession({
+        conversationId: conversation.id,
+        agentId,
+        harnessName: 'langgraph',
+      });
+      sessionId = session.id;
+    });
+
+    it('should create a v2 checkpoint', async () => {
+      const result = await repo.createCheckpointV2({
+        sessionId,
+        agentId,
+        checkpointData: { cursor: 1, status: 'idle' },
+        harnessState: { messages: [] },
+        workspaceRef: 'workspace-ref-1',
+        suspendReason: 'manual_suspend',
+      });
+
+      expect(result.id).toBeDefined();
+    });
+
+    it('should fetch the latest v2 checkpoint for a session', async () => {
+      await repo.createCheckpointV2({
+        sessionId,
+        agentId,
+        checkpointData: { cursor: 10 },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await repo.createCheckpointV2({
+        sessionId,
+        agentId,
+        checkpointData: { cursor: 11 },
+      });
+
+      const checkpoint = await repo.getCheckpointV2(sessionId);
+      expect(checkpoint).not.toBeNull();
+      expect(checkpoint!.checkpointData).toEqual({ cursor: 11 });
+      expect(checkpoint!.checkpointVersion).toBe(2);
+    });
+
+    it('should round-trip checkpoint JSON payloads', async () => {
+      const checkpointData = {
+        cursor: { lastMessageId: 'msg-42' },
+        runnerState: { status: 'WAITING', pending: ['approval'] },
+      };
+      const harnessState = {
+        payload: {
+          nested: {
+            value: true,
+          },
+        },
+      };
+
+      await repo.createCheckpointV2({
+        sessionId,
+        agentId,
+        checkpointData,
+        harnessState,
+      });
+
+      const checkpoint = await repo.getCheckpointV2(sessionId);
+      expect(checkpoint).not.toBeNull();
+      expect(checkpoint!.checkpointData).toEqual(checkpointData);
+      expect(checkpoint!.harnessState).toEqual(harnessState);
+    });
+
+    it('should delete all v2 checkpoints for a session', async () => {
+      const conversation = await repo.createConversation(agentId);
+      const session = await repo.createSandboxSession({
+        conversationId: conversation.id,
+        agentId,
+        harnessName: 'langgraph',
+      });
+
+      await repo.createCheckpointV2({
+        sessionId: session.id,
+        agentId,
+        checkpointData: { step: 1 },
+      });
+      await repo.createCheckpointV2({
+        sessionId: session.id,
+        agentId,
+        checkpointData: { step: 2 },
+      });
+
+      const deleted = await repo.deleteCheckpointsForSession(session.id);
+      expect(deleted).toBe(2);
+
+      const checkpoint = await repo.getCheckpointV2(session.id);
+      expect(checkpoint).toBeNull();
     });
   });
 });

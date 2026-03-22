@@ -8,15 +8,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');
 
 const agents = [
-  { dir: 'langgraph-agent', expectedHarness: 'langgraph', expectedName: 'langgraph-helper' },
-  { dir: 'openai-agent', expectedHarness: 'openai-agents', expectedName: 'openai-helper' },
-  { dir: 'claude-agent', expectedHarness: 'claude-agents', expectedName: 'claude-helper' },
-  { dir: 'vercel-agent', expectedHarness: 'vercel-ai', expectedName: 'vercel-helper' },
-  { dir: 'pi-agent', expectedHarness: 'pi-agent', expectedName: 'pi-helper' },
+  { dir: 'langgraph-agent', expectedHarness: 'langgraph', expectedName: 'langgraph-analyst', provider: 'openai', model: 'gpt-5-mini', expectedTools: [{ ref: 'calculator' }, { ref: 'weather' }, { ref: 'emit-event' }, { ref: 'list-directory' }, { ref: 'search-files' }, { ref: 'execute-trade' }] },
+  { dir: 'claude-agent', expectedHarness: 'claude-agents', expectedName: 'claude-writer', provider: 'anthropic', model: 'claude-sonnet-4-6', expectedTools: [{ ref: 'emit-event' }] },
+  { dir: 'pi-agent', expectedHarness: 'pi-agent', expectedName: 'pi-auditor', provider: 'openai', model: 'gpt-5-mini', expectedTools: [{ ref: 'emit-event' }] },
 ];
 
 describe('manifest validation', () => {
-  for (const { dir, expectedHarness, expectedName } of agents) {
+  for (const { dir, expectedHarness, expectedName, provider, model, expectedTools } of agents) {
     describe(dir, () => {
       it('parses and validates correctly', async () => {
         const yamlContent = await readFile(join(agentsDir, dir, 'agent.yaml'), 'utf-8');
@@ -34,11 +32,8 @@ describe('manifest validation', () => {
         const parsed = parseManifestString(yamlContent);
         const manifest = validateManifest(parsed);
 
-        expect(manifest.spec.tools).toHaveLength(2);
-        expect(manifest.spec.tools).toEqual([
-          { ref: 'calculator' },
-          { ref: 'weather' },
-        ]);
+        expect(manifest.spec.tools).toHaveLength(expectedTools.length);
+        expect(manifest.spec.tools).toEqual(expectedTools);
       });
 
       it('has valid resource limits', async () => {
@@ -50,6 +45,23 @@ describe('manifest validation', () => {
         expect(manifest.spec.resources?.maxTokensPerRun).toBe(4000);
       });
 
+      it('uses harnessConfig instead of model', async () => {
+        const yamlContent = await readFile(join(agentsDir, dir, 'agent.yaml'), 'utf-8');
+        const parsed = parseManifestString(yamlContent);
+        const manifest = validateManifest(parsed);
+        const spec = manifest.spec as {
+          model?: unknown;
+          harnessConfig?: {
+            provider?: string;
+            model?: string;
+          };
+        };
+
+        expect(spec.model).toBeUndefined();
+        expect(spec.harnessConfig?.provider).toBe(provider);
+        expect(spec.harnessConfig?.model).toBe(model);
+      });
+
       it('has kitchen-sink label', async () => {
         const yamlContent = await readFile(join(agentsDir, dir, 'agent.yaml'), 'utf-8');
         const parsed = parseManifestString(yamlContent);
@@ -57,6 +69,15 @@ describe('manifest validation', () => {
 
         expect(manifest.metadata.labels?.example).toBe('kitchen-sink');
         expect(manifest.metadata.labels?.harness).toBe(expectedHarness);
+      });
+
+      it('has chain-role label', async () => {
+        const yamlContent = await readFile(join(agentsDir, dir, 'agent.yaml'), 'utf-8');
+        const parsed = parseManifestString(yamlContent);
+        const manifest = validateManifest(parsed);
+
+        expect(manifest.metadata.labels?.['chain-role']).toBeTruthy();
+        expect(manifest.metadata.labels?.['chain-order']).toBeTruthy();
       });
     });
   }

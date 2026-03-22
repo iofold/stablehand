@@ -15,8 +15,21 @@ function minimalManifest(): AgentManifest {
     metadata: { name: 'test-agent' },
     spec: {
       harness: 'langgraph',
-      model: { provider: 'openai', id: 'gpt-4o' },
+      harnessConfig: { provider: 'openai', model: 'gpt-4o' },
       instructions: 'You are a test agent.',
+    },
+  };
+}
+
+function minimalLegacyManifest(): AgentManifest {
+  return {
+    apiVersion: 'ctxmill.io/v1',
+    kind: 'Agent',
+    metadata: { name: 'legacy-agent' },
+    spec: {
+      harness: 'langgraph',
+      model: { provider: 'openai', id: 'gpt-4o' },
+      instructions: 'You are a legacy test agent.',
     },
   };
 }
@@ -32,10 +45,10 @@ function fullManifest(): AgentManifest {
       labels: { team: 'platform', tier: 'gold' },
     },
     spec: {
-      harness: 'openai-agents',
-      model: {
+      harness: 'claude-agents',
+      harnessConfig: {
         provider: 'anthropic',
-        id: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-4-6',
         apiKeyRef: 'ANTHROPIC_KEY',
         temperature: 0.7,
         maxTokens: 4096,
@@ -68,6 +81,10 @@ describe('validate', () => {
 
   it('validates a full manifest with all optional fields', () => {
     expect(() => validateManifest(fullManifest())).not.toThrow();
+  });
+
+  it('validates a legacy manifest with spec.model', () => {
+    expect(() => validateManifest(minimalLegacyManifest())).not.toThrow();
   });
 
   it('rejects invalid apiVersion', () => {
@@ -111,15 +128,30 @@ describe('validate', () => {
 
   it('rejects temperature above 2', () => {
     const m = minimalManifest();
-    m.spec.model.temperature = 3;
+    if (m.spec.harnessConfig) {
+      m.spec.harnessConfig.temperature = 3;
+    }
     const result = safeValidateManifest(m);
     expect(result.success).toBe(false);
   });
 
   it('rejects temperature below 0', () => {
     const m = minimalManifest();
-    m.spec.model.temperature = -0.5;
+    if (m.spec.harnessConfig) {
+      m.spec.harnessConfig.temperature = -0.5;
+    }
     const result = safeValidateManifest(m);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects spec with both model and harnessConfig', () => {
+    const result = safeValidateManifest({
+      ...minimalManifest(),
+      spec: {
+        ...minimalManifest().spec,
+        model: { provider: 'openai', id: 'gpt-4o' },
+      },
+    });
     expect(result.success).toBe(false);
   });
 
@@ -165,6 +197,54 @@ describe('validate', () => {
       expect(result.data.metadata.name).toBe('test-agent');
     }
   });
+
+  it('validates nativeTools with allowlist', () => {
+    const m = minimalManifest();
+    m.spec.nativeTools = { allowlist: ['bash', 'read_file'] };
+    expect(() => validateManifest(m)).not.toThrow();
+  });
+
+  it('validates nativeTools with blocklist', () => {
+    const m = minimalManifest();
+    m.spec.nativeTools = { blocklist: ['rm', 'curl'] };
+    expect(() => validateManifest(m)).not.toThrow();
+  });
+
+  it('validates workspace content with files and skills', () => {
+    const m = minimalManifest();
+    m.spec.workspace = {
+      content: {
+        files: [{ src: 'config.json', dest: '/workspace/config.json' }],
+        skills: ['analysis'],
+      },
+    };
+    expect(() => validateManifest(m)).not.toThrow();
+  });
+
+  it('rejects nativeTools with unknown fields', () => {
+    const result = safeValidateManifest({
+      ...minimalManifest(),
+      spec: {
+        ...minimalManifest().spec,
+        nativeTools: {
+          allowlist: ['bash'],
+          unexpected: true,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects empty file src', () => {
+    const m = minimalManifest();
+    m.spec.workspace = {
+      content: {
+        files: [{ src: '', dest: '/workspace/config.json' }],
+      },
+    };
+    const result = safeValidateManifest(m);
+    expect(result.success).toBe(false);
+  });
 });
 
 // ── parser.ts ──────────────────────────────────────────────
@@ -178,9 +258,9 @@ metadata:
   name: yaml-agent
 spec:
   harness: langgraph
-  model:
+  harnessConfig:
     provider: openai
-    id: gpt-4o
+    model: gpt-4o
   instructions: Do stuff.
 `;
     const parsed = parseManifestString(yaml);
@@ -216,9 +296,20 @@ spec:
 
 describe('convert', () => {
   describe('manifestToDefinition', () => {
-    it('maps model.id to model field', () => {
+    it('maps harnessConfig into AgentDefinition', () => {
       const def = manifestToDefinition(minimalManifest());
-      expect(def.model).toBe('gpt-4o');
+      expect(def.harnessConfig).toEqual({
+        provider: 'openai',
+        model: 'gpt-4o',
+      });
+    });
+
+    it('maps legacy model config into harnessConfig', () => {
+      const def = manifestToDefinition(minimalLegacyManifest());
+      expect(def.harnessConfig).toEqual({
+        provider: 'openai',
+        model: 'gpt-4o',
+      });
     });
 
     it('maps instructions to systemPrompt', () => {
@@ -233,12 +324,12 @@ describe('convert', () => {
 
     it('maps harness field', () => {
       const def = manifestToDefinition(fullManifest());
-      expect(def.harness).toBe('openai-agents');
+      expect(def.harness).toBe('claude-agents');
     });
 
-    it('maps modelConfig correctly', () => {
+    it('maps full harnessConfig correctly', () => {
       const def = manifestToDefinition(fullManifest());
-      expect(def.modelConfig).toEqual({
+      expect(def.harnessConfig).toEqual({
         provider: 'anthropic',
         model: 'claude-sonnet-4-6',
         baseUrl: 'https://api.anthropic.com',
@@ -264,13 +355,54 @@ describe('convert', () => {
       const def = manifestToDefinition(fullManifest());
       expect(def.mode).toBe('interactive');
     });
+
+    it('converts nativeTools allowlist and blocklist', () => {
+      const m = minimalManifest();
+      m.spec.nativeTools = {
+        allowlist: ['bash', 'read_file'],
+        blocklist: ['rm'],
+      };
+
+      const def = manifestToDefinition(m);
+      expect(def.nativeTools).toEqual({
+        allowlist: ['bash', 'read_file'],
+        blocklist: ['rm'],
+      });
+    });
+
+    it('converts workspace content with skills and files', () => {
+      const m = minimalManifest();
+      m.spec.workspace = {
+        content: {
+          files: [{ src: 'README.md', dest: '/workspace/README.md' }],
+          skills: ['analysis', 'review'],
+        },
+      };
+
+      const def = manifestToDefinition(m);
+      expect(def.workspaceContent).toEqual({
+        files: [{ src: 'README.md', dest: '/workspace/README.md' }],
+        skills: ['analysis', 'review'],
+      });
+    });
+
+    it('omits nativeTools when not set', () => {
+      const def = manifestToDefinition(minimalManifest());
+      expect(def.nativeTools).toBeUndefined();
+    });
+
+    it('passes projectDir from context', () => {
+      const def = manifestToDefinition(minimalManifest(), { projectDir: '/tmp/project' });
+      expect(def.projectDir).toBe('/tmp/project');
+    });
   });
 
   describe('definitionToManifest', () => {
     it('creates proper K8s envelope', () => {
       const def: AgentDefinition = {
         name: 'my-agent',
-        model: 'gpt-4o',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
         tools: ['bash'],
         systemPrompt: 'Hello',
       };
@@ -283,7 +415,8 @@ describe('convert', () => {
     it('maps systemPrompt to instructions', () => {
       const def: AgentDefinition = {
         name: 'a1',
-        model: 'gpt-4o',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
         tools: [],
         systemPrompt: 'Be helpful',
       };
@@ -294,7 +427,8 @@ describe('convert', () => {
     it('maps tools to ref array', () => {
       const def: AgentDefinition = {
         name: 'a1',
-        model: 'gpt-4o',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
         tools: ['bash', 'read_file'],
         systemPrompt: 'hi',
       };
@@ -302,22 +436,24 @@ describe('convert', () => {
       expect(m.spec.tools).toEqual([{ ref: 'bash' }, { ref: 'read_file' }]);
     });
 
-    it('uses default provider openai when no modelConfig', () => {
+    it('uses harnessConfig provider and model', () => {
       const def: AgentDefinition = {
         name: 'a1',
-        model: 'gpt-4o',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
         tools: [],
         systemPrompt: 'hi',
       };
       const m = definitionToManifest(def);
-      expect(m.spec.model.provider).toBe('openai');
-      expect(m.spec.model.id).toBe('gpt-4o');
+      expect(m.spec.harnessConfig?.provider).toBe('openai');
+      expect(m.spec.harnessConfig?.model).toBe('gpt-4o');
     });
 
     it('preserves labels when passed', () => {
       const def: AgentDefinition = {
         name: 'a1',
-        model: 'gpt-4o',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
         tools: [],
         systemPrompt: 'hi',
       };
@@ -328,7 +464,8 @@ describe('convert', () => {
     it('omits labels when none passed', () => {
       const def: AgentDefinition = {
         name: 'a1',
-        model: 'gpt-4o',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
         tools: [],
         systemPrompt: 'hi',
       };
@@ -336,28 +473,77 @@ describe('convert', () => {
       expect(m.metadata.labels).toBeUndefined();
     });
 
-    it('uses modelConfig.model over def.model when modelConfig present', () => {
+    it('uses harnessConfig values for manifest harnessConfig', () => {
       const def: AgentDefinition = {
         name: 'a1',
-        model: 'gpt-4o',
-        modelConfig: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        harness: 'claude-agents',
+        harnessConfig: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
         tools: [],
         systemPrompt: 'hi',
       };
       const m = definitionToManifest(def);
-      expect(m.spec.model.id).toBe('claude-sonnet-4-6');
-      expect(m.spec.model.provider).toBe('anthropic');
+      expect(m.spec.harnessConfig?.model).toBe('claude-sonnet-4-6');
+      expect(m.spec.harnessConfig?.provider).toBe('anthropic');
     });
 
-    it('defaults harness to langgraph', () => {
+    it('preserves harness from definition', () => {
       const def: AgentDefinition = {
         name: 'a1',
-        model: 'gpt-4o',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
         tools: [],
         systemPrompt: 'hi',
       };
       const m = definitionToManifest(def);
       expect(m.spec.harness).toBe('langgraph');
+    });
+
+    it('round-trips nativeTools through definition→manifest', () => {
+      const def: AgentDefinition = {
+        name: 'a1',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
+        tools: [],
+        systemPrompt: 'hi',
+        nativeTools: {
+          allowlist: ['bash'],
+          blocklist: ['rm'],
+        },
+      };
+
+      const manifest = definitionToManifest(def);
+      expect(manifest.spec.nativeTools).toEqual({
+        allowlist: ['bash'],
+        blocklist: ['rm'],
+      });
+
+      const roundTripped = manifestToDefinition(manifest);
+      expect(roundTripped.nativeTools).toEqual({
+        allowlist: ['bash'],
+        blocklist: ['rm'],
+      });
+    });
+
+    it('maps workspaceContent into workspace.content', () => {
+      const def: AgentDefinition = {
+        name: 'a1',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
+        tools: [],
+        systemPrompt: 'hi',
+        workspaceContent: {
+          files: [{ src: 'README.md', dest: '/workspace/README.md' }],
+          skills: true,
+        },
+      };
+
+      const manifest = definitionToManifest(def);
+      expect(manifest.spec.workspace).toEqual({
+        content: {
+          files: [{ src: 'README.md', dest: '/workspace/README.md' }],
+          skills: true,
+        },
+      });
     });
   });
 });
@@ -388,7 +574,10 @@ describe('ManifestService', () => {
     expect(result.agentId).toBe('new-id');
     expect(mockDb.createAgent).toHaveBeenCalledOnce();
     expect(mockDb.createAgent.mock.calls[0][0].name).toBe('test-agent');
-    expect(mockDb.createAgent.mock.calls[0][0].model).toBe('gpt-4o');
+    expect(JSON.parse(mockDb.createAgent.mock.calls[0][0].harnessConfig)).toEqual({
+      provider: 'openai',
+      model: 'gpt-4o',
+    });
   });
 
   it('importManifest updates existing agent', async () => {
@@ -409,7 +598,8 @@ describe('ManifestService', () => {
     mockDb.getAgent.mockResolvedValue({
       id: 'a1',
       name: 'test-agent',
-      model: 'gpt-4o',
+      harness: 'langgraph',
+      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
       systemPrompt: 'hi',
       tools: [],
     });
@@ -424,8 +614,8 @@ describe('ManifestService', () => {
     mockDb.getAgent.mockResolvedValue({
       id: 'a1',
       name: 'gen-agent',
-      model: 'gpt-4o',
       harness: 'langgraph',
+      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
       systemPrompt: 'Be helpful.',
       tools: ['bash'],
       description: 'Auto-generated',
@@ -448,7 +638,8 @@ describe('ManifestService', () => {
 
     const def: AgentDefinition = {
       name: 'sync-agent',
-      model: 'gpt-4o',
+      harness: 'langgraph',
+      harnessConfig: { provider: 'openai', model: 'gpt-4o' },
       tools: ['read_file'],
       systemPrompt: 'Sync me.',
     };
@@ -465,7 +656,8 @@ describe('ManifestService', () => {
 
     const def: AgentDefinition = {
       name: 'sync-agent',
-      model: 'gpt-4o',
+      harness: 'langgraph',
+      harnessConfig: { provider: 'openai', model: 'gpt-4o' },
       tools: [],
       systemPrompt: 'hi',
     };
@@ -478,7 +670,8 @@ describe('ManifestService', () => {
     mockDb.getAgent.mockResolvedValue({
       id: 'a1',
       name: 'json-agent',
-      model: 'gpt-4o',
+      harness: 'langgraph',
+      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
       systemPrompt: 'hi',
       tools: [],
     });

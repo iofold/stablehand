@@ -13,6 +13,7 @@ import {
   Loader2,
   X,
   FolderOpen,
+  MessageSquare,
 } from 'lucide-react';
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { cn } from '@/lib/utils';
@@ -82,7 +83,7 @@ function TraceTimeline({ steps }: { steps: TraceStep[] }) {
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-[11px] text-surface-500 tabular-nums flex-shrink-0">
+                    <span className="text-[11px] text-surface-400 tabular-nums flex-shrink-0">
                       #{step.ordinal}
                     </span>
                     <span className={cn(
@@ -101,6 +102,13 @@ function TraceTimeline({ steps }: { steps: TraceStep[] }) {
                 <p className="text-sm text-surface-300 mt-1 break-words line-clamp-3">
                   {step.content}
                 </p>
+                {isToolCall && step.metadata?.args != null && (
+                  <pre className="text-[11px] text-surface-500 font-mono mt-1 max-h-20 overflow-y-auto whitespace-pre-wrap">
+                    {typeof step.metadata.args === 'string' 
+                      ? step.metadata.args 
+                      : JSON.stringify(step.metadata.args, null, 2)}
+                  </pre>
+                )}
               </div>
             </div>
           </div>
@@ -132,11 +140,11 @@ function SessionDiffPanel({ agentId, runId }: { agentId: string; runId: string }
 
   if (loading) return <div className="text-surface-400 text-sm py-2">Loading diff...</div>;
   if (error) return <div className="text-red-400 text-sm py-2">Failed to load diff</div>;
-  if (diffs.length === 0) return <div className="text-surface-500 text-sm py-2">No changes in this session</div>;
+  if (diffs.length === 0) return <div className="text-surface-400 text-sm py-2">No changes in this session</div>;
 
   return (
     <div className="space-y-1 py-2">
-      <p className="text-[11px] text-surface-500 uppercase tracking-wider mb-2">Session Changes</p>
+      <p className="text-[11px] text-surface-400 uppercase tracking-wider mb-2">Session Changes</p>
       {diffs.map((d) => (
         <div key={d.path} className="flex items-center gap-2 text-sm font-mono">
           <span className={cn(
@@ -287,7 +295,7 @@ function SessionActions({
             value={forkName}
             onChange={(e) => setForkName(e.target.value)}
             placeholder="New agent name..."
-            className="flex-1 rounded-lg border border-surface-600/40 bg-surface-800/60 px-3 py-1.5 text-sm text-surface-200 placeholder-surface-600 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/30"
+            className="flex-1 rounded-lg border border-surface-600/40 bg-surface-800/60 px-3 py-1.5 text-sm text-surface-200 placeholder-surface-400 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/30"
           />
           <button
             type="button"
@@ -326,12 +334,12 @@ function SessionActions({
 }
 
 /* ------------------------------------------------------------------ */
-/*  AgentRunsTab                                                       */
+/*  AgentSessionsTab                                                   */
 /* ------------------------------------------------------------------ */
 
 const RUN_FILTERS = ['all', 'running', 'completed', 'error', 'cancelled'] as const;
 
-export interface AgentRunsTabProps {
+export interface AgentSessionsTabProps {
   runs: AgentRun[];
   loading: boolean;
   filter: string;
@@ -340,9 +348,11 @@ export interface AgentRunsTabProps {
   traces: Trace[];
   /** Called when user wants to view files for a specific run session */
   onViewSessionFiles?: (runId: string) => void;
+  /** Called when user wants to continue chat for a session */
+  onContinueChat?: (conversationId: string) => void;
 }
 
-export function AgentRunsTab({
+export function AgentSessionsTab({
   runs,
   loading,
   filter,
@@ -350,8 +360,9 @@ export function AgentRunsTab({
   agentId,
   traces,
   onViewSessionFiles,
-}: AgentRunsTabProps) {
-  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  onContinueChat,
+}: AgentSessionsTabProps) {
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   // Build a map of runId -> trace for fast lookup
   const traceByRunId = useMemo(() => {
@@ -364,12 +375,32 @@ export function AgentRunsTab({
     return map;
   }, [traces]);
 
-  const handleToggleRun = (runId: string) => {
-    setExpandedRunId((prev) => (prev === runId ? null : runId));
+  const sessions = useMemo(() => {
+    const grouped = new Map<string, AgentRun[]>();
+    for (const run of runs) {
+      const convId = run.conversationId ?? 'unknown';
+      const existing = grouped.get(convId) ?? [];
+      existing.push(run);
+      grouped.set(convId, existing);
+    }
+    return Array.from(grouped.entries()).map(([convId, sessionRuns]) => ({
+      conversationId: convId,
+      startedAt: Math.min(...sessionRuns.map(r => r.startedAt)),
+      messageCount: sessionRuns.reduce((acc, r) => {
+        const trace = traceByRunId[r.id];
+        return acc + (trace?.steps?.length || 0);
+      }, 0),
+      lastMessageAt: Math.max(...sessionRuns.map(r => r.completedAt ?? r.startedAt)),
+      runs: sessionRuns.sort((a, b) => a.startedAt - b.startedAt),
+    })).sort((a, b) => b.startedAt - a.startedAt);
+  }, [runs, traceByRunId]);
+
+  const handleToggleSession = (convId: string) => {
+    setExpandedSessionId((prev) => (prev === convId ? null : convId));
   };
 
   return (
-    <div data-testid="runs-history" className="space-y-4">
+    <div data-testid="sessions-history" className="space-y-4">
       {/* Status filter */}
       <div className="flex gap-1.5 flex-wrap">
         {RUN_FILTERS.map((f) => (
@@ -389,146 +420,135 @@ export function AgentRunsTab({
         ))}
       </div>
 
-      {/* Runs list */}
+      {/* Sessions list */}
       {loading ? (
-        <div className="text-center py-12 text-surface-500 text-sm">Loading runs...</div>
-      ) : runs.length === 0 ? (
+        <div className="text-center py-12 text-surface-400 text-sm">Loading sessions...</div>
+      ) : sessions.length === 0 ? (
         <div className="text-center py-16">
-          <p className="text-surface-400 font-medium">No runs found</p>
-          <p className="text-surface-600 text-sm mt-1">
-            {filter === 'all' ? 'Start a new run to view activity and traces.' : `No ${filter} runs.`}
+          <p className="text-surface-400 font-medium">No sessions found</p>
+          <p className="text-surface-400 text-sm mt-1">
+            {filter === 'all' ? 'Start a new run to view activity and traces.' : `No ${filter} sessions.`}
           </p>
         </div>
       ) : (
-        <div className="border border-surface-700 rounded-lg overflow-hidden bg-surface-800/30">
-          <table className="w-full text-left border-collapse">
+        <div className="border border-surface-700 rounded-lg overflow-x-auto bg-surface-800/30">
+          <table className="w-full text-left border-collapse min-w-[600px]">
             <thead>
               <tr className="bg-surface-800/50">
-                <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">ID</th>
+                <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Session ID</th>
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Status</th>
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Started</th>
-                <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Duration</th>
+                <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Runs</th>
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Messages</th>
                 <th className="px-4 py-3 border-b border-surface-700"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-700/50">
-              {runs.map((run) => {
-                const isExpanded = expandedRunId === run.id;
-                const trace = traceByRunId[run.id];
-                const messagesCount = trace?.steps?.length || 0;
+              {sessions.map((session) => {
+                const isExpanded = expandedSessionId === session.conversationId;
+                const latestRun = session.runs[session.runs.length - 1];
 
                 return (
-                  <Fragment key={run.id}>
+                  <Fragment key={session.conversationId}>
                     <tr
                       role="button"
                       tabIndex={0}
-                      onClick={() => handleToggleRun(run.id)}
+                      onClick={() => handleToggleSession(session.conversationId)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
-                          handleToggleRun(run.id);
+                          handleToggleSession(session.conversationId);
                         }
                       }}
                       className="hover:bg-surface-800/50 cursor-pointer transition-colors group"
                     >
                       <td className="px-4 py-3 text-sm font-mono text-surface-300">
-                        {run.id.slice(0, 8)}
+                        {session.conversationId.slice(0, 8)}
                       </td>
                       <td className="px-4 py-3">
-                        <RunStatusBadge status={run.status} />
+                        <RunStatusBadge status={latestRun.status} />
                       </td>
                       <td className="px-4 py-3 text-sm text-surface-400 tabular-nums">
-                        {formatTime(run.startedAt)}
+                        {formatTime(session.startedAt)}
                       </td>
                       <td className="px-4 py-3 text-sm text-surface-400 tabular-nums">
-                        {run.completedAt ? formatDuration(run.startedAt, run.completedAt) : '--'}
+                        {session.runs.length}
                       </td>
                       <td className="px-4 py-3 text-sm text-surface-400 tabular-nums">
-                        {messagesCount}
+                        {session.messageCount}
                       </td>
                       <td className="px-4 py-3 text-right">
                         {isExpanded ? (
-                          <ChevronDown className="h-4 w-4 text-surface-600 inline-block" />
+                          <ChevronDown className="h-4 w-4 text-surface-400 inline-block" />
                         ) : (
-                          <ChevronRight className="h-4 w-4 text-surface-600 inline-block" />
+                          <ChevronRight className="h-4 w-4 text-surface-400 inline-block" />
                         )}
                       </td>
                     </tr>
 
-                    {/* Expanded run detail */}
+                    {/* Expanded session detail */}
                     {isExpanded && (
                       <tr className="bg-surface-900/30">
                         <td colSpan={6} className="p-0">
-                          <div data-testid="run-detail" className="px-4 py-4 space-y-4 border-t border-surface-700/30">
-                            {/* Run metadata */}
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                              <div>
-                                <p className="text-[11px] text-surface-500 uppercase tracking-wider">Status</p>
-                                <div className="mt-1">
-                                  <RunStatusBadge status={run.status} />
-                                </div>
-                              </div>
-                              <div>
-                                <p className="text-[11px] text-surface-500 uppercase tracking-wider">Mode</p>
-                                <p className="text-sm text-surface-300 mt-1">{run.mode || 'background'}</p>
-                              </div>
-                              <div>
-                                <p className="text-[11px] text-surface-500 uppercase tracking-wider">Started</p>
-                                <p className="text-sm text-surface-300 mt-1 tabular-nums">{formatTime(run.startedAt)}</p>
-                              </div>
-                              <div>
-                                <p className="text-[11px] text-surface-500 uppercase tracking-wider">Duration</p>
-                                <p className="text-sm text-surface-300 mt-1 tabular-nums">
-                                  {run.completedAt ? formatDuration(run.startedAt, run.completedAt) : 'In progress...'}
-                                </p>
-                              </div>
-                            </div>
-
-                            {/* Task description */}
-                            {(run.taskDescription || trace?.taskDescription) && (
-                              <div>
-                                <p className="text-[11px] text-surface-500 uppercase tracking-wider mb-1">Task</p>
-                                <p className="text-sm text-surface-300 bg-surface-900/60 rounded-lg px-3 py-2 border border-surface-700/30">
-                                  {run.taskDescription || trace?.taskDescription}
-                                </p>
-                              </div>
-                            )}
-
+                          <div data-testid="session-detail" className="px-4 py-4 space-y-4 border-t border-surface-700/30">
                             {/* Session actions */}
-                            {(run.status === 'completed' || run.status === 'error') && (
+                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                              {onContinueChat && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); onContinueChat(session.conversationId); }}
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent-600/20 border border-accent-500/30 px-3 py-1.5 text-xs font-medium text-accent-300 hover:bg-accent-600/30 transition-colors"
+                                >
+                                  <MessageSquare className="h-3.5 w-3.5" />
+                                  Continue Chat
+                                </button>
+                              )}
+                            </div>
+                            {(latestRun.status === 'completed' || latestRun.status === 'error') && (
                               <SessionActions
                                 agentId={agentId}
-                                runId={run.id}
+                                runId={latestRun.id}
                                 onViewFiles={onViewSessionFiles}
                               />
                             )}
 
-                            {/* Trace timeline */}
-                            {trace && trace.steps && trace.steps.length > 0 ? (
-                              <div>
-                                <div className="flex items-center justify-between mb-3">
-                                  <p className="text-[11px] text-surface-500 uppercase tracking-wider">Execution Trace</p>
-                                  {trace.outcome && (
-                                    <span className={cn(
-                                      'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium border',
-                                      trace.outcome === 'success'
-                                        ? 'bg-emerald-900/30 border-emerald-700/30 text-emerald-300'
-                                        : trace.outcome === 'error'
-                                          ? 'bg-red-900/30 border-red-700/30 text-red-300'
-                                          : 'bg-surface-800/60 border-surface-700/40 text-surface-400',
-                                    )}>
-                                      {trace.outcome}
-                                    </span>
-                                  )}
-                                </div>
-                                <TraceTimeline steps={trace.steps} />
-                              </div>
-                            ) : (
-                              <div className="text-center py-6">
-                                <div><p className="text-surface-400 font-medium">No trace data</p><p className="text-surface-600 text-sm mt-1">Trace data will appear here once the agent executes subtasks.</p></div>
-                              </div>
-                            )}
+                            {/* Nested runs */}
+                            <div className="space-y-3">
+                              <p className="text-[11px] text-surface-400 uppercase tracking-wider">Session Runs</p>
+                              {session.runs.map((run, idx) => {
+                                const trace = traceByRunId[run.id];
+                                return (
+                                  <div key={run.id} className="border border-surface-700/50 rounded-lg bg-surface-800/40 p-3 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center gap-3">
+                                        <span className="text-xs font-mono text-surface-400">Run {idx + 1}</span>
+                                        <RunStatusBadge status={run.status} />
+                                        <span className="text-xs text-surface-400 tabular-nums">
+                                          {formatTime(run.startedAt)}
+                                        </span>
+                                        <span className="text-xs text-surface-400 tabular-nums">
+                                          {run.completedAt ? formatDuration(run.startedAt, run.completedAt) : 'In progress...'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    
+                                    {/* Task description */}
+                                    {(run.taskDescription || trace?.taskDescription) && (
+                                      <p className="text-sm text-surface-300 bg-surface-900/60 rounded px-2 py-1.5 border border-surface-700/30">
+                                        {run.taskDescription || trace?.taskDescription}
+                                      </p>
+                                    )}
+
+                                    {/* Trace timeline */}
+                                    {trace && trace.steps && trace.steps.length > 0 && (
+                                      <div className="mt-2 pl-2 border-l-2 border-surface-700/30">
+                                        <TraceTimeline steps={trace.steps} />
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         </td>
                       </tr>

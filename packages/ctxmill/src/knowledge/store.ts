@@ -203,10 +203,16 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     return lines.join('\n');
   }
 
-  // ── Shared knowledge stubs (InMemoryKnowledgeStore has no shared concept) ──
+  // ── Shared knowledge ──
 
   async listShared(): Promise<KnowledgeItem[]> {
-    return [];
+    const result: KnowledgeItem[] = [];
+    for (const item of this.items.values()) {
+      if (item.agentId === '__shared__') {
+        result.push(item);
+      }
+    }
+    return result;
   }
 
   async addShared(
@@ -220,7 +226,7 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
   }
 
   async sharedStats(): Promise<KnowledgeStats> {
-    return { totalItems: 0, categories: {}, recentItems: 0 };
+    return this.stats('__shared__');
   }
 
   async searchAll(options: KnowledgeSearchOptions): Promise<KnowledgeSearchResult> {

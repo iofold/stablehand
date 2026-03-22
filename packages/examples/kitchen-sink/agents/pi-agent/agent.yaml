@@ -1,25 +1,41 @@
 apiVersion: ctxmill.io/v1
 kind: Agent
 metadata:
-  name: pi-helper
-  displayName: PI Agent Helper
-  description: General assistant using PI Agent harness
+  name: pi-auditor
+  displayName: PI Auditor
+  description: >-
+    Auditor agent. Monitors chain events and logs a structured audit
+    trail of the multi-agent workflow.
   labels:
     example: kitchen-sink
     harness: pi-agent
+    chain-role: auditor
+    chain-order: "3"
 spec:
   harness: pi-agent
-  model:
+  harnessConfig:
     provider: openai
-    id: gpt-5-mini
+    model: gpt-5-mini
     apiKeyRef: "$secret:OPENAI_API_KEY"
-    temperature: 0.2
   instructions: |
-    You are a helpful assistant that can perform calculations and check weather.
-    Always be concise and accurate. You are powered by the PI Agent harness.
+    You are the Auditor in a multi-agent chain. Your role:
+    1. Monitor events from the chain: analysis.complete and report.ready.
+    2. Log each event with a timestamp, the originating agent, and a brief
+       summary of the payload.
+    3. At the end of the chain, produce a structured audit log summarizing
+       the full workflow execution.
+    4. Use the emit-event tool to emit an "audit.logged" event with the
+       full audit trail in the payload under the key "auditLog".
+
+    Always be thorough and precise. You are powered by the PI Agent harness.
   tools:
-    - ref: calculator
-    - ref: weather
+    - ref: emit-event
+  nativeTools:
+    allowlist:
+      - read
+      - bash
+      - edit
+      - write
   mode: interactive
   resources:
     maxRunDurationSeconds: 60

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline';
 
-const API_BASE = process.env.CTXMILL_API_URL || `http://localhost:${process.env.CTXMILL_PORT || '3001'}`;
+const API_BASE =
+  process.env.CTXMILL_API_URL ||
+  `http://localhost:${process.env.CTXMILL_PORT || '3002'}`;
 
 interface Agent {
   id: string;
@@ -12,7 +14,11 @@ async function resolveAgentId(): Promise<string> {
   const res = await fetch(`${API_BASE}/api/agents`);
   if (!res.ok) throw new Error(`Failed to list agents: ${res.status}`);
   const agents = (await res.json()) as Agent[];
-  if (agents.length === 0) throw new Error('No agents registered. Start `ctxmill dev` first.');
+  if (agents.length === 0) {
+    throw new Error(
+      'No agents registered. Create or import one, then retry against the running Docker stack.',
+    );
+  }
   return agents[0].id;
 }
 
@@ -95,7 +101,7 @@ export async function startChat() {
         if (started) console.log('\n');
         else console.log('\nAssistant: [no text response]\n');
       } catch (err) {
-        console.error('Error: Could not connect to API server. Is `ctxmill dev` running?');
+        console.error('Error: Could not connect to API server. Is the Docker stack running?');
         console.error(`  ${(err as Error).message}\n`);
       }
 

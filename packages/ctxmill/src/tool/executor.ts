@@ -23,8 +23,8 @@ export class LocalFunctionExecutor {
       throw new Error(`Unknown tool: "${call.name}". Available tools: ${available}`);
     }
 
-    // Validate input with Zod
-    const parsed = tool.input.safeParse(call.arguments);
+    const zodInput = tool.input as import('zod').ZodType;
+    const parsed = zodInput.safeParse(call.arguments);
     if (!parsed.success) {
       throw new Error(`Tool "${call.name}" input validation failed: ${parsed.error.message}`);
     }
@@ -67,7 +67,7 @@ export class LocalFunctionExecutor {
       result.push({
         name: tool.name,
         description: tool.description,
-        input_schema: zodToJsonSchema(tool.input),
+        input_schema: zodToJsonSchema(tool.input as any),
       });
     }
     return result;

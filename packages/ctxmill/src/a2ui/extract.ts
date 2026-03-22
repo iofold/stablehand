@@ -8,22 +8,11 @@ export interface A2UIBlock {
   props: Record<string, unknown>;
 }
 
-// Whitelist of allowed component names
 const ALLOWED_COMPONENTS = new Set([
-  // Charts
   'TimeSeriesChart', 'BarChart', 'PieChart', 'MetricCard', 'TableView',
   'CandlestickChart', 'FunnelChart', 'SankeyDiagram', 'KnowledgeGraphView',
-  // With prefix
-  'charts:TimeSeriesChart', 'charts:BarChart', 'charts:PieChart', 'charts:MetricCard',
-  'charts:TableView', 'charts:CandlestickChart', 'charts:FunnelChart',
-  'charts:SankeyDiagram', 'charts:KnowledgeGraphView',
-  // Additional chart types
   'LineChart', 'AreaChart', 'ScatterChart', 'RadarChart', 'Treemap', 'NetworkGraph',
-  'charts:LineChart', 'charts:AreaChart', 'charts:ScatterChart', 'charts:RadarChart',
-  'charts:Treemap', 'charts:NetworkGraph',
-  // HITL
   'ApprovalCard', 'EditableDocument', 'FieldRequestForm',
-  'hitl:ApprovalCard', 'hitl:EditableDocument', 'hitl:FieldRequestForm',
 ]);
 
 /** Maximum length for sanitized string prop values */
@@ -43,15 +32,15 @@ export const ALLOWED_PROPS: Record<string, string[]> = {
   ScatterChart:      ['data', 'xKey', 'yKey', 'title', 'color', 'width', 'height'],
   RadarChart:        ['data', 'dataKey', 'title', 'width', 'height'],
   Treemap:           ['data', 'dataKey', 'nameKey', 'title', 'colors', 'width', 'height'],
-  SankeyDiagram:     ['data', 'title', 'width', 'height'],
+  SankeyDiagram:     ['data', 'nodes', 'links', 'title', 'width', 'height'],
   NetworkGraph:      ['data', 'title', 'width', 'height'],
   TimeSeriesChart:   ['data', 'xKey', 'yKey', 'title', 'color', 'width', 'height'],
-  MetricCard:        ['title', 'value', 'change', 'trend', 'prefix', 'suffix', 'description'],
+  MetricCard:        ['title', 'value', 'change', 'changeLabel', 'trend', 'prefix', 'suffix', 'description'],
   TableView:         ['data', 'columns', 'title', 'pageSize'],
   CandlestickChart:  ['data', 'title', 'width', 'height'],
-  FunnelChart:       ['data', 'title', 'width', 'height', 'colors'],
-  KnowledgeGraphView:['data', 'title', 'width', 'height'],
-  ApprovalCard:      ['title', 'description', 'toolName', 'args', 'approveLabel', 'rejectLabel'],
+  FunnelChart:       ['data', 'stages', 'title', 'width', 'height', 'colors'],
+  KnowledgeGraphView:['data', 'nodes', 'edges', 'title', 'width', 'height'],
+  ApprovalCard:      ['title', 'description', 'action', 'details', 'toolName', 'args', 'approveLabel', 'rejectLabel'],
   EditableDocument:  ['content', 'title', 'format'],
   FieldRequestForm:  ['fields', 'title', 'submitLabel'],
 };
@@ -60,9 +49,59 @@ export const ALLOWED_PROPS: Record<string, string[]> = {
  * Resolve a potentially prefixed component name (e.g. "charts:BarChart")
  * to its base name for prop-whitelist lookup.
  */
+export function normalizeComponentName(name: string): string {
+  if (name.startsWith('ctxmill.charts:')) return name.slice('ctxmill.charts:'.length);
+  if (name.startsWith('ctxmill.hitl:')) return name.slice('ctxmill.hitl:'.length);
+  if (name.startsWith('charts:')) return name.slice('charts:'.length);
+  if (name.startsWith('hitl:')) return name.slice('hitl:'.length);
+  return name;
+}
+
 function baseComponentName(name: string): string {
-  const idx = name.indexOf(':');
-  return idx >= 0 ? name.slice(idx + 1) : name;
+  return normalizeComponentName(name);
+}
+
+function normalizeProps(
+  componentName: string,
+  props: Record<string, unknown>,
+): Record<string, unknown> {
+  const base = baseComponentName(componentName);
+  const normalized = { ...props };
+
+  if (base === 'FunnelChart' && !Array.isArray(normalized.stages) && Array.isArray(normalized.data)) {
+    normalized.stages = normalized.data;
+  }
+
+  if (base === 'SankeyDiagram' && normalized.data && typeof normalized.data === 'object') {
+    const data = normalized.data as Record<string, unknown>;
+    if (!Array.isArray(normalized.nodes) && Array.isArray(data.nodes)) {
+      normalized.nodes = data.nodes;
+    }
+    if (!Array.isArray(normalized.links) && Array.isArray(data.links)) {
+      normalized.links = data.links;
+    }
+  }
+
+  if (base === 'KnowledgeGraphView' && normalized.data && typeof normalized.data === 'object') {
+    const data = normalized.data as Record<string, unknown>;
+    if (!Array.isArray(normalized.nodes) && Array.isArray(data.nodes)) {
+      normalized.nodes = data.nodes;
+    }
+    if (!Array.isArray(normalized.edges) && Array.isArray(data.edges)) {
+      normalized.edges = data.edges;
+    }
+  }
+
+  if (base === 'ApprovalCard') {
+    if (typeof normalized.action !== 'string' && typeof normalized.toolName === 'string') {
+      normalized.action = normalized.toolName;
+    }
+    if (!normalized.details && normalized.args && typeof normalized.args === 'object') {
+      normalized.details = normalized.args;
+    }
+  }
+
+  return normalized;
 }
 
 /**
@@ -117,7 +156,7 @@ export function sanitizeProps(
   const allowedSet = new Set(allowed);
   const filtered: Record<string, unknown> = {};
 
-  for (const [key, value] of Object.entries(props)) {
+  for (const [key, value] of Object.entries(normalizeProps(componentName, props))) {
     if (allowedSet.has(key)) {
       filtered[key] = deepSanitize(value);
     }
@@ -145,10 +184,10 @@ export function extractA2UIBlocks(text: string): A2UIBlock[] {
         typeof parsed.component === 'string' &&
         typeof parsed.props === 'object' &&
         parsed.props !== null &&
-        ALLOWED_COMPONENTS.has(parsed.component)
+        ALLOWED_COMPONENTS.has(baseComponentName(parsed.component))
       ) {
         blocks.push({
-          component: parsed.component,
+          component: baseComponentName(parsed.component),
           props: sanitizeProps(parsed.component, parsed.props),
         });
       }
@@ -163,5 +202,5 @@ export function extractA2UIBlocks(text: string): A2UIBlock[] {
  * Check if a component name is in the allowed whitelist.
  */
 export function isAllowedComponent(name: string): boolean {
-  return ALLOWED_COMPONENTS.has(name);
+  return ALLOWED_COMPONENTS.has(baseComponentName(name));
 }

@@ -25,9 +25,11 @@ export function scaffold({ projectDir, packageName }: ScaffoldOptions): void {
         type: 'module',
         private: true,
         scripts: {
-          dev: 'ctxmill dev',
+          dev: 'docker compose up --build',
+          'dev:down': 'docker compose down',
+          'dev:logs': 'docker compose logs -f',
           test: 'vitest run',
-          chat: 'ctxmill chat',
+          chat: 'docker compose exec orchestrator npx ctxmill chat',
           eval: 'ctxmill eval',
         },
         dependencies: {
@@ -76,7 +78,7 @@ export function scaffold({ projectDir, packageName }: ScaffoldOptions): void {
     `import { defineConfig } from 'ctxmill';
 
 export default defineConfig({
-  preset: 'local',
+  preset: 'docker',
   llm: {
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
@@ -283,6 +285,77 @@ export default defineTool({
   );
 
   writeFileSync(
+    join(projectDir, 'Dockerfile'),
+    `FROM node:22-slim
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+
+EXPOSE 3001
+
+CMD ["npx", "ctxmill", "dev"]
+`,
+  );
+
+  writeFileSync(
+    join(projectDir, 'docker-compose.yml'),
+    `services:
+  orchestrator:
+    build: .
+    environment:
+      DATABASE_URL: \${DATABASE_URL:-postgres://ctxmill:ctxmill@postgres:5432/ctxmill}
+      CTXMILL_PORT: 3001
+      CTXMILL_UI_MODE: disabled
+      CTXMILL_API_URL: http://localhost:3001
+      OPENAI_API_KEY: \${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: \${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3002:3001"
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+      - ctxmill_data:/app/.ctxmill
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ctxmill
+      POSTGRES_USER: ctxmill
+      POSTGRES_PASSWORD: ctxmill
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ctxmill -d ctxmill"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+  node_modules:
+  ctxmill_data:
+`,
+  );
+
+  writeFileSync(
+    join(projectDir, '.dockerignore'),
+    `node_modules/
+dist/
+.ctxmill/
+.git/
+`,
+  );
+
+  writeFileSync(
     join(projectDir, 'feedback', 'examples.yaml'),
     `# Ground truth examples for evaluation
 examples:
@@ -345,10 +418,14 @@ dist/
 
   writeFileSync(
     join(projectDir, '.env.example'),
-    `# Required: Your Anthropic API key
-ANTHROPIC_API_KEY=sk-ant-...
+    `# Database used by docker compose
+DATABASE_URL=postgres://ctxmill:ctxmill@postgres:5432/ctxmill
 
-# Optional: Custom base URL (for proxies)
+# Recommended: provide the API keys your agents need
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=
+
+# Optional: custom base URL (for proxies)
 # ANTHROPIC_BASE_URL=https://api.anthropic.com
 `,
   );
@@ -362,12 +439,18 @@ Built with [CTXMill](https://github.com/ctxmill/ctxmill) -- the framework for ve
 ## Quick Start
 
 \`\`\`bash
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
-npm install
-npx ctxmill dev
+cp .env.example .env
+# add your API keys to .env
+docker compose up --build
 \`\`\`
 
-Open http://localhost:3100 to chat with your agent.
+The API will be available at http://localhost:3002.
+
+To chat with your agent from the running container:
+
+\`\`\`bash
+docker compose exec orchestrator npx ctxmill chat
+\`\`\`
 
 ## Project Structure
 
@@ -383,8 +466,10 @@ ${packageName}/
 
 ## Commands
 
-- \`npx ctxmill dev\` -- Start API + UI servers
-- \`npx ctxmill chat\` -- Chat in terminal
+- \`npm run dev\` -- Build and start the Docker stack
+- \`npm run dev:down\` -- Stop the Docker stack
+- \`npm run dev:logs\` -- Tail container logs
+- \`npm run chat\` -- Open terminal chat inside the orchestrator container
 - \`npx vitest\` -- Run tests
 `,
   );

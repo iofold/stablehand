@@ -16,15 +16,28 @@ export interface ManifestMetadata {
 // ── Spec ────────────────────────────────────────────────
 export interface ManifestSpec {
   harness: string;
-  model: ManifestModelConfig;
+  model?: ManifestModelConfig;
+  harnessConfig?: ManifestHarnessConfig;
   instructions: string;
   tools?: ManifestToolRef[];
+  nativeTools?: ManifestNativeTools;
   triggers?: ManifestTrigger[];
   emits?: ManifestEmit[];
   hitl?: ManifestHITL;
   workspace?: ManifestWorkspace;
   resources?: ManifestResources;
   mode?: 'interactive' | 'background' | 'both';
+}
+
+export interface ManifestHarnessConfig {
+  provider: string;
+  model: string;
+  apiKeyRef?: string;
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+  reasoning?: 'off' | 'low' | 'medium' | 'high';
+  baseUrl?: string;
 }
 
 export interface ManifestModelConfig {
@@ -43,6 +56,28 @@ export type ManifestToolRef =
   | { ref: string }
   | { mcp: ManifestMCPTool }
   | { inline: ManifestInlineTool };
+
+export interface ManifestNativeTools {
+  /** SDK-native tool names to allow. If set, only these are enabled. */
+  allowlist?: string[];
+  /** SDK-native tool names to deny. Applied after allowlist. */
+  blocklist?: string[];
+}
+
+export interface ManifestFileCopy {
+  src: string;
+  dest: string;
+}
+
+export interface ManifestWorkspaceContent {
+  /** Explicit files to copy into workspace before run */
+  files?: ManifestFileCopy[];
+  /**
+   * true = auto-discover all skills; string[] = named skills only.
+   * Skills are copied to .ctxmill/skills/ in workspace.
+   */
+  skills?: boolean | string[];
+}
 
 export interface ManifestMCPTool {
   name: string;
@@ -95,6 +130,7 @@ export interface ManifestWorkspace {
   maxSizeBytes?: number;
   readOnlyPaths?: string[];
   writablePaths?: string[];
+  content?: ManifestWorkspaceContent;
 }
 
 // ── Resources ───────────────────────────────────────────
@@ -103,4 +139,17 @@ export interface ManifestResources {
   maxTokensPerRun?: number;
   maxToolCallsPerRun?: number;
   costLimitPerDay?: number;
+  /** Sandbox container resource limits. */
+  sandbox?: ManifestSandboxResources;
+}
+
+export interface ManifestSandboxResources {
+  /** CPU allocation in fractional cores. Range: 0.5 - 4.0 */
+  cpus?: number;
+  /** Memory limit in MiB. Range: 256 - 4096 */
+  memoryMb?: number;
+  /** PID limit. Range: 64 - 512 */
+  pidsLimit?: number;
+  /** Run timeout in seconds. Range: 60 - 3600 */
+  timeoutSec?: number;
 }

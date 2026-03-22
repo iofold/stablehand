@@ -3,12 +3,14 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  Play,
   Search,
   Shield,
   Wrench,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fetchCatalogTools } from '@/lib/api';
+import { ToolTester } from '@/components/tools/ToolTester';
 
 interface CatalogTool {
   name: string;
@@ -38,6 +40,7 @@ export function ToolRegistryPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
+  const [testingTool, setTestingTool] = useState<string | null>(null);
 
   const loadTools = useCallback(async () => {
     setLoading(true);
@@ -91,13 +94,13 @@ export function ToolRegistryPage() {
               </p>
             </div>
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-500" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-400" />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search tools..."
-                className="rounded-lg border border-surface-700 bg-surface-800 pl-9 pr-4 py-2 text-sm text-surface-200 placeholder:text-surface-500 focus:outline-none focus:ring-1 focus:ring-accent-500/50 w-64"
+                className="rounded-lg border border-surface-700 bg-surface-800 pl-9 pr-4 py-2 text-sm text-surface-200 placeholder:text-surface-400 focus:outline-none focus:ring-1 focus:ring-accent-500/50 w-64"
               />
             </div>
           </div>
@@ -140,16 +143,16 @@ export function ToolRegistryPage() {
           </div>
         ) : error ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Wrench className="h-8 w-8 text-surface-600 mb-3" />
+            <Wrench className="h-8 w-8 text-surface-400 mb-3" />
             <p className="text-sm text-surface-400">{error}</p>
           </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Wrench className="h-8 w-8 text-surface-600 mb-3" />
+            <Wrench className="h-8 w-8 text-surface-400 mb-3" />
             <p className="text-sm text-surface-400">
               {search ? 'No tools match your search.' : 'No tools registered yet.'}
             </p>
-            <p className="text-xs text-surface-500 mt-1">
+            <p className="text-xs text-surface-400 mt-1">
               Tools will appear here when agents register them.
             </p>
           </div>
@@ -162,10 +165,9 @@ export function ToolRegistryPage() {
                   key={tool.name}
                   className="border border-surface-700 rounded-lg bg-surface-800/30 overflow-hidden"
                 >
-                  <button
-                    type="button"
+                  <div
                     onClick={() => setExpandedTool(isExpanded ? null : tool.name)}
-                    className="w-full text-left px-4 py-4 hover:bg-surface-800/50 transition-colors focus-visible:outline-none focus-visible:bg-surface-800/50"
+                    className="w-full text-left px-4 py-4 hover:bg-surface-800/50 transition-colors cursor-pointer"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
@@ -174,9 +176,9 @@ export function ToolRegistryPage() {
                             {tool.name}
                           </span>
                           {isExpanded ? (
-                            <ChevronDown className="h-3.5 w-3.5 text-surface-500 flex-shrink-0" />
+                            <ChevronDown className="h-3.5 w-3.5 text-surface-400 flex-shrink-0" />
                           ) : (
-                            <ChevronRight className="h-3.5 w-3.5 text-surface-500 flex-shrink-0" />
+                            <ChevronRight className="h-3.5 w-3.5 text-surface-400 flex-shrink-0" />
                           )}
                         </div>
                         {tool.description && (
@@ -185,6 +187,25 @@ export function ToolRegistryPage() {
                           </p>
                         )}
                       </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTestingTool(testingTool === tool.name ? null : tool.name);
+                          if (testingTool !== tool.name && !isExpanded) {
+                            setExpandedTool(tool.name);
+                          }
+                        }}
+                        className={cn(
+                          "flex-shrink-0 inline-flex items-center justify-center rounded-md p-1.5 transition-colors",
+                          testingTool === tool.name
+                            ? "bg-accent-500/20 text-accent-400"
+                            : "bg-surface-800 text-surface-400 hover:bg-surface-700 hover:text-surface-200"
+                        )}
+                        title="Test Tool"
+                      >
+                        <Play className="h-4 w-4" />
+                      </button>
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <span
@@ -202,13 +223,13 @@ export function ToolRegistryPage() {
                         </span>
                       )}
                     </div>
-                  </button>
+                  </div>
 
                   {isExpanded && (
                     <div className="border-t border-surface-700 bg-surface-900/50 px-4 py-4 space-y-3">
                       {tool.inputSchema && (
                         <div>
-                          <p className="text-[11px] font-medium text-surface-500 uppercase tracking-wider mb-2">
+                          <p className="text-[11px] font-medium text-surface-400 uppercase tracking-wider mb-2">
                             Input Schema
                           </p>
                           <pre className="overflow-x-auto rounded-lg bg-surface-950 border border-surface-700 p-3 text-xs text-surface-300 font-mono leading-relaxed max-h-60">
@@ -218,7 +239,7 @@ export function ToolRegistryPage() {
                       )}
                       {tool.secrets && tool.secrets.length > 0 && (
                         <div>
-                          <p className="text-[11px] font-medium text-surface-500 uppercase tracking-wider mb-2">
+                          <p className="text-[11px] font-medium text-surface-400 uppercase tracking-wider mb-2">
                             Secrets
                           </p>
                           <div className="flex flex-wrap gap-1.5">
@@ -234,9 +255,17 @@ export function ToolRegistryPage() {
                         </div>
                       )}
                       {!tool.inputSchema && (!tool.secrets || tool.secrets.length === 0) && (
-                        <p className="text-xs text-surface-500">No additional details available.</p>
+                        <p className="text-xs text-surface-400">No additional details available.</p>
                       )}
                     </div>
+                  )}
+
+                  {testingTool === tool.name && (
+                    <ToolTester
+                      toolName={tool.name}
+                      inputSchema={tool.inputSchema}
+                      onClose={() => setTestingTool(null)}
+                    />
                   )}
                 </div>
               );

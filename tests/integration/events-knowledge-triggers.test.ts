@@ -28,7 +28,7 @@ describe('Events, Knowledge, and Triggers Integration', () => {
     container = await createContainer(
       {
         preset: 'local',
-        database: { type: 'sqlite', path: 'data.db' },
+        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
         llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
       },
       dataDir,
@@ -37,7 +37,7 @@ describe('Events, Knowledge, and Triggers Integration', () => {
     const envFactory = new MockOverlayFactory();
     app = await createServer({
       db: container.db,
-      executor: container.agentExecutor,
+      agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       knowledgeStore: container.knowledgeStore,
@@ -61,7 +61,8 @@ describe('Events, Knowledge, and Triggers Integration', () => {
       url: '/api/agents',
       payload: {
         name,
-        model: 'claude-sonnet-4-6',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
         systemPrompt: 'You are a test agent.',
         tools: ['bash'],
       },

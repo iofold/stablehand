@@ -29,11 +29,11 @@ export function AgentFilesTab({ agentId, runId }: AgentFilesTabProps) {
         <h3 className="text-sm font-semibold text-surface-200">
           {runId ? `Session Workspace (run ${runId.slice(0, 8)})` : 'Agent Base Workspace'}
         </h3>
-        <p className="text-xs text-surface-500 mt-0.5">
-          {runId ? 'Files from this session overlay' : 'Isolated filesystem for this agent'}
+        <p className="text-xs text-surface-400 mt-0.5">
+          {runId ? 'Files and edits scoped to this run overlay' : 'Base workspace directory for this agent'}
         </p>
       </div>
-      <div className="flex gap-4 min-h-[500px]">
+      <div className="flex min-h-[500px] min-w-0 gap-4">
       {/* File tree (left panel) */}
       <div className="w-[280px] flex-shrink-0 rounded-lg border border-surface-700 bg-surface-850 overflow-hidden">
         <FileExplorer
@@ -47,7 +47,7 @@ export function AgentFilesTab({ agentId, runId }: AgentFilesTabProps) {
       </div>
 
       {/* File viewer (right panel) */}
-      <div className="flex-1 rounded-lg border border-surface-700 bg-surface-850 overflow-hidden">
+      <div className="min-w-0 flex-1 rounded-lg border border-surface-700 bg-surface-850 overflow-hidden">
         {selectedFile ? (
           <FileViewer
             agentId={agentId}

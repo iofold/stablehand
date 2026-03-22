@@ -1,2 +1,11 @@
 export { default as calculator } from './calculator.js';
 export { default as weather } from './weather.js';
+export { default as readFile } from './read-file.js';
+export { default as writeFile } from './write-file.js';
+export { default as writeNote } from './write-note.js';
+export { default as listDirectory } from './list-directory.js';
+export { default as searchFiles } from './search-files.js';
+export { default as executeTrade } from './execute-trade.js';
+export { default as execCommand } from './exec-command.js';
+export { default as processImage } from './process-image.js';
+export { default as manageFiles } from './manage-files.js';

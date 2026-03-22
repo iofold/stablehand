@@ -7,9 +7,8 @@ import type { SSEManager } from '../sse.js';
 import type { InterruptManager } from '../interrupt.js';
 import type { RunRegistry } from '../run-registry.js';
 import type { DatabaseRepository } from '../../database/repository.js';
-import type { AgentExecutor } from '../../agent/executor.js';
-import type { AgentDefinition } from '../../types.js';
-import type { AgentModelConfig } from '../../harness/types.js';
+import type { AgentDefinition, AgentResourceLimits } from '../../types.js';
+import type { HarnessRegistry } from '../../harness/types.js';
 import type { LearningPipeline } from '../../learning/types.js';
 import type { KnowledgeStore } from '../../knowledge/types.js';
 import type { AgentRunService } from '../agent-run-service.js';
@@ -19,15 +18,17 @@ import type { EnvironmentFactory } from '../../workspace/types.js';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared, seedAgentWorkspace } from '../../workspace/ensure.js';
 import { getErrorMessage } from '../../util/errors.js';
 import type { ManifestService } from '../../manifest/index.js';
+import type { SecretProvider } from '../../secrets/types.js';
+import type { HttpAuthConfig, HttpEndpointConfig } from '../../tool/providers/http.js';
+import { DefaultToolRegistry } from '../../tool/registry.js';
 import {
   discoverSkills,
-  discoverLegacySkills,
   loadSkill,
   createSkillDirectory,
   updateSkillMd,
   isValidSkillName,
 } from '../../skills/loader.js';
-import type { LoadedSkill, LegacySkill } from '@ctxmill/shared';
+import type { LoadedSkill } from '@ctxmill/shared';
 import {
   isBlockedPath,
   resolveBaseDir,
@@ -36,15 +37,7 @@ import {
   mapMessagesToInternal,
   requireAgent,
 } from './agent-helpers.js';
-
-/** Safely parse JSON, returning a fallback on failure. */
-function safeJsonParse(value: string, fallback: unknown = {}): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
-}
+import { getAgentHttpToolProviderName, registerAgentHttpTools } from '../http-tools.js';
 
 /** Build a safe error response — only include details in development mode. */
 function safeError(message: string, err: unknown): { error: string; detail?: string } {
@@ -55,18 +48,129 @@ function safeError(message: string, err: unknown): { error: string; detail?: str
   return { error: 'Internal error' };
 }
 
-/** Convert a DB agent row to an AgentDefinition for the executor. */
-function toAgentDef(agent: { name: string; model: string; systemPrompt: string; tools: string[]; description?: string | null; metadata?: Record<string, unknown> | null; workspaceDir?: string | null; harness?: string | null; modelConfig?: string | null }): AgentDefinition {
+/**
+ * Validate resource limits for an agent.
+ * Returns an array of validation error strings. Empty array means valid.
+ */
+function validateResourceLimits(limits: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+
+  if (limits.cpus !== undefined) {
+    const cpus = Number(limits.cpus);
+    if (isNaN(cpus) || cpus < 0.5 || cpus > 4.0) {
+      errors.push(`cpus must be between 0.5 and 4.0, got ${limits.cpus}`);
+    }
+  }
+
+  if (limits.memoryMb !== undefined) {
+    const mem = Number(limits.memoryMb);
+    if (isNaN(mem) || !Number.isInteger(mem) || mem < 256 || mem > 4096) {
+      errors.push(`memoryMb must be an integer between 256 and 4096, got ${limits.memoryMb}`);
+    }
+  }
+
+  if (limits.pidsLimit !== undefined) {
+    const pids = Number(limits.pidsLimit);
+    if (isNaN(pids) || !Number.isInteger(pids) || pids < 64 || pids > 512) {
+      errors.push(`pidsLimit must be an integer between 64 and 512, got ${limits.pidsLimit}`);
+    }
+  }
+
+  if (limits.timeoutSec !== undefined) {
+    const timeout = Number(limits.timeoutSec);
+    if (isNaN(timeout) || !Number.isInteger(timeout) || timeout < 60 || timeout > 3600) {
+      errors.push(`timeoutSec must be an integer between 60 and 3600, got ${limits.timeoutSec}`);
+    }
+  }
+
+  return errors;
+}
+
+type AgentHttpToolDefinition = {
+  name: string;
+  description: string;
+  endpoint: string;
+  method?: HttpEndpointConfig['method'];
+  inputSchema?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  timeout?: number;
+  authentication?: HttpAuthConfig;
+};
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function getHttpToolNames(httpTools?: AgentHttpToolDefinition[] | unknown): string[] {
+  if (!Array.isArray(httpTools) || httpTools.length === 0) return [];
+  return httpTools
+    .filter((tool): tool is AgentHttpToolDefinition => isObjectRecord(tool) && isNonEmptyString(tool.name))
+    .map((tool) => tool.name);
+}
+
+function validateHttpTools(httpTools?: AgentHttpToolDefinition[] | unknown): string | null {
+  if (httpTools === undefined) return null;
+  if (!Array.isArray(httpTools)) {
+    return 'HTTP tool requires name, description, and endpoint';
+  }
+  for (const httpTool of httpTools) {
+    if (
+      !isObjectRecord(httpTool) ||
+      !isNonEmptyString(httpTool.name) ||
+      !isNonEmptyString(httpTool.description) ||
+      !isNonEmptyString(httpTool.endpoint)
+    ) {
+      return 'HTTP tool requires name, description, and endpoint';
+    }
+  }
+  return null;
+}
+
+function mergeToolNames(
+  baseTools: string[],
+  httpTools?: AgentHttpToolDefinition[] | unknown,
+): string[] {
+  return [...new Set([...baseTools, ...getHttpToolNames(httpTools)])];
+}
+
+function parseStoredHarnessConfig(harnessConfigJson: string): Record<string, unknown> {
+  const parsed = JSON.parse(harnessConfigJson) as unknown;
+  if (!isObjectRecord(parsed)) {
+    throw new Error('Stored harnessConfig must be a JSON object');
+  }
+  return parsed;
+}
+
+type StoredAgent = NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
+
+/** Convert a DB agent row to an AgentDefinition for the sandbox runner. */
+function toAgentDef(agent: StoredAgent): AgentDefinition {
+  const manifest = agent.manifest ?? null;
+  const manifestSpec = (manifest as Record<string, unknown> | null)?.spec as Record<string, unknown> | undefined;
+  const meta = (agent.metadata ?? {}) as Record<string, unknown>;
+  const resourceLimits = (manifest?.resourceLimits ?? manifestSpec?.resources) as AgentResourceLimits | undefined;
+
+  const rawNativeTools = ('nativeTools' in meta ? meta.nativeTools : manifestSpec?.nativeTools) as
+    { allowlist?: string[]; blocklist?: string[] } | undefined;
+  const rawWorkspaceContent = (manifestSpec?.workspace as Record<string, unknown> | undefined)?.content as
+    { files?: Array<{ src: string; dest: string }>; skills?: boolean | string[] } | undefined;
+
   return {
     name: agent.name,
-    model: agent.model,
-    harness: agent.harness ?? undefined,
-    modelConfig: agent.modelConfig ? safeJsonParse(agent.modelConfig) as AgentModelConfig : undefined,
+    harness: agent.harness,
+    harnessConfig: parseStoredHarnessConfig(agent.harnessConfig),
     systemPrompt: agent.systemPrompt,
     tools: agent.tools,
     description: agent.description ?? undefined,
     metadata: agent.metadata ?? undefined,
     workspaceDir: agent.workspaceDir ?? undefined,
+    resourceLimits,
+    ...(rawNativeTools ? { nativeTools: rawNativeTools } : {}),
+    ...(rawWorkspaceContent ? { workspaceContent: rawWorkspaceContent } : {}),
   };
 }
 
@@ -75,8 +179,8 @@ export interface AgentRouteOptions {
   db: DatabaseRepository;
   sse: SSEManager;
   interrupts: InterruptManager;
-  executor: AgentExecutor;
   runRegistry: RunRegistry;
+  harnessRegistry: HarnessRegistry;
   learningPipeline?: LearningPipeline;
   knowledgeStore?: KnowledgeStore;
   agentRunService: AgentRunService;
@@ -86,13 +190,16 @@ export interface AgentRouteOptions {
   /** Factory for creating session execution environments. */
   envFactory?: EnvironmentFactory;
   manifestService?: ManifestService;
+  secretProvider?: SecretProvider;
+  toolRegistry?: DefaultToolRegistry;
 }
 
 export async function agentRoutes(
   app: FastifyInstance,
   opts: AgentRouteOptions,
 ): Promise<void> {
-  const { db, sse, interrupts, executor, runRegistry, learningPipeline, knowledgeStore, agentRunService, eventBus, dataDir, envFactory, manifestService } = opts;
+  const { db, sse, interrupts, runRegistry, harnessRegistry, learningPipeline, knowledgeStore, agentRunService, eventBus, dataDir, envFactory, manifestService, secretProvider, toolRegistry } = opts;
+  const validWebhookEvents = ['run.started', 'run.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'];
 
   // Pre-handler that loads the agent by :id and attaches it to the request.
   // Routes using this hook can access the agent via `getRequestAgent(request)`.
@@ -112,6 +219,80 @@ export async function agentRoutes(
     return ensureAgentWorkspaceShared(dataDir, agentId);
   }
 
+  function extractManifestFields(agent: { manifest?: Record<string, unknown> | null; metadata?: Record<string, unknown> | null }) {
+    const spec = (agent.manifest as Record<string, unknown> | null)?.spec as Record<string, unknown> | undefined;
+    const meta = (agent.metadata ?? {}) as Record<string, unknown>;
+    return {
+      nativeTools: ('nativeTools' in meta ? meta.nativeTools : spec?.nativeTools ?? null) as Record<string, unknown> | null,
+      workspaceContent: ((spec?.workspace as Record<string, unknown> | undefined)?.content ?? null) as Record<string, unknown> | null,
+    };
+  }
+
+  function toAgentResponse(agent: StoredAgent): Record<string, unknown> {
+    const agentMeta = (agent.metadata ?? {}) as Record<string, unknown>;
+    return {
+      ...agent,
+      harnessConfig: parseStoredHarnessConfig(agent.harnessConfig),
+      ...extractManifestFields(agent),
+      resourceLimits: agentMeta.resourceLimits ?? null,
+    };
+  }
+
+  function getHarnessError(harnessName: string): string {
+    const available = harnessRegistry.list();
+    if (available.length === 0) {
+      return `Unknown harness: ${harnessName}`;
+    }
+
+    return `Unknown harness: ${harnessName}. Available: ${available.join(', ')}`;
+  }
+
+  function validateHarnessConfigInput(
+    harnessName: string,
+    harnessConfig: unknown,
+  ):
+    | { success: true; harnessConfig: Record<string, unknown> }
+    | { success: false; status: number; body: Record<string, unknown> } {
+    if (!isObjectRecord(harnessConfig)) {
+      return {
+        success: false,
+        status: 400,
+        body: {
+          error: `Invalid harnessConfig for harness "${harnessName}"`,
+          details: [{ message: 'harnessConfig must be an object' }],
+        },
+      };
+    }
+
+    let harness: ReturnType<HarnessRegistry['get']>;
+    try {
+      harness = harnessRegistry.get(harnessName);
+    } catch {
+      return {
+        success: false,
+        status: 400,
+        body: { error: getHarnessError(harnessName) },
+      };
+    }
+
+    const parseResult = harness.configSchema.safeParse(harnessConfig);
+    if (!parseResult.success) {
+      return {
+        success: false,
+        status: 400,
+        body: {
+          error: `Invalid harnessConfig for harness "${harnessName}"`,
+          details: parseResult.error.issues,
+        },
+      };
+    }
+
+    return {
+      success: true,
+      harnessConfig: parseResult.data as Record<string, unknown>,
+    };
+  }
+
   // ── GET /api/agents — List all agents ──────────────────
 
   app.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
@@ -126,11 +307,12 @@ export async function agentRoutes(
         .slice(0, 5);
 
       return {
-        ...agent,
+        ...toAgentResponse(agent),
         sseClients: sse.getClientCount(agent.id),
         activeSessions: activeAgentIds.has(agent.id) ? sse.getClientCount(agent.id) : 0,
         lastActivity: sse.getLastActivity(agent.id) ?? null,
         activeRuns: activeRuns.length,
+        totalRuns: allRuns.length,
         runs: recentRuns,
       };
     });
@@ -145,43 +327,95 @@ export async function agentRoutes(
       request: FastifyRequest<{
         Body: {
           name: string;
-          model: string;
+          harness: string;
+          harnessConfig: Record<string, unknown>;
           systemPrompt: string;
           tools: string[];
+          httpTools?: AgentHttpToolDefinition[];
           description?: string;
           metadata?: Record<string, unknown>;
+          callbackUrl?: string | null;
+          resourceLimits?: AgentResourceLimits | null;
         };
       }>,
       reply: FastifyReply,
     ) => {
       const body = request.body as {
         name?: string;
-        model?: string;
+        harness?: string;
+        harnessConfig?: Record<string, unknown>;
         systemPrompt?: string;
         tools?: string[];
+        httpTools?: AgentHttpToolDefinition[];
         description?: string;
         metadata?: Record<string, unknown>;
+        callbackUrl?: string | null;
+        resourceLimits?: AgentResourceLimits | null;
+        model?: unknown;
+        modelConfig?: unknown;
       } | undefined;
+
+      if (body && ('model' in body || 'modelConfig' in body)) {
+        return reply.status(400).send({
+          error: 'model and modelConfig are no longer supported; use harness and harnessConfig',
+        });
+      }
 
       if (
         !body ||
         typeof body.name !== 'string' || body.name.trim() === '' ||
-        typeof body.model !== 'string' || body.model.trim() === '' ||
+        !isNonEmptyString(body.harness) ||
+        !isObjectRecord(body.harnessConfig) ||
         typeof body.systemPrompt !== 'string' ||
         !Array.isArray(body.tools)
       ) {
         return reply.status(400).send({
-          error: 'name, model, systemPrompt, and tools are required',
+          error: 'name, harness, harnessConfig, systemPrompt, and tools are required',
         });
       }
 
+      const validatedHarnessConfig = validateHarnessConfigInput(body.harness, body.harnessConfig);
+      if (!validatedHarnessConfig.success) {
+        return reply.status(validatedHarnessConfig.status).send(validatedHarnessConfig.body);
+      }
+
+      // Validate resource limits if provided
+      if (body.resourceLimits && typeof body.resourceLimits === 'object') {
+        const limitsErrors = validateResourceLimits(body.resourceLimits as Record<string, unknown>);
+        if (limitsErrors.length > 0) {
+          return reply.status(400).send({
+            error: 'Invalid resource limits',
+            details: limitsErrors,
+          });
+        }
+      }
+
+      const httpToolDefs = body.httpTools;
+      const httpToolError = validateHttpTools(httpToolDefs);
+      if (httpToolError) {
+        return reply.status(400).send({ error: httpToolError });
+      }
+
+      // Merge resourceLimits into metadata for DB storage
+      const metadata: Record<string, unknown> = { ...(body.metadata ?? {}) };
+      if (body.resourceLimits) {
+        metadata.resourceLimits = body.resourceLimits;
+      }
+      if (httpToolDefs !== undefined) {
+        metadata.httpTools = httpToolDefs;
+      }
+
+      const toolNames = mergeToolNames(body.tools, httpToolDefs);
+
       let agent = await db.createAgent({
         name: body.name,
-        model: body.model,
+        harness: body.harness,
+        harnessConfig: JSON.stringify(validatedHarnessConfig.harnessConfig),
         systemPrompt: body.systemPrompt,
-        tools: body.tools,
+        tools: toolNames,
         description: body.description ?? null,
-        metadata: body.metadata ?? null,
+        metadata: Object.keys(metadata).length > 0 ? metadata : null,
+        callbackUrl: body.callbackUrl ?? null,
       });
 
       // Create workspace directories and update the agent record
@@ -202,7 +436,11 @@ export async function agentRoutes(
         });
       }
 
-      return reply.status(201).send(agent);
+      if (toolRegistry) {
+        await registerAgentHttpTools(toolRegistry, agent, secretProvider);
+      }
+
+      return reply.status(201).send(toAgentResponse(agent));
     },
   );
 
@@ -304,11 +542,15 @@ export async function agentRoutes(
         Params: { id: string };
         Body: {
           name?: string;
-          model?: string;
+          harness?: string;
+          harnessConfig?: Record<string, unknown>;
           systemPrompt?: string;
           tools?: string[];
+          httpTools?: AgentHttpToolDefinition[];
           description?: string;
           metadata?: Record<string, unknown>;
+          callbackUrl?: string | null;
+          resourceLimits?: AgentResourceLimits | null;
         };
       }>,
       reply: FastifyReply,
@@ -316,28 +558,116 @@ export async function agentRoutes(
       const { id } = request.params;
       const body = request.body as {
         name?: string;
-        model?: string;
+        harness?: string;
+        harnessConfig?: Record<string, unknown>;
         systemPrompt?: string;
         tools?: string[];
+        httpTools?: AgentHttpToolDefinition[];
         description?: string;
         metadata?: Record<string, unknown>;
+        callbackUrl?: string | null;
+        resourceLimits?: AgentResourceLimits | null;
+        model?: unknown;
+        modelConfig?: unknown;
       } | undefined;
 
       if (!body || Object.keys(body).length === 0) {
         return reply.status(400).send({ error: 'Request body must contain at least one field to update' });
       }
 
+      if ('model' in body || 'modelConfig' in body) {
+        return reply.status(400).send({
+          error: 'model and modelConfig are no longer supported; use harness and harnessConfig',
+        });
+      }
+
+      // Validate resource limits if provided
+      if (body.resourceLimits && typeof body.resourceLimits === 'object') {
+        const limitsErrors = validateResourceLimits(body.resourceLimits as Record<string, unknown>);
+        if (limitsErrors.length > 0) {
+          return reply.status(400).send({
+            error: 'Invalid resource limits',
+            details: limitsErrors,
+          });
+        }
+      }
+
+      const agent = getRequestAgent(request);
+      const existingMetadata = (agent.metadata ?? {}) as Record<string, unknown>;
+      const existingHttpTools = Array.isArray(existingMetadata.httpTools)
+        ? existingMetadata.httpTools as AgentHttpToolDefinition[]
+        : undefined;
+      const existingHttpToolNames = new Set(getHttpToolNames(existingHttpTools));
+
+      const httpToolError = validateHttpTools(body.httpTools);
+      if (httpToolError) {
+        return reply.status(400).send({ error: httpToolError });
+      }
+
       const updateData: Record<string, unknown> = {};
       if (body.name !== undefined) updateData.name = body.name;
-      if (body.model !== undefined) updateData.model = body.model;
       if (body.systemPrompt !== undefined) updateData.systemPrompt = body.systemPrompt;
-      if (body.tools !== undefined) updateData.tools = body.tools;
       if (body.description !== undefined) updateData.description = body.description;
-      if (body.metadata !== undefined) updateData.metadata = body.metadata;
+      if (body.callbackUrl !== undefined) updateData.callbackUrl = body.callbackUrl;
+
+      if (body.harness !== undefined && !isNonEmptyString(body.harness)) {
+        return reply.status(400).send({ error: 'harness must be a non-empty string' });
+      }
+
+      if (body.harness !== undefined && body.harnessConfig === undefined) {
+        return reply.status(400).send({ error: 'harnessConfig is required when changing harness' });
+      }
+
+      const nextHarness = body.harness ?? agent.harness;
+      if (body.harnessConfig !== undefined) {
+        const validatedHarnessConfig = validateHarnessConfigInput(nextHarness, body.harnessConfig);
+        if (!validatedHarnessConfig.success) {
+          return reply.status(validatedHarnessConfig.status).send(validatedHarnessConfig.body);
+        }
+
+        updateData.harnessConfig = JSON.stringify(validatedHarnessConfig.harnessConfig);
+      }
+
+      if (body.harness !== undefined) {
+        updateData.harness = body.harness;
+      }
+
+      const shouldUpdateTools = body.tools !== undefined || body.httpTools !== undefined;
+      if (shouldUpdateTools) {
+        const baseTools = (body.tools !== undefined ? body.tools : agent.tools)
+          .filter((toolName) => !existingHttpToolNames.has(toolName));
+        const nextHttpTools = body.httpTools !== undefined ? body.httpTools : existingHttpTools;
+        updateData.tools = mergeToolNames(baseTools, nextHttpTools);
+      }
+
+      // Merge resourceLimits into metadata for DB storage
+      if (body.resourceLimits !== undefined || body.metadata !== undefined || body.httpTools !== undefined) {
+        const newMetadata = body.metadata !== undefined ? { ...body.metadata } : { ...existingMetadata };
+
+        if (body.httpTools === undefined && existingMetadata.httpTools !== undefined) {
+          newMetadata.httpTools = existingMetadata.httpTools;
+        }
+
+        if (body.resourceLimits === null) {
+          delete newMetadata.resourceLimits;
+        } else if (body.resourceLimits) {
+          newMetadata.resourceLimits = body.resourceLimits;
+        }
+
+        if (body.httpTools !== undefined) {
+          newMetadata.httpTools = body.httpTools;
+        }
+
+        updateData.metadata = Object.keys(newMetadata).length > 0 ? newMetadata : null;
+      }
 
       const updated = await db.updateAgent(id, updateData);
 
-      return reply.send(updated);
+      if (updated && toolRegistry) {
+        await registerAgentHttpTools(toolRegistry, updated, secretProvider);
+      }
+
+      return reply.send(updated ? toAgentResponse(updated) : updated);
     },
   );
 
@@ -351,6 +681,10 @@ export async function agentRoutes(
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
+      if (toolRegistry) {
+        toolRegistry.removeProvider(getAgentHttpToolProviderName(id));
+        await toolRegistry.refresh();
+      }
 
       await db.deleteAgentCascade(id);
 
@@ -379,7 +713,7 @@ export async function agentRoutes(
 
       const conversations = await db.getConversationsForAgent(id);
       return reply.send({
-        ...agent,
+        ...toAgentResponse(agent),
         conversationCount: conversations.length,
         sseClients: sse.getClientCount(id),
         hasPendingInterrupt: interrupts.hasPendingForAgent(id),
@@ -448,8 +782,11 @@ export async function agentRoutes(
         messageId: message.id,
       });
 
-      // Spawn the agent executor asynchronously — don't block the response.
+      // Spawn the agent run asynchronously — don't block the response.
       // DB is the single source of truth for agent definitions.
+      if (!agent.harness) {
+        return reply.status(500).send({ error: 'Agent harness is not set' });
+      }
       const agentDef = toAgentDef(agent);
       const allMessages = await db.getMessages(conversationId);
       const messages = mapMessagesToInternal(allMessages, id);
@@ -467,6 +804,7 @@ export async function agentRoutes(
       return reply.status(201).send({
         messageId: message.id,
         conversationId,
+        runId: run.id,
       });
     },
   );
@@ -513,6 +851,9 @@ export async function agentRoutes(
 
       // Fire-and-forget: run the agent with the task as a synthetic user message
       // DB is the single source of truth for agent definitions.
+      if (!agent.harness) {
+        return reply.status(500).send({ error: 'Agent harness is not set' });
+      }
       const agentDef = toAgentDef(agent);
 
       // Create a synthetic user message from the task
@@ -555,6 +896,12 @@ export async function agentRoutes(
       reply: FastifyReply,
     ) => {
       const { id, runId } = request.params;
+
+      // Ownership check: verify run belongs to this agent
+      const run = runRegistry.getRun(runId);
+      if (!run || run.agentId !== id) {
+        return reply.status(404).send({ error: 'Run not found', runId });
+      }
 
       const cancelled = await runRegistry.cancelRun(runId);
       if (!cancelled) {
@@ -621,8 +968,6 @@ export async function agentRoutes(
     ) => {
       const { id } = request.params;
 
-      const agent = getRequestAgent(request);
-
       // Set SSE headers
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -636,11 +981,82 @@ export async function agentRoutes(
         `data: ${JSON.stringify({ type: 'CONNECTED', agentId: id, timestamp: Date.now() })}\n\n`,
       );
 
-      // Subscribe to agent events — heartbeat + cleanup handled by SSEManager
-      sse.subscribe(id, reply);
+      const activeRuns = runRegistry.getActiveRuns(id);
+      if (activeRuns.length > 0) {
+        const currentRun = activeRuns[0];
+        reply.raw.write(
+          `data: ${JSON.stringify({
+            type: 'RUN_STARTED',
+            runId: currentRun.id,
+            agentId: id,
+            timestamp: currentRun.startedAt,
+          })}\n\n`,
+        );
+      }
+
+      const lastEventId = request.headers['last-event-id'] as string | undefined;
+      sse.subscribe(id, reply, lastEventId);
 
       // Keep the request open; the SSEManager handles the lifecycle.
       // Fastify will not auto-end the reply because we wrote to raw.
+    },
+  );
+
+  // ── GET /api/agents/:id/interrupts — List pending interrupts ────
+
+  app.get(
+    '/:id/interrupts',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{
+        Params: { id: string };
+        Querystring: { include_resolved?: string };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const { id } = request.params;
+      const query = request.query as { include_resolved?: string } | undefined;
+      const includeResolved = query?.include_resolved === 'true';
+
+      // Fast path: return in-memory pending interrupts
+      const inMemory = interrupts.getPendingForAgent(id);
+      const pending = inMemory.map((entry) => ({
+        id: entry.runId,
+        runId: entry.runId,
+        agentId: id,
+        toolCallId: entry.info.toolCallId,
+        toolName: entry.info.toolName,
+        args: entry.info.args,
+        createdAt: entry.info.createdAt,
+        status: 'pending' as const,
+      }));
+
+      // If DB is available and caller wants resolved history, merge from DB
+      if (includeResolved) {
+        try {
+          const dbRows = await db.getPendingInterruptsForAgent(id);
+          // Merge DB rows that aren't already in the in-memory set
+          const seenIds = new Set(pending.map((p) => p.id));
+          for (const row of dbRows) {
+            if (!seenIds.has(row.id)) {
+              pending.push({
+                id: row.id,
+                runId: row.runId,
+                agentId: row.agentId,
+                toolCallId: row.toolCallId,
+                toolName: row.toolName,
+                args: row.args as Record<string, unknown>,
+                createdAt: row.createdAt,
+                status: row.status as 'pending',
+              });
+            }
+          }
+        } catch {
+          // DB query failed; return what we have from memory
+        }
+      }
+
+      return reply.send({ interrupts: pending });
     },
   );
 
@@ -651,27 +1067,34 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Body: { action: 'approve' | 'reject'; runId?: string; data?: unknown };
+        Body: { action: 'approve' | 'reject' | 'submit'; runId: string; data?: unknown };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
       const body = request.body as { action?: string; runId?: string; data?: unknown } | undefined;
 
-      if (!body || (body.action !== 'approve' && body.action !== 'reject' && body.action !== 'submit')) {
+      if (
+        !body ||
+        (body.action !== 'approve' && body.action !== 'reject' && body.action !== 'submit') ||
+        typeof body.runId !== 'string' ||
+        body.runId.trim() === ''
+      ) {
         return reply.status(400).send({
-          error: 'action is required and must be "approve", "reject", or "submit"',
+          error: 'action is required and must be "approve", "reject", or "submit", and runId is required',
         });
       }
 
       // Map 'submit' (used by document/form HITL) to 'approve' with data
       const resolveAction: 'approve' | 'reject' = body.action === 'submit' ? 'approve' : body.action as 'approve' | 'reject';
 
-      // Use runId from the request body; fall back to agentId for backward compatibility
-      const resolveKey = body.runId ?? id;
+      const run = runRegistry.getRun(body.runId);
+      if (!run || run.agentId !== id) {
+        return reply.status(404).send({ error: 'Run not found', runId: body.runId });
+      }
 
       const resolved = interrupts.resolve(
-        resolveKey,
+        body.runId,
         resolveAction,
         body.data,
         id,
@@ -856,6 +1279,12 @@ export async function agentRoutes(
       reply: FastifyReply,
     ) => {
       const { id, convId } = request.params;
+
+      // Ownership check: verify conversation belongs to this agent
+      const conversation = await db.getConversation(convId);
+      if (!conversation || conversation.agentId !== id) {
+        return reply.status(404).send({ error: 'Conversation not found' });
+      }
 
       const messages = await db.getMessages(convId);
       return reply.send(messages);
@@ -1111,11 +1540,13 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
+        Querystring: { runId?: string };
         Body: { path: string; content: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
+      const query = request.query as { runId?: string };
       const body = request.body as { path?: string; content?: string };
 
       const agent = getRequestAgent(request);
@@ -1124,7 +1555,14 @@ export async function agentRoutes(
         return reply.status(400).send({ error: 'path and content are required' });
       }
 
-      const baseDir = resolveBaseDir(agent);
+      if (query.runId) {
+        const run = runRegistry.getRun(query.runId);
+        if (!run || run.agentId !== id) {
+          return reply.status(404).send({ error: 'Run not found', runId: query.runId });
+        }
+      }
+
+      const baseDir = resolveBaseDir(agent, { runId: query.runId, dataDir });
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -1156,11 +1594,13 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
+        Querystring: { runId?: string };
         Body: { path: string; content: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
+      const query = request.query as { runId?: string };
       const body = request.body as { path?: string; content?: string };
 
       const agent = getRequestAgent(request);
@@ -1169,7 +1609,14 @@ export async function agentRoutes(
         return reply.status(400).send({ error: 'path and content are required' });
       }
 
-      const baseDir = resolveBaseDir(agent);
+      if (query.runId) {
+        const run = runRegistry.getRun(query.runId);
+        if (!run || run.agentId !== id) {
+          return reply.status(404).send({ error: 'Run not found', runId: query.runId });
+        }
+      }
+
+      const baseDir = resolveBaseDir(agent, { runId: query.runId, dataDir });
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -1208,12 +1655,12 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { path?: string };
+        Querystring: { path?: string; runId?: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const query = request.query as { path?: string };
+      const query = request.query as { path?: string; runId?: string };
 
       const agent = getRequestAgent(request);
 
@@ -1221,7 +1668,14 @@ export async function agentRoutes(
         return reply.status(400).send({ error: 'path query parameter is required' });
       }
 
-      const baseDir = resolveBaseDir(agent);
+      if (query.runId) {
+        const run = runRegistry.getRun(query.runId);
+        if (!run || run.agentId !== id) {
+          return reply.status(404).send({ error: 'Run not found', runId: query.runId });
+        }
+      }
+
+      const baseDir = resolveBaseDir(agent, { runId: query.runId, dataDir });
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -1282,7 +1736,7 @@ export async function agentRoutes(
     },
   );
 
-  // ── GET /api/agents/:id/skills — List skills (SKILL.md format + legacy) ──
+  // ── GET /api/agents/:id/skills — List skills (SKILL.md format) ──
 
   app.get(
     '/:id/skills',
@@ -1298,7 +1752,7 @@ export async function agentRoutes(
       const query = request.query as { runId?: string };
 
       if (!dataDir) {
-        return reply.send({ skills: [], legacySkills: [] });
+        return reply.send({ skills: [] });
       }
 
       // When runId is provided, look in the session's merged skills dir first
@@ -1311,19 +1765,15 @@ export async function agentRoutes(
       }
 
       try {
-        // Discover standard SKILL.md skills
         const manifests = await discoverSkills(skillsDir);
         const skills: LoadedSkill[] = await Promise.all(
           manifests.map((m) => loadSkill(m.path)),
         );
 
-        // Discover legacy loose .ts/.js files for backward compat
-        const legacySkills = await discoverLegacySkills(skillsDir);
-
-        return reply.send({ skills, legacySkills });
+        return reply.send({ skills });
       } catch (err) {
         request.log.warn({ err }, 'Skill discovery failed');
-        return reply.send({ skills: [], legacySkills: [] });
+        return reply.send({ skills: [] });
       }
     },
   );
@@ -1469,24 +1919,12 @@ export async function agentRoutes(
         return reply.status(403).send({ error: 'Invalid skill name' });
       }
 
-      // Support both new format (directory) and legacy (loose file)
-      if (existsSync(skillDir) && existsSync(join(skillDir, 'SKILL.md'))) {
-        // New format — remove the entire directory
-        const { rm } = await import('node:fs/promises');
-        await rm(skillDir, { recursive: true, force: true });
-        return reply.status(204).send();
-      }
-
-      // Legacy fallback — try to delete a loose .ts or .js file
-      const legacyTs = resolve(join(skillsDir, `${skillName}.ts`));
-      const legacyJs = resolve(join(skillsDir, `${skillName}.js`));
-      const legacyPath = existsSync(legacyTs) ? legacyTs : existsSync(legacyJs) ? legacyJs : null;
-
-      if (!legacyPath) {
+      if (!existsSync(skillDir) || !existsSync(join(skillDir, 'SKILL.md'))) {
         return reply.status(404).send({ error: 'Skill not found', skillName });
       }
 
-      await unlink(legacyPath);
+      const { rm } = await import('node:fs/promises');
+      await rm(skillDir, { recursive: true, force: true });
       return reply.status(204).send();
     },
   );
@@ -1591,16 +2029,18 @@ export async function agentRoutes(
         return reply.status(400).send({ error: 'No session environment for this run' });
       }
 
-      try {
-        // Create a new agent (cloned from existing)
-        const newAgent = await db.createAgent({
-          name: body.name,
-          model: agent.model,
-          systemPrompt: agent.systemPrompt,
-          tools: agent.tools,
-          description: agent.description,
-          metadata: agent.metadata,
-        });
+        try {
+          // Create a new agent (cloned from existing)
+          const newAgent = await db.createAgent({
+            name: body.name,
+            harness: agent.harness,
+            harnessConfig: agent.harnessConfig,
+            systemPrompt: agent.systemPrompt,
+            tools: agent.tools,
+            description: agent.description,
+            metadata: agent.metadata,
+            callbackUrl: agent.callbackUrl,
+          });
 
         // Create workspace for the new agent
         const newWorkspaceDir = ensureAgentWorkspace(newAgent.id);
@@ -1668,6 +2108,111 @@ export async function agentRoutes(
       }
     },
   );
+
+  // ── Secrets CRUD ───────────────────────────────────────────
+
+  // GET /:id/secrets — list secret key names (never values)
+  app.get(
+    '/:id/secrets',
+    { preHandler: [loadAgent] },
+    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      if (!secretProvider) {
+        return reply.status(501).send({ error: 'Secret storage not configured' });
+      }
+      try {
+        const keys = secretProvider.list(request.params.id);
+        return reply.send({ keys });
+      } catch (err) {
+        return reply.status(500).send(safeError('Failed to list secrets', err));
+      }
+    },
+  );
+
+  // POST /:id/secrets — set a secret { key, value }
+  app.post(
+    '/:id/secrets',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string }; Body: { key: string; value: string } }>,
+      reply: FastifyReply,
+    ) => {
+      if (!secretProvider) {
+        return reply.status(501).send({ error: 'Secret storage not configured' });
+      }
+      const { key, value } = request.body ?? ({} as Record<string, string>);
+      if (!key || typeof key !== 'string' || !value || typeof value !== 'string') {
+        return reply.status(400).send({ error: 'key and value are required strings' });
+      }
+      try {
+        secretProvider.set(request.params.id, key, value);
+        return reply.status(201).send({ key });
+      } catch (err) {
+        return reply.status(500).send(safeError('Failed to set secret', err));
+      }
+    },
+  );
+
+  // DELETE /:id/secrets/:key — delete a secret
+  app.delete(
+    '/:id/secrets/:key',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string; key: string } }>,
+      reply: FastifyReply,
+    ) => {
+      if (!secretProvider) {
+        return reply.status(501).send({ error: 'Secret storage not configured' });
+      }
+      try {
+        secretProvider.delete(request.params.id, request.params.key);
+        return reply.status(204).send();
+      } catch (err) {
+        return reply.status(500).send(safeError('Failed to delete secret', err));
+      }
+    },
+  );
+
+  app.post('/:id/webhooks', { preHandler: [loadAgent] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = request.body as { url?: string; events?: string[]; secret?: string } | undefined;
+
+    if (!body?.url || !body?.events?.length) {
+      return reply.status(400).send({ error: 'url and events are required' });
+    }
+
+    const invalidEvents = body.events.filter((eventType) => !validWebhookEvents.includes(eventType));
+    if (invalidEvents.length > 0) {
+      return reply.status(400).send({ error: `Invalid event types: ${invalidEvents.join(', ')}`, validEvents: validWebhookEvents });
+    }
+
+    const now = Date.now();
+    const webhook = await db.createWebhook({
+      id: randomUUID(),
+      agentId: id,
+      url: body.url,
+      events: body.events,
+      secret: body.secret ?? null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return reply.status(201).send(webhook);
+  });
+
+  app.get('/:id/webhooks', { preHandler: [loadAgent] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const hooks = await db.listWebhooks(id);
+    return reply.send(hooks);
+  });
+
+  app.delete('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {
+    const { webhookId } = request.params as { id: string; webhookId: string };
+    const deleted = await db.deleteWebhook(webhookId);
+    if (!deleted) {
+      return reply.status(404).send({ error: 'Webhook not found' });
+    }
+    return reply.status(204).send();
+  });
 }
 
 // ── GET /api/runs — Top-level route (registered separately) ─
@@ -1685,5 +2230,34 @@ export async function runsRoutes(
   app.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
     const activeRuns = runRegistry.getActiveRuns();
     return reply.send(activeRuns);
+  });
+
+  // POST /api/runs/:id/resume — Resume a suspended run
+  app.post('/:id/resume', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    const { id } = request.params;
+
+    // Look up the run first
+    const run = runRegistry.getRun(id);
+    if (!run) {
+      return reply.status(404).send({ error: 'Run not found' });
+    }
+
+    if (run.status !== 'suspended') {
+      return reply.status(400).send({
+        error: `Run is not suspended (current status: ${run.status})`,
+      });
+    }
+
+    const resumed = await runRegistry.resumeRun(id);
+    if (!resumed) {
+      return reply.status(500).send({ error: 'Failed to resume run' });
+    }
+
+    return reply.send({
+      id: resumed.id,
+      agentId: resumed.agentId,
+      status: resumed.status,
+      resumedAt: resumed.resumedAt,
+    });
   });
 }

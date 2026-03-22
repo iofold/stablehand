@@ -37,7 +37,7 @@ export function MetricCard({ title, value, change, changeLabel }: MetricCardProp
           )}
         </div>
         {changeLabel && (
-          <p className="text-xs text-surface-500">{changeLabel}</p>
+          <p className="text-xs text-surface-400">{changeLabel}</p>
         )}
       </div>
     </div>

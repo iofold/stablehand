@@ -1,16 +1,21 @@
 import { test, expect } from '@playwright/test';
-
-const API = 'http://localhost:3001';
+import { API_BASE, createTestAgent, deleteTestAgent } from './support';
 
 test.describe('Files Tab', () => {
   let agentId: string;
 
   test.beforeAll(async ({ request }) => {
-    const res = await request.get(`${API}/api/agents`);
-    expect(res.ok()).toBe(true);
-    const agents = await res.json();
-    expect(agents.length).toBeGreaterThan(0);
-    agentId = agents[0].id;
+    const agent = await createTestAgent(request, {
+      name: `files-agent-${Date.now()}`,
+      description: 'Files tab regression test agent',
+    });
+    agentId = agent.id;
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (agentId) {
+      await deleteTestAgent(request, agentId);
+    }
   });
 
   test('Files tab shows seed files', async ({ page }) => {
@@ -104,7 +109,7 @@ test.describe('Files Tab', () => {
   test('Files API returns correct data', async ({ request }) => {
     // List root directory
     const listRes = await request.get(
-      `${API}/api/agents/${agentId}/files?path=.`,
+      `${API_BASE}/api/agents/${agentId}/files?path=.`,
     );
     expect(listRes.ok()).toBe(true);
     const listData = await listRes.json();
@@ -116,7 +121,7 @@ test.describe('Files Tab', () => {
 
     // List data subdirectory
     const subRes = await request.get(
-      `${API}/api/agents/${agentId}/files?path=data`,
+      `${API_BASE}/api/agents/${agentId}/files?path=data`,
     );
     expect(subRes.ok()).toBe(true);
     const subData = await subRes.json();
@@ -129,7 +134,7 @@ test.describe('Files Tab', () => {
 
     // Read a file
     const readRes = await request.get(
-      `${API}/api/agents/${agentId}/files/read?path=README.md`,
+      `${API_BASE}/api/agents/${agentId}/files/read?path=README.md`,
     );
     expect(readRes.ok()).toBe(true);
     const readData = await readRes.json();

@@ -11,9 +11,10 @@ export const emitEventTool: ToolDefinition = {
     'Emit a custom event to the event bus. Other agents can be triggered by these events via event triggers.',
   input: z.object({
     type: z.string().describe('Event type, e.g. "email.classified", "response.drafted"'),
-    payload: z.record(z.unknown()).describe('Event payload data'),
+    payload: z.record(z.string(), z.unknown()).describe('Event payload data'),
   }),
-  handler: async (input: { type: string; payload: Record<string, unknown> }, ctx) => {
+  handler: async (rawInput: unknown, ctx) => {
+    const input = rawInput as { type: string; payload: Record<string, unknown> };
     const eventBus = ctx.eventBus;
     if (!eventBus) {
       return 'Error: Event bus is not available in the current context';

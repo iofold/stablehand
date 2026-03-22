@@ -19,7 +19,10 @@ export function AgentStatusBadge({ status }: AgentStatusBadgeProps) {
     <span
       className="inline-flex items-center gap-2 text-xs font-medium text-surface-400"
     >
-      <span className={cn('h-1.5 w-1.5 rounded-full', config.color)} />
+      <span
+        className={cn('h-1.5 w-1.5 rounded-full', config.color)}
+        aria-label={`Status: ${config.label}`}
+      />
       {config.label}
     </span>
   );

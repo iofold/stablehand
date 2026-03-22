@@ -25,7 +25,7 @@ describe('Failure injection — rollback and cleanup', () => {
     container = await createContainer(
       {
         preset: 'local',
-        database: { type: 'sqlite', path: 'data.db' },
+        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
         llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
       },
       dataDir,
@@ -35,7 +35,7 @@ describe('Failure injection — rollback and cleanup', () => {
 
     app = await createServer({
       db: container.db,
-      executor: container.agentExecutor,
+      agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
@@ -50,7 +50,8 @@ describe('Failure injection — rollback and cleanup', () => {
       url: '/api/agents',
       payload: {
         name: 'failure-agent-A',
-        model: 'test-model',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
         systemPrompt: 'Agent A.',
         tools: [],
       },
@@ -64,7 +65,8 @@ describe('Failure injection — rollback and cleanup', () => {
       url: '/api/agents',
       payload: {
         name: 'failure-agent-B',
-        model: 'test-model',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
         systemPrompt: 'Agent B.',
         tools: [],
       },
@@ -140,7 +142,8 @@ describe('Failure injection — rollback and cleanup', () => {
     // Create agent directly via DB without calling ensureAgentWorkspace
     const noWsAgent = await container.db.createAgent({
       name: 'no-workspace-agent',
-      model: 'test-model',
+      harness: 'langgraph',
+      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5-mini' }),
       systemPrompt: 'No workspace.',
       tools: [],
     });
@@ -157,7 +160,8 @@ describe('Failure injection — rollback and cleanup', () => {
   it('returns 500 when agent has no workspace configured (read)', async () => {
     const noWsAgent = await container.db.createAgent({
       name: 'no-workspace-agent-read',
-      model: 'test-model',
+      harness: 'langgraph',
+      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5-mini' }),
       systemPrompt: 'No workspace.',
       tools: [],
     });
@@ -309,7 +313,8 @@ describe('Failure injection — rollback and cleanup', () => {
       url: '/api/agents',
       payload: {
         name: 'cascade-delete-agent',
-        model: 'test-model',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
         systemPrompt: 'Will be deleted.',
         tools: [],
       },
@@ -352,16 +357,17 @@ describe('Failure injection — rollback and cleanup', () => {
   it('delete cascade succeeds even when agent has active runs', async () => {
     // Verifies that deleteAgentCascade correctly deletes agentRuns before
     // conversations (respecting the FK from agentRuns.conversationId to conversations.id)
-    const createRes = await app.inject({
-      method: 'POST',
-      url: '/api/agents',
-      payload: {
-        name: 'cascade-active-run-agent',
-        model: 'test-model',
-        systemPrompt: 'Active run should not block delete.',
-        tools: [],
-      },
-    });
+     const createRes = await app.inject({
+       method: 'POST',
+       url: '/api/agents',
+       payload: {
+         name: 'cascade-active-run-agent',
+         harness: 'langgraph',
+         harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+         systemPrompt: 'Active run should not block delete.',
+         tools: [],
+       },
+     });
     expect(createRes.statusCode).toBe(201);
     const activeRunAgentId = createRes.json().id;
 

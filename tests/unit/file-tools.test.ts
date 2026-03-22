@@ -11,11 +11,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ToolContext } from '../../packages/ctxmill/src/tool/types.js';
 
-import readFileTool from '../../packages/examples/finance-dashboard/tools/read-file.js';
-import listDirectoryTool from '../../packages/examples/finance-dashboard/tools/list-directory.js';
-import searchFilesTool from '../../packages/examples/finance-dashboard/tools/search-files.js';
-import writeNoteTool from '../../packages/examples/finance-dashboard/tools/write-note.js';
-import writeFileTool from '../../packages/examples/finance-dashboard/tools/write-file.js';
+import readFileTool from '../../packages/examples/kitchen-sink/tools/read-file.js';
+import listDirectoryTool from '../../packages/examples/kitchen-sink/tools/list-directory.js';
+import searchFilesTool from '../../packages/examples/kitchen-sink/tools/search-files.js';
+import writeNoteTool from '../../packages/examples/kitchen-sink/tools/write-note.js';
+import writeFileTool from '../../packages/examples/kitchen-sink/tools/write-file.js';
 
 let workspaceDir: string;
 let mockCtx: ToolContext;

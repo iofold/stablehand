@@ -14,9 +14,7 @@ const agentsDir = join(__dirname, '..', 'agents');
 
 const agentDirs = [
   'langgraph-agent',
-  'openai-agent',
   'claude-agent',
-  'vercel-agent',
   'pi-agent',
 ];
 
@@ -27,7 +25,7 @@ async function loadManifest(dir: string): Promise<AgentManifest> {
 }
 
 describe('cross-harness compatibility', () => {
-  it('all 5 agents produce valid AgentDefinition shapes', async () => {
+  it('all 3 agents produce valid AgentDefinition shapes', async () => {
     const definitions = await Promise.all(
       agentDirs.map(async (dir) => {
         const manifest = await loadManifest(dir);
@@ -35,29 +33,27 @@ describe('cross-harness compatibility', () => {
       }),
     );
 
-    expect(definitions).toHaveLength(5);
+    expect(definitions).toHaveLength(3);
     for (const def of definitions) {
+      const harnessConfig = (def.harnessConfig ?? {}) as {
+        provider?: string;
+        model?: string;
+      };
+
       // Every AgentDefinition must have these required fields
       expect(def.name).toBeTruthy();
-      expect(def.model).toBeTruthy();
+      expect(harnessConfig).toBeTruthy();
       expect(def.systemPrompt).toBeTruthy();
       expect(def.harness).toBeTruthy();
       expect(Array.isArray(def.tools)).toBe(true);
     }
   });
 
-  it('all tool references resolve to the same shared tools', async () => {
-    const toolSets = await Promise.all(
-      agentDirs.map(async (dir) => {
-        const manifest = await loadManifest(dir);
-        const def = manifestToDefinition(manifest);
-        return def.tools;
-      }),
-    );
-
-    const expected = ['calculator', 'weather'];
-    for (const tools of toolSets) {
-      expect(tools).toEqual(expected);
+  it('all agents include emit-event tool for chaining', async () => {
+    for (const dir of agentDirs) {
+      const manifest = await loadManifest(dir);
+      const def = manifestToDefinition(manifest);
+      expect(def.tools).toContain('emit-event');
     }
   });
 
@@ -70,34 +66,39 @@ describe('cross-harness compatibility', () => {
     );
 
     const unique = new Set(harnesses);
-    expect(unique.size).toBe(5);
+    expect(unique.size).toBe(3);
   });
 
-  it('model configs are valid for their respective harnesses', async () => {
+  it('harness configs are valid for their respective harnesses', async () => {
     for (const dir of agentDirs) {
       const manifest = await loadManifest(dir);
       const def = manifestToDefinition(manifest);
+      const harnessConfig = (def.harnessConfig ?? {}) as {
+        provider?: string;
+        model?: string;
+        temperature?: number;
+      };
 
       // All configs should have a provider and model
-      expect(def.modelConfig?.provider).toBeTruthy();
-      expect(def.modelConfig?.model).toBeTruthy();
+      expect(harnessConfig.provider).toBeTruthy();
+      expect(harnessConfig.model).toBeTruthy();
 
-      // Claude agent should use anthropic provider
-      if (def.harness === 'claude-agents') {
-        expect(def.modelConfig?.provider).toBe('anthropic');
-        expect(def.modelConfig?.model).toBe('claude-sonnet-4-6');
-      }
+        // Claude agent should use anthropic provider
+        if (def.harness === 'claude-agents') {
+         expect(harnessConfig.provider).toBe('anthropic');
+         expect(harnessConfig.model).toBe('claude-sonnet-4-6');
+         }
 
-      // Non-Claude agents should use openai provider
-      if (def.harness !== 'claude-agents') {
-        expect(def.modelConfig?.provider).toBe('openai');
-      }
+        // Other non-Claude agents should use openai provider
+        if (def.harness !== 'claude-agents') {
+          expect(harnessConfig.provider).toBe('openai');
+         }
 
-      // Temperature should be within valid range
-      if (def.modelConfig?.temperature !== undefined) {
-        expect(def.modelConfig.temperature).toBeGreaterThanOrEqual(0);
-        expect(def.modelConfig.temperature).toBeLessThanOrEqual(2);
-      }
+        // Temperature should be within valid range
+        if (typeof harnessConfig.temperature === 'number') {
+         expect(harnessConfig.temperature).toBeGreaterThanOrEqual(0);
+         expect(harnessConfig.temperature).toBeLessThanOrEqual(2);
+        }
     }
   });
 
@@ -110,6 +111,22 @@ describe('cross-harness compatibility', () => {
     );
 
     const unique = new Set(names);
-    expect(unique.size).toBe(5);
+    expect(unique.size).toBe(3);
+  });
+
+  it('all agents have chain-role labels', async () => {
+    const roles = await Promise.all(
+      agentDirs.map(async (dir) => {
+        const manifest = await loadManifest(dir);
+        return manifest.metadata.labels?.['chain-role'];
+      }),
+    );
+
+    // All roles should be defined and unique
+    for (const role of roles) {
+      expect(role).toBeTruthy();
+    }
+    const unique = new Set(roles);
+    expect(unique.size).toBe(3);
   });
 });

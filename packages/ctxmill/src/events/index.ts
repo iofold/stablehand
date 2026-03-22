@@ -5,5 +5,5 @@ export type { A2UIPayload } from './types.js';
 export { waitForEvent, EventTimeoutError } from './wait-for-event.js';
 export { matchesSelector } from './wait-condition.js';
 export type { WaitCondition } from './wait-condition.js';
-export { SQLiteEventQueue } from './event-queue.js';
+export { EventQueueImpl, EventQueueImpl as SQLiteEventQueue } from './event-queue.js';
 export type { EventQueue } from './event-queue.js';

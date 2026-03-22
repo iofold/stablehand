@@ -1,13 +1,11 @@
-import type { z } from 'zod';
-
-export interface ToolDefinition<TInput extends z.ZodType = z.ZodType> {
+export interface ToolDefinition {
   name: string;
   description: string;
-  input: TInput;
+  input: unknown;
   requiresApproval?: boolean;
   secrets?: string[];
   timeout?: number;
-  handler: (input: z.infer<TInput>, ctx: ToolContext) => Promise<string>;
+  handler: (input: unknown, ctx: ToolContext) => Promise<string>;
 }
 
 export interface ToolCall {
@@ -28,6 +26,8 @@ export interface ToolResult {
 export interface ToolContext {
   agentId: string;
   conversationId: string;
+  /** Run instance identifier (maps to runId). */
+  instanceId?: string;
   workspaceDir: string;
   /** Session-scoped execution environment (if available). */
   env?: import('../workspace/types.js').ExecutionEnvironment;

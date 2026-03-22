@@ -1,9 +1,6 @@
-import type { z } from 'zod';
 import type { ToolDefinition } from './types.js';
 
-export function defineTool<T extends z.ZodType>(
-  def: ToolDefinition<T>,
-): ToolDefinition<T> {
+export function defineTool(def: ToolDefinition): ToolDefinition {
   return def;
 }
 
@@ -23,3 +20,10 @@ export type { ComposioConfig } from './providers/composio.js';
 
 // Tool registry
 export { DefaultToolRegistry } from './registry.js';
+
+// Schema conversion (Zod <-> JSON Schema for gRPC transport)
+export { zodToJsonSchema, jsonSchemaToZod } from './schema-convert.js';
+
+// Tool metadata (serializable representation for gRPC transport)
+export type { ToolMetadata } from './metadata.js';
+export { ORCHESTRATOR_TOOLS, toToolMetadata, toToolMetadataList } from './metadata.js';

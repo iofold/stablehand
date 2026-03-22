@@ -52,20 +52,38 @@ jobs:
         run: pnpm -r build
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
+      - name: Start Docker stack
+        run: |
+          docker compose down -v || true
+          cp .env.example .env
+          docker compose up --build -d
+      - name: Wait for Docker services
+        run: |
+          timeout 60 bash -c 'until curl -sf http://localhost:3002/health; do sleep 2; done'
+          timeout 60 bash -c 'until curl -sf http://localhost:3200 > /dev/null; do sleep 2; done'
       - name: Run E2E tests
         run: pnpm test:e2e
-        continue-on-error: true
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          PLAYWRIGHT_BASE_URL: http://localhost:3200
+          PLAYWRIGHT_API_BASE_URL: http://localhost:3002
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: playwright-report
-          path: playwright-report/
+          path: playwright-report-docker/
           retention-days: 7
+      - name: Show Docker logs
+        if: always()
+        run: docker compose logs --no-color
+      - name: Stop Docker stack
+        if: always()
+        run: docker compose down -v
 
   fuse-tests:
     name: FUSE Contract Tests

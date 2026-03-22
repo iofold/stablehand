@@ -12,20 +12,22 @@ import type { AgentDefinition } from '../types.js';
 import type { ToolDefinition } from '../tool/types.js';
 
 import { ensureAgentWorkspace, seedAgentWorkspace } from '../workspace/ensure.js';
+import { DefaultOrchestratorToolRegistry, registerDefaultToolHandlers } from '../orchestrator/grpc/orchestrator-service.js';
 
 export async function startDev() {
   const cwd = process.cwd();
 
   // Load config — env var override takes precedence
-  let config: { preset: string } = { preset: process.env.CTXMILL_PRESET || 'local' };
+  let config: { preset: string } = { preset: process.env.CTXMILL_PRESET || 'docker' };
   const configPath = join(cwd, 'ctxmill.config.ts');
   if (!process.env.CTXMILL_PRESET && existsSync(configPath)) {
     const mod = await import(pathToFileURL(configPath).href);
     config = mod.default;
   }
 
-  // Ensure .ctxmill directory
-  const dataDir = join(cwd, '.ctxmill');
+  const dataDir = process.env.CTXMILL_DATA_DIR
+    ? resolve(process.env.CTXMILL_DATA_DIR)
+    : join(cwd, '.ctxmill');
   mkdirSync(dataDir, { recursive: true });
 
   // Load .env file if present
@@ -48,22 +50,29 @@ export async function startDev() {
     }
   }
 
-  // Check for API key — support both Anthropic and OpenAI-compatible providers
-  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    console.error('\n  Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env or environment\n');
-    console.error('  echo "ANTHROPIC_API_KEY=sk-ant-..." > .env\n');
+  const model = process.env.OPENAI_MODEL;
+  if (!model) {
+    console.error('\n  Set OPENAI_MODEL in .env or environment before starting ctxmill dev\n');
     process.exit(1);
   }
 
-  // Auto-detect provider from which key is set and model name
-  const model = process.env.OPENAI_MODEL || 'claude-sonnet-4-20250514';
-  const provider: 'anthropic' | 'openai' =
-    process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY
-      ? 'openai'
-      : model.includes('claude')
-        ? 'anthropic'
-        : 'openai';
+  const provider: 'anthropic' | 'openai' | 'google' = model.includes('claude')
+    ? 'anthropic'
+    : model.includes('gemini')
+      ? 'google'
+      : 'openai';
+
+  // Pick the API key that matches the detected provider — no cross-provider fallback
+  const apiKey = provider === 'anthropic'
+    ? process.env.ANTHROPIC_API_KEY
+    : provider === 'google'
+      ? process.env.GOOGLE_API_KEY
+      : process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    const keyName = provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : provider === 'google' ? 'GOOGLE_API_KEY' : 'OPENAI_API_KEY';
+    console.error(`\n  Set ${keyName} in .env or environment (detected provider: ${provider})\n`);
+    process.exit(1);
+  }
 
   // Discover agents
   const agentsDir = join(cwd, 'agents');
@@ -120,7 +129,7 @@ export async function startDev() {
 
   // ── Build DI container (database + services) ─────────
   const apiPort = parseInt(process.env.CTXMILL_PORT || '3001', 10);
-  const uiPort = parseInt(process.env.CTXMILL_UI_PORT || '3101', 10);
+  const uiPort = parseInt(process.env.CTXMILL_UI_PORT || '3200', 10);
 
   const userConfig: CTXMillConfig = {
     preset: config.preset as CTXMillConfig['preset'],
@@ -133,6 +142,7 @@ export async function startDev() {
   };
   const container: AppContainer = await createContainer(userConfig, dataDir);
   console.log('  \x1b[32m✓\x1b[0m Database initialized');
+  console.log('  \x1b[1mExecution:\x1b[0m sandbox (Docker containers)');
 
   // ── Discover agents & tools from project directories ─
   let agentDefs: AgentDefinition[] = [];
@@ -157,7 +167,8 @@ export async function startDev() {
     if (!alreadyRegistered) {
       await container.db.createAgent({
         name: def.name,
-        model: def.model,
+        harness: def.harness,
+        harnessConfig: JSON.stringify(def.harnessConfig),
         systemPrompt: def.systemPrompt,
         tools: def.tools,
         description: def.description ?? null,
@@ -179,10 +190,38 @@ export async function startDev() {
 
   console.log(`  \x1b[32m✓\x1b[0m Registered ${agentDefs.length} agent(s), ${toolDefs.length} tool(s)`);
 
-  // ── Start Fastify orchestrator ───────────────────────
+  const toolRegistry = new DefaultOrchestratorToolRegistry();
+  if (container.eventBus) {
+    registerDefaultToolHandlers(toolRegistry, container.eventBus);
+  }
+  for (const tool of toolDefs) {
+    toolRegistry.set(tool.name, async (args, ctx) => {
+      if (tool.requiresApproval && container.interruptManager && container.sseManager) {
+        container.sseManager.broadcast(ctx.agentId, {
+          type: 'TOOL_CALL_START',
+          timestamp: Date.now(),
+          runId: ctx.runId,
+          toolCallId: ctx.requestId,
+          toolName: tool.name,
+          requiresApproval: true,
+          args,
+        });
+
+        const resolution = await container.interruptManager.waitForApproval(
+          ctx.runId, ctx.agentId, ctx.requestId, tool.name, args as Record<string, unknown>,
+        );
+
+        if (resolution.action !== 'approve') {
+          return JSON.stringify({ error: `Tool call rejected: ${resolution.data ?? resolution.action}` });
+        }
+      }
+
+      return tool.handler(args, {} as Parameters<typeof tool.handler>[1]);
+    });
+  }
+
   const server: FastifyInstance = await createServer({
     db: container.db,
-    executor: container.agentExecutor,
     port: apiPort,
     host: '0.0.0.0',
     runRegistry: container.runRegistry,
@@ -193,14 +232,34 @@ export async function startDev() {
     triggerManager: container.triggerManager,
     sse: container.sseManager,
     interrupts: container.interruptManager,
+    secretProvider: container.secretProvider,
+    containerManager: container.containerManager,
+    agentRunService: container.agentRunService,
+    toolRegistry,
+    toolDefinitionRegistry: container.toolRegistry,
   });
   await server.listen({ port: apiPort, host: '0.0.0.0' });
   console.log(`  \x1b[32mAPI:\x1b[0m  http://localhost:${apiPort}`);
 
+  // ── Orphan container cleanup ──────────────────────────
+  // Run asynchronously after the server is listening — does NOT block startup.
+  void (async () => {
+    try {
+      const result = await container.orphanCleanup.runOnce();
+      console.log(
+        `  \x1b[32m\u2713\x1b[0m Orphan cleanup: found ${result.orphansFound} orphans, cleaned ${result.cleaned}, ${result.errors} errors`,
+      );
+    } catch (err) {
+      console.error('  \x1b[33mOrphan cleanup failed (non-fatal):\x1b[0m', err);
+    }
+    // Start periodic sweep as a safety net (every 5 minutes)
+    container.orphanCleanup.startPeriodicSweep();
+  })();
+
   // ── Start UI server ─────────────────────────────────
-  // In published mode, serve pre-built static files from ctxmill/ui/dist
-  // In monorepo dev, spawn Vite dev server from the UI package
+  // Docker-first workflow: disable UI auto-probing unless explicitly enabled.
   let viteProcess: ChildProcess | null = null;
+  const uiMode = process.env.CTXMILL_UI_MODE || 'disabled';
   const uiDistDir = join(cwd, 'node_modules', 'ctxmill', 'ui', 'dist');
   // Try common monorepo layouts: packages/<name>/ or packages/examples/<name>/
   const monorepoUiCandidates = [
@@ -212,11 +271,8 @@ export async function startDev() {
     (d) => existsSync(join(d, 'vite.config.ts')),
   ) ?? monorepoUiCandidates[0];
 
-  if (existsSync(join(uiDistDir, 'index.html'))) {
-    // Serve pre-built static UI via Fastify
+  if (uiMode === 'embedded' && existsSync(join(uiDistDir, 'index.html'))) {
     try {
-      // @fastify/static is an optional dependency
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const mod = await import(/* webpackIgnore: true */ '@fastify/static' as string);
       const fastifyStatic = mod.default ?? mod;
       await server.register(fastifyStatic, {
@@ -226,19 +282,24 @@ export async function startDev() {
       });
       console.log(`  \x1b[32mUI:\x1b[0m   http://localhost:${apiPort} (embedded)`);
     } catch {
-      console.log('  \x1b[33mUI:\x1b[0m   (install @fastify/static for embedded UI)');
+      console.log('  \x1b[33mUI:\x1b[0m   embedded mode requested but @fastify/static is unavailable');
     }
-  } else if (existsSync(join(monorepoUiDir, 'vite.config.ts'))) {
-    // Monorepo development: spawn Vite dev server
+  } else if (uiMode === 'vite' && existsSync(join(monorepoUiDir, 'vite.config.ts'))) {
     viteProcess = spawn('npx', ['vite', '--port', String(uiPort), '--host', '0.0.0.0'], {
       cwd: monorepoUiDir,
       stdio: 'pipe',
-      env: { ...process.env, CTXMILL_PORT: String(apiPort), CTXMILL_UI_PORT: String(uiPort) },
+      env: {
+        ...process.env,
+        CTXMILL_PORT: String(apiPort),
+        CTXMILL_UI_PORT: String(uiPort),
+        CTXMILL_API_ORIGIN:
+          process.env.CTXMILL_API_ORIGIN || `http://localhost:${apiPort}`,
+      },
     });
     viteProcess.on('error', () => {});
     console.log(`  \x1b[32mUI:\x1b[0m   http://localhost:${uiPort}`);
   } else {
-    console.log('  \x1b[33mUI:\x1b[0m   (no UI available — install @ctxmill/ui for the web dashboard)');
+    console.log('  \x1b[33mUI:\x1b[0m   disabled (use the Docker UI service)');
   }
 
   console.log('');
@@ -255,7 +316,7 @@ export async function startDev() {
       viteProcess.kill('SIGTERM');
     }
     container.sseBroadcaster.shutdown();
-    container.learningSubscriber.shutdown();
+    container.learningSubscriber?.shutdown();
     await server.close();
     await container.close();
     process.exit(0);
@@ -263,6 +324,8 @@ export async function startDev() {
 
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
+  process.on('unhandledRejection', (err) => console.error('[UNHANDLED REJECTION]', err));
+  process.on('uncaughtException', (err) => console.error('[UNCAUGHT EXCEPTION]', err));
 
   // Keep the process alive
   await new Promise(() => {});
