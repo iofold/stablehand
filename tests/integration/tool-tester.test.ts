@@ -9,7 +9,6 @@ import { z } from 'zod';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
 import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js';
 import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
 import { LocalToolProvider } from '../../packages/ctxmill/src/tool/providers/local.js';
@@ -59,15 +58,12 @@ describe('POST /api/catalogs/tools/test', () => {
     toolRegistry.addProvider(new LocalToolProvider(toolExecutor));
     await toolRegistry.refresh();
 
-    const envFactory = new MockOverlayFactory();
-
     app = await createServer({
       db: container.db,
       agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
-      envFactory,
       toolDefinitionRegistry: toolRegistry,
     });
 

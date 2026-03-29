@@ -44,7 +44,7 @@ type MockHarness = {
 };
 
 function agentEventToProto(event: AgentEvent, seq: number, runId: string) {
-  const sessionEvent = agentEventToSessionEvent(event, seq, runId);
+  const sessionEvent = agentEventToSessionEvent(event);
   return {
     sequence: BigInt(seq),
     runId,

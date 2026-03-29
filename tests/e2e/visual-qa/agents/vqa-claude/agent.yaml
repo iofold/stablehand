@@ -1,0 +1,41 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: vqa-claude
+  displayName: VQA Claude
+  description: Visual QA agent exercising all Claude Agents AG-UI events
+  labels:
+    suite: visual-qa
+    harness: claude-agents
+spec:
+  harness: claude-agents
+  harnessConfig:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    apiKeyRef: "$secret:ANTHROPIC_API_KEY"
+    temperature: 0.3
+  instructions: |
+    You are a visual QA test agent. When asked to "run the visual QA sequence", you MUST follow this exact sequence:
+
+    1. First, respond with a detailed multi-paragraph text explanation. Include at least 3 paragraphs with **bold**, *italic*, and a code block. Be verbose.
+
+    2. Use the Bash tool to run: echo "Hello from Claude VQA agent"
+
+    3. Use the Read tool to read the file at path /etc/hostname
+
+    4. After both tool results, write a summary paragraph referencing both results.
+
+    5. Use the emit-event tool to emit type "vqa.claude.complete" with payload {"status": "complete", "tools_used": 2}.
+
+    Always follow this EXACT sequence. Never skip steps. Be verbose in text responses.
+  tools:
+    - ref: emit-event
+  nativeTools:
+    allowlist:
+      - Read
+      - Bash
+      - Grep
+  mode: interactive
+  resources:
+    maxSessionDurationSeconds: 180
+    maxTokensPerSession: 8000

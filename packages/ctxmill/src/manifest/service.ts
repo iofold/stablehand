@@ -1,15 +1,18 @@
 import type { DatabaseRepository } from '../database/repository.js';
 import type { AgentDefinition } from '../types.js';
+import { ensureAgentWorkspace, seedAgentWorkspace } from '../workspace/ensure.js';
 import type { AgentManifest } from './types.js';
 import { validateManifest } from './validate.js';
 import { parseManifestString, serializeManifestYAML, serializeManifestJSON } from './parser.js';
 import { manifestToDefinition, definitionToManifest } from './convert.js';
 
 export class ManifestService {
-  private db: DatabaseRepository;
+  private readonly db: DatabaseRepository;
+  private readonly dataDir: string | undefined;
 
-  constructor(db: DatabaseRepository) {
+  constructor(db: DatabaseRepository, dataDir?: string) {
     this.db = db;
+    this.dataDir = dataDir;
   }
 
   private parseHarnessConfig(harnessConfigJson: string): Record<string, unknown> {
@@ -63,6 +66,13 @@ export class ManifestService {
       description: def.description,
       manifest: manifest as unknown as Record<string, unknown>,
     });
+
+    if (this.dataDir) {
+      const workspaceDir = ensureAgentWorkspace(this.dataDir, agent.id);
+      seedAgentWorkspace(workspaceDir);
+      await this.db.updateAgent(agent.id, { workspaceDir });
+    }
+
     return { agentId: agent.id, created: true, manifest };
   }
 

@@ -2,29 +2,29 @@
 
 ## OVERVIEW
 
-Orchestrator, 5 harness adapters, sandbox container management, tool execution, event bus, PostgreSQL persistence. All execution routes through Docker sandbox containers via gRPC.
+Orchestrator, 5 harness adapters, sandbox container management, tool execution, event bus, PostgreSQL persistence. All execution routes through Docker sandbox containers via gRPC. 102 source files, ~77k TS lines.
 
 ## STRUCTURE
 
 ```
 src/
-  a2ui/           Structured visual block extraction from agent output (1 file)
+  a2ui/           Structured visual block extraction from agent output (2 files)
   agent/          Agent discovery from filesystem + defineAgent() builder (2 files)
-  cli/            `ctxmill dev` and `ctxmill chat` entry points (3 files)
-  config/         DI container, docker preset, factories (8 files)
+  cli/            `ctxmill dev` and `ctxmill chat` entry points (3 files, dynamic imports)
+  config/         DI container, docker preset, factories (6 files + 2 tests)
   database/       Drizzle ORM schema (16 tables), repository, migrations (6 files)
-  events/         TypedEventBus (18 events), triggers, wait primitives, queue (9 files)
-  harness/        5 adapters: LangGraph, OpenAI, Claude, Vercel AI, PI Agent (9 files)
+  events/         TypedEventBus (18 events), triggers, wait primitives, queue (8 files + 1 test)
+  harness/        5 adapters: LangGraph, OpenAI, Claude, Vercel AI, PI Agent (7 files)
   knowledge/      KnowledgeStore abstraction — InMemory + Mem0 impls (5 files)
-  learning/       Trace collection → reflection → knowledge update pipeline (8 files)
+  learning/       Trace collection → reflection → knowledge update pipeline (7 files + 1 test)
   llm/            Provider-agnostic LLM factory for learning reflector (4 files)
-  manifest/       YAML agent manifest parsing, validation, conversion (7 files)
-  orchestrator/   Fastify server, SSE, HITL, routes, sandbox run service (28 files)
-  sandbox/        Container lifecycle, gRPC daemon, checkpoint, pause, timeout (26 files)
+  manifest/       YAML agent manifest parsing, validation, conversion (6 files + 1 test)
+  orchestrator/   Fastify server, SSE, HITL, routes, sandbox run service (12 files + 7 routes + 8 tests)
+  sandbox/        Container lifecycle, gRPC daemon, checkpoint, pause, timeout (15 files + 13 tests)
   secrets/        Encrypted per-agent secret storage via PostgreSQL (4 files)
   skills/         SKILL.md loader (frontmatter + markdown body) (1 file)
-  tool/           Tool executor, 4 providers (Local, MCP, HTTP, Composio), registry (17 files)
-  util/           Shared error utilities (2 files)
+  tool/           Tool executor, 4 providers (Local, MCP, HTTP, Composio), registry (7 files + 3 tests)
+  util/           Shared error utilities (2 files + 1 test)
   workspace/      Session overlays — MockOverlay + FuseOverlay (5 files)
 ```
 
@@ -105,6 +105,16 @@ Harness code runs INSIDE sandbox containers, not in the orchestrator. This chang
 **Claude Agent SDK spawns a subprocess.** The `query()` API looks like a simple function call but spawns `node cli.js` under the hood. It resolves cli.js relative to its own package directory. The container needs: the SDK package installed, `node` on PATH, and a writable `cwd` directory.
 
 **PI Agent SDK has no `getMessages()`.** The native session's agent object exposes `replaceMessages()` but NOT `getMessages()`. Use the harness's own `transcript` array for message tracking and `exportState()`.
+
+## SANDBOX INTERNALS
+
+**Container concurrency** — `ContainerSemaphore` in `container-manager.ts`. FIFO queue, 20 concurrent default (`CTXMILL_MAX_CONTAINERS`), 60s queue timeout → `ContainerLimitError` (503).
+
+**Safe suspend phases** — `ExecutionPhaseTracker` in `execution-phase.ts`. Cooperative suspend only at: `idle`, `before_llm`, `after_llm`, `after_tool`, `hitl_wait`. Unsafe phases (`llm_call_in_flight`, `tool_execution`) wait for next safe point.
+
+**Tool proxy** — `createToolProxy()` in `tool-proxy.ts`. Orchestrator-location tools serialized via gRPC `RequestTool` RPC. 3 retries, exponential backoff (100ms/500ms/2s), 5min timeout.
+
+**Pause state machine** — `PauseManager` in `pause-manager.ts`. States: `none` → `scheduled` → `paused` → `promoting` → `idle_frozen`. HITL: 5s delay → docker pause → 5min checkpoint promotion. Idle: 5min freeze → 10min checkpoint.
 
 ## ANTI-PATTERNS (beyond root)
 

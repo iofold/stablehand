@@ -18,7 +18,6 @@ import type { FastifyInstance } from 'fastify';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
 
 const AGENT_PAYLOAD = {
   name: 'ownership-test',
@@ -47,15 +46,12 @@ describe('Ownership enforcement on routes', () => {
       dataDir,
     );
 
-    const envFactory = new MockOverlayFactory();
-
     app = await createServer({
       db: container.db,
       agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
-      envFactory,
     });
 
     await app.ready();
@@ -76,23 +72,21 @@ describe('Ownership enforcement on routes', () => {
     return res.json().id;
   }
 
-  // ── POST /agents/:id/runs/:runId/cancel ─────────────────────
+  // ── POST /agents/:id/sessions/:runId/cancel ──────────────────
 
-  describe('POST /agents/:id/runs/:runId/cancel', () => {
+  describe('POST /agents/:id/sessions/:runId/cancel', () => {
     it('returns 404 when runId belongs to a different agent', async () => {
       const agentAId = await createAgent('cancel-owner-A');
       const agentBId = await createAgent('cancel-owner-B');
 
-      // Start a run on Agent A via the run registry directly
       const run = await container.runRegistry.startRun(agentAId, 'conv-1', 'interactive', 'test');
 
-      // Try to cancel Agent A's run via Agent B's endpoint
       const cancel = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentBId}/runs/${run.id}/cancel`,
+        url: `/api/agents/${agentBId}/sessions/${run.id}/cancel`,
       });
       expect(cancel.statusCode).toBe(404);
-      expect(cancel.json().error).toBe('Run not found');
+      expect(cancel.json().error).toBe('Session not found');
     });
 
     it('succeeds when runId belongs to the correct agent', async () => {
@@ -102,7 +96,7 @@ describe('Ownership enforcement on routes', () => {
 
       const cancel = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentId}/runs/${run.id}/cancel`,
+        url: `/api/agents/${agentId}/sessions/${run.id}/cancel`,
       });
       expect(cancel.statusCode).toBe(200);
       expect(cancel.json().cancelled).toBe(true);
@@ -113,7 +107,7 @@ describe('Ownership enforcement on routes', () => {
 
       const cancel = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentId}/runs/non-existent-run-id/cancel`,
+        url: `/api/agents/${agentId}/sessions/non-existent-run-id/cancel`,
       });
       expect(cancel.statusCode).toBe(404);
     });
@@ -136,7 +130,7 @@ describe('Ownership enforcement on routes', () => {
         payload: { action: 'approve', runId: run.id },
       });
       expect(result.statusCode).toBe(404);
-      expect(result.json().error).toBe('Run not found');
+      expect(result.json().error).toBe('No pending interrupt for agent');
     });
 
     it('returns 404 when runId does not exist at all', async () => {
@@ -148,7 +142,7 @@ describe('Ownership enforcement on routes', () => {
         payload: { action: 'approve', runId: 'totally-fake-run-id' },
       });
       expect(result.statusCode).toBe(404);
-      expect(result.json().error).toBe('Run not found');
+      expect(result.json().error).toBe('No pending interrupt for agent');
     });
   });
 

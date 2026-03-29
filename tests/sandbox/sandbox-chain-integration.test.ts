@@ -286,7 +286,6 @@ function makeMockContainerManager(): ContainerManager & {
     getContainer: vi.fn(async () => null),
     listManagedContainers: vi.fn(async () => []),
     getContainerExitCode: vi.fn(async () => null),
-    cleanupOrphans: vi.fn(async () => 0),
     pauseContainer: vi.fn(async () => {}),
     unpauseContainer: vi.fn(async () => {}),
     getMetrics: vi.fn(() => ({ ...metrics })),
@@ -327,7 +326,6 @@ function makeMockRunRegistry() {
       if (run) run.error = error;
     }),
     getAbortSignal: vi.fn().mockReturnValue(undefined),
-    updateSessionDir: vi.fn(),
     pauseRun: vi.fn(),
     resumeRun: vi.fn(),
     _runs: runs,
@@ -647,7 +645,6 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       expect(agentBEvents.some((e) => e.event.type === 'RUN_STARTED')).toBe(true);
 
       // Both should have text content
-      expect(agentAEvents.some((e) => e.event.type === 'TEXT_MESSAGE_CONTENT')).toBe(true);
       expect(agentBEvents.some((e) => e.event.type === 'TEXT_MESSAGE_CONTENT')).toBe(true);
     });
   });

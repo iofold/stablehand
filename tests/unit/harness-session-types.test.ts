@@ -12,8 +12,8 @@ import type {
   HarnessTurnContext,
   HarnessTurnInput,
 } from '../../packages/ctxmill/src/harness/index.js';
-import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
-import type { Message, NativeToolConfig } from '../../packages/ctxmill/src/types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
+import type { Message, NativeToolConfig } from '@ctxmill/sandbox-daemon';
 
 function makeMessage(role: Message['role'], content: string): Message {
   return {

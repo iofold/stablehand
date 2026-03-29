@@ -139,6 +139,7 @@ export class HTTPToolProvider implements ToolProvider {
         name: ep.name,
         description: ep.description,
         input: zodInput,
+        location: 'orchestrator',
         timeout: ep.timeout ?? DEFAULT_TIMEOUT,
         handler: async (
           input: unknown,

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAgentsStore } from '@/stores/agents';
-import type { AgentRun } from '@/stores/agents';
+import type { AgentSession } from '@/stores/agents';
 import type { Agent } from '@/stores/agents';
 import {
   fetchKnowledgeStats,
@@ -24,10 +24,9 @@ export interface UseAgentDetailReturn {
   agents: Agent[];
   error: string | null;
 
-  // Runs state
-  allRuns: AgentRun[];
-  runsLoading: boolean;
-  loadRuns: () => Promise<void>;
+  allSessions: AgentSession[];
+  sessionsLoading: boolean;
+  loadSessions: () => Promise<void>;
 
   // Traces state
   traces: Trace[];
@@ -43,11 +42,10 @@ export function useAgentDetail(id: string | undefined, activeTab: TabId): UseAge
   const agents = useAgentsStore((s) => s.agents);
   const loading = useAgentsStore((s) => s.loading);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
-  const storeFetchRuns = useAgentsStore((s) => s.fetchRuns);
+  const storeFetchSessions = useAgentsStore((s) => s.fetchSessions);
 
-  // Runs state
-  const [allRuns, setAllRuns] = useState<AgentRun[]>([]);
-  const [runsLoading, setRunsLoading] = useState(false);
+  const [allSessions, setAllSessions] = useState<AgentSession[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
 
   // Learning dashboard state
   const [overviewKnowledgeItems, setOverviewKnowledgeItems] = useState<KnowledgeItem[]>([]);
@@ -58,7 +56,6 @@ export function useAgentDetail(id: string | undefined, activeTab: TabId): UseAge
   // Error state
   const [error, setError] = useState<string | null>(null);
 
-  // Traces state for runs tab
   const [traces, setTraces] = useState<Trace[]>([]);
 
   useEffect(() => {
@@ -67,24 +64,23 @@ export function useAgentDetail(id: string | undefined, activeTab: TabId): UseAge
 
   const agent = agents.find((a) => a.id === id);
 
-  // Fetch runs when Sessions or Overview tab is active
-  const loadRuns = useCallback(async () => {
+  const loadSessions = useCallback(async () => {
     if (!id) return;
-    setRunsLoading(true);
+    setSessionsLoading(true);
     setError(null);
     try {
-      const runs = await storeFetchRuns(id);
-      setAllRuns(Array.isArray(runs) ? runs : []);
+      const sessions = await storeFetchSessions(id);
+      setAllSessions(Array.isArray(sessions) ? sessions : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setRunsLoading(false);
+      setSessionsLoading(false);
     }
-  }, [id, storeFetchRuns]);
+  }, [id, storeFetchSessions]);
 
   useEffect(() => {
-    if (activeTab === 'sessions' || activeTab === 'overview') loadRuns();
-  }, [activeTab, loadRuns]);
+    if (activeTab === 'sessions' || activeTab === 'overview') loadSessions();
+  }, [activeTab, loadSessions]);
 
   // Fetch traces when Sessions tab is active
   useEffect(() => {
@@ -138,9 +134,9 @@ export function useAgentDetail(id: string | undefined, activeTab: TabId): UseAge
     loading,
     agents,
     error,
-    allRuns,
-    runsLoading,
-    loadRuns,
+    allSessions,
+    sessionsLoading,
+    loadSessions,
     traces,
     overviewKnowledgeItems,
     overviewKnowledgeStats,

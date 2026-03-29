@@ -2,17 +2,6 @@ const API_BASE = '/api';
 
 // ── Session types ────────────────────────────────────────────────────
 
-export interface FileDiff {
-  path: string;
-  type: 'added' | 'modified' | 'deleted';
-}
-
-export interface PromoteResult {
-  added: number;
-  modified: number;
-  deleted: number;
-}
-
 export interface HttpToolDefinition {
   name: string;
   description: string;
@@ -58,12 +47,12 @@ export async function fetchAgent(id: string) {
   return apiFetch(`${API_BASE}/agents/${id}`);
 }
 
-export async function fetchRuns(agentId: string) {
-  return apiFetch(`${API_BASE}/agents/${agentId}/runs`);
+export async function fetchSessions(agentId: string) {
+  return apiFetch(`${API_BASE}/agents/${agentId}/sessions`);
 }
 
-export async function fetchAllActiveRuns() {
-  return apiFetch(`${API_BASE}/runs`);
+export async function fetchAllActiveSessions() {
+  return apiFetch(`${API_BASE}/sessions`);
 }
 
 export async function fetchConversations(agentId: string) {
@@ -151,6 +140,18 @@ export async function sendInterrupt(agentId: string, action: string, data?: unkn
   return apiMutate(`${API_BASE}/agents/${agentId}/interrupt`, 'POST', { action, data, runId });
 }
 
+export async function fetchInterrupts(agentId: string): Promise<Array<{
+  id: string;
+  runId: string;
+  agentId: string;
+  toolCallId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  status: string;
+}>> {
+  return apiFetch(`${API_BASE}/agents/${agentId}/interrupts`);
+}
+
 export function createSSEConnection(agentId: string): EventSource {
   return new EventSource(`${API_BASE}/agents/${agentId}/stream`);
 }
@@ -160,7 +161,7 @@ export async function startBackgroundRun(agentId: string, task: string) {
 }
 
 export async function cancelRun(agentId: string, runId: string) {
-  return apiMutate(`${API_BASE}/agents/${agentId}/runs/${runId}/cancel`, 'POST');
+  return apiMutate(`${API_BASE}/agents/${agentId}/sessions/${runId}/cancel`, 'POST');
 }
 
 export async function deleteKnowledgeItem(agentId: string, itemId: string) {
@@ -216,7 +217,6 @@ export async function createAgent(data: {
   tools: string[];
   description?: string;
   metadata?: Record<string, unknown>;
-  callbackUrl?: string | null;
   httpTools?: HttpToolDefinition[];
 }) {
   return apiMutate(`${API_BASE}/agents`, 'POST', data);
@@ -230,7 +230,6 @@ export async function updateAgent(id: string, data: Partial<{
   tools: string[];
   description?: string;
   metadata?: Record<string, unknown>;
-  callbackUrl?: string | null;
   httpTools?: HttpToolDefinition[];
 }>) {
   return apiMutate(`${API_BASE}/agents/${id}`, 'PUT', data);
@@ -313,25 +312,6 @@ export async function deleteSecret(agentId: string, key: string): Promise<void> 
 
 export async function deleteAgent(id: string): Promise<void> {
   await apiFetch(`${API_BASE}/agents/${id}`, { method: 'DELETE' });
-}
-
-// ── Session lifecycle operations ─────────────────────────────────────
-
-export async function fetchSessionDiff(agentId: string, runId: string): Promise<FileDiff[]> {
-  const data = await apiFetch<{ changes?: FileDiff[] }>(`${API_BASE}/agents/${agentId}/runs/${runId}/diff`);
-  return data.changes ?? [];
-}
-
-export async function promoteSession(agentId: string, runId: string): Promise<PromoteResult> {
-  return apiMutate<PromoteResult>(`${API_BASE}/agents/${agentId}/runs/${runId}/promote`, 'POST');
-}
-
-export async function forkSession(agentId: string, runId: string, newAgentName: string): Promise<{ agentId: string }> {
-  return apiMutate<{ agentId: string }>(`${API_BASE}/agents/${agentId}/runs/${runId}/fork`, 'POST', { name: newAgentName });
-}
-
-export async function discardSession(agentId: string, runId: string): Promise<void> {
-  await apiFetch(`${API_BASE}/agents/${agentId}/runs/${runId}/session`, { method: 'DELETE' });
 }
 
 // ── Trigger operations ──────────────────────────────────────────────
@@ -422,6 +402,38 @@ export interface AppConfig {
 
 export async function fetchConfig(): Promise<AppConfig> {
   return apiFetch<AppConfig>(`${API_BASE}/config`);
+}
+
+// ── Workspace Size Limit Settings ───────────────────────────
+
+export interface SystemSettings {
+  maxWorkspaceTarBytes:        number;
+  maxCheckpointBytes:          number;
+  maxTarUploadBytes:           number;
+  idleTimeoutMs:               number;
+  freezePromotionMs:           number;
+  maxPauseDurationMs:          number;
+  pauseDelayMs:                number;
+  turnTimeoutMs:               number;
+  reconciliationIntervalMs:    number;
+  maxGlobalContainers:         number;
+  queueTimeoutMs:              number;
+  maxConcurrentSessionsPerAgent: number;
+  maxTriggerDepth:             number;
+  defaultCpus:                 number;
+  defaultMemoryMb:             number;
+  defaultPidsLimit:            number;
+  defaultTimeoutSec:           number;
+}
+
+export async function fetchSettings(): Promise<SystemSettings> {
+  return apiFetch<SystemSettings>(`${API_BASE}/settings`);
+}
+
+export async function updateSettings(
+  partial: Partial<SystemSettings>,
+): Promise<SystemSettings> {
+  return apiMutate<SystemSettings>(`${API_BASE}/settings`, 'PUT', partial);
 }
 
 // ── Event Log operations ────────────────────────────────────────────

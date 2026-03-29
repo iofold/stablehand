@@ -1,10 +1,12 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { fastifyConnectPlugin } from '@connectrpc/connect-fastify';
-import { agentRoutes, runsRoutes } from './routes/agents.js';
+import { agentRoutes, sessionsRoutes } from './routes/agents.js';
+import { artifactRoutes } from './routes/artifacts.js';
 import { catalogRoutes } from './routes/catalogs.js';
 import { eventRoutes } from './routes/events.js';
 import { knowledgeRoutes } from './routes/knowledge.js';
+import { settingsRoutes } from './routes/settings.js';
 import { triggerRoutes } from './routes/triggers.js';
 import { sandboxRoutes } from './routes/sandbox.js';
 import type { EventTriggerManager } from '../events/trigger-manager.js';
@@ -16,19 +18,21 @@ import type { LearningPipeline } from '../learning/types.js';
 import type { KnowledgeStore } from '../knowledge/types.js';
 import type { TypedEventBus } from '../events/bus.js';
 import { RunRegistry } from './run-registry.js';
-import type { EnvironmentFactory } from '../workspace/types.js';
-import { ManifestService } from '../manifest/index.js';
 import type { SecretProvider } from '../secrets/types.js';
 import { createGrpcRoutes } from './grpc/router.js';
 import type { OrchestratorToolRegistry } from './grpc/orchestrator-service.js';
 import type { ContainerManager } from '../sandbox/container-manager.js';
+import type { LocalFunctionExecutor } from '../tool/executor.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
+import type { ArtifactStore } from '../artifact/index.js';
 import { registerExistingAgentHttpTools } from './http-tools.js';
 import { DefaultHarnessRegistry } from '../harness/registry.js';
 import { LangGraphHarness } from '../harness/langgraph.js';
 import { ClaudeAgentsHarness } from '../harness/claude-agents.js';
 import { PIAgentHarness } from '../harness/pi-agent.js';
 import type { HarnessRegistry } from '../harness/types.js';
+import type { SystemSettingsService } from '../settings/service.js';
+import type { SandboxSessionManager } from './sandbox-run-service.js';
 
 export interface ServerOptions {
   port?: number;
@@ -41,8 +45,6 @@ export interface ServerOptions {
   eventBus?: TypedEventBus;
   /** Path to the .ctxmill data directory for agent workspaces. */
   dataDir?: string;
-  /** Factory for creating session execution environments. */
-  envFactory?: EnvironmentFactory;
   /** Event trigger manager for pub/sub trigger system. */
   triggerManager?: EventTriggerManager;
   /** Pre-wired SSEManager (e.g. from DI container). Falls back to a new instance. */
@@ -54,10 +56,18 @@ export interface ServerOptions {
   /** Pre-wired OrchestratorToolRegistry for gRPC tool callbacks from sandboxes. */
   toolRegistry?: OrchestratorToolRegistry;
   toolDefinitionRegistry?: DefaultToolRegistry;
+  /** Pre-wired LocalFunctionExecutor with built-in and user-defined tools. */
+  toolExecutor?: LocalFunctionExecutor;
   /** Pre-wired ContainerManager for sandbox concurrency stats. */
   containerManager?: ContainerManager;
+  artifactStore?: ArtifactStore;
+  /** S3 bucket name for artifact storage. Required when artifactStore is provided. */
+  artifactBucket?: string;
   /** Pre-wired AgentRunService from DI container. */
   agentRunService: AgentRunService;
+  sandboxSessionManager?: SandboxSessionManager;
+  settingsService?: SystemSettingsService;
+  onHitlPause?: (sessionId: string) => void;
 }
 
 function createDefaultHarnessRegistry(): HarnessRegistry {
@@ -75,12 +85,19 @@ function createDefaultHarnessRegistry(): HarnessRegistry {
  * the database, SSE manager, interrupt manager, and agent routes.
  */
 export async function createServer(opts: ServerOptions): Promise<FastifyInstance> {
-  const { db, port: _port, host: _host, harnessRegistry: optHarnessRegistry, runRegistry: optRunRegistry, learningPipeline, knowledgeStore, eventBus, dataDir, envFactory, triggerManager } = opts;
+  const { db, port: _port, host: _host, harnessRegistry: optHarnessRegistry, runRegistry: optRunRegistry, learningPipeline, knowledgeStore, eventBus, dataDir, triggerManager } = opts;
   const runRegistry = optRunRegistry ?? new RunRegistry();
   const harnessRegistry = optHarnessRegistry ?? createDefaultHarnessRegistry();
   const toolDefinitionRegistry = opts.toolDefinitionRegistry ?? new DefaultToolRegistry();
 
   const app = Fastify({ logger: true });
+
+  // Allow binary uploads (application/gzip, application/x-gzip) for workspace tarball endpoint.
+  // The route handler reads from request.raw directly, so we skip body parsing.
+  app.addContentTypeParser(
+    ['application/gzip', 'application/x-gzip'],
+    function (_request, _payload, done) { done(null); },
+  );
 
   // CORS — configurable via CORS_ORIGINS env var, defaults to Docker UI ports
   await app.register(cors, {
@@ -111,6 +128,13 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
       routes: createGrpcRoutes({
         eventBus,
         toolRegistry: opts.toolRegistry,
+        interruptManager: interrupts,
+        runRegistry,
+        toolExecutor: opts.toolExecutor,
+        toolDefinitionRegistry: toolDefinitionRegistry,
+        onHitlPause: opts.onHitlPause,
+        repository: db,
+        artifactStore: opts.artifactStore,
       }),
     });
   }
@@ -157,8 +181,6 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   // ── AgentRunService ──────────────────────────────────────
   const agentRunService = opts.agentRunService;
 
-  const manifestService = new ManifestService(db);
-
   // ── Config endpoint ──────────────────────────────────────
   app.get('/api/config', async () => {
     const startTime = process.uptime() * 1000;
@@ -182,13 +204,27 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, runRegistry, harnessRegistry, learningPipeline, knowledgeStore, agentRunService, eventBus, dataDir, envFactory, manifestService, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry });
-  await app.register(runsRoutes, { prefix: '/api/runs', runRegistry });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, runRegistry, harnessRegistry, learningPipeline, knowledgeStore, agentRunService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, sandboxSessionManager: opts.sandboxSessionManager, settingsService: opts.settingsService });
+  await app.register(sessionsRoutes, { prefix: '/api/sessions', runRegistry });
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
   await app.register(eventRoutes, { prefix: '/api/events', db });
   await app.register(knowledgeRoutes, { prefix: '/api/knowledge', knowledgeStore });
   if (triggerManager) {
     await app.register(triggerRoutes, { prefix: '/api/triggers', triggerManager, db });
+  }
+  if (opts.settingsService) {
+    await app.register(settingsRoutes, {
+      prefix: '/api/settings',
+      settingsService: opts.settingsService,
+    });
+  }
+  if (opts.artifactStore && opts.artifactBucket) {
+    await app.register(artifactRoutes, {
+      prefix: '/api/artifacts',
+      artifactStore: opts.artifactStore,
+      repository: db,
+      bucket: opts.artifactBucket,
+    });
   }
 
   // ── Graceful shutdown ──────────────────────────────────

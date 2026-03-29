@@ -1,18 +1,11 @@
 import { useState } from 'react';
 import {
-  Clock,
-  Activity,
-  Wrench,
-  Brain,
-  Users,
   ChevronDown,
   ChevronRight,
-  Sparkles,
-  BookOpen,
 } from 'lucide-react';
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { cn } from '@/lib/utils';
-import type { AgentRun } from '@/stores/agents';
+import type { AgentSession } from '@/stores/agents';
 import type {
   KnowledgeItem,
   KnowledgeStats,
@@ -53,18 +46,16 @@ export interface AgentOverviewTabProps {
     harness: string;
     harnessConfig: Record<string, unknown>;
     description?: string;
-    callbackUrl?: string | null;
     workspaceDir?: string | null;
     tools?: string[];
     metadata?: Record<string, unknown> | null;
   };
-  totalRuns: number;
-  activeRuns: number;
+  totalSessions: number;
+  activeSessions: number;
   toolsCount: number;
   knowledgeTotal: number;
-  sseClients: number;
-  recentSessions: AgentRun[];
-  onNavigateSession: (runId: string) => void;
+  recentSessions: AgentSession[];
+  onContinueSession: (sessionId: string) => void;
   knowledgeStats?: KnowledgeStats;
   recentKnowledgeItems?: KnowledgeItem[];
   traceStats?: TraceStats;
@@ -73,13 +64,12 @@ export interface AgentOverviewTabProps {
 
 export function AgentOverviewTab({
   agent,
-  totalRuns,
-  activeRuns,
+  totalSessions,
+  activeSessions,
   toolsCount,
   knowledgeTotal,
-  sseClients,
   recentSessions,
-  onNavigateSession,
+  onContinueSession,
   knowledgeStats,
   recentKnowledgeItems,
   traceStats,
@@ -93,7 +83,6 @@ export function AgentOverviewTab({
     harnessConfig: parsedHarnessConfig,
     description: agent.description,
     tools: agent.tools ?? [],
-    callbackUrl: agent.callbackUrl ?? undefined,
     workspaceDir: agent.workspaceDir ?? undefined,
     metadata: agent.metadata ?? {},
     systemPrompt: agent.systemPrompt ?? '',
@@ -104,14 +93,12 @@ export function AgentOverviewTab({
     <div className="space-y-6">
       {/* Stats grid */}
       <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-surface-700">
-        <div className="flex-1 min-w-0"><StatCard label="Total Sessions" value={totalRuns} /></div>
-        <div className="flex-1 min-w-0"><StatCard label="Active" value={activeRuns} /></div>
+        <div className="flex-1 min-w-0"><StatCard label="Total Sessions" value={totalSessions} /></div>
+        <div className="flex-1 min-w-0"><StatCard label="Active" value={activeSessions} /></div>
         <div className="flex-1 min-w-0"><StatCard label="Tools Count" value={toolsCount} /></div>
         <div className="flex-1 min-w-0"><StatCard label="Knowledge Items" value={knowledgeTotal} /></div>
-        <div className="flex-1 min-w-0"><StatCard label="SSE Clients" value={sseClients} /></div>
       </div>
 
-      {/* Recent runs */}
       <div className="rounded-lg border border-surface-700 bg-surface-800 p-6">
         <h3 className="text-label mb-4">
           Recent Sessions
@@ -125,7 +112,7 @@ export function AgentOverviewTab({
                 <button
                   key={run.id}
                   type="button"
-                  onClick={() => onNavigateSession(run.id)}
+                   onClick={() => onContinueSession(run.conversationId ?? run.id)}
                   className={cn(
                     'flex w-full items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-surface-700/60 cursor-pointer text-left px-4 -mx-4 rounded-lg',
                     idx !== recentSessions.length - 1 && 'border-b border-surface-700/50'
@@ -149,7 +136,7 @@ export function AgentOverviewTab({
               <div className="mt-3 pt-3 border-t border-surface-700/50 text-center">
                 <button
                   type="button"
-                  onClick={() => onNavigateSession('')}
+                   onClick={() => onContinueSession('')}
                   className="text-xs font-medium text-accent-400 hover:text-accent-300 transition-colors"
                 >
                   View All Sessions
@@ -255,7 +242,6 @@ export function AgentOverviewTab({
               </div>
               <ConfigField label="Harness" value={agent.harness ?? undefined} mono />
               <ConfigField label="Workspace" value={agent.workspaceDir ?? undefined} mono />
-              <ConfigField label="Callback URL" value={agent.callbackUrl ?? undefined} mono />
               <ConfigField
                 label="Tools"
                 value={agent.tools && agent.tools.length > 0 ? `${agent.tools.length} configured` : 'None'}
@@ -337,13 +323,4 @@ function ConfigField({
       </p>
     </div>
   );
-}
-
-function normalizeJsonLike(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
 }

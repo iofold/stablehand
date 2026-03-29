@@ -32,3 +32,4 @@ agent.md
 *.db
 *.db-shm
 *.db-wal
+.sisyphus/notepads/

@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { DefaultHarnessRegistry } from '../../packages/ctxmill/src/harness/registry.js';
-import { LangGraphConfigSchema } from '../../packages/ctxmill/src/harness/langgraph.js';
-import { ClaudeAgentsConfigSchema } from '../../packages/ctxmill/src/harness/claude-agents.js';
-import { PIAgentConfigSchema } from '../../packages/ctxmill/src/harness/pi-agent.js';
-import type { AgentHarness, HarnessSession } from '../../packages/ctxmill/src/harness/types.js';
+import { LangGraphConfigSchema } from '@ctxmill/sandbox-daemon';
+import { ClaudeAgentsConfigSchema } from '@ctxmill/sandbox-daemon';
+import { PIAgentConfigSchema } from '@ctxmill/sandbox-daemon';
+import type { AgentHarness, HarnessSession } from '@ctxmill/sandbox-daemon';
 
 function stubHarness(name: string, configSchema: z.ZodType): AgentHarness {
   return {

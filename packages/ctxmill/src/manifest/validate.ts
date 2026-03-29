@@ -65,10 +65,6 @@ const manifestWorkspaceContentSchema = z.object({
 }).strict();
 
 const manifestWorkspaceSchema = z.object({
-  snapshotRef: z.string().optional(),
-  maxSizeBytes: z.number().positive().optional(),
-  readOnlyPaths: z.array(z.string()).optional(),
-  writablePaths: z.array(z.string()).optional(),
   content: manifestWorkspaceContentSchema.optional(),
 });
 
@@ -80,8 +76,8 @@ const manifestSandboxResourcesSchema = z.object({
 });
 
 const manifestResourcesSchema = z.object({
-  maxRunDurationSeconds: z.number().positive().optional(),
-  maxTokensPerRun: z.number().positive().optional(),
+  maxSessionDurationSeconds: z.number().positive().optional(),
+  maxTokensPerSession: z.number().positive().optional(),
   maxToolCallsPerRun: z.number().positive().optional(),
   costLimitPerDay: z.number().positive().optional(),
   sandbox: manifestSandboxResourcesSchema.optional(),

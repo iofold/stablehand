@@ -57,6 +57,9 @@ function createMockSessionManager(events: SessionEvent[] = []): SandboxSessionMa
       }
     },
     killSession: vi.fn(async () => {}),
+    suspendSession: vi.fn(async () => {}),
+    freezeSession: vi.fn(async () => {}),
+    unfreezeSession: vi.fn(async () => {}),
   };
 }
 
@@ -222,6 +225,9 @@ describe('SandboxRunService', () => {
           };
         },
         killSession: vi.fn(async () => {}),
+        suspendSession: vi.fn(async () => {}),
+        freezeSession: vi.fn(async () => {}),
+        unfreezeSession: vi.fn(async () => {}),
       };
       const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
 
@@ -252,6 +258,9 @@ describe('SandboxRunService', () => {
         ensureSession: vi.fn(async () => { throw new Error('Session init failed'); }),
         deliverTurn: (async function* () {}) as SandboxSessionManager['deliverTurn'],
         killSession: vi.fn(async () => {}),
+        suspendSession: vi.fn(async () => {}),
+        freezeSession: vi.fn(async () => {}),
+        unfreezeSession: vi.fn(async () => {}),
       };
       const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
 
@@ -270,6 +279,9 @@ describe('SandboxRunService', () => {
           throw new Error('Stream disconnected');
         },
         killSession: vi.fn(async () => {}),
+        suspendSession: vi.fn(async () => {}),
+        freezeSession: vi.fn(async () => {}),
+        unfreezeSession: vi.fn(async () => {}),
       };
       const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
 

@@ -4,23 +4,14 @@ import {
   ArrowLeft,
   MessageSquare,
   Play,
-  LayoutDashboard,
-  Brain,
-  Wrench,
-  Clock,
-  FolderOpen,
-  GitBranch,
-  Bot,
-  Cpu,
   Pencil,
 } from 'lucide-react';
-import { AgentStatusBadge } from '@/components/dashboard/AgentStatusBadge';
 import { useAgentsStore } from '@/stores/agents';
 import { cn } from '@/lib/utils';
 import { AgentFormModal } from '@/components/agents/AgentFormModal';
 
 import { useAgentDetail } from '@/hooks/useAgentDetail';
-import { useAgentRuns } from '@/hooks/useAgentRuns';
+import { useAgentSessions } from '@/hooks/useAgentSessions';
 import { useAgentKnowledge } from '@/hooks/useAgentKnowledge';
 
 import {
@@ -63,20 +54,19 @@ export function AgentDetailPage() {
   const [runTask, setRunTask] = useState('');
   const [submittingRun, setSubmittingRun] = useState(false);
 
-  // Runs filter state
-  const [runsFilter, setRunsFilter] = useState<string>('all');
+  const [sessionsFilter, setSessionsFilter] = useState<string>('all');
 
   // Session-scoped file viewing: when set, Files tab shows session workspace
-  const [sessionRunId, setSessionRunId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   // Custom hooks
   const {
     agent,
     loading,
     agents,
-    allRuns,
-    runsLoading,
-    loadRuns,
+    allSessions,
+    sessionsLoading,
+    loadSessions,
     traces,
     overviewKnowledgeItems,
     overviewKnowledgeStats,
@@ -84,16 +74,16 @@ export function AgentDetailPage() {
     feedbackStats,
   } = useAgentDetail(id, activeTab);
 
-  const { filteredRuns, totalRuns, activeRunsCount } = useAgentRuns(allRuns, runsFilter);
+  const { filteredSessions, totalSessions, activeSessionsCount } = useAgentSessions(allSessions, sessionsFilter);
 
   const recentSessions = useMemo(() => {
-    const seen = new Map<string, (typeof allRuns)[number]>();
-    for (const run of allRuns) {
-      const key = run.conversationId || run.id;
-      if (!seen.has(key)) seen.set(key, run);
+    const seen = new Map<string, (typeof allSessions)[number]>();
+    for (const session of allSessions) {
+      const key = session.conversationId || session.id;
+      if (!seen.has(key)) seen.set(key, session);
     }
     return Array.from(seen.values()).slice(0, 10);
-  }, [allRuns]);
+  }, [allSessions]);
 
   const {
     knowledgeItems,
@@ -106,7 +96,6 @@ export function AgentDetailPage() {
   } = useAgentKnowledge(id, activeTab);
 
   const toolsCount = agent?.tools?.length ?? 0;
-  const sseClients = agent?.sseClients ?? 0;
 
   const handleStartRun = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -116,7 +105,7 @@ export function AgentDetailPage() {
       await startBackgroundRun(id, runTask.trim());
       setRunTask('');
       setShowRunForm(false);
-      loadRuns();
+      loadSessions();
     } finally {
       setSubmittingRun(false);
     }
@@ -144,6 +133,7 @@ export function AgentDetailPage() {
           <h2 className="text-xl font-semibold text-surface-300 mb-2">Agent not found</h2>
           <p className="text-surface-400 mb-4">The agent you are looking for does not exist.</p>
            <button
+             type="button"
              onClick={() => navigate(-1)}
              className="px-4 py-2 bg-accent-600 text-white rounded-lg hover:bg-accent-500 transition-colors"
            >
@@ -217,20 +207,20 @@ export function AgentDetailPage() {
               </button>
               <button
                 type="button"
-                onClick={() => navigate(`/agents/${id}/chat`)}
+                onClick={() => navigate(`/agents/${id}/sessions/new`)}
                 className="btn-secondary"
               >
                 <MessageSquare className="h-4 w-4" />
-                Open Chat
+                Open Session
               </button>
               <button
                 type="button"
-                data-testid="start-run-button"
+                data-testid="start-session-button"
                 onClick={() => setShowRunForm((v) => !v)}
                 className="btn-primary"
               >
                 <Play className="h-4 w-4" />
-                Start Run
+                Start Session
               </button>
             </div>
           </div>
@@ -247,7 +237,6 @@ export function AgentDetailPage() {
                 value={runTask}
                 onChange={(e) => setRunTask(e.target.value)}
                 placeholder="Describe the task..."
-                autoFocus
                 className="flex-1 rounded-lg border border-surface-600/40 bg-surface-800/60 px-3 py-2 text-sm text-surface-200 placeholder-surface-400 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/30"
               />
               <button
@@ -294,14 +283,17 @@ export function AgentDetailPage() {
         {activeTab === 'overview' && (
           <AgentOverviewTab
             agent={agent}
-            totalRuns={totalRuns}
-            activeRuns={activeRunsCount}
+            totalSessions={totalSessions}
+            activeSessions={activeSessionsCount}
             toolsCount={toolsCount}
             knowledgeTotal={overviewKnowledgeStats.totalItems ?? 0}
-            sseClients={sseClients}
             recentSessions={recentSessions}
-            onNavigateSession={(runId) => {
-              setActiveTab('sessions');
+            onContinueSession={(sessionId) => {
+              if (sessionId) {
+                navigate(`/agents/${id}/sessions/${sessionId}`);
+              } else {
+                setActiveTab('sessions');
+              }
             }}
             knowledgeStats={overviewKnowledgeStats}
             recentKnowledgeItems={overviewKnowledgeItems}
@@ -324,17 +316,17 @@ export function AgentDetailPage() {
 
         {activeTab === 'sessions' && (
           <AgentSessionsTab
-            runs={filteredRuns}
-            loading={runsLoading}
-            filter={runsFilter}
-            onFilterChange={setRunsFilter}
+            sessions={filteredSessions}
+            loading={sessionsLoading}
+            filter={sessionsFilter}
+            onFilterChange={setSessionsFilter}
             agentId={id!}
             traces={traces}
-            onViewSessionFiles={(runId) => {
-              setSessionRunId(runId);
+            onViewSessionFiles={(sessionId) => {
+              setSelectedSessionId(sessionId);
               setActiveTab('files');
             }}
-            onContinueChat={(conversationId) => navigate(`/agents/${id}/chat/${conversationId}`)}
+            onContinueSession={(sessionId) => navigate(`/agents/${id}/sessions/${sessionId}`)}
           />
         )}
 
@@ -344,21 +336,21 @@ export function AgentDetailPage() {
 
         {activeTab === 'files' && id && (
           <div className="space-y-3">
-            {sessionRunId && (
+            {selectedSessionId && (
               <div className="flex items-center gap-3 rounded-lg border border-accent-700/30 bg-accent-900/20 px-4 py-2.5">
                 <span className="text-sm text-accent-300">
-                  Viewing session workspace (run {sessionRunId.slice(0, 8)})
+                  Viewing session workspace ({selectedSessionId.slice(0, 8)})
                 </span>
                 <button
                   type="button"
-                  onClick={() => setSessionRunId(null)}
+                  onClick={() => setSelectedSessionId(null)}
                   className="text-xs text-accent-400 hover:text-accent-200 underline underline-offset-2 transition-colors"
                 >
                   Switch to base workspace
                 </button>
               </div>
             )}
-            <AgentFilesTab agentId={id} runId={sessionRunId ?? undefined} />
+            <AgentFilesTab agentId={id} runId={selectedSessionId ?? undefined} />
           </div>
         )}
 

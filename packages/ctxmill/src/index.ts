@@ -34,20 +34,16 @@ export type { CTXMillConfig, ResolvedConfig, Preset } from './config/types.js';
 export type {
   AGUIEventType,
   AGUIEvent,
-  A2UIPayload,
   EventMap,
   EventName,
 } from './events/types.js';
 export type { PersistEventFn } from './events/bus.js';
 export { waitForEvent, EventTimeoutError } from './events/wait-for-event.js';
-export { EventQueueImpl, EventQueueImpl as SQLiteEventQueue } from './events/event-queue.js';
-export type { EventQueue } from './events/event-queue.js';
 
 // Event trigger system
 export type { EventTrigger } from './events/triggers.js';
 export { interpolateTemplate } from './events/triggers.js';
 export { EventTriggerManager } from './events/trigger-manager.js';
-export type { TriggerRunCallback } from './events/trigger-manager.js';
 
 // Knowledge types and implementations
 export type {
@@ -61,17 +57,6 @@ export type {
 export { InMemoryKnowledgeStore } from './knowledge/store.js';
 export { InMemoryContextProvider } from './knowledge/context.js';
 
-// Workspace types and implementations
-export type {
-  ExecutionEnvironment,
-  ExecOptions,
-  ExecResult,
-  FileDiff,
-  PromoteResult,
-  EnvironmentFactory,
-} from './workspace/index.js';
-export { MockOverlayEnvironment, MockOverlayFactory } from './workspace/index.js';
-export { FuseOverlayEnvironment, FuseOverlayFactory } from './workspace/index.js';
 export { ensureAgentWorkspace, seedAgentWorkspace } from './workspace/index.js';
 
 // Learning types and implementations
@@ -112,3 +97,5 @@ export { ManifestService, validateManifest, parseManifestString, serializeManife
 
 // Error utilities
 export { getErrorMessage, isHttpError } from './util/errors.js';
+export type { RetryOptions } from './util/retry.js';
+export { retryWithBackoff } from './util/retry.js';

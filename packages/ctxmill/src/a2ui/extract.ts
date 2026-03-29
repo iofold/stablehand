@@ -12,7 +12,6 @@ const ALLOWED_COMPONENTS = new Set([
   'TimeSeriesChart', 'BarChart', 'PieChart', 'MetricCard', 'TableView',
   'CandlestickChart', 'FunnelChart', 'SankeyDiagram', 'KnowledgeGraphView',
   'LineChart', 'AreaChart', 'ScatterChart', 'RadarChart', 'Treemap', 'NetworkGraph',
-  'ApprovalCard', 'EditableDocument', 'FieldRequestForm',
 ]);
 
 /** Maximum length for sanitized string prop values */
@@ -40,9 +39,6 @@ export const ALLOWED_PROPS: Record<string, string[]> = {
   CandlestickChart:  ['data', 'title', 'width', 'height'],
   FunnelChart:       ['data', 'stages', 'title', 'width', 'height', 'colors'],
   KnowledgeGraphView:['data', 'nodes', 'edges', 'title', 'width', 'height'],
-  ApprovalCard:      ['title', 'description', 'action', 'details', 'toolName', 'args', 'approveLabel', 'rejectLabel'],
-  EditableDocument:  ['content', 'title', 'format'],
-  FieldRequestForm:  ['fields', 'title', 'submitLabel'],
 };
 
 /**
@@ -51,9 +47,7 @@ export const ALLOWED_PROPS: Record<string, string[]> = {
  */
 export function normalizeComponentName(name: string): string {
   if (name.startsWith('ctxmill.charts:')) return name.slice('ctxmill.charts:'.length);
-  if (name.startsWith('ctxmill.hitl:')) return name.slice('ctxmill.hitl:'.length);
   if (name.startsWith('charts:')) return name.slice('charts:'.length);
-  if (name.startsWith('hitl:')) return name.slice('hitl:'.length);
   return name;
 }
 
@@ -89,15 +83,6 @@ function normalizeProps(
     }
     if (!Array.isArray(normalized.edges) && Array.isArray(data.edges)) {
       normalized.edges = data.edges;
-    }
-  }
-
-  if (base === 'ApprovalCard') {
-    if (typeof normalized.action !== 'string' && typeof normalized.toolName === 'string') {
-      normalized.action = normalized.toolName;
-    }
-    if (!normalized.details && normalized.args && typeof normalized.args === 'object') {
-      normalized.details = normalized.args;
     }
   }
 
@@ -163,39 +148,6 @@ export function sanitizeProps(
   }
 
   return filtered;
-}
-
-const MAX_BLOCK_SIZE = 50 * 1024; // 50KB per block
-
-const A2UI_PATTERN = /\{\s*"component"\s*:\s*"[^"]+"\s*,\s*"props"\s*:\s*\{[\s\S]*?\}\s*\}/g;
-
-/**
- * Extract all valid A2UI blocks from LLM text output.
- * Returns an array of validated blocks with allowed component names.
- */
-export function extractA2UIBlocks(text: string): A2UIBlock[] {
-  const blocks: A2UIBlock[] = [];
-  let match;
-  while ((match = A2UI_PATTERN.exec(text)) !== null) {
-    if (match[0].length > MAX_BLOCK_SIZE) continue;
-    try {
-      const parsed = JSON.parse(match[0]);
-      if (
-        typeof parsed.component === 'string' &&
-        typeof parsed.props === 'object' &&
-        parsed.props !== null &&
-        ALLOWED_COMPONENTS.has(baseComponentName(parsed.component))
-      ) {
-        blocks.push({
-          component: baseComponentName(parsed.component),
-          props: sanitizeProps(parsed.component, parsed.props),
-        });
-      }
-    } catch { /* skip invalid JSON */ }
-  }
-  // Reset lastIndex since we use /g flag
-  A2UI_PATTERN.lastIndex = 0;
-  return blocks;
 }
 
 /**

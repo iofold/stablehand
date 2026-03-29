@@ -20,7 +20,6 @@ export interface ApiAgent {
   harness: string;
   harnessConfig: Record<string, unknown>;
   workspaceDir?: string | null;
-  callbackUrl?: string | null;
   /** Per-agent resource limits for sandbox containers. */
   resourceLimits?: ApiAgentResourceLimits | null;
   metadata?: Record<string, unknown> | null;
@@ -34,6 +33,16 @@ export interface ApiAgent {
   totalRuns?: number;
   runs?: ApiAgentRun[];
   systemPrompt?: string;
+  /** Sandbox session counts grouped by lifecycle state. */
+  sessionsByStatus?: ApiSessionStatusCounts;
+}
+
+/** Session counts grouped by sandbox lifecycle state. */
+export interface ApiSessionStatusCounts {
+  active: number;
+  frozen: number;
+  checkpointed: number;
+  terminated: number;
 }
 
 /** Run as returned by GET /api/agents/:id/runs */
@@ -56,7 +65,6 @@ export interface ApiMessage {
   content: string;
   toolCallId?: string;
   toolCalls?: ApiToolCallState[];
-  a2uiBlocks?: ApiA2UIBlock[];
   createdAt: string;
 }
 
@@ -70,7 +78,7 @@ export interface ApiToolCallState {
   status: 'pending' | 'running' | 'complete' | 'error';
 }
 
-/** A2UI component block */
+/** A2UI component block rendered via the a2ui-render tool */
 export interface ApiA2UIBlock {
   id: string;
   component: string;
@@ -162,7 +170,7 @@ export interface ApiSharedKnowledgeItem extends ApiKnowledgeItem {
 
 // ── Sandbox Session types ───────────────────────────────────────
 
-export type SandboxSessionStatus = 'ACTIVE' | 'FROZEN' | 'CHECKPOINTED' | 'RESTORING';
+export type SandboxSessionStatus = 'ACTIVE' | 'FROZEN' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED';
 
 /** Persistent sandbox session as returned by sandbox session APIs. */
 export interface ApiSandboxSession {

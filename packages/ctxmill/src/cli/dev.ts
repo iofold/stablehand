@@ -6,7 +6,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { FastifyInstance } from 'fastify';
 import { createContainer, type AppContainer } from '../config/container.js';
 import { createServer } from '../orchestrator/server.js';
-import { discoverAgents, discoverTools } from '../agent/discovery.js';
+import { discoverAgents, discoverManifests, discoverTools } from '../agent/discovery.js';
+import { manifestToDefinition } from '../manifest/convert.js';
 import type { CTXMillConfig } from '../config/types.js';
 import type { AgentDefinition } from '../types.js';
 import type { ToolDefinition } from '../tool/types.js';
@@ -80,8 +81,10 @@ export async function startDev() {
   if (existsSync(agentsDir)) {
     for (const entry of readdirSync(agentsDir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        const agentFile = join(agentsDir, entry.name, 'agent.ts');
-        if (existsSync(agentFile)) {
+        const hasTs = existsSync(join(agentsDir, entry.name, 'agent.ts'));
+        const hasYaml = existsSync(join(agentsDir, entry.name, 'agent.yaml'))
+          || existsSync(join(agentsDir, entry.name, 'agent.yml'));
+        if (hasTs || hasYaml) {
           agents.push(entry.name);
         }
       }
@@ -150,6 +153,9 @@ export async function startDev() {
 
   if (existsSync(agentsDir)) {
     agentDefs = await discoverAgents(agentsDir);
+    const manifests = await discoverManifests(agentsDir);
+    const manifestDefs = manifests.map((m) => manifestToDefinition(m, { projectDir: cwd }));
+    agentDefs = [...agentDefs, ...manifestDefs];
   }
   if (existsSync(toolsDir)) {
     toolDefs = await discoverTools(toolsDir);
@@ -190,7 +196,18 @@ export async function startDev() {
 
   console.log(`  \x1b[32m✓\x1b[0m Registered ${agentDefs.length} agent(s), ${toolDefs.length} tool(s)`);
 
-  const toolRegistry = new DefaultOrchestratorToolRegistry();
+  const toolRegistry = new DefaultOrchestratorToolRegistry(
+    container.toolRegistry,
+    (ctx) => ({
+      agentId: ctx.agentId,
+      conversationId: '',
+      instanceId: ctx.runId,
+      requestId: ctx.requestId,
+      workspaceDir: '/workspace',
+      knowledge: { query: async () => ({ items: [] }) },
+      eventBus: container.eventBus,
+    }),
+  );
   if (container.eventBus) {
     registerDefaultToolHandlers(toolRegistry, container.eventBus);
   }
@@ -234,27 +251,27 @@ export async function startDev() {
     interrupts: container.interruptManager,
     secretProvider: container.secretProvider,
     containerManager: container.containerManager,
+    artifactStore: container.artifactStore,
+    artifactBucket: process.env.S3_BUCKET || 'ctxmill-artifacts',
     agentRunService: container.agentRunService,
     toolRegistry,
     toolDefinitionRegistry: container.toolRegistry,
+    toolExecutor: container.toolExecutor,
+    settingsService: container.settingsService,
+    sandboxSessionManager: container.sessionManager,
+    onHitlPause: (sessionId: string) => {
+      const record = container.sessionManager.findSessionById(sessionId);
+      if (record) {
+        container.lifecyclePolicy.schedulePause(sessionId, record.containerId);
+      }
+    },
   });
   await server.listen({ port: apiPort, host: '0.0.0.0' });
   console.log(`  \x1b[32mAPI:\x1b[0m  http://localhost:${apiPort}`);
 
-  // ── Orphan container cleanup ──────────────────────────
-  // Run asynchronously after the server is listening — does NOT block startup.
-  void (async () => {
-    try {
-      const result = await container.orphanCleanup.runOnce();
-      console.log(
-        `  \x1b[32m\u2713\x1b[0m Orphan cleanup: found ${result.orphansFound} orphans, cleaned ${result.cleaned}, ${result.errors} errors`,
-      );
-    } catch (err) {
-      console.error('  \x1b[33mOrphan cleanup failed (non-fatal):\x1b[0m', err);
-    }
-    // Start periodic sweep as a safety net (every 5 minutes)
-    container.orphanCleanup.startPeriodicSweep();
-  })();
+  void container.lifecyclePolicy.start().catch((err: unknown) => {
+    console.error('  \x1b[33mLifecycle startup failed (non-fatal):\x1b[0m', err);
+  });
 
   // ── Start UI server ─────────────────────────────────
   // Docker-first workflow: disable UI auto-probing unless explicitly enabled.

@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'fs';
 import path, { dirname } from 'path';
 import { fileURLToPath } from 'url';
+import yaml from 'yaml';
 import { API_BASE } from './support';
 
 /**
@@ -59,7 +60,8 @@ interface AgentInfo {
 }
 
 /**
-     * Import all kitchen-sink agent manifests via the API.
+ * Seed all kitchen-sink agents via POST /api/agents.
+ * Parses each agent.yaml manifest and converts to the JSON create payload.
  * Returns a map of directory name -> agent ID.
  */
 async function seedAgents(
@@ -69,31 +71,36 @@ async function seedAgents(
     TEST_DIR,
     '../../packages/examples/kitchen-sink/agents',
   );
-  const imported: Record<string, string> = {};
+  const created: Record<string, string> = {};
 
   for (const dir of AGENT_DIRS) {
     const manifestPath = path.join(agentsRoot, dir, 'agent.yaml');
     if (!fs.existsSync(manifestPath)) continue;
 
-    const content = uniquifyManifest(dir, fs.readFileSync(manifestPath, 'utf-8'));
-    const res = await request.post(`${API_BASE}/api/agents/import`, {
-      data: { content },
+    const raw = yaml.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    const meta = raw?.metadata ?? {};
+    const spec = raw?.spec ?? {};
+    const suffix = `${dir}-${RUN_SUFFIX}`;
+
+    const res = await request.post(`${API_BASE}/api/agents`, {
+      data: {
+        name: `${meta.name}-${suffix}`,
+        harness: spec.harness,
+        harnessConfig: spec.harnessConfig ?? {},
+        systemPrompt: spec.instructions ?? '',
+        tools: (spec.tools ?? []).map((t: { ref?: string }) => t.ref).filter(Boolean),
+        description: meta.description ?? null,
+      },
     });
     expect(res.ok()).toBeTruthy();
     const data = await res.json();
-    if (data.agentId) {
-      imported[dir] = data.agentId;
+    const agentId = data.id ?? data.agentId;
+    if (agentId) {
+      created[dir] = agentId;
     }
   }
 
-  return imported;
-}
-
-function uniquifyManifest(dir: string, content: string): string {
-  const suffix = `${dir}-${RUN_SUFFIX}`;
-  return content
-    .replace(/^(\s*name:\s*)(.+)$/m, (_, prefix, value) => `${prefix}${String(value).trim()}-${suffix}`)
-    .replace(/^(\s*displayName:\s*)(.+)$/m, (_, prefix, value) => `${prefix}${String(value).trim()} ${RUN_SUFFIX}`);
+  return created;
 }
 
 /**

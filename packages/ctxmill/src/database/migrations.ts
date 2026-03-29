@@ -19,7 +19,6 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       status TEXT NOT NULL DEFAULT 'created',
       manifest JSONB,
       version INTEGER DEFAULT 1,
-      callback_url TEXT,
       metadata JSONB,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
@@ -154,6 +153,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
 
   // Performance indexes
   await sql`CREATE INDEX IF NOT EXISTS idx_execution_traces_agent_started ON execution_traces(agent_id, started_at)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_traces_run_agent ON execution_traces(run_id, agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_feedback_signals_agent_created ON feedback_signals(agent_id, created_at)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages(conversation_id, created_at)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_conversations_agent_updated ON conversations(agent_id, updated_at)`;
@@ -218,6 +218,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   if (!runCols.includes('session_dir')) {
     await sql`ALTER TABLE agent_runs ADD COLUMN session_dir TEXT`;
   }
+  await sql`ALTER TABLE agent_runs DROP COLUMN IF EXISTS session_dir`;
 
   // Create event_triggers table if missing
   await sql`
@@ -279,11 +280,8 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_agent ON pending_interrupts(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_status ON pending_interrupts(status, expires_at)`;
 
-  // Add callback_url column to agents table if missing
-  const agentColsCallback = await getColumnNames('agents');
-  if (!agentColsCallback.includes('callback_url')) {
-    await sql`ALTER TABLE agents ADD COLUMN callback_url TEXT`;
-  }
+  // Add session_id to pending_interrupts for durable HITL
+  await sql`ALTER TABLE pending_interrupts ADD COLUMN IF NOT EXISTS session_id TEXT`;
 
   // Create callback_outbox table for durable webhook delivery
   await sql`
@@ -373,11 +371,35 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   if (!runColsRefresh.includes('resumed_at')) {
     await sql`ALTER TABLE agent_runs ADD COLUMN resumed_at BIGINT`;
   }
-  if (!runColsRefresh.includes('retry_count')) {
-    await sql`ALTER TABLE agent_runs ADD COLUMN retry_count INTEGER DEFAULT 0`;
-  }
-  if (!runColsRefresh.includes('max_retries')) {
-    await sql`ALTER TABLE agent_runs ADD COLUMN max_retries INTEGER DEFAULT 0`;
-  }
   await sql`CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS artifacts (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+      conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes BIGINT NOT NULL,
+      storage_key TEXT NOT NULL,
+      bucket TEXT NOT NULL,
+      metadata JSONB,
+      status TEXT NOT NULL DEFAULT 'active',
+      expires_at BIGINT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_agent_created ON artifacts(agent_id, created_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status)`;
 }

@@ -137,6 +137,43 @@ export class AgentRunService {
 
     let encounteredError = false;
     let lastErrorMessage = '';
+    let hitlPending = false;
+    const pendingToolCalls = new Map<string, { id: string; name: string; args: string; result?: string; error?: string; status: string }>();
+    let accumulatedText = '';
+    let assistantFlushedForBatch = false;
+
+    const normalizeContent = (value: unknown): string => {
+      if (typeof value === 'string') return value;
+      if (value == null) return '';
+
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    };
+
+    const buildPersistedToolCalls = () => Array.from(pendingToolCalls.values()).map((tc) => ({
+      id: tc.id,
+      name: tc.name,
+      args: tc.args,
+      status: tc.status,
+    }));
+
+    const persistMessage = async (
+      role: MessageCommittedEvent['role'],
+      content: string,
+      options?: { toolCalls?: ReturnType<typeof buildPersistedToolCalls>; toolCallId?: string },
+    ) => {
+      await this.db.addMessage({
+        agentId,
+        conversationId,
+        role,
+        content,
+        toolCalls: options?.toolCalls,
+        toolCallId: options?.toolCallId,
+      });
+    };
 
     const eventSource: AsyncGenerator<AGUIEvent> = this.sandboxRunService.executeSessionTurn(
       agentDef,
@@ -164,22 +201,79 @@ export class AgentRunService {
           }
         }
 
-        // Persist completed message from sandbox source of truth
+        if (event.type === 'TOOL_CALL_START') {
+          const e = event as Record<string, unknown>;
+          const tcId = (e.toolCallId as string) || `tc-${Date.now()}`;
+          pendingToolCalls.set(tcId, {
+            id: tcId,
+            name: (e.toolName as string) || (e.name as string) || 'unknown',
+            args: typeof e.args === 'string'
+              ? e.args
+              : e.args === undefined
+                ? ''
+                : JSON.stringify(e.args),
+            status: 'running',
+          });
+        }
+
+        if (event.type === 'TOOL_CALL_ARGS') {
+          const e = event as Record<string, unknown>;
+          const tc = pendingToolCalls.get(e.toolCallId as string);
+          if (tc) {
+            tc.args += (e.args as string) || (e.delta as string) || '';
+          }
+        }
+
+        if (event.type === 'TOOL_CALL_END') {
+          const e = event as Record<string, unknown>;
+          const tc = pendingToolCalls.get(e.toolCallId as string);
+          if (tc) tc.status = 'complete';
+        }
+
+        if (event.type === 'TOOL_CALL_RESULT') {
+          const e = event as Record<string, unknown>;
+          const tcId = e.toolCallId as string;
+          const tc = pendingToolCalls.get(tcId);
+          if (tc) {
+            tc.result = normalizeContent(e.result);
+            tc.error = e.error as string | undefined;
+            tc.status = tc.error ? 'error' : 'complete';
+          }
+
+          if (!assistantFlushedForBatch && pendingToolCalls.size > 0) {
+            await persistMessage('assistant', accumulatedText, {
+              toolCalls: buildPersistedToolCalls(),
+            });
+            accumulatedText = '';
+            assistantFlushedForBatch = true;
+          }
+
+          await persistMessage('tool', normalizeContent(e.result), {
+            toolCallId: tcId,
+          });
+        }
+
         if (event.type === 'MESSAGE_COMMITTED') {
           const committed = event as unknown as MessageCommittedEvent;
-          await this.db.addMessage({
-            agentId,
-            conversationId,
-            role: committed.role,
-            content: committed.content,
-            toolCalls: committed.toolCalls as unknown[] | undefined,
-            toolCallId: committed.toolCallId,
-          });
+          if (assistantFlushedForBatch) {
+            if (accumulatedText) {
+              await persistMessage(committed.role, accumulatedText);
+            }
+            assistantFlushedForBatch = false;
+            pendingToolCalls.clear();
+            accumulatedText = '';
+          } else {
+            await persistMessage(committed.role, committed.content, {
+              toolCalls: committed.toolCalls as ReturnType<typeof buildPersistedToolCalls> | undefined,
+              toolCallId: committed.toolCallId,
+            });
+          }
         }
 
         // Emit text chunks to internal event bus (for triggers and monitoring)
         if (event.type === 'TEXT_MESSAGE_CONTENT' && 'content' in event) {
           const textEvent = event as unknown as TextContentEvent;
+          accumulatedText += textEvent.content;
 
           if (this.eventBus) {
             this.eventBus.emit('run.text_chunk', {
@@ -233,13 +327,18 @@ export class AgentRunService {
           }
         }
 
-        // Handle HITL pause events — pause the run instead of keeping it in running state
         if (event.type === 'HITL_PAUSE') {
           const pauseEvent = event as unknown as HITLPauseEvent;
           const reason = pauseEvent.reason ?? 'hitl_approval';
-          await this.runRegistry.pauseRun(runId, reason);
-          // Sessions handle restore transparently — no partial content to persist
-          return;
+          if (!hitlPending) {
+            await this.runRegistry.pauseRun(runId, reason);
+            hitlPending = true;
+          }
+        }
+
+        if (hitlPending) {
+          hitlPending = false;
+          await this.runRegistry.resumeRun(runId);
         }
       }
 

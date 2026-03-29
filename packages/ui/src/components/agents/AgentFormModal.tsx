@@ -69,7 +69,6 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   const [harnessConfigText, setHarnessConfigText] = useState(
     JSON.stringify(HARNESS_CONFIG_TEMPLATES[HARNESS_OPTIONS[0]], null, 2)
   );
-  const [callbackUrl, setCallbackUrl] = useState('');
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [tools, setTools] = useState<string[]>([]);
@@ -90,7 +89,6 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       setName(agent.name);
       setHarness(agent.harness ?? HARNESS_OPTIONS[0]);
       setHarnessConfigText(formatJsonLike(agent.harnessConfig));
-      setCallbackUrl(agent.callbackUrl ?? '');
       setDescription(agent.description ?? '');
       setSystemPrompt(agent.systemPrompt ?? '');
       setTools(agent.tools ?? []);
@@ -108,7 +106,6 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       setName('');
       setHarness(HARNESS_OPTIONS[0]);
       setHarnessConfigText(JSON.stringify(HARNESS_CONFIG_TEMPLATES[HARNESS_OPTIONS[0]], null, 2));
-      setCallbackUrl('');
       setDescription('');
       setSystemPrompt('');
       setTools([]);
@@ -193,7 +190,6 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         systemPrompt: systemPrompt.trim(),
         tools,
         description: description.trim() || undefined,
-        callbackUrl: callbackUrl.trim() || null,
         harnessConfig: parsedHarnessConfig,
         metadata,
       };
@@ -296,20 +292,6 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
             {errors.harness && (
               <p className="mt-1 text-xs text-red-400">{errors.harness}</p>
             )}
-          </div>
-
-          <div>
-            <label htmlFor="agent-callback-url" className="text-label">
-              Callback URL
-            </label>
-            <input
-              id="agent-callback-url"
-              type="url"
-              value={callbackUrl}
-              onChange={(e) => setCallbackUrl(e.target.value)}
-              placeholder="https://example.com/callback"
-              className="input-base mt-1.5 font-mono"
-            />
           </div>
 
           <div>

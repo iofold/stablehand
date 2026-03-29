@@ -28,6 +28,8 @@ export interface RunRegistryOptions {
   eventBus?: TypedEventBus;
   /** When true, DB persistence failures throw instead of degrading gracefully. */
   strict?: boolean;
+  /** Default max concurrent runs per agent. Defaults to MAX_CONCURRENT_RUNS_PER_AGENT (3). */
+  defaultMaxConcurrent?: number;
 }
 
 export interface AgentRun {
@@ -41,12 +43,9 @@ export interface AgentRun {
   completedAt?: number;
   error?: string;
   taskDescription?: string;
-  sessionDir?: string;
   pausedAt?: number;
   pausedReason?: string;
   resumedAt?: number;
-  retryCount?: number;
-  maxRetries?: number;
 }
 
 /**
@@ -59,6 +58,7 @@ export class RunRegistry {
   private db?: DatabaseRepository;
   private eventBus?: TypedEventBus;
   private readonly strict: boolean;
+  private readonly defaultMaxConcurrent: number;
 
   /** Count of DB persist operations that failed (for health checks). */
   failedPersists = 0;
@@ -85,6 +85,7 @@ export class RunRegistry {
       this.eventBus = eventBus;
       this.strict = process.env.CTXMILL_STRICT_TESTS === '1';
     }
+    this.defaultMaxConcurrent = (isOpts ? (dbOrOpts as RunRegistryOptions).defaultMaxConcurrent : undefined) ?? MAX_CONCURRENT_RUNS_PER_AGENT;
   }
 
   /**
@@ -141,12 +142,9 @@ export class RunRegistry {
         completedAt: row.completedAt ?? undefined,
         error: row.error ?? undefined,
         taskDescription: row.taskDescription ?? undefined,
-        sessionDir: row.sessionDir ?? undefined,
         pausedAt: (row as any).pausedAt ?? undefined,
         pausedReason: (row as any).pausedReason ?? undefined,
         resumedAt: (row as any).resumedAt ?? undefined,
-        retryCount: (row as any).retryCount ?? undefined,
-        maxRetries: (row as any).maxRetries ?? undefined,
       };
 
       // Only `running` runs are interrupted by a restart — mark them as error.
@@ -184,7 +182,7 @@ export class RunRegistry {
     options?: StartRunOptions,
   ): Promise<AgentRun> {
     // --- Concurrent run limit ---
-    const limit = options?.maxConcurrent ?? MAX_CONCURRENT_RUNS_PER_AGENT;
+    const limit = options?.maxConcurrent ?? this.defaultMaxConcurrent;
     const activeCount = this.getActiveRuns(agentId).length;
     if (activeCount >= limit) {
       throw new Error(`Concurrent run limit reached for agent ${agentId} (${activeCount}/${limit})`);
@@ -231,6 +229,17 @@ export class RunRegistry {
     }
 
     return run;
+  }
+
+  /**
+   * Set the sessionId on an existing run (in-memory only).
+   * Called after a sandbox session is created to backfill the session ID.
+   */
+  setRunSessionId(runId: string, sessionId: string): void {
+    const run = this.runs.get(runId);
+    if (run) {
+      run.sessionId = sessionId;
+    }
   }
 
   /**
@@ -364,23 +373,6 @@ export class RunRegistry {
   }
 
   /**
-   * Update the sessionDir for a run (after environment is set up).
-   */
-  async updateSessionDir(runId: string, sessionDir: string): Promise<void> {
-    const run = this.runs.get(runId);
-    if (!run) return;
-    run.sessionDir = sessionDir;
-
-    if (this.db) {
-      try {
-        await this.db.updateRun(runId, { sessionDir });
-      } catch (err) {
-        this.recordPersistFailure('updateSessionDir', runId, err);
-      }
-    }
-  }
-
-  /**
    * Pause a running run. Records reason and timestamp.
    * Only runs in `running` status can be paused.
    */
@@ -409,12 +401,11 @@ export class RunRegistry {
     }
 
     if (this.eventBus) {
-      this.eventBus.emit('run.completed', {
+      this.eventBus.emit('run.paused', {
         runId,
         agentId: run.agentId,
         conversationId: run.conversationId,
-        status: 'cancelled' as const, // closest available event status for paused
-        durationMs: (run.pausedAt ?? Date.now()) - run.startedAt,
+        reason,
         timestamp: run.pausedAt ?? Date.now(),
       });
     }

@@ -38,5 +38,5 @@ spec:
       - execute
   mode: interactive
   resources:
-    maxRunDurationSeconds: 60
-    maxTokensPerRun: 4000
+    maxSessionDurationSeconds: 60
+    maxTokensPerSession: 4000

@@ -72,13 +72,17 @@ describe('conversation store', () => {
 
   // ── handleSSEEvent: TEXT_MESSAGE flow ──────────────────────────
 
-  it('streams assistant text and finalizes on TEXT_MESSAGE_END', () => {
+  it('streams assistant text and finalizes on TEXT_MESSAGE_END', async () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
     handleSSEEvent({ type: 'TEXT_MESSAGE_START', role: 'assistant' });
     handleSSEEvent({ type: 'TEXT_MESSAGE_CONTENT', content: 'Hello ' });
     handleSSEEvent({ type: 'TEXT_MESSAGE_CONTENT', content: 'world' });
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
 
     expect(getStore().streamingContent).toBe('Hello world');
 
@@ -115,12 +119,14 @@ describe('conversation store', () => {
     handleSSEEvent({ type: 'TOOL_CALL_END', toolCallId: 'tc1' });
     handleSSEEvent({ type: 'TOOL_CALL_RESULT', toolCallId: 'tc1', result: 'found it' });
 
-    const tc = getStore().toolCalls.get('tc1');
-    expect(tc).toBeDefined();
-    expect(tc!.name).toBe('search');
-    expect(tc!.args).toBe('{"q":"test"}');
-    expect(tc!.result).toBe('found it');
-    expect(tc!.status).toBe('complete');
+    const { messages } = getStore();
+    const tcMsg = messages.find((m) => m.toolCalls && m.toolCalls.some((t) => t.id === 'tc1'));
+    expect(tcMsg).toBeDefined();
+    const tc = tcMsg!.toolCalls!.find((t) => t.id === 'tc1')!;
+    expect(tc.name).toBe('search');
+    expect(tc.args).toBe('{"q":"test"}');
+    expect(tc.result).toBe('found it');
+    expect(tc.status).toBe('complete');
   });
 
   it('tool calls are attached to message on TEXT_MESSAGE_END', () => {
@@ -133,26 +139,13 @@ describe('conversation store', () => {
     handleSSEEvent({ type: 'TOOL_CALL_END', toolCallId: 'tc1' });
     handleSSEEvent({ type: 'TEXT_MESSAGE_END' });
 
-    const msg = getStore().messages[0];
-    expect(msg.toolCalls).toHaveLength(1);
-    expect(msg.toolCalls![0].name).toBe('search');
-  });
-
-  // ── handleSSEEvent: CUSTOM (a2ui) ─────────────────────────────
-
-  it('handles CUSTOM a2ui events', () => {
-    const { handleSSEEvent } = getStore();
-
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({
-      type: 'CUSTOM',
-      subtype: 'a2ui',
-      id: 'b1',
-      payload: { component: 'ctxmill.charts:MetricCard', props: { title: 'Users', value: 12 } },
-    });
-
-    expect(getStore().a2uiBlocks).toHaveLength(1);
-    expect(getStore().a2uiBlocks[0].component).toBe('MetricCard');
+    const { messages } = getStore();
+    const textMsg = messages.find((m) => m.content === 'result');
+    expect(textMsg).toBeDefined();
+    const tcMsg = messages.find((m) => m.toolCalls && m.toolCalls.length > 0);
+    expect(tcMsg).toBeDefined();
+    expect(tcMsg!.toolCalls).toHaveLength(1);
+    expect(tcMsg!.toolCalls![0].name).toBe('search');
   });
 
   // ── handleSSEEvent: RUN_FINISHED ───────────────────────────────
@@ -171,25 +164,6 @@ describe('conversation store', () => {
     expect(state.currentRunId).toBeNull();
     expect(state.messages).toHaveLength(1);
     expect(state.messages[0].content).toBe('partial');
-  });
-
-  it('RUN_FINISHED preserves pending A2UI blocks', () => {
-    const { handleSSEEvent } = getStore();
-
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_START', role: 'assistant' });
-    handleSSEEvent({
-      type: 'CUSTOM',
-      subtype: 'a2ui',
-      id: 'b1',
-      payload: { component: 'ctxmill.hitl:ApprovalCard', props: { title: 'Approve', description: 'Review', action: 'deploy' } },
-    });
-    handleSSEEvent({ type: 'RUN_FINISHED' });
-
-    const state = getStore();
-    expect(state.messages).toHaveLength(1);
-    expect(state.messages[0].a2uiBlocks).toHaveLength(1);
-    expect(state.messages[0].a2uiBlocks?.[0].component).toBe('ApprovalCard');
   });
 
   it('RUN_FINISHED with no streaming content does not add empty message', () => {
@@ -215,21 +189,6 @@ describe('conversation store', () => {
     expect(state.messages).toHaveLength(1);
     expect(state.messages[0].role).toBe('system');
     expect(state.messages[0].content).toContain('Something broke');
-  });
-
-  it('normalizeConversationMessage uses stored A2UI payload and canonicalizes names', () => {
-    const message = normalizeConversationMessage({
-      id: 'm1',
-      role: 'assistant',
-      content: 'hello',
-      a2uiPayload: [
-        { component: 'ctxmill.charts:MetricCard', props: { title: 'Users', value: 42 } },
-      ],
-    }, 'fallback');
-
-    expect(message.a2uiBlocks).toHaveLength(1);
-    expect(message.a2uiBlocks?.[0].component).toBe('MetricCard');
-    expect(message.a2uiBlocks?.[0].id).toBe('m1-a2ui-0');
   });
 
   it('normalizeConversationMessage adapts persisted backend toolCalls shape', () => {
@@ -275,6 +234,19 @@ describe('conversation store', () => {
     ]);
   });
 
+  it('normalizeConversationMessage preserves toolCallId for tool-role messages', () => {
+    const message = normalizeConversationMessage({
+      id: 'm3',
+      role: 'tool',
+      toolCallId: 'tc-9',
+      content: 'done',
+    }, 'fallback');
+
+    expect(message.role).toBe('tool');
+    expect(message.toolCallId).toBe('tc-9');
+    expect(message.content).toBe('done');
+  });
+
   // ── handleSSEEvent: TOOL_CALL_RESULT with error ────────────────
 
   it('TOOL_CALL_RESULT with error marks tool as error status', () => {
@@ -285,8 +257,11 @@ describe('conversation store', () => {
     handleSSEEvent({ type: 'TOOL_CALL_START', toolCallId: 'tc1', name: 'fail' });
     handleSSEEvent({ type: 'TOOL_CALL_RESULT', toolCallId: 'tc1', result: '', error: 'boom' });
 
-    const tc = getStore().toolCalls.get('tc1');
-    expect(tc!.status).toBe('error');
-    expect(tc!.error).toBe('boom');
+    const { messages } = getStore();
+    const tcMsg = messages.find((m) => m.toolCalls && m.toolCalls.some((t) => t.id === 'tc1'));
+    expect(tcMsg).toBeDefined();
+    const tc = tcMsg!.toolCalls!.find((t) => t.id === 'tc1')!;
+    expect(tc.status).toBe('error');
+    expect(tc.error).toBe('boom');
   });
 });

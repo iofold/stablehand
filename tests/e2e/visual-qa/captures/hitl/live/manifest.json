@@ -1,0 +1,37 @@
+{
+  "harness": "hitl",
+  "mode": "live",
+  "capturedAt": "2026-03-25T08:07:12.239Z",
+  "captures": [
+    {
+      "eventType": "hitl-empty",
+      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/hitl/live/00-hitl-empty.png",
+      "description": "Chat page before HITL trigger",
+      "timestamp": 1774426009950
+    },
+    {
+      "eventType": "hitl-pending-viewport",
+      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/hitl/live/01-hitl-pending-viewport.png",
+      "description": "HITL approval card visible in chat",
+      "timestamp": 1774426016948
+    },
+    {
+      "eventType": "hitl-pending-card",
+      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/hitl/live/02-hitl-pending-card-component.png",
+      "description": "Approval card — pending state with approve/reject buttons",
+      "timestamp": 1774426017048
+    },
+    {
+      "eventType": "hitl-approved-viewport",
+      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/hitl/live/03-hitl-approved-viewport.png",
+      "description": "After approval — resolved state",
+      "timestamp": 1774426032156
+    },
+    {
+      "eventType": "hitl-finished",
+      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/hitl/live/04-hitl-finished.png",
+      "description": "Run completed after HITL approval",
+      "timestamp": 1774426032239
+    }
+  ]
+}

@@ -1,12 +1,9 @@
 import type { ToolDefinition } from '../types.js';
+import { a2uiRenderTool } from './a2ui-render.js';
 import { emitEventTool } from './emit-event.js';
+import { requestApprovalTool } from './request-approval.js';
 
-/**
- * Built-in tools that are automatically available to all agents.
- * These are registered with the tool executor during container setup,
- * so agents do not need to list them in their `tools[]` array.
- */
-export const builtinTools: ToolDefinition[] = [emitEventTool];
+export const builtinTools: ToolDefinition[] = [emitEventTool, requestApprovalTool, a2uiRenderTool];
 
 /**
  * Names of built-in tools that are automatically available to all agents.

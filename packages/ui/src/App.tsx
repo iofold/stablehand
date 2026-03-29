@@ -1,8 +1,8 @@
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { DashboardPage } from './pages/DashboardPage';
-import { ChatPage } from './pages/ChatPage';
+import { SessionPage } from './pages/SessionPage';
 import { AgentDetailPage } from './pages/AgentDetailPage';
-import { RunDetailPage } from './pages/RunDetailPage';
+import { SessionDetailPage } from './pages/SessionDetailPage';
 import { EventsPage } from './pages/EventsPage';
 import { ToolRegistryPage } from './pages/ToolRegistryPage';
 import { AgentFlowPage } from './pages/AgentFlowPage';
@@ -27,9 +27,9 @@ export function App() {
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/triggers" element={<TriggersPage />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/agents/:id/chat/:conversationId" element={<ChatPage />} />
-            <Route path="/agents/:id/chat" element={<ChatPage />} />
-            <Route path="/agents/:id/runs/:runId" element={<RunDetailPage />} />
+            <Route path="/agents/:id/sessions/new" element={<SessionPage />} />
+            <Route path="/agents/:id/sessions/run/:sessionId" element={<SessionDetailPage />} />
+            <Route path="/agents/:id/sessions/:sessionId" element={<SessionPage />} />
             <Route path="/agents/:id" element={<AgentDetailPage />} />
           </Routes>
         </ErrorBoundary>

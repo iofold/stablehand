@@ -12,8 +12,11 @@
 
 import type { MessageCommittedEvent } from '@ctxmill/shared';
 import type { AGUIEvent } from '../events/types.js';
+import type { AGUISessionEvent, MessageCommittedSessionEvent, SessionEvent } from '@ctxmill/sandbox-daemon';
 import type { AgentDefinition, Message } from '../types.js';
 import type { TypedEventBus } from '../events/bus.js';
+
+export type { AGUISessionEvent, MessageCommittedSessionEvent, SessionEvent } from '@ctxmill/sandbox-daemon';
 
 // ── Logger interface ─────────────────────────────────────────
 
@@ -33,35 +36,16 @@ const defaultLogger: Logger = {
   debug: (msg, ...args) => console.debug(`${TAG} ${msg}`, ...args),
 };
 
-// ── SessionEvent types ───────────────────────────────────────
-
-/** An AG-UI event forwarded verbatim from the harness session. */
-export interface AGUISessionEvent {
-  type: 'ag_ui_event';
-  event: AGUIEvent;
-}
-
-/** A fully committed message emitted by the harness after a turn. */
-export interface MessageCommittedSessionEvent {
-  type: 'message_committed';
-  role: 'assistant' | 'tool';
-  content: string;
-  toolCalls?: MessageCommittedEvent['toolCalls'];
-  toolCallId?: string;
-  /** Turn ID that produced this message. */
-  turnId: string;
-  /** Monotonic sequence within the session. */
-  messageSeq: number;
-}
-
-export type SessionEvent = AGUISessionEvent | MessageCommittedSessionEvent;
-
 // ── SandboxSessionManager interface ─────────────────────────
 
 export interface SandboxSessionManager {
   ensureSession(conversationId: string, agentDef: AgentDefinition, agentId: string): Promise<{ sessionId: string }>;
   deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<SessionEvent>;
   killSession(sessionId: string): Promise<void>;
+  suspendSession(sessionId: string, reason: string): Promise<unknown>;
+  freezeSession(sessionId: string): Promise<void>;
+  unfreezeSession(sessionId: string): Promise<void>;
+  resumeWithInterruptResolution?(sessionId: string, runId: string, agentId: string): Promise<void>;
 }
 
 // ── Deps ──────────────────────────────────────────────────────
@@ -70,6 +54,7 @@ export interface SandboxRunServiceDeps {
   sessionManager: SandboxSessionManager;
   eventBus: TypedEventBus;
   logger?: Logger;
+  onSessionReady?: (runId: string, sessionId: string) => void;
 }
 
 // ── SandboxRunService ────────────────────────────────────────
@@ -96,6 +81,7 @@ export class SandboxRunService {
     const { sessionManager } = this.deps;
 
     const { sessionId } = await sessionManager.ensureSession(conversationId, agentDef, agentId ?? agentDef.name);
+    this.deps.onSessionReady?.(turnId, sessionId);
     this.logger.debug(`Session ${sessionId} ready for turn ${turnId} (agent=${agentDef.name})`);
 
     if (signal?.aborted) {

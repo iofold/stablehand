@@ -1,4 +1,4 @@
-import { pgTable, text, bigint, boolean, doublePrecision, serial, integer, index, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, text, bigint, boolean, doublePrecision, serial, integer, index, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
 
 export const agents = pgTable('agents', {
@@ -13,7 +13,6 @@ export const agents = pgTable('agents', {
   status: text('status').notNull().default('created'),
   manifest: jsonb('manifest').$type<Record<string, unknown>>(),
   version: bigint('version', { mode: 'number' }).default(1),
-  callbackUrl: text('callback_url'),
   metadata: jsonb('metadata').$type<Record<string, unknown>>(),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
@@ -36,7 +35,6 @@ export const messages = pgTable('messages', {
   content: text('content').notNull(),
   toolCallId: text('tool_call_id'),
   toolCalls: jsonb('tool_calls').$type<unknown[]>(),
-  a2uiPayload: jsonb('a2ui_payload').$type<Record<string, unknown>>(),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
   conversationCreatedIdx: index('idx_messages_conversation_created').on(table.conversationId, table.createdAt),
@@ -66,6 +64,7 @@ export const executionTraces = pgTable('execution_traces', {
   outcome: text('outcome'),
 }, (table) => ({
   agentStartedIdx: index('idx_execution_traces_agent_started').on(table.agentId, table.startedAt),
+  runAgentUniqueIdx: uniqueIndex('idx_execution_traces_run_agent').on(table.runId, table.agentId),
 }));
 
 export const agentRuns = pgTable('agent_runs', {
@@ -78,12 +77,9 @@ export const agentRuns = pgTable('agent_runs', {
   startedAt: bigint('started_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   completedAt: bigint('completed_at', { mode: 'number' }),
   error: text('error'),
-  sessionDir: text('session_dir'),
   pausedAt: bigint('paused_at', { mode: 'number' }),
   pausedReason: text('paused_reason'),
   resumedAt: bigint('resumed_at', { mode: 'number' }),
-  retryCount: integer('retry_count').default(0),
-  maxRetries: integer('max_retries').default(0),
 }, (table) => ({
   agentStartedIdx: index('idx_agent_runs_agent_started').on(table.agentId, table.startedAt),
   statusIdx: index('idx_agent_runs_status').on(table.status),
@@ -155,6 +151,7 @@ export const pendingInterrupts = pgTable('pending_interrupts', {
   id: text('id').primaryKey(),
   runId: text('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
   agentId: text('agent_id').notNull().references(() => agents.id),
+  sessionId: text('session_id'),
   toolCallId: text('tool_call_id').notNull(),
   toolName: text('tool_name').notNull(),
   args: jsonb('args').notNull().$type<Record<string, unknown>>().default({}),
@@ -250,7 +247,37 @@ export const webhooks = pgTable('webhooks', {
   agentIdx: index('idx_webhooks_agent').on(table.agentId),
 }));
 
+export const systemSettings = pgTable('system_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const artifacts = pgTable('artifacts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+  runId: text('run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
+  conversationId: text('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+  name: text('name').notNull(),
+  mimeType: text('mime_type').notNull(),
+  sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+  storageKey: text('storage_key').notNull(),
+  bucket: text('bucket').notNull(),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+  status: text('status').notNull().default('active'),
+  expiresAt: bigint('expires_at', { mode: 'number' }),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+}, (table) => ({
+  agentCreatedIdx: index('idx_artifacts_agent_created').on(table.agentId, table.createdAt),
+  runIdx: index('idx_artifacts_run').on(table.runId),
+  statusIdx: index('idx_artifacts_status').on(table.status),
+}));
+
 export type SandboxSessionRow = typeof sandboxSessions.$inferSelect;
 export type SandboxSessionInsert = typeof sandboxSessions.$inferInsert;
 export type AgentCheckpointRow = typeof agentCheckpoints.$inferSelect;
 export type AgentCheckpointInsert = typeof agentCheckpoints.$inferInsert;
+export type SystemSettingRow = typeof systemSettings.$inferSelect;
+export type ArtifactRow = typeof artifacts.$inferSelect;
+export type ArtifactInsert = typeof artifacts.$inferInsert;

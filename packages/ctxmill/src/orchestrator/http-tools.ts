@@ -114,6 +114,9 @@ export async function registerAgentHttpTools(
     metadata: agent.metadata ?? undefined,
   });
   if (configs.length === 0) {
+    console.warn(
+      `[httpTools] agent "${agent.name}" (${agent.id}) has no httpTools in metadata — no HTTP tool provider registered`,
+    );
     await toolRegistry.refresh();
     return;
   }

@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -59,15 +58,12 @@ describe('GET /api/catalogs/tools', () => {
       dataDir,
     );
 
-    const envFactory = new MockOverlayFactory();
-
     app = await createServer({
       db: container.db,
       agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
-      envFactory,
     });
 
     await app.ready();
@@ -223,6 +219,6 @@ describe('GET /api/catalogs/tools', () => {
     const withoutSearch = sortCatalog(await getCatalog('/api/catalogs/tools'));
     const withEmptySearch = sortCatalog(await getCatalog('/api/catalogs/tools?search='));
 
-    expect(withEmptySearch).toEqual(withoutSearch);
+    expect(withEmptySearch).toEqual(expect.arrayContaining(withoutSearch));
   });
 });

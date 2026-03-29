@@ -24,7 +24,6 @@ function createMockDb() {
     harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-test' }),
     manifest: null,
     version: 1,
-    callbackUrl: 'https://legacy.example/hook',
     status: 'created',
     createdAt: 1,
     updatedAt: 1,

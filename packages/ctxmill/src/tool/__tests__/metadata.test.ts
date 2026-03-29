@@ -127,6 +127,38 @@ describe('toToolMetadata', () => {
     const meta = toToolMetadata(tool, 'orchestrator');
     expect(meta.location).toBe('orchestrator');
   });
+
+  it('uses tool.location when set to orchestrator', () => {
+    const tool = makeTool({ name: 'http-tool', location: 'orchestrator' });
+    const meta = toToolMetadata(tool);
+    expect(meta.location).toBe('orchestrator');
+  });
+
+  it('uses tool.location when set to sandbox', () => {
+    const tool = makeTool({ name: 'emit-event', location: 'sandbox' });
+    const meta = toToolMetadata(tool);
+    expect(meta.location).toBe('sandbox');
+  });
+
+  it('explicit parameter overrides tool.location', () => {
+    const tool = makeTool({ name: 'http-tool', location: 'orchestrator' });
+    const meta = toToolMetadata(tool, 'sandbox');
+    expect(meta.location).toBe('sandbox');
+  });
+
+  it('falls back to ORCHESTRATOR_TOOLS when tool.location is unset', () => {
+    const tool = makeTool({ name: 'emit-event' });
+    expect(tool.location).toBeUndefined();
+    const meta = toToolMetadata(tool);
+    expect(meta.location).toBe('orchestrator');
+  });
+
+  it('falls back to sandbox when tool.location is unset and name not in ORCHESTRATOR_TOOLS', () => {
+    const tool = makeTool({ name: 'plain-tool' });
+    expect(tool.location).toBeUndefined();
+    const meta = toToolMetadata(tool);
+    expect(meta.location).toBe('sandbox');
+  });
 });
 
 /* -------------------------------------------------------------------------- */

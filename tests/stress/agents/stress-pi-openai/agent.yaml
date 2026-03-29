@@ -28,5 +28,5 @@ spec:
       - bash
   mode: interactive
   resources:
-    maxRunDurationSeconds: 120
-    maxTokensPerRun: 8000
+    maxSessionDurationSeconds: 120
+    maxTokensPerSession: 8000

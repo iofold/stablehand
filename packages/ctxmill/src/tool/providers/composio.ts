@@ -214,6 +214,7 @@ export class ComposioToolProvider implements ToolProvider {
         name: prefixedName,
         description: tool.description ?? '',
         input: zodInput,
+        location: 'orchestrator',
         handler: async (input: unknown, ctx: ToolContext) => this.execute(prefixedName, input, ctx),
       } satisfies ToolDefinition;
     });

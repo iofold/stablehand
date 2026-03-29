@@ -1,14 +1,13 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { FastifyInstance } from 'fastify';
 
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
 
 describe('File endpoint integration tests', () => {
   let app: FastifyInstance;
@@ -37,15 +36,12 @@ describe('File endpoint integration tests', () => {
       dataDir,
     );
 
-    const envFactory = new MockOverlayFactory();
-
     app = await createServer({
       db: container.db,
       agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
-      envFactory,
     });
 
     await app.ready();
@@ -273,50 +269,6 @@ describe('File endpoint integration tests', () => {
     expect(res.statusCode).toBe(400);
     const body = res.json();
     expect(body.error).toContain('directory');
-  });
-
-  // ── Session Tests ──
-
-  it('lists files from session workspace when runId is provided', async () => {
-    // Register a real run with a real conversation so FK + runId validation passes
-    const conv1 = await container.db.createConversation(agentId);
-    const run = await container.runRegistry.startRun(agentId, conv1.id, 'interactive');
-    const runId = run.id;
-    // Create session merged workspace dir under dataDir/agents/:id/sessions/:runId/merged
-    const sessionMergedDir = join(dataDir, 'agents', agentId, 'sessions', runId, 'merged');
-    mkdirSync(sessionMergedDir, { recursive: true });
-    writeFileSync(join(sessionMergedDir, 'session-file.txt'), 'session content');
-
-    const res = await app.inject({
-      method: 'GET',
-      url: `/api/agents/${agentId}/files?runId=${runId}`,
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    const names = body.entries.map((e: { name: string }) => e.name);
-    expect(names).toContain('session-file.txt');
-  });
-
-  it('reads file from session workspace when runId is provided', async () => {
-    // Register a real run with a real conversation so FK + runId validation passes
-    const conv2 = await container.db.createConversation(agentId);
-    const run = await container.runRegistry.startRun(agentId, conv2.id, 'interactive');
-    const runId = run.id;
-    // Create session merged workspace dir under dataDir/agents/:id/sessions/:runId/merged
-    const sessionMergedDir = join(dataDir, 'agents', agentId, 'sessions', runId, 'merged');
-    mkdirSync(sessionMergedDir, { recursive: true });
-    writeFileSync(join(sessionMergedDir, 'session-file.txt'), 'session content');
-
-    const res = await app.inject({
-      method: 'GET',
-      url: `/api/agents/${agentId}/files/read?path=session-file.txt&runId=${runId}`,
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.content).toBe('session content');
-    expect(body.path).toBe('session-file.txt');
   });
 
   // ── 404 Test ──

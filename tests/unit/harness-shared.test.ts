@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeStreamTextDeltas } from '../../packages/ctxmill/src/harness/shared.js';
+import { normalizeStreamTextDeltas } from '@ctxmill/sandbox-daemon';
 
 describe('normalizeStreamTextDeltas', () => {
   it('returns plain string chunks unchanged', () => {

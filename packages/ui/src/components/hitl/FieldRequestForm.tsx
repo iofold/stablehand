@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 
 interface FormField {
   name: string;
@@ -10,7 +10,7 @@ interface FormField {
   options?: string[];
 }
 
-interface FieldRequestFormProps {
+export interface FieldRequestFormProps {
   title: string;
   fields: FormField[];
   submitLabel?: string;
@@ -26,13 +26,15 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
     return initial;
   });
   const [errors, setErrors] = useState<Record<string, boolean>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const handleChange = useCallback((name: string, value: string) => {
     setValues((prev) => ({ ...prev, [name]: value }));
     setErrors((prev) => ({ ...prev, [name]: false }));
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const newErrors: Record<string, boolean> = {};
@@ -50,7 +52,17 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
       return;
     }
 
-    onSubmit(values);
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      await Promise.resolve(onSubmit(values));
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Failed to submit');
+      setIsSubmitting(false);
+      return;
+    }
+    setIsSubmitting(false);
   };
 
   const inputClasses = (name: string) =>
@@ -75,7 +87,8 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
               <textarea
                 value={values[field.name]}
                 onChange={(e) => handleChange(field.name, e.target.value)}
-                className={cn(inputClasses(field.name), 'resize-y min-h-[80px]')}
+                disabled={isSubmitting}
+                className={cn(inputClasses(field.name), 'resize-y min-h-[80px] disabled:opacity-50 disabled:cursor-not-allowed')}
                 rows={4}
               />
             ) : field.type === 'select' ? (
@@ -83,7 +96,9 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
                 <select
                   value={values[field.name]}
                   onChange={(e) => handleChange(field.name, e.target.value)}
-                  className={cn(inputClasses(field.name), 'appearance-none pr-8')}
+                  disabled={isSubmitting}
+                  required={field.required}
+                  className={cn(inputClasses(field.name), 'appearance-none pr-8 disabled:opacity-50 disabled:cursor-not-allowed')}
                 >
                   <option value="">Select...</option>
                   {field.options?.map((opt) => (
@@ -99,7 +114,8 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
                 type={field.type}
                 value={values[field.name]}
                 onChange={(e) => handleChange(field.name, e.target.value)}
-                className={inputClasses(field.name)}
+                disabled={isSubmitting}
+                className={cn(inputClasses(field.name), 'disabled:opacity-50 disabled:cursor-not-allowed')}
               />
             )}
 
@@ -109,11 +125,19 @@ export function FieldRequestForm({ title, fields, submitLabel = 'Submit', onSubm
           </div>
         ))}
 
+        {submitError && (
+          <div className="text-sm text-status-error bg-status-error/10 px-3 py-2 rounded-md">
+            {submitError}
+          </div>
+        )}
+
         <button
           data-testid="submit-button"
           type="submit"
-          className="btn-primary"
+          disabled={isSubmitting}
+          className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
+          {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
           {submitLabel}
         </button>
       </form>

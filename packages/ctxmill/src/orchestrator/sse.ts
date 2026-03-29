@@ -4,6 +4,7 @@ import type { TypedEventBus } from '../events/bus.js';
 
 const MAX_QUEUE_SIZE = 100;
 const MAX_EVENT_HISTORY = 50;
+const RETENTION_AFTER_COMPLETION = 5;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_HEARTBEAT_FAILURES = 3;
 
@@ -187,16 +188,19 @@ export class SSEManager {
     this.eventSeq++;
     const eventId = `${agentId}-${this.eventSeq}`;
 
+    const history = this.eventHistory.get(agentId) ?? [];
+    history.push({ id: eventId, event });
+
     if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
-      this.eventHistory.delete(agentId);
+      if (history.length > RETENTION_AFTER_COMPLETION) {
+        history.splice(0, history.length - RETENTION_AFTER_COMPLETION);
+      }
     } else {
-      const history = this.eventHistory.get(agentId) ?? [];
-      history.push({ id: eventId, event });
       if (history.length > MAX_EVENT_HISTORY) {
         history.splice(0, history.length - MAX_EVENT_HISTORY);
       }
-      this.eventHistory.set(agentId, history);
     }
+    this.eventHistory.set(agentId, history);
 
     const clients = this.connections.get(agentId);
     if (!clients || clients.size === 0) return;

@@ -1,9 +1,7 @@
-// packages/ctxmill/src/workspace/index.ts — barrel export
-
-export type {
-  ExecutionEnvironment, ExecOptions, ExecResult,
-  FileDiff, PromoteResult, EnvironmentFactory,
-} from './types.js';
-export { MockOverlayEnvironment, MockOverlayFactory } from './mock-overlay.js';
-export { FuseOverlayEnvironment, FuseOverlayFactory } from './fuse-overlay.js';
 export { ensureAgentWorkspace, seedAgentWorkspace } from './ensure.js';
+export {
+  getSessionDir, getSessionWorkspacePath,
+  copyBaseToSession, cleanupSession,
+} from './session-workspace.js';
+export { validateAndExtractTarball } from './tar-upload.js';
+export type { TarUploadResult, TarUploadOptions } from './tar-upload.js';

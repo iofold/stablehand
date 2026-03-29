@@ -8,7 +8,6 @@ import type { FastifyInstance } from 'fastify';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
 
 describe('File operations, Skills, and Feedback API', () => {
   let app: FastifyInstance;
@@ -30,15 +29,12 @@ describe('File operations, Skills, and Feedback API', () => {
       dataDir,
     );
 
-    const envFactory = new MockOverlayFactory();
-
     app = await createServer({
       db: container.db,
       agentRunService: container.agentRunService,
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
-      envFactory,
     });
 
     await app.ready();

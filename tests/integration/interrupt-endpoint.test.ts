@@ -8,7 +8,6 @@ import type { FastifyInstance } from 'fastify';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
 
 /**
  * Integration tests for POST /api/agents/:id/interrupt
@@ -21,8 +20,6 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
   let app: FastifyInstance;
   let container: AppContainer;
   let dataDir: string;
-  const envFactory = new MockOverlayFactory();
-
   beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
@@ -47,7 +44,6 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
-      envFactory,
     });
 
     await app.ready();
@@ -189,10 +185,9 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
       payload: { action: 'approve', runId: 'nonexistent-run' },
     });
 
-    // Ownership check rejects unknown runIds with 404
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toMatch(/Run not found/);
-    expect(res.json().runId).toBe('nonexistent-run');
+    expect(res.json().error).toMatch(/No pending interrupt/);
+    expect(res.json().agentId).toBe(agentId);
   });
 
   it('returns 404 when run exists but no pending interrupt', async () => {

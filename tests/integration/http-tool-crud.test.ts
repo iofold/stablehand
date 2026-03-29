@@ -7,7 +7,6 @@ import { join } from 'node:path';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
 import { allowConsoleErrors } from '../setup-strict.js';
 
 type HttpToolDefinition = {
@@ -88,7 +87,6 @@ describe('HTTP tool CRUD via agent API', () => {
       runRegistry: container.runRegistry,
       eventBus: container.eventBus,
       dataDir,
-      envFactory: new MockOverlayFactory(),
     });
 
     await app.ready();

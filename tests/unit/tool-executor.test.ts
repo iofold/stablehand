@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
-import type { ToolDefinition, ToolContext } from '../../packages/ctxmill/src/tool/types.js';
+import type { ToolDefinition, ToolContext } from '@ctxmill/sandbox-daemon';
 
 const mockCtx: ToolContext = {
   agentId: 'test-agent',

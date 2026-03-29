@@ -14,6 +14,8 @@ service OrchestratorService {
   rpc RequestTool(RequestToolRequest) returns (RequestToolResponse);
   rpc EmitEvent(EmitEventRequest) returns (EmitEventResponse);
   rpc RefreshSecrets(RefreshSecretsRequest) returns (RefreshSecretsResponse);
+  rpc RegisterArtifact(RegisterArtifactRequest) returns (RegisterArtifactResponse);
+  rpc ResolveArtifact(ResolveArtifactRequest) returns (ResolveArtifactResponse);
 }
 
 message OpenSessionRequest {
@@ -190,6 +192,7 @@ enum ToolLocation {
   TOOL_LOCATION_UNSPECIFIED = 0;
   TOOL_LOCATION_SANDBOX = 1;
   TOOL_LOCATION_ORCHESTRATOR = 2;
+  TOOL_LOCATION_DAEMON = 3;
 }
 
 message AgentEvent {
@@ -249,4 +252,38 @@ message TokenUsage {
   int64 output_tokens = 2;
   int64 total_tokens = 3;
   optional double cost = 4;
+}
+
+message ArtifactMeta {
+  string id = 1;
+  string agent_id = 2;
+  string run_id = 3;
+  string name = 4;
+  string mime_type = 5;
+  int64 size_bytes = 6;
+  string storage_key = 7;
+  string bucket = 8;
+  string metadata_json = 9;
+  int64 created_at = 10;
+}
+
+message RegisterArtifactRequest {
+  string run_id = 1;
+  string agent_id = 2;
+  ArtifactMeta artifact = 3;
+}
+
+message RegisterArtifactResponse {
+  string artifact_id = 1;
+  string error = 2;
+}
+
+message ResolveArtifactRequest {
+  string artifact_id = 1;
+  string agent_id = 2;
+}
+
+message ResolveArtifactResponse {
+  ArtifactMeta artifact = 1;
+  string error = 2;
 }

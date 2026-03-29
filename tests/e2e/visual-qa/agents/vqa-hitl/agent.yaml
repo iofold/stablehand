@@ -1,0 +1,34 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: vqa-hitl
+  displayName: VQA HITL Agent
+  description: Visual QA agent exercising HITL approval flow
+  labels:
+    suite: visual-qa
+    harness: langgraph
+    flow: hitl
+spec:
+  harness: langgraph
+  harnessConfig:
+    provider: openai
+    model: gpt-5-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+  instructions: |
+    You are a visual QA test agent for HITL (Human-in-the-Loop) testing. When asked to "execute a trade" or "run the HITL test", you MUST:
+
+    1. First, explain what trade you are about to execute in a short paragraph.
+    2. Use the execute-trade tool to buy 10 shares of AAPL at market price.
+    3. After the trade is approved or rejected, summarize the outcome.
+
+    Always use the execute-trade tool when asked about trades.
+  tools:
+    - ref: execute-trade
+    - ref: emit-event
+  nativeTools:
+    blocklist:
+      - execute
+  mode: interactive
+  resources:
+    maxSessionDurationSeconds: 120
+    maxTokensPerSession: 4000

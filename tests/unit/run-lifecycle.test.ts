@@ -169,7 +169,6 @@ describe('Durable Run Lifecycle', () => {
           completedAt: null,
           error: null,
           taskDescription: 'interrupted task',
-          sessionDir: null,
         },
       ]);
 
@@ -201,7 +200,6 @@ describe('Durable Run Lifecycle', () => {
           completedAt: null,
           error: null,
           taskDescription: 'paused for HITL',
-          sessionDir: null,
           pausedAt: Date.now() - 5000,
           pausedReason: 'hitl_approval',
         },
@@ -231,7 +229,6 @@ describe('Durable Run Lifecycle', () => {
           completedAt: null,
           error: null,
           taskDescription: 'waiting to run',
-          sessionDir: null,
         },
       ]);
 
@@ -259,7 +256,6 @@ describe('Durable Run Lifecycle', () => {
           completedAt: null,
           error: null,
           taskDescription: null,
-          sessionDir: null,
         },
         {
           id: 'run-paused',
@@ -271,7 +267,6 @@ describe('Durable Run Lifecycle', () => {
           completedAt: null,
           error: null,
           taskDescription: null,
-          sessionDir: null,
           pausedAt: now - 3000,
           pausedReason: 'external_suspension',
         },
@@ -285,7 +280,6 @@ describe('Durable Run Lifecycle', () => {
           completedAt: null,
           error: null,
           taskDescription: null,
-          sessionDir: null,
         },
         {
           id: 'run-completed',
@@ -297,7 +291,6 @@ describe('Durable Run Lifecycle', () => {
           completedAt: now - 15000,
           error: null,
           taskDescription: null,
-          sessionDir: null,
         },
       ]);
 
@@ -387,9 +380,9 @@ describe('Durable Run Lifecycle', () => {
   // ── 6. Event emission ────────────────────────────────────────
 
   describe('Event emission for pause/resume', () => {
-    it('pauseRun emits a run.completed event', async () => {
+    it('pauseRun emits a run.paused event', async () => {
       const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
-      const collector = collectEvents(bus, 'run.completed');
+      const collector = collectEvents(bus, 'run.paused');
 
       await registry.pauseRun(run.id, 'hitl_approval');
 
@@ -398,6 +391,7 @@ describe('Durable Run Lifecycle', () => {
         expect.objectContaining({
           runId: run.id,
           agentId: 'agent-1',
+          reason: 'hitl_approval',
         }),
       );
 
@@ -477,8 +471,6 @@ describe('Durable Run Lifecycle', () => {
       expect(run.pausedAt).toBeUndefined();
       expect(run.pausedReason).toBeUndefined();
       expect(run.resumedAt).toBeUndefined();
-      expect(run.retryCount).toBeUndefined();
-      expect(run.maxRetries).toBeUndefined();
     });
   });
 });

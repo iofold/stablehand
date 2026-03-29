@@ -8,6 +8,20 @@ import { matchesSelector } from './wait-condition.js';
 /** Maximum trigger depth to prevent infinite trigger chains. */
 export const MAX_TRIGGER_DEPTH = 5;
 
+function selectorsEqual(
+  a: Record<string, unknown> | null | undefined,
+  b: Record<string, unknown> | null | undefined,
+): boolean {
+  const aNorm = a && Object.keys(a).length > 0 ? a : null;
+  const bNorm = b && Object.keys(b).length > 0 ? b : null;
+  if (aNorm === null && bNorm === null) return true;
+  if (aNorm === null || bNorm === null) return false;
+  const aKeys = Object.keys(aNorm).sort();
+  const bKeys = Object.keys(bNorm).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((k, i) => k === bKeys[i] && JSON.stringify(aNorm[k]) === JSON.stringify(bNorm[bKeys[i]]));
+}
+
 /** Callback invoked when a trigger fires to start a background run. */
 export type TriggerRunCallback = (agentId: string, task: string, triggerId: string, triggerDepth?: number) => Promise<void>;
 
@@ -48,15 +62,18 @@ export class EventTriggerManager {
   private handlers: Map<string, (...args: any[]) => void> = new Map();
   /** Tracks custom event types we're subscribed to (beyond KNOWN_EVENT_TYPES). */
   private subscribedCustomTypes = new Set<string>();
+  private readonly maxDepth: number;
 
   constructor(
     eventBus: TypedEventBus,
     db: DatabaseRepository,
     onFire: TriggerRunCallback,
+    maxDepth?: number,
   ) {
     this.eventBus = eventBus;
     this.db = db;
     this.onFire = onFire;
+    this.maxDepth = maxDepth ?? MAX_TRIGGER_DEPTH;
   }
 
   /**
@@ -100,6 +117,11 @@ export class EventTriggerManager {
   async register(
     input: Omit<EventTrigger, 'id' | 'createdAt'> & { id?: string; createdAt?: string },
   ): Promise<EventTrigger> {
+    const existing = this.findBySignature(input.agentId, input.eventType, input.selector);
+    if (existing) {
+      return existing;
+    }
+
     const trigger: EventTrigger = {
       id: input.id ?? randomUUID(),
       agentId: input.agentId,
@@ -181,6 +203,20 @@ export class EventTriggerManager {
     return this.triggers.get(triggerId);
   }
 
+  private findBySignature(
+    agentId: string,
+    eventType: string,
+    selector?: Record<string, unknown> | null,
+  ): EventTrigger | undefined {
+    for (const trigger of this.triggers.values()) {
+      if (trigger.agentId !== agentId) continue;
+      if (trigger.eventType !== eventType) continue;
+      if (!selectorsEqual(trigger.selector, selector)) continue;
+      return trigger;
+    }
+    return undefined;
+  }
+
   /**
    * List triggers, optionally filtered by agentId.
    */
@@ -255,12 +291,14 @@ export class EventTriggerManager {
 
     // --- Cascade protection: check trigger depth ---
     const currentDepth = typeof payloadObj._triggerDepth === 'number' ? payloadObj._triggerDepth : 0;
-    if (currentDepth >= MAX_TRIGGER_DEPTH) {
+    if (currentDepth >= this.maxDepth) {
       console.warn(
-        `[EventTriggerManager] skipping event "${eventType}" — trigger depth ${currentDepth} reached max (${MAX_TRIGGER_DEPTH})`,
+        `[EventTriggerManager] skipping event "${eventType}" — trigger depth ${currentDepth} reached max (${this.maxDepth})`,
       );
       return;
     }
+
+    const firedAgents = new Set<string>();
 
     for (const trigger of this.triggers.values()) {
       if (!trigger.enabled) continue;
@@ -276,6 +314,8 @@ export class EventTriggerManager {
         if (!matchesSelector(matchTarget, trigger.selector)) continue;
       }
 
+      if (firedAgents.has(trigger.agentId)) continue;
+
       // Interpolate the task template
       const flatPayload = 'payload' in payloadObj && typeof payloadObj.payload === 'object'
         ? { ...payloadObj, ...(payloadObj.payload as Record<string, unknown>) }
@@ -285,6 +325,7 @@ export class EventTriggerManager {
       // Fire the run — errors are isolated per trigger
       try {
         await this.onFire(trigger.agentId, task, trigger.id, currentDepth + 1);
+        firedAgents.add(trigger.agentId);
 
         // Emit trigger.fired event (as a custom event to avoid circular typed emit)
         console.log(`[EventTriggerManager] trigger ${trigger.id} fired for agent ${trigger.agentId}`);

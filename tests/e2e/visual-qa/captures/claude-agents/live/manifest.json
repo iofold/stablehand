@@ -1,0 +1,13 @@
+{
+  "harness": "claude-agents",
+  "mode": "live",
+  "capturedAt": "2026-03-25T08:06:49.193Z",
+  "captures": [
+    {
+      "eventType": "claude-native-tools-complete",
+      "filePath": "/path/to/stablehand/tests/e2e/visual-qa/captures/claude-agents/live/00-claude-native-tools-complete.png",
+      "description": "Claude tool execution state",
+      "timestamp": 1774426009193
+    }
+  ]
+}

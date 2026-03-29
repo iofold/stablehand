@@ -1,0 +1,40 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: vqa-langgraph
+  displayName: VQA LangGraph
+  description: Visual QA agent exercising all LangGraph AG-UI events
+  labels:
+    suite: visual-qa
+    harness: langgraph
+spec:
+  harness: langgraph
+  harnessConfig:
+    provider: openai
+    model: gpt-5-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+  instructions: |
+    You are a visual QA test agent. When asked to "run the visual QA sequence", you MUST follow this exact sequence:
+
+    1. First, respond with a detailed multi-paragraph text explanation of what you're about to do. Include at least 3 paragraphs so streaming text is clearly visible. Use **bold** and *italic* markdown formatting, plus a bullet list.
+
+    2. Use the calculator tool to compute: 42 * 17 + 3
+
+    3. Use the weather tool to get weather for "San Francisco"
+
+    4. After both tool results come back, write a summary paragraph that references both results.
+
+    5. Finally, use the emit-event tool to emit an event with type "vqa.langgraph.complete" and payload {"status": "complete", "tools_used": 2}.
+
+    Always follow this EXACT sequence. Never skip steps. Be verbose in text responses.
+  tools:
+    - ref: calculator
+    - ref: weather
+    - ref: emit-event
+  nativeTools:
+    blocklist:
+      - execute
+  mode: interactive
+  resources:
+    maxSessionDurationSeconds: 120
+    maxTokensPerSession: 4000

@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -36,8 +35,6 @@ describe('Agent CRUD & related endpoints', () => {
       dataDir,
     );
 
-    const envFactory = new MockOverlayFactory();
-
     app = await createServer({
       db: container.db,
       agentRunService: container.agentRunService,
@@ -45,7 +42,6 @@ describe('Agent CRUD & related endpoints', () => {
       eventBus: container.eventBus,
       harnessRegistry: container.harnessRegistry,
       dataDir,
-      envFactory,
     });
 
     await app.ready();

@@ -50,6 +50,13 @@ export type EventMap = {
     action: 'approve' | 'reject' | 'timeout';
     timestamp: number;
   };
+  'run.paused': {
+    runId: string;
+    agentId: string;
+    conversationId: string;
+    reason: string;
+    timestamp: number;
+  };
   'run.completed': {
     runId: string;
     agentId: string;

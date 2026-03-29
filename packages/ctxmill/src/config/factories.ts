@@ -1,14 +1,9 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import type { ResolvedConfig } from './types.js';
 import type { KnowledgeStore } from '../knowledge/types.js';
 import type { LLMProvider } from '../llm/types.js';
-import type { EnvironmentFactory } from '../workspace/types.js';
 import { InMemoryKnowledgeStore } from '../knowledge/store.js';
 import { Mem0KnowledgeStore } from '../knowledge/mem0-store.js';
 import { createLLMProvider } from '../llm/factory.js';
-import { MockOverlayFactory } from '../workspace/mock-overlay.js';
-import { FuseOverlayFactory } from '../workspace/fuse-overlay.js';
 
 /**
  * Create a KnowledgeStore from resolved config.
@@ -71,25 +66,4 @@ export function createLLMProviderFromConfig(config: ResolvedConfig): LLMProvider
     model,
     provider: provider as 'anthropic' | 'openai',
   });
-}
-
-/**
- * Detect whether fuse-overlayfs is available on this host.
- * Synchronous check — suitable for startup-time detection.
- */
-function isFuseAvailable(): boolean {
-  try {
-    execFileSync('fuse-overlayfs', ['--version'], { stdio: 'pipe' });
-    return existsSync('/dev/fuse');
-  } catch {
-    return false;
-  }
-}
-
-export function createEnvironmentFactory(_executionType: string): EnvironmentFactory {
-  if (isFuseAvailable()) {
-    return new FuseOverlayFactory();
-  }
-  console.warn('[EnvironmentFactory] fuse-overlayfs not available, falling back to mock overlay');
-  return new MockOverlayFactory();
 }

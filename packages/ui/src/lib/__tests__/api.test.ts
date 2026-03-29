@@ -7,8 +7,8 @@ import {
   createSSEConnection,
   startBackgroundRun,
   cancelRun,
-  fetchRuns,
-  fetchAllActiveRuns,
+  fetchSessions,
+  fetchAllActiveSessions,
   fetchConversations,
   fetchMessages,
   fetchKnowledge,
@@ -57,17 +57,17 @@ describe('fetchAgent', () => {
   });
 });
 
-describe('fetchRuns', () => {
-  it('calls GET /api/agents/:id/runs', async () => {
-    await fetchRuns('a1');
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/runs', undefined);
+describe('fetchSessions', () => {
+  it('calls GET /api/agents/:id/sessions', async () => {
+    await fetchSessions('a1');
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/sessions', undefined);
   });
 });
 
-describe('fetchAllActiveRuns', () => {
-  it('calls GET /api/runs', async () => {
-    await fetchAllActiveRuns();
-    expect(mockFetch).toHaveBeenCalledWith('/api/runs', undefined);
+describe('fetchAllActiveSessions', () => {
+  it('calls GET /api/sessions', async () => {
+    await fetchAllActiveSessions();
+    expect(mockFetch).toHaveBeenCalledWith('/api/sessions', undefined);
   });
 });
 
@@ -124,10 +124,10 @@ describe('startBackgroundRun', () => {
 });
 
 describe('cancelRun', () => {
-  it('calls POST /api/agents/:id/runs/:runId/cancel', async () => {
+  it('calls POST /api/agents/:id/sessions/:runId/cancel', async () => {
     await cancelRun('a1', 'r1');
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/runs/r1/cancel', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/sessions/r1/cancel', {
       method: 'POST',
       headers: undefined,
       body: undefined,

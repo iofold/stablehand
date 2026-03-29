@@ -74,6 +74,10 @@ export interface ContainerInfo {
   networkIp?: string;
 }
 
+export interface ManagedContainerWithLabels extends ContainerInfo {
+  labels: Record<string, string>;
+}
+
 export interface ContainerMetrics {
   /** Currently running containers (from semaphore) */
   active: number;
@@ -275,38 +279,38 @@ export class ContainerManager {
   async createContainer(opts: CreateContainerOptions): Promise<ContainerInfo> {
     // Acquire a concurrency slot (queues if at capacity, throws on timeout)
     await this.semaphore.acquire();
+    let containerCreated = false;
 
-    const cpus = opts.cpus ?? this.defaultCpus;
-    const memoryMb = opts.memoryMb ?? this.defaultMemoryMb;
-    const pidsLimit = opts.pidsLimit ?? this.defaultPidsLimit;
-    const timeoutSec = opts.timeoutSec ?? this.defaultTimeoutSec;
-    const containerName = `ctxmill-run-${opts.runId}`;
-
-    console.debug(
-      `${TAG} creating container ${containerName} (harness=${opts.harnessName}, cpus=${cpus}, mem=${memoryMb}MiB, active=${this.semaphore.getActive()}/${this.semaphore.getActive() + this.semaphore.getQueued()})`,
-    );
-
-    const dataVolume = process.env.CTXMILL_DATA_VOLUME;
-    const dataRoot = '/app/project/.ctxmill';
-    const binds: string[] = [];
-    const volumeMounts: unknown[] = [];
-
-    if (opts.workspaceDir && dataVolume && opts.workspaceDir.startsWith(dataRoot)) {
-      const subpath = opts.workspaceDir.slice(dataRoot.length + 1);
-      volumeMounts.push({
-        Type: 'volume',
-        Source: dataVolume,
-        Target: '/workspace',
-        ReadOnly: false,
-        VolumeOptions: { Subpath: subpath },
-      });
-    } else if (opts.workspaceDir) {
-      binds.push(`${opts.workspaceDir}:/workspace:rw`);
-    }
-
-    let container: Awaited<ReturnType<Dockerode['createContainer']>>;
     try {
-      container = await this.docker.createContainer({
+      const cpus = opts.cpus ?? this.defaultCpus;
+      const memoryMb = opts.memoryMb ?? this.defaultMemoryMb;
+      const pidsLimit = opts.pidsLimit ?? this.defaultPidsLimit;
+      const timeoutSec = opts.timeoutSec ?? this.defaultTimeoutSec;
+      const containerName = `ctxmill-run-${opts.runId}`;
+
+      console.debug(
+        `${TAG} creating container ${containerName} (harness=${opts.harnessName}, cpus=${cpus}, mem=${memoryMb}MiB, active=${this.semaphore.getActive()}/${this.semaphore.getActive() + this.semaphore.getQueued()})`,
+      );
+
+      const dataVolume = process.env.CTXMILL_DATA_VOLUME;
+      const dataRoot = '/app/project/.ctxmill';
+      const binds: string[] = [];
+      const volumeMounts: unknown[] = [];
+
+      if (opts.workspaceDir && dataVolume && opts.workspaceDir.startsWith(dataRoot)) {
+        const subpath = opts.workspaceDir.slice(dataRoot.length + 1);
+        volumeMounts.push({
+          Type: 'volume',
+          Source: dataVolume,
+          Target: '/workspace',
+          ReadOnly: false,
+          VolumeOptions: { Subpath: subpath },
+        });
+      } else if (opts.workspaceDir) {
+        binds.push(`${opts.workspaceDir}:/workspace:rw`);
+      }
+
+      const container = await this.docker.createContainer({
         Image: `${this.imagePrefix}-${opts.harnessName}:latest`,
         name: containerName,
         Labels: {
@@ -327,6 +331,13 @@ export class ContainerManager {
           NetworkMode: this.networkName,
           SecurityOpt: ['no-new-privileges'],
           ReadonlyRootfs: false,
+          LogConfig: {
+            Type: 'json-file',
+            Config: {
+              'max-size': '50m',
+              'max-file': '3',
+            },
+          },
           Binds: binds.length > 0 ? binds : undefined,
           Mounts: volumeMounts.length > 0 ? volumeMounts : undefined,
         } as Record<string, unknown>,
@@ -344,71 +355,72 @@ export class ContainerManager {
                 `HTTPS_PROXY=http://${this.egressProxyHost}:${this.egressProxyPort}`,
                 `http_proxy=http://${this.egressProxyHost}:${this.egressProxyPort}`,
                 `https_proxy=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                'NO_PROXY=orchestrator,localhost,127.0.0.1',
-                'no_proxy=orchestrator,localhost,127.0.0.1',
+                'NO_PROXY=orchestrator,localhost,127.0.0.1,minio',
+                'no_proxy=orchestrator,localhost,127.0.0.1,minio',
               ]
             : []),
         ],
       });
-    } catch (err) {
-      // Release the semaphore slot if the Docker API call fails
-      this.semaphore.release();
-      throw err;
+
+      console.debug(`${TAG} container ${containerName} created (id=${container.id})`);
+
+      // ── Update metrics ─────────────────────────────────────
+      this.totalCreated++;
+      const currentHarnessCount = this.activeByHarness.get(opts.harnessName) ?? 0;
+      this.activeByHarness.set(opts.harnessName, currentHarnessCount + 1);
+      this.containerStartTimes.set(container.id, Date.now());
+      this.containerHarness.set(container.id, opts.harnessName);
+
+      containerCreated = true;
+      return {
+        containerId: container.id,
+        containerName,
+        runId: opts.runId,
+        agentId: opts.agentId,
+        harnessName: opts.harnessName,
+        status: 'created',
+      };
+    } finally {
+      if (!containerCreated) {
+        this.semaphore.release();
+      }
     }
-
-    console.debug(`${TAG} container ${containerName} created (id=${container.id})`);
-
-    // ── Update metrics ─────────────────────────────────────
-    this.totalCreated++;
-    const currentHarnessCount = this.activeByHarness.get(opts.harnessName) ?? 0;
-    this.activeByHarness.set(opts.harnessName, currentHarnessCount + 1);
-    this.containerStartTimes.set(container.id, Date.now());
-    this.containerHarness.set(container.id, opts.harnessName);
-
-    return {
-      containerId: container.id,
-      containerName,
-      runId: opts.runId,
-      agentId: opts.agentId,
-      harnessName: opts.harnessName,
-      status: 'created',
-    };
   }
 
   async createSessionContainer(opts: CreateSessionContainerOptions): Promise<ContainerInfo> {
     await this.semaphore.acquire();
+    let containerCreated = false;
 
-    const cpus = opts.cpus ?? this.defaultCpus;
-    const memoryMb = opts.memoryMb ?? this.defaultMemoryMb;
-    const pidsLimit = opts.pidsLimit ?? this.defaultPidsLimit;
-    const timeoutSec = opts.timeoutSec ?? this.defaultTimeoutSec;
-    const containerName = sessionContainerName(opts.conversationId);
-
-    console.debug(
-      `${TAG} creating session container ${containerName} (harness=${opts.harnessName}, session=${opts.sessionId}, cpus=${cpus}, mem=${memoryMb}MiB)`,
-    );
-
-    const dataVolume = process.env.CTXMILL_DATA_VOLUME;
-    const dataRoot = '/app/project/.ctxmill';
-    const binds: string[] = [];
-    const volumeMounts: unknown[] = [];
-
-    if (opts.workspaceDir && dataVolume && opts.workspaceDir.startsWith(dataRoot)) {
-      const subpath = opts.workspaceDir.slice(dataRoot.length + 1);
-      volumeMounts.push({
-        Type: 'volume',
-        Source: dataVolume,
-        Target: '/workspace',
-        ReadOnly: false,
-        VolumeOptions: { Subpath: subpath },
-      });
-    } else if (opts.workspaceDir) {
-      binds.push(`${opts.workspaceDir}:/workspace:rw`);
-    }
-
-    let container: Awaited<ReturnType<Dockerode['createContainer']>>;
     try {
-      container = await this.docker.createContainer({
+      const cpus = opts.cpus ?? this.defaultCpus;
+      const memoryMb = opts.memoryMb ?? this.defaultMemoryMb;
+      const pidsLimit = opts.pidsLimit ?? this.defaultPidsLimit;
+      const timeoutSec = opts.timeoutSec ?? this.defaultTimeoutSec;
+      const containerName = sessionContainerName(opts.conversationId);
+
+      console.debug(
+        `${TAG} creating session container ${containerName} (harness=${opts.harnessName}, session=${opts.sessionId}, cpus=${cpus}, mem=${memoryMb}MiB)`,
+      );
+
+      const dataVolume = process.env.CTXMILL_DATA_VOLUME;
+      const dataRoot = '/app/project/.ctxmill';
+      const binds: string[] = [];
+      const volumeMounts: unknown[] = [];
+
+      if (opts.workspaceDir && dataVolume && opts.workspaceDir.startsWith(dataRoot)) {
+        const subpath = opts.workspaceDir.slice(dataRoot.length + 1);
+        volumeMounts.push({
+          Type: 'volume',
+          Source: dataVolume,
+          Target: '/workspace',
+          ReadOnly: false,
+          VolumeOptions: { Subpath: subpath },
+        });
+      } else if (opts.workspaceDir) {
+        binds.push(`${opts.workspaceDir}:/workspace:rw`);
+      }
+
+      const container = await this.docker.createContainer({
         Image: `${this.imagePrefix}-${opts.harnessName}:latest`,
         name: containerName,
         Labels: {
@@ -430,6 +442,13 @@ export class ContainerManager {
           NetworkMode: this.networkName,
           SecurityOpt: ['no-new-privileges'],
           ReadonlyRootfs: false,
+          LogConfig: {
+            Type: 'json-file',
+            Config: {
+              'max-size': '50m',
+              'max-file': '3',
+            },
+          },
           Binds: binds.length > 0 ? binds : undefined,
           Mounts: volumeMounts.length > 0 ? volumeMounts : undefined,
         } as Record<string, unknown>,
@@ -447,33 +466,35 @@ export class ContainerManager {
                 `HTTPS_PROXY=http://${this.egressProxyHost}:${this.egressProxyPort}`,
                 `http_proxy=http://${this.egressProxyHost}:${this.egressProxyPort}`,
                 `https_proxy=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                'NO_PROXY=orchestrator,localhost,127.0.0.1',
-                'no_proxy=orchestrator,localhost,127.0.0.1',
+                'NO_PROXY=orchestrator,localhost,127.0.0.1,minio',
+                'no_proxy=orchestrator,localhost,127.0.0.1,minio',
               ]
             : []),
         ],
       });
-    } catch (err) {
-      this.semaphore.release();
-      throw err;
+
+      console.debug(`${TAG} session container ${containerName} created (id=${container.id})`);
+
+      this.totalCreated++;
+      const currentHarnessCount = this.activeByHarness.get(opts.harnessName) ?? 0;
+      this.activeByHarness.set(opts.harnessName, currentHarnessCount + 1);
+      this.containerStartTimes.set(container.id, Date.now());
+      this.containerHarness.set(container.id, opts.harnessName);
+
+      containerCreated = true;
+      return {
+        containerId: container.id,
+        containerName,
+        runId: opts.sessionId,
+        agentId: opts.agentId,
+        harnessName: opts.harnessName,
+        status: 'created',
+      };
+    } finally {
+      if (!containerCreated) {
+        this.semaphore.release();
+      }
     }
-
-    console.debug(`${TAG} session container ${containerName} created (id=${container.id})`);
-
-    this.totalCreated++;
-    const currentHarnessCount = this.activeByHarness.get(opts.harnessName) ?? 0;
-    this.activeByHarness.set(opts.harnessName, currentHarnessCount + 1);
-    this.containerStartTimes.set(container.id, Date.now());
-    this.containerHarness.set(container.id, opts.harnessName);
-
-    return {
-      containerId: container.id,
-      containerName,
-      runId: opts.sessionId,
-      agentId: opts.agentId,
-      harnessName: opts.harnessName,
-      status: 'created',
-    };
   }
 
   async startContainer(containerId: string): Promise<void> {
@@ -622,6 +643,18 @@ export class ContainerManager {
     return containers.map((c) => this.containerListItemToInfo(c));
   }
 
+  async listManagedContainersWithLabels(): Promise<ManagedContainerWithLabels[]> {
+    const containers = await this.docker.listContainers({
+      all: true,
+      filters: { label: ['ctxmill.managed=true'] },
+    });
+
+    return containers.map((c) => ({
+      ...this.containerListItemToInfo(c),
+      labels: c.Labels ?? {},
+    }));
+  }
+
   async getContainerExitCode(containerId: string): Promise<number | null> {
     const container = this.docker.getContainer(containerId);
     try {
@@ -720,52 +753,7 @@ export class ContainerManager {
     };
   }
 
-  // ── Cleanup ─────────────────────────────────────────────
 
-  async cleanupOrphans(activeRunIds: Set<string>, activeSessionIds?: Set<string>): Promise<number> {
-    const containers = await this.docker.listContainers({
-      all: true,
-      filters: { label: ['ctxmill.managed=true'] },
-    });
-
-    let cleaned = 0;
-    for (const c of containers) {
-      const sessionId = c.Labels['ctxmill.session-id'];
-      const runId = c.Labels['ctxmill.run-id'];
-      const timeout = parseInt(c.Labels['ctxmill.timeout'] || '600', 10);
-      const startedAt = new Date(c.Labels['ctxmill.started-at']);
-      const isExpired = (Date.now() - startedAt.getTime()) / 1000 > timeout;
-
-      const isOrphanSession =
-        sessionId !== undefined &&
-        activeSessionIds !== undefined &&
-        !activeSessionIds.has(sessionId);
-
-      const isOrphanRun = runId !== undefined && !activeRunIds.has(runId);
-
-      if (isOrphanSession || isOrphanRun || isExpired) {
-        console.debug(
-          `${TAG} cleaning up orphan container ${c.Id} (runId=${runId}, sessionId=${sessionId}, expired=${isExpired})`,
-        );
-        try {
-          await this.stopContainer(c.Id, 10);
-        } catch {
-          // Best-effort stop
-        }
-        try {
-          await this.removeContainer(c.Id, true);
-        } catch {
-          // Best-effort remove
-        }
-        cleaned++;
-      }
-    }
-
-    if (cleaned > 0) {
-      console.debug(`${TAG} cleaned up ${cleaned} orphan container(s)`);
-    }
-    return cleaned;
-  }
 
   // ── Private helpers ─────────────────────────────────────
 
@@ -801,7 +789,7 @@ export class ContainerManager {
     const info: ContainerInfo = {
       containerId: c.Id,
       containerName: c.Names?.[0]?.replace(/^\//, '') ?? '',
-      runId: labels['ctxmill.run-id'] ?? '',
+      runId: labels['ctxmill.run-id'] || labels['ctxmill.session-id'] || '',
       agentId: labels['ctxmill.agent-id'] ?? '',
       harnessName: labels['ctxmill.harness'] ?? '',
       status: dockerStateToStatus(c.State),

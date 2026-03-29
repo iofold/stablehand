@@ -122,7 +122,6 @@ function createMockContainerManager(): ContainerManager {
     getContainer: vi.fn(async () => null),
     listManagedContainers: vi.fn(async () => []),
     getContainerExitCode: vi.fn(async () => null),
-    cleanupOrphans: vi.fn(async () => 0),
   } as unknown as ContainerManager;
 }
 
@@ -228,7 +227,6 @@ describe('HTTP tool registration', () => {
       metadata: input.metadata,
       harness: input.harness,
       harnessConfig: input.harnessConfig,
-      callbackUrl: input.callbackUrl,
       workspaceDir: null,
     }));
 
@@ -333,7 +331,6 @@ describe('HTTP tool registration', () => {
       tools: Array.isArray(input.tools) ? input.tools : ['read_file', 'old-http-tool'],
       metadata: input.metadata ?? null,
       description: input.description ?? null,
-      callbackUrl: input.callbackUrl ?? null,
       workspaceDir: null,
     }));
 
@@ -456,6 +453,9 @@ describe('HTTP tool registration', () => {
       }),
       deliverTurn: async function* (): AsyncGenerator<SessionEvent> {},
       killSession: vi.fn(async () => {}),
+      suspendSession: vi.fn(async () => {}),
+      freezeSession: vi.fn(async () => {}),
+      unfreezeSession: vi.fn(async () => {}),
     };
 
     const service = new SandboxRunService({

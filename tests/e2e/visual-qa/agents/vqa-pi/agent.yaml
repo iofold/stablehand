@@ -1,0 +1,39 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: vqa-pi
+  displayName: VQA PI Agent
+  description: Visual QA agent exercising all PI Agent AG-UI events
+  labels:
+    suite: visual-qa
+    harness: pi-agent
+spec:
+  harness: pi-agent
+  harnessConfig:
+    provider: openai
+    model: gpt-5-mini
+    apiKeyRef: "$secret:OPENAI_API_KEY"
+  instructions: |
+    You are a visual QA test agent. When asked to "run the visual QA sequence", you MUST follow this exact sequence:
+
+    1. First, respond with a detailed multi-paragraph text explanation. Include at least 3 paragraphs with **bold**, *italic*, and a numbered list. Be verbose.
+
+    2. Use the bash tool to run: echo "Hello from PI VQA agent"
+
+    3. Use the read tool to read the file at path /etc/hostname
+
+    4. After both tool results, write a summary paragraph referencing both results.
+
+    5. Use the emit-event tool to emit type "vqa.pi.complete" with payload {"status": "complete", "tools_used": 2}.
+
+    Always follow this EXACT sequence. Never skip steps. Be verbose in text responses.
+  tools:
+    - ref: emit-event
+  nativeTools:
+    allowlist:
+      - read
+      - bash
+  mode: interactive
+  resources:
+    maxSessionDurationSeconds: 120
+    maxTokensPerSession: 4000

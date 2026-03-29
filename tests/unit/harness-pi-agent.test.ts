@@ -45,10 +45,10 @@ vi.mock('@mariozechner/pi-ai', async () => {
 });
 
 import { Type } from '@sinclair/typebox';
-import { PIAgentHarness, convertTools, zodToTypeBox } from '../../packages/ctxmill/src/harness/pi-agent.js';
-import type { AgentEvent, AgentHarness, HarnessSessionConfig, TokenUsage } from '../../packages/ctxmill/src/harness/types.js';
-import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
-import type { Message } from '../../packages/ctxmill/src/types.js';
+import { PIAgentHarness, convertTools, zodToTypeBox } from '@ctxmill/sandbox-daemon';
+import type { AgentEvent, AgentHarness, HarnessSessionConfig, TokenUsage } from '@ctxmill/sandbox-daemon';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
+import type { Message } from '@ctxmill/sandbox-daemon';
 
 function makeMessage(
   role: Message['role'],

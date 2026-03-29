@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Vite + React 18 + Zustand + Tailwind CSS. SSE streaming from orchestrator. 10 pages, 7 agent detail tabs, A2UI chart rendering, HITL approval cards. Dark mode, WCAG AA.
+Vite + React 18 + Zustand + Tailwind CSS. SSE streaming from orchestrator. 10 pages, 7 agent detail tabs, A2UI chart rendering (15 Recharts types), HITL approval cards. Dark mode, WCAG AA. 78 source files.
 
 ## STRUCTURE
 
@@ -10,19 +10,19 @@ Vite + React 18 + Zustand + Tailwind CSS. SSE streaming from orchestrator. 10 pa
 src/
   pages/              10 route pages (Dashboard, Chat, AgentDetail, RunDetail, Events, Tools, Flow, Knowledge, Triggers, Settings)
   components/
-    a2ui/             Agent-to-UI block renderer (15 chart types via Recharts)
-    agent/            Agent detail tabs (Overview, Knowledge, Runs, Tools, Files, Subagents, Secrets) — has index.ts barrel
-    agents/           Agent list, create/edit modals (AgentFormModal)
-    chat/             ChatThread, ChatInput, message streaming, tool call rendering
-    charts/           15 Recharts wrappers (bar, line, area, pie, radar, scatter, funnel, treemap, etc.)
-    dashboard/        Dashboard widgets and stat cards
+    a2ui/             Agent-to-UI block renderer (5 files — 15 chart types via Recharts)
+    agent/            Agent detail tabs: Overview, Knowledge, Runs, Tools, Files, Subagents, Secrets (8 files, has index.ts barrel)
+    agents/           Agent list, create/edit modals — AgentFormModal (3 files)
+    chat/             ChatThread, ChatInput, message streaming, tool call rendering (6 files)
+    charts/           15 Recharts wrappers — bar, line, area, pie, radar, scatter, funnel, treemap, etc. (15 files)
+    dashboard/        Dashboard widgets and stat cards (4 files)
     explorer/         File browser and code viewer
-    hitl/             ApprovalCard, EditableDocument, FieldRequestForm
+    hitl/             ApprovalCard, EditableDocument, FieldRequestForm (3 files)
     tools/            Tool execution UI and test interface
-    ui/               Sidebar, layout, shared primitives
-  stores/             3 Zustand stores (agents, conversation, interrupt)
-  lib/                API client (api.ts), SSE hook (useSSE.ts), A2UI helpers, utils
-  hooks/              useAgentDetail, useAgentKnowledge, useAgentRuns — data fetching hooks
+    ui/               Sidebar, layout, shared primitives (5 files)
+  stores/             3 Zustand stores (agents, conversation, interrupt) + 2 colocated tests in __tests__/
+  lib/                API client (api.ts), SSE hook (useSSE.ts), A2UI helpers, utils (6 files)
+  hooks/              useAgentDetail, useAgentKnowledge, useAgentRuns — data fetching hooks (3 files)
 ```
 
 ## WHERE TO LOOK
@@ -39,11 +39,13 @@ src/
 
 ## CONVENTIONS (differs from backend)
 
-- **Vite proxy** — `/api` proxied to `orchestrator:3001` in dev (vite.config.ts)
-- **Path alias** — `@/` maps to `src/` (Vite only, not in backend)
+- **Vite proxy** — `/api` proxied to `orchestrator:3001` in dev (vite.config.ts). Port configurable via `CTXMILL_UI_PORT` (default 3200)
+- **Path alias** — `@/` maps to `src/` (Vite + vitest only, not in backend)
 - **Tailwind theme** — Custom colors: `accent` (teal), `surface` (grayscale), `highlight` (amber), `status-*` (success/warning/error/info)
 - **Fonts** — Inter (sans), JetBrains Mono (mono)
 - **SSE auto-reconnect** — `useSSE` hook reconnects on error
-- **No barrel exports** — Direct imports from component files (unlike backend pattern)
+- **No barrel exports** — Direct imports from component files (unlike backend barrel pattern)
 - **Component files** — PascalCase `.tsx` files, one component per file
 - **No CSS modules** — Tailwind utility classes only
+- **jsdom test environment** — UI tests run in jsdom (packages/ui/vitest.config.ts), globals enabled
+- **State selectors** — Zustand stores use selector pattern for optimal re-renders

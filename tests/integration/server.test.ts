@@ -90,8 +90,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
     const hitlCatalog = body.catalogs.find(
       (c: { name: string }) => c.name === 'ctxmill.hitl',
     );
-    expect(hitlCatalog).toBeDefined();
-    expect(hitlCatalog.components.ApprovalCard).toBeDefined();
+    expect(hitlCatalog).toBeUndefined();
   });
 
   // ── ORC-18: Agent CRUD via HTTP ─────────────────────────

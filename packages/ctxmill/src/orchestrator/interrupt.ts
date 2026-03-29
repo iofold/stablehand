@@ -9,11 +9,24 @@
 import type { TypedEventBus } from '../events/bus.js';
 import type { DatabaseRepository } from '../database/repository.js';
 
+type InterruptStore = Pick<
+  DatabaseRepository,
+  'cleanupExpiredInterrupts' | 'getAllPendingInterrupts' | 'savePendingInterrupt' | 'resolveInterrupt'
+>;
+
+interface PendingEntry {
+  resolve: (value: InterruptResolution) => void;
+  info: PendingInterrupt;
+  agentId?: string;
+  timeoutId?: ReturnType<typeof setTimeout>;
+}
+
 export interface PendingInterrupt {
   toolCallId: string;
   toolName: string;
   args: Record<string, unknown>;
   createdAt: number;
+  sessionId?: string;
 }
 
 export interface InterruptResolution {
@@ -22,21 +35,78 @@ export interface InterruptResolution {
 }
 
 export class InterruptManager {
-  private pending = new Map<
-    string,
-    {
-      resolve: (value: InterruptResolution) => void;
-      info: PendingInterrupt;
-      agentId?: string;
-      timeoutId?: ReturnType<typeof setTimeout>;
-    }
-  >();
+  private pending = new Map<string, PendingEntry>();
   private eventBus?: TypedEventBus;
-  private db?: DatabaseRepository;
+  private db?: InterruptStore;
 
-  constructor(eventBus?: TypedEventBus, db?: DatabaseRepository) {
+  constructor(eventBus?: TypedEventBus, db?: InterruptStore) {
     this.eventBus = eventBus;
     this.db = db;
+  }
+
+  private createPendingPromise(
+    runId: string,
+    agentId: string,
+    toolCallId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    createdAt: number,
+    timeoutMs: number,
+    emitInterruptedEvent: boolean,
+    sessionId?: string,
+  ): Promise<InterruptResolution> {
+    return new Promise<InterruptResolution>((resolve) => {
+      const wrappedResolve = (value: InterruptResolution) => {
+        const entry = this.pending.get(runId);
+        if (entry?.timeoutId) clearTimeout(entry.timeoutId);
+        resolve(value);
+      };
+
+      const timeoutId = timeoutMs > 0
+        ? setTimeout(() => {
+            const entry = this.pending.get(runId);
+            if (entry) {
+              this.pending.delete(runId);
+              resolve({ action: 'timeout', data: `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes` });
+
+              if (this.db) {
+                this.db.resolveInterrupt(runId, 'timeout', `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes`).catch((err) => {
+                  console.error('[InterruptManager] failed to persist timeout resolution:', err);
+                });
+              }
+
+              if (this.eventBus) {
+                this.eventBus.emit('run.interrupt_resolved', {
+                  runId,
+                  agentId,
+                  interruptId: runId,
+                  action: 'timeout',
+                  timestamp: Date.now(),
+                });
+              }
+            }
+          }, timeoutMs)
+        : undefined;
+
+      this.pending.set(runId, {
+        resolve: wrappedResolve,
+        info: { toolCallId, toolName, args, createdAt, sessionId },
+        agentId,
+        timeoutId,
+      });
+
+      if (emitInterruptedEvent && this.eventBus) {
+        this.eventBus.emit('run.interrupted', {
+          runId,
+          agentId,
+          toolCallId,
+          toolName,
+          args,
+          interruptId: runId,
+          timestamp: createdAt,
+        });
+      }
+    });
   }
 
   /**
@@ -47,12 +117,38 @@ export class InterruptManager {
   async loadFromDb(): Promise<void> {
     if (!this.db) return;
 
-    // Clean up expired interrupts
     const now = Date.now();
     try {
       await this.db.cleanupExpiredInterrupts(now);
     } catch (err) {
       console.error('[InterruptManager] failed to cleanup expired interrupts:', err);
+    }
+
+    try {
+      const records = await this.db.getAllPendingInterrupts();
+      let reloadedCount = 0;
+      for (const record of records) {
+        const remainingMs = record.expiresAt - now;
+        if (remainingMs <= 0 || this.pending.has(record.runId)) {
+          continue;
+        }
+
+        void this.createPendingPromise(
+          record.runId,
+          record.agentId,
+          record.toolCallId,
+          record.toolName,
+          record.args,
+          record.createdAt,
+          remainingMs,
+          false,
+        );
+        reloadedCount += 1;
+      }
+
+      console.info(`[InterruptManager] reloaded ${reloadedCount} pending interrupt(s) from database`);
+    } catch (err) {
+      console.error('[InterruptManager] failed to reload pending interrupts:', err);
     }
   }
 
@@ -70,6 +166,7 @@ export class InterruptManager {
     toolName: string,
     args: Record<string, unknown>,
     timeoutMs: number = 300_000,
+    sessionId?: string,
   ): Promise<InterruptResolution> {
     // If there is already a pending interrupt for this run, reject it
     const existing = this.pending.get(runId);
@@ -95,65 +192,23 @@ export class InterruptManager {
         createdAt: now,
         expiresAt,
         status: 'pending',
+        sessionId,
       }).catch((err) => {
         console.error('[InterruptManager] failed to persist pending interrupt:', err);
       });
     }
 
-    return new Promise<InterruptResolution>((resolve) => {
-      const wrappedResolve = (value: InterruptResolution) => {
-        const entry = this.pending.get(runId);
-        if (entry?.timeoutId) clearTimeout(entry.timeoutId);
-        resolve(value);
-      };
-
-      const timeoutId = timeoutMs > 0
-        ? setTimeout(() => {
-            const entry = this.pending.get(runId);
-            if (entry) {
-              this.pending.delete(runId);
-              resolve({ action: 'timeout', data: `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes` });
-
-              // Update DB status
-              if (this.db) {
-                this.db.resolveInterrupt(runId, 'timeout', `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes`).catch((err) => {
-                  console.error('[InterruptManager] failed to persist timeout resolution:', err);
-                });
-              }
-
-              if (this.eventBus) {
-                this.eventBus.emit('run.interrupt_resolved', {
-                  runId,
-                  agentId,
-                  interruptId: runId,
-                  action: 'timeout',
-                  timestamp: Date.now(),
-                });
-              }
-            }
-          }, timeoutMs)
-        : undefined;
-
-      this.pending.set(runId, {
-        resolve: wrappedResolve,
-        info: { toolCallId, toolName, args, createdAt: now },
-        agentId,
-        timeoutId,
-      });
-
-      // Emit interrupt event
-      if (this.eventBus) {
-        this.eventBus.emit('run.interrupted', {
-          runId,
-          agentId,
-          toolCallId,
-          toolName,
-          args,
-          interruptId: runId,
-          timestamp: now,
-        });
-      }
-    });
+    return this.createPendingPromise(
+      runId,
+      agentId,
+      toolCallId,
+      toolName,
+      args,
+      now,
+      timeoutMs,
+      true,
+      sessionId,
+    );
   }
 
   /**
@@ -185,6 +240,29 @@ export class InterruptManager {
     }
 
     return true;
+  }
+
+  /**
+   * Cancel the internal timeout for a session's pending interrupt without resolving it.
+   * The entry stays pending for later resolution by the lifecycle policy.
+   */
+  cancelTimeoutForSession(sessionId: string): void {
+    for (const [, entry] of this.pending) {
+      if (entry.info.sessionId === sessionId && entry.timeoutId) {
+        clearTimeout(entry.timeoutId);
+        entry.timeoutId = undefined;
+      }
+    }
+  }
+
+  /** Resolve a pending interrupt by sessionId. Returns true if a match was found. */
+  resolveForSession(sessionId: string, action: 'approve' | 'reject' | 'timeout', data?: unknown): boolean {
+    for (const [runId, entry] of this.pending) {
+      if (entry.info.sessionId === sessionId) {
+        return this.resolve(runId, action, data, entry.agentId);
+      }
+    }
+    return false;
   }
 
   /**

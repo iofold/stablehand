@@ -3,6 +3,8 @@ import { pipeline } from 'node:stream/promises';
 import { Readable, PassThrough } from 'node:stream';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import type { SystemSettingsService } from '../settings/service.js';
+import { DEFAULT_MAX_WORKSPACE_TAR_BYTES } from '../settings/service.js';
 import type { ContainerManager } from './container-manager.js';
 
 // ── Public interfaces ─────────────────────────────────────────
@@ -11,12 +13,8 @@ export interface WorkspaceDiffOptions {
   containerManager: ContainerManager;
   /** Directory for storing checkpoint data. Default: 'data/checkpoints' */
   checkpointDir?: string;
+  settingsService?: SystemSettingsService;
 }
-
-// ── Size limits (REQ-029) ─────────────────────────────────────
-
-const WARN_SIZE_BYTES = 50 * 1024 * 1024;   // 50 MB
-const MAX_SIZE_BYTES = 100 * 1024 * 1024;    // 100 MB
 
 // ── WorkspaceDiffService ──────────────────────────────────────
 
@@ -25,10 +23,12 @@ const TAG = '[WorkspaceDiff]';
 export class WorkspaceDiffService {
   private readonly containerManager: ContainerManager;
   private readonly checkpointDir: string;
+  private readonly settingsService: SystemSettingsService | undefined;
 
   constructor(options: WorkspaceDiffOptions) {
     this.containerManager = options.containerManager;
     this.checkpointDir = options.checkpointDir ?? 'data/checkpoints';
+    this.settingsService = options.settingsService;
   }
 
   /**
@@ -50,15 +50,21 @@ export class WorkspaceDiffService {
     }
 
     // 3. Check size BEFORE writing to storage (REQ-029)
-    if (tarBuffer.length > MAX_SIZE_BYTES) {
+    const maxSizeBytes = this.settingsService
+      ? (await this.settingsService.getAll()).maxWorkspaceTarBytes
+      : DEFAULT_MAX_WORKSPACE_TAR_BYTES;
+    const warnSizeBytes = Math.floor(maxSizeBytes * 0.5);
+
+    if (tarBuffer.length > maxSizeBytes) {
       const sizeMb = (tarBuffer.length / (1024 * 1024)).toFixed(1);
+      const limitMb = (maxSizeBytes / (1024 * 1024)).toFixed(0);
       throw Object.assign(
-        new Error(`Workspace diff too large (${sizeMb} MB, limit is 100 MB)`),
+        new Error(`Workspace diff too large (${sizeMb} MB, limit is ${limitMb} MB)`),
         { code: 'workspace_diff_too_large', sizeBytes: tarBuffer.length },
       );
     }
 
-    if (tarBuffer.length > WARN_SIZE_BYTES) {
+    if (tarBuffer.length > warnSizeBytes) {
       const sizeMb = (tarBuffer.length / (1024 * 1024)).toFixed(1);
       console.warn(`${TAG} workspace diff for run ${runId} is large: ${sizeMb} MB`);
     }

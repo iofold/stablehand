@@ -1,6 +1,67 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
+import type { InterruptRow } from '../../packages/ctxmill/src/database/repository.js';
 import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
+
+type InterruptStore = NonNullable<ConstructorParameters<typeof InterruptManager>[1]>;
+type InterruptInsert = Parameters<InterruptStore['savePendingInterrupt']>[0];
+
+function createMockInterruptDb() {
+  const rows = new Map<string, InterruptRow>();
+
+  const toRow = (data: InterruptInsert): InterruptRow => ({
+    id: data.id,
+    runId: data.runId,
+    agentId: data.agentId,
+    toolCallId: data.toolCallId,
+    toolName: data.toolName,
+    args: data.args ?? {},
+    timeoutMs: data.timeoutMs,
+    createdAt: data.createdAt,
+    expiresAt: data.expiresAt,
+    resolvedAt: data.resolvedAt ?? null,
+    resolvedAction: data.resolvedAction ?? null,
+    resolvedData: data.resolvedData ?? null,
+    status: data.status ?? 'pending',
+  });
+
+  const db: InterruptStore = {
+    savePendingInterrupt: vi.fn(async (data: InterruptInsert) => {
+      const row = toRow(data);
+      rows.set(row.id, row);
+      return row;
+    }),
+    resolveInterrupt: vi.fn(async (id: string, action: string, data?: unknown) => {
+      const row = rows.get(id);
+      if (!row) {
+        return undefined;
+      }
+
+      const updated: InterruptRow = {
+        ...row,
+        status: 'resolved',
+        resolvedAt: Date.now(),
+        resolvedAction: action,
+        resolvedData: data ?? null,
+      };
+      rows.set(id, updated);
+      return updated;
+    }),
+    cleanupExpiredInterrupts: vi.fn(async (beforeTime: number) => {
+      let deleted = 0;
+      for (const [id, row] of rows) {
+        if (row.status === 'pending' && row.expiresAt < beforeTime) {
+          rows.delete(id);
+          deleted += 1;
+        }
+      }
+      return deleted;
+    }),
+    getAllPendingInterrupts: vi.fn(async () => Array.from(rows.values()).filter((row) => row.status === 'pending')),
+  };
+
+  return { db, rows };
+}
 
 describe('InterruptManager', () => {
   let manager: InterruptManager;
@@ -11,6 +72,7 @@ describe('InterruptManager', () => {
 
   afterEach(() => {
     manager.shutdown();
+    vi.useRealTimers();
   });
 
   // ORC-17: waitForApproval returns a promise, resolve completes it
@@ -258,6 +320,59 @@ describe('InterruptManager', () => {
 
       busManager.shutdown();
       vi.useRealTimers();
+    });
+  });
+
+  describe('loadFromDb', () => {
+    it('reloads non-expired pending interrupts so they can be resolved after restart', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-25T12:00:00.000Z'));
+
+      const { db } = createMockInterruptDb();
+      const firstManager = new InterruptManager(undefined, db);
+      firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 60_000);
+
+      const restartedManager = new InterruptManager(undefined, db);
+      await restartedManager.loadFromDb();
+
+      expect(db.cleanupExpiredInterrupts).toHaveBeenCalledWith(Date.now());
+      expect(db.getAllPendingInterrupts).toHaveBeenCalledTimes(1);
+      expect(restartedManager.hasPending('run-1')).toBe(true);
+      expect(restartedManager.getPending('run-1')).toEqual({
+        toolCallId: 'tc-1',
+        toolName: 'bash',
+        args: { cmd: 'ls' },
+        createdAt: Date.now(),
+      });
+
+      expect(restartedManager.resolve('run-1', 'approve', 'approved', 'agent-1')).toBe(true);
+      expect(restartedManager.hasPending('run-1')).toBe(false);
+      expect(db.resolveInterrupt).toHaveBeenCalledWith('run-1', 'approve', 'approved');
+
+      firstManager.shutdown();
+      restartedManager.shutdown();
+    });
+
+    it('cleans up expired interrupts during restart instead of reloading them', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-25T12:00:00.000Z'));
+
+      const { db, rows } = createMockInterruptDb();
+      const firstManager = new InterruptManager(undefined, db);
+      firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 1_000);
+
+      vi.setSystemTime(new Date('2026-03-25T12:00:02.000Z'));
+
+      const restartedManager = new InterruptManager(undefined, db);
+      await restartedManager.loadFromDb();
+
+      expect(db.cleanupExpiredInterrupts).toHaveBeenCalledWith(Date.now());
+      expect(rows.has('run-1')).toBe(false);
+      expect(restartedManager.hasPending('run-1')).toBe(false);
+      expect(restartedManager.resolve('run-1', 'approve')).toBe(false);
+
+      firstManager.shutdown();
+      restartedManager.shutdown();
     });
   });
 });

@@ -315,36 +315,9 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
                 data: 'object',
               },
             },
-          },
-        },
-        {
-          name: 'ctxmill.hitl',
-          components: {
-            ApprovalCard: {
-              props: {
-                title: 'string',
-                description: 'string',
-                action: 'string',
-                details: 'object?',
-              },
-            },
-            EditableDocument: {
-              props: {
-                title: 'string',
-                content: 'string',
-                format: 'string?',
-              },
-            },
-            FieldRequestForm: {
-              props: {
-                title: 'string',
-                fields: 'array',
-                submitLabel: 'string?',
-              },
-            },
-          },
-        },
-      ],
+           },
+         },
+       ],
     };
   });
 }

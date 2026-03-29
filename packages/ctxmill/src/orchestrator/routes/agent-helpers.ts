@@ -1,5 +1,4 @@
 import { resolve, normalize, join } from 'node:path';
-import { existsSync } from 'node:fs';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { Message } from '../../types.js';
 import type { DatabaseRepository } from '../../database/repository.js';
@@ -22,16 +21,8 @@ export function isBlockedPath(name: string): boolean {
  */
 export function resolveBaseDir(
   agent: { id: string; workspaceDir?: string | null },
-  opts?: { runId?: string; dataDir?: string },
+  _opts?: { runId?: string; dataDir?: string },
 ): string | null {
-  if (opts?.runId && opts.dataDir) {
-    const sessionMerged = resolve(
-      join(opts.dataDir, 'agents', agent.id, 'sessions', opts.runId, 'merged'),
-    );
-    if (existsSync(sessionMerged)) {
-      return sessionMerged;
-    }
-  }
   return agent.workspaceDir ? resolve(agent.workspaceDir) : null;
 }
 
@@ -61,14 +52,6 @@ export function validateSandboxPath(
   }
 
   return null;
-}
-
-/**
- * Resolve the session directory for an agent's workspace.
- * Pattern: `join(agent.workspaceDir, '..', '..', 'sessions')`
- */
-export function resolveSessionDir(agent: { workspaceDir?: string | null }): string {
-  return join(agent.workspaceDir!, '..', '..', 'sessions');
 }
 
 /**

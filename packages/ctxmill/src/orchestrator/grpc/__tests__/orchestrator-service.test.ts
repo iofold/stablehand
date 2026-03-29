@@ -370,4 +370,191 @@ describe('createGrpcRoutes', () => {
     routesFn(mockRouter as any);
     expect(mockRouter.service).toHaveBeenCalledTimes(1);
   });
+
+  it('bridges toolExecutor tools into the gRPC registry', async () => {
+    const eventBus = makeEventBus();
+    const { LocalFunctionExecutor } = await import('../../../tool/executor.js');
+    const { z } = await import('zod');
+
+    const executor = new LocalFunctionExecutor();
+    executor.register({
+      name: 'my-local-tool',
+      description: 'A local tool',
+      input: z.object({ x: z.number() }),
+      handler: async (input: unknown) => JSON.stringify({ result: (input as { x: number }).x * 2 }),
+    });
+
+    const registry = new DefaultOrchestratorToolRegistry();
+    createGrpcRoutes({ eventBus, toolRegistry: registry, toolExecutor: executor });
+
+    expect(registry.has('my-local-tool')).toBe(true);
+    const handler = registry.get('my-local-tool')!;
+    const result = await handler({ x: 21 }, { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' });
+    expect(JSON.parse(result)).toEqual({ result: 42 });
+  });
+
+  it('bridges toolDefinitionRegistry tools into the gRPC registry', async () => {
+    const eventBus = makeEventBus();
+    const { DefaultToolRegistry } = await import('../../../tool/registry.js');
+    const { z } = await import('zod');
+
+    const defRegistry = new DefaultToolRegistry();
+    defRegistry.addProvider({
+      name: 'test-http',
+      async listTools() {
+        return [{
+          name: 'http-health-check',
+          description: 'HTTP health check tool',
+          input: z.object({ url: z.string() }),
+          location: 'orchestrator' as const,
+          handler: async (input: unknown) => JSON.stringify({ status: 'ok', url: (input as { url: string }).url }),
+        }];
+      },
+    });
+    await defRegistry.refresh();
+
+    const routes = createGrpcRoutes({ eventBus, toolDefinitionRegistry: defRegistry });
+    expect(typeof routes).toBe('function');
+
+    const registry = new DefaultOrchestratorToolRegistry(defRegistry, (ctx) => ({
+      agentId: ctx.agentId,
+      conversationId: '',
+      instanceId: ctx.runId,
+      requestId: ctx.requestId,
+      workspaceDir: '/workspace',
+      knowledge: { query: async () => ({ items: [] }) },
+    }));
+
+    expect(registry.has('http-health-check')).toBe(true);
+    const handler = registry.get('http-health-check')!;
+    const result = await handler({ url: 'http://example.com' }, { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' });
+    expect(JSON.parse(result)).toEqual({ status: 'ok', url: 'http://example.com' });
+  });
+
+  it('does not overwrite existing gRPC handlers with bridged tools', async () => {
+    const eventBus = makeEventBus();
+    const { LocalFunctionExecutor } = await import('../../../tool/executor.js');
+    const { z } = await import('zod');
+
+    const executor = new LocalFunctionExecutor();
+    executor.register({
+      name: 'emit-event',
+      description: 'should not overwrite',
+      input: z.object({}),
+      handler: async () => 'WRONG',
+    });
+
+    const registry = new DefaultOrchestratorToolRegistry();
+    createGrpcRoutes({ eventBus, toolRegistry: registry, toolExecutor: executor });
+
+    const handler = registry.get('emit-event')!;
+    const result = await handler(
+      { type: 'test' },
+      { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+    );
+    expect(result).not.toBe('WRONG');
+  });
+
+  it('bridged handler receives agentId and runId from gRPC context', async () => {
+    const eventBus = makeEventBus();
+    const { LocalFunctionExecutor } = await import('../../../tool/executor.js');
+    const { z } = await import('zod');
+
+    const receivedCtx = { agentId: '', instanceId: '' };
+    const executor = new LocalFunctionExecutor();
+    executor.register({
+      name: 'ctx-checker',
+      description: 'checks context',
+      input: z.object({}),
+      handler: async (_input: unknown, ctx) => {
+        receivedCtx.agentId = ctx.agentId;
+        receivedCtx.instanceId = ctx.instanceId ?? '';
+        return 'ok';
+      },
+    });
+
+    const registry = new DefaultOrchestratorToolRegistry();
+    createGrpcRoutes({ eventBus, toolRegistry: registry, toolExecutor: executor });
+
+    await registry.get('ctx-checker')!({}, { runId: 'run-42', agentId: 'agent-99', requestId: 'req-1' });
+    expect(receivedCtx.agentId).toBe('agent-99');
+    expect(receivedCtx.instanceId).toBe('run-42');
+  });
+
+  it('resolves HTTP tools added to DefaultToolRegistry AFTER gRPC routes are created', async () => {
+    const { DefaultToolRegistry } = await import('../../../tool/registry.js');
+    const { HTTPToolProvider } = await import('../../../tool/providers/http.js');
+    const eventBus = makeEventBus();
+
+    const defRegistry = new DefaultToolRegistry();
+
+    createGrpcRoutes({ eventBus, toolDefinitionRegistry: defRegistry });
+
+    const grpcRegistry = new DefaultOrchestratorToolRegistry(defRegistry, (ctx) => ({
+      agentId: ctx.agentId,
+      conversationId: '',
+      instanceId: ctx.runId,
+      requestId: ctx.requestId,
+      workspaceDir: '/workspace',
+      knowledge: { query: async () => ({ items: [] }) },
+    }));
+
+    expect(grpcRegistry.has('detect-column-mapping')).toBe(false);
+
+    defRegistry.addProvider(new HTTPToolProvider([{
+      name: 'detect-column-mapping',
+      url: 'http://localhost:9999/noop',
+      method: 'POST',
+      description: 'Detect columns',
+    }], { name: 'http-agent-04' }));
+    await defRegistry.refresh();
+
+    expect(grpcRegistry.has('detect-column-mapping')).toBe(true);
+    const handler = grpcRegistry.get('detect-column-mapping');
+    expect(typeof handler).toBe('function');
+  });
+
+  it('requestTool dispatches dynamically-registered HTTP tools via delegate', async () => {
+    const { DefaultToolRegistry } = await import('../../../tool/registry.js');
+    const { z } = await import('zod');
+    const eventBus = makeEventBus();
+
+    const defRegistry = new DefaultToolRegistry();
+    defRegistry.addProvider({
+      name: 'http-test',
+      async listTools() {
+        return [{
+          name: 'detect-column-mapping',
+          description: 'Detect columns',
+          input: z.object({}),
+          location: 'orchestrator' as const,
+          handler: async () => JSON.stringify({ columns: ['date', 'amount'] }),
+        }];
+      },
+      async execute() { return ''; },
+    });
+    await defRegistry.refresh();
+
+    const grpcRegistry = new DefaultOrchestratorToolRegistry(defRegistry, (ctx) => ({
+      agentId: ctx.agentId,
+      conversationId: '',
+      instanceId: ctx.runId,
+      requestId: ctx.requestId,
+      workspaceDir: '/workspace',
+      knowledge: { query: async () => ({ items: [] }) },
+    }));
+    registerDefaultToolHandlers(grpcRegistry, eventBus);
+
+    const impl = createOrchestratorServiceImpl({ eventBus, toolRegistry: grpcRegistry });
+    const resp = await impl.requestTool(create(RequestToolRequestSchema, {
+      runId: 'run-1',
+      agentId: 'agent-04',
+      toolName: 'detect-column-mapping',
+      argsJson: '{}',
+      requestId: 'req-1',
+    }));
+
+    expect(resp.error).toBeFalsy();
+    expect(JSON.parse(resp.result)).toEqual({ columns: ['date', 'amount'] });
+  });
 });

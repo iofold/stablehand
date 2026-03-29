@@ -507,139 +507,6 @@ describe('ContainerManager', () => {
     });
   });
 
-  // ── cleanupOrphans ──────────────────────────────────────
-
-  describe('cleanupOrphans', () => {
-    it('removes containers not in activeRunIds set', async () => {
-      const mockOrphanContainer = createMockContainer({ id: 'orphan-container' });
-      docker.getContainer.mockReturnValue(mockOrphanContainer);
-
-      docker.listContainers.mockResolvedValue([
-        {
-          Id: 'orphan-container',
-          Names: ['/ctxmill-run-orphan'],
-          State: 'running',
-          Labels: {
-            'ctxmill.managed': 'true',
-            'ctxmill.run-id': 'orphan-run',
-            'ctxmill.agent-id': 'a1',
-            'ctxmill.harness': 'claude-agents',
-            'ctxmill.started-at': new Date().toISOString(),
-            'ctxmill.timeout': '600',
-          },
-        },
-      ]);
-
-      const cleaned = await manager.cleanupOrphans(new Set(['active-run']));
-      expect(cleaned).toBe(1);
-    });
-
-    it('removes expired containers regardless of DB state', async () => {
-      const mockExpiredContainer = createMockContainer({ id: 'expired-container' });
-      docker.getContainer.mockReturnValue(mockExpiredContainer);
-
-      // Container started 700 seconds ago with 600s timeout
-      const startedAt = new Date(Date.now() - 700_000).toISOString();
-      docker.listContainers.mockResolvedValue([
-        {
-          Id: 'expired-container',
-          Names: ['/ctxmill-run-expired'],
-          State: 'running',
-          Labels: {
-            'ctxmill.managed': 'true',
-            'ctxmill.run-id': 'expired-run',
-            'ctxmill.agent-id': 'a1',
-            'ctxmill.harness': 'claude-agents',
-            'ctxmill.started-at': startedAt,
-            'ctxmill.timeout': '600',
-          },
-        },
-      ]);
-
-      // Even though the run is "active", it should be cleaned up because it expired
-      const cleaned = await manager.cleanupOrphans(new Set(['expired-run']));
-      expect(cleaned).toBe(1);
-    });
-
-    it('skips active non-expired containers', async () => {
-      docker.listContainers.mockResolvedValue([
-        {
-          Id: 'active-container',
-          Names: ['/ctxmill-run-active'],
-          State: 'running',
-          Labels: {
-            'ctxmill.managed': 'true',
-            'ctxmill.run-id': 'active-run',
-            'ctxmill.agent-id': 'a1',
-            'ctxmill.harness': 'claude-agents',
-            'ctxmill.started-at': new Date().toISOString(),
-            'ctxmill.timeout': '600',
-          },
-        },
-      ]);
-
-      const cleaned = await manager.cleanupOrphans(new Set(['active-run']));
-      expect(cleaned).toBe(0);
-    });
-
-    it('returns 0 when no managed containers exist', async () => {
-      docker.listContainers.mockResolvedValue([]);
-
-      const cleaned = await manager.cleanupOrphans(new Set());
-      expect(cleaned).toBe(0);
-    });
-
-    it('handles mixed active and orphan containers', async () => {
-      const mockContainer = createMockContainer();
-      docker.getContainer.mockReturnValue(mockContainer);
-
-      docker.listContainers.mockResolvedValue([
-        {
-          Id: 'c-active',
-          Names: ['/ctxmill-run-active'],
-          State: 'running',
-          Labels: {
-            'ctxmill.managed': 'true',
-            'ctxmill.run-id': 'active-run',
-            'ctxmill.agent-id': 'a1',
-            'ctxmill.harness': 'claude-agents',
-            'ctxmill.started-at': new Date().toISOString(),
-            'ctxmill.timeout': '600',
-          },
-        },
-        {
-          Id: 'c-orphan1',
-          Names: ['/ctxmill-run-orphan1'],
-          State: 'running',
-          Labels: {
-            'ctxmill.managed': 'true',
-            'ctxmill.run-id': 'orphan1',
-            'ctxmill.agent-id': 'a2',
-            'ctxmill.harness': 'langgraph',
-            'ctxmill.started-at': new Date().toISOString(),
-            'ctxmill.timeout': '600',
-          },
-        },
-        {
-          Id: 'c-orphan2',
-          Names: ['/ctxmill-run-orphan2'],
-          State: 'exited',
-          Labels: {
-            'ctxmill.managed': 'true',
-            'ctxmill.run-id': 'orphan2',
-            'ctxmill.agent-id': 'a3',
-            'ctxmill.harness': 'pi-agent',
-            'ctxmill.started-at': new Date().toISOString(),
-            'ctxmill.timeout': '600',
-          },
-        },
-      ]);
-
-      const cleaned = await manager.cleanupOrphans(new Set(['active-run']));
-      expect(cleaned).toBe(2);
-    });
-  });
-
   // ── Docker state mapping ────────────────────────────────
 
   describe('container state mapping', () => {
@@ -672,3 +539,61 @@ describe('ContainerManager', () => {
     });
   });
 });
+
+describe('semaphore slot release (FIX-4)', () => {
+  it('releases semaphore when Docker createContainer throws', async () => {
+    const docker = createMockDocker({
+      createContainer: vi.fn().mockRejectedValue(new Error('docker create failed')),
+    });
+    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as any);
+
+    await expect(manager.createContainer(defaultCreateOpts())).rejects.toThrow('docker create failed');
+    expect(manager.getMetrics().active).toBe(0);
+  });
+
+  it('does NOT release semaphore on successful container creation', async () => {
+    const docker = createMockDocker();
+    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as any);
+
+    const info = await manager.createContainer(defaultCreateOpts());
+
+    expect(manager.getMetrics().active).toBe(1);
+
+    await manager.removeContainer(info.containerId);
+    expect(manager.getMetrics().active).toBe(0);
+  });
+
+  it('releases semaphore when post-Docker metrics code throws', async () => {
+    const docker = createMockDocker();
+    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as any);
+    const activeByHarness = (manager as any).activeByHarness as Map<string, number>;
+    const setSpy = vi.spyOn(activeByHarness, 'set').mockImplementation(() => {
+      throw new Error('metrics failed');
+    });
+
+    await expect(manager.createContainer(defaultCreateOpts())).rejects.toThrow('metrics failed');
+    expect(manager.getMetrics().active).toBe(0);
+
+    setSpy.mockRestore();
+  });
+
+  it('releases session semaphore when Docker createContainer throws', async () => {
+    const docker = createMockDocker({
+      createContainer: vi.fn().mockRejectedValue(new Error('session create failed')),
+    });
+    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as any);
+
+    await expect(
+      manager.createSessionContainer({
+        conversationId: 'conv-001',
+        sessionId: 'session-001',
+        agentId: 'agent-abc',
+        harnessName: 'claude-agents',
+      }),
+    ).rejects.toThrow('session create failed');
+
+    expect(manager.getMetrics().active).toBe(0);
+  });
+});
+
+

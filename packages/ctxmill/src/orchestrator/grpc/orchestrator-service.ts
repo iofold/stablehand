@@ -14,14 +14,25 @@ import {
   RequestToolResponseSchema,
   EmitEventResponseSchema,
   RefreshSecretsResponseSchema,
+  RegisterArtifactResponseSchema,
+  ResolveArtifactResponseSchema,
+  ArtifactMetaSchema,
   type RequestToolRequest,
   type RequestToolResponse,
   type EmitEventRequest,
   type EmitEventResponse,
   type RefreshSecretsRequest,
   type RefreshSecretsResponse,
+  type RegisterArtifactRequest,
+  type RegisterArtifactResponse,
+  type ResolveArtifactRequest,
+  type ResolveArtifactResponse,
 } from '@ctxmill/proto/sandbox/v1';
 import type { TypedEventBus } from '../../events/bus.js';
+import type { InterruptManager } from '../interrupt.js';
+import type { RunRegistry } from '../run-registry.js';
+import type { DatabaseRepository } from '../../database/repository.js';
+import type { ArtifactStore } from '../../artifact/index.js';
 
 /**
  * Context passed to each orchestrator-side tool handler when dispatching
@@ -52,14 +63,35 @@ export interface OrchestratorToolRegistry {
   has(toolName: string): boolean;
 }
 
-/**
- * In-memory tool handler registry.
- */
+export interface ToolRegistryDelegate {
+  getTool(name: string): { handler: (input: unknown, ctx: import('../../tool/types.js').ToolContext) => Promise<string> } | undefined;
+}
+
+export type ToolContextFactory = (ctx: ToolHandlerContext) => import('../../tool/types.js').ToolContext;
+
 export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry {
   private handlers = new Map<string, OrchestratorToolHandler>();
+  private delegate?: ToolRegistryDelegate;
+  private makeToolContext?: ToolContextFactory;
+
+  constructor(delegate?: ToolRegistryDelegate, makeToolContext?: ToolContextFactory) {
+    this.delegate = delegate;
+    this.makeToolContext = makeToolContext;
+  }
 
   get(toolName: string): OrchestratorToolHandler | undefined {
-    return this.handlers.get(toolName);
+    const builtin = this.handlers.get(toolName);
+    if (builtin) return builtin;
+
+    if (this.delegate && this.makeToolContext) {
+      const tool = this.delegate.getTool(toolName);
+      if (tool) {
+        const ctxFactory = this.makeToolContext;
+        return async (args, ctx) => tool.handler(args, ctxFactory(ctx));
+      }
+    }
+
+    return undefined;
   }
 
   set(toolName: string, handler: OrchestratorToolHandler): void {
@@ -67,7 +99,8 @@ export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry
   }
 
   has(toolName: string): boolean {
-    return this.handlers.has(toolName);
+    if (this.handlers.has(toolName)) return true;
+    return this.delegate?.getTool(toolName) != null;
   }
 }
 
@@ -77,6 +110,8 @@ export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry
 export interface OrchestratorServiceDeps {
   eventBus: TypedEventBus;
   toolRegistry: OrchestratorToolRegistry;
+  repository?: DatabaseRepository;
+  artifactStore?: ArtifactStore;
 }
 
 /**
@@ -186,6 +221,84 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
         secretsPath: '',
       });
     },
+
+    async registerArtifact(req: RegisterArtifactRequest): Promise<RegisterArtifactResponse> {
+      const { artifact } = req;
+      if (!artifact || !artifact.name) {
+        throw new ConnectError('artifact with name is required', Code.InvalidArgument);
+      }
+
+      try {
+        if (deps.repository) {
+          const row = await deps.repository.saveArtifact({
+            id: artifact.id || undefined,
+            agentId: artifact.agentId,
+            runId: artifact.runId || undefined,
+            name: artifact.name,
+            mimeType: artifact.mimeType,
+            sizeBytes: Number(artifact.sizeBytes),
+            storageKey: artifact.storageKey,
+            bucket: artifact.bucket,
+            metadata: artifact.metadataJson ? JSON.parse(artifact.metadataJson) : undefined,
+          });
+
+          return create(RegisterArtifactResponseSchema, {
+            artifactId: row.id,
+          });
+        }
+
+        return create(RegisterArtifactResponseSchema, {
+          artifactId: artifact.id || '',
+          error: 'No repository configured for artifact storage',
+        });
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return create(RegisterArtifactResponseSchema, {
+          artifactId: '',
+          error: errorMsg,
+        });
+      }
+    },
+
+    async resolveArtifact(req: ResolveArtifactRequest): Promise<ResolveArtifactResponse> {
+      const { artifactId } = req;
+      if (!artifactId) {
+        throw new ConnectError('artifact_id is required', Code.InvalidArgument);
+      }
+
+      try {
+        if (!deps.repository) {
+          return create(ResolveArtifactResponseSchema, {
+            error: 'No repository configured for artifact storage',
+          });
+        }
+
+        const row = await deps.repository.getArtifact(artifactId);
+        if (!row) {
+          return create(ResolveArtifactResponseSchema, {
+            error: `Artifact not found: ${artifactId}`,
+          });
+        }
+
+        return create(ResolveArtifactResponseSchema, {
+          artifact: create(ArtifactMetaSchema, {
+            id: row.id,
+            agentId: row.agentId,
+            runId: row.runId ?? '',
+            name: row.name,
+            mimeType: row.mimeType,
+            sizeBytes: BigInt(row.sizeBytes),
+            storageKey: row.storageKey,
+            bucket: row.bucket,
+            metadataJson: row.metadata ? JSON.stringify(row.metadata) : '',
+            createdAt: BigInt(row.createdAt),
+          }),
+        });
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return create(ResolveArtifactResponseSchema, { error: errorMsg });
+      }
+    },
   };
 }
 
@@ -196,10 +309,24 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
  *   - `emit-event`: Emits a custom event on the EventBus (convenience tool
  *     that sandboxes can call as a tool instead of using the EmitEvent RPC directly)
  */
+export interface RegisterToolHandlersDeps {
+  eventBus: TypedEventBus;
+  interruptManager?: InterruptManager;
+  runRegistry?: RunRegistry;
+  onHitlPause?: (sessionId: string) => void;
+}
+
 export function registerDefaultToolHandlers(
   registry: OrchestratorToolRegistry,
-  eventBus: TypedEventBus,
+  eventBusOrDeps: TypedEventBus | RegisterToolHandlersDeps,
 ): void {
+  const deps: RegisterToolHandlersDeps =
+    'emit' in eventBusOrDeps
+      ? { eventBus: eventBusOrDeps }
+      : eventBusOrDeps;
+
+  const { eventBus, interruptManager, runRegistry, onHitlPause } = deps;
+
   registry.set('emit-event', async (args, ctx) => {
     const eventType = typeof args.type === 'string' ? args.type
       : typeof args.event_type === 'string' ? args.event_type
@@ -215,4 +342,41 @@ export function registerDefaultToolHandlers(
 
     return JSON.stringify({ ok: true, eventType });
   });
+
+  if (interruptManager) {
+    registry.set('request-approval', async (args, ctx) => {
+      const reason = typeof args.reason === 'string' ? args.reason : 'Tool requires approval';
+
+      // Look up sessionId from the run's record
+      const run = runRegistry?.getRun(ctx.runId);
+      const sessionId = run?.sessionId;
+
+      if (runRegistry) {
+        await runRegistry.pauseRun(ctx.runId, 'hitl_approval');
+      }
+
+      if (sessionId && onHitlPause) {
+        onHitlPause(sessionId);
+      }
+
+      const resolution = await interruptManager.waitForApproval(
+        ctx.runId,
+        ctx.agentId,
+        ctx.requestId,
+        'request-approval',
+        { ...args, reason },
+        300_000,
+        sessionId,
+      );
+
+      if (runRegistry) {
+        await runRegistry.resumeRun(ctx.runId);
+      }
+
+      if (resolution.action === 'approve') {
+        return JSON.stringify({ approved: true, action: 'approve' });
+      }
+      return JSON.stringify({ approved: false, action: resolution.action, reason: resolution.data ?? resolution.action });
+    });
+  }
 }

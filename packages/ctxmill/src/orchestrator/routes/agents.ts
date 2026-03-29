@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, existsSync } from 'node:fs';
 import { resolve, normalize, join, dirname } from 'node:path';
-import { readdir, stat, readFile, writeFile, unlink, mkdir } from 'node:fs/promises';
+import { readdir, stat, readFile, writeFile, unlink, mkdir, mkdtemp, rename, rm, chown } from 'node:fs/promises';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { SSEManager } from '../sse.js';
 import type { InterruptManager } from '../interrupt.js';
@@ -12,13 +12,14 @@ import type { HarnessRegistry } from '../../harness/types.js';
 import type { LearningPipeline } from '../../learning/types.js';
 import type { KnowledgeStore } from '../../knowledge/types.js';
 import type { AgentRunService } from '../agent-run-service.js';
+import type { SandboxSessionManager } from '../sandbox-run-service.js';
 import type { TypedEventBus } from '../../events/bus.js';
 import { TraceCollector } from '../../learning/trace.js';
-import type { EnvironmentFactory } from '../../workspace/types.js';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared, seedAgentWorkspace } from '../../workspace/ensure.js';
+import { validateAndExtractTarball } from '../../workspace/tar-upload.js';
 import { getErrorMessage } from '../../util/errors.js';
-import type { ManifestService } from '../../manifest/index.js';
 import type { SecretProvider } from '../../secrets/types.js';
+import type { SystemSettingsService } from '../../settings/service.js';
 import type { HttpAuthConfig, HttpEndpointConfig } from '../../tool/providers/http.js';
 import { DefaultToolRegistry } from '../../tool/registry.js';
 import {
@@ -33,7 +34,6 @@ import {
   isBlockedPath,
   resolveBaseDir,
   validateSandboxPath,
-  resolveSessionDir,
   mapMessagesToInternal,
   requireAgent,
 } from './agent-helpers.js';
@@ -46,6 +46,23 @@ function safeError(message: string, err: unknown): { error: string; detail?: str
     return { error: message, detail: String(err) };
   }
   return { error: 'Internal error' };
+}
+
+async function chownRecursive(dir: string, uid: number, gid: number): Promise<void> {
+  try {
+    await chown(dir, uid, gid);
+    const entries = await readdir(dir);
+    for (const name of entries) {
+      const fullPath = join(dir, name);
+      const s = await stat(fullPath);
+      await chown(fullPath, uid, gid);
+      if (s.isDirectory()) {
+        await chownRecursive(fullPath, uid, gid);
+      }
+    }
+  } catch {
+    /* non-root process — skip chown */
+  }
 }
 
 /**
@@ -152,7 +169,7 @@ function toAgentDef(agent: StoredAgent): AgentDefinition {
   const manifest = agent.manifest ?? null;
   const manifestSpec = (manifest as Record<string, unknown> | null)?.spec as Record<string, unknown> | undefined;
   const meta = (agent.metadata ?? {}) as Record<string, unknown>;
-  const resourceLimits = (manifest?.resourceLimits ?? manifestSpec?.resources) as AgentResourceLimits | undefined;
+  const resourceLimits = (manifest?.resourceLimits ?? manifestSpec?.resources ?? meta.resourceLimits) as AgentResourceLimits | undefined;
 
   const rawNativeTools = ('nativeTools' in meta ? meta.nativeTools : manifestSpec?.nativeTools) as
     { allowlist?: string[]; blocklist?: string[] } | undefined;
@@ -187,18 +204,17 @@ export interface AgentRouteOptions {
   eventBus?: TypedEventBus;
   /** Path to the .ctxmill data directory for agent workspaces. */
   dataDir?: string;
-  /** Factory for creating session execution environments. */
-  envFactory?: EnvironmentFactory;
-  manifestService?: ManifestService;
   secretProvider?: SecretProvider;
   toolRegistry?: DefaultToolRegistry;
+  sandboxSessionManager?: SandboxSessionManager;
+  settingsService?: SystemSettingsService;
 }
 
 export async function agentRoutes(
   app: FastifyInstance,
   opts: AgentRouteOptions,
 ): Promise<void> {
-  const { db, sse, interrupts, runRegistry, harnessRegistry, learningPipeline, knowledgeStore, agentRunService, eventBus, dataDir, envFactory, manifestService, secretProvider, toolRegistry } = opts;
+  const { db, sse, interrupts, runRegistry, harnessRegistry, learningPipeline, knowledgeStore, agentRunService, eventBus, dataDir, secretProvider, toolRegistry, sandboxSessionManager, settingsService } = opts;
   const validWebhookEvents = ['run.started', 'run.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'];
 
   // Pre-handler that loads the agent by :id and attaches it to the request.
@@ -297,46 +313,58 @@ export async function agentRoutes(
 
   app.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
     const agentList = await db.listAgents();
-    const activeAgentIds = new Set(sse.getActiveAgentIds());
-    const enriched = agentList.map((agent) => {
-      const allRuns = runRegistry.getAllRuns(agent.id);
-      const activeRuns = runRegistry.getActiveRuns(agent.id);
-      // Last 5 runs, most recent first
-      const recentRuns = [...allRuns]
+    const [conversationCounts, sessionStatusMap] = await Promise.all([
+      Promise.all(agentList.map((agent) => db.getConversationCount(agent.id))),
+      db.getSessionStatusCountsByAgent(),
+    ]);
+
+    const defaultSessionCounts = { active: 0, frozen: 0, checkpointed: 0, terminated: 0 };
+
+    const enriched = agentList.map((agent, idx) => {
+      const allSessions = runRegistry.getAllRuns(agent.id);
+      const activeSessions = runRegistry.getActiveRuns(agent.id);
+      const completedSessions = allSessions.filter((r) => r.status === 'completed').length;
+      const failedSessions = allSessions.filter((r) => r.status === 'error').length;
+      const recentSessions = [...allSessions]
         .sort((a, b) => b.startedAt - a.startedAt)
         .slice(0, 5);
 
       return {
         ...toAgentResponse(agent),
         sseClients: sse.getClientCount(agent.id),
-        activeSessions: activeAgentIds.has(agent.id) ? sse.getClientCount(agent.id) : 0,
         lastActivity: sse.getLastActivity(agent.id) ?? null,
-        activeRuns: activeRuns.length,
-        totalRuns: allRuns.length,
-        runs: recentRuns,
+        activeSessions: activeSessions.length,
+        totalSessions: allSessions.length,
+        completedSessions,
+        failedSessions,
+        conversationCount: conversationCounts[idx],
+        hasPendingInterrupt: interrupts.hasPendingForAgent(agent.id),
+        sessions: recentSessions,
+        sessionsByStatus: sessionStatusMap.get(agent.id) ?? defaultSessionCounts,
       };
     });
     return reply.send(enriched);
   });
 
-  // ── POST /api/agents — Create a new agent ───────────────
-
   app.post(
     '/',
     async (
       request: FastifyRequest<{
-        Body: {
-          name: string;
-          harness: string;
-          harnessConfig: Record<string, unknown>;
-          systemPrompt: string;
-          tools: string[];
-          httpTools?: AgentHttpToolDefinition[];
-          description?: string;
-          metadata?: Record<string, unknown>;
-          callbackUrl?: string | null;
-          resourceLimits?: AgentResourceLimits | null;
-        };
+        Body:
+          | string
+          | {
+            name?: string;
+            harness?: string;
+            harnessConfig?: Record<string, unknown>;
+            systemPrompt?: string;
+            tools?: string[];
+            httpTools?: AgentHttpToolDefinition[];
+            description?: string;
+            metadata?: Record<string, unknown>;
+            resourceLimits?: AgentResourceLimits | null;
+            model?: unknown;
+            modelConfig?: unknown;
+          };
       }>,
       reply: FastifyReply,
     ) => {
@@ -349,7 +377,6 @@ export async function agentRoutes(
         httpTools?: AgentHttpToolDefinition[];
         description?: string;
         metadata?: Record<string, unknown>;
-        callbackUrl?: string | null;
         resourceLimits?: AgentResourceLimits | null;
         model?: unknown;
         modelConfig?: unknown;
@@ -415,7 +442,6 @@ export async function agentRoutes(
         tools: toolNames,
         description: body.description ?? null,
         metadata: Object.keys(metadata).length > 0 ? metadata : null,
-        callbackUrl: body.callbackUrl ?? null,
       });
 
       // Create workspace directories and update the agent record
@@ -444,94 +470,6 @@ export async function agentRoutes(
     },
   );
 
-  // ── POST /api/agents/import — Import agent from manifest ──
-  app.post(
-    '/import',
-    async (
-      request: FastifyRequest<{
-        Body: { content: string; format?: 'yaml' | 'json'; changedBy?: string; changeNote?: string };
-      }>,
-      reply: FastifyReply,
-    ) => {
-      if (!manifestService) {
-        return reply.status(501).send({ error: 'Manifest service not configured' });
-      }
-      try {
-        const contentType = request.headers['content-type'] ?? '';
-        let content: string;
-        let changedBy: string | undefined;
-        let changeNote: string | undefined;
-
-        if (contentType.includes('text/yaml') || contentType.includes('application/x-yaml')) {
-          content = request.body as unknown as string;
-        } else {
-          const body = request.body as { content?: string; changedBy?: string; changeNote?: string } | undefined;
-          if (!body || typeof body.content !== 'string') {
-            return reply.status(400).send({ error: 'content is required' });
-          }
-          content = body.content;
-          changedBy = body.changedBy;
-          changeNote = body.changeNote;
-        }
-
-        const result = await manifestService.importManifest(content, { changedBy, changeNote });
-        return reply.status(result.created ? 201 : 200).send(result);
-      } catch (err) {
-        if (err instanceof Error && err.name === 'ZodError') {
-          return reply.status(400).send({ error: 'Manifest validation failed', details: String(err) });
-        }
-        return reply.status(400).send(safeError('Failed to import manifest', err));
-      }
-    },
-  );
-
-  // ── GET /api/agents/:id/manifest — Export agent manifest ──
-  app.get(
-    '/:id/manifest',
-    async (
-      request: FastifyRequest<{ Params: { id: string }; Querystring: { format?: string } }>,
-      reply: FastifyReply,
-    ) => {
-      if (!manifestService) {
-        return reply.status(501).send({ error: 'Manifest service not configured' });
-      }
-      try {
-        const { id } = request.params;
-        const query = request.query as { format?: string };
-        const format = query.format === 'json' ? 'json' : 'yaml';
-
-        const serialized = await manifestService.exportManifest(id, format);
-        if (format === 'json') {
-          return reply.type('application/json').send(serialized);
-        }
-        return reply.type('text/yaml').send(serialized);
-      } catch (err) {
-        if (err instanceof Error && err.message.startsWith('Agent not found')) {
-          return reply.status(404).send({ error: 'Agent not found' });
-        }
-        return reply.status(500).send(safeError('Failed to export manifest', err));
-      }
-    },
-  );
-
-  // ── GET /api/agents/:id/versions — Get version history ──
-  app.get(
-    '/:id/versions',
-    { preHandler: [loadAgent] },
-    async (
-      request: FastifyRequest<{ Params: { id: string } }>,
-      reply: FastifyReply,
-    ) => {
-      try {
-        const { id } = request.params;
-        const versions = await db.getAgentVersions(id);
-        return reply.send({ versions });
-      } catch (err) {
-        return reply.status(500).send(safeError('Failed to get versions', err));
-      }
-    },
-  );
-
   // ── PUT /api/agents/:id — Update an agent ──────────────
 
   app.put(
@@ -549,7 +487,6 @@ export async function agentRoutes(
           httpTools?: AgentHttpToolDefinition[];
           description?: string;
           metadata?: Record<string, unknown>;
-          callbackUrl?: string | null;
           resourceLimits?: AgentResourceLimits | null;
         };
       }>,
@@ -565,7 +502,6 @@ export async function agentRoutes(
         httpTools?: AgentHttpToolDefinition[];
         description?: string;
         metadata?: Record<string, unknown>;
-        callbackUrl?: string | null;
         resourceLimits?: AgentResourceLimits | null;
         model?: unknown;
         modelConfig?: unknown;
@@ -608,7 +544,6 @@ export async function agentRoutes(
       if (body.name !== undefined) updateData.name = body.name;
       if (body.systemPrompt !== undefined) updateData.systemPrompt = body.systemPrompt;
       if (body.description !== undefined) updateData.description = body.description;
-      if (body.callbackUrl !== undefined) updateData.callbackUrl = body.callbackUrl;
 
       if (body.harness !== undefined && !isNonEmptyString(body.harness)) {
         return reply.status(400).send({ error: 'harness must be a non-empty string' });
@@ -799,6 +734,8 @@ export async function agentRoutes(
         conversationId,
         runId: run.id,
         taskDescription: body.content,
+      }).catch((err) => {
+        console.error(`[agents] executeRun failed for agent ${id}, run ${run.id}:`, err);
       });
 
       return reply.status(201).send({
@@ -875,6 +812,8 @@ export async function agentRoutes(
         conversationId,
         runId: run.id,
         taskDescription: body.task ?? 'background run',
+      }).catch((err) => {
+        console.error(`[agents] executeRun failed for agent ${id}, run ${run.id}:`, err);
       });
 
       return reply.status(201).send({
@@ -884,10 +823,8 @@ export async function agentRoutes(
     },
   );
 
-  // ── POST /api/agents/:id/runs/:runId/cancel — Cancel a run ─
-
   app.post(
-    '/:id/runs/:runId/cancel',
+    '/:id/sessions/:runId/cancel',
     { preHandler: [loadAgent] },
     async (
       request: FastifyRequest<{
@@ -897,15 +834,14 @@ export async function agentRoutes(
     ) => {
       const { id, runId } = request.params;
 
-      // Ownership check: verify run belongs to this agent
       const run = runRegistry.getRun(runId);
       if (!run || run.agentId !== id) {
-        return reply.status(404).send({ error: 'Run not found', runId });
+        return reply.status(404).send({ error: 'Session not found', runId });
       }
 
       const cancelled = await runRegistry.cancelRun(runId);
       if (!cancelled) {
-        return reply.status(404).send({ error: 'Run not found', runId });
+        return reply.status(404).send({ error: 'Session not found', runId });
       }
 
       sse.broadcast(id, {
@@ -1088,25 +1024,59 @@ export async function agentRoutes(
       // Map 'submit' (used by document/form HITL) to 'approve' with data
       const resolveAction: 'approve' | 'reject' = body.action === 'submit' ? 'approve' : body.action as 'approve' | 'reject';
 
-      const run = runRegistry.getRun(body.runId);
-      if (!run || run.agentId !== id) {
-        return reply.status(404).send({ error: 'Run not found', runId: body.runId });
+      // DB-first: check for the pending interrupt in persistent storage
+      const dbInterrupt = await db.getPendingInterrupt(body.runId);
+
+      if (dbInterrupt && dbInterrupt.agentId === id) {
+        // Idempotency: already resolved
+        if (dbInterrupt.status === 'resolved') {
+          return reply.send({ alreadyResolved: true, action: dbInterrupt.resolvedAction });
+        }
+
+        // Resolve in DB first (durable)
+        await db.resolveInterrupt(body.runId, resolveAction, body.data);
       }
 
-      const resolved = interrupts.resolve(
-        body.runId,
-        resolveAction,
-        body.data,
-        id,
-      );
-      if (!resolved) {
-        return reply.status(404).send({
-          error: 'No pending interrupt for agent',
+      // Try in-memory fast path (also covers race where DB write hasn't landed yet)
+      const inMemoryResolved = interrupts.resolve(body.runId, resolveAction, body.data, id);
+
+      // If neither DB nor in-memory had the interrupt, 404
+      if (!dbInterrupt && !inMemoryResolved) {
+        return reply.status(404).send({ error: 'No pending interrupt for agent', agentId: id });
+      }
+      if (dbInterrupt && dbInterrupt.agentId !== id && !inMemoryResolved) {
+        return reply.status(404).send({ error: 'No pending interrupt for agent', agentId: id });
+      }
+
+      if (inMemoryResolved) {
+        sse.broadcast(id, {
+          type: 'CUSTOM',
+          subtype: 'interrupt_resolved',
+          timestamp: Date.now(),
           agentId: id,
+          action: resolveAction,
         });
+        return reply.send({ resolved: true, action: resolveAction });
       }
 
-      // Broadcast the interrupt resolution via SSE
+      const sessionId = dbInterrupt?.sessionId;
+      if (sessionId && dbInterrupt && sandboxSessionManager?.resumeWithInterruptResolution) {
+        void sandboxSessionManager.resumeWithInterruptResolution(sessionId, dbInterrupt.runId, id).catch((err) => {
+          console.error(`[agents] async resume failed for session ${sessionId}:`, err);
+        });
+
+        sse.broadcast(id, {
+          type: 'CUSTOM',
+          subtype: 'interrupt_resolved',
+          timestamp: Date.now(),
+          agentId: id,
+          action: resolveAction,
+          resuming: true,
+        });
+
+        return reply.status(202).send({ accepted: true, resuming: true, action: resolveAction });
+      }
+
       sse.broadcast(id, {
         type: 'CUSTOM',
         subtype: 'interrupt_resolved',
@@ -1115,7 +1085,7 @@ export async function agentRoutes(
         action: resolveAction,
       });
 
-      return reply.send({ resolved: true, action: resolveAction });
+      return reply.send({ resolved: true, action: resolveAction, note: 'Resolved in DB; session resume not available' });
     },
   );
 
@@ -1266,6 +1236,122 @@ export async function agentRoutes(
 
       const sessions = await db.getSessionsForAgent(id);
       return reply.send({ sessions });
+    },
+  );
+
+  app.post(
+    '/:id/sessions/:sessionId/suspend',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
+      reply: FastifyReply,
+    ) => {
+      const agent = getRequestAgent(request);
+      const { sessionId } = request.params;
+
+      if (!sandboxSessionManager) {
+        return reply.status(501).send({ error: 'Sandbox session manager not configured' });
+      }
+
+      try {
+        const sessions = await db.getSandboxSessionsByAgent(agent.id);
+        const session = sessions.find((candidate) => candidate.id === sessionId);
+        if (!session) {
+          return reply.status(404).send({ error: 'Session not found', sessionId });
+        }
+
+        await sandboxSessionManager.suspendSession(sessionId, 'api_request');
+        return reply.status(200).send({ sessionId, status: 'checkpointed' });
+      } catch (err) {
+        return reply.status(500).send(safeError('Failed to suspend session', err));
+      }
+    },
+  );
+
+  app.post(
+    '/:id/sessions/:sessionId/freeze',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
+      reply: FastifyReply,
+    ) => {
+      const agent = getRequestAgent(request);
+      const { sessionId } = request.params;
+
+      if (!sandboxSessionManager) {
+        return reply.status(501).send({ error: 'Sandbox session manager not configured' });
+      }
+
+      try {
+        const sessions = await db.getSandboxSessionsByAgent(agent.id);
+        const session = sessions.find((candidate) => candidate.id === sessionId);
+        if (!session) {
+          return reply.status(404).send({ error: 'Session not found', sessionId });
+        }
+
+        await sandboxSessionManager.freezeSession(sessionId);
+        return reply.status(200).send({ sessionId, status: 'frozen' });
+      } catch (err) {
+        return reply.status(500).send(safeError('Failed to freeze session', err));
+      }
+    },
+  );
+
+  app.post(
+    '/:id/sessions/:sessionId/unfreeze',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
+      reply: FastifyReply,
+    ) => {
+      const agent = getRequestAgent(request);
+      const { sessionId } = request.params;
+
+      if (!sandboxSessionManager) {
+        return reply.status(501).send({ error: 'Sandbox session manager not configured' });
+      }
+
+      try {
+        const sessions = await db.getSandboxSessionsByAgent(agent.id);
+        const session = sessions.find((candidate) => candidate.id === sessionId);
+        if (!session) {
+          return reply.status(404).send({ error: 'Session not found', sessionId });
+        }
+
+        await sandboxSessionManager.unfreezeSession(sessionId);
+        return reply.status(200).send({ sessionId, status: 'active' });
+      } catch (err) {
+        return reply.status(500).send(safeError('Failed to unfreeze session', err));
+      }
+    },
+  );
+
+  app.post(
+    '/:id/sessions/:sessionId/kill',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
+      reply: FastifyReply,
+    ) => {
+      const agent = getRequestAgent(request);
+      const { sessionId } = request.params;
+
+      if (!sandboxSessionManager) {
+        return reply.status(501).send({ error: 'Sandbox session manager not configured' });
+      }
+
+      try {
+        const sessions = await db.getSandboxSessionsByAgent(agent.id);
+        const session = sessions.find((candidate) => candidate.id === sessionId);
+        if (!session) {
+          return reply.status(404).send({ error: 'Session not found', sessionId });
+        }
+
+        await sandboxSessionManager.killSession(sessionId);
+        return reply.status(204).send();
+      } catch (err) {
+        return reply.status(500).send(safeError('Failed to kill session', err));
+      }
     },
   );
 
@@ -1929,182 +2015,88 @@ export async function agentRoutes(
     },
   );
 
-  // ── GET /api/agents/:id/runs/:runId/diff — Get session diff ─
+  // ── POST /api/agents/:id/workspace — Upload tarball to replace base workspace ─
 
-  app.get(
-    '/:id/runs/:runId/diff',
-    { preHandler: [loadAgent] },
+  app.post(
+    '/:id/workspace',
+    {
+      preHandler: [loadAgent],
+      config: { rawBody: true },
+    },
     async (
-      request: FastifyRequest<{ Params: { id: string; runId: string } }>,
+      request: FastifyRequest<{ Params: { id: string }; Querystring: { force?: string } }>,
       reply: FastifyReply,
     ) => {
-      const { id, runId } = request.params;
-
       const agent = getRequestAgent(request);
 
-      const run = runRegistry.getRun(runId);
-      if (!run || run.agentId !== id) {
-        return reply.status(404).send({ error: 'Run not found', runId });
+      if (!agent.workspaceDir) {
+        return reply.status(400).send({ error: 'Agent has no workspace configured' });
       }
 
-      if (!run.sessionDir || !envFactory || !agent.workspaceDir) {
-        return reply.send({ changes: [] });
+      const contentType = request.headers['content-type'] ?? '';
+      if (!contentType.includes('application/gzip') && !contentType.includes('application/x-gzip')) {
+        return reply.status(415).send({ error: 'Content-Type must be application/gzip' });
       }
 
       try {
-        const sessionsDir = resolveSessionDir(agent);
-        const env = envFactory.create(agent.workspaceDir, runId, sessionsDir);
-        await env.setup();
-        const changes = await env.diff();
-        // Don't tear down — let the session persist for promote/fork
-        return reply.send({ changes });
-      } catch (err) {
-        return reply.status(500).send(safeError('Failed to compute diff', err));
-      }
-    },
-  );
+        const allSessions = await db.getActiveSandboxSessions();
+        const agentSessions = allSessions.filter((s) => s.agentId === agent.id);
 
-  // ── POST /api/agents/:id/runs/:runId/promote — Promote session changes to base ─
-
-  app.post(
-    '/:id/runs/:runId/promote',
-    { preHandler: [loadAgent] },
-    async (
-      request: FastifyRequest<{ Params: { id: string; runId: string } }>,
-      reply: FastifyReply,
-    ) => {
-      const { id, runId } = request.params;
-
-      const agent = getRequestAgent(request);
-
-      const run = runRegistry.getRun(runId);
-      if (!run || run.agentId !== id) {
-        return reply.status(404).send({ error: 'Run not found', runId });
-      }
-
-      if (!run.sessionDir || !envFactory || !agent.workspaceDir) {
-        return reply.status(400).send({ error: 'No session environment for this run' });
-      }
-
-      try {
-        const sessionsDir = resolveSessionDir(agent);
-        const env = envFactory.create(agent.workspaceDir, runId, sessionsDir);
-        await env.setup();
-        const result = await env.promote();
-        await env.teardown();
-        return reply.send(result);
-      } catch (err) {
-        return reply.status(500).send(safeError('Failed to promote session', err));
-      }
-    },
-  );
-
-  // ── POST /api/agents/:id/runs/:runId/fork — Fork session into a new agent ─
-
-  app.post(
-    '/:id/runs/:runId/fork',
-    { preHandler: [loadAgent] },
-    async (
-      request: FastifyRequest<{
-        Params: { id: string; runId: string };
-        Body: { name: string };
-      }>,
-      reply: FastifyReply,
-    ) => {
-      const { id, runId } = request.params;
-      const body = request.body as { name?: string } | undefined;
-
-      if (!body || typeof body.name !== 'string' || body.name.trim() === '') {
-        return reply.status(400).send({ error: 'name is required for the forked agent' });
-      }
-
-      const agent = getRequestAgent(request);
-
-      const run = runRegistry.getRun(runId);
-      if (!run || run.agentId !== id) {
-        return reply.status(404).send({ error: 'Run not found', runId });
-      }
-
-      if (!run.sessionDir || !envFactory || !agent.workspaceDir) {
-        return reply.status(400).send({ error: 'No session environment for this run' });
-      }
-
-        try {
-          // Create a new agent (cloned from existing)
-          const newAgent = await db.createAgent({
-            name: body.name,
-            harness: agent.harness,
-            harnessConfig: agent.harnessConfig,
-            systemPrompt: agent.systemPrompt,
-            tools: agent.tools,
-            description: agent.description,
-            metadata: agent.metadata,
-            callbackUrl: agent.callbackUrl,
-          });
-
-        // Create workspace for the new agent
-        const newWorkspaceDir = ensureAgentWorkspace(newAgent.id);
-        if (newWorkspaceDir) {
-          await db.updateAgent(newAgent.id, { workspaceDir: newWorkspaceDir });
-        }
-
-        // Fork the session environment to the new agent's base workspace
-        try {
-          const sessionsDir = resolveSessionDir(agent);
-          const env = envFactory.create(agent.workspaceDir, runId, sessionsDir);
-          await env.setup();
-          if (newWorkspaceDir) {
-            await env.fork(newWorkspaceDir);
+        if (agentSessions.length > 0) {
+          const force = request.query.force === 'true';
+          if (!force) {
+            return reply.status(409).send({
+              error: 'Agent has active sessions. Kill them first or use ?force=true',
+              activeSessions: agentSessions.map((s) => s.id),
+            });
           }
-        } catch (forkErr) {
-          // Clean up orphaned agent on fork failure
-          try {
-            await db.deleteAgentCascade(newAgent.id);
-            if (newWorkspaceDir) {
-              const { rmSync: rmSyncFs } = await import('node:fs');
-              rmSyncFs(newWorkspaceDir, { recursive: true, force: true });
+
+          if (sandboxSessionManager) {
+            for (const session of agentSessions) {
+              try {
+                await sandboxSessionManager.killSession(session.id);
+              } catch (err) {
+                console.error(`[agents] failed to kill session ${session.id} during force upload:`, err);
+              }
             }
-          } catch { /* best-effort cleanup */ }
-          throw forkErr;
+          }
         }
-
-        return reply.status(201).send({ agentId: newAgent.id, name: body.name });
       } catch (err) {
-        return reply.status(500).send(safeError('Failed to fork session', err));
-      }
-    },
-  );
-
-  // ── DELETE /api/agents/:id/runs/:runId/session — Discard session ─
-
-  app.delete(
-    '/:id/runs/:runId/session',
-    { preHandler: [loadAgent] },
-    async (
-      request: FastifyRequest<{ Params: { id: string; runId: string } }>,
-      reply: FastifyReply,
-    ) => {
-      const { id, runId } = request.params;
-
-      const agent = getRequestAgent(request);
-
-      const run = runRegistry.getRun(runId);
-      if (!run || run.agentId !== id) {
-        return reply.status(404).send({ error: 'Run not found', runId });
+        return reply.status(500).send(safeError('Failed to check active sessions', err));
       }
 
-      if (!run.sessionDir || !envFactory || !agent.workspaceDir) {
-        return reply.send({ discarded: true });
-      }
-
+      const baseDir = agent.workspaceDir;
+      const tempDir = await mkdtemp(join(dirname(baseDir), '.upload-'));
       try {
-        const sessionsDir = resolveSessionDir(agent);
-        const env = envFactory.create(agent.workspaceDir, runId, sessionsDir);
-        await env.setup();
-        await env.teardown();
-        return reply.send({ discarded: true });
+        const maxTarBytes = settingsService
+          ? (await settingsService.getAll()).maxTarUploadBytes
+          : undefined;
+        const result = await validateAndExtractTarball(request.raw, tempDir, {
+          maxBytes: maxTarBytes,
+        });
+
+        const oldDir = baseDir + '.old';
+
+        await rm(oldDir, { recursive: true, force: true });
+
+        const baseExists = await stat(baseDir).then(() => true, () => false);
+        if (baseExists) {
+          await rename(baseDir, oldDir);
+        }
+        await rename(tempDir, baseDir);
+
+        await rm(oldDir, { recursive: true, force: true });
+
+        await chownRecursive(baseDir, 1000, 1000);
+
+        return reply.status(201).send({ files: result.files, totalBytes: result.totalBytes });
       } catch (err) {
-        return reply.status(500).send(safeError('Failed to discard session', err));
+        await rm(tempDir, { recursive: true, force: true });
+
+        if (err instanceof Error && err.message.includes('size exceeds')) {
+          return reply.status(413).send({ error: err.message });
+        }
+        return reply.status(400).send(safeError('Failed to extract workspace tarball', err));
       }
     },
   );
@@ -2215,42 +2207,38 @@ export async function agentRoutes(
   });
 }
 
-// ── GET /api/runs — Top-level route (registered separately) ─
-
-export interface RunsRouteOptions {
+export interface SessionsRouteOptions {
   runRegistry: RunRegistry;
 }
 
-export async function runsRoutes(
+export async function sessionsRoutes(
   app: FastifyInstance,
-  opts: RunsRouteOptions,
+  opts: SessionsRouteOptions,
 ): Promise<void> {
   const { runRegistry } = opts;
 
   app.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const activeRuns = runRegistry.getActiveRuns();
-    return reply.send(activeRuns);
+    const activeSessions = runRegistry.getActiveRuns();
+    return reply.send(activeSessions);
   });
 
-  // POST /api/runs/:id/resume — Resume a suspended run
   app.post('/:id/resume', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     const { id } = request.params;
 
-    // Look up the run first
     const run = runRegistry.getRun(id);
     if (!run) {
-      return reply.status(404).send({ error: 'Run not found' });
+      return reply.status(404).send({ error: 'Session not found' });
     }
 
     if (run.status !== 'suspended') {
       return reply.status(400).send({
-        error: `Run is not suspended (current status: ${run.status})`,
+        error: `Session is not suspended (current status: ${run.status})`,
       });
     }
 
     const resumed = await runRegistry.resumeRun(id);
     if (!resumed) {
-      return reply.status(500).send({ error: 'Failed to resume run' });
+      return reply.status(500).send({ error: 'Failed to resume session' });
     }
 
     return reply.send({

@@ -8,7 +8,6 @@ import type { FastifyInstance } from 'fastify';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { MockOverlayFactory } from '../../packages/ctxmill/src/workspace/mock-overlay.js';
 
 describe('Events, Knowledge, and Triggers Integration', () => {
   let app: FastifyInstance;
@@ -34,7 +33,6 @@ describe('Events, Knowledge, and Triggers Integration', () => {
       dataDir,
     );
 
-    const envFactory = new MockOverlayFactory();
     app = await createServer({
       db: container.db,
       agentRunService: container.agentRunService,
@@ -44,7 +42,6 @@ describe('Events, Knowledge, and Triggers Integration', () => {
       learningPipeline: container.learningPipeline,
       triggerManager: container.triggerManager,
       dataDir,
-      envFactory,
     });
     await app.ready();
   });

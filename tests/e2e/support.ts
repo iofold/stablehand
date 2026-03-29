@@ -8,7 +8,6 @@ export interface TestAgent {
   name: string;
   workspaceDir?: string | null;
   harness?: string | null;
-  callbackUrl?: string | null;
   harnessConfig?: Record<string, unknown> | null;
 }
 
@@ -20,7 +19,6 @@ interface CreateAgentOptions {
   metadata?: Record<string, unknown>;
   harness?: string;
   harnessConfig?: Record<string, unknown> | null;
-  callbackUrl?: string | null;
 }
 
 export async function createTestAgent(
@@ -38,7 +36,6 @@ export async function createTestAgent(
       tools: options.tools ?? [],
       description: options.description,
       metadata: options.metadata,
-      callbackUrl: options.callbackUrl ?? null,
     },
   });
 
@@ -170,6 +167,7 @@ type PathModule = {
 
 const loadFs = new Function('return import("node:fs")') as () => Promise<FsModule>;
 const loadPath = new Function('return import("node:path")') as () => Promise<PathModule>;
+const loadYaml = new Function('return import("yaml")') as () => Promise<{ parse(s: string): unknown }>;
 
 export async function importStressAgent(
   request: APIRequestContext,
@@ -177,14 +175,26 @@ export async function importStressAgent(
 ): Promise<TestAgent> {
   const fs = await loadFs();
   const path = await loadPath();
+  const yamlLib = await loadYaml();
   const manifestPath = path.join(process.cwd(), 'tests', 'stress', 'agents', agentDir, 'agent.yaml');
-  const content = fs.readFileSync(manifestPath, 'utf-8');
-  const response = await request.post(`${API_BASE}/api/agents/import`, {
-    data: { content },
+  const raw = yamlLib.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>;
+  const meta = (raw.metadata ?? {}) as Record<string, unknown>;
+  const spec = (raw.spec ?? {}) as Record<string, unknown>;
+  const tools = (spec.tools as Array<{ ref?: string }> | undefined) ?? [];
+
+  const response = await request.post(`${API_BASE}/api/agents`, {
+    data: {
+      name: meta.name as string,
+      harness: spec.harness as string,
+      harnessConfig: (spec.harnessConfig ?? {}) as Record<string, unknown>,
+      systemPrompt: (spec.instructions ?? '') as string,
+      tools: tools.map((t) => t.ref).filter(Boolean),
+      description: (meta.description ?? null) as string | null,
+    },
   });
   expect(response.ok()).toBeTruthy();
   const result = await response.json();
-  return { id: result.agentId ?? result.id, name: result.name } as TestAgent;
+  return { id: result.id, name: result.name } as TestAgent;
 }
 
 export async function getInterrupts(

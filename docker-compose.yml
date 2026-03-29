@@ -29,18 +29,26 @@ services:
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3200,http://127.0.0.1:3200}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://platform.ctxmill.com,http://localhost:3200}
       CTXMILL_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-ctxmill}_ctxmill-data
-    ports:
-      - "${API_PORT:-3002}:3001"
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ctxmill}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-ctxmill-dev}
+      S3_BUCKET: ${S3_BUCKET:-ctxmill-artifacts}
+      S3_REGION: ${S3_REGION:-us-east-1}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ctxmill-data:/app/project/.ctxmill
+    ports:
+      - "${API_PORT:-3002}:3001"
     networks:
       - default
       - ctxmill-agents
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     restart: unless-stopped
 
@@ -51,9 +59,19 @@ services:
       target: ui
     ports:
       - "${UI_PORT:-3200}:80"
+    networks:
+      - default
+      - web
     depends_on:
       - orchestrator
     restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.ctxmill.rule=Host(`${CTXMILL_DOMAIN:-platform.ctxmill.com}`)"
+      - "traefik.http.routers.ctxmill.entrypoints=websecure"
+      - "traefik.http.routers.ctxmill.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ctxmill.loadbalancer.server.port=80"
 
   egress-proxy:
     build:
@@ -71,6 +89,27 @@ services:
       interval: 5s
       timeout: 3s
       retries: 3
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-ctxmill}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-ctxmill-dev}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - default
+      - ctxmill-agents
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -119,8 +158,11 @@ services:
 volumes:
   pgdata:
   ctxmill-data:
+  minio-data:
 
 networks:
+  web:
+    external: true
   ctxmill-agents:
     driver: bridge
     name: ctxmill-agents

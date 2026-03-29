@@ -14,7 +14,7 @@ import {
   protoSessionCheckpointToInternal,
   type SessionCheckpoint as ProtoCompatibleCheckpoint,
 } from '../../packages/ctxmill/src/sandbox/proto-convert.js';
-import { PauseManager } from '../../packages/ctxmill/src/sandbox/pause-manager.js';
+import { ContainerLifecyclePolicy } from '../../packages/ctxmill/src/orchestrator/container-lifecycle-policy.js';
 import type { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
 import type { HarnessExportedState } from '../../packages/ctxmill/src/harness/types.js';
 
@@ -217,7 +217,6 @@ function createMockContainerManager(): ContainerManager {
     listManagedContainers: vi.fn(),
     getContainerExitCode: vi.fn(),
     ensureNetwork: vi.fn(),
-    cleanupOrphans: vi.fn(),
   } as unknown as ContainerManager;
 }
 
@@ -577,9 +576,47 @@ describe('Resume with unavailable secret', () => {
   });
 });
 
+function createMockLifecyclePolicy(
+  cm: ContainerManager,
+  options: {
+    pauseDelayMs?: number;
+    maxPauseDurationMs?: number;
+    onPromoteToCheckpoint?: (sessionId: string) => Promise<void>;
+  } = {},
+): ContainerLifecyclePolicy {
+  const mockDb = {
+    getActiveSandboxSessions: vi.fn().mockResolvedValue([]),
+    updateSandboxSessionStatus: vi.fn().mockResolvedValue(undefined),
+    getCheckpointV2: vi.fn().mockResolvedValue(null),
+    deleteSandboxSession: vi.fn().mockResolvedValue(undefined),
+  } as any;
+  const mockLogger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+  return new ContainerLifecyclePolicy({
+    containerManager: cm,
+    db: mockDb,
+    logger: mockLogger,
+    config: {
+      pauseDelayMs: options.pauseDelayMs ?? 5_000,
+      maxPauseDurationMs: options.maxPauseDurationMs ?? 300_000,
+      idleTimeoutMs: 300_000,
+      freezePromotionMs: 600_000,
+    },
+    onPromoteToCheckpoint: options.onPromoteToCheckpoint ?? vi.fn().mockResolvedValue(undefined),
+    reconciliationCallbacks: {
+      onSessionReconnected: vi.fn(),
+      onSessionEvicted: vi.fn(),
+    },
+  });
+}
+
 describe('Docker pause for HITL', () => {
   let cm: ContainerManager;
-  let pm: PauseManager;
+  let pm: ContainerLifecyclePolicy;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -592,11 +629,7 @@ describe('Docker pause for HITL', () => {
   });
 
   it('pauses after 5s on approval_needed, unpauses on approval_resolved', async () => {
-    pm = new PauseManager({
-      containerManager: cm,
-      pauseDelayMs: 5_000,
-      maxPauseDurationMs: 300_000,
-    });
+    pm = createMockLifecyclePolicy(cm, { pauseDelayMs: 5_000, maxPauseDurationMs: 300_000 });
 
     pm.schedulePause('run-hitl-1', 'container-hitl');
     expect(pm.getState('run-hitl-1')).toBe('scheduled');
@@ -614,11 +647,7 @@ describe('Docker pause for HITL', () => {
   });
 
   it('never pauses if approval resolves within the 5s delay', async () => {
-    pm = new PauseManager({
-      containerManager: cm,
-      pauseDelayMs: 5_000,
-      maxPauseDurationMs: 300_000,
-    });
+    pm = createMockLifecyclePolicy(cm, { pauseDelayMs: 5_000, maxPauseDurationMs: 300_000 });
 
     pm.schedulePause('run-fast', 'container-fast');
 
@@ -633,7 +662,7 @@ describe('Docker pause for HITL', () => {
 
 describe('Docker pause promotion to checkpoint', () => {
   let cm: ContainerManager;
-  let pm: PauseManager;
+  let pm: ContainerLifecyclePolicy;
   let onPromote: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -648,8 +677,7 @@ describe('Docker pause promotion to checkpoint', () => {
   });
 
   it('promotes from pause to full suspend after maxPauseDurationMs', async () => {
-    pm = new PauseManager({
-      containerManager: cm,
+    pm = createMockLifecyclePolicy(cm, {
       pauseDelayMs: 5_000,
       maxPauseDurationMs: 300_000,
       onPromoteToCheckpoint: onPromote,
@@ -665,8 +693,7 @@ describe('Docker pause promotion to checkpoint', () => {
   });
 
   it('does not promote if cancelPause is called before promotion timer', async () => {
-    pm = new PauseManager({
-      containerManager: cm,
+    pm = createMockLifecyclePolicy(cm, {
       pauseDelayMs: 5_000,
       maxPauseDurationMs: 300_000,
       onPromoteToCheckpoint: onPromote,

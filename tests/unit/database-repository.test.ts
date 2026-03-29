@@ -30,6 +30,7 @@ describe('DatabaseRepository', () => {
         'agent_runs',
         'agent_versions',
         'agents',
+        'artifacts',
         'callback_outbox',
         'conversations',
         'event_store',
@@ -43,6 +44,7 @@ describe('DatabaseRepository', () => {
         'scheduled_events',
         'secrets',
         'suspended_runs',
+        'system_settings',
         'webhooks',
       ]);
     });

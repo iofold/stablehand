@@ -132,6 +132,7 @@ export class MCPToolProvider implements ToolProvider {
           name: mcpTool.name,
           description: mcpTool.description ?? '',
           input: zodInput,
+          location: 'orchestrator',
           handler: async (input: unknown, _ctx: ToolContext) => {
             return this.execute(mcpTool.name, input as Record<string, unknown>, _ctx);
           },

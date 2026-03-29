@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
-import type { AgentDefinition } from '../../packages/ctxmill/src/types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
 import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js';
 import type { ToolProvider } from '../../packages/ctxmill/src/tool/provider.js';
-import type { ToolCall, ToolContext, ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
+import type { ToolCall, ToolContext, ToolDefinition } from '@ctxmill/sandbox-daemon';
 import {
   mapAgentHttpToolsToConfigs,
   registerAgentHttpTools,

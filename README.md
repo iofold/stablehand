@@ -6,12 +6,14 @@ CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persi
 
 ## What Ships Today
 
-- **Multi-harness agent runtime**: LangGraph, OpenAI Agents, Claude Agents, Vercel AI, and PI Agent
+- **Multi-harness agent runtime**: LangGraph, Claude Agents, and PI Agent
 - **Streaming UI**: SSE-based run and message streaming to the frontend
 - **A2UI chart rendering**: agent-driven charts and structured visual blocks
 - **Human-in-the-loop (HITL)**: approval cards, editable documents, and structured field requests
 - **Event bus and triggers**: persisted event flow plus background-run triggers
-- **Workspace isolation**: mock and `fuse-overlayfs` session overlays
+- **Workspace isolation**: session-scoped workspace diff capture/restore during suspend/resume
+- **Artifact storage**: S3/MinIO-backed persistent file upload/download with signed URLs
+- **System settings**: 17 runtime-configurable knobs with DB persistence and Settings UI
 - **Learning pipeline**: optional trace reflection and knowledge updates
 - **PostgreSQL persistence**: agents, runs, messages, events, traces, triggers, and secrets
 - **React operations UI**: dashboard, chat, knowledge, files, triggers, tools, and run detail views
@@ -78,11 +80,12 @@ packages/
     src/
       a2ui/             Agent-to-UI structured block extraction
       agent/            Agent discovery and manifest loading
+      artifact/         Artifact storage (S3/MinIO) and daemon tools
       cli/              `ctxmill dev` and `ctxmill chat`
       config/           Presets, factories, DI container
       database/         PostgreSQL schema, repository, migrations
       events/           Typed event bus, triggers, wait primitives
-      harness/          Harness adapters (5 shipped)
+      harness/          Harness adapters (3 shipped: LangGraph, Claude Agents, PI Agent)
       knowledge/        Knowledge store abstractions and implementations
       learning/         Trace reflection and learning pipeline
       llm/              LLM abstraction layer and provider factory
@@ -90,6 +93,7 @@ packages/
       orchestrator/     Fastify server, SSE, HITL, routes
       sandbox/          Container lifecycle, gRPC daemon, checkpoint/resume
       secrets/          Encrypted secret storage
+      settings/         Runtime system configuration (17 knobs)
       skills/           Skill loader (SKILL.md format)
       tool/             Tool executors and providers
       util/             Shared runtime utilities
@@ -143,8 +147,8 @@ The shipped UI includes:
 | Persistence | PostgreSQL |
 | Frontend | React, Vite, Tailwind CSS |
 | State | Zustand |
-| Agent harnesses | LangGraph, OpenAI Agents, Claude Agents, Vercel AI, PI Agent |
-| Tool providers | Local, MCP, HTTP, Composio |
+| Agent harnesses | LangGraph, Claude Agents, PI Agent |
+| Tool providers | Local, MCP, HTTP, Composio, Artifact (S3) |
 | Testing | Vitest, Playwright |
 | Monorepo | pnpm workspaces |
 

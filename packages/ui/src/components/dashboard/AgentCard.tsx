@@ -1,10 +1,14 @@
 import { useNavigate } from 'react-router-dom';
-import { MessageSquare, Settings, AlertCircle, Activity, Clock } from 'lucide-react';
+import { MessageSquare, Settings, AlertCircle, Activity, Clock, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Agent } from '@/stores/agents';
+import { AgentAvatar } from './illustrations/AgentAvatar';
+import { StatusPulse } from './illustrations/StatusPulse';
+import { AnimatedCounter } from './MicroInteractions';
 
 interface AgentCardProps {
   agent: Agent;
+  onEdit?: (agent: Agent) => void;
 }
 
 function formatRelativeTime(timestamp: number | undefined): string {
@@ -20,47 +24,67 @@ function formatRelativeTime(timestamp: number | undefined): string {
   return `${days}d ago`;
 }
 
-export function AgentCard({ agent }: AgentCardProps) {
+export function AgentCard({ agent, onEdit }: AgentCardProps) {
   const navigate = useNavigate();
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'running':
-        return 'bg-status-success shadow-[0_0_8px_rgba(16,185,129,0.6)]';
-      case 'booting':
-        return 'bg-status-warning shadow-[0_0_8px_rgba(245,158,11,0.6)]';
-      case 'error':
-        return 'bg-status-error shadow-[0_0_8px_rgba(239,68,68,0.6)]';
-      default:
-        return 'bg-surface-600';
-    }
-  };
 
   const getStatusBorderColor = (status: string) => {
     switch (status) {
       case 'running':
-        return 'border-t-2 border-t-emerald-500/30';
+        return 'border-l-2 border-l-emerald-500/50';
       case 'booting':
-        return 'border-t-2 border-t-yellow-500/30';
+        return 'border-l-2 border-l-yellow-500/50';
       case 'error':
-        return 'border-t-2 border-t-red-500/30';
+        return 'border-l-2 border-l-red-500/50';
       default:
-        return 'border-t-2 border-t-surface-600/30';
+        return 'border-l-2 border-l-surface-600/50';
     }
   };
 
-  const capabilities = [
-    { label: 'tools', count: agent.tools.length },
-    { label: 'native tools', count: agent.nativeTools?.allowlist?.length ?? agent.nativeTools?.blocklist?.length ?? 0 },
-    { label: 'knowledge', count: agent.knowledgeItems ?? 0 },
-    { label: 'workspace', count: agent.workspaceDir ? 1 : 0 },
-  ].filter((c) => c.count > 0);
+  const totalTools = agent.tools.length + (agent.nativeTools?.allowlist?.length ?? agent.nativeTools?.blocklist?.length ?? 0);
 
-  const metrics = [
-    `${agent.totalRuns ?? agent.runs?.length ?? 0} runs`,
-    `${agent.conversationCount ?? 0} chats`,
-    `${agent.sseClients ?? 0} connections`,
-  ];
+  const renderSessions = () => {
+    const stats = agent.sessionsByStatus;
+    const total = (stats?.active ?? 0) + (stats?.frozen ?? 0) + (stats?.checkpointed ?? 0) + (stats?.terminated ?? 0);
+    if (!stats || total === 0) {
+      return <span className="tabular-nums font-medium text-surface-200">0</span>;
+    }
+
+    const parts = [];
+    if (stats.active > 0) parts.push(`${stats.active} active`);
+    if (stats.frozen > 0) parts.push(`${stats.frozen} frozen`);
+    if (stats.checkpointed > 0) parts.push(`${stats.checkpointed} checkpointed`);
+    if (stats.terminated > 0) parts.push(`${stats.terminated} terminated`);
+    const title = parts.join(', ');
+
+    return (
+      <div role="status" aria-label={`${stats.active} active, ${stats.frozen} frozen, ${stats.checkpointed} checkpointed, ${stats.terminated} terminated sessions`} className="flex items-center gap-2 tabular-nums font-medium text-surface-200" title={title}>
+        {stats.active > 0 && (
+          <span className="inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+            {stats.active}
+          </span>
+        )}
+        {stats.frozen > 0 && (
+          <span className="inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+            {stats.frozen}
+          </span>
+        )}
+        {stats.checkpointed > 0 && (
+          <span className="inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+            {stats.checkpointed}
+          </span>
+        )}
+        {stats.terminated > 0 && (
+          <span className="inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span>
+            {stats.terminated}
+          </span>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div
@@ -72,26 +96,52 @@ export function AgentCard({ agent }: AgentCardProps) {
         'transition-all duration-200 hover:border-surface-600 hover:shadow-lg hover:shadow-black/20'
       )}
     >
-      <div className="p-4 flex flex-col gap-3">
-        {/* Header Row: Status Dot + Agent Name and Model Name */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 min-w-0">
-            <div
-              className={cn(
-                'w-2.5 h-2.5 rounded-full flex-shrink-0',
-                getStatusColor(agent.status)
-              )}
-              aria-label={`Status: ${agent.status}`}
+      <div className="p-5 flex flex-col md:flex-row items-start gap-6 min-h-[120px]">
+        <AgentAvatar harnessType={agent.harness} className="hidden md:block" />
+
+        <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <StatusPulse
+              status={agent.status === 'running' ? 'running' : agent.status === 'error' ? 'error' : 'idle'}
+              width={12}
+              height={12}
+              className="flex-shrink-0"
             />
             <h3
               data-testid="agent-name"
-              className="text-base font-semibold text-surface-200 truncate"
+              className="text-lg font-semibold text-surface-100 truncate"
               title={agent.name}
             >
               {agent.name}
             </h3>
           </div>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="h-10">
+            <p className="text-sm text-surface-400 line-clamp-2">
+              {agent.description || <span className="italic text-surface-500">No description provided.</span>}
+            </p>
+          </div>
+          <p className="text-[11px] text-surface-500 mt-0.5">
+            Created {formatRelativeTime(agent.createdAt)}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap md:flex-nowrap items-center gap-6 text-sm text-surface-300 md:px-6 md:border-x md:border-surface-700/50">
+          <div className="flex flex-col min-w-[70px]">
+            <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Sessions</span>
+            {renderSessions()}
+          </div>
+          <div className="flex flex-col min-w-[70px]">
+            <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Tools</span>
+            <AnimatedCounter value={totalTools} className="tabular-nums font-medium text-surface-200" />
+          </div>
+          <div className="flex flex-col min-w-[70px]">
+            <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Knowledge</span>
+            <AnimatedCounter value={agent.knowledgeItems ?? 0} className="tabular-nums font-medium text-surface-200" />
+          </div>
+        </div>
+
+        <div className="flex flex-col items-start md:items-end gap-3 flex-shrink-0 min-w-[200px]">
+          <div className="flex items-center gap-2">
             {agent.harness && (
               <span className="rounded bg-surface-700/60 px-1.5 py-0.5 text-[10px] font-medium text-surface-300 uppercase tracking-wider">
                 {agent.harness}
@@ -101,71 +151,56 @@ export function AgentCard({ agent }: AgentCardProps) {
               {(agent.harnessConfig as Record<string, unknown>)?.model as string ?? agent.harness}
             </span>
           </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {agent.hasPendingInterrupt && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/15 border border-orange-500/30 px-2 py-0.5 text-[11px] font-medium text-orange-400">
-              <AlertCircle className="h-3 w-3" />
-              Approval Needed
-            </span>
-          )}
-          {(agent.activeRuns ?? 0) > 0 && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-              <Activity className="h-3 w-3" />
-              {agent.activeRuns} Active
-            </span>
-          )}
-          <span className="inline-flex items-center gap-1 text-[11px] text-surface-400 ml-auto">
-            <Clock className="h-3 w-3" />
-            {formatRelativeTime(agent.lastActivity)}
-          </span>
-        </div>
-
-        {/* Description: 2-line max */}
-        {agent.description && (
-          <p className="text-sm text-surface-400 line-clamp-2">
-            {agent.description}
-          </p>
-        )}
-
-        {/* Capabilities/Skills: Tiny tags */}
-        {capabilities.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {capabilities.map((cap) => (
-              <span
-                key={cap.label}
-                className="inline-flex items-center rounded-full bg-surface-800/60 border border-surface-700 px-2 py-0.5 text-[11px] text-surface-400"
-              >
-                {cap.count} {cap.label}
+          
+          <div className="flex items-center gap-2">
+            {agent.hasPendingInterrupt && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/15 border border-orange-500/30 px-2 py-0.5 text-[11px] font-medium text-orange-400">
+                <AlertCircle className="h-3 w-3" />
+                Approval Needed
               </span>
-            ))}
+            )}
+            {(agent.activeSessions ?? 0) > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+                <Activity className="h-3 w-3" />
+                {agent.activeSessions} Active
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1 text-[11px] text-surface-400">
+              <Clock className="h-3 w-3" />
+              {formatRelativeTime(agent.lastActivity)}
+            </span>
           </div>
-        )}
 
-        {/* Bottom metrics: Tabular nums with separators */}
-        <div className="text-xs text-surface-400 tabular-nums mt-1">
-          {metrics.join(' · ')}
+          <div className="flex items-center gap-2 mt-1 w-full md:w-auto">
+            <button
+              type="button"
+              onClick={() => navigate(`/agents/${agent.id}/sessions/new`)}
+              aria-label={`Open session for ${agent.name}`}
+              className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-md bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 transition-colors shadow-sm focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              Session
+            </button>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onEdit?.(agent); }}
+              aria-label={`Edit ${agent.name}`}
+              className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-md bg-surface-700 px-3 py-1.5 text-xs font-medium text-surface-100 hover:bg-surface-600 transition-colors shadow-sm focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(`/agents/${agent.id}`)}
+              aria-label={`View details for ${agent.name}`}
+              className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-md bg-surface-700 px-4 py-1.5 text-xs font-medium text-surface-100 hover:bg-surface-600 transition-colors shadow-sm focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              Details
+            </button>
+          </div>
         </div>
-      </div>
-
-      <div className="absolute inset-0 flex items-center justify-center gap-3 bg-surface-900/80 backdrop-blur-[2px] opacity-0 transition-opacity duration-200 group-hover:opacity-100 rounded-lg">
-        <button
-          type="button"
-          onClick={() => navigate(`/agents/${agent.id}/chat`)}
-          className="flex items-center gap-2 rounded-md bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-500 transition-colors shadow-lg"
-        >
-          <MessageSquare className="h-4 w-4" />
-          Chat
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate(`/agents/${agent.id}`)}
-          className="flex items-center gap-2 rounded-md bg-surface-700 px-4 py-2 text-sm font-medium text-surface-100 hover:bg-surface-600 transition-colors shadow-lg"
-        >
-          <Settings className="h-4 w-4" />
-          Details
-        </button>
       </div>
     </div>
   );

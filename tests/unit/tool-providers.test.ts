@@ -4,7 +4,7 @@ import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.
 import { LocalToolProvider } from '../../packages/ctxmill/src/tool/providers/local.js';
 import { MCPToolProvider } from '../../packages/ctxmill/src/tool/providers/mcp.js';
 import { ComposioToolProvider } from '../../packages/ctxmill/src/tool/providers/composio.js';
-import type { ToolDefinition, ToolContext } from '../../packages/ctxmill/src/tool/types.js';
+import type { ToolDefinition, ToolContext } from '@ctxmill/sandbox-daemon';
 
 const mockCtx: ToolContext = {
   agentId: 'test-agent',

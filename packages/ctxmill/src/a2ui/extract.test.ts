@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  extractA2UIBlocks,
   isAllowedComponent,
   normalizeComponentName,
   sanitizeProps,
@@ -10,25 +9,8 @@ describe('A2UI extraction', () => {
   it('normalizes supported component aliases', () => {
     expect(normalizeComponentName('ctxmill.charts:MetricCard')).toBe('MetricCard');
     expect(normalizeComponentName('charts:MetricCard')).toBe('MetricCard');
-    expect(normalizeComponentName('ctxmill.hitl:ApprovalCard')).toBe('ApprovalCard');
+    expect(normalizeComponentName('ctxmill.hitl:ApprovalCard')).toBe('ctxmill.hitl:ApprovalCard');
     expect(isAllowedComponent('ctxmill.charts:MetricCard')).toBe(true);
-  });
-
-  it('canonicalizes aliases and preserves supported MetricCard props', () => {
-    const blocks = extractA2UIBlocks(
-      '{"component":"ctxmill.charts:MetricCard","props":{"title":"Users","value":42,"changeLabel":"vs last week"}}',
-    );
-
-    expect(blocks).toEqual([
-      {
-        component: 'MetricCard',
-        props: {
-          title: 'Users',
-          value: 42,
-          changeLabel: 'vs last week',
-        },
-      },
-    ]);
   });
 
   it('maps legacy chart and HITL payload shapes into supported props', () => {
@@ -73,16 +55,5 @@ describe('A2UI extraction', () => {
       edges: [{ source: 'n1', target: 'n2' }],
     });
 
-    expect(
-      sanitizeProps('ApprovalCard', {
-        toolName: 'deploy',
-        args: { env: 'prod' },
-      }),
-    ).toEqual({
-      action: 'deploy',
-      details: { env: 'prod' },
-      toolName: 'deploy',
-      args: { env: 'prod' },
-    });
   });
 });

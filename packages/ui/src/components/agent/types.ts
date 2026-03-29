@@ -1,4 +1,4 @@
-import type { AgentRun } from '@/stores/agents';
+import type { AgentSession } from '@/stores/agents';
 
 export type TabId = 'overview' | 'knowledge' | 'sessions' | 'tools' | 'files' | 'secrets';
 
@@ -7,7 +7,7 @@ export interface Session {
   startedAt: number;
   messageCount: number;
   lastMessageAt: number;
-  runs: AgentRun[];
+  sessions: AgentSession[];
 }
 
 export interface KnowledgeItem {

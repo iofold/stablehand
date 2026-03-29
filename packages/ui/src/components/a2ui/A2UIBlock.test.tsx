@@ -36,7 +36,7 @@ describe('A2UIBlock', () => {
     expect(container.textContent).toContain('UnknownThing');
   });
 
-  it('renders namespaced HITL components through the generic registry', () => {
+  it('renders HITL component names as unknown (not supported in A2UI)', () => {
     act(() => {
       root.render(
         <A2UIBlock
@@ -54,9 +54,7 @@ describe('A2UIBlock', () => {
       );
     });
 
-    expect(container.querySelector('[data-testid="approval-card"]')).not.toBeNull();
-    expect(container.textContent).toContain('Approve deployment');
-    expect(container.textContent).toContain('deploy');
+    expect(container.textContent).toContain('Unknown Component');
   });
 
   it('isolates render failures to the block', () => {

@@ -41,8 +41,8 @@ describe('manifest validation', () => {
         const parsed = parseManifestString(yamlContent);
         const manifest = validateManifest(parsed);
 
-        expect(manifest.spec.resources?.maxRunDurationSeconds).toBe(60);
-        expect(manifest.spec.resources?.maxTokensPerRun).toBe(4000);
+        expect(manifest.spec.resources?.maxSessionDurationSeconds).toBe(60);
+        expect(manifest.spec.resources?.maxTokensPerSession).toBe(4000);
       });
 
       it('uses harnessConfig instead of model', async () => {

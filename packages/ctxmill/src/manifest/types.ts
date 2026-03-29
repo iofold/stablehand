@@ -126,17 +126,13 @@ export interface ManifestApproval {
 
 // ── Workspace ───────────────────────────────────────────
 export interface ManifestWorkspace {
-  snapshotRef?: string;
-  maxSizeBytes?: number;
-  readOnlyPaths?: string[];
-  writablePaths?: string[];
   content?: ManifestWorkspaceContent;
 }
 
 // ── Resources ───────────────────────────────────────────
 export interface ManifestResources {
-  maxRunDurationSeconds?: number;
-  maxTokensPerRun?: number;
+  maxSessionDurationSeconds?: number;
+  maxTokensPerSession?: number;
   maxToolCallsPerRun?: number;
   costLimitPerDay?: number;
   /** Sandbox container resource limits. */

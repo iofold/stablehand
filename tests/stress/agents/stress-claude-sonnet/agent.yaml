@@ -31,5 +31,5 @@ spec:
       - Glob
   mode: interactive
   resources:
-    maxRunDurationSeconds: 180
-    maxTokensPerRun: 16000
+    maxSessionDurationSeconds: 180
+    maxTokensPerSession: 16000

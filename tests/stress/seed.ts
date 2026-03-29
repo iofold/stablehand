@@ -13,15 +13,54 @@ type FsPromises = {
   readFile(path: string | URL, encoding: 'utf8'): Promise<string>;
 };
 
-const loadFsPromises = new Function('return import("node:fs/promises")') as () => Promise<FsPromises>;
-const { readdir, readFile } = await loadFsPromises();
+type YamlModule = {
+  parse(source: string): unknown;
+};
 
-const API_BASE = process.env.API_BASE ?? 'http://localhost:3002';
-const AGENTS_DIR = new URL('./agents/', import.meta.url);
-const CLEAN_FLAG = '--clean';
-const STRESS_TRIGGER_NAME = 'stress-tools-complete-to-chain-responder';
+type ManifestModel = {
+  provider?: unknown;
+  id?: unknown;
+  apiKeyRef?: unknown;
+};
 
-type ImportResult = {
+type ManifestToolRef = {
+  ref?: unknown;
+};
+
+type ManifestMetadata = {
+  name?: unknown;
+  displayName?: unknown;
+  description?: unknown;
+  labels?: unknown;
+};
+
+type ManifestSpec = {
+  harness?: unknown;
+  harnessConfig?: unknown;
+  model?: unknown;
+  instructions?: unknown;
+  tools?: unknown;
+  nativeTools?: unknown;
+  resources?: unknown;
+};
+
+type ParsedManifest = {
+  metadata?: unknown;
+  spec?: unknown;
+};
+
+type AgentPayload = {
+  name: string;
+  harness: string;
+  harnessConfig: Record<string, unknown>;
+  systemPrompt: string;
+  tools: string[];
+  description?: string;
+  metadata?: Record<string, unknown>;
+  resourceLimits?: Record<string, unknown>;
+};
+
+type SeedResult = {
   name: string;
   dir: string;
   ok: boolean;
@@ -41,21 +80,106 @@ type TriggerPayload = {
   enabled: boolean;
 };
 
-async function importManifest(dir: string, manifestYaml: string): Promise<ImportResult> {
-  const res = await fetch(`${API_BASE}/api/agents/import`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: manifestYaml }),
-  });
+const loadFsPromises = new Function('return import("node:fs/promises")') as () => Promise<FsPromises>;
+const loadYaml = new Function('return import("yaml")') as () => Promise<YamlModule>;
+const { readdir, readFile } = await loadFsPromises();
+const { parse: parseYaml } = await loadYaml();
 
-  const body = await parseJson(res);
-  return {
-    name: basename(dir),
-    dir,
-    ok: res.ok,
-    status: res.status,
-    body,
+const API_BASE = process.env.API_BASE ?? 'http://localhost:3002';
+const AGENTS_DIR = new URL('./agents/', import.meta.url);
+const CLEAN_FLAG = '--clean';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function pickString(value: unknown, fieldName: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`Manifest field ${fieldName} must be a non-empty string.`);
+  }
+  return value;
+}
+
+function toObject(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error('Expected object in manifest.');
+  }
+  return value;
+}
+
+function toHarnessConfig(spec: ManifestSpec): Record<string, unknown> {
+  if (isRecord(spec.harnessConfig)) {
+    return { ...spec.harnessConfig };
+  }
+
+  const model = spec.model as ManifestModel | undefined;
+  if (!isRecord(model)) {
+    throw new Error('Manifest spec.harnessConfig or spec.model is required.');
+  }
+
+  const provider = pickString(model.provider, 'spec.model.provider');
+  const modelId = pickString(model.id, 'spec.model.id');
+  const harnessConfig: Record<string, unknown> = {
+    provider,
+    model: modelId,
   };
+
+  if (typeof model.apiKeyRef === 'string' && model.apiKeyRef.trim() !== '') {
+    harnessConfig.apiKeyRef = model.apiKeyRef;
+  }
+
+  return harnessConfig;
+}
+
+function toToolRefs(rawTools: unknown): string[] {
+  if (!Array.isArray(rawTools)) {
+    return [];
+  }
+
+  return rawTools
+    .map((tool) => (isRecord(tool) ? (tool as ManifestToolRef).ref : undefined))
+    .filter((toolRef): toolRef is string => typeof toolRef === 'string' && toolRef.trim() !== '');
+}
+
+function parseManifestToPayload(manifestYaml: string): AgentPayload {
+  const parsed = parseYaml(manifestYaml) as ParsedManifest;
+  const metadata = toObject(parsed.metadata);
+  const spec = toObject(parsed.spec) as ManifestSpec;
+
+  const payloadMetadata: Record<string, unknown> = {};
+  if (typeof (metadata as ManifestMetadata).displayName === 'string') {
+    payloadMetadata.displayName = (metadata as ManifestMetadata).displayName;
+  }
+  if (isRecord((metadata as ManifestMetadata).labels)) {
+    payloadMetadata.labels = (metadata as ManifestMetadata).labels as Record<string, unknown>;
+  }
+  if (isRecord(spec.nativeTools)) {
+    payloadMetadata.nativeTools = spec.nativeTools;
+  }
+  if (isRecord(spec.resources)) {
+    payloadMetadata.resourceLimits = spec.resources;
+  }
+
+  const payload: AgentPayload = {
+    name: pickString((metadata as ManifestMetadata).name, 'metadata.name'),
+    harness: pickString(spec.harness, 'spec.harness'),
+    harnessConfig: toHarnessConfig(spec),
+    systemPrompt: pickString(spec.instructions, 'spec.instructions'),
+    tools: toToolRefs(spec.tools),
+  };
+
+  const description = (metadata as ManifestMetadata).description;
+  if (typeof description === 'string' && description.trim() !== '') {
+    payload.description = description;
+  }
+  if (isRecord(spec.resources)) {
+    payload.resourceLimits = spec.resources;
+  }
+  if (Object.keys(payloadMetadata).length > 0) {
+    payload.metadata = payloadMetadata;
+  }
+
+  return payload;
 }
 
 async function parseJson(res: Response): Promise<unknown> {
@@ -81,71 +205,59 @@ async function listManifestPaths(): Promise<string[]> {
   return dirs.map((dir) => `${dir}agent.yaml`);
 }
 
-function basename(value: string): string {
-  const normalized = value.replace(/\/$/, '');
-  const parts = normalized.split('/');
-  return parts[parts.length - 1] ?? normalized;
-}
-
-function extractAgentName(manifestYaml: string): string {
-  const match = manifestYaml.match(/^\s*name:\s*([^\n]+)$/m);
-  if (!match) {
-    throw new Error('Unable to determine agent name from manifest.');
-  }
-
-  return match[1].trim();
-}
-
-function normalizeImportedAgent(body: unknown, fallbackName: string): AgentSummary {
-  if (!body || typeof body !== 'object') {
+function normalizeAgent(body: unknown, fallbackName: string): AgentSummary {
+  if (!isRecord(body)) {
     return { name: fallbackName };
   }
 
-  const record = body as Record<string, unknown>;
-  const id = typeof record.agentId === 'string'
-    ? record.agentId
-    : typeof record.id === 'string'
-      ? record.id
+  const id = typeof body.agentId === 'string'
+    ? body.agentId
+    : typeof body.id === 'string'
+      ? body.id
       : undefined;
-  const manifest = typeof record.manifest === 'object' && record.manifest !== null
-    ? record.manifest as Record<string, unknown>
-    : undefined;
-  const metadata = manifest && typeof manifest.metadata === 'object' && manifest.metadata !== null
-    ? manifest.metadata as Record<string, unknown>
-    : undefined;
-  const name = typeof record.name === 'string'
-    ? record.name
-    : typeof metadata?.name === 'string'
-      ? metadata.name as string
-      : fallbackName;
-
+  const name = typeof body.name === 'string' ? body.name : fallbackName;
   return { name, id };
 }
 
 async function fetchAgents(): Promise<AgentSummary[]> {
-  const endpoints = ['/api/agents', '/api/agent-definitions'];
-
-  for (const endpoint of endpoints) {
-    const res = await fetch(`${API_BASE}${endpoint}`);
-    if (!res.ok) {
-      continue;
-    }
-
-    const body = await parseJson(res);
-    if (!Array.isArray(body)) {
-      continue;
-    }
-
-    return body
-      .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
-      .map((item) => ({
-        name: typeof item.name === 'string' ? item.name : '',
-        id: typeof item.id === 'string' ? item.id : undefined,
-      }))
-      .filter((item) => item.name.startsWith('stress-'));
+  const res = await fetch(`${API_BASE}/api/agents`);
+  if (!res.ok) {
+    return [];
   }
 
-  return [];
+  const body = await parseJson(res);
+  if (!Array.isArray(body)) {
+    return [];
+  }
+
+  return body
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((item) => ({
+      name: typeof item.name === 'string' ? item.name : '',
+      id: typeof item.id === 'string' ? item.id : undefined,
+    }))
+    .filter((item) => item.name !== '');
+}
+
+async function upsertAgent(dir: string, payload: AgentPayload, existingAgentId?: string): Promise<SeedResult> {
+  const endpoint = existingAgentId
+    ? `${API_BASE}/api/agents/${existingAgentId}`
+    : `${API_BASE}/api/agents`;
+  const method = existingAgentId ? 'PUT' : 'POST';
+  const res = await fetch(endpoint, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const body = await parseJson(res);
+  return {
+    name: payload.name,
+    dir,
+    ok: res.ok,
+    status: res.status,
+    body,
+  };
 }
 
 async function deleteAgent(agent: AgentSummary): Promise<void> {
@@ -167,7 +279,7 @@ async function deleteAgent(agent: AgentSummary): Promise<void> {
 }
 
 async function cleanStressAgents(): Promise<void> {
-  const agents = await fetchAgents();
+  const agents = (await fetchAgents()).filter((agent) => agent.name.startsWith('stress-'));
   if (agents.length === 0) {
     console.log('No stress agents found to delete.');
     return;
@@ -179,14 +291,14 @@ async function cleanStressAgents(): Promise<void> {
   }
 }
 
-async function registerTrigger(results: ImportResult[]): Promise<void> {
+async function registerTrigger(results: SeedResult[]): Promise<void> {
   const responder = results.find((r) => r.name === 'stress-chain-responder');
   if (!responder || !responder.ok) {
-    console.log('  [SKIP] stress-chain-responder not imported — skipping trigger registration');
+    console.log('  [SKIP] stress-chain-responder not seeded — skipping trigger registration');
     return;
   }
 
-  const agent = normalizeImportedAgent(responder.body, responder.name);
+  const agent = normalizeAgent(responder.body, responder.name);
   if (!agent.id) {
     console.log('  [SKIP] Could not determine stress-chain-responder ID — skipping trigger');
     return;
@@ -214,15 +326,19 @@ async function registerTrigger(results: ImportResult[]): Promise<void> {
   console.error(`  [WARN] Trigger registration returned ${res.status}: ${JSON.stringify(body)}`);
 }
 
-async function importAllManifests(): Promise<ImportResult[]> {
+async function seedAllAgents(): Promise<SeedResult[]> {
   const manifestPaths = await listManifestPaths();
-  const results: ImportResult[] = [];
+  const existingAgents = await fetchAgents();
+  const existingByName = new Map(existingAgents.map((agent) => [agent.name, agent]));
+  const results: SeedResult[] = [];
 
   for (const manifestPath of manifestPaths) {
     const manifestYaml = await readFile(manifestPath, 'utf8');
-    const result = await importManifest(manifestPath.replace(/\/agent\.yaml$/, ''), manifestYaml);
+    const payload = parseManifestToPayload(manifestYaml);
+    const existingAgent = existingByName.get(payload.name);
+    const result = await upsertAgent(manifestPath.replace(/\/agent\.yaml$/, ''), payload, existingAgent?.id);
     if (!result.ok) {
-      throw new Error(`Import failed for ${manifestPath} (${result.status}): ${JSON.stringify(result.body)}`);
+      throw new Error(`Seed failed for ${manifestPath} (${result.status}): ${JSON.stringify(result.body)}`);
     }
     results.push(result);
   }
@@ -230,11 +346,11 @@ async function importAllManifests(): Promise<ImportResult[]> {
   return results;
 }
 
-function printSummary(results: ImportResult[]): void {
-  console.log(`Imported ${results.length} stress agents:`);
+function printSummary(results: SeedResult[]): void {
+  console.log(`Seeded ${results.length} stress agents:`);
 
   for (const result of results) {
-    const agent = normalizeImportedAgent(result.body, result.name);
+    const agent = normalizeAgent(result.body, result.name);
     const suffix = agent.id ? ` (${agent.id})` : '';
     console.log(`- ${agent.name}${suffix}`);
   }
@@ -246,17 +362,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  const results = await importAllManifests();
+  const results = await seedAllAgents();
   await registerTrigger(results);
 
-  const manifestPaths = await listManifestPaths();
-  const importedNames = await Promise.all(
-    manifestPaths.map(async (manifestPath) => extractAgentName(await readFile(manifestPath, 'utf8'))),
-  );
-
   printSummary(results);
-  console.log(`Trigger registered: stress.tools.complete -> stress-chain-responder`);
-  console.log(`Agents: ${importedNames.join(', ')}`);
+  console.log('Trigger registered: stress.tools.complete -> stress-chain-responder');
+  console.log(`Agents: ${results.map((result) => result.name).join(', ')}`);
 }
 
 await main();

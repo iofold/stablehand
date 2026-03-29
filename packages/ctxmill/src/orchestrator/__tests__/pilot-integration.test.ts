@@ -25,7 +25,6 @@ type AgentRow = {
   harnessConfig: string;
   manifest: Record<string, unknown> | null;
   version: number;
-  callbackUrl: string | null;
   status: string;
   createdAt: number;
   updatedAt: number;
@@ -51,7 +50,6 @@ type RunRow = {
   completedAt: number | null;
   error: string | null;
   taskDescription: string | null;
-  sessionDir?: string | null;
 };
 
 function createAgentRow(overrides?: Partial<AgentRow>): AgentRow {
@@ -67,7 +65,6 @@ function createAgentRow(overrides?: Partial<AgentRow>): AgentRow {
     harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-test' }),
     manifest: null,
     version: 1,
-    callbackUrl: null,
     status: 'created',
     createdAt: 1,
     updatedAt: 1,
@@ -101,7 +98,6 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
         metadata: (data.metadata as Record<string, unknown> | null | undefined) ?? null,
         harness: String(data.harness ?? 'langgraph'),
         harnessConfig: String(data.harnessConfig),
-        callbackUrl: (data.callbackUrl as string | null | undefined) ?? null,
         createdAt: now,
         updatedAt: now,
       });
@@ -344,7 +340,6 @@ describe('Pilot integration', () => {
           harnessConfig: { provider: 'openai', model: 'gpt-4o' },
           systemPrompt: 'Test Pilot integration',
           tools: ['read_file'],
-          callbackUrl: 'https://legacy.example/callback',
           httpTools: [{
             name: 'remote-search',
             description: 'Search a Pilot API',
@@ -362,7 +357,6 @@ describe('Pilot integration', () => {
       expect(createResponse.statusCode).toBe(201);
       expect(createResponse.json()).toEqual(expect.objectContaining({
         id: 'agent-1',
-        callbackUrl: 'https://legacy.example/callback',
         tools: ['read_file', 'remote-search'],
         metadata: {
           httpTools: [{
@@ -410,7 +404,7 @@ describe('Pilot integration', () => {
     it('enqueues only matching webhooks for each subscribed event', async () => {
       const eventBus = new TypedEventBus();
       const db = createMockDb({
-        agents: [createAgentRow({ callbackUrl: 'https://legacy.example/callback' })],
+        agents: [createAgentRow()],
         webhooks: [
           {
             id: 'hook-started',
@@ -640,7 +634,6 @@ describe('Pilot integration', () => {
           harnessConfig: { provider: 'openai', model: 'gpt-4o' },
           systemPrompt: 'Execute Pilot dispatches',
           tools: ['read_file'],
-          callbackUrl: 'https://legacy.example/callback',
           httpTools: [{
             name: 'remote-search',
             description: 'Search Pilot over HTTP',

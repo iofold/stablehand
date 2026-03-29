@@ -65,8 +65,8 @@ function fullManifest(): AgentManifest {
       triggers: [{ event: 'agent.finished', filter: { status: 'ok' } }],
       emits: [{ event: 'report.ready', schema: { type: 'object' } }],
       hitl: { approvals: [{ tool: 'bash', timeout: 30, fallback: 'reject' }] },
-      workspace: { snapshotRef: 'snap-1', maxSizeBytes: 1024 },
-      resources: { maxRunDurationSeconds: 300, maxTokensPerRun: 100000 },
+      workspace: { content: { files: [{ src: 'data.json', dest: 'data.json' }] } },
+      resources: { maxSessionDurationSeconds: 300, maxTokensPerSession: 100000 },
       mode: 'interactive',
     },
   };

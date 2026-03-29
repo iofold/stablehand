@@ -21,8 +21,8 @@ export interface ToolMetadata {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  /** Where the tool executes — sandbox (default) or orchestrator. */
-  location: 'sandbox' | 'orchestrator';
+  /** Where the tool executes — sandbox (default), orchestrator, or daemon. */
+  location: 'sandbox' | 'orchestrator' | 'daemon';
 }
 
 /* -------------------------------------------------------------------------- */
@@ -37,6 +37,12 @@ export interface ToolMetadata {
 export const ORCHESTRATOR_TOOLS: ReadonlySet<string> = new Set([
   'emit-event',
   'request-approval',
+  'a2ui-render',
+]);
+
+export const DAEMON_TOOLS: ReadonlySet<string> = new Set([
+  'artifact_upload',
+  'artifact_download',
 ]);
 
 /* -------------------------------------------------------------------------- */
@@ -53,10 +59,16 @@ export const ORCHESTRATOR_TOOLS: ReadonlySet<string> = new Set([
  */
 export function toToolMetadata(
   tool: ToolDefinition,
-  location?: 'sandbox' | 'orchestrator',
+  location?: 'sandbox' | 'orchestrator' | 'daemon',
 ): ToolMetadata {
   const resolvedLocation =
-    location ?? (ORCHESTRATOR_TOOLS.has(tool.name) || tool.requiresApproval ? 'orchestrator' : 'sandbox');
+    location
+    ?? tool.location
+    ?? (ORCHESTRATOR_TOOLS.has(tool.name) || tool.requiresApproval
+      ? 'orchestrator'
+      : DAEMON_TOOLS.has(tool.name)
+        ? 'daemon'
+        : 'sandbox');
 
   return {
     name: tool.name,

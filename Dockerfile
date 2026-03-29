@@ -12,6 +12,7 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 # Copy all package.json and config files to resolve workspace dependencies
 COPY packages/shared/package.json packages/shared/tsconfig.json packages/shared/
 COPY packages/ctxmill/package.json packages/ctxmill/tsconfig.json packages/ctxmill/
+COPY packages/sandbox-daemon/package.json packages/sandbox-daemon/tsconfig.json packages/sandbox-daemon/
 COPY packages/proto/package.json packages/proto/tsconfig.build.json packages/proto/
 COPY packages/ui/package.json packages/ui/vite.config.ts packages/ui/tsconfig.json packages/ui/
 COPY packages/ui/postcss.config.js packages/ui/tailwind.config.ts packages/ui/index.html packages/ui/
@@ -26,6 +27,7 @@ RUN pnpm install --frozen-lockfile
 # Copy source code
 COPY packages/shared/src/ packages/shared/src/
 COPY packages/ctxmill/src/ packages/ctxmill/src/
+COPY packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
 COPY packages/proto/gen/ packages/proto/gen/
 COPY packages/ui/src/ packages/ui/src/
 
@@ -34,6 +36,9 @@ RUN cd packages/shared && npx tsc --build
 
 # Build proto (compile .ts to .js so Node 22 strip-only mode can handle enums)
 RUN cd packages/proto && npx tsc -p tsconfig.build.json
+
+# Build sandbox-daemon (ctxmill depends on it via re-export stubs)
+RUN pnpm --filter @ctxmill/sandbox-daemon build
 
 # Build orchestrator
 RUN pnpm --filter ctxmill build
@@ -52,6 +57,7 @@ WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/ctxmill/package.json packages/ctxmill/
+COPY packages/sandbox-daemon/package.json packages/sandbox-daemon/
 COPY packages/proto/package.json packages/proto/
 
 # Copy example package.json files for workspace resolution
@@ -65,6 +71,7 @@ RUN pnpm install --frozen-lockfile --prod --shamefully-hoist
 # Copy built output
 COPY --from=build /app/packages/shared/dist/ packages/shared/dist/
 COPY --from=build /app/packages/ctxmill/dist/ packages/ctxmill/dist/
+COPY --from=build /app/packages/sandbox-daemon/dist/ packages/sandbox-daemon/dist/
 COPY --from=build /app/packages/proto/dist/ packages/proto/dist/
 COPY --from=build /app/packages/proto/gen/ packages/proto/gen/
 

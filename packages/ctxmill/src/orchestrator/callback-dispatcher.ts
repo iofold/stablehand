@@ -11,7 +11,7 @@ export function getRetryDelay(attempt: number): number {
   return RETRY_DELAYS_MS[idx];
 }
 
-export interface EnqueueCallbackOpts {
+interface EnqueueCallbackOpts {
   agentId: string;
   runId?: string;
   callbackUrl: string;

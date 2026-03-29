@@ -1,6 +1,6 @@
 import type { CTXMillConfig, ResolvedConfig } from './types.js';
 import { resolveConfig } from './resolve.js';
-import { createKnowledgeStoreFromConfig, createLLMProviderFromConfig, createEnvironmentFactory } from './factories.js';
+import { createKnowledgeStoreFromConfig, createLLMProviderFromConfig } from './factories.js';
 import { createDatabase, type DatabaseConnection } from '../database/connection.js';
 import { runMigrations } from '../database/migrations.js';
 import { DatabaseRepository } from '../database/repository.js';
@@ -24,24 +24,26 @@ import { RunRegistry } from '../orchestrator/run-registry.js';
 import { LearningEventSubscriber } from '../learning/event-subscriber.js';
 import { SuspendedRunMatcher } from '../orchestrator/suspended-run-matcher.js';
 import { EventTriggerManager } from '../events/trigger-manager.js';
-import type { EnvironmentFactory } from '../workspace/types.js';
 import { AgentRunService } from '../orchestrator/agent-run-service.js';
 import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
-import type { EnqueueCallbackOpts } from '../orchestrator/callback-dispatcher.js';
 import { ManifestService } from '../manifest/index.js';
 import { CachedPostgresSecretProvider } from '../secrets/postgres-provider.js';
 import { deriveKey } from '../secrets/crypto.js';
 import type { SecretProvider } from '../secrets/types.js';
 import { ContainerManager } from '../sandbox/container-manager.js';
-import { OrphanCleanup } from '../sandbox/orphan-cleanup.js';
-import { PauseManager } from '../sandbox/pause-manager.js';
+import { WorkspaceDiffService } from '../sandbox/workspace-diff.js';
+import { SystemSettingsService } from '../settings/service.js';
+import { ContainerLifecyclePolicy } from '../orchestrator/container-lifecycle-policy.js';
 import { SandboxRunService } from '../orchestrator/sandbox-run-service.js';
 import type { SandboxSessionManager } from '../orchestrator/sandbox-run-service.js';
 import { SandboxSessionManager as SandboxSessionManagerImpl } from '../orchestrator/sandbox-session-manager.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
+import { LocalToolProvider } from '../tool/providers/local.js';
+import { ArtifactToolProvider } from '../tool/providers/artifact.js';
 import { builtinTools, builtinToolNames } from '../tool/builtin/index.js';
-import { ORCHESTRATOR_TOOLS } from '../tool/metadata.js';
+import { ORCHESTRATOR_TOOLS, DAEMON_TOOLS } from '../tool/metadata.js';
 import { zodToJsonSchema } from '../tool/schema-convert.js';
+import { ArtifactStore } from '../artifact/artifact-store.js';
 
 export interface AppContainer {
   config: ResolvedConfig;
@@ -60,7 +62,6 @@ export interface AppContainer {
   learningSubscriber?: LearningEventSubscriber;
   suspendedRunMatcher: SuspendedRunMatcher;
   triggerManager: EventTriggerManager;
-  envFactory: EnvironmentFactory;
   agentRunService: AgentRunService;
   harnessRegistry: HarnessRegistry;
   manifestService: ManifestService;
@@ -68,13 +69,19 @@ export interface AppContainer {
   callbackDispatcher: CallbackDispatcher;
   /** Container manager for sandbox container lifecycle. */
   containerManager: ContainerManager;
-  /** Orphan container cleanup service. */
-  orphanCleanup: OrphanCleanup;
+  workspaceDiffService: WorkspaceDiffService;
+  settingsService: SystemSettingsService;
+  lifecyclePolicy: ContainerLifecyclePolicy;
+  artifactStore?: ArtifactStore;
+  /** Sandbox session manager (typed as implementation for reconciliation). */
+  sessionManager: SandboxSessionManagerImpl;
   /** Gracefully close database connections */
   close: () => Promise<void>;
 }
 
 export const VALID_WEBHOOK_EVENTS = ['run.started', 'run.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'] as const;
+
+type EnqueueCallbackArgs = Parameters<CallbackDispatcher['enqueue']>[0];
 
 async function enqueueIfSubscribed(
   db: DatabaseRepository,
@@ -84,7 +91,7 @@ async function enqueueIfSubscribed(
   payload: Record<string, unknown>,
   runId?: string,
 ): Promise<void> {
-  const deliveries: EnqueueCallbackOpts[] = [];
+  const deliveries: EnqueueCallbackArgs[] = [];
 
   const hooks = await db.getWebhooksForAgent(agentId);
   for (const hook of hooks) {
@@ -170,6 +177,8 @@ export async function createContainer(
   await runMigrations(dbConn.pgClient);
 
   const db = new DatabaseRepository(dbConn.db);
+  const settingsService = new SystemSettingsService(db);
+  const startupSettings = await settingsService.getAll();
 
   // ── Secrets ─────────────────────────────────────────────
   const secretMasterKey = deriveKey(
@@ -197,6 +206,30 @@ export async function createContainer(
     toolExecutor.register(tool);
   }
   const toolRegistry = new DefaultToolRegistry();
+  toolRegistry.addProvider(new LocalToolProvider(toolExecutor));
+
+  let artifactStore: ArtifactStore | undefined;
+  const s3Endpoint = process.env.S3_ENDPOINT;
+  const s3PublicEndpoint = process.env.S3_PUBLIC_ENDPOINT;
+  const s3AccessKey = process.env.S3_ACCESS_KEY;
+  const s3SecretKey = process.env.S3_SECRET_KEY;
+  const s3Bucket = process.env.S3_BUCKET || 'ctxmill-artifacts';
+  const s3Region = process.env.S3_REGION || 'us-east-1';
+
+  if (s3Endpoint && s3AccessKey && s3SecretKey) {
+    artifactStore = new ArtifactStore({
+      s3Endpoint,
+      s3PublicEndpoint,
+      s3Region,
+      s3AccessKey,
+      s3SecretKey,
+      bucket: s3Bucket,
+    });
+    await artifactStore.ensureBucket();
+    toolRegistry.addProvider(new ArtifactToolProvider());
+  }
+
+  await toolRegistry.refresh();
 
   // ── Events ──────────────────────────────────────────────
   const eventBus = new TypedEventBus({
@@ -240,9 +273,6 @@ export async function createContainer(
     }
   });
 
-  // ── Workspace Environment ────────────────────────────────
-  const envFactory: EnvironmentFactory = createEnvironmentFactory(config.execution.type);
-
   // ── Harness Registry ────────────────────────────────────
   // All harnesses are now stateless — they resolve dependencies from
   // HarnessRunConfig at runtime, so no orchestrator objects are needed.
@@ -252,7 +282,11 @@ export async function createContainer(
   harnessRegistry.register(new PIAgentHarness());
 
   // ── Agent Execution ─────────────────────────────────────
-  const runRegistry = new RunRegistry(db, eventBus);
+  const runRegistry = new RunRegistry({
+    db,
+    eventBus,
+    defaultMaxConcurrent: startupSettings.maxConcurrentRunsPerAgent,
+  });
   await runRegistry.loadFromDb();
 
   // ── Agent Run Service ────────────────────────────────────
@@ -327,14 +361,19 @@ export async function createContainer(
         timestamp: Date.now(),
       });
     }).catch((err) => {
-      console.error(`[EventTriggerManager] run error for trigger ${triggerId}:`, err);
+      console.error(`[event-trigger] executeRun failed for agent ${agentId}:`, err);
     });
-  });
+  }, startupSettings.maxTriggerDepth);
   await triggerManager.start();
 
   // ── Sandbox Run Service ─────────────────────────────────
   const containerManager = new ContainerManager({
-    maxGlobalContainers: config.execution.maxGlobalContainers,
+    maxGlobalContainers: startupSettings.maxGlobalContainers,
+    queueTimeoutMs: startupSettings.queueTimeoutMs,
+    defaultCpus: startupSettings.defaultCpus,
+    defaultMemoryMb: startupSettings.defaultMemoryMb,
+    defaultPidsLimit: startupSettings.defaultPidsLimit,
+    defaultTimeoutSec: startupSettings.defaultTimeoutSec,
   });
   // Ensure the Docker bridge network exists before any containers are created.
   // This is best-effort — if Docker is not available (e.g. in tests), the
@@ -344,9 +383,57 @@ export async function createContainer(
   } catch (err) {
     console.warn('[Container] Docker network setup failed (sandbox runs will not work):', (err as Error).message);
   }
-
-  const pauseManager = new PauseManager({
+  const workspaceDiffService = new WorkspaceDiffService({
     containerManager,
+    settingsService,
+  });
+
+  let sessionManagerRef: SandboxSessionManagerImpl | null = null;
+
+  const lifecyclePolicy = new ContainerLifecyclePolicy({
+    containerManager,
+    db,
+    logger: {
+      info: (msg, ...args) => console.log('[LifecyclePolicy]', msg, ...args),
+      warn: (msg, ...args) => console.warn('[LifecyclePolicy]', msg, ...args),
+      error: (msg, ...args) => console.error('[LifecyclePolicy]', msg, ...args),
+      debug: (msg, ...args) => console.debug('[LifecyclePolicy]', msg, ...args),
+    },
+    config: {
+      reconciliationIntervalMs: startupSettings.reconciliationIntervalMs,
+      pauseDelayMs: startupSettings.pauseDelayMs,
+      maxPauseDurationMs: startupSettings.maxPauseDurationMs,
+      idleTimeoutMs: startupSettings.idleTimeoutMs,
+      freezePromotionMs: startupSettings.freezePromotionMs,
+    },
+    onPromoteToCheckpoint: async (sessionId: string) => {
+      if (!sessionManagerRef) {
+        throw new Error('onPromoteToCheckpoint: session manager not initialized');
+      }
+      await sessionManagerRef.suspendSession(sessionId, 'hitl-promotion');
+      interruptManager.resolveForSession(sessionId, 'timeout', 'Approval timed out — session checkpointed by lifecycle policy');
+    },
+    reconciliationCallbacks: {
+      onSessionReconnected: (session, grpcClient) => {
+        if (sessionManagerRef) {
+          sessionManagerRef.onSessionReconnected(session.conversationId, {
+            sessionId: session.id,
+            conversationId: session.conversationId,
+            agentId: session.agentId,
+            containerName: session.containerName ?? '',
+            containerId: session.containerId ?? '',
+            status: (session.status as 'ACTIVE' | 'FROZEN' | 'CHECKPOINTED' | 'RESTORING') ?? 'ACTIVE',
+            harnessName: session.harnessName,
+            ...(grpcClient ? { grpcClient } : {}),
+          });
+        }
+      },
+      onSessionEvicted: (sessionId, conversationId) => {
+        if (sessionManagerRef) {
+          sessionManagerRef.onSessionEvicted(sessionId, conversationId);
+        }
+      }
+    },
   });
 
   // ── Sandbox Secrets (allowlisted env vars for container injection) ──
@@ -356,6 +443,11 @@ export async function createContainer(
     'GOOGLE_API_KEY',
     'OPENAI_BASE_URL',
     'OPENAI_MODEL',
+    'S3_ENDPOINT',
+    'S3_ACCESS_KEY',
+    'S3_SECRET_KEY',
+    'S3_BUCKET',
+    'S3_REGION',
   ] as const;
 
   const sandboxSecrets: Readonly<Record<string, string>> = Object.fromEntries(
@@ -366,7 +458,7 @@ export async function createContainer(
 
   const resolveToolsForAgent = (toolNames: string[]) => {
     const declaredTools = new Set(toolNames);
-    const allTools = new Map<string, { name: string; description: string; input: unknown; requiresApproval?: boolean }>();
+    const allTools = new Map<string, { name: string; description: string; input: unknown; requiresApproval?: boolean; location?: 'sandbox' | 'orchestrator' | 'daemon' }>();
 
     for (const tool of toolExecutor.list()) {
       if (declaredTools.has(tool.name) || builtinToolNames.has(tool.name)) {
@@ -377,8 +469,9 @@ export async function createContainer(
       allTools.set(tool.name, tool);
     }
 
-    return Array.from(allTools.values()).map((tool) => {
-      const isOrchestrator = ORCHESTRATOR_TOOLS.has(tool.name) || tool.requiresApproval;
+  return Array.from(allTools.values()).map((tool) => {
+      const isDaemon = DAEMON_TOOLS.has(tool.name) || tool.location === 'daemon';
+      const isOrchestrator = !isDaemon && (tool.location === 'orchestrator' || ORCHESTRATOR_TOOLS.has(tool.name) || tool.requiresApproval);
       let inputSchemaJson = '{"type":"object","properties":{}}';
       try {
         const schema = zodToJsonSchema(tool.input as any) as Record<string, unknown>;
@@ -390,34 +483,44 @@ export async function createContainer(
         name: tool.name,
         description: tool.description,
         inputSchemaJson,
-        location: isOrchestrator ? 2 : 1,
+        location: isDaemon ? 3 : isOrchestrator ? 2 : 1,
       };
     });
   };
 
-  const realSessionManager = new SandboxSessionManagerImpl({
+  const realSessionManagerDeps: ConstructorParameters<typeof SandboxSessionManagerImpl>[0] = {
     containerManager,
     db,
-    pauseManager,
+    lifecyclePolicy,
+    interruptManager,
     sandboxSecrets,
     resolveToolsForAgent,
+    dataDir,
+    workspaceDiffService,
     logger: {
-      info: (msg, ...args) => console.log('[SessionManager]', msg, ...args),
-      warn: (msg, ...args) => console.warn('[SessionManager]', msg, ...args),
-      error: (msg, ...args) => console.error('[SessionManager]', msg, ...args),
-      debug: (msg, ...args) => console.debug('[SessionManager]', msg, ...args),
+      info: (msg: string, ...args: unknown[]) => console.log('[SessionManager]', msg, ...args),
+      warn: (msg: string, ...args: unknown[]) => console.warn('[SessionManager]', msg, ...args),
+      error: (msg: string, ...args: unknown[]) => console.error('[SessionManager]', msg, ...args),
+      debug: (msg: string, ...args: unknown[]) => console.debug('[SessionManager]', msg, ...args),
     },
     config: {
-      idleTimeoutMs: 300_000,
+      idleTimeoutMs: startupSettings.idleTimeoutMs,
       maxQueuedMessages: 100,
+      turnTimeoutMs: startupSettings.turnTimeoutMs,
     },
-  });
+  };
+
+  const realSessionManager = new SandboxSessionManagerImpl(realSessionManagerDeps);
 
   const sessionManager: SandboxSessionManager = realSessionManager;
+  sessionManagerRef = realSessionManager;
 
   const sandboxRunService = new SandboxRunService({
     sessionManager,
     eventBus,
+    onSessionReady: (runId, sessionId) => {
+      runRegistry.setRunSessionId(runId, sessionId);
+    },
   });
 
   const agentRunService = new AgentRunService({
@@ -432,7 +535,7 @@ export async function createContainer(
   });
   agentRunServiceRef = agentRunService;
 
-  const manifestService = new ManifestService(db);
+  const manifestService = new ManifestService(db, dataDir);
 
   // ── Callback Dispatcher ──────────────────────────────────
   const callbackDispatcher = new CallbackDispatcher(db);
@@ -440,18 +543,6 @@ export async function createContainer(
   registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
 
   callbackDispatcher.start();
-
-  // ── Orphan Cleanup ─────────────────────────────────────
-  const orphanCleanup = new OrphanCleanup({
-    containerManager,
-    getActiveRunIds: async () => {
-      const activeRuns = await db.getActiveRuns();
-      return new Set(activeRuns.map((r) => r.id));
-    },
-    markRunFailed: async (runId: string, error: string) => {
-      await db.updateRun(runId, { status: 'failed', error });
-    },
-  });
 
   return {
     config,
@@ -470,16 +561,19 @@ export async function createContainer(
     learningSubscriber,
     suspendedRunMatcher,
     triggerManager,
-    envFactory,
     agentRunService,
     harnessRegistry,
     manifestService,
     secretProvider,
     callbackDispatcher,
     containerManager,
-    orphanCleanup,
+    workspaceDiffService,
+    settingsService,
+    lifecyclePolicy,
+    artifactStore,
+    sessionManager: realSessionManager,
     close: async () => {
-      orphanCleanup.stopPeriodicSweep();
+      lifecyclePolicy.stop();
       callbackDispatcher.stop();
       await dbConn.close();
     },

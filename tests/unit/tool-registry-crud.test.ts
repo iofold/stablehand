@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js';
 import type { ToolProvider } from '../../packages/ctxmill/src/tool/provider.js';
-import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 
 function createToolDefinition(
   name: string,

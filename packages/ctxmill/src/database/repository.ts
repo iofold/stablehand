@@ -17,11 +17,9 @@ type RunInsert = typeof pgSchema.agentRuns.$inferInsert;
 type RunSelect = typeof pgSchema.agentRuns.$inferSelect;
 type SuspendedRunInsert = typeof pgSchema.suspendedRuns.$inferInsert;
 export type SuspendedRunRow = typeof pgSchema.suspendedRuns.$inferSelect;
-type ScheduledEventInsert = typeof pgSchema.scheduledEvents.$inferInsert;
 export type ScheduledEventRow = typeof pgSchema.scheduledEvents.$inferSelect;
 type TriggerInsert = typeof pgSchema.eventTriggers.$inferInsert;
 type TriggerSelect = typeof pgSchema.eventTriggers.$inferSelect;
-type VersionInsert = typeof pgSchema.agentVersions.$inferInsert;
 type VersionSelect = typeof pgSchema.agentVersions.$inferSelect;
 type InterruptInsert = typeof pgSchema.pendingInterrupts.$inferInsert;
 export type InterruptRow = typeof pgSchema.pendingInterrupts.$inferSelect;
@@ -30,6 +28,9 @@ export type CallbackOutboxRow = typeof pgSchema.callbackOutbox.$inferSelect;
 type WebhookInsert = typeof pgSchema.webhooks.$inferInsert;
 export type WebhookRow = typeof pgSchema.webhooks.$inferSelect;
 export type SandboxSessionRow = typeof pgSchema.sandboxSessions.$inferSelect;
+export type SystemSettingRow = typeof pgSchema.systemSettings.$inferSelect;
+type ArtifactInsert = typeof pgSchema.artifacts.$inferInsert;
+type ArtifactRow = typeof pgSchema.artifacts.$inferSelect;
 
 export interface Checkpoint {
   id: string;
@@ -254,7 +255,18 @@ export class DatabaseRepository {
   // ── Execution Traces ────────────────────────────────────
 
   async saveTrace(data: TraceInsert): Promise<TraceSelect> {
-    const [trace] = await this.db.insert(this.schema.executionTraces).values(data).returning();
+    const [trace] = await this.db
+      .insert(this.schema.executionTraces)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [this.schema.executionTraces.runId, this.schema.executionTraces.agentId],
+        set: {
+          steps: data.steps,
+          completedAt: data.completedAt,
+          outcome: data.outcome,
+        },
+      })
+      .returning();
     if (!trace) {
       throw new Error('Expected insert to return a row but got undefined');
     }
@@ -916,6 +928,12 @@ export class DatabaseRepository {
     });
   }
 
+  async getAllPendingInterrupts(): Promise<InterruptRow[]> {
+    return this.db.query.pendingInterrupts.findMany({
+      where: eq(this.schema.pendingInterrupts.status, 'pending'),
+    });
+  }
+
   async resolveInterrupt(
     id: string,
     action: string,
@@ -935,8 +953,14 @@ export class DatabaseRepository {
   }
 
   async cleanupExpiredInterrupts(beforeTime: number): Promise<number> {
-    const deleted = await this.db
-      .delete(this.schema.pendingInterrupts)
+    const updated = await this.db
+      .update(this.schema.pendingInterrupts)
+      .set({
+        status: 'resolved',
+        resolvedAt: Date.now(),
+        resolvedAction: 'timeout',
+        resolvedData: 'Approval expired',
+      })
       .where(
         and(
           eq(this.schema.pendingInterrupts.status, 'pending'),
@@ -944,7 +968,16 @@ export class DatabaseRepository {
         ),
       )
       .returning({ id: this.schema.pendingInterrupts.id });
-    return deleted.length;
+    return updated.length;
+  }
+
+  async getResolvedInterruptsForSession(sessionId: string): Promise<InterruptRow[]> {
+    return this.db.query.pendingInterrupts.findMany({
+      where: and(
+        eq(this.schema.pendingInterrupts.sessionId, sessionId),
+        eq(this.schema.pendingInterrupts.status, 'resolved'),
+      ),
+    });
   }
 
   // ── Callback Outbox ──────────────────────────────────────
@@ -1129,6 +1162,28 @@ export class DatabaseRepository {
       .where(eq(this.schema.sandboxSessions.agentId, agentId));
   }
 
+  async getSessionStatusCountsByAgent(): Promise<Map<string, { active: number; frozen: number; checkpointed: number; terminated: number }>> {
+    const rows = await this.db
+      .select({
+        agentId: this.schema.sandboxSessions.agentId,
+        status: this.schema.sandboxSessions.status,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(this.schema.sandboxSessions)
+      .groupBy(this.schema.sandboxSessions.agentId, this.schema.sandboxSessions.status);
+
+    const result = new Map<string, { active: number; frozen: number; checkpointed: number; terminated: number }>();
+    for (const row of rows) {
+      if (!result.has(row.agentId)) {
+        result.set(row.agentId, { active: 0, frozen: 0, checkpointed: 0, terminated: 0 });
+      }
+      const counts = result.get(row.agentId)!;
+      const key = row.status.toLowerCase() as 'active' | 'frozen' | 'checkpointed' | 'terminated';
+      if (key in counts) counts[key] = row.count;
+    }
+    return result;
+  }
+
   async createCheckpoint(checkpoint: {
     runId: string;
     agentId: string;
@@ -1258,5 +1313,76 @@ export class DatabaseRepository {
       .from(this.schema.agentCheckpoints)
       .where(eq(this.schema.agentCheckpoints.sessionId, sessionId));
     return Number(row?.totalSize ?? 0);
+  }
+
+  async getSystemSetting(key: string): Promise<string | null> {
+    const rows = await this.db
+      .select()
+      .from(this.schema.systemSettings)
+      .where(eq(this.schema.systemSettings.key, key))
+      .limit(1);
+    return rows[0]?.value ?? null;
+  }
+
+  async setSystemSetting(key: string, value: string): Promise<void> {
+    await this.db
+      .insert(this.schema.systemSettings)
+      .values({ key, value })
+      .onConflictDoUpdate({
+        target: this.schema.systemSettings.key,
+        set: { value, updatedAt: new Date().toISOString() },
+      });
+  }
+
+  async getAllSystemSettings(): Promise<Record<string, string>> {
+    const rows = await this.db.select().from(this.schema.systemSettings);
+    return Object.fromEntries(rows.map((r: SystemSettingRow) => [r.key, r.value]));
+  }
+
+  // ── Artifacts ──────────────────────────────────────────────
+
+  async saveArtifact(data: ArtifactInsert): Promise<ArtifactRow> {
+    const [row] = await this.db.insert(this.schema.artifacts).values(data).returning();
+    if (!row) throw new Error('Expected insert to return a row but got undefined');
+    return row;
+  }
+
+  async getArtifact(id: string): Promise<ArtifactRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(this.schema.artifacts)
+      .where(eq(this.schema.artifacts.id, id));
+    return row;
+  }
+
+  async listArtifactsForAgent(agentId: string, limit = 100, offset = 0): Promise<ArtifactRow[]> {
+    return this.db.query.artifacts.findMany({
+      where: and(
+        eq(this.schema.artifacts.agentId, agentId),
+        eq(this.schema.artifacts.status, 'active'),
+      ),
+      orderBy: [desc(this.schema.artifacts.createdAt)],
+      limit,
+      offset,
+    });
+  }
+
+  async listArtifactsForRun(runId: string): Promise<ArtifactRow[]> {
+    return this.db.query.artifacts.findMany({
+      where: and(
+        eq(this.schema.artifacts.runId, runId),
+        eq(this.schema.artifacts.status, 'active'),
+      ),
+      orderBy: [desc(this.schema.artifacts.createdAt)],
+    });
+  }
+
+  async deleteArtifact(id: string): Promise<ArtifactRow | undefined> {
+    const [row] = await this.db
+      .update(this.schema.artifacts)
+      .set({ status: 'deleted', updatedAt: Date.now() })
+      .where(eq(this.schema.artifacts.id, id))
+      .returning();
+    return row;
   }
 }

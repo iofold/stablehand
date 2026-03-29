@@ -201,7 +201,6 @@ describe('POST /api/runs/:id/resume', () => {
             completedAt: null,
             error: null,
             taskDescription: 'suspended for checkpoint',
-            sessionDir: null,
             pausedAt: Date.now() - 5000,
             pausedReason: 'checkpoint_saved',
           },

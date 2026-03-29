@@ -86,6 +86,7 @@ function createDeps(overrides: {
     completeRun: ReturnType<typeof vi.fn>;
     getAbortSignal: ReturnType<typeof vi.fn>;
     pauseRun: ReturnType<typeof vi.fn>;
+    resumeRun: ReturnType<typeof vi.fn>;
   };
   learningPipeline?: { process: ReturnType<typeof vi.fn> };
   eventBus?: TypedEventBus;
@@ -103,6 +104,7 @@ function createDeps(overrides: {
     completeRun: vi.fn().mockResolvedValue(undefined),
     getAbortSignal: vi.fn().mockReturnValue(undefined),
     pauseRun: vi.fn().mockResolvedValue(undefined),
+    resumeRun: vi.fn().mockResolvedValue(undefined),
   };
   const learningPipeline = overrides.learningPipeline;
   const eventBus = overrides.eventBus;
@@ -156,14 +158,17 @@ describe('AgentRunService', () => {
       { type: 'RUN_FINISHED', timestamp: 5, runId: 'run-1' },
     ];
 
+    const broadcasterForwarded = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT']);
+    const directEvents = events.filter((e) => !broadcasterForwarded.has(e.type));
+
     const { deps, sandboxRunService, sse } = createDeps();
     sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
 
     const service = new AgentRunService(deps);
     await service.executeRun(makeParams());
 
-    expect(sse.broadcast).toHaveBeenCalledTimes(events.length);
-    for (const [index, event] of events.entries()) {
+    expect(sse.broadcast).toHaveBeenCalledTimes(directEvents.length);
+    for (const [index, event] of directEvents.entries()) {
       expect(sse.broadcast).toHaveBeenNthCalledWith(index + 1, 'agent-1', event);
     }
   });
@@ -234,10 +239,10 @@ describe('AgentRunService', () => {
     expect(db.addMessage).not.toHaveBeenCalled();
   });
 
-  it('does not persist TOOL_CALL lifecycle events without MESSAGE_COMMITTED', async () => {
+  it('does not persist TOOL_CALL lifecycle events before a result arrives', async () => {
     const events: StreamEvent[] = [
       { type: 'TOOL_CALL_START', timestamp: 1, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search', result: 'found', durationMs: 42 },
+      { type: 'TOOL_CALL_END', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1' },
       { type: 'RUN_FINISHED', timestamp: 3, runId: 'run-1' },
     ];
 
@@ -248,6 +253,58 @@ describe('AgentRunService', () => {
     await service.executeRun(makeParams());
 
     expect(db.addMessage).not.toHaveBeenCalled();
+  });
+
+  it('persists assistant and tool messages separately for tool-use turns', async () => {
+    const events: StreamEvent[] = [
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', content: 'Let me check.' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
+      { type: 'TOOL_CALL_ARGS', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', args: '{"q":"test"}' },
+      { type: 'TOOL_CALL_END', timestamp: 4, runId: 'run-1', toolCallId: 'tc-1' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search', result: 'Found 3 results', durationMs: 42 },
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 6, runId: 'run-1', messageId: 'm1', content: 'Based on the results:' },
+      makeCommittedEvent({ timestamp: 7, content: 'Based on the results:' }),
+      { type: 'RUN_FINISHED', timestamp: 8, runId: 'run-1' },
+    ];
+
+    const { deps, sandboxRunService, db } = createDeps();
+    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+
+    const service = new AgentRunService(deps);
+    await service.executeRun(makeParams());
+
+    expect(db.addMessage).toHaveBeenCalledTimes(3);
+    expect(db.addMessage).toHaveBeenNthCalledWith(1, {
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      role: 'assistant',
+      content: 'Let me check.',
+      toolCalls: [
+        {
+          id: 'tc-1',
+          name: 'search',
+          args: '{"q":"test"}',
+          status: 'complete',
+        },
+      ],
+      toolCallId: undefined,
+    });
+    expect(db.addMessage).toHaveBeenNthCalledWith(2, {
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      role: 'tool',
+      content: 'Found 3 results',
+      toolCalls: undefined,
+      toolCallId: 'tc-1',
+    });
+    expect(db.addMessage).toHaveBeenNthCalledWith(3, {
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      role: 'assistant',
+      content: 'Based on the results:',
+      toolCalls: undefined,
+      toolCallId: undefined,
+    });
   });
 
   it('calls completeRun after a successful turn', async () => {
@@ -299,10 +356,13 @@ describe('AgentRunService', () => {
     }
   });
 
-  it('pauses the run on HITL_PAUSE and does not complete it', async () => {
+  it('pauses the run on HITL_PAUSE and resumes when events continue', async () => {
     const { deps, sandboxRunService, runRegistry } = createDeps();
     sandboxRunService.executeSessionTurn.mockReturnValue(
-      eventStream([{ type: 'HITL_PAUSE', timestamp: 1, runId: 'run-1', reason: 'approval_required' }]),
+      eventStream([
+        { type: 'HITL_PAUSE', timestamp: 1, runId: 'run-1', reason: 'approval_required' },
+        { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
+      ]),
     );
 
     const service = new AgentRunService(deps);
@@ -310,7 +370,8 @@ describe('AgentRunService', () => {
 
     if (!(runRegistry instanceof RunRegistry)) {
       expect(runRegistry.pauseRun).toHaveBeenCalledWith('run-1', 'approval_required');
-      expect(runRegistry.completeRun).not.toHaveBeenCalled();
+      expect(runRegistry.resumeRun).toHaveBeenCalledWith('run-1');
+      expect(runRegistry.completeRun).toHaveBeenCalled();
     }
   });
 
@@ -777,11 +838,9 @@ describe('AgentRunService', () => {
 
     it('preserves original event fields when broadcasting', async () => {
       const originalEvent = {
-        type: 'TEXT_MESSAGE_CONTENT',
+        type: 'RUN_STARTED',
         timestamp: 12345,
         runId: 'run-1',
-        messageId: 'msg-1',
-        content: 'test',
         customField: 'should-be-preserved',
       } satisfies AGUIEvent;
 

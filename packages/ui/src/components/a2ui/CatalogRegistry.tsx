@@ -15,7 +15,7 @@ import { RadarChart } from '@/components/charts/RadarChart';
 import { Treemap } from '@/components/charts/Treemap';
 import { NetworkGraph } from '@/components/charts/NetworkGraph';
 import { normalizeA2UIComponentName } from '@/lib/a2ui';
-import { hitlBlockAdapters } from './HitlBlockAdapters';
+
 
 type AnyProps = Record<string, unknown>;
 
@@ -65,5 +65,3 @@ registerCatalog('charts', {
   Treemap: c(Treemap),
   NetworkGraph: c(NetworkGraph),
 });
-
-registerCatalog('hitl', hitlBlockAdapters);

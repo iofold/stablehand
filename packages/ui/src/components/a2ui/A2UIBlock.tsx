@@ -1,10 +1,10 @@
 import { resolve } from './CatalogRegistry';
+import type { ApiA2UIBlock } from '@ctxmill/shared';
 import { A2UIErrorBoundary } from './A2UIErrorBoundary';
-import type { A2UIBlock as A2UIBlockType } from '@/stores/conversation';
 import { normalizeA2UIComponentName } from '@/lib/a2ui';
 
 interface A2UIBlockProps {
-  block: A2UIBlockType;
+  block: ApiA2UIBlock;
 }
 
 export function A2UIBlock({ block }: A2UIBlockProps) {

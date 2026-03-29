@@ -3,7 +3,7 @@ import { EventTriggerManager, MAX_TRIGGER_DEPTH } from '../../packages/ctxmill/s
 import { AgentRunService } from '../../packages/ctxmill/src/orchestrator/agent-run-service.js';
 import type { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import type { AgentDefinition } from '../../packages/ctxmill/src/types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import type { SandboxRunService } from '../../packages/ctxmill/src/orchestrator/sandbox-run-service.js';
 
 /** Helper to build an async generator from an array of events */
@@ -41,7 +41,6 @@ function makeMockRunRegistry() {
     startRun: vi.fn().mockResolvedValue({ id: 'run-triggered', agentId: 'triggered-agent' }),
     completeRun: vi.fn(),
     getAbortSignal: vi.fn().mockReturnValue(undefined),
-    updateSessionDir: vi.fn(),
   };
 }
 

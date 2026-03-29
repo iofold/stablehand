@@ -1,20 +1,15 @@
 import { create } from 'zustand';
-import type { ApiToolCallState, ApiA2UIBlock } from '@ctxmill/shared';
-import {
-  extractEmbeddedA2UIBlocks,
-  normalizeA2UIBlock,
-  normalizeStoredA2UIBlocks,
-} from '@/lib/a2ui';
+import type { ApiToolCallState } from '@ctxmill/shared';
+import { useInterruptStore } from './interrupt';
 
 export type ToolCallState = ApiToolCallState;
-export type A2UIBlock = ApiA2UIBlock;
 
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  toolCallId?: string;
   toolCalls?: ToolCallState[];
-  a2uiBlocks?: A2UIBlock[];
   createdAt: string;
 }
 
@@ -90,18 +85,17 @@ export function normalizeConversationMessage(
   fallbackId: string,
 ): Message {
   const id = (value.id as string) || fallbackId;
-  const content = (value.content as string) || '';
+  const rawContent = (value.content as string) || '';
   const role = ((value.role as string) || 'assistant') as Message['role'];
-  const a2uiBlocks = normalizeStoredA2UIBlocks(value.a2uiBlocks, `${id}-a2ui`)
-    ?? normalizeStoredA2UIBlocks(value.a2uiPayload, `${id}-a2ui`)
-    ?? (role === 'assistant' ? extractEmbeddedA2UIBlocks(content, `${id}-embedded`) : undefined);
+
+  const content = rawContent;
 
   return {
     id,
     role,
     content,
+    toolCallId: typeof value.toolCallId === 'string' ? value.toolCallId : undefined,
     toolCalls: normalizeStoredToolCalls(value.toolCalls, id),
-    a2uiBlocks,
     createdAt: normalizeCreatedAt(value.createdAt),
   };
 }
@@ -114,15 +108,21 @@ interface ConversationStore {
   streamingContent: string;
   streamingRole: 'user' | 'assistant';
   toolCalls: Map<string, ToolCallState>;
-  a2uiBlocks: A2UIBlock[];
   seenEventIds: Set<string>;
+  _historyLoaded: boolean;
 
   addUserMessage: (content: string) => void;
   handleSSEEvent: (event: Record<string, unknown>) => void;
   loadMessages: (msgs: Message[]) => void;
   setActiveConversation: (conversationId: string | null) => void;
   reset: () => void;
+  addSystemMessage: (content: string) => void;
 }
+
+// Track tool calls that received complete args via TOOL_CALL_START.
+// When the harness provides full args upfront, subsequent TOOL_CALL_ARGS
+// deltas (echoed by the SSE broadcaster) must be skipped to avoid doubling.
+const toolCallsWithStartArgs = new Set<string>();
 
 let messageCounter = 0;
 function nextId() {
@@ -154,23 +154,31 @@ function scheduleDeltaFlush(set: (updater: (state: ConversationStore) => Partial
 }
 
 function flushPendingDelta(set: (updater: (state: ConversationStore) => Partial<ConversationStore>) => void): void {
-  if (flushCallback) {
-    flushCallback();
+  if (pendingDelta.length > 0) {
+    set((state) => ({
+      streamingContent: state.streamingContent + pendingDelta,
+    }));
+    pendingDelta = '';
   }
+  flushScheduled = false;
+  flushCallback = null;
 }
 
-function buildAssistantMessage(state: Pick<ConversationStore, 'streamingContent' | 'toolCalls' | 'a2uiBlocks'>): Message | undefined {
+function buildAssistantMessage(state: Pick<ConversationStore, 'streamingContent' | 'toolCalls'>): Message | undefined {
   const toolCalls = Array.from(state.toolCalls.values());
-  if (!state.streamingContent && toolCalls.length === 0 && state.a2uiBlocks.length === 0) {
+  if (!state.streamingContent && toolCalls.length === 0) {
     return undefined;
   }
 
+  const msgId = nextId();
+
+  const content = state.streamingContent;
+
   return {
-    id: nextId(),
+    id: msgId,
     role: 'assistant',
-    content: state.streamingContent,
+    content,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    a2uiBlocks: state.a2uiBlocks.length > 0 ? [...state.a2uiBlocks] : undefined,
     createdAt: new Date().toISOString(),
   };
 }
@@ -183,8 +191,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   streamingContent: '',
   streamingRole: 'assistant',
   toolCalls: new Map(),
-  a2uiBlocks: [],
   seenEventIds: new Set(),
+  _historyLoaded: false,
 
   addUserMessage: (content: string) => {
     const msg: Message = {
@@ -193,7 +201,17 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       content,
       createdAt: new Date().toISOString(),
     };
-    set((state) => ({ messages: [...state.messages, msg] }));
+    set((state) => ({ messages: [...state.messages, msg], _historyLoaded: false }));
+  },
+
+  addSystemMessage: (content: string) => {
+    const msg: Message = {
+      id: nextId(),
+      role: 'system',
+      content,
+      createdAt: new Date().toISOString(),
+    };
+    set((prev) => ({ messages: [...prev.messages, msg] }));
   },
 
   setActiveConversation: (conversationId: string | null) => {
@@ -207,7 +225,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       streamingContent: '',
       streamingRole: 'assistant',
       toolCalls: new Map(),
-      a2uiBlocks: [],
+      _historyLoaded: msgs.length > 0,
     });
   },
 
@@ -228,25 +246,42 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
     switch (type) {
       case 'RUN_STARTED': {
+        const { _historyLoaded } = get();
+        if (_historyLoaded) {
+          break;
+        }
         set({
           isStreaming: true,
           currentRunId: (event.runId as string) || null,
           streamingContent: '',
           toolCalls: new Map(),
-          a2uiBlocks: [],
           seenEventIds: new Set(),
         });
         break;
       }
 
       case 'TEXT_MESSAGE_START': {
+        const pendingTCs = Array.from(get().toolCalls.values());
+        if (pendingTCs.length > 0) {
+          const tcMsg: Message = {
+            id: nextId(),
+            role: 'assistant',
+            content: '',
+            toolCalls: pendingTCs,
+            createdAt: new Date().toISOString(),
+          };
+          set((prev) => ({
+            messages: [...prev.messages, tcMsg],
+            toolCalls: new Map(),
+          }));
+        }
         const role = ((event.role as string) || 'assistant') as 'user' | 'assistant';
         set({ streamingContent: '', streamingRole: role });
         break;
       }
 
       case 'TEXT_MESSAGE_CONTENT': {
-        // Skip user echoes
+        if (get()._historyLoaded) break;
         if (get().streamingRole === 'user') break;
         const delta = (event.content as string) || (event.delta as string) || '';
         pendingDelta += delta;
@@ -269,14 +304,25 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           streamingContent: '',
           streamingRole: 'assistant',
           toolCalls: new Map(),
-          a2uiBlocks: [],
         }));
         break;
       }
 
       case 'TOOL_CALL_START': {
-        // Populate args from the start event if present (some harnesses send args
-        // here instead of via separate TOOL_CALL_ARGS streaming events).
+        flushPendingDelta(set);
+        const pendingText = get().streamingContent;
+        if (pendingText) {
+          const textMsg: Message = {
+            id: nextId(),
+            role: 'assistant',
+            content: pendingText,
+            createdAt: new Date().toISOString(),
+          };
+          set((prev) => ({
+            messages: [...prev.messages, textMsg],
+            streamingContent: '',
+          }));
+        }
         const startArgs = event.args;
         const argsStr = startArgs
           ? (typeof startArgs === 'string' ? startArgs : JSON.stringify(startArgs))
@@ -287,6 +333,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           args: argsStr,
           status: 'running',
         };
+        if (argsStr) toolCallsWithStartArgs.add(tc.id);
         set((state) => {
           const next = new Map(state.toolCalls);
           next.set(tc.id, tc);
@@ -297,6 +344,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
       case 'TOOL_CALL_ARGS': {
         const tcId = event.toolCallId as string;
+        if (toolCallsWithStartArgs.has(tcId)) break;
         const delta = (event.args as string) || (event.delta as string) || '';
         set((state) => {
           const next = new Map(state.toolCalls);
@@ -323,41 +371,80 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       }
 
       case 'TOOL_CALL_RESULT': {
-        const tcId = event.toolCallId as string;
+        let tcId = (event.toolCallId as string) || '';
+        if (!tcId) {
+          const running = Array.from(get().toolCalls.entries()).find(([_, tc]) => tc.status === 'running');
+          if (running) tcId = running[0];
+        }
+        if (!tcId) break;
+        toolCallsWithStartArgs.delete(tcId);
         const result = (event.result as string) || '';
         const error = event.error as string | undefined;
-        set((state) => {
-          const next = new Map(state.toolCalls);
-          const existing = next.get(tcId);
-          if (existing) {
-            next.set(tcId, {
-              ...existing,
-              result,
-              error,
-              status: error ? 'error' : 'complete',
-            });
-          }
-          return { toolCalls: next };
-        });
+
+        const state = get();
+        const completedTc = state.toolCalls.get(tcId);
+        if (!completedTc) break;
+
+        const finalTc: ToolCallState = {
+          ...completedTc,
+          result,
+          error,
+          status: error ? 'error' : 'complete',
+        };
+
+        const pendingText = state.streamingContent;
+        set((prev) => ({
+          messages: [...prev.messages, {
+            id: nextId(),
+            role: 'assistant' as const,
+            content: pendingText,
+            toolCalls: [finalTc],
+            createdAt: new Date().toISOString(),
+          }],
+          toolCalls: (() => {
+            const next = new Map(prev.toolCalls);
+            next.delete(tcId);
+            return next;
+          })(),
+          streamingContent: '',
+        }));
         break;
       }
 
       case 'CUSTOM': {
         const subtype = event.subtype as string;
-        if (subtype === 'a2ui') {
-          // Backend sends payload as nested object: { payload: { component, props } }
-          const payload = (event.payload as Record<string, unknown>) || event;
-          const block = normalizeA2UIBlock(payload, (event.id as string) || nextId());
-          if (block) {
-            set((state) => ({ a2uiBlocks: [...state.a2uiBlocks, block] }));
+        if (subtype === 'interrupt_resolved') {
+          const action = (event.action as string) || 'resolved';
+          const toolName = (event.toolName as string) || '';
+          const isApproved = action === 'approve';
+          const prefix = isApproved ? '✓ Approved' : '✗ Rejected';
+          const label = toolName ? `${prefix}: ${toolName}` : prefix;
+          const existing = get().messages;
+          const alreadyLogged = existing.length > 0 &&
+            existing[existing.length - 1].role === 'system' &&
+            existing[existing.length - 1].content.startsWith(prefix);
+          if (!alreadyLogged) {
+            const msg: Message = {
+              id: nextId(),
+              role: 'system',
+              content: label,
+              createdAt: new Date().toISOString(),
+            };
+            set((prev) => ({ messages: [...prev.messages, msg] }));
           }
+          useInterruptStore.getState().clear();
         }
         // interrupt events are handled by the interrupt store
         break;
       }
 
       case 'RUN_FINISHED': {
-        // Flush any pending delta before finalizing the message
+        useInterruptStore.getState().clear();
+        const { _historyLoaded: histLoaded } = get();
+        if (histLoaded) {
+          set({ isStreaming: false, currentRunId: null });
+          break;
+        }
         flushPendingDelta(set);
         const state = get();
         const msg = buildAssistantMessage(state);
@@ -367,7 +454,6 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
             streamingContent: '',
             streamingRole: 'assistant',
             toolCalls: new Map(),
-            a2uiBlocks: [],
           }));
         }
         set({
@@ -376,7 +462,6 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           streamingContent: '',
           streamingRole: 'assistant',
           toolCalls: new Map(),
-          a2uiBlocks: [],
           seenEventIds: new Set(),
         });
         break;
@@ -384,6 +469,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
       case 'RUN_ERROR': {
         const errorMsg = (event.message as string) || (event.error as string) || 'Unknown error';
+        useInterruptStore.getState().clear();
         const msg: Message = {
           id: nextId(),
           role: 'system',
@@ -410,7 +496,11 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     }
   },
 
-  reset: () =>
+  reset: () => {
+    pendingDelta = '';
+    flushScheduled = false;
+    flushCallback = null;
+    toolCallsWithStartArgs.clear();
     set({
       messages: [],
       currentRunId: null,
@@ -419,7 +509,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       streamingContent: '',
       streamingRole: 'assistant',
       toolCalls: new Map(),
-      a2uiBlocks: [],
       seenEventIds: new Set(),
-    }),
+      _historyLoaded: false,
+    });
+  },
 }));

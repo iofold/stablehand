@@ -1,17 +1,17 @@
 import { create } from 'zustand';
-import type { ApiAgentRun } from '@ctxmill/shared';
+import type { ApiAgentRun as ApiAgentSession } from '@ctxmill/shared';
 import {
   fetchAgents as apiFetchAgents,
   startBackgroundRun as apiStartRun,
   cancelRun as apiCancelRun,
-  fetchRuns as apiFetchRuns,
+  fetchSessions as apiFetchSessions,
   createAgent as apiCreateAgent,
   updateAgent as apiUpdateAgent,
   deleteAgent as apiDeleteAgent,
   type HttpToolDefinition,
 } from '@/lib/api';
 
-export type AgentRun = ApiAgentRun;
+export type AgentSession = ApiAgentSession;
 
 export interface Agent {
   id: string;
@@ -24,15 +24,18 @@ export interface Agent {
   workspaceContent?: { files?: Array<{ src: string; dest: string }>; skills?: boolean | string[] } | null;
   harness: string;
   harnessConfig: Record<string, unknown>;
-  callbackUrl?: string | null;
   sseClients?: number;
   conversationCount?: number;
+  sessionsByStatus?: { active: number; frozen: number; checkpointed: number; terminated: number };
   hasPendingInterrupt?: boolean;
   lastActivity?: number;
-  activeRuns?: number;
-  totalRuns?: number;
-  runs?: AgentRun[];
+  activeSessions?: number;
+  totalSessions?: number;
+  completedSessions?: number;
+  failedSessions?: number;
+  sessions?: AgentSession[];
   systemPrompt?: string;
+  createdAt?: number;
 
   knowledgeItems?: number;
   workspaceDir?: string | null;
@@ -55,7 +58,6 @@ interface AgentsStore {
     tools: string[];
     description?: string;
     metadata?: Record<string, unknown>;
-    callbackUrl?: string | null;
     httpTools?: HttpToolDefinition[];
   }) => Promise<Agent>;
   updateAgent: (id: string, data: Partial<{
@@ -66,14 +68,13 @@ interface AgentsStore {
     tools: string[];
     description?: string;
     metadata?: Record<string, unknown>;
-    callbackUrl?: string | null;
     httpTools?: HttpToolDefinition[];
   }>) => Promise<Agent>;
   deleteAgent: (id: string) => Promise<void>;
   startPolling: () => () => void;
   startBackgroundRun: (agentId: string, task: string) => Promise<void>;
   cancelRun: (agentId: string, runId: string) => Promise<void>;
-  fetchRuns: (agentId: string) => Promise<AgentRun[]>;
+  fetchSessions: (agentId: string) => Promise<AgentSession[]>;
 }
 
 export const useAgentsStore = create<AgentsStore>((set, get) => ({
@@ -149,12 +150,12 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
       throw err;
     }
   },
-  fetchRuns: async (agentId) => {
+  fetchSessions: async (agentId) => {
     try {
-      const runs = await apiFetchRuns(agentId);
-      return runs as AgentRun[];
+      const sessions = await apiFetchSessions(agentId);
+      return sessions as AgentSession[];
     } catch (err) {
-      console.error('[agents] fetchRuns failed:', err);
+      console.error('[agents] fetchSessions failed:', err);
       throw err;
     }
   },

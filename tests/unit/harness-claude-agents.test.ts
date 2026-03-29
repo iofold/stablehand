@@ -28,10 +28,10 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   createSdkMcpServer: mockCreateSdkMcpServer,
 }));
 
-import { ClaudeAgentsHarness } from '../../packages/ctxmill/src/harness/claude-agents.js';
-import type { AgentEvent, AgentHarness, HarnessSessionConfig } from '../../packages/ctxmill/src/harness/types.js';
-import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
-import type { Message } from '../../packages/ctxmill/src/types.js';
+import { ClaudeAgentsHarness } from '@ctxmill/sandbox-daemon';
+import type { AgentEvent, AgentHarness, HarnessSessionConfig } from '@ctxmill/sandbox-daemon';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
+import type { Message } from '@ctxmill/sandbox-daemon';
 
 function makeMessage(
   role: Message['role'],
@@ -385,6 +385,148 @@ describe('ClaudeAgentsHarness', () => {
       expect(assistant).toEqual([]);
     });
 
+    it('should defer tool_call_start to assistant message with populated args after streaming', () => {
+      const harness = new ClaudeAgentsHarness();
+      const toolStartTimes = new Map<string, number>();
+      const streamState = harness.createStreamMappingState();
+
+      // Step 1: content_block_start fires (tool_use block, no input yet)
+      const streamEvents = mapSdkMessage(harness, {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_defer', name: 'get-weather' },
+        },
+      }, toolStartTimes, streamState);
+
+      // content_block_start should NOT emit tool_call_start (deferred)
+      const toolStarts = streamEvents.filter((e) => e.type === 'tool_call_start');
+      expect(toolStarts).toHaveLength(0);
+
+      // Step 2: assistant message arrives with full input
+      const assistantEvents = mapSdkMessage(harness, {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_defer', name: 'get-weather', input: { city: 'NYC' } }],
+        },
+      }, toolStartTimes, streamState);
+
+      // assistant message emits tool_call_start with populated args
+      expect(assistantEvents).toEqual([
+        { type: 'tool_call_start', id: 'toolu_defer', name: 'get-weather', args: { city: 'NYC' } },
+      ]);
+    });
+
+    it('should use buffered input_json_delta as fallback when assistant input is missing', () => {
+      const harness = new ClaudeAgentsHarness();
+      const toolStartTimes = new Map<string, number>();
+      const streamState = harness.createStreamMappingState();
+
+      // Step 1: content_block_start
+      mapSdkMessage(harness, {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_buf', name: 'search' },
+        },
+      }, toolStartTimes, streamState);
+
+      // Step 2: input_json_delta events accumulate partial JSON
+      mapSdkMessage(harness, {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: '{"q":' },
+        },
+      }, toolStartTimes, streamState);
+      mapSdkMessage(harness, {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: '"test"}' },
+        },
+      }, toolStartTimes, streamState);
+
+      // Step 3: assistant message WITHOUT input field
+      const events = mapSdkMessage(harness, {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_buf', name: 'search' }],
+        },
+      }, toolStartTimes, streamState);
+
+      // Should fall back to buffered args from input_json_delta
+      expect(events).toEqual([
+        { type: 'tool_call_start', id: 'toolu_buf', name: 'search', args: { q: 'test' } },
+      ]);
+    });
+
+    it('should emit correct args for multiple streamed tool calls in one assistant message', () => {
+      const harness = new ClaudeAgentsHarness();
+      const toolStartTimes = new Map<string, number>();
+      const streamState = harness.createStreamMappingState();
+
+      // Two content_block_start events (streaming)
+      const stream1 = mapSdkMessage(harness, {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_m1', name: 'weather' },
+        },
+      }, toolStartTimes, streamState);
+
+      const stream2 = mapSdkMessage(harness, {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'toolu_m2', name: 'search' },
+        },
+      }, toolStartTimes, streamState);
+
+      // Neither should emit tool_call_start from streaming
+      expect(stream1.filter((e) => e.type === 'tool_call_start')).toHaveLength(0);
+      expect(stream2.filter((e) => e.type === 'tool_call_start')).toHaveLength(0);
+
+      // Assistant message with both tools and their inputs
+      const events = mapSdkMessage(harness, {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'toolu_m1', name: 'weather', input: { city: 'NYC' } },
+            { type: 'tool_use', id: 'toolu_m2', name: 'search', input: { q: 'hello' } },
+          ],
+        },
+      }, toolStartTimes, streamState);
+
+      // Both should have correct populated args
+      expect(events).toEqual([
+        { type: 'tool_call_start', id: 'toolu_m1', name: 'weather', args: { city: 'NYC' } },
+        { type: 'tool_call_start', id: 'toolu_m2', name: 'search', args: { q: 'hello' } },
+      ]);
+    });
+
+    it('should default to empty object (not empty string) when no args are available', () => {
+      const harness = new ClaudeAgentsHarness();
+      const toolStartTimes = new Map<string, number>();
+
+      const events = mapSdkMessage(harness, {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_empty', name: 'no-args-tool' }],
+        },
+      }, toolStartTimes);
+
+      expect(events).toEqual([
+        { type: 'tool_call_start', id: 'toolu_empty', name: 'no-args-tool', args: {} },
+      ]);
+    });
+
     it('should map result success messages to done with usage', () => {
       const harness = new ClaudeAgentsHarness();
 
@@ -480,6 +622,245 @@ describe('ClaudeAgentsHarness', () => {
         harnessConfigJson: JSON.stringify({ model: 'claude-sonnet-4-6' }),
         secrets: {},
       }))).rejects.toThrow('Missing Anthropic API key for claude-agents harness.');
+    });
+  });
+
+  describe('message_committed with toolCalls', () => {
+    it('should include tool calls in message_committed event', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'text', text: 'Let me check.' },
+              { type: 'tool_use', id: 'toolu_1', name: 'get-weather', input: { city: 'NYC' } },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Sunny, 72F' }],
+          },
+        },
+        {
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'The weather is sunny.' }],
+          },
+        },
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 10, output_tokens: 20 },
+        },
+      ]));
+
+      const session = await harness.openSession(makeConfig());
+      const events = await collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Weather?')], turnId: 'turn-1' },
+          {},
+        ),
+      );
+      await session.close();
+
+      const committed = events.filter((e) => e.type === 'message_committed');
+      expect(committed.length).toBeGreaterThanOrEqual(1);
+
+      const withTools = committed.find(
+        (e) => 'toolCalls' in e && Array.isArray(e.toolCalls) && e.toolCalls.length > 0,
+      );
+      expect(withTools).toBeDefined();
+      if (withTools && 'toolCalls' in withTools && Array.isArray(withTools.toolCalls)) {
+        expect(withTools.toolCalls).toHaveLength(1);
+        expect(withTools.toolCalls[0]).toMatchObject({
+          id: 'toolu_1',
+          name: 'get-weather',
+          status: 'complete',
+        });
+      }
+    });
+
+    it('should include multiple tool calls in message_committed event', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'tool_use', id: 'toolu_a', name: 'weather', input: { city: 'NYC' } },
+              { type: 'tool_use', id: 'toolu_b', name: 'search', input: { q: 'hello' } },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: 'toolu_a', content: 'Sunny' },
+              { type: 'tool_result', tool_use_id: 'toolu_b', content: 'Results' },
+            ],
+          },
+        },
+        {
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'Done.' }],
+          },
+        },
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 10, output_tokens: 20 },
+        },
+      ]));
+
+      const session = await harness.openSession(makeConfig());
+      const events = await collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Do both')], turnId: 'turn-1' },
+          {},
+        ),
+      );
+      await session.close();
+
+      const withTools = events.find(
+        (e) => e.type === 'message_committed' && 'toolCalls' in e && Array.isArray(e.toolCalls) && e.toolCalls.length > 0,
+      );
+      expect(withTools).toBeDefined();
+      if (withTools && 'toolCalls' in withTools && Array.isArray(withTools.toolCalls)) {
+        expect(withTools.toolCalls).toHaveLength(2);
+        expect(withTools.toolCalls[0]).toMatchObject({ id: 'toolu_a', name: 'weather' });
+        expect(withTools.toolCalls[1]).toMatchObject({ id: 'toolu_b', name: 'search' });
+      }
+    });
+
+    it('should mark tool call status as error when tool_call_end has error', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'tool_use', id: 'toolu_err', name: 'failing-tool', input: { x: 1 } },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_err', content: 'Error occurred', is_error: true }],
+          },
+        },
+        {
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'The tool failed.' }],
+          },
+        },
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 10, output_tokens: 20 },
+        },
+      ]));
+
+      const session = await harness.openSession(makeConfig());
+      const events = await collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Run it')], turnId: 'turn-1' },
+          {},
+        ),
+      );
+      await session.close();
+
+      const withTools = events.find(
+        (e) => e.type === 'message_committed' && 'toolCalls' in e && Array.isArray(e.toolCalls) && e.toolCalls.length > 0,
+      );
+      expect(withTools).toBeDefined();
+      if (withTools && 'toolCalls' in withTools && Array.isArray(withTools.toolCalls)) {
+        const errTool = withTools.toolCalls.find((tc) => tc.id === 'toolu_err');
+        expect(errTool).toBeDefined();
+        if (errTool) {
+          expect(errTool).toMatchObject({
+            id: 'toolu_err',
+            name: 'failing-tool',
+            status: 'error',
+          });
+        }
+      }
+    });
+
+    it('should emit message_committed for tool-only turns with no text', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'tool_use', id: 'toolu_only', name: 'silent-tool', input: {} },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_only', content: 'done' }],
+          },
+        },
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 5, output_tokens: 10 },
+        },
+      ]));
+
+      const session = await harness.openSession(makeConfig());
+      const events = await collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Do it')], turnId: 'turn-1' },
+          {},
+        ),
+      );
+      await session.close();
+
+      const committed = events.filter((e) => e.type === 'message_committed');
+      expect(committed.length).toBeGreaterThanOrEqual(1);
+
+      const toolOnly = committed.find(
+        (e) => 'toolCalls' in e && Array.isArray(e.toolCalls),
+      );
+      expect(toolOnly).toBeDefined();
+      if (toolOnly && 'toolCalls' in toolOnly) {
+        expect(toolOnly.content).toBe('');
+        expect(Array.isArray(toolOnly.toolCalls)).toBe(true);
+      }
     });
   });
 });
