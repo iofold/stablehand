@@ -1,7 +1,7 @@
 export interface ExecutionTrace {
   id: string;
   agentId: string;
-  runId: string;
+  turnId: string;
   taskDescription: string;
   steps: TraceStep[];
   startedAt: Date;

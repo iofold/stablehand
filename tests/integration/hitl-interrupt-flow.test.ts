@@ -45,18 +45,18 @@ describe('HITL Interrupt Lifecycle', () => {
         { to: 'user@example.com', body: 'Hello' },
       );
 
-      // Verify run.interrupted was emitted
-      expect(interruptedEvents.events).toHaveLength(1);
-      expect(interruptedEvents.events[0]).toEqual(
-        expect.objectContaining({
-          runId: 'run-1',
-          agentId: 'agent-1',
-          toolCallId: 'tc-1',
-          toolName: 'send_email',
-          args: { to: 'user@example.com', body: 'Hello' },
-          interruptId: 'run-1',
-        }),
-      );
+       // Verify run.interrupted was emitted
+       expect(interruptedEvents.events).toHaveLength(1);
+       expect(interruptedEvents.events[0]).toEqual(
+         expect.objectContaining({
+           turnId: 'run-1',
+           agentId: 'agent-1',
+           toolCallId: 'tc-1',
+           toolName: 'send_email',
+           args: { to: 'user@example.com', body: 'Hello' },
+           interruptId: 'run-1',
+         }),
+       );
 
       // Verify SSEBroadcaster forwarded it as CUSTOM
       expect(mockSSE.broadcast).toHaveBeenCalledTimes(1);
@@ -73,16 +73,16 @@ describe('HITL Interrupt Lifecycle', () => {
       const result = await promise;
       expect(result).toEqual({ action: 'approve', data: { reason: 'ok' } });
 
-      // Verify run.interrupt_resolved event was emitted
-      expect(resolvedEvents.events).toHaveLength(1);
-      expect(resolvedEvents.events[0]).toEqual(
-        expect.objectContaining({
-          runId: 'run-1',
-          agentId: 'agent-1',
-          interruptId: 'run-1',
-          action: 'approve',
-        }),
-      );
+       // Verify run.interrupt_resolved event was emitted
+       expect(resolvedEvents.events).toHaveLength(1);
+       expect(resolvedEvents.events[0]).toEqual(
+         expect.objectContaining({
+           turnId: 'run-1',
+           agentId: 'agent-1',
+           interruptId: 'run-1',
+           action: 'approve',
+         }),
+       );
 
       // SSEBroadcaster should have broadcast the resolved event too
       expect(mockSSE.broadcast).toHaveBeenCalledWith(
@@ -112,14 +112,14 @@ describe('HITL Interrupt Lifecycle', () => {
       const result = await promise;
       expect(result).toEqual({ action: 'reject', data: { reason: 'too dangerous' } });
 
-      expect(resolvedEvents.events).toHaveLength(1);
-      expect(resolvedEvents.events[0]).toEqual(
-        expect.objectContaining({
-          runId: 'run-rej',
-          agentId: 'agent-rej',
-          action: 'reject',
-        }),
-      );
+       expect(resolvedEvents.events).toHaveLength(1);
+       expect(resolvedEvents.events[0]).toEqual(
+         expect.objectContaining({
+           turnId: 'run-rej',
+           agentId: 'agent-rej',
+           action: 'reject',
+         }),
+       );
 
       resolvedEvents.unsubscribe();
     });
@@ -151,15 +151,15 @@ describe('HITL Interrupt Lifecycle', () => {
       // Pending should be cleared
       expect(interrupts.hasPending('run-to')).toBe(false);
 
-      // run.interrupt_resolved event should have been emitted with timeout
-      expect(resolvedEvents.events).toHaveLength(1);
-      expect(resolvedEvents.events[0]).toEqual(
-        expect.objectContaining({
-          runId: 'run-to',
-          agentId: 'agent-to',
-          action: 'timeout',
-        }),
-      );
+       // run.interrupt_resolved event should have been emitted with timeout
+       expect(resolvedEvents.events).toHaveLength(1);
+       expect(resolvedEvents.events[0]).toEqual(
+         expect.objectContaining({
+           turnId: 'run-to',
+           agentId: 'agent-to',
+           action: 'timeout',
+         }),
+       );
 
       resolvedEvents.unsubscribe();
       vi.useRealTimers();
@@ -180,27 +180,27 @@ describe('HITL Interrupt Lifecycle', () => {
         'run-c2', 'agent-shared', 'tc-c2', 'tool_b', { y: 2 },
       );
 
-      // Both should have emitted interrupted events
-      expect(interruptedEvents.events).toHaveLength(2);
-      expect(interruptedEvents.events[0].runId).toBe('run-c1');
-      expect(interruptedEvents.events[1].runId).toBe('run-c2');
+       // Both should have emitted interrupted events
+       expect(interruptedEvents.events).toHaveLength(2);
+       expect(interruptedEvents.events[0].turnId).toBe('run-c1');
+       expect(interruptedEvents.events[1].turnId).toBe('run-c2');
 
-      // Resolve run-1 with approve, run-2 with reject
-      interrupts.resolve('run-c1', 'approve', { ok: true }, 'agent-shared');
-      interrupts.resolve('run-c2', 'reject', { reason: 'no' }, 'agent-shared');
+       // Resolve run-1 with approve, run-2 with reject
+       interrupts.resolve('run-c1', 'approve', { ok: true }, 'agent-shared');
+       interrupts.resolve('run-c2', 'reject', { reason: 'no' }, 'agent-shared');
 
-      const result1 = await promise1;
-      const result2 = await promise2;
+       const result1 = await promise1;
+       const result2 = await promise2;
 
-      expect(result1).toEqual({ action: 'approve', data: { ok: true } });
-      expect(result2).toEqual({ action: 'reject', data: { reason: 'no' } });
+       expect(result1).toEqual({ action: 'approve', data: { ok: true } });
+       expect(result2).toEqual({ action: 'reject', data: { reason: 'no' } });
 
-      // Verify events emitted with correct runIds
-      expect(resolvedEvents.events).toHaveLength(2);
-      const r1Event = resolvedEvents.events.find(e => e.runId === 'run-c1');
-      const r2Event = resolvedEvents.events.find(e => e.runId === 'run-c2');
-      expect(r1Event).toEqual(expect.objectContaining({ action: 'approve', runId: 'run-c1' }));
-      expect(r2Event).toEqual(expect.objectContaining({ action: 'reject', runId: 'run-c2' }));
+       // Verify events emitted with correct turnIds
+       expect(resolvedEvents.events).toHaveLength(2);
+       const r1Event = resolvedEvents.events.find(e => e.turnId === 'run-c1');
+       const r2Event = resolvedEvents.events.find(e => e.turnId === 'run-c2');
+       expect(r1Event).toEqual(expect.objectContaining({ action: 'approve', turnId: 'run-c1' }));
+       expect(r2Event).toEqual(expect.objectContaining({ action: 'reject', turnId: 'run-c2' }));
 
       interruptedEvents.unsubscribe();
       resolvedEvents.unsubscribe();

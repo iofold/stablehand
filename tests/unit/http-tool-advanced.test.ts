@@ -1,17 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { HTTPToolProvider } from '../../packages/ctxmill/src/tool/providers/http.js';
+import { createMockToolContext } from '../utils/event-bus-test-helpers.js';
 import type { HttpEndpointConfig } from '../../packages/ctxmill/src/tool/providers/http.js';
-import type { ToolContext } from '../../packages/ctxmill/src/tool/types.js';
 
-const mockCtx: ToolContext = {
-  agentId: 'test-agent',
-  conversationId: 'test-conv',
-  instanceId: 'run-123',
-  workspaceDir: '/tmp/test',
-  knowledge: {
-    query: async () => ({ items: [] }),
-  },
-};
+const mockCtx = createMockToolContext();
 
 function makeEndpoint(overrides?: Partial<HttpEndpointConfig>): HttpEndpointConfig {
   return {
@@ -260,18 +252,19 @@ describe('HTTPToolProvider – custom headers merging', () => {
 
     await provider.execute('test-tool', {}, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-
-    // Auto-injected headers
-    expect(headers['X-Agent-Id']).toBe('test-agent');
-    expect(headers['X-Conversation-Id']).toBe('test-conv');
-    expect(headers['X-Instance-Id']).toBe('run-123');
-    expect(headers['Content-Type']).toBe('application/json');
-
-    // Custom headers
-    expect(headers['X-Custom-Header']).toBe('custom-value');
-    expect(headers['X-Request-Id']).toBe('req-12345');
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Agent-Id': 'test-agent',
+          'X-Conversation-Id': 'test-conv',
+          'X-Instance-Id': 'run-123',
+          'Content-Type': 'application/json',
+          'X-Custom-Header': 'custom-value',
+          'X-Request-Id': 'req-12345',
+        }),
+      }),
+    );
   });
 
   it('should allow custom headers to override Content-Type', async () => {
@@ -289,11 +282,14 @@ describe('HTTPToolProvider – custom headers merging', () => {
 
     await provider.execute('test-tool', {}, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-
-    // Custom Content-Type should override default
-    expect(headers['Content-Type']).toBe('application/x-www-form-urlencoded');
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'Content-Type': 'application/x-www-form-urlencoded',
+        }),
+      }),
+    );
   });
 });
 
@@ -313,11 +309,22 @@ describe('HTTPToolProvider – auth header format verification', () => {
 
     await provider.execute('test-tool', {}, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-
-    expect(headers['Authorization']).toBe('Bearer my-jwt-token-xyz');
-    expect(headers['X-API-Key']).toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer my-jwt-token-xyz',
+        }),
+      }),
+    );
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          'X-API-Key': expect.anything(),
+        }),
+      }),
+    );
   });
 
   it('should format API-key as X-API-Key header', async () => {
@@ -333,11 +340,22 @@ describe('HTTPToolProvider – auth header format verification', () => {
 
     await provider.execute('test-tool', {}, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-
-    expect(headers['X-API-Key']).toBe('sk-1234567890');
-    expect(headers['Authorization']).toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-API-Key': 'sk-1234567890',
+        }),
+      }),
+    );
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          Authorization: expect.anything(),
+        }),
+      }),
+    );
   });
 
   it('should not mix Bearer and API-key headers', async () => {
@@ -353,11 +371,22 @@ describe('HTTPToolProvider – auth header format verification', () => {
 
     await provider.execute('test-tool', {}, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-
-    expect(headers['Authorization']).toBe('Bearer token-value');
-    expect(headers['X-API-Key']).toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer token-value',
+        }),
+      }),
+    );
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          'X-API-Key': expect.anything(),
+        }),
+      }),
+    );
   });
 });
 
@@ -372,8 +401,9 @@ describe('HTTPToolProvider – tool with no input schema', () => {
     );
 
     const tools = await provider.listTools();
-    expect(tools[0].input.safeParse({}).success).toBe(true);
-    expect(tools[0].input.safeParse({ anyKey: 'anyValue' }).success).toBe(true);
+    const schema = tools[0].input as { safeParse: (value: unknown) => { success: boolean } };
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ anyKey: 'anyValue' }).success).toBe(true);
 
     const result = await provider.execute('test-tool', {}, mockCtx);
     expect(result).toBe('{"status":"ok"}');
@@ -384,13 +414,14 @@ describe('HTTPToolProvider – tool with no input schema', () => {
     const provider = new HTTPToolProvider([makeEndpoint()], { fetchFn });
 
     const tools = await provider.listTools();
+    const schema = tools[0].input as { safeParse: (value: unknown) => { success: boolean } };
 
     // Should accept empty object
-    expect(tools[0].input.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({}).success).toBe(true);
 
     // Should accept any object
     expect(
-      tools[0].input.safeParse({
+      schema.safeParse({
         foo: 'bar',
         nested: { key: 'value' },
         array: [1, 2, 3],
@@ -415,9 +446,11 @@ describe('HTTPToolProvider – tool with no input schema', () => {
 
     await provider.execute('test-tool', arbitraryInput, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const body = JSON.parse(options.body as string);
-
-    expect(body).toEqual(arbitraryInput);
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        body: JSON.stringify(arbitraryInput),
+      }),
+    );
   });
 });

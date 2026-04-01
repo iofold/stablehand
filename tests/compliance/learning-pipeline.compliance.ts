@@ -16,7 +16,6 @@ import type {
   LearningPipeline,
   ExecutionTrace,
   FeedbackSignal,
-  Insight,
 } from '../../packages/ctxmill/src/learning/types.js';
 
 // ── Test data builders ──────────────────────────────────────────

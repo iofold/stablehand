@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Inspect API response for messages', async ({ page }) => {
   const agentId = 'f22dbb85-376d-4c7e-a91d-e132a2dc45f3';
@@ -17,8 +17,8 @@ test('Inspect API response for messages', async ({ page }) => {
     }
   });
 
-  await page.goto(`/agents/${agentId}/chat?conversationId=${conversationId}`);
-  await page.getByTestId('chat-input').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.goto(`/agents/${agentId}/sessions/new?conversationId=${conversationId}`);
+  await page.getByTestId('session-input').waitFor({ state: 'visible', timeout: 15_000 });
   await page.waitForTimeout(3000);
 
   console.log('\n=== API RESPONSES INTERCEPTED ===\n');

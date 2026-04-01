@@ -1,12 +1,12 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('A2UI BarChart in existing conversation', async ({ page }) => {
   const agentId = 'f22dbb85-376d-4c7e-a91d-e132a2dc45f3';
   const conversationId = 'a1d7489a-360d-476e-ba89-8dd5262980ce';
 
   // Navigate directly to the conversation
-  await page.goto(`/agents/${agentId}/chat?conversationId=${conversationId}`);
-  await page.getByTestId('chat-input').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.goto(`/agents/${agentId}/sessions/new?conversationId=${conversationId}`);
+  await page.getByTestId('session-input').waitFor({ state: 'visible', timeout: 15_000 });
 
   console.log('\n=== EXISTING CONVERSATION A2UI TEST ===\n');
   

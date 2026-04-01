@@ -15,7 +15,7 @@ spec:
   harness: pi-agent
   harnessConfig:
     provider: openai
-    model: gpt-5-mini
+    model: gpt-5.4-mini
     apiKeyRef: "$secret:OPENAI_API_KEY"
   instructions: |
     You are the Auditor in a multi-agent chain. Your role:

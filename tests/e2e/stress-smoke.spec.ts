@@ -9,7 +9,7 @@ import {
   resolveInterrupt,
   getEvents,
   getConversationMessages,
-  cancelRun,
+  cancelSession,
   type TestAgent,
 } from './support';
 
@@ -27,9 +27,9 @@ type TestRun = { id: string; status: string; conversationId: string };
 
 const trackedRuns = new Map<string, Set<string>>();
 
-function trackRun(agentKey: string, runId: string): void {
+function trackRun(agentKey: string, sessionId: string): void {
   const runs = trackedRuns.get(agentKey) ?? new Set<string>();
-  runs.add(runId);
+  runs.add(sessionId);
   trackedRuns.set(agentKey, runs);
 }
 
@@ -37,9 +37,10 @@ async function listRuns(
   request: APIRequestContext,
   agentId: string,
 ): Promise<TestRun[]> {
-  const response = await request.get(`${API_BASE}/api/agents/${agentId}/runs`);
+  const response = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
   expect(response.ok()).toBeTruthy();
-  return (await response.json()) as TestRun[];
+  const body = (await response.json()) as { sessions?: TestRun[] } | TestRun[];
+  return Array.isArray(body) ? body : (body.sessions ?? []);
 }
 
 async function ensureStressTrigger(
@@ -70,14 +71,14 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
   });
 
   test.afterAll(async ({ request }) => {
-    for (const [agentKey, runIds] of trackedRuns.entries()) {
+    for (const [agentKey, sessionIds] of trackedRuns.entries()) {
       const agent = agents[agentKey];
       if (!agent) {
         continue;
       }
 
-      for (const runId of runIds) {
-        await cancelRun(request, agent.id, runId);
+      for (const sessionId of sessionIds) {
+        await cancelSession(request, agent.id, sessionId);
       }
     }
 
@@ -92,17 +93,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-lg-openai'];
     expect(agent).toBeTruthy();
 
-    const { runId, conversationId } = await startBackgroundRun(
+    const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Run the stress test now. Confirm you are operational and emit stress.tools.complete.',
     );
-    trackRun('stress-lg-openai', runId);
+    trackRun('stress-lg-openai', sessionId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      runId,
+      sessionId,
       ['completed', 'error'],
       100_000,
     );
@@ -120,8 +121,8 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       agentId: agent.id,
       limit: 20,
     });
-    if (!events.some((event) => event.payload.includes(runId))) {
-      console.warn(`Optional event stress.tools.complete missing for run ${runId}`);
+    if (!events.some((event) => event.payload.includes(sessionId))) {
+      console.warn(`Optional event stress.tools.complete missing for run ${sessionId}`);
     }
   });
 
@@ -131,17 +132,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-lg-gemini'];
     expect(agent).toBeTruthy();
 
-    const { runId, conversationId } = await startBackgroundRun(
+    const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Run the stress test now. Confirm you are operational and emit stress.gemini.complete.',
     );
-    trackRun('stress-lg-gemini', runId);
+    trackRun('stress-lg-gemini', sessionId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      runId,
+      sessionId,
       ['completed', 'error'],
       100_000,
     );
@@ -159,8 +160,8 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       agentId: agent.id,
       limit: 20,
     });
-    if (!events.some((event) => event.payload.includes(runId))) {
-      console.warn(`Optional event stress.gemini.complete missing for run ${runId}`);
+    if (!events.some((event) => event.payload.includes(sessionId))) {
+      console.warn(`Optional event stress.gemini.complete missing for run ${sessionId}`);
     }
   });
 
@@ -170,17 +171,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-pi-openai'];
     expect(agent).toBeTruthy();
 
-    const { runId, conversationId } = await startBackgroundRun(
+    const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Run the stress test now. Confirm you are operational and emit stress.pi.complete.',
     );
-    trackRun('stress-pi-openai', runId);
+    trackRun('stress-pi-openai', sessionId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      runId,
+      sessionId,
       ['completed', 'error'],
       100_000,
     );
@@ -198,8 +199,8 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       agentId: agent.id,
       limit: 20,
     });
-    if (!events.some((event) => event.payload.includes(runId))) {
-      console.warn(`Optional event stress.pi.complete missing for run ${runId}`);
+    if (!events.some((event) => event.payload.includes(sessionId))) {
+      console.warn(`Optional event stress.pi.complete missing for run ${sessionId}`);
     }
   });
 
@@ -209,17 +210,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-pi-gemini'];
     expect(agent).toBeTruthy();
 
-    const { runId, conversationId } = await startBackgroundRun(
+    const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Run the stress test now. Confirm you are operational and emit stress.pi-gemini.complete.',
     );
-    trackRun('stress-pi-gemini', runId);
+    trackRun('stress-pi-gemini', sessionId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      runId,
+      sessionId,
       ['completed', 'error'],
       100_000,
     );
@@ -237,8 +238,8 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       agentId: agent.id,
       limit: 20,
     });
-    if (!events.some((event) => event.payload.includes(runId))) {
-      console.warn(`Optional event stress.pi-gemini.complete missing for run ${runId}`);
+    if (!events.some((event) => event.payload.includes(sessionId))) {
+      console.warn(`Optional event stress.pi-gemini.complete missing for run ${sessionId}`);
     }
   });
 
@@ -248,17 +249,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-claude-sonnet'];
     expect(agent).toBeTruthy();
 
-    const { runId, conversationId } = await startBackgroundRun(
+    const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Write a Python file at stress_test.py that computes the first 10 Fibonacci numbers and prints them as a JSON array. Then execute it with Bash and verify the output is correct. Finally, read the file back to confirm it exists.',
     );
-    trackRun('stress-claude-sonnet', runId);
+    trackRun('stress-claude-sonnet', sessionId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      runId,
+      sessionId,
       ['completed', 'error'],
       100_000,
     );
@@ -276,8 +277,8 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       agentId: agent.id,
       limit: 20,
     });
-    if (!events.some((event) => event.payload.includes(runId))) {
-      console.warn(`Optional event stress.claude.complete missing for run ${runId}`);
+    if (!events.some((event) => event.payload.includes(sessionId))) {
+      console.warn(`Optional event stress.claude.complete missing for run ${sessionId}`);
     }
   });
 
@@ -353,22 +354,22 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-hitl'];
     expect(agent).toBeTruthy();
 
-    const { runId, conversationId } = await startBackgroundRun(
+    const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Request approval for writing stress test results, then emit stress.hitl.complete.',
     );
-    trackRun('stress-hitl', runId);
+    trackRun('stress-hitl', sessionId);
 
     let runState: { status: string; conversationId: string };
 
     try {
-      runState = await waitForRunStatus(request, agent.id, runId, ['paused'], 30_000);
+      runState = await waitForRunStatus(request, agent.id, sessionId, ['paused'], 30_000);
     } catch {
       runState = await waitForRunStatus(
         request,
         agent.id,
-        runId,
+        sessionId,
         ['completed', 'error'],
         70_000,
       );
@@ -379,24 +380,24 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
         .poll(
           async () => {
             const interrupts = await getInterrupts(request, agent.id);
-            return interrupts.find((entry) => entry.runId === runId) ?? null;
+            return interrupts.find((entry) => entry.runId === sessionId) ?? null;
           },
           { timeout: 30_000 },
         )
         .not.toBeNull();
 
       const interrupts = await getInterrupts(request, agent.id);
-      const interrupt = interrupts.find((entry) => entry.runId === runId);
+      const interrupt = interrupts.find((entry) => entry.runId === sessionId);
 
       expect(interrupt).toBeTruthy();
 
-      const resolution = await resolveInterrupt(request, agent.id, runId, 'approve');
+      const resolution = await resolveInterrupt(request, agent.id, sessionId, 'approve');
       expect(resolution).toEqual({ resolved: true, action: 'approve' });
 
       const finalRun = await waitForRunStatus(
         request,
         agent.id,
-        runId,
+        sessionId,
         ['completed', 'error'],
         100_000,
       );
@@ -420,6 +421,6 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
           console.warn('No assistant message found — run may have errored before generating output');
         };
 
-    console.warn(`Optional HITL interrupt did not occur for run ${runId}`);
+    console.warn(`Optional HITL interrupt did not occur for run ${sessionId}`);
   });
 });

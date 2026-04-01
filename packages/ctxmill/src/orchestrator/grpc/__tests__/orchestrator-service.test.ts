@@ -44,7 +44,7 @@ describe('OrchestratorService — RequestTool', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(RequestToolRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       toolName: 'my-tool',
       argsJson: '{"x": 1}',
@@ -58,7 +58,7 @@ describe('OrchestratorService — RequestTool', () => {
     expect(resp.error).toBeUndefined();
     expect(handler).toHaveBeenCalledWith(
       { x: 1 },
-      { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
   });
 
@@ -67,7 +67,7 @@ describe('OrchestratorService — RequestTool', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(RequestToolRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       toolName: 'nonexistent',
       argsJson: '{}',
@@ -87,7 +87,7 @@ describe('OrchestratorService — RequestTool', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(RequestToolRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       toolName: 'my-tool',
       argsJson: 'not-json',
@@ -106,7 +106,7 @@ describe('OrchestratorService — RequestTool', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(RequestToolRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       toolName: 'boom',
       argsJson: '{}',
@@ -124,7 +124,7 @@ describe('OrchestratorService — RequestTool', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(RequestToolRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       toolName: '',
       argsJson: '{}',
@@ -140,7 +140,7 @@ describe('OrchestratorService — RequestTool', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(RequestToolRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       toolName: 'no-args',
       argsJson: '',
@@ -152,7 +152,7 @@ describe('OrchestratorService — RequestTool', () => {
     expect(resp.result).toBe('ok');
     expect(handler).toHaveBeenCalledWith(
       {},
-      { runId: 'run-1', agentId: 'agent-1', requestId: 'req-6' },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-6' },
     );
   });
 });
@@ -169,7 +169,7 @@ describe('OrchestratorService — EmitEvent', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(EmitEventRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       eventType: 'agent.progress',
       payloadJson: '{"step": 3, "agentId": "agent-1"}',
     });
@@ -189,7 +189,7 @@ describe('OrchestratorService — EmitEvent', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(EmitEventRequestSchema, {
-      runId: 'run-42',
+      sessionId: 'run-42',
       eventType: 'test.event',
       payloadJson: '{"data": "hello"}',
     });
@@ -208,7 +208,7 @@ describe('OrchestratorService — EmitEvent', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(EmitEventRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       eventType: '',
       payloadJson: '{}',
     });
@@ -221,7 +221,7 @@ describe('OrchestratorService — EmitEvent', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(EmitEventRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       eventType: 'test.event',
       payloadJson: '{bad',
     });
@@ -234,7 +234,7 @@ describe('OrchestratorService — EmitEvent', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(EmitEventRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       eventType: 'simple.event',
       payloadJson: '',
     });
@@ -256,7 +256,7 @@ describe('OrchestratorService — RefreshSecrets', () => {
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     const req = create(RefreshSecretsRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
     });
 
@@ -294,7 +294,7 @@ describe('registerDefaultToolHandlers', () => {
     const handler = registry.get('emit-event')!;
     const result = await handler(
       { event_type: 'my.custom.event', payload: { key: 'value' } },
-      { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
     const parsed = JSON.parse(result);
@@ -316,7 +316,7 @@ describe('registerDefaultToolHandlers', () => {
     const handler = registry.get('emit-event')!;
     await handler(
       {},
-      { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
     expect(eventBus.emitCustom).toHaveBeenCalledWith(
@@ -389,7 +389,7 @@ describe('createGrpcRoutes', () => {
 
     expect(registry.has('my-local-tool')).toBe(true);
     const handler = registry.get('my-local-tool')!;
-    const result = await handler({ x: 21 }, { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' });
+    const result = await handler({ x: 21 }, { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' });
     expect(JSON.parse(result)).toEqual({ result: 42 });
   });
 
@@ -419,7 +419,7 @@ describe('createGrpcRoutes', () => {
     const registry = new DefaultOrchestratorToolRegistry(defRegistry, (ctx) => ({
       agentId: ctx.agentId,
       conversationId: '',
-      instanceId: ctx.runId,
+      instanceId: ctx.sessionId,
       requestId: ctx.requestId,
       workspaceDir: '/workspace',
       knowledge: { query: async () => ({ items: [] }) },
@@ -427,7 +427,7 @@ describe('createGrpcRoutes', () => {
 
     expect(registry.has('http-health-check')).toBe(true);
     const handler = registry.get('http-health-check')!;
-    const result = await handler({ url: 'http://example.com' }, { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' });
+    const result = await handler({ url: 'http://example.com' }, { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' });
     expect(JSON.parse(result)).toEqual({ status: 'ok', url: 'http://example.com' });
   });
 
@@ -450,7 +450,7 @@ describe('createGrpcRoutes', () => {
     const handler = registry.get('emit-event')!;
     const result = await handler(
       { type: 'test' },
-      { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
     expect(result).not.toBe('WRONG');
   });
@@ -476,7 +476,7 @@ describe('createGrpcRoutes', () => {
     const registry = new DefaultOrchestratorToolRegistry();
     createGrpcRoutes({ eventBus, toolRegistry: registry, toolExecutor: executor });
 
-    await registry.get('ctx-checker')!({}, { runId: 'run-42', agentId: 'agent-99', requestId: 'req-1' });
+    await registry.get('ctx-checker')!({}, { sessionId: 'run-42', agentId: 'agent-99', requestId: 'req-1' });
     expect(receivedCtx.agentId).toBe('agent-99');
     expect(receivedCtx.instanceId).toBe('run-42');
   });
@@ -493,7 +493,7 @@ describe('createGrpcRoutes', () => {
     const grpcRegistry = new DefaultOrchestratorToolRegistry(defRegistry, (ctx) => ({
       agentId: ctx.agentId,
       conversationId: '',
-      instanceId: ctx.runId,
+      instanceId: ctx.sessionId,
       requestId: ctx.requestId,
       workspaceDir: '/workspace',
       knowledge: { query: async () => ({ items: [] }) },
@@ -538,7 +538,7 @@ describe('createGrpcRoutes', () => {
     const grpcRegistry = new DefaultOrchestratorToolRegistry(defRegistry, (ctx) => ({
       agentId: ctx.agentId,
       conversationId: '',
-      instanceId: ctx.runId,
+      instanceId: ctx.sessionId,
       requestId: ctx.requestId,
       workspaceDir: '/workspace',
       knowledge: { query: async () => ({ items: [] }) },
@@ -547,7 +547,7 @@ describe('createGrpcRoutes', () => {
 
     const impl = createOrchestratorServiceImpl({ eventBus, toolRegistry: grpcRegistry });
     const resp = await impl.requestTool(create(RequestToolRequestSchema, {
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-04',
       toolName: 'detect-column-mapping',
       argsJson: '{}',

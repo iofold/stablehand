@@ -279,8 +279,8 @@ export function protoSessionCheckpointToInternal(
  */
 export interface ProtoToolDefsOptions {
   orchestratorClient?: OrchestratorServiceClient;
-  runId?: string;
-  runIdRef?: { current: string };
+  sessionId?: string;
+  sessionIdRef?: { current: string };
   agentId?: string;
   daemonHandlers?: Map<string, (input: unknown) => Promise<string>>;
 }
@@ -307,13 +307,13 @@ export function protoToToolDefs(
 
     let handler: (input: unknown) => Promise<string>;
 
-    const effectiveRunId = opts?.runId ?? opts?.runIdRef;
+    const effectiveSessionId = opts?.sessionId ?? opts?.sessionIdRef;
     if (isDaemon && opts?.daemonHandlers?.has(t.name)) {
       handler = opts.daemonHandlers.get(t.name)!;
     } else if (isDaemon) {
       handler = createDaemonStub(t.name);
-    } else if (isOrchestrator && opts?.orchestratorClient && effectiveRunId && opts.agentId) {
-      handler = createToolProxy(t.name, opts.orchestratorClient, effectiveRunId, opts.agentId);
+    } else if (isOrchestrator && opts?.orchestratorClient && effectiveSessionId && opts.agentId) {
+      handler = createToolProxy(t.name, opts.orchestratorClient, effectiveSessionId, opts.agentId);
     } else if (isOrchestrator) {
       handler = createOrchestratorProxyStub(t.name);
     } else {
@@ -324,6 +324,7 @@ export function protoToToolDefs(
       name: t.name,
       description: t.description,
       input: zodSchema,
+      programmatic: t.programmatic,
       handler,
     };
   });

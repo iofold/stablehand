@@ -25,7 +25,7 @@ describe('HTTP tool CRUD via agent API', () => {
   const validAgent = {
     name: 'http-tool-agent',
     harness: 'langgraph',
-    harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+    harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
     systemPrompt: 'You are a helpful agent.',
     tools: ['base-tool'],
     description: 'Agent used for HTTP tool CRUD tests',

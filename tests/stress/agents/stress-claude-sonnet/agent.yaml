@@ -19,6 +19,12 @@ spec:
     When given a task, you MUST use your tools to complete it.
     You have access to Read, Write, Edit, Bash, Glob, and Grep tools.
     Always execute the code you write to verify it works.
+
+    You also have an emit-event tool. When asked to "emit" an event, you MUST call
+    the emit-event tool with the specified event type and a JSON payload. For example,
+    to emit "stress.claude.complete", call emit-event with type="stress.claude.complete"
+    and payload={"agent": "stress-claude-sonnet", "status": "ok"}.
+    Do NOT just print or log the event name — you must use the emit-event tool.
   tools:
     - ref: emit-event
   nativeTools:

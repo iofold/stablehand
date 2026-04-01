@@ -10,10 +10,10 @@ interface MessageBubbleProps {
   message: Message;
   isStreaming?: boolean;
   agentId?: string;
-  sessionId?: string;
+  conversationId?: string;
 }
 
-export function MessageBubble({ message, isStreaming, agentId, sessionId }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentId, conversationId }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
 
@@ -131,7 +131,7 @@ export function MessageBubble({ message, isStreaming, agentId, sessionId }: Mess
             <FeedbackButtons
               agentId={agentId}
               messageId={message.id}
-              sessionId={sessionId}
+              conversationId={conversationId}
             />
           </div>
         )}

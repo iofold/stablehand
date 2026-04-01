@@ -1,20 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SandboxRunService } from '../sandbox-run-service.js';
-import type { SandboxSessionManager, SessionEvent } from '../sandbox-run-service.js';
-import type { TypedEventBus } from '../../events/bus.js';
+import { SessionTurnService } from '../session-turn-service.js';
+import type { SandboxSessionManager, SessionEvent } from '../session-turn-service.js';
+import { TypedEventBus } from '../../events/bus.js';
 import type { AGUIEvent } from '../../events/types.js';
 import type { AgentDefinition, Message } from '../../types.js';
 
-function createMockEventBus(): TypedEventBus {
-  return {
-    emit: vi.fn(),
-    on: vi.fn(),
-    off: vi.fn(),
-    once: vi.fn(),
-    onAgent: vi.fn(),
-    emitCustom: vi.fn(),
-    removeAllListeners: vi.fn(),
-  } as unknown as TypedEventBus;
+function createTestBus(options?: ConstructorParameters<typeof TypedEventBus>[0]): TypedEventBus {
+  return new TypedEventBus(options);
 }
 
 function createTestAgentDef(overrides?: Partial<AgentDefinition>): AgentDefinition {
@@ -58,6 +50,8 @@ function createMockSessionManager(events: SessionEvent[] = []): SandboxSessionMa
     },
     killSession: vi.fn(async () => {}),
     suspendSession: vi.fn(async () => {}),
+    pauseSession: vi.fn(async () => {}),
+    resumeSession: vi.fn(async () => {}),
     freezeSession: vi.fn(async () => {}),
     unfreezeSession: vi.fn(async () => {}),
   };
@@ -75,17 +69,18 @@ describe('SandboxRunService', () => {
   let eventBus: TypedEventBus;
 
   beforeEach(() => {
-    eventBus = createMockEventBus();
+    eventBus = createTestBus();
   });
 
   afterEach(() => {
+    eventBus.removeAllListeners();
     vi.restoreAllMocks();
   });
 
   describe('happy path', () => {
     it('should call ensureSession with correct conversationId and agentDef', async () => {
       const sm = createMockSessionManager();
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
       const agentDef = createTestAgentDef();
 
       await collectEvents(service.executeSessionTurn(agentDef, 'conv-1', createTestMessages(), 'turn-1'));
@@ -96,7 +91,7 @@ describe('SandboxRunService', () => {
     it('should yield AGUIEvents from ag_ui_event session events', async () => {
       const aguiEvent: AGUIEvent = { type: 'RUN_STARTED', timestamp: 100, runId: 'turn-1' };
       const sm = createMockSessionManager([{ type: 'ag_ui_event', event: aguiEvent }]);
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       const events = await collectEvents(
         service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1'),
@@ -114,7 +109,7 @@ describe('SandboxRunService', () => {
         turnId: 'turn-1',
         messageSeq: 0,
       }]);
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       const events = await collectEvents(
         service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1'),
@@ -135,7 +130,7 @@ describe('SandboxRunService', () => {
         turnId: 'my-turn-id',
         messageSeq: 3,
       }]);
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       const events = await collectEvents(
         service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'my-turn-id'),
@@ -154,7 +149,7 @@ describe('SandboxRunService', () => {
         turnId: 'turn-1',
         messageSeq: 1,
       }]);
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       const events = await collectEvents(
         service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1'),
@@ -172,7 +167,7 @@ describe('SandboxRunService', () => {
         { type: 'message_committed', role: 'assistant', content: 'Done.', turnId: 'turn-1', messageSeq: 0 },
         { type: 'ag_ui_event', event: e2 },
       ]);
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       const events = await collectEvents(
         service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1'),
@@ -186,7 +181,7 @@ describe('SandboxRunService', () => {
 
     it('should yield no events when deliverTurn yields nothing', async () => {
       const sm = createMockSessionManager([]);
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       const events = await collectEvents(
         service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1'),
@@ -201,7 +196,7 @@ describe('SandboxRunService', () => {
     it('should not call deliverTurn when signal is already aborted', async () => {
       const sm = createMockSessionManager();
       const deliverSpy = vi.spyOn(sm, 'deliverTurn' as never);
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
       const controller = new AbortController();
       controller.abort();
 
@@ -226,10 +221,12 @@ describe('SandboxRunService', () => {
         },
         killSession: vi.fn(async () => {}),
         suspendSession: vi.fn(async () => {}),
+        pauseSession: vi.fn(async () => {}),
+        resumeSession: vi.fn(async () => {}),
         freezeSession: vi.fn(async () => {}),
         unfreezeSession: vi.fn(async () => {}),
       };
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       await collectEvents(
         service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1', controller.signal),
@@ -242,7 +239,7 @@ describe('SandboxRunService', () => {
       const sm = createMockSessionManager([
         { type: 'ag_ui_event', event: { type: 'RUN_FINISHED', timestamp: 1, runId: 'turn-1' } as AGUIEvent },
       ]);
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       await collectEvents(
         service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1'),
@@ -259,10 +256,12 @@ describe('SandboxRunService', () => {
         deliverTurn: (async function* () {}) as SandboxSessionManager['deliverTurn'],
         killSession: vi.fn(async () => {}),
         suspendSession: vi.fn(async () => {}),
+        pauseSession: vi.fn(async () => {}),
+        resumeSession: vi.fn(async () => {}),
         freezeSession: vi.fn(async () => {}),
         unfreezeSession: vi.fn(async () => {}),
       };
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       await expect(
         collectEvents(service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1')),
@@ -280,10 +279,12 @@ describe('SandboxRunService', () => {
         },
         killSession: vi.fn(async () => {}),
         suspendSession: vi.fn(async () => {}),
+        pauseSession: vi.fn(async () => {}),
+        resumeSession: vi.fn(async () => {}),
         freezeSession: vi.fn(async () => {}),
         unfreezeSession: vi.fn(async () => {}),
       };
-      const service = new SandboxRunService({ sessionManager: sm, eventBus, logger: silentLogger });
+      const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
       await expect(
         collectEvents(service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1')),

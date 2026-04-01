@@ -55,7 +55,7 @@ export interface AgentOverviewTabProps {
   toolsCount: number;
   knowledgeTotal: number;
   recentSessions: AgentSession[];
-  onContinueSession: (sessionId: string) => void;
+  onContinueSession: (conversationId: string) => void;
   knowledgeStats?: KnowledgeStats;
   recentKnowledgeItems?: KnowledgeItem[];
   traceStats?: TraceStats;

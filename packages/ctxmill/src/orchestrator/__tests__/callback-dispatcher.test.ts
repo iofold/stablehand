@@ -83,9 +83,9 @@ describe('CallbackDispatcher', () => {
     it('creates an outbox entry and returns its ID', async () => {
       const id = await dispatcher.enqueue({
         agentId: 'agent-1',
-        runId: 'run-1',
+        sessionId: 'run-1',
         callbackUrl: 'https://example.com/hook',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: { status: 'completed' },
       });
 
@@ -95,16 +95,16 @@ describe('CallbackDispatcher', () => {
 
       const call = (db.enqueueCallback as any).mock.calls[0][0];
       expect(call.agentId).toBe('agent-1');
-      expect(call.runId).toBe('run-1');
+      expect(call.sessionId).toBe('run-1');
       expect(call.callbackUrl).toBe('https://example.com/hook');
-      expect(call.eventType).toBe('run.completed');
+      expect(call.eventType).toBe('turn.completed');
       expect(call.payload).toEqual({ status: 'completed' });
       expect(call.status).toBe('pending');
       expect(call.attempts).toBe(0);
       expect(call.maxAttempts).toBe(5);
     });
 
-    it('sets runId to null when not provided', async () => {
+    it('sets sessionId to null when not provided', async () => {
       await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook',
@@ -113,7 +113,7 @@ describe('CallbackDispatcher', () => {
       });
 
       const call = (db.enqueueCallback as any).mock.calls[0][0];
-      expect(call.runId).toBeNull();
+      expect(call.sessionId).toBeNull();
     });
   });
 
@@ -128,9 +128,9 @@ describe('CallbackDispatcher', () => {
 
       await dispatcher.enqueue({
         agentId: 'agent-1',
-        runId: 'run-1',
+        sessionId: 'run-1',
         callbackUrl: 'https://example.com/hook',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: { status: 'completed' },
       });
 
@@ -152,7 +152,7 @@ describe('CallbackDispatcher', () => {
       const id = await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: { test: true },
       });
 
@@ -164,7 +164,7 @@ describe('CallbackDispatcher', () => {
       expect(init.method).toBe('POST');
       expect(init.headers['Content-Type']).toBe('application/json');
       expect(init.headers['X-Agent-Id']).toBe('agent-1');
-      expect(init.headers['X-Event-Type']).toBe('run.completed');
+      expect(init.headers['X-Event-Type']).toBe('turn.completed');
       expect(init.headers['X-Delivery-Id']).toBe(id);
       expect(JSON.parse(init.body)).toEqual({ test: true });
     });
@@ -179,7 +179,7 @@ describe('CallbackDispatcher', () => {
       await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: {},
       });
 
@@ -199,7 +199,7 @@ describe('CallbackDispatcher', () => {
       await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: {},
       });
 
@@ -225,7 +225,7 @@ describe('CallbackDispatcher', () => {
       await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: {},
       });
 
@@ -249,7 +249,7 @@ describe('CallbackDispatcher', () => {
       const id = await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: {},
       });
 
@@ -278,7 +278,7 @@ describe('CallbackDispatcher', () => {
       const id = await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: {},
       });
 
@@ -297,14 +297,14 @@ describe('CallbackDispatcher', () => {
       await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook1',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: { id: 1 },
       });
 
       await dispatcher.enqueue({
         agentId: 'agent-2',
         callbackUrl: 'https://example.com/hook2',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: { id: 2 },
       });
 
@@ -343,14 +343,14 @@ describe('CallbackDispatcher', () => {
       await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook1',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: {},
       });
 
       await dispatcher.enqueue({
         agentId: 'agent-2',
         callbackUrl: 'https://example.com/hook2',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: {},
       });
 

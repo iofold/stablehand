@@ -79,9 +79,27 @@ describe('proto v2 sandbox roundtrip', () => {
         workspaceRef: { strategy: 'tar', reference: 's3://bucket/archive.tar' },
         harnessState: { phase: 'paused', nested: { attempt: 2 } },
       }),
+      tools: [
+        create(ToolMetadataSchema, {
+          name: 'search',
+          description: 'Search docs',
+          inputSchemaJson: '{"type":"object"}',
+          location: ToolLocation.ORCHESTRATOR,
+          programmatic: true,
+        }),
+      ],
+      agentId: 'agent-restore',
+      harnessConfigJson: '{"model":"claude-sonnet-4-6"}',
+      systemPrompt: 'Restore prompt',
     });
 
-    expectRoundTrip(RestoreBootstrapSchema, message);
+    const decoded = expectRoundTrip(RestoreBootstrapSchema, message);
+    expect(decoded.tools).toHaveLength(1);
+    expect(decoded.tools[0]?.name).toBe('search');
+    expect(decoded.tools[0]?.programmatic).toBe(true);
+    expect(decoded.agentId).toBe('agent-restore');
+    expect(decoded.harnessConfigJson).toBe('{"model":"claude-sonnet-4-6"}');
+    expect(decoded.systemPrompt).toBe('Restore prompt');
   });
 
   it('round-trips OpenSessionRequest with fresh bootstrap', () => {
@@ -109,14 +127,14 @@ describe('proto v2 sandbox roundtrip', () => {
       agentId: 'agent-3',
       conversationId: 'conversation-3',
       harnessName: 'langgraph',
-      harnessConfigJson: '{"provider":"openai","model":"gpt-5-mini"}',
+      harnessConfigJson: '{"provider":"openai","model":"gpt-5.4-mini"}',
       systemPrompt: 'No model config field.',
       tools: [],
       workspaceDir: '/workspace',
     });
 
     const decoded = expectRoundTrip(FreshBootstrapSchema, message);
-    expect(decoded.harnessConfigJson).toBe('{"provider":"openai","model":"gpt-5-mini"}');
+    expect(decoded.harnessConfigJson).toBe('{"provider":"openai","model":"gpt-5.4-mini"}');
   });
 
   it('round-trips OpenSessionRequest with restore bootstrap', () => {
@@ -134,12 +152,30 @@ describe('proto v2 sandbox roundtrip', () => {
             workspaceRef: { strategy: 'git', reference: 'abc123' },
             harnessState: { restored: true },
           },
+          tools: [
+            create(ToolMetadataSchema, {
+              name: 'emit-event',
+              description: 'Emit event',
+              inputSchemaJson: '{"type":"object"}',
+              location: ToolLocation.ORCHESTRATOR,
+            }),
+          ],
+          agentId: 'agent-open-restore',
+          harnessConfigJson: '{"model":"gpt-5.4-mini"}',
+          systemPrompt: 'Recovered system prompt',
         }),
       },
     });
 
     const decoded = expectRoundTrip(OpenSessionRequestSchema, message);
     expect(decoded.bootstrap.case).toBe('restore');
+    if (decoded.bootstrap.case !== 'restore') {
+      throw new Error('Expected restore bootstrap');
+    }
+    expect(decoded.bootstrap.value.tools[0]?.name).toBe('emit-event');
+    expect(decoded.bootstrap.value.agentId).toBe('agent-open-restore');
+    expect(decoded.bootstrap.value.harnessConfigJson).toBe('{"model":"gpt-5.4-mini"}');
+    expect(decoded.bootstrap.value.systemPrompt).toBe('Recovered system prompt');
   });
 
   it('round-trips OpenSessionResponse', () => {

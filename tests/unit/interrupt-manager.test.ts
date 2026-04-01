@@ -11,12 +11,12 @@ function createMockInterruptDb() {
 
   const toRow = (data: InterruptInsert): InterruptRow => ({
     id: data.id,
-    runId: data.runId,
+    agentSessionId: data.agentSessionId,
     agentId: data.agentId,
     toolCallId: data.toolCallId,
     toolName: data.toolName,
     args: data.args ?? {},
-    timeoutMs: data.timeoutMs,
+    timeoutMs: data.timeoutMs ?? 0,
     createdAt: data.createdAt,
     expiresAt: data.expiresAt,
     resolvedAt: data.resolvedAt ?? null,
@@ -265,20 +265,22 @@ describe('InterruptManager', () => {
       const bus = new TypedEventBus();
       const busManager = new InterruptManager(bus);
       const events: any[] = [];
-      bus.on('run.interrupted', (payload) => events.push(payload));
+      bus.on('run.interrupted', (payload) => {
+        events.push(payload);
+      });
 
       busManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
 
       // Allow microtasks to flush
       await new Promise((r) => setTimeout(r, 10));
 
-      expect(events).toHaveLength(1);
-      expect(events[0].runId).toBe('run-1');
-      expect(events[0].agentId).toBe('agent-1');
-      expect(events[0].toolCallId).toBe('tc-1');
-      expect(events[0].toolName).toBe('bash');
-      expect(events[0].args).toEqual({ cmd: 'ls' });
-      expect(events[0].timestamp).toBeTypeOf('number');
+       expect(events).toHaveLength(1);
+       expect(events[0].turnId).toBe('run-1');
+       expect(events[0].agentId).toBe('agent-1');
+       expect(events[0].toolCallId).toBe('tc-1');
+       expect(events[0].toolName).toBe('bash');
+       expect(events[0].args).toEqual({ cmd: 'ls' });
+       expect(events[0].timestamp).toBeTypeOf('number');
 
       busManager.shutdown();
     });
@@ -287,33 +289,37 @@ describe('InterruptManager', () => {
       const bus = new TypedEventBus();
       const busManager = new InterruptManager(bus);
       const events: any[] = [];
-      bus.on('run.interrupt_resolved', (payload) => events.push(payload));
+      bus.on('run.interrupt_resolved', (payload) => {
+        events.push(payload);
+      });
 
       busManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
       busManager.resolve('run-1', 'approve', undefined, 'agent-1');
 
-      expect(events).toHaveLength(1);
-      expect(events[0].runId).toBe('run-1');
-      expect(events[0].agentId).toBe('agent-1');
-      expect(events[0].action).toBe('approve');
-      expect(events[0].timestamp).toBeTypeOf('number');
+       expect(events).toHaveLength(1);
+       expect(events[0].turnId).toBe('run-1');
+       expect(events[0].agentId).toBe('agent-1');
+       expect(events[0].action).toBe('approve');
+       expect(events[0].timestamp).toBeTypeOf('number');
 
-      busManager.shutdown();
-    });
+       busManager.shutdown();
+     });
 
-    it('timeout emits run.interrupt_resolved with action timeout', async () => {
-      vi.useFakeTimers();
-      const bus = new TypedEventBus();
-      const busManager = new InterruptManager(bus);
-      const events: any[] = [];
-      bus.on('run.interrupt_resolved', (payload) => events.push(payload));
+     it('timeout emits run.interrupt_resolved with action timeout', async () => {
+       vi.useFakeTimers();
+       const bus = new TypedEventBus();
+       const busManager = new InterruptManager(bus);
+       const events: any[] = [];
+       bus.on('run.interrupt_resolved', (payload) => {
+         events.push(payload);
+       });
 
-      busManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 1000);
+       busManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 1000);
 
-      vi.advanceTimersByTime(1000);
+       vi.advanceTimersByTime(1000);
 
-      expect(events).toHaveLength(1);
-      expect(events[0].runId).toBe('run-1');
+       expect(events).toHaveLength(1);
+       expect(events[0].turnId).toBe('run-1');
       expect(events[0].agentId).toBe('agent-1');
       expect(events[0].action).toBe('timeout');
       expect(events[0].timestamp).toBeTypeOf('number');
@@ -343,6 +349,7 @@ describe('InterruptManager', () => {
         toolName: 'bash',
         args: { cmd: 'ls' },
         createdAt: Date.now(),
+        sessionId: undefined,
       });
 
       expect(restartedManager.resolve('run-1', 'approve', 'approved', 'agent-1')).toBe(true);

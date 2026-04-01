@@ -3,14 +3,13 @@ import { allowConsoleErrors } from '../setup-strict.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { FastifyInstance } from 'fastify';
 
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
 
 describe('Failure injection — rollback and cleanup', () => {
-  let app: FastifyInstance;
+  let app: Awaited<ReturnType<typeof createServer>>;
   let container: AppContainer;
   let dataDir: string;
   let agentAId: string;
@@ -18,23 +17,38 @@ describe('Failure injection — rollback and cleanup', () => {
 
   beforeEach(() => { allowConsoleErrors(); });
 
+  async function createContainerWithRetry() {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await createContainer(
+          {
+            preset: 'docker',
+            database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
+            llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
+          },
+          dataDir,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes('already exists') || attempt === 2) {
+          throw error;
+        }
+      }
+    }
+
+    throw new Error('unreachable');
+  }
+
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-failure-inj-'));
 
-    container = await createContainer(
-      {
-        preset: 'local',
-        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
-        llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
-      },
-      dataDir,
-    );
+    container = await createContainerWithRetry();
 
     app = await createServer({
       db: container.db,
-      agentRunService: container.agentRunService,
-      runRegistry: container.runRegistry,
+      agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
+      sessionManager: container.sessionManager,
       dataDir,
     });
 
@@ -47,7 +61,7 @@ describe('Failure injection — rollback and cleanup', () => {
       payload: {
         name: 'failure-agent-A',
         harness: 'langgraph',
-        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
         systemPrompt: 'Agent A.',
         tools: [],
       },
@@ -62,7 +76,7 @@ describe('Failure injection — rollback and cleanup', () => {
       payload: {
         name: 'failure-agent-B',
         harness: 'langgraph',
-        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
         systemPrompt: 'Agent B.',
         tools: [],
       },
@@ -72,64 +86,71 @@ describe('Failure injection — rollback and cleanup', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
+    await container?.close();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  // ── 1. Wrong-agent runId returns 404 for file operations ──
+  // ── 1. Wrong-agent sessionId returns 404 for file operations ──
 
-  it('returns 404 when runId belongs to a different agent', async () => {
+  it('returns 404 when sessionId belongs to a different agent', async () => {
     // Create a conversation and run for agent A
     const conv = await container.db.createConversation(agentAId);
-    const run = await container.runRegistry.startRun(agentAId, conv.id, 'background', 'test');
+    const run = await container.db.createTurn({
+      agentId: agentAId,
+      conversationId: conv.id,
+      mode: 'background',
+      taskDescription: 'test',
+    });
 
-    // Try listing files on agent B using agent A's runId
+    // Try listing files on agent B using agent A's sessionId
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentBId}/files?runId=${run.id}`,
+      url: `/api/agents/${agentBId}/files?sessionId=${run.id}`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Run not found');
-
-    await container.runRegistry.completeRun(run.id);
+    expect(res.json().error).toContain('Session not found');
   });
 
-  it('returns 404 when runId belongs to a different agent (read endpoint)', async () => {
+  it('returns 404 when sessionId belongs to a different agent (read endpoint)', async () => {
     const conv = await container.db.createConversation(agentAId);
-    const run = await container.runRegistry.startRun(agentAId, conv.id, 'background', 'test');
+    const run = await container.db.createTurn({
+      agentId: agentAId,
+      conversationId: conv.id,
+      mode: 'background',
+      taskDescription: 'test',
+    });
 
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentBId}/files/read?path=foo.txt&runId=${run.id}`,
+      url: `/api/agents/${agentBId}/files/read?path=foo.txt&sessionId=${run.id}`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Run not found');
-
-    await container.runRegistry.completeRun(run.id);
+    expect(res.json().error).toContain('Session not found');
   });
 
-  // ── 2. Non-existent runId returns 404 for file operations ──
+  // ── 2. Non-existent sessionId returns 404 for file operations ──
 
-  it('returns 404 for completely non-existent runId on file list', async () => {
+  it('returns 404 for completely non-existent sessionId on file list', async () => {
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentAId}/files?runId=nonexistent-run-id`,
+      url: `/api/agents/${agentAId}/files?sessionId=nonexistent-run-id`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Run not found');
+    expect(res.json().error).toContain('Session not found');
   });
 
-  it('returns 404 for completely non-existent runId on file read', async () => {
+  it('returns 404 for completely non-existent sessionId on file read', async () => {
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentAId}/files/read?path=foo.txt&runId=nonexistent-run-id`,
+      url: `/api/agents/${agentAId}/files/read?path=foo.txt&sessionId=nonexistent-run-id`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Run not found');
+    expect(res.json().error).toContain('Session not found');
   });
 
   // ── 3. Agent with no workspaceDir returns 500 for file operations ──
@@ -139,7 +160,7 @@ describe('Failure injection — rollback and cleanup', () => {
     const noWsAgent = await container.db.createAgent({
       name: 'no-workspace-agent',
       harness: 'langgraph',
-      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5-mini' }),
+      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5.4-mini' }),
       systemPrompt: 'No workspace.',
       tools: [],
     });
@@ -157,7 +178,7 @@ describe('Failure injection — rollback and cleanup', () => {
     const noWsAgent = await container.db.createAgent({
       name: 'no-workspace-agent-read',
       harness: 'langgraph',
-      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5-mini' }),
+      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5.4-mini' }),
       systemPrompt: 'No workspace.',
       tools: [],
     });
@@ -179,14 +200,14 @@ describe('Failure injection — rollback and cleanup', () => {
     mkdirSync(sessionMergedDir, { recursive: true });
     writeFileSync(join(sessionMergedDir, 'stale-file.txt'), 'should not be accessible');
 
-    // Request with the stale runId — should be rejected at the registry check
+    // Request with the stale sessionId — should be rejected at the registry check
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentAId}/files?runId=${staleRunId}`,
+      url: `/api/agents/${agentAId}/files?sessionId=${staleRunId}`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Run not found');
+    expect(res.json().error).toContain('Session not found');
   });
 
   it('returns 404 for stale session dir on file read', async () => {
@@ -198,21 +219,21 @@ describe('Failure injection — rollback and cleanup', () => {
 
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentAId}/files/read?path=stale-secret.txt&runId=${staleRunId}`,
+      url: `/api/agents/${agentAId}/files/read?path=stale-secret.txt&sessionId=${staleRunId}`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Run not found');
+    expect(res.json().error).toContain('Session not found');
   });
 
-  it('returns 404 when cancelling a non-existent run', async () => {
+  it('returns 404 when cancelling a non-existent session', async () => {
     const res = await app.inject({
       method: 'POST',
-      url: `/api/agents/${agentAId}/runs/nonexistent-run/cancel`,
+      url: `/api/agents/${agentAId}/sessions/nonexistent-run/cancel`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Run not found');
+    expect(res.json().error).toContain('Session not found');
   });
 
   it('delete cascade removes agent, conversations, and completed runs', async () => {
@@ -223,7 +244,7 @@ describe('Failure injection — rollback and cleanup', () => {
       payload: {
         name: 'cascade-delete-agent',
         harness: 'langgraph',
-        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
         systemPrompt: 'Will be deleted.',
         tools: [],
       },
@@ -233,8 +254,14 @@ describe('Failure injection — rollback and cleanup', () => {
 
     // Create conversation and run, then complete the run so FK order doesn't block
     const conv = await container.db.createConversation(cascadeAgentId);
-    const run = await container.runRegistry.startRun(cascadeAgentId, conv.id, 'background', 'cascade test');
-    await container.runRegistry.completeRun(run.id);
+    await container.db.createTurn({
+      agentId: cascadeAgentId,
+      conversationId: conv.id,
+      mode: 'background',
+      taskDescription: 'cascade test',
+      completedAt: Date.now(),
+      error: null,
+    });
 
     // Verify agent and conv exist
     const agentBefore = await container.db.getAgent(cascadeAgentId);
@@ -272,7 +299,7 @@ describe('Failure injection — rollback and cleanup', () => {
        payload: {
          name: 'cascade-active-run-agent',
          harness: 'langgraph',
-         harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+         harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
          systemPrompt: 'Active run should not block delete.',
          tools: [],
        },
@@ -282,7 +309,12 @@ describe('Failure injection — rollback and cleanup', () => {
 
     // Create conversation and run — leave run active
     const conv = await container.db.createConversation(activeRunAgentId);
-    await container.runRegistry.startRun(activeRunAgentId, conv.id, 'background', 'active run');
+    await container.db.createTurn({
+      agentId: activeRunAgentId,
+      conversationId: conv.id,
+      mode: 'background',
+      taskDescription: 'active run',
+    });
 
     // Delete should succeed — FK ordering is correct
     const delRes = await app.inject({

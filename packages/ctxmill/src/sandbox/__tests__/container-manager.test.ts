@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PassThrough } from 'node:stream';
+import type { Writable } from 'node:stream';
 import { ContainerManager } from '../container-manager.js';
 import type { CreateContainerOptions, ContainerManagerOptions } from '../container-manager.js';
 
 // ── Mock factories ──────────────────────────────────────────
 
 function createMockContainer(overrides: Record<string, unknown> = {}) {
+  const execStream = new PassThrough();
+  const mockExec = {
+    start: vi.fn().mockResolvedValue(execStream),
+    inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+  };
+
   return {
     id: overrides.id ?? 'sha256-abc123',
     start: vi.fn().mockResolvedValue(undefined),
@@ -19,7 +27,13 @@ function createMockContainer(overrides: Record<string, unknown> = {}) {
         yield Buffer.from('fake-tar-data');
       })(),
     ),
+    changes: vi.fn().mockResolvedValue([
+      { Path: '/workspace/file.txt', Kind: 0 },
+    ]),
+    exec: vi.fn().mockResolvedValue(mockExec),
     logs: vi.fn().mockResolvedValue(Buffer.from('line1\nline2\nline3')),
+    _mockExec: mockExec,
+    _mockExecStream: execStream,
     ...overrides,
   };
 }
@@ -40,6 +54,11 @@ function createMockDocker(overrides: Record<string, unknown> = {}) {
     listContainers: vi.fn().mockResolvedValue([]),
     getNetwork: vi.fn().mockReturnValue(createMockNetwork()),
     createNetwork: vi.fn().mockResolvedValue({}),
+    modem: {
+      demuxStream: vi.fn((_stream: unknown, stdout: Writable, _stderr: Writable) => {
+        stdout.write(Buffer.from('fake-diff-tar-data'));
+      }),
+    },
     _mockContainer: mockContainer,
     ...overrides,
   };
@@ -48,7 +67,7 @@ function createMockDocker(overrides: Record<string, unknown> = {}) {
 
 function defaultCreateOpts(): CreateContainerOptions {
   return {
-    runId: 'run-001',
+    sessionId: 'run-001',
     agentId: 'agent-abc',
     harnessName: 'claude-agents',
   };
@@ -79,17 +98,17 @@ describe('ContainerManager', () => {
 
       // Labels
       expect(arg.Labels['ctxmill.managed']).toBe('true');
-      expect(arg.Labels['ctxmill.run-id']).toBe('run-001');
+      expect(arg.Labels['ctxmill.session-id']).toBe('run-001');
       expect(arg.Labels['ctxmill.agent-id']).toBe('agent-abc');
       expect(arg.Labels['ctxmill.harness']).toBe('claude-agents');
       expect(arg.Labels['ctxmill.timeout']).toBe('600');
       expect(arg.Labels['ctxmill.started-at']).toBeTruthy();
 
-      // Resource limits (defaults)
+      // Resource limits (defaults — claude-agents has 2048 MiB floor)
       expect(arg.HostConfig.CpuPeriod).toBe(100_000);
       expect(arg.HostConfig.CpuQuota).toBe(100_000); // 1.0 * 100000
-      expect(arg.HostConfig.Memory).toBe(512 * 1024 * 1024);
-      expect(arg.HostConfig.MemorySwap).toBe(512 * 1024 * 1024);
+      expect(arg.HostConfig.Memory).toBe(2048 * 1024 * 1024);
+      expect(arg.HostConfig.MemorySwap).toBe(2048 * 1024 * 1024);
       expect(arg.HostConfig.PidsLimit).toBe(256);
 
       // Network
@@ -103,7 +122,7 @@ describe('ContainerManager', () => {
 
       // Env
       expect(arg.Env).toContain('SANDBOX_PORT=50051');
-      expect(arg.Env).toContain(`NODE_OPTIONS=--max-old-space-size=${Math.floor(512 * 0.9)}`);
+      expect(arg.Env).toContain(`NODE_OPTIONS=--max-old-space-size=${Math.floor(2048 * 0.9)}`);
 
       // Return info
       expect(info.containerId).toBe('sha256-abc123');
@@ -111,10 +130,10 @@ describe('ContainerManager', () => {
       expect(info.status).toBe('created');
     });
 
-    it('uses ctxmill-run-{runId} naming convention', async () => {
+    it('uses ctxmill-run-{sessionId} naming convention', async () => {
       const info = await manager.createContainer({
         ...defaultCreateOpts(),
-        runId: 'my-special-run',
+        sessionId: 'my-special-run',
       });
 
       const arg = docker.createContainer.mock.calls[0][0];
@@ -127,7 +146,7 @@ describe('ContainerManager', () => {
 
       const arg = docker.createContainer.mock.calls[0][0];
       expect(arg.HostConfig.CpuQuota).toBe(100_000); // 1.0 CPU
-      expect(arg.HostConfig.Memory).toBe(512 * 1024 * 1024); // 512 MiB
+      expect(arg.HostConfig.Memory).toBe(2048 * 1024 * 1024); // claude-agents floor
       expect(arg.HostConfig.PidsLimit).toBe(256);
     });
 
@@ -135,17 +154,17 @@ describe('ContainerManager', () => {
       await manager.createContainer({
         ...defaultCreateOpts(),
         cpus: 2.5,
-        memoryMb: 1024,
+        memoryMb: 4096,
         pidsLimit: 512,
         timeoutSec: 1200,
       });
 
       const arg = docker.createContainer.mock.calls[0][0];
       expect(arg.HostConfig.CpuQuota).toBe(250_000); // 2.5 * 100000
-      expect(arg.HostConfig.Memory).toBe(1024 * 1024 * 1024);
+      expect(arg.HostConfig.Memory).toBe(4096 * 1024 * 1024);
       expect(arg.HostConfig.PidsLimit).toBe(512);
       expect(arg.Labels['ctxmill.timeout']).toBe('1200');
-      expect(arg.Env).toContain(`NODE_OPTIONS=--max-old-space-size=${Math.floor(1024 * 0.9)}`);
+      expect(arg.Env).toContain(`NODE_OPTIONS=--max-old-space-size=${Math.floor(4096 * 0.9)}`);
     });
 
     it('mounts workspace directory when provided', async () => {
@@ -175,10 +194,13 @@ describe('ContainerManager', () => {
         defaultTimeoutSec: 300,
       };
       const customManager = new ContainerManager(opts, docker as any);
-      await customManager.createContainer(defaultCreateOpts());
+      await customManager.createContainer({
+        ...defaultCreateOpts(),
+        harnessName: 'langgraph', // use non-claude harness to test raw defaults (claude has a memory floor)
+      });
 
       const arg = docker.createContainer.mock.calls[0][0];
-      expect(arg.Image).toBe('my-registry/agent-claude-agents:latest');
+      expect(arg.Image).toBe('my-registry/agent-langgraph:latest');
       expect(arg.HostConfig.NetworkMode).toBe('custom-net');
       expect(arg.HostConfig.CpuQuota).toBe(50_000); // 0.5 * 100000
       expect(arg.HostConfig.Memory).toBe(256 * 1024 * 1024);
@@ -287,16 +309,65 @@ describe('ContainerManager', () => {
       const result = await manager.extractWorkspaceDiff('sha256-abc123');
 
       expect(docker.getContainer).toHaveBeenCalledWith('sha256-abc123');
-      expect(docker._mockContainer.getArchive).toHaveBeenCalledWith({ path: '/workspace' });
+      expect(docker._mockContainer.changes).toHaveBeenCalledTimes(1);
+      expect(docker._mockContainer.exec).toHaveBeenCalledWith({
+        Cmd: ['tar', 'cf', '-', '--no-recursion', '--ignore-failed-read', '-T', '-'],
+        AttachStdin: true,
+        AttachStdout: true,
+        AttachStderr: true,
+      });
       expect(result).toBeInstanceOf(Buffer);
-      expect(result!.toString()).toBe('fake-tar-data');
+      expect(result!.toString()).toBe('fake-diff-tar-data');
     });
 
-    it('returns null when workspace path does not exist (404)', async () => {
-      docker._mockContainer.getArchive.mockRejectedValue({ statusCode: 404, message: 'not found' });
+    it('returns null when there are no meaningful changes', async () => {
+      docker._mockContainer.changes.mockResolvedValue([
+        { Path: '/tmp/cache-file', Kind: 1 },
+        { Path: '/workspace/deleted.txt', Kind: 2 },
+      ]);
 
       const result = await manager.extractWorkspaceDiff('sha256-abc123');
       expect(result).toBeNull();
+    });
+  });
+
+  describe('extractContainerDiff', () => {
+    it('filters diff paths and tars only meaningful added and modified paths', async () => {
+      const writtenChunks: Buffer[] = [];
+      docker._mockContainer._mockExecStream.on('data', (chunk: Buffer | string) => {
+        writtenChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      docker._mockContainer.changes.mockResolvedValue([
+        { Path: '/workspace/file.txt', Kind: 0 },
+        { Path: '/workspace/new-dir', Kind: 1 },
+        { Path: '/workspace/node_modules/pkg/index.js', Kind: 1 },
+        { Path: '/home/ctxmill/.cache/tool/cache.bin', Kind: 1 },
+        { Path: '/etc/hosts', Kind: 0 },
+        { Path: '/workspace/deleted.txt', Kind: 2 },
+        { Path: '/home/ctxmill/.claude/settings.json', Kind: 1 },
+      ]);
+
+      const result = await manager.extractContainerDiff('sha256-abc123');
+
+      expect(result?.toString()).toBe('fake-diff-tar-data');
+      expect(docker.modem.demuxStream).toHaveBeenCalledTimes(1);
+      expect(Buffer.concat(writtenChunks).toString('utf-8')).toBe([
+        '/workspace/file.txt',
+        '/workspace/new-dir',
+        '/home/ctxmill/.claude/settings.json',
+        '',
+      ].join('\n'));
+    });
+
+    it('throws when tar exits non-zero', async () => {
+      docker._mockContainer._mockExec.inspect.mockResolvedValue({ ExitCode: 1 });
+      docker.modem.demuxStream.mockImplementation((_stream: unknown, _stdout: Writable, stderr: Writable) => {
+        stderr.write(Buffer.from('tar failed'));
+      });
+
+      await expect(manager.extractContainerDiff('sha256-abc123')).rejects.toThrow(
+        'Failed to extract container diff: tar failed',
+      );
     });
   });
 
@@ -335,14 +406,14 @@ describe('ContainerManager', () => {
   // ── getContainer ────────────────────────────────────────
 
   describe('getContainer', () => {
-    it('returns null for unknown runId', async () => {
+    it('returns null for unknown sessionId', async () => {
       docker.listContainers.mockResolvedValue([]);
 
       const info = await manager.getContainer('unknown-run');
       expect(info).toBeNull();
     });
 
-    it('returns container info for known runId', async () => {
+    it('returns container info for known sessionId', async () => {
       docker.listContainers.mockResolvedValue([
         {
           Id: 'sha256-found',
@@ -350,7 +421,7 @@ describe('ContainerManager', () => {
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
-            'ctxmill.run-id': 'run-001',
+            'ctxmill.session-id': 'run-001',
             'ctxmill.agent-id': 'agent-abc',
             'ctxmill.harness': 'claude-agents',
             'ctxmill.started-at': '2026-03-17T10:00:00.000Z',
@@ -363,25 +434,25 @@ describe('ContainerManager', () => {
         },
       ]);
 
-      const info = await manager.getContainer('run-001');
-      expect(info).not.toBeNull();
-      expect(info!.containerId).toBe('sha256-found');
-      expect(info!.containerName).toBe('ctxmill-run-run-001');
-      expect(info!.runId).toBe('run-001');
-      expect(info!.agentId).toBe('agent-abc');
-      expect(info!.harnessName).toBe('claude-agents');
-      expect(info!.status).toBe('running');
-      expect(info!.startedAt).toEqual(new Date('2026-03-17T10:00:00.000Z'));
-      expect(info!.networkIp).toBe('172.18.0.5');
-    });
+       const info = await manager.getContainer('run-001');
+       expect(info).not.toBeNull();
+       expect(info!.containerId).toBe('sha256-found');
+       expect(info!.containerName).toBe('ctxmill-run-run-001');
+       expect(info!.sessionId).toBe('run-001');
+       expect(info!.agentId).toBe('agent-abc');
+       expect(info!.harnessName).toBe('claude-agents');
+       expect(info!.status).toBe('running');
+       expect(info!.startedAt).toEqual(new Date('2026-03-17T10:00:00.000Z'));
+       expect(info!.networkIp).toBe('172.18.0.5');
+     });
 
-    it('filters by ctxmill.run-id label', async () => {
+    it('filters by ctxmill.session-id label', async () => {
       await manager.getContainer('run-xyz');
 
       expect(docker.listContainers).toHaveBeenCalledWith({
         all: true,
         filters: {
-          label: ['ctxmill.managed=true', 'ctxmill.run-id=run-xyz'],
+          label: ['ctxmill.managed=true', 'ctxmill.session-id=run-xyz'],
         },
       });
     });
@@ -409,7 +480,7 @@ describe('ContainerManager', () => {
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
-            'ctxmill.run-id': 'r1',
+            'ctxmill.session-id': 'r1',
             'ctxmill.agent-id': 'a1',
             'ctxmill.harness': 'langgraph',
           },
@@ -421,7 +492,7 @@ describe('ContainerManager', () => {
           State: 'exited',
           Labels: {
             'ctxmill.managed': 'true',
-            'ctxmill.run-id': 'r2',
+            'ctxmill.session-id': 'r2',
             'ctxmill.agent-id': 'a2',
             'ctxmill.harness': 'pi-agent',
           },
@@ -429,13 +500,13 @@ describe('ContainerManager', () => {
         },
       ]);
 
-      const result = await manager.listManagedContainers();
-      expect(result).toHaveLength(2);
-      expect(result[0].runId).toBe('r1');
-      expect(result[0].status).toBe('running');
-      expect(result[1].runId).toBe('r2');
-      expect(result[1].status).toBe('stopped');
-    });
+       const result = await manager.listManagedContainers();
+       expect(result).toHaveLength(2);
+       expect(result[0].sessionId).toBe('r1');
+       expect(result[0].status).toBe('running');
+       expect(result[1].sessionId).toBe('r2');
+       expect(result[1].status).toBe('stopped');
+     });
   });
 
   // ── getContainerExitCode ────────────────────────────────
@@ -526,7 +597,7 @@ describe('ContainerManager', () => {
           State: dockerState,
           Labels: {
             'ctxmill.managed': 'true',
-            'ctxmill.run-id': `r-${dockerState}`,
+            'ctxmill.session-id': `r-${dockerState}`,
             'ctxmill.agent-id': 'a1',
             'ctxmill.harness': 'claude-agents',
           },
@@ -595,5 +666,3 @@ describe('semaphore slot release (FIX-4)', () => {
     expect(manager.getMetrics().active).toBe(0);
   });
 });
-
-

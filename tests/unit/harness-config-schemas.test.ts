@@ -20,16 +20,16 @@ function stubHarness(name: string, configSchema: z.ZodType): AgentHarness {
 describe('harness config schemas', () => {
   describe('LangGraphConfigSchema', () => {
     it('parses a valid config with explicit provider', () => {
-      expect(LangGraphConfigSchema.parse({ provider: 'openai', model: 'gpt-5-mini' })).toEqual({
+      expect(LangGraphConfigSchema.parse({ provider: 'openai', model: 'gpt-5.4-mini' })).toEqual({
         provider: 'openai',
-        model: 'gpt-5-mini',
+        model: 'gpt-5.4-mini',
       });
     });
 
     it('defaults provider to openai', () => {
-      expect(LangGraphConfigSchema.parse({ model: 'gpt-5-mini' })).toEqual({
+      expect(LangGraphConfigSchema.parse({ model: 'gpt-5.4-mini' })).toEqual({
         provider: 'openai',
-        model: 'gpt-5-mini',
+        model: 'gpt-5.4-mini',
       });
     });
 
@@ -39,18 +39,18 @@ describe('harness config schemas', () => {
 
     it('accepts subagents', () => {
       expect(LangGraphConfigSchema.parse({
-        model: 'gpt-5-mini',
+        model: 'gpt-5.4-mini',
         subagents: [{ role: 'researcher', enabled: true }],
       })).toEqual({
         provider: 'openai',
-        model: 'gpt-5-mini',
+        model: 'gpt-5.4-mini',
         subagents: [{ role: 'researcher', enabled: true }],
       });
     });
 
     it('rejects temperature above 2', () => {
       expect(() => LangGraphConfigSchema.parse({
-        model: 'gpt-5-mini',
+        model: 'gpt-5.4-mini',
         temperature: 3,
       })).toThrow();
     });
@@ -84,9 +84,9 @@ describe('harness config schemas', () => {
 
   describe('PIAgentConfigSchema', () => {
     it('parses a valid config with explicit provider', () => {
-      expect(PIAgentConfigSchema.parse({ provider: 'openai', model: 'gpt-5-mini' })).toEqual({
+      expect(PIAgentConfigSchema.parse({ provider: 'openai', model: 'gpt-5.4-mini' })).toEqual({
         provider: 'openai',
-        model: 'gpt-5-mini',
+        model: 'gpt-5.4-mini',
       });
     });
 
@@ -97,7 +97,7 @@ describe('harness config schemas', () => {
     it('rejects invalid provider', () => {
       expect(() => PIAgentConfigSchema.parse({
         provider: 'invalid',
-        model: 'gpt-5-mini',
+        model: 'gpt-5.4-mini',
       })).toThrow();
     });
   });

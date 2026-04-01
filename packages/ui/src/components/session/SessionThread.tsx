@@ -24,32 +24,11 @@ export interface SessionThreadProps {
   agentName?: string;
   agentTools?: string[];
   agentId?: string;
-  sessionId?: string;
+  conversationId?: string;
   pastRunError?: string | null;
 }
 
 const TOOL_CALL_COLLAPSE_THRESHOLD = 1;
-
-function ToolResultBubble({ toolName, toolCallId, content }: {
-  toolName?: string;
-  toolCallId?: string;
-  content: string;
-}) {
-  return (
-    <div className="py-2 animate-fade-in">
-      <div className="max-w-[85%] rounded-lg border border-surface-700/70 bg-surface-900/80 px-4 py-3">
-        <div className="mb-2 flex items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-surface-400">
-          <Wrench className="h-3 w-3" />
-          <span>{toolName ?? 'tool result'}</span>
-          {toolCallId && <span className="text-surface-500">{toolCallId}</span>}
-        </div>
-        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-surface-950 px-3 py-2 text-xs font-mono text-surface-300">
-          {content}
-        </pre>
-      </div>
-    </div>
-  );
-}
 
 function CollapsibleToolCalls({ toolCalls }: { toolCalls: ToolCallState[] }) {
   const [expanded, setExpanded] = useState(false);
@@ -113,7 +92,7 @@ export function SessionThread({
   agentName,
   agentTools = [],
   agentId,
-  sessionId,
+  conversationId,
   pastRunError,
 }: SessionThreadProps) {
   const endRef = useRef<HTMLDivElement>(null);
@@ -259,7 +238,7 @@ export function SessionThread({
                   status: 'complete',
                 }} />
               ) : (
-                 <MessageBubble message={msg} agentId={agentId} sessionId={sessionId} />
+                 <MessageBubble message={msg} agentId={agentId} conversationId={conversationId} />
               )}
               {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
                 <CollapsibleToolCalls toolCalls={msg.toolCalls} />

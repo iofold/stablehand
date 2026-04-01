@@ -26,8 +26,8 @@ test.describe('Conversation continuity', () => {
   });
 
   test('second message includes conversationId from first message response', async ({ page }) => {
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     const messageRequests: Array<{ body: Record<string, unknown> }> = [];
 
@@ -39,7 +39,7 @@ test.describe('Conversation continuity', () => {
       await route.continue();
     });
 
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
     const firstSendResponse = page.waitForResponse((response) =>
       response.request().method() === 'POST' &&
       response.url().includes(`/api/agents/${agentId}/message`) &&

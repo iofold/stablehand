@@ -34,7 +34,7 @@ for (const harness of HARNESSES) {
     test.skip(!hasHarnessKey(harness), `Skipping: ${harness} API key not available`);
 
     let agentId = '';
-    let runId = '';
+    let sessionId = '';
 
     test.beforeEach(async ({ request }) => {
       // Create agent
@@ -50,10 +50,10 @@ for (const harness of HARNESSES) {
 
       // Start background run and wait for completion
       const run = await startBackgroundRun(request, agentId, 'Run the visual QA sequence');
-      runId = run.runId;
+      sessionId = run.sessionId;
 
       // Wait for run to complete (120s timeout for safety)
-      await waitForRunStatus(request, agentId, runId, ['completed', 'error'], 120_000);
+      await waitForRunStatus(request, agentId, sessionId, ['completed', 'error'], 120_000);
     });
 
     test.afterEach(async ({ request }) => {
@@ -80,7 +80,7 @@ for (const harness of HARNESSES) {
 
       // Navigate to the run detail page
       // Try direct URL navigation to the run
-      await page.goto(`/agents/${agentId}/runs/${runId}`);
+      await page.goto(`/agents/${agentId}/sessions/run/${sessionId}`);
       await page.waitForLoadState('domcontentloaded');
 
       // Wait for the page to load content
@@ -122,11 +122,12 @@ for (const harness of HARNESSES) {
         );
       }
 
-      // Check for back button
-      const backButton = page.getByTestId('back-button');
-      const hasBackButton = await backButton.isVisible().catch(() => false);
+       // Check for back button
+       const backButton = page.getByTestId('back-button');
+       const hasBackButton = await backButton.isVisible().catch(() => false);
+       expect(hasBackButton).toBe(true);
 
-      // Final full-page capture
+       // Final full-page capture
       await capture.captureViewport('replay-final', 'Final replay page state');
 
       // Write manifest for later analysis

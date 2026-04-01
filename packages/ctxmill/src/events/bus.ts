@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events';
 
 export type EventMap = {
-  'run.started': {
-    runId: string;
+  'turn.started': {
+    turnId: string;
+    sessionId: string;
     agentId: string;
     conversationId: string;
     mode: 'interactive' | 'background';
@@ -10,14 +11,14 @@ export type EventMap = {
     timestamp: number;
   };
   'run.text_chunk': {
-    runId: string;
+    turnId: string;
     agentId: string;
     messageId: string;
     content: string;
     timestamp: number;
   };
   'run.tool_started': {
-    runId: string;
+    turnId: string;
     agentId: string;
     toolCallId: string;
     toolName: string;
@@ -25,7 +26,7 @@ export type EventMap = {
     timestamp: number;
   };
   'run.tool_result': {
-    runId: string;
+    turnId: string;
     agentId: string;
     toolCallId: string;
     toolName: string;
@@ -35,7 +36,7 @@ export type EventMap = {
     timestamp: number;
   };
   'run.interrupted': {
-    runId: string;
+    turnId: string;
     agentId: string;
     toolCallId: string;
     toolName: string;
@@ -44,21 +45,22 @@ export type EventMap = {
     timestamp: number;
   };
   'run.interrupt_resolved': {
-    runId: string;
+    turnId: string;
     agentId: string;
     interruptId: string;
     action: 'approve' | 'reject' | 'timeout';
     timestamp: number;
   };
-  'run.paused': {
-    runId: string;
+  'session.paused': {
+    sessionId: string;
     agentId: string;
     conversationId: string;
     reason: string;
     timestamp: number;
   };
-  'run.completed': {
-    runId: string;
+  'turn.completed': {
+    turnId: string;
+    sessionId: string;
     agentId: string;
     conversationId: string;
     status: 'completed' | 'error' | 'cancelled';
@@ -68,7 +70,7 @@ export type EventMap = {
   };
   'learning.trace_captured': {
     traceId: string;
-    runId: string;
+    turnId: string;
     agentId: string;
     stepCount: number;
     outcome: 'success' | 'failure' | 'partial';
@@ -88,7 +90,7 @@ export type EventMap = {
   };
   'feedback.received': {
     feedbackId: string;
-    runId: string;
+    turnId: string;
     agentId: string;
     type: 'thumbs_up' | 'thumbs_down';
     messageId?: string;
@@ -114,7 +116,7 @@ export type EventMap = {
     timestamp: number;
   };
   'run.resumed': {
-    runId: string;
+    turnId: string;
     agentId: string;
     triggeredBy: string;
     suspendedDurationMs: number;
@@ -124,7 +126,7 @@ export type EventMap = {
     triggerId: string;
     agentId: string;
     eventType: string;
-    runId: string;
+    turnId: string;
     timestamp: number;
   };
   'custom': {

@@ -112,7 +112,7 @@ export function SettingsPage() {
         setDraftReconcileSec(String(Math.round(s.reconciliationIntervalMs / 1000)));
         setDraftMaxContainers(String(s.maxGlobalContainers));
         setDraftQueueSec(String(Math.round(s.queueTimeoutMs / 1000)));
-        setDraftMaxRunsPerAgent(String(s.maxConcurrentRunsPerAgent));
+        setDraftMaxRunsPerAgent(String(s.maxConcurrentSessionsPerAgent));
         setDraftTriggerDepth(String(s.maxTriggerDepth));
         setDraftCpus(String(s.defaultCpus));
         setDraftMemoryMb(String(s.defaultMemoryMb));
@@ -144,7 +144,7 @@ export function SettingsPage() {
         reconciliationIntervalMs:  Math.round(Number(draftReconcileSec) * S),
         maxGlobalContainers:       Math.round(Number(draftMaxContainers)),
         queueTimeoutMs:            Math.round(Number(draftQueueSec) * S),
-        maxConcurrentRunsPerAgent: Math.round(Number(draftMaxRunsPerAgent)),
+        maxConcurrentSessionsPerAgent: Math.round(Number(draftMaxRunsPerAgent)),
         maxTriggerDepth:           Math.round(Number(draftTriggerDepth)),
         defaultCpus:               Number(draftCpus),
         defaultMemoryMb:           Math.round(Number(draftMemoryMb)),

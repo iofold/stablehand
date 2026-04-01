@@ -26,12 +26,12 @@ function makeTrace(overrides: Partial<ExecutionTrace> = {}): ExecutionTrace {
 function createMockLLMProvider(responseContent: string): LLMProvider {
   return {
     name: 'mock-llm',
+    healthy: vi.fn().mockResolvedValue(undefined),
+    shutdown: vi.fn().mockResolvedValue(undefined),
     invoke: vi.fn().mockResolvedValue({
       content: responseContent,
       usage: { inputTokens: 100, outputTokens: 50 },
     } satisfies LLMResponse),
-    start: vi.fn().mockResolvedValue(undefined),
-    stop: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -46,7 +46,10 @@ describe('SimpleReflector', () => {
       await reflector.process(makeTrace());
 
       expect(provider.invoke).toHaveBeenCalledTimes(1);
-      const prompt = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(provider.invoke).toHaveBeenCalledWith(
+        expect.stringContaining('Summarize a document'),
+      );
+      const prompt = (provider.invoke as ReturnType<typeof vi.fn>).mock.lastCall?.[0] as string;
       expect(prompt).toContain('Summarize a document');
       expect(prompt).toContain('success');
       expect(prompt).toContain('Called model');
@@ -139,7 +142,10 @@ describe('SimpleReflector', () => {
 
       await reflector.process(makeTrace(), feedback);
 
-      const prompt = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(provider.invoke).toHaveBeenCalledWith(
+        expect.stringContaining('Summarize a document'),
+      );
+      const prompt = (provider.invoke as ReturnType<typeof vi.fn>).mock.lastCall?.[0] as string;
       expect(prompt).toContain('Feedback received');
       expect(prompt).toContain('human');
       expect(prompt).toContain('thumbs');

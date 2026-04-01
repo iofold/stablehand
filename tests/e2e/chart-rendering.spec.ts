@@ -4,8 +4,8 @@ test('A2UI BarChart rendering test', async ({ page }) => {
   const agentId = 'f22dbb85-376d-4c7e-a91d-e132a2dc45f3';
 
   // Navigate to the chat page
-  await page.goto(`/agents/${agentId}/chat`);
-  await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+  await page.goto(`/agents/${agentId}/sessions/new`);
+  await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
   // Take initial screenshot
   const path1 = 'test-results/chart-test-01-initial.png';
@@ -16,7 +16,7 @@ test('A2UI BarChart rendering test', async ({ page }) => {
   const chartMessage = `Generate a bar chart visualization as a JSON block. Output it exactly in this format embedded in your response text: {"component":"BarChart","props":{"data":[{"name":"NYC","value":72},{"name":"London","value":59},{"name":"Tokyo","value":68},{"name":"Paris","value":61},{"name":"Sydney","value":77}],"xKey":"name","yKey":"value","title":"City Temperatures"}}. Just output that JSON block inline in your text.`;
 
   // Send the message
-  const chatInput = page.getByTestId('chat-input');
+  const chatInput = page.getByTestId('session-input');
   await chatInput.fill(chartMessage);
   
   // Wait for response to complete by looking for the run-finished marker
@@ -37,7 +37,7 @@ test('A2UI BarChart rendering test', async ({ page }) => {
   try {
     await responsePromise;
     await page.waitForTimeout(1000);
-  } catch (e) {
+  } catch {
     console.log('Response finished or timeout');
   }
 

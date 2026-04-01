@@ -116,8 +116,8 @@ export interface AgentSessionsTabProps {
   agentId: string;
   traces: Trace[];
   /** Called when user wants to view files for a specific run session */
-  onViewSessionFiles?: (runId: string) => void;
-  onContinueSession?: (sessionId: string) => void;
+  onViewSessionFiles?: (sessionId: string) => void;
+  onContinueSession?: (conversationId: string) => void;
 }
 
 export function AgentSessionsTab({
@@ -130,14 +130,13 @@ export function AgentSessionsTab({
   onViewSessionFiles,
   onContinueSession,
 }: AgentSessionsTabProps) {
-  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+  const [expandedConversationId, setExpandedConversationId] = useState<string | null>(null);
 
-  // Build a map of runId -> trace for fast lookup
-  const traceByRunId = useMemo(() => {
+  const traceBySessionId = useMemo(() => {
     const map: Record<string, Trace> = {};
     for (const trace of traces) {
-      if (trace.runId) {
-        map[trace.runId] = trace;
+      if (trace.sessionId) {
+        map[trace.sessionId] = trace;
       }
     }
     return map;
@@ -146,25 +145,26 @@ export function AgentSessionsTab({
   const groupedSessions = useMemo(() => {
     const grouped = new Map<string, AgentSession[]>();
     for (const session of sessions) {
-      const sessionId = session.conversationId ?? 'unknown';
-      const existing = grouped.get(sessionId) ?? [];
+      const conversationId = session.conversationId ?? 'unknown';
+      const existing = grouped.get(conversationId) ?? [];
       existing.push(session);
-      grouped.set(sessionId, existing);
+      grouped.set(conversationId, existing);
     }
-    return Array.from(grouped.entries()).map(([sessionId, sessionEntries]) => ({
-      sessionId,
+    return Array.from(grouped.entries()).map(([conversationId, sessionEntries]) => ({
+      conversationId,
       startedAt: Math.min(...sessionEntries.map((entry) => entry.startedAt)),
       messageCount: sessionEntries.reduce((acc, entry) => {
-        const trace = traceByRunId[entry.id];
+        if (typeof entry.messageCount === 'number') return acc + entry.messageCount;
+        const trace = traceBySessionId[entry.id];
         return acc + (trace?.steps?.length || 0);
       }, 0),
       lastMessageAt: Math.max(...sessionEntries.map((entry) => entry.completedAt ?? entry.startedAt)),
       entries: sessionEntries.sort((a, b) => b.startedAt - a.startedAt),
     })).sort((a, b) => b.startedAt - a.startedAt);
-  }, [sessions, traceByRunId]);
+  }, [sessions, traceBySessionId]);
 
   const handleToggleSession = (convId: string) => {
-    setExpandedSessionId((prev) => (prev === convId ? null : convId));
+    setExpandedConversationId((prev) => (prev === convId ? null : convId));
   };
 
   void agentId;
@@ -191,14 +191,14 @@ export function AgentSessionsTab({
         ))}
       </div>
 
-      {/* Sessions list */}
+      {/* Conversations list */}
       {loading ? (
-        <div className="text-center py-12 text-surface-400 text-sm">Loading sessions...</div>
+        <div className="text-center py-12 text-surface-400 text-sm">Loading conversations...</div>
       ) : groupedSessions.length === 0 ? (
         <div className="text-center py-16">
-          <p className="text-surface-400 font-medium">No sessions found</p>
+          <p className="text-surface-400 font-medium">No conversations found</p>
           <p className="text-surface-400 text-sm mt-1">
-            {filter === 'all' ? 'Start a session to view activity and traces.' : `No ${filter} sessions.`}
+            {filter === 'all' ? 'Start a conversation to view activity and traces.' : `No ${filter} conversations.`}
           </p>
         </div>
       ) : (
@@ -206,7 +206,7 @@ export function AgentSessionsTab({
           <table className="w-full text-left border-collapse min-w-[600px]">
             <thead>
               <tr className="bg-surface-800/50">
-                <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Session</th>
+                <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Conversation</th>
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Status</th>
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Started</th>
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Turns</th>
@@ -216,20 +216,20 @@ export function AgentSessionsTab({
             </thead>
             <tbody className="divide-y divide-surface-700/50">
               {groupedSessions.map((session) => {
-                const isExpanded = expandedSessionId === session.sessionId;
+                const isExpanded = expandedConversationId === session.conversationId;
                 const latestEntry = session.entries[0];
 
                 return (
-                  <Fragment key={session.sessionId}>
+                  <Fragment key={session.conversationId}>
                     <tr
-                      onClick={() => handleToggleSession(session.sessionId)}
+                      onClick={() => handleToggleSession(session.conversationId)}
                       className="hover:bg-surface-800/50 cursor-pointer transition-colors group"
                     >
                       <td className="px-4 py-3 text-sm font-mono text-surface-300">
-                        {session.sessionId.slice(0, 8)}
+                        {session.conversationId.slice(0, 8)}
                       </td>
                       <td className="px-4 py-3">
-                        <RunStatusBadge status={latestEntry.status} />
+                        <RunStatusBadge status={latestEntry.status} pausedReason={latestEntry.pausedReason} />
                       </td>
                       <td className="px-4 py-3 text-sm text-surface-400 tabular-nums">
                         {formatTime(session.startedAt)}
@@ -249,21 +249,21 @@ export function AgentSessionsTab({
                       </td>
                     </tr>
 
-                    {/* Expanded session detail */}
+                    {/* Expanded conversation detail */}
                     {isExpanded && (
                       <tr className="bg-surface-900/30">
                         <td colSpan={6} className="p-0">
                           <div data-testid="session-detail" className="px-4 py-4 space-y-4 border-t border-surface-700/30">
-                            {/* Session actions */}
+                            {/* Conversation actions */}
                             <div className="flex flex-wrap items-center gap-2 mb-2">
                               {onContinueSession && (
                                  <button
                                    type="button"
-                                   onClick={(e) => { e.stopPropagation(); onContinueSession(session.sessionId); }}
+                                   onClick={(e) => { e.stopPropagation(); onContinueSession(session.conversationId); }}
                                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent-600/20 border border-accent-500/30 px-3 py-1.5 text-xs font-medium text-accent-300 hover:bg-accent-600/30 transition-colors"
                                  >
                                    <MessageSquare className="h-3.5 w-3.5" />
-                                   Continue Session
+                                   Continue Conversation
                                  </button>
                                )}
                             </div>
@@ -271,13 +271,13 @@ export function AgentSessionsTab({
                             <div className="space-y-3">
                               <p className="text-[11px] text-surface-400 uppercase tracking-wider">Turns</p>
                               {session.entries.map((entry, idx) => {
-                                const trace = traceByRunId[entry.id];
+                                 const trace = traceBySessionId[entry.id];
                                 return (
                                   <div key={entry.id} className="border border-surface-700/50 rounded-lg bg-surface-800/40 p-3 space-y-3">
                                     <div className="flex items-center justify-between">
                                       <div className="flex items-center gap-3">
                                         <span className="text-xs font-mono text-surface-400">Turn {idx + 1}</span>
-                                        <RunStatusBadge status={entry.status} />
+                                        <RunStatusBadge status={entry.status} pausedReason={entry.pausedReason} />
                                         <span className="text-xs text-surface-400 tabular-nums">
                                           {formatTime(entry.startedAt)}
                                         </span>

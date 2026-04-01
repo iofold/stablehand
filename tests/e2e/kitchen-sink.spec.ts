@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 import fs from 'fs';
 import path, { dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -65,7 +65,7 @@ interface AgentInfo {
  * Returns a map of directory name -> agent ID.
  */
 async function seedAgents(
-  request: ReturnType<typeof test>['request'] extends never ? never : any,
+  request: APIRequestContext,
 ): Promise<Record<string, string>> {
   const agentsRoot = path.resolve(
     TEST_DIR,
@@ -149,16 +149,19 @@ async function getRuns(
   request: any,
   agentId: string,
 ): Promise<Array<{ id: string; taskDescription?: string }>> {
-  const res = await request.get(`${API_BASE}/api/agents/${agentId}/runs`);
+  const res = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
   expect(res.ok()).toBeTruthy();
-  return (await res.json()) as Array<{ id: string; taskDescription?: string }>;
+  const body = (await res.json()) as {
+    sessions?: Array<{ id: string; taskDescription?: string }>;
+  } | Array<{ id: string; taskDescription?: string }>;
+  return Array.isArray(body) ? body : (body.sessions ?? []);
 }
 
 // ── Tests ────────────────────────────────────────────────────
 
 test.describe('Kitchen Sink — Multi-Agent Chain', () => {
   let importedAgents: Record<string, string> = {};
-  let seededAgents: Record<string, AgentInfo> = {};
+  const seededAgents: Record<string, AgentInfo> = {};
 
   test.beforeAll(async ({ request }) => {
     // Seed all agents
@@ -244,11 +247,11 @@ test.describe('Kitchen Sink — Multi-Agent Chain', () => {
     expect(analyst).toBeTruthy();
 
     // Navigate to chat
-    await page.goto(`/agents/${analyst!.id}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${analyst!.id}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     // Send a message that triggers analysis
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
     const userPrompt = 'What is 42 * 17? Analyze this calculation and emit your findings.';
     const startedAt = Date.now();
     const responsePromise = page.waitForResponse((response) =>
@@ -270,11 +273,11 @@ test.describe('Kitchen Sink — Multi-Agent Chain', () => {
     const body = (await response.json()) as {
       messageId: string;
       conversationId: string;
-      runId: string;
+      sessionId: string;
     };
     expect(body.messageId).toBeTruthy();
     expect(body.conversationId).toBeTruthy();
-    expect(body.runId).toBeTruthy();
+    expect(body.sessionId).toBeTruthy();
 
     await expect
       .poll(
@@ -302,7 +305,7 @@ test.describe('Kitchen Sink — Multi-Agent Chain', () => {
           expect(res.ok()).toBeTruthy();
           const data = await res.json();
           return data.events.some(
-            (event: { payload: string }) => JSON.parse(event.payload).runId === body.runId,
+            (event: { payload: string }) => JSON.parse(event.payload).sessionId === body.sessionId,
           );
         },
         { timeout: 30_000 },

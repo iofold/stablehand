@@ -75,12 +75,13 @@ export function Dashboard({ agents, loading, onFilteredCountChange }: DashboardP
       const matchesSearch = agent.name.toLowerCase().includes(searchQuery.toLowerCase());
       
       let matchesStatus = true;
+      const activeOrPaused = (agent.sessionsByStatus?.active ?? 0) + (agent.sessionsByStatus?.paused ?? 0);
       if (statusFilter === 'running') {
-        matchesStatus = agent.status === 'running' || agent.status === 'booting' || (agent.activeSessions ?? 0) > 0;
+        matchesStatus = agent.status === 'running' || agent.status === 'booting' || activeOrPaused > 0;
       } else if (statusFilter === 'error') {
         matchesStatus = agent.status === 'error';
       } else if (statusFilter === 'idle') {
-        matchesStatus = agent.status !== 'running' && agent.status !== 'booting' && (agent.activeSessions ?? 0) === 0 && agent.status !== 'error';
+        matchesStatus = agent.status !== 'running' && agent.status !== 'booting' && activeOrPaused === 0 && agent.status !== 'error';
       }
 
       return matchesSearch && matchesStatus;

@@ -46,7 +46,7 @@ function makeConfig(overrides: Partial<HarnessSessionConfig> = {}): HarnessSessi
     conversationId: 'conversation-1',
     workspaceDir: '/tmp/workspace',
     harnessConfigJson: JSON.stringify({
-      model: 'gpt-5-mini',
+      model: 'gpt-5.4-mini',
       provider: 'openai',
       apiKeyRef: 'openai',
     }),
@@ -112,9 +112,44 @@ async function openTestSession(config: HarnessSessionConfig = makeConfig()) {
   vi.doMock('@langchain/openai', langchainOpenAiMock);
   vi.doMock(LANGCHAIN_OPENAI_MODULE_ID, langchainOpenAiMock);
 
-  const { LangGraphHarness } = await import('../../packages/ctxmill/src/harness/langgraph.js');
+  const { LangGraphHarness } = await import('../../packages/sandbox-daemon/src/harness/langgraph.ts');
   const harness = new LangGraphHarness();
   const session = await harness.openSession(config);
+
+  Reflect.set(session, 'buildModelFromConfig', async () => ({}));
+
+  return { harness, session };
+}
+
+async function openRestoredTestSession(
+  restore: { stateVersion: string; messages: Message[]; payload: Record<string, unknown> },
+  config: HarnessSessionConfig = makeConfig(),
+) {
+  vi.resetModules();
+  const deepagentsMock = () => ({
+    __esModule: true,
+    createDeepAgent: mockCreateDeepAgent,
+    LocalShellBackend: MockLocalShellBackend,
+  });
+  const langchainToolsMock = () => ({
+    __esModule: true,
+    tool: mockLcTool,
+  });
+  const langchainOpenAiMock = () => ({
+    __esModule: true,
+    ChatOpenAI: MockChatOpenAI,
+  });
+
+  vi.doMock('deepagents', deepagentsMock);
+  vi.doMock(DEEPAGENTS_MODULE_ID, deepagentsMock);
+  vi.doMock('@langchain/core/tools', langchainToolsMock);
+  vi.doMock(LANGCHAIN_TOOLS_MODULE_ID, langchainToolsMock);
+  vi.doMock('@langchain/openai', langchainOpenAiMock);
+  vi.doMock(LANGCHAIN_OPENAI_MODULE_ID, langchainOpenAiMock);
+
+  const { LangGraphHarness } = await import('../../packages/sandbox-daemon/src/harness/langgraph.ts');
+  const harness = new LangGraphHarness();
+  const session = await harness.openSession(config, restore);
 
   Reflect.set(session, 'buildModelFromConfig', async () => ({}));
 
@@ -132,6 +167,72 @@ describe('LangGraphHarness', () => {
   it('should have name "langgraph"', async () => {
     const { harness } = await openTestSession();
     expect(harness.name).toBe('langgraph');
+  });
+
+  it('openSession with restore populates transcript from payload.transcript', async () => {
+    mockStreamEvents.mockImplementation(() => langGraphStream([
+      {
+        event: 'on_chat_model_stream',
+        data: { chunk: { content: 'Done.' } },
+      },
+    ]));
+
+    const restoredMessage = makeMessage('assistant', 'Restored reply');
+    const userMessage = makeMessage('user', 'Continue');
+    const { session } = await openRestoredTestSession({
+      stateVersion: '1',
+      messages: [],
+      payload: { transcript: [restoredMessage] },
+    });
+
+    await collectEvents(session.deliverTurn({
+      messages: [userMessage],
+      turnId: 'turn-restored',
+    }, {}));
+
+    await expect(session.exportState()).resolves.toEqual({
+      stateVersion: '1',
+      payload: {
+        transcript: [
+          restoredMessage,
+          userMessage,
+          expect.objectContaining({ role: 'assistant', content: 'Done.' }),
+        ],
+      },
+    });
+  });
+
+  it('openSession with restore falls back to restore.messages when payload has no transcript', async () => {
+    mockStreamEvents.mockImplementation(() => langGraphStream([
+      {
+        event: 'on_chat_model_stream',
+        data: { chunk: { content: 'Fallback done.' } },
+      },
+    ]));
+
+    const restoredMessage = makeMessage('assistant', 'Fallback restored reply');
+    const userMessage = makeMessage('user', 'Continue fallback');
+    const { session } = await openRestoredTestSession({
+      stateVersion: '1',
+      messages: [restoredMessage],
+      payload: {},
+    });
+
+    await collectEvents(session.deliverTurn({
+      messages: [userMessage],
+      turnId: 'turn-fallback',
+    }, {}));
+
+    await expect(session.exportState()).resolves.toEqual({
+      stateVersion: '1',
+      payload: {
+        transcript: [
+          restoredMessage,
+          userMessage,
+          expect.objectContaining({ role: 'assistant', content: 'Fallback done.' }),
+        ],
+      },
+    });
   });
 
   it('includes a single tool call in message_committed events', async () => {

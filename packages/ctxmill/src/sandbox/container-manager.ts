@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { PassThrough } from 'node:stream';
 import Dockerode from 'dockerode';
 import * as tar from 'tar-stream';
 
@@ -39,7 +40,7 @@ export interface ContainerManagerOptions {
 }
 
 export interface CreateContainerOptions {
-  runId: string;
+  sessionId: string;
   agentId: string;
   harnessName: string;
   workspaceDir?: string;
@@ -66,7 +67,7 @@ export interface CreateSessionContainerOptions {
 export interface ContainerInfo {
   containerId: string;
   containerName: string;
-  runId: string;
+  sessionId: string;
   agentId: string;
   harnessName: string;
   status: 'created' | 'running' | 'paused' | 'stopped' | 'removed';
@@ -233,6 +234,40 @@ export class ContainerSemaphore {
 
 const TAG = '[ContainerManager]';
 
+const DIFF_EXCLUDE_PREFIXES: ReadonlySet<string> = new Set([
+  '/tmp', '/var', '/proc', '/sys', '/dev', '/run',
+  '/usr', '/etc',
+]);
+
+/**
+ * Return true when a diff path should be included in snapshots.
+ */
+function shouldIncludeDiffPath(filePath: string): boolean {
+  for (const prefix of DIFF_EXCLUDE_PREFIXES) {
+    if (filePath === prefix || filePath.startsWith(prefix + '/')) {
+      return false;
+    }
+  }
+  if (
+    filePath.includes('/node_modules/')
+    || filePath.includes('/.npm/')
+    || filePath.includes('/.cache/')
+    || filePath.includes('/.bun/')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Per-harness minimum memory floors (MiB).
+ * Harnesses that spawn subprocesses (e.g. Claude SDK → node cli.js) need
+ * more headroom than the global default.
+ */
+const HARNESS_MEMORY_FLOOR: ReadonlyMap<string, number> = new Map([
+  ['claude-agents', 2048],
+]);
+
 export class ContainerManager {
   private readonly docker: Dockerode;
   private readonly networkName: string;
@@ -260,7 +295,7 @@ export class ContainerManager {
     this.networkName = options?.networkName ?? 'ctxmill-agents';
     this.imagePrefix = options?.imagePrefix ?? 'ctxmill/harness';
     this.defaultCpus = options?.defaultCpus ?? 1.0;
-    this.defaultMemoryMb = options?.defaultMemoryMb ?? 512;
+    this.defaultMemoryMb = options?.defaultMemoryMb ?? 1024;
     this.defaultPidsLimit = options?.defaultPidsLimit ?? 256;
     this.defaultTimeoutSec = options?.defaultTimeoutSec ?? 600;
     this.egressProxy =
@@ -283,10 +318,11 @@ export class ContainerManager {
 
     try {
       const cpus = opts.cpus ?? this.defaultCpus;
-      const memoryMb = opts.memoryMb ?? this.defaultMemoryMb;
+      const harnessFloor = HARNESS_MEMORY_FLOOR.get(opts.harnessName) ?? 0;
+      const memoryMb = Math.max(opts.memoryMb ?? this.defaultMemoryMb, harnessFloor);
       const pidsLimit = opts.pidsLimit ?? this.defaultPidsLimit;
       const timeoutSec = opts.timeoutSec ?? this.defaultTimeoutSec;
-      const containerName = `ctxmill-run-${opts.runId}`;
+      const containerName = `ctxmill-run-${opts.sessionId}`;
 
       console.debug(
         `${TAG} creating container ${containerName} (harness=${opts.harnessName}, cpus=${cpus}, mem=${memoryMb}MiB, active=${this.semaphore.getActive()}/${this.semaphore.getActive() + this.semaphore.getQueued()})`,
@@ -315,7 +351,7 @@ export class ContainerManager {
         name: containerName,
         Labels: {
           'ctxmill.managed': 'true',
-          'ctxmill.run-id': opts.runId,
+          'ctxmill.session-id': opts.sessionId,
           'ctxmill.agent-id': opts.agentId,
           'ctxmill.harness': opts.harnessName,
           'ctxmill.started-at': new Date().toISOString(),
@@ -375,7 +411,7 @@ export class ContainerManager {
       return {
         containerId: container.id,
         containerName,
-        runId: opts.runId,
+        sessionId: opts.sessionId,
         agentId: opts.agentId,
         harnessName: opts.harnessName,
         status: 'created',
@@ -393,7 +429,8 @@ export class ContainerManager {
 
     try {
       const cpus = opts.cpus ?? this.defaultCpus;
-      const memoryMb = opts.memoryMb ?? this.defaultMemoryMb;
+      const harnessFloor = HARNESS_MEMORY_FLOOR.get(opts.harnessName) ?? 0;
+      const memoryMb = Math.max(opts.memoryMb ?? this.defaultMemoryMb, harnessFloor);
       const pidsLimit = opts.pidsLimit ?? this.defaultPidsLimit;
       const timeoutSec = opts.timeoutSec ?? this.defaultTimeoutSec;
       const containerName = sessionContainerName(opts.conversationId);
@@ -485,7 +522,7 @@ export class ContainerManager {
       return {
         containerId: container.id,
         containerName,
-        runId: opts.sessionId,
+        sessionId: opts.sessionId,
         agentId: opts.agentId,
         harnessName: opts.harnessName,
         status: 'created',
@@ -588,22 +625,83 @@ export class ContainerManager {
   // ── Workspace ───────────────────────────────────────────
 
   async extractWorkspaceDiff(containerId: string): Promise<Buffer | null> {
-    console.debug(`${TAG} extracting workspace diff from container ${containerId}`);
+    return this.extractContainerDiff(containerId);
+  }
+
+  /**
+   * Extract all meaningful filesystem changes from a container using Docker's
+   * overlay diff. Uses container.changes() to find modified/added files, filters
+   * out noise, then creates a tar via `docker exec tar` inside the container.
+   */
+  async extractContainerDiff(containerId: string): Promise<Buffer | null> {
+    console.debug(`${TAG} extracting container diff from container ${containerId}`);
     const container = this.docker.getContainer(containerId);
-    try {
-      const stream = await container.getArchive({ path: '/workspace' });
-      const chunks: Buffer[] = [];
-      for await (const chunk of stream as AsyncIterable<Buffer>) {
-        chunks.push(chunk);
-      }
-      return Buffer.concat(chunks);
-    } catch (err: unknown) {
-      if (isDockerError(err) && err.statusCode === 404) {
-        console.debug(`${TAG} no /workspace directory in container ${containerId}`);
-        return null;
-      }
-      throw err;
+    const changes = await container.changes();
+    const paths = Array.from(new Set(
+      changes
+        .filter((change) => (change.Kind === 0 || change.Kind === 1) && shouldIncludeDiffPath(change.Path))
+        .map((change) => change.Path),
+    ));
+
+    if (paths.length === 0) {
+      console.debug(`${TAG} no meaningful filesystem changes in container ${containerId}`);
+      return null;
     }
+
+    const exec = await container.exec({
+      Cmd: ['tar', 'cf', '-', '--no-recursion', '--ignore-failed-read', '-T', '-'],
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+    });
+    const stream = await exec.start({ hijack: true, stdin: true });
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    stdout.on('data', (chunk: Buffer | string) => {
+      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    stderr.on('data', (chunk: Buffer | string) => {
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+
+    this.docker.modem.demuxStream(stream, stdout, stderr);
+
+    const streamDone = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        stdout.end();
+        stderr.end();
+        resolve();
+      };
+      stream.on('error', reject);
+      stream.on('end', finish);
+      stream.on('finish', finish);
+      stream.on('close', finish);
+    });
+
+    stream.write(paths.join('\n') + '\n');
+    stream.end();
+
+    await streamDone;
+
+    const execResult = await exec.inspect();
+    if ((execResult.ExitCode ?? 0) !== 0) {
+      const stderrText = Buffer.concat(stderrChunks).toString('utf-8').trim();
+      throw new Error(
+        stderrText.length > 0
+          ? `Failed to extract container diff: ${stderrText}`
+          : `Failed to extract container diff: tar exited with code ${execResult.ExitCode}`,
+      );
+    }
+
+    return Buffer.concat(stdoutChunks);
   }
 
   async extractLogs(containerId: string, tail?: number): Promise<string> {
@@ -620,11 +718,11 @@ export class ContainerManager {
 
   // ── Tracking ────────────────────────────────────────────
 
-  async getContainer(runId: string): Promise<ContainerInfo | null> {
+  async getContainer(sessionId: string): Promise<ContainerInfo | null> {
     const containers = await this.docker.listContainers({
       all: true,
       filters: {
-        label: [`ctxmill.managed=true`, `ctxmill.run-id=${runId}`],
+        label: [`ctxmill.managed=true`, `ctxmill.session-id=${sessionId}`],
       },
     });
 
@@ -789,7 +887,7 @@ export class ContainerManager {
     const info: ContainerInfo = {
       containerId: c.Id,
       containerName: c.Names?.[0]?.replace(/^\//, '') ?? '',
-      runId: labels['ctxmill.run-id'] || labels['ctxmill.session-id'] || '',
+      sessionId: labels['ctxmill.session-id'] || labels['ctxmill.run-id'] || '',
       agentId: labels['ctxmill.agent-id'] ?? '',
       harnessName: labels['ctxmill.harness'] ?? '',
       status: dockerStateToStatus(c.State),

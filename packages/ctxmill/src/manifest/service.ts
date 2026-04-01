@@ -21,7 +21,7 @@ export class ManifestService {
       if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
         return parsed as Record<string, unknown>;
       }
-    } catch (_err) {
+    } catch {
       return {};
     }
 

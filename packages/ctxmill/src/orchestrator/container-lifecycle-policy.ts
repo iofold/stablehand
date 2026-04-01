@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { create } from '@bufbuild/protobuf';
 import { createClient, ConnectError } from '@connectrpc/connect';
-import { createGrpcTransport } from '@connectrpc/connect-node';
+import { createConnectTransport } from '@connectrpc/connect-node';
 import {
   HarnessService,
   KillSessionRequestSchema,
@@ -21,7 +21,7 @@ const DEFAULT_FREEZE_PROMOTION_MS = 600_000;
 const GRPC_PORT = 50051;
 const HEALTH_CHECK_TIMEOUT_MS = 10_000;
 
-export type PauseState = 'none' | 'scheduled' | 'paused' | 'promoting' | 'idle_frozen';
+export type PauseState = 'none' | 'scheduled' | 'paused' | 'promoting' | 'idle_paused' | 'hitl_grace';
 
 export interface IdleCallbacks {
   onFreeze: (sessionId: string) => Promise<void>;
@@ -36,6 +36,7 @@ export interface PauseEntry {
   promotionTimer?: ReturnType<typeof setTimeout>;
   idleTimer?: ReturnType<typeof setTimeout>;
   freezePromotionTimer?: ReturnType<typeof setTimeout>;
+  hitlGraceTimer?: ReturnType<typeof setTimeout>;
   idleCallbacks?: IdleCallbacks;
 }
 
@@ -46,7 +47,7 @@ interface ManagedContainerWithLabels extends ContainerInfo {
 type HarnessGrpcClient = ReturnType<typeof createClient<typeof HarnessService>>;
 
 interface ReadyClient {
-  transport: ReturnType<typeof createGrpcTransport>;
+  transport: ReturnType<typeof createConnectTransport>;
   grpcClient: HarnessGrpcClient;
 }
 
@@ -113,7 +114,7 @@ async function waitForContainerReady(
   baseUrl: string,
   timeoutMs = HEALTH_CHECK_TIMEOUT_MS,
 ): Promise<ReadyClient> {
-  const transport = createGrpcTransport({ baseUrl });
+  const transport = createConnectTransport({ baseUrl, httpVersion: '1.1' });
   const grpcClient = createClient(HarnessService, transport);
   const start = Date.now();
 
@@ -202,10 +203,12 @@ export class ContainerLifecyclePolicy {
     clearTimeoutSafe(entry.promotionTimer);
     clearTimeoutSafe(entry.idleTimer);
     clearTimeoutSafe(entry.freezePromotionTimer);
+    clearTimeoutSafe(entry.hitlGraceTimer);
     entry.pauseTimer = undefined;
     entry.promotionTimer = undefined;
     entry.idleTimer = undefined;
     entry.freezePromotionTimer = undefined;
+    entry.hitlGraceTimer = undefined;
   }
 
   schedulePause(sessionId: string, containerId: string): void {
@@ -232,6 +235,32 @@ export class ContainerLifecyclePolicy {
 
     this.entries.set(sessionId, entry);
     this.logger.debug(`${TAG} scheduled pause for session ${sessionId} in ${this.pauseDelayMs}ms`);
+  }
+
+  scheduleHitlGrace(sessionId: string, containerId: string): void {
+    const existing = this.entries.get(sessionId);
+    if (existing && existing.state !== 'none') {
+      this.logger.debug(`${TAG} session ${sessionId} HITL grace already ${existing.state}`);
+      return;
+    }
+
+    const entry: PauseEntry = existing ?? {
+      containerId,
+      state: 'none',
+    };
+
+    clearTimeoutSafe(entry.hitlGraceTimer);
+    entry.containerId = containerId;
+    entry.state = 'hitl_grace';
+    entry.hitlGraceTimer = setTimeout(() => {
+      void this.executeHitlGracePromotion(sessionId).catch((err) => {
+        this.logger.error(`${TAG} executeHitlGracePromotion failed for session ${sessionId}:`, err);
+      });
+    }, this.idleTimeoutMs);
+    unrefTimer(entry.hitlGraceTimer);
+
+    this.entries.set(sessionId, entry);
+    this.logger.debug(`${TAG} scheduled HITL grace for session ${sessionId} in ${this.idleTimeoutMs}ms`);
   }
 
   async cancelPause(sessionId: string): Promise<void> {
@@ -292,11 +321,11 @@ export class ContainerLifecyclePolicy {
 
     this.clearEntryTimers(entry);
 
-    if (entry.state === 'idle_frozen') {
+    if (entry.state === 'idle_paused') {
       try {
         await this.containerManager.unpauseContainer(entry.containerId);
       } catch (err) {
-        this.logger.warn(`${TAG} failed to unpause idle-frozen container ${entry.containerId}:`, err);
+        this.logger.warn(`${TAG} failed to unpause idle-paused container ${entry.containerId}:`, err);
       }
     }
 
@@ -329,7 +358,8 @@ export class ContainerLifecyclePolicy {
       entry.pauseTimer
       || entry.promotionTimer
       || entry.idleTimer
-      || entry.freezePromotionTimer,
+      || entry.freezePromotionTimer
+      || entry.hitlGraceTimer,
     );
 
     if (!hasTimers && entry.state === 'none' && !entry.idleCallbacks) {
@@ -436,7 +466,7 @@ export class ContainerLifecyclePolicy {
 
     try {
       await callbacks.onFreeze(sessionId);
-      entry.state = 'idle_frozen';
+      entry.state = 'idle_paused';
       entry.freezePromotionTimer = setTimeout(() => {
         void this.executeIdlePromotion(sessionId).catch((err) => {
           this.logger.error(`${TAG} executeIdlePromotion failed for session ${sessionId}:`, err);
@@ -444,7 +474,7 @@ export class ContainerLifecyclePolicy {
       }, this.freezePromotionMs);
       unrefTimer(entry.freezePromotionTimer);
       this.entries.set(sessionId, entry);
-      this.logger.debug(`${TAG} idle-froze session ${sessionId}; promotion in ${this.freezePromotionMs}ms`);
+      this.logger.debug(`${TAG} idle-paused session ${sessionId}; promotion in ${this.freezePromotionMs}ms`);
     } catch (err) {
       if (hasStatusCode(err, 404)) {
         this.logger.warn(`${TAG} container missing during idle freeze for session ${sessionId}`);
@@ -465,7 +495,7 @@ export class ContainerLifecyclePolicy {
 
   private async executeIdlePromotion(sessionId: string): Promise<void> {
     const entry = this.entries.get(sessionId);
-    if (!entry || entry.state !== 'idle_frozen') {
+    if (!entry || entry.state !== 'idle_paused') {
       return;
     }
 
@@ -494,9 +524,9 @@ export class ContainerLifecyclePolicy {
 
       this.clearEntryTimers(entry);
       this.entries.delete(sessionId);
-      this.logger.debug(`${TAG} promoted idle-frozen session ${sessionId} to checkpoint`);
+      this.logger.debug(`${TAG} promoted idle-paused session ${sessionId} to checkpoint`);
     } catch (err) {
-      this.logger.error(`${TAG} failed to checkpoint idle-frozen session ${sessionId}:`, err);
+      this.logger.error(`${TAG} failed to checkpoint idle-paused session ${sessionId}:`, err);
       try {
         await this.containerManager.unpauseContainer(entry.containerId);
       } catch (unpauseErr) {
@@ -507,6 +537,45 @@ export class ContainerLifecyclePolicy {
       entry.state = 'none';
       entry.idleCallbacks = undefined;
       this.clearEntryTimers(entry);
+      this.entries.delete(sessionId);
+    }
+  }
+
+  private async executeHitlGracePromotion(sessionId: string): Promise<void> {
+    const entry = this.entries.get(sessionId);
+    if (!entry || entry.state !== 'hitl_grace') {
+      return;
+    }
+
+    entry.hitlGraceTimer = undefined;
+    entry.state = 'promoting';
+    this.entries.set(sessionId, entry);
+
+    try {
+      await retryWithBackoff(() => this.onPromoteToCheckpoint(sessionId), {
+        delays: [1_000, 2_000],
+        onRetry: (err, attempt, delayMs) => {
+          this.logger.warn(
+            `${TAG} retrying HITL checkpoint for session ${sessionId} after attempt ${attempt + 1} in ${delayMs}ms:`,
+            err,
+          );
+        },
+      });
+
+      this.clearEntryTimers(entry);
+      this.entries.delete(sessionId);
+      this.logger.debug(`${TAG} promoted HITL-grace session ${sessionId} to checkpoint`);
+    } catch (err) {
+      this.logger.error(`${TAG} failed to checkpoint HITL-grace session ${sessionId}:`, err);
+      this.clearEntryTimers(entry);
+      entry.state = 'none';
+
+      if (entry.idleCallbacks) {
+        this.entries.set(sessionId, entry);
+        this.scheduleIdleTimeout(sessionId, entry.containerId, entry.idleCallbacks);
+        return;
+      }
+
       this.entries.delete(sessionId);
     }
   }
@@ -537,16 +606,17 @@ export class ContainerLifecyclePolicy {
       if (!alive) {
         const checkpoint = await this.db.getCheckpointV2(session.id);
         if (checkpoint) {
-          this.logger.info(`${TAG} session ${session.id}: container gone, checkpoint exists -> CHECKPOINTED`);
-          await this.db.updateSandboxSessionStatus(session.id, 'CHECKPOINTED');
-          this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
-          markedCheckpointed++;
-        } else {
-          this.logger.info(`${TAG} session ${session.id}: container gone, no checkpoint -> deleting`);
-          await this.db.deleteSandboxSession(session.id);
+           this.logger.info(`${TAG} session ${session.id}: container gone, checkpoint exists -> CHECKPOINTED`);
+           await this.db.updateSandboxSessionStatus(session.id, 'CHECKPOINTED');
+           this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
+           markedCheckpointed++;
+         } else {
+           this.logger.info(`${TAG} session ${session.id}: container gone, no checkpoint -> TERMINATED`);
+           await this.db.updateSandboxSessionStatus(session.id, 'TERMINATED');
           this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
           deleted++;
         }
+        this.cleanup(session.id);
         continue;
       }
 
@@ -556,8 +626,8 @@ export class ContainerLifecyclePolicy {
         const { grpcClient } = await waitForContainerReady(baseUrl);
         this.reconciliationCallbacks.onSessionReconnected(session, grpcClient);
         reconnected++;
-      } else if (session.status === 'FROZEN' && container.status === 'paused') {
-        this.logger.info(`${TAG} session ${session.id}: container paused (FROZEN), caching lazy unfreeze state`);
+      } else if (session.status === 'PAUSED' && container.status === 'paused') {
+        this.logger.info(`${TAG} session ${session.id}: container paused (${session.status}), caching lazy unfreeze state`);
         this.reconciliationCallbacks.onSessionReconnected(session);
         reconnected++;
       }
@@ -577,7 +647,11 @@ export class ContainerLifecyclePolicy {
         await this.containerManager.removeContainer(container.containerId, true);
         orphansCleaned++;
       } catch (err) {
-        this.logger.warn(`${TAG} failed cleaning orphan container ${container.containerName}:`, err);
+        if (hasStatusCode(err, 404)) {
+          orphansCleaned++;
+        } else {
+          this.logger.warn(`${TAG} failed cleaning orphan container ${container.containerName}:`, err);
+        }
       } finally {
         this.removingContainers.delete(container.containerId);
       }
@@ -679,7 +753,11 @@ export class ContainerLifecyclePolicy {
           await this.containerManager.removeContainer(container.containerId, true);
           cleaned++;
         } catch (err) {
-          this.logger.warn(`${TAG} failed cleaning container ${container.containerId}:`, err);
+          if (hasStatusCode(err, 404)) {
+            cleaned++;
+          } else {
+            this.logger.warn(`${TAG} failed cleaning container ${container.containerId}:`, err);
+          }
         } finally {
           this.removingContainers.delete(container.containerId);
         }
@@ -722,6 +800,7 @@ export class ContainerLifecyclePolicy {
       if (conversationId) {
         this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
       }
+      this.cleanup(sessionId);
       this.logger.info(`${TAG} session ${sessionId}: dead container ${containerId}, checkpoint exists -> CHECKPOINTED`);
       return 'skip';
     }
@@ -730,6 +809,7 @@ export class ContainerLifecyclePolicy {
     if (conversationId) {
       this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
     }
+    this.cleanup(sessionId);
     this.logger.info(`${TAG} session ${sessionId}: dead container ${containerId}, no checkpoint -> TERMINATED`);
     return 'kill';
   }

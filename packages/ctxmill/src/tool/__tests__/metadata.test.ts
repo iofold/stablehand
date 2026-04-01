@@ -6,7 +6,7 @@ import {
   ORCHESTRATOR_TOOLS,
 } from '../metadata.js';
 import { jsonSchemaToZod } from '../schema-convert.js';
-import type { ToolDefinition, ToolContext } from '../types.js';
+import type { ToolDefinition } from '../types.js';
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */

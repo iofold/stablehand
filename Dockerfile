@@ -53,22 +53,18 @@ RUN corepack enable && corepack prepare pnpm@10.12.4 --activate
 
 WORKDIR /app
 
-# Copy workspace config
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/ctxmill/package.json packages/ctxmill/
 COPY packages/sandbox-daemon/package.json packages/sandbox-daemon/
 COPY packages/proto/package.json packages/proto/
 
-# Copy example package.json files for workspace resolution
 COPY packages/examples/ packages/examples/
 COPY packages/create-ctxmill/package.json packages/create-ctxmill/
 COPY packages/ui/package.json packages/ui/
 
-# Install production dependencies only (shamefully-hoist for SDK resolution in lazy imports)
 RUN pnpm install --frozen-lockfile --prod --shamefully-hoist
 
-# Copy built output
 COPY --from=build /app/packages/shared/dist/ packages/shared/dist/
 COPY --from=build /app/packages/ctxmill/dist/ packages/ctxmill/dist/
 COPY --from=build /app/packages/sandbox-daemon/dist/ packages/sandbox-daemon/dist/

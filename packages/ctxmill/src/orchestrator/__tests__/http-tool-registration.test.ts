@@ -3,21 +3,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { agentRoutes } from '../routes/agents.js';
 import { createServer } from '../server.js';
-import { SandboxRunService } from '../sandbox-run-service.js';
-import type { SandboxSessionManager, SessionEvent } from '../sandbox-run-service.js';
+import { SessionTurnService } from '../session-turn-service.js';
+import type { SessionEvent } from '../session-turn-service.js';
 import { mapAgentHttpToolsToConfigs } from '../http-tools.js';
-import type { AgentRunService } from '../agent-run-service.js';
-import type { RunRegistry } from '../run-registry.js';
+import type { AgentSessionService } from '../agent-session-service.js';
+import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 import type { SSEManager } from '../sse.js';
 import type { InterruptManager } from '../interrupt.js';
 import type { DatabaseRepository } from '../../database/repository.js';
-import type { TypedEventBus } from '../../events/bus.js';
-import type { SecretProvider } from '../../secrets/types.js';
-import type { ResolvedConfig } from '../../config/types.js';
+import { TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition, Message } from '../../types.js';
-import type { ToolDefinition } from '../../tool/types.js';
-import type { ContainerManager, ContainerInfo } from '../../sandbox/container-manager.js';
 import { DefaultToolRegistry } from '../../tool/registry.js';
+
+function createTestBus(options?: ConstructorParameters<typeof TypedEventBus>[0]): TypedEventBus {
+  return new TypedEventBus(options);
+}
 
 function createHarnessRegistry() {
   const configSchema = z.object({ model: z.string().min(1) }).passthrough();
@@ -35,20 +35,18 @@ function createHarnessRegistry() {
 }
 
 let mockStartRunIterator: AsyncGenerator<unknown>;
-let capturedStartRunRequest: Record<string, unknown> | null = null;
 
 vi.mock('@connectrpc/connect', () => ({
   createClient: vi.fn(() => ({
     kill: vi.fn(async () => ({ success: true })),
-    startRun: vi.fn((req: Record<string, unknown>) => {
-      capturedStartRunRequest = req;
+    startRun: vi.fn((_req: Record<string, unknown>) => {
       return mockStartRunIterator;
     }),
   })),
 }));
 
 vi.mock('@connectrpc/connect-node', () => ({
-  createGrpcTransport: vi.fn(() => ({})),
+  createConnectTransport: vi.fn(() => ({})),
 }));
 
 function createRouteDbMock(): {
@@ -81,83 +79,35 @@ async function buildAgentsApp(db: DatabaseRepository, toolRegistry?: DefaultTool
     getLastActivity: vi.fn(() => null),
   } as unknown as SSEManager;
   const interrupts = {} as unknown as InterruptManager;
-  const runRegistry = {
-    getAllRuns: vi.fn(() => []),
-    getActiveRuns: vi.fn(() => []),
-  } as unknown as RunRegistry;
-  const agentRunService = {
-    executeRun: vi.fn(),
-  } as unknown as AgentRunService;
+  const sessionManager = {
+    ensureSession: vi.fn(),
+    deliverTurn: vi.fn(),
+    killSession: vi.fn(),
+    findSessionById: vi.fn(),
+    startTurn: vi.fn(),
+    completeTurn: vi.fn(),
+    cancelCurrentTurn: vi.fn(),
+    getAbortSignal: vi.fn(),
+    pauseForHitl: vi.fn(),
+    resumeFromHitl: vi.fn(),
+    getTurn: vi.fn(),
+    getActiveTurns: vi.fn(() => []),
+  } as unknown as SandboxSessionManager;
+  const agentSessionService = {
+    executeSession: vi.fn(),
+  } as unknown as AgentSessionService;
 
   await app.register(agentRoutes, {
     db,
     sse,
     interrupts,
-    runRegistry,
+    sessionManager,
     harnessRegistry: createHarnessRegistry() as never,
-    agentRunService,
+    agentSessionService,
     toolRegistry,
   });
   await app.ready();
   return app;
-}
-
-function createMockContainerManager(): ContainerManager {
-  return {
-    createContainer: vi.fn(async () => ({
-      containerId: 'container-123',
-      containerName: 'ctxmill-run-test-run-id',
-      runId: 'run-1',
-      agentId: 'agent-1',
-      harnessName: 'langgraph',
-      status: 'created',
-    } satisfies ContainerInfo)),
-    startContainer: vi.fn(async () => {}),
-    stopContainer: vi.fn(async () => {}),
-    removeContainer: vi.fn(async () => {}),
-    injectSecrets: vi.fn(async () => {}),
-    extractLogs: vi.fn(async () => 'container logs'),
-    extractWorkspaceDiff: vi.fn(async () => null),
-    ensureNetwork: vi.fn(async () => {}),
-    getContainer: vi.fn(async () => null),
-    listManagedContainers: vi.fn(async () => []),
-    getContainerExitCode: vi.fn(async () => null),
-  } as unknown as ContainerManager;
-}
-
-function createMockEventBus(): TypedEventBus {
-  return {
-    emit: vi.fn(),
-    on: vi.fn(),
-    off: vi.fn(),
-    once: vi.fn(),
-    onAgent: vi.fn(),
-    emitCustom: vi.fn(),
-    removeAllListeners: vi.fn(),
-  } as unknown as TypedEventBus;
-}
-
-function createMockSecretProvider(): SecretProvider {
-  return {
-    get: vi.fn(() => null),
-    set: vi.fn(),
-    delete: vi.fn(),
-    list: vi.fn(() => []),
-  };
-}
-
-function createMockConfig(): ResolvedConfig {
-  return {
-    execution: { type: 'docker', warmPool: 0, maxGlobalContainers: 20 },
-    database: { type: 'postgres', url: 'postgres://localhost/test' },
-    knowledge: { providers: [] },
-    tools: { executors: [] },
-    security: { preset: 'permissive' },
-    learning: { strategy: 'simple', async: false },
-    orchestration: { eventBus: true, reconciliation: false },
-    observability: { sink: 'console', path: '/tmp/obs' },
-    llm: { provider: 'openai', model: 'gpt-4o', apiKey: 'test-key', baseUrl: '' },
-  };
 }
 
 function createAgentDef(overrides?: Partial<AgentDefinition>): AgentDefinition {
@@ -181,15 +131,6 @@ function createMessages(): Message[] {
   }];
 }
 
-function createTools(): ToolDefinition[] {
-  return [{
-    name: 'read_file',
-    description: 'Read a file',
-    input: z.object({ path: z.string() }),
-    handler: async () => 'ok',
-  }];
-}
-
 const originalFetch = globalThis.fetch;
 const silentLogger = {
   info: vi.fn(),
@@ -200,7 +141,6 @@ const silentLogger = {
 
 describe('HTTP tool registration', () => {
   beforeEach(() => {
-    capturedStartRunRequest = null;
     mockStartRunIterator = (async function* () {
       yield {
         sequence: BigInt(1),
@@ -379,7 +319,7 @@ describe('HTTP tool registration', () => {
 
     const app = await createServer({
       db,
-      agentRunService: { executeRun: vi.fn() } as unknown as AgentRunService,
+      agentSessionService: { executeSession: vi.fn() } as unknown as AgentSessionService,
       toolDefinitionRegistry: toolRegistry,
     });
 
@@ -446,7 +386,7 @@ describe('HTTP tool registration', () => {
     });
 
     const capturedAgentDef: AgentDefinition[] = [];
-    const sessionManager: SandboxSessionManager = {
+    const sessionManager = {
       ensureSession: vi.fn(async (_convId, def) => {
         capturedAgentDef.push(def);
         return { sessionId: 'session-1' };
@@ -456,11 +396,11 @@ describe('HTTP tool registration', () => {
       suspendSession: vi.fn(async () => {}),
       freezeSession: vi.fn(async () => {}),
       unfreezeSession: vi.fn(async () => {}),
-    };
+    } as unknown as SandboxSessionManager;
 
-    const service = new SandboxRunService({
+    const service = new SessionTurnService({
       sessionManager,
-      eventBus: createMockEventBus(),
+      eventBus: createTestBus(),
       logger: silentLogger,
     });
 

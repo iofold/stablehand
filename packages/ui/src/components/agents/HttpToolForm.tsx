@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface HttpToolDefinition {
@@ -26,6 +26,20 @@ interface HttpToolFormProps {
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as const;
 type HttpMethod = typeof HTTP_METHODS[number];
 
+interface HeaderRow {
+  id: string;
+  key: string;
+  value: string;
+}
+
+function createHeaderRow(key = '', value = ''): HeaderRow {
+  return {
+    id: `${key}-${value}-${Math.random().toString(36).slice(2, 10)}`,
+    key,
+    value,
+  };
+}
+
 export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -35,7 +49,7 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
   const [authToken, setAuthToken] = useState('');
   const [apiKeyName, setApiKeyName] = useState('Authorization');
   const [apiKeyValue, setApiKeyValue] = useState('');
-  const [headers, setHeaders] = useState<Array<{ key: string; value: string }>>([]);
+  const [headers, setHeaders] = useState<HeaderRow[]>([]);
   const [inputSchemaText, setInputSchemaText] = useState('');
   const [timeoutStr, setTimeoutStr] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -57,7 +71,7 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
       }
       
       if (tool.headers) {
-        setHeaders(Object.entries(tool.headers).map(([key, value]) => ({ key, value })));
+        setHeaders(Object.entries(tool.headers).map(([key, value]) => createHeaderRow(key, value)));
       }
       
       if (tool.inputSchema) {
@@ -160,7 +174,7 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
   };
 
   const addHeader = () => {
-    setHeaders([...headers, { key: '', value: '' }]);
+    setHeaders([...headers, createHeaderRow()]);
   };
 
   const removeHeader = (index: number) => {
@@ -177,8 +191,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
     <div className="space-y-6">
       <div className="space-y-4 pb-5 border-b border-surface-700/50">
         <div>
-          <label className="text-label">Name</label>
+          <label htmlFor="http-tool-name" className="text-label">Name</label>
           <input
+            id="http-tool-name"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -189,8 +204,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
         </div>
 
         <div>
-          <label className="text-label">Description</label>
+          <label htmlFor="http-tool-description" className="text-label">Description</label>
           <textarea
+            id="http-tool-description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="What does this tool do? When should the agent use it?"
@@ -204,8 +220,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
       <div className="space-y-4 pb-5 border-b border-surface-700/50">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
           <div className="sm:col-span-1">
-            <label className="text-label">Method</label>
+            <label htmlFor="http-tool-method" className="text-label">Method</label>
             <select
+              id="http-tool-method"
               value={method}
               onChange={(e) => setMethod(e.target.value as HttpMethod)}
               className="input-base mt-1.5"
@@ -216,8 +233,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
             </select>
           </div>
           <div className="sm:col-span-3">
-            <label className="text-label">Endpoint URL</label>
+            <label htmlFor="http-tool-endpoint" className="text-label">Endpoint URL</label>
             <input
+              id="http-tool-endpoint"
               type="url"
               value={endpoint}
               onChange={(e) => setEndpoint(e.target.value)}
@@ -231,8 +249,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
 
       <div className="space-y-4 pb-5 border-b border-surface-700/50">
         <div>
-          <label className="text-label">Authentication</label>
+          <label htmlFor="http-tool-authentication" className="text-label">Authentication</label>
           <select
+            id="http-tool-authentication"
             value={authType}
             onChange={(e) => setAuthType(e.target.value as 'none' | 'bearer' | 'api-key')}
             className="input-base mt-1.5"
@@ -245,8 +264,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
 
         {authType === 'bearer' && (
           <div>
-            <label className="text-label">Token</label>
+            <label htmlFor="http-tool-token" className="text-label">Token</label>
             <input
+              id="http-tool-token"
               type="password"
               value={authToken}
               onChange={(e) => setAuthToken(e.target.value)}
@@ -260,8 +280,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
         {authType === 'api-key' && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="text-label">Header Name</label>
+              <label htmlFor="http-tool-api-key-name" className="text-label">Header Name</label>
               <input
+                id="http-tool-api-key-name"
                 type="text"
                 value={apiKeyName}
                 onChange={(e) => setApiKeyName(e.target.value)}
@@ -271,8 +292,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
               {errors.apiKeyName && <p className="mt-1 text-xs text-red-400">{errors.apiKeyName}</p>}
             </div>
             <div>
-              <label className="text-label">API Key</label>
+              <label htmlFor="http-tool-api-key-value" className="text-label">API Key</label>
               <input
+                id="http-tool-api-key-value"
                 type="password"
                 value={apiKeyValue}
                 onChange={(e) => setApiKeyValue(e.target.value)}
@@ -287,7 +309,7 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
 
       <div className="space-y-4 pb-5 border-b border-surface-700/50">
         <div className="flex items-center justify-between">
-          <label className="text-label">Headers</label>
+          <span className="text-label">Headers</span>
           <button
             type="button"
             onClick={addHeader}
@@ -303,8 +325,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
         ) : (
           <div className="space-y-2">
             {headers.map((header, index) => (
-              <div key={index} className="flex items-center gap-2">
+              <div key={header.id} className="flex items-center gap-2">
                 <input
+                  aria-label={`Header name ${index + 1}`}
                   type="text"
                   value={header.key}
                   onChange={(e) => updateHeader(index, 'key', e.target.value)}
@@ -312,6 +335,7 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
                   className="input-base font-mono text-sm"
                 />
                 <input
+                  aria-label={`Header value ${index + 1}`}
                   type="text"
                   value={header.value}
                   onChange={(e) => updateHeader(index, 'value', e.target.value)}
@@ -333,8 +357,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
 
       <div className="space-y-4 pb-5 border-b border-surface-700/50">
         <div>
-          <label className="text-label">Input Schema (JSON)</label>
+          <label htmlFor="http-tool-input-schema" className="text-label">Input Schema (JSON)</label>
           <textarea
+            id="http-tool-input-schema"
             value={inputSchemaText}
             onChange={(e) => setInputSchemaText(e.target.value)}
             placeholder={'{\n  "type": "object",\n  "properties": {\n    "query": { "type": "string" }\n  }\n}'}
@@ -347,8 +372,9 @@ export function HttpToolForm({ tool, onSave, onCancel }: HttpToolFormProps) {
 
       <div className="space-y-4">
         <div>
-          <label className="text-label">Timeout (seconds)</label>
+          <label htmlFor="http-tool-timeout" className="text-label">Timeout (seconds)</label>
           <input
+            id="http-tool-timeout"
             type="number"
             value={timeoutStr}
             onChange={(e) => setTimeoutStr(e.target.value)}

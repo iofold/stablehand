@@ -1,389 +1,142 @@
-# CTXMill Event Pipeline - Complete Mapping
+# CTXMill Protocol Mapping Spec
 
-## 1. PROTO DEFINITION (sandbox.proto)
+> Authoritative reference for how AG-UI wire events and gRPC proto fields map to ctxmill internal abstractions.
+> Updated: 2026-03-31 (post runId→sessionId/turnId migration)
 
-**File**: `/path/to/stablehand/packages/proto/ctxmill/sandbox/v1/sandbox.proto`
+## Core Entities
 
-### AgentEvent Oneof
-```protobuf
-message AgentEvent {
-  oneof event {
-    TextDelta text_delta = 1;
-    ToolCallStart tool_call_start = 2;
-    ToolCallEnd tool_call_end = 3;
-    ApprovalNeeded approval_needed = 4;
-    ApprovalResolved approval_resolved = 5;
-    ErrorEvent error = 6;
-    DoneEvent done = 7;
-  }
-}
+Table of the 4 key identifiers:
+- `conversationId` — Persistent conversation. 1:1 with a conversation DB row. Used across sessions.
+- `turnId` — Single request→response cycle within a session. Created per user message. This is what becomes `runId` on the AG-UI wire.
+- `sessionId` — Sandbox container session. Persists across turns for the same conversation. Maps to `sandbox_sessions` DB table.
+- `runId` (wire only) — AG-UI protocol field. NOT an internal entity. Exists only in SSE events sent to the browser. Populated from `turnId` (for run events) or `conversationId` (for user message events).
+
+## Section 1: AG-UI Protocol Mapping
+
+### Wire Format
+
+The AG-UI protocol defines `runId` as a required field on all events. In ctxmill:
+
+| AG-UI Event Type | Wire `runId` value | Source location |
+|---|---|---|
+| RUN_STARTED | turnId | SSEBroadcaster (from bus `turn.started`) or direct broadcast in routes |
+| RUN_FINISHED | turnId | SSEBroadcaster (from bus `turn.completed`) |
+| RUN_ERROR | turnId | AgentSessionService catch block |
+| TEXT_MESSAGE_START | conversationId (user msg) or turnId (assistant) | Route handler (user), SSEBroadcaster (assistant) |
+| TEXT_MESSAGE_CONTENT | turnId | SSEBroadcaster (from bus `run.text_chunk`) |
+| TEXT_MESSAGE_END | conversationId (user msg) or turnId (assistant) | Route handler (user), SSEBroadcaster (assistant) |
+| TOOL_CALL_START | turnId | SSEBroadcaster (from bus `run.tool_started`) |
+| TOOL_CALL_ARGS | turnId | SSEBroadcaster (synthetic, emitted after TOOL_CALL_START) |
+| TOOL_CALL_RESULT | turnId | SSEBroadcaster (from bus `run.tool_result`) |
+| MESSAGE_COMMITTED | turnId | SessionTurnService |
+| CUSTOM | varies (turnId, sessionId, or agentId) | Various direct broadcasts and EmitEvent RPC |
+
+### SSE Broadcast Resolution
+
+SSEBroadcaster resolves the wire `runId` with a fallback chain:
+```
+payload.turnId ?? payload.sessionId ?? payload.runId
 ```
 
-### Message Types
-```protobuf
-message TextDelta {
-  string content = 1;
-}
+### Emission Paths
 
-message ToolCallStart {
-  string id = 1;
-  string name = 2;
-  string args_json = 3;
-}
+1. **EventBus → SSEBroadcaster → SSE** — Most run events (text, tool, started, finished). SSEBroadcaster subscribes to internal events and re-emits as AG-UI.
+2. **SessionTurnService → AGUIEvent yield** — `MESSAGE_COMMITTED` events are yielded directly from the turn service as AGUIEvents.
+3. **AgentSessionService → direct SSE** — `RUN_ERROR` on unhandled exceptions during turn execution.
+4. **Route handlers → direct SSE** — User message events (`TEXT_MESSAGE_*`) and session control (`CUSTOM` interrupt_resolved, run_cancelled).
+5. **gRPC EmitEvent → EventBus → SSEBroadcaster** — Custom events emitted by sandbox harnesses via the `emit-event` tool.
 
-message ToolCallEnd {
-  string id = 1;
-  string result = 2;
-  optional string error = 3;
-  int64 duration_ms = 4;
-}
+## Section 2: Internal Event Bus Mapping
 
-message ApprovalNeeded {
-  string id = 1;
-  string tool_name = 2;
-  string args_json = 3;
-}
+Table of all 18 event types from `packages/ctxmill/src/events/bus.ts`:
 
-message ApprovalResolved {
-  string id = 1;
-  string action = 2;
-}
+| Internal Event | Key Fields | AG-UI Mapping | Notes |
+|---|---|---|---|
+| turn.started | turnId, sessionId, agentId, conversationId, mode | RUN_STARTED | — |
+| run.text_chunk | turnId, agentId, messageId, content | TEXT_MESSAGE_CONTENT | — |
+| run.tool_started | turnId, agentId, toolCallId, toolName, args | TOOL_CALL_START + TOOL_CALL_ARGS | — |
+| run.tool_result | turnId, agentId, toolCallId, toolName, result, durationMs | TOOL_CALL_RESULT | — |
+| run.interrupted | turnId, agentId, toolCallId, toolName, args, interruptId | CUSTOM | — |
+| run.interrupt_resolved | turnId, agentId, interruptId, action | CUSTOM | — |
+| session.paused | sessionId, agentId, conversationId, reason | CUSTOM | Uses sessionId not turnId |
+| turn.completed | turnId, sessionId, agentId, conversationId, status, durationMs | RUN_FINISHED | — |
+| run.resumed | turnId, agentId, triggeredBy, suspendedDurationMs | Not mapped to AG-UI | — |
+| feedback.received | feedbackId, turnId, agentId, type | Not mapped to AG-UI | — |
+| trigger.fired | triggerId, agentId, eventType, turnId | Not mapped to AG-UI | — |
+| learning.* (3 events) | varies | Not mapped to AG-UI | Internal only |
+| agent.created/deleted | agentId | Not mapped to AG-UI | Internal only |
+| client.connected/disconnected | agentId, clientId | Not mapped to AG-UI | Internal only |
+| custom | type, agentId, payload | CUSTOM | Passthrough |
 
-message ErrorEvent {
-  string message = 1;
-  optional string stack_trace = 2;
-  string category = 3;
-}
+## Section 3: gRPC Proto Mapping
 
-message DoneEvent {
-  optional string result = 1;
-  optional TokenUsage usage = 2;
-  bool interrupted = 3;
-}
+### Services
 
-message TokenUsage {
-  int64 input_tokens = 1;
-  int64 output_tokens = 2;
-  int64 total_tokens = 3;
-  optional double cost = 4;
-}
+**HarnessService** (Orchestrator → Sandbox):
+
+| RPC | Proto Request | Proto Response | Key Field Mapping |
+|---|---|---|---|
+| OpenSession | session_id, agent_id, conversation_id, bootstrap (fresh or restore) | stream SessionEvent | session_id → sessionId |
+| DeliverTurn | session_id, messages[], turn_id, tools[] | stream SessionEvent | turn_id → turnId (becomes runId in harness) |
+| SuspendSession | session_id, reason | SessionCheckpoint | session_id → sessionId |
+| KillSession | session_id, reason | Empty | session_id → sessionId |
+
+**OrchestratorService** (Sandbox → Orchestrator):
+
+| RPC | Proto Request | Proto Response | Key Field Mapping |
+|---|---|---|---|
+| RequestTool | tool_name, arguments_json, request_id | ToolCallResult | orchestrator-side tool execution |
+| EmitEvent | event_type, payload (JSON) | Empty | payload.runId = sessionId (injected by orchestrator) |
+| RefreshSecrets | — | SecretsPayload | P2+ stub |
+| RegisterArtifact | metadata, upload_url | ArtifactRecord | S3/MinIO registration |
+| ResolveArtifact | artifact_id | ArtifactRecord | S3/MinIO lookup |
+
+### Proto → Harness Internal Mapping
+
+The conversion functions in `packages/sandbox-daemon/src/sandbox/proto-convert.ts`:
+
+| Proto Field | Internal Type | Field Name | Notes |
+|---|---|---|---|
+| DeliverTurnRequest.turn_id | HarnessTurnInput.turnId | turnId | Becomes `runId` in harness tool context |
+| DeliverTurnRequest.session_id | (used for gRPC context) | sessionId | — |
+| FreshBootstrap.agent_id | HarnessSessionConfig.agentId | agentId | — |
+| FreshBootstrap.conversation_id | HarnessSessionConfig.conversationId | conversationId | — |
+| FreshBootstrap.instructions | HarnessSessionConfig.instructions | instructions | — |
+| ToolMetadata.location | ToolDefinition.location | SANDBOX / ORCHESTRATOR / DAEMON | Determines where tool executes |
+
+### Harness runId Usage
+
+Each harness receives `turnId` from proto and passes it as `runId` to tool handlers:
+- **Claude Agents**: `runId` parameter in `createToolContext()`, `runTurn()`, `handleToolResult()`
+- **PI Agent**: `this.turnRef.runId = input.turnId` — stores turnId as runId on session ref
+- **LangGraph**: `instanceId: input.turnId` — uses turnId as the LangGraph instance ID
+
+### Data Flow: Turn Execution
+
+```
+User sends message
+  → POST /api/agents/:id/message
+    → Creates conversation (if new) + turn row in DB
+    → SSE broadcast: TEXT_MESSAGE_* (runId = conversationId)
+    → AgentSessionService.executeSession(turnId)
+      → SandboxSessionManager.ensureSession(conversationId)
+        → gRPC DeliverTurn(session_id, turn_id, messages[])
+          → Sandbox converts: turnId → HarnessTurnInput.turnId
+            → Harness executes with runId = turnId
+              → Yields AgentEvent stream
+            → Sandbox converts: AgentEvent → proto SessionEvent
+          → Orchestrator receives SessionEvent stream
+        → SessionTurnService converts: SessionEvent → AGUIEvent (runId = turnId)
+      → AgentSessionService broadcasts AGUIEvent via SSE
+      → EventBus emits: run.text_chunk, run.tool_started, etc. (turnId in payload)
+        → SSEBroadcaster maps: turnId → AG-UI runId
 ```
 
----
+## Section 4: The `runId` Contract
 
-## 2. TYPESCRIPT UNION TYPE (harness/types.ts)
+`runId` exists at 3 boundaries:
+1. **AG-UI wire format** (SSE events to browser) — MUST be `runId`, protocol-mandated
+2. **Proto/gRPC** (between orchestrator and sandbox) — Does NOT exist in proto. Injected by orchestrator into EmitEvent payloads.
+3. **Harness internal** (inside sandbox containers) — Used as the tool execution context identifier. Set from proto `turn_id`.
 
-**File**: `/path/to/stablehand/packages/ctxmill/src/harness/types.ts`
-
-### AgentEvent Union
-```typescript
-export type AgentEvent =
-  | { type: 'text_delta'; content: string }
-  | { type: 'tool_call_start'; id: string; name: string; args: unknown }
-  | { type: 'tool_call_end'; id: string; result: string; error?: string; durationMs: number }
-  | { type: 'approval_needed'; id: string; tool: string; args: unknown }
-  | { type: 'approval_resolved'; id: string; action: 'approve' | 'reject' }
-  | { type: 'error'; error: string }
-  | { type: 'done'; result?: string; usage?: TokenUsage };
-```
-
-### TokenUsage Interface
-```typescript
-export interface TokenUsage {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  cost?: number;
-}
-```
-
----
-
-## 3. PROTO → TYPESCRIPT CONVERSION (proto-convert.ts)
-
-**File**: `/path/to/stablehand/packages/ctxmill/src/sandbox/proto-convert.ts`
-
-### Function: `agentEventToProto()`
-Wraps internal AgentEvent in proto StartRunResponse envelope with sequence, timestamp, runId.
-
-### Function: `convertAgentEvent()`
-**Switch statement mapping each AgentEvent type to proto:**
-
-```typescript
-case 'text_delta':
-  → TextDeltaSchema { content }
-
-case 'tool_call_start':
-  → ToolCallStartSchema { id, name, argsJson: JSON.stringify(args) }
-
-case 'tool_call_end':
-  → ToolCallEndSchema { id, result, error?, durationMs: BigInt }
-
-case 'approval_needed':
-  → ApprovalNeededSchema { id, toolName: tool, argsJson: JSON.stringify(args) }
-
-case 'approval_resolved':
-  → ApprovalResolvedSchema { id, action }
-
-case 'error':
-  → ErrorEventSchema { message: error, category: 'runtime' }
-
-case 'done':
-  → DoneEventSchema { result?, usage?, interrupted: false }
-```
-
-**Key Detail**: Error events hardcode `category: 'runtime'` in the main case and `'internal'` in the fallback default case.
-
----
-
-## 4. PROTO → AG-UI CONVERSION (sandbox-run-service.ts)
-
-**File**: `/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-run-service.ts`
-
-### Function: `convertProtoToAGUI()`
-**Switch statement mapping proto AgentEvent to AGUIEvent(s):**
-
-```typescript
-case 'textDelta':
-  → TEXT_MESSAGE_START (if not already started)
-  → TEXT_MESSAGE_CONTENT { content }
-
-case 'toolCallStart':
-  → TEXT_MESSAGE_END (if text block open)
-  → TOOL_CALL_START { toolCallId, toolName }
-  → TOOL_CALL_ARGS { toolCallId, args: argsJson }
-
-case 'toolCallEnd':
-  → TOOL_CALL_RESULT { toolCallId, result, durationMs }
-
-case 'approvalNeeded':
-  → CUSTOM { subtype: 'interrupted', toolCallId, toolName, args, _pauseHint: 'schedule' }
-
-case 'approvalResolved':
-  → CUSTOM { subtype: 'interrupt_resolved', toolCallId, action, _pauseHint: 'cancel' }
-
-case 'error':
-  → RUN_ERROR { error: message }
-
-case 'done':
-  → TEXT_MESSAGE_END (if text block open)
-  → (handled by caller as RUN_FINISHED/RUN_FAILED)
-```
-
-**State Machine**: Tracks `textStarted`, `currentTextContent` to frame text blocks properly.
-
----
-
-## 5. AG-UI EVENT TYPES (shared/src/events.ts)
-
-**File**: `/path/to/stablehand/packages/shared/src/events.ts`
-
-### AGUIEventType Union
-```typescript
-export type AGUIEventType =
-  | 'RUN_STARTED'
-  | 'RUN_FINISHED'
-  | 'RUN_ERROR'
-  | 'RUN_FAILED'
-  | 'TEXT_MESSAGE_START'
-  | 'TEXT_MESSAGE_CONTENT'
-  | 'TEXT_MESSAGE_END'
-  | 'TOOL_CALL_START'
-  | 'TOOL_CALL_ARGS'
-  | 'TOOL_CALL_END'
-  | 'TOOL_CALL_RESULT'
-  | 'STATE_DELTA'
-  | 'HITL_PAUSE'
-  | 'CUSTOM';
-```
-
-### AGUIEvent Interface
-```typescript
-export interface AGUIEvent {
-  type: AGUIEventType;
-  timestamp: number;
-  runId: string;
-  [key: string]: unknown;
-}
-```
-
----
-
-## 6. HARNESS EMISSION POINTS
-
-### OpenAI Agents (openai-agents.ts)
-**File**: `/path/to/stablehand/packages/ctxmill/src/harness/openai-agents.ts`
-
-Yields:
-- `{ type: 'text_delta', content: delta }`
-- `{ type: 'tool_call_start', id, name, args }`
-- `{ type: 'done', usage }`
-- `{ type: 'error', error: String(err) }`
-
-### Claude Agents (claude-agents.ts)
-**File**: `/path/to/stablehand/packages/ctxmill/src/harness/claude-agents.ts`
-
-Yields:
-- `{ type: 'text_delta', content: delta.text }`
-- `{ type: 'tool_call_start', id, name, args: fullInput }`
-- `{ type: 'tool_call_end', id, result: 'Rejected by user.', durationMs }` (approval rejection)
-- `{ type: 'tool_call_end', id, result, durationMs }`
-- `{ type: 'done', usage }`
-- `{ type: 'error', error: String(err) }`
-
-### Vercel AI (vercel-ai.ts)
-**File**: `/path/to/stablehand/packages/ctxmill/src/harness/vercel-ai.ts`
-
-Yields:
-- `{ type: 'text_delta', content: delta }`
-- `{ type: 'tool_call_start', id, name, args }`
-- `{ type: 'tool_call_end', id, result, durationMs }`
-- `{ type: 'error', error: String(error) }`
-- `{ type: 'done', usage }`
-
-### LangGraph (langgraph.ts)
-**File**: `/path/to/stablehand/packages/ctxmill/src/harness/langgraph.ts`
-
-Yields:
-- `{ type: 'text_delta', content: textDelta }`
-- `{ type: 'tool_call_start', id, name, args }`
-- `{ type: 'tool_call_end', id, result, durationMs }`
-- `{ type: 'done' }`
-- `{ type: 'error', error: String(err) }`
-
-### PI Agent (pi-agent.ts)
-**File**: `/path/to/stablehand/packages/ctxmill/src/harness/pi-agent.ts`
-
-Yields:
-- Text deltas from PI Agent stream events
-- Tool call start/end events
-- Done event
-- `{ type: 'error', error: String(err) }`
-
----
-
-## 7. SSE BROADCASTING (sse-broadcaster.ts)
-
-**File**: `/path/to/stablehand/packages/ctxmill/src/orchestrator/sse-broadcaster.ts`
-
-### Event Type Mapping
-```typescript
-const EVENT_TYPE_MAP: Record<string, AGUIEventType> = {
-  'run.started': 'RUN_STARTED',
-  'run.text_chunk': 'TEXT_MESSAGE_CONTENT',
-  'run.tool_started': 'TOOL_CALL_START',
-  'run.tool_result': 'TOOL_CALL_RESULT',
-  'run.interrupted': 'CUSTOM',
-  'run.interrupt_resolved': 'CUSTOM',
-  'run.completed': 'RUN_FINISHED',
-};
-```
-
-### Broadcast Flow
-1. Subscribes to internal TypedEventBus events (run.*)
-2. Maps to AGUIEventType via EVENT_TYPE_MAP
-3. Broadcasts via SSEManager to connected clients
-
----
-
-## 8. ERROR HANDLING PATTERNS
-
-### Current Error Category Usage
-- **Proto**: `ErrorEvent.category` field (string) — currently hardcoded to `'runtime'` or `'internal'`
-- **Test expectations** (sandbox-run-service.test.ts, sandbox-lifecycle-integration.test.ts):
-  ```typescript
-  { message: 'LLM rate limited', category: 'runtime' }
-  ```
-
-### Harness Error Yields
-All harnesses catch top-level errors and yield:
-```typescript
-{ type: 'error', error: String(err) }
-```
-
-**No category field in TypeScript union** — only in proto ErrorEvent.
-
-### Conversion Hardcoding (proto-convert.ts, `'error'` case)
-```typescript
-case 'error':
-  return create(AgentEventSchema, {
-    event: {
-      case: 'error',
-      value: create(ProtoErrorEventSchema, {
-        message: event.error,
-        category: 'runtime',  // ← HARDCODED
-      }),
-    },
-  });
-```
-
----
-
-## 9. INTEGRATION POINTS SUMMARY
-
-| Layer | File | Type | Variants |
-|-------|------|------|----------|
-| **Proto** | sandbox.proto | oneof AgentEvent | 7 types |
-| **TypeScript** | harness/types.ts | union AgentEvent | 7 types |
-| **Conversion** | proto-convert.ts | convertAgentEvent() | 7 cases |
-| **AG-UI** | sandbox-run-service.ts | convertProtoToAGUI() | 7 cases → 14+ AGUIEvent types |
-| **Harnesses** | openai-agents.ts, claude-agents.ts, vercel-ai.ts, langgraph.ts, pi-agent.ts | yield statements | 7 types emitted |
-| **Broadcasting** | sse-broadcaster.ts | EVENT_TYPE_MAP | Maps internal events to AGUIEventType |
-| **AG-UI Types** | shared/src/events.ts | AGUIEventType | 15 types |
-
----
-
-## 10. ADDING NEW EVENT TYPES - CHECKLIST
-
-To add a new event type (e.g., `text_start`, `text_end`, `tool_call_args_delta`):
-
-1. **Proto** (sandbox.proto):
-   - Add new message type (e.g., `message TextStart { ... }`)
-   - Add to `AgentEvent` oneof (e.g., `TextStart text_start = 8;`)
-
-2. **TypeScript** (harness/types.ts):
-   - Add variant to `AgentEvent` union (e.g., `| { type: 'text_start' }`)
-
-3. **Conversion** (proto-convert.ts):
-   - Add case in `convertAgentEvent()` switch
-   - Create proto message via schema
-
-4. **AG-UI Conversion** (sandbox-run-service.ts):
-   - Add case in `convertProtoToAGUI()` switch
-   - Yield appropriate AGUIEvent(s)
-   - Update state machine if needed (textStarted, etc.)
-
-5. **Harnesses** (all 5 harness files):
-   - Add yield statement where event should be emitted
-   - Ensure consistent field names and types
-
-6. **AG-UI Types** (shared/src/events.ts):
-   - Add new AGUIEventType if needed
-   - Update AGUIEvent interface if new fields required
-
-7. **SSE Broadcasting** (sse-broadcaster.ts):
-   - Add mapping in EVENT_TYPE_MAP if using internal event bus
-
-8. **Tests**:
-   - Update proto roundtrip tests
-   - Update conversion tests
-   - Update harness tests
-
----
-
-## 11. CURRENT GAPS & OPPORTUNITIES
-
-### Missing in TypeScript Union
-- `error` type has no `category` field (only in proto)
-- No `stack_trace` field in TypeScript (only in proto)
-
-### Hardcoded Values
-- Error category always `'runtime'` in proto-convert.ts `'error'` case
-- Fallback category `'internal'` in proto-convert.ts default case
-
-### Not Yet Implemented
-- `text_start` / `text_end` events (state machine exists in sandbox-run-service.ts but no proto events)
-- `tool_call_args_delta` (streaming args)
-- Lifecycle events (agent_started, agent_finished, etc.)
-- Structured error categories (validation, rate_limit, auth, etc.)
-
+**Rule**: Internal code NEVER uses `runId` as a variable name. Use `turnId`, `sessionId`, or `conversationId` as appropriate. The `runId` field name appears ONLY when constructing AG-UI wire events or reading them from SSE.

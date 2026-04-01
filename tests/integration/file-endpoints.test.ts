@@ -53,7 +53,7 @@ describe('File endpoint integration tests', () => {
       payload: {
         name: 'file-test-agent',
         harness: 'langgraph',
-        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
         systemPrompt: 'You are a test agent.',
         tools: [],
       },

@@ -16,7 +16,7 @@ test('Final trace of chart message loading', async ({ page }) => {
           status: response.status(),
           data: json,
         });
-      } catch (e) {
+      } catch {
         // Ignore parse errors
       }
     }
@@ -25,8 +25,8 @@ test('Final trace of chart message loading', async ({ page }) => {
   console.log(`\n🎯 Testing conversation: ${targetConvId}`);
   
   // Navigate with explicit conversation ID
-  await page.goto(`/agents/${agentId}/chat?conversationId=${targetConvId}`);
-  await page.getByTestId('chat-input').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.goto(`/agents/${agentId}/sessions/new?conversationId=${targetConvId}`);
+  await page.getByTestId('session-input').waitFor({ state: 'visible', timeout: 15_000 });
   await page.waitForTimeout(2000);
 
   console.log(`\n📡 API calls made: ${apiCalls.length}`);

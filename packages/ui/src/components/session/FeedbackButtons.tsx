@@ -6,10 +6,10 @@ import { submitFeedback } from '@/lib/api';
 interface FeedbackButtonsProps {
   agentId: string;
   messageId: string;
-  sessionId?: string;
+  conversationId?: string;
 }
 
-export function FeedbackButtons({ agentId, messageId, sessionId }: FeedbackButtonsProps) {
+export function FeedbackButtons({ agentId, messageId, conversationId }: FeedbackButtonsProps) {
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showToast, setShowToast] = useState(false);
@@ -24,7 +24,7 @@ export function FeedbackButtons({ agentId, messageId, sessionId }: FeedbackButto
     setSubmitting(true);
     try {
       await submitFeedback(agentId, {
-          conversationId: sessionId || 'unknown',
+          conversationId: conversationId || 'unknown',
         messageId,
         type,
       });

@@ -12,12 +12,11 @@ import { sandboxRoutes } from './routes/sandbox.js';
 import type { EventTriggerManager } from '../events/trigger-manager.js';
 import { SSEManager } from './sse.js';
 import { InterruptManager } from './interrupt.js';
-import type { AgentRunService } from './agent-run-service.js';
+import type { AgentSessionService } from './agent-session-service.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { LearningPipeline } from '../learning/types.js';
 import type { KnowledgeStore } from '../knowledge/types.js';
 import type { TypedEventBus } from '../events/bus.js';
-import { RunRegistry } from './run-registry.js';
 import type { SecretProvider } from '../secrets/types.js';
 import { createGrpcRoutes } from './grpc/router.js';
 import type { OrchestratorToolRegistry } from './grpc/orchestrator-service.js';
@@ -32,14 +31,13 @@ import { ClaudeAgentsHarness } from '../harness/claude-agents.js';
 import { PIAgentHarness } from '../harness/pi-agent.js';
 import type { HarnessRegistry } from '../harness/types.js';
 import type { SystemSettingsService } from '../settings/service.js';
-import type { SandboxSessionManager } from './sandbox-run-service.js';
+import type { SandboxSessionManager } from './sandbox-session-manager.js';
 
 export interface ServerOptions {
   port?: number;
   host?: string;
   db: DatabaseRepository;
   harnessRegistry?: HarnessRegistry;
-  runRegistry?: RunRegistry;
   learningPipeline?: LearningPipeline;
   knowledgeStore?: KnowledgeStore;
   eventBus?: TypedEventBus;
@@ -63,11 +61,10 @@ export interface ServerOptions {
   artifactStore?: ArtifactStore;
   /** S3 bucket name for artifact storage. Required when artifactStore is provided. */
   artifactBucket?: string;
-  /** Pre-wired AgentRunService from DI container. */
-  agentRunService: AgentRunService;
-  sandboxSessionManager?: SandboxSessionManager;
+  /** Pre-wired AgentSessionService from DI container. */
+  agentSessionService: AgentSessionService;
+  sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
-  onHitlPause?: (sessionId: string) => void;
 }
 
 function createDefaultHarnessRegistry(): HarnessRegistry {
@@ -85,8 +82,7 @@ function createDefaultHarnessRegistry(): HarnessRegistry {
  * the database, SSE manager, interrupt manager, and agent routes.
  */
 export async function createServer(opts: ServerOptions): Promise<FastifyInstance> {
-  const { db, port: _port, host: _host, harnessRegistry: optHarnessRegistry, runRegistry: optRunRegistry, learningPipeline, knowledgeStore, eventBus, dataDir, triggerManager } = opts;
-  const runRegistry = optRunRegistry ?? new RunRegistry();
+  const { db, harnessRegistry: optHarnessRegistry, learningPipeline, knowledgeStore, eventBus, dataDir, triggerManager } = opts;
   const harnessRegistry = optHarnessRegistry ?? createDefaultHarnessRegistry();
   const toolDefinitionRegistry = opts.toolDefinitionRegistry ?? new DefaultToolRegistry();
 
@@ -129,10 +125,9 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         eventBus,
         toolRegistry: opts.toolRegistry,
         interruptManager: interrupts,
-        runRegistry,
+        sessionManager: opts.sessionManager,
         toolExecutor: opts.toolExecutor,
         toolDefinitionRegistry: toolDefinitionRegistry,
-        onHitlPause: opts.onHitlPause,
         repository: db,
         artifactStore: opts.artifactStore,
       }),
@@ -178,8 +173,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     });
   }
 
-  // ── AgentRunService ──────────────────────────────────────
-  const agentRunService = opts.agentRunService;
+  // ── AgentSessionService ───────────────────────────────────
+  const agentSessionService = opts.agentSessionService;
 
   // ── Config endpoint ──────────────────────────────────────
   app.get('/api/config', async () => {
@@ -204,8 +199,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, runRegistry, harnessRegistry, learningPipeline, knowledgeStore, agentRunService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, sandboxSessionManager: opts.sandboxSessionManager, settingsService: opts.settingsService });
-  await app.register(sessionsRoutes, { prefix: '/api/sessions', runRegistry });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, learningPipeline, knowledgeStore, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, sessionManager: opts.sessionManager, settingsService: opts.settingsService });
+  await app.register(sessionsRoutes, { prefix: '/api/sessions', db, sessionManager: opts.sessionManager });
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
   await app.register(eventRoutes, { prefix: '/api/events', db });
   await app.register(knowledgeRoutes, { prefix: '/api/knowledge', knowledgeStore });

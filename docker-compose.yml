@@ -26,10 +26,10 @@ services:
       CTXMILL_UI_MODE: disabled
       NODE_ENV: production
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://platform.ctxmill.com,http://localhost:3200}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://platform.dev.example.com,http://localhost:3200}
       CTXMILL_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-ctxmill}_ctxmill-data
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
@@ -37,6 +37,10 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-ctxmill-dev}
       S3_BUCKET: ${S3_BUCKET:-ctxmill-artifacts}
       S3_REGION: ${S3_REGION:-us-east-1}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-ctxmill}
+      LANGSMITH_WORKSPACE_ID: ${LANGSMITH_WORKSPACE_ID:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ctxmill-data:/app/project/.ctxmill
@@ -68,7 +72,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=web"
-      - "traefik.http.routers.ctxmill.rule=Host(`${CTXMILL_DOMAIN:-platform.ctxmill.com}`)"
+      - "traefik.http.routers.ctxmill.rule=Host(`${CTXMILL_DOMAIN:-platform.dev.example.com}`)"
       - "traefik.http.routers.ctxmill.entrypoints=websecure"
       - "traefik.http.routers.ctxmill.tls.certresolver=letsencrypt"
       - "traefik.http.services.ctxmill.loadbalancer.server.port=80"
@@ -162,6 +166,7 @@ volumes:
 
 networks:
   web:
+    name: web
     external: true
   ctxmill-agents:
     driver: bridge

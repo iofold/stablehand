@@ -71,6 +71,9 @@ export function mapAgentHttpToolsToConfigs(agentDef: AgentDefinition): HttpEndpo
     if (authentication) {
       config.authentication = authentication;
     }
+    if (tool.programmatic === true) {
+      config.programmatic = true;
+    }
 
     return [config];
   });

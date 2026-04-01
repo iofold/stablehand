@@ -56,7 +56,7 @@ export const knowledgeItems = pgTable('knowledge_items', {
 export const executionTraces = pgTable('execution_traces', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   agentId: text('agent_id').notNull(),
-  runId: text('run_id').notNull(),
+  sessionId: text('session_id').notNull(),
   taskDescription: text('task_description').notNull(),
   steps: jsonb('steps').notNull().$type<unknown[]>(),
   startedAt: bigint('started_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
@@ -64,25 +64,22 @@ export const executionTraces = pgTable('execution_traces', {
   outcome: text('outcome'),
 }, (table) => ({
   agentStartedIdx: index('idx_execution_traces_agent_started').on(table.agentId, table.startedAt),
-  runAgentUniqueIdx: uniqueIndex('idx_execution_traces_run_agent').on(table.runId, table.agentId),
+  sessionAgentUniqueIdx: uniqueIndex('idx_execution_traces_session_agent').on(table.sessionId, table.agentId),
 }));
 
-export const agentRuns = pgTable('agent_runs', {
+export const turns = pgTable('turns', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  sessionId: text('session_id').references(() => sandboxSessions.id),
   agentId: text('agent_id').notNull().references(() => agents.id),
   conversationId: text('conversation_id').references(() => conversations.id),
-  status: text('status').notNull().default('queued'),
   mode: text('mode').notNull().default('interactive'),
   taskDescription: text('task_description'),
   startedAt: bigint('started_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   completedAt: bigint('completed_at', { mode: 'number' }),
   error: text('error'),
-  pausedAt: bigint('paused_at', { mode: 'number' }),
-  pausedReason: text('paused_reason'),
-  resumedAt: bigint('resumed_at', { mode: 'number' }),
 }, (table) => ({
-  agentStartedIdx: index('idx_agent_runs_agent_started').on(table.agentId, table.startedAt),
-  statusIdx: index('idx_agent_runs_status').on(table.status),
+  agentStartedIdx: index('idx_turns_agent_started').on(table.agentId, table.startedAt),
+  sessionIdx: index('idx_turns_session').on(table.sessionId),
 }));
 
 export const eventStore = pgTable('event_store', {
@@ -95,9 +92,9 @@ export const eventStore = pgTable('event_store', {
   agentSeqIdx: index('idx_event_store_agent_seq').on(table.agentId, table.seq),
 }));
 
-export const suspendedRuns = pgTable('suspended_runs', {
+export const suspendedSessions = pgTable('suspended_sessions', {
   id: text('id').primaryKey(),
-  agentRunId: text('agent_run_id').notNull(),
+  agentSessionId: text('agent_session_id').notNull(),
   agentId: text('agent_id').notNull(),
   waitEventType: text('wait_event_type').notNull(),
   waitSelector: text('wait_selector').notNull(),
@@ -105,9 +102,9 @@ export const suspendedRuns = pgTable('suspended_runs', {
   snapshotState: text('snapshot_state').notNull(),
   createdAt: bigint('created_at', { mode: 'number' }).notNull(),
 }, (table) => ({
-  eventTypeIdx: index('idx_suspended_runs_event_type').on(table.waitEventType),
-  agentIdx: index('idx_suspended_runs_agent').on(table.agentId),
-  expiresIdx: index('idx_suspended_runs_expires').on(table.waitExpiresAt),
+  eventTypeIdx: index('idx_suspended_sessions_event_type').on(table.waitEventType),
+  agentIdx: index('idx_suspended_sessions_agent').on(table.agentId),
+  expiresIdx: index('idx_suspended_sessions_expires').on(table.waitExpiresAt),
 }));
 
 export const scheduledEvents = pgTable('scheduled_events', {
@@ -149,7 +146,7 @@ export const agentVersions = pgTable('agent_versions', {
 
 export const pendingInterrupts = pgTable('pending_interrupts', {
   id: text('id').primaryKey(),
-  runId: text('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+  agentSessionId: text('agent_session_id').notNull().references(() => turns.id, { onDelete: 'cascade' }),
   agentId: text('agent_id').notNull().references(() => agents.id),
   sessionId: text('session_id'),
   toolCallId: text('tool_call_id').notNull(),
@@ -163,7 +160,7 @@ export const pendingInterrupts = pgTable('pending_interrupts', {
   resolvedData: jsonb('resolved_data').$type<unknown>(),
   status: text('status').notNull().default('pending'),
 }, (table) => ({
-  runIdx: index('idx_interrupts_run').on(table.runId),
+  agentSessionIdx: index('idx_interrupts_agent_session').on(table.agentSessionId),
   agentIdx: index('idx_interrupts_agent').on(table.agentId),
   statusExpiresIdx: index('idx_interrupts_status').on(table.status, table.expiresAt),
 }));
@@ -191,6 +188,8 @@ export const sandboxSessions = pgTable('sandbox_sessions', {
   checkpointRef: text('checkpoint_ref'),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  pausedAt: bigint('paused_at', { mode: 'number' }),
+  pausedReason: text('paused_reason'),
   lastActivityAt: bigint('last_activity_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
   conversationIdx: index('idx_sandbox_sessions_conversation').on(table.conversationId),
@@ -217,7 +216,7 @@ export const agentCheckpoints = pgTable('agent_checkpoints', {
 export const callbackOutbox = pgTable('callback_outbox', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   agentId: text('agent_id').notNull().references(() => agents.id),
-  runId: text('run_id').references(() => agentRuns.id),
+  sessionId: text('session_id').references(() => turns.id),
   callbackUrl: text('callback_url').notNull(),
   eventType: text('event_type').notNull(),
   payload: jsonb('payload').notNull().$type<Record<string, unknown>>().default({}),
@@ -256,7 +255,7 @@ export const systemSettings = pgTable('system_settings', {
 export const artifacts = pgTable('artifacts', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
-  runId: text('run_id').references(() => agentRuns.id, { onDelete: 'set null' }),
+  sessionId: text('session_id').references(() => turns.id, { onDelete: 'set null' }),
   conversationId: text('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   mimeType: text('mime_type').notNull(),
@@ -270,11 +269,14 @@ export const artifacts = pgTable('artifacts', {
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
   agentCreatedIdx: index('idx_artifacts_agent_created').on(table.agentId, table.createdAt),
-  runIdx: index('idx_artifacts_run').on(table.runId),
+  sessionIdx: index('idx_artifacts_session').on(table.sessionId),
   statusIdx: index('idx_artifacts_status').on(table.status),
 }));
 
-export type SandboxSessionRow = typeof sandboxSessions.$inferSelect;
+export type SandboxSessionRow = Omit<typeof sandboxSessions.$inferSelect, 'pausedAt' | 'pausedReason'> & {
+  pausedAt?: number | null;
+  pausedReason?: string | null;
+};
 export type SandboxSessionInsert = typeof sandboxSessions.$inferInsert;
 export type AgentCheckpointRow = typeof agentCheckpoints.$inferSelect;
 export type AgentCheckpointInsert = typeof agentCheckpoints.$inferInsert;

@@ -29,9 +29,9 @@ export interface ApiAgent {
   conversationCount?: number;
   hasPendingInterrupt?: boolean;
   lastActivity?: number;
-  activeRuns?: number;
-  totalRuns?: number;
-  runs?: ApiAgentRun[];
+  activeSessions?: number;
+  totalSessions?: number;
+  sessions?: ApiAgentSession[];
   systemPrompt?: string;
   /** Sandbox session counts grouped by lifecycle state. */
   sessionsByStatus?: ApiSessionStatusCounts;
@@ -40,13 +40,13 @@ export interface ApiAgent {
 /** Session counts grouped by sandbox lifecycle state. */
 export interface ApiSessionStatusCounts {
   active: number;
-  frozen: number;
+  paused: number;
   checkpointed: number;
   terminated: number;
 }
 
-/** Run as returned by GET /api/agents/:id/runs */
-export interface ApiAgentRun {
+/** Session as returned by GET /api/agents/:id/sessions */
+export interface ApiAgentSession {
   id: string;
   agentId: string;
   conversationId: string;
@@ -56,6 +56,9 @@ export interface ApiAgentRun {
   completedAt?: number;
   error?: string;
   taskDescription?: string;
+  messageCount?: number;
+  pausedAt?: number | null;
+  pausedReason?: string | null;
 }
 
 /** Message as returned by GET /api/agents/:id/conversations/:cid/messages */
@@ -91,7 +94,7 @@ export interface ApiInterruptPayload {
   toolName: string;
   args: Record<string, unknown>;
   toolCallId: string;
-  runId?: string;
+  sessionId?: string;
 }
 
 /** POST /api/agents/:id/feedback request body */
@@ -168,9 +171,27 @@ export interface ApiSharedKnowledgeItem extends ApiKnowledgeItem {
   agentId: string;
 }
 
+// ── Conversation Summary types ──────────────────────────────────
+
+/** Enriched conversation as returned by GET /api/agents/:id/conversations/summary */
+export interface ApiConversationSummary {
+  id: string;
+  agentId: string;
+  status: 'running' | 'paused' | 'suspended' | 'completed' | 'error' | 'idle';
+  mode: 'interactive' | 'background';
+  turnCount: number;
+  messageCount: number;
+  taskDescription?: string;
+  startedAt: number;
+  updatedAt: number;
+  latestTurnId?: string;
+  sandboxSessionId?: string;
+  sandboxStatus?: SandboxSessionStatus;
+}
+
 // ── Sandbox Session types ───────────────────────────────────────
 
-export type SandboxSessionStatus = 'ACTIVE' | 'FROZEN' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED';
+export type SandboxSessionStatus = 'ACTIVE' | 'PAUSED' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED';
 
 /** Persistent sandbox session as returned by sandbox session APIs. */
 export interface ApiSandboxSession {

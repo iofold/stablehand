@@ -1,4 +1,4 @@
-// @ts-nocheck — test file with mock data, zod v4 type widening
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Tests for the sandbox tool proxy — verifies that orchestrator-location
  * tools are correctly proxied via gRPC with retries and error handling.
@@ -46,6 +46,8 @@ function makeMockClient(
     requestTool: vi.fn().mockResolvedValue(
       makeSuccessResponse('req-1', '{"ok":true}'),
     ),
+    registerArtifact: vi.fn(),
+    resolveArtifact: vi.fn(),
     ...impl,
   };
 }
@@ -89,7 +91,7 @@ describe('createToolProxy', () => {
     expect(client.requestTool).toHaveBeenCalledTimes(1);
 
     const callArgs = (client.requestTool as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(callArgs.runId).toBe('run-1');
+    expect(callArgs.sessionId).toBe('run-1');
     expect(callArgs.agentId).toBe('agent-1');
     expect(callArgs.toolName).toBe('search');
     expect(JSON.parse(callArgs.argsJson)).toEqual({ query: 'hello' });
@@ -281,7 +283,7 @@ describe('createOrchestratorToolProxies', () => {
     expect(defs).toHaveLength(1);
 
     // Verify Zod schema works
-    const parsed = defs[0].input.safeParse({ event_type: 'test' });
+    const parsed = (defs[0].input as { safeParse: (input: unknown) => { success: boolean } }).safeParse({ event_type: 'test' });
     expect(parsed.success).toBe(true);
 
     // Verify handler proxies through

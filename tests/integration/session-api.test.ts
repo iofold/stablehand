@@ -3,14 +3,13 @@ import { allowConsoleErrors } from '../setup-strict.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { FastifyInstance } from 'fastify';
 
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
 
 describe('Session API lifecycle', () => {
-  let app: FastifyInstance;
+  let app: Awaited<ReturnType<typeof createServer>>;
   let container: AppContainer;
   let dataDir: string;
   let agentId: string;
@@ -21,10 +20,10 @@ describe('Session API lifecycle', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-session-test-'));
 
     container = await createContainer(
-      {
-        preset: 'local',
-        database: {
-          url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
+        {
+          preset: 'docker',
+          database: {
+            url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
         },
         llm: {
           provider: 'anthropic',
@@ -37,9 +36,9 @@ describe('Session API lifecycle', () => {
 
     app = await createServer({
       db: container.db,
-      agentRunService: container.agentRunService,
-      runRegistry: container.runRegistry,
+      agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
+      sessionManager: container.sessionManager,
       dataDir,
     });
 
@@ -51,7 +50,7 @@ describe('Session API lifecycle', () => {
       payload: {
         name: 'session-test-agent',
         harness: 'langgraph',
-        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
         systemPrompt: 'You are a test agent.',
         tools: [],
       },
@@ -62,30 +61,25 @@ describe('Session API lifecycle', () => {
 
   afterAll(async () => {
     await app.close();
+    await container.close();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('GET /api/agents/:id/sessions returns conversation summaries', async () => {
+  it('GET /api/agents/:id/sessions returns persisted sessions', async () => {
     const firstConversation = await container.db.createConversation(agentId);
-    await container.db.addMessage({
-      conversationId: firstConversation.id,
+    const firstSession = await container.db.createTurn({
       agentId,
-      role: 'user',
-      content: 'hello',
-    });
-    await container.db.addMessage({
       conversationId: firstConversation.id,
-      agentId,
-      role: 'assistant',
-      content: 'hi',
+      mode: 'interactive',
+      taskDescription: 'hello',
     });
 
     const secondConversation = await container.db.createConversation(agentId);
-    await container.db.addMessage({
-      conversationId: secondConversation.id,
+    const secondSession = await container.db.createTurn({
       agentId,
-      role: 'user',
-      content: 'second',
+      conversationId: secondConversation.id,
+      mode: 'background',
+      taskDescription: 'second',
     });
 
     const res = await app.inject({
@@ -96,28 +90,26 @@ describe('Session API lifecycle', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
       sessions: Array<{
+        id: string;
         conversationId: string;
-        startedAt: number;
-        messageCount: number | string;
-        lastMessageAt: number | string | null;
+        mode: string;
+        taskDescription: string | null;
       }>;
     };
-    const sessions = body.sessions.map((session) => ({
-      ...session,
-      messageCount: Number(session.messageCount),
-      lastMessageAt: session.lastMessageAt === null ? null : Number(session.lastMessageAt),
-    }));
+    const sessions = body.sessions;
     expect(sessions).toHaveLength(2);
     expect(sessions).toEqual(expect.arrayContaining([
       expect.objectContaining({
+        id: firstSession.id,
         conversationId: firstConversation.id,
-        messageCount: 2,
-        lastMessageAt: expect.any(Number),
+        mode: 'interactive',
+        taskDescription: 'hello',
       }),
       expect.objectContaining({
+        id: secondSession.id,
         conversationId: secondConversation.id,
-        messageCount: 1,
-        lastMessageAt: expect.any(Number),
+        mode: 'background',
+        taskDescription: 'second',
       }),
     ]));
   });

@@ -1,11 +1,20 @@
 import type postgres from 'postgres';
 
+/**
+ * Single-pass schema creation for a fresh database.
+ *
+ * Tables are ordered by foreign-key dependency (parents before children).
+ * No incremental migration logic — this file assumes a clean database.
+ *
+ * Source of truth: schema-pg.ts (Drizzle ORM definitions) plus the
+ * `secrets` table used via raw SQL in secrets/postgres-provider.ts.
+ */
 export async function runMigrations(sql: postgres.Sql): Promise<void> {
-  // Enable extensions
+  // ── Extensions ──────────────────────────────────────────────────────
   await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
   await sql`CREATE EXTENSION IF NOT EXISTS vector`;
 
-  // Core tables
+  // ── 1. agents (root table) ─────────────────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY NOT NULL,
@@ -18,13 +27,14 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       workspace_dir TEXT,
       status TEXT NOT NULL DEFAULT 'created',
       manifest JSONB,
-      version INTEGER DEFAULT 1,
+      version BIGINT DEFAULT 1,
       metadata JSONB,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
     )
   `;
 
+  // ── 2. conversations (→ agents) ────────────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY NOT NULL,
@@ -34,6 +44,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
+  // ── 3. messages (→ conversations) ──────────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY NOT NULL,
@@ -43,11 +54,11 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       content TEXT NOT NULL,
       tool_call_id TEXT,
       tool_calls JSONB,
-      a2ui_payload JSONB,
       created_at BIGINT NOT NULL
     )
   `;
 
+  // ── 4. knowledge_items ─────────────────────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS knowledge_items (
       id TEXT PRIMARY KEY NOT NULL,
@@ -61,11 +72,12 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
+  // ── 5. execution_traces ────────────────────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS execution_traces (
       id TEXT PRIMARY KEY NOT NULL,
       agent_id TEXT NOT NULL,
-      run_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
       task_description TEXT NOT NULL,
       steps JSONB NOT NULL,
       started_at BIGINT NOT NULL,
@@ -74,12 +86,32 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
+  // ── 6. sandbox_sessions (→ conversations, agents) ──────────────────
   await sql`
-    CREATE TABLE IF NOT EXISTS agent_runs (
+    CREATE TABLE IF NOT EXISTS sandbox_sessions (
       id TEXT PRIMARY KEY NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id),
+      agent_id TEXT NOT NULL REFERENCES agents(id),
+      container_name TEXT,
+      container_id TEXT,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      harness_name TEXT NOT NULL,
+      checkpoint_ref TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      last_activity_at BIGINT NOT NULL,
+      paused_at BIGINT,
+      paused_reason TEXT
+    )
+  `;
+
+  // ── 7. turns (→ sandbox_sessions, agents, conversations) ───────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS turns (
+      id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT REFERENCES sandbox_sessions(id),
       agent_id TEXT NOT NULL REFERENCES agents(id),
       conversation_id TEXT REFERENCES conversations(id),
-      status TEXT NOT NULL DEFAULT 'queued',
       mode TEXT NOT NULL DEFAULT 'interactive',
       task_description TEXT,
       started_at BIGINT NOT NULL,
@@ -88,6 +120,91 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
+  // ── 8. event_store ─────────────────────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS event_store (
+      seq SERIAL PRIMARY KEY,
+      type TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at BIGINT NOT NULL
+    )
+  `;
+
+  // ── 9. suspended_sessions ──────────────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS suspended_sessions (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      wait_event_type TEXT NOT NULL,
+      wait_selector TEXT NOT NULL,
+      wait_expires_at BIGINT,
+      snapshot_state TEXT NOT NULL,
+      created_at BIGINT NOT NULL
+    )
+  `;
+
+  // ── 10. scheduled_events ───────────────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS scheduled_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      wake_at BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at BIGINT NOT NULL
+    )
+  `;
+
+  // ── 11. event_triggers (→ agents) ──────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS event_triggers (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      selector JSONB,
+      task_template TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      created_at TEXT NOT NULL
+    )
+  `;
+
+  // ── 12. agent_versions (→ agents) ──────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS agent_versions (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      version BIGINT NOT NULL,
+      manifest JSONB NOT NULL,
+      changed_by TEXT,
+      change_note TEXT,
+      created_at BIGINT NOT NULL
+    )
+  `;
+
+  // ── 13. pending_interrupts (→ turns, agents) ───────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS pending_interrupts (
+      id TEXT PRIMARY KEY,
+      agent_session_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(id),
+      session_id TEXT,
+      tool_call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      args JSONB NOT NULL DEFAULT '{}',
+      timeout_ms INTEGER NOT NULL DEFAULT 300000,
+      created_at BIGINT NOT NULL,
+      expires_at BIGINT NOT NULL,
+      resolved_at BIGINT,
+      resolved_action TEXT,
+      resolved_data JSONB,
+      status TEXT NOT NULL DEFAULT 'pending'
+    )
+  `;
+
+  // ── 14. feedback_signals ───────────────────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS feedback_signals (
       id TEXT PRIMARY KEY NOT NULL,
@@ -95,47 +212,91 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       agent_id TEXT NOT NULL,
       source TEXT NOT NULL,
       type TEXT NOT NULL,
-      value TEXT NOT NULL,
+      value JSONB NOT NULL,
       created_at BIGINT NOT NULL
     )
   `;
 
+  // ── 15. agent_checkpoints (→ sandbox_sessions) ─────────────────────
   await sql`
-    CREATE TABLE IF NOT EXISTS event_store (
-      seq SERIAL PRIMARY KEY,
-      type TEXT NOT NULL,
-      agent_id TEXT NOT NULL,
-      payload JSONB NOT NULL,
-      created_at BIGINT NOT NULL
-    )
-  `;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS suspended_runs (
+    CREATE TABLE IF NOT EXISTS agent_checkpoints (
       id TEXT PRIMARY KEY NOT NULL,
-      agent_run_id TEXT NOT NULL,
+      session_id TEXT NOT NULL REFERENCES sandbox_sessions(id) ON DELETE CASCADE,
       agent_id TEXT NOT NULL,
-      wait_event_type TEXT NOT NULL,
-      wait_selector TEXT NOT NULL,
-      wait_expires_at BIGINT,
-      snapshot_state JSONB NOT NULL,
+      checkpoint_version INTEGER NOT NULL DEFAULT 2,
+      checkpoint_data JSONB NOT NULL,
+      harness_state JSONB,
+      workspace_ref TEXT,
+      suspend_reason TEXT,
       created_at BIGINT NOT NULL
     )
   `;
 
+  // ── 16. callback_outbox (→ agents, turns) ──────────────────────────
   await sql`
-    CREATE TABLE IF NOT EXISTS scheduled_events (
+    CREATE TABLE IF NOT EXISTS callback_outbox (
       id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL,
-      type TEXT NOT NULL,
-      payload JSONB NOT NULL,
-      wake_at BIGINT NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id),
+      session_id TEXT REFERENCES turns(id),
+      callback_url TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}',
       status TEXT NOT NULL DEFAULT 'pending',
-      created_at BIGINT NOT NULL
+      attempts INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 5,
+      next_attempt_at BIGINT NOT NULL,
+      last_attempt_at BIGINT,
+      last_error TEXT,
+      created_at BIGINT NOT NULL,
+      delivered_at BIGINT
     )
   `;
 
-  // Secrets table (AES-256-GCM encrypted at rest)
+  // ── 17. webhooks (→ agents) ────────────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      events JSONB NOT NULL DEFAULT '[]',
+      secret TEXT,
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    )
+  `;
+
+  // ── 18. system_settings ────────────────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `;
+
+  // ── 19. artifacts (→ agents, turns, conversations) ─────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS artifacts (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      session_id TEXT REFERENCES turns(id) ON DELETE SET NULL,
+      conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes BIGINT NOT NULL,
+      storage_key TEXT NOT NULL,
+      bucket TEXT NOT NULL,
+      metadata JSONB,
+      status TEXT NOT NULL DEFAULT 'active',
+      expires_at BIGINT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    )
+  `;
+
+  // ── 20. secrets (raw SQL usage — not in Drizzle schema) ────────────
+  // Used by secrets/postgres-provider.ts via raw postgres.js queries
   await sql`
     CREATE TABLE IF NOT EXISTS secrets (
       id TEXT PRIMARY KEY NOT NULL,
@@ -151,255 +312,71 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // Performance indexes
-  await sql`CREATE INDEX IF NOT EXISTS idx_execution_traces_agent_started ON execution_traces(agent_id, started_at)`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_traces_run_agent ON execution_traces(run_id, agent_id)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_feedback_signals_agent_created ON feedback_signals(agent_id, created_at)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages(conversation_id, created_at)`;
+  // ── Indexes ────────────────────────────────────────────────────────
+  // Matches indexes defined in schema-pg.ts table definitions
+
+  // conversations
   await sql`CREATE INDEX IF NOT EXISTS idx_conversations_agent_updated ON conversations(agent_id, updated_at)`;
+
+  // messages
+  await sql`CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages(conversation_id, created_at)`;
+
+  // knowledge_items
   await sql`CREATE INDEX IF NOT EXISTS idx_knowledge_items_agent_category ON knowledge_items(agent_id, category)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_started ON agent_runs(agent_id, started_at)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_event_store_agent_seq ON event_store(agent_id, seq)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_suspended_runs_event_type ON suspended_runs(wait_event_type)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_suspended_runs_agent ON suspended_runs(agent_id)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_suspended_runs_expires ON suspended_runs(wait_expires_at)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_scheduled_events_wake ON scheduled_events(status, wake_at)`;
 
-  // --- Incremental migrations for schema evolution ---
+  // execution_traces
+  await sql`CREATE INDEX IF NOT EXISTS idx_execution_traces_agent_started ON execution_traces(agent_id, started_at)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_traces_session_agent ON execution_traces(session_id, agent_id)`;
 
-  // Helper to get column names for a table
-  async function getColumnNames(tableName: string): Promise<string[]> {
-    const cols = await sql`
-      SELECT column_name FROM information_schema.columns
-      WHERE table_name = ${tableName}
-    `;
-    return cols.map(c => c.column_name as string);
-  }
-
-  // Add workspace_dir column to agents table if missing
-  const agentCols = await getColumnNames('agents');
-  if (!agentCols.includes('workspace_dir')) {
-    await sql`ALTER TABLE agents ADD COLUMN workspace_dir TEXT`;
-  }
-
-  if (!agentCols.includes('harness')) {
-    await sql`ALTER TABLE agents ADD COLUMN harness TEXT`;
-  }
-
-  if (!agentCols.includes('harness_config')) {
-    await sql`ALTER TABLE agents ADD COLUMN harness_config TEXT`;
-  }
-
-  if (agentCols.includes('model') && agentCols.includes('model_config')) {
-    await sql`
-      UPDATE agents
-      SET harness_config = COALESCE(
-        model_config::text,
-        json_build_object('provider', 'openai', 'model', COALESCE(model, 'gpt-5-mini'))::text
-      )
-      WHERE harness_config IS NULL
-    `;
-  } else if (agentCols.includes('model')) {
-    await sql`
-      UPDATE agents
-      SET harness_config = json_build_object('provider', 'openai', 'model', COALESCE(model, 'gpt-5-mini'))::text
-      WHERE harness_config IS NULL
-    `;
-  }
-
-  await sql`ALTER TABLE agents ALTER COLUMN harness_config SET NOT NULL`;
-  await sql`UPDATE agents SET harness = 'langgraph' WHERE harness IS NULL`;
-  await sql`ALTER TABLE agents ALTER COLUMN harness SET NOT NULL`;
-  await sql`ALTER TABLE agents DROP COLUMN IF EXISTS model`;
-  await sql`ALTER TABLE agents DROP COLUMN IF EXISTS model_config`;
-
-  // Add session_dir column to agent_runs table if missing
-  const runCols = await getColumnNames('agent_runs');
-  if (!runCols.includes('session_dir')) {
-    await sql`ALTER TABLE agent_runs ADD COLUMN session_dir TEXT`;
-  }
-  await sql`ALTER TABLE agent_runs DROP COLUMN IF EXISTS session_dir`;
-
-  // Create event_triggers table if missing
-  await sql`
-    CREATE TABLE IF NOT EXISTS event_triggers (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      event_type TEXT NOT NULL,
-      selector TEXT,
-      task_template TEXT NOT NULL,
-      enabled BOOLEAN NOT NULL DEFAULT true,
-      created_at TEXT NOT NULL
-    )
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_agent ON event_triggers(agent_id)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_event_type ON event_triggers(event_type)`;
-
-  // Add manifest and version columns to agents table if missing
-  const agentColsRefresh = await getColumnNames('agents');
-  if (!agentColsRefresh.includes('manifest')) {
-    await sql`ALTER TABLE agents ADD COLUMN manifest JSONB`;
-  }
-  if (!agentColsRefresh.includes('version')) {
-    await sql`ALTER TABLE agents ADD COLUMN version INTEGER DEFAULT 1`;
-  }
-
-  // Create agent_versions table
-  await sql`
-    CREATE TABLE IF NOT EXISTS agent_versions (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      version INTEGER NOT NULL,
-      manifest JSONB NOT NULL,
-      changed_by TEXT,
-      change_note TEXT,
-      created_at BIGINT NOT NULL
-    )
-  `;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_versions_agent_version ON agent_versions(agent_id, version)`;
-
-  // Create pending_interrupts table for durable HITL
-  await sql`
-    CREATE TABLE IF NOT EXISTS pending_interrupts (
-      id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
-      agent_id TEXT NOT NULL REFERENCES agents(id),
-      tool_call_id TEXT NOT NULL,
-      tool_name TEXT NOT NULL,
-      args JSONB NOT NULL DEFAULT '{}',
-      timeout_ms INTEGER NOT NULL DEFAULT 300000,
-      created_at BIGINT NOT NULL,
-      expires_at BIGINT NOT NULL,
-      resolved_at BIGINT,
-      resolved_action TEXT,
-      resolved_data JSONB,
-      status TEXT NOT NULL DEFAULT 'pending'
-    )
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_run ON pending_interrupts(run_id)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_agent ON pending_interrupts(agent_id)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_status ON pending_interrupts(status, expires_at)`;
-
-  // Add session_id to pending_interrupts for durable HITL
-  await sql`ALTER TABLE pending_interrupts ADD COLUMN IF NOT EXISTS session_id TEXT`;
-
-  // Create callback_outbox table for durable webhook delivery
-  await sql`
-    CREATE TABLE IF NOT EXISTS callback_outbox (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL REFERENCES agents(id),
-      run_id TEXT REFERENCES agent_runs(id),
-      callback_url TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      payload JSONB NOT NULL DEFAULT '{}',
-      status TEXT NOT NULL DEFAULT 'pending',
-      attempts INTEGER NOT NULL DEFAULT 0,
-      max_attempts INTEGER NOT NULL DEFAULT 5,
-      next_attempt_at BIGINT NOT NULL,
-      last_attempt_at BIGINT,
-      last_error TEXT,
-      created_at BIGINT NOT NULL,
-      delivered_at BIGINT
-    )
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS idx_outbox_status ON callback_outbox(status, next_attempt_at)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_outbox_agent ON callback_outbox(agent_id)`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS webhooks (
-      id TEXT PRIMARY KEY,
-      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      url TEXT NOT NULL,
-      events JSONB NOT NULL DEFAULT '[]',
-      secret TEXT,
-      active BOOLEAN NOT NULL DEFAULT true,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL
-    )
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS idx_webhooks_agent ON webhooks(agent_id)`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS sandbox_sessions (
-      id TEXT PRIMARY KEY NOT NULL,
-      conversation_id TEXT NOT NULL REFERENCES conversations(id),
-      agent_id TEXT NOT NULL REFERENCES agents(id),
-      container_name TEXT,
-      container_id TEXT,
-      status TEXT NOT NULL DEFAULT 'ACTIVE',
-      harness_name TEXT NOT NULL,
-      checkpoint_ref TEXT,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL,
-      last_activity_at BIGINT NOT NULL
-    )
-  `;
+  // sandbox_sessions
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_conversation ON sandbox_sessions(conversation_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_agent ON sandbox_sessions(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_status ON sandbox_sessions(status)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_last_activity ON sandbox_sessions(last_activity_at)`;
 
-  const checkpointCols = await getColumnNames('agent_checkpoints');
-  if (checkpointCols.includes('run_id') || checkpointCols.includes('version')) {
-    await sql`DROP TABLE IF EXISTS agent_checkpoints CASCADE`;
-  }
+  // turns
+  await sql`CREATE INDEX IF NOT EXISTS idx_turns_agent_started ON turns(agent_id, started_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id)`;
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS agent_checkpoints (
-      id TEXT PRIMARY KEY NOT NULL,
-      session_id TEXT NOT NULL REFERENCES sandbox_sessions(id) ON DELETE CASCADE,
-      agent_id TEXT NOT NULL,
-      checkpoint_version INTEGER NOT NULL DEFAULT 2,
-      checkpoint_data JSONB NOT NULL,
-      harness_state JSONB,
-      workspace_ref TEXT,
-      suspend_reason TEXT,
-      created_at BIGINT NOT NULL
-    )
-  `;
+  // event_store
+  await sql`CREATE INDEX IF NOT EXISTS idx_event_store_agent_seq ON event_store(agent_id, seq)`;
+
+  // suspended_sessions
+  await sql`CREATE INDEX IF NOT EXISTS idx_suspended_sessions_event_type ON suspended_sessions(wait_event_type)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_suspended_sessions_agent ON suspended_sessions(agent_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_suspended_sessions_expires ON suspended_sessions(wait_expires_at)`;
+
+  // scheduled_events
+  await sql`CREATE INDEX IF NOT EXISTS idx_scheduled_events_wake ON scheduled_events(status, wake_at)`;
+
+  // event_triggers
+  await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_agent ON event_triggers(agent_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_event_type ON event_triggers(event_type)`;
+
+  // agent_versions
+  await sql`CREATE INDEX IF NOT EXISTS idx_agent_versions_agent_version ON agent_versions(agent_id, version)`;
+
+  // pending_interrupts
+  await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_agent_session ON pending_interrupts(agent_session_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_agent ON pending_interrupts(agent_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_status ON pending_interrupts(status, expires_at)`;
+
+  // feedback_signals
+  await sql`CREATE INDEX IF NOT EXISTS idx_feedback_signals_agent_created ON feedback_signals(agent_id, created_at)`;
+
+  // agent_checkpoints
   await sql`CREATE INDEX IF NOT EXISTS idx_checkpoints_session_id ON agent_checkpoints(session_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_checkpoints_agent_id ON agent_checkpoints(agent_id)`;
 
-  // Add durable run lifecycle columns to agent_runs table
-  const runColsRefresh = await getColumnNames('agent_runs');
-  if (!runColsRefresh.includes('paused_at')) {
-    await sql`ALTER TABLE agent_runs ADD COLUMN paused_at BIGINT`;
-  }
-  if (!runColsRefresh.includes('paused_reason')) {
-    await sql`ALTER TABLE agent_runs ADD COLUMN paused_reason TEXT`;
-  }
-  if (!runColsRefresh.includes('resumed_at')) {
-    await sql`ALTER TABLE agent_runs ADD COLUMN resumed_at BIGINT`;
-  }
-  await sql`CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)`;
+  // callback_outbox
+  await sql`CREATE INDEX IF NOT EXISTS idx_outbox_status ON callback_outbox(status, next_attempt_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_outbox_agent ON callback_outbox(agent_id)`;
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS system_settings (
-      key TEXT PRIMARY KEY NOT NULL,
-      value TEXT NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-  `;
+  // webhooks
+  await sql`CREATE INDEX IF NOT EXISTS idx_webhooks_agent ON webhooks(agent_id)`;
 
-  await sql`
-    CREATE TABLE IF NOT EXISTS artifacts (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
-      conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
-      name TEXT NOT NULL,
-      mime_type TEXT NOT NULL,
-      size_bytes BIGINT NOT NULL,
-      storage_key TEXT NOT NULL,
-      bucket TEXT NOT NULL,
-      metadata JSONB,
-      status TEXT NOT NULL DEFAULT 'active',
-      expires_at BIGINT,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL
-    )
-  `;
+  // artifacts
   await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_agent_created ON artifacts(agent_id, created_at)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status)`;
 }

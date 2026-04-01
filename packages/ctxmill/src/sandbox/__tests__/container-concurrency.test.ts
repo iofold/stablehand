@@ -4,7 +4,7 @@ import {
   ContainerLimitError,
   ContainerManager,
 } from '../container-manager.js';
-import type { ContainerManagerOptions, CreateContainerOptions } from '../container-manager.js';
+import type { CreateContainerOptions } from '../container-manager.js';
 
 // ── ContainerSemaphore unit tests ────────────────────────────
 
@@ -238,9 +238,9 @@ function createMockDocker(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function defaultCreateOpts(runId = 'run-001'): CreateContainerOptions {
+function defaultCreateOpts(sessionId = 'run-001'): CreateContainerOptions {
   return {
-    runId,
+    sessionId,
     agentId: 'agent-abc',
     harnessName: 'claude-agents',
   };

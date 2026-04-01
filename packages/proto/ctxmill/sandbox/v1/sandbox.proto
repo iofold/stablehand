@@ -38,6 +38,10 @@ message FreshBootstrap {
 
 message RestoreBootstrap {
   SessionCheckpoint session_checkpoint = 1;
+  repeated ToolMetadata tools = 2;
+  string agent_id = 3;
+  string harness_config_json = 4;
+  string system_prompt = 5;
 }
 
 message OpenSessionResponse {
@@ -129,7 +133,7 @@ message KillSessionResponse {
 }
 
 message RequestToolRequest {
-  string run_id = 1;
+  string session_id = 1;
   string agent_id = 2;
   string tool_name = 3;
   string args_json = 4;
@@ -143,7 +147,7 @@ message RequestToolResponse {
 }
 
 message EmitEventRequest {
-  string run_id = 1;
+  string session_id = 1;
   string event_type = 2;
   string payload_json = 3;
 }
@@ -151,7 +155,7 @@ message EmitEventRequest {
 message EmitEventResponse {}
 
 message RefreshSecretsRequest {
-  string run_id = 1;
+  string session_id = 1;
   string agent_id = 2;
 }
 
@@ -186,6 +190,7 @@ message ToolMetadata {
   string description = 2;
   string input_schema_json = 3;
   ToolLocation location = 4;
+  bool programmatic = 5;
 }
 
 enum ToolLocation {
@@ -257,7 +262,7 @@ message TokenUsage {
 message ArtifactMeta {
   string id = 1;
   string agent_id = 2;
-  string run_id = 3;
+  string session_id = 3;
   string name = 4;
   string mime_type = 5;
   int64 size_bytes = 6;
@@ -268,7 +273,7 @@ message ArtifactMeta {
 }
 
 message RegisterArtifactRequest {
-  string run_id = 1;
+  string session_id = 1;
   string agent_id = 2;
   ArtifactMeta artifact = 3;
 }

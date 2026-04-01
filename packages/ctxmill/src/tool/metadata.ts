@@ -38,6 +38,7 @@ export const ORCHESTRATOR_TOOLS: ReadonlySet<string> = new Set([
   'emit-event',
   'request-approval',
   'a2ui-render',
+  'ctxmill-guide',
 ]);
 
 export const DAEMON_TOOLS: ReadonlySet<string> = new Set([

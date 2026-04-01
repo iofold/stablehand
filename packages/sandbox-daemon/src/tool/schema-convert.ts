@@ -234,7 +234,8 @@ function stripNullFromSchema(node: Record<string, unknown>): Record<string, unkn
   if (Array.isArray(node.anyOf)) {
     const variants = (node.anyOf as Record<string, unknown>[]).filter(v => v.type !== 'null');
     if (variants.length === 1) {
-      const { anyOf: _, ...rest } = node;
+      const rest = { ...node };
+      delete rest.anyOf;
       return { ...rest, ...variants[0] };
     }
     return { ...node, anyOf: variants };

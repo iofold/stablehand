@@ -2,34 +2,34 @@ import type { SSEManager } from './sse.js';
 import type { TypedEventBus, EventName, EventMap } from '../events/bus.js';
 import type { AGUIEventType } from '@ctxmill/shared';
 
-/** Maps internal run.* event names to AG-UI SSE event types. */
+/** Maps internal session/run event names to AG-UI SSE event types. */
 const EVENT_TYPE_MAP: Record<string, AGUIEventType> = {
-  'run.started': 'RUN_STARTED',
-  'run.paused': 'CUSTOM',
+  'turn.started': 'RUN_STARTED',
+  'session.paused': 'CUSTOM',
   'run.text_chunk': 'TEXT_MESSAGE_CONTENT',
   'run.tool_started': 'TOOL_CALL_START',
   'run.tool_result': 'TOOL_CALL_RESULT',
   'run.interrupted': 'CUSTOM',
   'run.interrupt_resolved': 'CUSTOM',
-  'run.completed': 'RUN_FINISHED',
+  'turn.completed': 'RUN_FINISHED',
 };
 
 const RUN_EVENTS: EventName[] = [
-  'run.started',
-  'run.paused',
+  'turn.started',
+  'session.paused',
   'run.text_chunk',
   'run.tool_started',
   'run.tool_result',
   'run.interrupted',
   'run.interrupt_resolved',
-  'run.completed',
+  'turn.completed',
 ];
 
 type AnyHandler = (payload: EventMap[EventName]) => void;
 
 /**
  * Bridges the internal TypedEventBus to SSE clients via SSEManager.
- * Subscribes to all run.* events and broadcasts them as AG-UI events.
+  * Subscribes to session and run events and broadcasts them as AG-UI events.
  */
 export class SSEBroadcaster {
   private sseManager: SSEManager;
@@ -49,12 +49,16 @@ export class SSEBroadcaster {
         if (!agentId) return;
 
         const aguiType = EVENT_TYPE_MAP[event] ?? 'CUSTOM';
-        const runId = (payload as Record<string, unknown>).runId as string;
+        const runId = ((payload as Record<string, unknown>).turnId
+          ?? (payload as Record<string, unknown>).sessionId
+          ?? (payload as Record<string, unknown>).runId) as string;
+        const conversationId = (payload as Record<string, unknown>).conversationId as string | undefined;
 
         this.sseManager.broadcast(agentId, {
           ...payload,
           type: aguiType,
           runId: runId ?? '',
+          conversationId,
           internalType: event,
         });
 

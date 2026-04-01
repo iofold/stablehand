@@ -5,12 +5,12 @@ export class TraceCollector {
   private steps: TraceStep[] = [];
   private startTime: number;
   private agentId: string;
-  private runId: string;
+  private turnId: string;
   private taskDescription: string;
 
-  constructor(agentId: string, runId: string, taskDescription: string) {
+  constructor(agentId: string, turnId: string, taskDescription: string) {
     this.agentId = agentId;
-    this.runId = runId;
+    this.turnId = turnId;
     this.taskDescription = taskDescription;
     this.startTime = Date.now();
   }
@@ -34,7 +34,7 @@ export class TraceCollector {
     return {
       id: randomUUID(),
       agentId: this.agentId,
-      runId: this.runId,
+      turnId: this.turnId,
       taskDescription: this.taskDescription,
       steps: [...this.steps],
       startedAt: new Date(this.startTime),

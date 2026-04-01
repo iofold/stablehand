@@ -12,7 +12,7 @@ test.describe('A2UI Chart Rendering Visual QA', () => {
     const agent = await createTestAgent(request, {
       name: `vqa-a2ui-${Date.now()}`,
       harness: 'langgraph',
-      harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+      harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
       systemPrompt: `You are a data visualization agent. When asked to generate a chart, include the chart data as a JSON block in your response.
 
 When asked for a bar chart, include this exact JSON block inline in your response:
@@ -38,10 +38,10 @@ Always output the JSON block as part of your natural text response. Surround it 
   test('renders BarChart from inline JSON block', async ({ page }) => {
     const capture = new ScreenshotCapture(page, 'a2ui-barchart', 'live');
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId('chat-input').fill('Generate a bar chart of city temperatures');
+    await page.getByTestId('session-input').fill('Generate a bar chart of city temperatures');
     await page.getByTestId('send-button').click();
 
     await page.waitForSelector('[data-testid="run-finished"]', { state: 'attached', timeout: 120_000 });
@@ -57,10 +57,12 @@ Always output the JSON block as part of your natural text response. Surround it 
     // Check for SVG elements (recharts renders SVG)
     const svgElements = page.locator('svg');
     const svgCount = await svgElements.count();
+    expect(svgCount).toBeGreaterThan(0);
 
     // Check for recharts containers
     const rechartsContainers = page.locator('[class*="recharts"]');
     const rechartsCount = await rechartsContainers.count();
+    expect(rechartsCount).toBeGreaterThan(0);
 
     // Capture the assistant message area
     const assistantMsg = page.getByTestId('message-bubble-assistant').last();
@@ -74,10 +76,10 @@ Always output the JSON block as part of your natural text response. Surround it 
   test('renders LineChart from inline JSON block', async ({ page }) => {
     const capture = new ScreenshotCapture(page, 'a2ui-linechart', 'live');
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId('chat-input').fill('Generate a line chart of monthly sales data');
+    await page.getByTestId('session-input').fill('Generate a line chart of monthly sales data');
     await page.getByTestId('send-button').click();
 
     await page.waitForSelector('[data-testid="run-finished"]', { state: 'attached', timeout: 120_000 });
@@ -100,10 +102,10 @@ Always output the JSON block as part of your natural text response. Surround it 
   test('renders PieChart from inline JSON block', async ({ page }) => {
     const capture = new ScreenshotCapture(page, 'a2ui-piechart', 'live');
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId('chat-input').fill('Generate a pie chart of browser market share');
+    await page.getByTestId('session-input').fill('Generate a pie chart of browser market share');
     await page.getByTestId('send-button').click();
 
     await page.waitForSelector('[data-testid="run-finished"]', { state: 'attached', timeout: 120_000 });

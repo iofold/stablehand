@@ -61,7 +61,12 @@ export class LangGraphHarness implements AgentHarness {
   async openSession(config: HarnessSessionConfig, restore?: HarnessRestorePoint): Promise<HarnessSession> {
     const session = new LangGraphSession(config);
     if (restore) {
-      session.restoreTranscript(restore.messages);
+      const transcriptFromState = restore.payload['transcript'];
+      if (Array.isArray(transcriptFromState) && transcriptFromState.length > 0) {
+        session.restoreTranscript(transcriptFromState as Message[]);
+      } else if (restore.messages.length > 0) {
+        session.restoreTranscript(restore.messages);
+      }
     }
     return session;
   }

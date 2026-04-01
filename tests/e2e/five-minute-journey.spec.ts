@@ -77,13 +77,13 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     await expect(page).toHaveURL(`/agents/${agentId}`);
 
     // Navigate to chat from agent detail page
-    const chatUrl = page.url() + '/chat';
+    const chatUrl = page.url() + '/sessions/new';
     await page.goto(chatUrl);
 
     // ---------------------------------------------------------------
     // 3. Chat — type message, submit, see user bubble
     // ---------------------------------------------------------------
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
     await expect(chatInput).toBeVisible({ timeout: 15_000 });
 
     const sendButton = page.getByTestId('send-button');
@@ -111,8 +111,8 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     // ---------------------------------------------------------------
     expect(typeof sendBody.conversationId).toBe('string');
     expect(sendBody.conversationId.length).toBeGreaterThan(0);
-    expect(typeof sendBody.runId).toBe('string');
-    expect(sendBody.runId.length).toBeGreaterThan(0);
+    expect(typeof sendBody.sessionId).toBe('string');
+    expect(sendBody.sessionId.length).toBeGreaterThan(0);
 
     // Tool call cards are optional — verify if present
     const toolCards = page.getByTestId('tool-call-card');

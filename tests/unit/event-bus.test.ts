@@ -104,11 +104,11 @@ describe('TypedEventBus', () => {
     const handler2 = vi.fn();
 
     bus.on('agent.created', handler1);
-    bus.on('run.completed', handler2);
+    bus.on('turn.completed', handler2);
 
     bus.removeAllListeners();
     bus.emit('agent.created', { agentId: 'a', name: 'A', timestamp: 0 });
-    bus.emit('run.completed', {
+    bus.emit('turn.completed', {
       runId: 'r1',
       agentId: 'a',
       conversationId: 'c1',

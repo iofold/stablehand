@@ -40,7 +40,7 @@ import { retryWithBackoff } from '../util/retry.js';
 export interface OrchestratorServiceClient {
   requestTool: (
     req: {
-      runId: string;
+      sessionId: string;
       agentId: string;
       toolName: string;
       argsJson: string;
@@ -93,7 +93,7 @@ const DEFAULT_RETRY_DELAYS = [100, 500, 2000]; // 3 retries with exponential bac
 export function createToolProxy(
   toolName: string,
   orchestratorClient: OrchestratorServiceClient,
-  runId: string | { current: string },
+  sessionId: string | { current: string },
   agentId: string,
   opts?: ToolProxyOptions,
 ): (input: unknown) => Promise<string> {
@@ -102,12 +102,12 @@ export function createToolProxy(
   const retryDelays = opts?.retryDelays ?? DEFAULT_RETRY_DELAYS;
 
   return async (input: unknown): Promise<string> => {
-    const resolvedRunId = typeof runId === 'string' ? runId : runId.current;
+    const resolvedSessionId = typeof sessionId === 'string' ? sessionId : sessionId.current;
     const requestId = generateRequestId();
     const argsJson = typeof input === 'string' ? input : JSON.stringify(input ?? {});
 
     const req = create(RequestToolRequestSchema, {
-      runId: resolvedRunId,
+      sessionId: resolvedSessionId,
       agentId,
       toolName,
       argsJson,
@@ -164,7 +164,7 @@ export function createToolProxy(
 export function createOrchestratorToolProxies(
   tools: ProtoToolMetadata[],
   orchestratorClient: OrchestratorServiceClient,
-  runId: string,
+  sessionId: string,
   agentId: string,
   opts?: ToolProxyOptions,
 ): ToolDefinition[] {
@@ -177,7 +177,7 @@ export function createOrchestratorToolProxies(
       const handler = createToolProxy(
         t.name,
         orchestratorClient,
-        runId,
+        sessionId,
         agentId,
         opts,
       );

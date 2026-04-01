@@ -10,7 +10,7 @@ import {
   SandboxSessionManager,
   type SessionRecord,
 } from '../sandbox-session-manager.js';
-import type { SessionEvent } from '../sandbox-run-service.js';
+import type { SessionEvent } from '../session-turn-service.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { ContainerManager } from '../../sandbox/container-manager.js';
@@ -42,6 +42,8 @@ type SandboxSessionManagerInternals = {
 
 function createMockContainerManager(): ContainerManager {
   return {
+    extractContainerDiff: vi.fn().mockResolvedValue(null),
+    extractWorkspaceDiff: vi.fn().mockResolvedValue(null),
     unpauseContainer: vi.fn().mockResolvedValue(undefined),
   } as unknown as ContainerManager;
 }

@@ -162,6 +162,8 @@ class ClaudeSession implements HarnessSession {
 
     try {
       const maxTurns = this.harnessConfig.maxTurns;
+      const isFirstTurn = this.transcript.length === input.messages.length;
+      const sdkSessionId = this.config.conversationId;
 
       const q = this.sdk.query({
         prompt: this.generateInput(input.messages),
@@ -174,8 +176,9 @@ class ClaudeSession implements HarnessSession {
           mcpServers: { ctxmill: this.mcpServer },
           permissionMode: 'bypassPermissions',
           allowDangerouslySkipPermissions: true,
-          includePartialMessages: true,
-          persistSession: false,
+          includePartialMessages: false,
+          persistSession: true,
+          ...(isFirstTurn ? { sessionId: sdkSessionId } : { resume: sdkSessionId }),
           abortController,
           env: this.buildClaudeEnv(),
           ...(maxTurns != null ? { maxTurns } : {}),
@@ -251,8 +254,11 @@ class ClaudeSession implements HarnessSession {
 
   async exportState(): Promise<HarnessExportedState> {
     return {
-      stateVersion: '1',
-      payload: { transcript: this.transcript },
+      stateVersion: '2',
+      payload: {
+        transcript: this.transcript,
+        sessionId: this.config.conversationId,
+      },
     };
   }
 
@@ -362,11 +368,29 @@ export class ClaudeAgentsHarness implements AgentHarness {
   readonly configSchema = ClaudeAgentsConfigSchema;
 
   protected async loadSdkModule(): Promise<ClaudeSdkModule> {
-    return {
+    const baseSdk: ClaudeSdkModule = {
       query: sdkQuery,
       tool: sdkTool as unknown as SdkToolFactory,
       createSdkMcpServer,
     };
+
+    if (process.env.LANGSMITH_TRACING !== 'true') {
+      return baseSdk;
+    }
+
+    try {
+      const { wrapClaudeAgentSDK } = await import('langsmith/experimental/anthropic');
+      const wrapped = wrapClaudeAgentSDK(baseSdk);
+      console.log('[claude-agents] LangSmith tracing enabled');
+      return {
+        query: wrapped.query ?? baseSdk.query,
+        tool: (wrapped.tool ?? baseSdk.tool) as unknown as SdkToolFactory,
+        createSdkMcpServer: wrapped.createSdkMcpServer ?? baseSdk.createSdkMcpServer,
+      };
+    } catch (err) {
+      console.warn('[claude-agents] LangSmith tracing init failed, continuing without:', err);
+      return baseSdk;
+    }
   }
 
   async openSession(
@@ -387,7 +411,12 @@ export class ClaudeAgentsHarness implements AgentHarness {
 
     const session = new ClaudeSession(config, harnessConfig, apiKey, this, sdk);
     if (restore) {
-      session.restoreTranscript(restore.messages);
+      const transcriptFromState = restore.payload['transcript'];
+      if (Array.isArray(transcriptFromState) && transcriptFromState.length > 0) {
+        session.restoreTranscript(transcriptFromState as Message[]);
+      } else if (restore.messages.length > 0) {
+        session.restoreTranscript(restore.messages);
+      }
     }
     return session;
   }

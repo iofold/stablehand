@@ -28,10 +28,10 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   createSdkMcpServer: mockCreateSdkMcpServer,
 }));
 
-import { ClaudeAgentsHarness } from '@ctxmill/sandbox-daemon';
-import type { AgentEvent, AgentHarness, HarnessSessionConfig } from '@ctxmill/sandbox-daemon';
-import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
-import type { Message } from '@ctxmill/sandbox-daemon';
+import { ClaudeAgentsHarness } from '../../packages/sandbox-daemon/src/index.ts';
+import type { AgentEvent, AgentHarness, HarnessSessionConfig } from '../../packages/sandbox-daemon/src/index.ts';
+import type { ToolDefinition } from '../../packages/sandbox-daemon/src/index.ts';
+import type { Message } from '../../packages/sandbox-daemon/src/index.ts';
 
 function makeMessage(
   role: Message['role'],
@@ -612,8 +612,87 @@ describe('ClaudeAgentsHarness', () => {
         },
       });
       expect(queryCall?.options.permissionMode).toBe('bypassPermissions');
-      expect(queryCall?.options.includePartialMessages).toBe(true);
+      expect(queryCall?.options.includePartialMessages).toBe(false);
       expect(queryCall?.options.maxTurns).toBe(4);
+    });
+
+    it('openSession with restore populates transcript from payload.transcript', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      ]));
+
+      const restoredMessage = makeMessage('assistant', 'Restored reply');
+      const userMessage = makeMessage('user', 'Hello again');
+      const session = await harness.openSession(makeConfig(), {
+        stateVersion: '1',
+        messages: [],
+        payload: { transcript: [restoredMessage] },
+      });
+
+      await collectEvents(
+        session.deliverTurn(
+          { messages: [userMessage], turnId: 'turn-restore' },
+          {},
+        ),
+      );
+
+      await expect(session.exportState()).resolves.toEqual({
+        stateVersion: '2',
+        payload: {
+          transcript: [restoredMessage, userMessage],
+          sessionId: 'conversation-1',
+        },
+      });
+
+      await session.close();
+    });
+
+    it('deliverTurn after restore uses resume instead of sessionId', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 1, output_tokens: 2 },
+        },
+      ]));
+
+      const session = await harness.openSession(makeConfig(), {
+        stateVersion: '1',
+        messages: [],
+        payload: { transcript: [makeMessage('assistant', 'Restored reply')] },
+      });
+
+      await collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Resume me')], turnId: 'turn-resume' },
+          {},
+        ),
+      );
+
+      const queryCall = mockQuery.mock.calls[0]?.[0];
+
+      expect(queryCall?.options.resume).toBe('conversation-1');
+      expect(queryCall?.options.sessionId).toBeUndefined();
+
+      await session.close();
     });
 
     it('should yield an error event when the API key is missing', async () => {

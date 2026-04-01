@@ -20,7 +20,7 @@ interface Logger {
 export interface ArtifactHandlerDeps {
   artifactStore: ArtifactStore;
   orchestratorClient: OrchestratorServiceClient;
-  runId: string | { current: string };
+  sessionId: string | { current: string };
   agentId: string;
   workspaceDir: string;
   logger?: Logger;
@@ -57,8 +57,8 @@ function detectMimeType(filename: string): string {
   return MIME_TYPES[ext] ?? 'application/octet-stream';
 }
 
-function getEffectiveRunId(runId: string | { current: string }): string {
-  return typeof runId === 'string' ? runId : runId.current;
+function getEffectiveSessionId(sessionId: string | { current: string }): string {
+  return typeof sessionId === 'string' ? sessionId : sessionId.current;
 }
 
 function resolveWorkspacePath(workspaceDir: string, requestedPath: string): string | null {
@@ -74,7 +74,7 @@ function resolveWorkspacePath(workspaceDir: string, requestedPath: string): stri
 }
 
 export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (input: unknown) => Promise<string>> {
-  const { artifactStore, orchestratorClient, runId, agentId, workspaceDir, logger: maybeLogger } = deps;
+  const { artifactStore, orchestratorClient, sessionId, agentId, workspaceDir, logger: maybeLogger } = deps;
   const logger = maybeLogger ?? console;
   const handlers = new Map<string, (input: unknown) => Promise<string>>();
 
@@ -106,7 +106,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       const filename = input.name ?? basename(fullPath);
       const mimeType = input.mimeType ?? detectMimeType(fullPath);
       const artifactId = randomUUID();
-      const effectiveRunId = getEffectiveRunId(runId);
+      const effectiveSessionId = getEffectiveSessionId(sessionId);
       const storageKey = `${agentId}/${artifactId}/${filename}`;
 
       await artifactStore.upload(storageKey, fileBuffer, mimeType);
@@ -116,12 +116,12 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       try {
         response = await orchestratorClient.registerArtifact(
           create(RegisterArtifactRequestSchema, {
-            runId: effectiveRunId,
+            sessionId: effectiveSessionId,
             agentId,
             artifact: create(ArtifactMetaSchema, {
               id: artifactId,
               agentId,
-              runId: effectiveRunId,
+              sessionId: effectiveSessionId,
               name: filename,
               mimeType,
               sizeBytes: BigInt(fileBuffer.byteLength),
@@ -135,7 +135,9 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       } catch (rpcErr) {
         try {
           await artifactStore.deleteObject(storageKey);
-        } catch {}
+        } catch (cleanupErr) {
+          logger.warn('[artifact] failed to delete artifact after metadata registration error', cleanupErr);
+        }
         throw rpcErr;
       }
 

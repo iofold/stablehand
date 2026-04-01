@@ -6,10 +6,10 @@ import { File, Upload } from 'lucide-react';
 export interface AgentFilesTabProps {
   agentId: string;
   /** When provided, shows session overlay files instead of base workspace */
-  runId?: string;
+  sessionId?: string;
 }
 
-export function AgentFilesTab({ agentId, runId }: AgentFilesTabProps) {
+export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   // Increment key to force FileExplorer remount after mutations
   const [explorerKey, setExplorerKey] = useState(0);
@@ -27,10 +27,10 @@ export function AgentFilesTab({ agentId, runId }: AgentFilesTabProps) {
     <div data-testid="files-tab-content" className="space-y-3">
       <div>
         <h3 className="text-sm font-semibold text-surface-200">
-          {runId ? `Session Workspace (run ${runId.slice(0, 8)})` : 'Agent Base Workspace'}
+          {sessionId ? `Session Workspace (run ${sessionId.slice(0, 8)})` : 'Agent Base Workspace'}
         </h3>
         <p className="text-xs text-surface-400 mt-0.5">
-          {runId ? 'Files and edits scoped to this run overlay' : 'Base workspace directory for this agent'}
+          {sessionId ? 'Files and edits scoped to this run overlay' : 'Base workspace directory for this agent'}
         </p>
       </div>
       <div className="flex min-h-[500px] min-w-0 gap-4">
@@ -41,7 +41,7 @@ export function AgentFilesTab({ agentId, runId }: AgentFilesTabProps) {
           agentId={agentId}
           onFileSelect={setSelectedFile}
           selectedFile={selectedFile}
-          runId={runId}
+          sessionId={sessionId}
           onFileCreated={refreshExplorer}
         />
       </div>
@@ -53,7 +53,7 @@ export function AgentFilesTab({ agentId, runId }: AgentFilesTabProps) {
             agentId={agentId}
             filePath={selectedFile}
             onClose={() => setSelectedFile(null)}
-            runId={runId}
+            sessionId={sessionId}
             onFileDeleted={handleFileDeleted}
             onFileSaved={refreshExplorer}
           />

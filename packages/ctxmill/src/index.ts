@@ -26,6 +26,7 @@ export type {
   ToolResult,
   ToolContext,
 } from './tool/types.js';
+export { createCtxmillGuideTool, CTXMILL_GUIDE_TOOL_NAME } from './tool/builtin/ctxmill-guide.js';
 
 // Config types
 export type { CTXMillConfig, ResolvedConfig, Preset } from './config/types.js';

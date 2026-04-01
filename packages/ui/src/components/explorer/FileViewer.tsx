@@ -8,7 +8,7 @@ interface FileViewerProps {
   filePath: string;
   onClose: () => void;
   /** When provided, reads from the session overlay instead of base workspace */
-  runId?: string;
+  sessionId?: string;
   /** Called after a file is deleted */
   onFileDeleted?: (path: string) => void;
   /** Called after a file is saved */
@@ -21,7 +21,7 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, onFileSaved }: FileViewerProps) {
+export function FileViewer({ agentId, filePath, onClose, sessionId, onFileDeleted, onFileSaved }: FileViewerProps) {
   const [content, setContent] = useState<string | null>(null);
   const [size, setSize] = useState<number>(0);
   const [loading, setLoading] = useState(true);
@@ -44,7 +44,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
 
     async function load() {
       try {
-        const data = await readFile(agentId, filePath, runId);
+        const data = await readFile(agentId, filePath, sessionId);
         if (!mounted) return;
         setContent(data.content ?? '');
         setSize(data.size ?? 0);
@@ -58,7 +58,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
     return () => {
       mounted = false;
     };
-  }, [agentId, filePath, runId]);
+  }, [agentId, filePath, sessionId]);
 
   const handleCopy = async () => {
     if (!content) return;
@@ -87,7 +87,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
     setSaving(true);
     setSaveError(null);
     try {
-      const result = await updateFile(agentId, filePath, editContent, runId);
+      const result = await updateFile(agentId, filePath, editContent, sessionId);
       setContent(editContent);
       setSize(result.size);
       setEditing(false);
@@ -102,7 +102,7 @@ export function FileViewer({ agentId, filePath, onClose, runId, onFileDeleted, o
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      await deleteFile(agentId, filePath, runId);
+      await deleteFile(agentId, filePath, sessionId);
       onFileDeleted?.(filePath);
       onClose();
     } catch (err) {

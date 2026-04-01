@@ -3,12 +3,12 @@ import { test } from '@playwright/test';
 test('Debug chart rendering', async ({ page }) => {
   const agentId = 'f22dbb85-376d-4c7e-a91d-e132a2dc45f3';
 
-  await page.goto(`/agents/${agentId}/chat`);
-  await page.getByTestId('chat-input').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.goto(`/agents/${agentId}/sessions/new`);
+  await page.getByTestId('session-input').waitFor({ state: 'visible', timeout: 15_000 });
 
   const chartMessage = `Generate a bar chart visualization as a JSON block. Output it exactly in this format embedded in your response text: {"component":"BarChart","props":{"data":[{"name":"NYC","value":72},{"name":"London","value":59},{"name":"Tokyo","value":68},{"name":"Paris","value":61},{"name":"Sydney","value":77}],"xKey":"name","yKey":"value","title":"City Temperatures"}}. Just output that JSON block inline in your text.`;
 
-  const chatInput = page.getByTestId('chat-input');
+  const chatInput = page.getByTestId('session-input');
   await chatInput.fill(chartMessage);
   
   const sendButton = page.getByTestId('send-button');
@@ -20,7 +20,7 @@ test('Debug chart rendering', async ({ page }) => {
 
   try {
     await page.waitForSelector('[data-testid="run-finished"]', { timeout: 90_000 });
-  } catch (e) {
+  } catch {
     console.log('Run finished marker timeout');
   }
 

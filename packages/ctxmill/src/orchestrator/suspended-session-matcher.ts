@@ -1,17 +1,17 @@
 import type { TypedEventBus, EventName, EventMap } from '../events/bus.js';
-import type { DatabaseRepository } from '../database/repository.js';
+import type { DatabaseRepository, SuspendedSessionRow } from '../database/repository.js';
 import type { WaitCondition } from '../events/wait-condition.js';
 import { matchesSelector } from '../events/wait-condition.js';
 
 /** Event types the matcher subscribes to for resume evaluation. */
 const WATCHABLE_EVENTS: EventName[] = [
-  'run.started',
+  'turn.started',
   'run.text_chunk',
   'run.tool_started',
   'run.tool_result',
   'run.interrupted',
   'run.interrupt_resolved',
-  'run.completed',
+  'turn.completed',
   'feedback.received',
   'agent.created',
   'agent.deleted',
@@ -24,7 +24,7 @@ const WATCHABLE_EVENTS: EventName[] = [
 
 const RECONCILIATION_INTERVAL_MS = 30_000;
 
-export class SuspendedRunMatcher {
+export class SuspendedSessionMatcher {
   private eventBus: TypedEventBus;
   private db: DatabaseRepository;
   private onResume: (condition: WaitCondition, triggerEvent: unknown) => Promise<void>;
@@ -44,7 +44,7 @@ export class SuspendedRunMatcher {
     for (const eventType of WATCHABLE_EVENTS) {
       const handler = (payload: unknown) => {
         this.handleEvent(eventType, payload).catch((err) =>
-          console.error(`[SuspendedRunMatcher] error handling ${eventType}:`, err),
+          console.error(`[SuspendedSessionMatcher] error handling ${eventType}:`, err),
         );
       };
       this.handlers.set(eventType, handler as any);
@@ -53,27 +53,27 @@ export class SuspendedRunMatcher {
 
     // Start reconciliation loop to expire old suspended runs
     this.reconciliationTimer = setInterval(() => {
-      this.db.expireOldSuspendedRuns(Date.now()).catch((err) =>
-        console.error('[SuspendedRunMatcher] reconciliation error:', err),
+      this.db.expireOldSuspendedSessions(Date.now()).catch((err) =>
+        console.error('[SuspendedSessionMatcher] reconciliation error:', err),
       );
     }, RECONCILIATION_INTERVAL_MS);
   }
 
   private async handleEvent(eventType: string, payload: unknown): Promise<void> {
-    let suspendedRuns;
+    let suspendedSessions: SuspendedSessionRow[];
     try {
-      suspendedRuns = await this.db.getSuspendedRunsByEventType(eventType);
+      suspendedSessions = await this.db.getSuspendedSessionsByEventType(eventType);
     } catch (err) {
-      console.error(`[SuspendedRunMatcher] DB query error for ${eventType}:`, err);
+      console.error(`[SuspendedSessionMatcher] DB query error for ${eventType}:`, err);
       return;
     }
 
-    for (const row of suspendedRuns) {
+    for (const row of suspendedSessions) {
       let selector: Record<string, unknown>;
       try {
         selector = JSON.parse(row.waitSelector);
       } catch {
-        console.error(`[SuspendedRunMatcher] invalid selector JSON for suspended run ${row.id}`);
+        console.error(`[SuspendedSessionMatcher] invalid selector JSON for suspended session ${row.id}`);
         continue;
       }
 
@@ -81,21 +81,23 @@ export class SuspendedRunMatcher {
 
       if (matchesSelector(payloadObj, selector)) {
         try {
-          await this.db.deleteSuspendedRun(row.id);
+          await this.db.deleteSuspendedSession(row.id);
         } catch (err) {
-          console.error(`[SuspendedRunMatcher] failed to delete suspended run ${row.id}:`, err);
+          console.error(`[SuspendedSessionMatcher] failed to delete suspended session ${row.id}:`, err);
           continue;
         }
 
         const suspendedDurationMs = Date.now() - row.createdAt;
 
-        this.eventBus.emit('run.resumed', {
-          runId: row.agentRunId,
-          agentId: row.agentId,
-          triggeredBy: eventType,
-          suspendedDurationMs,
-          timestamp: Date.now(),
-        });
+        const sessionId = row.agentSessionId;
+
+         this.eventBus.emit('run.resumed', {
+           turnId: sessionId,
+           agentId: row.agentId,
+           triggeredBy: eventType,
+           suspendedDurationMs,
+           timestamp: Date.now(),
+         } as unknown as EventMap['run.resumed']);
 
         // Build WaitCondition from the row
         let snapshotState: WaitCondition['contextSnapshot'];
@@ -105,21 +107,21 @@ export class SuspendedRunMatcher {
           snapshotState = { conversationId: '' };
         }
 
-        const condition: WaitCondition = {
+        const condition = {
           id: row.id,
-          runId: row.agentRunId,
+          sessionId,
           agentId: row.agentId,
           eventType: row.waitEventType,
           selector,
           expiresAt: row.waitExpiresAt ?? undefined,
           contextSnapshot: snapshotState,
           createdAt: row.createdAt,
-        };
+        } as unknown as WaitCondition;
 
         try {
           await this.onResume(condition, payload);
         } catch (err) {
-          console.error(`[SuspendedRunMatcher] onResume callback error for ${row.id}:`, err);
+          console.error(`[SuspendedSessionMatcher] onResume callback error for ${row.id}:`, err);
         }
       }
     }

@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   ArrowLeft,
   Radio,
@@ -18,9 +18,8 @@ import { useConversationStore } from '@/stores/conversation';
 import { normalizeConversationMessage } from '@/stores/conversation';
 import { useInterruptStore } from '@/stores/interrupt';
 import { useAgentsStore } from '@/stores/agents';
-import type { AgentSession } from '@/stores/agents';
 import { useSSE, useSSEStatus } from '@/lib/useSSE';
-import { sendMessage, sendInterrupt, fetchMessages, fetchConversations, fetchSessions, fetchInterrupts } from '@/lib/api';
+import { sendMessage, sendInterrupt, fetchMessages, fetchConversations, fetchSessions, fetchTurns, fetchInterrupts } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 function humanizeError(raw: string): { summary: string; details: string } {
@@ -46,8 +45,9 @@ function humanizeError(raw: string): { summary: string; details: string } {
 }
 
 export function SessionPage() {
-  const { id, sessionId: routeSessionId } = useParams<{ id: string; sessionId?: string }>();
+  const { id, conversationId: routeConversationId } = useParams<{ id: string; conversationId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const agents = useAgentsStore((s) => s.agents);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const {
@@ -67,9 +67,10 @@ export function SessionPage() {
   const [error, setError] = useState<string | null>(null);
   const [pastRunError, setPastRunError] = useState<string | null>(null);
   const [lastFailedContent, setLastFailedContent] = useState<string | null>(null);
-  const [explorerOpen, _setExplorerOpen] = useState(false);
+  const [explorerOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | undefined>(routeSessionId);
+  const [conversationId, setConversationId] = useState<string | undefined>(routeConversationId);
+  const [isReadOnly, setIsReadOnly] = useState(false);
 
   useSSE(id);
 
@@ -80,39 +81,41 @@ export function SessionPage() {
   useEffect(() => {
     reset();
     if (!id) {
-      setSessionId(undefined);
+      setConversationId(undefined);
       loadMessages([]);
       return;
     }
 
     let mounted = true;
 
-    setSessionId(routeSessionId);
-    setActiveConversation(routeSessionId ?? null);
+    setConversationId(routeConversationId);
+    setActiveConversation(routeConversationId ?? null);
     loadMessages([]);
     setPastRunError(null);
+    setIsReadOnly(false);
 
     async function loadHistory() {
       try {
-        let resolvedSessionId = routeSessionId;
+        let resolvedConversationId = routeConversationId;
+        const isNewSession = location.pathname.endsWith('/conversations/new') || location.pathname.endsWith('/sessions/new');
 
-        if (!resolvedSessionId) {
+        if (!resolvedConversationId && !isNewSession) {
           const convs = await fetchConversations(id!) as Array<{ id: string }>;
           if (!mounted) return;
           if (Array.isArray(convs) && convs.length > 0) {
-            resolvedSessionId = convs[0].id;
+            resolvedConversationId = convs[0].id;
           }
         }
 
-        if (!resolvedSessionId) {
-          setSessionId(undefined);
+        if (!resolvedConversationId) {
+          setConversationId(undefined);
           setActiveConversation(null);
           loadMessages([]);
         } else {
-          setSessionId(resolvedSessionId);
-          setActiveConversation(resolvedSessionId);
+          setConversationId(resolvedConversationId);
+          setActiveConversation(resolvedConversationId);
 
-          const msgs = await fetchMessages(id!, resolvedSessionId);
+          const msgs = await fetchMessages(id!, resolvedConversationId);
           if (!mounted) return;
           if (!Array.isArray(msgs) || msgs.length === 0) {
             loadMessages([]);
@@ -129,33 +132,69 @@ export function SessionPage() {
 
         if (mounted) {
           try {
-            const sessions = await fetchSessions(id!);
-            if (mounted && Array.isArray(sessions)) {
-                if (resolvedSessionId) {
-                  const sessionEntries = sessions.filter((session: Record<string, unknown>) => session.conversationId === resolvedSessionId);
-                sessionEntries.sort((a: any, b: any) => (b.startedAt || 0) - (a.startedAt || 0));
-                const lastSession = sessionEntries[0] as AgentSession | undefined;
+            const [sessionsRaw, turnsRaw] = await Promise.all([
+              fetchSessions(id!),
+              fetchTurns(id!),
+            ]);
+            if (!mounted) return;
 
-                const hasActiveSession = sessionEntries.some(
-                  (session: Record<string, unknown>) => session.status === 'running' || session.status === 'queued',
+            const sessions = Array.isArray(sessionsRaw)
+              ? sessionsRaw
+              : ((sessionsRaw as Record<string, unknown>)?.sessions ?? []) as Record<string, unknown>[];
+            const turns = Array.isArray(turnsRaw) ? turnsRaw : [] as Record<string, unknown>[];
+
+            const hasActiveContainer = resolvedConversationId
+              ? sessions.some(
+                  (s: Record<string, unknown>) =>
+                    s.conversationId === resolvedConversationId &&
+                    (s.status === 'ACTIVE' || s.status === 'RESTORING'),
+                )
+              : sessions.some(
+                  (s: Record<string, unknown>) =>
+                    s.status === 'ACTIVE' || s.status === 'RESTORING',
                 );
-                useConversationStore.setState({ isStreaming: hasActiveSession });
+            // Container being ACTIVE is not enough — we also need an incomplete turn.
+            // Sandbox sessions stay ACTIVE even after a turn completes (container persists).
+            const hasActiveTurn = resolvedConversationId
+              ? turns.some(
+                  (t: Record<string, unknown>) =>
+                    t.conversationId === resolvedConversationId &&
+                    t.completedAt == null &&
+                    !t.error,
+                )
+              : turns.some(
+                  (t: Record<string, unknown>) =>
+                    t.completedAt == null && !t.error,
+                );
+            useConversationStore.setState({ isStreaming: hasActiveContainer && hasActiveTurn });
 
-                  if (lastSession && lastSession.status === 'error' && lastSession.error) {
-                  setPastRunError(lastSession.error as string);
-                } else {
-                  setPastRunError(null);
-                }
+            if (resolvedConversationId) {
+              const convTurns = turns
+                .filter((t: Record<string, unknown>) => t.conversationId === resolvedConversationId)
+                .sort(
+                  (a: Record<string, unknown>, b: Record<string, unknown>) =>
+                    ((b.startedAt as number) || 0) - ((a.startedAt as number) || 0),
+                );
+              const lastTurn = convTurns[0];
+              if (lastTurn?.error) {
+                setPastRunError(lastTurn.error as string);
               } else {
-                const hasActiveSession = sessions.some(
-                  (session: Record<string, unknown>) => session.status === 'running' || session.status === 'queued',
-                );
-                useConversationStore.setState({ isStreaming: hasActiveSession });
                 setPastRunError(null);
               }
+
+              const hasAnyActiveSession = sessions.some(
+                (s: Record<string, unknown>) =>
+                  s.conversationId === resolvedConversationId &&
+                  (s.status === 'ACTIVE' || s.status === 'RESTORING' || s.status === 'PAUSED' || s.status === 'CHECKPOINTED')
+              );
+              if (!hasAnyActiveSession && !hasActiveTurn && convTurns.length > 0) {
+                setIsReadOnly(true);
+              }
+            } else {
+              setPastRunError(null);
             }
           } catch (err) {
-            console.debug('[SessionPage] Failed to fetch sessions:', err);
+            console.debug('[SessionPage] Failed to fetch sessions/turns:', err);
           }
 
           try {
@@ -167,7 +206,7 @@ export function SessionPage() {
                 toolName: first.toolName,
                 args: first.args,
                 toolCallId: first.toolCallId,
-                runId: first.runId,
+                sessionId: first.sessionId,
               });
             }
           } catch (err) {
@@ -184,7 +223,7 @@ export function SessionPage() {
       mounted = false;
       reset();
     };
-  }, [id, routeSessionId, loadMessages, setActiveConversation, reset]);
+  }, [id, routeConversationId, loadMessages, setActiveConversation, reset, location.pathname]);
 
   const agent = agents.find((a) => a.id === id);
 
@@ -199,10 +238,11 @@ export function SessionPage() {
       setLastFailedContent(null);
       addUserMessage(content);
       try {
-        const response = await sendMessage(id, content, sessionId);
-        if (response?.conversationId && !sessionId) {
-          setSessionId(response.conversationId);
+        const response = await sendMessage(id, content, conversationId);
+        if (response?.conversationId && !conversationId) {
+          setConversationId(response.conversationId);
           setActiveConversation(response.conversationId);
+          navigate(`/agents/${id}/conversations/${response.conversationId}`, { replace: true });
         }
       } catch (err) {
         console.error('[Session] Failed to send message:', err);
@@ -210,7 +250,7 @@ export function SessionPage() {
         setLastFailedContent(content);
       }
     },
-    [id, addUserMessage, sessionId, setActiveConversation],
+    [id, addUserMessage, conversationId, setActiveConversation, navigate],
   );
 
   const handleApprove = useCallback(async () => {
@@ -221,13 +261,13 @@ export function SessionPage() {
       useConversationStore.getState().addSystemMessage(
         `✓ Approved${toolName ? `: ${toolName}` : ''}`,
       );
-      await sendInterrupt(id, 'approve', undefined, interrupt?.runId);
+      await sendInterrupt(id, 'approve', undefined, interrupt?.sessionId);
       clearInterrupt();
     } catch (err) {
       console.error('[Session] Failed to send approval:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.runId, interrupt?.toolName]);
+  }, [id, clearInterrupt, interrupt?.sessionId, interrupt?.toolName]);
 
   const handleReject = useCallback(async () => {
     if (!id) return;
@@ -237,27 +277,27 @@ export function SessionPage() {
       useConversationStore.getState().addSystemMessage(
         `✗ Rejected${toolName ? `: ${toolName}` : ''}`,
       );
-      await sendInterrupt(id, 'reject', undefined, interrupt?.runId);
+      await sendInterrupt(id, 'reject', undefined, interrupt?.sessionId);
       clearInterrupt();
     } catch (err) {
       console.error('[Session] Failed to send rejection:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.runId, interrupt?.toolName]);
+  }, [id, clearInterrupt, interrupt?.sessionId, interrupt?.toolName]);
 
   const handleDocSubmit = useCallback(
     async (content: string) => {
       if (!id) return;
       setError(null);
       try {
-        await sendInterrupt(id, 'submit', { content }, interrupt?.runId);
+        await sendInterrupt(id, 'submit', { content }, interrupt?.sessionId);
         clearInterrupt();
       } catch (err) {
         console.error('[Session] Failed to submit document:', err);
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [id, clearInterrupt, interrupt?.runId],
+    [id, clearInterrupt, interrupt?.sessionId],
   );
 
   const handleFormSubmit = useCallback(
@@ -265,14 +305,14 @@ export function SessionPage() {
       if (!id) return;
       setError(null);
       try {
-        await sendInterrupt(id, 'submit', values, interrupt?.runId);
+        await sendInterrupt(id, 'submit', values, interrupt?.sessionId);
         clearInterrupt();
       } catch (err) {
         console.error('[Session] Failed to submit form:', err);
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [id, clearInterrupt, interrupt?.runId],
+    [id, clearInterrupt, interrupt?.sessionId],
   );
 
   const handleFileSelect = useCallback((path: string) => {
@@ -392,7 +432,7 @@ export function SessionPage() {
             agentName={agent?.name}
             agentTools={agent?.tools}
             agentId={id}
-            sessionId={sessionId}
+            conversationId={conversationId}
             pastRunError={pastRunError}
           />
 
@@ -440,7 +480,15 @@ export function SessionPage() {
               />
             </div>
           )}
-          <SessionInput onSend={handleSend} disabled={isStreaming} />
+          {isReadOnly ? (
+            <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+              <div className="rounded-lg border border-surface-700 bg-surface-800/50 p-4 text-center">
+                <p className="text-sm text-surface-400">This conversation has ended.</p>
+              </div>
+            </div>
+          ) : (
+            <SessionInput onSend={handleSend} disabled={isStreaming} />
+          )}
         </div>
       </div>
 

@@ -15,7 +15,7 @@ function makeTrace(overrides: Partial<ExecutionTrace> = {}): ExecutionTrace {
   return {
     id: 'trace-1',
     agentId: 'agent-1',
-    runId: 'run-1',
+    turnId: 'run-1',
     taskDescription: 'Summarize a document',
     steps: [
       { ordinal: 0, type: 'llm_call', content: 'Called model', durationMs: 200, metadata: {} },
@@ -81,11 +81,11 @@ describe('TraceCollector', () => {
       const collector = new TraceCollector('agent-1', 'run-1', 'Summarize docs');
       collector.addStep('llm_call', 'hello', 100);
 
-      const trace = collector.finalize('failure');
-      expect(trace.id).toBeDefined();
-      expect(trace.agentId).toBe('agent-1');
-      expect(trace.runId).toBe('run-1');
-      expect(trace.taskDescription).toBe('Summarize docs');
+       const trace = collector.finalize('failure');
+       expect(trace.id).toBeDefined();
+       expect(trace.agentId).toBe('agent-1');
+       expect(trace.turnId).toBe('run-1');
+       expect(trace.taskDescription).toBe('Summarize docs');
       expect(trace.outcome).toBe('failure');
       expect(trace.startedAt).toBeInstanceOf(Date);
       expect(trace.completedAt).toBeInstanceOf(Date);
@@ -278,13 +278,13 @@ describe('DefaultLearningPipeline', () => {
       const trace = makeTrace();
       await pipeline.process(trace);
 
-      expect(events).toHaveLength(1);
-      expect(events[0].traceId).toBe('trace-1');
-      expect(events[0].runId).toBe('run-1');
-      expect(events[0].agentId).toBe('agent-1');
-      expect(events[0].stepCount).toBe(2);
-      expect(events[0].outcome).toBe('success');
-      expect(events[0].timestamp).toBeTypeOf('number');
+       expect(events).toHaveLength(1);
+       expect(events[0].traceId).toBe('trace-1');
+       expect(events[0].turnId).toBe('run-1');
+       expect(events[0].agentId).toBe('agent-1');
+       expect(events[0].stepCount).toBe(2);
+       expect(events[0].outcome).toBe('success');
+       expect(events[0].timestamp).toBeTypeOf('number');
     });
 
     it('process() emits learning.insight_extracted when insights found', async () => {

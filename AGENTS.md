@@ -66,6 +66,18 @@ docs/
 - **Zod for tool input** — `z.object(...)` schema validation in all tool definitions
 - **gRPC error codes** — Use `ConnectError` with `Code.*` (InvalidArgument, etc.)
 
+## WORKFLOW RULES
+
+- **ALWAYS commit after completing work** — Every agent session MUST `git add` + `git commit` its changes before stopping. Uncommitted work gets lost when other sessions clean the working tree. Do NOT push unless the user explicitly asks.
+- **Commit granularity** — One commit per logical unit of work (feature, fix, refactor). If a session implements multiple things, multiple commits are fine.
+- **Never leave dirty working tree** — If you made changes, commit them. No exceptions.
+- **Visually verify UI changes** — After any change that touches routes returning data to the UI, API response shapes, or frontend components:
+  1. Rebuild the Docker stack (`docker compose up --build -d`)
+  2. Write a Playwright script in `.tmp/` that navigates the affected screens, interacts with them, and takes screenshots
+  3. Run the script and feed each screenshot to `look_at` with a specific critique goal (e.g., "Are sessions listed? Do status badges render? Any broken layouts?")
+  4. Fix any issues surfaced before marking the task complete
+  This catches shape mismatches, empty states, and rendering failures that unit tests miss.
+
 ## ANTI-PATTERNS
 
 - **NEVER store secrets in checkpoints** — Secrets injected fresh on resume via tmpfs (`/run/secrets/config.json`), never persisted
@@ -125,7 +137,7 @@ docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile
 - **HITL pause flow** — Tool requests approval → Docker pause (5s delay) → freeze promotion (5 min) → checkpoint promotion (10 min).
 - **`--experimental-strip-types`** — Node 22 flag in Dockerfile CMD for TypeScript enum handling in proto-generated code.
 - **19 DB tables** via Drizzle ORM — see `packages/ctxmill/src/database/schema-pg.ts`. Test DB uses advisory lock (ID: 424242) for concurrent resets.
-- **Default model** — `gpt-5-mini` (OpenAI). Override via `OPENAI_MODEL` env var. Per-agent override in YAML manifest.
+- **Default model** — `gpt-5.4-mini` (OpenAI). Override via `OPENAI_MODEL` env var. Per-agent override in YAML manifest.
 - **Workspace isolation** — Workspace diff capture/restore during suspend/resume. Legacy FUSE/mock overlay abstractions removed.
 - **Container concurrency** — Semaphore limits concurrent sandbox containers (default 20). FIFO queue with 60s timeout.
 - **Tool providers** — 5 types: Local (in-process), MCP (stdio/HTTP), HTTP (REST endpoints), Composio (500+ SaaS), Artifact (daemon-handled S3/MinIO upload/download).

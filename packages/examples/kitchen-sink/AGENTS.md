@@ -8,9 +8,9 @@
 
 ```
 agents/
-  langgraph-agent/agent.yaml    Chain starter — analyst role (LangGraph, gpt-5-mini)
+  langgraph-agent/agent.yaml    Chain starter — analyst role (LangGraph, gpt-5.4-mini)
   claude-agent/agent.yaml       Chain middle — writer role (Claude, claude-sonnet-4-6)
-  pi-agent/agent.yaml           Chain end — auditor role (PI Agent, gpt-5-mini)
+  pi-agent/agent.yaml           Chain end — auditor role (PI Agent, gpt-5.4-mini)
 tools/
   index.ts                      Barrel export (11 tools)
   calculator.ts                 Arithmetic (no approval)

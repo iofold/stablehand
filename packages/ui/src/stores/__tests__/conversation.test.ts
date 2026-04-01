@@ -19,8 +19,8 @@ describe('conversation store', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0].role).toBe('user');
     expect(messages[0].content).toBe('hello');
-    expect(messages[0].id).toBeTruthy();
-    expect(messages[0].createdAt).toBeTruthy();
+    expect(messages[0].id).toEqual(expect.any(String));
+    expect(messages[0].createdAt).toEqual(expect.any(String));
   });
 
   it('addUserMessage appends multiple messages in order', () => {
@@ -57,7 +57,7 @@ describe('conversation store', () => {
     const state = getStore();
     expect(state.messages).toEqual([]);
     expect(state.isStreaming).toBe(false);
-    expect(state.currentRunId).toBeNull();
+    expect(state.currentTurnId).toBeNull();
   });
 
   // ── handleSSEEvent: RUN_STARTED ────────────────────────────────
@@ -67,7 +67,7 @@ describe('conversation store', () => {
 
     const state = getStore();
     expect(state.isStreaming).toBe(true);
-    expect(state.currentRunId).toBe('run-1');
+    expect(state.currentTurnId).toBe('run-1');
   });
 
   // ── handleSSEEvent: TEXT_MESSAGE flow ──────────────────────────
@@ -121,7 +121,7 @@ describe('conversation store', () => {
 
     const { messages } = getStore();
     const tcMsg = messages.find((m) => m.toolCalls && m.toolCalls.some((t) => t.id === 'tc1'));
-    expect(tcMsg).toBeDefined();
+    expect(tcMsg).toEqual(expect.objectContaining({ toolCalls: expect.any(Array) }));
     const tc = tcMsg!.toolCalls!.find((t) => t.id === 'tc1')!;
     expect(tc.name).toBe('search');
     expect(tc.args).toBe('{"q":"test"}');
@@ -141,9 +141,9 @@ describe('conversation store', () => {
 
     const { messages } = getStore();
     const textMsg = messages.find((m) => m.content === 'result');
-    expect(textMsg).toBeDefined();
+    expect(textMsg).toEqual(expect.objectContaining({ content: 'result' }));
     const tcMsg = messages.find((m) => m.toolCalls && m.toolCalls.length > 0);
-    expect(tcMsg).toBeDefined();
+    expect(tcMsg).toEqual(expect.objectContaining({ toolCalls: expect.any(Array) }));
     expect(tcMsg!.toolCalls).toHaveLength(1);
     expect(tcMsg!.toolCalls![0].name).toBe('search');
   });
@@ -161,7 +161,7 @@ describe('conversation store', () => {
 
     const state = getStore();
     expect(state.isStreaming).toBe(false);
-    expect(state.currentRunId).toBeNull();
+    expect(state.currentTurnId).toBeNull();
     expect(state.messages).toHaveLength(1);
     expect(state.messages[0].content).toBe('partial');
   });
@@ -259,7 +259,7 @@ describe('conversation store', () => {
 
     const { messages } = getStore();
     const tcMsg = messages.find((m) => m.toolCalls && m.toolCalls.some((t) => t.id === 'tc1'));
-    expect(tcMsg).toBeDefined();
+    expect(tcMsg).toEqual(expect.objectContaining({ toolCalls: expect.any(Array) }));
     const tc = tcMsg!.toolCalls!.find((t) => t.id === 'tc1')!;
     expect(tc.status).toBe('error');
     expect(tc.error).toBe('boom');

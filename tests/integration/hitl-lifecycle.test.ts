@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RunRegistry } from '../../packages/ctxmill/src/orchestrator/run-registry.js';
 import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
 import { ContainerLifecyclePolicy } from '../../packages/ctxmill/src/orchestrator/container-lifecycle-policy.js';
+import { TestSessionRegistry } from '../utils/test-session-registry.js';
 import type { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
 import type {
   InterruptRow,
@@ -78,8 +78,9 @@ function createMockInterruptDb(): {
 
   const toRow = (data: InterruptInsert): InterruptRow => ({
     id: data.id,
-    runId: data.runId,
+    agentSessionId: data.agentSessionId,
     agentId: data.agentId,
+    sessionId: data.sessionId ?? null,
     toolCallId: data.toolCallId ?? '',
     toolName: data.toolName ?? '',
     args: data.args ?? {},
@@ -166,8 +167,8 @@ describe('HITL lifecycle boundary conditions', () => {
   describe('HITL pause/resume state transitions', () => {
     it('pauseRun sets status to paused and emits run.paused', async () => {
       const bus = createTestBus();
-      const pausedEvents = collectEvents(bus, 'run.paused');
-      const registry = new RunRegistry(undefined, bus);
+      const pausedEvents = collectEvents(bus, 'session.paused');
+      const registry = new TestSessionRegistry(undefined, bus);
       const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
 
       const paused = await registry.pauseRun(run.id, 'hitl_approval');
@@ -178,7 +179,7 @@ describe('HITL lifecycle boundary conditions', () => {
       expect(pausedEvents.events).toHaveLength(1);
       expect(pausedEvents.events[0]).toEqual(
         expect.objectContaining({
-          runId: run.id,
+          sessionId: run.id,
           agentId: 'agent-1',
           conversationId: 'conv-1',
           reason: 'hitl_approval',
@@ -189,7 +190,7 @@ describe('HITL lifecycle boundary conditions', () => {
     });
 
     it('resumeRun after pauseRun transitions back to running', async () => {
-      const registry = new RunRegistry(undefined, createTestBus());
+      const registry = new TestSessionRegistry(undefined, createTestBus());
       const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
 
       await registry.pauseRun(run.id, 'hitl_approval');
@@ -201,7 +202,7 @@ describe('HITL lifecycle boundary conditions', () => {
     });
 
     it('pauseRun on non-running run returns undefined', async () => {
-      const registry = new RunRegistry(undefined, createTestBus());
+      const registry = new TestSessionRegistry(undefined, createTestBus());
       const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
 
       await registry.completeRun(run.id);
@@ -344,6 +345,7 @@ describe('HITL lifecycle boundary conditions', () => {
       const { db } = createMockInterruptDb();
       const firstManager = new InterruptManager(undefined, db);
       firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 60_000);
+      await Promise.resolve();
 
       const restartedManager = new InterruptManager(undefined, db);
       await restartedManager.loadFromDb();
@@ -362,6 +364,7 @@ describe('HITL lifecycle boundary conditions', () => {
       const { db, rows } = createMockInterruptDb();
       const firstManager = new InterruptManager(undefined, db);
       firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 1_000);
+      await Promise.resolve();
 
       vi.setSystemTime(new Date('2026-03-25T12:00:02.000Z'));
 

@@ -29,14 +29,13 @@ describe('Checkpoint Repository', () => {
   // Helper to create a run for the agent
   async function createRun(): Promise<string> {
     const conv = await repo.createConversation(agentId);
-    const run = await repo.createRun({
-      agentId,
+    const sandboxSession = await repo.createSandboxSession({
       conversationId: conv.id,
-      status: 'running',
-      mode: 'interactive',
-      startedAt: Date.now(),
+      agentId,
+      harnessName: 'langgraph',
+      status: 'ACTIVE',
     });
-    return run.id;
+    return sandboxSession.id;
   }
 
   describe('createCheckpoint', () => {
@@ -49,7 +48,7 @@ describe('Checkpoint Repository', () => {
       };
 
       const result = await repo.createCheckpoint({
-        runId,
+        sessionId: runId,
         agentId,
         version: 2,
         checkpointData,
@@ -63,7 +62,7 @@ describe('Checkpoint Repository', () => {
       // Verify stored data via getCheckpoint
       const checkpoint = await repo.getCheckpoint(runId);
       expect(checkpoint).not.toBeNull();
-      expect(checkpoint!.runId).toBe(runId);
+      expect(checkpoint!.sessionId).toBe(runId);
       expect(checkpoint!.agentId).toBe(agentId);
       expect(checkpoint!.version).toBe(2);
       expect(checkpoint!.checkpointData).toEqual(checkpointData);
@@ -76,7 +75,7 @@ describe('Checkpoint Repository', () => {
       const runId = await createRun();
 
       await repo.createCheckpoint({
-        runId,
+        sessionId: runId,
         agentId,
         checkpointData: { state: 'test' },
       });
@@ -89,7 +88,7 @@ describe('Checkpoint Repository', () => {
       const runId = await createRun();
 
       await repo.createCheckpoint({
-        runId,
+        sessionId: runId,
         agentId,
         checkpointData: { state: 'minimal' },
       });
@@ -106,7 +105,7 @@ describe('Checkpoint Repository', () => {
 
       // Create two checkpoints for the same run
       await repo.createCheckpoint({
-        runId,
+        sessionId: runId,
         agentId,
         checkpointData: { step: 'first' },
         suspendReason: 'first_suspend',
@@ -116,7 +115,7 @@ describe('Checkpoint Repository', () => {
       await new Promise((r) => setTimeout(r, 10));
 
       await repo.createCheckpoint({
-        runId,
+        sessionId: runId,
         agentId,
         checkpointData: { step: 'second' },
         suspendReason: 'second_suspend',
@@ -139,12 +138,12 @@ describe('Checkpoint Repository', () => {
       const runId = await createRun();
 
       await repo.createCheckpoint({
-        runId,
+        sessionId: runId,
         agentId,
         checkpointData: { step: 1 },
       });
       await repo.createCheckpoint({
-        runId,
+        sessionId: runId,
         agentId,
         checkpointData: { step: 2 },
       });
@@ -169,7 +168,7 @@ describe('Checkpoint Repository', () => {
       const runId = await createRun();
 
       await repo.createCheckpoint({
-        runId,
+        sessionId: runId,
         agentId,
         checkpointData: { data: 'some checkpoint data for sizing' },
       });
@@ -191,7 +190,7 @@ describe('Checkpoint Repository', () => {
       const runId = await createRun();
 
       await repo.createCheckpoint({
-        runId,
+        sessionId: runId,
         agentId,
         checkpointData: { state: 'will be cascaded' },
       });

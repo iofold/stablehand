@@ -3,10 +3,11 @@ import { randomUUID } from 'node:crypto';
 import type { TypedEventBus } from '../events/bus.js';
 
 const MAX_QUEUE_SIZE = 100;
-const MAX_EVENT_HISTORY = 50;
-const RETENTION_AFTER_COMPLETION = 5;
+const MAX_EVENTS_PER_CONVERSATION = 500;
+const RETENTION_AFTER_COMPLETION = 50;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_HEARTBEAT_FAILURES = 3;
+const CONVERSATION_EXPIRY_MS = 30 * 60 * 1000;
 
 interface ConnectionState {
   queue: string[];
@@ -33,12 +34,16 @@ export class SSEManager {
   private heartbeatIntervals = new Map<FastifyReply, NodeJS.Timeout>();
   private lastActivityMap = new Map<string, number>();
   private connectionState = new Map<FastifyReply, ConnectionState>();
-  private eventHistory = new Map<string, HistoryEntry[]>();
+  // agentId → Map<conversationId, HistoryEntry[]>
+  // Events without conversationId go into '__global__' bucket
+  private eventHistory = new Map<string, Map<string, HistoryEntry[]>>();
+  private cleanupTimer?: ReturnType<typeof setInterval>;
   private eventSeq = 0;
   private eventBus?: TypedEventBus;
 
   constructor(eventBus?: TypedEventBus) {
     this.eventBus = eventBus;
+    this.cleanupTimer = setInterval(() => this.cleanupExpiredConversations(), 5 * 60 * 1000);
   }
 
   /**
@@ -58,22 +63,34 @@ export class SSEManager {
     };
     this.connectionState.set(reply, state);
 
-    const history = this.eventHistory.get(agentId) ?? [];
-    try {
-      let replaying = !lastEventId;
-      for (const entry of history) {
-        if (!replaying) {
-          if (entry.id === lastEventId) {
-            replaying = true;
-          }
-          continue;
+    const agentMap = this.eventHistory.get(agentId);
+    if (agentMap) {
+      try {
+        const allEntries: HistoryEntry[] = [];
+        for (const entries of agentMap.values()) {
+          allEntries.push(...entries);
         }
-        reply.raw.write(`id: ${entry.id}\ndata: ${JSON.stringify(entry.event)}\n\n`);
+        allEntries.sort((a, b) => {
+          const seqA = parseInt(a.id.substring(a.id.lastIndexOf('-') + 1), 10);
+          const seqB = parseInt(b.id.substring(b.id.lastIndexOf('-') + 1), 10);
+          return seqA - seqB;
+        });
+
+        let replaying = !lastEventId;
+        for (const entry of allEntries) {
+          if (!replaying) {
+            if (entry.id === lastEventId) {
+              replaying = true;
+            }
+            continue;
+          }
+          reply.raw.write(`id: ${entry.id}\ndata: ${JSON.stringify(entry.event)}\n\n`);
+        }
+      } catch (writeErr) {
+        console.debug('[SSE] Failed to replay history for agent', agentId, writeErr);
+        this.connectionState.delete(reply);
+        return;
       }
-    } catch (writeErr) {
-      console.debug('[SSE] Failed to replay history for agent', agentId, writeErr);
-      this.connectionState.delete(reply);
-      return;
     }
 
     if (!this.connections.has(agentId)) {
@@ -188,19 +205,26 @@ export class SSEManager {
     this.eventSeq++;
     const eventId = `${agentId}-${this.eventSeq}`;
 
-    const history = this.eventHistory.get(agentId) ?? [];
+    const conversationId = (event.conversationId as string) || '__global__';
+    let agentMap = this.eventHistory.get(agentId);
+    if (!agentMap) {
+      agentMap = new Map();
+      this.eventHistory.set(agentId, agentMap);
+    }
+    let history = agentMap.get(conversationId);
+    if (!history) {
+      history = [];
+      agentMap.set(conversationId, history);
+    }
     history.push({ id: eventId, event });
 
     if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
       if (history.length > RETENTION_AFTER_COMPLETION) {
         history.splice(0, history.length - RETENTION_AFTER_COMPLETION);
       }
-    } else {
-      if (history.length > MAX_EVENT_HISTORY) {
-        history.splice(0, history.length - MAX_EVENT_HISTORY);
-      }
+    } else if (history.length > MAX_EVENTS_PER_CONVERSATION) {
+      history.splice(0, history.length - MAX_EVENTS_PER_CONVERSATION);
     }
-    this.eventHistory.set(agentId, history);
 
     const clients = this.connections.get(agentId);
     if (!clients || clients.size === 0) return;
@@ -271,10 +295,40 @@ export class SSEManager {
     return this.lastActivityMap.get(agentId);
   }
 
+  getConversationHistory(agentId: string, conversationId: string): HistoryEntry[] {
+    const agentMap = this.eventHistory.get(agentId);
+    if (!agentMap) return [];
+    return agentMap.get(conversationId) ?? [];
+  }
+
+  private cleanupExpiredConversations(): void {
+    const now = Date.now();
+    for (const [agentId, agentMap] of this.eventHistory) {
+      for (const [convId, entries] of agentMap) {
+        if (entries.length === 0) {
+          agentMap.delete(convId);
+          continue;
+        }
+        const lastEvent = entries[entries.length - 1];
+        const lastTimestamp = (lastEvent.event.timestamp as number) || 0;
+        if (now - lastTimestamp > CONVERSATION_EXPIRY_MS) {
+          agentMap.delete(convId);
+        }
+      }
+      if (agentMap.size === 0) {
+        this.eventHistory.delete(agentId);
+      }
+    }
+  }
+
   /**
    * Tear down all connections and intervals. Call on server shutdown.
    */
   shutdown(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
     for (const [agentId, clients] of this.connections) {
       for (const reply of clients) {
         this.unsubscribe(agentId, reply);

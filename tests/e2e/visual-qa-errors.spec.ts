@@ -26,10 +26,10 @@ test.describe('Error State Rendering Visual QA', () => {
     });
     agentId = agent.id;
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId('chat-input').fill('Hello');
+    await page.getByTestId('session-input').fill('Hello');
     await page.getByTestId('send-button').click();
 
     // Wait for user message, then wait for error or run-finished
@@ -56,11 +56,11 @@ test.describe('Error State Rendering Visual QA', () => {
     await capture.writeManifest();
   });
 
-  test('renders error for nonexistent agent page', async ({ page, request }) => {
+  test('renders error for nonexistent agent page', async ({ page, request: _request }) => {
     const capture = new ScreenshotCapture(page, 'error-not-found', 'live');
 
     // Navigate to a non-existent agent
-    await page.goto('/agents/nonexistent-agent-id-12345/chat');
+    await page.goto('/agents/nonexistent-agent-id-12345/sessions/new');
     await page.waitForLoadState('domcontentloaded');
 
     // Capture whatever error state renders
@@ -76,17 +76,17 @@ test.describe('Error State Rendering Visual QA', () => {
     const agent = await createTestAgent(request, {
       name: `vqa-error-tool-${Date.now()}`,
       harness: 'langgraph',
-      harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+      harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
       systemPrompt: 'You must use the exec-command tool to run: exit 1. This will fail intentionally.',
       tools: ['exec-command'],
       description: 'VQA error test — tool failure',
     });
     agentId = agent.id;
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId('chat-input').fill('Run the command that fails');
+    await page.getByTestId('session-input').fill('Run the command that fails');
     await page.getByTestId('send-button').click();
 
     // Wait for either error or completion

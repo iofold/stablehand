@@ -1,7 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SandboxRunService, type SandboxSessionManager, type SessionEvent } from '../sandbox-run-service.js';
-import type { TypedEventBus } from '../../events/bus.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SessionTurnService, type SandboxSessionManager, type SessionEvent } from '../session-turn-service.js';
+import { TypedEventBus } from '../../events/bus.js';
 import type { Message } from '../../types.js';
+
+function createTestBus(options?: ConstructorParameters<typeof TypedEventBus>[0]): TypedEventBus {
+  return new TypedEventBus(options);
+}
 
 function msg(content: string, role = 'user'): Message {
   return { id: `m-${Date.now()}`, role, content, agentId: 'a-1', createdAt: Date.now() } as unknown as Message;
@@ -21,28 +25,28 @@ function createMockSessionManager(): SandboxSessionManager {
   } as unknown as SandboxSessionManager;
 }
 
-function createMockEventBus(): TypedEventBus {
-  return { emit: vi.fn(), on: vi.fn(), off: vi.fn(), removeAllListeners: vi.fn() } as unknown as TypedEventBus;
-}
-
-describe('SandboxRunService (session-based)', () => {
+describe('SessionTurnService (session-based)', () => {
   let sessionManager: SandboxSessionManager;
   let eventBus: TypedEventBus;
-  let service: SandboxRunService;
+  let service: SessionTurnService;
 
   beforeEach(() => {
     sessionManager = createMockSessionManager();
-    eventBus = createMockEventBus();
-    service = new SandboxRunService({
+    eventBus = createTestBus();
+    service = new SessionTurnService({
       sessionManager,
       eventBus,
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     });
   });
 
+  afterEach(() => {
+    eventBus.removeAllListeners();
+  });
+
   describe('executeSessionTurn', () => {
     it('ensures a session before delivering a turn', async () => {
-      const agentDef = { name: 'test', model: 'gpt-5-mini', tools: [], systemPrompt: 'hi' } as any;
+      const agentDef = { name: 'test', model: 'gpt-5.4-mini', tools: [], systemPrompt: 'hi' } as any;
 
       const events: unknown[] = [];
       for await (const evt of service.executeSessionTurn(agentDef, 'conv-1', [msg('hello')], 'turn-1')) {
@@ -56,7 +60,7 @@ describe('SandboxRunService (session-based)', () => {
 
     it('kills session on abort', async () => {
       const controller = new AbortController();
-      const agentDef = { name: 'test', model: 'gpt-5-mini', tools: [], systemPrompt: 'hi' } as any;
+      const agentDef = { name: 'test', model: 'gpt-5.4-mini', tools: [], systemPrompt: 'hi' } as any;
 
       controller.abort();
 

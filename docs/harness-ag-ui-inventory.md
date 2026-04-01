@@ -33,7 +33,7 @@ harnessRegistry.register(new PIAgentHarness());
 ```typescript
 {
   provider: 'openai' | 'anthropic' | 'google' (default: 'openai')
-  model: string (e.g., 'gpt-5-mini', 'claude-sonnet-4-6')
+  model: string (e.g., 'gpt-5.4-mini', 'claude-sonnet-4-6')
   apiKeyRef?: string (e.g., "$secret:OPENAI_API_KEY")
   baseUrl?: string (custom endpoint)
   temperature?: number (0-2)
@@ -76,7 +76,7 @@ harnessRegistry.register(new PIAgentHarness());
 harness: langgraph
 harnessConfig:
   provider: openai
-  model: gpt-5-mini
+  model: gpt-5.4-mini
   apiKeyRef: "$secret:OPENAI_API_KEY"
 tools:
   - ref: calculator
@@ -162,7 +162,7 @@ nativeTools:
 ```typescript
 {
   provider: 'openai' | 'anthropic' | 'google' (default: 'openai')
-  model: string (e.g., 'gpt-5-mini')
+  model: string (e.g., 'gpt-5.4-mini')
   apiKeyRef?: string (e.g., "$secret:OPENAI_API_KEY")
   baseUrl?: string (custom endpoint)
 }
@@ -201,7 +201,7 @@ nativeTools:
 harness: pi-agent
 harnessConfig:
   provider: openai
-  model: gpt-5-mini
+  model: gpt-5.4-mini
   apiKeyRef: "$secret:OPENAI_API_KEY"
 tools:
   - ref: emit-event

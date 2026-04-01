@@ -11,7 +11,7 @@ import type { AppContainer } from '../../packages/ctxmill/src/config/container.j
 const VALID_AGENT = {
   name: 'test-agent',
   harness: 'langgraph',
-  harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+  harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
   systemPrompt: 'You are a test agent.',
   tools: ['tool-a', 'tool-b'],
 };
@@ -37,10 +37,10 @@ describe('Agent CRUD & related endpoints', () => {
 
     app = await createServer({
       db: container.db,
-      agentRunService: container.agentRunService,
-      runRegistry: container.runRegistry,
+      agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
       harnessRegistry: container.harnessRegistry,
+      sessionManager: container.sessionManager,
       dataDir,
     });
 
@@ -49,6 +49,7 @@ describe('Agent CRUD & related endpoints', () => {
 
   afterAll(async () => {
     await app.close();
+    await container.close();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -61,6 +62,47 @@ describe('Agent CRUD & related endpoints', () => {
     return res;
   }
 
+  async function createActiveSession(agentId: string, taskDescription: string, mode: 'interactive' | 'background' = 'background') {
+    const agent = await container.db.getAgent(agentId);
+    if (!agent) {
+      throw new Error(`Agent ${agentId} not found`);
+    }
+
+    const conversation = await container.db.createConversation(agentId);
+    const sandboxSession = await container.db.createSandboxSession({
+      conversationId: conversation.id,
+      agentId,
+      harnessName: agent.harness,
+      status: 'ACTIVE',
+    });
+    const session = await container.db.createTurn({
+      agentId,
+      conversationId: conversation.id,
+      mode,
+      taskDescription,
+      sessionId: sandboxSession.id,
+    });
+    container.sessionManager.onSessionReconnected(conversation.id, {
+      sessionId: sandboxSession.id,
+      conversationId: conversation.id,
+      agentId,
+      containerName: 'test-container',
+      containerId: 'test-container-id',
+      status: 'ACTIVE',
+      harnessName: agent.harness,
+    });
+    container.sessionManager.startTurn(
+      sandboxSession.id,
+      session.id,
+      agentId,
+      conversation.id,
+      mode,
+      taskDescription,
+    );
+
+    return { session, conversation };
+  }
+
   // ── POST /api/agents ───────────────────────────────────────
 
   describe('POST /api/agents', () => {
@@ -68,7 +110,7 @@ describe('Agent CRUD & related endpoints', () => {
       const res = await createAgent({ name: 'create-valid' });
       expect(res.statusCode).toBe(201);
       const body = res.json();
-      expect(body.id).toBeDefined();
+      expect(body.id).toEqual(expect.any(String));
       expect(body.name).toBe('create-valid');
       expect(body.harness).toBe(VALID_AGENT.harness);
       expect(body.harnessConfig).toEqual(VALID_AGENT.harnessConfig);
@@ -135,7 +177,7 @@ describe('Agent CRUD & related endpoints', () => {
     it('rejects invalid harnessConfig for the selected harness', async () => {
       const res = await createAgent({
         name: 'invalid-harness-config',
-        harnessConfig: { provider: 'invalid', model: 'gpt-5-mini' },
+        harnessConfig: { provider: 'invalid', model: 'gpt-5.4-mini' },
       });
 
       expect(res.statusCode).toBe(400);
@@ -150,7 +192,7 @@ describe('Agent CRUD & related endpoints', () => {
         url: '/api/agents',
         payload: {
           ...VALID_AGENT,
-          model: 'gpt-5-mini',
+          model: 'gpt-5.4-mini',
         },
       });
 
@@ -292,7 +334,7 @@ describe('Agent CRUD & related endpoints', () => {
       expect(Array.isArray(body)).toBe(true);
 
       const agent = body.find((entry: Record<string, unknown>) => entry.name === 'list-agent');
-      expect(agent).toBeDefined();
+      expect(agent).toEqual(expect.objectContaining({ name: 'list-agent' }));
       expect(agent?.harnessConfig).toEqual(VALID_AGENT.harnessConfig);
       expect(agent).not.toHaveProperty('model');
       expect(agent).not.toHaveProperty('modelConfig');
@@ -361,9 +403,9 @@ describe('Agent CRUD & related endpoints', () => {
     });
   });
 
-  // ── GET /api/agents/:id/runs ───────────────────────────────
+  // ── GET /api/agents/:id/sessions ───────────────────────────
 
-  describe('GET /api/agents/:id/runs', () => {
+  describe('GET /api/agents/:id/sessions', () => {
     let agentId: string;
 
     beforeAll(async () => {
@@ -374,32 +416,35 @@ describe('Agent CRUD & related endpoints', () => {
     it('returns empty for fresh agent', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/runs`,
+        url: `/api/agents/${agentId}/sessions`,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual([]);
+      expect(res.json()).toEqual({ sessions: [] });
     });
 
     it('lists runs after creating one', async () => {
       const conv = await container.db.createConversation(agentId);
-      const run = await container.runRegistry.startRun(agentId, conv.id, 'background', 'test');
+      const run = await container.db.createTurn({
+        agentId,
+        conversationId: conv.id,
+        mode: 'background',
+        taskDescription: 'test',
+      });
 
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/runs`,
+        url: `/api/agents/${agentId}/sessions`,
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.length).toBeGreaterThanOrEqual(1);
-      expect(body.some((r: any) => r.id === run.id)).toBe(true);
-
-      await container.runRegistry.completeRun(run.id);
+      expect(body.sessions.length).toBeGreaterThanOrEqual(1);
+      expect(body.sessions.some((r: any) => r.id === run.id)).toBe(true);
     });
   });
 
-  // ── GET /api/agents/:id/runs/:runId ────────────────────────
+  // ── GET /api/agents/:id/sessions/:sessionId ─────────────────
 
-  describe('GET /api/agents/:id/runs/:runId', () => {
+  describe('GET /api/agents/:id/sessions/:sessionId', () => {
     let agentId: string;
     let runId: string;
 
@@ -407,56 +452,60 @@ describe('Agent CRUD & related endpoints', () => {
       const res = await createAgent({ name: 'run-detail-agent' });
       agentId = res.json().id;
       const conv = await container.db.createConversation(agentId);
-      const run = await container.runRegistry.startRun(agentId, conv.id, 'background', 'detail test');
+      const run = await container.db.createTurn({
+        agentId,
+        conversationId: conv.id,
+        mode: 'background',
+        taskDescription: 'detail test',
+      });
       runId = run.id;
     });
 
     it('returns run with messages array', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/runs/${runId}`,
+        url: `/api/agents/${agentId}/sessions/${runId}`,
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.run).toBeDefined();
-      expect(body.run.id).toBe(runId);
+      expect(body.session).toEqual(expect.objectContaining({ id: runId }));
+      expect(body.session.id).toBe(runId);
       expect(Array.isArray(body.messages)).toBe(true);
     });
 
     it('returns 404 for non-existent runId', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/runs/nonexistent-run`,
+        url: `/api/agents/${agentId}/sessions/nonexistent-run`,
       });
       expect(res.statusCode).toBe(404);
     });
   });
 
-  // ── POST /api/agents/:id/runs/:runId/cancel ────────────────
+  // ── POST /api/agents/:id/sessions/:runId/cancel ────────────────
 
-  describe('POST /api/agents/:id/runs/:runId/cancel', () => {
+  describe('POST /api/agents/:id/sessions/:runId/cancel', () => {
     it('cancels existing run', async () => {
       const created = await createAgent({ name: 'cancel-agent' });
       const agentId = created.json().id;
-      const conv = await container.db.createConversation(agentId);
-      const run = await container.runRegistry.startRun(agentId, conv.id, 'background', 'cancel me');
+      const { session } = await createActiveSession(agentId, 'cancel me');
 
       const res = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentId}/runs/${run.id}/cancel`,
+        url: `/api/agents/${agentId}/sessions/${session.id}/cancel`,
       });
       expect(res.statusCode).toBe(200);
       expect(res.json().cancelled).toBe(true);
     });
   });
 
-  // ── GET /api/runs ──────────────────────────────────────────
+  // ── GET /api/sessions ──────────────────────────────────────────
 
-  describe('GET /api/runs', () => {
+  describe('GET /api/sessions', () => {
     it('returns active runs list', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: '/api/runs',
+        url: '/api/sessions',
       });
       expect(res.statusCode).toBe(200);
       expect(Array.isArray(res.json())).toBe(true);
@@ -476,7 +525,7 @@ describe('Agent CRUD & related endpoints', () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.versions).toBeDefined();
+      expect(body).toEqual(expect.objectContaining({ versions: expect.any(Array) }));
       expect(Array.isArray(body.versions)).toBe(true);
     });
   });
@@ -491,9 +540,7 @@ describe('Agent CRUD & related endpoints', () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.llm).toBeDefined();
-      expect(body.system).toBeDefined();
-      expect(body.agentDefaults).toBeDefined();
+      expect(body).toEqual(expect.objectContaining({ llm: expect.any(Object), system: expect.any(Object), agentDefaults: expect.any(Object) }));
     });
   });
 

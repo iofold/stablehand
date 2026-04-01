@@ -12,7 +12,7 @@ spec:
   harness: langgraph
   harnessConfig:
     provider: openai
-    model: gpt-5-mini
+    model: gpt-5.4-mini
     apiKeyRef: "$secret:OPENAI_API_KEY"
   instructions: |
     You are a visual QA test agent for HITL (Human-in-the-Loop) testing. When asked to "execute a trade" or "run the HITL test", you MUST:

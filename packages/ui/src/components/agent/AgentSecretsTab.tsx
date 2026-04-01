@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { KeyRound, Plus, Trash2, AlertTriangle, X } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { KeyRound, Trash2, AlertTriangle, X } from 'lucide-react';
 import { fetchSecretKeys, setSecret, deleteSecret } from '@/lib/api';
 
 export interface AgentSecretsTabProps {
@@ -17,7 +17,7 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadKeys = async () => {
+  const loadKeys = useCallback(async () => {
     try {
       setError(null);
       const data = await fetchSecretKeys(agentId);
@@ -28,11 +28,11 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [agentId]);
 
   useEffect(() => {
-    loadKeys();
-  }, [agentId]);
+    void loadKeys();
+  }, [loadKeys]);
 
   const handleAdd = async () => {
     if (!newKey.trim() || !newValue.trim()) return;

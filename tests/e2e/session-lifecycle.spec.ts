@@ -8,7 +8,7 @@ import {
 
 test.describe('Session lifecycle', () => {
   let agentId = '';
-  let runId = '';
+  let sessionId = '';
 
   test.beforeAll(async ({ request }) => {
     const agent = await createTestAgent(request, {
@@ -22,8 +22,8 @@ test.describe('Session lifecycle', () => {
       agentId,
       'Generate a short report and finish cleanly for session UI testing.',
     );
-    runId = run.runId;
-    await waitForRunStatus(request, agentId, runId, ['completed', 'error']);
+    sessionId = run.sessionId;
+    await waitForRunStatus(request, agentId, sessionId, ['completed', 'error']);
   });
 
   test.afterAll(async ({ request }) => {
@@ -41,7 +41,7 @@ test.describe('Session lifecycle', () => {
     await expect(runsHistory).toBeVisible();
 
     const runRow = runsHistory.locator('tbody tr').filter({
-      has: page.getByText(runId.slice(0, 8), { exact: true }),
+      has: page.getByText(sessionId.slice(0, 8), { exact: true }),
     });
     await expect(runRow.first()).toBeVisible();
     await runRow.first().click();
@@ -56,7 +56,7 @@ test.describe('Session lifecycle', () => {
   });
 
   test('session diff endpoint returns valid response', async ({ request }) => {
-    const diffRes = await request.get(`/api/agents/${agentId}/runs/${runId}/diff`);
+    const diffRes = await request.get(`/api/agents/${agentId}/sessions/${sessionId}/diff`);
     expect(diffRes.ok()).toBeTruthy();
     const body = await diffRes.json();
     expect(body).toHaveProperty('changes');

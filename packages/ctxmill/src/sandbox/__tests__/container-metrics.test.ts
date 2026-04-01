@@ -71,17 +71,17 @@ describe('ContainerManager — metrics', () => {
 
   it('tracks create/remove lifecycle with per-harness breakdown and peak', async () => {
     const info1 = await manager.createContainer({
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       harnessName: 'langgraph',
     });
     await manager.createContainer({
-      runId: 'run-2',
+      sessionId: 'run-2',
       agentId: 'agent-2',
       harnessName: 'claude-agents',
     });
     await manager.createContainer({
-      runId: 'run-3',
+      sessionId: 'run-3',
       agentId: 'agent-3',
       harnessName: 'langgraph',
     });
@@ -103,7 +103,7 @@ describe('ContainerManager — metrics', () => {
 
   it('handles 404 (already removed) gracefully during removal', async () => {
     const info = await manager.createContainer({
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       harnessName: 'langgraph',
     });
@@ -122,7 +122,7 @@ describe('ContainerManager — metrics', () => {
 
   it('computes averageLifetimeMs after container completion', async () => {
     const info = await manager.createContainer({
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       harnessName: 'langgraph',
     });
@@ -136,7 +136,7 @@ describe('ContainerManager — metrics', () => {
   it('returns snapshot isolation — getMetrics() is not a live reference', async () => {
     const m1 = manager.getMetrics();
     await manager.createContainer({
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       harnessName: 'langgraph',
     });

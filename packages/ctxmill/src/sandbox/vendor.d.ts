@@ -1,4 +1,9 @@
 declare module 'dockerode' {
+  interface FilesystemChange {
+    Path: string;
+    Kind: 0 | 1 | 2;
+  }
+
   interface ContainerInfo {
     Id: string;
     Names: string[];
@@ -13,6 +18,16 @@ declare module 'dockerode' {
     [key: string]: unknown;
   }
 
+  interface ExecInspectInfo {
+    ExitCode: number | null;
+    [key: string]: unknown;
+  }
+
+  interface Exec {
+    start(opts?: Record<string, unknown>): Promise<NodeJS.ReadWriteStream>;
+    inspect(): Promise<ExecInspectInfo>;
+  }
+
   interface Container {
     id: string;
     start(): Promise<void>;
@@ -25,8 +40,17 @@ declare module 'dockerode' {
     logs(opts?: Record<string, unknown>): Promise<NodeJS.ReadableStream>;
     putArchive(stream: NodeJS.ReadableStream | Buffer, opts: { path: string }): Promise<void>;
     getArchive(opts: { path: string }): Promise<NodeJS.ReadableStream>;
-    exec(opts: Record<string, unknown>): Promise<{ start(opts?: Record<string, unknown>): Promise<{ output: NodeJS.ReadableStream }> }>;
+    changes(): Promise<FilesystemChange[]>;
+    exec(opts: Record<string, unknown>): Promise<Exec>;
     wait(): Promise<{ StatusCode: number }>;
+  }
+
+  interface Modem {
+    demuxStream(
+      stream: NodeJS.ReadableStream,
+      stdout: NodeJS.WritableStream,
+      stderr: NodeJS.WritableStream,
+    ): void;
   }
 
   interface NetworkInfo {
@@ -50,10 +74,11 @@ declare module 'dockerode' {
     listNetworks(opts?: Record<string, unknown>): Promise<NetworkInfo[]>;
     createNetwork(opts: Record<string, unknown>): Promise<Network>;
     ping(): Promise<string>;
+    modem: Modem;
   }
 
   namespace Dockerode {
-    export { ContainerInfo, Container, ContainerInspectInfo, NetworkInfo, Network };
+    export { ContainerInfo, Container, ContainerInspectInfo, Exec, ExecInspectInfo, FilesystemChange, Modem, NetworkInfo, Network };
   }
 
   export = Dockerode;

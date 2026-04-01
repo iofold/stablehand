@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
 import { builtinTools, builtinToolNames } from '../../packages/ctxmill/src/tool/builtin/index.js';
+import { createCtxmillGuideTool } from '../../packages/ctxmill/src/tool/builtin/ctxmill-guide.js';
 
 describe('Builtin tool registration', () => {
   it('resolveToolsForAgent includes emit-event even when agent does not declare it', () => {
@@ -28,6 +29,7 @@ describe('Builtin tool registration', () => {
     for (const tool of builtinTools) {
       toolExecutor.register(tool);
     }
+    toolExecutor.register(createCtxmillGuideTool({ listTools: () => toolExecutor.list() }));
 
     const names = toolExecutor.list().map((t) => t.name);
     for (const name of builtinToolNames) {

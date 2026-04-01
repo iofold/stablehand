@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ShieldCheck,
   Sparkles,
@@ -41,6 +41,18 @@ function sourceBadgeClass(source?: string): string {
   }
 }
 
+function locationBadgeClass(location?: string): string {
+  switch (location) {
+    case 'orchestrator':
+      return 'bg-blue-500/10 border-blue-500/20 text-blue-400';
+    case 'daemon':
+      return 'bg-purple-500/10 border-purple-500/20 text-purple-400';
+    case 'sandbox':
+    default:
+      return 'bg-surface-700/30 border-surface-600/30 text-surface-400';
+  }
+}
+
 function normalizeLoadedSkill(skill: LoadedSkill): LoadedSkill {
   return {
     ...skill,
@@ -70,8 +82,9 @@ export function AgentToolsTab({ tools = [], agentId, nativeTools }: AgentToolsTa
   const [editInstructions, setEditInstructions] = useState('');
   const [savingSkill, setSavingSkill] = useState(false);
 
-  // Expand state for instructions
+  // Expand state for instructions and tool descriptions
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
+  const [expandedTool, setExpandedTool] = useState<string | null>(null);
 
   // Delete confirmation state
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -185,6 +198,32 @@ export function AgentToolsTab({ tools = [], agentId, nativeTools }: AgentToolsTa
     setExpandedSkill(expandedSkill === name ? null : name);
   };
 
+  const toggleExpandTool = (name: string) => {
+    setExpandedTool(expandedTool === name ? null : name);
+  };
+
+  // Build a single deduplicated tool list: union of declared tools + builtins
+  const allToolEntries = useMemo(() => {
+    const seen = new Set<string>();
+    const entries: { name: string; catalog?: CatalogTool; declared: boolean }[] = [];
+
+    for (const name of tools) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        entries.push({ name, catalog: catalogTools.get(name), declared: true });
+      }
+    }
+    for (const [name, cat] of catalogTools) {
+      if (cat.builtin && !seen.has(name)) {
+        seen.add(name);
+        entries.push({ name, catalog: cat, declared: false });
+      }
+    }
+    return entries;
+  }, [tools, catalogTools]);
+
+  const hasNoTools = allToolEntries.length === 0;
+
   return (
     <div data-testid="tools-explorer" className="space-y-8">
       {nativeTools && (nativeTools.allowlist?.length || nativeTools.blocklist?.length) ? (
@@ -205,7 +244,7 @@ export function AgentToolsTab({ tools = [], agentId, nativeTools }: AgentToolsTa
       ) : null}
       {/* Tools section */}
       <div className="space-y-4">
-      {tools.length === 0 ? (
+      {hasNoTools ? (
         <div className="text-center py-16">
           <p className="text-surface-400 font-medium">No tools configured</p>
           <p className="text-surface-400 text-sm mt-1">Configure tools in the agent definition to grant it capabilities.</p>
@@ -216,34 +255,61 @@ export function AgentToolsTab({ tools = [], agentId, nativeTools }: AgentToolsTa
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {tools.map((tool) => {
-            const catalogEntry = catalogTools.get(tool);
-            return (
-              <div
-                key={tool}
-                data-testid="tool-detail-card"
-                className="border border-surface-700 rounded-lg bg-surface-800 px-4 py-3 transition-colors hover:border-surface-600 flex flex-col gap-2"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <h4 className="font-mono text-sm font-bold text-surface-200 break-all">{tool}</h4>
-                  <span className={`shrink-0 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${sourceBadgeClass(catalogEntry?.source)}`}>
-                    {catalogEntry?.source || 'unknown'}
+          {allToolEntries.map(({ name, catalog, declared }) => (
+            <div
+              key={name}
+              data-testid="tool-detail-card"
+              className="border border-surface-700 rounded-lg bg-surface-800 px-4 py-3 transition-colors hover:border-surface-600 flex flex-col gap-2"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <h4 className="font-mono text-sm font-bold text-surface-200 break-all">{name}</h4>
+                <div className="flex flex-wrap gap-1 justify-end shrink-0">
+                  {catalog?.builtin && (
+                    <span className="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider bg-sky-500/10 border-sky-500/20 text-sky-400">
+                      builtin
+                    </span>
+                  )}
+                  {catalog?.location && (
+                    <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${locationBadgeClass(catalog.location)}`}>
+                      {catalog.location}
+                    </span>
+                  )}
+                  <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${sourceBadgeClass(catalog?.source)}`}>
+                    {catalog?.source || 'unknown'}
                   </span>
+                  {catalog?.requiresApproval && (
+                    <span className="inline-flex items-center gap-1 rounded-md border border-orange-500/20 bg-orange-500/10 px-2 py-0.5 text-[10px] font-medium text-orange-400">
+                      <ShieldCheck className="h-3 w-3" /> approval
+                    </span>
+                  )}
                 </div>
-                {catalogEntry?.description && (
-                  <p className="text-xs text-surface-400 line-clamp-2" title={catalogEntry.description}>
-                    {catalogEntry.description}
-                  </p>
-                )}
-                {isHITL(tool) && (
-                  <div className="mt-1 flex items-center gap-1.5 text-[11px] text-amber-300">
-                    <ShieldCheck className="h-3 w-3" />
-                    <span>Requires approval (HITL)</span>
-                  </div>
-                )}
               </div>
-            );
-          })}
+              {catalog?.description && (
+                <div className="flex flex-col gap-1">
+                  <p className={`text-xs text-surface-400 ${expandedTool === name ? '' : 'line-clamp-2'}`}>
+                    {catalog.description}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => toggleExpandTool(name)}
+                    className="self-start flex items-center gap-1 text-[11px] text-surface-400 hover:text-surface-300 transition-colors mt-1"
+                  >
+                    {expandedTool === name ? (
+                      <ChevronDown className="h-3 w-3" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3" />
+                    )}
+                    {expandedTool === name ? 'Show less' : 'Show more'}
+                  </button>
+                </div>
+              )}
+              {expandedTool === name && catalog?.inputSchema && (
+                <div className="mt-2 rounded-md bg-surface-900/50 border border-surface-700/50 px-3 py-2 text-xs text-surface-300 font-mono whitespace-pre-wrap overflow-x-auto">
+                  {JSON.stringify(catalog.inputSchema, null, 2)}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
       </div>

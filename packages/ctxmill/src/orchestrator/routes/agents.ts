@@ -5,15 +5,14 @@ import { readdir, stat, readFile, writeFile, unlink, mkdir, mkdtemp, rename, rm,
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { SSEManager } from '../sse.js';
 import type { InterruptManager } from '../interrupt.js';
-import type { RunRegistry } from '../run-registry.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { AgentDefinition, AgentResourceLimits } from '../../types.js';
 import type { HarnessRegistry } from '../../harness/types.js';
 import type { LearningPipeline } from '../../learning/types.js';
 import type { KnowledgeStore } from '../../knowledge/types.js';
-import type { AgentRunService } from '../agent-run-service.js';
-import type { SandboxSessionManager } from '../sandbox-run-service.js';
-import type { TypedEventBus } from '../../events/bus.js';
+import type { AgentSessionService } from '../agent-session-service.js';
+import type { SandboxSessionManager } from '../sandbox-session-manager.js';
+import type { EventMap, TypedEventBus } from '../../events/bus.js';
 import { TraceCollector } from '../../learning/trace.js';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared, seedAgentWorkspace } from '../../workspace/ensure.js';
 import { validateAndExtractTarball } from '../../workspace/tar-upload.js';
@@ -196,17 +195,16 @@ export interface AgentRouteOptions {
   db: DatabaseRepository;
   sse: SSEManager;
   interrupts: InterruptManager;
-  runRegistry: RunRegistry;
   harnessRegistry: HarnessRegistry;
   learningPipeline?: LearningPipeline;
   knowledgeStore?: KnowledgeStore;
-  agentRunService: AgentRunService;
+  agentSessionService: AgentSessionService;
   eventBus?: TypedEventBus;
   /** Path to the .ctxmill data directory for agent workspaces. */
   dataDir?: string;
   secretProvider?: SecretProvider;
   toolRegistry?: DefaultToolRegistry;
-  sandboxSessionManager?: SandboxSessionManager;
+  sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
 }
 
@@ -214,8 +212,8 @@ export async function agentRoutes(
   app: FastifyInstance,
   opts: AgentRouteOptions,
 ): Promise<void> {
-  const { db, sse, interrupts, runRegistry, harnessRegistry, learningPipeline, knowledgeStore, agentRunService, eventBus, dataDir, secretProvider, toolRegistry, sandboxSessionManager, settingsService } = opts;
-  const validWebhookEvents = ['run.started', 'run.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'];
+  const { db, sse, interrupts, harnessRegistry, learningPipeline, knowledgeStore, agentSessionService, eventBus, dataDir, secretProvider, toolRegistry, sessionManager, settingsService } = opts;
+  const validWebhookEvents = ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'];
 
   // Pre-handler that loads the agent by :id and attaches it to the request.
   // Routes using this hook can access the agent via `getRequestAgent(request)`.
@@ -251,6 +249,39 @@ export async function agentRoutes(
       harnessConfig: parseStoredHarnessConfig(agent.harnessConfig),
       ...extractManifestFields(agent),
       resourceLimits: agentMeta.resourceLimits ?? null,
+    };
+  }
+
+  function toApiAgentSession(
+    turn: { id: string; agentId: string; conversationId: string | null; sessionId: string | null; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null },
+    sandboxSession?: { status: string; pausedAt?: number | null; pausedReason?: string | null } | null,
+  ) {
+    let status: string;
+    if (turn.error) {
+      status = 'error';
+    } else if (turn.completedAt != null) {
+      status = 'completed';
+    } else if (sandboxSession?.status === 'PAUSED') {
+      status = 'paused';
+    } else if (sandboxSession?.status === 'CHECKPOINTED') {
+      status = 'suspended';
+    } else {
+      status = 'running';
+    }
+
+    return {
+      id: turn.id,
+      agentId: turn.agentId,
+      conversationId: turn.conversationId ?? '',
+      ...(turn.sessionId ? { sandboxSessionId: turn.sessionId } : {}),
+      status,
+      mode: turn.mode || 'interactive',
+      startedAt: turn.startedAt,
+      ...(turn.completedAt != null ? { completedAt: turn.completedAt } : {}),
+      ...(turn.error ? { error: turn.error } : {}),
+      ...(turn.taskDescription ? { taskDescription: turn.taskDescription } : {}),
+      ...(sandboxSession?.pausedAt != null ? { pausedAt: sandboxSession.pausedAt } : {}),
+      ...(sandboxSession?.pausedReason ? { pausedReason: sandboxSession.pausedReason } : {}),
     };
   }
 
@@ -318,32 +349,34 @@ export async function agentRoutes(
       db.getSessionStatusCountsByAgent(),
     ]);
 
-    const defaultSessionCounts = { active: 0, frozen: 0, checkpointed: 0, terminated: 0 };
+    const defaultSessionCounts = { active: 0, paused: 0, checkpointed: 0, terminated: 0 };
 
     const enriched = agentList.map((agent, idx) => {
-      const allSessions = runRegistry.getAllRuns(agent.id);
-      const activeSessions = runRegistry.getActiveRuns(agent.id);
-      const completedSessions = allSessions.filter((r) => r.status === 'completed').length;
-      const failedSessions = allSessions.filter((r) => r.status === 'error').length;
-      const recentSessions = [...allSessions]
-        .sort((a, b) => b.startedAt - a.startedAt)
-        .slice(0, 5);
+      const allRunsPromise = db.getTurnsByAgent(agent.id);
+      const activeRunsPromise = db.getActiveTurnsForAgent(agent.id);
+      return Promise.all([allRunsPromise, activeRunsPromise]).then(([allRuns, activeRuns]) => {
+        const completedRuns = allRuns.filter((r) => r.completedAt !== null && !r.error).length;
+        const failedRuns = allRuns.filter((r) => !!r.error).length;
+        const recentRuns = [...allRuns]
+          .sort((a, b) => b.startedAt - a.startedAt)
+          .slice(0, 5);
 
-      return {
-        ...toAgentResponse(agent),
-        sseClients: sse.getClientCount(agent.id),
-        lastActivity: sse.getLastActivity(agent.id) ?? null,
-        activeSessions: activeSessions.length,
-        totalSessions: allSessions.length,
-        completedSessions,
-        failedSessions,
-        conversationCount: conversationCounts[idx],
-        hasPendingInterrupt: interrupts.hasPendingForAgent(agent.id),
-        sessions: recentSessions,
-        sessionsByStatus: sessionStatusMap.get(agent.id) ?? defaultSessionCounts,
-      };
+        return {
+          ...toAgentResponse(agent),
+          sseClients: sse.getClientCount(agent.id),
+          lastActivity: sse.getLastActivity(agent.id) ?? null,
+          activeSessions: activeRuns.length,
+          totalSessions: conversationCounts[idx],
+          completedSessions: completedRuns,
+          failedSessions: failedRuns,
+          conversationCount: conversationCounts[idx],
+          hasPendingInterrupt: interrupts.hasPendingForAgent(agent.id),
+          sessions: recentRuns.map((turn) => toApiAgentSession(turn)),
+          sessionsByStatus: sessionStatusMap.get(agent.id) ?? defaultSessionCounts,
+        };
+      });
     });
-    return reply.send(enriched);
+    return reply.send(await Promise.all(enriched));
   });
 
   app.post(
@@ -646,12 +679,35 @@ export async function agentRoutes(
       const { id } = request.params;
       const agent = getRequestAgent(request);
 
-      const conversations = await db.getConversationsForAgent(id);
+      const [conversations, allRuns, activeRuns, sandboxSessions] = await Promise.all([
+        db.getConversationsForAgent(id),
+        db.getTurnsByAgent(id),
+        db.getActiveTurnsForAgent(id),
+        db.getSandboxSessionsByAgent(id),
+      ]);
+      const completedRuns = allRuns.filter((session) => session.completedAt !== null && !session.error).length;
+      const failedRuns = allRuns.filter((session) => !!session.error).length;
+      const recentRuns = [...allRuns]
+        .sort((a, b) => b.startedAt - a.startedAt)
+        .slice(0, 5);
+
+      const sessionsByStatus = { active: 0, paused: 0, checkpointed: 0, terminated: 0 };
+      for (const s of sandboxSessions) {
+        const key = s.status.toLowerCase() as keyof typeof sessionsByStatus;
+        if (key in sessionsByStatus) sessionsByStatus[key]++;
+      }
+
       return reply.send({
         ...toAgentResponse(agent),
         conversationCount: conversations.length,
         sseClients: sse.getClientCount(id),
         hasPendingInterrupt: interrupts.hasPendingForAgent(id),
+        activeSessions: activeRuns.length,
+        totalSessions: conversations.length,
+        completedSessions: completedRuns,
+        failedSessions: failedRuns,
+        sessions: recentRuns.map((turn) => toApiAgentSession(turn)),
+        sessionsByStatus,
       });
     },
   );
@@ -679,9 +735,11 @@ export async function agentRoutes(
 
       // Get or create conversation
       let conversationId = body.conversationId;
+      let createdConversation = false;
       if (!conversationId) {
         const conv = await db.createConversation(id);
         conversationId = conv.id;
+        createdConversation = true;
       }
 
       // Create user message
@@ -693,13 +751,26 @@ export async function agentRoutes(
       });
 
       // Create an interactive run in the registry + DB
-      const run = await runRegistry.startRun(id, conversationId, 'interactive');
+      let session: Awaited<ReturnType<DatabaseRepository['createTurn']>>;
+      try {
+        sessionManager?.checkConcurrencyLimit(id);
+        session = await db.createTurn({ agentId: id, conversationId, mode: 'interactive' });
+      } catch (err) {
+        await db.deleteMessage(message.id).catch((deleteErr) => {
+          console.error(`[agents] failed to rollback user message ${message.id}:`, deleteErr);
+        });
+        if (createdConversation) {
+          console.error(`[agents] interactive session start failed after creating conversation ${conversationId}`);
+        }
+        return reply.status(500).send(safeError('Failed to start session', err));
+      }
 
       // Broadcast a user message event via SSE
       sse.broadcast(id, {
         type: 'TEXT_MESSAGE_START',
         timestamp: Date.now(),
         runId: conversationId,
+        conversationId,
         messageId: message.id,
         role: 'user',
       });
@@ -707,6 +778,7 @@ export async function agentRoutes(
         type: 'TEXT_MESSAGE_CONTENT',
         timestamp: Date.now(),
         runId: conversationId,
+        conversationId,
         messageId: message.id,
         content: body.content,
       });
@@ -714,7 +786,19 @@ export async function agentRoutes(
         type: 'TEXT_MESSAGE_END',
         timestamp: Date.now(),
         runId: conversationId,
+        conversationId,
         messageId: message.id,
+      });
+
+      // Immediate streaming indicator — synthetic RUN_STARTED before container creation.
+      // The real RUN_STARTED from turn.started arrives later; the UI handles duplicate
+      // isStreaming=true transitions harmlessly via seenEventIds dedup.
+      sse.broadcast(id, {
+        type: 'RUN_STARTED',
+        runId: conversationId,
+        agentId: id,
+        conversationId,
+        timestamp: Date.now(),
       });
 
       // Spawn the agent run asynchronously — don't block the response.
@@ -726,30 +810,33 @@ export async function agentRoutes(
       const allMessages = await db.getMessages(conversationId);
       const messages = mapMessagesToInternal(allMessages, id);
 
-      // Delegate to AgentRunService (fire-and-forget)
-      void agentRunService.executeRun({
+      void agentSessionService.executeSession({
         agentDef,
         messages,
         agentId: id,
         conversationId,
-        runId: run.id,
+        sessionId: session.id,
+        mode: 'interactive',
         taskDescription: body.content,
-      }).catch((err) => {
-        console.error(`[agents] executeRun failed for agent ${id}, run ${run.id}:`, err);
+      }).catch(async (err) => {
+        console.error(`[agents] executeSession failed for agent ${id}, session ${session.id}:`, err);
+        sse.broadcast(id, { type: 'RUN_ERROR', timestamp: Date.now(), runId: session.id, conversationId, error: String(err) });
+        sse.broadcast(id, { type: 'RUN_FINISHED', timestamp: Date.now(), runId: session.id, conversationId });
+        await db.updateTurn(session.id, { completedAt: Date.now(), error: String(err) }).catch(() => {});
       });
 
       return reply.status(201).send({
         messageId: message.id,
         conversationId,
-        runId: run.id,
+        sessionId: session.id,
       });
     },
   );
 
-  // ── POST /api/agents/:id/run — Start a background agent run ─
+  // ── POST /api/agents/:id/session — Start a background agent session ─
 
   app.post(
-    '/:id/run',
+    '/:id/session',
     { preHandler: [loadAgent] },
     async (
       request: FastifyRequest<{
@@ -767,12 +854,12 @@ export async function agentRoutes(
 
       const agent = getRequestAgent(request);
 
-      // Create a conversation for this background run
+      // Create a conversation for this background session
       const conv = await db.createConversation(id);
       const conversationId = conv.id;
 
-      // Create a run in the registry + DB
-      const run = await runRegistry.startRun(id, conversationId, 'background', body.task);
+      sessionManager?.checkConcurrencyLimit(id);
+      const session = await db.createTurn({ agentId: id, conversationId, mode: 'background', taskDescription: body.task });
 
       // Update agent status to 'running'
       await db.updateAgentStatus(id, 'running');
@@ -781,7 +868,7 @@ export async function agentRoutes(
       sse.broadcast(id, {
         type: 'RUN_STARTED',
         timestamp: Date.now(),
-        runId: run.id,
+        runId: session.id,
         mode: 'background',
         taskDescription: body.task,
       });
@@ -804,92 +891,86 @@ export async function agentRoutes(
       const allMessages = await db.getMessages(conversationId);
       const messages = mapMessagesToInternal(allMessages, id);
 
-      // Delegate to AgentRunService (fire-and-forget)
-      void agentRunService.executeRun({
+      void agentSessionService.executeSession({
         agentDef,
         messages,
         agentId: id,
         conversationId,
-        runId: run.id,
-        taskDescription: body.task ?? 'background run',
-      }).catch((err) => {
-        console.error(`[agents] executeRun failed for agent ${id}, run ${run.id}:`, err);
+        sessionId: session.id,
+        mode: 'background',
+        taskDescription: body.task ?? 'background session',
+      }).catch(async (err) => {
+        console.error(`[agents] executeSession failed for agent ${id}, session ${session.id}:`, err);
+        sse.broadcast(id, { type: 'RUN_ERROR', timestamp: Date.now(), runId: session.id, error: String(err) });
+        sse.broadcast(id, { type: 'RUN_FINISHED', timestamp: Date.now(), runId: session.id });
+        await db.updateTurn(session.id, { completedAt: Date.now(), error: String(err) }).catch(() => {});
       });
 
       return reply.status(201).send({
-        runId: run.id,
+        sessionId: session.id,
         conversationId,
       });
     },
   );
 
   app.post(
-    '/:id/sessions/:runId/cancel',
+    '/:id/sessions/:sessionId/cancel',
     { preHandler: [loadAgent] },
     async (
       request: FastifyRequest<{
-        Params: { id: string; runId: string };
+        Params: { id: string; sessionId: string };
       }>,
       reply: FastifyReply,
     ) => {
-      const { id, runId } = request.params;
+      const { id, sessionId } = request.params;
 
-      const run = runRegistry.getRun(runId);
-      if (!run || run.agentId !== id) {
-        return reply.status(404).send({ error: 'Session not found', runId });
+      const session = await db.getTurn(sessionId);
+
+      if (!session || session.agentId !== id) {
+        return reply.status(404).send({ error: 'Session not found', sessionId });
       }
 
-      const cancelled = await runRegistry.cancelRun(runId);
+      const cancelled = session.sessionId ? sessionManager?.cancelCurrentTurn(session.sessionId) : false;
       if (!cancelled) {
-        return reply.status(404).send({ error: 'Session not found', runId });
+        return reply.status(404).send({ error: 'Session not found', sessionId });
       }
 
       sse.broadcast(id, {
         type: 'CUSTOM',
         subtype: 'run_cancelled',
         timestamp: Date.now(),
-        runId,
+        runId: sessionId,
         agentId: id,
       });
 
-      return reply.send({ cancelled: true, runId });
+      return reply.send({ cancelled: true, sessionId });
     },
   );
 
-  // ── GET /api/agents/:id/runs — List all runs for an agent ─
-
   app.get(
-    '/:id/runs',
+    '/:id/sessions/:sessionId',
     { preHandler: [loadAgent] },
     async (
-      request: FastifyRequest<{ Params: { id: string } }>,
+      request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
       reply: FastifyReply,
     ) => {
-      const { id } = request.params;
+      const { id, sessionId } = request.params;
 
-      const runs = runRegistry.getAllRuns(id);
-      return reply.send(runs);
-    },
-  );
-
-  // ── GET /api/agents/:id/runs/:runId — Get single run with messages ─
-
-  app.get(
-    '/:id/runs/:runId',
-    { preHandler: [loadAgent] },
-    async (
-      request: FastifyRequest<{ Params: { id: string; runId: string } }>,
-      reply: FastifyReply,
-    ) => {
-      const { id, runId } = request.params;
-
-      const run = runRegistry.getRun(runId);
-      if (!run || run.agentId !== id) {
-        return reply.status(404).send({ error: 'Run not found', runId });
+      let session = await db.getTurn(sessionId);
+      if (!session) {
+        const conversation = await db.getConversation(sessionId);
+        if (conversation?.agentId === id) {
+          session = await db.getLatestTurnForConversation(conversation.id);
+        }
       }
 
-      const messages = await db.getMessages(run.conversationId);
-      return reply.send({ run, messages });
+      if (!session || session.agentId !== id) {
+        return reply.status(404).send({ error: 'Session not found', sessionId });
+      }
+
+      const conversationId = session.conversationId;
+      const messages = typeof conversationId === 'string' ? await db.getMessages(conversationId) : [];
+      return reply.send({ session, messages });
     },
   );
 
@@ -917,15 +998,24 @@ export async function agentRoutes(
         `data: ${JSON.stringify({ type: 'CONNECTED', agentId: id, timestamp: Date.now() })}\n\n`,
       );
 
-      const activeRuns = runRegistry.getActiveRuns(id);
-      if (activeRuns.length > 0) {
-        const currentRun = activeRuns[0];
+      // Send state snapshot for each active sandbox session
+      const sandboxSessions = await db.getSandboxSessionsByAgent(id);
+      const activeSessions = sandboxSessions.filter(
+        (s) => s.status === 'ACTIVE' || s.status === 'PAUSED' || s.status === 'RESTORING',
+      );
+
+      for (const session of activeSessions) {
         reply.raw.write(
           `data: ${JSON.stringify({
-            type: 'RUN_STARTED',
-            runId: currentRun.id,
+            type: 'CUSTOM',
+            subtype: 'state_snapshot',
             agentId: id,
-            timestamp: currentRun.startedAt,
+            conversationId: session.conversationId,
+            sessionId: session.id,
+            status: session.status,
+            harnessName: session.harnessName,
+            containerName: session.containerName,
+            timestamp: Date.now(),
           })}\n\n`,
         );
       }
@@ -957,8 +1047,8 @@ export async function agentRoutes(
       // Fast path: return in-memory pending interrupts
       const inMemory = interrupts.getPendingForAgent(id);
       const pending = inMemory.map((entry) => ({
-        id: entry.runId,
-        runId: entry.runId,
+        id: entry.turnId,
+        sessionId: entry.turnId,
         agentId: id,
         toolCallId: entry.info.toolCallId,
         toolName: entry.info.toolName,
@@ -977,7 +1067,7 @@ export async function agentRoutes(
             if (!seenIds.has(row.id)) {
               pending.push({
                 id: row.id,
-                runId: row.runId,
+                sessionId: row.agentSessionId,
                 agentId: row.agentId,
                 toolCallId: row.toolCallId,
                 toolName: row.toolName,
@@ -1003,21 +1093,21 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Body: { action: 'approve' | 'reject' | 'submit'; runId: string; data?: unknown };
+        Body: { action: 'approve' | 'reject' | 'submit'; sessionId: string; data?: unknown };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const body = request.body as { action?: string; runId?: string; data?: unknown } | undefined;
+      const body = request.body as { action?: string; sessionId?: string; data?: unknown } | undefined;
 
       if (
         !body ||
         (body.action !== 'approve' && body.action !== 'reject' && body.action !== 'submit') ||
-        typeof body.runId !== 'string' ||
-        body.runId.trim() === ''
+        typeof body.sessionId !== 'string' ||
+        body.sessionId.trim() === ''
       ) {
         return reply.status(400).send({
-          error: 'action is required and must be "approve", "reject", or "submit", and runId is required',
+          error: 'action is required and must be "approve", "reject", or "submit", and sessionId is required',
         });
       }
 
@@ -1025,7 +1115,7 @@ export async function agentRoutes(
       const resolveAction: 'approve' | 'reject' = body.action === 'submit' ? 'approve' : body.action as 'approve' | 'reject';
 
       // DB-first: check for the pending interrupt in persistent storage
-      const dbInterrupt = await db.getPendingInterrupt(body.runId);
+      const dbInterrupt = await db.getPendingInterrupt(body.sessionId);
 
       if (dbInterrupt && dbInterrupt.agentId === id) {
         // Idempotency: already resolved
@@ -1034,11 +1124,11 @@ export async function agentRoutes(
         }
 
         // Resolve in DB first (durable)
-        await db.resolveInterrupt(body.runId, resolveAction, body.data);
+        await db.resolveInterrupt(body.sessionId, resolveAction, body.data);
       }
 
       // Try in-memory fast path (also covers race where DB write hasn't landed yet)
-      const inMemoryResolved = interrupts.resolve(body.runId, resolveAction, body.data, id);
+      const inMemoryResolved = interrupts.resolve(body.sessionId, resolveAction, body.data, id);
 
       // If neither DB nor in-memory had the interrupt, 404
       if (!dbInterrupt && !inMemoryResolved) {
@@ -1060,8 +1150,8 @@ export async function agentRoutes(
       }
 
       const sessionId = dbInterrupt?.sessionId;
-      if (sessionId && dbInterrupt && sandboxSessionManager?.resumeWithInterruptResolution) {
-        void sandboxSessionManager.resumeWithInterruptResolution(sessionId, dbInterrupt.runId, id).catch((err) => {
+      if (sessionId && dbInterrupt && sessionManager?.resumeWithInterruptResolution) {
+        void sessionManager.resumeWithInterruptResolution(sessionId, dbInterrupt.agentSessionId, id).catch((err) => {
           console.error(`[agents] async resume failed for session ${sessionId}:`, err);
         });
 
@@ -1127,27 +1217,26 @@ export async function agentRoutes(
       // Store the feedback signal in the database
       const feedbackId = randomUUID();
 
-      // Look up the actual runId for this conversation
-      const allRuns = runRegistry.getAllRuns(id);
-      const matchingRun = allRuns
-        .filter((r) => r.conversationId === body.conversationId)
+      const allSessions = await db.getTurnsByAgent(id);
+      const matchingSession = allSessions
+        .filter((session) => session.conversationId === body.conversationId)
         .sort((a, b) => b.startedAt - a.startedAt)[0];
-      const resolvedRunId = matchingRun?.id ?? body.conversationId!;
+      const resolvedTurnId = matchingSession?.id ?? body.conversationId!;
 
       if (eventBus) {
         eventBus.emit('feedback.received', {
           feedbackId,
-          runId: resolvedRunId,
+          turnId: resolvedTurnId,
           agentId: id,
           type: body.type as 'thumbs_up' | 'thumbs_down',
           messageId: body.messageId ?? undefined,
           timestamp: Date.now(),
-        });
+        } as unknown as EventMap['feedback.received']);
       }
 
       const feedback = await db.saveFeedback({
         id: feedbackId,
-        traceId: resolvedRunId,
+        traceId: resolvedTurnId,
         agentId: id,
         source: 'human',
         type: 'thumbs',
@@ -1167,13 +1256,13 @@ export async function agentRoutes(
           const userMsg = messages.find((m) => m.role === 'user');
           const trace = new TraceCollector(
             id,
-            resolvedRunId,
+            resolvedTurnId,
             userMsg?.content ?? 'feedback-triggered',
           ).finalize(body.type === 'thumbs_up' ? 'success' : 'failure');
 
           const feedbackSignal = {
             id: feedbackId,
-            traceId: resolvedRunId,
+            traceId: resolvedTurnId,
             agentId: id,
             source: 'human' as const,
             type: 'thumbs' as const,
@@ -1223,7 +1312,21 @@ export async function agentRoutes(
     },
   );
 
-  // ── GET /api/agents/:id/sessions — Active sessions ──────
+  app.get(
+    '/:id/conversations/summary',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string } }>,
+      reply: FastifyReply,
+    ) => {
+      const { id } = request.params;
+
+      const conversations = await db.getConversationSummaries(id);
+      return reply.send({ conversations });
+    },
+  );
+
+  // ── GET /api/agents/:id/sessions — Session list ─────────
 
   app.get(
     '/:id/sessions',
@@ -1234,8 +1337,33 @@ export async function agentRoutes(
     ) => {
       const { id } = request.params;
 
-      const sessions = await db.getSessionsForAgent(id);
+      const [turns, sandboxSessions] = await Promise.all([
+        db.getTurnsByAgent(id),
+        db.getSandboxSessionsByAgent(id),
+      ]);
+      const sandboxBySessionId = new Map(sandboxSessions.map((s) => [s.id, s]));
+
+      const sessions = turns
+        .sort((a, b) => b.startedAt - a.startedAt)
+        .map((turn) => toApiAgentSession(turn, turn.sessionId ? sandboxBySessionId.get(turn.sessionId) : null));
+
       return reply.send({ sessions });
+    },
+  );
+
+  // ── GET /api/agents/:id/turns — List turn history ────
+
+  app.get(
+    '/:id/turns',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string } }>,
+      reply: FastifyReply,
+    ) => {
+      const { id } = request.params;
+
+      const turns = await db.getTurnsByAgent(id);
+      return reply.send(turns);
     },
   );
 
@@ -1249,7 +1377,7 @@ export async function agentRoutes(
       const agent = getRequestAgent(request);
       const { sessionId } = request.params;
 
-      if (!sandboxSessionManager) {
+      if (!sessionManager) {
         return reply.status(501).send({ error: 'Sandbox session manager not configured' });
       }
 
@@ -1260,7 +1388,7 @@ export async function agentRoutes(
           return reply.status(404).send({ error: 'Session not found', sessionId });
         }
 
-        await sandboxSessionManager.suspendSession(sessionId, 'api_request');
+      await sessionManager.suspendSession(sessionId, 'api_request');
         return reply.status(200).send({ sessionId, status: 'checkpointed' });
       } catch (err) {
         return reply.status(500).send(safeError('Failed to suspend session', err));
@@ -1278,7 +1406,7 @@ export async function agentRoutes(
       const agent = getRequestAgent(request);
       const { sessionId } = request.params;
 
-      if (!sandboxSessionManager) {
+      if (!sessionManager) {
         return reply.status(501).send({ error: 'Sandbox session manager not configured' });
       }
 
@@ -1289,8 +1417,8 @@ export async function agentRoutes(
           return reply.status(404).send({ error: 'Session not found', sessionId });
         }
 
-        await sandboxSessionManager.freezeSession(sessionId);
-        return reply.status(200).send({ sessionId, status: 'frozen' });
+      await sessionManager.pauseSession(sessionId, 'idle');
+        return reply.status(200).send({ sessionId, status: 'paused' });
       } catch (err) {
         return reply.status(500).send(safeError('Failed to freeze session', err));
       }
@@ -1307,7 +1435,7 @@ export async function agentRoutes(
       const agent = getRequestAgent(request);
       const { sessionId } = request.params;
 
-      if (!sandboxSessionManager) {
+      if (!sessionManager) {
         return reply.status(501).send({ error: 'Sandbox session manager not configured' });
       }
 
@@ -1318,7 +1446,7 @@ export async function agentRoutes(
           return reply.status(404).send({ error: 'Session not found', sessionId });
         }
 
-        await sandboxSessionManager.unfreezeSession(sessionId);
+      await sessionManager.resumeSession(sessionId);
         return reply.status(200).send({ sessionId, status: 'active' });
       } catch (err) {
         return reply.status(500).send(safeError('Failed to unfreeze session', err));
@@ -1336,7 +1464,7 @@ export async function agentRoutes(
       const agent = getRequestAgent(request);
       const { sessionId } = request.params;
 
-      if (!sandboxSessionManager) {
+      if (!sessionManager) {
         return reply.status(501).send({ error: 'Sandbox session manager not configured' });
       }
 
@@ -1347,7 +1475,7 @@ export async function agentRoutes(
           return reply.status(404).send({ error: 'Session not found', sessionId });
         }
 
-        await sandboxSessionManager.killSession(sessionId);
+      await sessionManager.killSession(sessionId);
         return reply.status(204).send();
       } catch (err) {
         return reply.status(500).send(safeError('Failed to kill session', err));
@@ -1490,24 +1618,23 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { path?: string; runId?: string };
+        Querystring: { path?: string; sessionId?: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const query = request.query as { path?: string; runId?: string };
+      const query = request.query as { path?: string; sessionId?: string };
 
       const agent = getRequestAgent(request);
 
-      // Validate runId belongs to a real run for this agent
-      if (query.runId) {
-        const run = runRegistry.getRun(query.runId);
+      if (query.sessionId) {
+        const run = await db.getTurn(query.sessionId);
         if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Run not found', runId: query.runId });
+          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
       }
 
-      const baseDir = resolveBaseDir(agent, { runId: query.runId, dataDir });
+      const baseDir = resolveBaseDir(agent, { sessionId: query.sessionId, dataDir } as unknown as Parameters<typeof resolveBaseDir>[1]);
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -1557,12 +1684,12 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { path?: string; runId?: string };
+        Querystring: { path?: string; sessionId?: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const query = request.query as { path?: string; runId?: string };
+      const query = request.query as { path?: string; sessionId?: string };
 
       const agent = getRequestAgent(request);
 
@@ -1570,15 +1697,14 @@ export async function agentRoutes(
         return reply.status(400).send({ error: 'path query parameter is required' });
       }
 
-      // Validate runId belongs to a real run for this agent
-      if (query.runId) {
-        const run = runRegistry.getRun(query.runId);
+      if (query.sessionId) {
+        const run = await db.getTurn(query.sessionId);
         if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Run not found', runId: query.runId });
+          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
       }
 
-      const baseDir = resolveBaseDir(agent, { runId: query.runId, dataDir });
+      const baseDir = resolveBaseDir(agent, { sessionId: query.sessionId, dataDir } as unknown as Parameters<typeof resolveBaseDir>[1]);
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -1626,13 +1752,13 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { runId?: string };
+        Querystring: { sessionId?: string };
         Body: { path: string; content: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const query = request.query as { runId?: string };
+      const query = request.query as { sessionId?: string };
       const body = request.body as { path?: string; content?: string };
 
       const agent = getRequestAgent(request);
@@ -1641,14 +1767,14 @@ export async function agentRoutes(
         return reply.status(400).send({ error: 'path and content are required' });
       }
 
-      if (query.runId) {
-        const run = runRegistry.getRun(query.runId);
+      if (query.sessionId) {
+        const run = await db.getTurn(query.sessionId);
         if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Run not found', runId: query.runId });
+          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
       }
 
-      const baseDir = resolveBaseDir(agent, { runId: query.runId, dataDir });
+      const baseDir = resolveBaseDir(agent, { sessionId: query.sessionId, dataDir } as unknown as Parameters<typeof resolveBaseDir>[1]);
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -1680,13 +1806,13 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { runId?: string };
+        Querystring: { sessionId?: string };
         Body: { path: string; content: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const query = request.query as { runId?: string };
+      const query = request.query as { sessionId?: string };
       const body = request.body as { path?: string; content?: string };
 
       const agent = getRequestAgent(request);
@@ -1695,14 +1821,14 @@ export async function agentRoutes(
         return reply.status(400).send({ error: 'path and content are required' });
       }
 
-      if (query.runId) {
-        const run = runRegistry.getRun(query.runId);
+      if (query.sessionId) {
+        const run = await db.getTurn(query.sessionId);
         if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Run not found', runId: query.runId });
+          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
       }
 
-      const baseDir = resolveBaseDir(agent, { runId: query.runId, dataDir });
+      const baseDir = resolveBaseDir(agent, { sessionId: query.sessionId, dataDir } as unknown as Parameters<typeof resolveBaseDir>[1]);
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -1741,12 +1867,12 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { path?: string; runId?: string };
+        Querystring: { path?: string; sessionId?: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const query = request.query as { path?: string; runId?: string };
+      const query = request.query as { path?: string; sessionId?: string };
 
       const agent = getRequestAgent(request);
 
@@ -1754,14 +1880,14 @@ export async function agentRoutes(
         return reply.status(400).send({ error: 'path query parameter is required' });
       }
 
-      if (query.runId) {
-        const run = runRegistry.getRun(query.runId);
+      if (query.sessionId) {
+        const run = await db.getTurn(query.sessionId);
         if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Run not found', runId: query.runId });
+          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
       }
 
-      const baseDir = resolveBaseDir(agent, { runId: query.runId, dataDir });
+      const baseDir = resolveBaseDir(agent, { sessionId: query.sessionId, dataDir } as unknown as Parameters<typeof resolveBaseDir>[1]);
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -1830,21 +1956,21 @@ export async function agentRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { runId?: string };
+        Querystring: { sessionId?: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const query = request.query as { runId?: string };
+      const query = request.query as { sessionId?: string };
 
       if (!dataDir) {
         return reply.send({ skills: [] });
       }
 
-      // When runId is provided, look in the session's merged skills dir first
+      // When sessionId is provided, look in the session's merged skills dir first
       let skillsDir: string;
-      if (query.runId) {
-        const sessionSkills = resolve(join(dataDir, 'agents', id, 'sessions', query.runId, 'merged', 'skills'));
+      if (query.sessionId) {
+        const sessionSkills = resolve(join(dataDir, 'agents', id, 'sessions', query.sessionId, 'merged', 'skills'));
         skillsDir = existsSync(sessionSkills) ? sessionSkills : resolve(join(dataDir, 'agents', id, 'base', 'skills'));
       } else {
         skillsDir = resolve(join(dataDir, 'agents', id, 'base', 'skills'));
@@ -2051,10 +2177,10 @@ export async function agentRoutes(
             });
           }
 
-          if (sandboxSessionManager) {
+      if (sessionManager) {
             for (const session of agentSessions) {
               try {
-                await sandboxSessionManager.killSession(session.id);
+          await sessionManager.killSession(session.id);
               } catch (err) {
                 console.error(`[agents] failed to kill session ${session.id} during force upload:`, err);
               }
@@ -2205,47 +2331,71 @@ export async function agentRoutes(
     }
     return reply.status(204).send();
   });
+
+  app.get(
+    '/:id/versions',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string } }>,
+      reply: FastifyReply,
+    ) => {
+      const { id } = request.params;
+      const versions = await db.getAgentVersions(id);
+      return reply.send({ versions });
+    },
+  );
 }
 
 export interface SessionsRouteOptions {
-  runRegistry: RunRegistry;
+  db: DatabaseRepository;
+  sessionManager?: SandboxSessionManager;
 }
 
 export async function sessionsRoutes(
   app: FastifyInstance,
   opts: SessionsRouteOptions,
 ): Promise<void> {
-  const { runRegistry } = opts;
+  const { db, sessionManager } = opts;
 
-  app.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const activeSessions = runRegistry.getActiveRuns();
-    return reply.send(activeSessions);
+  app.get('/', async (
+    request: FastifyRequest<{ Querystring: { format?: string } }>,
+    reply: FastifyReply,
+  ) => {
+    const { format } = request.query;
+    if (format === 'sandbox') {
+      const activeSessions = await db.getActiveSandboxSessions();
+      return reply.send(activeSessions);
+    }
+
+    const activeConversations = await db.getActiveConversationSummaries();
+    return reply.send(activeConversations);
   });
 
   app.post('/:id/resume', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     const { id } = request.params;
 
-    const run = runRegistry.getRun(id);
-    if (!run) {
+    const session = await db.getSandboxSession(id);
+    if (!session) {
       return reply.status(404).send({ error: 'Session not found' });
     }
 
-    if (run.status !== 'suspended') {
+    if (session.status !== 'PAUSED') {
       return reply.status(400).send({
-        error: `Session is not suspended (current status: ${run.status})`,
+        error: `Session is not suspended (current status: ${session.status})`,
       });
     }
 
-    const resumed = await runRegistry.resumeRun(id);
-    if (!resumed) {
-      return reply.status(500).send({ error: 'Failed to resume session' });
+    if (!sessionManager) {
+      return reply.status(500).send({ error: 'Session manager not configured' });
     }
 
+    await sessionManager.resumeSession(id);
+    const resumed = await db.getSandboxSession(id);
+
     return reply.send({
-      id: resumed.id,
-      agentId: resumed.agentId,
-      status: resumed.status,
-      resumedAt: resumed.resumedAt,
+      id: resumed?.id ?? id,
+      agentId: resumed?.agentId ?? session.agentId,
+      status: resumed?.status ?? 'ACTIVE',
     });
   });
 }

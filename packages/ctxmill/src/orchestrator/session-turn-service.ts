@@ -1,5 +1,5 @@
 /**
- * SandboxRunService — session-turn executor that delegates to SandboxSessionManager.
+ * SessionTurnService — session-turn executor that delegates to SandboxSessionManager.
  *
  * Flow:
  *  1. ensureSession(conversationId, agentDef) — get or create a persistent session
@@ -12,7 +12,7 @@
 
 import type { MessageCommittedEvent } from '@ctxmill/shared';
 import type { AGUIEvent } from '../events/types.js';
-import type { AGUISessionEvent, MessageCommittedSessionEvent, SessionEvent } from '@ctxmill/sandbox-daemon';
+import type { SessionEvent } from '@ctxmill/sandbox-daemon';
 import type { AgentDefinition, Message } from '../types.js';
 import type { TypedEventBus } from '../events/bus.js';
 
@@ -27,7 +27,7 @@ export interface Logger {
   debug(msg: string, ...args: unknown[]): void;
 }
 
-const TAG = '[SandboxRunService]';
+const TAG = '[SessionTurnService]';
 
 const defaultLogger: Logger = {
   info: (msg, ...args) => console.log(`${TAG} ${msg}`, ...args),
@@ -43,32 +43,32 @@ export interface SandboxSessionManager {
   deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<SessionEvent>;
   killSession(sessionId: string): Promise<void>;
   suspendSession(sessionId: string, reason: string): Promise<unknown>;
+  pauseSession(sessionId: string, reason: 'hitl' | 'idle'): Promise<void>;
+  resumeSession(sessionId: string): Promise<void>;
   freezeSession(sessionId: string): Promise<void>;
   unfreezeSession(sessionId: string): Promise<void>;
-  resumeWithInterruptResolution?(sessionId: string, runId: string, agentId: string): Promise<void>;
+  resumeWithInterruptResolution?(sessionId: string, agentSessionId: string, agentId: string): Promise<void>;
 }
 
 // ── Deps ──────────────────────────────────────────────────────
 
-export interface SandboxRunServiceDeps {
+export interface SessionTurnServiceDeps {
   sessionManager: SandboxSessionManager;
   eventBus: TypedEventBus;
   logger?: Logger;
-  onSessionReady?: (runId: string, sessionId: string) => void;
+  onSessionReady?: (agentSessionId: string, sandboxSessionId: string) => void;
 }
 
-// ── SandboxRunService ────────────────────────────────────────
-
-export class SandboxRunService {
+export class SessionTurnService {
   private readonly logger: Logger;
 
-  constructor(private readonly deps: SandboxRunServiceDeps) {
+  constructor(private readonly deps: SessionTurnServiceDeps) {
     this.logger = deps.logger ?? defaultLogger;
   }
 
   /**
    * Execute one conversation turn inside a persistent sandbox session.
-   * Yields AGUIEvents so SSE broadcasters and AgentRunService can consume them uniformly.
+   * Yields AGUIEvents so SSE broadcasters and AgentSessionService can consume them uniformly.
    */
   async *executeSessionTurn(
     agentDef: AgentDefinition,
@@ -77,10 +77,12 @@ export class SandboxRunService {
     turnId: string,
     signal?: AbortSignal,
     agentId?: string,
+    existingSessionId?: string,
   ): AsyncGenerator<AGUIEvent> {
     const { sessionManager } = this.deps;
 
-    const { sessionId } = await sessionManager.ensureSession(conversationId, agentDef, agentId ?? agentDef.name);
+    const sessionId = existingSessionId
+      ?? (await sessionManager.ensureSession(conversationId, agentDef, agentId ?? agentDef.name)).sessionId;
     this.deps.onSessionReady?.(turnId, sessionId);
     this.logger.debug(`Session ${sessionId} ready for turn ${turnId} (agent=${agentDef.name})`);
 
@@ -127,7 +129,7 @@ export class SandboxRunService {
         const event: MessageCommittedEvent = {
           type: 'MESSAGE_COMMITTED',
           timestamp: Date.now(),
-          // turnId serves as the runId in the session-turn model
+          // turnId serves as the agent session id in the session-turn model
           runId: turnId,
           role: sessionEvent.role,
           content: sessionEvent.content,

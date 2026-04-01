@@ -115,7 +115,7 @@ describe('startBackgroundRun', () => {
   it('calls POST with task and background mode', async () => {
     await startBackgroundRun('a1', 'do stuff');
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/run', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task: 'do stuff', mode: 'background' }),
@@ -124,7 +124,7 @@ describe('startBackgroundRun', () => {
 });
 
 describe('cancelRun', () => {
-  it('calls POST /api/agents/:id/sessions/:runId/cancel', async () => {
+  it('calls POST /api/agents/:id/sessions/:sessionId/cancel', async () => {
     await cancelRun('a1', 'r1');
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/sessions/r1/cancel', {
@@ -250,12 +250,12 @@ describe('listFiles', () => {
     expect(result).toEqual({ entries });
   });
 
-  it('includes runId when provided', async () => {
+  it('includes sessionId when provided', async () => {
     await listFiles('a1', 'data', 'xyz');
 
     const calledUrl = (mockFetch.mock.calls[0] as string[])[0];
     expect(calledUrl).toContain('path=data');
-    expect(calledUrl).toContain('&runId=xyz');
+    expect(calledUrl).toContain('&sessionId=xyz');
   });
 
   it('throws on non-200 response', async () => {
@@ -284,12 +284,12 @@ describe('readFile', () => {
     expect(result).toEqual(fileData);
   });
 
-  it('includes runId when provided', async () => {
+  it('includes sessionId when provided', async () => {
     await readFile('a1', '/file.txt', 'xyz');
 
     const calledUrl = (mockFetch.mock.calls[0] as string[])[0];
     expect(calledUrl).toContain('path=%2Ffile.txt');
-    expect(calledUrl).toContain('&runId=xyz');
+    expect(calledUrl).toContain('&sessionId=xyz');
   });
 
   it('throws on 403 response (blocked file)', async () => {

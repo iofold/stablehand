@@ -10,6 +10,15 @@ export type MCPTransportConfig =
   | { type: 'http'; url: string; headers?: Record<string, string> };
 
 /**
+ * Configuration options for MCPToolProvider.
+ */
+export interface MCPProviderConfig {
+  transport: MCPTransportConfig;
+  /** List of tool names that should be marked as programmatic. */
+  programmaticTools?: string[];
+}
+
+/**
  * Converts a JSON Schema property object into a Zod schema.
  * Handles the common subset used by MCP tool definitions.
  */
@@ -69,11 +78,14 @@ export class MCPToolProvider implements ToolProvider {
   private transport: any = null;
   private cachedTools: ToolDefinition[] | null = null;
 
-  private config: MCPTransportConfig;
+  private transportConfig: MCPTransportConfig;
+  private programmaticToolNames: Set<string>;
 
-  constructor(config: MCPTransportConfig, name?: string) {
-    this.config = config;
-    this.name = name ?? `mcp-${config.type}`;
+  constructor(config: MCPTransportConfig | MCPProviderConfig, name?: string) {
+    const isProviderConfig = 'transport' in config;
+    this.transportConfig = isProviderConfig ? config.transport : config;
+    this.programmaticToolNames = new Set(isProviderConfig ? config.programmaticTools : []);
+    this.name = name ?? `mcp-${this.transportConfig.type}`;
   }
 
   /**
@@ -88,21 +100,21 @@ export class MCPToolProvider implements ToolProvider {
 
     this.client = new Client({ name: 'ctxmill', version: '1.0.0' });
 
-    if (this.config.type === 'stdio') {
+    if (this.transportConfig.type === 'stdio') {
       const { StdioClientTransport } = await import(
         '@modelcontextprotocol/sdk/client/stdio.js'
       );
       this.transport = new StdioClientTransport({
-        command: this.config.command,
-        args: this.config.args,
-        env: this.config.env,
+        command: this.transportConfig.command,
+        args: this.transportConfig.args,
+        env: this.transportConfig.env,
       });
     } else {
       const { StreamableHTTPClientTransport } = await import(
         '@modelcontextprotocol/sdk/client/streamableHttp.js'
       );
       this.transport = new StreamableHTTPClientTransport(
-        new URL(this.config.url),
+        new URL(this.transportConfig.url),
       );
     }
 
@@ -133,6 +145,7 @@ export class MCPToolProvider implements ToolProvider {
           description: mcpTool.description ?? '',
           input: zodInput,
           location: 'orchestrator',
+          programmatic: this.programmaticToolNames.has(mcpTool.name),
           handler: async (input: unknown, _ctx: ToolContext) => {
             return this.execute(mcpTool.name, input as Record<string, unknown>, _ctx);
           },

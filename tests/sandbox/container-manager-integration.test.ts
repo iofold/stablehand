@@ -7,51 +7,12 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
-import type { CreateContainerOptions, ContainerManagerOptions } from '../../packages/ctxmill/src/sandbox/container-manager.js';
-
-// ── Mock factories ──────────────────────────────────────────
-
-function createMockContainer(overrides: Record<string, unknown> = {}) {
-  return {
-    id: overrides.id ?? 'sha256-abc123',
-    start: vi.fn().mockResolvedValue(undefined),
-    stop: vi.fn().mockResolvedValue(undefined),
-    remove: vi.fn().mockResolvedValue(undefined),
-    inspect: vi.fn().mockResolvedValue({
-      State: { Status: 'exited', ExitCode: 0 },
-    }),
-    putArchive: vi.fn().mockResolvedValue(undefined),
-    getArchive: vi.fn().mockResolvedValue(
-      (async function* () {
-        yield Buffer.from('fake-tar-data');
-      })(),
-    ),
-    logs: vi.fn().mockResolvedValue(Buffer.from('line1\nline2\nline3')),
-    ...overrides,
-  };
-}
-
-function createMockNetwork(overrides: Record<string, unknown> = {}) {
-  return {
-    inspect: vi.fn().mockResolvedValue({ Name: 'ctxmill-agents' }),
-    ...overrides,
-  };
-}
-
-function createMockDocker(overrides: Record<string, unknown> = {}) {
-  const mockContainer = createMockContainer();
-
-  const docker = {
-    createContainer: vi.fn().mockResolvedValue(mockContainer),
-    getContainer: vi.fn().mockReturnValue(mockContainer),
-    listContainers: vi.fn().mockResolvedValue([]),
-    getNetwork: vi.fn().mockReturnValue(createMockNetwork()),
-    createNetwork: vi.fn().mockResolvedValue({}),
-    _mockContainer: mockContainer,
-    ...overrides,
-  };
-  return docker;
-}
+import type { CreateContainerOptions } from '../../packages/ctxmill/src/sandbox/container-manager.js';
+import {
+  createMockContainer,
+  createMockDocker,
+  createMockNetwork,
+} from '../utils/event-bus-test-helpers.js';
 
 function defaultCreateOpts(): CreateContainerOptions {
   return {
@@ -68,7 +29,17 @@ describe('ContainerManager Integration Tests', () => {
   let manager: ContainerManager;
 
   beforeEach(() => {
-    docker = createMockDocker();
+    const mockContainer = createMockContainer({
+      inspect: vi.fn().mockResolvedValue({
+        State: { Status: 'exited', ExitCode: 0 },
+      }),
+    });
+    docker = createMockDocker({
+      createContainer: vi.fn().mockResolvedValue(mockContainer),
+      getContainer: vi.fn().mockReturnValue(mockContainer),
+      getNetwork: vi.fn().mockReturnValue(createMockNetwork()),
+      _mockContainer: mockContainer,
+    });
     manager = new ContainerManager(undefined, docker as any);
   });
 
@@ -76,7 +47,7 @@ describe('ContainerManager Integration Tests', () => {
 
   describe('container creation — labels', () => {
     it('should set all required ctxmill labels', async () => {
-      const info = await manager.createContainer({
+      await manager.createContainer({
         ...defaultCreateOpts(),
         timeoutSec: 300,
       });
@@ -240,7 +211,7 @@ describe('ContainerManager Integration Tests', () => {
 
       // Verify putArchive was called (the implementation creates a tar with config.json)
       expect(docker._mockContainer.putArchive).toHaveBeenCalledTimes(1);
-      const [_archive, opts] = docker._mockContainer.putArchive.mock.calls[0];
+      const [, opts] = docker._mockContainer.putArchive.mock.calls[0];
       expect(opts.path).toBe('/run/secrets');
     });
 

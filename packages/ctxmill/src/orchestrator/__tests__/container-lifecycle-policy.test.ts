@@ -211,7 +211,7 @@ describe('ContainerLifecyclePolicy', () => {
       await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
 
       expect(callbacks.onFreeze).toHaveBeenCalledWith('session-1');
-      expect(policy.getState('session-1')).toBe('idle_frozen');
+      expect(policy.getState('session-1')).toBe('idle_paused');
     });
 
     it('after freezePromotionMs calls onCheckpoint callback', async () => {
@@ -243,7 +243,7 @@ describe('ContainerLifecyclePolicy', () => {
       expect(callbacks.onCheckpoint).not.toHaveBeenCalled();
     });
 
-    it('cancelIdleTimeout unpauses if already frozen', async () => {
+    it('cancelIdleTimeout unpauses if already idle-paused', async () => {
       const callbacks = {
         onFreeze: vi.fn().mockResolvedValue(undefined),
         onCheckpoint: vi.fn().mockResolvedValue(undefined),

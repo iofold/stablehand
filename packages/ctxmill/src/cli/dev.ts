@@ -201,7 +201,7 @@ export async function startDev() {
     (ctx) => ({
       agentId: ctx.agentId,
       conversationId: '',
-      instanceId: ctx.runId,
+      instanceId: ctx.sessionId,
       requestId: ctx.requestId,
       workspaceDir: '/workspace',
       knowledge: { query: async () => ({ items: [] }) },
@@ -217,7 +217,7 @@ export async function startDev() {
         container.sseManager.broadcast(ctx.agentId, {
           type: 'TOOL_CALL_START',
           timestamp: Date.now(),
-          runId: ctx.runId,
+          runId: ctx.sessionId,
           toolCallId: ctx.requestId,
           toolName: tool.name,
           requiresApproval: true,
@@ -225,7 +225,7 @@ export async function startDev() {
         });
 
         const resolution = await container.interruptManager.waitForApproval(
-          ctx.runId, ctx.agentId, ctx.requestId, tool.name, args as Record<string, unknown>,
+            ctx.sessionId, ctx.agentId, ctx.requestId, tool.name, args as Record<string, unknown>,
         );
 
         if (resolution.action !== 'approve') {
@@ -241,7 +241,6 @@ export async function startDev() {
     db: container.db,
     port: apiPort,
     host: '0.0.0.0',
-    runRegistry: container.runRegistry,
     learningPipeline: container.learningPipeline,
     knowledgeStore: container.knowledgeStore,
     eventBus: container.eventBus,
@@ -253,18 +252,12 @@ export async function startDev() {
     containerManager: container.containerManager,
     artifactStore: container.artifactStore,
     artifactBucket: process.env.S3_BUCKET || 'ctxmill-artifacts',
-    agentRunService: container.agentRunService,
+    agentSessionService: container.agentSessionService,
     toolRegistry,
     toolDefinitionRegistry: container.toolRegistry,
     toolExecutor: container.toolExecutor,
     settingsService: container.settingsService,
-    sandboxSessionManager: container.sessionManager,
-    onHitlPause: (sessionId: string) => {
-      const record = container.sessionManager.findSessionById(sessionId);
-      if (record) {
-        container.lifecyclePolicy.schedulePause(sessionId, record.containerId);
-      }
-    },
+    sessionManager: container.sessionManager,
   });
   await server.listen({ port: apiPort, host: '0.0.0.0' });
   console.log(`  \x1b[32mAPI:\x1b[0m  http://localhost:${apiPort}`);

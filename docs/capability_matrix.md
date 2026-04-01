@@ -559,7 +559,7 @@ nativeTools:
 ## REFERENCE: Kitchen-Sink Example
 
 ### Agents (3)
-1. **langgraph-analyst** (LangGraph, OpenAI gpt-5-mini)
+1. **langgraph-analyst** (LangGraph, OpenAI gpt-5.4-mini)
    - Tools: calculator, weather, list-directory, search-files, execute-trade, emit-event
    - Emits: analysis.complete
    - Triggers: None (chain starter)
@@ -570,7 +570,7 @@ nativeTools:
    - Emits: report.ready
    - Triggers: analysis.complete → spawn writer
 
-3. **pi-auditor** (PI Agent, OpenAI gpt-5-mini)
+3. **pi-auditor** (PI Agent, OpenAI gpt-5.4-mini)
    - Tools: emit-event
    - Native Tools: read, bash, edit, write
    - Emits: audit.logged

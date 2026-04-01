@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, type KeyboardEvent } from 'react';
-import { X, Wrench } from 'lucide-react';
+import { X, Wrench, Check } from 'lucide-react';
 import { useAgentsStore, type Agent } from '@/stores/agents';
+import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { ToolPickerModal } from './ToolPickerModal';
 
@@ -17,9 +18,9 @@ const HARNESS_OPTIONS = [
 ] as const;
 
 const HARNESS_CONFIG_TEMPLATES: Record<string, object> = {
-  langgraph: { provider: 'openai', model: 'gpt-5-mini', apiKeyRef: '$secret:OPENAI_API_KEY' },
+  langgraph: { provider: 'openai', model: 'gpt-5.4-mini', apiKeyRef: '$secret:OPENAI_API_KEY' },
   'claude-agents': { model: 'claude-sonnet-4-6', apiKeyRef: '$secret:ANTHROPIC_API_KEY' },
-  'pi-agent': { provider: 'openai', model: 'gpt-5-mini', apiKeyRef: '$secret:OPENAI_API_KEY' },
+  'pi-agent': { provider: 'openai', model: 'gpt-5.4-mini', apiKeyRef: '$secret:OPENAI_API_KEY' },
 };
 
 function TagList({
@@ -62,7 +63,7 @@ function TagList({
 }
 
 export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
-  const { createAgent, updateAgent, agents: allAgents } = useAgentsStore();
+  const { createAgent, updateAgent } = useAgentsStore();
 
   const [name, setName] = useState('');
   const [harness, setHarness] = useState<string>(HARNESS_OPTIONS[0]);
@@ -72,6 +73,8 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [tools, setTools] = useState<string[]>([]);
+  const [excludedBuiltins, setExcludedBuiltins] = useState<string[]>([]);
+  const [builtinTools, setBuiltinTools] = useState<CatalogTool[]>([]);
   const [toolPickerOpen, setToolPickerOpen] = useState(false);
   const [nativeToolsMode, setNativeToolsMode] = useState<'none' | 'allowlist' | 'blocklist'>('none');
   const [nativeToolsList, setNativeToolsList] = useState<string[]>([]);
@@ -80,6 +83,19 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   const [saving, setSaving] = useState(false);
 
   const isEditing = Boolean(agent);
+
+  useEffect(() => {
+    if (!open) return;
+    let mounted = true;
+    fetchCatalogTools().then((data) => {
+      if (mounted && Array.isArray(data)) {
+        setBuiltinTools(data.filter(t => t.builtin));
+      }
+    }).catch(err => {
+      console.debug('[AgentFormModal] Failed to load tools:', err);
+    });
+    return () => { mounted = false; };
+  }, [open]);
 
   // Populate form when editing
   useEffect(() => {
@@ -92,6 +108,10 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       setDescription(agent.description ?? '');
       setSystemPrompt(agent.systemPrompt ?? '');
       setTools(agent.tools ?? []);
+      
+      const metaExcluded = agent.metadata?.excludeBuiltinTools;
+      setExcludedBuiltins(Array.isArray(metaExcluded) ? metaExcluded.filter((v: unknown): v is string => typeof v === 'string') : []);
+
       if (agent.nativeTools?.allowlist?.length) {
         setNativeToolsMode('allowlist');
         setNativeToolsList(agent.nativeTools.allowlist);
@@ -109,6 +129,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       setDescription('');
       setSystemPrompt('');
       setTools([]);
+      setExcludedBuiltins([]);
       setNativeToolsMode('none');
       setNativeToolsList([]);
     }
@@ -184,6 +205,11 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         : nativeToolsMode === 'allowlist' ? { allowlist: nativeToolsList }
         : { blocklist: nativeToolsList };
       const metadata = buildMetadata(agent?.metadata, nativeTools);
+      if (excludedBuiltins.length > 0) {
+        metadata.excludeBuiltinTools = excludedBuiltins;
+      } else {
+        delete metadata.excludeBuiltinTools;
+      }
       const payload = {
         name: name.trim(),
         harness,
@@ -302,7 +328,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
               id="agent-harness-config"
               value={harnessConfigText}
               onChange={(e) => setHarnessConfigText(e.target.value)}
-              placeholder={'{\n  "provider": "openai",\n  "model": "gpt-5-mini"\n}'}
+              placeholder={'{\n  "provider": "openai",\n  "model": "gpt-5.4-mini"\n}'}
               rows={5}
               className={cn('input-base mt-1.5 resize-y font-mono', errors.harnessConfig && 'border-red-500/60')}
             />
@@ -344,7 +370,6 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
             )}
           </div>
 
-          {/* Tools */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <div className="text-label">
@@ -356,14 +381,58 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
                 className="flex items-center gap-1.5 text-xs font-medium text-accent-400 hover:text-accent-300 transition-colors bg-accent-500/10 hover:bg-accent-500/20 px-2.5 py-1 rounded-md border border-accent-500/20"
               >
                 <Wrench className="h-3.5 w-3.5" />
-                Select Tools ({tools.length})
+                Select Tools
               </button>
             </div>
-            <TagList
-              items={tools}
-              onRemove={(i) => setTools(tools.filter((_, idx) => idx !== i))}
-              color="brand"
-            />
+            <div className="flex flex-wrap gap-1.5">
+              {tools.filter(t => !builtinTools.some(b => b.name === t)).map((tool) => (
+                <span
+                  key={tool}
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs bg-accent-600/15 text-accent-300 border-accent-500/20"
+                >
+                  {tool}
+                  <button
+                    type="button"
+                    onClick={() => setTools(tools.filter(t => t !== tool))}
+                    className="ml-0.5 hover:text-accent-100 transition-colors"
+                    aria-label={`Remove ${tool}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              {builtinTools.map((tool) => {
+                const isExcluded = excludedBuiltins.includes(tool.name);
+                const isDeclared = tools.includes(tool.name);
+                return (
+                  <button
+                    key={tool.name}
+                    type="button"
+                    onClick={() => {
+                      setExcludedBuiltins((prev) =>
+                        isExcluded
+                          ? prev.filter((t) => t !== tool.name)
+                          : [...prev, tool.name]
+                      );
+                    }}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded-md border transition-colors',
+                      isExcluded
+                        ? 'bg-surface-800/50 text-surface-500 border-surface-700/50 line-through opacity-60'
+                        : 'bg-sky-500/10 text-sky-400 border-sky-500/20 hover:bg-sky-500/20'
+                    )}
+                    title={isExcluded ? 'Click to re-enable' : `Builtin${isDeclared ? ' + declared in manifest' : ''} — click to disable`}
+                  >
+                    {!isExcluded && <Check className="h-3 w-3" />}
+                    {tool.name}
+                    <span className="text-[9px] opacity-60 uppercase">builtin</span>
+                  </button>
+                );
+              })}
+              {tools.length === 0 && builtinTools.length === 0 && (
+                <p className="text-xs text-surface-500">No tools selected</p>
+              )}
+            </div>
           </div>
 
           {/* Native SDK Tools */}
@@ -435,6 +504,8 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         onClose={() => setToolPickerOpen(false)}
         selectedTools={tools}
         onSelectionChange={setTools}
+        excludedBuiltins={excludedBuiltins}
+        onExcludedBuiltinsChange={setExcludedBuiltins}
       />
     </div>
   );
@@ -456,6 +527,7 @@ function extractNonManagedMetadata(
   const next = { ...metadata };
   delete next.skills;
   delete next.nativeTools;
+  delete next.excludeBuiltinTools;
   return next;
 }
 

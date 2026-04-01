@@ -15,9 +15,13 @@
  * sees sub-agent activity as normal tool_call_start/end events in the gRPC stream.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { agentEventToSessionEvent } from '../../packages/ctxmill/src/sandbox/proto-convert.js';
 import { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
+import {
+  createMockContainer,
+  createMockDocker,
+} from '../utils/event-bus-test-helpers.js';
 import type { AgentEvent, AgentHarness } from '../../packages/ctxmill/src/harness/types.js';
 
 type MockHarnessRunConfig = {
@@ -75,7 +79,7 @@ function createMockHarness(name: string, events: AgentEvent[]): MockHarness {
 
 function createTestConfig(overrides?: Partial<MockHarnessRunConfig>): MockHarnessRunConfig {
   return {
-    harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+    harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
     systemPrompt: 'You are a test agent.',
     messages: [
       {
@@ -105,45 +109,6 @@ async function collectEvents(harness: MockHarness, config: MockHarnessRunConfig)
     events.push(event);
   }
   return events;
-}
-
-// ── Mock Docker factory ──────────────────────────────────────────────────────
-
-function createMockContainer(overrides: Record<string, unknown> = {}) {
-  return {
-    id: overrides.id ?? 'sha256-subagent-test',
-    start: vi.fn().mockResolvedValue(undefined),
-    stop: vi.fn().mockResolvedValue(undefined),
-    remove: vi.fn().mockResolvedValue(undefined),
-    inspect: vi.fn().mockResolvedValue({
-      State: { Status: 'running', ExitCode: 0 },
-    }),
-    putArchive: vi.fn().mockResolvedValue(undefined),
-    getArchive: vi.fn().mockResolvedValue(
-      (async function* () {
-        yield Buffer.from('fake-tar-data');
-      })(),
-    ),
-    logs: vi.fn().mockResolvedValue(Buffer.from('subagent test log')),
-    pause: vi.fn().mockResolvedValue(undefined),
-    unpause: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
-  };
-}
-
-function createMockDocker(overrides: Record<string, unknown> = {}) {
-  const mockContainer = createMockContainer();
-  return {
-    createContainer: vi.fn().mockResolvedValue(mockContainer),
-    getContainer: vi.fn().mockReturnValue(mockContainer),
-    listContainers: vi.fn().mockResolvedValue([]),
-    getNetwork: vi.fn().mockReturnValue({
-      inspect: vi.fn().mockResolvedValue({ Name: 'ctxmill-agents' }),
-    }),
-    createNetwork: vi.fn().mockResolvedValue({}),
-    _mockContainer: mockContainer,
-    ...overrides,
-  };
 }
 
 // ── Test suites ──────────────────────────────────────────────────────────────
@@ -239,8 +204,8 @@ describe('Harness-Native Sub-Agents', () => {
         // Every envelope should have the correct metadata
         expect(protoEnvelope.sequence).toBe(BigInt(seq));
         expect(protoEnvelope.runId).toBe(runId);
-        expect(protoEnvelope.timestamp).toBeDefined();
-        expect(protoEnvelope.event).toBeDefined();
+        expect(protoEnvelope.timestamp).toEqual(expect.any(Object));
+        expect(protoEnvelope.event).toEqual(expect.any(Object));
       }
     });
 
@@ -281,7 +246,12 @@ describe('Harness-Native Sub-Agents', () => {
     let manager: ContainerManager;
 
     beforeEach(() => {
-      docker = createMockDocker();
+      const mockContainer = createMockContainer();
+      docker = createMockDocker({
+        createContainer: async () => mockContainer,
+        getContainer: () => mockContainer,
+        _mockContainer: mockContainer,
+      });
       manager = new ContainerManager(undefined, docker as any);
     });
 
@@ -441,7 +411,7 @@ describe('Harness-Native Sub-Agents', () => {
       const toolEnd = events.find(
         (e) => e.type === 'tool_call_end' && (e as any).id === 'tc-sub-err',
       ) as any;
-      expect(toolEnd).toBeDefined();
+      expect(toolEnd).toEqual(expect.objectContaining({ type: 'tool_call_end' }));
       expect(toolEnd.error).toBe('Permission denied in sub-agent sandbox');
     });
   });
@@ -553,12 +523,12 @@ describe('Harness-Native Sub-Agents', () => {
 
       for (const name of supportedNames) {
         const mod = harnessModules[name];
-        expect(mod).toBeDefined();
+        expect(mod).toEqual(expect.any(Object));
         // Each module exports exactly one harness class
         const className = Object.keys(mod).find(
           (k) => k.endsWith('Harness') && typeof mod[k] === 'function',
         );
-        expect(className).toBeDefined();
+        expect(className).toEqual(expect.any(String));
         const instance = new mod[className!]();
         expect(instance.name).toBe(name);
       }
@@ -637,7 +607,6 @@ describe('Harness-Native Sub-Agents', () => {
       );
 
       for (const proto of protos) {
-        expect(proto.timestamp).toBeDefined();
         // Timestamp should have seconds > 0 (not the epoch)
         expect(proto.timestamp!.seconds).toBeGreaterThan(BigInt(0));
       }
@@ -808,7 +777,7 @@ describe('Harness-Native Sub-Agents', () => {
 
       // Timestamps should be non-null and valid
       for (const p of protos) {
-        expect(p.timestamp).toBeDefined();
+        expect(p.timestamp!.seconds).toBeGreaterThan(BigInt(0));
       }
     });
   });
@@ -867,7 +836,7 @@ describe('Harness-Native Sub-Agents', () => {
 
       // Simulate runner.ts loop
       let seq = 0;
-      const protoEnvelopes = [];
+      const protoEnvelopes: Array<ReturnType<typeof agentEventToProto>> = [];
 
       for await (const event of harness.run(config)) {
         seq++;
@@ -892,7 +861,7 @@ describe('Harness-Native Sub-Agents', () => {
       const doneEnvelope = protoEnvelopes[protoEnvelopes.length - 1];
       expect(doneEnvelope.event?.event.case).toBe('done');
       const doneValue = doneEnvelope.event?.event.value as any;
-      expect(doneValue.usage).toBeDefined();
+      expect(doneValue.usage).toEqual(expect.objectContaining({ inputTokens: expect.any(BigInt) }));
       expect(doneValue.usage.inputTokens).toBe(BigInt(500));
       expect(doneValue.usage.outputTokens).toBe(BigInt(150));
       expect(doneValue.usage.totalTokens).toBe(BigInt(650));
@@ -946,7 +915,7 @@ describe('Harness-Native Sub-Agents', () => {
       const config = createTestConfig({ runId: 'run-subgraph' });
 
       let seq = 0;
-      const envelopes = [];
+      const envelopes: Array<ReturnType<typeof agentEventToProto>> = [];
 
       for await (const event of harness.run(config)) {
         seq++;

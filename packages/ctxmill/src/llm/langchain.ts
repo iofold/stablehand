@@ -1,7 +1,7 @@
 import { ChatAnthropic } from '@langchain/anthropic';
 import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
-import type { LLMProvider, LLMProviderConfig, LLMResponse, LLMStreamChunk } from './types.js';
+import type { LLMProvider, LLMProviderConfig, LLMResponse } from './types.js';
 import { getErrorMessage, isHttpError } from '../util/errors.js';
 
 /** Minimal interface for a chat model that can invoke messages. */

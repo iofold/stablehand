@@ -1,4 +1,4 @@
-// @ts-nocheck — test file with mock data, zod v4 type widening
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * End-to-end tests for the emit-event tool flow through the gRPC proxy.
  *
@@ -11,7 +11,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { z } from 'zod';
 import { create } from '@bufbuild/protobuf';
 import {
   RequestToolResponseSchema,
@@ -56,6 +55,8 @@ function makeMockClient(
     requestTool: vi.fn().mockResolvedValue(
       makeSuccessResponse('req-1', '{"ok":true}'),
     ),
+    registerArtifact: vi.fn(),
+    resolveArtifact: vi.fn(),
     ...impl,
   };
 }
@@ -154,7 +155,7 @@ describe('emit-event through sandbox tool proxy', () => {
 
     // Verify the RPC was called with correct serialization
     const callArgs = requestTool.mock.calls[0][0];
-    expect(callArgs.runId).toBe('run-1');
+    expect(callArgs.sessionId).toBe('run-1');
     expect(callArgs.agentId).toBe('agent-1');
     expect(callArgs.toolName).toBe('emit-event');
     const sentArgs = JSON.parse(callArgs.argsJson);
@@ -250,7 +251,7 @@ describe('protoToToolDefs wires emit-event proxy', () => {
 
     const defs = protoToToolDefs(tools, {
       orchestratorClient: client,
-      runId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
     });
 
@@ -288,7 +289,7 @@ describe('protoToToolDefs wires emit-event proxy', () => {
     const defs = protoToToolDefs(tools);
 
     // Should validate correctly
-    const valid = defs[0].input.safeParse({
+    const valid = (defs[0].input as { safeParse: (input: unknown) => { success: boolean } }).safeParse({
       type: 'email.sent',
       payload: { to: 'user@example.com' },
     });
@@ -341,7 +342,7 @@ describe('orchestrator emit-event handler', () => {
 
     const result = await handler(
       { type: 'email.classified', payload: { category: 'support' } },
-      { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
     const parsed = JSON.parse(result);
@@ -360,7 +361,7 @@ describe('orchestrator emit-event handler', () => {
 
     await handler(
       { payload: { data: 'test' } },
-      { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
     expect(eventBus.emitCustom).toHaveBeenCalledWith(
@@ -375,7 +376,7 @@ describe('orchestrator emit-event handler', () => {
 
     const result = await handler(
       { type: 'empty.event' },
-      { runId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
     const parsed = JSON.parse(result);
@@ -393,7 +394,7 @@ describe('orchestrator emit-event handler', () => {
 
     await handler(
       { type: 'inject.test', payload: { original: true } },
-      { runId: 'run-99', agentId: 'agent-X', requestId: 'req-1' },
+      { sessionId: 'run-99', agentId: 'agent-X', requestId: 'req-1' },
     );
 
     expect(eventBus.emitCustom).toHaveBeenCalledWith(
@@ -421,11 +422,9 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     const svcImpl = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
     // 2. Create a mock client that delegates to the actual orchestrator service impl
-    const client: OrchestratorServiceClient = {
-      requestTool: async (req) => {
-        return svcImpl.requestTool(req as any);
-      },
-    };
+    const client = makeMockClient({
+      requestTool: async (req) => svcImpl.requestTool(req as any),
+    });
 
     // 3. Create the sandbox-side proxy handler
     const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
@@ -468,11 +467,9 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     registerDefaultToolHandlers(registry, eventBus);
     const svcImpl = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
-    const client: OrchestratorServiceClient = {
-      requestTool: async (req) => {
-        return svcImpl.requestTool(req as any);
-      },
-    };
+    const client = makeMockClient({
+      requestTool: async (req) => svcImpl.requestTool(req as any),
+    });
 
     const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
       retryDelays: [],
@@ -494,11 +491,9 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     registerDefaultToolHandlers(registry, eventBus);
     const svcImpl = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
-    const client: OrchestratorServiceClient = {
-      requestTool: async (req) => {
-        return svcImpl.requestTool(req as any);
-      },
-    };
+    const client = makeMockClient({
+      requestTool: async (req) => svcImpl.requestTool(req as any),
+    });
 
     const handler = createToolProxy('emit-event', client, 'run-42', 'data-agent', {
       retryDelays: [],
@@ -544,17 +539,15 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     registerDefaultToolHandlers(registry, eventBus);
     const svcImpl = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
 
-    const client: OrchestratorServiceClient = {
-      requestTool: async (req) => {
-        return svcImpl.requestTool(req as any);
-      },
-    };
+    const client = makeMockClient({
+      requestTool: async (req) => svcImpl.requestTool(req as any),
+    });
 
     // Convert the builtin emit-event tool through the full metadata pipeline
     const protoTools = [makeEmitEventProtoMetadata()];
     const toolDefs = protoToToolDefs(protoTools, {
       orchestratorClient: client,
-      runId: 'run-proto',
+      sessionId: 'run-proto',
       agentId: 'proto-agent',
     });
 

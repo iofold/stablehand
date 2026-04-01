@@ -6,7 +6,7 @@
  * durable interrupts that survive server restarts.
  */
 
-import type { TypedEventBus } from '../events/bus.js';
+import type { EventMap, TypedEventBus } from '../events/bus.js';
 import type { DatabaseRepository } from '../database/repository.js';
 
 type InterruptStore = Pick<
@@ -45,7 +45,7 @@ export class InterruptManager {
   }
 
   private createPendingPromise(
-    runId: string,
+    turnId: string,
     agentId: string,
     toolCallId: string,
     toolName: string,
@@ -57,38 +57,38 @@ export class InterruptManager {
   ): Promise<InterruptResolution> {
     return new Promise<InterruptResolution>((resolve) => {
       const wrappedResolve = (value: InterruptResolution) => {
-        const entry = this.pending.get(runId);
+        const entry = this.pending.get(turnId);
         if (entry?.timeoutId) clearTimeout(entry.timeoutId);
         resolve(value);
       };
 
       const timeoutId = timeoutMs > 0
         ? setTimeout(() => {
-            const entry = this.pending.get(runId);
+            const entry = this.pending.get(turnId);
             if (entry) {
-              this.pending.delete(runId);
+              this.pending.delete(turnId);
               resolve({ action: 'timeout', data: `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes` });
 
               if (this.db) {
-                this.db.resolveInterrupt(runId, 'timeout', `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes`).catch((err) => {
+                this.db.resolveInterrupt(turnId, 'timeout', `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes`).catch((err) => {
                   console.error('[InterruptManager] failed to persist timeout resolution:', err);
                 });
               }
 
               if (this.eventBus) {
                 this.eventBus.emit('run.interrupt_resolved', {
-                  runId,
+                  turnId,
                   agentId,
-                  interruptId: runId,
+                  interruptId: turnId,
                   action: 'timeout',
                   timestamp: Date.now(),
-                });
+                } as unknown as EventMap['run.interrupt_resolved']);
               }
             }
           }, timeoutMs)
         : undefined;
 
-      this.pending.set(runId, {
+      this.pending.set(turnId, {
         resolve: wrappedResolve,
         info: { toolCallId, toolName, args, createdAt, sessionId },
         agentId,
@@ -97,14 +97,14 @@ export class InterruptManager {
 
       if (emitInterruptedEvent && this.eventBus) {
         this.eventBus.emit('run.interrupted', {
-          runId,
+          turnId,
           agentId,
           toolCallId,
           toolName,
           args,
-          interruptId: runId,
+          interruptId: turnId,
           timestamp: createdAt,
-        });
+        } as unknown as EventMap['run.interrupted']);
       }
     });
   }
@@ -129,12 +129,12 @@ export class InterruptManager {
       let reloadedCount = 0;
       for (const record of records) {
         const remainingMs = record.expiresAt - now;
-        if (remainingMs <= 0 || this.pending.has(record.runId)) {
+        if (remainingMs <= 0 || this.pending.has(record.agentSessionId)) {
           continue;
         }
 
         void this.createPendingPromise(
-          record.runId,
+          record.agentSessionId,
           record.agentId,
           record.toolCallId,
           record.toolName,
@@ -156,11 +156,11 @@ export class InterruptManager {
    * Create a pending interrupt and return a promise that resolves
    * when the user responds via the interrupt endpoint.
    *
-   * Keyed by runId so that concurrent runs of the same agent don't
+   * Keyed by turnId so that concurrent turns of the same agent don't
    * interfere with each other.
    */
   waitForApproval(
-    runId: string,
+    turnId: string,
     agentId: string,
     toolCallId: string,
     toolName: string,
@@ -169,11 +169,11 @@ export class InterruptManager {
     sessionId?: string,
   ): Promise<InterruptResolution> {
     // If there is already a pending interrupt for this run, reject it
-    const existing = this.pending.get(runId);
+    const existing = this.pending.get(turnId);
     if (existing) {
       if (existing.timeoutId) clearTimeout(existing.timeoutId);
       existing.resolve({ action: 'reject', data: 'Superseded by new interrupt' });
-      this.pending.delete(runId);
+      this.pending.delete(turnId);
     }
 
     const now = Date.now();
@@ -182,8 +182,8 @@ export class InterruptManager {
     // Persist to DB (fire-and-forget, don't block the Promise creation)
     if (this.db) {
       this.db.savePendingInterrupt({
-        id: runId,
-        runId,
+        id: turnId,
+        agentSessionId: turnId,
         agentId,
         toolCallId,
         toolName,
@@ -199,7 +199,7 @@ export class InterruptManager {
     }
 
     return this.createPendingPromise(
-      runId,
+      turnId,
       agentId,
       toolCallId,
       toolName,
@@ -215,28 +215,28 @@ export class InterruptManager {
    * Resolve a pending interrupt with the user's decision.
    * Returns true if there was a pending interrupt, false otherwise.
    */
-  resolve(runId: string, action: 'approve' | 'reject' | 'timeout', data?: unknown, agentId?: string): boolean {
-    const entry = this.pending.get(runId);
+  resolve(turnId: string, action: 'approve' | 'reject' | 'timeout', data?: unknown, agentId?: string): boolean {
+    const entry = this.pending.get(turnId);
     if (!entry) return false;
     if (entry.timeoutId) clearTimeout(entry.timeoutId);
     entry.resolve({ action, data });
-    this.pending.delete(runId);
+    this.pending.delete(turnId);
 
     // Persist resolution to DB
     if (this.db) {
-      this.db.resolveInterrupt(runId, action, data).catch((err) => {
+      this.db.resolveInterrupt(turnId, action, data).catch((err) => {
         console.error('[InterruptManager] failed to persist interrupt resolution:', err);
       });
     }
 
     if (this.eventBus) {
       this.eventBus.emit('run.interrupt_resolved', {
-        runId,
-        agentId: agentId ?? runId,
-        interruptId: runId,
+        turnId,
+        agentId: agentId ?? turnId,
+        interruptId: turnId,
         action,
         timestamp: Date.now(),
-      });
+      } as unknown as EventMap['run.interrupt_resolved']);
     }
 
     return true;
@@ -257,23 +257,23 @@ export class InterruptManager {
 
   /** Resolve a pending interrupt by sessionId. Returns true if a match was found. */
   resolveForSession(sessionId: string, action: 'approve' | 'reject' | 'timeout', data?: unknown): boolean {
-    for (const [runId, entry] of this.pending) {
+    for (const [turnId, entry] of this.pending) {
       if (entry.info.sessionId === sessionId) {
-        return this.resolve(runId, action, data, entry.agentId);
+        return this.resolve(turnId, action, data, entry.agentId);
       }
     }
     return false;
   }
 
   /**
-   * Check whether a run has a pending interrupt.
+   * Check whether a turn has a pending interrupt.
    */
-  hasPending(runId: string): boolean {
-    return this.pending.has(runId);
+  hasPending(turnId: string): boolean {
+    return this.pending.has(turnId);
   }
 
   /**
-   * Check whether any run for a given agent has a pending interrupt.
+   * Check whether any turn for a given agent has a pending interrupt.
    */
   hasPendingForAgent(agentId: string): boolean {
     for (const entry of this.pending.values()) {
@@ -283,20 +283,20 @@ export class InterruptManager {
   }
 
   /**
-   * Get info about the pending interrupt for a run, if any.
+   * Get info about the pending interrupt for a turn, if any.
    */
-  getPending(runId: string): PendingInterrupt | undefined {
-    return this.pending.get(runId)?.info;
+  getPending(turnId: string): PendingInterrupt | undefined {
+    return this.pending.get(turnId)?.info;
   }
 
   /**
    * Get all pending interrupts for a given agent from the in-memory map.
    */
-  getPendingForAgent(agentId: string): Array<{ runId: string; info: PendingInterrupt }> {
-    const results: Array<{ runId: string; info: PendingInterrupt }> = [];
-    for (const [runId, entry] of this.pending) {
+  getPendingForAgent(agentId: string): Array<{ turnId: string; info: PendingInterrupt }> {
+    const results: Array<{ turnId: string; info: PendingInterrupt }> = [];
+    for (const [turnId, entry] of this.pending) {
       if (entry.agentId === agentId) {
-        results.push({ runId, info: entry.info });
+        results.push({ turnId, info: entry.info });
       }
     }
     return results;
@@ -306,13 +306,13 @@ export class InterruptManager {
    * Reject all pending interrupts. Call on server shutdown.
    */
   shutdown(): void {
-    for (const [runId, entry] of this.pending) {
+    for (const [turnId, entry] of this.pending) {
       if (entry.timeoutId) clearTimeout(entry.timeoutId);
       entry.resolve({ action: 'reject', data: 'Server shutting down' });
 
       // Mark as resolved in DB
       if (this.db) {
-        this.db.resolveInterrupt(runId, 'reject', 'Server shutting down').catch((err) => {
+        this.db.resolveInterrupt(turnId, 'reject', 'Server shutting down').catch((err) => {
           console.error('[InterruptManager] failed to persist shutdown resolution:', err);
         });
       }

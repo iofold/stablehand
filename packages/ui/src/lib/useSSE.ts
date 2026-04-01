@@ -56,7 +56,7 @@ export function useSSE(agentId: string | undefined) {
             toolName: data.toolName ?? '',
             args: data.args ?? {},
             toolCallId: data.toolCallId ?? '',
-            runId: data.runId,
+            sessionId: data.runId,
           });
         }
 
@@ -79,6 +79,7 @@ export function useSSE(agentId: string | undefined) {
     }
 
     setStatus('connecting');
+    useConversationStore.getState().seenEventIds?.clear();
     const es = createSSEConnection(agentId);
     eventSourceRef.current = es;
 

@@ -7,7 +7,7 @@ import type { ExecutionTrace } from './types.js';
 export interface TraceDbRow {
   id: string;
   agentId: string;
-  runId: string;
+  sessionId: string;
   taskDescription: string;
   steps: unknown[];
   startedAt: number;
@@ -27,7 +27,7 @@ export function traceToDbRow(trace: ExecutionTrace): TraceDbRow {
   return {
     id: trace.id,
     agentId: trace.agentId,
-    runId: trace.runId,
+    sessionId: trace.turnId,
     taskDescription: trace.taskDescription,
     steps: trace.steps,
     startedAt: trace.startedAt.getTime(),
@@ -43,7 +43,7 @@ export function traceToDbRow(trace: ExecutionTrace): TraceDbRow {
 export function dbRowToTrace(row: {
   id: string;
   agentId: string;
-  runId: string;
+  sessionId: string;
   taskDescription: string;
   steps: unknown;
   startedAt: number;
@@ -53,7 +53,7 @@ export function dbRowToTrace(row: {
   return {
     id: row.id,
     agentId: row.agentId,
-    runId: row.runId,
+    turnId: row.sessionId,
     taskDescription: row.taskDescription,
     steps: (Array.isArray(row.steps) ? row.steps : []) as ExecutionTrace['steps'],
     startedAt: new Date(row.startedAt),

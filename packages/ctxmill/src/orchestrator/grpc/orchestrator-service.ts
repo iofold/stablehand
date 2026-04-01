@@ -30,16 +30,16 @@ import {
 } from '@ctxmill/proto/sandbox/v1';
 import type { TypedEventBus } from '../../events/bus.js';
 import type { InterruptManager } from '../interrupt.js';
-import type { RunRegistry } from '../run-registry.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { ArtifactStore } from '../../artifact/index.js';
+import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 
 /**
  * Context passed to each orchestrator-side tool handler when dispatching
  * a tool call from a sandbox.
  */
 export interface ToolHandlerContext {
-  runId: string;
+  sessionId: string;
   agentId: string;
   requestId: string;
 }
@@ -131,7 +131,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
      * the handler, and returns the result (or an error).
      */
     async requestTool(req: RequestToolRequest): Promise<RequestToolResponse> {
-      const { runId, agentId, toolName, argsJson, requestId } = req;
+      const { sessionId, agentId, toolName, argsJson, requestId } = req;
 
       if (!toolName) {
         throw new ConnectError('tool_name is required', Code.InvalidArgument);
@@ -160,7 +160,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
       }
 
       try {
-        const result = await handler(args, { runId, agentId, requestId });
+        const result = await handler(args, { sessionId, agentId, requestId });
         return create(RequestToolResponseSchema, {
           requestId,
           result,
@@ -181,7 +181,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
      * The event is dispatched for SSE broadcast and trigger processing.
      */
     async emitEvent(req: EmitEventRequest): Promise<EmitEventResponse> {
-      const { runId, eventType, payloadJson } = req;
+      const { sessionId, eventType, payloadJson } = req;
 
       if (!eventType) {
         throw new ConnectError('event_type is required', Code.InvalidArgument);
@@ -196,8 +196,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
         }
       }
 
-      // Inject runId into the payload so downstream handlers have context
-      payload.runId = runId;
+      payload.runId = sessionId;
 
       // Extract agentId from payload if present, otherwise use empty string
       const agentId = typeof payload.agentId === 'string' ? payload.agentId : '';
@@ -213,7 +212,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
      * In future, this will re-derive secrets for a running sandbox without
      * requiring a restart.
      */
-    async refreshSecrets(req: RefreshSecretsRequest): Promise<RefreshSecretsResponse> {
+    async refreshSecrets(_req: RefreshSecretsRequest): Promise<RefreshSecretsResponse> {
       // Stub — not implemented yet
       return create(RefreshSecretsResponseSchema, {
         success: false,
@@ -233,7 +232,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           const row = await deps.repository.saveArtifact({
             id: artifact.id || undefined,
             agentId: artifact.agentId,
-            runId: artifact.runId || undefined,
+            sessionId: artifact.sessionId || undefined,
             name: artifact.name,
             mimeType: artifact.mimeType,
             sizeBytes: Number(artifact.sizeBytes),
@@ -284,7 +283,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           artifact: create(ArtifactMetaSchema, {
             id: row.id,
             agentId: row.agentId,
-            runId: row.runId ?? '',
+            sessionId: row.sessionId ?? '',
             name: row.name,
             mimeType: row.mimeType,
             sizeBytes: BigInt(row.sizeBytes),
@@ -312,8 +311,8 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
 export interface RegisterToolHandlersDeps {
   eventBus: TypedEventBus;
   interruptManager?: InterruptManager;
-  runRegistry?: RunRegistry;
-  onHitlPause?: (sessionId: string) => void;
+  sessionManager?: SandboxSessionManager;
+  repository?: DatabaseRepository;
 }
 
 export function registerDefaultToolHandlers(
@@ -325,7 +324,7 @@ export function registerDefaultToolHandlers(
       ? { eventBus: eventBusOrDeps }
       : eventBusOrDeps;
 
-  const { eventBus, interruptManager, runRegistry, onHitlPause } = deps;
+  const { eventBus, interruptManager, sessionManager, repository } = deps;
 
   registry.set('emit-event', async (args, ctx) => {
     const eventType = typeof args.type === 'string' ? args.type
@@ -335,7 +334,7 @@ export function registerDefaultToolHandlers(
       ? args.payload as Record<string, unknown>
       : {};
 
-    payload.runId = ctx.runId;
+    payload.runId = ctx.sessionId;
     payload.agentId = ctx.agentId;
 
     eventBus.emitCustom(eventType, ctx.agentId, payload);
@@ -347,30 +346,25 @@ export function registerDefaultToolHandlers(
     registry.set('request-approval', async (args, ctx) => {
       const reason = typeof args.reason === 'string' ? args.reason : 'Tool requires approval';
 
-      // Look up sessionId from the run's record
-      const run = runRegistry?.getRun(ctx.runId);
-      const sessionId = run?.sessionId;
+      const turn = repository ? await repository.getTurn(ctx.sessionId) : undefined;
+      const sandboxSessionId = turn?.sessionId ?? undefined;
 
-      if (runRegistry) {
-        await runRegistry.pauseRun(ctx.runId, 'hitl_approval');
-      }
-
-      if (sessionId && onHitlPause) {
-        onHitlPause(sessionId);
+      if (sandboxSessionId && sessionManager) {
+        await sessionManager.pauseSession(sandboxSessionId, 'hitl');
       }
 
       const resolution = await interruptManager.waitForApproval(
-        ctx.runId,
+        ctx.sessionId,
         ctx.agentId,
         ctx.requestId,
         'request-approval',
         { ...args, reason },
         300_000,
-        sessionId,
+        sandboxSessionId,
       );
 
-      if (runRegistry) {
-        await runRegistry.resumeRun(ctx.runId);
+      if (sandboxSessionId && sessionManager) {
+        await sessionManager.resumeSession(sandboxSessionId);
       }
 
       if (resolution.action === 'approve') {

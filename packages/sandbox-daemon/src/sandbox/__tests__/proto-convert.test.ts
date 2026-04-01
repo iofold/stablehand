@@ -697,7 +697,7 @@ describe('protoToToolDefs', () => {
       ],
       {
         orchestratorClient: client,
-        runId: 'run-123',
+        sessionId: 'run-123',
         agentId: 'agent-123',
       },
     );
@@ -709,7 +709,7 @@ describe('protoToToolDefs', () => {
 
     const [request] = requestTool.mock.calls[0] ?? [];
     expect(request).toMatchObject({
-      runId: 'run-123',
+      sessionId: 'run-123',
       agentId: 'agent-123',
       toolName: 'emit-event',
       argsJson: '{"name":"turn.completed"}',

@@ -29,7 +29,7 @@ export async function createTestAgent(
     data: {
       name: options.name ?? `e2e-agent-${Date.now()}`,
       harness: options.harness ?? 'langgraph',
-      harnessConfig: options.harnessConfig ?? { provider: 'openai', model: 'gpt-5-mini' },
+      harnessConfig: options.harnessConfig ?? { provider: 'openai', model: 'gpt-5.4-mini' },
       systemPrompt:
         options.systemPrompt ??
         'You are a deterministic end-to-end test agent. Respond concisely.',
@@ -55,12 +55,12 @@ export async function startBackgroundRun(
   request: APIRequestContext,
   agentId: string,
   task: string,
-): Promise<{ runId: string; conversationId: string }> {
-  const response = await request.post(`${API_BASE}/api/agents/${agentId}/run`, {
+): Promise<{ sessionId: string; conversationId: string }> {
+  const response = await request.post(`${API_BASE}/api/agents/${agentId}/session`, {
     data: { task, mode: 'background' },
   });
   expect(response.ok()).toBeTruthy();
-  return (await response.json()) as { runId: string; conversationId: string };
+  return (await response.json()) as { sessionId: string; conversationId: string };
 }
 
 export async function sendAgentMessage(
@@ -68,7 +68,7 @@ export async function sendAgentMessage(
   agentId: string,
   content: string,
   conversationId?: string,
-): Promise<{ messageId: string; conversationId: string; runId: string }> {
+): Promise<{ messageId: string; conversationId: string; sessionId: string }> {
   const response = await request.post(
     `${API_BASE}/api/agents/${agentId}/message`,
     {
@@ -79,36 +79,45 @@ export async function sendAgentMessage(
   return (await response.json()) as {
     messageId: string;
     conversationId: string;
-    runId: string;
+    sessionId: string;
   };
 }
 
 export async function waitForRunStatus(
   request: APIRequestContext,
   agentId: string,
-  runId: string,
+  sessionId: string,
   statuses: string[],
   timeoutMs = 60_000,
-): Promise<{ id: string; status: string; conversationId: string }> {
+): Promise<{ id: string; sessionId?: string; status: string; conversationId: string }> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const response = await request.get(`${API_BASE}/api/agents/${agentId}/runs`);
-    expect(response.ok()).toBeTruthy();
-    const runs = (await response.json()) as Array<{
-      id: string;
-      status: string;
-      conversationId: string;
-    }>;
-    const run = runs.find((entry) => entry.id === runId);
-    if (run && statuses.includes(run.status)) {
-      return run;
+    const response = await request.get(`${API_BASE}/api/agents/${agentId}/turns`);
+    if (!response.ok()) {
+      await delay(1_000);
+      continue;
+    }
+    const body = await response.json();
+    const turns = Array.isArray(body) ? body : [];
+    const turn = turns.find((t: Record<string, unknown>) =>
+      t.id === sessionId || t.conversationId === sessionId,
+    );
+    if (turn) {
+      const derivedStatus = turn.error
+        ? 'error'
+        : turn.completedAt !== null
+          ? 'completed'
+          : 'running';
+      if (statuses.includes(derivedStatus)) {
+        return { ...turn, status: derivedStatus } as { id: string; sessionId?: string; status: string; conversationId: string };
+      }
     }
     await delay(1_000);
   }
 
   throw new Error(
-    `Timed out waiting for run ${runId} to reach one of: ${statuses.join(', ')}`,
+    `Timed out waiting for session ${sessionId} to reach one of: ${statuses.join(', ')}`,
   );
 }
 
@@ -181,12 +190,14 @@ export async function importStressAgent(
   const meta = (raw.metadata ?? {}) as Record<string, unknown>;
   const spec = (raw.spec ?? {}) as Record<string, unknown>;
   const tools = (spec.tools as Array<{ ref?: string }> | undefined) ?? [];
+  const model = spec.model as Record<string, unknown> | undefined;
+  const harnessConfig = (spec.harnessConfig ?? (model ? { provider: model.provider, model: model.id } : {})) as Record<string, unknown>;
 
   const response = await request.post(`${API_BASE}/api/agents`, {
     data: {
       name: meta.name as string,
       harness: spec.harness as string,
-      harnessConfig: (spec.harnessConfig ?? {}) as Record<string, unknown>,
+      harnessConfig,
       systemPrompt: (spec.instructions ?? '') as string,
       tools: tools.map((t) => t.ref).filter(Boolean),
       description: (meta.description ?? null) as string | null,
@@ -234,10 +245,10 @@ export async function getEvents(
   return body.events ?? [];
 }
 
-export async function cancelRun(
+export async function cancelSession(
   request: APIRequestContext,
   agentId: string,
-  runId: string,
+  sessionId: string,
 ): Promise<void> {
-  await request.post(`${API_BASE}/api/agents/${agentId}/runs/${runId}/cancel`);
+  await request.post(`${API_BASE}/api/agents/${agentId}/sessions/${sessionId}/cancel`);
 }

@@ -16,78 +16,54 @@ RUN corepack enable && corepack prepare pnpm@10.12.4 --activate
 
 WORKDIR /app
 
-# Copy workspace config and lockfile first for layer caching
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 
-# Copy package.json and tsconfig files to resolve workspace dependencies
 COPY packages/shared/package.json packages/shared/tsconfig.json packages/shared/
 COPY packages/ctxmill/package.json packages/ctxmill/tsconfig.json packages/ctxmill/
 COPY packages/proto/package.json packages/proto/tsconfig.build.json packages/proto/
 COPY packages/sandbox-daemon/package.json packages/sandbox-daemon/tsconfig.json packages/sandbox-daemon/
 
-# Copy example and other package.json files so pnpm workspace resolution works
 COPY packages/examples/ packages/examples/
 COPY packages/create-ctxmill/package.json packages/create-ctxmill/
 COPY packages/ui/package.json packages/ui/
 
-# Install all dependencies (including devDependencies for building)
 RUN pnpm install --frozen-lockfile
 
-# Copy source code for packages needed by the sandbox daemon
 COPY packages/shared/src/ packages/shared/src/
 COPY packages/ctxmill/src/ packages/ctxmill/src/
 COPY packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
 COPY packages/proto/ packages/proto/
 
-# Build shared first (composite project, used by ctxmill)
 RUN cd packages/shared && npx tsc --build
-
-# Build proto (compile .ts to .js for Node 22 strip-only mode)
 RUN cd packages/proto && npx tsc -p tsconfig.build.json
-
-# Prebuild sandbox-daemon so ctxmill can resolve workspace types
 RUN pnpm --filter @ctxmill/sandbox-daemon build
-
-# Build ctxmill
 RUN pnpm --filter ctxmill build
+
+RUN pnpm --filter @ctxmill/sandbox-daemon deploy --prod --legacy /app/deploy/sandbox-daemon
 
 
 # ── Stage 2: harness-base (shared runtime for all harness images) ────────────
-FROM node:22-slim AS harness-base
+FROM node:22-alpine AS harness-base
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git \
-      curl \
-      ca-certificates \
-      tini \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache git curl tini bash unzip
 
-RUN userdel -r node 2>/dev/null || true && \
-    groupadd -f -g 1000 ctxmill && \
-    useradd -u 1000 -g 1000 -m -s /bin/bash ctxmill
+RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 
-RUN corepack enable && corepack prepare pnpm@10.12.4 --activate
+RUN deluser --remove-home node 2>/dev/null; \
+    addgroup -g 1000 ctxmill && adduser -u 1000 -G ctxmill -D -s /bin/sh ctxmill
 
 WORKDIR /app
 RUN chown ctxmill:ctxmill /app
 
-COPY --chown=ctxmill:ctxmill pnpm-workspace.yaml pnpm-lock.yaml package.json ./
-
-COPY --chown=ctxmill:ctxmill packages/shared/package.json packages/shared/
-COPY --chown=ctxmill:ctxmill packages/ctxmill/package.json packages/ctxmill/
-COPY --chown=ctxmill:ctxmill packages/proto/package.json packages/proto/
-COPY --chown=ctxmill:ctxmill packages/sandbox-daemon/package.json packages/sandbox-daemon/
-
-COPY --chown=ctxmill:ctxmill packages/examples/ packages/examples/
-COPY --chown=ctxmill:ctxmill packages/create-ctxmill/package.json packages/create-ctxmill/
-COPY --chown=ctxmill:ctxmill packages/ui/package.json packages/ui/
-
 USER ctxmill
 
-RUN pnpm install --prod --shamefully-hoist --filter @ctxmill/sandbox-daemon...
+COPY --chown=ctxmill:ctxmill --from=build /app/deploy/sandbox-daemon/node_modules/ node_modules/
+COPY --chown=ctxmill:ctxmill --from=build /app/deploy/sandbox-daemon/package.json ./
 
 COPY --chown=ctxmill:ctxmill --from=build /app/packages/shared/dist/ packages/shared/dist/
+COPY --chown=ctxmill:ctxmill --from=build /app/packages/shared/package.json packages/shared/
 COPY --chown=ctxmill:ctxmill --from=build /app/packages/sandbox-daemon/dist/ packages/sandbox-daemon/dist/
+COPY --chown=ctxmill:ctxmill --from=build /app/packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
 COPY --chown=ctxmill:ctxmill --from=build /app/packages/proto/ packages/proto/
 
 USER root
@@ -98,22 +74,11 @@ EXPOSE 50051
 
 
 # ── Stage 3: harness-langgraph ───────────────────────────────────────────────
+# Uses deepagents JS SDK (pure TypeScript) — no Python needed.
 FROM harness-base AS harness-langgraph
 
-USER root
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip python3-venv \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN python3 -m venv /opt/langgraph-venv && \
-    /opt/langgraph-venv/bin/pip install --no-cache-dir \
-      langchain langchain-openai langchain-anthropic langgraph
-
-ENV PATH="/opt/langgraph-venv/bin:$PATH"
-
-USER ctxmill
 WORKDIR /app
-ENTRYPOINT ["node", "packages/sandbox-daemon/dist/sandbox/daemon.js"]
+ENTRYPOINT ["bun", "run", "packages/sandbox-daemon/src/sandbox/daemon.ts"]
 
 
 # ── Stage 4: harness-claude-agents ───────────────────────────────────────────
@@ -127,13 +92,12 @@ ENV CLAUDE_CODE_PATH=/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.j
 USER ctxmill
 WORKDIR /app
 
-ENTRYPOINT ["tini", "--", "node", "packages/sandbox-daemon/dist/sandbox/daemon.js"]
+ENTRYPOINT ["tini", "--", "bun", "run", "packages/sandbox-daemon/src/sandbox/daemon.ts"]
 
 
 # ── Stage 5: harness-pi-agent ───────────────────────────────────────────────
-# SDK deps: @mariozechner/pi-coding-agent, @mariozechner/pi-ai
 FROM harness-base AS harness-pi-agent
 
 WORKDIR /app
 
-ENTRYPOINT ["tini", "--", "node", "packages/sandbox-daemon/dist/sandbox/daemon.js"]
+ENTRYPOINT ["tini", "--", "bun", "run", "packages/sandbox-daemon/src/sandbox/daemon.ts"]

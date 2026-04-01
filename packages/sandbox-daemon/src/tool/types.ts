@@ -4,6 +4,7 @@ export interface ToolDefinition {
   input: unknown;
   requiresApproval?: boolean;
   location?: 'sandbox' | 'orchestrator' | 'daemon';
+  programmatic?: boolean;
   secrets?: string[];
   timeout?: number;
   handler: (input: unknown, ctx: ToolContext) => Promise<string>;

@@ -6,7 +6,7 @@ function makeTrace(overrides: Partial<ExecutionTrace> = {}): ExecutionTrace {
   return {
     id: 'trace-1',
     agentId: 'agent-1',
-    runId: 'run-1',
+    turnId: 'run-1',
     taskDescription: 'Do something',
     steps: [
       { ordinal: 0, type: 'llm_call', content: 'hello', durationMs: 100, metadata: {} },
@@ -26,7 +26,7 @@ describe('traceToDbRow', () => {
 
     expect(row.id).toBe('trace-1');
     expect(row.agentId).toBe('agent-1');
-    expect(row.runId).toBe('run-1');
+    expect(row.sessionId).toBe('run-1');
     expect(row.taskDescription).toBe('Do something');
     expect(row.steps).toEqual(trace.steps);
     expect(row.startedAt).toBe(new Date('2026-01-01T00:00:00Z').getTime());
@@ -62,7 +62,7 @@ describe('dbRowToTrace', () => {
     const row = {
       id: 'trace-2',
       agentId: 'agent-2',
-      runId: 'run-2',
+      sessionId: 'run-2',
       taskDescription: 'Another task',
       steps: [{ ordinal: 0, type: 'reasoning', content: 'thinking', durationMs: 200, metadata: {} }],
       startedAt: 1735689600000,
@@ -84,7 +84,7 @@ describe('dbRowToTrace', () => {
     const row = {
       id: 'trace-3',
       agentId: 'agent-3',
-      runId: 'run-3',
+      sessionId: 'run-3',
       taskDescription: 'Task 3',
       steps: [],
       startedAt: Date.now(),
@@ -100,7 +100,7 @@ describe('dbRowToTrace', () => {
     const row = {
       id: 'trace-4',
       agentId: 'agent-4',
-      runId: 'run-4',
+      sessionId: 'run-4',
       taskDescription: 'Task 4',
       steps: [],
       startedAt: before - 1000,
@@ -115,7 +115,7 @@ describe('dbRowToTrace', () => {
     const row = {
       id: 'trace-5',
       agentId: 'agent-5',
-      runId: 'run-5',
+      sessionId: 'run-5',
       taskDescription: 'Task 5',
       steps: 'not-an-array' as unknown,
       startedAt: Date.now(),

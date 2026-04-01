@@ -9,24 +9,24 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import { RunRegistry } from '../../packages/ctxmill/src/orchestrator/run-registry.js';
-import { AgentRunService } from '../../packages/ctxmill/src/orchestrator/agent-run-service.js';
+import { AgentSessionService } from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
 import {
   createTestBus,
   collectEvents,
   createMockSSEManager,
   createMockDatabase,
 } from '../utils/event-bus-test-helpers.js';
+import { TestSessionRegistry, createTestSessionManager } from '../utils/test-session-registry.js';
 
 const settle = (ms = 10) => new Promise((r) => setTimeout(r, ms));
 
 describe('Run Cancellation with AbortSignal', () => {
   let bus: TypedEventBus;
-  let registry: RunRegistry;
+  let registry: TestSessionRegistry;
 
   beforeEach(() => {
     bus = createTestBus();
-    registry = new RunRegistry(undefined, bus);
+    registry = new TestSessionRegistry(undefined, bus);
   });
 
   // ── 1. AbortController lifecycle ─────────────────────────────────
@@ -56,14 +56,15 @@ describe('Run Cancellation with AbortSignal', () => {
 
     it('cancelRun() emits run.completed with status cancelled', async () => {
       const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
-      const collector = collectEvents(bus, 'run.completed');
+      const collector = collectEvents(bus, 'turn.completed');
 
       await registry.cancelRun(run.id);
 
       expect(collector.events).toHaveLength(1);
       expect(collector.events[0]).toEqual(
-        expect.objectContaining({
-          runId: run.id,
+          expect.objectContaining({
+          sessionId: run.id,
+          turnId: run.id,
           agentId: 'agent-1',
           status: 'cancelled',
         }),
@@ -94,6 +95,7 @@ describe('Run Cancellation with AbortSignal', () => {
       const mockSSE = createMockSSEManager();
       const mockDB = createMockDatabase();
       mockDB.addMessage = vi.fn().mockResolvedValue({ id: 'msg-1' });
+      (mockDB as Record<string, unknown>).updateTurn = vi.fn().mockResolvedValue(undefined);
 
       // Track how many events the executor actually yielded before abort
       const yieldedEvents: string[] = [];
@@ -147,24 +149,25 @@ describe('Run Cancellation with AbortSignal', () => {
         ),
       };
 
-      const service = new AgentRunService({
-        sandboxRunService: mockSandboxRunService as any,
+      const sessionManager = createTestSessionManager(registry);
+      const run = await registry.startRun('agent-1', 'conv-1', 'interactive', 'cancellable task');
+
+      const service = new AgentSessionService({
+        sessionTurnService: mockSandboxRunService as any,
         sse: mockSSE as any,
         db: mockDB as any,
-        runRegistry: registry,
+        sessionManager: sessionManager as any,
         eventBus: bus,
       });
 
-      // Start a run via registry so AbortController is created
-      const run = await registry.startRun('agent-1', 'conv-1', 'interactive', 'cancellable task');
-
       // Start execution in background, cancel after first chunk
-      const execPromise = service.executeRun({
-        agentDef: { name: 'test', systemPrompt: 'test', tools: [] } as any,
+      const execPromise = service.executeSession({
+        agentDef: { name: 'test', harness: 'langgraph', harnessConfig: {}, systemPrompt: 'test', tools: [] } as any,
         messages: [{ id: 'u1', agentId: 'agent-1', role: 'user', content: 'Hi', createdAt: new Date() }],
         agentId: 'agent-1',
         conversationId: 'conv-1',
-        runId: run.id,
+        sessionId: run.id,
+        mode: 'interactive',
         taskDescription: 'cancellable task',
       });
 
@@ -201,7 +204,7 @@ describe('Run Cancellation with AbortSignal', () => {
     });
 
     it('no event is emitted for non-existent run cancellation', async () => {
-      const collector = collectEvents(bus, 'run.completed');
+      const collector = collectEvents(bus, 'turn.completed');
 
       await registry.cancelRun('non-existent-run-id');
 
@@ -225,7 +228,7 @@ describe('Run Cancellation with AbortSignal', () => {
 
       // Attempting to cancel a completed run — the run still exists in the map
       // but the AbortController is already gone, so abort() won't be called
-      const collector = collectEvents(bus, 'run.completed');
+      const collector = collectEvents(bus, 'turn.completed');
       const result = await registry.cancelRun(run.id);
 
       // cancelRun returns the run (it exists in the map) but overwrites status
@@ -289,7 +292,7 @@ describe('Run Cancellation with AbortSignal', () => {
       const run1 = await registry.startRun('agent-1', 'conv-1', 'interactive');
       const run2 = await registry.startRun('agent-1', 'conv-2', 'interactive');
 
-      const collector = collectEvents(bus, 'run.completed');
+      const collector = collectEvents(bus, 'turn.completed');
 
       // Cancel run-1, complete run-2
       await registry.cancelRun(run1.id);
@@ -297,8 +300,8 @@ describe('Run Cancellation with AbortSignal', () => {
 
       expect(collector.events).toHaveLength(2);
 
-      const cancelEvent = collector.events.find((e) => e.runId === run1.id);
-      const completeEvent = collector.events.find((e) => e.runId === run2.id);
+      const cancelEvent = collector.events.find((e) => e.sessionId === run1.id);
+      const completeEvent = collector.events.find((e) => e.sessionId === run2.id);
 
       expect(cancelEvent).toBeDefined();
       expect(cancelEvent!.status).toBe('cancelled');

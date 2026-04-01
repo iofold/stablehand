@@ -15,7 +15,7 @@
  *   SECRETS_PATH — Path to secrets JSON (default: /run/secrets/config.json)
  */
 
-import { createServer, type Http2Server } from 'node:http2';
+import { createServer, type Server } from 'node:http';
 import { create } from '@bufbuild/protobuf';
 import { ConnectError, Code, type ConnectRouter } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
@@ -44,15 +44,127 @@ import { openSession, deliverTurn, suspendSession, killSession } from './runner.
 import { validateCheckpointSize } from './checkpoint.js';
 
 import type { ResolvedSecrets } from '../harness/types.js';
+import type { ToolContext, ToolDefinition } from '../tool/types.js';
 
 /* -------------------------------------------------------------------------- */
 /*  State                                                                      */
 /* -------------------------------------------------------------------------- */
 
 let secrets: ResolvedSecrets = {};
-let server: Http2Server | null = null;
+let server: Server | null = null;
 let activeAbort: AbortController | null = null;
-let activeSessionMeta: { sessionId: string } | null = null;
+let toolApi: { stop: () => void } | null = null;
+let _sessionTools: ToolDefinition[] = [];
+
+interface BunServer {
+  stop(): void;
+}
+
+interface BunGlobal {
+  serve(options: {
+    port: number;
+    fetch(request: Request): Response | Promise<Response>;
+  }): BunServer;
+}
+
+export function setSessionTools(tools: ToolDefinition[]) {
+  _sessionTools = tools;
+}
+
+export function getSessionTools(): ToolDefinition[] {
+  return _sessionTools;
+}
+
+function getBun(): BunGlobal | null {
+  const bun = (globalThis as typeof globalThis & { Bun?: BunGlobal }).Bun;
+  return bun ?? null;
+}
+
+function jsonResponse(body: unknown, status: number = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'content-type': 'application/json',
+    },
+  });
+}
+
+function parseToolResult(result: string): unknown {
+  try {
+    return JSON.parse(result);
+  } catch {
+    return { result };
+  }
+}
+
+function createMinimalToolContext(): ToolContext {
+  return {
+    agentId: 'sandbox-daemon',
+    conversationId: 'sandbox-daemon',
+    workspaceDir: '/workspace',
+    knowledge: {
+      query: async () => ({ items: [] }),
+    },
+  };
+}
+
+export function startToolApi(
+  port: number = 8080,
+  getTools: () => ToolDefinition[],
+): { stop: () => void } {
+  const bun = getBun();
+  if (!bun) {
+    console.error('[sandbox] Bun runtime unavailable — PTC tool API disabled');
+    return {
+      stop() {},
+    };
+  }
+
+  const toolServer = bun.serve({
+    port,
+    fetch: async (request: Request) => {
+      const url = new URL(request.url);
+
+      if (request.method === 'GET' && url.pathname === '/tools') {
+        return jsonResponse(getTools().map((tool) => tool.name));
+      }
+
+      if (request.method === 'POST' && url.pathname.startsWith('/tools/')) {
+        const toolName = decodeURIComponent(url.pathname.slice('/tools/'.length));
+        const tool = getTools().find((candidate) => candidate.name === toolName);
+
+        if (!tool) {
+          return jsonResponse({ error: `Tool not found: ${toolName}` }, 404);
+        }
+
+        let parsedBody: unknown;
+        try {
+          parsedBody = await request.json();
+        } catch {
+          parsedBody = {};
+        }
+
+        try {
+          const result = await tool.handler(parsedBody, createMinimalToolContext());
+          return jsonResponse(parseToolResult(result));
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          return jsonResponse({ error: message }, 500);
+        }
+      }
+
+      return jsonResponse({ error: `Not found: ${url.pathname}` }, 404);
+    },
+  });
+
+  console.error(`[sandbox] tool API listening on :${port}`);
+
+  return {
+    stop() {
+      toolServer.stop();
+    },
+  };
+}
 
 /* -------------------------------------------------------------------------- */
 /*  RPC handlers                                                               */
@@ -69,7 +181,6 @@ async function handleOpenSession(req: OpenSessionRequest) {
     const resolvedSecrets = await ensureSecrets();
     const result = await openSession(req, resolvedSecrets, {});
 
-    activeSessionMeta = { sessionId: result.sessionId };
     console.error(`[sandbox] session opened — sessionId=${result.sessionId}, status=${result.status}`);
 
     return create(OpenSessionResponseSchema, {
@@ -150,7 +261,6 @@ async function handleKillSession(req: KillSessionRequest) {
   }
 
   await killSession();
-  activeSessionMeta = null;
 
   return create(KillSessionResponseSchema, {
     finalStatus: 'killed',
@@ -209,13 +319,14 @@ async function ensureSecrets(): Promise<ResolvedSecrets> {
  *
  * @param port        - Port to listen on (default: 50051).
  * @param secretsPath - Path to the secrets JSON file.
- * @returns The HTTP/2 server instance.
+ * @returns The HTTP/1.1 server instance.
  */
 export async function startDaemon(
   port: number = Number(process.env.SANDBOX_PORT) || 50051,
   secretsPath: string = process.env.SECRETS_PATH || DEFAULT_SECRETS_PATH,
-): Promise<Http2Server> {
+): Promise<Server> {
   void secretsPath;
+  const toolApiPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
 
   const connectHandler = connectNodeAdapter({
     routes: registerRoutes,
@@ -229,6 +340,8 @@ export async function startDaemon(
       resolve();
     });
   });
+
+  toolApi = startToolApi(toolApiPort, getSessionTools);
 
   return server;
 }
@@ -246,7 +359,6 @@ export async function stopDaemon(): Promise<void> {
   await killSession().catch((err: unknown) => {
     console.error('[sandbox] killSession during stopDaemon failed:', err);
   });
-  activeSessionMeta = null;
 
   if (server) {
     await new Promise<void>((resolve, reject) => {
@@ -256,6 +368,11 @@ export async function stopDaemon(): Promise<void> {
       });
     });
     server = null;
+  }
+
+  if (toolApi) {
+    toolApi.stop();
+    toolApi = null;
   }
 }
 

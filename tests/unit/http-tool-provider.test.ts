@@ -1,17 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { HTTPToolProvider } from '../../packages/ctxmill/src/tool/providers/http.js';
+import { createMockToolContext } from '../utils/event-bus-test-helpers.js';
 import type { HttpEndpointConfig } from '../../packages/ctxmill/src/tool/providers/http.js';
 import type { ToolContext } from '../../packages/ctxmill/src/tool/types.js';
 
-const mockCtx: ToolContext = {
-  agentId: 'test-agent',
-  conversationId: 'test-conv',
-  instanceId: 'run-123',
-  workspaceDir: '/tmp/test',
-  knowledge: {
-    query: async () => ({ items: [] }),
-  },
-};
+const mockCtx = createMockToolContext();
 
 function makeEndpoint(overrides?: Partial<HttpEndpointConfig>): HttpEndpointConfig {
   return {
@@ -87,7 +80,7 @@ describe('HTTPToolProvider – registration', () => {
     ], { fetchFn: mockFetch() });
 
     const tools = await provider.listTools();
-    const schema = tools[0].input;
+    const schema = tools[0].input as { safeParse: (value: unknown) => { success: boolean } };
 
     // Valid input
     expect(schema.safeParse({ query: 'hello' }).success).toBe(true);
@@ -103,7 +96,8 @@ describe('HTTPToolProvider – registration', () => {
     });
 
     const tools = await provider.listTools();
-    expect(tools[0].input.safeParse({}).success).toBe(true);
+    const schema = tools[0].input as { safeParse: (value: unknown) => { success: boolean } };
+    expect(schema.safeParse({}).success).toBe(true);
   });
 
   it('should set timeout from endpoint config', async () => {
@@ -145,16 +139,19 @@ describe('HTTPToolProvider – request building', () => {
     expect(result).toBe('{"result":"ok"}');
     expect(fetchFn).toHaveBeenCalledTimes(1);
 
-    const [url, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(url).toBe('https://api.example.com/run');
-    expect(options.method).toBe('POST');
-    expect(JSON.parse(options.body as string)).toEqual({ input: 'data' });
-
-    const headers = options.headers as Record<string, string>;
-    expect(headers['Content-Type']).toBe('application/json');
-    expect(headers['X-Agent-Id']).toBe('test-agent');
-    expect(headers['X-Conversation-Id']).toBe('test-conv');
-    expect(headers['X-Instance-Id']).toBe('run-123');
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/run',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ input: 'data' }),
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          'X-Agent-Id': 'test-agent',
+          'X-Conversation-Id': 'test-conv',
+          'X-Instance-Id': 'run-123',
+        }),
+      }),
+    );
   });
 
   it('should not include X-Instance-Id when instanceId is missing', async () => {
@@ -168,9 +165,14 @@ describe('HTTPToolProvider – request building', () => {
 
     await provider.execute('test-tool', {}, ctxNoInstance);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-    expect(headers['X-Instance-Id']).toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          'X-Instance-Id': expect.anything(),
+        }),
+      }),
+    );
   });
 
   it('should not send body for GET requests', async () => {
@@ -182,9 +184,18 @@ describe('HTTPToolProvider – request building', () => {
 
     await provider.execute('test-tool', { q: 'hello' }, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(options.method).toBe('GET');
-    expect(options.body).toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        method: 'GET',
+      }),
+    );
+    expect(fetchFn).not.toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        body: expect.anything(),
+      }),
+    );
   });
 
   it('should merge static headers from endpoint config', async () => {
@@ -196,10 +207,15 @@ describe('HTTPToolProvider – request building', () => {
 
     await provider.execute('test-tool', {}, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-    expect(headers['X-Custom']).toBe('value');
-    expect(headers['Accept']).toBe('text/plain');
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Custom': 'value',
+          Accept: 'text/plain',
+        }),
+      }),
+    );
   });
 
   it('should send PUT requests with body', async () => {
@@ -211,9 +227,13 @@ describe('HTTPToolProvider – request building', () => {
 
     await provider.execute('test-tool', { id: 1, name: 'test' }, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(options.method).toBe('PUT');
-    expect(JSON.parse(options.body as string)).toEqual({ id: 1, name: 'test' });
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ id: 1, name: 'test' }),
+      }),
+    );
   });
 
   it('should send DELETE requests with body', async () => {
@@ -225,9 +245,13 @@ describe('HTTPToolProvider – request building', () => {
 
     await provider.execute('test-tool', { id: 42 }, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(options.method).toBe('DELETE');
-    expect(JSON.parse(options.body as string)).toEqual({ id: 42 });
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        method: 'DELETE',
+        body: JSON.stringify({ id: 42 }),
+      }),
+    );
   });
 
   it('should send PATCH requests with body', async () => {
@@ -239,9 +263,13 @@ describe('HTTPToolProvider – request building', () => {
 
     await provider.execute('test-tool', { status: 'done' }, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(options.method).toBe('PATCH');
-    expect(JSON.parse(options.body as string)).toEqual({ status: 'done' });
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'done' }),
+      }),
+    );
   });
 });
 
@@ -261,9 +289,14 @@ describe('HTTPToolProvider – authentication', () => {
 
     await provider.execute('test-tool', {}, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-    expect(headers['Authorization']).toBe('Bearer secret-jwt-token');
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer secret-jwt-token',
+        }),
+      }),
+    );
   });
 
   it('should inject API key as X-API-Key header', async () => {
@@ -279,9 +312,14 @@ describe('HTTPToolProvider – authentication', () => {
 
     await provider.execute('test-tool', {}, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-    expect(headers['X-API-Key']).toBe('abc-123');
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-API-Key': 'abc-123',
+        }),
+      }),
+    );
   });
 
   it('should fall back to process.env for secrets', async () => {
@@ -301,9 +339,14 @@ describe('HTTPToolProvider – authentication', () => {
 
       await provider.execute('test-tool', {}, mockCtx);
 
-      const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-      const headers = options.headers as Record<string, string>;
-      expect(headers['Authorization']).toBe('Bearer env-secret');
+      expect(fetchFn).toHaveBeenCalledWith(
+        'https://api.example.com/action',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer env-secret',
+          }),
+        }),
+      );
     } finally {
       if (originalEnv === undefined) {
         delete process.env.FALLBACK_SECRET;
@@ -326,9 +369,14 @@ describe('HTTPToolProvider – authentication', () => {
 
     await provider.execute('test-tool', {}, mockCtx);
 
-    const [, options] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = options.headers as Record<string, string>;
-    expect(headers['Authorization']).toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.example.com/action',
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          Authorization: expect.anything(),
+        }),
+      }),
+    );
   });
 });
 

@@ -8,7 +8,7 @@
  * - Event data builders for all EventMap event types
  */
 
-import { vi, type Mock } from 'vitest';
+import { vi } from 'vitest';
 import {
   TypedEventBus,
   type EventMap,
@@ -112,6 +112,8 @@ export function createMockDatabase() {
     createRun: vi.fn(),
     getRun: vi.fn(),
     updateRun: vi.fn(),
+    createTurn: vi.fn(),
+    updateTurn: vi.fn(),
     listRuns: vi.fn(),
     persistEvent: vi.fn(),
     getEventsSince: vi.fn(),
@@ -132,10 +134,11 @@ export function createMockLearningPipeline() {
 // ── Event Data Builders ─────────────────────────────────────────
 
 export function makeRunStartedEvent(
-  overrides?: Partial<EventMap['run.started']>,
-): EventMap['run.started'] {
+  overrides?: Partial<EventMap['turn.started']>,
+): EventMap['turn.started'] {
   return {
-    runId: 'run-test-1',
+    turnId: 'run-test-1',
+    sessionId: 'run-test-1',
     agentId: 'agent-test-1',
     conversationId: 'conv-test-1',
     mode: 'interactive',
@@ -146,10 +149,11 @@ export function makeRunStartedEvent(
 }
 
 export function makeRunCompletedEvent(
-  overrides?: Partial<EventMap['run.completed']>,
-): EventMap['run.completed'] {
+  overrides?: Partial<EventMap['turn.completed']>,
+): EventMap['turn.completed'] {
   return {
-    runId: 'run-test-1',
+    turnId: 'run-test-1',
+    sessionId: 'run-test-1',
     agentId: 'agent-test-1',
     conversationId: 'conv-test-1',
     status: 'completed',
@@ -163,7 +167,7 @@ export function makeTextChunkEvent(
   overrides?: Partial<EventMap['run.text_chunk']>,
 ): EventMap['run.text_chunk'] {
   return {
-    runId: 'run-test-1',
+    turnId: 'run-test-1',
     agentId: 'agent-test-1',
     messageId: 'msg-test-1',
     content: 'Hello world',
@@ -176,7 +180,7 @@ export function makeToolStartedEvent(
   overrides?: Partial<EventMap['run.tool_started']>,
 ): EventMap['run.tool_started'] {
   return {
-    runId: 'run-test-1',
+    turnId: 'run-test-1',
     agentId: 'agent-test-1',
     toolCallId: 'tc-test-1',
     toolName: 'read_file',
@@ -190,7 +194,7 @@ export function makeToolResultEvent(
   overrides?: Partial<EventMap['run.tool_result']>,
 ): EventMap['run.tool_result'] {
   return {
-    runId: 'run-test-1',
+    turnId: 'run-test-1',
     agentId: 'agent-test-1',
     toolCallId: 'tc-test-1',
     toolName: 'read_file',
@@ -206,7 +210,7 @@ export function makeFeedbackReceivedEvent(
 ): EventMap['feedback.received'] {
   return {
     feedbackId: 'fb-test-1',
-    runId: 'run-test-1',
+    turnId: 'run-test-1',
     agentId: 'agent-test-1',
     type: 'thumbs_up',
     timestamp: Date.now(),
@@ -229,7 +233,7 @@ export function makeRunResumedEvent(
   overrides?: Partial<EventMap['run.resumed']>,
 ): EventMap['run.resumed'] {
   return {
-    runId: 'run-test-1',
+    turnId: 'run-test-1',
     agentId: 'agent-test-1',
     triggeredBy: 'feedback.received',
     suspendedDurationMs: 5000,
@@ -242,7 +246,7 @@ export function makeRunResumedEvent(
 
 export interface SuspendedRunRow {
   id: string;
-  agentRunId: string;
+  agentSessionId: string;
   agentId: string;
   waitEventType: string;
   waitSelector: string;
@@ -256,7 +260,7 @@ export function makeSuspendedRunRow(
 ): SuspendedRunRow {
   return {
     id: 'sr-1',
-    agentRunId: 'run-1',
+    agentSessionId: 'run-1',
     agentId: 'agent-1',
     waitEventType: 'feedback.received',
     waitSelector: JSON.stringify({ agentId: 'agent-1', type: 'thumbs_up' }),
@@ -279,10 +283,10 @@ export function createMockSuspendDb(
   }
 
   return {
-    getSuspendedRunsByEventType: vi.fn().mockImplementation((eventType: string) => {
+    getSuspendedSessionsByEventType: vi.fn().mockImplementation((eventType: string) => {
       return Promise.resolve(rows[eventType] ?? []);
     }),
-    deleteSuspendedRun: vi.fn().mockImplementation((id: string) => {
+    deleteSuspendedSession: vi.fn().mockImplementation((id: string) => {
       suspendedRuns.delete(id);
       for (const arr of Object.values(rows)) {
         const idx = arr.findIndex((r) => r.id === id);
@@ -290,7 +294,7 @@ export function createMockSuspendDb(
       }
       return Promise.resolve(undefined);
     }),
-    expireOldSuspendedRuns: vi.fn().mockResolvedValue(0),
+    expireOldSuspendedSessions: vi.fn().mockResolvedValue(0),
     createSuspendedRun: vi.fn().mockImplementation((data: SuspendedRunRow) => {
       suspendedRuns.set(data.id, data);
       const eventType = data.waitEventType;
@@ -301,6 +305,101 @@ export function createMockSuspendDb(
     _store: suspendedRuns,
   };
 }
+
+// ── Timing Helpers ──────────────────────────────────────────────
+
+export const settle = (ms = 15) => new Promise((r) => setTimeout(r, ms));
+
+// ── Data Builders ───────────────────────────────────────────────
+
+export function makeTraceRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'trace-1',
+    agentId: 'agent-test-1',
+    sessionId: 'run-test-1',
+    taskDescription: 'Test task',
+    steps: [],
+    startedAt: Date.now() - 1000,
+    completedAt: Date.now(),
+    outcome: 'success',
+    metadata: '{}',
+    ...overrides,
+  };
+}
+
+export function makeFeedbackRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'fb-row-1',
+    traceId: 'trace-1',
+    agentId: 'agent-test-1',
+    source: 'human',
+    type: 'thumbs',
+    value: 'positive',
+    createdAt: Date.now(),
+    ...overrides,
+  };
+}
+
+// ── Container Mock Factories ────────────────────────────────────
+
+export function createMockContainer(overrides: Record<string, unknown> = {}) {
+  return {
+    id: overrides.id ?? 'sha256-abc123',
+    start: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    inspect: vi.fn().mockResolvedValue({
+      State: { Status: 'running', ExitCode: 0 },
+    }),
+    putArchive: vi.fn().mockResolvedValue(undefined),
+    getArchive: vi.fn().mockResolvedValue(
+      (async function* () {
+        yield Buffer.from('fake-tar-data');
+      })(),
+    ),
+    logs: vi.fn().mockResolvedValue(Buffer.from('line1\nline2\nline3')),
+    pause: vi.fn().mockResolvedValue(undefined),
+    unpause: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+export function createMockNetwork(overrides: Record<string, unknown> = {}) {
+  return {
+    inspect: vi.fn().mockResolvedValue({ Name: 'ctxmill-agents' }),
+    ...overrides,
+  };
+}
+
+export function createMockDocker(overrides: Record<string, unknown> = {}) {
+  const mockContainer = createMockContainer();
+  return {
+    createContainer: vi.fn().mockResolvedValue(mockContainer),
+    getContainer: vi.fn().mockReturnValue(mockContainer),
+    listContainers: vi.fn().mockResolvedValue([]),
+    getNetwork: vi.fn().mockReturnValue(createMockNetwork()),
+    createNetwork: vi.fn().mockResolvedValue({}),
+    _mockContainer: mockContainer,
+    ...overrides,
+  };
+}
+
+// ── Tool Context Mock ───────────────────────────────────────────
+
+export function createMockToolContext(overrides: Record<string, unknown> = {}) {
+  return {
+    agentId: 'test-agent',
+    conversationId: 'test-conv',
+    instanceId: 'run-123',
+    workspaceDir: '/tmp/test',
+    knowledge: {
+      query: async () => ({ items: [] }),
+    },
+    ...overrides,
+  };
+}
+
+// ── Trigger DB Mock ─────────────────────────────────────────────
 
 export function createMockTriggerDb(initialTriggers: Array<{
   id: string;

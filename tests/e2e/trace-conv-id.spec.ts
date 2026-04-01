@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Trace conversation ID through chat', async ({ page }) => {
   const agentId = 'f22dbb85-376d-4c7e-a91d-e132a2dc45f3';
@@ -7,11 +7,11 @@ test('Trace conversation ID through chat', async ({ page }) => {
   console.log('\nTarget conversation ID:', targetConvId);
 
   // Navigate with explicit conversation ID
-  const navUrl = `/agents/${agentId}/chat?conversationId=${targetConvId}`;
+  const navUrl = `/agents/${agentId}/sessions/new?conversationId=${targetConvId}`;
   console.log('Navigation URL:', navUrl);
   
   await page.goto(navUrl);
-  await page.getByTestId('chat-input').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.getByTestId('session-input').waitFor({ state: 'visible', timeout: 15_000 });
 
   // Check what the page's URL is
   const currentUrl = page.url();

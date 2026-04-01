@@ -17,7 +17,7 @@ import { resolve } from 'node:path';
 import { create } from '@bufbuild/protobuf';
 import type { JsonObject } from '@bufbuild/protobuf';
 import { createClient, ConnectError, Code } from '@connectrpc/connect';
-import { createGrpcTransport } from '@connectrpc/connect-node';
+import { createConnectTransport } from '@connectrpc/connect-node';
 import {
   HarnessService,
   OpenSessionRequestSchema,
@@ -31,10 +31,11 @@ import {
 import type { ContainerManager } from '../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../sandbox/workspace-diff.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../database/repository.js';
+import type { TypedEventBus } from '../events/bus.js';
 import type { ContainerLifecyclePolicy } from './container-lifecycle-policy.js';
 import type { InterruptManager } from './interrupt.js';
 import { protoSessionEventToCustom } from '../sandbox/proto-convert.js';
-import type { SessionEvent as CustomSessionEvent } from './sandbox-run-service.js';
+import type { SessionEvent as CustomSessionEvent } from './session-turn-service.js';
 import type { AgentDefinition, Message } from '../types.js';
 import { retryWithBackoff } from '../util/retry.js';
 import {
@@ -66,9 +67,11 @@ export interface SandboxSessionManagerDeps {
   containerManager: ContainerManager;
   db: DatabaseRepository;
   lifecyclePolicy: ContainerLifecyclePolicy;
+  eventBus?: TypedEventBus;
+  maxConcurrentSessionsPerAgent?: number;
   interruptManager?: InterruptManager;
   sandboxSecrets?: Readonly<Record<string, string>>;
-  resolveToolsForAgent?: (toolNames: string[]) => ToolMetadata[];
+  resolveToolsForAgent?: (toolNames: string[], excludeBuiltins?: string[]) => ToolMetadata[];
   logger: Logger;
   config: {
     idleTimeoutMs: number;
@@ -85,9 +88,11 @@ export interface SessionRecord {
   agentId: string;
   containerName: string;
   containerId: string;
-  status: 'ACTIVE' | 'FROZEN' | 'CHECKPOINTED' | 'RESTORING';
+  status: 'ACTIVE' | 'PAUSED' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED';
   harnessName: string;
   sessionWorkspaceDir?: string;
+  currentTurnAbortController?: AbortController;
+  currentTurnId?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   grpcClient?: any; // ConnectRPC client — typed as any per spec
 }
@@ -199,12 +204,12 @@ function sessionContainerName(conversationId: string): string {
  * A network-level error (ECONNREFUSED etc.) means the server is not ready.
  */
 interface ReadyClient {
-  transport: ReturnType<typeof createGrpcTransport>;
+  transport: ReturnType<typeof createConnectTransport>;
   grpcClient: ReturnType<typeof createClient<typeof HarnessService>>;
 }
 
 async function waitForContainerReady(baseUrl: string, timeoutMs = HEALTH_CHECK_TIMEOUT_MS): Promise<ReadyClient> {
-  const transport = createGrpcTransport({ baseUrl });
+  const transport = createConnectTransport({ baseUrl, httpVersion: '1.1' });
   const grpcClient = createClient(HarnessService, transport);
   const start = Date.now();
 
@@ -274,9 +279,11 @@ export class SandboxSessionManager {
   private readonly containerManager: ContainerManager;
   private readonly db: DatabaseRepository;
   private readonly lifecyclePolicy: ContainerLifecyclePolicy;
+  private readonly eventBus: TypedEventBus | undefined;
+  private readonly maxConcurrentSessionsPerAgent: number;
   private readonly interruptManager: InterruptManager | undefined;
   private readonly sandboxSecrets: Readonly<Record<string, string>>;
-  private readonly resolveToolsForAgent: (toolNames: string[]) => ToolMetadata[];
+  private readonly resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[]) => ToolMetadata[];
   private readonly logger: Logger;
   private readonly config: {
     idleTimeoutMs: number;
@@ -302,6 +309,8 @@ export class SandboxSessionManager {
     this.containerManager = deps.containerManager;
     this.db = deps.db;
     this.lifecyclePolicy = deps.lifecyclePolicy;
+    this.eventBus = deps.eventBus;
+    this.maxConcurrentSessionsPerAgent = deps.maxConcurrentSessionsPerAgent ?? 3;
     this.interruptManager = deps.interruptManager;
     this.sandboxSecrets = deps.sandboxSecrets ?? {};
     this.resolveToolsForAgent = deps.resolveToolsForAgent ?? (() => []);
@@ -320,7 +329,7 @@ export class SandboxSessionManager {
    *  1. In-memory cache hit (ACTIVE) → return immediately.
    *  2. DB miss → create a fresh container + OpenSession(FreshBootstrap).
    *  3. DB ACTIVE → reconnect gRPC client (container may still be running).
-   *  4. DB FROZEN → docker unpause + reconnect gRPC.
+   *  4. DB PAUSED (idle) → docker unpause + reconnect gRPC.
    *  5. DB CHECKPOINTED → create container + OpenSession(RestoreBootstrap).
    *  6. DB RESTORING → throw; caller should retry later.
    */
@@ -353,13 +362,24 @@ export class SandboxSessionManager {
           return this.recoverDeadSession(dbSession, conversationId, agentDef, agentId, 'reconnect', err);
         }
       }
-      case 'FROZEN': {
-        try {
-          const record = await this.unfreezeContainer(dbSession);
-          this.sessions.set(conversationId, record);
-          return record;
-        } catch (err) {
-          return this.recoverDeadSession(dbSession, conversationId, agentDef, agentId, 'unfreeze', err);
+      case 'PAUSED': {
+        if (dbSession.pausedReason === 'idle') {
+          try {
+            const record = await this.unfreezeContainer(dbSession);
+            this.sessions.set(conversationId, record);
+            return record;
+          } catch (err) {
+            return this.recoverDeadSession(dbSession, conversationId, agentDef, agentId, 'unfreeze', err);
+          }
+        } else {
+          try {
+            const record = await this.reconnectToContainer(dbSession);
+            record.status = 'PAUSED';
+            this.sessions.set(conversationId, record);
+            return record;
+          } catch (err) {
+            return this.recoverDeadSession(dbSession, conversationId, agentDef, agentId, 'reconnect-paused', err);
+          }
         }
       }
       case 'CHECKPOINTED': {
@@ -371,6 +391,12 @@ export class SandboxSessionManager {
         throw new Error(
           `Session ${dbSession.id} for conversation ${conversationId} is currently being restored. Try again shortly.`,
         );
+      }
+      case 'TERMINATED': {
+        this.logger.info(
+          `${TAG} session ${dbSession.id} for conversation ${conversationId} is terminated, creating fresh session`,
+        );
+        return this.createFreshSession(conversationId, agentDef, agentId);
       }
       default: {
         this.logger.warn(
@@ -398,6 +424,142 @@ export class SandboxSessionManager {
     this.agentDefs.delete(conversationId);
     this.turnQueues.delete(sessionId);
     this.activeTurns.delete(sessionId);
+  }
+
+  startTurn(
+    sessionId: string,
+    turnId: string,
+    agentId: string,
+    conversationId: string,
+    mode: 'interactive' | 'background',
+    taskDescription?: string,
+  ): AbortSignal {
+    const record = this.findSessionById(sessionId);
+    if (!record) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    const controller = new AbortController();
+    record.currentTurnAbortController = controller;
+    record.currentTurnId = turnId;
+    this.eventBus?.emit('turn.started', {
+      turnId,
+      sessionId,
+      agentId,
+      conversationId,
+      mode,
+      taskDescription: taskDescription ?? '',
+      timestamp: Date.now(),
+    });
+    return controller.signal;
+  }
+
+  completeTurn(
+    sessionId: string,
+    turnId: string,
+    agentId: string,
+    conversationId: string,
+    status: 'completed' | 'error' | 'cancelled',
+    durationMs: number,
+    error?: string,
+  ): void {
+    const record = this.findSessionById(sessionId);
+    if (record) {
+      record.currentTurnAbortController = undefined;
+      record.currentTurnId = undefined;
+    }
+    this.activeTurns.delete(sessionId);
+    this.eventBus?.emit('turn.completed', {
+      turnId,
+      sessionId,
+      agentId,
+      conversationId,
+      status,
+      error,
+      durationMs,
+      timestamp: Date.now(),
+    });
+  }
+
+  cancelCurrentTurn(sessionId: string): boolean {
+    const record = this.findSessionById(sessionId);
+    if (!record?.currentTurnAbortController) {
+      return false;
+    }
+    record.currentTurnAbortController.abort();
+    return true;
+  }
+
+  getAbortSignal(sessionId: string): AbortSignal | undefined {
+    return this.findSessionById(sessionId)?.currentTurnAbortController?.signal;
+  }
+
+  async pauseSession(sessionId: string, reason: 'hitl' | 'idle'): Promise<void> {
+    const record = this.findSessionById(sessionId);
+    if (!record || record.status !== 'ACTIVE') {
+      return;
+    }
+
+    const timestamp = Date.now();
+    record.status = 'PAUSED';
+    await this.db.updateSandboxSessionStatus(sessionId, 'PAUSED', {
+      pausedAt: timestamp,
+      pausedReason: reason,
+    });
+    this.eventBus?.emit('session.paused', {
+      sessionId,
+      agentId: record.agentId,
+      conversationId: record.conversationId,
+      reason,
+      timestamp,
+    });
+
+    if (reason === 'idle') {
+      await this.containerManager.pauseContainer(record.containerId);
+      return;
+    }
+
+    this.lifecyclePolicy.scheduleHitlGrace(sessionId, record.containerId);
+  }
+
+  async resumeSession(sessionId: string): Promise<void> {
+    const record = this.findSessionById(sessionId);
+    if (!record) {
+      return;
+    }
+
+    if (record.status !== 'PAUSED') {
+      return;
+    }
+
+    record.status = 'ACTIVE';
+    await this.db.updateSandboxSessionStatus(sessionId, 'ACTIVE', {
+      pausedAt: null,
+      pausedReason: null,
+    });
+    await this.lifecyclePolicy.cancelPause(sessionId);
+
+    try {
+      await this.containerManager.unpauseContainer(record.containerId);
+    } catch (error) {
+      this.logger.debug(`${TAG} container ${record.containerId} was not resumable for session ${sessionId}`, error);
+    }
+  }
+
+  async pauseForHitl(sessionId: string, _reason: string): Promise<void> {
+    await this.pauseSession(sessionId, 'hitl');
+  }
+
+  async resumeFromHitl(sessionId: string): Promise<void> {
+    await this.resumeSession(sessionId);
+  }
+
+  checkConcurrencyLimit(agentId: string): void {
+    const activeForAgent = [...this.sessions.values()].filter((session) =>
+      session.agentId === agentId && session.status === 'ACTIVE');
+    if (activeForAgent.length >= this.maxConcurrentSessionsPerAgent) {
+      throw new Error(`Concurrent session limit (${this.maxConcurrentSessionsPerAgent}) reached for agent ${agentId}`);
+    }
   }
 
   // ── Turn delivery with coalescing ──────────────────────────────
@@ -499,6 +661,23 @@ export class SandboxSessionManager {
     await this.db.updateSandboxSessionStatus(sessionId, 'CHECKPOINTED');
     record.status = 'CHECKPOINTED';
 
+    await this.lifecyclePolicy.cancelIdleTimeout(sessionId);
+    await this.lifecyclePolicy.cancelPause(sessionId);
+
+    if (record.containerId) {
+      try {
+        await this.containerManager.stopContainer(record.containerId, 10);
+        await this.containerManager.removeContainer(record.containerId, true);
+      } catch (err) {
+        this.logger.warn(`${TAG} container cleanup failed for session ${sessionId}:`, err);
+      }
+    }
+
+    this.sessions.delete(record.conversationId);
+    this.agentDefs.delete(record.conversationId);
+    this.turnQueues.delete(sessionId);
+    this.activeTurns.delete(sessionId);
+
     this.logger.info(`${TAG} session ${sessionId} suspended`);
     return checkpoint;
   }
@@ -537,16 +716,16 @@ export class SandboxSessionManager {
     }
 
     if (record?.sessionWorkspaceDir) {
-      try {
-        const sessionDir = resolve(record.sessionWorkspaceDir, '..');
-        await cleanupSession(sessionDir);
-        this.logger.debug(`${TAG} cleaned up session workspace for ${sessionId}`);
-      } catch (err) {
-        this.logger.warn(`${TAG} session workspace cleanup failed for ${sessionId}:`, err);
-      }
-    }
+       try {
+         const sessionDir = resolve(record.sessionWorkspaceDir, '..');
+         await cleanupSession(sessionDir);
+         this.logger.debug(`${TAG} cleaned up session workspace for ${sessionId}`);
+       } catch (err) {
+         this.logger.warn(`${TAG} session workspace cleanup failed for ${sessionId}:`, err);
+       }
+     }
 
-    await this.db.deleteSandboxSession(sessionId);
+     await this.db.updateSandboxSessionStatus(sessionId, 'TERMINATED');
     if (record) {
       this.sessions.delete(record.conversationId);
       this.agentDefs.delete(record.conversationId);
@@ -562,39 +741,23 @@ export class SandboxSessionManager {
    * Used to free CPU for idle sessions while preserving full in-memory state.
    */
   async freezeSession(sessionId: string): Promise<void> {
-    const record = this.findSessionById(sessionId);
-    if (!record) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-    this.logger.info(`${TAG} freezing session ${sessionId}`);
-    await this.containerManager.pauseContainer(record.containerId);
-    await this.db.updateSandboxSessionStatus(sessionId, 'FROZEN');
-    record.status = 'FROZEN';
-    this.logger.info(`${TAG} session ${sessionId} frozen`);
+    await this.pauseSession(sessionId, 'idle');
   }
 
   /**
    * Unfreeze a session by unpausing its Docker container.
    */
   async unfreezeSession(sessionId: string): Promise<void> {
-    const record = this.findSessionById(sessionId);
-    if (!record) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-    this.logger.info(`${TAG} unfreezing session ${sessionId}`);
-    await this.containerManager.unpauseContainer(record.containerId);
-    await this.db.updateSandboxSessionStatus(sessionId, 'ACTIVE');
-    record.status = 'ACTIVE';
-    this.logger.info(`${TAG} session ${sessionId} unfrozen`);
+    await this.resumeSession(sessionId);
   }
 
   async resumeWithInterruptResolution(
     sessionId: string,
-    runId: string,
+    turnId: string,
     agentId: string,
   ): Promise<void> {
     this.logger.info(
-      `${TAG} resuming session ${sessionId} with interrupt resolution (run=${runId}, agent=${agentId})`,
+      `${TAG} resuming session ${sessionId} with interrupt resolution (turn=${turnId}, agent=${agentId})`,
     );
 
     const dbSession = await this.db.getSandboxSession(sessionId);
@@ -619,10 +782,10 @@ export class SandboxSessionManager {
     const record = await this.ensureSession(conversationId, agentDef, agentId);
 
     const resolvedInterrupts = await this.db.getResolvedInterruptsForSession(sessionId);
-    const interrupt = resolvedInterrupts.find((entry) => entry.runId === runId);
+    const interrupt = resolvedInterrupts.find((entry) => entry.agentSessionId === turnId);
     if (!interrupt) {
       this.logger.warn(
-        `${TAG} no resolved interrupt matching runId=${runId} for session ${sessionId} (found ${resolvedInterrupts.length} other interrupts), skipping continuation turn`,
+        `${TAG} no resolved interrupt matching turnId=${turnId} for session ${sessionId} (found ${resolvedInterrupts.length} other interrupts), skipping continuation turn`,
       );
       return;
     }
@@ -667,15 +830,17 @@ export class SandboxSessionManager {
       createdAt: new Date(),
     };
 
-    const turnId = `hitl-resume-${runId.slice(0, 8)}-${Date.now()}`;
+    const continuationTurnId = `hitl-resume-${turnId.slice(0, 8)}-${Date.now()}`;
     this.logger.info(
-      `${TAG} delivering continuation turn ${turnId} for session ${record.sessionId}`,
+      `${TAG} delivering continuation turn ${continuationTurnId} for session ${record.sessionId}`,
     );
 
-    for await (const _event of this.deliverTurn(record.sessionId, [continuationMessage], turnId)) {}
+    for await (const _event of this.deliverTurn(record.sessionId, [continuationMessage], continuationTurnId)) {
+      void _event;
+    }
 
     this.logger.info(
-      `${TAG} continuation turn ${turnId} completed for session ${record.sessionId}`,
+      `${TAG} continuation turn ${continuationTurnId} completed for session ${record.sessionId}`,
     );
   }
 
@@ -723,6 +888,8 @@ export class SandboxSessionManager {
     const harnessName = agentDef.harness ?? 'langgraph';
     const sessionId = randomUUID();
 
+    this.checkConcurrencyLimit(agentId ?? agentDef.name);
+
     this.logger.info(
       `${TAG} creating fresh session ${sessionId} for conversation ${conversationId} (harness=${harnessName})`,
     );
@@ -742,7 +909,7 @@ export class SandboxSessionManager {
 
     // Create and start the container
     const containerInfo = await this.containerManager.createContainer({
-      runId: sessionId,
+      sessionId,
       agentId: agentId ?? agentDef.name,
       harnessName,
       workspaceDir,
@@ -769,7 +936,10 @@ export class SandboxSessionManager {
           harnessConfigJson: JSON.stringify(agentDef.harnessConfig),
           systemPrompt: agentDef.systemPrompt,
           workspaceDir: workspaceDir ?? '/workspace',
-          tools: this.resolveToolsForAgent(agentDef.tools ?? []),
+          tools: this.resolveToolsForAgent(
+            agentDef.tools ?? [],
+            asStringArray(agentDef.metadata?.excludeBuiltinTools),
+          ),
         },
       },
     });
@@ -882,7 +1052,7 @@ export class SandboxSessionManager {
 
       // Spin up a fresh container
       const containerInfo = await this.containerManager.createContainer({
-        runId: sessionId,
+        sessionId,
         agentId: agentDef.name,
         harnessName,
         workspaceDir,
@@ -919,11 +1089,18 @@ export class SandboxSessionManager {
               harnessName,
               harnessState: (checkpoint.harnessState ?? {}) as JsonObject,
             },
+            agentId: agentDef.name,
+            harnessConfigJson: JSON.stringify(agentDef.harnessConfig),
+            systemPrompt: agentDef.systemPrompt,
+            tools: this.resolveToolsForAgent(
+              agentDef.tools ?? [],
+              asStringArray(agentDef.metadata?.excludeBuiltinTools),
+            ),
           },
         },
       });
 
-      await grpcClient.openSession(openReq);
+      await retryGrpcCall(() => grpcClient.openSession(openReq), 5, 1000);
 
       await this.db.updateSandboxSessionStatus(sessionId, 'ACTIVE', {
         containerName: containerInfo.containerName,
@@ -952,7 +1129,7 @@ export class SandboxSessionManager {
   }
 
   /**
-   * Recover from a dead container when ensureSession finds ACTIVE or FROZEN
+   * Recover from a dead container when ensureSession finds ACTIVE or PAUSED
    * status but the container is unreachable.
    *
    * Recovery strategy:
@@ -1088,12 +1265,12 @@ export class SandboxSessionManager {
               hitlActive = true;
               this.interruptManager?.cancelTimeoutForSession(sessionId);
               void Promise.resolve()
-                .then(() => this.lifecyclePolicy.schedulePause(sessionId, record.containerId))
+                .then(() => this.pauseSession(sessionId, 'hitl'))
                 .catch((err) => {
-                  this.logger.warn(`${TAG} failed to schedule Docker pause for session ${sessionId}:`, err);
+                  this.logger.warn(`${TAG} failed to schedule HITL grace for session ${sessionId}:`, err);
                 });
               this.logger.debug(
-                `${TAG} HITL_PAUSE detected for session ${sessionId}, turn timeout suspended, Docker pause scheduled`,
+                `${TAG} HITL_PAUSE detected for session ${sessionId}, turn timeout suspended, HITL grace scheduled`,
               );
             } else if (hitlActive) {
               hitlActive = false;
@@ -1130,7 +1307,7 @@ export class SandboxSessionManager {
 
     await this.db.updateSandboxSessionStatus(sessionId, 'ACTIVE');
     this.lifecyclePolicy.scheduleIdleTimeout(sessionId, record.containerId, {
-      onFreeze: (sid) => this.freezeSession(sid),
+      onFreeze: (sid) => this.pauseSession(sid, 'idle'),
       onCheckpoint: async (sid) => {
         await this.suspendSession(sid, 'idle-checkpoint');
       },
@@ -1226,7 +1403,7 @@ export class SandboxSessionManager {
   }
 
   private isStaleContainerError(err: unknown): boolean {
-    if (err instanceof ConnectError && err.code === Code.Unavailable) return true;
+    if (err instanceof ConnectError && (err.code === Code.Unavailable || err.code === Code.Internal)) return true;
     if (err instanceof Error && /ENOTFOUND|ECONNREFUSED|ECONNRESET/.test(err.message)) return true;
     return false;
   }
@@ -1257,4 +1434,10 @@ export class SandboxSessionManager {
       return undefined;
     }
   }
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((v): v is string => typeof v === 'string');
+  return strings.length > 0 ? strings : undefined;
 }

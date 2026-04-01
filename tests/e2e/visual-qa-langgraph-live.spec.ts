@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createTestAgent, deleteTestAgent, sendAgentMessage, waitForRunStatus } from './support.js';
+import { createTestAgent, deleteTestAgent, waitForRunStatus } from './support.js';
 import { hasHarnessKey, getHarnessConfig, getVQAPrompt, getToolsForHarness } from './visual-qa/support.js';
 import { ScreenshotCapture } from './visual-qa/screenshot-capture.js';
 
@@ -32,11 +32,11 @@ test.describe(`${HARNESS} Live Streaming Visual QA`, () => {
     test.setTimeout(180_000);
     const capture = new ScreenshotCapture(page, HARNESS, 'live');
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
     await capture.captureViewport('empty-state', 'Chat page initial empty state');
 
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
     await chatInput.fill('Run the visual QA sequence');
     await expect(page.getByTestId('send-button')).toBeEnabled();
 
@@ -47,13 +47,13 @@ test.describe(`${HARNESS} Live Streaming Visual QA`, () => {
     );
     await page.getByTestId('send-button').click();
     const sendResponse = await sendResponsePromise;
-    const sendBody = await sendResponse.json() as { runId: string; conversationId: string };
+    const sendBody = await sendResponse.json() as { sessionId: string; conversationId: string };
 
     await expect(page.getByTestId('message-bubble-user').last()).toBeVisible({ timeout: 5_000 });
     await capture.captureViewport('user-message', 'User message sent');
 
     // Wait for run completion via API (reliable, not SSE-dependent)
-    await waitForRunStatus(request, agentId, sendBody.runId, ['completed', 'error'], 150_000);
+    await waitForRunStatus(request, agentId, sendBody.sessionId, ['completed', 'error'], 150_000);
 
     // Give UI time to process final SSE events after run completes
     await page.waitForTimeout(3_000);
@@ -89,20 +89,20 @@ test.describe(`${HARNESS} Live Streaming Visual QA`, () => {
     test.setTimeout(180_000);
     const capture = new ScreenshotCapture(page, HARNESS, 'live');
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     const sendResponsePromise = page.waitForResponse((response) =>
       response.request().method() === 'POST' &&
       response.url().includes(`/api/agents/${agentId}/message`) &&
       response.ok(),
     );
-    await page.getByTestId('chat-input').fill('Run the visual QA sequence');
+    await page.getByTestId('session-input').fill('Run the visual QA sequence');
     await page.getByTestId('send-button').click();
     const sendResponse = await sendResponsePromise;
-    const sendBody = await sendResponse.json() as { runId: string; conversationId: string };
+    const sendBody = await sendResponse.json() as { sessionId: string; conversationId: string };
 
-    await waitForRunStatus(request, agentId, sendBody.runId, ['completed', 'error'], 150_000);
+    await waitForRunStatus(request, agentId, sendBody.sessionId, ['completed', 'error'], 150_000);
 
     await page.reload();
     await page.waitForLoadState('domcontentloaded');

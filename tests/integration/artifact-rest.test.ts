@@ -36,10 +36,6 @@ type ArtifactRecord = {
   deletedAt: string | null;
 };
 
-type ArtifactEnvelope = {
-  artifact: ArtifactRecord;
-};
-
 type ArtifactListEnvelope = {
   artifacts: ArtifactRecord[];
 };
@@ -61,7 +57,7 @@ async function createTestAgent(prefix: string): Promise<CreatedAgent> {
       displayName: 'Artifact REST Test',
       harness: 'langgraph',
       description: 'Live REST artifact integration test agent',
-      harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+      harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
       systemPrompt: 'You are a test agent.',
       tools: ['artifact_upload', 'artifact_download'],
     }),
@@ -143,13 +139,13 @@ describe('Artifact REST API Integration', () => {
     const metadataResponse = await fetch(`${ARTIFACTS_BASE}/${data.artifactId}`);
     expect(metadataResponse.status).toBe(200);
 
-    const metadata: ArtifactEnvelope = await metadataResponse.json();
-    expect(metadata.artifact.id).toBe(data.artifactId);
-    expect(metadata.artifact.agentId).toBe(testAgentId);
-    expect(metadata.artifact.name).toBe('test-upload.txt');
-    expect(metadata.artifact.mimeType).toBe('text/plain');
-    expect(metadata.artifact.sizeBytes).toBe(100);
-    expect(metadata.artifact.status).toBe('active');
+    const metadata: ArtifactRecord = await metadataResponse.json();
+    expect(metadata.id).toBe(data.artifactId);
+    expect(metadata.agentId).toBe(testAgentId);
+    expect(metadata.name).toBe('test-upload.txt');
+    expect(metadata.mimeType).toBe('text/plain');
+    expect(metadata.sizeBytes).toBe(100);
+    expect(metadata.status).toBe('active');
   });
 
   it('rejects invalid upload-url requests', async () => {
@@ -206,13 +202,13 @@ describe('Artifact REST API Integration', () => {
     const metadataResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
     expect(metadataResponse.status).toBe(200);
 
-    const metadata: ArtifactEnvelope = await metadataResponse.json();
-    expect(metadata.artifact.id).toBe(uploadData.artifactId);
-    expect(metadata.artifact.agentId).toBe(testAgentId);
-    expect(metadata.artifact.name).toBe('round-trip.txt');
-    expect(metadata.artifact.mimeType).toBe('text/plain');
-    expect(metadata.artifact.sizeBytes).toBe(Buffer.byteLength(fileContent));
-    expect(metadata.artifact.storageKey).toBe(uploadData.storageKey);
+    const metadata: ArtifactRecord = await metadataResponse.json();
+    expect(metadata.id).toBe(uploadData.artifactId);
+    expect(metadata.agentId).toBe(testAgentId);
+    expect(metadata.name).toBe('round-trip.txt');
+    expect(metadata.mimeType).toBe('text/plain');
+    expect(metadata.sizeBytes).toBe(Buffer.byteLength(fileContent));
+    expect(metadata.storageKey).toBe(uploadData.storageKey);
 
     const downloadResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}/download-url?expiresIn=120`);
     expect(downloadResponse.status).toBe(200);
@@ -251,9 +247,9 @@ describe('Artifact REST API Integration', () => {
     const deletedMetadataResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
     expect(deletedMetadataResponse.status).toBe(200);
 
-    const deletedMetadata: ArtifactEnvelope = await deletedMetadataResponse.json();
-    expect(deletedMetadata.artifact.status).toBe('deleted');
-    expect(deletedMetadata.artifact.id).toBe(uploadData.artifactId);
+    const deletedMetadata: ArtifactRecord = await deletedMetadataResponse.json();
+    expect(deletedMetadata.status).toBe('deleted');
+    expect(deletedMetadata.id).toBe(uploadData.artifactId);
   });
 
   it('returns 404 for a missing artifact', async () => {

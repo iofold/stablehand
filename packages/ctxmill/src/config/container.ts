@@ -20,11 +20,10 @@ import { DefaultLearningPipeline } from '../learning/pipeline.js';
 import { SSEManager } from '../orchestrator/sse.js';
 import { SSEBroadcaster } from '../orchestrator/sse-broadcaster.js';
 import { InterruptManager } from '../orchestrator/interrupt.js';
-import { RunRegistry } from '../orchestrator/run-registry.js';
 import { LearningEventSubscriber } from '../learning/event-subscriber.js';
-import { SuspendedRunMatcher } from '../orchestrator/suspended-run-matcher.js';
+import { SuspendedSessionMatcher } from '../orchestrator/suspended-session-matcher.js';
 import { EventTriggerManager } from '../events/trigger-manager.js';
-import { AgentRunService } from '../orchestrator/agent-run-service.js';
+import { AgentSessionService } from '../orchestrator/agent-session-service.js';
 import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
 import { ManifestService } from '../manifest/index.js';
 import { CachedPostgresSecretProvider } from '../secrets/postgres-provider.js';
@@ -34,13 +33,14 @@ import { ContainerManager } from '../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../sandbox/workspace-diff.js';
 import { SystemSettingsService } from '../settings/service.js';
 import { ContainerLifecyclePolicy } from '../orchestrator/container-lifecycle-policy.js';
-import { SandboxRunService } from '../orchestrator/sandbox-run-service.js';
-import type { SandboxSessionManager } from '../orchestrator/sandbox-run-service.js';
+import { SessionTurnService } from '../orchestrator/session-turn-service.js';
+import type { SandboxSessionManager } from '../orchestrator/session-turn-service.js';
 import { SandboxSessionManager as SandboxSessionManagerImpl } from '../orchestrator/sandbox-session-manager.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
 import { LocalToolProvider } from '../tool/providers/local.js';
 import { ArtifactToolProvider } from '../tool/providers/artifact.js';
 import { builtinTools, builtinToolNames } from '../tool/builtin/index.js';
+import { createCtxmillGuideTool } from '../tool/builtin/ctxmill-guide.js';
 import { ORCHESTRATOR_TOOLS, DAEMON_TOOLS } from '../tool/metadata.js';
 import { zodToJsonSchema } from '../tool/schema-convert.js';
 import { ArtifactStore } from '../artifact/artifact-store.js';
@@ -58,11 +58,10 @@ export interface AppContainer {
   sseManager: SSEManager;
   sseBroadcaster: SSEBroadcaster;
   interruptManager: InterruptManager;
-  runRegistry: RunRegistry;
   learningSubscriber?: LearningEventSubscriber;
-  suspendedRunMatcher: SuspendedRunMatcher;
+  suspendedSessionMatcher: SuspendedSessionMatcher;
   triggerManager: EventTriggerManager;
-  agentRunService: AgentRunService;
+  agentSessionService: AgentSessionService;
   harnessRegistry: HarnessRegistry;
   manifestService: ManifestService;
   secretProvider: SecretProvider;
@@ -79,7 +78,7 @@ export interface AppContainer {
   close: () => Promise<void>;
 }
 
-export const VALID_WEBHOOK_EVENTS = ['run.started', 'run.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'] as const;
+export const VALID_WEBHOOK_EVENTS = ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'] as const;
 
 type EnqueueCallbackArgs = Parameters<CallbackDispatcher['enqueue']>[0];
 
@@ -89,14 +88,14 @@ async function enqueueIfSubscribed(
   agentId: string,
   eventType: string,
   payload: Record<string, unknown>,
-  runId?: string,
+  sessionId?: string,
 ): Promise<void> {
   const deliveries: EnqueueCallbackArgs[] = [];
 
   const hooks = await db.getWebhooksForAgent(agentId);
   for (const hook of hooks) {
     if ((hook.events as string[]).includes(eventType)) {
-      deliveries.push({ agentId, runId, callbackUrl: hook.url, eventType, payload });
+      deliveries.push({ agentId, sessionId, callbackUrl: hook.url, eventType, payload });
     }
   }
 
@@ -110,47 +109,49 @@ export function registerCallbackSubscriptions(
   db: DatabaseRepository,
   callbackDispatcher: CallbackDispatcher,
 ): void {
-  eventBus.on('run.completed', async (payload) => {
+  eventBus.on('turn.completed', async (payload) => {
     try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.completed', {
-        runId: payload.runId,
+      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'turn.completed', {
+        turnId: payload.turnId,
+        sessionId: payload.sessionId,
         agentId: payload.agentId,
         conversationId: payload.conversationId,
         status: payload.status,
         error: payload.error,
         durationMs: payload.durationMs,
         timestamp: payload.timestamp,
-      }, payload.runId);
+      }, payload.turnId);
     } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue run.completed callback:', err);
+      console.error('[CallbackDispatcher] failed to enqueue turn.completed callback:', err);
     }
   });
 
-  eventBus.on('run.started', async (payload) => {
+  eventBus.on('turn.started', async (payload) => {
     try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.started', {
-        runId: payload.runId,
+      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'turn.started', {
+        turnId: payload.turnId,
+        sessionId: payload.sessionId,
         agentId: payload.agentId,
         conversationId: payload.conversationId,
         mode: payload.mode,
         taskDescription: payload.taskDescription,
         timestamp: payload.timestamp,
-      }, payload.runId);
+      }, payload.turnId);
     } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue run.started callback:', err);
+      console.error('[CallbackDispatcher] failed to enqueue turn.started callback:', err);
     }
   });
 
   eventBus.on('run.tool_started', async (payload) => {
     try {
       await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.tool_started', {
-        runId: payload.runId,
+        turnId: payload.turnId,
         agentId: payload.agentId,
         toolCallId: payload.toolCallId,
         toolName: payload.toolName,
         args: payload.args,
         timestamp: payload.timestamp,
-      }, payload.runId);
+      }, payload.turnId);
     } catch (err) {
       console.error('[CallbackDispatcher] failed to enqueue run.tool_started callback:', err);
     }
@@ -205,6 +206,10 @@ export async function createContainer(
   for (const tool of builtinTools) {
     toolExecutor.register(tool);
   }
+  const ctxmillGuideTool = createCtxmillGuideTool({
+    listTools: () => toolExecutor.list(),
+  });
+  toolExecutor.register(ctxmillGuideTool);
   const toolRegistry = new DefaultToolRegistry();
   toolRegistry.addProvider(new LocalToolProvider(toolExecutor));
 
@@ -264,13 +269,8 @@ export async function createContainer(
     : undefined;
 
   // ── Suspend/Resume ──────────────────────────────────────
-  const suspendedRunMatcher = new SuspendedRunMatcher(eventBus, db, async (condition, _triggerEvent) => {
-    console.log(`[SuspendedRunMatcher] resuming run ${condition.runId} for agent ${condition.agentId} (event: ${condition.eventType})`);
-    try {
-      await db.updateRun(condition.runId, { status: 'running' });
-    } catch (err) {
-      console.error(`[SuspendedRunMatcher] failed to update run status for ${condition.runId}:`, err);
-    }
+  const suspendedSessionMatcher = new SuspendedSessionMatcher(eventBus, db, async (condition, _triggerEvent) => {
+    console.log(`[SuspendedSessionMatcher] resuming session ${condition.sessionId} for agent ${condition.agentId} (event: ${condition.eventType})`);
   });
 
   // ── Harness Registry ────────────────────────────────────
@@ -282,16 +282,9 @@ export async function createContainer(
   harnessRegistry.register(new PIAgentHarness());
 
   // ── Agent Execution ─────────────────────────────────────
-  const runRegistry = new RunRegistry({
-    db,
-    eventBus,
-    defaultMaxConcurrent: startupSettings.maxConcurrentRunsPerAgent,
-  });
-  await runRegistry.loadFromDb();
-
   // ── Agent Run Service ────────────────────────────────────
   // Lazy ref so the onFire callback (defined below) can access it after construction.
-  let agentRunServiceRef: AgentRunService | null = null;
+  let agentSessionServiceRef: AgentSessionService | null = null;
 
   // ── Event Triggers ─────────────────────────────────────
   const triggerManager = new EventTriggerManager(eventBus, db, async (agentId, task, triggerId) => {
@@ -300,9 +293,15 @@ export async function createContainer(
       console.error(`[EventTriggerManager] agent ${agentId} not found for trigger ${triggerId}`);
       return;
     }
-    // Create conversation + run for the triggered background run
+    // Create conversation + session for the triggered background session
     const conv = await db.createConversation(agentId);
-    const run = await runRegistry.startRun(agentId, conv.id, 'background', task);
+    sessionManagerRef?.checkConcurrencyLimit(agentId);
+    const session = await db.createTurn({
+      agentId,
+      conversationId: conv.id,
+      mode: 'background',
+      taskDescription: task,
+    });
 
     // Persist the synthetic user message
     await db.addMessage({ agentId, conversationId: conv.id, role: 'user', content: task });
@@ -322,7 +321,7 @@ export async function createContainer(
       if (typeof rawHarnessConfig === 'object' && rawHarnessConfig !== null && !Array.isArray(rawHarnessConfig)) {
         parsedHarnessConfig = rawHarnessConfig as Record<string, unknown>;
       }
-    } catch (_err) {
+    } catch {
       parsedHarnessConfig = {};
     }
 
@@ -342,26 +341,27 @@ export async function createContainer(
       resourceLimits: perAgentResourceLimits,
     };
 
-    // Fire-and-forget — AgentRunService handles SSE broadcasting, run.text_chunk events,
-    // message persistence, run completion, and learning traces.
-    void agentRunServiceRef!.executeRun({
+    // Fire-and-forget — AgentSessionService handles SSE broadcasting, run.text_chunk events,
+    // message persistence, session completion, and learning traces.
+    void agentSessionServiceRef!.executeSession({
       agentDef,
       messages,
-      agentId,
-      conversationId: conv.id,
-      runId: run.id,
-      taskDescription: task,
-    }).then(() => {
+        agentId,
+        conversationId: conv.id,
+        sessionId: session.id,
+        mode: 'background',
+        taskDescription: task,
+      }).then(() => {
       // Emit trigger.fired event after successful run
       eventBus.emit('trigger.fired', {
         triggerId,
         agentId,
         eventType: 'trigger.fired',
-        runId: run.id,
+        turnId: session.id,
         timestamp: Date.now(),
       });
     }).catch((err) => {
-      console.error(`[event-trigger] executeRun failed for agent ${agentId}:`, err);
+      console.error(`[event-trigger] executeSession failed for agent ${agentId}:`, err);
     });
   }, startupSettings.maxTriggerDepth);
   await triggerManager.start();
@@ -422,7 +422,7 @@ export async function createContainer(
             agentId: session.agentId,
             containerName: session.containerName ?? '',
             containerId: session.containerId ?? '',
-            status: (session.status as 'ACTIVE' | 'FROZEN' | 'CHECKPOINTED' | 'RESTORING') ?? 'ACTIVE',
+            status: (session.status as 'ACTIVE' | 'PAUSED' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED') ?? 'ACTIVE',
             harnessName: session.harnessName,
             ...(grpcClient ? { grpcClient } : {}),
           });
@@ -448,6 +448,10 @@ export async function createContainer(
     'S3_SECRET_KEY',
     'S3_BUCKET',
     'S3_REGION',
+    'LANGSMITH_TRACING',
+    'LANGSMITH_API_KEY',
+    'LANGSMITH_PROJECT',
+    'LANGSMITH_WORKSPACE_ID',
   ] as const;
 
   const sandboxSecrets: Readonly<Record<string, string>> = Object.fromEntries(
@@ -456,9 +460,10 @@ export async function createContainer(
       .map((key) => [key, process.env[key]!]),
   );
 
-  const resolveToolsForAgent = (toolNames: string[]) => {
+  const resolveToolsForAgent = (toolNames: string[], excludeBuiltins?: string[]) => {
     const declaredTools = new Set(toolNames);
-    const allTools = new Map<string, { name: string; description: string; input: unknown; requiresApproval?: boolean; location?: 'sandbox' | 'orchestrator' | 'daemon' }>();
+    const excluded = excludeBuiltins ? new Set(excludeBuiltins) : undefined;
+    const allTools = new Map<string, { name: string; description: string; input: unknown; requiresApproval?: boolean; location?: 'sandbox' | 'orchestrator' | 'daemon'; programmatic?: boolean }>();
 
     for (const tool of toolExecutor.list()) {
       if (declaredTools.has(tool.name) || builtinToolNames.has(tool.name)) {
@@ -467,6 +472,12 @@ export async function createContainer(
     }
     for (const tool of toolRegistry.listForAgent(toolNames)) {
       allTools.set(tool.name, tool);
+    }
+
+    if (excluded) {
+      for (const name of excluded) {
+        if (builtinToolNames.has(name)) allTools.delete(name);
+      }
     }
 
   return Array.from(allTools.values()).map((tool) => {
@@ -478,12 +489,15 @@ export async function createContainer(
         if (schema.type === 'object') {
           inputSchemaJson = JSON.stringify(schema);
         }
-      } catch {}
+      } catch {
+        inputSchemaJson = '{"type":"object","properties":{}}';
+      }
       return {
         name: tool.name,
         description: tool.description,
         inputSchemaJson,
         location: isDaemon ? 3 : isOrchestrator ? 2 : 1,
+        programmatic: tool.programmatic ?? false,
       };
     });
   };
@@ -492,6 +506,8 @@ export async function createContainer(
     containerManager,
     db,
     lifecyclePolicy,
+    eventBus,
+    maxConcurrentSessionsPerAgent: startupSettings.maxConcurrentRunsPerAgent,
     interruptManager,
     sandboxSecrets,
     resolveToolsForAgent,
@@ -515,25 +531,25 @@ export async function createContainer(
   const sessionManager: SandboxSessionManager = realSessionManager;
   sessionManagerRef = realSessionManager;
 
-  const sandboxRunService = new SandboxRunService({
+  const sessionTurnService = new SessionTurnService({
     sessionManager,
     eventBus,
-    onSessionReady: (runId, sessionId) => {
-      runRegistry.setRunSessionId(runId, sessionId);
+    onSessionReady: (agentSessionId, sandboxSessionId) => {
+      void db.updateTurn(agentSessionId, { sessionId: sandboxSessionId });
     },
   });
 
-  const agentRunService = new AgentRunService({
+  const agentSessionService = new AgentSessionService({
     sse: sseManager,
     db,
-    runRegistry,
+    sessionManager: realSessionManager,
     learningPipeline,
     eventBus,
-    sandboxRunService,
+    sessionTurnService,
     toolExecutor,
     toolRegistry,
   });
-  agentRunServiceRef = agentRunService;
+  agentSessionServiceRef = agentSessionService;
 
   const manifestService = new ManifestService(db, dataDir);
 
@@ -557,11 +573,10 @@ export async function createContainer(
     sseManager,
     sseBroadcaster,
     interruptManager,
-    runRegistry,
     learningSubscriber,
-    suspendedRunMatcher,
+    suspendedSessionMatcher,
     triggerManager,
-    agentRunService,
+    agentSessionService,
     harnessRegistry,
     manifestService,
     secretProvider,

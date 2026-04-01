@@ -1,147 +1,135 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventTriggerManager, MAX_TRIGGER_DEPTH } from '../../packages/ctxmill/src/events/trigger-manager.js';
-import { AgentRunService } from '../../packages/ctxmill/src/orchestrator/agent-run-service.js';
-import type { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
+import { AgentSessionService } from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
+import { createTestBus, createMockTriggerDb } from '../utils/event-bus-test-helpers.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
-import type { SandboxRunService } from '../../packages/ctxmill/src/orchestrator/sandbox-run-service.js';
+import type { AgentDefinition } from '../../packages/sandbox-daemon/src/types.js';
+import type { SessionTurnService } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
 
-/** Helper to build an async generator from an array of events */
 async function* mockEventStream(events: Array<Record<string, unknown>>) {
   for (const e of events) {
     yield e;
   }
 }
 
-// ── Shared mock factories ──────────────────────────────────────
+const settle = () => new Promise((r) => setTimeout(r, 15));
 
-function makeMockBus() {
-  return {
-    on: vi.fn(),
-    off: vi.fn(),
-    emit: vi.fn(),
-  } as unknown as TypedEventBus;
-}
-
-function makeMockDb(overrides: Record<string, unknown> = {}) {
-  return {
-    getTriggers: vi.fn().mockResolvedValue([]),
-    saveTrigger: vi.fn().mockResolvedValue(undefined),
-    deleteTrigger: vi.fn().mockResolvedValue(undefined),
-    getAgent: vi.fn().mockResolvedValue(undefined),
-    createConversation: vi.fn().mockResolvedValue({ id: 'conv-triggered' }),
-    addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
-    getMessages: vi.fn().mockResolvedValue([]),
-    ...overrides,
-  } as unknown as DatabaseRepository;
-}
-
-function makeMockRunRegistry() {
-  return {
-    startRun: vi.fn().mockResolvedValue({ id: 'run-triggered', agentId: 'triggered-agent' }),
-    completeRun: vi.fn(),
-    getAbortSignal: vi.fn().mockReturnValue(undefined),
-  };
-}
-
-function makeMockSandboxRunService() {
+function makeMockSessionTurnService() {
   return {
     executeSessionTurn: vi.fn().mockReturnValue(mockEventStream([
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), messageId: 'msg-1', content: 'sandbox response' },
     ])),
-  } as SandboxRunService & {
+  } as SessionTurnService & {
     executeSessionTurn: ReturnType<typeof vi.fn>;
   };
 }
 
 
 describe('EventTriggerManager sandbox mode', () => {
-  // ── Test: sandbox mode routes through SandboxRunService ──
+  let manager: EventTriggerManager | undefined;
+  afterEach(() => {
+    manager?.shutdown();
+    manager = undefined;
+  });
 
   describe('sandbox routing via AgentRunService', () => {
     it('routes triggered run to SandboxRunService', async () => {
-      const mockSandboxRunService = makeMockSandboxRunService();
+      const mockSessionTurnService = makeMockSessionTurnService();
 
-      const agentRunService = new AgentRunService({
+      const agentRunService = new AgentSessionService({
         sse: { broadcast: vi.fn() },
-        db: { addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }) },
-        runRegistry: makeMockRunRegistry(),
-        sandboxRunService: mockSandboxRunService,
+        db: { addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }), updateTurn: vi.fn().mockResolvedValue(undefined) },
+        sessionManager: {
+          ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
+          startTurn: vi.fn().mockReturnValue(undefined),
+          completeTurn: vi.fn().mockResolvedValue(undefined),
+          pauseForHitl: vi.fn().mockResolvedValue(undefined),
+          resumeFromHitl: vi.fn().mockResolvedValue(undefined),
+        },
+        sessionTurnService: mockSessionTurnService,
         toolExecutor: { list: vi.fn().mockReturnValue([]) },
       } as any);
 
       const agentDef: AgentDefinition = {
         name: 'triggered-agent',
         harness: 'claude-agents',
-        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
         tools: [],
         systemPrompt: 'You are a triggered agent.',
       };
 
-      await agentRunService.executeRun({
+      await agentRunService.executeSession({
         agentDef,
         messages: [{ id: 'msg-1', agentId: 'triggered-agent', role: 'user', content: 'triggered task', createdAt: new Date() }],
         agentId: 'triggered-agent',
         conversationId: 'conv-1',
-        runId: 'run-1',
+        sessionId: 'run-1',
+        mode: 'background',
         taskDescription: 'triggered task',
       });
 
-      expect(mockSandboxRunService.executeSessionTurn).toHaveBeenCalledTimes(1);
+      expect(mockSessionTurnService.executeSessionTurn).toHaveBeenCalledTimes(1);
     });
   });
 
-  // ── Test: triggered run gets its own secrets ──
-
   describe('triggered run secret isolation', () => {
     it('sandbox executeSessionTurn receives the triggered agent name (not triggering agent)', async () => {
-      const mockSandboxRunService = makeMockSandboxRunService();
+      const mockSessionTurnService = makeMockSessionTurnService();
 
-      const agentRunService = new AgentRunService({
+      const agentRunService = new AgentSessionService({
         sse: { broadcast: vi.fn() },
-        db: { addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }) },
-        runRegistry: makeMockRunRegistry(),
-        sandboxRunService: mockSandboxRunService,
+        db: { addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }), updateTurn: vi.fn().mockResolvedValue(undefined) },
+        sessionManager: {
+          ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
+          startTurn: vi.fn().mockReturnValue(undefined),
+          completeTurn: vi.fn().mockResolvedValue(undefined),
+          pauseForHitl: vi.fn().mockResolvedValue(undefined),
+          resumeFromHitl: vi.fn().mockResolvedValue(undefined),
+        },
+        sessionTurnService: mockSessionTurnService,
         toolExecutor: { list: vi.fn().mockReturnValue([]) },
       } as any);
 
-      // This is the TRIGGERED agent's definition
       const triggeredAgentDef: AgentDefinition = {
         name: 'agent-B',
         harness: 'claude-agents',
-        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
         tools: ['search'],
         systemPrompt: 'I am agent B.',
       };
 
-      await agentRunService.executeRun({
+      await agentRunService.executeSession({
         agentDef: triggeredAgentDef,
         messages: [{ id: 'msg-1', agentId: 'agent-B', role: 'user', content: 'event payload', createdAt: new Date() }],
         agentId: 'agent-B',
         conversationId: 'conv-B',
-        runId: 'run-B',
+        sessionId: 'run-B',
+        mode: 'background',
         taskDescription: 'event payload',
       });
 
-      const [agentDef, conversationId, messages, turnId] = mockSandboxRunService.executeSessionTurn.mock.calls[0] ?? [];
+      expect(mockSessionTurnService.executeSessionTurn).toHaveBeenCalledTimes(1);
+      const [agentDef, conversationId, messages, turnId] = mockSessionTurnService.executeSessionTurn.mock.lastCall ?? [];
       expect(agentDef.name).toBe('agent-B');
       expect(conversationId).toBe('conv-B');
-      expect(messages).toEqual([
-        { id: 'msg-1', agentId: 'agent-B', role: 'user', content: 'event payload', createdAt: expect.any(Date) },
-      ]);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        id: 'msg-1',
+        agentId: 'agent-B',
+        role: 'user',
+        content: 'event payload',
+      });
       expect(turnId).toBe('run-B');
     });
   });
 
-  // ── Test: trigger depth enforcement in sandbox mode ──
-
-  describe('trigger depth enforcement with sandbox mode', () => {
+  describe('trigger depth enforcement with real EventBus', () => {
     it('onFire callback receives incremented trigger depth', async () => {
       const onFire = vi.fn().mockResolvedValue(undefined);
-      const mockBus = makeMockBus();
-      const mockDb = makeMockDb();
+      const bus = createTestBus();
+      const mockDb = createMockTriggerDb();
 
-      const manager = new EventTriggerManager(mockBus, mockDb, onFire);
+      manager = new EventTriggerManager(bus, mockDb as unknown as DatabaseRepository, onFire);
 
       await manager.register({
         agentId: 'agent-1',
@@ -150,9 +138,8 @@ describe('EventTriggerManager sandbox mode', () => {
         enabled: true,
       });
 
-      // Emit at depth 3 (below limit of 5)
       manager.emitCustomEvent('custom.sandbox_test', 'agent-1', { _triggerDepth: 3 });
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
 
       expect(onFire).toHaveBeenCalledTimes(1);
       expect(onFire).toHaveBeenCalledWith('agent-1', 'Handle event', expect.any(String), 4);
@@ -160,10 +147,10 @@ describe('EventTriggerManager sandbox mode', () => {
 
     it('blocks triggers at MAX_TRIGGER_DEPTH regardless of execution mode', async () => {
       const onFire = vi.fn().mockResolvedValue(undefined);
-      const mockBus = makeMockBus();
-      const mockDb = makeMockDb();
+      const bus = createTestBus();
+      const mockDb = createMockTriggerDb();
 
-      const manager = new EventTriggerManager(mockBus, mockDb, onFire);
+      manager = new EventTriggerManager(bus, mockDb as unknown as DatabaseRepository, onFire);
 
       await manager.register({
         agentId: 'sandbox-agent',
@@ -172,21 +159,20 @@ describe('EventTriggerManager sandbox mode', () => {
         enabled: true,
       });
 
-      // Emit at exactly MAX_TRIGGER_DEPTH — should be blocked
       manager.emitCustomEvent('custom.deep_trigger', 'sandbox-agent', {
         _triggerDepth: MAX_TRIGGER_DEPTH,
       });
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
 
       expect(onFire).not.toHaveBeenCalled();
     });
 
     it('full chain A -> B -> C -> D -> E -> blocked at F (depth 5)', async () => {
       const onFire = vi.fn().mockResolvedValue(undefined);
-      const mockBus = makeMockBus();
-      const mockDb = makeMockDb();
+      const bus = createTestBus();
+      const mockDb = createMockTriggerDb();
 
-      const manager = new EventTriggerManager(mockBus, mockDb, onFire);
+      manager = new EventTriggerManager(bus, mockDb as unknown as DatabaseRepository, onFire);
 
       await manager.register({
         agentId: 'agent-chain',
@@ -195,28 +181,23 @@ describe('EventTriggerManager sandbox mode', () => {
         enabled: true,
       });
 
-      // Simulate depths 0, 1, 2, 3, 4 — all should fire
       for (let depth = 0; depth < MAX_TRIGGER_DEPTH; depth++) {
         onFire.mockClear();
         manager.emitCustomEvent('custom.chain', 'agent-chain', { _triggerDepth: depth });
-        await new Promise((r) => setTimeout(r, 10));
+        await settle();
         expect(onFire).toHaveBeenCalledTimes(1);
         expect(onFire).toHaveBeenCalledWith('agent-chain', 'Chain step', expect.any(String), depth + 1);
       }
 
-      // At depth 5 (MAX_TRIGGER_DEPTH), it should be blocked
       onFire.mockClear();
       manager.emitCustomEvent('custom.chain', 'agent-chain', { _triggerDepth: MAX_TRIGGER_DEPTH });
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
       expect(onFire).not.toHaveBeenCalled();
     });
   });
 
-  // ── Test: fire-and-forget behavior ──
-
   describe('fire-and-forget behavior', () => {
     it('triggering agent completes independently even if triggered run fails', async () => {
-      // Simulate a SandboxRunService that errors out
       const failingSandbox = {
         executeSessionTurn: vi.fn().mockImplementation(async function* () {
           if (Date.now() < 0) {
@@ -224,47 +205,50 @@ describe('EventTriggerManager sandbox mode', () => {
           }
           throw new Error('container failed to start');
         }),
-      } as unknown as SandboxRunService;
+      } as unknown as SessionTurnService;
 
-      const runRegistry = makeMockRunRegistry();
       const sse = { broadcast: vi.fn() };
+      const sessionManager = {
+        ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
+        startTurn: vi.fn().mockReturnValue(undefined),
+        completeTurn: vi.fn().mockResolvedValue(undefined),
+        pauseForHitl: vi.fn().mockResolvedValue(undefined),
+        resumeFromHitl: vi.fn().mockResolvedValue(undefined),
+      };
 
-      const agentRunService = new AgentRunService({
+      const agentRunService = new AgentSessionService({
         sse,
-        db: { addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }) },
-        runRegistry,
-        sandboxRunService: failingSandbox,
+        db: { addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }), updateTurn: vi.fn().mockResolvedValue(undefined) },
+        sessionManager,
+        sessionTurnService: failingSandbox,
         toolExecutor: { list: vi.fn().mockReturnValue([]) },
       } as any);
 
-      // Execute the triggered run — it should handle the failure gracefully
-      await agentRunService.executeRun({
+      await agentRunService.executeSession({
         agentDef: {
           name: 'failing-agent',
           harness: 'claude-agents',
-          harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+          harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
           tools: [],
           systemPrompt: 'fail',
         },
         messages: [],
         agentId: 'failing-agent',
         conversationId: 'conv-1',
-        runId: 'run-fail',
+        sessionId: 'run-fail',
+        mode: 'background',
         taskDescription: 'will fail',
       });
 
-      // The run should have been completed with an error
-      expect(runRegistry.completeRun).toHaveBeenCalledWith('run-fail', expect.stringContaining('container failed'));
+      expect(sessionManager.completeTurn).toHaveBeenCalledWith('sandbox-1', 'run-fail', 'failing-agent', 'conv-1', 'error', expect.any(Number), expect.stringContaining('container failed'));
     });
 
-    it('onFire callback is fire-and-forget in container.ts pattern', async () => {
-      // This test verifies the pattern used in container.ts — the onFire callback
-      // does NOT await the executeRun result, and errors are caught silently
+    it('onFire callback is fire-and-forget — errors are isolated', async () => {
       const onFire = vi.fn().mockRejectedValue(new Error('triggered run failed'));
-      const mockBus = makeMockBus();
-      const mockDb = makeMockDb();
+      const bus = createTestBus();
+      const mockDb = createMockTriggerDb();
 
-      const manager = new EventTriggerManager(mockBus, mockDb, onFire);
+      manager = new EventTriggerManager(bus, mockDb as unknown as DatabaseRepository, onFire);
 
       await manager.register({
         agentId: 'agent-1',
@@ -273,24 +257,19 @@ describe('EventTriggerManager sandbox mode', () => {
         enabled: true,
       });
 
-      // Should not throw even though onFire rejects
       manager.emitCustomEvent('custom.fire_forget', 'agent-1', {});
-      await new Promise((r) => setTimeout(r, 20));
+      await settle();
 
-      // onFire was called even though it fails — errors are isolated
       expect(onFire).toHaveBeenCalledTimes(1);
     });
   });
 
-  // ── Test: container.ts agentDef includes resourceLimits from manifest ──
-
   describe('agentDef construction from manifest', () => {
     it('includes resourceLimits from agent manifest', () => {
-      // Simulate what container.ts does after fetching the agent row
       const agentRow = {
         name: 'manifest-agent',
         harness: 'claude-agents',
-        harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5-mini' }),
+        harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5.4-mini' }),
         systemPrompt: 'I have manifest overrides.',
         tools: ['search'],
         description: 'Test agent',
@@ -301,7 +280,6 @@ describe('EventTriggerManager sandbox mode', () => {
         },
       };
 
-      // Reproduce the agentDef construction logic from container.ts
       const manifest = agentRow.manifest as Record<string, unknown> | null;
       const perAgentResourceLimits = manifest?.resourceLimits as Record<string, unknown> | undefined;
 
@@ -345,15 +323,13 @@ describe('EventTriggerManager sandbox mode', () => {
     });
   });
 
-  // ── Test: event payload as initial message content ──
-
   describe('event payload as initial message', () => {
     it('triggered run receives event payload interpolated into task template', async () => {
       const onFire = vi.fn().mockResolvedValue(undefined);
-      const mockBus = makeMockBus();
-      const mockDb = makeMockDb();
+      const bus = createTestBus();
+      const mockDb = createMockTriggerDb();
 
-      const manager = new EventTriggerManager(mockBus, mockDb, onFire);
+      manager = new EventTriggerManager(bus, mockDb as unknown as DatabaseRepository, onFire);
 
       await manager.register({
         agentId: 'agent-1',
@@ -366,11 +342,15 @@ describe('EventTriggerManager sandbox mode', () => {
         source: 'pipeline-A',
         count: 42,
       });
-      await new Promise((r) => setTimeout(r, 10));
+      await settle();
 
       expect(onFire).toHaveBeenCalledTimes(1);
-      const [, task] = onFire.mock.calls[0];
-      expect(task).toBe('Process data: source=pipeline-A, count=42');
+      expect(onFire).toHaveBeenCalledWith(
+        'agent-1',
+        'Process data: source=pipeline-A, count=42',
+        expect.any(String),
+        1,
+      );
     });
   });
 });

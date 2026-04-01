@@ -2,9 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { createGzip, createGunzip } from 'node:zlib';
+import { createGunzip } from 'node:zlib';
 import { WorkspaceDiffService } from '../workspace-diff.js';
-import type { WorkspaceDiffOptions } from '../workspace-diff.js';
 
 // ── Mock helpers ─────────────────────────────────────────────
 
@@ -19,6 +18,7 @@ function createMockContainerManager(overrides: Record<string, unknown> = {}) {
   const mockContainer = createMockContainer();
 
   return {
+    extractContainerDiff: vi.fn().mockResolvedValue(Buffer.from('fake-tar-data')),
     extractWorkspaceDiff: vi.fn().mockResolvedValue(Buffer.from('fake-tar-data')),
     docker: {
       getContainer: vi.fn().mockReturnValue(mockContainer),
@@ -37,18 +37,6 @@ function gzipDecompress(input: Buffer): Promise<Buffer> {
     gunzip.on('end', () => resolve(Buffer.concat(chunks)));
     gunzip.on('error', reject);
     gunzip.end(input);
-  });
-}
-
-function gzipCompress(input: Buffer): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  const gzip = createGzip();
-
-  return new Promise<Buffer>((resolve, reject) => {
-    gzip.on('data', (chunk: Buffer) => chunks.push(chunk));
-    gzip.on('end', () => resolve(Buffer.concat(chunks)));
-    gzip.on('error', reject);
-    gzip.end(input);
   });
 }
 
@@ -77,12 +65,11 @@ describe('WorkspaceDiffService', () => {
   describe('capture', () => {
     it('creates tar.gz file and returns path when container has changes', async () => {
       const tarData = Buffer.from('fake-tar-data-for-capture');
-      cm.extractWorkspaceDiff.mockResolvedValue(tarData);
+      cm.extractContainerDiff.mockResolvedValue(tarData);
 
       const result = await service.capture('run-001', 'container-abc');
 
-      // Should call extractWorkspaceDiff with the container ID
-      expect(cm.extractWorkspaceDiff).toHaveBeenCalledWith('container-abc');
+      expect(cm.extractContainerDiff).toHaveBeenCalledWith('container-abc');
 
       // Should return the correct path
       const expectedPath = path.join(tmpDir, 'run-001', 'workspace.tar.gz');
@@ -98,8 +85,8 @@ describe('WorkspaceDiffService', () => {
       expect(decompressed.toString()).toBe('fake-tar-data-for-capture');
     });
 
-    it('returns "none" when extractWorkspaceDiff returns empty buffer', async () => {
-      cm.extractWorkspaceDiff.mockResolvedValue(Buffer.alloc(0));
+    it('returns "none" when extractContainerDiff returns empty buffer', async () => {
+      cm.extractContainerDiff.mockResolvedValue(Buffer.alloc(0));
 
       const result = await service.capture('run-002', 'container-def');
 
@@ -108,11 +95,11 @@ describe('WorkspaceDiffService', () => {
       // No file should be created
       await expect(
         fs.stat(path.join(tmpDir, 'run-002', 'workspace.tar.gz')),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/ENOENT/);
     });
 
-    it('returns "none" when extractWorkspaceDiff returns null', async () => {
-      cm.extractWorkspaceDiff.mockResolvedValue(null);
+    it('returns "none" when extractContainerDiff returns null', async () => {
+      cm.extractContainerDiff.mockResolvedValue(null);
 
       const result = await service.capture('run-003', 'container-ghi');
 
@@ -123,10 +110,10 @@ describe('WorkspaceDiffService', () => {
       const tarData1 = Buffer.from('first-capture');
       const tarData2 = Buffer.from('second-capture');
 
-      cm.extractWorkspaceDiff.mockResolvedValue(tarData1);
+      cm.extractContainerDiff.mockResolvedValue(tarData1);
       const path1 = await service.capture('run-idem', 'c1');
 
-      cm.extractWorkspaceDiff.mockResolvedValue(tarData2);
+      cm.extractContainerDiff.mockResolvedValue(tarData2);
       const path2 = await service.capture('run-idem', 'c2');
 
       expect(path1).toBe(path2);
@@ -140,7 +127,7 @@ describe('WorkspaceDiffService', () => {
     it('rejects workspace > 100 MB with workspace_diff_too_large error', async () => {
       // Create a buffer larger than 100 MB
       const largeBuffer = Buffer.alloc(101 * 1024 * 1024, 'x');
-      cm.extractWorkspaceDiff.mockResolvedValue(largeBuffer);
+      cm.extractContainerDiff.mockResolvedValue(largeBuffer);
 
       await expect(service.capture('run-large', 'container-large')).rejects.toMatchObject({
         code: 'workspace_diff_too_large',
@@ -150,7 +137,7 @@ describe('WorkspaceDiffService', () => {
       // No file should be created
       await expect(
         fs.stat(path.join(tmpDir, 'run-large', 'workspace.tar.gz')),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/ENOENT/);
     });
 
     it('warns at > 50 MB but still succeeds', async () => {
@@ -158,7 +145,7 @@ describe('WorkspaceDiffService', () => {
 
       // Create a buffer larger than 50 MB but under 100 MB
       const mediumBuffer = Buffer.alloc(51 * 1024 * 1024, 'y');
-      cm.extractWorkspaceDiff.mockResolvedValue(mediumBuffer);
+      cm.extractContainerDiff.mockResolvedValue(mediumBuffer);
 
       const result = await service.capture('run-medium', 'container-medium');
 
@@ -177,7 +164,7 @@ describe('WorkspaceDiffService', () => {
     it('extracts tar into container at /workspace', async () => {
       // First capture a workspace diff
       const tarData = Buffer.from('restore-test-tar-data');
-      cm.extractWorkspaceDiff.mockResolvedValue(tarData);
+      cm.extractContainerDiff.mockResolvedValue(tarData);
       await service.capture('run-restore', 'container-src');
 
       // Now restore into a different container
@@ -214,7 +201,7 @@ describe('WorkspaceDiffService', () => {
     it('deletes the checkpoint directory', async () => {
       // Create a checkpoint first
       const tarData = Buffer.from('cleanup-test-data');
-      cm.extractWorkspaceDiff.mockResolvedValue(tarData);
+      cm.extractContainerDiff.mockResolvedValue(tarData);
       await service.capture('run-cleanup', 'container-z');
 
       const runDir = path.join(tmpDir, 'run-cleanup');
@@ -226,7 +213,7 @@ describe('WorkspaceDiffService', () => {
       await service.cleanup('run-cleanup');
 
       // Verify directory is gone
-      await expect(fs.stat(runDir)).rejects.toThrow();
+      await expect(fs.stat(runDir)).rejects.toThrow(/ENOENT/);
     });
 
     it('is idempotent — does not throw if directory does not exist', async () => {

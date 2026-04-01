@@ -1,15 +1,44 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
-import type { ToolDefinition, ToolContext } from '@ctxmill/sandbox-daemon';
+import { createMockToolContext } from '../utils/event-bus-test-helpers.js';
+import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
 
-const mockCtx: ToolContext = {
-  agentId: 'test-agent',
-  conversationId: 'test-conv',
-  knowledge: {
-    query: async () => ({ items: [] }),
-  },
-};
+const mockCtx = createMockToolContext();
+
+function getValueInput(input: unknown): { value: string } {
+  if (
+    typeof input !== 'object' ||
+    input === null ||
+    !('value' in input) ||
+    typeof input.value !== 'string'
+  ) {
+    throw new Error('Expected { value: string } input');
+  }
+  return { value: input.value };
+}
+
+function getComplexInput(input: unknown): { name: string; count: number; tags?: string[] } {
+  if (
+    typeof input !== 'object' ||
+    input === null ||
+    !('name' in input) ||
+    typeof input.name !== 'string' ||
+    !('count' in input) ||
+    typeof input.count !== 'number'
+  ) {
+    throw new Error('Expected complex tool input');
+  }
+
+  if ('tags' in input && input.tags !== undefined) {
+    if (!Array.isArray(input.tags) || input.tags.some((tag) => typeof tag !== 'string')) {
+      throw new Error('Expected tags to be string[]');
+    }
+    return { name: input.name, count: input.count, tags: input.tags };
+  }
+
+  return { name: input.name, count: input.count };
+}
 
 function createTool(overrides: Partial<ToolDefinition> = {}): ToolDefinition {
   return {
@@ -18,8 +47,9 @@ function createTool(overrides: Partial<ToolDefinition> = {}): ToolDefinition {
     input: z.object({
       value: z.string().describe('A string value'),
     }),
-    handler: async (input: { value: string }) => {
-      return JSON.stringify({ echo: input.value });
+    handler: async (input: unknown) => {
+      const parsed = getValueInput(input);
+      return JSON.stringify({ echo: parsed.value });
     },
     ...overrides,
   };
@@ -112,10 +142,11 @@ describe('LocalFunctionExecutor', () => {
   it('should measure execution duration', async () => {
     executor.register(
       createTool({
-        handler: async (input: { value: string }) => {
+        handler: async (input: unknown) => {
+          const parsed = getValueInput(input);
           // Simulate slight delay
           await new Promise((r) => setTimeout(r, 10));
-          return JSON.stringify({ value: input.value });
+          return JSON.stringify({ value: parsed.value });
         },
       }),
     );
@@ -137,8 +168,9 @@ describe('LocalFunctionExecutor', () => {
         count: z.number().positive(),
         tags: z.array(z.string()).optional(),
       }),
-      handler: async (input: { name: string; count: number; tags?: string[] }) => {
-        return JSON.stringify({ processed: true, name: input.name, count: input.count });
+      handler: async (input: unknown) => {
+        const parsed = getComplexInput(input);
+        return JSON.stringify({ processed: true, name: parsed.name, count: parsed.count });
       },
     });
 

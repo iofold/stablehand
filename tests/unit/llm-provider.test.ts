@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { LLMProvider, LLMProviderConfig, LLMResponse } from '../../packages/ctxmill/src/llm/types.js';
+import type { LLMProvider } from '../../packages/ctxmill/src/llm/types.js';
 
 describe('LLMProvider interface', () => {
   it('should allow a minimal implementation', async () => {
@@ -21,10 +21,10 @@ describe('LLMProvider interface', () => {
   it('should support streaming via invokeStream', async () => {
     const provider: LLMProvider = {
       name: 'mock-stream',
-      async invoke(prompt) {
+      async invoke(_prompt) {
         return { content: 'full', usage: { inputTokens: 1, outputTokens: 1 } };
       },
-      async *invokeStream(prompt) {
+      async *invokeStream(_prompt) {
         yield { content: 'hel', done: false };
         yield { content: 'lo', done: true };
       },

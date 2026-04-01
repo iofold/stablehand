@@ -3,11 +3,11 @@ import type { AGUIEvent } from '../events/types.js';
 import type { MessageCommittedEvent } from '@ctxmill/shared';
 import type { AgentDefinition, Message } from '../types.js';
 import type { SSEManager } from './sse.js';
-import type { RunRegistry } from './run-registry.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { LearningPipeline } from '../learning/types.js';
-import type { TypedEventBus } from '../events/bus.js';
-import type { SandboxRunService } from './sandbox-run-service.js';
+import type { EventMap, TypedEventBus } from '../events/bus.js';
+import type { SessionTurnService } from './session-turn-service.js';
+import type { SandboxSessionManager, SessionRecord } from './sandbox-session-manager.js';
 import type { LocalFunctionExecutor } from '../tool/executor.js';
 import { builtinToolNames } from '../tool/builtin/index.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
@@ -47,58 +47,62 @@ interface HITLPauseEvent {
   reason?: string;
 }
 
-export interface AgentRunServiceDeps {
+export interface AgentSessionServiceDeps {
   sse: SSEManager;
   db: DatabaseRepository;
-  runRegistry: RunRegistry;
+  sessionManager: SandboxSessionManager;
   learningPipeline?: LearningPipeline;
   eventBus?: TypedEventBus;
-  /** SandboxRunService for executing runs in Docker containers. */
-  sandboxRunService: SandboxRunService;
-  /** Tool executor for resolving tool definitions for sandbox runs. */
+  /** SessionTurnService for executing sessions in Docker containers. */
+  sessionTurnService: SessionTurnService;
+  /** Tool executor for resolving tool definitions for sandbox sessions. */
   toolExecutor?: LocalFunctionExecutor;
   toolRegistry?: DefaultToolRegistry;
 }
 
-export interface ExecuteRunParams {
+export interface ExecuteSessionParams {
   agentDef: AgentDefinition;
   messages: Message[];
   agentId: string;
   conversationId: string;
-  runId: string;
+  sessionId: string;
+  mode: 'interactive' | 'background';
   taskDescription: string;
 }
 
 /**
- * Extracted business logic for executing an agent run.
+  * Extracted business logic for executing an agent session.
  *
  * Streams events from the sandbox, broadcasts ALL events via SSE,
  * persists messages only from MESSAGE_COMMITTED events (sandbox is source of truth),
- * triggers learning pipeline, and completes the run in the registry.
+  * triggers learning pipeline, and completes the session in the registry.
  */
-export class AgentRunService {
+export class AgentSessionService {
   private sse: SSEManager;
   private db: DatabaseRepository;
-  private runRegistry: RunRegistry;
+  private sessionManager: SandboxSessionManager;
   private learningPipeline?: LearningPipeline;
   private eventBus?: TypedEventBus;
-  private sandboxRunService: SandboxRunService;
+  private sessionTurnService: SessionTurnService;
   private toolExecutor?: LocalFunctionExecutor;
   private toolRegistry?: DefaultToolRegistry;
 
-  constructor(deps: AgentRunServiceDeps) {
+  constructor(deps: AgentSessionServiceDeps) {
     this.sse = deps.sse;
     this.db = deps.db;
-    this.runRegistry = deps.runRegistry;
+    this.sessionManager = deps.sessionManager;
     this.learningPipeline = deps.learningPipeline;
     this.eventBus = deps.eventBus;
-    this.sandboxRunService = deps.sandboxRunService;
+    this.sessionTurnService = deps.sessionTurnService;
     this.toolExecutor = deps.toolExecutor;
     this.toolRegistry = deps.toolRegistry;
   }
 
   private async resolveTools(agentDef: AgentDefinition) {
     const declaredTools = new Set(agentDef.tools);
+    const excluded = Array.isArray(agentDef.metadata?.excludeBuiltinTools)
+      ? new Set(agentDef.metadata.excludeBuiltinTools as string[])
+      : undefined;
     const allTools = new Map<string, (ReturnType<LocalFunctionExecutor['list']>[number])>();
 
     if (this.toolExecutor) {
@@ -118,6 +122,12 @@ export class AgentRunService {
       }
     }
 
+    if (excluded) {
+      for (const name of excluded) {
+        if (builtinToolNames.has(name)) allTools.delete(name);
+      }
+    }
+
     return Array.from(allTools.values());
   }
 
@@ -128,12 +138,42 @@ export class AgentRunService {
    *
    * The sandbox is the source of truth — no delta accumulation occurs here.
    */
-  async executeRun(params: ExecuteRunParams): Promise<void> {
-    const { agentDef, messages, agentId, conversationId, runId, taskDescription } = params;
+  async executeSession(params: ExecuteSessionParams): Promise<void> {
+    const { agentDef, messages, agentId, conversationId, sessionId: turnId, mode, taskDescription } = params;
 
-    const traceCollector = new TraceCollector(agentId, runId, taskDescription);
+    const traceCollector = new TraceCollector(agentId, turnId, taskDescription);
+    const startedAt = Date.now();
 
-    const signal = this.runRegistry.getAbortSignal(runId);
+    // Session setup — container creation can fail (e.g., missing Docker image).
+    // Errors here must be caught separately because the event-loop try/catch
+    // below depends on sandboxSessionId which doesn't exist yet.
+    let sandboxSession: SessionRecord;
+    try {
+      sandboxSession = await this.sessionManager.ensureSession(conversationId, agentDef, agentId);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[AgentSessionService] Session ${turnId} setup failed:`, err instanceof Error ? err.stack : err);
+      this.sse.broadcast(agentId, {
+        type: 'RUN_ERROR',
+        timestamp: Date.now(),
+        runId: turnId,
+        error: errorMsg,
+      });
+      this.sse.broadcast(agentId, {
+        type: 'RUN_FINISHED',
+        timestamp: Date.now(),
+        runId: turnId,
+      });
+      await this.db.updateTurn(turnId, {
+        completedAt: Date.now(),
+        error: errorMsg,
+      });
+      return;
+    }
+
+    const sandboxSessionId = sandboxSession.sessionId;
+    await this.db.updateTurn(turnId, { sessionId: sandboxSessionId });
+    const signal = this.sessionManager.startTurn(sandboxSessionId, turnId, agentId, conversationId, mode, taskDescription);
 
     let encounteredError = false;
     let lastErrorMessage = '';
@@ -141,6 +181,7 @@ export class AgentRunService {
     const pendingToolCalls = new Map<string, { id: string; name: string; args: string; result?: string; error?: string; status: string }>();
     let accumulatedText = '';
     let assistantFlushedForBatch = false;
+    let flushedAssistantMessageId: string | null = null;
 
     const normalizeContent = (value: unknown): string => {
       if (typeof value === 'string') return value;
@@ -164,8 +205,8 @@ export class AgentRunService {
       role: MessageCommittedEvent['role'],
       content: string,
       options?: { toolCalls?: ReturnType<typeof buildPersistedToolCalls>; toolCallId?: string },
-    ) => {
-      await this.db.addMessage({
+    ): Promise<string> => {
+      const msg = await this.db.addMessage({
         agentId,
         conversationId,
         role,
@@ -173,16 +214,36 @@ export class AgentRunService {
         toolCalls: options?.toolCalls,
         toolCallId: options?.toolCallId,
       });
+      return msg.id;
     };
 
-    const eventSource: AsyncGenerator<AGUIEvent> = this.sandboxRunService.executeSessionTurn(
+      const eventSource: AsyncGenerator<AGUIEvent> = this.sessionTurnService.executeSessionTurn(
       agentDef,
       conversationId,
       messages,
-      runId,
+      turnId,
       signal,
       agentId,
+      sandboxSessionId,
     );
+
+    const finalizeTurn = async (status: 'completed' | 'error' | 'cancelled', error?: string) => {
+      const completedAt = Date.now();
+      await this.db.updateTurn(turnId, {
+        sessionId: sandboxSessionId,
+        completedAt,
+        error: error ?? null,
+      });
+      this.sessionManager.completeTurn(
+        sandboxSessionId,
+        turnId,
+        agentId,
+        conversationId,
+        status,
+        completedAt - startedAt,
+        error,
+      );
+    };
 
     try {
       for await (const event of eventSource) {
@@ -241,11 +302,13 @@ export class AgentRunService {
           }
 
           if (!assistantFlushedForBatch && pendingToolCalls.size > 0) {
-            await persistMessage('assistant', accumulatedText, {
+            flushedAssistantMessageId = await persistMessage('assistant', accumulatedText, {
               toolCalls: buildPersistedToolCalls(),
             });
             accumulatedText = '';
             assistantFlushedForBatch = true;
+          } else if (assistantFlushedForBatch && flushedAssistantMessageId) {
+            await this.db.updateMessageToolCalls(flushedAssistantMessageId, buildPersistedToolCalls());
           }
 
           await persistMessage('tool', normalizeContent(e.result), {
@@ -277,12 +340,12 @@ export class AgentRunService {
 
           if (this.eventBus) {
             this.eventBus.emit('run.text_chunk', {
-              runId,
+              turnId,
               agentId,
               messageId: textEvent.messageId ?? '',
               content: textEvent.content,
               timestamp: Date.now(),
-            });
+            } as unknown as EventMap['run.text_chunk']);
           }
         }
 
@@ -296,13 +359,13 @@ export class AgentRunService {
 
           if (this.eventBus) {
             this.eventBus.emit('run.tool_started', {
-              runId,
+              turnId,
               agentId,
               toolCallId: toolStart.toolCallId ?? '',
               toolName: toolStart.toolName,
               args: toolStart.args ?? {},
               timestamp: Date.now(),
-            });
+            } as unknown as EventMap['run.tool_started']);
           }
         }
         if (event.type === 'TOOL_CALL_RESULT' && 'result' in event) {
@@ -316,43 +379,41 @@ export class AgentRunService {
 
           if (this.eventBus) {
             this.eventBus.emit('run.tool_result', {
-              runId,
+              turnId,
               agentId,
               toolCallId: toolResult.toolCallId ?? '',
               toolName: toolResult.toolName ?? '',
               result: String(toolResult.result).slice(0, 500),
               durationMs: toolResult.durationMs ?? 0,
               timestamp: Date.now(),
-            });
+            } as unknown as EventMap['run.tool_result']);
           }
         }
 
         if (event.type === 'HITL_PAUSE') {
-          const pauseEvent = event as unknown as HITLPauseEvent;
-          const reason = pauseEvent.reason ?? 'hitl_approval';
+          void (event as unknown as HITLPauseEvent);
           if (!hitlPending) {
-            await this.runRegistry.pauseRun(runId, reason);
+            await this.sessionManager.pauseSession(sandboxSessionId, 'hitl');
             hitlPending = true;
           }
         }
 
         if (hitlPending) {
           hitlPending = false;
-          await this.runRegistry.resumeRun(runId);
+          await this.sessionManager.resumeSession(sandboxSessionId);
         }
       }
 
-      // If cancelled, skip completion (already handled by cancelRun)
       if (signal?.aborted) {
+        await finalizeTurn('cancelled');
         return;
       }
 
-      // Complete the run — mark as error if we saw error events, with the actual error detail
       if (encounteredError) {
-        const errorDetail = lastErrorMessage || 'Run completed with errors (no detail captured)';
-        await this.runRegistry.completeRun(runId, errorDetail);
+        const errorDetail = lastErrorMessage || 'Session completed with errors (no detail captured)';
+        await finalizeTurn('error', errorDetail);
       } else {
-        await this.runRegistry.completeRun(runId);
+        await finalizeTurn('completed');
       }
 
       // Trigger learning pipeline (never block or fail the main run)
@@ -365,15 +426,15 @@ export class AgentRunService {
         }
       }
     } catch (err) {
-      console.error(`[AgentRunService] Run ${runId} error:`, err instanceof Error ? err.stack : err);
+      console.error(`[AgentSessionService] Session ${turnId} error:`, err instanceof Error ? err.stack : err);
       this.sse.broadcast(agentId, {
         type: 'RUN_ERROR',
         timestamp: Date.now(),
-        runId,
+        runId: turnId,
         error: String(err),
       });
 
-      await this.runRegistry.completeRun(runId, String(err));
+      await finalizeTurn('error', String(err));
 
       // Trigger learning pipeline even on failure to learn from errors
       if (this.learningPipeline) {

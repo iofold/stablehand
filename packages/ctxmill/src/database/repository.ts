@@ -1,4 +1,4 @@
-import { eq, sql, gt, lt, and, desc, asc, inArray, isNotNull } from 'drizzle-orm';
+import { eq, sql, gt, lt, and, desc, asc, inArray, isNotNull, isNull, ilike } from 'drizzle-orm';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 
@@ -13,10 +13,10 @@ type TraceInsert = typeof pgSchema.executionTraces.$inferInsert;
 type TraceSelect = typeof pgSchema.executionTraces.$inferSelect;
 type FeedbackInsert = typeof pgSchema.feedbackSignals.$inferInsert;
 type FeedbackSelect = typeof pgSchema.feedbackSignals.$inferSelect;
-type RunInsert = typeof pgSchema.agentRuns.$inferInsert;
-type RunSelect = typeof pgSchema.agentRuns.$inferSelect;
-type SuspendedRunInsert = typeof pgSchema.suspendedRuns.$inferInsert;
-export type SuspendedRunRow = typeof pgSchema.suspendedRuns.$inferSelect;
+type TurnInsert = typeof pgSchema.turns.$inferInsert;
+type TurnSelect = typeof pgSchema.turns.$inferSelect;
+type SuspendedSessionInsert = typeof pgSchema.suspendedSessions.$inferInsert;
+export type SuspendedSessionRow = typeof pgSchema.suspendedSessions.$inferSelect;
 export type ScheduledEventRow = typeof pgSchema.scheduledEvents.$inferSelect;
 type TriggerInsert = typeof pgSchema.eventTriggers.$inferInsert;
 type TriggerSelect = typeof pgSchema.eventTriggers.$inferSelect;
@@ -27,14 +27,17 @@ type CallbackOutboxInsert = typeof pgSchema.callbackOutbox.$inferInsert;
 export type CallbackOutboxRow = typeof pgSchema.callbackOutbox.$inferSelect;
 type WebhookInsert = typeof pgSchema.webhooks.$inferInsert;
 export type WebhookRow = typeof pgSchema.webhooks.$inferSelect;
-export type SandboxSessionRow = typeof pgSchema.sandboxSessions.$inferSelect;
+export type SandboxSessionRow = Omit<typeof pgSchema.sandboxSessions.$inferSelect, 'pausedAt' | 'pausedReason'> & {
+  pausedAt?: number | null;
+  pausedReason?: string | null;
+};
 export type SystemSettingRow = typeof pgSchema.systemSettings.$inferSelect;
 type ArtifactInsert = typeof pgSchema.artifacts.$inferInsert;
 type ArtifactRow = typeof pgSchema.artifacts.$inferSelect;
 
 export interface Checkpoint {
   id: string;
-  runId: string;
+  sessionId: string;
   agentId: string;
   version: number;
   checkpointData: Record<string, unknown>;
@@ -55,12 +58,44 @@ export interface CheckpointV2 {
   createdAt: number;
 }
 
+export interface ConversationSummaryRow {
+  id: string;
+  agentId: string;
+  status: 'running' | 'paused' | 'suspended' | 'completed' | 'error' | 'idle';
+  mode: string;
+  turnCount: number;
+  messageCount: number;
+  taskDescription: string | null;
+  startedAt: number;
+  updatedAt: number;
+  latestTurnId: string | null;
+  sandboxSessionId: string | null;
+  sandboxStatus: string | null;
+}
+
 export class DatabaseRepository {
   private db: any;
   private schema = pgSchema;
 
   constructor(db: DrizzleDb) {
     this.db = db;
+  }
+
+  private getTurnStatusWhere(status: string, agentId?: string) {
+    const activeStatuses = new Set(['queued', 'running', 'paused', 'suspended', 'active']);
+    const condition = activeStatuses.has(status)
+      ? isNull(this.schema.turns.completedAt)
+      : status === 'completed'
+        ? and(isNotNull(this.schema.turns.completedAt), isNull(this.schema.turns.error))
+        : status === 'error' || status === 'failed'
+          ? isNotNull(this.schema.turns.error)
+          : sql`1 = 0`;
+
+    if (!agentId) {
+      return condition;
+    }
+
+    return and(eq(this.schema.turns.agentId, agentId), condition);
   }
 
   // ── Agents ──────────────────────────────────────────────
@@ -110,12 +145,10 @@ export class DatabaseRepository {
       if (conversationIds.length > 0) {
         await tx.delete(this.schema.messages).where(inArray(this.schema.messages.conversationId, conversationIds));
       }
-    await tx.delete(this.schema.agentCheckpoints).where(eq(this.schema.agentCheckpoints.agentId, agentId));
-    await tx.delete(this.schema.sandboxSessions).where(eq(this.schema.sandboxSessions.agentId, agentId));
-      // Delete callback_outbox before agentRuns because callback_outbox.run_id references agent_runs.id
+      await tx.delete(this.schema.agentCheckpoints).where(eq(this.schema.agentCheckpoints.agentId, agentId));
       await tx.delete(this.schema.callbackOutbox).where(eq(this.schema.callbackOutbox.agentId, agentId));
-      // Delete agentRuns before conversations because agentRuns.conversationId references conversations.id
-      await tx.delete(this.schema.agentRuns).where(eq(this.schema.agentRuns.agentId, agentId));
+      await tx.delete(this.schema.turns).where(eq(this.schema.turns.agentId, agentId));
+      await tx.delete(this.schema.sandboxSessions).where(eq(this.schema.sandboxSessions.agentId, agentId));
       await tx.delete(this.schema.conversations).where(eq(this.schema.conversations.agentId, agentId));
       await tx.delete(this.schema.executionTraces).where(eq(this.schema.executionTraces.agentId, agentId));
       await tx.delete(this.schema.feedbackSignals).where(eq(this.schema.feedbackSignals.agentId, agentId));
@@ -152,6 +185,7 @@ export class DatabaseRepository {
   async getConversationsForAgent(agentId: string): Promise<ConversationSelect[]> {
     return this.db.query.conversations.findMany({
       where: eq(this.schema.conversations.agentId, agentId),
+      orderBy: (conversations: any) => [desc(conversations.updatedAt)],
     });
   }
 
@@ -167,6 +201,16 @@ export class DatabaseRepository {
       }
       return message;
     });
+  }
+
+  async updateMessageToolCalls(id: string, toolCalls: unknown[]): Promise<void> {
+    await this.db.update(this.schema.messages)
+      .set({ toolCalls })
+      .where(eq(this.schema.messages.id, id));
+  }
+
+  async deleteMessage(id: string): Promise<void> {
+    await this.db.delete(this.schema.messages).where(eq(this.schema.messages.id, id));
   }
 
   async getMessages(conversationId: string): Promise<MessageSelect[]> {
@@ -206,6 +250,14 @@ export class DatabaseRepository {
       .groupBy(this.schema.conversations.id);
 
     return rows;
+  }
+
+  async getConversationSummaries(agentId: string): Promise<ConversationSummaryRow[]> {
+    return this.queryConversationSummaries({ agentId });
+  }
+
+  async getActiveConversationSummaries(): Promise<ConversationSummaryRow[]> {
+    return this.queryConversationSummaries({ sandboxStatuses: ['ACTIVE', 'PAUSED'] });
   }
 
   // ── Knowledge Items ─────────────────────────────────────
@@ -259,7 +311,7 @@ export class DatabaseRepository {
       .insert(this.schema.executionTraces)
       .values(data)
       .onConflictDoUpdate({
-        target: [this.schema.executionTraces.runId, this.schema.executionTraces.agentId],
+        target: [this.schema.executionTraces.sessionId, this.schema.executionTraces.agentId],
         set: {
           steps: data.steps,
           completedAt: data.completedAt,
@@ -304,85 +356,81 @@ export class DatabaseRepository {
     });
   }
 
-  // ── Agent Runs ────────────────────────────────────────
-
-  async createRun(data: RunInsert): Promise<RunSelect> {
-    const [run] = await this.db.insert(this.schema.agentRuns).values(data).returning();
-    if (!run) {
+  async createTurn(data: TurnInsert): Promise<TurnSelect> {
+    const [turn] = await this.db.insert(this.schema.turns).values(data).returning();
+    if (!turn) {
       throw new Error('Expected insert to return a row but got undefined');
     }
-    return run;
+    return turn;
   }
 
-  async updateRun(
+  async updateTurn(
     id: string,
-    updates: Partial<Omit<RunInsert, 'id'>>,
-  ): Promise<RunSelect | undefined> {
+    updates: Partial<Omit<TurnInsert, 'id'>>,
+  ): Promise<TurnSelect | undefined> {
     const [updated] = await this.db
-      .update(this.schema.agentRuns)
+      .update(this.schema.turns)
       .set(updates)
-      .where(eq(this.schema.agentRuns.id, id))
+      .where(eq(this.schema.turns.id, id))
       .returning();
     return updated;
   }
 
-  async getRunsForAgent(agentId: string): Promise<RunSelect[]> {
-    return this.db.query.agentRuns.findMany({
-      where: eq(this.schema.agentRuns.agentId, agentId),
+  async getTurnsByAgent(agentId: string): Promise<TurnSelect[]> {
+    return this.db.query.turns.findMany({
+      where: eq(this.schema.turns.agentId, agentId),
     });
   }
 
-  async getActiveRuns(): Promise<RunSelect[]> {
-    return this.db.query.agentRuns.findMany({
-      where: inArray(this.schema.agentRuns.status, ['queued', 'running', 'paused', 'suspended']),
+  async getActiveTurns(): Promise<TurnSelect[]> {
+    return this.db.query.turns.findMany({
+      where: isNull(this.schema.turns.completedAt),
     });
   }
 
-  async getAllRuns(): Promise<RunSelect[]> {
-    return this.db.query.agentRuns.findMany();
+  async getAllTurns(): Promise<TurnSelect[]> {
+    return this.db.query.turns.findMany();
   }
 
-  async getRun(id: string): Promise<RunSelect | undefined> {
-    return this.db.query.agentRuns.findFirst({
-      where: eq(this.schema.agentRuns.id, id),
+  async getTurn(id: string): Promise<TurnSelect | undefined> {
+    return this.db.query.turns.findFirst({
+      where: eq(this.schema.turns.id, id),
     });
   }
 
-  async getRunsByStatus(
+  async getLatestTurnForConversation(conversationId: string): Promise<TurnSelect | undefined> {
+    return this.db.query.turns.findFirst({
+      where: eq(this.schema.turns.conversationId, conversationId),
+      orderBy: (turns: typeof this.schema.turns) => [desc(turns.startedAt), desc(turns.id)],
+    });
+  }
+
+  async getTurnsByStatus(
     agentId: string,
     status: string,
-  ): Promise<RunSelect[]> {
-    return this.db.query.agentRuns.findMany({
-      where: (runs: any, { and }: any) =>
-        and(eq(runs.agentId, agentId), eq(runs.status, status)),
+  ): Promise<TurnSelect[]> {
+    return this.db.query.turns.findMany({
+      where: this.getTurnStatusWhere(status, agentId),
     });
   }
 
-  /**
-   * Get all runs with a given status (across all agents).
-   */
-  async getRunsByStatusGlobal(status: string): Promise<RunSelect[]> {
-    return this.db.query.agentRuns.findMany({
-      where: eq(this.schema.agentRuns.status, status),
+  async getTurnsByStatusGlobal(status: string): Promise<TurnSelect[]> {
+    return this.db.query.turns.findMany({
+      where: this.getTurnStatusWhere(status),
     });
   }
 
-  /**
-   * Get active (non-terminal) runs for a specific agent.
-   * Includes queued, running, and paused.
-   */
-  async getActiveRunsForAgent(agentId: string): Promise<RunSelect[]> {
-    return this.db.query.agentRuns.findMany({
-      where: (runs: any, { and: a, inArray: ia }: any) =>
-        a(eq(runs.agentId, agentId), ia(runs.status, ['queued', 'running', 'paused'])),
+  async getActiveTurnsForAgent(agentId: string): Promise<TurnSelect[]> {
+    return this.db.query.turns.findMany({
+      where: and(eq(this.schema.turns.agentId, agentId), isNull(this.schema.turns.completedAt)),
     });
   }
 
-  async getRunsCount(agentId: string): Promise<number> {
+  async getTurnsCount(agentId: string): Promise<number> {
     const rows = await this.db
       .select({ count: sql<number>`count(*)` })
-      .from(this.schema.agentRuns)
-      .where(eq(this.schema.agentRuns.agentId, agentId));
+      .from(this.schema.turns)
+      .where(eq(this.schema.turns.agentId, agentId));
     return rows[0]?.count ?? 0;
   }
 
@@ -559,25 +607,24 @@ export class DatabaseRepository {
   }
 
   async getAgentAnalytics(agentId: string): Promise<{
-    totalRuns: number;
-    completedRuns: number;
-    failedRuns: number;
+    totalSessions: number;
+    completedSessions: number;
+    failedSessions: number;
     totalConversations: number;
     totalKnowledge: number;
     totalTraces: number;
     totalFeedback: number;
-    avgRunDuration: number;
+    avgSessionDuration: number;
   }> {
-    // Aggregate run stats in SQL instead of loading all rows
-    const [runStats] = await this.db
+    const [sessionStats] = await this.db
       .select({
-        totalRuns: sql<number>`count(*)`.as('total_runs'),
-        completedRuns: sql<number>`sum(case when ${this.schema.agentRuns.status} = 'completed' then 1 else 0 end)`.as('completed_runs'),
-        failedRuns: sql<number>`sum(case when ${this.schema.agentRuns.status} = 'error' then 1 else 0 end)`.as('failed_runs'),
-        avgRunDuration: sql<number>`coalesce(avg(case when ${this.schema.agentRuns.completedAt} is not null and ${this.schema.agentRuns.startedAt} is not null then ${this.schema.agentRuns.completedAt} - ${this.schema.agentRuns.startedAt} end), 0)`.as('avg_run_duration'),
+        totalSessions: sql<number>`count(*)`.as('total_sessions'),
+        completedSessions: sql<number>`sum(case when ${this.schema.turns.completedAt} is not null and ${this.schema.turns.error} is null then 1 else 0 end)`.as('completed_sessions'),
+        failedSessions: sql<number>`sum(case when ${this.schema.turns.error} is not null then 1 else 0 end)`.as('failed_sessions'),
+        avgSessionDuration: sql<number>`coalesce(avg(case when ${this.schema.turns.completedAt} is not null and ${this.schema.turns.startedAt} is not null then ${this.schema.turns.completedAt} - ${this.schema.turns.startedAt} end), 0)`.as('avg_session_duration'),
       })
-      .from(this.schema.agentRuns)
-      .where(eq(this.schema.agentRuns.agentId, agentId));
+      .from(this.schema.turns)
+      .where(eq(this.schema.turns.agentId, agentId));
 
     const [conversationCount, knowledgeCount, traceStats, feedbackStats] = await Promise.all([
       this.getConversationCount(agentId),
@@ -587,14 +634,14 @@ export class DatabaseRepository {
     ]);
 
     return {
-      totalRuns: runStats?.totalRuns ?? 0,
-      completedRuns: runStats?.completedRuns ?? 0,
-      failedRuns: runStats?.failedRuns ?? 0,
+      totalSessions: sessionStats?.totalSessions ?? 0,
+      completedSessions: sessionStats?.completedSessions ?? 0,
+      failedSessions: sessionStats?.failedSessions ?? 0,
       totalConversations: conversationCount,
       totalKnowledge: knowledgeCount,
       totalTraces: traceStats.total,
       totalFeedback: feedbackStats.total,
-      avgRunDuration: Math.round(runStats?.avgRunDuration ?? 0),
+      avgSessionDuration: Math.round(sessionStats?.avgSessionDuration ?? 0),
     };
   }
 
@@ -611,32 +658,30 @@ export class DatabaseRepository {
     return row.seq;
   }
 
-  // ── Suspended Runs ──────────────────────────────────────
-
-  async createSuspendedRun(data: SuspendedRunInsert): Promise<void> {
-    await this.db.insert(this.schema.suspendedRuns).values(data);
+  async createSuspendedSession(data: SuspendedSessionInsert): Promise<void> {
+    await this.db.insert(this.schema.suspendedSessions).values(data);
   }
 
-  async getSuspendedRunsByEventType(eventType: string): Promise<SuspendedRunRow[]> {
-    return this.db.query.suspendedRuns.findMany({
-      where: eq(this.schema.suspendedRuns.waitEventType, eventType),
+  async getSuspendedSessionsByEventType(eventType: string): Promise<SuspendedSessionRow[]> {
+    return this.db.query.suspendedSessions.findMany({
+      where: eq(this.schema.suspendedSessions.waitEventType, eventType),
     });
   }
 
-  async deleteSuspendedRun(id: string): Promise<void> {
-    await this.db.delete(this.schema.suspendedRuns).where(eq(this.schema.suspendedRuns.id, id));
+  async deleteSuspendedSession(id: string): Promise<void> {
+    await this.db.delete(this.schema.suspendedSessions).where(eq(this.schema.suspendedSessions.id, id));
   }
 
-  async expireOldSuspendedRuns(beforeTime: number): Promise<number> {
+  async expireOldSuspendedSessions(beforeTime: number): Promise<number> {
     const deleted = await this.db
-      .delete(this.schema.suspendedRuns)
+      .delete(this.schema.suspendedSessions)
       .where(
         and(
-          isNotNull(this.schema.suspendedRuns.waitExpiresAt),
-          lt(this.schema.suspendedRuns.waitExpiresAt, beforeTime),
+          isNotNull(this.schema.suspendedSessions.waitExpiresAt),
+          lt(this.schema.suspendedSessions.waitExpiresAt, beforeTime),
         ),
       )
-      .returning({ id: this.schema.suspendedRuns.id });
+      .returning({ id: this.schema.suspendedSessions.id });
     return deleted.length;
   }
 
@@ -928,6 +973,18 @@ export class DatabaseRepository {
     });
   }
 
+  async getPendingInterruptsForSession(sessionId: string): Promise<InterruptRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.pendingInterrupts)
+      .where(
+        and(
+          eq(this.schema.pendingInterrupts.sessionId, sessionId),
+          eq(this.schema.pendingInterrupts.status, 'pending'),
+        ),
+      );
+  }
+
   async getAllPendingInterrupts(): Promise<InterruptRow[]> {
     return this.db.query.pendingInterrupts.findMany({
       where: eq(this.schema.pendingInterrupts.status, 'pending'),
@@ -1087,6 +1144,7 @@ export class DatabaseRepository {
     status?: string;
     harnessName: string;
     checkpointRef?: string;
+    pausedReason?: string;
   }): Promise<SandboxSessionRow> {
     const [row] = await this.db
       .insert(this.schema.sandboxSessions)
@@ -1099,6 +1157,7 @@ export class DatabaseRepository {
         status: session.status ?? 'ACTIVE',
         harnessName: session.harnessName,
         checkpointRef: session.checkpointRef ?? null,
+        pausedReason: session.pausedReason ?? null,
       })
       .returning();
     if (!row) throw new Error('Expected insert to return a row but got undefined');
@@ -1127,8 +1186,21 @@ export class DatabaseRepository {
   async updateSandboxSessionStatus(
     id: string,
     status: string,
-    extra?: { containerName?: string; containerId?: string; checkpointRef?: string },
+    extra?: {
+      containerName?: string;
+      containerId?: string;
+      checkpointRef?: string;
+      pausedAt?: number | null;
+      pausedReason?: string | null;
+    },
   ): Promise<void> {
+    const pauseMetadata = status === 'ACTIVE'
+      ? { pausedAt: null, pausedReason: null }
+      : {
+          ...(extra?.pausedAt !== undefined ? { pausedAt: extra.pausedAt } : {}),
+          ...(extra?.pausedReason !== undefined ? { pausedReason: extra.pausedReason } : {}),
+        };
+
     await this.db
       .update(this.schema.sandboxSessions)
       .set({
@@ -1138,6 +1210,7 @@ export class DatabaseRepository {
         ...(extra?.containerName !== undefined ? { containerName: extra.containerName } : {}),
         ...(extra?.containerId !== undefined ? { containerId: extra.containerId } : {}),
         ...(extra?.checkpointRef !== undefined ? { checkpointRef: extra.checkpointRef } : {}),
+        ...pauseMetadata,
       })
       .where(eq(this.schema.sandboxSessions.id, id));
   }
@@ -1152,7 +1225,7 @@ export class DatabaseRepository {
     return this.db
       .select()
       .from(this.schema.sandboxSessions)
-      .where(inArray(this.schema.sandboxSessions.status, ['ACTIVE', 'FROZEN']));
+      .where(inArray(this.schema.sandboxSessions.status, ['ACTIVE', 'PAUSED']));
   }
 
   async getSandboxSessionsByAgent(agentId: string): Promise<SandboxSessionRow[]> {
@@ -1162,7 +1235,7 @@ export class DatabaseRepository {
       .where(eq(this.schema.sandboxSessions.agentId, agentId));
   }
 
-  async getSessionStatusCountsByAgent(): Promise<Map<string, { active: number; frozen: number; checkpointed: number; terminated: number }>> {
+  async getSessionStatusCountsByAgent(): Promise<Map<string, { active: number; paused: number; checkpointed: number; terminated: number }>> {
     const rows = await this.db
       .select({
         agentId: this.schema.sandboxSessions.agentId,
@@ -1172,33 +1245,186 @@ export class DatabaseRepository {
       .from(this.schema.sandboxSessions)
       .groupBy(this.schema.sandboxSessions.agentId, this.schema.sandboxSessions.status);
 
-    const result = new Map<string, { active: number; frozen: number; checkpointed: number; terminated: number }>();
+    const result = new Map<string, { active: number; paused: number; checkpointed: number; terminated: number }>();
     for (const row of rows) {
       if (!result.has(row.agentId)) {
-        result.set(row.agentId, { active: 0, frozen: 0, checkpointed: 0, terminated: 0 });
+        result.set(row.agentId, { active: 0, paused: 0, checkpointed: 0, terminated: 0 });
       }
       const counts = result.get(row.agentId)!;
-      const key = row.status.toLowerCase() as 'active' | 'frozen' | 'checkpointed' | 'terminated';
-      if (key in counts) counts[key] = row.count;
+      const key = row.status.toLowerCase() as 'active' | 'paused' | 'checkpointed' | 'terminated';
+      if (key in counts) {
+        counts[key as keyof typeof counts] += row.count;
+      }
     }
     return result;
   }
 
+  private async queryConversationSummaries(options: {
+    agentId?: string;
+    sandboxStatuses?: string[];
+  }): Promise<ConversationSummaryRow[]> {
+    const turnStats = this.db
+      .select({
+        conversationId: this.schema.turns.conversationId,
+        startedAt: sql<number | null>`min(${this.schema.turns.startedAt})`.as('started_at'),
+        turnCount: sql<number>`count(*)::int`.as('turn_count'),
+      })
+      .from(this.schema.turns)
+      .where(isNotNull(this.schema.turns.conversationId))
+      .groupBy(this.schema.turns.conversationId)
+      .as('turn_stats');
+
+    const latestTurnCandidates = this.db
+      .select({
+        conversationId: this.schema.turns.conversationId,
+        latestTurnId: this.schema.turns.id,
+        mode: this.schema.turns.mode,
+        taskDescription: this.schema.turns.taskDescription,
+        completedAt: this.schema.turns.completedAt,
+        error: this.schema.turns.error,
+        turnRowNumber: sql<number>`row_number() over (
+          partition by ${this.schema.turns.conversationId}
+          order by ${this.schema.turns.startedAt} desc, ${this.schema.turns.id} desc
+        )`.as('turn_rn'),
+      })
+      .from(this.schema.turns)
+      .where(isNotNull(this.schema.turns.conversationId))
+      .as('latest_turn_candidates');
+
+    const messageCounts = this.db
+      .select({
+        conversationId: this.schema.messages.conversationId,
+        messageCount: sql<number>`count(*)::int`.as('message_count'),
+      })
+      .from(this.schema.messages)
+      .groupBy(this.schema.messages.conversationId)
+      .as('message_counts');
+
+    const latestSandboxCandidates = this.db
+      .select({
+        conversationId: this.schema.sandboxSessions.conversationId,
+        sandboxSessionId: this.schema.sandboxSessions.id,
+        sandboxStatus: this.schema.sandboxSessions.status,
+        sbxRowNumber: sql<number>`row_number() over (
+          partition by ${this.schema.sandboxSessions.conversationId}
+          order by ${this.schema.sandboxSessions.createdAt} desc, ${this.schema.sandboxSessions.id} desc
+        )`.as('sbx_rn'),
+      })
+      .from(this.schema.sandboxSessions)
+      .as('latest_sandbox_candidates');
+
+    const filters = [isNotNull(this.schema.conversations.id)];
+    if (options.agentId) {
+      filters.push(eq(this.schema.conversations.agentId, options.agentId));
+    }
+    if (options.sandboxStatuses?.length) {
+      filters.push(inArray(latestSandboxCandidates.sandboxStatus, options.sandboxStatuses));
+    }
+
+    const rows: Array<{
+      id: string;
+      agentId: string;
+      updatedAt: number;
+      conversationCreatedAt: number;
+      startedAt: number | null;
+      turnCount: number | null;
+      messageCount: number | null;
+      latestTurnId: string | null;
+      mode: string | null;
+      taskDescription: string | null;
+      completedAt: number | null;
+      error: string | null;
+      sandboxSessionId: string | null;
+      sandboxStatus: string | null;
+    }> = await this.db
+      .select({
+        id: this.schema.conversations.id,
+        agentId: this.schema.conversations.agentId,
+        updatedAt: this.schema.conversations.updatedAt,
+        conversationCreatedAt: this.schema.conversations.createdAt,
+        startedAt: turnStats.startedAt,
+        turnCount: turnStats.turnCount,
+        messageCount: messageCounts.messageCount,
+        latestTurnId: latestTurnCandidates.latestTurnId,
+        mode: latestTurnCandidates.mode,
+        taskDescription: latestTurnCandidates.taskDescription,
+        completedAt: latestTurnCandidates.completedAt,
+        error: latestTurnCandidates.error,
+        sandboxSessionId: latestSandboxCandidates.sandboxSessionId,
+        sandboxStatus: latestSandboxCandidates.sandboxStatus,
+      })
+      .from(this.schema.conversations)
+      .leftJoin(
+        turnStats,
+        eq(this.schema.conversations.id, turnStats.conversationId),
+      )
+      .leftJoin(
+        latestTurnCandidates,
+        and(
+          eq(this.schema.conversations.id, latestTurnCandidates.conversationId),
+          eq(latestTurnCandidates.turnRowNumber, 1),
+        ),
+      )
+      .leftJoin(
+        messageCounts,
+        eq(this.schema.conversations.id, messageCounts.conversationId),
+      )
+      .leftJoin(
+        latestSandboxCandidates,
+        and(
+          eq(this.schema.conversations.id, latestSandboxCandidates.conversationId),
+          eq(latestSandboxCandidates.sbxRowNumber, 1),
+        ),
+      )
+      .where(and(...filters))
+      .orderBy(desc(this.schema.conversations.updatedAt));
+
+    return rows.map((row): ConversationSummaryRow => {
+      let status: ConversationSummaryRow['status'] = 'idle';
+      if (row.error) {
+        status = 'error';
+      } else if (row.completedAt != null) {
+        status = 'completed';
+      } else if (row.sandboxStatus === 'PAUSED') {
+        status = 'paused';
+      } else if (row.sandboxStatus === 'CHECKPOINTED') {
+        status = 'suspended';
+      } else if (row.sandboxStatus === 'ACTIVE') {
+        status = 'running';
+      }
+
+      return {
+        id: row.id,
+        agentId: row.agentId,
+        status,
+        mode: row.mode ?? 'interactive',
+        turnCount: row.turnCount ?? 0,
+        messageCount: row.messageCount ?? 0,
+        taskDescription: row.taskDescription ?? null,
+        startedAt: row.startedAt ?? row.conversationCreatedAt,
+        updatedAt: row.updatedAt,
+        latestTurnId: row.latestTurnId ?? null,
+        sandboxSessionId: row.sandboxSessionId ?? null,
+        sandboxStatus: row.sandboxStatus ?? null,
+      };
+    });
+  }
+
   async createCheckpoint(checkpoint: {
-    runId: string;
+    sessionId: string;
     agentId: string;
     version?: number;
     checkpointData: Record<string, unknown>;
     workspaceRef?: string;
     suspendReason?: string;
   }): Promise<{ id: string }> {
-    const existingSession = await this.getSandboxSession(checkpoint.runId);
-    if (!existingSession) {
-      const run = await this.db.query.agentRuns.findFirst({
-        where: eq(this.schema.agentRuns.id, checkpoint.runId),
+      const existingSession = await this.getSandboxSession(checkpoint.sessionId);
+      if (!existingSession) {
+      const turn = await this.db.query.turns.findFirst({
+        where: eq(this.schema.turns.id, checkpoint.sessionId),
       });
-      if (!run?.conversationId) {
-        throw new Error(`Cannot create checkpoint without sandbox session or run conversation for ${checkpoint.runId}`);
+      if (!turn?.conversationId) {
+        throw new Error(`Cannot create checkpoint without sandbox session or session conversation for ${checkpoint.sessionId}`);
       }
 
       const harnessName = typeof checkpoint.checkpointData.harnessName === 'string'
@@ -1206,16 +1432,17 @@ export class DatabaseRepository {
         : 'unknown';
 
       await this.createSandboxSession({
-        id: checkpoint.runId,
-        conversationId: run.conversationId,
+        id: checkpoint.sessionId,
+        conversationId: turn.conversationId,
         agentId: checkpoint.agentId,
         harnessName,
-        status: 'FROZEN',
+        status: 'PAUSED',
+        pausedReason: 'idle',
       });
     }
 
     return this.createCheckpointV2({
-      sessionId: checkpoint.runId,
+      sessionId: checkpoint.sessionId,
       agentId: checkpoint.agentId,
       checkpointVersion: checkpoint.version,
       checkpointData: checkpoint.checkpointData,
@@ -1224,15 +1451,15 @@ export class DatabaseRepository {
     });
   }
 
-  async getCheckpoint(runId: string): Promise<Checkpoint | null> {
-    const row = await this.getCheckpointV2(runId);
+  async getCheckpoint(sessionId: string): Promise<Checkpoint | null> {
+    const row = await this.getCheckpointV2(sessionId);
     if (!row) {
       return null;
     }
 
     return {
       id: row.id,
-      runId: row.sessionId,
+      sessionId: row.sessionId,
       agentId: row.agentId,
       version: row.checkpointVersion,
       checkpointData: row.checkpointData,
@@ -1242,8 +1469,8 @@ export class DatabaseRepository {
     };
   }
 
-  async deleteCheckpoints(runId: string): Promise<number> {
-    return this.deleteCheckpointsForSession(runId);
+  async deleteCheckpoints(sessionId: string): Promise<number> {
+    return this.deleteCheckpointsForSession(sessionId);
   }
 
   // ── Checkpoints v2 (Session-based) ────────────────────────
@@ -1355,6 +1582,34 @@ export class DatabaseRepository {
     return row;
   }
 
+  async listAllArtifacts(
+    limit = 100,
+    offset = 0,
+    search?: string,
+  ): Promise<{ artifacts: ArtifactRow[]; total: number }> {
+    const conditions = [eq(this.schema.artifacts.status, 'active')];
+    if (search) {
+      conditions.push(ilike(this.schema.artifacts.name, `%${search}%`));
+    }
+
+    const where = and(...conditions);
+
+    const [artifacts, countResult] = await Promise.all([
+      this.db.query.artifacts.findMany({
+        where,
+        orderBy: [desc(this.schema.artifacts.createdAt)],
+        limit,
+        offset,
+      }),
+      this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(this.schema.artifacts)
+        .where(where),
+    ]);
+
+    return { artifacts, total: countResult[0]?.count ?? 0 };
+  }
+
   async listArtifactsForAgent(agentId: string, limit = 100, offset = 0): Promise<ArtifactRow[]> {
     return this.db.query.artifacts.findMany({
       where: and(
@@ -1367,10 +1622,10 @@ export class DatabaseRepository {
     });
   }
 
-  async listArtifactsForRun(runId: string): Promise<ArtifactRow[]> {
+  async listArtifactsForSession(sessionId: string): Promise<ArtifactRow[]> {
     return this.db.query.artifacts.findMany({
       where: and(
-        eq(this.schema.artifacts.runId, runId),
+        eq(this.schema.artifacts.sessionId, sessionId),
         eq(this.schema.artifacts.status, 'active'),
       ),
       orderBy: [desc(this.schema.artifacts.createdAt)],

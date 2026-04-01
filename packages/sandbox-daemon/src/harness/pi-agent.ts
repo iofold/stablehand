@@ -211,10 +211,16 @@ function resolveModel(
   if (baseUrl) {
     return {
       id: model,
+      name: model,
       provider,
       api: 'openai-completions' as const,
       baseUrl,
       apiKey: resolvedApiKey,
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 16384,
     };
   }
 
@@ -223,11 +229,25 @@ function resolveModel(
     return resolved;
   }
 
+  const providerDefaults: Record<string, { baseUrl: string; api: string }> = {
+    openai: { baseUrl: 'https://api.openai.com/v1', api: 'openai-completions' },
+    anthropic: { baseUrl: 'https://api.anthropic.com/v1', api: 'anthropic' },
+    google: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', api: 'google-genai' },
+  };
+  const defaults = providerDefaults[provider] ?? providerDefaults.openai;
+
   return {
     id: model,
+    name: model,
     provider,
-    api: 'openai-completions' as const,
+    api: defaults.api,
+    baseUrl: defaults.baseUrl,
     apiKey: resolvedApiKey,
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 16384,
   };
 }
 
@@ -398,7 +418,9 @@ export class PIAgentHarness implements AgentHarness {
       model,
       tools: nativeTools as any[],
       customTools: customTools as any[],
-      sessionManager: sdk.SessionManager.inMemory(cwd),
+      sessionManager: restore
+        ? sdk.SessionManager.continueRecent(cwd)
+        : sdk.SessionManager.create(cwd),
       settingsManager,
       authStorage,
       modelRegistry,
@@ -406,14 +428,15 @@ export class PIAgentHarness implements AgentHarness {
     });
     const nativeSession: NativePiSession = created.session;
 
+    const session = new PiAgentSession(nativeSession, config, turnRef);
     if (restore) {
-      const restoredMessages = restore.payload['messages'];
-      if (Array.isArray(restoredMessages) && restoredMessages.length > 0) {
-        nativeSession.agent.replaceMessages(restoredMessages as Array<Record<string, unknown>>);
+      const restoredTranscript = restore.payload['transcript'];
+      if (Array.isArray(restoredTranscript) && restoredTranscript.length > 0) {
+        session.restoreTranscript(restoredTranscript as Message[]);
       }
     }
 
-    return new PiAgentSession(nativeSession, config, turnRef);
+    return session;
   }
 
   private buildNativeTools(
@@ -478,9 +501,19 @@ class PiAgentSession implements HarnessSession {
     private readonly turnRef: ConvertToolsContext,
   ) {}
 
+  restoreTranscript(messages: Message[]): void {
+    this.transcript.push(...messages);
+  }
+
   async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<CtxMillAgentEvent> {
     this.turnRef.onApprovalNeeded = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
     this.turnRef.runId = input.turnId;
+
+    const { createPiLangSmithTracer } = await import('./pi-langsmith-tracer.js');
+    const tracer = await createPiLangSmithTracer(
+      this.config.agentId,
+      this.config.conversationId,
+    );
 
     const lastUserMsg = [...input.messages].reverse().find((m) => m.role === 'user');
 
@@ -496,6 +529,19 @@ class PiAgentSession implements HarnessSession {
 
     try {
       unsubscribe = this.nativeSession.subscribe((piEvent: Record<string, unknown>) => {
+        const eventType = typeof piEvent.type === 'string' ? piEvent.type : 'unknown';
+        const eventKeys = Object.keys(piEvent).filter((k) => k !== 'type').join(',');
+        console.log(`[pi-agent] SDK event: ${eventType} keys=[${eventKeys}]`);
+        if (eventType === 'message_end' || eventType === 'turn_end' || eventType === 'message_start') {
+          console.log(`[pi-agent] SDK event payload: ${JSON.stringify(piEvent).slice(0, 500)}`);
+        }
+        tracer?.onEvent(piEvent);
+        if (piEvent.type === 'message_end' || piEvent.type === 'turn_end') {
+          const msg = piEvent.message as Record<string, unknown> | undefined;
+          if (msg?.stopReason === 'error') {
+            console.error(`[pi-agent] SDK model error: ${msg.errorMessage}`);
+          }
+        }
         totalUsage = _piUpdateUsage(totalUsage, piEvent);
         const mapped = _piMapAgentEvent(piEvent, totalUsage);
         if (mapped) {
@@ -597,13 +643,17 @@ class PiAgentSession implements HarnessSession {
       yield { type: 'error', error: String(err) };
     } finally {
       unsubscribe?.();
+      await tracer?.flush();
     }
   }
 
   async exportState(): Promise<HarnessExportedState> {
     return {
-      stateVersion: '1',
-      payload: { transcript: this.transcript },
+      stateVersion: '2',
+      payload: {
+        transcript: this.transcript,
+        nativePersistence: true,
+      },
     };
   }
 

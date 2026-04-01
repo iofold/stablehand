@@ -13,7 +13,7 @@ export const DEFAULT_QUEUE_TIMEOUT_MS             = 60_000;
 export const DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT = 3;
 export const DEFAULT_MAX_TRIGGER_DEPTH            = 5;
 export const DEFAULT_DEFAULT_CPUS                 = 1.0;
-export const DEFAULT_DEFAULT_MEMORY_MB            = 512;
+export const DEFAULT_DEFAULT_MEMORY_MB            = 1024;
 export const DEFAULT_DEFAULT_PIDS_LIMIT           = 256;
 export const DEFAULT_DEFAULT_TIMEOUT_SEC          = 600;
 

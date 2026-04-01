@@ -27,9 +27,9 @@ describe('SSEBroadcaster', () => {
   });
 
   describe('event mapping', () => {
-    it('run.started broadcasts with type RUN_STARTED', () => {
+    it('turn.started broadcasts with type RUN_STARTED', () => {
       const event = makeRunStartedEvent();
-      bus.emit('run.started', event);
+      bus.emit('turn.started', event);
 
       expect(sseManager.broadcast).toHaveBeenCalledWith(
         event.agentId,
@@ -67,9 +67,9 @@ describe('SSEBroadcaster', () => {
       );
     });
 
-    it('run.completed broadcasts with type RUN_FINISHED', () => {
+    it('turn.completed broadcasts with type RUN_FINISHED', () => {
       const event = makeRunCompletedEvent();
-      bus.emit('run.completed', event);
+      bus.emit('turn.completed', event);
 
       expect(sseManager.broadcast).toHaveBeenCalledWith(
         event.agentId,
@@ -79,7 +79,7 @@ describe('SSEBroadcaster', () => {
 
     it('run.interrupted broadcasts with type CUSTOM', () => {
       const event: EventMap['run.interrupted'] = {
-        runId: 'run-1',
+        turnId: 'run-1',
         agentId: 'agent-1',
         toolCallId: 'tc-1',
         toolName: 'dangerous_tool',
@@ -97,7 +97,7 @@ describe('SSEBroadcaster', () => {
 
     it('run.interrupt_resolved broadcasts with type CUSTOM', () => {
       const event: EventMap['run.interrupt_resolved'] = {
-        runId: 'run-1',
+        turnId: 'run-1',
         agentId: 'agent-1',
         interruptId: 'int-1',
         action: 'approve',
@@ -115,7 +115,7 @@ describe('SSEBroadcaster', () => {
   describe('agentId routing', () => {
     it('broadcast called with correct agentId from payload', () => {
       const event = makeRunStartedEvent({ agentId: 'my-agent-42' });
-      bus.emit('run.started', event);
+      bus.emit('turn.started', event);
 
       expect(sseManager.broadcast).toHaveBeenCalledWith(
         'my-agent-42',
@@ -127,8 +127,8 @@ describe('SSEBroadcaster', () => {
       const event1 = makeRunStartedEvent({ agentId: 'agent-a' });
       const event2 = makeRunStartedEvent({ agentId: 'agent-b' });
 
-      bus.emit('run.started', event1);
-      bus.emit('run.started', event2);
+      bus.emit('turn.started', event1);
+      bus.emit('turn.started', event2);
 
       expect(sseManager.broadcast).toHaveBeenCalledTimes(2);
       expect(sseManager.broadcast).toHaveBeenCalledWith('agent-a', expect.anything());
@@ -139,7 +139,7 @@ describe('SSEBroadcaster', () => {
   describe('payload passthrough', () => {
     it('original payload fields preserved and internalType added', () => {
       const event = makeTextChunkEvent({
-        runId: 'run-xyz',
+        turnId: 'run-xyz',
         agentId: 'agent-xyz',
         messageId: 'msg-xyz',
         content: 'hello there',
@@ -149,6 +149,7 @@ describe('SSEBroadcaster', () => {
       expect(sseManager.broadcast).toHaveBeenCalledWith(
         'agent-xyz',
         expect.objectContaining({
+          turnId: 'run-xyz',
           runId: 'run-xyz',
           agentId: 'agent-xyz',
           messageId: 'msg-xyz',
@@ -168,10 +169,10 @@ describe('SSEBroadcaster', () => {
       });
 
       // First event throws
-      bus.emit('run.started', makeRunStartedEvent({ agentId: 'agent-1' }));
+      bus.emit('turn.started', makeRunStartedEvent({ agentId: 'agent-1' }));
 
       // Second event on a different event type should still attempt broadcast
-      bus.emit('run.completed', makeRunCompletedEvent({ agentId: 'agent-1' }));
+      bus.emit('turn.completed', makeRunCompletedEvent({ agentId: 'agent-1' }));
 
       // Both calls were attempted
       expect(sseManager.broadcast).toHaveBeenCalledTimes(2);
@@ -201,8 +202,8 @@ describe('SSEBroadcaster', () => {
     it('shutdown removes all listeners and no broadcasts after', () => {
       broadcaster.shutdown();
 
-      bus.emit('run.started', makeRunStartedEvent());
-      bus.emit('run.completed', makeRunCompletedEvent());
+      bus.emit('turn.started', makeRunStartedEvent());
+      bus.emit('turn.completed', makeRunCompletedEvent());
       bus.emit('run.text_chunk', makeTextChunkEvent());
 
       expect(sseManager.broadcast).not.toHaveBeenCalled();

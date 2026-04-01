@@ -8,8 +8,8 @@ import type { DatabaseRepository, WebhookRow } from '../../database/repository.j
 import type { CallbackDispatcher } from '../callback-dispatcher.js';
 import { SSEManager } from '../sse.js';
 import { InterruptManager } from '../interrupt.js';
-import { RunRegistry } from '../run-registry.js';
-import type { AgentRunService } from '../agent-run-service.js';
+import type { AgentSessionService } from '../agent-session-service.js';
+import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 
 function createMockDb() {
   const agent = {
@@ -49,7 +49,7 @@ function createMockDb() {
         id: 'hook-1',
         agentId: 'agent-1',
         url: 'https://hooks.example/run-completed',
-        events: ['run.completed'],
+        events: ['turn.completed'],
         secret: null,
         active: true,
         createdAt: 10,
@@ -71,22 +71,36 @@ async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
     configSchema,
     openSession: vi.fn(),
   };
+  const sessionManager = {
+    ensureSession: vi.fn(),
+    deliverTurn: vi.fn(),
+    killSession: vi.fn(),
+    findSessionById: vi.fn(),
+    startTurn: vi.fn(),
+    completeTurn: vi.fn(),
+    cancelCurrentTurn: vi.fn(),
+    getAbortSignal: vi.fn(),
+    pauseForHitl: vi.fn(),
+    resumeFromHitl: vi.fn(),
+    getTurn: vi.fn(),
+    getActiveTurns: vi.fn(() => []),
+  } as unknown as SandboxSessionManager;
   await app.register(agentRoutes, {
     prefix: '/api/agents',
     db,
     sse: new SSEManager(),
     interrupts: new InterruptManager(),
-    runRegistry: new RunRegistry(),
+    sessionManager,
     harnessRegistry: {
       register: vi.fn(),
       get: vi.fn(() => harness),
       getConfigSchema: vi.fn(() => configSchema),
       list: vi.fn(() => ['langgraph']),
     },
-    agentRunService: {
-      executeRun: vi.fn(),
-      resumeRun: vi.fn(),
-    } as unknown as AgentRunService,
+    agentSessionService: {
+      executeSession: vi.fn(),
+      resumeSession: vi.fn(),
+    } as unknown as AgentSessionService,
     eventBus: new TypedEventBus(),
   });
   await app.ready();
@@ -116,7 +130,7 @@ describe('webhook routes', () => {
       url: '/api/agents/agent-1/webhooks',
       payload: {
         url: 'https://hooks.example/new',
-        events: ['run.started', 'run.completed'],
+        events: ['turn.started', 'turn.completed'],
         secret: 'top-secret',
       },
     });
@@ -126,7 +140,7 @@ describe('webhook routes', () => {
       id: expect.any(String),
       agentId: 'agent-1',
       url: 'https://hooks.example/new',
-      events: ['run.started', 'run.completed'],
+      events: ['turn.started', 'turn.completed'],
       secret: 'top-secret',
       createdAt: expect.any(Number),
       updatedAt: expect.any(Number),
@@ -135,7 +149,7 @@ describe('webhook routes', () => {
     expect(response.json()).toEqual(expect.objectContaining({
       agentId: 'agent-1',
       url: 'https://hooks.example/new',
-      events: ['run.started', 'run.completed'],
+      events: ['turn.started', 'turn.completed'],
       secret: 'top-secret',
       active: true,
     }));
@@ -147,14 +161,14 @@ describe('webhook routes', () => {
       url: '/api/agents/agent-1/webhooks',
       payload: {
         url: 'https://hooks.example/new',
-        events: ['run.completed', 'run.unknown'],
+        events: ['turn.completed', 'run.unknown'],
       },
     });
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({
       error: 'Invalid event types: run.unknown',
-      validEvents: ['run.started', 'run.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'],
+      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'],
     });
     expect(db.createWebhook).not.toHaveBeenCalled();
   });
@@ -211,7 +225,7 @@ describe('callback subscriptions', () => {
           id: 'hook-1',
           agentId: 'agent-1',
           url: 'https://hooks.example/run-started',
-          events: ['run.started'],
+          events: ['turn.started'],
           secret: null,
           active: true,
           createdAt: 1,
@@ -222,8 +236,9 @@ describe('callback subscriptions', () => {
     const callbackDispatcher = createDispatcher();
 
     registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
-    eventBus.emit('run.started', {
-      runId: 'run-1',
+    eventBus.emit('turn.started', {
+      turnId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       mode: 'interactive',
@@ -235,11 +250,12 @@ describe('callback subscriptions', () => {
     expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
     expect(callbackDispatcher.enqueue).toHaveBeenNthCalledWith(1, {
       agentId: 'agent-1',
-      runId: 'run-1',
+      sessionId: 'run-1',
       callbackUrl: 'https://hooks.example/run-started',
-      eventType: 'run.started',
+      eventType: 'turn.started',
       payload: {
-        runId: 'run-1',
+        turnId: 'run-1',
+        sessionId: 'run-1',
         agentId: 'agent-1',
         conversationId: 'conv-1',
         mode: 'interactive',
@@ -257,7 +273,7 @@ describe('callback subscriptions', () => {
           id: 'hook-1',
           agentId: 'agent-1',
           url: 'https://hooks.example/run-completed',
-          events: ['run.completed'],
+          events: ['turn.completed'],
           secret: null,
           active: true,
           createdAt: 1,
@@ -268,8 +284,9 @@ describe('callback subscriptions', () => {
     const callbackDispatcher = createDispatcher();
 
     registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
-    eventBus.emit('run.completed', {
-      runId: 'run-1',
+    eventBus.emit('turn.completed', {
+      turnId: 'run-1',
+      sessionId: 'run-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       status: 'completed',
@@ -281,11 +298,12 @@ describe('callback subscriptions', () => {
     expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
     expect(callbackDispatcher.enqueue).toHaveBeenNthCalledWith(1, {
       agentId: 'agent-1',
-      runId: 'run-1',
+      sessionId: 'run-1',
       callbackUrl: 'https://hooks.example/run-completed',
-      eventType: 'run.completed',
+      eventType: 'turn.completed',
       payload: {
-        runId: 'run-1',
+        turnId: 'run-1',
+        sessionId: 'run-1',
         agentId: 'agent-1',
         conversationId: 'conv-1',
         status: 'completed',
@@ -304,7 +322,7 @@ describe('callback subscriptions', () => {
           id: 'hook-1',
           agentId: 'agent-1',
           url: 'https://hooks.example/run-completed',
-          events: ['run.completed'],
+          events: ['turn.completed'],
           secret: null,
           active: true,
           createdAt: 1,
@@ -326,7 +344,7 @@ describe('callback subscriptions', () => {
 
     registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
     eventBus.emit('run.tool_started', {
-      runId: 'run-1',
+      turnId: 'run-1',
       agentId: 'agent-1',
       toolCallId: 'tool-1',
       toolName: 'search',
@@ -336,19 +354,19 @@ describe('callback subscriptions', () => {
     await flushEvents();
 
     expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
-    expect(callbackDispatcher.enqueue).toHaveBeenNthCalledWith(1, {
-      agentId: 'agent-1',
-      runId: 'run-1',
-      callbackUrl: 'https://hooks.example/run-tool-started',
-      eventType: 'run.tool_started',
-      payload: {
-        runId: 'run-1',
-        agentId: 'agent-1',
-        toolCallId: 'tool-1',
-        toolName: 'search',
-        args: { query: 'ctxmill' },
-        timestamp: 789,
-      },
-    });
+     expect(callbackDispatcher.enqueue).toHaveBeenNthCalledWith(1, {
+       agentId: 'agent-1',
+       sessionId: 'run-1',
+       callbackUrl: 'https://hooks.example/run-tool-started',
+       eventType: 'run.tool_started',
+       payload: {
+         turnId: 'run-1',
+         agentId: 'agent-1',
+         toolCallId: 'tool-1',
+         toolName: 'search',
+         args: { query: 'ctxmill' },
+         timestamp: 789,
+       },
+     });
   });
 });

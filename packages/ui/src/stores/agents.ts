@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ApiAgentRun as ApiAgentSession } from '@ctxmill/shared';
+import type { ApiAgentSession } from '@ctxmill/shared';
 import {
   fetchAgents as apiFetchAgents,
   startBackgroundRun as apiStartRun,
@@ -11,7 +11,7 @@ import {
   type HttpToolDefinition,
 } from '@/lib/api';
 
-export type AgentSession = ApiAgentSession;
+export type AgentSession = ApiAgentSession & { sandboxSessionId?: string };
 
 export interface Agent {
   id: string;
@@ -26,14 +26,10 @@ export interface Agent {
   harnessConfig: Record<string, unknown>;
   sseClients?: number;
   conversationCount?: number;
-  sessionsByStatus?: { active: number; frozen: number; checkpointed: number; terminated: number };
+  sessionsByStatus?: { active: number; paused: number; checkpointed: number; terminated: number };
   hasPendingInterrupt?: boolean;
   lastActivity?: number;
-  activeSessions?: number;
   totalSessions?: number;
-  completedSessions?: number;
-  failedSessions?: number;
-  sessions?: AgentSession[];
   systemPrompt?: string;
   createdAt?: number;
 
@@ -73,7 +69,7 @@ interface AgentsStore {
   deleteAgent: (id: string) => Promise<void>;
   startPolling: () => () => void;
   startBackgroundRun: (agentId: string, task: string) => Promise<void>;
-  cancelRun: (agentId: string, runId: string) => Promise<void>;
+  cancelRun: (agentId: string, sessionId: string) => Promise<void>;
   fetchSessions: (agentId: string) => Promise<AgentSession[]>;
 }
 
@@ -141,9 +137,9 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
       throw err;
     }
   },
-  cancelRun: async (agentId, runId) => {
+  cancelRun: async (agentId, sessionId) => {
     try {
-      await apiCancelRun(agentId, runId);
+      await apiCancelRun(agentId, sessionId);
       await get().fetchAgents();
     } catch (err) {
       console.error('[agents] cancelRun failed:', err);
@@ -152,8 +148,11 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
   },
   fetchSessions: async (agentId) => {
     try {
-      const sessions = await apiFetchSessions(agentId);
-      return sessions as AgentSession[];
+      const data = await apiFetchSessions(agentId);
+      const sessions = Array.isArray(data)
+        ? data
+        : (data as { sessions?: AgentSession[] })?.sessions;
+      return Array.isArray(sessions) ? sessions : [];
     } catch (err) {
       console.error('[agents] fetchSessions failed:', err);
       throw err;

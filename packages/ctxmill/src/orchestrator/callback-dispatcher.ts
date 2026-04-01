@@ -13,7 +13,7 @@ export function getRetryDelay(attempt: number): number {
 
 interface EnqueueCallbackOpts {
   agentId: string;
-  runId?: string;
+  sessionId?: string;
   callbackUrl: string;
   eventType: string;
   payload: Record<string, unknown>;
@@ -51,7 +51,7 @@ export class CallbackDispatcher {
     await this.db.enqueueCallback({
       id,
       agentId: opts.agentId,
-      runId: opts.runId ?? null,
+      sessionId: opts.sessionId ?? null,
       callbackUrl: opts.callbackUrl,
       eventType: opts.eventType,
       payload: opts.payload,

@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
-  MessageSquare,
   Play,
   Pencil,
 } from 'lucide-react';
@@ -20,6 +19,7 @@ import {
   AgentSessionsTab,
   AgentToolsTab,
   AgentFilesTab,
+  AgentArtifactsTab,
   AgentSecretsTab,
 } from '@/components/agent';
 import type { TabId } from '@/components/agent';
@@ -34,6 +34,7 @@ const TABS: { id: TabId; label: string; testId?: string }[] = [
   { id: 'sessions', label: 'Sessions', testId: 'sessions-tab' },
   { id: 'tools', label: 'Tools', testId: 'tools-tab' },
   { id: 'files', label: 'Files', testId: 'files-tab' },
+  { id: 'artifacts', label: 'Artifacts', testId: 'artifacts-tab' },
   { id: 'secrets', label: 'Secrets', testId: 'secrets-tab' },
 ];
 
@@ -74,15 +75,14 @@ export function AgentDetailPage() {
     feedbackStats,
   } = useAgentDetail(id, activeTab);
 
-  const { filteredSessions, totalSessions, activeSessionsCount } = useAgentSessions(allSessions, sessionsFilter);
+  const { filteredSessions } = useAgentSessions(allSessions, sessionsFilter);
+  const totalSessions = agent?.totalSessions ?? 0;
+  const activeSessionsCount = (agent?.sessionsByStatus?.active ?? 0) + (agent?.sessionsByStatus?.paused ?? 0);
 
   const recentSessions = useMemo(() => {
-    const seen = new Map<string, (typeof allSessions)[number]>();
-    for (const session of allSessions) {
-      const key = session.conversationId || session.id;
-      if (!seen.has(key)) seen.set(key, session);
-    }
-    return Array.from(seen.values()).slice(0, 10);
+    return [...allSessions]
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, 10);
   }, [allSessions]);
 
   const {
@@ -200,18 +200,11 @@ export function AgentDetailPage() {
               <button
                 type="button"
                 onClick={() => setShowEditModal(true)}
-                className="rounded-lg p-2 text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
+                className="flex items-center gap-1.5 rounded-lg bg-surface-700 px-3 py-2 text-sm font-medium text-surface-200 hover:bg-surface-600 transition-colors"
                 aria-label="Edit agent"
               >
                 <Pencil className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate(`/agents/${id}/sessions/new`)}
-                className="btn-secondary"
-              >
-                <MessageSquare className="h-4 w-4" />
-                Open Session
+                Edit
               </button>
               <button
                 type="button"
@@ -288,9 +281,9 @@ export function AgentDetailPage() {
             toolsCount={toolsCount}
             knowledgeTotal={overviewKnowledgeStats.totalItems ?? 0}
             recentSessions={recentSessions}
-            onContinueSession={(sessionId) => {
-              if (sessionId) {
-                navigate(`/agents/${id}/sessions/${sessionId}`);
+            onContinueSession={(conversationId) => {
+              if (conversationId) {
+                navigate(`/agents/${id}/conversations/${conversationId}`);
               } else {
                 setActiveTab('sessions');
               }
@@ -326,7 +319,7 @@ export function AgentDetailPage() {
               setSelectedSessionId(sessionId);
               setActiveTab('files');
             }}
-            onContinueSession={(sessionId) => navigate(`/agents/${id}/sessions/${sessionId}`)}
+            onContinueSession={(conversationId) => navigate(`/agents/${id}/conversations/${conversationId}`)}
           />
         )}
 
@@ -350,8 +343,12 @@ export function AgentDetailPage() {
                 </button>
               </div>
             )}
-            <AgentFilesTab agentId={id} runId={selectedSessionId ?? undefined} />
+            <AgentFilesTab agentId={id} sessionId={selectedSessionId ?? undefined} />
           </div>
+        )}
+
+        {activeTab === 'artifacts' && id && (
+          <AgentArtifactsTab agentId={id} />
         )}
 
         {activeTab === 'secrets' && id && (

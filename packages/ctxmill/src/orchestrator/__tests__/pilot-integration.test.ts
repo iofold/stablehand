@@ -6,12 +6,12 @@ import type { CallbackOutboxRow, DatabaseRepository, WebhookRow } from '../../da
 import { TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition } from '../../types.js';
 import { CallbackDispatcher } from '../callback-dispatcher.js';
-import type { AgentRunService } from '../agent-run-service.js';
+import type { AgentSessionService } from '../agent-session-service.js';
 import { InterruptManager } from '../interrupt.js';
 import { agentRoutes } from '../routes/agents.js';
-import { RunRegistry } from '../run-registry.js';
 import { mapAgentHttpToolsToConfigs } from '../http-tools.js';
 import { SSEManager } from '../sse.js';
+import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 
 type AgentRow = {
   id: string;
@@ -222,6 +222,19 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
         status: attempts >= row.maxAttempts ? 'failed' : 'pending',
       });
     }),
+    createTurn: vi.fn(async (data: Record<string, unknown>) => {
+      const id = `turn-${Date.now()}`;
+      const row = { id, ...data, sessionId: `sandbox-${id}`, startedAt: Date.now(), completedAt: null, error: null };
+      runs.set(id, row as unknown as RunRow);
+      return row;
+    }),
+    updateTurn: vi.fn(async () => undefined),
+    getTurn: vi.fn(async (id: string) => {
+      const row = runs.get(id);
+      return row ? { ...row } : undefined;
+    }),
+    getTurnsByAgent: vi.fn(async () => []),
+    getActiveTurns: vi.fn(async () => []),
     _stores: {
       agents,
       webhooks,
@@ -246,25 +259,44 @@ function flushEvents(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function createMockSessionManager(): SandboxSessionManager {
+  return {
+    ensureSession: vi.fn(),
+    deliverTurn: vi.fn(),
+    killSession: vi.fn(),
+    findSessionById: vi.fn(),
+    startTurn: vi.fn(),
+    completeTurn: vi.fn(),
+    cancelCurrentTurn: vi.fn(() => true),
+    getAbortSignal: vi.fn(),
+    pauseForHitl: vi.fn(),
+    resumeFromHitl: vi.fn(),
+    checkConcurrencyLimit: vi.fn(),
+    getTurn: vi.fn(),
+    getActiveTurns: vi.fn(() => []),
+    getTurnsByAgent: vi.fn(() => []),
+  } as unknown as SandboxSessionManager;
+}
+
 async function buildApp(options?: {
   db?: ReturnType<typeof createMockDb>;
   eventBus?: TypedEventBus;
-  runRegistry?: RunRegistry;
-  agentRunService?: AgentRunService;
+  sessionManager?: SandboxSessionManager;
+  agentSessionService?: AgentSessionService;
 }): Promise<{
   app: FastifyInstance;
   db: ReturnType<typeof createMockDb>;
   eventBus: TypedEventBus;
-  runRegistry: RunRegistry;
-  agentRunService: AgentRunService;
+  sessionManager: SandboxSessionManager;
+  agentSessionService: AgentSessionService;
 }> {
   const db = options?.db ?? createMockDb();
   const eventBus = options?.eventBus ?? new TypedEventBus();
-  const runRegistry = options?.runRegistry ?? new RunRegistry(db, eventBus);
-  const agentRunService = options?.agentRunService ?? ({
-    executeRun: vi.fn(async () => {}),
-    resumeRun: vi.fn(async () => {}),
-  } as unknown as AgentRunService);
+  const sessionManager = options?.sessionManager ?? createMockSessionManager();
+  const agentSessionService = options?.agentSessionService ?? ({
+    executeSession: vi.fn(async () => {}),
+    resumeSession: vi.fn(async () => {}),
+  } as unknown as AgentSessionService);
 
   const app = Fastify();
   const configSchema = z.object({ model: z.string().min(1) }).passthrough();
@@ -278,19 +310,19 @@ async function buildApp(options?: {
     db,
     sse: new SSEManager(),
     interrupts: new InterruptManager() as unknown as InterruptManager,
-    runRegistry,
+    sessionManager,
     harnessRegistry: {
       register: vi.fn(),
       get: vi.fn(() => harness),
       getConfigSchema: vi.fn(() => configSchema),
       list: vi.fn(() => ['langgraph']),
     },
-    agentRunService,
+    agentSessionService,
     eventBus,
   });
   await app.ready();
 
-  return { app, db, eventBus, runRegistry, agentRunService };
+  return { app, db, eventBus, sessionManager, agentSessionService };
 }
 
 function createHttpAgent(overrides?: Partial<AgentDefinition>): AgentDefinition {
@@ -378,7 +410,7 @@ describe('Pilot integration', () => {
         url: '/api/agents/agent-1/webhooks',
         payload: {
           url: 'https://hooks.example/pilot',
-          events: ['run.started', 'run.completed', 'run.tool_started'],
+          events: ['turn.started', 'turn.completed', 'run.tool_started'],
         },
       });
 
@@ -394,7 +426,7 @@ describe('Pilot integration', () => {
         expect.objectContaining({
           agentId: 'agent-1',
           url: 'https://hooks.example/pilot',
-          events: ['run.started', 'run.completed', 'run.tool_started'],
+          events: ['turn.started', 'turn.completed', 'run.tool_started'],
         }),
       ]);
     });
@@ -410,7 +442,7 @@ describe('Pilot integration', () => {
             id: 'hook-started',
             agentId: 'agent-1',
             url: 'https://hooks.example/run-started',
-            events: ['run.started'],
+            events: ['turn.started'],
             secret: null,
             active: true,
             createdAt: 1,
@@ -430,7 +462,7 @@ describe('Pilot integration', () => {
             id: 'hook-completed',
             agentId: 'agent-1',
             url: 'https://hooks.example/run-completed',
-            events: ['run.completed'],
+            events: ['turn.completed'],
             secret: null,
             active: true,
             createdAt: 1,
@@ -442,8 +474,9 @@ describe('Pilot integration', () => {
 
       registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
 
-      eventBus.emit('run.started', {
-        runId: 'run-1',
+      eventBus.emit('turn.started', {
+        turnId: 'run-1',
+        sessionId: 'run-1',
         agentId: 'agent-1',
         conversationId: 'conv-1',
         mode: 'background',
@@ -455,11 +488,12 @@ describe('Pilot integration', () => {
       expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
       expect(callbackDispatcher.enqueue).toHaveBeenCalledWith({
         agentId: 'agent-1',
-        runId: 'run-1',
+        sessionId: 'run-1',
         callbackUrl: 'https://hooks.example/run-started',
-        eventType: 'run.started',
+        eventType: 'turn.started',
         payload: {
-          runId: 'run-1',
+          turnId: 'run-1',
+          sessionId: 'run-1',
           agentId: 'agent-1',
           conversationId: 'conv-1',
           mode: 'background',
@@ -471,7 +505,7 @@ describe('Pilot integration', () => {
       callbackDispatcher.enqueue.mockClear();
 
       eventBus.emit('run.tool_started', {
-        runId: 'run-1',
+        turnId: 'run-1',
         agentId: 'agent-1',
         toolCallId: 'tool-1',
         toolName: 'remote-search',
@@ -483,23 +517,24 @@ describe('Pilot integration', () => {
       expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
       expect(callbackDispatcher.enqueue).toHaveBeenCalledWith({
         agentId: 'agent-1',
-        runId: 'run-1',
-        callbackUrl: 'https://hooks.example/tool-called',
-        eventType: 'run.tool_started',
-        payload: {
-          runId: 'run-1',
-          agentId: 'agent-1',
-          toolCallId: 'tool-1',
-          toolName: 'remote-search',
-          args: { query: 'pilot order status' },
-          timestamp: 200,
-        },
-      });
+         sessionId: 'run-1',
+         callbackUrl: 'https://hooks.example/tool-called',
+         eventType: 'run.tool_started',
+         payload: {
+           turnId: 'run-1',
+           agentId: 'agent-1',
+           toolCallId: 'tool-1',
+           toolName: 'remote-search',
+           args: { query: 'pilot order status' },
+           timestamp: 200,
+         },
+       });
 
       callbackDispatcher.enqueue.mockClear();
 
-      eventBus.emit('run.completed', {
-        runId: 'run-1',
+      eventBus.emit('turn.completed', {
+        turnId: 'run-1',
+        sessionId: 'run-1',
         agentId: 'agent-1',
         conversationId: 'conv-1',
         status: 'completed',
@@ -511,11 +546,12 @@ describe('Pilot integration', () => {
       expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
       expect(callbackDispatcher.enqueue).toHaveBeenCalledWith({
         agentId: 'agent-1',
-        runId: 'run-1',
+        sessionId: 'run-1',
         callbackUrl: 'https://hooks.example/run-completed',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
         payload: {
-          runId: 'run-1',
+          turnId: 'run-1',
+          sessionId: 'run-1',
           agentId: 'agent-1',
           conversationId: 'conv-1',
           status: 'completed',
@@ -527,11 +563,11 @@ describe('Pilot integration', () => {
 
       expect(callbackDispatcher.enqueue).not.toHaveBeenCalledWith(expect.objectContaining({
         callbackUrl: 'https://hooks.example/run-started',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
       }));
       expect(callbackDispatcher.enqueue).not.toHaveBeenCalledWith(expect.objectContaining({
         callbackUrl: 'https://hooks.example/tool-called',
-        eventType: 'run.completed',
+        eventType: 'turn.completed',
       }));
     });
   });
@@ -605,12 +641,12 @@ describe('Pilot integration', () => {
       callbackDispatcher.fetchFn = fetchMock;
       registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
 
-      const runRegistry = new RunRegistry(db, eventBus);
-      const cancelRunSpy = vi.spyOn(runRegistry, 'cancelRun');
-      const agentRunService = {
-        executeRun: vi.fn(async (params: { agentId: string; runId: string }) => {
+      const sessionManager = createMockSessionManager();
+      const cancelSessionSpy = vi.spyOn(sessionManager, 'cancelCurrentTurn');
+        const agentSessionService = {
+        executeSession: vi.fn(async (params: { agentId: string; sessionId: string }) => {
           eventBus.emit('run.tool_started', {
-            runId: params.runId,
+            turnId: params.sessionId,
             agentId: params.agentId,
             toolCallId: 'tool-1',
             toolName: 'remote-search',
@@ -619,10 +655,10 @@ describe('Pilot integration', () => {
           });
           return new Promise<void>(() => {});
         }),
-        resumeRun: vi.fn(async () => {}),
-      } as unknown as AgentRunService;
+        resumeSession: vi.fn(async () => {}),
+      } as unknown as AgentSessionService;
 
-      const system = await buildApp({ db, eventBus, runRegistry, agentRunService });
+      const system = await buildApp({ db, eventBus, sessionManager, agentSessionService });
       app = system.app;
 
       const createResponse = await app.inject({
@@ -648,61 +684,65 @@ describe('Pilot integration', () => {
         url: '/api/agents/agent-1/webhooks',
         payload: {
           url: 'https://hooks.example/pilot',
-          events: ['run.started', 'run.completed', 'run.tool_started'],
+          events: ['turn.started', 'turn.completed', 'run.tool_started'],
         },
       });
       expect(webhookResponse.statusCode).toBe(201);
 
       const startResponse = await app.inject({
         method: 'POST',
-        url: '/api/agents/agent-1/run',
+        url: '/api/agents/agent-1/session',
         payload: { task: 'Dispatch Pilot order sync' },
       });
 
       expect(startResponse.statusCode).toBe(201);
-      expect(agentRunService.executeRun).toHaveBeenCalledTimes(1);
+      expect(agentSessionService.executeSession).toHaveBeenCalledTimes(1);
 
-      const { runId } = startResponse.json() as { runId: string; conversationId: string };
+      const { sessionId } = startResponse.json() as { sessionId: string; conversationId: string };
 
       await flushEvents();
       await callbackDispatcher.processPending();
 
       const preCancelDeliveries = getDeliveredBodies(fetchMock);
-      expect(preCancelDeliveries).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          eventType: 'run.started',
-          body: expect.objectContaining({
-            runId,
-            agentId: 'agent-1',
-            taskDescription: 'Dispatch Pilot order sync',
-          }),
-        }),
-        expect.objectContaining({
-          eventType: 'run.tool_started',
-          body: expect.objectContaining({
-            runId,
-            toolName: 'remote-search',
-            args: { query: 'pilot shipment 42' },
-          }),
-        }),
-      ]));
+      // turn.started is emitted by sessionManager.startTurn() which is mocked in this test
+      // and doesn't fire events on the eventBus. Only run.tool_started (from executeSession mock) is delivered.
+       expect(preCancelDeliveries).toEqual(expect.arrayContaining([
+         expect.objectContaining({
+           eventType: 'run.tool_started',
+           body: expect.objectContaining({
+             turnId: sessionId,
+             toolName: 'remote-search',
+             args: { query: 'pilot shipment 42' },
+           }),
+         }),
+       ]));
 
       const cancelResponse = await app.inject({
         method: 'POST',
-        url: `/api/agents/agent-1/runs/${runId}/cancel`,
+        url: `/api/agents/agent-1/sessions/${sessionId}/cancel`,
       });
 
       expect(cancelResponse.statusCode).toBe(200);
-      expect(cancelRunSpy).toHaveBeenCalledWith(runId);
+      expect(cancelSessionSpy).toHaveBeenCalledWith(`sandbox-${sessionId}`);
+
+      eventBus.emit('turn.completed', {
+        turnId: sessionId,
+        sessionId,
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        status: 'cancelled' as const,
+        durationMs: 100,
+        timestamp: Date.now(),
+      });
 
       await flushEvents();
       await callbackDispatcher.processPending();
 
-      const completedDeliveries = getDeliveredBodies(fetchMock).filter((entry) => entry.eventType === 'run.completed');
+      const completedDeliveries = getDeliveredBodies(fetchMock).filter((entry) => entry.eventType === 'turn.completed');
       expect(completedDeliveries).toEqual(expect.arrayContaining([
         expect.objectContaining({
           body: expect.objectContaining({
-            runId,
+            sessionId,
             agentId: 'agent-1',
             status: 'cancelled',
           }),
@@ -712,7 +752,7 @@ describe('Pilot integration', () => {
         'https://hooks.example/pilot',
         expect.objectContaining({
           method: 'POST',
-          headers: expect.objectContaining({ 'X-Event-Type': 'run.completed' }),
+          headers: expect.objectContaining({ 'X-Event-Type': 'turn.completed' }),
         }),
       );
     });
@@ -732,7 +772,7 @@ describe('Pilot integration', () => {
         url: '/api/agents/agent-1/webhooks',
         payload: {
           url: 'https://hooks.example/lifecycle',
-          events: ['run.completed'],
+          events: ['turn.completed'],
         },
       });
       expect(createResponse.statusCode).toBe(201);
@@ -748,7 +788,7 @@ describe('Pilot integration', () => {
         expect.objectContaining({
           id: createdWebhook.id,
           url: 'https://hooks.example/lifecycle',
-          events: ['run.completed'],
+          events: ['turn.completed'],
         }),
       ]);
 
@@ -770,7 +810,7 @@ describe('Pilot integration', () => {
         url: '/api/agents/agent-1/webhooks',
         payload: {
           url: 'https://hooks.example/invalid',
-          events: ['run.completed', 'run.invalid'],
+          events: ['turn.completed', 'run.invalid'],
         },
       });
       expect(invalidResponse.statusCode).toBe(400);

@@ -1,8 +1,6 @@
 import {
   Brain,
-  Hash,
   Search,
-  Tag,
   ExternalLink,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';

@@ -65,13 +65,13 @@ test.describe('Visual regression', () => {
   });
 
   test('chat page empty state', async ({ page }) => {
-    await page.goto(`/agents/${agentId}/chat`);
+    await page.goto(`/agents/${agentId}/sessions/new`);
     await page.waitForLoadState('domcontentloaded');
 
     // Chat page should show the input area
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 10_000 });
 
-    const chatComposer = page.getByTestId('chat-input').locator('xpath=..');
+    const chatComposer = page.getByTestId('session-input').locator('xpath=..');
     await expect(chatComposer).toHaveScreenshot('chat-empty-composer.png', { maxDiffPixelRatio: 0.1 });
   });
 });

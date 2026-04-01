@@ -1,24 +1,30 @@
 import { cn } from '@/lib/utils';
 
-type RunStatus = 'queued' | 'running' | 'paused' | 'completed' | 'error' | 'cancelled' | 'suspended';
-
 interface RunStatusBadgeProps {
-  status: RunStatus;
+  status: string;
+  pausedReason?: string | null;
   className?: string;
 }
 
-const config: Record<RunStatus, { color: string }> = {
+const config: Record<string, { color: string }> = {
   queued: { color: 'bg-surface-500' },
   running: { color: 'bg-status-success' },
   paused: { color: 'bg-status-warning' },
-  completed: { color: 'bg-status-success' },
+  PAUSED: { color: 'bg-status-warning' },
+  completed: { color: 'bg-surface-400' },
   error: { color: 'bg-status-error' },
   cancelled: { color: 'bg-surface-500' },
-  suspended: { color: 'bg-surface-500' },
+  suspended: { color: 'bg-status-warning' },
 };
 
-export function RunStatusBadge({ status, className }: RunStatusBadgeProps) {
-  const { color } = config[status] ?? config.queued;
+export function RunStatusBadge({ status, pausedReason, className }: RunStatusBadgeProps) {
+  const normalizedStatus = status.toLowerCase();
+  const { color } = config[status] ?? config[normalizedStatus] ?? config.queued;
+
+  let displayStatus = status;
+  if (normalizedStatus === 'paused') {
+    displayStatus = pausedReason === 'idle' ? 'Paused (Idle)' : 'Paused (HITL)';
+  }
 
   return (
     <span
@@ -30,9 +36,10 @@ export function RunStatusBadge({ status, className }: RunStatusBadgeProps) {
     >
       <span
         className={cn('h-1.5 w-1.5 rounded-full', color)}
-        aria-label={`Run status: ${status}`}
+        role="img"
+        aria-label={`Run status: ${displayStatus}`}
       />
-      {status}
+      <span className="capitalize">{displayStatus}</span>
     </span>
   );
 }

@@ -45,6 +45,8 @@ export interface ComposioConfig {
   toolkits?: string[];
   userId?: string;
   baseUrl?: string;
+  /** List of tool names that should be marked as programmatic. */
+  programmaticTools?: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -173,12 +175,14 @@ export class ComposioToolProvider implements ToolProvider {
   private sessionId: string | null = null;
   private cachedSessionTools: ComposioToolDescriptor[] | null = null;
   private cachedTools: ToolDefinition[] | null = null;
+  private programmaticToolNames: Set<string>;
 
   constructor(
     private readonly config: ComposioConfig,
     client?: ComposioClient,
   ) {
     this.client = client ?? new RestComposioClient(config);
+    this.programmaticToolNames = new Set(config.programmaticTools ?? []);
   }
 
   private async ensureSession(): Promise<string> {
@@ -215,6 +219,7 @@ export class ComposioToolProvider implements ToolProvider {
         description: tool.description ?? '',
         input: zodInput,
         location: 'orchestrator',
+        programmatic: this.programmaticToolNames.has(tool.name),
         handler: async (input: unknown, ctx: ToolContext) => this.execute(prefixedName, input, ctx),
       } satisfies ToolDefinition;
     });

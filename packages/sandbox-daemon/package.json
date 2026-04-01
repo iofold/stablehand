@@ -37,6 +37,7 @@
     "@langchain/core": "^1.1.31",
     "@langchain/google-genai": "^2.1.26",
     "@langchain/openai": "^1.2.12",
+    "langsmith": "^0.5.15",
     "@mariozechner/pi-ai": "^0.58.1",
     "@mariozechner/pi-coding-agent": "^0.58.1",
     "deepagents": "^1.8.1",

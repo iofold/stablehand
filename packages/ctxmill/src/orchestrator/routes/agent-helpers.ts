@@ -1,4 +1,4 @@
-import { resolve, normalize, join } from 'node:path';
+import { resolve, normalize } from 'node:path';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { Message } from '../../types.js';
 import type { DatabaseRepository } from '../../database/repository.js';
@@ -15,13 +15,13 @@ export function isBlockedPath(name: string): boolean {
 /**
  * Resolve the base directory for file operations.
  *
- * When a `runId` is provided and a `dataDir` is configured, looks for a
+ * When a `sessionId` is provided and a `dataDir` is configured, looks for a
  * session-merged workspace first and falls back to the agent's workspace dir
  * (or `process.cwd()` as a last resort).
  */
 export function resolveBaseDir(
   agent: { id: string; workspaceDir?: string | null },
-  _opts?: { runId?: string; dataDir?: string },
+  _opts?: { sessionId?: string; dataDir?: string },
 ): string | null {
   return agent.workspaceDir ? resolve(agent.workspaceDir) : null;
 }

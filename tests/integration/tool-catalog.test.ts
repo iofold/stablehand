@@ -11,7 +11,7 @@ import type { AppContainer } from '../../packages/ctxmill/src/config/container.j
 const VALID_AGENT = {
   name: 'test-agent',
   harness: 'langgraph',
-  harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+  harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
   systemPrompt: 'You are a test agent.',
   tools: ['tool-a', 'tool-b'],
 };

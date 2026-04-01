@@ -5,12 +5,12 @@ test('Load conversation using correct route format', async ({ page }) => {
   const targetConvId = 'a1d7489a-360d-476e-ba89-8dd5262980ce';
 
   // Use the route parameter format instead of query param
-  const correctRoute = `/agents/${agentId}/chat/${targetConvId}`;
+  const correctRoute = `/agents/${agentId}/sessions/${targetConvId}`;
   
   console.log(`\n📍 Navigating to: ${correctRoute}`);
   
   await page.goto(correctRoute);
-  await page.getByTestId('chat-input').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.getByTestId('session-input').waitFor({ state: 'visible', timeout: 15_000 });
   await page.waitForTimeout(3000);
 
   // Check what messages are loaded

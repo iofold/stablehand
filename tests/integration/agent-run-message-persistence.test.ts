@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentRunService } from '../../packages/ctxmill/src/orchestrator/agent-run-service.js';
-import { RunRegistry } from '../../packages/ctxmill/src/orchestrator/run-registry.js';
+import { AgentSessionService } from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
 import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
 import type { AGUIEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
+import { TestSessionRegistry, createTestSessionManager } from '../utils/test-session-registry.js';
 
 type StreamEvent = AGUIEvent | MessageCommittedEvent;
 
@@ -16,7 +16,8 @@ async function* eventStream(events: readonly StreamEvent[]) {
 function makeAgentDef(): AgentDefinition {
   return {
     name: 'test-agent',
-    model: 'gpt-5-mini',
+    harness: 'langgraph',
+    harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
     systemPrompt: 'You are a test agent. {{knowledge}}',
     tools: ['search', 'weather'],
   };
@@ -54,41 +55,52 @@ describe('AgentRunService message persistence integration', () => {
 
   beforeEach(async () => {
     testDb = await createTestDb();
-  });
+  }, 30_000);
 
   afterEach(async () => {
-    await testDb.close();
-  });
+    await testDb?.close();
+  }, 30_000);
 
   async function executeAndReadMessages(events: StreamEvent[]) {
     const agent = await testDb.repo.createAgent({
       name: 'message-persistence-agent',
       harness: 'langgraph',
-      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5-mini' }),
+      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5.4-mini' }),
       systemPrompt: 'You are a test agent.',
       tools: ['search', 'weather'],
     });
     const conversation = await testDb.repo.createConversation(agent.id);
-    const runRegistry = new RunRegistry();
-    const run = await runRegistry.startRun(agent.id, conversation.id, 'interactive', 'message persistence test');
+    const run = await testDb.repo.createTurn({
+      agentId: agent.id,
+      conversationId: conversation.id,
+      mode: 'interactive',
+      taskDescription: 'message persistence test',
+    });
+    const sandboxSession = await testDb.repo.createSandboxSession({
+      conversationId: conversation.id,
+      agentId: agent.id,
+      harnessName: agent.harness,
+    });
+    const sessionRegistry = new TestSessionRegistry();
 
-    const service = new AgentRunService({
-      sandboxRunService: {
+    const service = new AgentSessionService({
+      sessionTurnService: {
         executeSessionTurn: vi.fn().mockReturnValue(eventStream(events)),
       } as never,
       sse: {
         broadcast: vi.fn(),
       } as never,
       db: testDb.repo,
-      runRegistry,
+      sessionManager: createTestSessionManager(sessionRegistry, { sessionId: sandboxSession.id }) as never,
     });
 
-    await service.executeRun({
+    await service.executeSession({
       agentDef: makeAgentDef(),
       messages: makeMessages(agent.id),
       agentId: agent.id,
       conversationId: conversation.id,
-      runId: run.id,
+      sessionId: run.id,
+      mode: 'interactive',
       taskDescription: 'message persistence test',
     });
 

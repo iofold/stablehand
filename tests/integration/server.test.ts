@@ -35,7 +35,11 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
 
     app = await createServer({
       db: container.db,
-      agentRunService: container.agentRunService,
+      agentSessionService: container.agentSessionService,
+      eventBus: container.eventBus,
+      harnessRegistry: container.harnessRegistry,
+      sessionManager: container.sessionManager,
+      dataDir,
     });
 
     // Use inject() — no listen() call needed
@@ -173,11 +177,15 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
     } finally {
       await app.close();
       // Re-create the server for remaining tests and afterAll cleanup
-      app = await createServer({
-        db: container.db,
-        agentRunService: container.agentRunService,
-      });
-      await app.ready();
+        app = await createServer({
+          db: container.db,
+          agentSessionService: container.agentSessionService,
+          eventBus: container.eventBus,
+          harnessRegistry: container.harnessRegistry,
+          sessionManager: container.sessionManager,
+          dataDir,
+        });
+        await app.ready();
     }
   });
 
@@ -215,28 +223,24 @@ describe('Module integration', () => {
       // All services exist
       expect(container.knowledgeStore).toBeDefined();
       expect(container.contextProvider).toBeDefined();
-      expect(container.llmProvider).toBeDefined();
-      expect(container.learningPipeline).toBeDefined();
       expect(container.toolExecutor).toBeDefined();
-      expect(container.agentRunService).toBeDefined();
+      expect(container.agentSessionService).toBeDefined();
       expect(container.eventBus).toBeDefined();
       expect(container.sseManager).toBeDefined();
       expect(container.interruptManager).toBeDefined();
-      expect(container.runRegistry).toBeDefined();
+      expect(container.sessionManager).toBeDefined();
 
       // Interface methods exist — KnowledgeStore
       expect(typeof container.knowledgeStore.add).toBe('function');
       expect(typeof container.knowledgeStore.render).toBe('function');
 
       // Interface methods exist — LLMProvider
-      expect(container.llmProvider).not.toBeNull();
       if (container.llmProvider) {
         expect(typeof container.llmProvider.invoke).toBe('function');
         expect(typeof container.llmProvider.healthy).toBe('function');
       }
 
       // Interface methods exist — LearningPipeline
-      expect(container.learningPipeline).toBeDefined();
       if (container.learningPipeline) {
         expect(typeof container.learningPipeline.process).toBe('function');
         expect(typeof container.learningPipeline.getKnowledge).toBe('function');

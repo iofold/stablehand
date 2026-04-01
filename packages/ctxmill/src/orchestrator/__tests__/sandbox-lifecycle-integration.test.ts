@@ -1,7 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SandboxRunService, type SandboxSessionManager, type SessionEvent } from '../sandbox-run-service.js';
-import type { TypedEventBus } from '../../events/bus.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SessionTurnService, type SandboxSessionManager, type SessionEvent } from '../session-turn-service.js';
+import { TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition, Message } from '../../types.js';
+
+function createTestBus(options?: ConstructorParameters<typeof TypedEventBus>[0]): TypedEventBus {
+  return new TypedEventBus(options);
+}
 
 function msg(content: string, role = 'user'): Message {
   return { id: `m-${Date.now()}`, role, content, agentId: 'a-1', createdAt: Date.now() } as unknown as Message;
@@ -24,25 +28,16 @@ function createMockSessionManager(): SandboxSessionManager {
   } as unknown as SandboxSessionManager;
 }
 
-function createMockEventBus(): TypedEventBus {
-  return {
-    emit: vi.fn(),
-    on: vi.fn(),
-    off: vi.fn(),
-    removeAllListeners: vi.fn(),
-  } as unknown as TypedEventBus;
-}
-
 const silentLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 
 describe('Sandbox Session Lifecycle Integration', () => {
   let sessionManager: SandboxSessionManager;
   let eventBus: TypedEventBus;
-  let service: SandboxRunService;
+  let service: SessionTurnService;
 
   const agentDef = {
     name: 'test-agent',
-    model: 'gpt-5-mini',
+    model: 'gpt-5.4-mini',
     tools: [],
     systemPrompt: 'You are a test agent.',
     harness: 'langgraph',
@@ -50,8 +45,12 @@ describe('Sandbox Session Lifecycle Integration', () => {
 
   beforeEach(() => {
     sessionManager = createMockSessionManager();
-    eventBus = createMockEventBus();
-    service = new SandboxRunService({ sessionManager, eventBus, logger: silentLogger });
+    eventBus = createTestBus();
+    service = new SessionTurnService({ sessionManager, eventBus, logger: silentLogger });
+  });
+
+  afterEach(() => {
+    eventBus.removeAllListeners();
   });
 
   describe('session-per-conversation', () => {
@@ -70,8 +69,8 @@ describe('Sandbox Session Lifecycle Integration', () => {
     it('reuses session for second message in same conversation', async () => {
       const messages: Message[] = [msg('first')];
 
-      for await (const _evt of service.executeSessionTurn(agentDef, 'conv-1', messages, 'turn-1')) { /* drain */ }
-      for await (const _evt of service.executeSessionTurn(agentDef, 'conv-1', [msg('second')], 'turn-2')) { /* drain */ }
+      for await (const evt of service.executeSessionTurn(agentDef, 'conv-1', messages, 'turn-1')) { void evt; }
+      for await (const evt of service.executeSessionTurn(agentDef, 'conv-1', [msg('second')], 'turn-2')) { void evt; }
 
       expect(sessionManager.ensureSession).toHaveBeenCalledTimes(2);
       const calls = (sessionManager.ensureSession as any).mock.calls;
@@ -82,8 +81,8 @@ describe('Sandbox Session Lifecycle Integration', () => {
     });
 
     it('creates separate sessions for different conversations', async () => {
-      for await (const _evt of service.executeSessionTurn(agentDef, 'conv-1', [msg('a')], 'turn-1')) { /* drain */ }
-      for await (const _evt of service.executeSessionTurn(agentDef, 'conv-2', [msg('b')], 'turn-2')) { /* drain */ }
+      for await (const evt of service.executeSessionTurn(agentDef, 'conv-1', [msg('a')], 'turn-1')) { void evt; }
+      for await (const evt of service.executeSessionTurn(agentDef, 'conv-2', [msg('b')], 'turn-2')) { void evt; }
 
       const calls = (sessionManager.ensureSession as any).mock.calls;
       expect(calls[0][0]).toBe('conv-1');
@@ -160,7 +159,7 @@ describe('Sandbox Session Lifecycle Integration', () => {
       });
 
       try {
-        for await (const _evt of service.executeSessionTurn(agentDef, 'conv-1', [msg('hi')], 'turn-1')) { /* drain */ }
+        for await (const evt of service.executeSessionTurn(agentDef, 'conv-1', [msg('hi')], 'turn-1')) { void evt; }
         expect.fail('should have thrown');
       } catch (err: any) {
         expect(err.message).toContain('harness crashed');

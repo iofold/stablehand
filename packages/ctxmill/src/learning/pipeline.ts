@@ -2,7 +2,7 @@ import type { ExecutionTrace, FeedbackSignal, LearningPipeline, LearningResult }
 import type { KnowledgeStore } from '../knowledge/types.js';
 import type { SimpleReflector } from './reflector.js';
 import type { DatabaseRepository } from '../database/repository.js';
-import type { TypedEventBus } from '../events/bus.js';
+import type { EventMap, TypedEventBus } from '../events/bus.js';
 import { getErrorMessage } from '../util/errors.js';
 import { traceToDbRow } from './trace-convert.js';
 
@@ -33,12 +33,12 @@ export class DefaultLearningPipeline implements LearningPipeline {
         if (this.eventBus) {
           this.eventBus.emit('learning.trace_captured', {
             traceId: trace.id,
-            runId: trace.runId,
+            turnId: trace.turnId,
             agentId: trace.agentId,
             stepCount: trace.steps.length,
             outcome: (trace.outcome === 'unknown' ? 'partial' : trace.outcome) as 'success' | 'failure' | 'partial',
             timestamp: Date.now(),
-          });
+          } as unknown as EventMap['learning.trace_captured']);
         }
       } catch (err) {
         console.error('[LearningPipeline] Trace save failed for', trace.id, err);

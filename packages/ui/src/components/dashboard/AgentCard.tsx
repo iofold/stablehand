@@ -44,30 +44,30 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
 
   const renderSessions = () => {
     const stats = agent.sessionsByStatus;
-    const total = (stats?.active ?? 0) + (stats?.frozen ?? 0) + (stats?.checkpointed ?? 0) + (stats?.terminated ?? 0);
+    const total = (stats?.active ?? 0) + (stats?.paused ?? 0) + (stats?.checkpointed ?? 0) + (stats?.terminated ?? 0);
     if (!stats || total === 0) {
       return <span className="tabular-nums font-medium text-surface-200">0</span>;
     }
 
     const parts = [];
     if (stats.active > 0) parts.push(`${stats.active} active`);
-    if (stats.frozen > 0) parts.push(`${stats.frozen} frozen`);
+    if (stats.paused > 0) parts.push(`${stats.paused} paused`);
     if (stats.checkpointed > 0) parts.push(`${stats.checkpointed} checkpointed`);
     if (stats.terminated > 0) parts.push(`${stats.terminated} terminated`);
     const title = parts.join(', ');
 
     return (
-      <div role="status" aria-label={`${stats.active} active, ${stats.frozen} frozen, ${stats.checkpointed} checkpointed, ${stats.terminated} terminated sessions`} className="flex items-center gap-2 tabular-nums font-medium text-surface-200" title={title}>
+      <div role="status" aria-label={`${total} sessions: ${title}`} className="flex items-center gap-2 tabular-nums font-medium text-surface-200" title={title}>
         {stats.active > 0 && (
           <span className="inline-flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
             {stats.active}
           </span>
         )}
-        {stats.frozen > 0 && (
+        {stats.paused > 0 && (
           <span className="inline-flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
-            {stats.frozen}
+            <span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>
+            {stats.paused}
           </span>
         )}
         {stats.checkpointed > 0 && (
@@ -93,10 +93,10 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
         'group relative w-full text-left rounded-lg border border-surface-700',
         'bg-gradient-to-b from-surface-800 to-surface-800/60',
         getStatusBorderColor(agent.status),
-        'transition-all duration-200 hover:border-surface-600 hover:shadow-lg hover:shadow-black/20'
+        'transition-all duration-200'
       )}
     >
-      <div className="p-5 flex flex-col md:flex-row items-start gap-6 min-h-[120px]">
+      <div className="relative p-5 flex flex-col md:flex-row items-start gap-6 min-h-[120px]">
         <AgentAvatar harnessType={agent.harness} className="hidden md:block" />
 
         <div className="flex-1 min-w-0 flex flex-col gap-1.5">
@@ -159,10 +159,10 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
                 Approval Needed
               </span>
             )}
-            {(agent.activeSessions ?? 0) > 0 && (
+            {((agent.sessionsByStatus?.active ?? 0) + (agent.sessionsByStatus?.paused ?? 0)) > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
                 <Activity className="h-3 w-3" />
-                {agent.activeSessions} Active
+                {(agent.sessionsByStatus?.active ?? 0) + (agent.sessionsByStatus?.paused ?? 0)} Active
               </span>
             )}
             <span className="inline-flex items-center gap-1 text-[11px] text-surface-400">
@@ -174,12 +174,12 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
           <div className="flex items-center gap-2 mt-1 w-full md:w-auto">
             <button
               type="button"
-              onClick={() => navigate(`/agents/${agent.id}/sessions/new`)}
+              onClick={(e) => { e.stopPropagation(); navigate(`/agents/${agent.id}/sessions/new`); }}
               aria-label={`Open session for ${agent.name}`}
               className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-md bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 transition-colors shadow-sm focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
             >
               <MessageSquare className="h-3.5 w-3.5" />
-              Session
+              New Session
             </button>
             <button
               type="button"
@@ -192,7 +192,7 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
             </button>
             <button
               type="button"
-              onClick={() => navigate(`/agents/${agent.id}`)}
+              onClick={(e) => { e.stopPropagation(); navigate(`/agents/${agent.id}`); }}
               aria-label={`View details for ${agent.name}`}
               className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-md bg-surface-700 px-4 py-1.5 text-xs font-medium text-surface-100 hover:bg-surface-600 transition-colors shadow-sm focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
             >

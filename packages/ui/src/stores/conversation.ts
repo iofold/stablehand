@@ -102,14 +102,13 @@ export function normalizeConversationMessage(
 
 interface ConversationStore {
   messages: Message[];
-  currentRunId: string | null;
+  currentTurnId: string | null;
   activeConversationId: string | null;
   isStreaming: boolean;
   streamingContent: string;
   streamingRole: 'user' | 'assistant';
   toolCalls: Map<string, ToolCallState>;
   seenEventIds: Set<string>;
-  _historyLoaded: boolean;
 
   addUserMessage: (content: string) => void;
   handleSSEEvent: (event: Record<string, unknown>) => void;
@@ -185,14 +184,13 @@ function buildAssistantMessage(state: Pick<ConversationStore, 'streamingContent'
 
 export const useConversationStore = create<ConversationStore>((set, get) => ({
   messages: [],
-  currentRunId: null,
+  currentTurnId: null,
   activeConversationId: null,
   isStreaming: false,
   streamingContent: '',
   streamingRole: 'assistant',
   toolCalls: new Map(),
   seenEventIds: new Set(),
-  _historyLoaded: false,
 
   addUserMessage: (content: string) => {
     const msg: Message = {
@@ -201,7 +199,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       content,
       createdAt: new Date().toISOString(),
     };
-    set((state) => ({ messages: [...state.messages, msg], _historyLoaded: false }));
+    set((state) => ({ messages: [...state.messages, msg] }));
   },
 
   addSystemMessage: (content: string) => {
@@ -219,13 +217,14 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   },
 
   loadMessages: (msgs: Message[]) => {
+    const { isStreaming, streamingContent, streamingRole, toolCalls } = get();
     set({
       messages: msgs,
-      isStreaming: false,
-      streamingContent: '',
-      streamingRole: 'assistant',
-      toolCalls: new Map(),
-      _historyLoaded: msgs.length > 0,
+      // Preserve streaming state if a run is active — don't clobber
+      isStreaming,
+      streamingContent: isStreaming ? streamingContent : '',
+      streamingRole: isStreaming ? streamingRole : 'assistant',
+      toolCalls: isStreaming ? toolCalls : new Map(),
     });
   },
 
@@ -246,16 +245,11 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
     switch (type) {
       case 'RUN_STARTED': {
-        const { _historyLoaded } = get();
-        if (_historyLoaded) {
-          break;
-        }
         set({
           isStreaming: true,
-          currentRunId: (event.runId as string) || null,
-          streamingContent: '',
-          toolCalls: new Map(),
-          seenEventIds: new Set(),
+          currentTurnId: (event.runId as string) || null,
+          streamingContent: get().streamingContent || '',
+          toolCalls: get().toolCalls.size > 0 ? get().toolCalls : new Map(),
         });
         break;
       }
@@ -281,7 +275,6 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       }
 
       case 'TEXT_MESSAGE_CONTENT': {
-        if (get()._historyLoaded) break;
         if (get().streamingRole === 'user') break;
         const delta = (event.content as string) || (event.delta as string) || '';
         pendingDelta += delta;
@@ -412,7 +405,19 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       }
 
       case 'CUSTOM': {
-        const subtype = event.subtype as string;
+        const subtype = (event.subtype as string) || '';
+        if (subtype === 'state_snapshot') {
+          const status = event.status as string;
+          const convId = event.conversationId as string;
+          const activeConv = get().activeConversationId;
+          if (convId && convId === activeConv) {
+            set({
+              isStreaming: status === 'ACTIVE' || status === 'RESTORING',
+              currentTurnId: (event.sessionId as string) || null,
+            });
+          }
+          break;
+        }
         if (subtype === 'interrupt_resolved') {
           const action = (event.action as string) || 'resolved';
           const toolName = (event.toolName as string) || '';
@@ -440,11 +445,6 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
       case 'RUN_FINISHED': {
         useInterruptStore.getState().clear();
-        const { _historyLoaded: histLoaded } = get();
-        if (histLoaded) {
-          set({ isStreaming: false, currentRunId: null });
-          break;
-        }
         flushPendingDelta(set);
         const state = get();
         const msg = buildAssistantMessage(state);
@@ -458,7 +458,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         }
         set({
           isStreaming: false,
-          currentRunId: null,
+          currentTurnId: null,
           streamingContent: '',
           streamingRole: 'assistant',
           toolCalls: new Map(),
@@ -479,7 +479,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         set((prev) => ({
           messages: [...prev.messages, msg],
           isStreaming: false,
-          currentRunId: null,
+          currentTurnId: null,
           streamingContent: '',
         }));
         break;
@@ -503,14 +503,13 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     toolCallsWithStartArgs.clear();
     set({
       messages: [],
-      currentRunId: null,
+      currentTurnId: null,
       activeConversationId: null,
       isStreaming: false,
       streamingContent: '',
       streamingRole: 'assistant',
       toolCalls: new Map(),
       seenEventIds: new Set(),
-      _historyLoaded: false,
     });
   },
 }));

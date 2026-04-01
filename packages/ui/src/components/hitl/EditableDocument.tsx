@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { cn } from '@/lib/utils';
 
 interface EditableDocumentProps {
   title: string;
@@ -39,13 +38,16 @@ export function EditableDocument({ title, content, format, onSubmit, onCancel }:
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/80 animate-fade-in"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) handleClose();
-      }}
     >
+      <button
+        type="button"
+        aria-label="Close editor"
+        className="absolute inset-0"
+        onClick={handleClose}
+      />
       <div
         data-testid="editable-document"
-        className="relative w-full max-w-2xl mx-4 rounded-lg border border-surface-700 bg-surface-850 animate-slide-up"
+        className="relative z-10 w-full max-w-2xl mx-4 rounded-lg border border-surface-700 bg-surface-850 animate-slide-up"
         role="dialog"
         aria-modal="true"
         aria-label={title}

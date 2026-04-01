@@ -8,6 +8,8 @@ interface ToolPickerModalProps {
   onClose: () => void;
   selectedTools: string[];
   onSelectionChange: (tools: string[]) => void;
+  excludedBuiltins: string[];
+  onExcludedBuiltinsChange: (excluded: string[]) => void;
 }
 
 function sourceBadgeClass(source: string): string {
@@ -23,11 +25,25 @@ function sourceBadgeClass(source: string): string {
   }
 }
 
+function locationBadgeClass(location?: string): string {
+  switch (location) {
+    case 'orchestrator':
+      return 'bg-blue-500/10 border-blue-500/20 text-blue-400';
+    case 'daemon':
+      return 'bg-purple-500/10 border-purple-500/20 text-purple-400';
+    case 'sandbox':
+    default:
+      return 'bg-surface-700/30 border-surface-600/30 text-surface-400';
+  }
+}
+
 export function ToolPickerModal({
   open,
   onClose,
   selectedTools,
   onSelectionChange,
+  excludedBuiltins,
+  onExcludedBuiltinsChange,
 }: ToolPickerModalProps) {
   const [tools, setTools] = useState<CatalogTool[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +51,7 @@ export function ToolPickerModal({
   const [search, setSearch] = useState('');
   const [expandedTool, setExpandedTool] = useState<string | null>(null);
   const [draftSelection, setDraftSelection] = useState<Set<string>>(new Set());
+  const [draftExcludedBuiltins, setDraftExcludedBuiltins] = useState<Set<string>>(new Set());
 
   const loadTools = useCallback(async () => {
     setLoading(true);
@@ -54,12 +71,13 @@ export function ToolPickerModal({
     if (open) {
       loadTools();
       setDraftSelection(new Set(selectedTools));
+      setDraftExcludedBuiltins(new Set(excludedBuiltins));
       setSearch('');
       setExpandedTool(null);
     }
-  }, [open, loadTools, selectedTools]);
+  }, [open, loadTools, selectedTools, excludedBuiltins]);
 
-  const filteredTools = useMemo(() => {
+  const { builtinTools, selectableTools } = useMemo(() => {
     let result = tools;
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -69,10 +87,15 @@ export function ToolPickerModal({
           (t.description?.toLowerCase().includes(q) ?? false),
       );
     }
-    return result.sort((a, b) => {
+    result = result.sort((a, b) => {
       if (a.source !== b.source) return a.source.localeCompare(b.source);
       return a.name.localeCompare(b.name);
     });
+
+    return {
+      builtinTools: result.filter(t => t.builtin),
+      selectableTools: result.filter(t => !t.builtin)
+    };
   }, [tools, search]);
 
   const handleToggleTool = (toolName: string) => {
@@ -87,10 +110,22 @@ export function ToolPickerModal({
     });
   };
 
+  const handleToggleBuiltin = (toolName: string) => {
+    setDraftExcludedBuiltins((prev) => {
+      const next = new Set(prev);
+      if (next.has(toolName)) {
+        next.delete(toolName);
+      } else {
+        next.add(toolName);
+      }
+      return next;
+    });
+  };
+
   const handleSelectAll = () => {
     setDraftSelection((prev) => {
       const next = new Set(prev);
-      filteredTools.forEach((t) => next.add(t.name));
+      selectableTools.forEach((t) => next.add(t.name));
       return next;
     });
   };
@@ -98,17 +133,20 @@ export function ToolPickerModal({
   const handleDeselectAll = () => {
     setDraftSelection((prev) => {
       const next = new Set(prev);
-      filteredTools.forEach((t) => next.delete(t.name));
+      selectableTools.forEach((t) => next.delete(t.name));
       return next;
     });
   };
 
   const handleApply = () => {
     onSelectionChange(Array.from(draftSelection));
+    onExcludedBuiltinsChange(Array.from(draftExcludedBuiltins));
     onClose();
   };
 
   if (!open) return null;
+
+  const totalSelected = draftSelection.size + builtinTools.length - draftExcludedBuiltins.size;
 
   return (
     <div
@@ -129,7 +167,7 @@ export function ToolPickerModal({
               Select Tools
             </h2>
             <p className="text-sm text-surface-400 mt-0.5">
-              {draftSelection.size} tool{draftSelection.size !== 1 ? 's' : ''} selected
+              {totalSelected} tool{totalSelected !== 1 ? 's' : ''} selected
             </p>
           </div>
           <button
@@ -183,123 +221,267 @@ export function ToolPickerModal({
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <p className="text-sm text-red-400">{error}</p>
             </div>
-          ) : filteredTools.length === 0 ? (
+          ) : builtinTools.length === 0 && selectableTools.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <p className="text-sm text-surface-400">
                 {search ? 'No tools match your search.' : 'No tools available.'}
               </p>
             </div>
           ) : (
-            <div className="space-y-3">
-              {filteredTools.map((tool) => {
-                const isExpanded = expandedTool === tool.name;
-                const isSelected = draftSelection.has(tool.name);
+            <div className="space-y-6">
+              {builtinTools.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-surface-200">Platform Tools (enabled by default)</h3>
+                  <div className="space-y-3">
+                    {builtinTools.map((tool) => {
+                      const isExpanded = expandedTool === tool.name;
+                      const isExcluded = draftExcludedBuiltins.has(tool.name);
 
-                return (
-                  <div
-                    key={tool.name}
-                    className={cn(
-                      'border rounded-lg overflow-hidden transition-colors',
-                      isSelected
-                        ? 'border-accent-500/50 bg-accent-500/5'
-                        : 'border-surface-700 bg-surface-800/50 hover:border-surface-600'
-                    )}
-                  >
-                    <div className="flex items-start px-4 py-3 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleTool(tool.name)}
-                        className={cn(
-                          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/50',
-                          isSelected
-                            ? 'border-accent-500 bg-accent-500 text-surface-950'
-                            : 'border-surface-600 bg-surface-900 hover:border-surface-500'
-                        )}
-                        aria-label={`Select ${tool.name}`}
-                      >
-                        {isSelected && <Check className="h-3.5 w-3.5" />}
-                      </button>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-sm font-semibold text-surface-100 font-mono truncate">
-                              {tool.name}
-                            </span>
-                            <span
+                      return (
+                        <div
+                          key={tool.name}
+                          className={cn(
+                            'border rounded-lg overflow-hidden transition-colors',
+                            isExcluded
+                              ? 'border-surface-700 bg-surface-800/30 opacity-50'
+                              : 'border-surface-700 bg-surface-800/50 hover:border-surface-600'
+                          )}
+                        >
+                          <div className="flex items-start px-4 py-3 gap-3">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleBuiltin(tool.name)}
                               className={cn(
-                                'inline-flex rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider shrink-0',
-                                sourceBadgeClass(tool.source)
+                                'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/50',
+                                !isExcluded
+                                  ? 'border-accent-500 bg-accent-500 text-surface-950'
+                                  : 'border-surface-600 bg-surface-900 hover:border-surface-500'
                               )}
+                              aria-label={isExcluded ? `Include ${tool.name}` : `Exclude ${tool.name}`}
                             >
-                              {tool.source}
-                            </span>
-                            {tool.requiresApproval && (
-                              <span className="inline-flex items-center gap-1 rounded-md border border-orange-500/20 bg-orange-500/10 px-1.5 py-0.5 text-[10px] font-medium text-orange-400 shrink-0">
-                                <Shield className="h-3 w-3" />
-                                approval
-                              </span>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setExpandedTool(isExpanded ? null : tool.name)}
-                            className="p-1 text-surface-400 hover:text-surface-200 transition-colors rounded hover:bg-surface-700/50"
-                            aria-label={isExpanded ? 'Collapse details' : 'Expand details'}
-                          >
-                            {isExpanded ? (
-                              <ChevronDown className="h-4 w-4" />
-                            ) : (
-                              <ChevronRight className="h-4 w-4" />
-                            )}
-                          </button>
-                        </div>
-                        
-                        {tool.description && (
-                          <p className="mt-1 text-xs text-surface-400 line-clamp-2 pr-8 cursor-pointer" onClick={() => handleToggleTool(tool.name)}>
-                            {tool.description}
-                          </p>
-                        )}
-                      </div>
-                    </div>
+                              {!isExcluded && <Check className="h-3.5 w-3.5" />}
+                            </button>
 
-                    {isExpanded && (
-                      <div className="border-t border-surface-700/50 bg-surface-900/50 px-4 py-3 ml-8 space-y-3">
-                        {tool.inputSchema && (
-                          <div>
-                            <p className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-1.5">
-                              Input Schema
-                            </p>
-                            <pre className="overflow-x-auto rounded-md bg-surface-950 border border-surface-800 p-2.5 text-[11px] text-surface-300 font-mono leading-relaxed max-h-40">
-                              {JSON.stringify(tool.inputSchema, null, 2)}
-                            </pre>
-                          </div>
-                        )}
-                        {tool.secrets && tool.secrets.length > 0 && (
-                          <div>
-                            <p className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-1.5">
-                              Secrets
-                            </p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {tool.secrets.map((s) => (
-                                <span
-                                  key={s}
-                                  className="inline-flex rounded border border-surface-700 bg-surface-800 px-1.5 py-0.5 text-[10px] font-mono text-surface-300"
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                  <span className={cn('text-sm font-semibold text-surface-100 font-mono truncate', isExcluded && 'line-through')}>
+                                    {tool.name}
+                                  </span>
+                                  <span className="inline-flex rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider shrink-0 bg-sky-500/10 border-sky-500/20 text-sky-400">
+                                    builtin
+                                  </span>
+                                  {isExcluded && (
+                                    <span className="inline-flex rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider shrink-0 bg-red-500/10 border-red-500/20 text-red-400">
+                                      excluded
+                                    </span>
+                                  )}
+                                  {tool.location && (
+                                    <span className={cn('inline-flex rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider shrink-0', locationBadgeClass(tool.location))}>
+                                      {tool.location}
+                                    </span>
+                                  )}
+                                  <span
+                                    className={cn(
+                                      'inline-flex rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider shrink-0',
+                                      sourceBadgeClass(tool.source)
+                                    )}
+                                  >
+                                    {tool.source}
+                                  </span>
+                                  {tool.requiresApproval && (
+                                    <span className="inline-flex items-center gap-1 rounded-md border border-orange-500/20 bg-orange-500/10 px-1.5 py-0.5 text-[10px] font-medium text-orange-400 shrink-0">
+                                      <Shield className="h-3 w-3" />
+                                      approval
+                                    </span>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedTool(isExpanded ? null : tool.name)}
+                                  className="p-1 text-surface-400 hover:text-surface-200 transition-colors rounded hover:bg-surface-700/50"
+                                  aria-label={isExpanded ? 'Collapse details' : 'Expand details'}
                                 >
-                                  {s}
-                                </span>
-                              ))}
+                                  {isExpanded ? (
+                                    <ChevronDown className="h-4 w-4" />
+                                  ) : (
+                                    <ChevronRight className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </div>
+                              
+                              {tool.description && (
+                                <p className="mt-1 text-xs text-surface-400 pr-8 cursor-pointer" onClick={() => handleToggleBuiltin(tool.name)}>
+                                  {tool.description}
+                                </p>
+                              )}
                             </div>
                           </div>
-                        )}
-                        {!tool.inputSchema && (!tool.secrets || tool.secrets.length === 0) && (
-                          <p className="text-xs text-surface-500 italic">No additional details available.</p>
-                        )}
-                      </div>
-                    )}
+
+                          {isExpanded && (
+                            <div className="border-t border-surface-700/50 bg-surface-900/50 px-4 py-3 ml-8 space-y-3">
+                              {tool.inputSchema && (
+                                <div>
+                                  <p className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-1.5">
+                                    Input Schema
+                                  </p>
+                                  <pre className="overflow-x-auto rounded-md bg-surface-950 border border-surface-800 p-2.5 text-[11px] text-surface-300 font-mono leading-relaxed max-h-40">
+                                    {JSON.stringify(tool.inputSchema, null, 2)}
+                                  </pre>
+                                </div>
+                              )}
+                              {tool.secrets && tool.secrets.length > 0 && (
+                                <div>
+                                  <p className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-1.5">
+                                    Secrets
+                                  </p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {tool.secrets.map((s) => (
+                                      <span
+                                        key={s}
+                                        className="inline-flex rounded border border-surface-700 bg-surface-800 px-1.5 py-0.5 text-[10px] font-mono text-surface-300"
+                                      >
+                                        {s}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {!tool.inputSchema && (!tool.secrets || tool.secrets.length === 0) && (
+                                <p className="text-xs text-surface-500 italic">No additional details available.</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
+                </div>
+              )}
+
+              {selectableTools.length > 0 && (
+                <div className="space-y-3">
+                  {builtinTools.length > 0 && (
+                    <h3 className="text-sm font-semibold text-surface-200">Available Tools</h3>
+                  )}
+                  <div className="space-y-3">
+                    {selectableTools.map((tool) => {
+                      const isExpanded = expandedTool === tool.name;
+                      const isSelected = draftSelection.has(tool.name);
+
+                      return (
+                        <div
+                          key={tool.name}
+                          className={cn(
+                            'border rounded-lg overflow-hidden transition-colors',
+                            isSelected
+                              ? 'border-accent-500/50 bg-accent-500/5'
+                              : 'border-surface-700 bg-surface-800/50 hover:border-surface-600'
+                          )}
+                        >
+                          <div className="flex items-start px-4 py-3 gap-3">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleTool(tool.name)}
+                              className={cn(
+                                'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/50',
+                                isSelected
+                                  ? 'border-accent-500 bg-accent-500 text-surface-950'
+                                  : 'border-surface-600 bg-surface-900 hover:border-surface-500'
+                              )}
+                              aria-label={`Select ${tool.name}`}
+                            >
+                              {isSelected && <Check className="h-3.5 w-3.5" />}
+                            </button>
+
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                  <span className="text-sm font-semibold text-surface-100 font-mono truncate">
+                                    {tool.name}
+                                  </span>
+                                  {tool.location && (
+                                    <span className={cn('inline-flex rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider shrink-0', locationBadgeClass(tool.location))}>
+                                      {tool.location}
+                                    </span>
+                                  )}
+                                  <span
+                                    className={cn(
+                                      'inline-flex rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider shrink-0',
+                                      sourceBadgeClass(tool.source)
+                                    )}
+                                  >
+                                    {tool.source}
+                                  </span>
+                                  {tool.requiresApproval && (
+                                    <span className="inline-flex items-center gap-1 rounded-md border border-orange-500/20 bg-orange-500/10 px-1.5 py-0.5 text-[10px] font-medium text-orange-400 shrink-0">
+                                      <Shield className="h-3 w-3" />
+                                      approval
+                                    </span>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedTool(isExpanded ? null : tool.name)}
+                                  className="p-1 text-surface-400 hover:text-surface-200 transition-colors rounded hover:bg-surface-700/50"
+                                  aria-label={isExpanded ? 'Collapse details' : 'Expand details'}
+                                >
+                                  {isExpanded ? (
+                                    <ChevronDown className="h-4 w-4" />
+                                  ) : (
+                                    <ChevronRight className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </div>
+                              
+                              {tool.description && (
+                                <p className="mt-1 text-xs text-surface-400 pr-8 cursor-pointer" onClick={() => handleToggleTool(tool.name)}>
+                                  {tool.description}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="border-t border-surface-700/50 bg-surface-900/50 px-4 py-3 ml-8 space-y-3">
+                              {tool.inputSchema && (
+                                <div>
+                                  <p className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-1.5">
+                                    Input Schema
+                                  </p>
+                                  <pre className="overflow-x-auto rounded-md bg-surface-950 border border-surface-800 p-2.5 text-[11px] text-surface-300 font-mono leading-relaxed max-h-40">
+                                    {JSON.stringify(tool.inputSchema, null, 2)}
+                                  </pre>
+                                </div>
+                              )}
+                              {tool.secrets && tool.secrets.length > 0 && (
+                                <div>
+                                  <p className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-1.5">
+                                    Secrets
+                                  </p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {tool.secrets.map((s) => (
+                                      <span
+                                        key={s}
+                                        className="inline-flex rounded border border-surface-700 bg-surface-800 px-1.5 py-0.5 text-[10px] font-mono text-surface-300"
+                                      >
+                                        {s}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {!tool.inputSchema && (!tool.secrets || tool.secrets.length === 0) && (
+                                <p className="text-xs text-surface-500 italic">No additional details available.</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -317,7 +499,7 @@ export function ToolPickerModal({
             onClick={handleApply}
             className="btn-primary"
           >
-            Apply {draftSelection.size} Tool{draftSelection.size !== 1 ? 's' : ''}
+            Apply {totalSelected} Tool{totalSelected !== 1 ? 's' : ''}
           </button>
         </div>
       </div>

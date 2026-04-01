@@ -101,11 +101,11 @@ export function hasHarnessKey(harness: 'langgraph' | 'claude-agents' | 'pi-agent
 export function getHarnessConfig(harness: string): Record<string, unknown> {
   switch (harness) {
     case 'langgraph':
-      return { provider: 'openai', model: 'gpt-5-mini' };
+      return { provider: 'openai', model: 'gpt-5.4-mini' };
     case 'claude-agents':
       return { provider: 'anthropic', model: 'claude-sonnet-4-6', temperature: 0.3 };
     case 'pi-agent':
-      return { provider: 'openai', model: 'gpt-5-mini' };
+      return { provider: 'openai', model: 'gpt-5.4-mini' };
     default:
       throw new Error(`Unknown harness: ${harness}`);
   }

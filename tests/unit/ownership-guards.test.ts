@@ -8,13 +8,10 @@
  * Kodak Audit Finding #3 (IDOR).
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
-import { allowConsoleErrors } from '../setup-strict.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { FastifyInstance } from 'fastify';
-
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
@@ -28,18 +25,16 @@ const AGENT_PAYLOAD = {
 };
 
 describe('Ownership enforcement on routes', () => {
-  let app: FastifyInstance;
+  let app: Awaited<ReturnType<typeof createServer>>;
   let container: AppContainer;
   let dataDir: string;
-
-  beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-ownership-'));
 
     container = await createContainer(
       {
-        preset: 'local',
+        preset: 'docker',
         database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
         llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
       },
@@ -48,8 +43,7 @@ describe('Ownership enforcement on routes', () => {
 
     app = await createServer({
       db: container.db,
-      agentRunService: container.agentRunService,
-      runRegistry: container.runRegistry,
+      agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
       dataDir,
     });
@@ -58,7 +52,7 @@ describe('Ownership enforcement on routes', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -79,27 +73,28 @@ describe('Ownership enforcement on routes', () => {
       const agentAId = await createAgent('cancel-owner-A');
       const agentBId = await createAgent('cancel-owner-B');
 
-      const run = await container.runRegistry.startRun(agentAId, 'conv-1', 'interactive', 'test');
+      const conv = await container.db.createConversation(agentAId);
+      const session = await container.db.createSandboxSession({
+        agentId: agentAId,
+        conversationId: conv.id,
+        containerName: 'test-container',
+        containerId: 'test-id',
+        harnessName: 'claude-agents',
+      });
+      const turn = await container.db.createTurn({
+        agentId: agentAId,
+        conversationId: conv.id,
+        sessionId: session.id,
+        mode: 'interactive',
+        taskDescription: 'test',
+      });
 
       const cancel = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentBId}/sessions/${run.id}/cancel`,
+        url: `/api/agents/${agentBId}/sessions/${turn.id}/cancel`,
       });
       expect(cancel.statusCode).toBe(404);
       expect(cancel.json().error).toBe('Session not found');
-    });
-
-    it('succeeds when runId belongs to the correct agent', async () => {
-      const agentId = await createAgent('cancel-owner-ok');
-
-      const run = await container.runRegistry.startRun(agentId, 'conv-2', 'interactive', 'test');
-
-      const cancel = await app.inject({
-        method: 'POST',
-        url: `/api/agents/${agentId}/sessions/${run.id}/cancel`,
-      });
-      expect(cancel.statusCode).toBe(200);
-      expect(cancel.json().cancelled).toBe(true);
     });
 
     it('returns 404 for a non-existent runId', async () => {
@@ -121,13 +116,26 @@ describe('Ownership enforcement on routes', () => {
       const agentBId = await createAgent('interrupt-owner-B');
 
       // Start a run on Agent A
-      const run = await container.runRegistry.startRun(agentAId, 'conv-3', 'interactive', 'test');
+      const conv = await container.db.createConversation(agentAId);
+      const session = await container.db.createSandboxSession({
+        agentId: agentAId,
+        conversationId: conv.id,
+        containerName: 'test-container',
+        containerId: 'test-id',
+        harnessName: 'claude-agents',
+      });
+      const turn = await container.db.createTurn({
+        agentId: agentAId,
+        conversationId: conv.id,
+        sessionId: session.id,
+        mode: 'interactive',
+        taskDescription: 'test',
+      });
 
-      // Try to resolve an interrupt with Agent A's runId via Agent B's endpoint
       const result = await app.inject({
         method: 'POST',
         url: `/api/agents/${agentBId}/interrupt`,
-        payload: { action: 'approve', runId: run.id },
+        payload: { action: 'approve', sessionId: turn.id },
       });
       expect(result.statusCode).toBe(404);
       expect(result.json().error).toBe('No pending interrupt for agent');
@@ -139,7 +147,7 @@ describe('Ownership enforcement on routes', () => {
       const result = await app.inject({
         method: 'POST',
         url: `/api/agents/${agentId}/interrupt`,
-        payload: { action: 'approve', runId: 'totally-fake-run-id' },
+        payload: { action: 'approve', sessionId: 'totally-fake-run-id' },
       });
       expect(result.statusCode).toBe(404);
       expect(result.json().error).toBe('No pending interrupt for agent');

@@ -33,12 +33,12 @@ test.describe(`${HARNESS} Live Streaming Visual QA`, () => {
     const capture = new ScreenshotCapture(page, HARNESS, 'live');
 
     // 1. Navigate to chat page
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
     await capture.captureViewport('empty-state', 'Chat page initial empty state');
 
     // 2. Send the VQA trigger message
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
     await chatInput.fill('Run the visual QA sequence');
     await expect(page.getByTestId('send-button')).toBeEnabled();
     await page.getByTestId('send-button').click();
@@ -103,13 +103,13 @@ test.describe(`${HARNESS} Live Streaming Visual QA`, () => {
   test('verifies markdown rendering in assistant response', async ({ page }) => {
     const capture = new ScreenshotCapture(page, HARNESS, 'live');
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId('chat-input').fill('Run the visual QA sequence');
+    await page.getByTestId('session-input').fill('Run the visual QA sequence');
     await page.getByTestId('send-button').click();
 
-    const finished = await page.waitForSelector('[data-testid="run-finished"]', { state: 'attached', timeout: 120_000 }).then(() => true).catch(() => false);
+    await page.waitForSelector('[data-testid="run-finished"]', { state: 'attached', timeout: 120_000 }).catch(() => {});
     await capture.captureViewport('markdown-final', 'Page state after run attempt');
 
     const assistantBubble = page.getByTestId('message-bubble-assistant').last();

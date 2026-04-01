@@ -105,7 +105,7 @@ describe('harness session types', () => {
       nativeTools: [nativeToolConfig],
       secrets: { OPENAI_API_KEY: 'secret' },
       workspaceDir: '/tmp/workspace',
-      harnessConfigJson: JSON.stringify({ provider: 'openai', model: 'gpt-5-mini', temperature: 0.2 }),
+      harnessConfigJson: JSON.stringify({ provider: 'openai', model: 'gpt-5.4-mini', temperature: 0.2 }),
       onApprovalNeeded: approvalSpy,
     };
 

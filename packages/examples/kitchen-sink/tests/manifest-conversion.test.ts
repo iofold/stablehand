@@ -8,9 +8,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');
 
 const agents = [
-  { dir: 'langgraph-agent', harness: 'langgraph', provider: 'openai', model: 'gpt-5-mini', harnessLabel: 'LangGraph', expectedTools: ['calculator', 'weather', 'emit-event', 'list-directory', 'search-files', 'execute-trade'] },
+  { dir: 'langgraph-agent', harness: 'langgraph', provider: 'openai', model: 'gpt-5.4-mini', harnessLabel: 'LangGraph', expectedTools: ['calculator', 'weather', 'emit-event', 'list-directory', 'search-files', 'execute-trade'] },
   { dir: 'claude-agent', harness: 'claude-agents', provider: 'anthropic', model: 'claude-sonnet-4-6', harnessLabel: 'Writer', expectedTools: ['emit-event'] },
-  { dir: 'pi-agent', harness: 'pi-agent', provider: 'openai', model: 'gpt-5-mini', harnessLabel: 'PI Agent', expectedTools: ['emit-event'] },
+  { dir: 'pi-agent', harness: 'pi-agent', provider: 'openai', model: 'gpt-5.4-mini', harnessLabel: 'PI Agent', expectedTools: ['emit-event'] },
 ];
 
 async function loadManifest(dir: string) {

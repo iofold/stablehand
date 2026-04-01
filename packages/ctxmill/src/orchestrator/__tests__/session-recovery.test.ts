@@ -4,12 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MessageCommittedSchema,
   SessionEventSchema,
+  ToolLocation,
+  ToolMetadataSchema,
   type SessionEvent as ProtoSessionEvent,
   type SessionCheckpoint,
 } from '@ctxmill/proto/sandbox/v1';
 
 import { SandboxSessionManager, type SessionRecord } from '../sandbox-session-manager.js';
-import type { SessionEvent } from '../sandbox-run-service.js';
+import type { SessionEvent } from '../session-turn-service.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../../database/repository.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { ContainerManager } from '../../sandbox/container-manager.js';
@@ -18,7 +20,7 @@ import type { AgentDefinition, Message } from '../../types.js';
 
 const connectMocks = vi.hoisted(() => ({
   createClientMock: vi.fn(),
-  createGrpcTransportMock: vi.fn(),
+  createConnectTransportMock: vi.fn(),
 }));
 
 vi.mock('@connectrpc/connect', async () => {
@@ -30,7 +32,7 @@ vi.mock('@connectrpc/connect', async () => {
 });
 
 vi.mock('@connectrpc/connect-node', () => ({
-  createGrpcTransport: connectMocks.createGrpcTransportMock,
+  createConnectTransport: connectMocks.createConnectTransportMock,
 }));
 
 type MockGrpcClient = ReturnType<typeof createMockGrpcClient>;
@@ -47,6 +49,7 @@ function createMockContainerManager(): ContainerManager {
     stopContainer: vi.fn().mockResolvedValue(undefined),
     removeContainer: vi.fn().mockResolvedValue(undefined),
     injectSecrets: vi.fn().mockResolvedValue(undefined),
+    extractContainerDiff: vi.fn().mockResolvedValue(undefined),
     extractWorkspaceDiff: vi.fn().mockResolvedValue(undefined),
     extractLogs: vi.fn().mockResolvedValue(undefined),
     getContainer: vi.fn().mockResolvedValue(undefined),
@@ -141,7 +144,7 @@ function createMessage(content: string): Message {
   } as unknown as Message;
 }
 
-function createDbSession(status: SandboxSessionRow['status']): SandboxSessionRow {
+function createDbSession(status: SandboxSessionRow['status'], pausedReason?: string | null): SandboxSessionRow {
   return {
     id: 'sess-1',
     conversationId: 'conv-1',
@@ -154,6 +157,8 @@ function createDbSession(status: SandboxSessionRow['status']): SandboxSessionRow
     createdAt: Date.now(),
     updatedAt: Date.now(),
     lastActivityAt: Date.now(),
+    pausedAt: status === 'PAUSED' ? Date.now() : undefined,
+    pausedReason: pausedReason ?? (status === 'PAUSED' ? 'idle' : undefined),
   };
 }
 
@@ -202,6 +207,9 @@ async function collectEvents(stream: AsyncGenerator<SessionEvent>): Promise<Sess
 
 type SandboxSessionManagerInternals = {
   sessions: Map<string, SessionRecord>;
+  agentDefs: Map<string, AgentDefinition>;
+  turnQueues: Map<string, unknown[]>;
+  activeTurns: Set<string>;
   isStaleContainerError(err: unknown): boolean;
 };
 
@@ -211,6 +219,7 @@ describe('SandboxSessionManager session recovery', () => {
   let lifecyclePolicy: ContainerLifecyclePolicy;
   let grpcClient: MockGrpcClient;
   let manager: SandboxSessionManager;
+  let resolveToolsForAgent: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.useRealTimers();
@@ -219,13 +228,23 @@ describe('SandboxSessionManager session recovery', () => {
     db = createMockDb();
     lifecyclePolicy = createMockLifecyclePolicy();
     grpcClient = createMockGrpcClient();
-    connectMocks.createGrpcTransportMock.mockReturnValue({});
+    resolveToolsForAgent = vi.fn().mockReturnValue([
+      create(ToolMetadataSchema, {
+        name: 'search',
+        description: 'Search docs',
+        inputSchemaJson: '{"type":"object"}',
+        location: ToolLocation.ORCHESTRATOR,
+        programmatic: true,
+      }),
+    ]);
+    connectMocks.createConnectTransportMock.mockReturnValue({});
     connectMocks.createClientMock.mockReturnValue(grpcClient);
     manager = new SandboxSessionManager({
       containerManager,
       db,
       lifecyclePolicy,
       workspaceDiffService: new WorkspaceDiffService({ containerManager }),
+      resolveToolsForAgent,
       logger: createLogger(),
       config: { idleTimeoutMs: 60_000, maxQueuedMessages: 10 },
     });
@@ -251,6 +270,38 @@ describe('SandboxSessionManager session recovery', () => {
       expect(session.sessionId).toBe('sess-1');
       expect(session.status).toBe('ACTIVE');
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
+      expect(resolveToolsForAgent).toHaveBeenCalledWith([]);
+      expect(grpcClient.openSession).toHaveBeenCalledWith(expect.objectContaining({
+        bootstrap: {
+          case: 'restore',
+          value: expect.objectContaining({
+            agentId: 'agent-1',
+            harnessConfigJson: '{}',
+            systemPrompt: 'test system prompt',
+            tools: [expect.objectContaining({ name: 'search', programmatic: true })],
+          }),
+        },
+      }));
+    });
+
+    it('CHECKPOINTED restore retries openSession on transient unavailable errors', async () => {
+      vi.useFakeTimers();
+      (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('CHECKPOINTED'));
+      (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
+
+      const retryingClient = createMockGrpcClient();
+      retryingClient.openSession
+        .mockRejectedValueOnce(new ConnectError('unavailable', Code.Unavailable))
+        .mockResolvedValueOnce({});
+      connectMocks.createClientMock.mockReturnValue(retryingClient);
+
+      const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+      await vi.advanceTimersByTimeAsync(11_500);
+      const session = await sessionPromise;
+
+      expect(retryingClient.openSession).toHaveBeenCalledTimes(2);
+      expect(session.sessionId).toBe('sess-1');
+      expect(session.status).toBe('ACTIVE');
     });
 
     it('ACTIVE + reconnect fails + no checkpoint → creates fresh session', async () => {
@@ -273,14 +324,14 @@ describe('SandboxSessionManager session recovery', () => {
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
     });
 
-    it('FROZEN + unfreeze fails + checkpoint exists → restores from checkpoint', async () => {
+    it('PAUSED/idle + unfreeze fails + checkpoint exists → restores from checkpoint', async () => {
       vi.useFakeTimers();
       const failingClient = createMockGrpcClient();
       failingClient.killSession.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:50051'));
       connectMocks.createClientMock
         .mockReturnValueOnce(failingClient)
         .mockReturnValue(grpcClient);
-      (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('FROZEN'));
+      (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('PAUSED'));
       (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
 
       const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
@@ -294,14 +345,14 @@ describe('SandboxSessionManager session recovery', () => {
       expect(session.status).toBe('ACTIVE');
     });
 
-    it('FROZEN + unfreeze fails + no checkpoint → creates fresh session', async () => {
+    it('PAUSED/idle + unfreeze fails + no checkpoint → creates fresh session', async () => {
       vi.useFakeTimers();
       const failingClient = createMockGrpcClient();
       failingClient.killSession.mockRejectedValue(new Error('socket hang up ECONNRESET'));
       connectMocks.createClientMock
         .mockReturnValueOnce(failingClient)
         .mockReturnValue(grpcClient);
-      (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('FROZEN'));
+      (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('PAUSED'));
       (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
       const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
@@ -438,7 +489,7 @@ describe('SandboxSessionManager session recovery', () => {
       await callbacks.onFreeze(session.sessionId);
 
       expect(containerManager.pauseContainer).toHaveBeenCalledWith('c-1');
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'FROZEN');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'PAUSED', expect.objectContaining({ pausedReason: 'idle' }));
     });
 
     it('onCheckpoint callback calls suspendSession with idle-checkpoint reason', async () => {
@@ -460,12 +511,42 @@ describe('SandboxSessionManager session recovery', () => {
       }));
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'CHECKPOINTED');
     });
+
+    it('suspendSession checkpoints, cleans runtime state, and removes the old container', async () => {
+      const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+      const privateManager = manager as unknown as SandboxSessionManagerInternals;
+
+      privateManager.turnQueues.set(session.sessionId, []);
+      privateManager.activeTurns.add(session.sessionId);
+
+      await manager.suspendSession(session.sessionId, 'manual-checkpoint');
+
+      expect(grpcClient.suspendSession).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: session.sessionId,
+        reason: 'manual-checkpoint',
+      }));
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'CHECKPOINTED');
+      expect(db.updateSandboxSessionStatus).not.toHaveBeenCalledWith(session.sessionId, 'TERMINATED');
+      expect(lifecyclePolicy.cancelIdleTimeout).toHaveBeenCalledWith(session.sessionId);
+      expect(lifecyclePolicy.cancelPause).toHaveBeenCalledWith(session.sessionId);
+      expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
+      expect(containerManager.removeContainer).toHaveBeenCalledWith('c-1', true);
+      expect(privateManager.sessions.has('conv-1')).toBe(false);
+      expect(privateManager.agentDefs.has('conv-1')).toBe(false);
+      expect(privateManager.turnQueues.has(session.sessionId)).toBe(false);
+      expect(privateManager.activeTurns.has(session.sessionId)).toBe(false);
+    });
   });
 
   describe('isStaleContainerError', () => {
     it('ConnectError with Code.Unavailable → true', () => {
       const privateManager = manager as unknown as SandboxSessionManagerInternals;
       expect(privateManager.isStaleContainerError(new ConnectError('unavailable', Code.Unavailable))).toBe(true);
+    });
+
+    it('ConnectError with Code.Internal → true', () => {
+      const privateManager = manager as unknown as SandboxSessionManagerInternals;
+      expect(privateManager.isStaleContainerError(new ConnectError('internal error', Code.Internal))).toBe(true);
     });
 
     it('ConnectError with Code.InvalidArgument → false', () => {

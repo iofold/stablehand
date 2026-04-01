@@ -1,18 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentRunService } from '../../packages/ctxmill/src/orchestrator/agent-run-service.js';
+import { AgentSessionService } from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
 import type {
-  AgentRunServiceDeps,
-  ExecuteRunParams,
-} from '../../packages/ctxmill/src/orchestrator/agent-run-service.js';
+  AgentSessionServiceDeps,
+  ExecuteSessionParams,
+} from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
 import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import { RunRegistry } from '../../packages/ctxmill/src/orchestrator/run-registry.js';
 import type { EventMap } from '../../packages/ctxmill/src/events/bus.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 import type { LearningPipeline } from '../../packages/ctxmill/src/learning/types.js';
 import type { SSEManager } from '../../packages/ctxmill/src/orchestrator/sse.js';
-import type { SandboxRunService } from '../../packages/ctxmill/src/orchestrator/sandbox-run-service.js';
+import type { SessionTurnService } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
 import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
 import type { AGUIEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
+import { TestSessionRegistry, createTestSessionManager } from '../utils/test-session-registry.js';
 
 type StreamEvent = AGUIEvent | MessageCommittedEvent;
 
@@ -33,7 +33,8 @@ function collectEvents<K extends keyof EventMap>(bus: TypedEventBus, event: K): 
 function makeAgentDef(): AgentDefinition {
   return {
     name: 'test-agent',
-    model: 'gpt-5-mini',
+    harness: 'claude-agents',
+    harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
     systemPrompt: 'You are a test agent. {{knowledge}}',
     tools: [],
   };
@@ -51,17 +52,28 @@ function makeMessages(): Message[] {
   ];
 }
 
-function makeParams(overrides: Partial<ExecuteRunParams> = {}): ExecuteRunParams {
+function makeParams(overrides: Partial<ExecuteSessionParams> = {}): ExecuteSessionParams {
   return {
     agentDef: makeAgentDef(),
     messages: makeMessages(),
     agentId: 'agent-1',
     conversationId: 'conv-1',
-    runId: 'run-1',
+    sessionId: 'run-1',
+    mode: 'interactive',
     taskDescription: 'test task',
     ...overrides,
   };
 }
+
+type MockSessionManager = {
+  ensureSession: ReturnType<typeof vi.fn>;
+  startTurn: ReturnType<typeof vi.fn>;
+  completeTurn: ReturnType<typeof vi.fn>;
+  pauseSession: ReturnType<typeof vi.fn>;
+  resumeSession: ReturnType<typeof vi.fn>;
+  pauseForHitl: ReturnType<typeof vi.fn>;
+  resumeFromHitl: ReturnType<typeof vi.fn>;
+};
 
 function makeCommittedEvent(
   overrides: Partial<MessageCommittedEvent> = {},
@@ -79,19 +91,14 @@ function makeCommittedEvent(
 }
 
 function createDeps(overrides: {
-  sandboxRunService?: { executeSessionTurn: ReturnType<typeof vi.fn> };
+  sessionTurnService?: { executeSessionTurn: ReturnType<typeof vi.fn> };
   sse?: { broadcast: ReturnType<typeof vi.fn> };
-  db?: { addMessage: ReturnType<typeof vi.fn> };
-  runRegistry?: RunRegistry | {
-    completeRun: ReturnType<typeof vi.fn>;
-    getAbortSignal: ReturnType<typeof vi.fn>;
-    pauseRun: ReturnType<typeof vi.fn>;
-    resumeRun: ReturnType<typeof vi.fn>;
-  };
+  db?: { addMessage: ReturnType<typeof vi.fn>; updateTurn: ReturnType<typeof vi.fn> };
+  sessionManager?: MockSessionManager;
   learningPipeline?: { process: ReturnType<typeof vi.fn> };
   eventBus?: TypedEventBus;
 } = {}) {
-  const sandboxRunService = overrides.sandboxRunService ?? {
+  const sessionTurnService = overrides.sessionTurnService ?? {
     executeSessionTurn: vi.fn(),
   };
   const sse = overrides.sse ?? {
@@ -99,29 +106,33 @@ function createDeps(overrides: {
   };
   const db = overrides.db ?? {
     addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
+    updateTurn: vi.fn().mockResolvedValue(undefined),
   };
-  const runRegistry = overrides.runRegistry ?? {
-    completeRun: vi.fn().mockResolvedValue(undefined),
-    getAbortSignal: vi.fn().mockReturnValue(undefined),
-    pauseRun: vi.fn().mockResolvedValue(undefined),
-    resumeRun: vi.fn().mockResolvedValue(undefined),
+  const sessionManager = overrides.sessionManager ?? {
+    ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
+    startTurn: vi.fn().mockReturnValue(undefined),
+    completeTurn: vi.fn().mockResolvedValue(undefined),
+    pauseSession: vi.fn().mockResolvedValue(undefined),
+    resumeSession: vi.fn().mockResolvedValue(undefined),
+    pauseForHitl: vi.fn().mockResolvedValue(undefined),
+    resumeFromHitl: vi.fn().mockResolvedValue(undefined),
   };
   const learningPipeline = overrides.learningPipeline;
   const eventBus = overrides.eventBus;
 
-  const deps: AgentRunServiceDeps = {
-    sandboxRunService: sandboxRunService as unknown as SandboxRunService,
+  const deps: AgentSessionServiceDeps = {
+    sessionTurnService: sessionTurnService as unknown as SessionTurnService,
     sse: sse as unknown as SSEManager,
     db: db as unknown as DatabaseRepository,
-    runRegistry: runRegistry as unknown as RunRegistry,
+    sessionManager: sessionManager as unknown as AgentSessionServiceDeps['sessionManager'],
     learningPipeline: learningPipeline as LearningPipeline | undefined,
     eventBus,
   };
 
-  return { deps, sandboxRunService, sse, db, runRegistry, learningPipeline, eventBus };
+  return { deps, sessionTurnService, sse, db, sessionManager, learningPipeline, eventBus };
 }
 
-describe('AgentRunService', () => {
+describe('AgentSessionService', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
@@ -129,23 +140,24 @@ describe('AgentRunService', () => {
   it('calls executeSessionTurn with conversation turn inputs and abort signal', async () => {
     const abortController = new AbortController();
     const params = makeParams();
-    const { deps, sandboxRunService, runRegistry } = createDeps();
+    const { deps, sessionTurnService, sessionManager, db } = createDeps();
 
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream([]));
-    if (!(runRegistry instanceof RunRegistry)) {
-      runRegistry.getAbortSignal.mockReturnValue(abortController.signal);
-    }
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([]));
+    sessionManager.startTurn.mockReturnValue(abortController.signal);
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(params);
+    const service = new AgentSessionService(deps);
+    await service.executeSession(params);
 
-    expect(sandboxRunService.executeSessionTurn).toHaveBeenCalledWith(
+    expect(db.updateTurn).toHaveBeenCalledWith('run-1', { sessionId: 'sandbox-1' });
+
+    expect(sessionTurnService.executeSessionTurn).toHaveBeenCalledWith(
       params.agentDef,
       params.conversationId,
       params.messages,
-      params.runId,
+      params.sessionId,
       abortController.signal,
       params.agentId,
+      'sandbox-1',
     );
   });
 
@@ -161,11 +173,11 @@ describe('AgentRunService', () => {
     const broadcasterForwarded = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT']);
     const directEvents = events.filter((e) => !broadcasterForwarded.has(e.type));
 
-    const { deps, sandboxRunService, sse } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+    const { deps, sessionTurnService, sse } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
     expect(sse.broadcast).toHaveBeenCalledTimes(directEvents.length);
     for (const [index, event] of directEvents.entries()) {
@@ -181,21 +193,21 @@ describe('AgentRunService', () => {
       messageSeq: 2,
     });
 
-    const { deps, sandboxRunService, db } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream([committed]));
+    const { deps, sessionTurnService, db } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([committed]));
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
     expect(db.addMessage).toHaveBeenCalledTimes(1);
-    expect(db.addMessage).toHaveBeenCalledWith({
+    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'agent-1',
       conversationId: 'conv-1',
       role: 'assistant',
       content: 'Hello world',
       toolCalls: undefined,
       toolCallId: undefined,
-    });
+    }));
   });
 
   it('persists tool MESSAGE_COMMITTED events with tool metadata', async () => {
@@ -207,20 +219,20 @@ describe('AgentRunService', () => {
       messageSeq: 3,
     });
 
-    const { deps, sandboxRunService, db } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream([committed]));
+    const { deps, sessionTurnService, db } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([committed]));
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
-    expect(db.addMessage).toHaveBeenCalledWith({
+    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'agent-1',
       conversationId: 'conv-1',
       role: 'tool',
       content: '{"ok":true}',
       toolCalls: [],
       toolCallId: 'tool-call-1',
-    });
+    }));
   });
 
   it('does not persist TEXT_MESSAGE_CONTENT events without MESSAGE_COMMITTED', async () => {
@@ -230,11 +242,11 @@ describe('AgentRunService', () => {
       { type: 'RUN_FINISHED', timestamp: 3, runId: 'run-1' },
     ];
 
-    const { deps, sandboxRunService, db } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+    const { deps, sessionTurnService, db } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
     expect(db.addMessage).not.toHaveBeenCalled();
   });
@@ -246,11 +258,11 @@ describe('AgentRunService', () => {
       { type: 'RUN_FINISHED', timestamp: 3, runId: 'run-1' },
     ];
 
-    const { deps, sandboxRunService, db } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+    const { deps, sessionTurnService, db } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
     expect(db.addMessage).not.toHaveBeenCalled();
   });
@@ -267,11 +279,11 @@ describe('AgentRunService', () => {
       { type: 'RUN_FINISHED', timestamp: 8, runId: 'run-1' },
     ];
 
-    const { deps, sandboxRunService, db } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+    const { deps, sessionTurnService, db } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
     expect(db.addMessage).toHaveBeenCalledTimes(3);
     expect(db.addMessage).toHaveBeenNthCalledWith(1, {
@@ -307,18 +319,22 @@ describe('AgentRunService', () => {
     });
   });
 
-  it('calls completeRun after a successful turn', async () => {
-    const { deps, sandboxRunService, runRegistry } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]));
+  it('calls completeSession after a successful turn', async () => {
+    const { deps, sessionTurnService, sessionManager } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]));
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
-    if (runRegistry instanceof RunRegistry) {
-      expect(runRegistry.getRun('run-1')).toBeUndefined();
-      return;
-    }
-    expect(runRegistry.completeRun).toHaveBeenCalledWith('run-1');
+    expect(sessionManager.completeTurn).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
+      'agent-1',
+      'conv-1',
+      'completed',
+      expect.any(Number),
+      undefined,
+    );
   });
 
   it('marks the run as errored when a RUN_ERROR event is streamed', async () => {
@@ -328,68 +344,75 @@ describe('AgentRunService', () => {
       { type: 'RUN_FAILED', timestamp: 3, runId: 'run-1' },
     ];
 
-    const { deps, sandboxRunService, runRegistry } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+    const { deps, sessionTurnService, sessionManager } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
-    if (!(runRegistry instanceof RunRegistry)) {
-      expect(runRegistry.completeRun).toHaveBeenCalledWith('run-1', 'tool execution failed');
-    }
+    expect(sessionManager.completeTurn).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
+      'agent-1',
+      'conv-1',
+      'error',
+      expect.any(Number),
+      'tool execution failed',
+    );
   });
 
   it('uses a fallback error message when RUN_FAILED is streamed without detail', async () => {
-    const { deps, sandboxRunService, runRegistry } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(
+    const { deps, sessionTurnService, sessionManager } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(
       eventStream([{ type: 'RUN_FAILED', timestamp: 1, runId: 'run-1' }]),
     );
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
-    if (!(runRegistry instanceof RunRegistry)) {
-      expect(runRegistry.completeRun).toHaveBeenCalledWith(
-        'run-1',
-        'Run completed with errors (no detail captured)',
-      );
-    }
+    expect(sessionManager.completeTurn).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
+      'agent-1',
+      'conv-1',
+      'error',
+      expect.any(Number),
+      'Session completed with errors (no detail captured)',
+    );
   });
 
   it('pauses the run on HITL_PAUSE and resumes when events continue', async () => {
-    const { deps, sandboxRunService, runRegistry } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(
+    const { deps, sessionTurnService, sessionManager } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(
       eventStream([
         { type: 'HITL_PAUSE', timestamp: 1, runId: 'run-1', reason: 'approval_required' },
         { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
       ]),
     );
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
-    if (!(runRegistry instanceof RunRegistry)) {
-      expect(runRegistry.pauseRun).toHaveBeenCalledWith('run-1', 'approval_required');
-      expect(runRegistry.resumeRun).toHaveBeenCalledWith('run-1');
-      expect(runRegistry.completeRun).toHaveBeenCalled();
-    }
+    expect(sessionManager.pauseSession).toHaveBeenCalledWith('sandbox-1', 'hitl');
+    expect(sessionManager.resumeSession).toHaveBeenCalledWith('sandbox-1');
+    expect(sessionManager.completeTurn).toHaveBeenCalled();
   });
 
   it('calls the learning pipeline after a successful run', async () => {
     const learningPipeline = {
       process: vi.fn().mockResolvedValue([]),
     };
-    const { deps, sandboxRunService } = createDeps({ learningPipeline });
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]));
+    const { deps, sessionTurnService } = createDeps({ learningPipeline });
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]));
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
     expect(learningPipeline.process).toHaveBeenCalledTimes(1);
     expect(learningPipeline.process).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: 'agent-1',
-        runId: 'run-1',
+        turnId: 'run-1',
         taskDescription: 'test task',
         outcome: 'success',
         steps: [],
@@ -398,15 +421,13 @@ describe('AgentRunService', () => {
   });
 
   it('does not call the learning pipeline when none is provided', async () => {
-    const { deps, sandboxRunService, runRegistry } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]));
+    const { deps, sessionTurnService, sessionManager } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]));
 
-    const service = new AgentRunService(deps);
-    await expect(service.executeRun(makeParams())).resolves.toBeUndefined();
+    const service = new AgentSessionService(deps);
+    await expect(service.executeSession(makeParams())).resolves.toBeUndefined();
 
-    if (!(runRegistry instanceof RunRegistry)) {
-      expect(runRegistry.completeRun).toHaveBeenCalledWith('run-1');
-    }
+    expect(sessionManager.completeTurn).toHaveBeenCalled();
   });
 
   it('swallows learning pipeline errors after success', async () => {
@@ -414,17 +435,15 @@ describe('AgentRunService', () => {
     const learningPipeline = {
       process: vi.fn().mockRejectedValue(new Error('pipeline crash')),
     };
-    const { deps, sandboxRunService, runRegistry } = createDeps({ learningPipeline });
-    sandboxRunService.executeSessionTurn.mockReturnValue(eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]));
+    const { deps, sessionTurnService, sessionManager } = createDeps({ learningPipeline });
+    sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]));
 
-    const service = new AgentRunService(deps);
-    await expect(service.executeRun(makeParams())).resolves.toBeUndefined();
+    const service = new AgentSessionService(deps);
+    await expect(service.executeSession(makeParams())).resolves.toBeUndefined();
 
     expect(learningPipeline.process).toHaveBeenCalledTimes(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith('Learning pipeline error:', expect.any(Error));
-    if (!(runRegistry instanceof RunRegistry)) {
-      expect(runRegistry.completeRun).toHaveBeenCalledWith('run-1');
-    }
+    expect(sessionManager.completeTurn).toHaveBeenCalled();
   });
 
   it('broadcasts RUN_ERROR and completes the run when sandbox streaming throws', async () => {
@@ -435,11 +454,11 @@ describe('AgentRunService', () => {
       throw thrown;
     }
 
-    const { deps, sandboxRunService, sse, runRegistry } = createDeps();
-    sandboxRunService.executeSessionTurn.mockReturnValue(failingStream());
+    const { deps, sessionTurnService, sse, sessionManager } = createDeps();
+    sessionTurnService.executeSessionTurn.mockReturnValue(failingStream());
 
-    const service = new AgentRunService(deps);
-    await service.executeRun(makeParams());
+    const service = new AgentSessionService(deps);
+    await service.executeSession(makeParams());
 
     expect(consoleErrorSpy).toHaveBeenCalled();
     expect(sse.broadcast).toHaveBeenCalledWith(
@@ -450,12 +469,15 @@ describe('AgentRunService', () => {
         error: 'TypeError: Cannot read properties of undefined',
       }),
     );
-    if (!(runRegistry instanceof RunRegistry)) {
-      expect(runRegistry.completeRun).toHaveBeenCalledWith(
-        'run-1',
-        'TypeError: Cannot read properties of undefined',
-      );
-    }
+    expect(sessionManager.completeTurn).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
+      'agent-1',
+      'conv-1',
+      'error',
+      expect.any(Number),
+      'TypeError: Cannot read properties of undefined',
+    );
   });
 
   describe('event bus integration', () => {
@@ -468,17 +490,17 @@ describe('AgentRunService', () => {
         { type: 'TEXT_MESSAGE_CONTENT', timestamp: 3, runId: 'run-1', messageId: 'msg-1', content: 'chunk3' },
       ];
 
-      const { deps, sandboxRunService } = createDeps({ eventBus });
-      sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+      const { deps, sessionTurnService } = createDeps({ eventBus });
+      sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
-      const service = new AgentRunService(deps);
-      await service.executeRun(makeParams());
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
 
       expect(textChunks).toHaveLength(3);
       expect(textChunks.map((chunk) => chunk.content)).toEqual(['chunk1', 'chunk2', 'chunk3']);
       expect(textChunks.map((chunk) => chunk.messageId)).toEqual(['msg-1', 'msg-1', 'msg-1']);
       for (const chunk of textChunks) {
-        expect(chunk.runId).toBe('run-1');
+        expect(chunk.turnId).toBe('run-1');
         expect(chunk.agentId).toBe('agent-1');
         expect(typeof chunk.timestamp).toBe('number');
       }
@@ -488,13 +510,13 @@ describe('AgentRunService', () => {
       const eventBus = new TypedEventBus();
       const textChunks = collectEvents(eventBus, 'run.text_chunk');
 
-      const { deps, sandboxRunService } = createDeps({ eventBus });
-      sandboxRunService.executeSessionTurn.mockReturnValue(
+      const { deps, sessionTurnService } = createDeps({ eventBus });
+      sessionTurnService.executeSessionTurn.mockReturnValue(
         eventStream([{ type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', content: 'no-id' }]),
       );
 
-      const service = new AgentRunService(deps);
-      await service.executeRun(makeParams());
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
 
       expect(textChunks).toHaveLength(1);
       expect(textChunks[0].messageId).toBe('');
@@ -504,8 +526,8 @@ describe('AgentRunService', () => {
       const eventBus = new TypedEventBus();
       const toolStarted = collectEvents(eventBus, 'run.tool_started');
 
-      const { deps, sandboxRunService } = createDeps({ eventBus });
-      sandboxRunService.executeSessionTurn.mockReturnValue(
+      const { deps, sessionTurnService } = createDeps({ eventBus });
+      sessionTurnService.executeSessionTurn.mockReturnValue(
         eventStream([
           {
             type: 'TOOL_CALL_START',
@@ -518,12 +540,12 @@ describe('AgentRunService', () => {
         ]),
       );
 
-      const service = new AgentRunService(deps);
-      await service.executeRun(makeParams());
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
 
       expect(toolStarted).toEqual([
         expect.objectContaining({
-          runId: 'run-1',
+          turnId: 'run-1',
           agentId: 'agent-1',
           toolCallId: 'tc-1',
           toolName: 'search',
@@ -537,8 +559,8 @@ describe('AgentRunService', () => {
       const toolResults = collectEvents(eventBus, 'run.tool_result');
       const longResult = 'x'.repeat(1000);
 
-      const { deps, sandboxRunService } = createDeps({ eventBus });
-      sandboxRunService.executeSessionTurn.mockReturnValue(
+      const { deps, sessionTurnService } = createDeps({ eventBus });
+      sessionTurnService.executeSessionTurn.mockReturnValue(
         eventStream([
           {
             type: 'TOOL_CALL_RESULT',
@@ -552,8 +574,8 @@ describe('AgentRunService', () => {
         ]),
       );
 
-      const service = new AgentRunService(deps);
-      await service.executeRun(makeParams());
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
 
       expect(toolResults).toHaveLength(1);
       expect(toolResults[0]).toMatchObject({
@@ -569,8 +591,8 @@ describe('AgentRunService', () => {
       const eventBus = new TypedEventBus();
       const toolResults = collectEvents(eventBus, 'run.tool_result');
 
-      const { deps, sandboxRunService } = createDeps({ eventBus });
-      sandboxRunService.executeSessionTurn.mockReturnValue(
+      const { deps, sessionTurnService } = createDeps({ eventBus });
+      sessionTurnService.executeSessionTurn.mockReturnValue(
         eventStream([
           {
             type: 'TOOL_CALL_RESULT',
@@ -583,8 +605,8 @@ describe('AgentRunService', () => {
         ]),
       );
 
-      const service = new AgentRunService(deps);
-      await service.executeRun(makeParams());
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
 
       expect(toolResults).toHaveLength(1);
       expect(toolResults[0].toolName).toBe('');
@@ -597,11 +619,11 @@ describe('AgentRunService', () => {
         { type: 'TOOL_CALL_RESULT', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', result: 'y', durationMs: 1 },
       ];
 
-      const { deps, sandboxRunService } = createDeps();
-      sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+      const { deps, sessionTurnService } = createDeps();
+      sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
-      const service = new AgentRunService(deps);
-      await expect(service.executeRun(makeParams())).resolves.toBeUndefined();
+      const service = new AgentSessionService(deps);
+      await expect(service.executeSession(makeParams())).resolves.toBeUndefined();
     });
   });
 
@@ -616,14 +638,19 @@ describe('AgentRunService', () => {
         { type: 'RUN_FINISHED', timestamp: 3, runId: 'run-1' },
       ];
 
-      const { deps, sandboxRunService } = createDeps({ learningPipeline });
-      sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+      const { deps, sessionTurnService } = createDeps({ learningPipeline });
+      sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
-      const service = new AgentRunService(deps);
-      await service.executeRun(makeParams());
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
 
       expect(learningPipeline.process).toHaveBeenCalledTimes(1);
-      const trace = learningPipeline.process.mock.calls[0][0];
+      expect(learningPipeline.process).toHaveBeenCalledWith(
+        expect.objectContaining({
+          steps: expect.any(Array),
+        }),
+      );
+      const trace = learningPipeline.process.mock.lastCall?.[0];
       expect(trace.steps).toHaveLength(2);
       expect(trace.steps[0]).toMatchObject({
         ordinal: 0,
@@ -651,13 +678,18 @@ describe('AgentRunService', () => {
         { type: 'TOOL_CALL_RESULT', timestamp: 4, runId: 'run-1', toolCallId: 'tc-2', result: 'b-result', durationMs: 20 },
       ];
 
-      const { deps, sandboxRunService } = createDeps({ learningPipeline });
-      sandboxRunService.executeSessionTurn.mockReturnValue(eventStream(events));
+      const { deps, sessionTurnService } = createDeps({ learningPipeline });
+      sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
-      const service = new AgentRunService(deps);
-      await service.executeRun(makeParams());
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
 
-      const trace = learningPipeline.process.mock.calls[0][0];
+      expect(learningPipeline.process).toHaveBeenCalledWith(
+        expect.objectContaining({
+          steps: expect.any(Array),
+        }),
+      );
+      const trace = learningPipeline.process.mock.lastCall?.[0];
       expect(trace.steps).toHaveLength(4);
       expect(trace.steps.map((step: { type: string; content: string }) => [step.type, step.content])).toEqual([
         ['tool_call', 'alpha'],
@@ -669,11 +701,11 @@ describe('AgentRunService', () => {
   });
 
   describe('AbortSignal cancellation', () => {
-    it('stops streaming when the real RunRegistry aborts the run and skips completion', async () => {
+    it('stops streaming when the real SessionRegistry aborts the run and skips completion', async () => {
       const eventBus = new TypedEventBus();
-      const registry = new RunRegistry(undefined, eventBus);
-      const completeRunSpy = vi.spyOn(registry, 'completeRun');
-      const run = await registry.startRun('agent-1', 'conv-1', 'interactive', 'test task');
+      const registry = new TestSessionRegistry(undefined, eventBus);
+      const completeRunSpy = vi.spyOn(registry, 'completeSession');
+      const run = await registry.startSession('agent-1', 'conv-1', 'interactive', 'test task');
 
       let yieldCount = 0;
       let gateResolve: (() => void) | undefined;
@@ -707,33 +739,34 @@ describe('AgentRunService', () => {
         }
       }
 
-      const service = new AgentRunService(createDeps({
+      const service = new AgentSessionService(createDeps({
         eventBus,
-        runRegistry: registry,
-        sandboxRunService: {
+        sessionManager: createTestSessionManager(registry) as unknown as MockSessionManager,
+        sessionTurnService: {
           executeSessionTurn: vi.fn().mockImplementation(cancellableStream),
         },
       }).deps);
 
-      const runPromise = service.executeRun(makeParams({ runId: run.id }));
+      const runPromise = service.executeSession(makeParams({ sessionId: run.id }));
 
       await new Promise((resolve) => setTimeout(resolve, 20));
-      await registry.cancelRun(run.id);
+      await registry.cancelSession(run.id);
       gateResolve?.();
       await runPromise;
 
       expect(yieldCount).toBe(2);
       expect(completeRunSpy).not.toHaveBeenCalled();
-      expect(registry.getRun(run.id)?.status).toBe('cancelled');
+      expect(registry.getSession(run.id)?.status).toBe('cancelled');
     });
 
-    it('persists committed messages that arrive before cancellation', async () => {
-      const eventBus = new TypedEventBus();
-      const registry = new RunRegistry(undefined, eventBus);
-      const run = await registry.startRun('agent-1', 'conv-1', 'interactive', 'test task');
-      const db = {
-        addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
-      };
+     it('persists committed messages that arrive before cancellation', async () => {
+       const eventBus = new TypedEventBus();
+       const registry = new TestSessionRegistry(undefined, eventBus);
+       const run = await registry.startSession('agent-1', 'conv-1', 'interactive', 'test task');
+       const db = {
+         addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
+         updateTurn: vi.fn().mockResolvedValue(undefined),
+       };
 
       let gateResolve: (() => void) | undefined;
       const gate = new Promise<void>((resolve) => {
@@ -764,44 +797,44 @@ describe('AgentRunService', () => {
         });
       }
 
-      const service = new AgentRunService(createDeps({
+      const service = new AgentSessionService(createDeps({
         db,
         eventBus,
-        runRegistry: registry,
-        sandboxRunService: {
+        sessionManager: createTestSessionManager(registry) as unknown as MockSessionManager,
+        sessionTurnService: {
           executeSessionTurn: vi.fn().mockImplementation(committedThenWait),
         },
       }).deps);
 
-      const runPromise = service.executeRun(makeParams({ runId: run.id }));
+      const runPromise = service.executeSession(makeParams({ sessionId: run.id }));
 
       await new Promise((resolve) => setTimeout(resolve, 20));
-      await registry.cancelRun(run.id);
+      await registry.cancelSession(run.id);
       gateResolve?.();
       await runPromise;
 
       expect(db.addMessage).toHaveBeenCalledTimes(1);
-      expect(db.addMessage).toHaveBeenCalledWith({
+      expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
         agentId: 'agent-1',
         conversationId: 'conv-1',
         role: 'assistant',
         content: 'Committed before cancel',
         toolCalls: undefined,
         toolCallId: undefined,
-      });
+      }));
     });
 
-    it('emits run.completed with cancelled status when RunRegistry.cancelRun is called', async () => {
+    it('emits turn.completed with cancelled status when SessionRegistry.cancelSession is called', async () => {
       const eventBus = new TypedEventBus();
-      const completedEvents = collectEvents(eventBus, 'run.completed');
-      const registry = new RunRegistry(undefined, eventBus);
-      const run = await registry.startRun('agent-1', 'conv-1', 'interactive', 'test');
+      const completedEvents = collectEvents(eventBus, 'turn.completed');
+      const registry = new TestSessionRegistry(undefined, eventBus);
+      const run = await registry.startSession('agent-1', 'conv-1', 'interactive', 'test');
 
-      await registry.cancelRun(run.id);
+      await registry.cancelSession(run.id);
 
       expect(completedEvents).toHaveLength(1);
       expect(completedEvents[0]).toMatchObject({
-        runId: run.id,
+        sessionId: run.id,
         agentId: 'agent-1',
         conversationId: 'conv-1',
         status: 'cancelled',
@@ -818,11 +851,11 @@ describe('AgentRunService', () => {
         throw new Error('connection refused');
       }
 
-      const { deps, sandboxRunService, sse } = createDeps();
-      sandboxRunService.executeSessionTurn.mockReturnValue(failingStream());
+      const { deps, sessionTurnService, sse } = createDeps();
+      sessionTurnService.executeSessionTurn.mockReturnValue(failingStream());
 
-      const service = new AgentRunService(deps);
-      await service.executeRun(makeParams());
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
 
       expect(sse.broadcast).toHaveBeenCalledTimes(1);
       expect(sse.broadcast).toHaveBeenCalledWith(
@@ -844,14 +877,14 @@ describe('AgentRunService', () => {
         customField: 'should-be-preserved',
       } satisfies AGUIEvent;
 
-      const { deps, sandboxRunService, sse } = createDeps();
-      sandboxRunService.executeSessionTurn.mockReturnValue(eventStream([originalEvent]));
+      const { deps, sessionTurnService, sse } = createDeps();
+      sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([originalEvent]));
 
-      const service = new AgentRunService(deps);
-      await service.executeRun(makeParams());
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
 
       expect(sse.broadcast).toHaveBeenCalledWith('agent-1', originalEvent);
-      const broadcastPayload = sse.broadcast.mock.calls[0][1] as Record<string, unknown>;
+      const broadcastPayload = sse.broadcast.mock.lastCall?.[1] as Record<string, unknown>;
       expect(broadcastPayload.customField).toBe('should-be-preserved');
       expect(broadcastPayload.timestamp).toBe(12345);
     });

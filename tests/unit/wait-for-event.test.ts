@@ -17,9 +17,9 @@ describe('waitForEvent', () => {
 
   describe('basic matching', () => {
     it('resolves when matching event emitted', async () => {
-      const promise = waitForEvent(bus, 'run.completed', 5000);
+      const promise = waitForEvent(bus, 'turn.completed', 5000);
       const event = makeRunCompletedEvent();
-      bus.emit('run.completed', event);
+      bus.emit('turn.completed', event);
       const result = await promise;
       expect(result).toEqual(event);
     });
@@ -27,12 +27,12 @@ describe('waitForEvent', () => {
     it('resolves with the emitted payload', async () => {
       const promise = waitForEvent(
         bus,
-        'run.completed',
+        'turn.completed',
         (p) => p.status === 'completed',
         5000,
       );
       const event = makeRunCompletedEvent({ status: 'completed', durationMs: 42 });
-      bus.emit('run.completed', event);
+      bus.emit('turn.completed', event);
       const result = await promise;
       expect(result.durationMs).toBe(42);
       expect(result.status).toBe('completed');
@@ -52,11 +52,11 @@ describe('waitForEvent', () => {
       vi.useFakeTimers();
       const promise = waitForEvent(
         bus,
-        'run.completed',
+        'turn.completed',
         (p) => p.status === 'completed',
         5000,
       );
-      bus.emit('run.completed', makeRunCompletedEvent({ status: 'error' }));
+      bus.emit('turn.completed', makeRunCompletedEvent({ status: 'error' }));
 
       // Promise should not have resolved yet — advance a tiny bit
       let resolved = false;
@@ -66,32 +66,32 @@ describe('waitForEvent', () => {
 
       vi.useRealTimers();
       // Clean up: reject the promise so it doesn't leak
-      bus.emit('run.completed', makeRunCompletedEvent({ status: 'completed' }));
+      bus.emit('turn.completed', makeRunCompletedEvent({ status: 'completed' }));
       await promise;
     });
 
     it('matching event after non-matching resolves with matching payload', async () => {
       const promise = waitForEvent(
         bus,
-        'run.completed',
+        'turn.completed',
         (p) => p.status === 'completed',
         5000,
       );
-      bus.emit('run.completed', makeRunCompletedEvent({ status: 'error' }));
-      const matching = makeRunCompletedEvent({ status: 'completed', runId: 'run-match' });
-      bus.emit('run.completed', matching);
+      bus.emit('turn.completed', makeRunCompletedEvent({ status: 'error' }));
+      const matching = makeRunCompletedEvent({ status: 'completed', sessionId: 'run-match' });
+      bus.emit('turn.completed', matching);
       const result = await promise;
-      expect(result.runId).toBe('run-match');
+      expect(result.sessionId).toBe('run-match');
     });
 
     it('predicate receives full payload', async () => {
       const predicateSpy = vi.fn().mockReturnValue(true);
-      const promise = waitForEvent(bus, 'run.completed', predicateSpy, 5000);
-      const event = makeRunCompletedEvent({ runId: 'full-payload-test' });
-      bus.emit('run.completed', event);
+      const promise = waitForEvent(bus, 'turn.completed', predicateSpy, 5000);
+      const event = makeRunCompletedEvent({ sessionId: 'full-payload-test' });
+      bus.emit('turn.completed', event);
       await promise;
       expect(predicateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ runId: 'full-payload-test' }),
+        expect.objectContaining({ sessionId: 'full-payload-test' }),
       );
     });
   });
@@ -105,13 +105,13 @@ describe('waitForEvent', () => {
     });
 
     it('no event within timeout rejects with EventTimeoutError', async () => {
-      const promise = waitForEvent(bus, 'run.completed', 1000);
+      const promise = waitForEvent(bus, 'turn.completed', 1000);
       vi.advanceTimersByTime(1001);
       await expect(promise).rejects.toThrow(EventTimeoutError);
     });
 
     it('EventTimeoutError has eventType and timeoutMs fields', async () => {
-      const promise = waitForEvent(bus, 'run.completed', 2000);
+      const promise = waitForEvent(bus, 'turn.completed', 2000);
       vi.advanceTimersByTime(2001);
       try {
         await promise;
@@ -119,16 +119,16 @@ describe('waitForEvent', () => {
       } catch (err) {
         expect(err).toBeInstanceOf(EventTimeoutError);
         const timeout = err as EventTimeoutError;
-        expect(timeout.eventType).toBe('run.completed');
+        expect(timeout.eventType).toBe('turn.completed');
         expect(timeout.timeoutMs).toBe(2000);
       }
     });
 
     it('resolved before timeout clears timer (no unhandled rejection)', async () => {
-      const promise = waitForEvent(bus, 'run.started', 5000);
-      bus.emit('run.started', makeRunStartedEvent());
+      const promise = waitForEvent(bus, 'turn.started', 5000);
+      bus.emit('turn.started', makeRunStartedEvent());
       const result = await promise;
-      expect(result.runId).toBeDefined();
+      expect(result.sessionId).toBeDefined();
       // Advance past the timeout — should NOT reject
       vi.advanceTimersByTime(6000);
       // If we get here without error, timeout was properly cleared
@@ -138,29 +138,29 @@ describe('waitForEvent', () => {
   describe('cleanup', () => {
     it('after resolve: handler removed from bus (emit again, no effect)', async () => {
       const spy = vi.fn();
-      bus.on('run.completed', spy);
+      bus.on('turn.completed', spy);
 
-      const promise = waitForEvent(bus, 'run.completed', 5000);
-      bus.emit('run.completed', makeRunCompletedEvent());
+      const promise = waitForEvent(bus, 'turn.completed', 5000);
+      bus.emit('turn.completed', makeRunCompletedEvent());
       await promise;
 
       // spy was called once from the direct on(), but the waitForEvent handler is now removed
       spy.mockClear();
-      bus.emit('run.completed', makeRunCompletedEvent());
+      bus.emit('turn.completed', makeRunCompletedEvent());
       // spy should be called once (from our explicit on()), but NOT the waitForEvent handler
       expect(spy).toHaveBeenCalledTimes(1);
     });
 
     it('after timeout: handler removed from bus', async () => {
       vi.useFakeTimers();
-      const promise = waitForEvent(bus, 'run.completed', 500);
+      const promise = waitForEvent(bus, 'turn.completed', 500);
       vi.advanceTimersByTime(501);
       await expect(promise).rejects.toThrow(EventTimeoutError);
 
       // Now emit — should not cause issues
       const spy = vi.fn();
-      bus.on('run.completed', spy);
-      bus.emit('run.completed', makeRunCompletedEvent());
+      bus.on('turn.completed', spy);
+      bus.emit('turn.completed', makeRunCompletedEvent());
       expect(spy).toHaveBeenCalledTimes(1);
       vi.useRealTimers();
     });
@@ -185,46 +185,46 @@ describe('waitForEvent', () => {
     it('2 waiters for same event type, different predicates — each resolves independently', async () => {
       const waiter1 = waitForEvent(
         bus,
-        'run.completed',
+        'turn.completed',
         (p) => p.status === 'completed',
         5000,
       );
       const waiter2 = waitForEvent(
         bus,
-        'run.completed',
+        'turn.completed',
         (p) => p.status === 'error',
         5000,
       );
 
       // Emit event matching waiter1 but not waiter2
-      bus.emit('run.completed', makeRunCompletedEvent({ status: 'completed', runId: 'w1' }));
+      bus.emit('turn.completed', makeRunCompletedEvent({ status: 'completed', sessionId: 'w1' }));
       const result1 = await waiter1;
-      expect(result1.runId).toBe('w1');
+      expect(result1.sessionId).toBe('w1');
 
       // waiter2 should still be pending — now emit matching event
-      bus.emit('run.completed', makeRunCompletedEvent({ status: 'error', runId: 'w2' }));
+      bus.emit('turn.completed', makeRunCompletedEvent({ status: 'error', sessionId: 'w2' }));
       const result2 = await waiter2;
-      expect(result2.runId).toBe('w2');
+      expect(result2.sessionId).toBe('w2');
     });
 
     it('event matching waiter1 but not waiter2 only resolves waiter1', async () => {
       vi.useFakeTimers();
       const waiter1 = waitForEvent(
         bus,
-        'run.completed',
-        (p) => p.runId === 'target',
+        'turn.completed',
+        (p) => p.sessionId === 'target',
         5000,
       );
       const waiter2 = waitForEvent(
         bus,
-        'run.completed',
-        (p) => p.runId === 'other',
+        'turn.completed',
+        (p) => p.sessionId === 'other',
         1000,
       );
 
-      bus.emit('run.completed', makeRunCompletedEvent({ runId: 'target' }));
+      bus.emit('turn.completed', makeRunCompletedEvent({ sessionId: 'target' }));
       const result1 = await waiter1;
-      expect(result1.runId).toBe('target');
+      expect(result1.sessionId).toBe('target');
 
       // waiter2 should timeout
       vi.advanceTimersByTime(1001);
@@ -239,12 +239,12 @@ describe('waitForEvent', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const promise = waitForEvent(
         bus,
-        'run.completed',
+        'turn.completed',
         () => { throw new Error('boom'); },
         5000,
       );
 
-      bus.emit('run.completed', makeRunCompletedEvent());
+      bus.emit('turn.completed', makeRunCompletedEvent());
       expect(warnSpy).toHaveBeenCalled();
 
       // Still pending since predicate always throws — timeout it
@@ -257,16 +257,16 @@ describe('waitForEvent', () => {
     it('event emitted synchronously in same tick — still caught', async () => {
       // We emit right after creating the promise in the same sync block
       // but waitForEvent registers the handler synchronously, so it works
-      const event = makeRunStartedEvent({ runId: 'sync-emit' });
-      const promise = waitForEvent(bus, 'run.started', 5000);
-      bus.emit('run.started', event);
+      const event = makeRunStartedEvent({ sessionId: 'sync-emit' });
+      const promise = waitForEvent(bus, 'turn.started', 5000);
+      bus.emit('turn.started', event);
       const result = await promise;
-      expect(result.runId).toBe('sync-emit');
+      expect(result.sessionId).toBe('sync-emit');
     });
 
     it('timeoutMs = 0 rejects immediately', async () => {
       vi.useFakeTimers();
-      const promise = waitForEvent(bus, 'run.completed', 0);
+      const promise = waitForEvent(bus, 'turn.completed', 0);
       vi.advanceTimersByTime(1);
       await expect(promise).rejects.toThrow(EventTimeoutError);
       vi.useRealTimers();

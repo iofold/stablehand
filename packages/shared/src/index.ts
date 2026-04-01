@@ -4,7 +4,7 @@ export type { AGUIEventType, AGUIEvent, MessageCommittedEvent } from './events.j
 export type {
   ApiAgent,
   ApiAgentResourceLimits,
-  ApiAgentRun,
+  ApiAgentSession,
   ApiMessage,
   ApiToolCallState,
   ApiA2UIBlock,

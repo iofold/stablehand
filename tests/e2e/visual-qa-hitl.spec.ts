@@ -2,8 +2,6 @@ import { test, expect } from '@playwright/test';
 import {
   createTestAgent,
   deleteTestAgent,
-  getInterrupts,
-  resolveInterrupt,
 } from './support.js';
 import { hasHarnessKey } from './visual-qa/support.js';
 import { ScreenshotCapture } from './visual-qa/screenshot-capture.js';
@@ -18,7 +16,7 @@ test.describe('HITL Approval Flow Visual QA', () => {
     const agent = await createTestAgent(request, {
       name: `vqa-hitl-${Date.now()}`,
       harness: 'langgraph',
-      harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+      harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
       systemPrompt: 'When asked to execute a trade, use the execute-trade tool to buy 10 shares of AAPL at market price. Always use the execute-trade tool.',
       tools: ['execute-trade', 'emit-event'],
       description: 'VQA HITL approval test agent',
@@ -30,15 +28,15 @@ test.describe('HITL Approval Flow Visual QA', () => {
     if (agentId) await deleteTestAgent(request, agentId);
   });
 
-  test('captures approval card pending and approved states', async ({ page, request }) => {
+  test('captures approval card pending and approved states', async ({ page, request: _request }) => {
     const capture = new ScreenshotCapture(page, 'hitl', 'live');
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
     await capture.captureViewport('hitl-empty', 'Chat page before HITL trigger');
 
     // Send message that triggers HITL approval
-    await page.getByTestId('chat-input').fill('Execute a trade to buy AAPL shares');
+    await page.getByTestId('session-input').fill('Execute a trade to buy AAPL shares');
     await page.getByTestId('send-button').click();
     await expect(page.getByTestId('message-bubble-user').last()).toBeVisible({ timeout: 5_000 });
 
@@ -60,6 +58,7 @@ test.describe('HITL Approval Flow Visual QA', () => {
     // Wait for resolution indicator
     const resolvedIndicator = page.getByTestId('approval-approved');
     const resolved = await resolvedIndicator.waitFor({ timeout: 15_000 }).then(() => true).catch(() => false);
+    expect(resolved).toBe(true);
 
     // Capture resolved state
     await capture.captureViewport('hitl-approved-viewport', 'After approval — resolved state');
@@ -74,13 +73,13 @@ test.describe('HITL Approval Flow Visual QA', () => {
     await capture.writeManifest();
   });
 
-  test('captures rejection flow', async ({ page, request }) => {
+  test('captures rejection flow', async ({ page, request: _request }) => {
     const capture = new ScreenshotCapture(page, 'hitl-reject', 'live');
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByTestId('chat-input').fill('Execute a trade to buy AAPL shares');
+    await page.getByTestId('session-input').fill('Execute a trade to buy AAPL shares');
     await page.getByTestId('send-button').click();
 
     // Wait for approval card

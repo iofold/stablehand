@@ -27,6 +27,8 @@ export interface HttpEndpointConfig {
   timeout?: number;
   /** Optional authentication configuration. */
   authentication?: HttpAuthConfig;
+  /** Mark this tool as programmatic (default: false). */
+  programmatic?: boolean;
 }
 
 const DEFAULT_TIMEOUT = 30_000;
@@ -141,6 +143,7 @@ export class HTTPToolProvider implements ToolProvider {
         input: zodInput,
         location: 'orchestrator',
         timeout: ep.timeout ?? DEFAULT_TIMEOUT,
+        programmatic: ep.programmatic ?? false,
         handler: async (
           input: unknown,
           ctx: ToolContext,
@@ -223,12 +226,14 @@ export class HTTPToolProvider implements ToolProvider {
       if (err instanceof DOMException && err.name === 'AbortError') {
         throw new Error(
           `HTTPToolProvider: request to "${ep.name}" timed out after ${timeout}ms`,
+          { cause: err },
         );
       }
       // Re-wrap non-Error objects
       if (err instanceof Error && err.name === 'AbortError') {
         throw new Error(
           `HTTPToolProvider: request to "${ep.name}" timed out after ${timeout}ms`,
+          { cause: err },
         );
       }
       throw err;

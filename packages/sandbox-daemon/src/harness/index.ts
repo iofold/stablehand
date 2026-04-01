@@ -3,3 +3,4 @@ export * from './shared.js';
 export * from './langgraph.js';
 export * from './claude-agents.js';
 export * from './pi-agent.js';
+export { createPiLangSmithTracer } from './pi-langsmith-tracer.js';

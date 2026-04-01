@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Activity, Brain, Zap, Settings, ChevronLeft, ChevronRight, Wrench, GitBranch, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Activity, Brain, Zap, Settings, Wrench, GitBranch, Menu, X, Archive } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -10,14 +10,16 @@ const navItems = [
   { icon: GitBranch, label: 'Agent Flow', path: '/flow' },
   { icon: Brain, label: 'Knowledge', path: '/knowledge' },
   { icon: Zap, label: 'Triggers', path: '/triggers' },
+  { icon: Archive, label: 'Artifacts', path: '/artifacts' },
   { icon: Settings, label: 'Settings', path: '/settings' },
 ];
 
 export function Sidebar() {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const location = useLocation();
+  const pathname = location.pathname;
 
   // Detect mobile viewport
   useEffect(() => {
@@ -33,8 +35,10 @@ export function Sidebar() {
 
   // Close mobile sidebar on route change
   useEffect(() => {
-    setMobileOpen(false);
-  }, [location.pathname]);
+    if (pathname) {
+      setMobileOpen(false);
+    }
+  }, [pathname]);
 
   // Close on Escape key
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -49,8 +53,7 @@ export function Sidebar() {
   }, [mobileOpen, handleKeyDown]);
 
   const sidebarContent = (
-    <aside
-      role="navigation"
+    <nav
       aria-label="Main navigation"
       className={cn(
         'flex flex-col border-r border-surface-700 bg-surface-850 h-full',
@@ -65,6 +68,7 @@ export function Sidebar() {
       <div className="flex h-14 items-center border-b border-surface-700/30 px-3">
         {isMobile && (
           <button
+            type="button"
             onClick={() => setMobileOpen(false)}
             className="mr-2 text-surface-400 hover:text-surface-200 transition-colors"
             aria-label="Close navigation menu"
@@ -87,8 +91,8 @@ export function Sidebar() {
       <nav className="flex-1 py-3 space-y-1">
         {navItems.map((item) => {
           const isActive =
-            location.pathname === item.path ||
-            (item.path !== '/' && location.pathname.startsWith(item.path));
+            pathname === item.path ||
+            (item.path !== '/' && pathname.startsWith(item.path));
           return (
             <Link
               key={item.label}
@@ -129,7 +133,7 @@ export function Sidebar() {
       {/* Status indicator */}
       <div className="px-3 pb-4">
         <div className="flex items-center">
-          <div className="flex items-center w-full px-2" aria-label="System status: online">
+          <div className="flex items-center w-full px-2">
             <span className="w-2 h-2 rounded-full bg-accent-500 flex-shrink-0 animate-pulse" />
             <span
               className={cn(
@@ -148,7 +152,7 @@ export function Sidebar() {
       </div>
 
       {/* Desktop: always collapsed icon-only with tooltips. Mobile: full labels. */}
-    </aside>
+    </nav>
   );
 
   // Mobile: hamburger button + overlay
@@ -158,6 +162,7 @@ export function Sidebar() {
         {/* Hamburger button - fixed top bar */}
         <div className="fixed top-0 left-0 right-0 z-30 flex items-center h-12 px-3 bg-surface-900 border-b border-surface-700/30">
           <button
+            type="button"
             onClick={() => setMobileOpen(true)}
             aria-label="Open navigation menu"
             className="p-1.5 text-surface-400 hover:text-surface-200 transition-colors"

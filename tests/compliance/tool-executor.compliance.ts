@@ -286,7 +286,7 @@ export function runToolExecutorCompliance(
         createEchoTool({
           name: 'str-throw',
           handler: async () => {
-            throw 'raw string error'; // eslint-disable-line no-throw-literal
+            throw 'raw string error';
           },
         }),
       );

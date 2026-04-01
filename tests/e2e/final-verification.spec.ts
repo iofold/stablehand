@@ -10,11 +10,11 @@ test('Final A2UI Chart Rendering Verification', async ({ page }) => {
 
   console.log(`Agent ID:         ${agentId}`);
   console.log(`Conversation ID:  ${conversationId}`);
-  console.log(`Route:            /agents/${agentId}/chat/${conversationId}\n`);
+  console.log(`Route:            /agents/${agentId}/sessions/${conversationId}\n`);
 
   // Navigate to the conversation
-  await page.goto(`/agents/${agentId}/chat/${conversationId}`);
-  await page.getByTestId('chat-input').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.goto(`/agents/${agentId}/sessions/${conversationId}`);
+  await page.getByTestId('session-input').waitFor({ state: 'visible', timeout: 15_000 });
   await page.waitForTimeout(2000);
 
   // 1. Check A2UI blocks

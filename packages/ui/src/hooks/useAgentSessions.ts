@@ -3,8 +3,6 @@ import type { AgentSession } from '@/stores/agents';
 
 export interface UseAgentSessionsReturn {
   filteredSessions: AgentSession[];
-  totalSessions: number;
-  activeSessionsCount: number;
 }
 
 export function useAgentSessions(allSessions: AgentSession[], sessionsFilter: string): UseAgentSessionsReturn {
@@ -30,8 +28,5 @@ export function useAgentSessions(allSessions: AgentSession[], sessionsFilter: st
     return allSessions.filter((session) => matchingConversationIds.has(session.conversationId ?? 'unknown'));
   }, [allSessions, sessionsFilter]);
 
-  const totalSessions = allSessions.length;
-  const activeSessionsCount = allSessions.filter((session) => session.status === 'running' || session.status === 'queued').length;
-
-  return { filteredSessions, totalSessions, activeSessionsCount };
+  return { filteredSessions };
 }

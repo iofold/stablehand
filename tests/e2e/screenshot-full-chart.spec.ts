@@ -4,8 +4,8 @@ test('Capture full chart screenshot', async ({ page }) => {
   const agentId = 'f22dbb85-376d-4c7e-a91d-e132a2dc45f3';
   const targetConvId = 'a1d7489a-360d-476e-ba89-8dd5262980ce';
 
-  await page.goto(`/agents/${agentId}/chat/${targetConvId}`);
-  await page.getByTestId('chat-input').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.goto(`/agents/${agentId}/sessions/${targetConvId}`);
+  await page.getByTestId('session-input').waitFor({ state: 'visible', timeout: 15_000 });
   await page.waitForTimeout(3000);
 
   // Scroll to the message area

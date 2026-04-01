@@ -214,7 +214,7 @@ export function eventQueueComplianceSuite(opts: EventQueueComplianceOptions): vo
       });
 
       await queue.enqueue({
-        type: 'run.completed',
+        type: 'turn.completed',
         agentId: 'agent-1',
         payload: {
           runId: 'r1',
@@ -228,7 +228,7 @@ export function eventQueueComplianceSuite(opts: EventQueueComplianceOptions): vo
 
       const events = await queue.getEventsSince('agent-1', id1, 100);
       expect(events).toHaveLength(1);
-      expect(events[0]!.type).toBe('run.completed');
+      expect(events[0]!.type).toBe('turn.completed');
     });
 
     it('getEventsSince respects limit', async () => {

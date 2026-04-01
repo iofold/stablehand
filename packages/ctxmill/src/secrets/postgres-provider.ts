@@ -18,7 +18,7 @@ export class PostgresSecretProvider implements SecretProvider {
     this.masterKey = masterKey;
   }
 
-  get(agentId: string, key: string, toolId?: string): string | null {
+  get(_agentId: string, _key: string, _toolId?: string): string | null {
     // SecretProvider interface is sync, but postgres.js is async.
     // We need a sync wrapper — use the underlying promise cache pattern.
     // Actually, the interface says `string | null` (sync). We'll need to

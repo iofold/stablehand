@@ -8,9 +8,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');
 
 const agents = [
-  { dir: 'langgraph-agent', expectedHarness: 'langgraph', expectedName: 'langgraph-analyst', provider: 'openai', model: 'gpt-5-mini', expectedTools: [{ ref: 'calculator' }, { ref: 'weather' }, { ref: 'emit-event' }, { ref: 'list-directory' }, { ref: 'search-files' }, { ref: 'execute-trade' }] },
+  { dir: 'langgraph-agent', expectedHarness: 'langgraph', expectedName: 'langgraph-analyst', provider: 'openai', model: 'gpt-5.4-mini', expectedTools: [{ ref: 'calculator' }, { ref: 'weather' }, { ref: 'emit-event' }, { ref: 'list-directory' }, { ref: 'search-files' }, { ref: 'execute-trade' }] },
   { dir: 'claude-agent', expectedHarness: 'claude-agents', expectedName: 'claude-writer', provider: 'anthropic', model: 'claude-sonnet-4-6', expectedTools: [{ ref: 'emit-event' }] },
-  { dir: 'pi-agent', expectedHarness: 'pi-agent', expectedName: 'pi-auditor', provider: 'openai', model: 'gpt-5-mini', expectedTools: [{ ref: 'emit-event' }] },
+  { dir: 'pi-agent', expectedHarness: 'pi-agent', expectedName: 'pi-auditor', provider: 'openai', model: 'gpt-5.4-mini', expectedTools: [{ ref: 'emit-event' }] },
 ];
 
 describe('manifest validation', () => {

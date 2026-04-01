@@ -57,9 +57,44 @@ import {
 } from './proto-convert.js';
 import { createArtifactHandlers } from './artifact-handler.js';
 import type { OrchestratorServiceClient } from './tool-proxy.js';
+import { setSessionTools } from './daemon.js';
+import { generatePtcScripts } from './ptc-codegen.js';
 
 async function mkdirSafe(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true }).catch(() => {});
+}
+
+function createDaemonHandlersForSession(
+  secrets: ResolvedSecrets,
+  orcClient: OrchestratorServiceClient | undefined,
+  agentId: string,
+  workspaceDir: string,
+): Map<string, (input: unknown) => Promise<string>> | undefined {
+  const s3Endpoint = secrets.S3_ENDPOINT;
+  const s3AccessKey = secrets.S3_ACCESS_KEY;
+  const s3SecretKey = secrets.S3_SECRET_KEY;
+  const s3Bucket = secrets.S3_BUCKET || 'ctxmill-artifacts';
+  const s3Region = secrets.S3_REGION || 'us-east-1';
+
+  if (!s3Endpoint || !s3AccessKey || !s3SecretKey || !orcClient) {
+    return undefined;
+  }
+
+  const artifactStore = new ArtifactStore({
+    s3Endpoint,
+    s3Region,
+    s3AccessKey,
+    s3SecretKey,
+    bucket: s3Bucket,
+  });
+
+  return createArtifactHandlers({
+    artifactStore,
+    orchestratorClient: orcClient,
+    sessionId: activeRunId,
+    agentId,
+    workspaceDir,
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -217,39 +252,38 @@ export async function openSession(
     const fresh = req.bootstrap.value;
     harnessName = fresh.harnessName;
 
-    let daemonHandlers: Map<string, (input: unknown) => Promise<string>> | undefined;
-    const s3Endpoint = secrets.S3_ENDPOINT;
-    const s3AccessKey = secrets.S3_ACCESS_KEY;
-    const s3SecretKey = secrets.S3_SECRET_KEY;
-    const s3Bucket = secrets.S3_BUCKET || 'ctxmill-artifacts';
-    const s3Region = secrets.S3_REGION || 'us-east-1';
-
-    if (s3Endpoint && s3AccessKey && s3SecretKey && orcClient) {
-      const artifactStore = new ArtifactStore({
-        s3Endpoint,
-        s3Region,
-        s3AccessKey,
-        s3SecretKey,
-        bucket: s3Bucket,
-      });
-
-      daemonHandlers = createArtifactHandlers({
-        artifactStore,
-        orchestratorClient: orcClient,
-        runId: activeRunId,
-        agentId: fresh.agentId,
-        workspaceDir: '/workspace',
-      });
-    }
+    const daemonHandlers = createDaemonHandlersForSession(
+      secrets,
+      orcClient,
+      fresh.agentId,
+      fresh.workspaceDir || '/workspace',
+    );
 
     const tools = protoToToolDefs(fresh.tools, {
       orchestratorClient: orcClient,
       agentId: fresh.agentId,
-      runIdRef: activeRunId,
+      sessionIdRef: activeRunId,
       daemonHandlers,
     });
+    setSessionTools(tools);
 
     const config = protoFreshBootstrapToSessionConfig(fresh, tools, secrets);
+    const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
+
+    try {
+      const ptcScripts = await generatePtcScripts({
+        tools,
+        scriptDir: `${config.workspaceDir}/.tools`,
+        daemonPort: ptcPort,
+      });
+
+      if (ptcScripts.length > 0) {
+        config.systemPrompt += '\n\nSome tools use programmatic tool calling (PTC) — large results stay in code scope instead of your context. Call ctxmill-guide({ topic: "ptc" }) for usage details, or run `ls /workspace/.tools/` to see available scripts.';
+      }
+    } catch (err) {
+      console.error('[sandbox] PTC script generation failed, continuing without PTC:', err);
+    }
+
     if (opts?.signal) {
       config.signal = opts.signal;
     }
@@ -268,18 +302,43 @@ export async function openSession(
     harnessName = checkpoint.harnessName;
 
     const restorePoint = protoRestoreBootstrapToRestorePoint(restore);
-
-    // Minimal config — the harness restores full configuration from its stored state.
-    const config = {
-      agentId: checkpoint.sessionId,
-      conversationId: checkpoint.conversationId,
-      systemPrompt: '',
-      tools: [],
+    const workspaceDir = checkpoint.workspaceRef?.reference || '/workspace';
+    const daemonHandlers = createDaemonHandlersForSession(
       secrets,
-      harnessConfigJson: '{}',
-      workspaceDir: checkpoint.workspaceRef?.reference || '/workspace',
+      orcClient,
+      restore.agentId,
+      workspaceDir,
+    );
+    const tools = protoToToolDefs(restore.tools, {
+      orchestratorClient: orcClient,
+      agentId: restore.agentId,
+      sessionIdRef: activeRunId,
+      daemonHandlers,
+    });
+    setSessionTools(tools);
+
+    const config = {
+      agentId: restore.agentId,
+      conversationId: checkpoint.conversationId,
+      systemPrompt: restore.systemPrompt,
+      tools,
+      secrets,
+      harnessConfigJson: restore.harnessConfigJson,
+      workspaceDir,
       signal: opts?.signal,
     };
+
+    const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
+
+    try {
+      await generatePtcScripts({
+        tools,
+        scriptDir: `${config.workspaceDir}/.tools`,
+        daemonPort: ptcPort,
+      });
+    } catch (err) {
+      console.error('[sandbox] PTC script generation failed during restore, continuing without PTC:', err);
+    }
 
     await mkdirSafe(config.workspaceDir);
 
@@ -486,6 +545,7 @@ export async function killSession(): Promise<KillSessionResponse> {
     phaseTracker = null;
     activeConversationId = null;
     activeHarnessName = null;
+    setSessionTools([]);
   }
 
   return create(KillSessionResponseSchema, { finalStatus: 'killed' });

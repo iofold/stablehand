@@ -3,6 +3,8 @@ import { z } from 'zod';
 
 const mockCreateAgentSession = vi.fn();
 const mockSessionManagerInMemory = vi.fn(() => ({ type: 'session-manager' }));
+const mockSessionManagerCreate = vi.fn((cwd: string) => ({ type: 'session-manager-file', cwd }));
+const mockSessionManagerContinueRecent = vi.fn((cwd: string) => ({ type: 'session-manager-continue', cwd }));
 const mockAuthStorageInMemory = vi.fn(() => ({ setRuntimeApiKey: vi.fn() }));
 const mockCreateCodingTools = vi.fn((cwd: string) => [{ name: 'coding-tools', cwd }]);
 const mockCreateReadTool = vi.fn((cwd: string) => ({ name: 'read', cwd }));
@@ -15,7 +17,11 @@ const mockCreateLsTool = vi.fn((cwd: string) => ({ name: 'ls', cwd }));
 
 vi.mock('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
-  SessionManager: { inMemory: mockSessionManagerInMemory },
+  SessionManager: {
+    inMemory: mockSessionManagerInMemory,
+    create: mockSessionManagerCreate,
+    continueRecent: mockSessionManagerContinueRecent,
+  },
   DefaultResourceLoader: vi.fn(function MockDefaultResourceLoader() {
     return {
       reload: vi.fn(async () => undefined),
@@ -45,10 +51,15 @@ vi.mock('@mariozechner/pi-ai', async () => {
 });
 
 import { Type } from '@sinclair/typebox';
-import { PIAgentHarness, convertTools, zodToTypeBox } from '@ctxmill/sandbox-daemon';
-import type { AgentEvent, AgentHarness, HarnessSessionConfig, TokenUsage } from '@ctxmill/sandbox-daemon';
-import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
-import type { Message } from '@ctxmill/sandbox-daemon';
+import { PIAgentHarness, convertTools, zodToTypeBox } from '../../packages/sandbox-daemon/src/index.ts';
+import type {
+  AgentEvent,
+  AgentHarness,
+  HarnessSessionConfig,
+  TokenUsage,
+} from '../../packages/sandbox-daemon/src/index.ts';
+import type { ToolDefinition } from '../../packages/sandbox-daemon/src/index.ts';
+import type { Message } from '../../packages/sandbox-daemon/src/index.ts';
 
 function makeMessage(
   role: Message['role'],
@@ -408,6 +419,143 @@ describe('PIAgentHarness private helpers', () => {
 });
 
 describe('PIAgentHarness native tool flow', () => {
+  it('openSession without restore uses SessionManager.create', async () => {
+    vi.resetModules();
+    mockCreateAgentSession.mockImplementation(async (options: unknown) => {
+      expect(options).toMatchObject({
+        sessionManager: {
+          type: 'session-manager-file',
+          cwd: '/tmp/workspace',
+        },
+      });
+      return {
+        session: {
+          subscribe: vi.fn(() => () => undefined),
+          prompt: vi.fn(async () => undefined),
+          abort: vi.fn(async () => undefined),
+          dispose: vi.fn(),
+          agent: {
+            replaceMessages: vi.fn(),
+            getMessages: vi.fn(() => []),
+          },
+        },
+      };
+    });
+
+    const { PIAgentHarness: FreshPIAgentHarness } = await import('../../packages/sandbox-daemon/src/harness/pi-agent.ts');
+    const harness = new FreshPIAgentHarness();
+    const session = await harness.openSession(makeConfig());
+
+    await session.close();
+  });
+
+  it('openSession with restore uses SessionManager.continueRecent', async () => {
+    vi.resetModules();
+    mockCreateAgentSession.mockImplementation(async (options: unknown) => {
+      expect(options).toMatchObject({
+        sessionManager: {
+          type: 'session-manager-continue',
+          cwd: '/tmp/workspace',
+        },
+      });
+      return {
+        session: {
+          subscribe: vi.fn(() => () => undefined),
+          prompt: vi.fn(async () => undefined),
+          abort: vi.fn(async () => undefined),
+          dispose: vi.fn(),
+          agent: {
+            replaceMessages: vi.fn(),
+            getMessages: vi.fn(() => []),
+          },
+        },
+      };
+    });
+
+    const { PIAgentHarness: FreshPIAgentHarness } = await import('../../packages/sandbox-daemon/src/harness/pi-agent.ts');
+    const harness = new FreshPIAgentHarness();
+    const session = await harness.openSession(makeConfig(), {
+      stateVersion: '1',
+      messages: [],
+      payload: { transcript: [] },
+    });
+
+    await session.close();
+  });
+
+  it('openSession with restore populates transcript from payload.transcript', async () => {
+    const replaceMessages = vi.fn();
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (listener: (event: Record<string, unknown>) => void) => {
+          listener({ type: 'agent_end', messages: [] });
+          return () => undefined;
+        },
+        prompt: vi.fn(async () => undefined),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages,
+          getMessages: vi.fn(() => []),
+        },
+      },
+    });
+
+    const harness = new PIAgentHarness();
+    const restoredMessage = makeMessage('assistant', 'Restored reply');
+    const session = await harness.openSession(makeConfig(), {
+      stateVersion: '1',
+      messages: [],
+      payload: { transcript: [restoredMessage] },
+    });
+
+    await collectEvents(
+      session.deliverTurn(
+        { messages: [makeMessage('user', 'Hello')], turnId: 'turn-restore' },
+        {},
+      ),
+    );
+
+    await expect(session.exportState()).resolves.toEqual({
+      stateVersion: '2',
+      payload: {
+        transcript: [restoredMessage],
+        nativePersistence: true,
+      },
+    });
+    expect(replaceMessages).not.toHaveBeenCalled();
+
+    await session.close();
+  });
+
+  it('exportState includes nativePersistence flag and stateVersion 2', async () => {
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: vi.fn(() => () => undefined),
+        prompt: vi.fn(async () => undefined),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+          getMessages: vi.fn(() => []),
+        },
+      },
+    });
+
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig());
+
+    await expect(session.exportState()).resolves.toEqual({
+      stateVersion: '2',
+      payload: {
+        transcript: [],
+        nativePersistence: true,
+      },
+    });
+
+    await session.close();
+  });
+
   it('should merge ctxmill tools with filtered native tools for session creation inputs', () => {
     const harness = new PIAgentHarness();
     const customTool: ToolDefinition = {

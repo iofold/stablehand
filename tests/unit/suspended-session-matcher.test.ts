@@ -7,41 +7,25 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { matchesSelector } from '../../packages/ctxmill/src/events/wait-condition.js';
-import { SuspendedRunMatcher } from '../../packages/ctxmill/src/orchestrator/suspended-run-matcher.js';
+import { SuspendedSessionMatcher } from '../../packages/ctxmill/src/orchestrator/suspended-session-matcher.js';
 import {
   createTestBus,
   collectEvents,
   makeFeedbackReceivedEvent,
-  makeRunCompletedEvent,
-} from '../../tests/utils/event-bus-test-helpers.js';
+  makeSuspendedRunRow,
+ } from '../utils/event-bus-test-helpers.js';
 import type { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function makeSuspendedRow(overrides?: Record<string, unknown>) {
-  return {
-    id: 'sr-1',
-    agentRunId: 'run-1',
-    agentId: 'agent-1',
-    waitEventType: 'feedback.received',
-    waitSelector: JSON.stringify({ agentId: 'agent-1', type: 'thumbs_up' }),
-    waitExpiresAt: null,
-    snapshotState: JSON.stringify({ conversationId: 'conv-1' }),
-    createdAt: Date.now() - 5000,
-    ...overrides,
-  };
-}
-
 function createMockDb(overrides?: Record<string, unknown>) {
   return {
-    getSuspendedRunsByEventType: vi.fn().mockResolvedValue([]),
-    deleteSuspendedRun: vi.fn().mockResolvedValue(undefined),
-    expireOldSuspendedRuns: vi.fn().mockResolvedValue(0),
+    getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([]),
+    deleteSuspendedSession: vi.fn().mockResolvedValue(undefined),
+    expireOldSuspendedSessions: vi.fn().mockResolvedValue(0),
     ...overrides,
   };
 }
-
-const settle = () => new Promise((r) => setTimeout(r, 20));
 
 // ── Tests ──────────────────────────────────────────────────────────
 
@@ -84,7 +68,7 @@ describe('SuspendedRunMatcher', () => {
     let bus: TypedEventBus;
     let mockDb: ReturnType<typeof createMockDb>;
     let onResume: ReturnType<typeof vi.fn>;
-    let matcher: SuspendedRunMatcher;
+    let matcher: SuspendedSessionMatcher;
 
     beforeEach(() => {
       vi.useFakeTimers();
@@ -98,32 +82,37 @@ describe('SuspendedRunMatcher', () => {
     });
 
     it('emit matching event calls onResume with condition and trigger event', async () => {
-      const row = makeSuspendedRow();
+      const row = makeSuspendedRunRow();
       mockDb = createMockDb({
-        getSuspendedRunsByEventType: vi.fn().mockResolvedValue([row]),
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       const event = makeFeedbackReceivedEvent({ agentId: 'agent-1', type: 'thumbs_up' });
       bus.emit('feedback.received', event);
       await vi.advanceTimersByTimeAsync(50);
 
       expect(onResume).toHaveBeenCalledTimes(1);
-      const [condition, triggerEvent] = onResume.mock.calls[0];
-      expect(condition.id).toBe('sr-1');
-      expect(condition.runId).toBe('run-1');
-      expect(condition.agentId).toBe('agent-1');
+       expect(onResume).toHaveBeenCalledWith(
+         expect.objectContaining({
+           id: 'sr-1',
+           sessionId: 'run-1',
+           agentId: 'agent-1',
+         }),
+         expect.any(Object),
+       );
+      const triggerEvent = onResume.mock.lastCall?.[1];
       expect(triggerEvent).toEqual(event);
     });
 
     it('emit non-matching event does NOT call onResume', async () => {
-      const row = makeSuspendedRow({
+      const row = makeSuspendedRunRow({
         waitSelector: JSON.stringify({ agentId: 'agent-1', type: 'thumbs_up' }),
       });
       mockDb = createMockDb({
-        getSuspendedRunsByEventType: vi.fn().mockResolvedValue([row]),
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       // Emit with wrong type field
       const event = makeFeedbackReceivedEvent({ agentId: 'agent-1', type: 'thumbs_down' });
@@ -134,57 +123,60 @@ describe('SuspendedRunMatcher', () => {
     });
 
     it('multiple suspended runs, only matching one resumed', async () => {
-      const row1 = makeSuspendedRow({
+      const row1 = makeSuspendedRunRow({
         id: 'sr-1',
         waitSelector: JSON.stringify({ agentId: 'agent-1' }),
       });
-      const row2 = makeSuspendedRow({
+      const row2 = makeSuspendedRunRow({
         id: 'sr-2',
-        agentRunId: 'run-2',
+        agentSessionId: 'run-2',
         waitSelector: JSON.stringify({ agentId: 'agent-2' }),
       });
       mockDb = createMockDb({
-        getSuspendedRunsByEventType: vi.fn().mockResolvedValue([row1, row2]),
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row1, row2]),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       const event = makeFeedbackReceivedEvent({ agentId: 'agent-1', type: 'thumbs_up' });
       bus.emit('feedback.received', event);
       await vi.advanceTimersByTimeAsync(50);
 
       expect(onResume).toHaveBeenCalledTimes(1);
-      expect(onResume.mock.calls[0][0].id).toBe('sr-1');
+      expect(onResume).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sr-1' }),
+        expect.any(Object),
+      );
     });
 
     it('resumed run is deleted from DB', async () => {
-      const row = makeSuspendedRow();
+      const row = makeSuspendedRunRow();
       mockDb = createMockDb({
-        getSuspendedRunsByEventType: vi.fn().mockResolvedValue([row]),
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       bus.emit('feedback.received', makeFeedbackReceivedEvent({ agentId: 'agent-1', type: 'thumbs_up' }));
       await vi.advanceTimersByTimeAsync(50);
 
-      expect(mockDb.deleteSuspendedRun).toHaveBeenCalledWith('sr-1');
+      expect(mockDb.deleteSuspendedSession).toHaveBeenCalledWith('sr-1');
     });
 
     it('run.resumed event emitted on bus', async () => {
-      const row = makeSuspendedRow();
+      const row = makeSuspendedRunRow();
       mockDb = createMockDb({
-        getSuspendedRunsByEventType: vi.fn().mockResolvedValue([row]),
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       const collector = collectEvents(bus, 'run.resumed');
 
       bus.emit('feedback.received', makeFeedbackReceivedEvent({ agentId: 'agent-1', type: 'thumbs_up' }));
       await vi.advanceTimersByTimeAsync(50);
 
-      expect(collector.events.length).toBe(1);
-      expect(collector.events[0].runId).toBe('run-1');
-      expect(collector.events[0].agentId).toBe('agent-1');
-      expect(collector.events[0].triggeredBy).toBe('feedback.received');
+       expect(collector.events.length).toBe(1);
+       expect(collector.events[0].turnId).toBe('run-1');
+       expect(collector.events[0].agentId).toBe('agent-1');
+       expect(collector.events[0].triggeredBy).toBe('feedback.received');
       collector.unsubscribe();
     });
   });
@@ -193,7 +185,7 @@ describe('SuspendedRunMatcher', () => {
     let bus: TypedEventBus;
     let mockDb: ReturnType<typeof createMockDb>;
     let onResume: ReturnType<typeof vi.fn>;
-    let matcher: SuspendedRunMatcher;
+    let matcher: SuspendedSessionMatcher;
 
     beforeEach(() => {
       vi.useFakeTimers();
@@ -208,39 +200,38 @@ describe('SuspendedRunMatcher', () => {
 
     it('expired runs cleaned up by reconciliation loop after 30s', async () => {
       mockDb = createMockDb({
-        expireOldSuspendedRuns: vi.fn().mockResolvedValue(3),
+        expireOldSuspendedSessions: vi.fn().mockResolvedValue(3),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       // Advance 30 seconds to trigger reconciliation
       await vi.advanceTimersByTimeAsync(30_000);
 
-      expect(mockDb.expireOldSuspendedRuns).toHaveBeenCalledTimes(1);
-      expect(mockDb.expireOldSuspendedRuns).toHaveBeenCalledWith(expect.any(Number));
+      expect(mockDb.expireOldSuspendedSessions).toHaveBeenCalledTimes(1);
+      expect(mockDb.expireOldSuspendedSessions).toHaveBeenCalledWith(expect.any(Number));
     });
 
     it('non-expired runs NOT cleaned up (reconciliation does not delete them)', async () => {
       mockDb = createMockDb({
-        expireOldSuspendedRuns: vi.fn().mockResolvedValue(0),
+        expireOldSuspendedSessions: vi.fn().mockResolvedValue(0),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       await vi.advanceTimersByTimeAsync(30_000);
 
-      expect(mockDb.expireOldSuspendedRuns).toHaveBeenCalledTimes(1);
+      expect(mockDb.expireOldSuspendedSessions).toHaveBeenCalledTimes(1);
       // Return value 0 means nothing was deleted
     });
 
-    it('expireOldSuspendedRuns returns count of deleted rows', async () => {
+    it('expireOldSuspendedSessions returns count of deleted rows', async () => {
       mockDb = createMockDb({
-        expireOldSuspendedRuns: vi.fn().mockResolvedValue(5),
+        expireOldSuspendedSessions: vi.fn().mockResolvedValue(5),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       await vi.advanceTimersByTimeAsync(30_000);
 
-      // The reconciliation calls expireOldSuspendedRuns which returns 5
-      const result = await mockDb.expireOldSuspendedRuns.mock.results[0].value;
+      const result = await mockDb.expireOldSuspendedSessions.mock.results[0].value;
       expect(result).toBe(5);
     });
   });
@@ -248,7 +239,7 @@ describe('SuspendedRunMatcher', () => {
   describe('error handling', () => {
     let bus: TypedEventBus;
     let onResume: ReturnType<typeof vi.fn>;
-    let matcher: SuspendedRunMatcher;
+    let matcher: SuspendedSessionMatcher;
 
     beforeEach(() => {
       vi.useFakeTimers();
@@ -264,9 +255,9 @@ describe('SuspendedRunMatcher', () => {
     it('DB query error is logged and does not crash', async () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const mockDb = createMockDb({
-        getSuspendedRunsByEventType: vi.fn().mockRejectedValue(new Error('DB down')),
+        getSuspendedSessionsByEventType: vi.fn().mockRejectedValue(new Error('DB down')),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       bus.emit('feedback.received', makeFeedbackReceivedEvent());
       await vi.advanceTimersByTimeAsync(50);
@@ -278,12 +269,12 @@ describe('SuspendedRunMatcher', () => {
 
     it('onResume callback error is logged and does not crash', async () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const row = makeSuspendedRow();
+      const row = makeSuspendedRunRow();
       const mockDb = createMockDb({
-        getSuspendedRunsByEventType: vi.fn().mockResolvedValue([row]),
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
       });
       const failingResume = vi.fn().mockRejectedValue(new Error('resume failed'));
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, failingResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, failingResume);
 
       bus.emit('feedback.received', makeFeedbackReceivedEvent({ agentId: 'agent-1', type: 'thumbs_up' }));
       await vi.advanceTimersByTimeAsync(50);
@@ -294,13 +285,13 @@ describe('SuspendedRunMatcher', () => {
     });
 
     it('matchesSelector with undefined payload field does not crash', async () => {
-      const row = makeSuspendedRow({
+      const row = makeSuspendedRunRow({
         waitSelector: JSON.stringify({ nonExistentField: 'value' }),
       });
       const mockDb = createMockDb({
-        getSuspendedRunsByEventType: vi.fn().mockResolvedValue([row]),
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
       });
-      matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       // Emit event that does not have nonExistentField — matchesSelector should return false
       bus.emit('feedback.received', makeFeedbackReceivedEvent());
@@ -326,34 +317,34 @@ describe('SuspendedRunMatcher', () => {
     });
 
     it('shutdown removes all listeners — events no longer trigger queries', async () => {
-      const row = makeSuspendedRow();
+      const row = makeSuspendedRunRow();
       mockDb = createMockDb({
-        getSuspendedRunsByEventType: vi.fn().mockResolvedValue([row]),
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
       });
-      const matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      const matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       matcher.shutdown();
 
       // Reset mocks to verify no calls after shutdown
-      mockDb.getSuspendedRunsByEventType.mockClear();
+      mockDb.getSuspendedSessionsByEventType.mockClear();
 
       bus.emit('feedback.received', makeFeedbackReceivedEvent({ agentId: 'agent-1', type: 'thumbs_up' }));
       await vi.advanceTimersByTimeAsync(50);
 
-      expect(mockDb.getSuspendedRunsByEventType).not.toHaveBeenCalled();
+      expect(mockDb.getSuspendedSessionsByEventType).not.toHaveBeenCalled();
       expect(onResume).not.toHaveBeenCalled();
     });
 
     it('shutdown clears reconciliation interval', async () => {
       mockDb = createMockDb();
-      const matcher = new SuspendedRunMatcher(bus, mockDb as any, onResume);
+      const matcher = new SuspendedSessionMatcher(bus, mockDb as any, onResume);
 
       matcher.shutdown();
 
       // Advance past reconciliation interval — should NOT trigger
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(mockDb.expireOldSuspendedRuns).not.toHaveBeenCalled();
+      expect(mockDb.expireOldSuspendedSessions).not.toHaveBeenCalled();
     });
   });
 });

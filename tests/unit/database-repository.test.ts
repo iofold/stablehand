@@ -12,7 +12,7 @@ describe('DatabaseRepository', () => {
   });
 
   afterAll(async () => {
-    await testDb.close();
+    await testDb?.close();
   });
 
   // --- Migrations ---
@@ -27,7 +27,6 @@ describe('DatabaseRepository', () => {
       const tableNames = tables.map((t: any) => t.tablename).sort();
       expect(tableNames).toEqual([
         'agent_checkpoints',
-        'agent_runs',
         'agent_versions',
         'agents',
         'artifacts',
@@ -43,8 +42,9 @@ describe('DatabaseRepository', () => {
         'sandbox_sessions',
         'scheduled_events',
         'secrets',
-        'suspended_runs',
+        'suspended_sessions',
         'system_settings',
+        'turns',
         'webhooks',
       ]);
     });
@@ -67,7 +67,7 @@ describe('DatabaseRepository', () => {
         WHERE table_name = 'agents'
         ORDER BY column_name
       `;
-      const columnNames = columns.map((column: { column_name: string }) => column.column_name);
+      const columnNames = columns.map((column) => String(column.column_name));
 
       expect(columnNames).toContain('harness');
       expect(columnNames).toContain('harness_config');
@@ -268,7 +268,7 @@ describe('DatabaseRepository', () => {
     it('should save and retrieve execution traces', async () => {
       const trace = await repo.saveTrace({
         agentId: 'agent-1',
-        runId: 'run-1',
+        sessionId: 'run-1',
         taskDescription: 'Test task',
         steps: [{ ordinal: 0, type: 'llm_call', content: 'hello', durationMs: 100 }],
         outcome: 'success',
@@ -278,7 +278,7 @@ describe('DatabaseRepository', () => {
 
       const traces = await repo.getTraces('agent-1');
       expect(traces).toHaveLength(1);
-      expect(traces[0].runId).toBe('run-1');
+      expect(traces[0].sessionId).toBe('run-1');
     });
   });
 
@@ -288,7 +288,7 @@ describe('DatabaseRepository', () => {
     it('should save and retrieve feedback signals', async () => {
       const trace = await repo.saveTrace({
         agentId: 'agent-1',
-        runId: 'run-1',
+        sessionId: 'run-1',
         taskDescription: 'Test',
         steps: [],
         outcome: 'success',
@@ -375,29 +375,32 @@ describe('DatabaseRepository', () => {
         harnessName: 'pi-agent',
       });
 
-      await repo.updateSandboxSessionStatus(created.id, 'FROZEN', {
-        containerName: 'frozen-container',
+      await repo.updateSandboxSessionStatus(created.id, 'PAUSED', {
+        containerName: 'paused-container',
         checkpointRef: 'checkpoint-ref-1',
+        pausedReason: 'idle',
       });
 
       const fetched = await repo.getSandboxSession(created.id);
       expect(fetched).not.toBeNull();
-      expect(fetched!.status).toBe('FROZEN');
-      expect(fetched!.containerName).toBe('frozen-container');
+      expect(fetched!.status).toBe('PAUSED');
+      expect(fetched!.containerName).toBe('paused-container');
+      expect(fetched!.pausedReason).toBe('idle');
       expect(fetched!.checkpointRef).toBe('checkpoint-ref-1');
     });
 
-    it('should list active and frozen sandbox sessions', async () => {
+    it('should list active and paused sandbox sessions', async () => {
       const active = await repo.createSandboxSession({
         conversationId,
         agentId,
         harnessName: 'langgraph',
       });
-      const frozen = await repo.createSandboxSession({
+      const paused = await repo.createSandboxSession({
         conversationId,
         agentId,
         harnessName: 'langgraph',
-        status: 'FROZEN',
+        status: 'PAUSED',
+        pausedReason: 'idle',
       });
       await repo.createSandboxSession({
         conversationId,
@@ -410,7 +413,7 @@ describe('DatabaseRepository', () => {
       const sessionIds = new Set(sessions.map((session) => session.id));
 
       expect(sessionIds.has(active.id)).toBe(true);
-      expect(sessionIds.has(frozen.id)).toBe(true);
+      expect(sessionIds.has(paused.id)).toBe(true);
       expect(sessions.some((session) => session.status === 'TERMINATED')).toBe(false);
     });
 

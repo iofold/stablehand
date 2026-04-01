@@ -41,10 +41,10 @@ describe('cross-harness compatibility', () => {
       };
 
       // Every AgentDefinition must have these required fields
-      expect(def.name).toBeTruthy();
-      expect(harnessConfig).toBeTruthy();
-      expect(def.systemPrompt).toBeTruthy();
-      expect(def.harness).toBeTruthy();
+      expect(def.name).toEqual(expect.any(String));
+      expect(harnessConfig).toEqual(expect.any(Object));
+      expect(def.systemPrompt).toEqual(expect.any(String));
+      expect(def.harness).toEqual(expect.any(String));
       expect(Array.isArray(def.tools)).toBe(true);
     }
   });
@@ -80,8 +80,8 @@ describe('cross-harness compatibility', () => {
       };
 
       // All configs should have a provider and model
-      expect(harnessConfig.provider).toBeTruthy();
-      expect(harnessConfig.model).toBeTruthy();
+      expect(harnessConfig.provider).toEqual(expect.any(String));
+      expect(harnessConfig.model).toEqual(expect.any(String));
 
         // Claude agent should use anthropic provider
         if (def.harness === 'claude-agents') {
@@ -124,7 +124,7 @@ describe('cross-harness compatibility', () => {
 
     // All roles should be defined and unique
     for (const role of roles) {
-      expect(role).toBeTruthy();
+      expect(role).toEqual(expect.any(String));
     }
     const unique = new Set(roles);
     expect(unique.size).toBe(3);

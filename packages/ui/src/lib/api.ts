@@ -51,12 +51,24 @@ export async function fetchSessions(agentId: string) {
   return apiFetch(`${API_BASE}/agents/${agentId}/sessions`);
 }
 
+export async function fetchTurns(agentId: string) {
+  return apiFetch(`${API_BASE}/agents/${agentId}/turns`);
+}
+
 export async function fetchAllActiveSessions() {
+  return apiFetch(`${API_BASE}/sessions?format=sandbox`);
+}
+
+export async function fetchActiveConversations() {
   return apiFetch(`${API_BASE}/sessions`);
 }
 
 export async function fetchConversations(agentId: string) {
   return apiFetch(`${API_BASE}/agents/${agentId}/conversations`);
+}
+
+export async function fetchConversationSummaries(agentId: string) {
+  return apiFetch(`${API_BASE}/agents/${agentId}/conversations/summary`);
 }
 
 export async function fetchMessages(agentId: string, conversationId: string) {
@@ -136,13 +148,13 @@ export async function sendMessage(
   );
 }
 
-export async function sendInterrupt(agentId: string, action: string, data?: unknown, runId?: string) {
-  return apiMutate(`${API_BASE}/agents/${agentId}/interrupt`, 'POST', { action, data, runId });
+export async function sendInterrupt(agentId: string, action: string, data?: unknown, sessionId?: string) {
+  return apiMutate(`${API_BASE}/agents/${agentId}/interrupt`, 'POST', { action, data, sessionId });
 }
 
 export async function fetchInterrupts(agentId: string): Promise<Array<{
   id: string;
-  runId: string;
+  sessionId: string;
   agentId: string;
   toolCallId: string;
   toolName: string;
@@ -157,11 +169,11 @@ export function createSSEConnection(agentId: string): EventSource {
 }
 
 export async function startBackgroundRun(agentId: string, task: string) {
-  return apiMutate(`${API_BASE}/agents/${agentId}/run`, 'POST', { task, mode: 'background' });
+  return apiMutate(`${API_BASE}/agents/${agentId}/session`, 'POST', { task, mode: 'background' });
 }
 
-export async function cancelRun(agentId: string, runId: string) {
-  return apiMutate(`${API_BASE}/agents/${agentId}/sessions/${runId}/cancel`, 'POST');
+export async function cancelRun(agentId: string, sessionId: string) {
+  return apiMutate(`${API_BASE}/agents/${agentId}/sessions/${sessionId}/cancel`, 'POST');
 }
 
 export async function deleteKnowledgeItem(agentId: string, itemId: string) {
@@ -177,35 +189,35 @@ export interface ReadFileResponse {
   size: number;
 }
 
-export async function listFiles(agentId: string, path: string, runId?: string): Promise<ListFilesResponse> {
+export async function listFiles(agentId: string, path: string, sessionId?: string): Promise<ListFilesResponse> {
   const params = new URLSearchParams({ path });
-  if (runId) params.set('runId', runId);
+  if (sessionId) params.set('sessionId', sessionId);
   return apiFetch<ListFilesResponse>(`${API_BASE}/agents/${agentId}/files?${params}`);
 }
 
-export async function readFile(agentId: string, path: string, runId?: string): Promise<ReadFileResponse> {
+export async function readFile(agentId: string, path: string, sessionId?: string): Promise<ReadFileResponse> {
   const params = new URLSearchParams({ path });
-  if (runId) params.set('runId', runId);
+  if (sessionId) params.set('sessionId', sessionId);
   return apiFetch<ReadFileResponse>(`${API_BASE}/agents/${agentId}/files/read?${params}`);
 }
 
-export async function createFile(agentId: string, path: string, content: string, runId?: string) {
+export async function createFile(agentId: string, path: string, content: string, sessionId?: string) {
   const params = new URLSearchParams();
-  if (runId) params.set('runId', runId);
+  if (sessionId) params.set('sessionId', sessionId);
   const url = `${API_BASE}/agents/${agentId}/files${params.size > 0 ? `?${params}` : ''}`;
   return apiMutate<{ path: string; size: number }>(url, 'POST', { path, content });
 }
 
-export async function updateFile(agentId: string, path: string, content: string, runId?: string) {
+export async function updateFile(agentId: string, path: string, content: string, sessionId?: string) {
   const params = new URLSearchParams();
-  if (runId) params.set('runId', runId);
+  if (sessionId) params.set('sessionId', sessionId);
   const url = `${API_BASE}/agents/${agentId}/files${params.size > 0 ? `?${params}` : ''}`;
   return apiMutate<{ path: string; size: number }>(url, 'PUT', { path, content });
 }
 
-export async function deleteFile(agentId: string, path: string, runId?: string): Promise<void> {
+export async function deleteFile(agentId: string, path: string, sessionId?: string): Promise<void> {
   const params = new URLSearchParams({ path });
-  if (runId) params.set('runId', runId);
+  if (sessionId) params.set('sessionId', sessionId);
   await apiFetch(`${API_BASE}/agents/${agentId}/files?${params}`, { method: 'DELETE' });
 }
 
@@ -363,6 +375,8 @@ export interface CatalogTool {
   inputSchema?: Record<string, unknown>;
   requiresApproval?: boolean;
   secrets?: string[];
+  builtin?: boolean;
+  location?: 'sandbox' | 'orchestrator' | 'daemon';
 }
 
 export async function fetchCatalogTools(): Promise<CatalogTool[]> {
@@ -482,4 +496,50 @@ export async function fetchEventStats(range?: string): Promise<EventStats> {
 
 export async function fetchEventTypes(): Promise<{ types: string[] }> {
   return apiFetch<{ types: string[] }>(`${API_BASE}/events/types`);
+}
+
+// ── Artifact operations ─────────────────────────────────────────────
+
+export interface Artifact {
+  id: string;
+  agentId: string;
+  sessionId?: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageKey: string;
+  bucket: string;
+  status: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: number;
+}
+
+export async function fetchArtifacts(agentId: string, sessionId?: string): Promise<{ artifacts: Artifact[] }> {
+  const params = new URLSearchParams({ agentId });
+  if (sessionId) params.set('sessionId', sessionId);
+  return apiFetch<{ artifacts: Artifact[] }>(`${API_BASE}/artifacts?${params}`);
+}
+
+export async function fetchAllArtifacts(options?: {
+  limit?: number;
+  offset?: number;
+  search?: string;
+}): Promise<{ artifacts: Artifact[]; total: number }> {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', String(options.limit));
+  if (options?.offset) params.set('offset', String(options.offset));
+  if (options?.search) params.set('search', options.search);
+  return apiFetch<{ artifacts: Artifact[]; total: number }>(`${API_BASE}/artifacts?${params}`);
+}
+
+export async function fetchArtifact(id: string): Promise<Artifact> {
+  return apiFetch<Artifact>(`${API_BASE}/artifacts/${id}`);
+}
+
+export async function fetchArtifactDownloadUrl(id: string): Promise<{ url: string; expiresIn: number; name: string; mimeType: string; sizeBytes: number }> {
+  return apiFetch(`${API_BASE}/artifacts/${id}/download-url`);
+}
+
+export async function deleteArtifact(id: string): Promise<void> {
+  await apiFetch(`${API_BASE}/artifacts/${id}`, { method: 'DELETE' });
 }

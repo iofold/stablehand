@@ -27,13 +27,13 @@ export type TriggerRunCallback = (agentId: string, task: string, triggerId: stri
 
 /** All known event types the trigger manager subscribes to. */
 const KNOWN_EVENT_TYPES: EventName[] = [
-  'run.started',
+  'turn.started',
   'run.text_chunk',
   'run.tool_started',
   'run.tool_result',
   'run.interrupted',
   'run.interrupt_resolved',
-  'run.completed',
+  'turn.completed',
   'run.resumed',
   'feedback.received',
   'agent.created',
@@ -249,11 +249,11 @@ export class EventTriggerManager {
       eventPayload._triggerDepth = payload._triggerDepth;
     }
 
+    // Emit to the bus — the subscription registered by ensureCustomSubscription()
+    // routes this to handleEvent() exactly once. Do NOT also call handleEvent()
+    // directly; that caused a double-fire bug where every custom event triggered
+    // matching triggers twice (one from the bus handler, one from the direct call).
     this.eventBus.emit(type as never, eventPayload as never);
-
-    this.handleEvent(type, eventPayload).catch((err) =>
-      console.error(`[EventTriggerManager] error handling custom event ${type}:`, err),
-    );
   }
 
   /**

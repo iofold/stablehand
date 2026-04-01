@@ -26,7 +26,7 @@ async function api(method: string, path: string, body?: unknown): Promise<{ stat
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  let data: any = null;
+  let data: any;
   try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data, res };
 }
@@ -51,11 +51,11 @@ async function waitFor<T>(
 async function waitForRun(agentId: string, runId: string, timeoutMs = RUN_TIMEOUT_MS) {
   return waitFor(
     async () => {
-      const r = await api('GET', `/api/agents/${agentId}/runs/${runId}`);
+      const r = await api('GET', `/api/agents/${agentId}/sessions/${runId}`);
       if (r.status === 404) return null;
       return r.data;
     },
-    (d) => d !== null && ['completed', 'error', 'cancelled'].includes(d?.run?.status ?? d?.status),
+    (d) => d !== null && ['completed', 'error', 'cancelled'].includes(d?.session?.status ?? d?.run?.status ?? d?.status),
     `run ${runId} to complete`,
     timeoutMs,
   );
@@ -64,18 +64,18 @@ async function waitForRun(agentId: string, runId: string, timeoutMs = RUN_TIMEOU
 async function waitForRunState(agentId: string, runId: string, states: string[], timeoutMs = 30_000, intervalMs = 1_000) {
   return waitFor(
     async () => {
-      const r = await api('GET', `/api/agents/${agentId}/runs/${runId}`);
+      const r = await api('GET', `/api/agents/${agentId}/sessions/${runId}`);
       if (r.status === 404) return null;
       return r.data;
     },
-    (d) => d !== null && states.includes(d?.run?.status ?? d?.status),
+    (d) => d !== null && states.includes(d?.session?.status ?? d?.run?.status ?? d?.status),
     `run ${runId} to reach ${states.join('|')}`,
     timeoutMs,
     intervalMs,
   );
 }
 
-function getRun(data: any) { return data?.run ?? data; }
+function getSession(data: any) { return data?.session ?? data?.run ?? data; }
 function getMessages(data: any): any[] { return Array.isArray(data?.messages) ? data.messages : []; }
 function getEntries(data: any): any[] { return Array.isArray(data?.entries) ? data.entries : []; }
 
@@ -103,7 +103,7 @@ async function createAgent(overrides: Record<string, unknown> = {}) {
   const payload = {
     name: uniqueName('e2e-agent'),
     harness: 'langgraph',
-    harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+    harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
     systemPrompt: 'You are a concise test assistant. Always reply as briefly as possible.',
     tools: [],
     ...overrides,
@@ -116,10 +116,10 @@ async function createAgent(overrides: Record<string, unknown> = {}) {
   return { agentId, data: r.data };
 }
 
-async function startRun(agentId: string, task: string) {
-  const r = await api('POST', `/api/agents/${agentId}/run`, { task });
+async function startSession(agentId: string, task: string) {
+  const r = await api('POST', `/api/agents/${agentId}/session`, { task });
   expect(r.status).toBe(201);
-  return { runId: r.data?.runId ?? r.data?.id, conversationId: r.data?.conversationId };
+  return { runId: r.data?.sessionId ?? r.data?.runId ?? r.data?.id, conversationId: r.data?.conversationId };
 }
 
 async function sendMessage(agentId: string, message: string, conversationId?: string) {
@@ -127,7 +127,7 @@ async function sendMessage(agentId: string, message: string, conversationId?: st
   if (conversationId) payload.conversationId = conversationId;
   const r = await api('POST', `/api/agents/${agentId}/message`, payload);
   expect(r.status).toBe(201);
-  return { runId: r.data?.runId ?? r.data?.id, conversationId: r.data?.conversationId };
+  return { runId: r.data?.sessionId ?? r.data?.runId ?? r.data?.id, conversationId: r.data?.conversationId };
 }
 
 async function waitForEventType(type: string, predicate?: (event: any) => boolean) {
@@ -182,6 +182,7 @@ async function openSseStream(agentId: string) {
             events.push(parsed as JsonRecord);
           }
         } catch {
+          continue;
         }
       }
     }
@@ -222,7 +223,7 @@ describe('Scenario Group 1: Agent Registration & CRUD', () => {
       id: created.agentId,
       name: created.data.name,
       harness: 'langgraph',
-      harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+      harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
     }));
 
     const updatedName = uniqueName('updated-agent');
@@ -270,7 +271,7 @@ describe('Scenario Group 1: Agent Registration & CRUD', () => {
 
     const webhookCreate = await api('POST', `/api/agents/${created.agentId}/webhooks`, {
       url: 'https://hooks.example.test/e2e',
-      events: ['run.started', 'run.completed'],
+      events: ['turn.started', 'turn.completed'],
     });
     expect(webhookCreate.status).toBe(201);
     expect(typeof webhookCreate.data?.id).toBe('string');
@@ -332,7 +333,7 @@ describe('Scenario Group 1: Agent Registration & CRUD', () => {
 describe('Scenario Group 2: Real Agent Execution', () => {
   it('S2a: LangGraph agent executes and completes', async () => {
     const created = await createAgent();
-    const started = await startRun(created.agentId, 'What is 2+2? Reply with just the number.');
+    const started = await startSession(created.agentId, 'What is 2+2? Reply with just the number.');
     const finished = await waitForRun(created.agentId, started.runId).catch((err) => {
       if (err instanceof Error && err.message.includes('Last: null')) {
         return null;
@@ -342,7 +343,7 @@ describe('Scenario Group 2: Real Agent Execution', () => {
     if (!finished) {
       return;
     }
-    const run = getRun(finished);
+    const run = getSession(finished);
 
     expect(run.status).toBe('completed');
     expect(getMessages(finished).some((message) => message?.role === 'assistant')).toBe(true);
@@ -354,9 +355,9 @@ describe('Scenario Group 2: Real Agent Execution', () => {
       harnessConfig: { model: 'claude-sonnet-4-6' },
     });
 
-    const started = await startRun(created.agentId, 'Reply with the word success and nothing else.');
+    const started = await startSession(created.agentId, 'Reply with the word success and nothing else.');
     const finished = await waitForRun(created.agentId, started.runId);
-    const run = getRun(finished);
+    const run = getSession(finished);
     const assistantText = extractAssistantText(getMessages(finished)).toLowerCase();
 
     expect(run.status).toBe('completed');
@@ -376,9 +377,9 @@ describe('Scenario Group 2: Real Agent Execution', () => {
     expect(readFile.status).toBe(200);
     expect(readFile.data?.content).toBe('orchestrator external file content');
 
-    const started = await startRun(created.agentId, 'There is a file in the workspace. Reply with a brief acknowledgement.');
+    const started = await startSession(created.agentId, 'There is a file in the workspace. Reply with a brief acknowledgement.');
     const finished = await waitForRun(created.agentId, started.runId);
-    expect(getRun(finished).status).toBe('completed');
+    expect(getSession(finished).status).toBe('completed');
   }, TEST_TIMEOUT_MS);
 
   it('S2d: interactive message endpoint preserves conversation ids', async () => {
@@ -392,8 +393,8 @@ describe('Scenario Group 2: Real Agent Execution', () => {
 
     expect(first.conversationId).toBeTruthy();
     expect(second.conversationId).toBe(first.conversationId);
-    expect(getRun(firstFinished).conversationId).toBe(first.conversationId);
-    expect(getRun(secondFinished).conversationId).toBe(first.conversationId);
+    expect(getSession(firstFinished).conversationId).toBe(first.conversationId);
+    expect(getSession(secondFinished).conversationId).toBe(first.conversationId);
   }, TEST_TIMEOUT_MS);
 });
 
@@ -416,7 +417,7 @@ describe('Scenario Group 3: Event System & Triggers', () => {
 
     const trigger = await api('POST', '/api/triggers', {
       agentId: agentB.agentId,
-      eventType: 'run.completed',
+      eventType: 'turn.completed',
       selector: { agentId: agentA.agentId, status: 'completed' },
       taskTemplate: 'Agent A done: {{status}}',
       enabled: true,
@@ -424,27 +425,27 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     expect(trigger.status).toBe(201);
     cleanup.triggers.add(trigger.data.id);
 
-    const startedA = await startRun(agentA.agentId, 'Reply with done.');
+    const startedA = await startSession(agentA.agentId, 'Reply with done.');
     const finishedA = await waitForRun(agentA.agentId, startedA.runId);
-    expect(getRun(finishedA).status).toBe('completed');
+    expect(getSession(finishedA).status).toBe('completed');
 
     const bRuns = await waitFor(
-      async () => api('GET', `/api/agents/${agentB.agentId}/runs`),
-      (response) => response.status === 200 && Array.isArray(response.data) && response.data.length > 0,
+      async () => api('GET', `/api/agents/${agentB.agentId}/sessions`),
+      (response) => response.status === 200 && Array.isArray(response.data?.sessions) && response.data.sessions.length > 0,
       'triggered run for agent B',
       RUN_TIMEOUT_MS,
       2_000,
     );
 
-    const triggeredRun = bRuns.data[0];
+    const triggeredRun = bRuns.data.sessions[0];
     expect(typeof triggeredRun?.id).toBe('string');
     const finishedB = await waitForRun(agentB.agentId, triggeredRun.id);
-    expect(getRun(finishedB).status).toBe('completed');
+    expect(getSession(finishedB).status).toBe('completed');
   }, TEST_TIMEOUT_MS);
 
   it('S3c: persists custom events emitted while an agent is running', async () => {
     const created = await createAgent();
-    const started = await startRun(
+    const started = await startSession(
       created.agentId,
       'Think carefully for a bit, then reply with the word done.',
     );
@@ -472,7 +473,7 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     expect(persisted.status).toBe(200);
 
     const finished = await waitForRun(created.agentId, started.runId);
-    expect(getRun(finished).status).toBe('completed');
+    expect(getSession(finished).status).toBe('completed');
   }, TEST_TIMEOUT_MS);
 
   it('S3d: SSE stream reports real run lifecycle events', async () => {
@@ -480,9 +481,9 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     const stream = await openSseStream(created.agentId);
 
     try {
-      const started = await startRun(created.agentId, 'Reply with SSE ok.');
+      const started = await startSession(created.agentId, 'Reply with SSE ok.');
       const finished = await waitForRun(created.agentId, started.runId);
-      expect(getRun(finished).status).toBe('completed');
+      expect(getSession(finished).status).toBe('completed');
 
       await waitFor(
         async () => stream.events,
@@ -572,7 +573,7 @@ describe('Scenario Group 5: Suspend/Resume and Run Lifecycle', () => {
 
     let cancelledRun: any = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const started = await startRun(
+      const started = await startSession(
         created.agentId,
         'Count from 1 to 200 and include a short phrase after each number before finishing.',
       );
@@ -581,27 +582,27 @@ describe('Scenario Group 5: Suspend/Resume and Run Lifecycle', () => {
         await waitForRunState(created.agentId, started.runId, ['running'], 10_000, 250);
       } catch {
         const maybeFinished = await waitForRun(created.agentId, started.runId, 20_000);
-        if (getRun(maybeFinished).status !== 'completed') {
+        if (getSession(maybeFinished).status !== 'completed') {
           cancelledRun = maybeFinished;
           break;
         }
         continue;
       }
 
-      const cancel = await api('POST', `/api/agents/${created.agentId}/runs/${started.runId}/cancel`);
+      const cancel = await api('POST', `/api/agents/${created.agentId}/sessions/${started.runId}/cancel`);
       if (cancel.status !== 200) {
         continue;
       }
 
       const finished = await waitForRun(created.agentId, started.runId, 30_000);
-      if (getRun(finished).status === 'cancelled') {
+      if (getSession(finished).status === 'cancelled') {
         cancelledRun = finished;
         break;
       }
     }
 
     expect(cancelledRun).toBeTruthy();
-    expect(getRun(cancelledRun).status).toBe('cancelled');
+    expect(getSession(cancelledRun).status).toBe('cancelled');
   }, TEST_TIMEOUT_MS);
 
   it('S5b: runs report running and completed lifecycle states', async () => {
@@ -611,7 +612,7 @@ describe('Scenario Group 5: Suspend/Resume and Run Lifecycle', () => {
     let completed: any = null;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const started = await startRun(
+      const started = await startSession(
         created.agentId,
         'Think step by step for a little while, then answer with done.',
       );
@@ -627,7 +628,7 @@ describe('Scenario Group 5: Suspend/Resume and Run Lifecycle', () => {
     }
 
     expect(observedRunning).toBeTruthy();
-    const run = getRun(completed);
+    const run = getSession(completed);
     expect(['completed', 'error', 'cancelled']).toContain(run.status);
     expect(typeof run.startedAt).toBe('number');
     expect(typeof run.completedAt).toBe('number');
@@ -641,7 +642,7 @@ describe('Scenario Group 6: Webhook & Callback', () => {
 
     const createWebhook = await api('POST', `/api/agents/${created.agentId}/webhooks`, {
       url: 'https://hooks.example.test/callback',
-      events: ['run.completed'],
+      events: ['turn.completed'],
     });
     expect(createWebhook.status).toBe(201);
 
@@ -670,14 +671,14 @@ describe('Scenario Group 6: Webhook & Callback', () => {
 
     const invalid = await api('POST', `/api/agents/${created.agentId}/webhooks`, {
       url: 'https://hooks.example.test/invalid-events',
-      events: ['run.completed', 'run.unknown'],
+      events: ['turn.completed', 'run.unknown'],
     });
 
     expect(invalid.status).toBe(400);
     expect(Array.isArray(invalid.data?.validEvents)).toBe(true);
     expect(invalid.data.validEvents).toEqual(expect.arrayContaining([
-      'run.started',
-      'run.completed',
+      'turn.started',
+      'turn.completed',
       'run.tool_started',
       'run.tool_result',
       'run.interrupted',

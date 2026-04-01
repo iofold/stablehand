@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { FastifyInstance } from 'fastify';
@@ -46,7 +46,7 @@ describe('File operations, Skills, and Feedback API', () => {
       payload: {
         name: 'file-ops-skills-test-agent',
         harness: 'langgraph',
-        harnessConfig: { provider: 'openai', model: 'gpt-5-mini' },
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
         systemPrompt: 'You are a test agent.',
         tools: [],
       },

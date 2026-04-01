@@ -52,7 +52,7 @@ function createHttpTool(overrides: Record<string, unknown> = {}): Record<string,
 function createAgentDefinition(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
   return {
     name: 'Search Agent',
-    model: 'gpt-5-mini',
+    model: 'gpt-5.4-mini',
     harness: 'langgraph',
     systemPrompt: 'You are helpful.',
     tools: [],

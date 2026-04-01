@@ -1,6 +1,6 @@
 export interface WaitCondition {
   id: string;
-  runId: string;
+  sessionId: string;
   agentId: string;
   eventType: string;
   selector: Record<string, unknown>;

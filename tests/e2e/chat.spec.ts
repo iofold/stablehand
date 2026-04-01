@@ -37,8 +37,8 @@ test.describe('Chat conversation flow', () => {
     });
     agentId = agent.id;
 
-    await page.goto(`/agents/${agentId}/chat`);
-    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15_000 });
+    await page.goto(`/agents/${agentId}/sessions/new`);
+    await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
   });
 
   test.afterEach(async ({ request }) => {
@@ -49,7 +49,7 @@ test.describe('Chat conversation flow', () => {
 
   // ---- 1. Navigate to the chat page ----
   test('renders the chat page with input and send button', async ({ page }) => {
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
     const sendButton = page.getByTestId('send-button');
 
     await expect(chatInput).toBeVisible();
@@ -61,7 +61,7 @@ test.describe('Chat conversation flow', () => {
 
   // ---- 2. Type a message and submit ----
   test('sends a user message and displays it in the thread', async ({ page }) => {
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
     const sendButton = page.getByTestId('send-button');
 
     const userMessage = 'Hello, what can you do?';
@@ -81,7 +81,7 @@ test.describe('Chat conversation flow', () => {
 
   // ---- 3 & 4. Wait for assistant response and assert content ----
   test('submitting a message returns conversation metadata', async ({ page }) => {
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
     const sendResponsePromise = page.waitForResponse((response) =>
       response.request().method() === 'POST' &&
       response.url().includes(`/api/agents/${agentId}/message`) &&
@@ -96,13 +96,13 @@ test.describe('Chat conversation flow', () => {
     await expect(page.getByTestId('message-bubble-user').last()).toBeVisible({ timeout: 5_000 });
     expect(typeof sendBody.conversationId).toBe('string');
     expect(sendBody.conversationId.length).toBeGreaterThan(0);
-    expect(typeof sendBody.runId).toBe('string');
-    expect(sendBody.runId.length).toBeGreaterThan(0);
+    expect(typeof sendBody.sessionId).toBe('string');
+    expect(sendBody.sessionId.length).toBeGreaterThan(0);
   });
 
   // ---- 5. Check for tool calls (optional) ----
   test('chat remains stable when no tool calls are rendered', async ({ page }) => {
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
 
     await chatInput.fill('Use a tool to help answer: what files exist in the current directory?');
     await chatInput.press('Enter');
@@ -127,7 +127,7 @@ test.describe('Chat conversation flow', () => {
 
   // ---- Keyboard shortcut: Enter to send ----
   test('submits message on Enter key press', async ({ page }) => {
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
 
     await chatInput.fill('Ping');
     await chatInput.press('Enter');
@@ -143,7 +143,7 @@ test.describe('Chat conversation flow', () => {
 
   // ---- Shift+Enter inserts newline instead of sending ----
   test('does not send on Shift+Enter (inserts newline)', async ({ page }) => {
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
 
     // Record current count before typing
     const beforeCount = await page.getByTestId('message-bubble-user').count();
@@ -164,7 +164,7 @@ test.describe('Chat conversation flow', () => {
 
   // ---- Multiple messages in sequence ----
   test('supports multiple messages in a conversation', async ({ page }) => {
-    const chatInput = page.getByTestId('chat-input');
+    const chatInput = page.getByTestId('session-input');
     const messageRequests: Array<Record<string, unknown>> = [];
 
     await page.route(`**/api/agents/${agentId}/message`, async (route) => {

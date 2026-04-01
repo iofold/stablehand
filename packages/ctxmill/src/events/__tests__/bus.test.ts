@@ -12,7 +12,7 @@ describe('TypedEventBus', () => {
       });
       bus.on('bus.error', (payload: any) => errors.push(payload));
       bus.emit('agent.created', { agentId: 'a1', name: 'test', timestamp: Date.now() });
-      expect(errors).toHaveLength(1);
+      expect(errors).toEqual([expect.objectContaining({ source: expect.any(String) })]);
       expect(errors[0]).toMatchObject({ source: 'persist', error: 'DB down' });
     });
 
@@ -24,7 +24,7 @@ describe('TypedEventBus', () => {
         throw new Error('handler broke');
       });
       bus.emit('agent.created', { agentId: 'a1', name: 'test', timestamp: Date.now() });
-      expect(errors).toHaveLength(1);
+      expect(errors).toEqual([expect.objectContaining({ source: expect.any(String) })]);
       expect(errors[0]).toMatchObject({ source: 'handler', error: 'handler broke' });
     });
 
@@ -47,20 +47,21 @@ describe('TypedEventBus', () => {
       const errors: any[] = [];
       const bus = new TypedEventBus();
       bus.on('bus.error', (payload: any) => errors.push(payload));
-      bus.on('run.started', () => {
+      bus.on('turn.started', () => {
         throw new Error('oops');
       });
       const before = Date.now();
-      bus.emit('run.started', {
-        runId: 'r1',
+      bus.emit('turn.started', {
+        turnId: 'r1',
+        sessionId: 'r1',
         agentId: 'a1',
         conversationId: 'c1',
         mode: 'interactive',
         taskDescription: 'test',
         timestamp: Date.now(),
       });
-      expect(errors).toHaveLength(1);
-      expect(errors[0].event).toBe('run.started');
+      expect(errors).toEqual([expect.objectContaining({ source: expect.any(String) })]);
+      expect(errors[0].event).toBe('turn.started');
       expect(errors[0].timestamp).toBeGreaterThanOrEqual(before);
     });
   });

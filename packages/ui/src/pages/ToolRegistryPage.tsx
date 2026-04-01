@@ -9,17 +9,8 @@ import {
   Wrench,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { fetchCatalogTools } from '@/lib/api';
+import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
 import { ToolTester } from '@/components/tools/ToolTester';
-
-interface CatalogTool {
-  name: string;
-  description?: string;
-  source: 'local' | 'mcp' | 'composio';
-  inputSchema?: Record<string, unknown>;
-  requiresApproval?: boolean;
-  secrets?: string[];
-}
 
 function sourceBadgeClass(source: string): string {
   switch (source) {
@@ -29,6 +20,18 @@ function sourceBadgeClass(source: string): string {
       return 'bg-purple-500/10 border-purple-500/20 text-purple-400';
     case 'composio':
       return 'bg-amber-500/10 border-amber-500/20 text-amber-400';
+    default:
+      return 'bg-surface-700/30 border-surface-600/30 text-surface-400';
+  }
+}
+
+function locationBadgeClass(location?: string): string {
+  switch (location) {
+    case 'orchestrator':
+      return 'bg-blue-500/10 border-blue-500/20 text-blue-400';
+    case 'daemon':
+      return 'bg-purple-500/10 border-purple-500/20 text-purple-400';
+    case 'sandbox':
     default:
       return 'bg-surface-700/30 border-surface-600/30 text-surface-400';
   }
@@ -72,10 +75,12 @@ export function ToolRegistryPage() {
 
   const stats = useMemo(() => {
     const bySource: Record<string, number> = {};
+    let builtinCount = 0;
     for (const t of tools) {
       bySource[t.source] = (bySource[t.source] ?? 0) + 1;
+      if (t.builtin) builtinCount++;
     }
-    return { total: tools.length, bySource };
+    return { total: tools.length, bySource, builtinCount };
   }, [tools]);
 
   return (
@@ -112,6 +117,12 @@ export function ToolRegistryPage() {
                 <p className="text-label">Total Tools</p>
                 <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
                   {stats.total}
+                </p>
+              </div>
+              <div className="flex-1 p-4">
+                <p className="text-label">Builtin</p>
+                <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
+                  {stats.builtinCount}
                 </p>
               </div>
               <div className="flex-1 p-4">
@@ -182,7 +193,7 @@ export function ToolRegistryPage() {
                           )}
                         </div>
                         {tool.description && (
-                          <p className="mt-1.5 text-xs text-surface-400 line-clamp-2">
+                          <p className="mt-1.5 text-xs text-surface-400">
                             {tool.description}
                           </p>
                         )}
@@ -208,6 +219,16 @@ export function ToolRegistryPage() {
                       </button>
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {tool.builtin && (
+                        <span className="inline-flex rounded-md border px-2 py-0.5 text-[11px] font-medium bg-sky-500/10 border-sky-500/20 text-sky-400">
+                          builtin
+                        </span>
+                      )}
+                      {tool.location && (
+                        <span className={cn('inline-flex rounded-md border px-2 py-0.5 text-[11px] font-medium', locationBadgeClass(tool.location))}>
+                          {tool.location}
+                        </span>
+                      )}
                       <span
                         className={cn(
                           'inline-flex rounded-md border px-2 py-0.5 text-[11px] font-medium',

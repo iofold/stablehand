@@ -2,10 +2,24 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { useAgentsStore } from '@/stores/agents';
-import type { AgentSession } from '@/stores/agents';
 import { Dashboard } from '@/components/dashboard/Dashboard';
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
-import { fetchAllActiveSessions } from '@/lib/api';
+import { fetchActiveConversations, fetchConversationSummaries } from '@/lib/api';
+
+export interface ApiConversationSummary {
+  id: string;
+  agentId: string;
+  status: 'running' | 'paused' | 'suspended' | 'completed' | 'error' | 'idle';
+  mode: 'interactive' | 'background';
+  turnCount: number;
+  messageCount: number;
+  taskDescription?: string;
+  startedAt: number;
+  updatedAt: number;
+  latestTurnId?: string;
+  sandboxSessionId?: string;
+  sandboxStatus?: string;
+}
 
 export function DashboardPage() {
   const agents = useAgentsStore((s) => s.agents);
@@ -14,7 +28,7 @@ export function DashboardPage() {
   const cancelRun = useAgentsStore((s) => s.cancelRun);
 
   const navigate = useNavigate();
-  const [activeSessions, setActiveSessions] = useState<AgentSession[]>([]);
+  const [activeConversations, setActiveConversations] = useState<ApiConversationSummary[]>([]);
   const [filteredCount, setFilteredCount] = useState<number | null>(null);
 
   useEffect(() => {
@@ -27,10 +41,27 @@ export function DashboardPage() {
         console.debug('[Dashboard] Agent fetch failed:', err);
       }
       try {
-        const sessions = await fetchAllActiveSessions();
-        if (mounted) setActiveSessions(Array.isArray(sessions) ? sessions : []);
+        const activeConvs = await fetchActiveConversations();
+        const activeArray = Array.isArray(activeConvs) ? activeConvs : [];
+        
+        const currentAgents = useAgentsStore.getState().agents;
+        const agentConvPromises = currentAgents
+          .filter(a => (a.conversationCount ?? 0) > 0 || (a.totalSessions ?? 0) > 0)
+          .map(a => fetchConversationSummaries(a.id).then(d => {
+            const convs = (d as { conversations?: ApiConversationSummary[] })?.conversations || d;
+            return Array.isArray(convs) ? convs : [];
+          }).catch(() => []));
+        const allAgentConvs = (await Promise.all(agentConvPromises)).flat();
+
+        const merged = new Map<string, ApiConversationSummary>();
+        for (const c of [...activeArray, ...allAgentConvs]) merged.set(c.id, c);
+        const allConvs = Array.from(merged.values())
+          .sort((a, b) => b.startedAt - a.startedAt)
+          .slice(0, 20);
+          
+        if (mounted) setActiveConversations(allConvs);
       } catch (err) {
-        console.debug('[Dashboard] Active sessions poll failed:', err);
+        console.debug('[Dashboard] Active conversations poll failed:', err);
       }
     }
 
@@ -45,7 +76,7 @@ export function DashboardPage() {
   const stats = useMemo(() => {
     const totalTools = agents.reduce((sum, a) => sum + a.tools.length, 0);
     const activeAgents = agents.filter(
-      (a) => (a.activeSessions ?? 0) > 0 || a.status === 'running' || a.status === 'booting',
+      (a) => ((a.sessionsByStatus?.active ?? 0) + (a.sessionsByStatus?.paused ?? 0)) > 0 || a.status === 'running' || a.status === 'booting',
     ).length;
     return { totalTools, activeAgents };
   }, [agents]);
@@ -56,9 +87,11 @@ export function DashboardPage() {
     return map;
   }, [agents]);
 
-  const handleCancelRun = async (session: AgentSession) => {
-    await cancelRun(session.agentId, session.id);
-    setActiveSessions((prev) => prev.filter((entry) => entry.id !== session.id));
+  const handleCancelRun = async (conv: ApiConversationSummary) => {
+    if (conv.sandboxSessionId) {
+      await cancelRun(conv.agentId, conv.sandboxSessionId);
+    }
+    setActiveConversations((prev) => prev.filter((entry) => entry.id !== conv.id));
   };
 
   return (
@@ -110,12 +143,12 @@ export function DashboardPage() {
           <Dashboard agents={agents} loading={loading} onFilteredCountChange={setFilteredCount} />
         </div>
 
-        {activeSessions.length > 0 && (
+        {activeConversations.length > 0 && (
           <div data-testid="active-sessions-section" className="animate-fade-in">
             <div className="mb-4 flex items-center gap-2">
-              <h3 className="text-sm font-medium text-surface-400">Active Sessions</h3>
-              <span className="rounded-full bg-green-500/15 border border-green-500/30 px-2 py-0.5 text-[10px] font-medium text-green-300">
-                {activeSessions.length}
+              <h3 className="text-sm font-medium text-surface-400">Recent Conversations</h3>
+              <span className="rounded-full bg-surface-500/15 border border-surface-500/30 px-2 py-0.5 text-[10px] font-medium text-surface-300">
+                {activeConversations.length}
               </span>
             </div>
             <div className="border border-surface-700 rounded-lg overflow-x-auto bg-surface-800/30">
@@ -130,25 +163,25 @@ export function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-surface-700/50">
-                  {activeSessions.map((session) => (
+                  {activeConversations.map((conv) => (
                     <tr
-                      key={session.id}
-                      onClick={() => navigate(`/agents/${session.agentId}/sessions/run/${session.id}`)}
+                      key={conv.id}
+                      onClick={() => navigate(`/agents/${conv.agentId}/conversations/${conv.id}`)}
                       className="hover:bg-surface-800/50 cursor-pointer transition-colors focus-visible:bg-surface-800/50 group"
                     >
                       <td className="px-4 py-3 text-sm font-medium text-surface-200">
-                        {agentNameMap[session.agentId] || session.agentId}
+                        {agentNameMap[conv.agentId] || conv.agentId}
                       </td>
                       <td className="px-4 py-3">
-                        <RunStatusBadge status={session.status} />
+                        <RunStatusBadge status={conv.status} />
                       </td>
                       <td className="px-4 py-3 text-sm text-surface-400">
                         <div className="max-w-[200px] sm:max-w-xs md:max-w-md truncate">
-                          {session.taskDescription || '--'}
+                          {conv.taskDescription || '--'}
                         </div>
                       </td>
                       <td className="px-4 py-3 text-sm text-surface-400 tabular-nums text-right">
-                        {formatDuration(session.startedAt)}
+                        {formatDuration(conv.startedAt)}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <button
@@ -156,10 +189,10 @@ export function DashboardPage() {
                           data-testid="cancel-run-button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleCancelRun(session);
+                            handleCancelRun(conv);
                           }}
                           className="rounded-md p-1.5 text-surface-400 transition-colors hover:text-red-400 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                          title="Cancel session"
+                          title="Cancel conversation"
                         >
                           <X className="h-3.5 w-3.5" />
                         </button>

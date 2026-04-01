@@ -91,7 +91,7 @@ export function definitionToManifest(
     : 'openai';
   const modelId = typeof def.harnessConfig.model === 'string'
     ? def.harnessConfig.model
-    : 'gpt-5-mini';
+    : 'gpt-5.4-mini';
   const baseUrl = typeof def.harnessConfig.baseUrl === 'string'
     ? def.harnessConfig.baseUrl
     : undefined;

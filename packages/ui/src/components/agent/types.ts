@@ -1,6 +1,6 @@
 import type { AgentSession } from '@/stores/agents';
 
-export type TabId = 'overview' | 'knowledge' | 'sessions' | 'tools' | 'files' | 'secrets';
+export type TabId = 'overview' | 'knowledge' | 'sessions' | 'tools' | 'files' | 'artifacts' | 'secrets';
 
 export interface Session {
   conversationId: string;
@@ -48,7 +48,7 @@ export interface TraceStep {
 export interface Trace {
   id: string;
   agentId: string;
-  runId: string;
+  sessionId: string;
   taskDescription?: string;
   steps: TraceStep[];
   startedAt: string;
@@ -62,6 +62,7 @@ export const TABS: { id: TabId; label: string; icon: string; testId?: string }[]
   { id: 'sessions', label: 'Sessions', icon: 'Clock', testId: 'sessions-tab' },
   { id: 'tools', label: 'Tools', icon: 'Wrench', testId: 'tools-tab' },
   { id: 'files', label: 'Files', icon: 'FolderOpen', testId: 'files-tab' },
+  { id: 'artifacts', label: 'Artifacts', icon: 'Archive', testId: 'artifacts-tab' },
   { id: 'secrets', label: 'Secrets', icon: 'KeyRound', testId: 'secrets-tab' },
 ];
 

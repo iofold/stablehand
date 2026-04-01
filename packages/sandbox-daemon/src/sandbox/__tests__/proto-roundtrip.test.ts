@@ -431,7 +431,7 @@ describe('session event converters', () => {
       },
     ];
 
-    cases.forEach((entry, index) => {
+    cases.forEach((entry, _index) => {
       const sessionEvent = agentEventToSessionEvent(entry.event);
 
       expect(sessionEvent.payload.case).toBe('agUiEvent');
@@ -648,7 +648,7 @@ describe('tool metadata conversions', () => {
       ],
       {
         orchestratorClient: client,
-        runId: 'run-rt',
+        sessionId: 'run-rt',
         agentId: 'agent-rt',
       },
     );
@@ -661,7 +661,7 @@ describe('tool metadata conversions', () => {
     );
     expect(requestTool).toHaveBeenCalledTimes(1);
     expect(requestTool.mock.calls[0]?.[0]).toMatchObject({
-      runId: 'run-rt',
+      sessionId: 'run-rt',
       agentId: 'agent-rt',
       toolName: 'emit-event',
       argsJson: '{"name":"report.ready"}',
