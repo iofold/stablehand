@@ -88,8 +88,6 @@ async function buildAgentsApp(db: DatabaseRepository, toolRegistry?: DefaultTool
     completeTurn: vi.fn(),
     cancelCurrentTurn: vi.fn(),
     getAbortSignal: vi.fn(),
-    pauseForHitl: vi.fn(),
-    resumeFromHitl: vi.fn(),
     getTurn: vi.fn(),
     getActiveTurns: vi.fn(() => []),
   } as unknown as SandboxSessionManager;

@@ -61,7 +61,6 @@ const manifestFileCopySchema = z.object({
 
 const manifestWorkspaceContentSchema = z.object({
   files: z.array(manifestFileCopySchema).optional(),
-  skills: z.union([z.boolean(), z.array(z.string())]).optional(),
 }).strict();
 
 const manifestWorkspaceSchema = z.object({

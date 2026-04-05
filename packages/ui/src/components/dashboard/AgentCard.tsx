@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { MessageSquare, Settings, AlertCircle, Activity, Clock, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getAgentStatusConfig } from '@/lib/agent-status';
 import type { Agent } from '@/stores/agents';
 import { AgentAvatar } from './illustrations/AgentAvatar';
 import { StatusPulse } from './illustrations/StatusPulse';
@@ -27,18 +28,7 @@ function formatRelativeTime(timestamp: number | undefined): string {
 export function AgentCard({ agent, onEdit }: AgentCardProps) {
   const navigate = useNavigate();
 
-  const getStatusBorderColor = (status: string) => {
-    switch (status) {
-      case 'running':
-        return 'border-l-2 border-l-emerald-500/50';
-      case 'booting':
-        return 'border-l-2 border-l-yellow-500/50';
-      case 'error':
-        return 'border-l-2 border-l-red-500/50';
-      default:
-        return 'border-l-2 border-l-surface-600/50';
-    }
-  };
+  const statusConfig = getAgentStatusConfig(agent.status);
 
   const totalTools = agent.tools.length + (agent.nativeTools?.allowlist?.length ?? agent.nativeTools?.blocklist?.length ?? 0);
 
@@ -92,7 +82,7 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
       className={cn(
         'group relative w-full text-left rounded-lg border border-surface-700',
         'bg-gradient-to-b from-surface-800 to-surface-800/60',
-        getStatusBorderColor(agent.status),
+        'border-l-2', statusConfig.borderColor,
         'transition-all duration-200'
       )}
     >
@@ -102,7 +92,7 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
         <div className="flex-1 min-w-0 flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <StatusPulse
-              status={agent.status === 'running' ? 'running' : agent.status === 'error' ? 'error' : 'idle'}
+              status={statusConfig.pulseStatus}
               width={12}
               height={12}
               className="flex-shrink-0"

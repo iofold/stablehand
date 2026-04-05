@@ -43,8 +43,6 @@ describe('EventTriggerManager sandbox mode', () => {
           ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
           startTurn: vi.fn().mockReturnValue(undefined),
           completeTurn: vi.fn().mockResolvedValue(undefined),
-          pauseForHitl: vi.fn().mockResolvedValue(undefined),
-          resumeFromHitl: vi.fn().mockResolvedValue(undefined),
         },
         sessionTurnService: mockSessionTurnService,
         toolExecutor: { list: vi.fn().mockReturnValue([]) },
@@ -83,8 +81,6 @@ describe('EventTriggerManager sandbox mode', () => {
           ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
           startTurn: vi.fn().mockReturnValue(undefined),
           completeTurn: vi.fn().mockResolvedValue(undefined),
-          pauseForHitl: vi.fn().mockResolvedValue(undefined),
-          resumeFromHitl: vi.fn().mockResolvedValue(undefined),
         },
         sessionTurnService: mockSessionTurnService,
         toolExecutor: { list: vi.fn().mockReturnValue([]) },
@@ -212,8 +208,6 @@ describe('EventTriggerManager sandbox mode', () => {
         ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
         startTurn: vi.fn().mockReturnValue(undefined),
         completeTurn: vi.fn().mockResolvedValue(undefined),
-        pauseForHitl: vi.fn().mockResolvedValue(undefined),
-        resumeFromHitl: vi.fn().mockResolvedValue(undefined),
       };
 
       const agentRunService = new AgentSessionService({

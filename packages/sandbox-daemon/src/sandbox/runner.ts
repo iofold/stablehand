@@ -271,6 +271,9 @@ export async function openSession(
     const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
 
     try {
+      const ptcEligible = tools.filter((t) => t.programmatic === true);
+      console.error(`[sandbox] PTC: ${ptcEligible.length}/${tools.length} tools are programmatic`);
+
       const ptcScripts = await generatePtcScripts({
         tools,
         scriptDir: `${config.workspaceDir}/.tools`,
@@ -278,6 +281,7 @@ export async function openSession(
       });
 
       if (ptcScripts.length > 0) {
+        console.error(`[sandbox] PTC: generated ${ptcScripts.length} scripts in ${config.workspaceDir}/.tools`);
         config.systemPrompt += '\n\nSome tools use programmatic tool calling (PTC) — large results stay in code scope instead of your context. Call ctxmill-guide({ topic: "ptc" }) for usage details, or run `ls /workspace/.tools/` to see available scripts.';
       }
     } catch (err) {
@@ -331,6 +335,9 @@ export async function openSession(
     const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
 
     try {
+      const ptcEligible = tools.filter((t) => t.programmatic === true);
+      console.error(`[sandbox] PTC restore: ${ptcEligible.length}/${tools.length} tools are programmatic`);
+
       await generatePtcScripts({
         tools,
         scriptDir: `${config.workspaceDir}/.tools`,

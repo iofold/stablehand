@@ -13,6 +13,7 @@ function createMockInterruptDb() {
     id: data.id,
     agentSessionId: data.agentSessionId,
     agentId: data.agentId,
+    sessionId: data.sessionId ?? null,
     toolCallId: data.toolCallId,
     toolName: data.toolName,
     args: data.args ?? {},
@@ -305,7 +306,7 @@ describe('InterruptManager', () => {
        busManager.shutdown();
      });
 
-     it('timeout emits run.interrupt_resolved with action timeout', async () => {
+     it('timeout emits run.interrupt_resolved with action suspend', async () => {
        vi.useFakeTimers();
        const bus = new TypedEventBus();
        const busManager = new InterruptManager(bus);
@@ -321,7 +322,7 @@ describe('InterruptManager', () => {
        expect(events).toHaveLength(1);
        expect(events[0].turnId).toBe('run-1');
       expect(events[0].agentId).toBe('agent-1');
-      expect(events[0].action).toBe('timeout');
+      expect(events[0].action).toBe('suspend');
       expect(events[0].timestamp).toBeTypeOf('number');
 
       busManager.shutdown();

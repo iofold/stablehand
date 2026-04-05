@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import { fastifyConnectPlugin } from '@connectrpc/connect-fastify';
 import { agentRoutes, sessionsRoutes } from './routes/agents.js';
 import { artifactRoutes } from './routes/artifacts.js';
@@ -100,6 +101,12 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     origin: process.env.CORS_ORIGINS
       ? process.env.CORS_ORIGINS.split(',')
       : ['http://localhost:3200', 'http://127.0.0.1:3200'],
+  });
+
+  await app.register(multipart, {
+    limits: {
+      fileSize: 50 * 1024 * 1024, // 50 MB
+    },
   });
 
   // Shared infrastructure — prefer injected instances from the DI container

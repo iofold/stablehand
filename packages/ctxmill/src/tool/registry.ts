@@ -35,13 +35,17 @@ export class DefaultToolRegistry implements ToolRegistry {
    * Call this after adding/removing providers to pick up changes.
    */
   async refresh(): Promise<void> {
-    this.toolCache.clear();
+    // Build new cache completely before swapping — prevents race condition where
+    // concurrent tool lookups see an empty/partial cache between clear() and
+    // the completion of async listTools() calls.
+    const newCache = new Map<string, { tool: ToolDefinition; provider: string }>();
     for (const [providerName, provider] of this.providers) {
       const tools = await provider.listTools();
       for (const tool of tools) {
-        this.toolCache.set(tool.name, { tool, provider: providerName });
+        newCache.set(tool.name, { tool, provider: providerName });
       }
     }
+    this.toolCache = newCache;
     this.dirty = false;
   }
 

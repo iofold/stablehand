@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve, normalize, join, dirname } from 'node:path';
 import { readdir, stat, readFile, writeFile, unlink, mkdir, mkdtemp, rename, rm, chown } from 'node:fs/promises';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
@@ -21,14 +21,6 @@ import type { SecretProvider } from '../../secrets/types.js';
 import type { SystemSettingsService } from '../../settings/service.js';
 import type { HttpAuthConfig, HttpEndpointConfig } from '../../tool/providers/http.js';
 import { DefaultToolRegistry } from '../../tool/registry.js';
-import {
-  discoverSkills,
-  loadSkill,
-  createSkillDirectory,
-  updateSkillMd,
-  isValidSkillName,
-} from '../../skills/loader.js';
-import type { LoadedSkill } from '@ctxmill/shared';
 import {
   isBlockedPath,
   resolveBaseDir,
@@ -173,7 +165,7 @@ function toAgentDef(agent: StoredAgent): AgentDefinition {
   const rawNativeTools = ('nativeTools' in meta ? meta.nativeTools : manifestSpec?.nativeTools) as
     { allowlist?: string[]; blocklist?: string[] } | undefined;
   const rawWorkspaceContent = (manifestSpec?.workspace as Record<string, unknown> | undefined)?.content as
-    { files?: Array<{ src: string; dest: string }>; skills?: boolean | string[] } | undefined;
+    { files?: Array<{ src: string; dest: string }> } | undefined;
 
   return {
     name: agent.name,
@@ -184,6 +176,7 @@ function toAgentDef(agent: StoredAgent): AgentDefinition {
     description: agent.description ?? undefined,
     metadata: agent.metadata ?? undefined,
     workspaceDir: agent.workspaceDir ?? undefined,
+    projectDir: agent.workspaceDir ? dirname(agent.workspaceDir) : undefined,
     resourceLimits,
     ...(rawNativeTools ? { nativeTools: rawNativeTools } : {}),
     ...(rawWorkspaceContent ? { workspaceContent: rawWorkspaceContent } : {}),
@@ -224,10 +217,6 @@ export async function agentRoutes(
     return (request as any).agent;
   }
 
-  /**
-   * Create workspace/skills/notes directories for an agent under base/ and return the workspace path.
-   * Delegates to the shared ensureAgentWorkspace from workspace/ensure.ts.
-   */
   function ensureAgentWorkspace(agentId: string): string | undefined {
     if (!dataDir) return undefined;
     return ensureAgentWorkspaceShared(dataDir, agentId);
@@ -274,6 +263,7 @@ export async function agentRoutes(
       agentId: turn.agentId,
       conversationId: turn.conversationId ?? '',
       ...(turn.sessionId ? { sandboxSessionId: turn.sessionId } : {}),
+      ...(sandboxSession ? { sandboxSessionStatus: sandboxSession.status } : {}),
       status,
       mode: turn.mode || 'interactive',
       startedAt: turn.startedAt,
@@ -411,6 +401,7 @@ export async function agentRoutes(
         description?: string;
         metadata?: Record<string, unknown>;
         resourceLimits?: AgentResourceLimits | null;
+        manifest?: Record<string, unknown>;
         model?: unknown;
         modelConfig?: unknown;
       } | undefined;
@@ -475,6 +466,7 @@ export async function agentRoutes(
         tools: toolNames,
         description: body.description ?? null,
         metadata: Object.keys(metadata).length > 0 ? metadata : null,
+        ...(body.manifest && typeof body.manifest === 'object' ? { manifest: body.manifest as Record<string, unknown> } : {}),
       });
 
       // Create workspace directories and update the agent record
@@ -1948,207 +1940,11 @@ export async function agentRoutes(
     },
   );
 
-  // ── GET /api/agents/:id/skills — List skills (SKILL.md format) ──
-
-  app.get(
-    '/:id/skills',
-    { preHandler: [loadAgent] },
-    async (
-      request: FastifyRequest<{
-        Params: { id: string };
-        Querystring: { sessionId?: string };
-      }>,
-      reply: FastifyReply,
-    ) => {
-      const { id } = request.params;
-      const query = request.query as { sessionId?: string };
-
-      if (!dataDir) {
-        return reply.send({ skills: [] });
-      }
-
-      // When sessionId is provided, look in the session's merged skills dir first
-      let skillsDir: string;
-      if (query.sessionId) {
-        const sessionSkills = resolve(join(dataDir, 'agents', id, 'sessions', query.sessionId, 'merged', 'skills'));
-        skillsDir = existsSync(sessionSkills) ? sessionSkills : resolve(join(dataDir, 'agents', id, 'base', 'skills'));
-      } else {
-        skillsDir = resolve(join(dataDir, 'agents', id, 'base', 'skills'));
-      }
-
-      try {
-        const manifests = await discoverSkills(skillsDir);
-        const skills: LoadedSkill[] = await Promise.all(
-          manifests.map((m) => loadSkill(m.path)),
-        );
-
-        return reply.send({ skills });
-      } catch (err) {
-        request.log.warn({ err }, 'Skill discovery failed');
-        return reply.send({ skills: [] });
-      }
-    },
-  );
-
-  // ── POST /api/agents/:id/skills — Create a skill (SKILL.md format) ─────
-
-  app.post(
-    '/:id/skills',
-    { preHandler: [loadAgent] },
-    async (
-      request: FastifyRequest<{
-        Params: { id: string };
-        Body: { name: string; description: string; instructions: string; scripts?: Record<string, string> };
-      }>,
-      reply: FastifyReply,
-    ) => {
-      const { id } = request.params;
-      const body = request.body as {
-        name?: string;
-        description?: string;
-        instructions?: string;
-        scripts?: Record<string, string>;
-      } | undefined;
-
-      if (
-        !body ||
-        typeof body.name !== 'string' ||
-        body.name.trim() === '' ||
-        typeof body.description !== 'string' ||
-        typeof body.instructions !== 'string'
-      ) {
-        return reply.status(400).send({ error: 'name, description, and instructions are required' });
-      }
-
-      // Validate skill name format
-      if (!isValidSkillName(body.name.trim())) {
-        return reply.status(400).send({
-          error: 'Invalid skill name: must be lowercase, hyphens only, max 64 characters',
-        });
-      }
-
-      if (!dataDir) {
-        return reply.status(500).send({ error: 'Data directory not configured' });
-      }
-
-      const skillsDir = resolve(join(dataDir, 'agents', id, 'base', 'skills'));
-      mkdirSync(skillsDir, { recursive: true });
-
-      // Sandbox check — make sure skill dir stays inside skillsDir
-      const targetDir = resolve(join(skillsDir, body.name.trim()));
-      if (!targetDir.startsWith(skillsDir)) {
-        return reply.status(403).send({ error: 'Invalid skill name' });
-      }
-
-      if (existsSync(targetDir)) {
-        return reply.status(409).send({ error: 'Skill already exists', name: body.name.trim() });
-      }
-
-      try {
-        const skill = await createSkillDirectory(
-          skillsDir,
-          body.name.trim(),
-          body.description.trim(),
-          body.instructions.trim(),
-          body.scripts,
-        );
-        return reply.status(201).send(skill);
-      } catch (err) {
-        return reply.status(500).send({ error: getErrorMessage(err) });
-      }
-    },
-  );
-
-  // ── PUT /api/agents/:id/skills/:skillName — Update a skill's SKILL.md ────
-
-  app.put(
-    '/:id/skills/:skillName',
-    { preHandler: [loadAgent] },
-    async (
-      request: FastifyRequest<{
-        Params: { id: string; skillName: string };
-        Body: { description?: string; instructions?: string };
-      }>,
-      reply: FastifyReply,
-    ) => {
-      const { id, skillName } = request.params;
-      const body = request.body as { description?: string; instructions?: string } | undefined;
-
-      if (!body || (body.description === undefined && body.instructions === undefined)) {
-        return reply.status(400).send({ error: 'At least one of description or instructions is required' });
-      }
-
-      if (!dataDir) {
-        return reply.status(500).send({ error: 'Data directory not configured' });
-      }
-
-      const skillsDir = resolve(join(dataDir, 'agents', id, 'base', 'skills'));
-      const skillDir = resolve(join(skillsDir, skillName));
-
-      // Sandbox check
-      if (!skillDir.startsWith(skillsDir)) {
-        return reply.status(403).send({ error: 'Invalid skill name' });
-      }
-
-      if (!existsSync(join(skillDir, 'SKILL.md'))) {
-        return reply.status(404).send({ error: 'Skill not found', skillName });
-      }
-
-      try {
-        const updated = await updateSkillMd(skillDir, {
-          description: body.description,
-          instructions: body.instructions,
-        });
-        return reply.send(updated);
-      } catch (err) {
-        return reply.status(500).send({ error: getErrorMessage(err) });
-      }
-    },
-  );
-
-  // ── DELETE /api/agents/:id/skills/:skillName — Delete a skill directory ──
-
-  app.delete(
-    '/:id/skills/:skillName',
-    { preHandler: [loadAgent] },
-    async (
-      request: FastifyRequest<{
-        Params: { id: string; skillName: string };
-      }>,
-      reply: FastifyReply,
-    ) => {
-      const { id, skillName } = request.params;
-
-      if (!dataDir) {
-        return reply.status(500).send({ error: 'Data directory not configured' });
-      }
-
-      const skillsDir = resolve(join(dataDir, 'agents', id, 'base', 'skills'));
-      const skillDir = resolve(join(skillsDir, skillName));
-
-      // Sandbox check
-      if (!skillDir.startsWith(skillsDir)) {
-        return reply.status(403).send({ error: 'Invalid skill name' });
-      }
-
-      if (!existsSync(skillDir) || !existsSync(join(skillDir, 'SKILL.md'))) {
-        return reply.status(404).send({ error: 'Skill not found', skillName });
-      }
-
-      const { rm } = await import('node:fs/promises');
-      await rm(skillDir, { recursive: true, force: true });
-      return reply.status(204).send();
-    },
-  );
-
   // ── POST /api/agents/:id/workspace — Upload tarball to replace base workspace ─
 
   app.post(
     '/:id/workspace',
-    {
-      preHandler: [loadAgent],
-      config: { rawBody: true },
-    },
+    { preHandler: [loadAgent] },
     async (
       request: FastifyRequest<{ Params: { id: string }; Querystring: { force?: string } }>,
       reply: FastifyReply,

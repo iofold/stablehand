@@ -24,7 +24,6 @@ export interface AgentDefinition {
   workspaceDir?: string;
   workspaceContent?: {
     files?: Array<{ src: string; dest: string }>;
-    skills?: boolean | string[];
   };
   projectDir?: string;
   resourceLimits?: AgentResourceLimits;

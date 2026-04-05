@@ -60,9 +60,6 @@ export function SettingsPage() {
   const [draftUploadMb, setDraftUploadMb] = useState('');
   // Session Lifecycle (stored as ms, displayed as seconds)
   const [draftIdleSec, setDraftIdleSec] = useState('');
-  const [draftFreezeSec, setDraftFreezeSec] = useState('');
-  const [draftMaxPauseSec, setDraftMaxPauseSec] = useState('');
-  const [draftPauseDelaySec, setDraftPauseDelaySec] = useState('');
   const [draftTurnSec, setDraftTurnSec] = useState('');
   const [draftReconcileSec, setDraftReconcileSec] = useState('');
   // Concurrency (stored as-is)
@@ -105,9 +102,6 @@ export function SettingsPage() {
         setDraftCheckpointMb(String(Math.round(s.maxCheckpointBytes / (1024 * 1024))));
         setDraftUploadMb(String(Math.round(s.maxTarUploadBytes / (1024 * 1024))));
         setDraftIdleSec(String(Math.round(s.idleTimeoutMs / 1000)));
-        setDraftFreezeSec(String(Math.round(s.freezePromotionMs / 1000)));
-        setDraftMaxPauseSec(String(Math.round(s.maxPauseDurationMs / 1000)));
-        setDraftPauseDelaySec(String(Math.round(s.pauseDelayMs / 1000)));
         setDraftTurnSec(String(Math.round(s.turnTimeoutMs / 1000)));
         setDraftReconcileSec(String(Math.round(s.reconciliationIntervalMs / 1000)));
         setDraftMaxContainers(String(s.maxGlobalContainers));
@@ -137,9 +131,6 @@ export function SettingsPage() {
         maxCheckpointBytes:        Math.round(Number(draftCheckpointMb) * MB),
         maxTarUploadBytes:         Math.round(Number(draftUploadMb) * MB),
         idleTimeoutMs:             Math.round(Number(draftIdleSec) * S),
-        freezePromotionMs:         Math.round(Number(draftFreezeSec) * S),
-        maxPauseDurationMs:        Math.round(Number(draftMaxPauseSec) * S),
-        pauseDelayMs:              Math.round(Number(draftPauseDelaySec) * S),
         turnTimeoutMs:             Math.round(Number(draftTurnSec) * S),
         reconciliationIntervalMs:  Math.round(Number(draftReconcileSec) * S),
         maxGlobalContainers:       Math.round(Number(draftMaxContainers)),
@@ -161,7 +152,7 @@ export function SettingsPage() {
     }
   }, [
     draftTarMb, draftCheckpointMb, draftUploadMb,
-    draftIdleSec, draftFreezeSec, draftMaxPauseSec, draftPauseDelaySec, draftTurnSec, draftReconcileSec,
+    draftIdleSec, draftTurnSec, draftReconcileSec,
     draftMaxContainers, draftQueueSec, draftMaxRunsPerAgent, draftTriggerDepth,
     draftCpus, draftMemoryMb, draftPidsLimit, draftTimeoutSec,
   ]);
@@ -321,10 +312,7 @@ export function SettingsPage() {
                 <div className="px-5 py-4 text-sm text-red-400">Failed to load system settings.</div>
               ) : (
                 <div className="divide-y divide-surface-700/50">
-                  <LimitRow label="Idle Timeout" description="Seconds before an idle session is frozen" value={draftIdleSec} onChange={setDraftIdleSec} unit="s" min={10} max={3600} />
-                  <LimitRow label="Freeze Promotion" description="Seconds before a frozen session is checkpointed" value={draftFreezeSec} onChange={setDraftFreezeSec} unit="s" min={10} max={3600} />
-                  <LimitRow label="Max Pause Duration" description="Seconds a HITL-paused session waits before auto-checkpoint" value={draftMaxPauseSec} onChange={setDraftMaxPauseSec} unit="s" min={10} max={3600} />
-                  <LimitRow label="Pause Delay" description="Grace delay in seconds before Docker-pausing on HITL" value={draftPauseDelaySec} onChange={setDraftPauseDelaySec} unit="s" min={0} max={60} />
+                  <LimitRow label="Idle Timeout" description="Seconds before an idle session is checkpointed (also governs HITL wait)" value={draftIdleSec} onChange={setDraftIdleSec} unit="s" min={10} max={3600} />
                   <LimitRow label="Turn Timeout" description="Max seconds for a single agent turn" value={draftTurnSec} onChange={setDraftTurnSec} unit="s" min={10} max={3600} />
                   <LimitRow label="Reconciliation Interval" description="Seconds between container state reconciliation sweeps" value={draftReconcileSec} onChange={setDraftReconcileSec} unit="s" min={10} max={3600} />
                 </div>

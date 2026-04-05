@@ -293,7 +293,7 @@ export class ContainerManager {
   constructor(options?: ContainerManagerOptions, dockerInstance?: Dockerode) {
     this.docker = dockerInstance ?? new Dockerode();
     this.networkName = options?.networkName ?? 'ctxmill-agents';
-    this.imagePrefix = options?.imagePrefix ?? 'ctxmill/harness';
+    this.imagePrefix = options?.imagePrefix ?? process.env.CTXMILL_IMAGE_PREFIX ?? 'ctxmill/harness';
     this.defaultCpus = options?.defaultCpus ?? 1.0;
     this.defaultMemoryMb = options?.defaultMemoryMb ?? 1024;
     this.defaultPidsLimit = options?.defaultPidsLimit ?? 256;

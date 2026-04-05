@@ -1,35 +1,29 @@
 export const DEFAULT_MAX_WORKSPACE_TAR_BYTES = 100 * 1024 * 1024;
-export const DEFAULT_MAX_CHECKPOINT_BYTES    =   5 * 1024 * 1024;
+export const DEFAULT_MAX_CHECKPOINT_BYTES    = 100 * 1024 * 1024;
 export const DEFAULT_MAX_TAR_UPLOAD_BYTES    = 100 * 1024 * 1024;
 
 export const DEFAULT_IDLE_TIMEOUT_MS              = 300_000;
-export const DEFAULT_FREEZE_PROMOTION_MS          = 600_000;
-export const DEFAULT_MAX_PAUSE_DURATION_MS        = 300_000;
-export const DEFAULT_PAUSE_DELAY_MS               = 5_000;
-export const DEFAULT_TURN_TIMEOUT_MS              = 300_000;
+export const DEFAULT_TURN_TIMEOUT_MS              = 1_800_000;
 export const DEFAULT_RECONCILIATION_INTERVAL_MS   = 300_000;
 export const DEFAULT_MAX_GLOBAL_CONTAINERS        = 20;
-export const DEFAULT_QUEUE_TIMEOUT_MS             = 60_000;
+export const DEFAULT_QUEUE_TIMEOUT_MS             = 600_000;
 export const DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT = 3;
 export const DEFAULT_MAX_TRIGGER_DEPTH            = 5;
 export const DEFAULT_DEFAULT_CPUS                 = 1.0;
 export const DEFAULT_DEFAULT_MEMORY_MB            = 1024;
 export const DEFAULT_DEFAULT_PIDS_LIMIT           = 256;
-export const DEFAULT_DEFAULT_TIMEOUT_SEC          = 600;
+export const DEFAULT_DEFAULT_TIMEOUT_SEC          = 43_200;
 
 export const SETTINGS_KEYS = {
   maxWorkspaceTarBytes:        'maxWorkspaceTarBytes',
   maxCheckpointBytes:          'maxCheckpointBytes',
   maxTarUploadBytes:           'maxTarUploadBytes',
   idleTimeoutMs:               'idleTimeoutMs',
-  freezePromotionMs:           'freezePromotionMs',
-  maxPauseDurationMs:          'maxPauseDurationMs',
-  pauseDelayMs:                'pauseDelayMs',
   turnTimeoutMs:               'turnTimeoutMs',
   reconciliationIntervalMs:    'reconciliationIntervalMs',
   maxGlobalContainers:         'maxGlobalContainers',
   queueTimeoutMs:              'queueTimeoutMs',
-  maxConcurrentRunsPerAgent:   'maxConcurrentRunsPerAgent',
+  maxConcurrentSessionsPerAgent: 'maxConcurrentSessionsPerAgent',
   maxTriggerDepth:             'maxTriggerDepth',
   defaultCpus:                 'defaultCpus',
   defaultMemoryMb:             'defaultMemoryMb',
@@ -39,19 +33,33 @@ export const SETTINGS_KEYS = {
 
 export type SettingsKey = (typeof SETTINGS_KEYS)[keyof typeof SETTINGS_KEYS];
 
+export const ENV_KEYS: Record<SettingsKey, string> = {
+  maxWorkspaceTarBytes:      'CTXMILL_MAX_WORKSPACE_TAR_BYTES',
+  maxCheckpointBytes:        'CTXMILL_MAX_CHECKPOINT_BYTES',
+  maxTarUploadBytes:         'CTXMILL_MAX_TAR_UPLOAD_BYTES',
+  idleTimeoutMs:             'CTXMILL_IDLE_TIMEOUT_MS',
+  turnTimeoutMs:             'CTXMILL_TURN_TIMEOUT_MS',
+  reconciliationIntervalMs:  'CTXMILL_RECONCILIATION_INTERVAL_MS',
+  maxGlobalContainers:       'CTXMILL_MAX_GLOBAL_CONTAINERS',
+  queueTimeoutMs:            'CTXMILL_QUEUE_TIMEOUT_MS',
+  maxConcurrentSessionsPerAgent: 'CTXMILL_MAX_CONCURRENT_SESSIONS_PER_AGENT',
+  maxTriggerDepth:           'CTXMILL_MAX_TRIGGER_DEPTH',
+  defaultCpus:               'CTXMILL_DEFAULT_CPUS',
+  defaultMemoryMb:           'CTXMILL_DEFAULT_MEMORY_MB',
+  defaultPidsLimit:          'CTXMILL_DEFAULT_PIDS_LIMIT',
+  defaultTimeoutSec:         'CTXMILL_DEFAULT_TIMEOUT_SEC',
+};
+
 export interface SystemSettings {
   maxWorkspaceTarBytes:        number;
   maxCheckpointBytes:          number;
   maxTarUploadBytes:           number;
   idleTimeoutMs:               number;
-  freezePromotionMs:           number;
-  maxPauseDurationMs:          number;
-  pauseDelayMs:                number;
   turnTimeoutMs:               number;
   reconciliationIntervalMs:    number;
   maxGlobalContainers:         number;
   queueTimeoutMs:              number;
-  maxConcurrentRunsPerAgent:   number;
+  maxConcurrentSessionsPerAgent: number;
   maxTriggerDepth:             number;
   defaultCpus:                 number;
   defaultMemoryMb:             number;
@@ -96,23 +104,20 @@ export class SystemSettingsService {
   private async _fetchAndCache(): Promise<SystemSettings> {
     const raw = await this.db.getAllSystemSettings();
     const settings: SystemSettings = {
-      maxWorkspaceTarBytes:      parseIntSetting(raw[SETTINGS_KEYS.maxWorkspaceTarBytes],      DEFAULT_MAX_WORKSPACE_TAR_BYTES),
-      maxCheckpointBytes:        parseIntSetting(raw[SETTINGS_KEYS.maxCheckpointBytes],        DEFAULT_MAX_CHECKPOINT_BYTES),
-      maxTarUploadBytes:         parseIntSetting(raw[SETTINGS_KEYS.maxTarUploadBytes],         DEFAULT_MAX_TAR_UPLOAD_BYTES),
-      idleTimeoutMs:             parseIntSetting(raw[SETTINGS_KEYS.idleTimeoutMs],             DEFAULT_IDLE_TIMEOUT_MS),
-      freezePromotionMs:         parseIntSetting(raw[SETTINGS_KEYS.freezePromotionMs],         DEFAULT_FREEZE_PROMOTION_MS),
-      maxPauseDurationMs:        parseIntSetting(raw[SETTINGS_KEYS.maxPauseDurationMs],        DEFAULT_MAX_PAUSE_DURATION_MS),
-      pauseDelayMs:              parseNonNegativeIntSetting(raw[SETTINGS_KEYS.pauseDelayMs],   DEFAULT_PAUSE_DELAY_MS),
-      turnTimeoutMs:             parseIntSetting(raw[SETTINGS_KEYS.turnTimeoutMs],             DEFAULT_TURN_TIMEOUT_MS),
-      reconciliationIntervalMs:  parseIntSetting(raw[SETTINGS_KEYS.reconciliationIntervalMs],  DEFAULT_RECONCILIATION_INTERVAL_MS),
-      maxGlobalContainers:       parseIntSetting(raw[SETTINGS_KEYS.maxGlobalContainers],       DEFAULT_MAX_GLOBAL_CONTAINERS),
-      queueTimeoutMs:            parseIntSetting(raw[SETTINGS_KEYS.queueTimeoutMs],            DEFAULT_QUEUE_TIMEOUT_MS),
-      maxConcurrentRunsPerAgent: parseIntSetting(raw[SETTINGS_KEYS.maxConcurrentRunsPerAgent], DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT),
-      maxTriggerDepth:           parseIntSetting(raw[SETTINGS_KEYS.maxTriggerDepth],           DEFAULT_MAX_TRIGGER_DEPTH),
-      defaultCpus:               parseFloatSetting(raw[SETTINGS_KEYS.defaultCpus],             DEFAULT_DEFAULT_CPUS),
-      defaultMemoryMb:           parseIntSetting(raw[SETTINGS_KEYS.defaultMemoryMb],           DEFAULT_DEFAULT_MEMORY_MB),
-      defaultPidsLimit:          parseIntSetting(raw[SETTINGS_KEYS.defaultPidsLimit],          DEFAULT_DEFAULT_PIDS_LIMIT),
-      defaultTimeoutSec:         parseIntSetting(raw[SETTINGS_KEYS.defaultTimeoutSec],         DEFAULT_DEFAULT_TIMEOUT_SEC),
+      maxWorkspaceTarBytes:      parseIntSetting(raw[SETTINGS_KEYS.maxWorkspaceTarBytes],      envInt('maxWorkspaceTarBytes', DEFAULT_MAX_WORKSPACE_TAR_BYTES)),
+      maxCheckpointBytes:        parseIntSetting(raw[SETTINGS_KEYS.maxCheckpointBytes],        envInt('maxCheckpointBytes', DEFAULT_MAX_CHECKPOINT_BYTES)),
+      maxTarUploadBytes:         parseIntSetting(raw[SETTINGS_KEYS.maxTarUploadBytes],         envInt('maxTarUploadBytes', DEFAULT_MAX_TAR_UPLOAD_BYTES)),
+      idleTimeoutMs:             parseIntSetting(raw[SETTINGS_KEYS.idleTimeoutMs],             envInt('idleTimeoutMs', DEFAULT_IDLE_TIMEOUT_MS)),
+      turnTimeoutMs:             parseIntSetting(raw[SETTINGS_KEYS.turnTimeoutMs],             envInt('turnTimeoutMs', DEFAULT_TURN_TIMEOUT_MS)),
+      reconciliationIntervalMs:  parseIntSetting(raw[SETTINGS_KEYS.reconciliationIntervalMs],  envInt('reconciliationIntervalMs', DEFAULT_RECONCILIATION_INTERVAL_MS)),
+      maxGlobalContainers:       parseIntSetting(raw[SETTINGS_KEYS.maxGlobalContainers],       envInt('maxGlobalContainers', DEFAULT_MAX_GLOBAL_CONTAINERS)),
+      queueTimeoutMs:            parseIntSetting(raw[SETTINGS_KEYS.queueTimeoutMs],            envInt('queueTimeoutMs', DEFAULT_QUEUE_TIMEOUT_MS)),
+      maxConcurrentSessionsPerAgent: parseIntSetting(raw[SETTINGS_KEYS.maxConcurrentSessionsPerAgent], envInt('maxConcurrentSessionsPerAgent', DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT)),
+      maxTriggerDepth:           parseIntSetting(raw[SETTINGS_KEYS.maxTriggerDepth],           envInt('maxTriggerDepth', DEFAULT_MAX_TRIGGER_DEPTH)),
+      defaultCpus:               parseFloatSetting(raw[SETTINGS_KEYS.defaultCpus],             envFloat('defaultCpus', DEFAULT_DEFAULT_CPUS)),
+      defaultMemoryMb:           parseIntSetting(raw[SETTINGS_KEYS.defaultMemoryMb],           envInt('defaultMemoryMb', DEFAULT_DEFAULT_MEMORY_MB)),
+      defaultPidsLimit:          parseIntSetting(raw[SETTINGS_KEYS.defaultPidsLimit],          envInt('defaultPidsLimit', DEFAULT_DEFAULT_PIDS_LIMIT)),
+      defaultTimeoutSec:         parseIntSetting(raw[SETTINGS_KEYS.defaultTimeoutSec],         envInt('defaultTimeoutSec', DEFAULT_DEFAULT_TIMEOUT_SEC)),
     };
 
     this.cache = settings;
@@ -160,6 +165,42 @@ function parseFloatSetting(raw: string | undefined, defaultValue: number): numbe
   if (!Number.isFinite(parsed) || parsed <= 0) {
     console.warn(`[SystemSettings] Invalid setting value "${raw}", using default ${defaultValue}`);
     return defaultValue;
+  }
+  return parsed;
+}
+
+/** Read env var as positive integer, or fall back to hardcoded default. */
+function envInt(key: SettingsKey, hardDefault: number): number {
+  const val = process.env[ENV_KEYS[key]];
+  if (val === undefined || val === '') return hardDefault;
+  const parsed = parseInt(val, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    console.warn(`[SystemSettings] Invalid ${ENV_KEYS[key]}="${val}", using default ${hardDefault}`);
+    return hardDefault;
+  }
+  return parsed;
+}
+
+/** Read env var as non-negative integer (allows 0), or fall back to hardcoded default. */
+function envNonNegativeInt(key: SettingsKey, hardDefault: number): number {
+  const val = process.env[ENV_KEYS[key]];
+  if (val === undefined || val === '') return hardDefault;
+  const parsed = parseInt(val, 10);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    console.warn(`[SystemSettings] Invalid ${ENV_KEYS[key]}="${val}", using default ${hardDefault}`);
+    return hardDefault;
+  }
+  return parsed;
+}
+
+/** Read env var as positive float, or fall back to hardcoded default. */
+function envFloat(key: SettingsKey, hardDefault: number): number {
+  const val = process.env[ENV_KEYS[key]];
+  if (val === undefined || val === '') return hardDefault;
+  const parsed = parseFloat(val);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(`[SystemSettings] Invalid ${ENV_KEYS[key]}="${val}", using default ${hardDefault}`);
+    return hardDefault;
   }
   return parsed;
 }

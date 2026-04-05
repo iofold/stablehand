@@ -128,7 +128,7 @@ describe('HITL Interrupt Lifecycle', () => {
   // ── Timeout flow ───────────────────────────────────────────────
 
   describe('Timeout flow', () => {
-    it('waitForApproval with short timeout resolves with timeout action after timer fires', async () => {
+    it('waitForApproval with short timeout resolves with suspend action after timer fires', async () => {
       vi.useFakeTimers();
 
       const resolvedEvents = collectEvents(bus, 'run.interrupt_resolved');
@@ -146,20 +146,18 @@ describe('HITL Interrupt Lifecycle', () => {
       vi.advanceTimersByTime(100);
 
       const result = await promise;
-      expect(result.action).toBe('timeout');
+      expect(result.action).toBe('suspend');
 
-      // Pending should be cleared
       expect(interrupts.hasPending('run-to')).toBe(false);
 
-       // run.interrupt_resolved event should have been emitted with timeout
        expect(resolvedEvents.events).toHaveLength(1);
        expect(resolvedEvents.events[0]).toEqual(
          expect.objectContaining({
            turnId: 'run-to',
            agentId: 'agent-to',
-           action: 'timeout',
-         }),
-       );
+            action: 'suspend',
+          }),
+        );
 
       resolvedEvents.unsubscribe();
       vi.useRealTimers();

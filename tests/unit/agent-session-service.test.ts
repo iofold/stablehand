@@ -71,8 +71,6 @@ type MockSessionManager = {
   completeTurn: ReturnType<typeof vi.fn>;
   pauseSession: ReturnType<typeof vi.fn>;
   resumeSession: ReturnType<typeof vi.fn>;
-  pauseForHitl: ReturnType<typeof vi.fn>;
-  resumeFromHitl: ReturnType<typeof vi.fn>;
 };
 
 function makeCommittedEvent(
@@ -93,7 +91,11 @@ function makeCommittedEvent(
 function createDeps(overrides: {
   sessionTurnService?: { executeSessionTurn: ReturnType<typeof vi.fn> };
   sse?: { broadcast: ReturnType<typeof vi.fn> };
-  db?: { addMessage: ReturnType<typeof vi.fn>; updateTurn: ReturnType<typeof vi.fn> };
+  db?: {
+    addMessage: ReturnType<typeof vi.fn>;
+    updateTurn: ReturnType<typeof vi.fn>;
+    updateMessageToolCalls?: ReturnType<typeof vi.fn>;
+  };
   sessionManager?: MockSessionManager;
   learningPipeline?: { process: ReturnType<typeof vi.fn> };
   eventBus?: TypedEventBus;
@@ -104,9 +106,11 @@ function createDeps(overrides: {
   const sse = overrides.sse ?? {
     broadcast: vi.fn(),
   };
-  const db = overrides.db ?? {
+  const db = {
     addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
     updateTurn: vi.fn().mockResolvedValue(undefined),
+    updateMessageToolCalls: vi.fn().mockResolvedValue(undefined),
+    ...overrides.db,
   };
   const sessionManager = overrides.sessionManager ?? {
     ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
@@ -114,8 +118,6 @@ function createDeps(overrides: {
     completeTurn: vi.fn().mockResolvedValue(undefined),
     pauseSession: vi.fn().mockResolvedValue(undefined),
     resumeSession: vi.fn().mockResolvedValue(undefined),
-    pauseForHitl: vi.fn().mockResolvedValue(undefined),
-    resumeFromHitl: vi.fn().mockResolvedValue(undefined),
   };
   const learningPipeline = overrides.learningPipeline;
   const eventBus = overrides.eventBus;
@@ -170,7 +172,7 @@ describe('AgentSessionService', () => {
       { type: 'RUN_FINISHED', timestamp: 5, runId: 'run-1' },
     ];
 
-    const broadcasterForwarded = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT']);
+    const broadcasterForwarded = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT', 'MESSAGE_COMMITTED']);
     const directEvents = events.filter((e) => !broadcasterForwarded.has(e.type));
 
     const { deps, sessionTurnService, sse } = createDeps();
@@ -286,7 +288,7 @@ describe('AgentSessionService', () => {
     await service.executeSession(makeParams());
 
     expect(db.addMessage).toHaveBeenCalledTimes(3);
-    expect(db.addMessage).toHaveBeenNthCalledWith(1, {
+    expect(db.addMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
       agentId: 'agent-1',
       conversationId: 'conv-1',
       role: 'assistant',
@@ -299,8 +301,11 @@ describe('AgentSessionService', () => {
           status: 'complete',
         },
       ],
-      toolCallId: undefined,
-    });
+    }));
+    const firstCall = (db.addMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(firstCall.parts).toHaveLength(2);
+    expect(firstCall.parts[0]).toEqual({ type: 'text', content: 'Let me check.' });
+    expect(firstCall.parts[1]).toMatchObject({ type: 'tool_call', id: 'tc-1', name: 'search', status: 'complete' });
     expect(db.addMessage).toHaveBeenNthCalledWith(2, {
       agentId: 'agent-1',
       conversationId: 'conv-1',
@@ -309,14 +314,12 @@ describe('AgentSessionService', () => {
       toolCalls: undefined,
       toolCallId: 'tc-1',
     });
-    expect(db.addMessage).toHaveBeenNthCalledWith(3, {
+    expect(db.addMessage).toHaveBeenNthCalledWith(3, expect.objectContaining({
       agentId: 'agent-1',
       conversationId: 'conv-1',
       role: 'assistant',
       content: 'Based on the results:',
-      toolCalls: undefined,
-      toolCallId: undefined,
-    });
+    }));
   });
 
   it('calls completeSession after a successful turn', async () => {
@@ -381,7 +384,7 @@ describe('AgentSessionService', () => {
     );
   });
 
-  it('pauses the run on HITL_PAUSE and resumes when events continue', async () => {
+  it('keeps the session active on HITL_PAUSE and completes normally', async () => {
     const { deps, sessionTurnService, sessionManager } = createDeps();
     sessionTurnService.executeSessionTurn.mockReturnValue(
       eventStream([
@@ -393,8 +396,8 @@ describe('AgentSessionService', () => {
     const service = new AgentSessionService(deps);
     await service.executeSession(makeParams());
 
-    expect(sessionManager.pauseSession).toHaveBeenCalledWith('sandbox-1', 'hitl');
-    expect(sessionManager.resumeSession).toHaveBeenCalledWith('sandbox-1');
+    expect(sessionManager.pauseSession).not.toHaveBeenCalled();
+    expect(sessionManager.resumeSession).not.toHaveBeenCalled();
     expect(sessionManager.completeTurn).toHaveBeenCalled();
   });
 

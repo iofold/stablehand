@@ -12,11 +12,11 @@ import {
 import {
   sessionCheckpointToProto,
   protoSessionCheckpointToInternal,
-  type SessionCheckpoint as ProtoCompatibleCheckpoint,
 } from '../../packages/ctxmill/src/sandbox/proto-convert.js';
-import { ContainerLifecyclePolicy } from '../../packages/ctxmill/src/orchestrator/container-lifecycle-policy.js';
 import type { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
 import type { HarnessExportedState } from '../../packages/ctxmill/src/harness/types.js';
+
+type ProtoCompatibleCheckpoint = Parameters<typeof sessionCheckpointToProto>[0];
 
 type StoredToolCall = {
   id: string;
@@ -150,7 +150,7 @@ function fromProtoCompatibleCheckpoint(checkpoint: ProtoCompatibleCheckpoint): S
   const stateVersion =
     typeof harnessStateRecord.stateVersion === 'string' ? harnessStateRecord.stateVersion : '1';
   const payload = getHarnessPayload(harnessStateRecord);
-  const pendingRequests = checkpoint.runnerState.pendingRequests.map((pending) => ({
+  const pendingRequests: NonNullable<SessionCheckpoint['runnerState']['pendingRequests']> = checkpoint.runnerState.pendingRequests.map((pending) => ({
     type: pending.type === 'approval' ? 'approval' : 'tool_call',
     id: pending.id,
     payload: JSON.parse(pending.payloadJson) as Record<string, unknown>,
@@ -211,7 +211,7 @@ function createMockContainerManager(): ContainerManager {
     stopContainer: vi.fn(),
     removeContainer: vi.fn(),
     injectSecrets: vi.fn(),
-    extractWorkspaceDiff: vi.fn(),
+    extractContainerDiff: vi.fn(),
     extractLogs: vi.fn(),
     getContainer: vi.fn(),
     listManagedContainers: vi.fn(),
@@ -576,141 +576,6 @@ describe('Resume with unavailable secret', () => {
   });
 });
 
-function createMockLifecyclePolicy(
-  cm: ContainerManager,
-  options: {
-    pauseDelayMs?: number;
-    maxPauseDurationMs?: number;
-    onPromoteToCheckpoint?: (sessionId: string) => Promise<void>;
-  } = {},
-): ContainerLifecyclePolicy {
-  const mockDb = {
-    getActiveSandboxSessions: vi.fn().mockResolvedValue([]),
-    updateSandboxSessionStatus: vi.fn().mockResolvedValue(undefined),
-    getCheckpointV2: vi.fn().mockResolvedValue(null),
-    deleteSandboxSession: vi.fn().mockResolvedValue(undefined),
-  } as any;
-  const mockLogger = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-  return new ContainerLifecyclePolicy({
-    containerManager: cm,
-    db: mockDb,
-    logger: mockLogger,
-    config: {
-      pauseDelayMs: options.pauseDelayMs ?? 5_000,
-      maxPauseDurationMs: options.maxPauseDurationMs ?? 300_000,
-      idleTimeoutMs: 300_000,
-      freezePromotionMs: 600_000,
-    },
-    onPromoteToCheckpoint: options.onPromoteToCheckpoint ?? vi.fn().mockResolvedValue(undefined),
-    reconciliationCallbacks: {
-      onSessionReconnected: vi.fn(),
-      onSessionEvicted: vi.fn(),
-    },
-  });
-}
-
-describe('Docker pause for HITL', () => {
-  let cm: ContainerManager;
-  let pm: ContainerLifecyclePolicy;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    cm = createMockContainerManager();
-  });
-
-  afterEach(() => {
-    pm?.cleanupAll();
-    vi.useRealTimers();
-  });
-
-  it('pauses after 5s on approval_needed, unpauses on approval_resolved', async () => {
-    pm = createMockLifecyclePolicy(cm, { pauseDelayMs: 5_000, maxPauseDurationMs: 300_000 });
-
-    pm.schedulePause('run-hitl-1', 'container-hitl');
-    expect(pm.getState('run-hitl-1')).toBe('scheduled');
-
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(cm.pauseContainer).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(pm.getState('run-hitl-1')).toBe('paused');
-    expect(cm.pauseContainer).toHaveBeenCalledWith('container-hitl');
-
-    await pm.cancelPause('run-hitl-1');
-    expect(cm.unpauseContainer).toHaveBeenCalledWith('container-hitl');
-    expect(pm.getState('run-hitl-1')).toBe('none');
-  });
-
-  it('never pauses if approval resolves within the 5s delay', async () => {
-    pm = createMockLifecyclePolicy(cm, { pauseDelayMs: 5_000, maxPauseDurationMs: 300_000 });
-
-    pm.schedulePause('run-fast', 'container-fast');
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await pm.cancelPause('run-fast');
-
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(cm.pauseContainer).not.toHaveBeenCalled();
-    expect(cm.unpauseContainer).not.toHaveBeenCalled();
-  });
-});
-
-describe('Docker pause promotion to checkpoint', () => {
-  let cm: ContainerManager;
-  let pm: ContainerLifecyclePolicy;
-  let onPromote: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    cm = createMockContainerManager();
-    onPromote = vi.fn().mockResolvedValue(undefined);
-  });
-
-  afterEach(() => {
-    pm?.cleanupAll();
-    vi.useRealTimers();
-  });
-
-  it('promotes from pause to full suspend after maxPauseDurationMs', async () => {
-    pm = createMockLifecyclePolicy(cm, {
-      pauseDelayMs: 5_000,
-      maxPauseDurationMs: 300_000,
-      onPromoteToCheckpoint: onPromote,
-    });
-
-    pm.schedulePause('run-promote', 'container-promote');
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(pm.getState('run-promote')).toBe('paused');
-
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(onPromote).toHaveBeenCalledWith('run-promote');
-    expect(pm.getState('run-promote')).toBe('none');
-  });
-
-  it('does not promote if cancelPause is called before promotion timer', async () => {
-    pm = createMockLifecyclePolicy(cm, {
-      pauseDelayMs: 5_000,
-      maxPauseDurationMs: 300_000,
-      onPromoteToCheckpoint: onPromote,
-    });
-
-    pm.schedulePause('run-nopromote', 'container-np');
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(pm.getState('run-nopromote')).toBe('paused');
-
-    await vi.advanceTimersByTimeAsync(120_000);
-    await pm.cancelPause('run-nopromote');
-
-    await vi.advanceTimersByTimeAsync(300_000);
-    expect(onPromote).not.toHaveBeenCalled();
-  });
-});
-
 describe('Checkpoint size limits', () => {
   it('rejects checkpoint > 5 MB with error', () => {
     const hugeContent = 'x'.repeat(5.5 * 1024 * 1024);
@@ -773,7 +638,7 @@ describe('Workspace diff size limits', () => {
 
     try {
       const mockCm = {
-        extractWorkspaceDiff: vi.fn(async () => Buffer.alloc(101 * 1024 * 1024, 'x')),
+        extractContainerDiff: vi.fn(async () => Buffer.alloc(101 * 1024 * 1024, 'x')),
       } as unknown as ContainerManager;
 
       const wds = new WorkspaceDiffService({
@@ -802,7 +667,7 @@ describe('Workspace diff size limits', () => {
 
     try {
       const mockCm = {
-        extractWorkspaceDiff: vi.fn(async () => Buffer.from('small-workspace-data')),
+        extractContainerDiff: vi.fn(async () => Buffer.from('small-workspace-data')),
       } as unknown as ContainerManager;
 
       const wds = new WorkspaceDiffService({

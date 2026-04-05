@@ -22,18 +22,23 @@ export interface EventTrigger {
 }
 
 /**
- * Interpolate `{{payload.field}}` placeholders in a task template.
+ * Interpolate `{{payload.field}}` and `{{payload}}` placeholders in a task template.
  *
- * Supports one level of nesting: `{{payload.from}}`, `{{payload.subject}}`, etc.
- * Unmatched placeholders are left as-is.
+ * Supports:
+ *  - `{{payload.field}}` — single field lookup (one level of nesting)
+ *  - `{{payload}}`       — JSON-stringified entire payload object
+ *
+ * Unmatched field placeholders are left as-is.
  */
 export function interpolateTemplate(
   template: string,
   payload: Record<string, unknown>,
 ): string {
-  return template.replace(/\{\{payload\.(\w+)\}\}/g, (_match, key: string) => {
+  let result = template.replace(/\{\{payload\}\}/g, () => JSON.stringify(payload));
+  result = result.replace(/\{\{payload\.(\w+)\}\}/g, (_match, key: string) => {
     const value = payload[key];
     if (value === undefined || value === null) return `{{payload.${key}}}`;
     return String(value);
   });
+  return result;
 }

@@ -1,0 +1,182 @@
+# Environment Variable Reference
+
+This document provides a comprehensive reference for all environment variables used by CTXMill.
+
+## Categories
+
+- [Core](#core)
+- [Sandbox](#sandbox)
+- [AI / Model](#ai--model)
+- [LangSmith / Tracing](#langsmith--tracing)
+- [Storage (S3 / MinIO)](#storage-s3--minio)
+- [Network](#network)
+- [Security](#security)
+- [Debug / Development](#debug--development)
+- [System Settings (DB-Persisted)](#system-settings-db-persisted)
+
+---
+
+## Core
+
+| Name | Default | Required? | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `DATABASE_URL` | `postgres://ctxmill:ctxmill@postgres:5432/ctxmill` | **Yes** | PostgreSQL connection string. | `postgres://user:pass@localhost:5432/db` |
+| `NODE_ENV` | `production` | No | Environment mode. Set to `development` for detailed error messages. | `development` |
+| `CTXMILL_PORT` | `3001` | No | Port the orchestrator API listens on. (Mapped to `3002` in default Docker stack). | `3001` |
+| `CTXMILL_UI_PORT` | `3200` | No | Port the React UI listens on. | `3200` |
+| `CTXMILL_PRESET` | `docker` | No | Configuration preset to use. | `docker` |
+| `CTXMILL_DATA_DIR` | `./.ctxmill` | No | Root directory for persisted agent data (workspaces, knowledge). | `/data/ctxmill` |
+| `CTXMILL_UI_MODE` | `disabled` | No | UI mode for `ctxmill dev`. Options: `disabled`, `embedded`, `vite`. | `vite` |
+| `CTXMILL_API_URL` | `http://localhost:3002` | No | Base URL for the API (used by CLI chat). | `https://api.ctxmill.com` |
+| `CTXMILL_API_ORIGIN` | `http://localhost:3001` | No | Origin for the API (used by Vite proxy). | `http://orchestrator:3001` |
+
+## Sandbox
+
+These variables control the behavior of agent sandbox containers.
+
+| Name | Default | Required? | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `ORCHESTRATOR_CALLBACK_URL` | `http://orchestrator:3001` | **Yes*** | URL for sandboxes to call back to the orchestrator. *Required in foreign stacks. | `http://ctxmill-api:3001` |
+| `CTXMILL_IMAGE_PREFIX` | `ctxmill/harness` | No | Prefix for sandbox Docker images. | `myregistry.com/ctxmill` |
+| `CTXMILL_MAX_CONTAINERS` | `20` | No | Maximum number of concurrent sandbox containers globally. | `50` |
+| `CTXMILL_DATA_VOLUME` | - | No | Docker volume name for persistent agent data. Required for volume-based persistence. | `myapp_ctxmill-data` |
+| `CTXMILL_EGRESS_PROXY` | `0` | No | Enable egress proxy for sandboxes (`1` to enable). | `1` |
+| `CTXMILL_ALLOWED_EGRESS_DOMAINS` | - | No | Comma-separated list of allowed domains for the egress proxy. | `api.openai.com,github.com` |
+| `SANDBOX_PORT` | `50051` | No | Port the sandbox gRPC daemon listens on. | `50051` |
+| `PTC_PORT` | `8080` | No | Port for the Programmatic Tool Calling (PTC) API in sandboxes. | `8080` |
+| `SECRETS_PATH` | `/run/secrets/config.json` | No | Path to the secrets JSON file inside the sandbox. | `/tmp/secrets.json` |
+| `TOOL_PROXY_TIMEOUT_MS` | `300000` | No | Timeout for tool calls proxied from sandbox to orchestrator. | `600000` |
+
+## AI / Model
+
+| Name | Default | Required? | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `OPENAI_API_KEY` | - | No | API key for OpenAI. | `sk-...` |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | No | Default model for the learning pipeline and agents. | `gpt-5.4` |
+| `OPENAI_BASE_URL` | - | No | Base URL for OpenAI-compatible APIs (e.g., Cloudflare AI Gateway). | `https://gateway...` |
+| `ANTHROPIC_API_KEY` | - | No | API key for Anthropic. | `sk-ant-...` |
+| `GOOGLE_API_KEY` | - | No | API key for Google Gemini. | `AIza...` |
+| `LLM_PROVIDER` | `openai` | No | Default LLM provider. | `anthropic` |
+| `DEFAULT_HARNESS` | `langgraph` | No | Default harness for new agents. | `claude-agents` |
+| `DEFAULT_TEMPERATURE` | `0.7` | No | Default temperature for LLM calls. | `0.5` |
+| `DEFAULT_MAX_TOKENS` | `4096` | No | Default max tokens for LLM calls. | `8192` |
+| `MEM0_API_KEY` | - | No | API key for Mem0 cloud knowledge store. | `m0-...` |
+| `MEM0_HOST` | - | No | Host for Mem0 API. | `https://api.mem0.ai` |
+
+## LangSmith / Tracing
+
+| Name | Default | Required? | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `LANGSMITH_TRACING` | `false` | No | Enable LangSmith tracing (`true` to enable). | `true` |
+| `LANGSMITH_API_KEY` | - | No | API key for LangSmith. | `lsv2_pt_...` |
+| `LANGSMITH_PROJECT` | `ctxmill` | No | LangSmith project name. | `my-project` |
+| `LANGSMITH_WORKSPACE_ID` | - | No | LangSmith workspace ID (required for service account keys). | `ws_...` |
+
+## Storage (S3 / MinIO)
+
+Used for persistent artifact storage (file uploads/downloads).
+
+| Name | Default | Required? | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `S3_ENDPOINT` | `http://minio:9000` | No | S3-compatible endpoint URL. | `https://s3.amazonaws.com` |
+| `S3_PUBLIC_ENDPOINT` | `http://localhost:9000` | No | Publicly accessible S3 endpoint URL (for signed URLs). | `https://artifacts.ctxmill.com` |
+| `S3_ACCESS_KEY` | `ctxmill` | No | S3 access key. | `AKIA...` |
+| `S3_SECRET_KEY` | `ctxmill-dev` | No | S3 secret key. | `secret...` |
+| `S3_BUCKET` | `ctxmill-artifacts` | No | S3 bucket name. | `my-artifacts` |
+| `S3_REGION` | `us-east-1` | No | S3 region. | `us-west-2` |
+
+## Network
+
+| Name | Default | Required? | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `CORS_ORIGINS` | `http://localhost:3200` | No | Comma-separated list of allowed CORS origins. | `https://app.ctxmill.com` |
+| `HTTP_PROXY` | - | No | HTTP proxy URL (injected into sandboxes if `CTXMILL_EGRESS_PROXY=1`). | `http://proxy:3128` |
+| `HTTPS_PROXY` | - | No | HTTPS proxy URL (injected into sandboxes if `CTXMILL_EGRESS_PROXY=1`). | `http://proxy:3128` |
+
+## Security
+
+| Name | Default | Required? | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `SECRET_MASTER_KEY` | `ctxmill-dev-key-change-in-prod` | No | Master key for per-agent secret encryption (AES-256-GCM). | `32-char-random-string` |
+
+## Debug / Development
+
+| Name | Default | Required? | Description | Example |
+| :--- | :--- | :--- | :--- | :--- |
+| `CTXMILL_STRICT_TESTS` | `0` | No | Enable strict test mode (`1` to enable). Fails tests on console errors. | `1` |
+| `CTXMILL_LOG_SECRETS` | `0` | No | Log secrets for debugging (`1` to enable). **Use with caution!** | `1` |
+
+---
+
+## System Settings (DB-Persisted)
+
+These settings are stored in the `system_settings` table in the database. They can be configured via the **Settings** page in the UI or via the `PUT /api/settings` API.
+
+Each setting also supports an **environment variable override** that sets the default value when no DB value exists. Priority: **DB value > env var > hardcoded default.**
+
+| Key | Env Var Override | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `turnTimeoutMs` | `CTXMILL_TURN_TIMEOUT_MS` | `300,000` (5m) | Timeout for a single agent turn (LLM call + tools). |
+| `idleTimeoutMs` | `CTXMILL_IDLE_TIMEOUT_MS` | `300,000` (5m) | Time before an idle session is frozen (Docker pause). |
+| `freezePromotionMs` | `CTXMILL_FREEZE_PROMOTION_MS` | `600,000` (10m) | Time before a frozen session is promoted to a checkpoint. |
+| `maxPauseDurationMs` | `CTXMILL_MAX_PAUSE_DURATION_MS` | `300,000` (5m) | Maximum time a session can stay paused during HITL. |
+| `pauseDelayMs` | `CTXMILL_PAUSE_DELAY_MS` | `5,000` (5s) | Delay before pausing a container after HITL request. |
+| `maxGlobalContainers` | `CTXMILL_MAX_GLOBAL_CONTAINERS` | `20` | Maximum concurrent sandbox containers globally. |
+| `maxConcurrentRunsPerAgent` | `CTXMILL_MAX_CONCURRENT_RUNS_PER_AGENT` | `3` | Maximum concurrent runs for a single agent. |
+| `maxTriggerDepth` | `CTXMILL_MAX_TRIGGER_DEPTH` | `5` | Maximum depth for event-triggered background runs. |
+| `defaultCpus` | `CTXMILL_DEFAULT_CPUS` | `1.0` | Default CPU allocation for sandboxes. |
+| `defaultMemoryMb` | `CTXMILL_DEFAULT_MEMORY_MB` | `1024` | Default memory limit for sandboxes. |
+| `defaultPidsLimit` | `CTXMILL_DEFAULT_PIDS_LIMIT` | `256` | Default PID limit for sandboxes. |
+| `defaultTimeoutSec` | `CTXMILL_DEFAULT_TIMEOUT_SEC` | `600` (10m) | Default hard timeout for sandbox containers. |
+| `maxWorkspaceTarBytes` | `CTXMILL_MAX_WORKSPACE_TAR_BYTES` | `100MB` | Maximum size for workspace snapshots. |
+| `maxCheckpointBytes` | `CTXMILL_MAX_CHECKPOINT_BYTES` | `5MB` | Maximum size for harness state checkpoints. |
+| `maxTarUploadBytes` | `CTXMILL_MAX_TAR_UPLOAD_BYTES` | `100MB` | Maximum size for tar uploads. |
+| `queueTimeoutMs` | `CTXMILL_QUEUE_TIMEOUT_MS` | `60,000` (1m) | Timeout for container queue wait. |
+| `reconciliationIntervalMs` | `CTXMILL_RECONCILIATION_INTERVAL_MS` | `300,000` (5m) | Interval for session reconciliation checks. |
+
+---
+
+## .env.example Template
+
+```bash
+# ── Core ──────────────────────────────────────────────────
+DATABASE_URL=postgres://ctxmill:ctxmill@postgres:5432/ctxmill
+NODE_ENV=production
+# API_PORT=3002
+# UI_PORT=3200
+
+# ── Sandbox ───────────────────────────────────────────────
+# Required for foreign stacks (e.g. if orchestrator service is renamed)
+# ORCHESTRATOR_CALLBACK_URL=http://orchestrator:3001
+# CTXMILL_DATA_VOLUME=ctxmill_ctxmill-data
+
+# ── LLM Provider Keys ────────────────────────────────────
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GOOGLE_API_KEY=
+
+# ── Model Defaults ───────────────────────────────────────
+OPENAI_MODEL=gpt-5.4-mini
+# OPENAI_BASE_URL=https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/compat
+
+# ── LangSmith Tracing (optional) ────────────────────────
+LANGSMITH_TRACING=false
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=ctxmill
+# LANGSMITH_WORKSPACE_ID=
+
+# ── S3 / MinIO (Artifact Storage) ────────────────────────
+S3_ENDPOINT=http://minio:9000
+S3_PUBLIC_ENDPOINT=http://localhost:9000
+S3_ACCESS_KEY=ctxmill
+S3_SECRET_KEY=ctxmill-dev
+S3_BUCKET=ctxmill-artifacts
+S3_REGION=us-east-1
+
+# ── Network ──────────────────────────────────────────────
+CORS_ORIGINS=http://localhost:3200,http://127.0.0.1:3200
+
+# ── Security ─────────────────────────────────────────────
+# Master key for per-agent secret encryption. CHANGE IN PROD!
+SECRET_MASTER_KEY=ctxmill-dev-key-change-in-prod
+```

@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { DefaultHarnessRegistry } from '../../packages/ctxmill/src/harness/registry.js';
-import { LangGraphConfigSchema } from '@ctxmill/sandbox-daemon';
-import { ClaudeAgentsConfigSchema } from '@ctxmill/sandbox-daemon';
-import { PIAgentConfigSchema } from '@ctxmill/sandbox-daemon';
-import type { AgentHarness, HarnessSession } from '@ctxmill/sandbox-daemon';
+import {
+  LangGraphConfigSchema,
+  ClaudeAgentsConfigSchema,
+  PIAgentConfigSchema,
+} from '../../packages/sandbox-daemon/src/index.ts';
+import type { AgentHarness, HarnessSession } from '../../packages/sandbox-daemon/src/index.ts';
 
 function stubHarness(name: string, configSchema: z.ZodType): AgentHarness {
   return {
@@ -40,11 +42,19 @@ describe('harness config schemas', () => {
     it('accepts subagents', () => {
       expect(LangGraphConfigSchema.parse({
         model: 'gpt-5.4-mini',
-        subagents: [{ role: 'researcher', enabled: true }],
+        subagents: [{
+          name: 'researcher',
+          description: 'Researches topics',
+          systemPrompt: 'You are a researcher.',
+        }],
       })).toEqual({
         provider: 'openai',
         model: 'gpt-5.4-mini',
-        subagents: [{ role: 'researcher', enabled: true }],
+        subagents: [{
+          name: 'researcher',
+          description: 'Researches topics',
+          systemPrompt: 'You are a researcher.',
+        }],
       });
     });
 

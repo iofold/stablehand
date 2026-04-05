@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 import { z } from 'zod';
-import { createDeepAgent } from 'deepagents';
 import { tool as lcTool } from '@langchain/core/tools';
+import { ToolMessage } from '@langchain/core/messages';
 import type { BaseLanguageModel } from '@langchain/core/language_models/base';
 import type { StreamEvent } from '@langchain/core/types/stream';
 import type {
@@ -29,7 +27,23 @@ export const LangGraphConfigSchema = z.object({
   maxTokens: z.number().int().positive().optional(),
   topP: z.number().min(0).max(1).optional(),
   reasoning: z.enum(['off', 'low', 'medium', 'high']).optional(),
-  subagents: z.array(z.record(z.string(), z.unknown())).optional(),
+  setup: z.object({
+    symlinks: z.array(z.object({
+      src: z.string(),
+      dest: z.string(),
+    })).optional(),
+  }).optional(),
+  subagents: z.array(z.object({
+    name: z.string(),
+    description: z.string(),
+    systemPrompt: z.string(),
+    provider: z.enum(['openai', 'anthropic', 'google']).optional(),
+    model: z.string().min(1).optional(),
+    apiKeyRef: z.string().optional(),
+    tools: z.array(z.string()).optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().optional(),
+  })).optional(),
 });
 
 export type LangGraphConfig = z.infer<typeof LangGraphConfigSchema>;
@@ -41,7 +55,13 @@ export type LangGraphConfig = z.infer<typeof LangGraphConfigSchema>;
  */
 interface StreamableAgent {
   streamEvents(
-    input: { messages: Array<{ role: 'user' | 'assistant'; content: string }> },
+    input: {
+      messages: Array<{
+        role: 'user' | 'assistant' | 'tool' | 'system';
+        content: string;
+        tool_call_id?: string;
+      }>;
+    },
     options: { version: 'v1' | 'v2' },
   ): AsyncIterable<StreamEvent>;
 }
@@ -90,7 +110,7 @@ class LangGraphSession implements HarnessSession {
     const { agentId, conversationId, workspaceDir, tools, systemPrompt } = this.config;
 
     try {
-      this.transcript.push(...input.messages);
+      this.transcript = [...input.messages];
 
       // Step 1: Resolve the chat model from config + secrets
       const chatModel = await this.buildModelFromConfig();
@@ -111,44 +131,40 @@ class LangGraphSession implements HarnessSession {
       const lcTools = this.buildLangChainTools(ctx, input.turnId, tools, onApprovalNeeded);
 
       // Step 5: Create the deep agent with LocalShellBackend for full filesystem/shell capabilities
-      const { LocalShellBackend } = await import('deepagents');
+      const { createDeepAgent, LocalShellBackend } = await this.loadDeepAgentsModule();
       const backend = new LocalShellBackend({
         rootDir: workspaceDir ?? process.cwd(),
         inheritEnv: true,
       });
 
-      const workDir = workspaceDir ?? process.cwd();
-      const skillsDir = join(workDir, '.ctxmill', 'skills');
-      let skills: string[] | undefined;
-      try {
-        await fs.access(skillsDir);
-        skills = [skillsDir];
-      } catch { /* skills dir doesn't exist — skip */ }
-
-      const subagents = this.harnessConfig.subagents;
-
       const allBlocklisted = this.config.nativeTools?.flatMap((c) => c.blocklist ?? []) ?? [];
+      const resolvedSubagents = await this.buildSubagentParams(this.harnessConfig.subagents, lcTools);
+
+      const hasSystemMessage = this.transcript.some((message) => message.role === 'system');
 
       const deepAgentParams: Record<string, unknown> = {
         model: chatModel,
         tools: lcTools,
-        systemPrompt,
         backend,
       };
-      if (skills) deepAgentParams.skills = skills;
-      if (subagents) deepAgentParams.subagents = subagents;
+      if (!hasSystemMessage) deepAgentParams.systemPrompt = systemPrompt;
+      if (resolvedSubagents) deepAgentParams.subagents = resolvedSubagents;
+      const middlewares: Record<string, unknown>[] = [
+        createToolErrorBoundaryMiddleware(),
+      ];
       if (allBlocklisted.length > 0) {
-        deepAgentParams.middleware = [this.createToolBlocklistMiddleware(allBlocklisted)];
+        middlewares.push(this.createToolBlocklistMiddleware(allBlocklisted));
       }
+      deepAgentParams.middleware = middlewares;
 
       const agent = createDeepAgent(deepAgentParams as Parameters<typeof createDeepAgent>[0]) as unknown as StreamableAgent;
 
       // Step 6: Convert full transcript to deepagents message format
       const langchainMessages = this.transcript
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({
-          role: m.role as 'user' | 'assistant',
+          role: m.role as 'user' | 'assistant' | 'tool' | 'system',
           content: m.content,
+          ...(m.role === 'tool' && m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
         }));
 
       // Step 7: Stream events from the agent, accumulating assistant text for transcript
@@ -351,8 +367,24 @@ class LangGraphSession implements HarnessSession {
   }
 
   private async buildModelFromConfig(): Promise<BaseLanguageModel> {
+    return this.buildModelForConfig(this.harnessConfig);
+  }
+
+  private async loadDeepAgentsModule(): Promise<typeof import('deepagents')> {
+    return import('deepagents');
+  }
+
+  private async buildModelForConfig(config: {
+    provider: 'openai' | 'anthropic' | 'google';
+    model: string;
+    apiKeyRef?: string;
+    baseUrl?: string;
+    temperature?: number;
+    maxTokens?: number;
+    reasoning?: 'off' | 'low' | 'medium' | 'high';
+  }): Promise<BaseLanguageModel> {
     const { secrets } = this.config;
-    const { provider, model, apiKeyRef, baseUrl, temperature, maxTokens } = this.harnessConfig;
+    const { provider, model, apiKeyRef, baseUrl, temperature, maxTokens, reasoning } = config;
     const resolvedApiKey = apiKeyRef
       ? resolveSecretRef(apiKeyRef, secrets)
       : provider === 'anthropic'
@@ -387,9 +419,61 @@ class LangGraphSession implements HarnessSession {
         modelName: model,
         ...(temperature != null ? { temperature } : {}),
         ...(maxTokens != null ? { maxTokens } : {}),
+        ...(reasoning && reasoning !== 'off' ? { reasoning_effort: reasoning } : {}),
       }) as unknown as BaseLanguageModel;
     }
   }
+
+  private async buildSubagentParams(
+    subagentConfigs: z.infer<typeof LangGraphConfigSchema>['subagents'],
+    parentTools?: unknown[],
+  ): Promise<Record<string, unknown>[] | undefined> {
+    if (!subagentConfigs?.length) return undefined;
+
+    // Build a lookup from tool name → tool object for subagent tool filtering
+    const toolsByName = new Map<string, unknown>();
+    if (parentTools) {
+      for (const tool of parentTools) {
+        const name = (tool as Record<string, unknown>)?.name;
+        if (typeof name === 'string') toolsByName.set(name, tool);
+      }
+    }
+
+    return Promise.all(
+      subagentConfigs.map(async (config) => {
+        const result: Record<string, unknown> = {
+          name: config.name,
+          description: config.description,
+          systemPrompt: config.systemPrompt,
+        };
+
+        if (config.provider || config.model) {
+          result.model = await this.buildModelForConfig({
+            provider: config.provider ?? this.harnessConfig.provider,
+            model: config.model ?? this.harnessConfig.model,
+            apiKeyRef: config.apiKeyRef,
+            baseUrl: this.harnessConfig.baseUrl,
+            temperature: config.temperature,
+            maxTokens: config.maxTokens,
+          });
+        }
+
+        // Resolve tool name strings to actual tool objects from the parent tool set
+        if (config.tools && parentTools) {
+          const resolved = config.tools
+            .map((name: string) => toolsByName.get(name))
+            .filter((t): t is NonNullable<typeof t> => t != null);
+          if (resolved.length > 0) result.tools = resolved;
+        }
+
+        return result;
+      }),
+    );
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /*  Build langchain tool wrappers                                             */
+  /* -------------------------------------------------------------------------- */
 
   /**
    * Build langchain tool wrappers around the provided tool definitions.
@@ -432,8 +516,15 @@ class LangGraphSession implements HarnessSession {
           }
 
           // Execute the tool via its handler directly (no LocalFunctionExecutor needed)
-          const result = await def.handler(args, ctx);
-          return result;
+          try {
+            const result = await def.handler(args, ctx);
+            return result;
+          } catch (handlerErr) {
+            // Return handler errors as tool results so the LLM can see and recover,
+            // rather than letting them propagate and crash the entire turn.
+            const msg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
+            return `Tool "${def.name}" execution failed: ${msg}`;
+          }
         },
         {
           name: def.name,
@@ -443,4 +534,45 @@ class LangGraphSession implements HarnessSession {
       );
     });
   }
+}
+
+const GRAPH_INTERRUPT_NAMES = new Set(['GraphInterrupt', 'NodeInterrupt']);
+
+/**
+ * Middleware that catches tool execution errors and returns them as ToolMessage
+ * results instead of letting them propagate and kill the session.
+ *
+ * Why this exists: langchain's ToolNode re-throws middleware-wrapped tool errors
+ * unless handleToolErrors === true (literal boolean). Neither createAgent nor
+ * createDeepAgent expose that flag. This middleware catches errors at the
+ * wrapToolCall layer — before ToolNode's re-throw logic sees them.
+ *
+ * GraphInterrupt/NodeInterrupt are preserved (re-thrown) since they're
+ * intentional control flow for human-in-the-loop, not recoverable errors.
+ */
+function createToolErrorBoundaryMiddleware(): Record<string, unknown> {
+  return {
+    name: 'CtxmillToolErrorBoundary',
+    wrapToolCall: async (
+      request: { toolCall: { id?: string; name: string }; [k: string]: unknown },
+      handler: (req: unknown) => Promise<unknown>,
+    ) => {
+      try {
+        return await handler(request);
+      } catch (err: unknown) {
+        if (err != null && typeof err === 'object' && 'name' in err &&
+            GRAPH_INTERRUPT_NAMES.has((err as { name: string }).name)) {
+          throw err;
+        }
+
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[sandbox] tool error boundary caught: ${request.toolCall.name} — ${msg}`);
+        return new ToolMessage({
+          content: `Tool "${request.toolCall.name}" failed: ${msg}`,
+          tool_call_id: request.toolCall.id ?? '',
+          name: request.toolCall.name,
+        });
+      }
+    },
+  };
 }

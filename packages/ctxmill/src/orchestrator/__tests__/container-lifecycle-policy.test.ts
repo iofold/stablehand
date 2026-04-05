@@ -21,7 +21,6 @@ const mockDb = {
   deleteSandboxSession: vi.fn(),
 } as any;
 
-const mockOnPromoteToCheckpoint = vi.fn();
 const mockOnSessionReconnected = vi.fn();
 const mockOnSessionEvicted = vi.fn();
 
@@ -34,10 +33,7 @@ const mockLogger = {
 
 const TEST_CONFIG = {
   reconciliationIntervalMs: 60_000,
-  pauseDelayMs: 1_000,
-  maxPauseDurationMs: 5_000,
   idleTimeoutMs: 2_000,
-  freezePromotionMs: 3_000,
 };
 
 function createSession(overrides: Record<string, unknown> = {}) {
@@ -73,7 +69,6 @@ function createPolicy() {
     db: mockDb,
     logger: mockLogger,
     config: TEST_CONFIG,
-    onPromoteToCheckpoint: mockOnPromoteToCheckpoint,
     reconciliationCallbacks: {
       onSessionReconnected: mockOnSessionReconnected,
       onSessionEvicted: mockOnSessionEvicted,
@@ -116,7 +111,6 @@ describe('ContainerLifecyclePolicy', () => {
     mockDb.getCheckpointV2.mockResolvedValue(null);
     mockDb.deleteSandboxSession.mockResolvedValue(undefined);
 
-    mockOnPromoteToCheckpoint.mockResolvedValue(undefined);
     mockOnSessionReconnected.mockReset();
     mockOnSessionEvicted.mockReset();
 
@@ -130,100 +124,26 @@ describe('ContainerLifecyclePolicy', () => {
     vi.useRealTimers();
   });
 
-  describe('HITL pause lifecycle', () => {
-    it('schedulePause sets state to scheduled', () => {
-      policy.schedulePause('session-1', 'container-1');
-
-      expect(policy.getState('session-1')).toBe('scheduled');
-    });
-
-    it('after pauseDelayMs pauses the container and marks session paused', async () => {
-      policy.schedulePause('session-1', 'container-1');
-
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.pauseDelayMs);
-
-      expect(mockContainerManager.pauseContainer).toHaveBeenCalledWith('container-1');
-      expect(policy.getState('session-1')).toBe('paused');
-    });
-
-    it('after maxPauseDurationMs calls onPromoteToCheckpoint', async () => {
-      policy.schedulePause('session-1', 'container-1');
-
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.pauseDelayMs);
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.maxPauseDurationMs);
-
-      expect(mockOnPromoteToCheckpoint).toHaveBeenCalledWith('session-1');
-      expect(policy.getState('session-1')).toBe('none');
-    });
-
-    it('cancelPause before pause executes clears timer', async () => {
-      policy.schedulePause('session-1', 'container-1');
-
-      await policy.cancelPause('session-1');
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.pauseDelayMs + TEST_CONFIG.maxPauseDurationMs);
-
-      expect(mockContainerManager.pauseContainer).not.toHaveBeenCalled();
-      expect(policy.getState('session-1')).toBe('none');
-    });
-
-    it('cancelPause after pause calls unpauseContainer', async () => {
-      policy.schedulePause('session-1', 'container-1');
-
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.pauseDelayMs);
-      await policy.cancelPause('session-1');
-
-      expect(mockContainerManager.unpauseContainer).toHaveBeenCalledWith('container-1');
-      expect(policy.getState('session-1')).toBe('none');
-    });
-
-    it('calling schedulePause twice does nothing', async () => {
-      policy.schedulePause('session-1', 'container-1');
-      policy.schedulePause('session-1', 'container-1');
-
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.pauseDelayMs);
-
-      expect(mockContainerManager.pauseContainer).toHaveBeenCalledTimes(1);
-      expect(policy.getState('session-1')).toBe('paused');
-    });
-  });
-
   describe('Idle timeout lifecycle', () => {
     it('scheduleIdleTimeout sets idle timer', async () => {
       const callbacks = {
-        onFreeze: vi.fn().mockResolvedValue(undefined),
         onCheckpoint: vi.fn().mockResolvedValue(undefined),
       };
 
       policy.scheduleIdleTimeout('session-1', 'container-1', callbacks);
       await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs - 1);
 
-      expect(callbacks.onFreeze).not.toHaveBeenCalled();
+      expect(callbacks.onCheckpoint).not.toHaveBeenCalled();
       expect(policy.getState('session-1')).toBe('none');
     });
 
-    it('after idleTimeoutMs calls onFreeze callback', async () => {
+    it('after idleTimeoutMs calls onCheckpoint directly', async () => {
       const callbacks = {
-        onFreeze: vi.fn().mockResolvedValue(undefined),
         onCheckpoint: vi.fn().mockResolvedValue(undefined),
       };
 
       policy.scheduleIdleTimeout('session-1', 'container-1', callbacks);
       await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
-
-      expect(callbacks.onFreeze).toHaveBeenCalledWith('session-1');
-      expect(policy.getState('session-1')).toBe('idle_paused');
-    });
-
-    it('after freezePromotionMs calls onCheckpoint callback', async () => {
-      const callbacks = {
-        onFreeze: vi.fn().mockResolvedValue(undefined),
-        onCheckpoint: vi.fn().mockResolvedValue(undefined),
-      };
-
-      policy.scheduleIdleTimeout('session-1', 'container-1', callbacks);
-
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.freezePromotionMs);
 
       expect(callbacks.onCheckpoint).toHaveBeenCalledWith('session-1');
       expect(policy.getState('session-1')).toBe('none');
@@ -231,53 +151,36 @@ describe('ContainerLifecyclePolicy', () => {
 
     it('cancelIdleTimeout clears idle timer', async () => {
       const callbacks = {
-        onFreeze: vi.fn().mockResolvedValue(undefined),
         onCheckpoint: vi.fn().mockResolvedValue(undefined),
       };
 
       policy.scheduleIdleTimeout('session-1', 'container-1', callbacks);
       await policy.cancelIdleTimeout('session-1');
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs + TEST_CONFIG.freezePromotionMs);
+      await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
 
-      expect(callbacks.onFreeze).not.toHaveBeenCalled();
       expect(callbacks.onCheckpoint).not.toHaveBeenCalled();
     });
 
-    it('cancelIdleTimeout unpauses if already idle-paused', async () => {
+    it('idle checkpoint is skipped when checkpoint promotion is already active', async () => {
       const callbacks = {
-        onFreeze: vi.fn().mockResolvedValue(undefined),
-        onCheckpoint: vi.fn().mockResolvedValue(undefined),
-      };
-
-      policy.scheduleIdleTimeout('session-1', 'container-1', callbacks);
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
-      await policy.cancelIdleTimeout('session-1');
-
-      expect(mockContainerManager.unpauseContainer).toHaveBeenCalledWith('container-1');
-      expect(policy.getState('session-1')).toBe('none');
-    });
-
-    it('idle freeze is skipped when HITL pause is active', async () => {
-      const callbacks = {
-        onFreeze: vi.fn().mockResolvedValue(undefined),
         onCheckpoint: vi.fn().mockResolvedValue(undefined),
       };
 
       const entries = Reflect.get(policy, 'entries') as Map<string, unknown>;
       entries.set('session-1', {
         containerId: 'container-1',
-        state: 'paused',
+        state: 'promoting',
         idleCallbacks: callbacks,
       });
 
-      const executeIdleFreeze = Reflect.get(policy, 'executeIdleFreeze').bind(policy) as (
+      const executeIdleCheckpoint = Reflect.get(policy, 'executeIdleCheckpoint').bind(policy) as (
         sessionId: string,
       ) => Promise<void>;
 
-      await executeIdleFreeze('session-1');
+      await executeIdleCheckpoint('session-1');
 
-      expect(callbacks.onFreeze).not.toHaveBeenCalled();
-      expect(policy.getState('session-1')).toBe('paused');
+      expect(callbacks.onCheckpoint).not.toHaveBeenCalled();
+      expect(policy.getState('session-1')).toBe('promoting');
     });
   });
 
@@ -288,10 +191,14 @@ describe('ContainerLifecyclePolicy', () => {
       await expect(shouldKillContainer('container-1')).resolves.toBe('kill');
     });
 
-    it('session with pending promotion returns skip', async () => {
+    it('session with pending idle checkpoint promotion returns skip', async () => {
       const shouldKillContainer = getShouldKillContainer(policy);
+      const entries = Reflect.get(policy, 'entries') as Map<string, unknown>;
 
-      policy.schedulePause('session-1', 'container-1');
+      entries.set('session-1', {
+        containerId: 'container-1',
+        state: 'promoting',
+      });
 
       await expect(shouldKillContainer('container-1', 'session-1')).resolves.toBe('skip');
     });
@@ -415,40 +322,28 @@ describe('ContainerLifecyclePolicy', () => {
   describe('cleanup', () => {
     it('cleanup(sessionId) clears all timers for that session', async () => {
       const callbacks = {
-        onFreeze: vi.fn().mockResolvedValue(undefined),
         onCheckpoint: vi.fn().mockResolvedValue(undefined),
       };
 
-      policy.schedulePause('session-1', 'container-1');
       policy.scheduleIdleTimeout('session-1', 'container-1', callbacks);
       policy.cleanup('session-1');
 
-      await vi.advanceTimersByTimeAsync(
-        TEST_CONFIG.pauseDelayMs + TEST_CONFIG.maxPauseDurationMs + TEST_CONFIG.idleTimeoutMs + TEST_CONFIG.freezePromotionMs,
-      );
+      await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
 
-      expect(mockContainerManager.pauseContainer).not.toHaveBeenCalled();
-      expect(callbacks.onFreeze).not.toHaveBeenCalled();
       expect(callbacks.onCheckpoint).not.toHaveBeenCalled();
       expect(policy.getState('session-1')).toBe('none');
     });
 
     it('cleanupAll() clears all entries', async () => {
       const callbacks = {
-        onFreeze: vi.fn().mockResolvedValue(undefined),
         onCheckpoint: vi.fn().mockResolvedValue(undefined),
       };
 
-      policy.schedulePause('session-1', 'container-1');
       policy.scheduleIdleTimeout('session-2', 'container-2', callbacks);
       policy.cleanupAll();
 
-      await vi.advanceTimersByTimeAsync(
-        TEST_CONFIG.pauseDelayMs + TEST_CONFIG.maxPauseDurationMs + TEST_CONFIG.idleTimeoutMs + TEST_CONFIG.freezePromotionMs,
-      );
+      await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
 
-      expect(mockContainerManager.pauseContainer).not.toHaveBeenCalled();
-      expect(callbacks.onFreeze).not.toHaveBeenCalled();
       expect(callbacks.onCheckpoint).not.toHaveBeenCalled();
       expect(policy.getState('session-1')).toBe('none');
       expect(policy.getState('session-2')).toBe('none');

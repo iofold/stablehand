@@ -349,10 +349,6 @@ export function registerDefaultToolHandlers(
       const turn = repository ? await repository.getTurn(ctx.sessionId) : undefined;
       const sandboxSessionId = turn?.sessionId ?? undefined;
 
-      if (sandboxSessionId && sessionManager) {
-        await sessionManager.pauseSession(sandboxSessionId, 'hitl');
-      }
-
       const resolution = await interruptManager.waitForApproval(
         ctx.sessionId,
         ctx.agentId,
@@ -363,12 +359,11 @@ export function registerDefaultToolHandlers(
         sandboxSessionId,
       );
 
-      if (sandboxSessionId && sessionManager) {
-        await sessionManager.resumeSession(sandboxSessionId);
-      }
-
       if (resolution.action === 'approve') {
         return JSON.stringify({ approved: true, action: 'approve' });
+      }
+      if (resolution.action === 'suspend') {
+        return JSON.stringify({ approved: false });
       }
       return JSON.stringify({ approved: false, action: resolution.action, reason: resolution.data ?? resolution.action });
     });

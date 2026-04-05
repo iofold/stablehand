@@ -16,7 +16,7 @@ import type { SessionEvent } from '@ctxmill/sandbox-daemon';
 import type { AgentDefinition, Message } from '../types.js';
 import type { TypedEventBus } from '../events/bus.js';
 
-export type { AGUISessionEvent, MessageCommittedSessionEvent, SessionEvent } from '@ctxmill/sandbox-daemon';
+export type { AGUISessionEvent, MessageCommittedSessionEvent, TurnFailedSessionEvent, SessionEvent } from '@ctxmill/sandbox-daemon';
 
 // ── Logger interface ─────────────────────────────────────────
 
@@ -139,6 +139,16 @@ export class SessionTurnService {
           messageSeq: sessionEvent.messageSeq,
         };
         return event;
+      }
+
+      case 'turn_failed': {
+        const errorEvent: AGUIEvent = {
+          type: 'RUN_ERROR',
+          timestamp: Date.now(),
+          runId: turnId,
+          error: sessionEvent.errorMessage,
+        };
+        return errorEvent;
       }
 
       default:

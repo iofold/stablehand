@@ -269,8 +269,6 @@ function createMockSessionManager(): SandboxSessionManager {
     completeTurn: vi.fn(),
     cancelCurrentTurn: vi.fn(() => true),
     getAbortSignal: vi.fn(),
-    pauseForHitl: vi.fn(),
-    resumeFromHitl: vi.fn(),
     checkConcurrencyLimit: vi.fn(),
     getTurn: vi.fn(),
     getActiveTurns: vi.fn(() => []),

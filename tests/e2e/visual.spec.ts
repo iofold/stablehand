@@ -11,7 +11,7 @@ import { createTestAgent, deleteTestAgent } from './support';
  * Pages covered:
  *   1. Dashboard   – /
  *   2. Agent detail – /agents/:id
- *   3. Chat (empty) – /agents/:id/chat
+ *   3. Chat (empty) – /agents/:id/conversations/new
  */
 
 test.describe('Visual regression', () => {

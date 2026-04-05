@@ -7,7 +7,8 @@ import {
 /**
  * E2E tests for the chat conversation flow.
  *
- * Route: /agents/:id/chat
+ * Route: /agents/:id/conversations/new (new chat)
+ *        /agents/:id/conversations/:conversationId (existing chat)
  *
  * Relies on data-testid attributes defined in the UI components:
  *   chat-input            - textarea for message input  (ChatInput.tsx)

@@ -40,6 +40,7 @@ import type {
   SessionEvent as CustomSessionEvent,
   AGUISessionEvent,
   MessageCommittedSessionEvent,
+  TurnFailedSessionEvent,
 } from '../session-event.js';
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
@@ -126,9 +127,23 @@ export function protoRestoreBootstrapToRestorePoint(
     ? (checkpoint.harnessState as Record<string, unknown>)
     : {};
 
+  // The harnessState stored in the checkpoint is the full HarnessExportedState
+  // shape: { stateVersion: string, payload: { transcript: [...], ... } }.
+  // Unwrap it so that HarnessRestorePoint.payload maps directly to the
+  // harness's inner payload (where 'transcript' lives), not the envelope.
+  const innerPayload =
+    typeof harnessState.payload === 'object' && harnessState.payload !== null
+      ? (harnessState.payload as Record<string, unknown>)
+      : harnessState;
+
+  const stateVersion =
+    typeof harnessState.stateVersion === 'string'
+      ? harnessState.stateVersion
+      : String(checkpoint.checkpointVersion);
+
   return {
-    stateVersion: String(checkpoint.checkpointVersion),
-    payload: harnessState,
+    stateVersion,
+    payload: innerPayload,
     messages: [],
   };
 }
@@ -653,6 +668,16 @@ export function protoSessionEventToCustom(
         toolCallId: mc.toolCallId,
         turnId: mc.turnId,
         messageSeq: Number(mc.messageSeq),
+      };
+      return event;
+    }
+
+    case 'turnFailed': {
+      const tf = proto.payload.value;
+      const event: TurnFailedSessionEvent = {
+        type: 'turn_failed',
+        turnId: tf.turnId || turnId,
+        errorMessage: tf.errorMessage,
       };
       return event;
     }

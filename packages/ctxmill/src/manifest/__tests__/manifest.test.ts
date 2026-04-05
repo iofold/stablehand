@@ -210,12 +210,11 @@ describe('validate', () => {
     expect(() => validateManifest(m)).not.toThrow();
   });
 
-  it('validates workspace content with files and skills', () => {
+  it('validates workspace content with files', () => {
     const m = minimalManifest();
     m.spec.workspace = {
       content: {
         files: [{ src: 'config.json', dest: '/workspace/config.json' }],
-        skills: ['analysis'],
       },
     };
     expect(() => validateManifest(m)).not.toThrow();
@@ -370,19 +369,17 @@ describe('convert', () => {
       });
     });
 
-    it('converts workspace content with skills and files', () => {
+    it('converts workspace content with files', () => {
       const m = minimalManifest();
       m.spec.workspace = {
         content: {
           files: [{ src: 'README.md', dest: '/workspace/README.md' }],
-          skills: ['analysis', 'review'],
         },
       };
 
       const def = manifestToDefinition(m);
       expect(def.workspaceContent).toEqual({
         files: [{ src: 'README.md', dest: '/workspace/README.md' }],
-        skills: ['analysis', 'review'],
       });
     });
 
@@ -533,7 +530,6 @@ describe('convert', () => {
         systemPrompt: 'hi',
         workspaceContent: {
           files: [{ src: 'README.md', dest: '/workspace/README.md' }],
-          skills: true,
         },
       };
 
@@ -541,7 +537,6 @@ describe('convert', () => {
       expect(manifest.spec.workspace).toEqual({
         content: {
           files: [{ src: 'README.md', dest: '/workspace/README.md' }],
-          skills: true,
         },
       });
     });

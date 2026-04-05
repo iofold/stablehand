@@ -247,67 +247,6 @@ export async function updateAgent(id: string, data: Partial<{
   return apiMutate(`${API_BASE}/agents/${id}`, 'PUT', data);
 }
 
-// ── Skill types (Agent Skills Standard / SKILL.md format) ───────────
-
-export interface SkillFrontmatter {
-  name: string;
-  description: string;
-  license?: string;
-  compatibility?: string;
-  metadata?: Record<string, unknown>;
-  'allowed-tools'?: string;
-}
-
-export interface LoadedSkill {
-  name: string;
-  description: string;
-  path: string;
-  source: 'project' | 'personal' | 'plugin' | 'marketplace';
-  frontmatter: SkillFrontmatter;
-  instructions: string;
-  scripts: string[];
-  references: string[];
-  assets: string[];
-}
-
-export interface LegacySkill {
-  name: string;
-  filename: string;
-  content: string;
-}
-
-/** @deprecated Use LoadedSkill instead — kept for backward compatibility */
-export type SkillFile = LegacySkill;
-
-export async function fetchSkills(agentId: string): Promise<{ skills: LoadedSkill[]; legacySkills: LegacySkill[] }> {
-  return apiFetch<{ skills: LoadedSkill[]; legacySkills: LegacySkill[] }>(
-    `${API_BASE}/agents/${agentId}/skills`,
-  );
-}
-
-export async function createSkill(
-  agentId: string,
-  data: { name: string; description: string; instructions: string; scripts?: Record<string, string> },
-): Promise<LoadedSkill> {
-  return apiMutate<LoadedSkill>(`${API_BASE}/agents/${agentId}/skills`, 'POST', data);
-}
-
-export async function updateSkill(
-  agentId: string,
-  skillName: string,
-  data: { description?: string; instructions?: string },
-): Promise<LoadedSkill> {
-  return apiMutate<LoadedSkill>(
-    `${API_BASE}/agents/${agentId}/skills/${encodeURIComponent(skillName)}`,
-    'PUT',
-    data,
-  );
-}
-
-export async function deleteSkill(agentId: string, skillName: string): Promise<void> {
-  await apiFetch(`${API_BASE}/agents/${agentId}/skills/${encodeURIComponent(skillName)}`, { method: 'DELETE' });
-}
-
 // ── Agent Secrets operations ──────────────────────────────────────────
 
 export async function fetchSecretKeys(agentId: string): Promise<{ keys: string[] }> {
@@ -425,9 +364,6 @@ export interface SystemSettings {
   maxCheckpointBytes:          number;
   maxTarUploadBytes:           number;
   idleTimeoutMs:               number;
-  freezePromotionMs:           number;
-  maxPauseDurationMs:          number;
-  pauseDelayMs:                number;
   turnTimeoutMs:               number;
   reconciliationIntervalMs:    number;
   maxGlobalContainers:         number;
@@ -542,4 +478,49 @@ export async function fetchArtifactDownloadUrl(id: string): Promise<{ url: strin
 
 export async function deleteArtifact(id: string): Promise<void> {
   await apiFetch(`${API_BASE}/artifacts/${id}`, { method: 'DELETE' });
+}
+
+export async function requestArtifactUploadUrl(agentId: string, name: string, mimeType: string, sizeBytes: number): Promise<{ artifactId: string; uploadUrl: string; storageKey: string; expiresIn: number }> {
+  const res = await fetch(`${API_BASE}/artifacts/upload-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentId, name, mimeType, sizeBytes }),
+  });
+  if (!res.ok) throw new Error(`Upload URL request failed: ${res.status}`);
+  return res.json();
+}
+
+export async function uploadArtifactToSignedUrl(uploadUrl: string, file: File): Promise<void> {
+  const res = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  });
+  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+}
+
+export async function uploadArtifactDirect(
+  file: File,
+  agentId: string,
+  name?: string,
+): Promise<Artifact> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('agentId', agentId);
+  if (name) {
+    formData.append('name', name);
+  }
+
+  const response = await fetch(`${API_BASE}/artifacts/upload`, {
+    method: 'POST',
+    body: formData,
+    // Do NOT set Content-Type header — browser sets it with boundary automatically
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Upload failed' }));
+    throw new Error(error.error || `Upload failed: ${response.status}`);
+  }
+
+  return response.json();
 }

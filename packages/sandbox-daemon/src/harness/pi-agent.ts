@@ -184,18 +184,26 @@ export function convertTools(
         }
       }
 
-      const result = await def.handler(params, {
-        agentId: config.agentId,
-        conversationId: config.conversationId,
-        workspaceDir: config.workspaceDir || process.cwd(),
-        eventBus: undefined,
-        knowledge: createStubKnowledgeContext(),
-      });
+      try {
+        const result = await def.handler(params, {
+          agentId: config.agentId,
+          conversationId: config.conversationId,
+          workspaceDir: config.workspaceDir || process.cwd(),
+          eventBus: undefined,
+          knowledge: createStubKnowledgeContext(),
+        });
 
-      return {
-        content: [{ type: 'text' as const, text: typeof result === 'string' ? result : JSON.stringify(result) }],
-        details: {},
-      };
+        return {
+          content: [{ type: 'text' as const, text: typeof result === 'string' ? result : JSON.stringify(result) }],
+          details: {},
+        };
+      } catch (handlerErr) {
+        const msg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
+        return {
+          content: [{ type: 'text' as const, text: `Tool "${def.name}" execution failed: ${msg}` }],
+          details: {},
+        };
+      }
     },
   }));
 }
@@ -399,17 +407,7 @@ export class PIAgentHarness implements AgentHarness {
       cwd,
       agentDir: cwd,
       settingsManager,
-      systemPromptOverride: () => config.systemPrompt,
       appendSystemPromptOverride: () => [],
-      skillsOverride: (current: { diagnostics: unknown }) => ({
-        skills: [],
-        diagnostics: current.diagnostics,
-      }),
-      promptsOverride: (current: { diagnostics: unknown }) => ({
-        prompts: [],
-        diagnostics: current.diagnostics,
-      }),
-      agentsFilesOverride: () => ({ agentsFiles: [] }),
     });
     await resourceLoader.reload();
 
@@ -493,7 +491,7 @@ export class PIAgentHarness implements AgentHarness {
 }
 
 class PiAgentSession implements HarnessSession {
-  private readonly transcript: Message[] = [];
+  private transcript: Message[] = [];
 
   constructor(
     private readonly nativeSession: NativePiSession,
@@ -505,7 +503,35 @@ class PiAgentSession implements HarnessSession {
     this.transcript.push(...messages);
   }
 
+  private buildNativeHistoryMessages(messages: Message[]): Array<Record<string, unknown>> {
+    return messages.map((message, index) => ({
+      role: 'user',
+      content: this.formatTranscriptMessage(message),
+      timestamp: this.toNativeTimestamp(message.createdAt, index),
+    }));
+  }
+
+  private formatTranscriptMessage(message: Message): string {
+    switch (message.role) {
+      case 'assistant':
+        return `[Previous assistant response]\n${message.content}`;
+      case 'system':
+        return `[Previous system message]\n${message.content}`;
+      case 'tool':
+        return `[Previous tool result${message.toolCallId ? ` (${message.toolCallId})` : ''}]\n${message.content}`;
+      case 'user':
+      default:
+        return message.content;
+    }
+  }
+
+  private toNativeTimestamp(createdAt: Date, index: number): number {
+    const base = createdAt instanceof Date ? createdAt.getTime() : Date.now();
+    return base + index;
+  }
+
   async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<CtxMillAgentEvent> {
+    this.transcript = [...input.messages];
     this.turnRef.onApprovalNeeded = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
     this.turnRef.runId = input.turnId;
 
@@ -515,7 +541,11 @@ class PiAgentSession implements HarnessSession {
       this.config.conversationId,
     );
 
-    const lastUserMsg = [...input.messages].reverse().find((m) => m.role === 'user');
+    const latestMessage = input.messages[input.messages.length - 1];
+    const lastUserMsg = latestMessage?.role === 'user' ? latestMessage : undefined;
+    const nativeHistory = lastUserMsg
+      ? input.messages.slice(0, -1)
+      : input.messages;
 
     const eventQueue: CtxMillAgentEvent[] = [];
     let done = false;
@@ -591,6 +621,8 @@ class PiAgentSession implements HarnessSession {
         done = true;
         eventQueue.push({ type: 'done', usage: totalUsage });
       }
+
+      this.nativeSession.agent.replaceMessages(this.buildNativeHistoryMessages(nativeHistory));
 
       const promptPromise = lastUserMsg
         ? this.nativeSession.prompt(lastUserMsg.content)

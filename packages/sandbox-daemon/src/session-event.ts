@@ -15,4 +15,10 @@ export interface MessageCommittedSessionEvent {
   messageSeq: number;
 }
 
-export type SessionEvent = AGUISessionEvent | MessageCommittedSessionEvent;
+export interface TurnFailedSessionEvent {
+  type: 'turn_failed';
+  turnId: string;
+  errorMessage: string;
+}
+
+export type SessionEvent = AGUISessionEvent | MessageCommittedSessionEvent | TurnFailedSessionEvent;

@@ -72,9 +72,6 @@ export function manifestToDefinition(
       ? {
           workspaceContent: {
             ...(spec.workspace.content.files ? { files: spec.workspace.content.files } : {}),
-            ...(spec.workspace.content.skills !== undefined
-              ? { skills: spec.workspace.content.skills }
-              : {}),
           },
         }
       : {}),
@@ -158,9 +155,6 @@ export function definitionToManifest(
             workspace: {
               content: {
                 ...(def.workspaceContent.files ? { files: def.workspaceContent.files } : {}),
-                ...(def.workspaceContent.skills !== undefined
-                  ? { skills: def.workspaceContent.skills }
-                  : {}),
               },
             },
           }

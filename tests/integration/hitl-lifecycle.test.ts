@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
-import { ContainerLifecyclePolicy } from '../../packages/ctxmill/src/orchestrator/container-lifecycle-policy.js';
 import { TestSessionRegistry } from '../utils/test-session-registry.js';
-import type { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
 import type {
   InterruptRow,
 } from '../../packages/ctxmill/src/database/repository.js';
@@ -13,62 +11,6 @@ import {
 
 type InterruptStore = NonNullable<ConstructorParameters<typeof InterruptManager>[1]>;
 type InterruptInsert = Parameters<InterruptStore['savePendingInterrupt']>[0];
-
-function createMockContainerManager(): ContainerManager {
-  return {
-    pauseContainer: vi.fn().mockResolvedValue(undefined),
-    unpauseContainer: vi.fn().mockResolvedValue(undefined),
-  } as unknown as ContainerManager;
-}
-
-function createPauseManager(
-  overrides?: {
-    pauseDelayMs?: number;
-    maxPauseDurationMs?: number;
-    idleTimeoutMs?: number;
-    freezePromotionMs?: number;
-    onPromoteToCheckpoint?: (sessionId: string) => Promise<void>;
-  },
-): {
-  pauseManager: ContainerLifecyclePolicy;
-  containerManager: ContainerManager;
-  onPromoteToCheckpoint: ReturnType<typeof vi.fn>;
-} {
-  const containerManager = createMockContainerManager();
-  const onPromoteToCheckpoint = overrides?.onPromoteToCheckpoint
-    ? vi.fn().mockImplementation(overrides.onPromoteToCheckpoint)
-    : vi.fn().mockResolvedValue(undefined);
-  const mockDb = {
-    getActiveSandboxSessions: vi.fn().mockResolvedValue([]),
-    updateSandboxSessionStatus: vi.fn().mockResolvedValue(undefined),
-    getCheckpointV2: vi.fn().mockResolvedValue(null),
-    deleteSandboxSession: vi.fn().mockResolvedValue(undefined),
-  } as any;
-  const mockLogger = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-  const pauseManager = new ContainerLifecyclePolicy({
-    containerManager,
-    db: mockDb,
-    logger: mockLogger,
-    config: {
-      pauseDelayMs: overrides?.pauseDelayMs ?? 5_000,
-      maxPauseDurationMs: overrides?.maxPauseDurationMs ?? 300_000,
-      idleTimeoutMs: overrides?.idleTimeoutMs ?? 300_000,
-      freezePromotionMs: overrides?.freezePromotionMs ?? 600_000,
-    },
-    onPromoteToCheckpoint,
-    reconciliationCallbacks: {
-      onSessionReconnected: vi.fn(),
-      onSessionEvicted: vi.fn(),
-    },
-  });
-
-  return { pauseManager, containerManager, onPromoteToCheckpoint };
-}
 
 function createMockInterruptDb(): {
   db: InterruptStore;
@@ -132,28 +74,6 @@ function createMockInterruptDb(): {
 
   return { db, rows };
 }
-async function waitForHitlThenScheduleIdleTimeout(
-  interrupts: InterruptManager,
-  pauseManager: ContainerLifecyclePolicy,
-  sessionId: string,
-  containerId: string,
-): Promise<void> {
-  pauseManager.schedulePause(sessionId, containerId);
-  await interrupts.waitForApproval(
-    'run-1',
-    'agent-1',
-    'tc-1',
-    'send_email',
-    { to: 'user@example.com' },
-    60_000,
-  );
-  await pauseManager.cancelPause(sessionId);
-  pauseManager.scheduleIdleTimeout(sessionId, containerId, {
-    onFreeze: vi.fn().mockResolvedValue(undefined),
-    onCheckpoint: vi.fn().mockResolvedValue(undefined),
-  });
-}
-
 describe('HITL lifecycle boundary conditions', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -164,50 +84,62 @@ describe('HITL lifecycle boundary conditions', () => {
     vi.useRealTimers();
   });
 
-  describe('HITL pause/resume state transitions', () => {
-    it('pauseRun sets status to paused and emits run.paused', async () => {
-      const bus = createTestBus();
-      const pausedEvents = collectEvents(bus, 'session.paused');
-      const registry = new TestSessionRegistry(undefined, bus);
+  describe('HITL wait state transitions', () => {
+    it('keeps the session ACTIVE while waiting for approval', async () => {
+      const registry = new TestSessionRegistry(undefined, createTestBus());
+      const onTimeout = vi.fn().mockResolvedValue(undefined);
+      const manager = new InterruptManager(createTestBus(), undefined, onTimeout);
       const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
 
-      const paused = await registry.pauseRun(run.id, 'hitl_approval');
-
-      expect(paused).toBeDefined();
-      expect(paused?.status).toBe('paused');
-      expect(paused?.pausedReason).toBe('hitl_approval');
-      expect(pausedEvents.events).toHaveLength(1);
-      expect(pausedEvents.events[0]).toEqual(
-        expect.objectContaining({
-          sessionId: run.id,
-          agentId: 'agent-1',
-          conversationId: 'conv-1',
-          reason: 'hitl_approval',
-        }),
+      const approval = manager.waitForApproval(
+        'run-1',
+        'agent-1',
+        'tc-1',
+        'send_email',
+        { to: 'user@example.com' },
+        1_000,
+        run.id,
       );
 
-      pausedEvents.unsubscribe();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(registry.getRun(run.id)?.status).toBe('running');
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).toBe(true);
+      await expect(approval).resolves.toEqual({ action: 'approve', data: { ok: true } });
+      expect(registry.getRun(run.id)?.status).toBe('running');
+
+      manager.shutdown();
     });
 
-    it('resumeRun after pauseRun transitions back to running', async () => {
+    it('on timeout fires onTimeout and suspends the session', async () => {
       const registry = new TestSessionRegistry(undefined, createTestBus());
       const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
+      const onTimeout = vi.fn(async (sessionId: string) => {
+        await registry.suspendSession(sessionId, 'hitl_timeout');
+      });
+      const manager = new InterruptManager(createTestBus(), undefined, onTimeout);
 
-      await registry.pauseRun(run.id, 'hitl_approval');
-      const resumed = await registry.resumeRun(run.id);
+      const approval = manager.waitForApproval(
+        'run-1',
+        'agent-1',
+        'tc-1',
+        'bash',
+        { cmd: 'ls' },
+        1_000,
+        run.id,
+      );
 
-      expect(resumed).toBeDefined();
-      expect(resumed?.status).toBe('running');
-      expect(resumed?.resumedAt).toBeTypeOf('number');
-    });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.resolve();
 
-    it('pauseRun on non-running run returns undefined', async () => {
-      const registry = new TestSessionRegistry(undefined, createTestBus());
-      const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
+      await expect(approval).resolves.toMatchObject({ action: 'suspend' });
+      expect(onTimeout).toHaveBeenCalledWith(run.id);
+      expect(registry.getRun(run.id)?.status).toBe('suspended');
+      expect(registry.getRun(run.id)?.pausedReason).toBe('hitl_timeout');
 
-      await registry.completeRun(run.id);
-
-      await expect(registry.pauseRun(run.id, 'should_not_pause')).resolves.toBeUndefined();
+      manager.shutdown();
     });
   });
 
@@ -243,13 +175,13 @@ describe('HITL lifecycle boundary conditions', () => {
       manager.shutdown();
     });
 
-    it('waitForApproval times out after configured duration', async () => {
+    it('waitForApproval suspends after configured duration', async () => {
       const manager = new InterruptManager(createTestBus());
       const approval = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 1_000);
 
       await vi.advanceTimersByTimeAsync(1_000);
 
-      await expect(approval).resolves.toMatchObject({ action: 'timeout' });
+      await expect(approval).resolves.toMatchObject({ action: 'suspend' });
       expect(manager.hasPending('run-1')).toBe(false);
 
       manager.shutdown();
@@ -280,31 +212,6 @@ describe('HITL lifecycle boundary conditions', () => {
       manager.shutdown();
     });
 
-    it('cancelTimeoutForSession prevents automatic timeout resolution', async () => {
-      const manager = new InterruptManager(createTestBus());
-
-      const approval = manager.waitForApproval(
-        'run-1',
-        'agent-1',
-        'tc-1',
-        'bash',
-        { cmd: 'ls' },
-        1_000,
-        'session-1',
-      );
-
-      manager.cancelTimeoutForSession('session-1');
-
-      await vi.advanceTimersByTimeAsync(2_000);
-
-      expect(manager.hasPending('run-1')).toBe(true);
-
-      expect(manager.resolve('run-1', 'approve')).toBe(true);
-      await expect(approval).resolves.toEqual({ action: 'approve' });
-
-      manager.shutdown();
-    });
-
     it('resolveForSession resolves pending interrupt by sessionId', async () => {
       const manager = new InterruptManager(createTestBus());
 
@@ -318,11 +225,11 @@ describe('HITL lifecycle boundary conditions', () => {
         'session-1',
       );
 
-      expect(manager.resolveForSession('session-1', 'timeout', 'timed out by lifecycle')).toBe(true);
+      expect(manager.resolveForSession('session-1', 'suspend', 'Session suspended for HITL approval — awaiting human decision')).toBe(true);
 
       await expect(approval).resolves.toEqual({
-        action: 'timeout',
-        data: 'timed out by lifecycle',
+        action: 'suspend',
+        data: 'Session suspended for HITL approval — awaiting human decision',
       });
       expect(manager.hasPending('run-1')).toBe(false);
 
@@ -332,7 +239,7 @@ describe('HITL lifecycle boundary conditions', () => {
     it('resolveForSession returns false for unknown sessionId', () => {
       const manager = new InterruptManager(createTestBus());
 
-      expect(manager.resolveForSession('no-such-session', 'timeout')).toBe(false);
+      expect(manager.resolveForSession('no-such-session', 'suspend')).toBe(false);
 
       manager.shutdown();
     });
@@ -380,144 +287,4 @@ describe('HITL lifecycle boundary conditions', () => {
     });
   });
 
-  describe('PauseManager HITL flow', () => {
-    it('schedulePause transitions to scheduled, then paused after delay', async () => {
-      const { pauseManager, containerManager } = createPauseManager({ pauseDelayMs: 5_000 });
-
-      pauseManager.schedulePause('sess-1', 'container-1');
-      expect(pauseManager.getState('sess-1')).toBe('scheduled');
-
-      await vi.advanceTimersByTimeAsync(5_000);
-
-      expect(pauseManager.getState('sess-1')).toBe('paused');
-      expect(containerManager.pauseContainer).toHaveBeenCalledWith('container-1');
-
-      pauseManager.cleanupAll();
-    });
-
-    it('cancelPause before pause executes cancels the schedule', async () => {
-      const { pauseManager, containerManager } = createPauseManager({ pauseDelayMs: 5_000 });
-
-      pauseManager.schedulePause('sess-1', 'container-1');
-      await pauseManager.cancelPause('sess-1');
-      await vi.advanceTimersByTimeAsync(10_000);
-
-      expect(pauseManager.getState('sess-1')).toBe('none');
-      expect(containerManager.pauseContainer).not.toHaveBeenCalled();
-      expect(containerManager.unpauseContainer).not.toHaveBeenCalled();
-
-      pauseManager.cleanupAll();
-    });
-
-    it('cancelPause after pause executes unpauses container', async () => {
-      const { pauseManager, containerManager } = createPauseManager({ pauseDelayMs: 5_000 });
-
-      pauseManager.schedulePause('sess-1', 'container-1');
-      await vi.advanceTimersByTimeAsync(5_000);
-      await pauseManager.cancelPause('sess-1');
-
-      expect(pauseManager.getState('sess-1')).toBe('none');
-      expect(containerManager.unpauseContainer).toHaveBeenCalledWith('container-1');
-
-      pauseManager.cleanupAll();
-    });
-
-    it('HITL promotion fires after maxPauseDurationMs', async () => {
-      const { pauseManager, onPromoteToCheckpoint } = createPauseManager({
-        pauseDelayMs: 1_000,
-        maxPauseDurationMs: 10_000,
-      });
-
-      pauseManager.schedulePause('sess-1', 'container-1');
-      await vi.advanceTimersByTimeAsync(1_000);
-      await vi.advanceTimersByTimeAsync(10_000);
-
-      expect(onPromoteToCheckpoint).toHaveBeenCalledWith('sess-1');
-      expect(pauseManager.getState('sess-1')).toBe('none');
-
-      pauseManager.cleanupAll();
-    });
-  });
-
-  describe('PauseManager + HITL coordination', () => {
-    it('idle timeout is not scheduled during active HITL wait', async () => {
-      const interrupts = new InterruptManager(createTestBus());
-      const { pauseManager } = createPauseManager({ pauseDelayMs: 5_000 });
-      const idleSpy = vi.spyOn(pauseManager, 'scheduleIdleTimeout');
-
-      const turn = waitForHitlThenScheduleIdleTimeout(
-        interrupts,
-        pauseManager,
-        'sess-1',
-        'container-1',
-      );
-
-      await Promise.resolve();
-
-      expect(pauseManager.getState('sess-1')).toBe('scheduled');
-      expect(idleSpy).not.toHaveBeenCalled();
-
-      expect(interrupts.resolve('run-1', 'approve', { ok: true }, 'agent-1')).toBe(true);
-      await turn;
-
-      expect(idleSpy).toHaveBeenCalledTimes(1);
-      expect(idleSpy).toHaveBeenCalledWith(
-        'sess-1',
-        'container-1',
-        expect.objectContaining({
-          onFreeze: expect.any(Function),
-          onCheckpoint: expect.any(Function),
-        }),
-      );
-
-      interrupts.shutdown();
-      pauseManager.cleanupAll();
-    });
-
-    it('lifecycle policy is sole timeout authority when interrupt timeout is cancelled', async () => {
-      const interrupts = new InterruptManager(createTestBus());
-      const { pauseManager, containerManager, onPromoteToCheckpoint } = createPauseManager({
-        pauseDelayMs: 1_000,
-        maxPauseDurationMs: 5_000,
-      });
-
-      const approval = interrupts.waitForApproval(
-        'run-1',
-        'agent-1',
-        'tc-1',
-        'send_email',
-        { to: 'a@b.com' },
-        30_000,
-        'sess-1',
-      );
-
-      interrupts.cancelTimeoutForSession('sess-1');
-
-      pauseManager.schedulePause('sess-1', 'container-1');
-
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(containerManager.pauseContainer).toHaveBeenCalledWith('container-1');
-
-      await vi.advanceTimersByTimeAsync(5_000);
-
-      expect(onPromoteToCheckpoint).toHaveBeenCalledWith('sess-1');
-
-      expect(interrupts.resolveForSession('sess-1', 'timeout', 'checkpointed by lifecycle')).toBe(
-        true,
-      );
-
-      await expect(approval).resolves.toEqual({
-        action: 'timeout',
-        data: 'checkpointed by lifecycle',
-      });
-
-      await vi.advanceTimersByTimeAsync(30_000);
-
-      expect(interrupts.hasPending('run-1')).toBe(false);
-
-      interrupts.shutdown();
-      pauseManager.cleanupAll();
-    });
-  });
 });

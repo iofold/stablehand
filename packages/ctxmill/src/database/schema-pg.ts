@@ -35,6 +35,7 @@ export const messages = pgTable('messages', {
   content: text('content').notNull(),
   toolCallId: text('tool_call_id'),
   toolCalls: jsonb('tool_calls').$type<unknown[]>(),
+  parts: jsonb('parts').$type<unknown[]>(),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
   conversationCreatedIdx: index('idx_messages_conversation_created').on(table.conversationId, table.createdAt),

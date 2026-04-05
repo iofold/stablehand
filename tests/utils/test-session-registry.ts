@@ -301,18 +301,6 @@ export function createTestSessionManager(
       const turnId = turnIdsBySessionId.get(sandboxSessionId);
       return turnId ? registry.getAbortSignal(turnId) : undefined;
     },
-    pauseForHitl: async (sandboxSessionId: string, reason: string) => {
-      const turnId = turnIdsBySessionId.get(sandboxSessionId);
-      if (turnId) {
-        await registry.pauseSession(turnId, reason);
-      }
-    },
-    resumeFromHitl: async (sandboxSessionId: string) => {
-      const turnId = turnIdsBySessionId.get(sandboxSessionId);
-      if (turnId) {
-        await registry.resumeSession(turnId);
-      }
-    },
     getSession: vi.fn(),
     getActiveSessions: () => [],
   };

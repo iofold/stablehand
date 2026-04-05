@@ -122,6 +122,9 @@ function parseManifestToPayload(manifestYaml: string): AgentPayload {
     payload.resourceLimits = spec.resources;
   }
 
+  // Preserve the full manifest so spec fields survive the API → DB round-trip.
+  (payload as Record<string, unknown>).manifest = parsed;
+
   return payload;
 }
 

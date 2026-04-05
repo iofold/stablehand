@@ -152,9 +152,36 @@ The shipped UI includes:
 | Testing | Vitest, Playwright |
 | Monorepo | pnpm workspaces |
 
-## Architecture Notes
+## Documentation
 
-The current architecture document is [docs/architecture.md](/path/to/stablehand/docs/architecture.md). Future sandbox execution work is tracked in [docs/plans/2026-03-17-sandbox-execution-requirements.md](/path/to/stablehand/docs/plans/2026-03-17-sandbox-execution-requirements.md).
+### Getting Started
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/architecture.md) | System architecture, component interactions, data flow |
+| [One-Pager](docs/ctxmill-one-pager.md) | High-level overview of what CTXMill is and does |
+| [API Reference](docs/api-reference.md) | Complete REST API and SSE streaming protocol reference |
+| [Environment Variables](docs/environment-variables.md) | Complete env var reference — core, sandbox, AI, storage, and system settings |
+| [Harness Comparison](docs/harness-comparison.md) | Feature matrix for choosing between LangGraph, Claude Agents, and PI Agent |
+
+### Guides
+| Document | Description |
+|----------|-------------|
+| [Embedding in Foreign Stacks](docs/embedding-in-foreign-stacks.md) | Integrating CTXMill into your existing application |
+| [Writing Tool Providers](docs/writing-tool-providers.md) | Adding custom tools (Local, MCP, HTTP, Composio) |
+| [Writing Skills](docs/writing-skills.md) | Creating agent skills with SKILL.md format |
+| [Programmatic Tool Calling](docs/programmatic-tool-calling.md) | PTC API for structured tool invocations |
+| [HITL Approval Flow](docs/HITL_APPROVAL_FLOW.md) | Human-in-the-loop approval cards, editable docs, and field requests |
+| [LangSmith Tracing](docs/langsmith-tracing.md) | Setting up observability with LangSmith |
+
+### Operations
+| Document | Description |
+|----------|-------------|
+| [Checkpoint & Resume](docs/checkpoint-resume.md) | Session suspend, checkpoint, and resume lifecycle |
+| [Container Lifecycle](docs/container-lifecycle.md) | Idle timeout, freeze promotion, and reconciliation |
+| [Observability](docs/observability.md) | Monitoring, logging, and debugging your deployment |
+| [Debugging Harnesses](docs/debugging-harnesses.md) | Troubleshooting agent execution inside sandbox containers |
+| [Event Pipeline Mapping](docs/event-pipeline-mapping.md) | Proto → TypeScript → AG-UI event conversion reference |
+| [Deploying with Bhatti](docs/deploy-bhatti.md) | Firecracker microVM deployment |
 
 ## License
 

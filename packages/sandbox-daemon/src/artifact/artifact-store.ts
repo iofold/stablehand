@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream';
 import {
   CreateBucketCommand,
   DeleteObjectCommand,
@@ -61,6 +62,13 @@ const MISSING_BUCKET_ERROR_NAMES = new Set(['NotFound', 'NoSuchBucket']);
 const BUCKET_EXISTS_ERROR_NAMES = new Set(['BucketAlreadyOwnedByYou', 'BucketAlreadyExists']);
 const MISSING_OBJECT_ERROR_NAMES = new Set(['NotFound', 'NoSuchKey']);
 
+/**
+ * HTTP status codes that indicate a bucket does not exist or is inaccessible.
+ * MinIO returns 403 Forbidden (often as UnknownError) for non-existent buckets
+ * instead of 404 NotFound like AWS S3.
+ */
+const MISSING_BUCKET_HTTP_STATUS_CODES = new Set([403, 404]);
+
 export class ArtifactStore {
   private readonly client: ArtifactStoreClient;
   private readonly signingClient: ArtifactStoreClient;
@@ -102,7 +110,7 @@ export class ArtifactStore {
       await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }));
       return;
     } catch (error) {
-      if (!hasErrorName(error, MISSING_BUCKET_ERROR_NAMES)) {
+      if (!isMissingBucketError(error)) {
         throw error;
       }
     }
@@ -120,13 +128,14 @@ export class ArtifactStore {
     }
   }
 
-  async upload(key: string, body: Buffer | Uint8Array, contentType: string): Promise<void> {
+  async upload(key: string, body: Buffer | Uint8Array | Readable, contentType: string, contentLength?: number): Promise<void> {
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
         Body: body,
         ContentType: contentType,
+        ...(contentLength !== undefined && { ContentLength: contentLength }),
       }),
     );
   }
@@ -217,6 +226,30 @@ const defaultGetSignedUrl: ArtifactStoreSignedUrlFn = async (client, command, op
 
   return getSignedUrl(client, command, options);
 };
+
+function isMissingBucketError(error: unknown): boolean {
+  if (hasErrorName(error, MISSING_BUCKET_ERROR_NAMES)) {
+    return true;
+  }
+
+  const httpStatus = getErrorHttpStatus(error);
+  return httpStatus !== undefined && MISSING_BUCKET_HTTP_STATUS_CODES.has(httpStatus);
+}
+
+function getErrorHttpStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('$metadata' in error)) {
+    return undefined;
+  }
+
+  const metadata = (error as { $metadata: unknown }).$metadata;
+
+  if (typeof metadata !== 'object' || metadata === null || !('httpStatusCode' in metadata)) {
+    return undefined;
+  }
+
+  const code = (metadata as { httpStatusCode: unknown }).httpStatusCode;
+  return typeof code === 'number' ? code : undefined;
+}
 
 function hasErrorName(error: unknown, names: ReadonlySet<string>): boolean {
   if (typeof error !== 'object' || error === null || !('name' in error)) {

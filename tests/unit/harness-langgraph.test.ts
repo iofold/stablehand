@@ -20,9 +20,37 @@ class MockLocalShellBackend {
   }
 }
 
-const DEEPAGENTS_MODULE_ID = 'file:///path/to/stablehand/node_modules/.pnpm/deepagents@1.8.1_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6__react-dom@_220e5e351a3af6f29d5ecee1bbd1c2a4/node_modules/deepagents/dist/index.js';
-const LANGCHAIN_TOOLS_MODULE_ID = 'file:///path/to/stablehand/node_modules/.pnpm/@langchain+core@1.1.31_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6_/node_modules/@langchain/core/dist/tools/index.js';
-const LANGCHAIN_OPENAI_MODULE_ID = 'file:///path/to/stablehand/node_modules/.pnpm/@langchain+openai@1.2.12_@langchain+core@1.1.31_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6___ws@8.19.0/node_modules/@langchain/openai/dist/index.js';
+vi.mock('deepagents', () => ({
+  __esModule: true,
+  createDeepAgent: mockCreateDeepAgent,
+  LocalShellBackend: MockLocalShellBackend,
+}));
+
+vi.mock('file:///path/to/stablehand/node_modules/.pnpm/deepagents@1.8.1_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6__react-dom@_220e5e351a3af6f29d5ecee1bbd1c2a4/node_modules/deepagents/dist/index.js', () => ({
+  __esModule: true,
+  createDeepAgent: mockCreateDeepAgent,
+  LocalShellBackend: MockLocalShellBackend,
+}));
+
+vi.mock('@langchain/core/tools', () => ({
+  __esModule: true,
+  tool: mockLcTool,
+}));
+
+vi.mock('file:///path/to/stablehand/node_modules/.pnpm/@langchain+core@1.1.31_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6_/node_modules/@langchain/core/dist/tools/index.js', () => ({
+  __esModule: true,
+  tool: mockLcTool,
+}));
+
+vi.mock('@langchain/openai', () => ({
+  __esModule: true,
+  ChatOpenAI: MockChatOpenAI,
+}));
+
+vi.mock('file:///path/to/stablehand/node_modules/.pnpm/@langchain+openai@1.2.12_@langchain+core@1.1.31_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6___ws@8.19.0/node_modules/@langchain/openai/dist/index.js', () => ({
+  __esModule: true,
+  ChatOpenAI: MockChatOpenAI,
+}));
 
 import type { AgentEvent, HarnessSessionConfig } from '../../packages/ctxmill/src/harness/types.js';
 import type { Message } from '../../packages/ctxmill/src/types.js';
@@ -68,6 +96,27 @@ async function* langGraphStream(events: Array<Record<string, unknown>>) {
   }
 }
 
+function createMockChatModel() {
+  return {
+    getName: () => 'mock-model',
+    _llmType: () => 'mock',
+    bindTools: vi.fn(function bindTools() {
+      return this;
+    }),
+    invoke: vi.fn(async () => ({ content: '' })),
+    stream: vi.fn(async function* () {
+      yield { content: '' };
+    }),
+  };
+}
+
+function createMockDeepAgentsModule() {
+  return {
+    createDeepAgent: mockCreateDeepAgent,
+    LocalShellBackend: MockLocalShellBackend,
+  };
+}
+
 function isCommittedWithToolCalls(
   event: AgentEvent,
 ): event is Extract<AgentEvent, { type: 'message_committed' }> & {
@@ -91,32 +140,12 @@ function getCommittedWithToolCalls(
 
 async function openTestSession(config: HarnessSessionConfig = makeConfig()) {
   vi.resetModules();
-  const deepagentsMock = () => ({
-    __esModule: true,
-    createDeepAgent: mockCreateDeepAgent,
-    LocalShellBackend: MockLocalShellBackend,
-  });
-  const langchainToolsMock = () => ({
-    __esModule: true,
-    tool: mockLcTool,
-  });
-  const langchainOpenAiMock = () => ({
-    __esModule: true,
-    ChatOpenAI: MockChatOpenAI,
-  });
-
-  vi.doMock('deepagents', deepagentsMock);
-  vi.doMock(DEEPAGENTS_MODULE_ID, deepagentsMock);
-  vi.doMock('@langchain/core/tools', langchainToolsMock);
-  vi.doMock(LANGCHAIN_TOOLS_MODULE_ID, langchainToolsMock);
-  vi.doMock('@langchain/openai', langchainOpenAiMock);
-  vi.doMock(LANGCHAIN_OPENAI_MODULE_ID, langchainOpenAiMock);
-
   const { LangGraphHarness } = await import('../../packages/sandbox-daemon/src/harness/langgraph.ts');
   const harness = new LangGraphHarness();
   const session = await harness.openSession(config);
 
-  Reflect.set(session, 'buildModelFromConfig', async () => ({}));
+  Reflect.set(session, 'buildModelFromConfig', async () => createMockChatModel());
+  Reflect.set(session, 'loadDeepAgentsModule', async () => createMockDeepAgentsModule());
 
   return { harness, session };
 }
@@ -126,32 +155,12 @@ async function openRestoredTestSession(
   config: HarnessSessionConfig = makeConfig(),
 ) {
   vi.resetModules();
-  const deepagentsMock = () => ({
-    __esModule: true,
-    createDeepAgent: mockCreateDeepAgent,
-    LocalShellBackend: MockLocalShellBackend,
-  });
-  const langchainToolsMock = () => ({
-    __esModule: true,
-    tool: mockLcTool,
-  });
-  const langchainOpenAiMock = () => ({
-    __esModule: true,
-    ChatOpenAI: MockChatOpenAI,
-  });
-
-  vi.doMock('deepagents', deepagentsMock);
-  vi.doMock(DEEPAGENTS_MODULE_ID, deepagentsMock);
-  vi.doMock('@langchain/core/tools', langchainToolsMock);
-  vi.doMock(LANGCHAIN_TOOLS_MODULE_ID, langchainToolsMock);
-  vi.doMock('@langchain/openai', langchainOpenAiMock);
-  vi.doMock(LANGCHAIN_OPENAI_MODULE_ID, langchainOpenAiMock);
-
   const { LangGraphHarness } = await import('../../packages/sandbox-daemon/src/harness/langgraph.ts');
   const harness = new LangGraphHarness();
   const session = await harness.openSession(config, restore);
 
-  Reflect.set(session, 'buildModelFromConfig', async () => ({}));
+  Reflect.set(session, 'buildModelFromConfig', async () => createMockChatModel());
+  Reflect.set(session, 'loadDeepAgentsModule', async () => createMockDeepAgentsModule());
 
   return { harness, session };
 }
@@ -186,7 +195,7 @@ describe('LangGraphHarness', () => {
     });
 
     await collectEvents(session.deliverTurn({
-      messages: [userMessage],
+      messages: [restoredMessage, userMessage],
       turnId: 'turn-restored',
     }, {}));
 
@@ -219,7 +228,7 @@ describe('LangGraphHarness', () => {
     });
 
     await collectEvents(session.deliverTurn({
-      messages: [userMessage],
+      messages: [restoredMessage, userMessage],
       turnId: 'turn-fallback',
     }, {}));
 

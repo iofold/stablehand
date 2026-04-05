@@ -14,7 +14,7 @@ import { MessageBubble } from './MessageBubble';
 import { ToolCallCard } from './ToolCallCard';
 import { ErrorDisplay } from './ErrorDisplay';
 import { cn } from '@/lib/utils';
-import type { Message, ToolCallState } from '@/stores/conversation';
+import type { Message, ToolCallState, MessagePart } from '@/stores/conversation';
 
 export interface SessionThreadProps {
   messages: Message[];
@@ -229,7 +229,30 @@ export function SessionThread({
         <div className="mx-auto max-w-3xl space-y-1">
           {mergedMessages.map((msg) => (
             <div key={msg.id} className="space-y-1">
-              {msg.role === 'tool' ? (
+              {msg.parts && msg.parts.length > 0 ? (
+                msg.parts.map((part: MessagePart) => (
+                  part.type === 'text' ? (
+                    <MessageBubble
+                      key={`${msg.id}-text-${part.content}`}
+                      message={{ ...msg, content: part.content, parts: [part] }}
+                      agentId={agentId}
+                      conversationId={conversationId}
+                    />
+                  ) : (
+                    <ToolCallCard
+                      key={`${msg.id}-tool-${part.id}`}
+                      toolCall={{
+                        id: part.id,
+                        name: part.name,
+                        args: part.args,
+                        result: part.result,
+                        error: part.error,
+                        status: part.status,
+                      }}
+                    />
+                  )
+                ))
+              ) : msg.role === 'tool' ? (
                 <ToolCallCard toolCall={{
                   id: msg.toolCallId || msg.id,
                   name: 'tool result',
@@ -238,10 +261,7 @@ export function SessionThread({
                   status: 'complete',
                 }} />
               ) : (
-                 <MessageBubble message={msg} agentId={agentId} conversationId={conversationId} />
-              )}
-              {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
-                <CollapsibleToolCalls toolCalls={msg.toolCalls} />
+                <MessageBubble message={msg} agentId={agentId} conversationId={conversationId} />
               )}
             </div>
           ))}

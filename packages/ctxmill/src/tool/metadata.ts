@@ -23,6 +23,8 @@ export interface ToolMetadata {
   inputSchema: Record<string, unknown>;
   /** Where the tool executes — sandbox (default), orchestrator, or daemon. */
   location: 'sandbox' | 'orchestrator' | 'daemon';
+  /** If true, the tool is available as a PTC script in /workspace/.tools/ */
+  programmatic?: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -76,6 +78,7 @@ export function toToolMetadata(
     description: tool.description,
     inputSchema: zodToJsonSchema(tool.input as any),
     location: resolvedLocation,
+    programmatic: tool.programmatic ?? false,
   };
 }
 

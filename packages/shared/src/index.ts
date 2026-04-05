@@ -6,6 +6,7 @@ export type {
   ApiAgentResourceLimits,
   ApiAgentSession,
   ApiMessage,
+  ApiMessagePart,
   ApiToolCallState,
   ApiA2UIBlock,
   ApiInterruptPayload,
@@ -14,10 +15,5 @@ export type {
   ApiKnowledgeStats,
   ApiSandboxSession,
   ApiSessionTurn,
-  SkillFrontmatter,
-  SkillManifestEntry,
-  LoadedSkill,
-  SkillValidationResult,
-  LegacySkill,
   SandboxSessionStatus,
 } from './api.js';

@@ -49,6 +49,48 @@ describe('ArtifactStore', () => {
     expect(sendMock).toHaveBeenCalledTimes(2);
   });
 
+  it('ensureBucket creates the bucket when HeadBucket returns HTTP 403 (MinIO)', async () => {
+    const { store, sendMock } = createStore();
+    sendMock
+      .mockRejectedValueOnce(createAwsServiceError('UnknownError', 403))
+      .mockResolvedValueOnce({});
+
+    await store.ensureBucket();
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(getSentCommand(sendMock, 0)).toEqual({
+      name: 'HeadBucketCommand',
+      input: { Bucket: 'artifacts' },
+    });
+    expect(getSentCommand(sendMock, 1)).toEqual({
+      name: 'CreateBucketCommand',
+      input: { Bucket: 'artifacts' },
+    });
+  });
+
+  it('ensureBucket creates the bucket when HeadBucket returns HTTP 404 with unknown error name', async () => {
+    const { store, sendMock } = createStore();
+    sendMock
+      .mockRejectedValueOnce(createAwsServiceError('SomeOtherError', 404))
+      .mockResolvedValueOnce({});
+
+    await store.ensureBucket();
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(getSentCommand(sendMock, 1)).toEqual({
+      name: 'CreateBucketCommand',
+      input: { Bucket: 'artifacts' },
+    });
+  });
+
+  it('ensureBucket throws on non-bucket-related errors', async () => {
+    const { store, sendMock } = createStore();
+    sendMock.mockRejectedValueOnce(createAwsServiceError('InternalError', 500));
+
+    await expect(store.ensureBucket()).rejects.toThrow('InternalError');
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
   it('upload sends PutObjectCommand with key body and content type', async () => {
     const { store, sendMock } = createStore();
     const body = Buffer.from('hello');
@@ -269,5 +311,12 @@ function getExpiresIn(options: unknown): number {
 function createAwsError(name: string): Error {
   const error = new Error(name);
   error.name = name;
+  return error;
+}
+
+function createAwsServiceError(name: string, httpStatusCode: number): Error & { $metadata: { httpStatusCode: number } } {
+  const error = new Error(name) as Error & { $metadata: { httpStatusCode: number } };
+  error.name = name;
+  error.$metadata = { httpStatusCode };
   return error;
 }

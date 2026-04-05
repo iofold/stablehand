@@ -503,6 +503,7 @@ describe('PIAgentHarness native tool flow', () => {
 
     const harness = new PIAgentHarness();
     const restoredMessage = makeMessage('assistant', 'Restored reply');
+    const userMessage = makeMessage('user', 'Hello');
     const session = await harness.openSession(makeConfig(), {
       stateVersion: '1',
       messages: [],
@@ -511,7 +512,7 @@ describe('PIAgentHarness native tool flow', () => {
 
     await collectEvents(
       session.deliverTurn(
-        { messages: [makeMessage('user', 'Hello')], turnId: 'turn-restore' },
+        { messages: [restoredMessage, userMessage], turnId: 'turn-restore' },
         {},
       ),
     );
@@ -519,7 +520,7 @@ describe('PIAgentHarness native tool flow', () => {
     await expect(session.exportState()).resolves.toEqual({
       stateVersion: '2',
       payload: {
-        transcript: [restoredMessage],
+        transcript: [restoredMessage, userMessage],
         nativePersistence: true,
       },
     });

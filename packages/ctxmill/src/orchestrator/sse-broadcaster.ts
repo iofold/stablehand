@@ -12,6 +12,7 @@ const EVENT_TYPE_MAP: Record<string, AGUIEventType> = {
   'run.interrupted': 'CUSTOM',
   'run.interrupt_resolved': 'CUSTOM',
   'turn.completed': 'RUN_FINISHED',
+  'message.committed': 'MESSAGE_COMMITTED',
 };
 
 const RUN_EVENTS: EventName[] = [
@@ -23,6 +24,7 @@ const RUN_EVENTS: EventName[] = [
   'run.interrupted',
   'run.interrupt_resolved',
   'turn.completed',
+  'message.committed',
 ];
 
 type AnyHandler = (payload: EventMap[EventName]) => void;

@@ -5,7 +5,8 @@ import { createTestAgent, deleteTestAgent } from './support';
  * E2E tests for conversation continuity — verifies that the second message
  * in a chat session includes the conversationId returned by the first message.
  *
- * Route: /agents/:id/chat
+ * Route: /agents/:id/conversations/new (new conversation)
+ *        /agents/:id/conversations/:conversationId (continued conversation)
  */
 
 test.describe('Conversation continuity', () => {

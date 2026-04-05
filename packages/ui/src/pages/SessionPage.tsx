@@ -65,12 +65,13 @@ export function SessionPage() {
   const sseStatus = useSSEStatus();
 
   const [error, setError] = useState<string | null>(null);
+  const [isReadOnly, setIsReadOnly] = useState(false);
   const [pastRunError, setPastRunError] = useState<string | null>(null);
   const [lastFailedContent, setLastFailedContent] = useState<string | null>(null);
   const [explorerOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>(routeConversationId);
-  const [isReadOnly, setIsReadOnly] = useState(false);
+
 
   useSSE(id);
 
@@ -92,7 +93,7 @@ export function SessionPage() {
     setActiveConversation(routeConversationId ?? null);
     loadMessages([]);
     setPastRunError(null);
-    setIsReadOnly(false);
+    setIsReadOnly(false);  
 
     async function loadHistory() {
       try {
@@ -182,12 +183,14 @@ export function SessionPage() {
                 setPastRunError(null);
               }
 
-              const hasAnyActiveSession = sessions.some(
-                (s: Record<string, unknown>) =>
-                  s.conversationId === resolvedConversationId &&
-                  (s.status === 'ACTIVE' || s.status === 'RESTORING' || s.status === 'PAUSED' || s.status === 'CHECKPOINTED')
-              );
-              if (!hasAnyActiveSession && !hasActiveTurn && convTurns.length > 0) {
+              // Only lock read-only when sandbox session is TERMINATED (no checkpoint to restore).
+              // ACTIVE/CHECKPOINTED/PAUSED sessions can always resume.
+              const sandboxStatuses = convTurns
+                .map((t: Record<string, unknown>) => t.sandboxSessionStatus as string | undefined)
+                .filter(Boolean);
+              const isTerminated = sandboxStatuses.length > 0 &&
+                sandboxStatuses.every((s) => s === 'TERMINATED');
+              if (isTerminated && !hasActiveTurn && convTurns.length > 0) {
                 setIsReadOnly(true);
               }
             } else {
@@ -324,6 +327,14 @@ export function SessionPage() {
     : sseStatus === 'connecting'
       ? 'bg-amber-400 animate-pulse'
       : 'bg-red-400';
+
+  if (!agentsLoaded) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-surface-950">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-surface-600 border-t-accent-400" />
+      </div>
+    );
+  }
 
   if (agentNotFound) {
     return (
@@ -483,7 +494,7 @@ export function SessionPage() {
           {isReadOnly ? (
             <div className="mx-auto w-full max-w-3xl px-4 pb-4">
               <div className="rounded-lg border border-surface-700 bg-surface-800/50 p-4 text-center">
-                <p className="text-sm text-surface-400">This conversation has ended.</p>
+                <p className="text-sm text-surface-400">This session has ended. Start a new conversation to continue.</p>
               </div>
             </div>
           ) : (

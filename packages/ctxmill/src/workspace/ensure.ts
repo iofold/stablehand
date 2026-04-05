@@ -1,16 +1,6 @@
 import { mkdirSync, existsSync, renameSync, writeFileSync, readdirSync, chownSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-/**
- * Ensure agent workspace directory structure exists.
- * Handles migration from flat layout -> base/ layout.
- *
- * Old layout:  agents/{id}/workspace/, agents/{id}/skills/, agents/{id}/notes/
- * New layout:  agents/{id}/base/workspace/, agents/{id}/base/skills/, agents/{id}/base/notes/
- *              agents/{id}/sessions/
- *
- * Returns the base/workspace path (what workspaceDir stores in DB).
- */
 export function ensureAgentWorkspace(dataDir: string, agentId: string): string {
   const agentDir = join(dataDir, 'agents', agentId);
   const baseDir = join(agentDir, 'base');
@@ -21,14 +11,12 @@ export function ensureAgentWorkspace(dataDir: string, agentId: string): string {
   if (existsSync(oldWorkspace) && !existsSync(baseDir)) {
     mkdirSync(baseDir, { recursive: true });
     renameSync(oldWorkspace, join(baseDir, 'workspace'));
-    const oldSkills = join(agentDir, 'skills');
     const oldNotes = join(agentDir, 'notes');
-    if (existsSync(oldSkills)) renameSync(oldSkills, join(baseDir, 'skills'));
     if (existsSync(oldNotes)) renameSync(oldNotes, join(baseDir, 'notes'));
   }
 
   // Ensure directories exist with ctxmill user ownership (UID 1000)
-  for (const dir of [join(baseDir, 'workspace'), join(baseDir, 'skills'), join(baseDir, 'notes'), sessionsDir]) {
+  for (const dir of [join(baseDir, 'workspace'), join(baseDir, 'notes'), sessionsDir]) {
     mkdirSync(dir, { recursive: true });
     try { chownSync(dir, 1000, 1000); } catch { /* non-root orchestrator — skip chown */ }
   }

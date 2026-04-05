@@ -54,6 +54,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       content TEXT NOT NULL,
       tool_call_id TEXT,
       tool_calls JSONB,
+      parts JSONB,
       created_at BIGINT NOT NULL
     )
   `;

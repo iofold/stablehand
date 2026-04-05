@@ -1,0 +1,42 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: test-lg-features
+  displayName: "LG Feature Test"
+  description: "Tests skills and multi-provider subagents for LangGraph"
+  labels:
+    harness: langgraph
+    test: features
+spec:
+  harness: langgraph
+  harnessConfig:
+    provider: openai
+    model: gpt-5.4-mini
+    subagents:
+      - name: gemini-helper
+        description: "A helper that uses Google Gemini for analysis"
+        systemPrompt: "You are a helpful assistant powered by Gemini. When asked, confirm that you are running on the Gemini model."
+        provider: google
+        model: gemini-2.5-flash
+      - name: claude-helper
+        description: "A helper that uses Claude for writing"
+        systemPrompt: "You are a helpful assistant powered by Claude. When asked, confirm that you are running on the Claude model."
+        provider: anthropic
+        model: claude-sonnet-4-6
+  instructions: |
+    You are a test agent for verifying LangGraph features.
+    {{skills}}
+
+    You have two subagents available:
+    - gemini-helper: Uses Google Gemini
+    - claude-helper: Uses Claude
+
+    When asked to test subagents, delegate a simple task to each one.
+    When asked about skills, describe what skills you have loaded.
+  tools:
+    - ref: calculator
+  workspace: {}
+  mode: interactive
+  resources:
+    maxSessionDurationSeconds: 120
+    maxTokensPerSession: 8000

@@ -80,8 +80,6 @@ async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
     completeTurn: vi.fn(),
     cancelCurrentTurn: vi.fn(),
     getAbortSignal: vi.fn(),
-    pauseForHitl: vi.fn(),
-    resumeFromHitl: vi.fn(),
     getTurn: vi.fn(),
     getActiveTurns: vi.fn(() => []),
   } as unknown as SandboxSessionManager;

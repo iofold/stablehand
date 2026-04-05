@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Archive, Search } from 'lucide-react';
+import { Archive, Search, Upload } from 'lucide-react';
 import { useAgentsStore } from '@/stores/agents';
 import { useArtifactsStore } from '@/stores/artifacts';
-import { ArtifactList, ArtifactDetailPanel } from '@/components/artifacts';
+import { ArtifactList, ArtifactDetailPanel, UploadArtifactModal } from '@/components/artifacts';
 
 export function ArtifactsPage() {
   const { agents, fetchAgents } = useAgentsStore();
@@ -10,6 +10,7 @@ export function ArtifactsPage() {
 
   const [selectedAgentId, setSelectedAgentId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
 
   useEffect(() => {
     fetchAgents();
@@ -71,6 +72,15 @@ export function ArtifactsPage() {
               className="w-full bg-surface-900 border border-surface-700 text-surface-100 rounded-md pl-9 pr-4 py-2 focus:outline-none focus:border-accent-500"
             />
           </div>
+
+          <button
+            type="button"
+            onClick={() => setUploadModalOpen(true)}
+            className="inline-flex items-center gap-2 rounded-md bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-500 transition-colors"
+          >
+            <Upload className="h-4 w-4" />
+            Upload Artifact
+          </button>
         </div>
       </div>
 
@@ -78,6 +88,13 @@ export function ArtifactsPage() {
         <ArtifactList searchQuery={selectedAgentId ? searchQuery : ''} showAgentName={!selectedAgentId} />
         {selectedArtifact && <ArtifactDetailPanel />}
       </div>
+
+      <UploadArtifactModal
+        open={uploadModalOpen}
+        onClose={() => setUploadModalOpen(false)}
+        preSelectedAgentId={selectedAgentId}
+        onSuccess={loadArtifacts}
+      />
     </div>
   );
 }

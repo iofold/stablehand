@@ -12,8 +12,8 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fsPromises } from 'node:fs';
-import { resolve } from 'node:path';
+import { promises as fs } from 'node:fs';
+import { resolve, join, dirname } from 'node:path';
 import { create } from '@bufbuild/protobuf';
 import type { JsonObject } from '@bufbuild/protobuf';
 import { createClient, ConnectError, Code } from '@connectrpc/connect';
@@ -24,11 +24,13 @@ import {
   DeliverTurnRequestSchema,
   SuspendSessionRequestSchema,
   KillSessionRequestSchema,
+  ToolMetadataSchema,
   type SessionEvent as ProtoSessionEvent,
   type SessionCheckpoint,
 } from '@ctxmill/proto/sandbox/v1';
 
 import type { ContainerManager } from '../sandbox/container-manager.js';
+import { WorkspacePreparationService } from '../sandbox/workspace-preparation.js';
 import { WorkspaceDiffService } from '../sandbox/workspace-diff.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../database/repository.js';
 import type { TypedEventBus } from '../events/bus.js';
@@ -50,6 +52,7 @@ type ToolMetadata = {
   description: string;
   inputSchemaJson: string;
   location: number;
+  programmatic?: boolean;
 };
 
 // ── Logger interface ───────────────────────────────────────────
@@ -494,7 +497,7 @@ export class SandboxSessionManager {
     return this.findSessionById(sessionId)?.currentTurnAbortController?.signal;
   }
 
-  async pauseSession(sessionId: string, reason: 'hitl' | 'idle'): Promise<void> {
+  async pauseSession(sessionId: string, reason: 'idle'): Promise<void> {
     const record = this.findSessionById(sessionId);
     if (!record || record.status !== 'ACTIVE') {
       return;
@@ -514,12 +517,7 @@ export class SandboxSessionManager {
       timestamp,
     });
 
-    if (reason === 'idle') {
-      await this.containerManager.pauseContainer(record.containerId);
-      return;
-    }
-
-    this.lifecyclePolicy.scheduleHitlGrace(sessionId, record.containerId);
+    await this.containerManager.pauseContainer(record.containerId);
   }
 
   async resumeSession(sessionId: string): Promise<void> {
@@ -544,14 +542,6 @@ export class SandboxSessionManager {
     } catch (error) {
       this.logger.debug(`${TAG} container ${record.containerId} was not resumable for session ${sessionId}`, error);
     }
-  }
-
-  async pauseForHitl(sessionId: string, _reason: string): Promise<void> {
-    await this.pauseSession(sessionId, 'hitl');
-  }
-
-  async resumeFromHitl(sessionId: string): Promise<void> {
-    await this.resumeSession(sessionId);
   }
 
   checkConcurrencyLimit(agentId: string): void {
@@ -652,6 +642,15 @@ export class SandboxSessionManager {
         conversationId: record.conversationId,
         checkpointVersion: checkpoint.checkpointVersion,
         sessionId: checkpoint.sessionId,
+        cursor: checkpoint.cursor,
+        runnerState: {
+          status: checkpoint.runnerState?.status ?? 'IDLE',
+          pendingRequests: (checkpoint.runnerState?.pendingRequests ?? []).map((request) => ({
+            type: request.type,
+            id: request.id,
+            payload: this.parsePendingRequestPayload(request.payloadJson),
+          })),
+        },
       },
       harnessState: checkpoint.harnessState as Record<string, unknown> | undefined,
       workspaceRef,
@@ -790,52 +789,113 @@ export class SandboxSessionManager {
       return;
     }
 
-    const elapsed = interrupt.resolvedAt != null
-      ? this.formatElapsed(interrupt.createdAt, interrupt.resolvedAt)
-      : 'unknown';
-    const decision = interrupt.resolvedAction === 'approve'
-      ? 'APPROVED'
-      : interrupt.resolvedAction === 'timeout'
-        ? 'TIMED OUT'
-        : 'REJECTED';
-    const requestSummary = typeof interrupt.args === 'object' && interrupt.args !== null
-      ? interrupt.args.reason ?? JSON.stringify(interrupt.args)
-      : String(interrupt.args);
+    const checkpoint = await this.db.getCheckpointV2(sessionId);
+    const pendingApprovals = this.getPendingApprovalRequests(checkpoint?.checkpointData).filter((request) => request.type === 'approval');
+    const resolutionContent = interrupt.resolvedAction === 'approve' ? 'APPROVED' : 'REJECTED';
 
-    const continuationContent = [
-      '[HITL Resolution] Your previous approval request has been resolved.',
-      '',
-      `Tool: ${interrupt.toolName}`,
-      `Request: ${String(requestSummary)}`,
-      `Decision: ${decision}`,
-      ...(interrupt.resolvedData != null
-        ? [
-            `Reviewer data: ${typeof interrupt.resolvedData === 'string' ? interrupt.resolvedData : JSON.stringify(interrupt.resolvedData)}`,
-          ]
-        : []),
-      `Time elapsed: ${elapsed}`,
-      '',
-      decision === 'APPROVED'
-        ? 'Continue with the approved action.'
-        : decision === 'TIMED OUT'
-          ? 'The approval request timed out. Handle this gracefully.'
-          : 'The request was rejected. Do not proceed with the rejected action.',
-    ].join('\n');
+    const continuationMessages: Message[] = [];
+    for (const approval of pendingApprovals) {
+      const toolArgs = {
+        tool: approval.payload.tool,
+        args: approval.payload.args,
+      };
 
-    const continuationMessage: Message = {
-      id: `hitl-resume-${randomUUID().slice(0, 8)}`,
-      agentId,
-      role: 'system',
-      content: continuationContent,
-      createdAt: new Date(),
-    };
+      await this.db.addMessage({
+        agentId,
+        conversationId,
+        role: 'assistant',
+        content: '',
+        toolCalls: [{
+          id: approval.id,
+          name: 'request-approval',
+          args: JSON.stringify(toolArgs),
+          status: 'complete',
+        }],
+      });
+      await this.db.addMessage({
+        agentId,
+        conversationId,
+        role: 'tool',
+        content: resolutionContent,
+        toolCallId: approval.id,
+      });
+
+      continuationMessages.push({
+        id: `hitl-assistant-${randomUUID().slice(0, 8)}`,
+        agentId,
+        role: 'assistant',
+        content: '',
+        toolCalls: [{
+          id: approval.id,
+          name: 'request-approval',
+          arguments: toolArgs,
+        }],
+        createdAt: new Date(),
+      });
+      continuationMessages.push({
+        id: `hitl-tool-${randomUUID().slice(0, 8)}`,
+        agentId,
+        role: 'tool',
+        content: resolutionContent,
+        toolCallId: approval.id,
+        createdAt: new Date(),
+      });
+    }
+
+    if (continuationMessages.length === 0) {
+      const fallbackToolCallId = interrupt.toolCallId || `hitl-${turnId}`;
+      const fallbackArgs = typeof interrupt.args === 'object' && interrupt.args !== null
+        ? interrupt.args as Record<string, unknown>
+        : { value: interrupt.args };
+
+      await this.db.addMessage({
+        agentId,
+        conversationId,
+        role: 'assistant',
+        content: '',
+        toolCalls: [{
+          id: fallbackToolCallId,
+          name: 'request-approval',
+          args: JSON.stringify(fallbackArgs),
+          status: 'complete',
+        }],
+      });
+      await this.db.addMessage({
+        agentId,
+        conversationId,
+        role: 'tool',
+        content: resolutionContent,
+        toolCallId: fallbackToolCallId,
+      });
+
+      continuationMessages.push({
+        id: `hitl-assistant-${randomUUID().slice(0, 8)}`,
+        agentId,
+        role: 'assistant',
+        content: '',
+        toolCalls: [{
+          id: fallbackToolCallId,
+          name: 'request-approval',
+          arguments: fallbackArgs,
+        }],
+        createdAt: new Date(),
+      });
+      continuationMessages.push({
+        id: `hitl-tool-${randomUUID().slice(0, 8)}`,
+        agentId,
+        role: 'tool',
+        content: resolutionContent,
+        toolCallId: fallbackToolCallId,
+        createdAt: new Date(),
+      });
+    }
 
     const continuationTurnId = `hitl-resume-${turnId.slice(0, 8)}-${Date.now()}`;
     this.logger.info(
       `${TAG} delivering continuation turn ${continuationTurnId} for session ${record.sessionId}`,
     );
 
-    for await (const _event of this.deliverTurn(record.sessionId, [continuationMessage], continuationTurnId)) {
+    for await (const _event of this.deliverTurn(record.sessionId, continuationMessages, continuationTurnId)) {
       void _event;
     }
 
@@ -844,17 +904,43 @@ export class SandboxSessionManager {
     );
   }
 
-  private formatElapsed(startMs: number, endMs: number): string {
-    const totalSec = Math.floor((endMs - startMs) / 1000);
-    const days = Math.floor(totalSec / 86400);
-    const hours = Math.floor((totalSec % 86400) / 3600);
-    const minutes = Math.floor((totalSec % 3600) / 60);
+  private getPendingApprovalRequests(checkpointData: Record<string, unknown> | undefined): Array<{
+    type: string;
+    id: string;
+    payload: { tool?: unknown; args?: unknown };
+  }> {
+    const runnerState = checkpointData?.runnerState;
+    if (!runnerState || typeof runnerState !== 'object') {
+      return [];
+    }
 
-    const parts: string[] = [];
-    if (days > 0) parts.push(`${days} day${days !== 1 ? 's' : ''}`);
-    if (hours > 0) parts.push(`${hours} hour${hours !== 1 ? 's' : ''}`);
-    if (minutes > 0) parts.push(`${minutes} minute${minutes !== 1 ? 's' : ''}`);
-    return parts.length > 0 ? parts.join(', ') : 'less than a minute';
+    const pendingRequests = 'pendingRequests' in runnerState ? runnerState.pendingRequests : undefined;
+    if (!Array.isArray(pendingRequests)) {
+      return [];
+    }
+
+    return pendingRequests.flatMap((request) => {
+      if (!request || typeof request !== 'object') {
+        return [];
+      }
+
+      const type = 'type' in request && typeof request.type === 'string' ? request.type : undefined;
+      const id = 'id' in request && typeof request.id === 'string' ? request.id : undefined;
+      const payload = 'payload' in request && request.payload && typeof request.payload === 'object'
+        ? request.payload as { tool?: unknown; args?: unknown }
+        : undefined;
+
+      return type && id && payload ? [{ type, id, payload }] : [];
+    });
+  }
+
+  private parsePendingRequestPayload(payloadJson: string): Record<string, unknown> {
+    try {
+      const parsed = JSON.parse(payloadJson) as unknown;
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
   }
 
   // ── Queries ────────────────────────────────────────────────────
@@ -907,6 +993,37 @@ export class SandboxSessionManager {
       this.logger.debug(`${TAG} created session workspace at ${sessionWorkspaceDir}`);
     }
 
+    if (workspaceDir && agentDef.workspaceContent) {
+      const workspacePreparation = new WorkspacePreparationService({ logger: this.logger });
+      await workspacePreparation.prepare({
+        workspaceDir,
+        projectDir: agentDef.projectDir,
+        harnessName,
+        workspaceContent: agentDef.workspaceContent,
+      });
+    }
+
+    const setup = agentDef.harnessConfig['setup'];
+    const symlinks =
+      workspaceDir && typeof setup === 'object' && setup !== null && 'symlinks' in setup && Array.isArray(setup.symlinks)
+        ? setup.symlinks
+        : undefined;
+
+    if (workspaceDir && symlinks) {
+      for (const link of symlinks) {
+        const srcPath = join(workspaceDir, link.src);
+        const destPath = join(workspaceDir, link.dest);
+        await fs.mkdir(dirname(destPath), { recursive: true });
+        try {
+          await fs.symlink(srcPath, destPath);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+            throw err;
+          }
+        }
+      }
+    }
+
     // Create and start the container
     const containerInfo = await this.containerManager.createContainer({
       sessionId,
@@ -926,6 +1043,10 @@ export class SandboxSessionManager {
     this.logger.debug(`${TAG} waiting for container at ${baseUrl}`);
     const { grpcClient } = await waitForContainerReady(baseUrl);
 
+    const resolvedTools = this.resolveToolsForAgent(
+      agentDef.tools ?? [],
+      asStringArray(agentDef.metadata?.excludeBuiltinTools),
+    );
     const openReq = create(OpenSessionRequestSchema, {
       bootstrap: {
         case: 'fresh',
@@ -935,11 +1056,14 @@ export class SandboxSessionManager {
           harnessName,
           harnessConfigJson: JSON.stringify(agentDef.harnessConfig),
           systemPrompt: agentDef.systemPrompt,
-          workspaceDir: workspaceDir ?? '/workspace',
-          tools: this.resolveToolsForAgent(
-            agentDef.tools ?? [],
-            asStringArray(agentDef.metadata?.excludeBuiltinTools),
-          ),
+          workspaceDir: '/workspace',
+          tools: resolvedTools.map((t) => create(ToolMetadataSchema, {
+            name: t.name,
+            description: t.description,
+            inputSchemaJson: t.inputSchemaJson,
+            location: t.location,
+            programmatic: t.programmatic ?? false,
+          })),
         },
       },
     });
@@ -1078,6 +1202,10 @@ export class SandboxSessionManager {
       const baseUrl = `http://${containerInfo.containerName}:${GRPC_PORT}`;
       const { grpcClient } = await waitForContainerReady(baseUrl);
 
+      const restoreTools = this.resolveToolsForAgent(
+        agentDef.tools ?? [],
+        asStringArray(agentDef.metadata?.excludeBuiltinTools),
+      );
       const openReq = create(OpenSessionRequestSchema, {
         bootstrap: {
           case: 'restore',
@@ -1092,10 +1220,13 @@ export class SandboxSessionManager {
             agentId: agentDef.name,
             harnessConfigJson: JSON.stringify(agentDef.harnessConfig),
             systemPrompt: agentDef.systemPrompt,
-            tools: this.resolveToolsForAgent(
-              agentDef.tools ?? [],
-              asStringArray(agentDef.metadata?.excludeBuiltinTools),
-            ),
+            tools: restoreTools.map((t) => create(ToolMetadataSchema, {
+              name: t.name,
+              description: t.description,
+              inputSchemaJson: t.inputSchemaJson,
+              location: t.location,
+              programmatic: t.programmatic ?? false,
+            })),
           },
         },
       });
@@ -1263,22 +1394,15 @@ export class SandboxSessionManager {
                 timeoutId = undefined;
               }
               hitlActive = true;
-              this.interruptManager?.cancelTimeoutForSession(sessionId);
-              void Promise.resolve()
-                .then(() => this.pauseSession(sessionId, 'hitl'))
-                .catch((err) => {
-                  this.logger.warn(`${TAG} failed to schedule HITL grace for session ${sessionId}:`, err);
-                });
               this.logger.debug(
-                `${TAG} HITL_PAUSE detected for session ${sessionId}, turn timeout suspended, HITL grace scheduled`,
+                `${TAG} HITL_PAUSE detected for session ${sessionId}, turn timeout suspended`,
               );
             } else if (hitlActive) {
               hitlActive = false;
-              await this.lifecyclePolicy.cancelPause(sessionId);
               timeoutId = setTimeout(() => abortController.abort(), turnTimeout);
               unrefTimer(timeoutId);
               this.logger.debug(
-                `${TAG} HITL resolved for session ${sessionId}, container unpaused, turn timeout re-armed`,
+                `${TAG} HITL resolved for session ${sessionId}, turn timeout re-armed`,
               );
             }
 
@@ -1307,7 +1431,6 @@ export class SandboxSessionManager {
 
     await this.db.updateSandboxSessionStatus(sessionId, 'ACTIVE');
     this.lifecyclePolicy.scheduleIdleTimeout(sessionId, record.containerId, {
-      onFreeze: (sid) => this.pauseSession(sid, 'idle'),
       onCheckpoint: async (sid) => {
         await this.suspendSession(sid, 'idle-checkpoint');
       },
@@ -1428,7 +1551,7 @@ export class SandboxSessionManager {
 
     const candidatePath = getSessionWorkspacePath(this.dataDir, agentId, sessionId);
     try {
-      await fsPromises.access(candidatePath);
+      await fs.access(candidatePath);
       return candidatePath;
     } catch {
       return undefined;

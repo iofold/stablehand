@@ -3,6 +3,7 @@ import {
   fetchArtifacts as apiFetchArtifacts,
   fetchAllArtifacts as apiFetchAllArtifacts,
   deleteArtifact as apiDeleteArtifact,
+  uploadArtifactDirect,
   type Artifact,
 } from '@/lib/api';
 
@@ -15,6 +16,7 @@ interface ArtifactsStore {
   fetchArtifacts: (agentId: string, sessionId?: string) => Promise<void>;
   fetchAllArtifacts: (options?: { limit?: number; offset?: number; search?: string }) => Promise<void>;
   deleteArtifact: (id: string) => Promise<void>;
+  uploadArtifact: (file: File, agentId: string) => Promise<void>;
   selectArtifact: (artifact: Artifact | null) => void;
   clearSelection: () => void;
 }
@@ -62,6 +64,19 @@ export const useArtifactsStore = create<ArtifactsStore>((set, _get) => ({
       }));
     } catch (err) {
       console.error('[artifacts] deleteArtifact failed:', err);
+      throw err;
+    }
+  },
+
+  uploadArtifact: async (file: File, agentId: string) => {
+    set({ loading: true, error: null });
+    try {
+      await uploadArtifactDirect(file, agentId);
+      const data = await apiFetchArtifacts(agentId);
+      const artifacts = data.artifacts || [];
+      set({ artifacts, total: artifacts.length, loading: false });
+    } catch (err) {
+      set({ error: String(err), loading: false });
       throw err;
     }
   },

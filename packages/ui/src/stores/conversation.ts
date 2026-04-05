@@ -4,10 +4,15 @@ import { useInterruptStore } from './interrupt';
 
 export type ToolCallState = ApiToolCallState;
 
+export type MessagePart =
+  | { type: 'text'; content: string }
+  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: ToolCallState['status'] };
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  parts?: MessagePart[];
   toolCallId?: string;
   toolCalls?: ToolCallState[];
   createdAt: string;
@@ -89,13 +94,45 @@ export function normalizeConversationMessage(
   const role = ((value.role as string) || 'assistant') as Message['role'];
 
   const content = rawContent;
+  const toolCalls = normalizeStoredToolCalls(value.toolCalls, id);
+  const parts: MessagePart[] = [];
+  if (role === 'tool' && typeof value.toolCallId === 'string') {
+    parts.push({ type: 'tool_call', id: value.toolCallId, name: 'tool result', args: '', result: content, status: 'complete' });
+  } else {
+    if (Array.isArray(value.parts) && value.parts.length > 0) {
+      for (const p of value.parts) {
+        const raw = p as Record<string, unknown>;
+        if (raw.type === 'text') {
+          parts.push({ type: 'text', content: (raw.content as string) || '' });
+        } else if (raw.type === 'tool_call') {
+          parts.push({
+            type: 'tool_call',
+            id: (raw.id as string) || '',
+            name: (raw.name as string) || 'unknown',
+            args: (raw.args as string) || '',
+            result: raw.result as string | undefined,
+            error: raw.error as string | undefined,
+            status: normalizeToolCallStatus(raw.status, raw.error as string | undefined),
+          });
+        }
+      }
+    } else {
+      if (content) parts.push({ type: 'text', content });
+      if (toolCalls) {
+        for (const tc of toolCalls) {
+          parts.push({ type: 'tool_call', ...tc });
+        }
+      }
+    }
+  }
 
   return {
     id,
     role,
     content,
+    parts: parts.length > 0 ? parts : undefined,
     toolCallId: typeof value.toolCallId === 'string' ? value.toolCallId : undefined,
-    toolCalls: normalizeStoredToolCalls(value.toolCalls, id),
+    toolCalls,
     createdAt: normalizeCreatedAt(value.createdAt),
   };
 }
@@ -172,11 +209,17 @@ function buildAssistantMessage(state: Pick<ConversationStore, 'streamingContent'
   const msgId = nextId();
 
   const content = state.streamingContent;
+  const parts: MessagePart[] = [];
+  if (state.streamingContent) parts.push({ type: 'text', content: state.streamingContent });
+  for (const tc of toolCalls) {
+    parts.push({ type: 'tool_call', ...tc });
+  }
 
   return {
     id: msgId,
     role: 'assistant',
     content,
+    parts: parts.length > 0 ? parts : undefined,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     createdAt: new Date().toISOString(),
   };
@@ -197,6 +240,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       id: nextId(),
       role: 'user',
       content,
+      parts: [{ type: 'text', content }],
       createdAt: new Date().toISOString(),
     };
     set((state) => ({ messages: [...state.messages, msg] }));
@@ -207,6 +251,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       id: nextId(),
       role: 'system',
       content,
+      parts: [{ type: 'text', content }],
       createdAt: new Date().toISOString(),
     };
     set((prev) => ({ messages: [...prev.messages, msg] }));
@@ -218,8 +263,11 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
   loadMessages: (msgs: Message[]) => {
     const { isStreaming, streamingContent, streamingRole, toolCalls } = get();
+    const normalizedMessages = msgs.map((msg, index) => (
+      normalizeConversationMessage(msg as unknown as Record<string, unknown>, msg.id || `loaded-${index}`)
+    ));
     set({
-      messages: msgs,
+      messages: normalizedMessages,
       // Preserve streaming state if a run is active — don't clobber
       isStreaming,
       streamingContent: isStreaming ? streamingContent : '',
@@ -257,10 +305,12 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       case 'TEXT_MESSAGE_START': {
         const pendingTCs = Array.from(get().toolCalls.values());
         if (pendingTCs.length > 0) {
+          const parts: MessagePart[] = pendingTCs.map((tc) => ({ type: 'tool_call', ...tc }));
           const tcMsg: Message = {
             id: nextId(),
             role: 'assistant',
             content: '',
+            parts,
             toolCalls: pendingTCs,
             createdAt: new Date().toISOString(),
           };
@@ -309,6 +359,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
             id: nextId(),
             role: 'assistant',
             content: pendingText,
+            parts: [{ type: 'text', content: pendingText }],
             createdAt: new Date().toISOString(),
           };
           set((prev) => ({
@@ -386,11 +437,15 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         };
 
         const pendingText = state.streamingContent;
+        const parts: MessagePart[] = [];
+        if (pendingText) parts.push({ type: 'text', content: pendingText });
+        parts.push({ type: 'tool_call', ...finalTc });
         set((prev) => ({
           messages: [...prev.messages, {
             id: nextId(),
             role: 'assistant' as const,
             content: pendingText,
+            parts,
             toolCalls: [finalTc],
             createdAt: new Date().toISOString(),
           }],
@@ -433,6 +488,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
               id: nextId(),
               role: 'system',
               content: label,
+              parts: [{ type: 'text', content: label }],
               createdAt: new Date().toISOString(),
             };
             set((prev) => ({ messages: [...prev.messages, msg] }));
@@ -440,6 +496,64 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           useInterruptStore.getState().clear();
         }
         // interrupt events are handled by the interrupt store
+        break;
+      }
+
+      case 'MESSAGE_COMMITTED': {
+        flushPendingDelta(set);
+        const role = ((event.role as string) || 'assistant') as Message['role'];
+        const content = (event.content as string) || '';
+        const rawParts = event.parts as Array<Record<string, unknown>> | undefined;
+
+        const parts: MessagePart[] = [];
+        if (Array.isArray(rawParts) && rawParts.length > 0) {
+          for (const p of rawParts) {
+            if (p.type === 'text') {
+              parts.push({ type: 'text', content: (p.content as string) || '' });
+            } else if (p.type === 'tool_call') {
+              parts.push({
+                type: 'tool_call',
+                id: (p.id as string) || '',
+                name: (p.name as string) || 'unknown',
+                args: (p.args as string) || '',
+                result: p.result as string | undefined,
+                error: p.error as string | undefined,
+                status: normalizeToolCallStatus(p.status, p.error as string | undefined),
+              });
+            }
+          }
+        } else {
+          if (content) parts.push({ type: 'text', content });
+          const tcs = event.toolCalls as Array<Record<string, unknown>> | undefined;
+          if (Array.isArray(tcs)) {
+            for (const tc of tcs) {
+              parts.push({
+                type: 'tool_call',
+                id: (tc.id as string) || '',
+                name: (tc.name as string) || 'unknown',
+                args: (tc.args as string) || '',
+                result: tc.result as string | undefined,
+                error: tc.error as string | undefined,
+                status: normalizeToolCallStatus(tc.status, tc.error as string | undefined),
+              });
+            }
+          }
+        }
+
+        const msg: Message = {
+          id: nextId(),
+          role,
+          content,
+          parts: parts.length > 0 ? parts : undefined,
+          createdAt: new Date().toISOString(),
+        };
+
+        set((prev) => ({
+          messages: [...prev.messages, msg],
+          streamingContent: '',
+          streamingRole: 'assistant',
+          toolCalls: new Map(),
+        }));
         break;
       }
 
@@ -474,6 +588,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           id: nextId(),
           role: 'system',
           content: `Error: ${errorMsg}`,
+          parts: [{ type: 'text', content: `Error: ${errorMsg}` }],
           createdAt: new Date().toISOString(),
         };
         set((prev) => ({

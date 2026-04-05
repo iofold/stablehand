@@ -89,7 +89,6 @@ function createMockLifecyclePolicy(): ContainerLifecyclePolicy {
   return {
     cancelPause: vi.fn().mockResolvedValue(undefined),
     cancelIdleTimeout: vi.fn().mockResolvedValue(undefined),
-    schedulePause: vi.fn(),
     scheduleIdleTimeout: vi.fn(),
     cleanupAll: vi.fn(),
     cleanup: vi.fn(),
@@ -461,13 +460,12 @@ describe('SandboxSessionManager session recovery', () => {
   });
 
   describe('idle timeout scheduling', () => {
-    it('scheduleIdleTimeout called after turn completion (not schedulePause)', async () => {
+    it('scheduleIdleTimeout called after turn completion', async () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
 
       await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1'));
 
       expect(lifecyclePolicy.scheduleIdleTimeout).toHaveBeenCalledTimes(1);
-      expect(lifecyclePolicy.schedulePause).not.toHaveBeenCalled();
     });
 
     it('cancelIdleTimeout called at turn start', async () => {
@@ -479,18 +477,7 @@ describe('SandboxSessionManager session recovery', () => {
       expect(lifecyclePolicy.cancelPause).toHaveBeenCalledWith(session.sessionId);
     });
 
-    it('onFreeze callback calls freezeSession', async () => {
-      const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
-      await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1'));
 
-      const callbacks = (lifecyclePolicy.scheduleIdleTimeout as ReturnType<typeof vi.fn>).mock.calls[0]?.[2] as {
-        onFreeze: (sessionId: string) => Promise<void>;
-      };
-      await callbacks.onFreeze(session.sessionId);
-
-      expect(containerManager.pauseContainer).toHaveBeenCalledWith('c-1');
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'PAUSED', expect.objectContaining({ pausedReason: 'idle' }));
-    });
 
     it('onCheckpoint callback calls suspendSession with idle-checkpoint reason', async () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');

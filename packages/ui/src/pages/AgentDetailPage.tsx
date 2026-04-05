@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useAgentsStore } from '@/stores/agents';
 import { cn } from '@/lib/utils';
+import { AgentStatusBadge } from '@/components/dashboard/AgentStatusBadge';
 import { AgentFormModal } from '@/components/agents/AgentFormModal';
 
 import { useAgentDetail } from '@/hooks/useAgentDetail';
@@ -174,15 +175,7 @@ export function AgentDetailPage() {
                   >
                     {agent.name}
                   </h1>
-                  <div className="flex items-center gap-1.5 text-xs text-surface-400">
-                    <div
-                      className={cn(
-                        'h-1.5 w-1.5 rounded-full',
-                        agent.status === 'active' ? 'bg-green-500' : 'bg-surface-500',
-                      )}
-                    />
-                    <span className="capitalize">{agent.status}</span>
-                  </div>
+                  <AgentStatusBadge status={agent.status} />
                 </div>
                 <div className="flex items-center gap-2 font-mono text-sm text-surface-400">
                   {agent.harness && (

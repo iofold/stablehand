@@ -642,7 +642,7 @@ describe('ClaudeAgentsHarness', () => {
 
       await collectEvents(
         session.deliverTurn(
-          { messages: [userMessage], turnId: 'turn-restore' },
+          { messages: [restoredMessage, userMessage], turnId: 'turn-restore' },
           {},
         ),
       );
@@ -674,23 +674,36 @@ describe('ClaudeAgentsHarness', () => {
         },
       ]));
 
+      const restoredMessage = makeMessage('assistant', 'Restored reply');
+      const userMessage1 = makeMessage('user', 'Resume me');
+      const userMessage2 = makeMessage('user', 'Second turn');
       const session = await harness.openSession(makeConfig(), {
         stateVersion: '1',
         messages: [],
-        payload: { transcript: [makeMessage('assistant', 'Restored reply')] },
+        payload: { transcript: [restoredMessage] },
       });
 
       await collectEvents(
         session.deliverTurn(
-          { messages: [makeMessage('user', 'Resume me')], turnId: 'turn-resume' },
+          { messages: [restoredMessage, userMessage1], turnId: 'turn-resume' },
           {},
         ),
       );
 
-      const queryCall = mockQuery.mock.calls[0]?.[0];
+      const firstQueryCall = mockQuery.mock.calls[0]?.[0];
+      expect(firstQueryCall?.options.sessionId).toBe('conversation-1');
+      expect(firstQueryCall?.options.resume).toBeUndefined();
 
-      expect(queryCall?.options.resume).toBe('conversation-1');
-      expect(queryCall?.options.sessionId).toBeUndefined();
+      await collectEvents(
+        session.deliverTurn(
+          { messages: [restoredMessage, userMessage1, userMessage2], turnId: 'turn-second' },
+          {},
+        ),
+      );
+
+      const secondQueryCall = mockQuery.mock.calls[1]?.[0];
+      expect(secondQueryCall?.options.resume).toBe('conversation-1');
+      expect(secondQueryCall?.options.sessionId).toBeUndefined();
 
       await session.close();
     });

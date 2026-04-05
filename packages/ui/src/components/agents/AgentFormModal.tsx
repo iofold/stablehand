@@ -525,7 +525,6 @@ function extractNonManagedMetadata(
 ): Record<string, unknown> {
   if (!metadata) return {};
   const next = { ...metadata };
-  delete next.skills;
   delete next.nativeTools;
   delete next.excludeBuiltinTools;
   return next;

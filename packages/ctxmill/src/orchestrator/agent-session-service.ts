@@ -18,6 +18,7 @@ const SSE_BROADCASTER_FORWARDED: ReadonlySet<string> = new Set([
   'TEXT_MESSAGE_CONTENT',
   'TOOL_CALL_START',
   'TOOL_CALL_RESULT',
+  'MESSAGE_COMMITTED',
 ]);
 
 /** Extended AG-UI event fields used when extracting tool/message data. */
@@ -46,6 +47,10 @@ interface HITLPauseEvent {
   type: 'HITL_PAUSE';
   reason?: string;
 }
+
+type StreamingPart =
+  | { type: 'text'; content: string }
+  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: string };
 
 export interface AgentSessionServiceDeps {
   sse: SSEManager;
@@ -177,8 +182,8 @@ export class AgentSessionService {
 
     let encounteredError = false;
     let lastErrorMessage = '';
-    let hitlPending = false;
     const pendingToolCalls = new Map<string, { id: string; name: string; args: string; result?: string; error?: string; status: string }>();
+    let streamingParts: StreamingPart[] = [];
     let accumulatedText = '';
     let assistantFlushedForBatch = false;
     let flushedAssistantMessageId: string | null = null;
@@ -201,16 +206,43 @@ export class AgentSessionService {
       status: tc.status,
     }));
 
+    const buildCommittedParts = (committed: MessageCommittedEvent): StreamingPart[] => {
+      if (streamingParts.length > 0) {
+        return [...streamingParts];
+      }
+
+      const fallbackParts: StreamingPart[] = [];
+      if (committed.content) {
+        fallbackParts.push({
+          type: 'text',
+          content: committed.content,
+        });
+      }
+
+      if (Array.isArray(committed.toolCalls)) {
+        fallbackParts.push(...committed.toolCalls.map((toolCall) => ({
+          type: 'tool_call' as const,
+          id: toolCall.id,
+          name: toolCall.name,
+          args: toolCall.args,
+          status: toolCall.status,
+        })));
+      }
+
+      return fallbackParts;
+    };
+
     const persistMessage = async (
       role: MessageCommittedEvent['role'],
       content: string,
-      options?: { toolCalls?: ReturnType<typeof buildPersistedToolCalls>; toolCallId?: string },
+      options?: { toolCalls?: ReturnType<typeof buildPersistedToolCalls>; toolCallId?: string; parts?: StreamingPart[] },
     ): Promise<string> => {
       const msg = await this.db.addMessage({
         agentId,
         conversationId,
         role,
         content,
+        parts: options?.parts,
         toolCalls: options?.toolCalls,
         toolCallId: options?.toolCallId,
       });
@@ -245,6 +277,28 @@ export class AgentSessionService {
       );
     };
 
+    const flushUncommittedMessages = async () => {
+      try {
+        if (pendingToolCalls.size > 0 && !assistantFlushedForBatch) {
+          await persistMessage('assistant', accumulatedText, {
+            parts: [...streamingParts],
+            toolCalls: buildPersistedToolCalls(),
+          });
+          accumulatedText = '';
+          assistantFlushedForBatch = true;
+        } else if (pendingToolCalls.size > 0 && assistantFlushedForBatch && flushedAssistantMessageId) {
+          await this.db.updateMessageToolCalls(flushedAssistantMessageId, buildPersistedToolCalls());
+        } else if (accumulatedText) {
+          await persistMessage('assistant', accumulatedText, {
+            parts: [...streamingParts],
+          });
+          accumulatedText = '';
+        }
+      } catch (flushErr) {
+        console.error('[AgentSessionService] Failed to flush uncommitted messages:', flushErr);
+      }
+    };
+
     try {
       for await (const event of eventSource) {
         if (signal?.aborted) break;
@@ -265,14 +319,22 @@ export class AgentSessionService {
         if (event.type === 'TOOL_CALL_START') {
           const e = event as Record<string, unknown>;
           const tcId = (e.toolCallId as string) || `tc-${Date.now()}`;
+          const toolArgs = typeof e.args === 'string'
+            ? e.args
+            : e.args === undefined
+              ? ''
+              : JSON.stringify(e.args);
           pendingToolCalls.set(tcId, {
             id: tcId,
             name: (e.toolName as string) || (e.name as string) || 'unknown',
-            args: typeof e.args === 'string'
-              ? e.args
-              : e.args === undefined
-                ? ''
-                : JSON.stringify(e.args),
+            args: toolArgs,
+            status: 'running',
+          });
+          streamingParts.push({
+            type: 'tool_call',
+            id: tcId,
+            name: (e.toolName as string) || (e.name as string) || 'unknown',
+            args: toolArgs,
             status: 'running',
           });
         }
@@ -280,8 +342,13 @@ export class AgentSessionService {
         if (event.type === 'TOOL_CALL_ARGS') {
           const e = event as Record<string, unknown>;
           const tc = pendingToolCalls.get(e.toolCallId as string);
+          const toolArgsDelta = (e.args as string) || (e.delta as string) || '';
           if (tc) {
-            tc.args += (e.args as string) || (e.delta as string) || '';
+            tc.args += toolArgsDelta;
+          }
+          const part = streamingParts.find((streamingPart) => streamingPart.type === 'tool_call' && streamingPart.id === (e.toolCallId as string));
+          if (part && part.type === 'tool_call') {
+            part.args += toolArgsDelta;
           }
         }
 
@@ -289,20 +356,29 @@ export class AgentSessionService {
           const e = event as Record<string, unknown>;
           const tc = pendingToolCalls.get(e.toolCallId as string);
           if (tc) tc.status = 'complete';
+          const part = streamingParts.find((streamingPart) => streamingPart.type === 'tool_call' && streamingPart.id === (e.toolCallId as string));
+          if (part && part.type === 'tool_call') part.status = 'complete';
         }
 
         if (event.type === 'TOOL_CALL_RESULT') {
           const e = event as Record<string, unknown>;
           const tcId = e.toolCallId as string;
           const tc = pendingToolCalls.get(tcId);
+          const part = streamingParts.find((streamingPart) => streamingPart.type === 'tool_call' && streamingPart.id === tcId);
           if (tc) {
             tc.result = normalizeContent(e.result);
             tc.error = e.error as string | undefined;
             tc.status = tc.error ? 'error' : 'complete';
           }
+          if (part && part.type === 'tool_call') {
+            part.result = normalizeContent(e.result);
+            part.error = e.error as string | undefined;
+            part.status = part.error ? 'error' : 'complete';
+          }
 
           if (!assistantFlushedForBatch && pendingToolCalls.size > 0) {
             flushedAssistantMessageId = await persistMessage('assistant', accumulatedText, {
+              parts: [...streamingParts],
               toolCalls: buildPersistedToolCalls(),
             });
             accumulatedText = '';
@@ -318,25 +394,56 @@ export class AgentSessionService {
 
         if (event.type === 'MESSAGE_COMMITTED') {
           const committed = event as unknown as MessageCommittedEvent;
+          const finalParts = buildCommittedParts(committed);
           if (assistantFlushedForBatch) {
             if (accumulatedText) {
-              await persistMessage(committed.role, accumulatedText);
+              await persistMessage(committed.role, accumulatedText, {
+                parts: finalParts,
+              });
             }
             assistantFlushedForBatch = false;
             pendingToolCalls.clear();
             accumulatedText = '';
           } else {
             await persistMessage(committed.role, committed.content, {
+              parts: finalParts,
               toolCalls: committed.toolCalls as ReturnType<typeof buildPersistedToolCalls> | undefined,
               toolCallId: committed.toolCallId,
             });
           }
+
+          if (this.eventBus) {
+            this.eventBus.emit('message.committed', {
+              turnId,
+              agentId,
+              conversationId,
+              messageSeq: committed.messageSeq,
+              role: committed.role,
+              content: committed.content,
+              parts: finalParts,
+              toolCalls: committed.toolCalls as unknown as EventMap['message.committed']['toolCalls'],
+              toolCallId: committed.toolCallId,
+              timestamp: Date.now(),
+            } as unknown as EventMap['message.committed']);
+          }
+
+          streamingParts = [];
         }
 
         // Emit text chunks to internal event bus (for triggers and monitoring)
         if (event.type === 'TEXT_MESSAGE_CONTENT' && 'content' in event) {
           const textEvent = event as unknown as TextContentEvent;
           accumulatedText += textEvent.content;
+
+          const lastPart = streamingParts[streamingParts.length - 1];
+          if (lastPart?.type === 'text') {
+            lastPart.content += textEvent.content;
+          } else {
+            streamingParts.push({
+              type: 'text',
+              content: textEvent.content,
+            });
+          }
 
           if (this.eventBus) {
             this.eventBus.emit('run.text_chunk', {
@@ -392,25 +499,18 @@ export class AgentSessionService {
 
         if (event.type === 'HITL_PAUSE') {
           void (event as unknown as HITLPauseEvent);
-          if (!hitlPending) {
-            await this.sessionManager.pauseSession(sandboxSessionId, 'hitl');
-            hitlPending = true;
-          }
-        }
-
-        if (hitlPending) {
-          hitlPending = false;
-          await this.sessionManager.resumeSession(sandboxSessionId);
         }
       }
 
       if (signal?.aborted) {
+        await flushUncommittedMessages();
         await finalizeTurn('cancelled');
         return;
       }
 
       if (encounteredError) {
         const errorDetail = lastErrorMessage || 'Session completed with errors (no detail captured)';
+        await flushUncommittedMessages();
         await finalizeTurn('error', errorDetail);
       } else {
         await finalizeTurn('completed');
@@ -434,6 +534,7 @@ export class AgentSessionService {
         error: String(err),
       });
 
+      await flushUncommittedMessages();
       await finalizeTurn('error', String(err));
 
       // Trigger learning pipeline even on failure to learn from errors

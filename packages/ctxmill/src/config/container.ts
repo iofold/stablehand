@@ -156,6 +156,22 @@ export function registerCallbackSubscriptions(
       console.error('[CallbackDispatcher] failed to enqueue run.tool_started callback:', err);
     }
   });
+
+  eventBus.on('run.interrupted', async (payload) => {
+    try {
+      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.interrupted', {
+        turnId: payload.turnId,
+        agentId: payload.agentId,
+        toolCallId: payload.toolCallId,
+        toolName: payload.toolName,
+        args: payload.args,
+        interruptId: payload.interruptId,
+        timestamp: payload.timestamp,
+      }, payload.turnId);
+    } catch (err) {
+      console.error('[CallbackDispatcher] failed to enqueue run.interrupted callback:', err);
+    }
+  });
 }
 
 /**
@@ -260,7 +276,11 @@ export async function createContainer(
   // ── SSE + Interrupts ───────────────────────────────────
   const sseManager = new SSEManager(eventBus);
   const sseBroadcaster = new SSEBroadcaster(sseManager, eventBus);
-  const interruptManager = new InterruptManager(eventBus, db);
+  const interruptManager = new InterruptManager(eventBus, db, async (sessionId) => {
+    if (sessionManagerRef) {
+      await sessionManagerRef.suspendSession(sessionId, 'hitl-timeout');
+    }
+  });
   await interruptManager.loadFromDb();
 
   // ── Event Subscribers ─────────────────────────────────
@@ -401,17 +421,7 @@ export async function createContainer(
     },
     config: {
       reconciliationIntervalMs: startupSettings.reconciliationIntervalMs,
-      pauseDelayMs: startupSettings.pauseDelayMs,
-      maxPauseDurationMs: startupSettings.maxPauseDurationMs,
       idleTimeoutMs: startupSettings.idleTimeoutMs,
-      freezePromotionMs: startupSettings.freezePromotionMs,
-    },
-    onPromoteToCheckpoint: async (sessionId: string) => {
-      if (!sessionManagerRef) {
-        throw new Error('onPromoteToCheckpoint: session manager not initialized');
-      }
-      await sessionManagerRef.suspendSession(sessionId, 'hitl-promotion');
-      interruptManager.resolveForSession(sessionId, 'timeout', 'Approval timed out — session checkpointed by lifecycle policy');
     },
     reconciliationCallbacks: {
       onSessionReconnected: (session, grpcClient) => {
@@ -507,7 +517,7 @@ export async function createContainer(
     db,
     lifecyclePolicy,
     eventBus,
-    maxConcurrentSessionsPerAgent: startupSettings.maxConcurrentRunsPerAgent,
+    maxConcurrentSessionsPerAgent: startupSettings.maxConcurrentSessionsPerAgent,
     interruptManager,
     sandboxSecrets,
     resolveToolsForAgent,

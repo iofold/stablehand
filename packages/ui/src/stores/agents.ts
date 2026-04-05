@@ -21,7 +21,7 @@ export interface Agent {
   tools: string[];
   httpTools?: HttpToolDefinition[];
   nativeTools?: { allowlist?: string[]; blocklist?: string[] } | null;
-  workspaceContent?: { files?: Array<{ src: string; dest: string }>; skills?: boolean | string[] } | null;
+  workspaceContent?: { files?: Array<{ src: string; dest: string }> } | null;
   harness: string;
   harnessConfig: Record<string, unknown>;
   sseClients?: number;

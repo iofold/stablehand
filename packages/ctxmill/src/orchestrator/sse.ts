@@ -63,33 +63,35 @@ export class SSEManager {
     };
     this.connectionState.set(reply, state);
 
-    const agentMap = this.eventHistory.get(agentId);
-    if (agentMap) {
-      try {
-        const allEntries: HistoryEntry[] = [];
-        for (const entries of agentMap.values()) {
-          allEntries.push(...entries);
-        }
-        allEntries.sort((a, b) => {
-          const seqA = parseInt(a.id.substring(a.id.lastIndexOf('-') + 1), 10);
-          const seqB = parseInt(b.id.substring(b.id.lastIndexOf('-') + 1), 10);
-          return seqA - seqB;
-        });
-
-        let replaying = !lastEventId;
-        for (const entry of allEntries) {
-          if (!replaying) {
-            if (entry.id === lastEventId) {
-              replaying = true;
-            }
-            continue;
+    if (lastEventId) {
+      const agentMap = this.eventHistory.get(agentId);
+      if (agentMap) {
+        try {
+          const allEntries: HistoryEntry[] = [];
+          for (const entries of agentMap.values()) {
+            allEntries.push(...entries);
           }
-          reply.raw.write(`id: ${entry.id}\ndata: ${JSON.stringify(entry.event)}\n\n`);
+          allEntries.sort((a, b) => {
+            const seqA = parseInt(a.id.substring(a.id.lastIndexOf('-') + 1), 10);
+            const seqB = parseInt(b.id.substring(b.id.lastIndexOf('-') + 1), 10);
+            return seqA - seqB;
+          });
+
+          let replaying = false;
+          for (const entry of allEntries) {
+            if (!replaying) {
+              if (entry.id === lastEventId) {
+                replaying = true;
+              }
+              continue;
+            }
+            reply.raw.write(`id: ${entry.id}\ndata: ${JSON.stringify(entry.event)}\n\n`);
+          }
+        } catch (writeErr) {
+          console.debug('[SSE] Failed to replay history for agent', agentId, writeErr);
+          this.connectionState.delete(reply);
+          return;
         }
-      } catch (writeErr) {
-        console.debug('[SSE] Failed to replay history for agent', agentId, writeErr);
-        this.connectionState.delete(reply);
-        return;
       }
     }
 

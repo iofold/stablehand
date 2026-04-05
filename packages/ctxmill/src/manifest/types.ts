@@ -38,6 +38,33 @@ export interface ManifestHarnessConfig {
   topP?: number;
   reasoning?: 'off' | 'low' | 'medium' | 'high';
   baseUrl?: string;
+  setup?: ManifestSetup;
+
+  /** Subagent definitions (LangGraph: per-subagent model override; Claude: passed to SDK agents option) */
+  subagents?: Record<string, ManifestSubagentConfig> | ManifestSubagentConfig[];
+}
+
+/** Subagent definition for agent manifests */
+export interface ManifestSubagentConfig {
+  name?: string;
+  description: string;
+  prompt: string;
+  /** Tool names to allow (opt-in) */
+  tools?: string[];
+  /** Tool names to disallow */
+  disallowedTools?: string[];
+  /** Override provider for this subagent (LangGraph only) */
+  provider?: string;
+  /** Override model for this subagent */
+  model?: string;
+  /** Secret ref for subagent-specific API key (LangGraph only) */
+  apiKeyRef?: string;
+  /** Max agentic turns before stopping */
+  maxTurns?: number;
+  /** Temperature override */
+  temperature?: number;
+  /** Max tokens override */
+  maxTokens?: number;
 }
 
 export interface ManifestModelConfig {
@@ -69,14 +96,18 @@ export interface ManifestFileCopy {
   dest: string;
 }
 
+export interface ManifestSetupSymlink {
+  src: string;
+  dest: string;
+}
+
+export interface ManifestSetup {
+  symlinks?: ManifestSetupSymlink[];
+}
+
 export interface ManifestWorkspaceContent {
   /** Explicit files to copy into workspace before run */
   files?: ManifestFileCopy[];
-  /**
-   * true = auto-discover all skills; string[] = named skills only.
-   * Skills are copied to .ctxmill/skills/ in workspace.
-   */
-  skills?: boolean | string[];
 }
 
 export interface ManifestMCPTool {

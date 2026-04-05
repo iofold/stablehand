@@ -30,7 +30,7 @@ export interface PendingInterrupt {
 }
 
 export interface InterruptResolution {
-  action: 'approve' | 'reject' | 'timeout';
+  action: 'approve' | 'reject' | 'suspend' | 'timeout';
   data?: unknown;
 }
 
@@ -38,10 +38,12 @@ export class InterruptManager {
   private pending = new Map<string, PendingEntry>();
   private eventBus?: TypedEventBus;
   private db?: InterruptStore;
+  private readonly onTimeout?: (sessionId: string) => Promise<void>;
 
-  constructor(eventBus?: TypedEventBus, db?: InterruptStore) {
+  constructor(eventBus?: TypedEventBus, db?: InterruptStore, onTimeout?: (sessionId: string) => Promise<void>) {
     this.eventBus = eventBus;
     this.db = db;
+    this.onTimeout = onTimeout;
   }
 
   private createPendingPromise(
@@ -67,10 +69,10 @@ export class InterruptManager {
             const entry = this.pending.get(turnId);
             if (entry) {
               this.pending.delete(turnId);
-              resolve({ action: 'timeout', data: `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes` });
+              resolve({ action: 'suspend', data: 'Session suspended for HITL approval — awaiting human decision' });
 
               if (this.db) {
-                this.db.resolveInterrupt(turnId, 'timeout', `Approval timed out after ${Math.round(timeoutMs / 60_000)} minutes`).catch((err) => {
+                this.db.resolveInterrupt(turnId, 'suspend', 'Session suspended for HITL approval — awaiting human decision').catch((err) => {
                   console.error('[InterruptManager] failed to persist timeout resolution:', err);
                 });
               }
@@ -80,9 +82,18 @@ export class InterruptManager {
                   turnId,
                   agentId,
                   interruptId: turnId,
-                  action: 'timeout',
+                  action: 'suspend',
                   timestamp: Date.now(),
                 } as unknown as EventMap['run.interrupt_resolved']);
+              }
+
+              // Cooperatively checkpoint the session on HITL timeout.
+              // The InterruptManager is the sole owner of the HITL deadline —
+              // the container lifecycle policy has no knowledge of HITL.
+              if (this.onTimeout && entry.info.sessionId) {
+                void this.onTimeout(entry.info.sessionId).catch((err) => {
+                  console.error('[InterruptManager] onTimeout callback failed:', err);
+                });
               }
             }
           }, timeoutMs)
@@ -215,7 +226,7 @@ export class InterruptManager {
    * Resolve a pending interrupt with the user's decision.
    * Returns true if there was a pending interrupt, false otherwise.
    */
-  resolve(turnId: string, action: 'approve' | 'reject' | 'timeout', data?: unknown, agentId?: string): boolean {
+  resolve(turnId: string, action: 'approve' | 'reject' | 'suspend' | 'timeout', data?: unknown, agentId?: string): boolean {
     const entry = this.pending.get(turnId);
     if (!entry) return false;
     if (entry.timeoutId) clearTimeout(entry.timeoutId);
@@ -242,21 +253,8 @@ export class InterruptManager {
     return true;
   }
 
-  /**
-   * Cancel the internal timeout for a session's pending interrupt without resolving it.
-   * The entry stays pending for later resolution by the lifecycle policy.
-   */
-  cancelTimeoutForSession(sessionId: string): void {
-    for (const [, entry] of this.pending) {
-      if (entry.info.sessionId === sessionId && entry.timeoutId) {
-        clearTimeout(entry.timeoutId);
-        entry.timeoutId = undefined;
-      }
-    }
-  }
-
   /** Resolve a pending interrupt by sessionId. Returns true if a match was found. */
-  resolveForSession(sessionId: string, action: 'approve' | 'reject' | 'timeout', data?: unknown): boolean {
+  resolveForSession(sessionId: string, action: 'approve' | 'reject' | 'suspend' | 'timeout', data?: unknown): boolean {
     for (const [turnId, entry] of this.pending) {
       if (entry.info.sessionId === sessionId) {
         return this.resolve(turnId, action, data, entry.agentId);

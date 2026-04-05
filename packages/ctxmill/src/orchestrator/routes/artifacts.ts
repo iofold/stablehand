@@ -19,12 +19,11 @@ export async function artifactRoutes(
   const { artifactStore, repository, bucket, eventBus } = opts;
 
   app.get('/', async (req, reply) => {
-    const { agentId, sessionId, limit, offset, search } = req.query as {
+    const { agentId, sessionId, limit, offset } = req.query as {
       agentId?: string;
       sessionId?: string;
       limit?: string;
       offset?: string;
-      search?: string;
     };
 
     if (sessionId) {
@@ -33,12 +32,7 @@ export async function artifactRoutes(
     }
 
     if (!agentId) {
-      const result = await repository.listAllArtifacts(
-        Number(limit) || 100,
-        Number(offset) || 0,
-        search || undefined,
-      );
-      return reply.send(result);
+      return reply.status(400).send({ error: 'agentId or sessionId is required' });
     }
 
     const artifacts = await repository.listArtifactsForAgent(
@@ -146,6 +140,79 @@ export async function artifactRoutes(
       uploadUrl,
       storageKey,
       expiresIn: ttl,
+    });
+  });
+
+  app.post('/upload', async (req, reply) => {
+    const data = await req.file();
+    if (!data) {
+      return reply.status(400).send({ error: 'No file provided' });
+    }
+
+    const agentIdField = data.fields.agentId;
+    const nameField = data.fields.name;
+
+    const agentId = agentIdField && 'value' in agentIdField ? String(agentIdField.value) : undefined;
+    const name = (nameField && 'value' in nameField ? String(nameField.value) : undefined) || data.filename;
+    const mimeType = data.mimetype || 'application/octet-stream';
+
+    if (!agentId) {
+      return reply.status(400).send({ error: 'agentId is required' });
+    }
+    if (!name) {
+      return reply.status(400).send({ error: 'File name could not be determined' });
+    }
+
+    const artifactId = randomUUID();
+    const storageKey = `${agentId}/${artifactId}/${name}`;
+
+    // Buffer the multipart file stream so we can pass an accurate Content-Length
+    // to S3. Streaming without ContentLength causes the AWS SDK v3 to set
+    // x-amz-decoded-content-length: undefined, which Node rejects.
+    const chunks: Buffer[] = [];
+    for await (const chunk of data.file) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    }
+    const fileBuffer = Buffer.concat(chunks);
+    await artifactStore.upload(storageKey, fileBuffer, mimeType, fileBuffer.length);
+
+    const head = await artifactStore.headObject(storageKey);
+    const sizeBytes = head?.sizeBytes ?? 0;
+
+    await repository.saveArtifact({
+      id: artifactId,
+      agentId,
+      name,
+      mimeType,
+      sizeBytes,
+      storageKey,
+      bucket,
+      status: 'active',
+    });
+
+    if (eventBus) {
+      eventBus.emit('custom', {
+        type: 'artifact.created',
+        agentId,
+        payload: {
+          artifactId,
+          name,
+          mimeType,
+          sizeBytes,
+        },
+        timestamp: Date.now(),
+      });
+    }
+
+    return reply.status(201).send({
+      id: artifactId,
+      agentId,
+      name,
+      mimeType,
+      sizeBytes,
+      storageKey,
+      bucket,
+      status: 'active',
     });
   });
 

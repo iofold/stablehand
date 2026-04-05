@@ -48,7 +48,7 @@ export type EventMap = {
     turnId: string;
     agentId: string;
     interruptId: string;
-    action: 'approve' | 'reject' | 'timeout';
+    action: 'approve' | 'reject' | 'suspend' | 'timeout';
     timestamp: number;
   };
   'session.paused': {
@@ -127,6 +127,18 @@ export type EventMap = {
     agentId: string;
     eventType: string;
     turnId: string;
+    timestamp: number;
+  };
+  'message.committed': {
+    turnId: string;
+    agentId: string;
+    conversationId: string;
+    messageSeq: number;
+    role: 'assistant' | 'tool';
+    content: string;
+    parts?: Array<{ type: string; [key: string]: unknown }>;
+    toolCalls?: Array<{ id: string; name: string; args: string; status: string }>;
+    toolCallId?: string;
     timestamp: number;
   };
   'custom': {

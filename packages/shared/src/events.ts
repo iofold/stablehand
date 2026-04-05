@@ -1,4 +1,4 @@
-import type { ApiToolCallState } from './api.js';
+import type { ApiToolCallState, ApiMessagePart } from './api.js';
 
 export type AGUIEventType =
   | 'RUN_STARTED'
@@ -27,16 +27,11 @@ export interface AGUIEvent {
 /** Emitted by the sandbox when a complete message has been finalized. */
 export interface MessageCommittedEvent extends AGUIEvent {
   type: 'MESSAGE_COMMITTED';
-  /** Message role: 'assistant' or 'tool'. */
   role: 'assistant' | 'tool';
-  /** Full message content. */
   content: string;
-  /** Tool calls included in this message, if any. */
   toolCalls?: ApiToolCallState[];
-  /** Tool call ID this message responds to, if role is 'tool'. */
   toolCallId?: string;
-  /** Turn within the session that produced this message. */
+  parts?: ApiMessagePart[];
   turnId: string;
-  /** Monotonic sequence number within the session. */
   messageSeq: number;
 }

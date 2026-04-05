@@ -34,6 +34,7 @@ type ArtifactRecord = {
   storageKey: string;
   status: string;
   deletedAt: string | null;
+  bucket?: string;
 };
 
 type ArtifactListEnvelope = {
@@ -266,5 +267,90 @@ describe('Artifact REST API Integration', () => {
 
     const emptyList: ArtifactListEnvelope = await emptyListResponse.json();
     expect(emptyList.artifacts).toEqual([]);
+  });
+
+  it('uploads an artifact via multipart proxy and round-trips through download', async () => {
+    const fileContent = `multipart-upload-${Date.now()}`;
+    const fileName = 'proxy-upload.txt';
+
+    const formData = new FormData();
+    formData.append('file', new Blob([fileContent], { type: 'text/plain' }), fileName);
+    formData.append('agentId', testAgentId);
+
+    const uploadResponse = await fetch(`${ARTIFACTS_BASE}/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    expect(uploadResponse.status).toBe(201);
+    const artifact: ArtifactRecord = await uploadResponse.json();
+    createdArtifactIds.add(artifact.id);
+
+    expect(artifact.id).toBeTruthy();
+    expect(artifact.agentId).toBe(testAgentId);
+    expect(artifact.name).toBe(fileName);
+    expect(artifact.mimeType).toBe('text/plain');
+    expect(artifact.sizeBytes).toBe(Buffer.byteLength(fileContent));
+    expect(artifact.storageKey).toContain(testAgentId);
+    expect(artifact.status).toBe('active');
+
+    // Verify download via proxy
+    const downloadResponse = await fetch(`${ARTIFACTS_BASE}/${artifact.id}/download`);
+    expect(downloadResponse.status).toBe(200);
+    expect(await downloadResponse.text()).toBe(fileContent);
+
+    // Verify it appears in list
+    const listResponse = await fetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(testAgentId)}&limit=100&offset=0`);
+    expect(listResponse.status).toBe(200);
+    const listed: ArtifactListEnvelope = await listResponse.json();
+    const found = listed.artifacts.find((a) => a.id === artifact.id);
+    expect(found).toBeDefined();
+    expect(found?.name).toBe(fileName);
+  });
+
+  it('accepts an optional name override in multipart upload', async () => {
+    const formData = new FormData();
+    formData.append('file', new Blob(['custom-name-test'], { type: 'application/octet-stream' }), 'original.bin');
+    formData.append('agentId', testAgentId);
+    formData.append('name', 'renamed-artifact.bin');
+
+    const response = await fetch(`${ARTIFACTS_BASE}/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    expect(response.status).toBe(201);
+    const artifact: ArtifactRecord = await response.json();
+    createdArtifactIds.add(artifact.id);
+
+    expect(artifact.name).toBe('renamed-artifact.bin');
+  });
+
+  it('rejects multipart upload without agentId', async () => {
+    const formData = new FormData();
+    formData.append('file', new Blob(['no-agent'], { type: 'text/plain' }), 'orphan.txt');
+
+    const response = await fetch(`${ARTIFACTS_BASE}/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toContain('agentId');
+  });
+
+  it('rejects multipart upload without a file', async () => {
+    const formData = new FormData();
+    formData.append('agentId', testAgentId);
+
+    const response = await fetch(`${ARTIFACTS_BASE}/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toContain('file');
   });
 });

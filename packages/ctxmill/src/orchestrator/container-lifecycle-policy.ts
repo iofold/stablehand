@@ -14,17 +14,13 @@ import { retryWithBackoff } from '../util/retry.js';
 
 const TAG = '[LifecyclePolicy]';
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
-const DEFAULT_PAUSE_DELAY_MS = 5_000;
-const DEFAULT_MAX_PAUSE_DURATION_MS = 300_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
-const DEFAULT_FREEZE_PROMOTION_MS = 600_000;
 const GRPC_PORT = 50051;
 const HEALTH_CHECK_TIMEOUT_MS = 10_000;
 
-export type PauseState = 'none' | 'scheduled' | 'paused' | 'promoting' | 'idle_paused' | 'hitl_grace';
+export type PauseState = 'none' | 'promoting';
 
 export interface IdleCallbacks {
-  onFreeze: (sessionId: string) => Promise<void>;
   onCheckpoint: (sessionId: string) => Promise<void>;
   onContainerGone?: (sessionId: string) => Promise<void>;
 }
@@ -32,11 +28,7 @@ export interface IdleCallbacks {
 export interface PauseEntry {
   containerId: string;
   state: PauseState;
-  pauseTimer?: ReturnType<typeof setTimeout>;
-  promotionTimer?: ReturnType<typeof setTimeout>;
   idleTimer?: ReturnType<typeof setTimeout>;
-  freezePromotionTimer?: ReturnType<typeof setTimeout>;
-  hitlGraceTimer?: ReturnType<typeof setTimeout>;
   idleCallbacks?: IdleCallbacks;
 }
 
@@ -69,12 +61,8 @@ export interface ContainerLifecyclePolicyDeps {
   logger: Logger;
   config: {
     reconciliationIntervalMs?: number;
-    pauseDelayMs?: number;
-    maxPauseDurationMs?: number;
     idleTimeoutMs?: number;
-    freezePromotionMs?: number;
   };
-  onPromoteToCheckpoint: (sessionId: string) => Promise<void>;
   reconciliationCallbacks: ReconciliationCallbacks;
 }
 
@@ -143,13 +131,9 @@ export class ContainerLifecyclePolicy {
   private readonly containerManager: ContainerManager;
   private readonly db: DatabaseRepository;
   private readonly logger: Logger;
-  private readonly onPromoteToCheckpoint: (sessionId: string) => Promise<void>;
   private readonly reconciliationCallbacks: ReconciliationCallbacks;
   private readonly reconciliationIntervalMs: number;
-  private readonly pauseDelayMs: number;
-  private readonly maxPauseDurationMs: number;
   private readonly idleTimeoutMs: number;
-  private readonly freezePromotionMs: number;
   private readonly entries = new Map<string, PauseEntry>();
   private readonly sessionConversationIds = new Map<string, string>();
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
@@ -160,13 +144,9 @@ export class ContainerLifecyclePolicy {
     this.containerManager = deps.containerManager;
     this.db = deps.db;
     this.logger = deps.logger;
-    this.onPromoteToCheckpoint = deps.onPromoteToCheckpoint;
     this.reconciliationCallbacks = deps.reconciliationCallbacks;
     this.reconciliationIntervalMs = deps.config.reconciliationIntervalMs ?? DEFAULT_RECONCILIATION_INTERVAL_MS;
-    this.pauseDelayMs = deps.config.pauseDelayMs ?? DEFAULT_PAUSE_DELAY_MS;
-    this.maxPauseDurationMs = deps.config.maxPauseDurationMs ?? DEFAULT_MAX_PAUSE_DURATION_MS;
     this.idleTimeoutMs = deps.config.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
-    this.freezePromotionMs = deps.config.freezePromotionMs ?? DEFAULT_FREEZE_PROMOTION_MS;
   }
 
   async start(): Promise<void> {
@@ -199,68 +179,8 @@ export class ContainerLifecyclePolicy {
   }
 
   private clearEntryTimers(entry: PauseEntry): void {
-    clearTimeoutSafe(entry.pauseTimer);
-    clearTimeoutSafe(entry.promotionTimer);
     clearTimeoutSafe(entry.idleTimer);
-    clearTimeoutSafe(entry.freezePromotionTimer);
-    clearTimeoutSafe(entry.hitlGraceTimer);
-    entry.pauseTimer = undefined;
-    entry.promotionTimer = undefined;
     entry.idleTimer = undefined;
-    entry.freezePromotionTimer = undefined;
-    entry.hitlGraceTimer = undefined;
-  }
-
-  schedulePause(sessionId: string, containerId: string): void {
-    const existing = this.entries.get(sessionId);
-    if (existing && existing.state !== 'none') {
-      this.logger.debug(`${TAG} session ${sessionId} pause already ${existing.state}`);
-      return;
-    }
-
-    const entry: PauseEntry = existing ?? {
-      containerId,
-      state: 'none',
-    };
-
-    clearTimeoutSafe(entry.pauseTimer);
-    entry.containerId = containerId;
-    entry.state = 'scheduled';
-    entry.pauseTimer = setTimeout(() => {
-      void this.executePause(sessionId).catch((err) => {
-        this.logger.warn(`${TAG} executePause failed for session ${sessionId}:`, err);
-      });
-    }, this.pauseDelayMs);
-    unrefTimer(entry.pauseTimer);
-
-    this.entries.set(sessionId, entry);
-    this.logger.debug(`${TAG} scheduled pause for session ${sessionId} in ${this.pauseDelayMs}ms`);
-  }
-
-  scheduleHitlGrace(sessionId: string, containerId: string): void {
-    const existing = this.entries.get(sessionId);
-    if (existing && existing.state !== 'none') {
-      this.logger.debug(`${TAG} session ${sessionId} HITL grace already ${existing.state}`);
-      return;
-    }
-
-    const entry: PauseEntry = existing ?? {
-      containerId,
-      state: 'none',
-    };
-
-    clearTimeoutSafe(entry.hitlGraceTimer);
-    entry.containerId = containerId;
-    entry.state = 'hitl_grace';
-    entry.hitlGraceTimer = setTimeout(() => {
-      void this.executeHitlGracePromotion(sessionId).catch((err) => {
-        this.logger.error(`${TAG} executeHitlGracePromotion failed for session ${sessionId}:`, err);
-      });
-    }, this.idleTimeoutMs);
-    unrefTimer(entry.hitlGraceTimer);
-
-    this.entries.set(sessionId, entry);
-    this.logger.debug(`${TAG} scheduled HITL grace for session ${sessionId} in ${this.idleTimeoutMs}ms`);
   }
 
   async cancelPause(sessionId: string): Promise<void> {
@@ -270,15 +190,6 @@ export class ContainerLifecyclePolicy {
     }
 
     this.clearEntryTimers(entry);
-
-    if (entry.state === 'paused') {
-      try {
-        await this.containerManager.unpauseContainer(entry.containerId);
-      } catch (err) {
-        this.logger.warn(`${TAG} failed to unpause container ${entry.containerId}:`, err);
-      }
-    }
-
     entry.state = 'none';
     this.maybeDeleteEntry(sessionId, entry);
     this.logger.debug(`${TAG} cancelled pause for session ${sessionId}`);
@@ -303,8 +214,8 @@ export class ContainerLifecyclePolicy {
     entry.state = 'none';
     entry.idleCallbacks = callbacks;
     entry.idleTimer = setTimeout(() => {
-      void this.executeIdleFreeze(sessionId).catch((err) => {
-        this.logger.warn(`${TAG} executeIdleFreeze failed for session ${sessionId}:`, err);
+      void this.executeIdleCheckpoint(sessionId).catch((err) => {
+        this.logger.warn(`${TAG} idle checkpoint failed for session ${sessionId}:`, err);
       });
     }, this.idleTimeoutMs);
     unrefTimer(entry.idleTimer);
@@ -320,15 +231,6 @@ export class ContainerLifecyclePolicy {
     }
 
     this.clearEntryTimers(entry);
-
-    if (entry.state === 'idle_paused') {
-      try {
-        await this.containerManager.unpauseContainer(entry.containerId);
-      } catch (err) {
-        this.logger.warn(`${TAG} failed to unpause idle-paused container ${entry.containerId}:`, err);
-      }
-    }
-
     entry.idleCallbacks = undefined;
     entry.state = 'none';
     this.maybeDeleteEntry(sessionId, entry);
@@ -354,13 +256,7 @@ export class ContainerLifecyclePolicy {
   }
 
   private maybeDeleteEntry(sessionId: string, entry: PauseEntry): void {
-    const hasTimers = Boolean(
-      entry.pauseTimer
-      || entry.promotionTimer
-      || entry.idleTimer
-      || entry.freezePromotionTimer
-      || entry.hitlGraceTimer,
-    );
+    const hasTimers = Boolean(entry.idleTimer);
 
     if (!hasTimers && entry.state === 'none' && !entry.idleCallbacks) {
       this.clearEntryTimers(entry);
@@ -371,81 +267,7 @@ export class ContainerLifecyclePolicy {
     this.entries.set(sessionId, entry);
   }
 
-  private async executePause(sessionId: string): Promise<void> {
-    const entry = this.entries.get(sessionId);
-    if (!entry || entry.state !== 'scheduled') {
-      return;
-    }
-
-    try {
-      await this.containerManager.pauseContainer(entry.containerId);
-      entry.pauseTimer = undefined;
-      entry.state = 'paused';
-      entry.promotionTimer = setTimeout(() => {
-        void this.executePromotion(sessionId).catch((err) => {
-          this.logger.error(`${TAG} executePromotion failed for session ${sessionId}:`, err);
-        });
-      }, this.maxPauseDurationMs);
-      unrefTimer(entry.promotionTimer);
-      this.entries.set(sessionId, entry);
-      this.logger.debug(`${TAG} paused session ${sessionId}; promotion in ${this.maxPauseDurationMs}ms`);
-    } catch (err) {
-      this.logger.warn(`${TAG} failed to pause container ${entry.containerId}:`, err);
-      entry.pauseTimer = undefined;
-      entry.promotionTimer = undefined;
-      entry.state = 'none';
-      this.maybeDeleteEntry(sessionId, entry);
-    }
-  }
-
-  private async executePromotion(sessionId: string): Promise<void> {
-    const entry = this.entries.get(sessionId);
-    if (!entry || entry.state !== 'paused') {
-      return;
-    }
-
-    entry.promotionTimer = undefined;
-    entry.state = 'promoting';
-    this.entries.set(sessionId, entry);
-
-    try {
-      await this.containerManager.unpauseContainer(entry.containerId);
-      await retryWithBackoff(() => this.onPromoteToCheckpoint(sessionId), {
-        delays: [1_000, 2_000],
-        onRetry: (err, attempt, delayMs) => {
-          this.logger.warn(
-            `${TAG} retrying checkpoint promotion for session ${sessionId} after attempt ${attempt + 1} in ${delayMs}ms:`,
-            err,
-          );
-        },
-      });
-
-      this.clearEntryTimers(entry);
-      this.entries.delete(sessionId);
-      this.logger.debug(`${TAG} promoted paused session ${sessionId} to checkpoint`);
-    } catch (err) {
-      this.logger.error(`${TAG} failed to promote paused session ${sessionId} to checkpoint:`, err);
-      try {
-        await this.containerManager.unpauseContainer(entry.containerId);
-      } catch (unpauseErr) {
-        this.logger.warn(`${TAG} failed to unpause container ${entry.containerId}:`, unpauseErr);
-      }
-
-      this.clearEntryTimers(entry);
-      entry.state = 'none';
-
-      if (entry.idleCallbacks) {
-        this.entries.set(sessionId, entry);
-        this.scheduleIdleTimeout(sessionId, entry.containerId, entry.idleCallbacks);
-        return;
-      }
-
-      this.clearEntryTimers(entry);
-      this.entries.delete(sessionId);
-    }
-  }
-
-  private async executeIdleFreeze(sessionId: string): Promise<void> {
+  private async executeIdleCheckpoint(sessionId: string): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) {
       return;
@@ -464,52 +286,9 @@ export class ContainerLifecyclePolicy {
       return;
     }
 
-    try {
-      await callbacks.onFreeze(sessionId);
-      entry.state = 'idle_paused';
-      entry.freezePromotionTimer = setTimeout(() => {
-        void this.executeIdlePromotion(sessionId).catch((err) => {
-          this.logger.error(`${TAG} executeIdlePromotion failed for session ${sessionId}:`, err);
-        });
-      }, this.freezePromotionMs);
-      unrefTimer(entry.freezePromotionTimer);
-      this.entries.set(sessionId, entry);
-      this.logger.debug(`${TAG} idle-paused session ${sessionId}; promotion in ${this.freezePromotionMs}ms`);
-    } catch (err) {
-      if (hasStatusCode(err, 404)) {
-        this.logger.warn(`${TAG} container missing during idle freeze for session ${sessionId}`);
-        try {
-          await callbacks.onContainerGone?.(sessionId);
-        } catch (goneErr) {
-          this.logger.warn(`${TAG} onContainerGone failed for session ${sessionId}:`, goneErr);
-        }
-      } else {
-        this.logger.warn(`${TAG} failed to idle-freeze session ${sessionId}:`, err);
-      }
-
-      entry.state = 'none';
-      entry.idleCallbacks = undefined;
-      this.maybeDeleteEntry(sessionId, entry);
-    }
-  }
-
-  private async executeIdlePromotion(sessionId: string): Promise<void> {
-    const entry = this.entries.get(sessionId);
-    if (!entry || entry.state !== 'idle_paused') {
-      return;
-    }
-
-    const callbacks = entry.idleCallbacks;
-    if (!callbacks) {
-      entry.freezePromotionTimer = undefined;
-      entry.state = 'none';
-      this.maybeDeleteEntry(sessionId, entry);
-      return;
-    }
-
-    entry.freezePromotionTimer = undefined;
     entry.state = 'promoting';
     this.entries.set(sessionId, entry);
+    this.logger.debug(`${TAG} idle timeout reached for session ${sessionId}, checkpointing directly`);
 
     try {
       await retryWithBackoff(() => callbacks.onCheckpoint(sessionId), {
@@ -524,58 +303,22 @@ export class ContainerLifecyclePolicy {
 
       this.clearEntryTimers(entry);
       this.entries.delete(sessionId);
-      this.logger.debug(`${TAG} promoted idle-paused session ${sessionId} to checkpoint`);
+      this.logger.debug(`${TAG} idle session ${sessionId} checkpointed successfully`);
     } catch (err) {
-      this.logger.error(`${TAG} failed to checkpoint idle-paused session ${sessionId}:`, err);
-      try {
-        await this.containerManager.unpauseContainer(entry.containerId);
-      } catch (unpauseErr) {
-        this.logger.warn(`${TAG} failed to unpause container ${entry.containerId}:`, unpauseErr);
+      if (hasStatusCode(err, 404)) {
+        this.logger.warn(`${TAG} container missing during idle checkpoint for session ${sessionId}`);
+        try {
+          await callbacks.onContainerGone?.(sessionId);
+        } catch (goneErr) {
+          this.logger.warn(`${TAG} onContainerGone failed for session ${sessionId}:`, goneErr);
+        }
+      } else {
+        this.logger.error(`${TAG} failed to checkpoint idle session ${sessionId}:`, err);
       }
 
       this.clearEntryTimers(entry);
       entry.state = 'none';
       entry.idleCallbacks = undefined;
-      this.clearEntryTimers(entry);
-      this.entries.delete(sessionId);
-    }
-  }
-
-  private async executeHitlGracePromotion(sessionId: string): Promise<void> {
-    const entry = this.entries.get(sessionId);
-    if (!entry || entry.state !== 'hitl_grace') {
-      return;
-    }
-
-    entry.hitlGraceTimer = undefined;
-    entry.state = 'promoting';
-    this.entries.set(sessionId, entry);
-
-    try {
-      await retryWithBackoff(() => this.onPromoteToCheckpoint(sessionId), {
-        delays: [1_000, 2_000],
-        onRetry: (err, attempt, delayMs) => {
-          this.logger.warn(
-            `${TAG} retrying HITL checkpoint for session ${sessionId} after attempt ${attempt + 1} in ${delayMs}ms:`,
-            err,
-          );
-        },
-      });
-
-      this.clearEntryTimers(entry);
-      this.entries.delete(sessionId);
-      this.logger.debug(`${TAG} promoted HITL-grace session ${sessionId} to checkpoint`);
-    } catch (err) {
-      this.logger.error(`${TAG} failed to checkpoint HITL-grace session ${sessionId}:`, err);
-      this.clearEntryTimers(entry);
-      entry.state = 'none';
-
-      if (entry.idleCallbacks) {
-        this.entries.set(sessionId, entry);
-        this.scheduleIdleTimeout(sessionId, entry.containerId, entry.idleCallbacks);
-        return;
-      }
-
       this.entries.delete(sessionId);
     }
   }

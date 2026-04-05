@@ -1,7 +1,12 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import * as fs from 'node:fs/promises';
+import path from 'node:path';
 import { z } from 'zod';
 import { query as sdkQuery, createSdkMcpServer, tool as sdkTool } from '@anthropic-ai/claude-agent-sdk';
-import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  AgentDefinition,
+  SDKMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 import type {
   AgentHarness,
   AgentEvent,
@@ -23,12 +28,28 @@ import {
   resolveSecretRef,
 } from './shared.js';
 
+const ClaudeAgentDefinitionSchema = z.object({
+  description: z.string(),
+  prompt: z.string(),
+  tools: z.array(z.string()).optional(),
+  disallowedTools: z.array(z.string()).optional(),
+  model: z.string().optional(),
+  maxTurns: z.number().int().positive().optional(),
+});
+
 export const ClaudeAgentsConfigSchema = z.object({
   provider: z.string().optional(),
   model: z.string().min(1),
   apiKeyRef: z.string().optional(),
   baseUrl: z.string().refine((value) => URL.canParse(value)).optional(),
   maxTurns: z.number().int().positive().optional(),
+  setup: z.object({
+    symlinks: z.array(z.object({
+      src: z.string(),
+      dest: z.string(),
+    })).optional(),
+  }).optional(),
+  subagents: z.record(z.string(), ClaudeAgentDefinitionSchema).optional(),
 });
 
 export type ClaudeAgentsConfig = z.infer<typeof ClaudeAgentsConfigSchema>;
@@ -115,10 +136,11 @@ type StreamMappingState = {
 };
 
 class ClaudeSession implements HarnessSession {
-  private readonly transcript: Message[] = [];
+  private transcript: Message[] = [];
   private readonly queuedEvents: AgentEvent[] = [];
   private activeApprovalHandler: ApprovalCallback | undefined;
   private readonly mcpServer: ReturnType<typeof createSdkMcpServer>;
+  private restoredFromCheckpoint = false;
 
   constructor(
     private readonly config: HarnessSessionConfig,
@@ -139,12 +161,35 @@ class ClaudeSession implements HarnessSession {
     this.mcpServer = sdk.createSdkMcpServer({ name: 'ctxmill', tools: mcpTools });
   }
 
-  restoreTranscript(messages: Message[]): void {
+  restoreTranscript(messages: Message[], options?: { markRestoredFromCheckpoint?: boolean }): void {
     this.transcript.push(...messages);
+    this.restoredFromCheckpoint = options?.markRestoredFromCheckpoint ?? true;
+  }
+
+  async restoreSessionJSONL(jsonlContent: string): Promise<void> {
+    for (const sessionPath of this.resolveSessionJSONLPaths()) {
+      await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+      await fs.writeFile(sessionPath, jsonlContent, 'utf-8');
+    }
+  }
+
+  private resolveSessionJSONLPaths(): string[] {
+    const configDir = process.env.CLAUDE_CONFIG_DIR
+      ?? path.join(process.env.HOME ?? '/home/ctxmill', '.claude');
+    const workspaceDir = this.config.workspaceDir || '/workspace';
+    const sessionId = this.config.conversationId;
+    const sanitizedWorkspaceDir = workspaceDir.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200);
+    const hashedWorkspaceDir = createHash('sha256').update(workspaceDir).digest('hex');
+    const projectDirs = [...new Set([sanitizedWorkspaceDir, hashedWorkspaceDir])];
+
+    return projectDirs.map((projectDir) =>
+      path.join(configDir, 'projects', projectDir, 'sessions', `${sessionId}.jsonl`),
+    );
   }
 
   async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<AgentEvent> {
-    this.transcript.push(...input.messages);
+    const isFirstTurn = this.restoredFromCheckpoint || this.transcript.length === 0;
+    this.transcript = [...input.messages];
     this.activeApprovalHandler = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
 
     const abortController = new AbortController();
@@ -162,7 +207,6 @@ class ClaudeSession implements HarnessSession {
 
     try {
       const maxTurns = this.harnessConfig.maxTurns;
-      const isFirstTurn = this.transcript.length === input.messages.length;
       const sdkSessionId = this.config.conversationId;
 
       const q = this.sdk.query({
@@ -171,6 +215,7 @@ class ClaudeSession implements HarnessSession {
           model: this.harnessConfig.model,
           systemPrompt: this.config.systemPrompt,
           cwd: this.config.workspaceDir,
+          settingSources: ['project'],
           allowedTools: this.buildAllowedTools() ?? [],
           disallowedTools: this.buildDisallowedTools() ?? [],
           mcpServers: { ctxmill: this.mcpServer },
@@ -178,6 +223,7 @@ class ClaudeSession implements HarnessSession {
           allowDangerouslySkipPermissions: true,
           includePartialMessages: false,
           persistSession: true,
+          ...(this.buildAgents() ? { agents: this.buildAgents() } : {}),
           ...(isFirstTurn ? { sessionId: sdkSessionId } : { resume: sdkSessionId }),
           abortController,
           env: this.buildClaudeEnv(),
@@ -217,6 +263,10 @@ class ClaudeSession implements HarnessSession {
         yield* this.flushQueuedEvents();
       }
 
+      if (this.restoredFromCheckpoint) {
+        this.restoredFromCheckpoint = false;
+      }
+
       yield* this.flushQueuedEvents();
       const committedToolCalls: Message['toolCalls'] | undefined =
         accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined;
@@ -253,11 +303,24 @@ class ClaudeSession implements HarnessSession {
   }
 
   async exportState(): Promise<HarnessExportedState> {
+    let sessionJSONL: string | undefined;
+    for (const sessionPath of this.resolveSessionJSONLPaths()) {
+      try {
+        sessionJSONL = await fs.readFile(sessionPath, 'utf-8');
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+
     return {
       stateVersion: '2',
       payload: {
         transcript: this.transcript,
         sessionId: this.config.conversationId,
+        ...(sessionJSONL != null ? { sessionJSONL } : {}),
       },
     };
   }
@@ -284,24 +347,62 @@ class ClaudeSession implements HarnessSession {
   }
 
   private async *generateInput(messages: Message[]): AsyncGenerator<SdkPromptMessage> {
+    if (this.restoredFromCheckpoint && messages.length > 1) {
+      for (const message of messages) {
+        yield {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: this.formatRestoredPromptMessage(message),
+          },
+        };
+      }
+      return;
+    }
+
     const lastMsg = messages[messages.length - 1];
+    if (!lastMsg) {
+      return;
+    }
+
     yield {
       type: 'user',
       message: {
         role: 'user',
-        content: lastMsg?.content ?? '',
+        content: lastMsg.content,
       },
     };
   }
 
+  private formatRestoredPromptMessage(message: Message): string {
+    switch (message.role) {
+      case 'assistant':
+        return `[Previous assistant response]\n${message.content}`;
+      case 'system':
+        return `[Previous system message]\n${message.content}`;
+      case 'tool':
+        return `[Previous tool output]\n${message.content}`;
+      case 'user':
+      default:
+        return message.content;
+    }
+  }
+
   private buildAllowedTools(): string[] | undefined {
     const nativeTools = this.config.nativeTools;
-    if (!nativeTools?.length) return undefined;
     const merged: string[] = [];
-    for (const nt of nativeTools) {
-      if (nt.allowlist) merged.push(...nt.allowlist);
+
+    for (const nt of nativeTools ?? []) {
+      if (nt.allowlist) {
+        merged.push(...nt.allowlist);
+      }
     }
-    return merged.length ? [...merged, 'mcp__ctxmill__*'] : undefined;
+
+    if (this.harnessConfig.subagents) {
+      merged.push('Agent');
+    }
+
+    return merged.length ? [...new Set([...merged, 'mcp__ctxmill__*'])] : undefined;
   }
 
   private buildDisallowedTools(): string[] | undefined {
@@ -338,6 +439,10 @@ class ClaudeSession implements HarnessSession {
       if (v !== undefined && !(k in claudeEnv) && !MODEL_ENV_BLOCKLIST.has(k)) claudeEnv[k] = v;
     }
     return claudeEnv;
+  }
+
+  private buildAgents(): Record<string, AgentDefinition> | undefined {
+    return this.harnessConfig.subagents;
   }
 
   private linkAbortSignals(
@@ -411,11 +516,21 @@ export class ClaudeAgentsHarness implements AgentHarness {
 
     const session = new ClaudeSession(config, harnessConfig, apiKey, this, sdk);
     if (restore) {
+      const sessionJSONL = restore.payload['sessionJSONL'];
+      const hasRestoredSessionJSONL = typeof sessionJSONL === 'string';
+      if (hasRestoredSessionJSONL) {
+        await session.restoreSessionJSONL(sessionJSONL);
+      }
+
       const transcriptFromState = restore.payload['transcript'];
       if (Array.isArray(transcriptFromState) && transcriptFromState.length > 0) {
-        session.restoreTranscript(transcriptFromState as Message[]);
+        session.restoreTranscript(transcriptFromState as Message[], {
+          markRestoredFromCheckpoint: !hasRestoredSessionJSONL,
+        });
       } else if (restore.messages.length > 0) {
-        session.restoreTranscript(restore.messages);
+        session.restoreTranscript(restore.messages, {
+          markRestoredFromCheckpoint: !hasRestoredSessionJSONL,
+        });
       }
     }
     return session;

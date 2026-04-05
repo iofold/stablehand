@@ -1,0 +1,54 @@
+apiVersion: ctxmill.io/v1
+kind: Agent
+metadata:
+  name: test-claude-features
+  displayName: "Claude Feature Test"
+  description: "Tests skills and subagents for Claude Agents"
+  labels:
+    harness: claude-agents
+    test: features
+spec:
+  harness: claude-agents
+  harnessConfig:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    setup:
+      symlinks:
+        - src: skills
+          dest: .claude/skills
+    subagents:
+      code-reviewer:
+        description: "Reviews code for quality and security"
+        prompt: "You are a code reviewer. When asked, confirm you are a subagent and report what tools you have access to."
+        tools:
+          - Read
+          - Grep
+          - Glob
+        model: claude-haiku-4-5
+      summarizer:
+        description: "Summarizes text concisely"
+        prompt: "You summarize text. When asked, confirm you are a subagent."
+        model: claude-sonnet-4-6
+  instructions: |
+    You are a test agent for verifying Claude Agents features.
+    {{skills}}
+
+    You have two subagents:
+    - code-reviewer: Reviews code (uses Haiku)
+    - summarizer: Summarizes text (uses Sonnet)
+
+    When asked to test subagents, delegate to one of them.
+    When asked about skills, describe what skills you have loaded.
+  nativeTools:
+    allowlist:
+      - Read
+      - Write
+      - Edit
+      - Bash
+      - Grep
+      - Glob
+  workspace: {}
+  mode: interactive
+  resources:
+    maxSessionDurationSeconds: 120
+    maxTokensPerSession: 8000
