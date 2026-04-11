@@ -5,6 +5,7 @@ export const requestApprovalTool: ToolDefinition = {
   name: 'request-approval',
   description:
     'Request human approval before proceeding with an action. The run will pause until a human approves or rejects the request.',
+  location: 'orchestrator',
   requiresApproval: true,
   input: z.object({
     reason: z.string().describe('Description of the action that needs approval'),

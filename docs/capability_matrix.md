@@ -58,7 +58,7 @@
 
 ---
 
-## 3. HARNESSES (5 Implementations)
+## 3. HARNESSES (Shipped Implementations)
 
 ### Harness Comparison
 
@@ -67,8 +67,6 @@
 | **LangGraph** | OpenAI, Anthropic | Blocklist | Yes | JSON payload | Via tool_call_start | Graph-based; supports deep agent params |
 | **Claude Agents** | Anthropic | Allowlist | No | JSON payload | approval_needed event | Uses @anthropic-sdk; streaming text_delta |
 | **PI Agent** | OpenAI | Allowlist | No | JSON payload | Via tool_call_start | TypeBox schema conversion; strict typing |
-| **OpenAI Agents** | OpenAI | Blocklist | No | JSON payload | Via tool_call_start | (Mentioned in AGENTS.md, not in kitchen-sink) |
-| **Vercel AI** | Multi-provider | Blocklist | No | JSON payload | Via tool_call_start | (Mentioned in AGENTS.md, not in kitchen-sink) |
 
 **Session Lifecycle**:
 1. `openSession(config, restore?)` → HarnessSession
@@ -154,8 +152,6 @@
 | **LangGraph** | **Yes** | `harnessConfig.subagents` | Deep agent params passed to graph |
 | **Claude Agents** | No | — | Single-agent only |
 | **PI Agent** | No | — | Single-agent only |
-| **OpenAI Agents** | Unknown | — | Not in kitchen-sink |
-| **Vercel AI** | Unknown | — | Not in kitchen-sink |
 
 **Subagent Flow**:
 1. Parent agent calls tool (e.g., `emit-event`)
@@ -176,12 +172,14 @@
 
 ## 6. EVENT EMISSION & CHAINING
 
-### Event System (18 Built-in + Custom)
+### Event System (Current EventMap + Custom)
 
 #### Built-in Events (EventMap)
 ```
-run.started, run.text_chunk, run.tool_started, run.tool_result,
-run.interrupted, run.interrupt_resolved, run.completed,
+turn.pending, turn.started, turn.completed,
+user.message, message.committed, run.ag_ui_event,
+run.text_chunk, run.tool_started, run.tool_result,
+run.interrupted, run.interrupt_resolved, session.paused,
 learning.trace_captured, learning.insight_extracted, learning.knowledge_updated,
 feedback.received,
 agent.created, agent.deleted,

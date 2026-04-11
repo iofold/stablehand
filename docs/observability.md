@@ -101,12 +101,14 @@ Every significant action in ctxmill emits a typed event. These events are persis
 
 ### Event Types
 
-There are 18 core event types, including:
-- `turn.started` / `turn.completed`
+The current `EventMap` includes turn lifecycle, message-commit, tool, HITL, session, learning, and trigger events, including:
+- `turn.pending` / `turn.started` / `turn.completed`
+- `user.message` / `message.committed`
 - `run.tool_started` / `run.tool_result`
 - `run.text_chunk`
 - `run.interrupted` / `run.interrupt_resolved`
 - `session.paused` / `run.resumed`
+- `run.ag_ui_event`
 - `learning.trace_captured`
 - `trigger.fired`
 

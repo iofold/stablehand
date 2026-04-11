@@ -41,5 +41,4 @@ export type {
   CheckpointSizeResult,
 } from './sandbox/checkpoint.js';
 export * from './sandbox/execution-phase.js';
-export * from './sandbox/secret-reader.js';
 export * from './artifact/artifact-store.js';

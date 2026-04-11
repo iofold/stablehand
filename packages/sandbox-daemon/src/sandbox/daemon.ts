@@ -12,7 +12,6 @@
  *
  * Environment:
  *   SANDBOX_PORT — Port to listen on (default: 50051)
- *   SECRETS_PATH — Path to secrets JSON (default: /run/secrets/config.json)
  */
 
 import { createServer, type Server } from 'node:http';
@@ -39,7 +38,6 @@ import {
   KillSessionResponseSchema,
 } from '@ctxmill/proto/sandbox/v1';
 
-import { readSecrets, DEFAULT_SECRETS_PATH } from './secret-reader.js';
 import { openSession, deliverTurn, suspendSession, killSession } from './runner.js';
 import { validateCheckpointSize } from './checkpoint.js';
 
@@ -52,7 +50,6 @@ import type { ToolContext, ToolDefinition } from '../tool/types.js';
 
 let secrets: ResolvedSecrets = {};
 let server: Server | null = null;
-let activeAbort: AbortController | null = null;
 let toolApi: { stop: () => void } | null = null;
 let _sessionTools: ToolDefinition[] = [];
 
@@ -93,7 +90,8 @@ function parseToolResult(result: string): unknown {
   try {
     return JSON.parse(result);
   } catch {
-    return { result };
+    console.error('[daemon] Failed to parse tool result as JSON, returning raw string.');
+    return result;
   }
 }
 
@@ -140,8 +138,9 @@ export function startToolApi(
         let parsedBody: unknown;
         try {
           parsedBody = await request.json();
-        } catch {
-          parsedBody = {};
+        } catch (parseErr: unknown) {
+          console.error(`[daemon] Failed to parse tool request body for ${toolName}:`, parseErr);
+          return jsonResponse({ error: 'Invalid request body: failed to parse JSON' }, 400);
         }
 
         try {
@@ -178,7 +177,7 @@ async function handleOpenSession(req: OpenSessionRequest) {
   console.error(`[sandbox] OpenSession called`);
 
   try {
-    const resolvedSecrets = await ensureSecrets();
+    const resolvedSecrets = ensureSecrets();
     const result = await openSession(req, resolvedSecrets, {});
 
     console.error(`[sandbox] session opened — sessionId=${result.sessionId}, status=${result.status}`);
@@ -200,12 +199,7 @@ async function handleOpenSession(req: OpenSessionRequest) {
  * Feeds user messages into the active session and streams back SessionEvents.
  */
 async function* handleDeliverTurn(req: DeliverTurnRequest) {
-  activeAbort = new AbortController();
-  try {
-    yield* deliverTurn(req, { signal: activeAbort.signal });
-  } finally {
-    activeAbort = null;
-  }
+  yield* deliverTurn(req);
 }
 
 /**
@@ -255,11 +249,6 @@ async function handleSuspendSession(req: SuspendSessionRequest) {
 async function handleKillSession(req: KillSessionRequest) {
   console.error(`[sandbox] KillSession called — sessionId=${req.sessionId}, reason=${req.reason}`);
 
-  if (activeAbort) {
-    activeAbort.abort();
-    activeAbort = null;
-  }
-
   await killSession();
 
   return create(KillSessionResponseSchema, {
@@ -284,33 +273,19 @@ function registerRoutes(router: ConnectRouter) {
 /*  Server lifecycle                                                           */
 /* -------------------------------------------------------------------------- */
 
-function resolveSecretsFromEnv(): ResolvedSecrets {
-  const knownKeys = [
-    'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_MODEL',
-    'S3_ENDPOINT', 'S3_ACCESS_KEY', 'S3_SECRET_KEY', 'S3_BUCKET', 'S3_REGION',
-  ];
+function buildSecretsFromEnv(): ResolvedSecrets {
   const result: ResolvedSecrets = {};
-  for (const key of knownKeys) {
-    if (process.env[key]) {
-      result[key] = process.env[key]!;
-    }
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) result[key] = value;
   }
   return result;
 }
 
-async function ensureSecrets(): Promise<ResolvedSecrets> {
+function ensureSecrets(): ResolvedSecrets {
   if (Object.keys(secrets).length > 0) return secrets;
-  secrets = resolveSecretsFromEnv();
-  if (Object.keys(secrets).length > 0) {
-    console.error(`[sandbox] loaded ${Object.keys(secrets).length} secret(s) from env`);
-    return secrets;
-  }
-  secrets = await readSecrets(DEFAULT_SECRETS_PATH);
-  if (Object.keys(secrets).length > 0) {
-    console.error(`[sandbox] loaded ${Object.keys(secrets).length} secret(s) from file`);
-  } else {
-    console.error(`[sandbox] no secrets found in env or file — running without API keys`);
-  }
+  secrets = buildSecretsFromEnv();
+  const count = Object.keys(secrets).length;
+  console.error(`[sandbox] resolved ${count} env var(s) as potential secrets`);
   return secrets;
 }
 
@@ -318,14 +293,11 @@ async function ensureSecrets(): Promise<ResolvedSecrets> {
  * Start the gRPC server.
  *
  * @param port        - Port to listen on (default: 50051).
- * @param secretsPath - Path to the secrets JSON file.
  * @returns The HTTP/1.1 server instance.
  */
 export async function startDaemon(
   port: number = Number(process.env.SANDBOX_PORT) || 50051,
-  secretsPath: string = process.env.SECRETS_PATH || DEFAULT_SECRETS_PATH,
 ): Promise<Server> {
-  void secretsPath;
   const toolApiPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
 
   const connectHandler = connectNodeAdapter({
@@ -333,6 +305,11 @@ export async function startDaemon(
   });
 
   server = createServer(connectHandler);
+
+  // Bun's default idle timeout (~10s) kills the DeliverTurn stream while
+  // the harness blocks on slow orchestrator tool calls (Exa, Firecrawl, etc).
+  server.keepAliveTimeout = 10 * 60 * 1000;
+  server.timeout = 0;
 
   await new Promise<void>((resolve) => {
     server!.listen(port, () => {
@@ -350,12 +327,6 @@ export async function startDaemon(
  * Gracefully shut down the daemon.
  */
 export async function stopDaemon(): Promise<void> {
-  if (activeAbort) {
-    activeAbort.abort();
-    activeAbort = null;
-  }
-
-  // Ask the runner to clean up any active session (best-effort)
   await killSession().catch((err: unknown) => {
     console.error('[sandbox] killSession during stopDaemon failed:', err);
   });

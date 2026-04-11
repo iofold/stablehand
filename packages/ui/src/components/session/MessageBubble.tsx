@@ -42,8 +42,10 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
         const parsed = JSON.parse(rawError);
         if (typeof parsed === 'object' && parsed !== null) {
           statusCode = typeof parsed.statusCode === 'number' ? parsed.statusCode : (typeof parsed.status === 'number' ? parsed.status : undefined);
-          summary = parsed.message || parsed.error || 'An error occurred';
-          details = rawError;
+          summary = parsed.message || parsed.error || parsed.detail || 'An error occurred';
+          if (parsed.stack || parsed.detail || rawError.length > 120) {
+            details = rawError;
+          }
         }
       } catch {
         // Not JSON — check for common HTTP status patterns like "404: ..." or "(404)"

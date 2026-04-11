@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './types.js';
 
 export function defineTool(def: ToolDefinition): ToolDefinition {
-  return def;
+  return { location: 'sandbox' as const, ...def };
 }
 
 export { LocalFunctionExecutor } from './executor.js';
@@ -26,4 +26,4 @@ export { zodToJsonSchema, jsonSchemaToZod } from './schema-convert.js';
 
 // Tool metadata (serializable representation for gRPC transport)
 export type { ToolMetadata } from './metadata.js';
-export { ORCHESTRATOR_TOOLS, toToolMetadata, toToolMetadataList } from './metadata.js';
+export { resolveToolLocation, toToolMetadata, toToolMetadataList } from './metadata.js';

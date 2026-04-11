@@ -28,64 +28,40 @@ export interface ToolMetadata {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Orchestrator-bound tools                                                   */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Tool names that always run on the orchestrator side regardless of the
- * location hint. These tools need access to orchestrator-only resources
- * (event bus, HITL approval queues, etc.) and cannot execute in a sandbox.
- */
-export const ORCHESTRATOR_TOOLS: ReadonlySet<string> = new Set([
-  'emit-event',
-  'request-approval',
-  'a2ui-render',
-  'ctxmill-guide',
-]);
-
-export const DAEMON_TOOLS: ReadonlySet<string> = new Set([
-  'artifact_upload',
-  'artifact_download',
-]);
-
-/* -------------------------------------------------------------------------- */
 /*  Conversion functions                                                       */
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Canonical resolver for tool execution location.
+ * Every tool should set `location` explicitly; defaults to `'sandbox'`.
+ */
+export function resolveToolLocation(
+  tool: Pick<ToolDefinition, 'location'>,
+): 'sandbox' | 'orchestrator' | 'daemon' {
+  return tool.location ?? 'sandbox';
+}
+
+/**
  * Convert a single ToolDefinition to its serializable ToolMetadata form.
  *
- * @param tool     - The tool definition containing a Zod input schema.
- * @param location - Execution location override. When omitted the function
- *                   checks whether `tool.name` is in {@link ORCHESTRATOR_TOOLS};
- *                   if so it is `'orchestrator'`, otherwise `'sandbox'`.
+ * @param tool             - The tool definition containing a Zod input schema.
+ * @param locationOverride - Execution location override.
  */
 export function toToolMetadata(
   tool: ToolDefinition,
-  location?: 'sandbox' | 'orchestrator' | 'daemon',
+  locationOverride?: 'sandbox' | 'orchestrator' | 'daemon',
 ): ToolMetadata {
-  const resolvedLocation =
-    location
-    ?? tool.location
-    ?? (ORCHESTRATOR_TOOLS.has(tool.name) || tool.requiresApproval
-      ? 'orchestrator'
-      : DAEMON_TOOLS.has(tool.name)
-        ? 'daemon'
-        : 'sandbox');
-
   return {
     name: tool.name,
     description: tool.description,
     inputSchema: zodToJsonSchema(tool.input as any),
-    location: resolvedLocation,
+    location: locationOverride ?? resolveToolLocation(tool),
     programmatic: tool.programmatic ?? false,
   };
 }
 
 /**
  * Bulk-convert an array of ToolDefinitions to ToolMetadata.
- *
- * Location is auto-detected per tool based on {@link ORCHESTRATOR_TOOLS}.
  */
 export function toToolMetadataList(tools: ToolDefinition[]): ToolMetadata[] {
   return tools.map((tool) => toToolMetadata(tool));

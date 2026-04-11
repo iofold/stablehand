@@ -44,11 +44,8 @@ function createMockContainerManager(): ContainerManager {
       containerName: 'ctxmill-run-sess-1',
     }),
     startContainer: vi.fn().mockResolvedValue(undefined),
-    pauseContainer: vi.fn().mockResolvedValue(undefined),
-    unpauseContainer: vi.fn().mockResolvedValue(undefined),
     stopContainer: vi.fn().mockResolvedValue(undefined),
     removeContainer: vi.fn().mockResolvedValue(undefined),
-    injectSecrets: vi.fn().mockResolvedValue(undefined),
     extractContainerDiff: vi.fn().mockResolvedValue(undefined),
     extractWorkspaceDiff: vi.fn().mockResolvedValue(undefined),
     extractLogs: vi.fn().mockResolvedValue(undefined),
@@ -87,7 +84,6 @@ function createMockDb(): DatabaseRepository {
 
 function createMockLifecyclePolicy(): ContainerLifecyclePolicy {
   return {
-    cancelPause: vi.fn().mockResolvedValue(undefined),
     cancelIdleTimeout: vi.fn().mockResolvedValue(undefined),
     scheduleIdleTimeout: vi.fn(),
     cleanupAll: vi.fn(),
@@ -205,10 +201,12 @@ async function collectEvents(stream: AsyncGenerator<SessionEvent>): Promise<Sess
 }
 
 type SandboxSessionManagerInternals = {
-  sessions: Map<string, SessionRecord>;
-  agentDefs: Map<string, AgentDefinition>;
-  turnQueues: Map<string, unknown[]>;
-  activeTurns: Set<string>;
+  stateStore: {
+    sessions: Map<string, SessionRecord>;
+    agentDefs: Map<string, AgentDefinition>;
+    turnQueues: Map<string, unknown[]>;
+    activeTurns: Set<string>;
+  };
   isStaleContainerError(err: unknown): boolean;
 };
 
@@ -243,6 +241,7 @@ describe('SandboxSessionManager session recovery', () => {
       db,
       lifecyclePolicy,
       workspaceDiffService: new WorkspaceDiffService({ containerManager }),
+      buildSandboxSecrets: () => ({}),
       resolveToolsForAgent,
       logger: createLogger(),
       config: { idleTimeoutMs: 60_000, maxQueuedMessages: 10 },
@@ -269,7 +268,7 @@ describe('SandboxSessionManager session recovery', () => {
       expect(session.sessionId).toBe('sess-1');
       expect(session.status).toBe('ACTIVE');
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
-      expect(resolveToolsForAgent).toHaveBeenCalledWith([]);
+      expect(resolveToolsForAgent).toHaveBeenCalledWith([], undefined);
       expect(grpcClient.openSession).toHaveBeenCalledWith(expect.objectContaining({
         bootstrap: {
           case: 'restore',
@@ -284,7 +283,7 @@ describe('SandboxSessionManager session recovery', () => {
     });
 
     it('CHECKPOINTED restore retries openSession on transient unavailable errors', async () => {
-      vi.useFakeTimers();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
       (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('CHECKPOINTED'));
       (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
 
@@ -295,7 +294,7 @@ describe('SandboxSessionManager session recovery', () => {
       connectMocks.createClientMock.mockReturnValue(retryingClient);
 
       const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
-      await vi.advanceTimersByTimeAsync(11_500);
+      await vi.runAllTimersAsync();
       const session = await sessionPromise;
 
       expect(retryingClient.openSession).toHaveBeenCalledTimes(2);
@@ -323,42 +322,24 @@ describe('SandboxSessionManager session recovery', () => {
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
     });
 
-    it('PAUSED/idle + unfreeze fails + checkpoint exists → restores from checkpoint', async () => {
-      vi.useFakeTimers();
-      const failingClient = createMockGrpcClient();
-      failingClient.killSession.mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:50051'));
-      connectMocks.createClientMock
-        .mockReturnValueOnce(failingClient)
-        .mockReturnValue(grpcClient);
+    it('PAUSED + checkpoint exists → restores from checkpoint', async () => {
       (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('PAUSED'));
       (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
 
-      const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
-      await vi.advanceTimersByTimeAsync(10_500);
-      const session = await sessionPromise;
+      const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
 
-      expect(containerManager.unpauseContainer).toHaveBeenCalledWith('c-1');
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'ACTIVE');
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'CHECKPOINTED');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'RESTORING');
       expect(session.sessionId).toBe('sess-1');
       expect(session.status).toBe('ACTIVE');
     });
 
-    it('PAUSED/idle + unfreeze fails + no checkpoint → creates fresh session', async () => {
-      vi.useFakeTimers();
-      const failingClient = createMockGrpcClient();
-      failingClient.killSession.mockRejectedValue(new Error('socket hang up ECONNRESET'));
-      connectMocks.createClientMock
-        .mockReturnValueOnce(failingClient)
-        .mockReturnValue(grpcClient);
+    it('PAUSED + no checkpoint → creates fresh session', async () => {
       (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('PAUSED'));
       (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
-      const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
-      await vi.advanceTimersByTimeAsync(10_500);
-      const session = await sessionPromise;
+      const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
 
-      expect(containerManager.unpauseContainer).toHaveBeenCalledWith('c-1');
       expect(db.createSandboxSession).toHaveBeenCalledTimes(1);
       expect(session.sessionId).not.toBe('sess-1');
       expect(session.status).toBe('ACTIVE');
@@ -409,19 +390,21 @@ describe('SandboxSessionManager session recovery', () => {
       expect(events[0]).toEqual(expect.objectContaining({ type: 'message_committed', content: 'retried after dns failure' }));
     });
 
-    it('ConnectError(InvalidArgument) → rethrown without retry', async () => {
+    it('ConnectError(InvalidArgument) → emits turn_failed without retry', async () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
       grpcClient.deliverTurn.mockImplementationOnce(() => {
         throw new ConnectError('invalid', Code.InvalidArgument);
       });
 
       await expect(collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1')))
-        .rejects.toThrow('invalid');
+        .resolves.toEqual([
+          expect.objectContaining({ type: 'turn_failed', errorMessage: '[invalid_argument] invalid' }),
+        ]);
       expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(1);
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
     });
 
-    it('retry limited to once — second failure throws', async () => {
+    it('retry limited to once — second failure emits turn_failed', async () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
       grpcClient.deliverTurn
         .mockImplementationOnce(() => {
@@ -432,13 +415,15 @@ describe('SandboxSessionManager session recovery', () => {
         });
 
       await expect(collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1')))
-        .rejects.toThrow('unavailable-2');
+        .resolves.toEqual([
+          expect.objectContaining({ type: 'turn_failed', errorMessage: '[unavailable] unavailable-2' }),
+        ]);
       expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(2);
     });
 
-    it('no cached agentDef → error rethrown without retry', async () => {
+    it('no cached agentDef → emits turn_failed without retry', async () => {
       const privateManager = manager as unknown as SandboxSessionManagerInternals;
-      privateManager.sessions.set('conv-1', {
+      privateManager.stateStore.sessions.set('conv-1', {
         sessionId: 'sess-1',
         conversationId: 'conv-1',
         agentId: 'agent-1',
@@ -453,7 +438,9 @@ describe('SandboxSessionManager session recovery', () => {
       });
 
       await expect(collectEvents(manager.deliverTurn('sess-1', [createMessage('hello')], 'turn-1')))
-        .rejects.toThrow('unavailable');
+        .resolves.toEqual([
+          expect.objectContaining({ type: 'turn_failed', errorMessage: '[unavailable] unavailable' }),
+        ]);
       expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(1);
       expect(containerManager.createContainer).not.toHaveBeenCalled();
     });
@@ -474,7 +461,6 @@ describe('SandboxSessionManager session recovery', () => {
       await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1'));
 
       expect(lifecyclePolicy.cancelIdleTimeout).toHaveBeenCalledWith(session.sessionId);
-      expect(lifecyclePolicy.cancelPause).toHaveBeenCalledWith(session.sessionId);
     });
 
 
@@ -503,8 +489,8 @@ describe('SandboxSessionManager session recovery', () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
       const privateManager = manager as unknown as SandboxSessionManagerInternals;
 
-      privateManager.turnQueues.set(session.sessionId, []);
-      privateManager.activeTurns.add(session.sessionId);
+      privateManager.stateStore.turnQueues.set(session.sessionId, []);
+      privateManager.stateStore.activeTurns.add(session.sessionId);
 
       await manager.suspendSession(session.sessionId, 'manual-checkpoint');
 
@@ -515,13 +501,12 @@ describe('SandboxSessionManager session recovery', () => {
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'CHECKPOINTED');
       expect(db.updateSandboxSessionStatus).not.toHaveBeenCalledWith(session.sessionId, 'TERMINATED');
       expect(lifecyclePolicy.cancelIdleTimeout).toHaveBeenCalledWith(session.sessionId);
-      expect(lifecyclePolicy.cancelPause).toHaveBeenCalledWith(session.sessionId);
       expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
       expect(containerManager.removeContainer).toHaveBeenCalledWith('c-1', true);
-      expect(privateManager.sessions.has('conv-1')).toBe(false);
-      expect(privateManager.agentDefs.has('conv-1')).toBe(false);
-      expect(privateManager.turnQueues.has(session.sessionId)).toBe(false);
-      expect(privateManager.activeTurns.has(session.sessionId)).toBe(false);
+      expect(privateManager.stateStore.sessions.has('conv-1')).toBe(false);
+      expect(privateManager.stateStore.agentDefs.has('conv-1')).toBe(false);
+      expect(privateManager.stateStore.turnQueues.has(session.sessionId)).toBe(false);
+      expect(privateManager.stateStore.activeTurns.has(session.sessionId)).toBe(false);
     });
   });
 

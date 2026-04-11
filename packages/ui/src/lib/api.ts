@@ -22,7 +22,14 @@ export interface HttpToolDefinition {
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
-    throw new Error(`API ${init?.method ?? 'GET'} ${url} failed: ${res.status}`);
+    let errorDetail = '';
+    try {
+      const body = await res.json();
+      errorDetail = body.error || body.message || body.detail || JSON.stringify(body);
+    } catch {
+      errorDetail = await res.text().catch(() => '');
+    }
+    throw new Error(errorDetail || `API ${init?.method ?? 'GET'} ${url} failed: ${res.status}`);
   }
   // 204 No Content — nothing to parse
   if (res.status === 204) return undefined as unknown as T;

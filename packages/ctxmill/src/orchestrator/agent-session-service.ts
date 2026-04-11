@@ -9,16 +9,14 @@ import type { EventMap, TypedEventBus } from '../events/bus.js';
 import type { SessionTurnService } from './session-turn-service.js';
 import type { SandboxSessionManager, SessionRecord } from './sandbox-session-manager.js';
 import type { LocalFunctionExecutor } from '../tool/executor.js';
-import { builtinToolNames } from '../tool/builtin/index.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
+import { sanitizeDbText } from '../util/sanitize.js';
 
-// AG-UI event types already broadcast by SSEBroadcaster via the internal event bus.
-// Skipping direct broadcast here prevents duplicate SSE delivery to clients.
-const SSE_BROADCASTER_FORWARDED: ReadonlySet<string> = new Set([
+const INDIVIDUALLY_HANDLED = new Set([
+  'MESSAGE_COMMITTED',
   'TEXT_MESSAGE_CONTENT',
   'TOOL_CALL_START',
   'TOOL_CALL_RESULT',
-  'MESSAGE_COMMITTED',
 ]);
 
 /** Extended AG-UI event fields used when extracting tool/message data. */
@@ -83,57 +81,18 @@ export interface ExecuteSessionParams {
   * triggers learning pipeline, and completes the session in the registry.
  */
 export class AgentSessionService {
-  private sse: SSEManager;
   private db: DatabaseRepository;
   private sessionManager: SandboxSessionManager;
   private learningPipeline?: LearningPipeline;
   private eventBus?: TypedEventBus;
   private sessionTurnService: SessionTurnService;
-  private toolExecutor?: LocalFunctionExecutor;
-  private toolRegistry?: DefaultToolRegistry;
 
   constructor(deps: AgentSessionServiceDeps) {
-    this.sse = deps.sse;
     this.db = deps.db;
     this.sessionManager = deps.sessionManager;
     this.learningPipeline = deps.learningPipeline;
     this.eventBus = deps.eventBus;
     this.sessionTurnService = deps.sessionTurnService;
-    this.toolExecutor = deps.toolExecutor;
-    this.toolRegistry = deps.toolRegistry;
-  }
-
-  private async resolveTools(agentDef: AgentDefinition) {
-    const declaredTools = new Set(agentDef.tools);
-    const excluded = Array.isArray(agentDef.metadata?.excludeBuiltinTools)
-      ? new Set(agentDef.metadata.excludeBuiltinTools as string[])
-      : undefined;
-    const allTools = new Map<string, (ReturnType<LocalFunctionExecutor['list']>[number])>();
-
-    if (this.toolExecutor) {
-      for (const tool of this.toolExecutor.list()) {
-        if (declaredTools.has(tool.name) || builtinToolNames.has(tool.name)) {
-          allTools.set(tool.name, tool);
-        }
-      }
-    }
-
-    if (this.toolRegistry) {
-      if (this.toolRegistry.needsRefresh) {
-        await this.toolRegistry.refresh();
-      }
-      for (const tool of this.toolRegistry.listForAgent(agentDef.tools)) {
-        allTools.set(tool.name, tool);
-      }
-    }
-
-    if (excluded) {
-      for (const name of excluded) {
-        if (builtinToolNames.has(name)) allTools.delete(name);
-      }
-    }
-
-    return Array.from(allTools.values());
   }
 
   /**
@@ -149,39 +108,13 @@ export class AgentSessionService {
     const traceCollector = new TraceCollector(agentId, turnId, taskDescription);
     const startedAt = Date.now();
 
-    // Session setup — container creation can fail (e.g., missing Docker image).
-    // Errors here must be caught separately because the event-loop try/catch
-    // below depends on sandboxSessionId which doesn't exist yet.
-    let sandboxSession: SessionRecord;
-    try {
-      sandboxSession = await this.sessionManager.ensureSession(conversationId, agentDef, agentId);
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error(`[AgentSessionService] Session ${turnId} setup failed:`, err instanceof Error ? err.stack : err);
-      this.sse.broadcast(agentId, {
-        type: 'RUN_ERROR',
-        timestamp: Date.now(),
-        runId: turnId,
-        error: errorMsg,
-      });
-      this.sse.broadcast(agentId, {
-        type: 'RUN_FINISHED',
-        timestamp: Date.now(),
-        runId: turnId,
-      });
-      await this.db.updateTurn(turnId, {
-        completedAt: Date.now(),
-        error: errorMsg,
-      });
-      return;
-    }
-
-    const sandboxSessionId = sandboxSession.sessionId;
-    await this.db.updateTurn(turnId, { sessionId: sandboxSessionId });
-    const signal = this.sessionManager.startTurn(sandboxSessionId, turnId, agentId, conversationId, mode, taskDescription);
-
+    let sandboxSessionId: string | undefined;
+    let signal: AbortSignal | undefined;
+    let runError: Error | undefined;
+    let wasCancelled = false;
     let encounteredError = false;
     let lastErrorMessage = '';
+
     const pendingToolCalls = new Map<string, { id: string; name: string; args: string; result?: string; error?: string; status: string }>();
     let streamingParts: StreamingPart[] = [];
     let accumulatedText = '';
@@ -189,13 +122,13 @@ export class AgentSessionService {
     let flushedAssistantMessageId: string | null = null;
 
     const normalizeContent = (value: unknown): string => {
-      if (typeof value === 'string') return value;
+      if (typeof value === 'string') return sanitizeDbText(value, 'normalizeContent');
       if (value == null) return '';
 
       try {
-        return JSON.stringify(value);
+        return sanitizeDbText(JSON.stringify(value), 'normalizeContent');
       } catch {
-        return String(value);
+        return sanitizeDbText(String(value), 'normalizeContent');
       }
     };
 
@@ -249,66 +182,90 @@ export class AgentSessionService {
       return msg.id;
     };
 
-      const eventSource: AsyncGenerator<AGUIEvent> = this.sessionTurnService.executeSessionTurn(
-      agentDef,
-      conversationId,
-      messages,
-      turnId,
-      signal,
-      agentId,
-      sandboxSessionId,
-    );
-
     const finalizeTurn = async (status: 'completed' | 'error' | 'cancelled', error?: string) => {
       const completedAt = Date.now();
       await this.db.updateTurn(turnId, {
-        sessionId: sandboxSessionId,
+        ...(sandboxSessionId ? { sessionId: sandboxSessionId } : {}),
         completedAt,
         error: error ?? null,
       });
-      this.sessionManager.completeTurn(
-        sandboxSessionId,
-        turnId,
-        agentId,
-        conversationId,
-        status,
-        completedAt - startedAt,
-        error,
-      );
+
+      if (sandboxSessionId) {
+        this.sessionManager.completeTurn(
+          sandboxSessionId,
+          turnId,
+          agentId,
+          conversationId,
+          status,
+          completedAt - startedAt,
+          error,
+        );
+        return;
+      }
+
+      if (this.eventBus) {
+        this.eventBus.emit('turn.completed', {
+          turnId,
+          sessionId: '',
+          agentId,
+          conversationId,
+          status,
+          error,
+          durationMs: completedAt - startedAt,
+          timestamp: Date.now(),
+        });
+      }
     };
 
     const flushUncommittedMessages = async () => {
-      try {
-        if (pendingToolCalls.size > 0 && !assistantFlushedForBatch) {
-          await persistMessage('assistant', accumulatedText, {
-            parts: [...streamingParts],
-            toolCalls: buildPersistedToolCalls(),
-          });
-          accumulatedText = '';
-          assistantFlushedForBatch = true;
-        } else if (pendingToolCalls.size > 0 && assistantFlushedForBatch && flushedAssistantMessageId) {
-          await this.db.updateMessageToolCalls(flushedAssistantMessageId, buildPersistedToolCalls());
-        } else if (accumulatedText) {
-          await persistMessage('assistant', accumulatedText, {
-            parts: [...streamingParts],
-          });
-          accumulatedText = '';
-        }
-      } catch (flushErr) {
-        console.error('[AgentSessionService] Failed to flush uncommitted messages:', flushErr);
+      if (pendingToolCalls.size > 0 && !assistantFlushedForBatch) {
+        await persistMessage('assistant', accumulatedText, {
+          parts: [...streamingParts],
+          toolCalls: buildPersistedToolCalls(),
+        });
+        accumulatedText = '';
+        assistantFlushedForBatch = true;
+      } else if (pendingToolCalls.size > 0 && assistantFlushedForBatch && flushedAssistantMessageId) {
+        await this.db.updateMessageToolCalls(flushedAssistantMessageId, buildPersistedToolCalls());
+      } else if (accumulatedText) {
+        await persistMessage('assistant', accumulatedText, {
+          parts: [...streamingParts],
+        });
+        accumulatedText = '';
       }
     };
 
     try {
+      const sandboxSession: SessionRecord = await this.sessionManager.ensureSession(conversationId, agentDef, agentId);
+      sandboxSessionId = sandboxSession.sessionId;
+
+      await this.db.updateTurn(turnId, { sessionId: sandboxSessionId });
+      signal = this.sessionManager.startTurn(sandboxSessionId, turnId, agentId, conversationId, mode, taskDescription);
+
+      const eventSource: AsyncGenerator<AGUIEvent> = this.sessionTurnService.executeSessionTurn(
+        agentDef,
+        conversationId,
+        messages,
+        turnId,
+        signal,
+        agentId,
+        sandboxSessionId,
+      );
+
       for await (const event of eventSource) {
         if (signal?.aborted) break;
 
-        // All events broadcast to SSE for UI streaming
-        if (!SSE_BROADCASTER_FORWARDED.has(event.type)) {
-          this.sse.broadcast(agentId, event as Record<string, unknown>);
+        if (!INDIVIDUALLY_HANDLED.has(event.type) && this.eventBus) {
+          this.eventBus.emit('run.ag_ui_event', {
+            turnId,
+            agentId,
+            conversationId,
+            event: event as Record<string, unknown>,
+            timestamp: Date.now(),
+          });
         }
 
-        if (event.type === 'RUN_ERROR' || event.type === 'RUN_FAILED') {
+        if (event.type === 'RUN_ERROR') {
           encounteredError = true;
           // Capture the actual error message from the event for descriptive error reporting
           if ('error' in event && typeof event.error === 'string' && event.error.length > 0) {
@@ -410,6 +367,7 @@ export class AgentSessionService {
               toolCalls: committed.toolCalls as ReturnType<typeof buildPersistedToolCalls> | undefined,
               toolCallId: committed.toolCallId,
             });
+            accumulatedText = '';
           }
 
           if (this.eventBus) {
@@ -503,44 +461,65 @@ export class AgentSessionService {
       }
 
       if (signal?.aborted) {
-        await flushUncommittedMessages();
-        await finalizeTurn('cancelled');
-        return;
-      }
-
-      if (encounteredError) {
-        const errorDetail = lastErrorMessage || 'Session completed with errors (no detail captured)';
-        await flushUncommittedMessages();
-        await finalizeTurn('error', errorDetail);
-      } else {
-        await finalizeTurn('completed');
-      }
-
-      // Trigger learning pipeline (never block or fail the main run)
-      if (this.learningPipeline) {
-        try {
-          const trace = traceCollector.finalize('success');
-          await this.learningPipeline.process(trace);
-        } catch (learningErr) {
-          console.error('Learning pipeline error:', learningErr);
-        }
+        wasCancelled = true;
+        runError = new Error('Session cancelled');
+      } else if (encounteredError) {
+        runError = new Error(lastErrorMessage || 'Session completed with errors (no detail captured)');
       }
     } catch (err) {
-      console.error(`[AgentSessionService] Session ${turnId} error:`, err instanceof Error ? err.stack : err);
-      this.sse.broadcast(agentId, {
-        type: 'RUN_ERROR',
-        timestamp: Date.now(),
-        runId: turnId,
-        error: String(err),
-      });
+      runError = err instanceof Error ? err : new Error(String(err));
+      console.error(`[AgentSessionService] Session ${turnId} error:`, runError.stack ?? runError.message);
+    } finally {
+      const status: 'completed' | 'error' | 'cancelled' =
+        wasCancelled
+          ? 'cancelled'
+          : runError
+            ? 'error'
+            : 'completed';
 
-      await flushUncommittedMessages();
-      await finalizeTurn('error', String(err));
+      let flushError: Error | undefined;
+      try {
+        await flushUncommittedMessages();
+      } catch (err) {
+        flushError = err instanceof Error ? err : new Error(String(err));
+        console.error(`[AgentSessionService] Failed to flush uncommitted messages for turn ${turnId}:`, flushError);
+      }
 
-      // Trigger learning pipeline even on failure to learn from errors
+      const finalError = runError && flushError
+        ? `${runError.message}; additionally flush failed: ${flushError.message}`
+        : runError?.message ?? flushError?.message;
+      const finalStatus = finalError ? (status === 'completed' ? 'error' : status) : status;
+
+      try {
+        await finalizeTurn(finalStatus, finalError);
+      } catch (finalizeErr) {
+        console.error(`[AgentSessionService] finalizeTurn failed for turn ${turnId}:`, finalizeErr);
+        try {
+          await this.db.updateTurn(turnId, {
+            ...(sandboxSessionId ? { sessionId: sandboxSessionId } : {}),
+            completedAt: Date.now(),
+            error: finalError ?? String(finalizeErr),
+          });
+          if (this.eventBus) {
+            this.eventBus.emit('turn.completed', {
+              turnId,
+              sessionId: sandboxSessionId ?? '',
+              agentId,
+              conversationId,
+              status: finalError ? 'error' : 'completed',
+              error: finalError ?? String(finalizeErr),
+              durationMs: Date.now() - startedAt,
+              timestamp: Date.now(),
+            });
+          }
+        } catch (dbErr) {
+          console.error(`[AgentSessionService] Failed to update turn ${turnId} even directly:`, dbErr);
+        }
+      }
+
       if (this.learningPipeline) {
         try {
-          const trace = traceCollector.finalize('failure');
+          const trace = traceCollector.finalize(finalStatus === 'completed' ? 'success' : 'failure');
           await this.learningPipeline.process(trace);
         } catch (learningErr) {
           console.error('Learning pipeline error:', learningErr);

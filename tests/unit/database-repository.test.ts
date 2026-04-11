@@ -44,6 +44,7 @@ describe('DatabaseRepository', () => {
         'secrets',
         'suspended_sessions',
         'system_settings',
+        'tool_request_dedup',
         'turns',
         'webhooks',
       ]);

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { z } from 'zod';
 import type {
   AgentHarness,
@@ -138,6 +139,23 @@ function zodFieldToTypeBox(
   return { schema: Type.String(), isOptional: false };
 }
 
+type PIAgentToolResult = {
+  content: Array<{ type: 'text'; text: string }>;
+  details: Record<string, unknown>;
+};
+
+interface PIAgentExtension {
+  name: string;
+  wrapToolCall?(
+    toolName: string,
+    params: Record<string, unknown>,
+    next: () => Promise<PIAgentToolResult>,
+  ): Promise<PIAgentToolResult>;
+  onEvent?(event: Record<string, unknown>): void;
+  onSessionStart?(config: { agentId: string; conversationId: string; workspaceDir: string }): Promise<void>;
+  onSessionClose?(): Promise<void>;
+}
+
 /**
  * Mutable context object shared between `convertTools` closures and `PiAgentSession`.
  * The session updates `onApprovalNeeded` and `runId` before each turn so tool
@@ -156,6 +174,7 @@ export function convertTools(
   Type: any,
   toolDefs: ToolDefinition[],
   config: ConvertToolsContext,
+  extensions: PIAgentExtension[] = [],
 ): any[] {
   return toolDefs.map((def) => ({
     name: def.name,
@@ -184,7 +203,7 @@ export function convertTools(
         }
       }
 
-      try {
+      const baseHandler = async (): Promise<PIAgentToolResult> => {
         const result = await def.handler(params, {
           agentId: config.agentId,
           conversationId: config.conversationId,
@@ -197,6 +216,19 @@ export function convertTools(
           content: [{ type: 'text' as const, text: typeof result === 'string' ? result : JSON.stringify(result) }],
           details: {},
         };
+      };
+
+      let chain: () => Promise<PIAgentToolResult> = baseHandler;
+      for (let i = extensions.length - 1; i >= 0; i--) {
+        const ext = extensions[i];
+        if (ext.wrapToolCall) {
+          const prev = chain;
+          chain = () => ext.wrapToolCall!(def.name, params, prev);
+        }
+      }
+
+      try {
+        return await chain();
       } catch (handlerErr) {
         const msg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
         return {
@@ -360,6 +392,7 @@ export const PIAgentConfigSchema = z.object({
   model: z.string().min(1),
   apiKeyRef: z.string().optional(),
   baseUrl: z.string().refine((value) => URL.canParse(value)).optional(),
+  extensions: z.array(z.string()).optional(),
 });
 
 export type PIAgentConfig = z.infer<typeof PIAgentConfigSchema>;
@@ -374,6 +407,24 @@ export class PIAgentHarness implements AgentHarness {
     const harnessConfig = PIAgentConfigSchema.parse(
       JSON.parse(z.string().parse(config.harnessConfigJson)),
     );
+    const extensions: PIAgentExtension[] = [];
+    const workspaceDir = config.workspaceDir ?? process.cwd();
+    for (const extPath of (harnessConfig.extensions ?? [])) {
+      try {
+        const resolved = path.resolve(workspaceDir, extPath);
+        const mod = await import(resolved);
+        const ext = mod.default ?? mod;
+        const loaded: PIAgentExtension = typeof ext === 'function' ? ext() : ext;
+        if (loaded.name) {
+          extensions.push(loaded);
+          console.error(`[pi-agent] Loaded extension: ${loaded.name} from ${extPath}`);
+        } else {
+          console.error(`[pi-agent] Extension missing 'name' property: ${extPath}`);
+        }
+      } catch (err) {
+        console.error(`[pi-agent] Failed to load extension: ${extPath}`, err);
+      }
+    }
     const resolvedApiKey = resolveSecretRef(harnessConfig.apiKeyRef, config.secrets);
     const model = resolveModel(sdk.getModel, harnessConfig, config.secrets);
 
@@ -395,7 +446,7 @@ export class PIAgentHarness implements AgentHarness {
       onApprovalNeeded: config.onApprovalNeeded,
       runId: config.conversationId,
     };
-    const customTools = convertTools(sdk.Type, config.tools, turnRef);
+    const customTools = convertTools(sdk.Type, config.tools, turnRef, extensions);
 
     const authStorage = sdk.AuthStorage.inMemory();
     if (resolvedApiKey) {
@@ -426,7 +477,18 @@ export class PIAgentHarness implements AgentHarness {
     });
     const nativeSession: NativePiSession = created.session;
 
-    const session = new PiAgentSession(nativeSession, config, turnRef);
+    const session = new PiAgentSession(nativeSession, config, turnRef, extensions);
+    for (const ext of extensions) {
+      try {
+        await ext.onSessionStart?.({
+          agentId: config.agentId,
+          conversationId: config.conversationId,
+          workspaceDir: config.workspaceDir ?? process.cwd(),
+        });
+      } catch (err) {
+        console.error(`[pi-agent] Extension '${ext.name}' onSessionStart error:`, err);
+      }
+    }
     if (restore) {
       const restoredTranscript = restore.payload['transcript'];
       if (Array.isArray(restoredTranscript) && restoredTranscript.length > 0) {
@@ -497,6 +559,7 @@ class PiAgentSession implements HarnessSession {
     private readonly nativeSession: NativePiSession,
     private readonly config: HarnessSessionConfig,
     private readonly turnRef: ConvertToolsContext,
+    private readonly extensions: PIAgentExtension[],
   ) {}
 
   restoreTranscript(messages: Message[]): void {
@@ -566,6 +629,13 @@ class PiAgentSession implements HarnessSession {
           console.log(`[pi-agent] SDK event payload: ${JSON.stringify(piEvent).slice(0, 500)}`);
         }
         tracer?.onEvent(piEvent);
+        for (const ext of this.extensions) {
+          try {
+            ext.onEvent?.(piEvent);
+          } catch (err) {
+            console.error(`[pi-agent] Extension '${ext.name}' onEvent error:`, err);
+          }
+        }
         if (piEvent.type === 'message_end' || piEvent.type === 'turn_end') {
           const msg = piEvent.message as Record<string, unknown> | undefined;
           if (msg?.stopReason === 'error') {
@@ -690,6 +760,16 @@ class PiAgentSession implements HarnessSession {
   }
 
   async close(): Promise<void> {
-    this.nativeSession.dispose();
+    try {
+      for (const ext of this.extensions) {
+        try {
+          await ext.onSessionClose?.();
+        } catch (err) {
+          console.error(`[pi-agent] Extension '${ext.name}' onSessionClose error:`, err);
+        }
+      }
+    } finally {
+      this.nativeSession.dispose();
+    }
   }
 }

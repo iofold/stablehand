@@ -45,12 +45,13 @@ The supported workflow in this repo is `docker compose`.
 
 ### 1. Orchestrator
 
-The orchestrator is a Fastify server that wires together the database, SSE manager, interrupt manager, run registry, knowledge routes, trigger routes, and agent execution services.
+The orchestrator is a Fastify server that wires together the database, SSE manager, interrupt manager, sandbox session manager, knowledge routes, trigger routes, and agent execution services.
 
 Relevant code:
 
 - [server.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/server.ts)
-- [agent-run-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/agent-run-service.ts)
+- [agent-session-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/agent-session-service.ts)
+- [sandbox-session-manager.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-session-manager.ts)
 - [routes/agents.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents.ts)
 
 ### 2. Multi-Harness Agent Execution
@@ -58,15 +59,13 @@ Relevant code:
 Agents are executed through a harness registry. The shipped harness adapters are:
 
 - LangGraph
-- OpenAI Agents
 - Claude Agents
-- Vercel AI
 - PI Agent
 
 Relevant code:
 
 - [harness/index.ts](/path/to/stablehand/packages/ctxmill/src/harness/index.ts)
-- [agent-run-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/agent-run-service.ts)
+- [agent-session-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/agent-session-service.ts)
 - [container.ts](/path/to/stablehand/packages/ctxmill/src/config/container.ts)
 
 ### 3. Tool Execution
@@ -81,17 +80,22 @@ Relevant code:
 
 ### 4. Event Bus and Triggers
 
-CTXMill uses a typed in-process event bus. It persists events, powers SSE broadcasting, feeds the learning pipeline, drives suspended-run matching, and can fire background runs through persisted event triggers.
+CTXMill uses a typed in-process event bus. It persists events, powers SSE broadcasting, feeds the learning pipeline, drives suspended-session matching, and can fire background runs through persisted event triggers.
 
 The TypedEventBus emits the following events:
 
-- `run.started` — Run begins execution
+- `turn.pending` — Turn accepted before sandbox readiness
+- `turn.started` — Turn begins execution
+- `turn.completed` — Turn finished (completed, error, or cancelled)
+- `user.message` — Canonical user-message append for live SSE bootstrap
+- `message.committed` — Canonical assistant/tool message commit
+- `run.ag_ui_event` — Forwarded AG-UI events not handled individually
 - `run.text_chunk` — Streaming text delta from harness
 - `run.tool_started` — Tool call initiated
 - `run.tool_result` — Tool call completed
 - `run.interrupted` — HITL approval needed
 - `run.interrupt_resolved` — HITL approval/rejection received
-- `run.completed` — Run finished (completed, error, or cancelled)
+- `session.paused` — Manual/compatibility session pause event
 - `run.resumed` — Suspended run resumed after event match
 - `learning.trace_captured` — Execution trace saved for reflection
 - `learning.insight_extracted` — Reflector produced new insights
@@ -112,12 +116,13 @@ Relevant code:
 
 ### 5. HITL and Suspend/Resume
 
-HITL is implemented through interrupt records and UI responses. Suspend/resume today means run-level bookkeeping: a run can wait on a matching event and later be marked resumed. This is not VM or process snapshot restoration.
+HITL is implemented through durable interrupt records and UI responses. Sandbox sessions can also be paused manually, checkpointed, restored, and resumed through the session manager. Separately, `SuspendedSessionMatcher` can emit `run.resumed` for event-driven resumptions. This is application-level checkpoint/restore of harness and workspace state, not raw Docker memory snapshotting.
 
 Relevant code:
 
 - [interrupt.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/interrupt.ts)
-- [suspended-run-matcher.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/suspended-run-matcher.ts)
+- [suspended-session-matcher.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/suspended-session-matcher.ts)
+- [sandbox-session-manager.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-session-manager.ts)
 - [routes/agents.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents.ts)
 
 ### 6. Workspace Isolation
@@ -159,26 +164,27 @@ Relevant code:
 
 ### 8. Sandbox Infrastructure
 
-All harness execution routes through the sandbox subsystem. The orchestrator creates a Docker container per run, injects secrets via tmpfs, waits for gRPC health, sends a `StartRun` RPC, and streams `AgentEvent` responses back. The subsystem also handles tool call proxying, checkpoint/resume for HITL, pause management, timeout enforcement, and orphan cleanup.
+All harness execution routes through the sandbox subsystem. The orchestrator creates a Docker container per sandbox session, injects secrets via tmpfs, waits for gRPC health, opens the session, delivers turns, and streams events back. The subsystem also handles tool call proxying, checkpoint/restore, lifecycle reconciliation, and workspace-diff capture.
 
 Relevant code:
 
 - [sandbox/container-manager.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/container-manager.ts)
-- [sandbox/daemon.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/daemon.ts)
-- [sandbox/runner.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/runner.ts)
-- [sandbox/tool-proxy.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/tool-proxy.ts)
-- [sandbox/checkpoint.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/checkpoint.ts)
-- [sandbox/pause-manager.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/pause-manager.ts)
-- [sandbox/proto-convert.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/proto-convert.ts)
-- [orchestrator/sandbox-run-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-run-service.ts)
+- [orchestrator/sandbox-session-manager.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-session-manager.ts)
+- [orchestrator/container-lifecycle-policy.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/container-lifecycle-policy.ts)
+- [sandbox/runner.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/runner.ts)
+- [sandbox/daemon.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/daemon.ts)
+- [sandbox/tool-proxy.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/tool-proxy.ts)
+- [sandbox/checkpoint.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/checkpoint.ts)
+- [sandbox/proto-convert.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/proto-convert.ts)
 
-### 9. A2UI Block Extraction
+### 9. A2UI Rendering
 
-Agent responses can contain structured visual blocks (charts, tables, metric cards). The A2UI extractor parses these from agent output for rendering in the frontend.
+Structured A2UI blocks are produced through the intrinsic `a2ui-render` tool and rendered in the frontend from tool-call results rather than being parsed out of free-form assistant text.
 
 Relevant code:
 
-- [a2ui/extract.ts](/path/to/stablehand/packages/ctxmill/src/a2ui/extract.ts)
+- [tool/builtin/a2ui-render.ts](/path/to/stablehand/packages/ctxmill/src/tool/builtin/a2ui-render.ts)
+- [ToolCallCard.tsx](/path/to/stablehand/packages/ui/src/components/chat/ToolCallCard.tsx)
 
 ### 10. LLM Abstraction Layer
 

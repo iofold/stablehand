@@ -214,15 +214,17 @@ export async function startDev() {
   for (const tool of toolDefs) {
     toolRegistry.set(tool.name, async (args, ctx) => {
       if (tool.requiresApproval && container.interruptManager && container.sseManager) {
-        container.sseManager.broadcast(ctx.agentId, {
-          type: 'TOOL_CALL_START',
-          timestamp: Date.now(),
-          runId: ctx.sessionId,
-          toolCallId: ctx.requestId,
-          toolName: tool.name,
-          requiresApproval: true,
-          args,
-        });
+        if (container.eventBus) {
+          container.eventBus.emit('run.tool_started', {
+            turnId: ctx.sessionId,
+            agentId: ctx.agentId,
+            toolCallId: ctx.requestId,
+            toolName: tool.name,
+            args: args as Record<string, unknown>,
+            requiresApproval: true,
+            timestamp: Date.now(),
+          });
+        }
 
         const resolution = await container.interruptManager.waitForApproval(
             ctx.sessionId, ctx.agentId, ctx.requestId, tool.name, args as Record<string, unknown>,
@@ -253,6 +255,7 @@ export async function startDev() {
     artifactStore: container.artifactStore,
     artifactBucket: process.env.S3_BUCKET || 'ctxmill-artifacts',
     agentSessionService: container.agentSessionService,
+    runStartupService: container.runStartupService,
     toolRegistry,
     toolDefinitionRegistry: container.toolRegistry,
     toolExecutor: container.toolExecutor,

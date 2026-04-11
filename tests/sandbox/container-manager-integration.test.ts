@@ -16,7 +16,7 @@ import {
 
 function defaultCreateOpts(): CreateContainerOptions {
   return {
-    runId: 'run-001',
+    sessionId: 'run-001',
     agentId: 'agent-abc',
     harnessName: 'claude-agents',
   };
@@ -56,7 +56,7 @@ describe('ContainerManager Integration Tests', () => {
       const arg = docker.createContainer.mock.calls[0][0];
 
       expect(arg.Labels['ctxmill.managed']).toBe('true');
-      expect(arg.Labels['ctxmill.run-id']).toBe('run-001');
+      expect(arg.Labels['ctxmill.session-id']).toBe('run-001');
       expect(arg.Labels['ctxmill.agent-id']).toBe('agent-abc');
       expect(arg.Labels['ctxmill.harness']).toBe('claude-agents');
       expect(arg.Labels['ctxmill.timeout']).toBe('300');
@@ -69,14 +69,14 @@ describe('ContainerManager Integration Tests', () => {
 
     it('should use correct label values from different agents', async () => {
       await manager.createContainer({
-        runId: 'run-xyz-789',
+        sessionId: 'run-xyz-789',
         agentId: 'finance-analyzer',
         harnessName: 'pi-agent',
         timeoutSec: 1200,
       });
 
       const arg = docker.createContainer.mock.calls[0][0];
-      expect(arg.Labels['ctxmill.run-id']).toBe('run-xyz-789');
+      expect(arg.Labels['ctxmill.session-id']).toBe('run-xyz-789');
       expect(arg.Labels['ctxmill.agent-id']).toBe('finance-analyzer');
       expect(arg.Labels['ctxmill.harness']).toBe('pi-agent');
       expect(arg.Labels['ctxmill.timeout']).toBe('1200');
@@ -90,8 +90,8 @@ describe('ContainerManager Integration Tests', () => {
       const arg = docker.createContainer.mock.calls[0][0];
       expect(arg.HostConfig.CpuPeriod).toBe(100_000);
       expect(arg.HostConfig.CpuQuota).toBe(100_000); // 1.0 CPU * 100000
-      expect(arg.HostConfig.Memory).toBe(512 * 1024 * 1024); // 512 MiB
-      expect(arg.HostConfig.MemorySwap).toBe(512 * 1024 * 1024); // No swap
+      expect(arg.HostConfig.Memory).toBe(2048 * 1024 * 1024); // 2048 MiB
+      expect(arg.HostConfig.MemorySwap).toBe(2048 * 1024 * 1024); // No swap
       expect(arg.HostConfig.PidsLimit).toBe(256);
     });
 
@@ -128,7 +128,7 @@ describe('ContainerManager Integration Tests', () => {
 
       const arg = docker.createContainer.mock.calls[0][0];
       const nodeOpts = arg.Env.find((e: string) => e.startsWith('NODE_OPTIONS='));
-      expect(nodeOpts).toBe(`NODE_OPTIONS=--max-old-space-size=${Math.floor(1024 * 0.9)}`);
+      expect(nodeOpts).toBe(`NODE_OPTIONS=--max-old-space-size=${Math.floor(2048 * 0.9)}`);
     });
   });
 
@@ -181,46 +181,30 @@ describe('ContainerManager Integration Tests', () => {
     });
   });
 
-  // ── Test 8: Secret injection ───────────────────────────────
+  describe('container creation — secrets env', () => {
+    it('should pass secrets as env vars during container creation', async () => {
+      await manager.createContainer({
+        ...defaultCreateOpts(),
+        secrets: {
+          OPENAI_API_KEY: 'sk-test-key',
+          ANTHROPIC_API_KEY: 'sk-ant-test',
+        },
+      });
 
-  describe('secret injection', () => {
-    it('should inject secrets via putArchive to /run/secrets', async () => {
-      const secrets = {
-        OPENAI_API_KEY: 'sk-test-key',
-        ANTHROPIC_API_KEY: 'sk-ant-test',
-      };
-
-      await manager.injectSecrets('sha256-abc123', secrets);
-
-      expect(docker.getContainer).toHaveBeenCalledWith('sha256-abc123');
-      expect(docker._mockContainer.putArchive).toHaveBeenCalledTimes(1);
-
-      const [archive, opts] = docker._mockContainer.putArchive.mock.calls[0];
-      expect(opts).toEqual({ path: '/run/secrets' });
-
-      // Archive should be a readable stream (from tar-stream pack)
-      expect(archive).toBeTruthy();
-      expect(typeof archive.pipe === 'function' || typeof archive.read === 'function').toBe(true);
+      const arg = docker.createContainer.mock.calls[0][0];
+      expect(arg.Env).toContain('OPENAI_API_KEY=sk-test-key');
+      expect(arg.Env).toContain('ANTHROPIC_API_KEY=sk-ant-test');
     });
 
-    it('should serialize secrets as JSON in config.json archive entry', async () => {
-      // We can't easily inspect the tar contents in the mock, but we verify
-      // the putArchive is called with a stream and correct path
-      const secrets = { MY_KEY: 'my-value' };
-      await manager.injectSecrets('sha256-abc123', secrets);
+    it('should handle empty secrets objects without adding env vars', async () => {
+      await manager.createContainer({
+        ...defaultCreateOpts(),
+        secrets: {},
+      });
 
-      // Verify putArchive was called (the implementation creates a tar with config.json)
-      expect(docker._mockContainer.putArchive).toHaveBeenCalledTimes(1);
-      const [, opts] = docker._mockContainer.putArchive.mock.calls[0];
-      expect(opts.path).toBe('/run/secrets');
-    });
-
-    it('should handle empty secrets without error', async () => {
-      // The caller (SandboxRunService) skips injectSecrets for empty secrets,
-      // but ContainerManager should handle it gracefully if called directly
-      await expect(
-        manager.injectSecrets('sha256-abc123', {}),
-      ).resolves.toBeUndefined();
+      const arg = docker.createContainer.mock.calls[0][0];
+      expect(arg.Env.some((entry: string) => entry.startsWith('OPENAI_API_KEY='))).toBe(false);
+      expect(arg.Env.some((entry: string) => entry.startsWith('ANTHROPIC_API_KEY='))).toBe(false);
     });
   });
 
@@ -300,7 +284,7 @@ describe('ContainerManager Integration Tests', () => {
 
       const arg = docker.createContainer.mock.calls[0][0];
       expect(arg.HostConfig.CpuQuota).toBe(50_000); // 0.5 * 100000
-      expect(arg.HostConfig.Memory).toBe(256 * 1024 * 1024);
+      expect(arg.HostConfig.Memory).toBe(2048 * 1024 * 1024);
       expect(arg.HostConfig.PidsLimit).toBe(128);
       expect(arg.Labels['ctxmill.timeout']).toBe('300');
     });

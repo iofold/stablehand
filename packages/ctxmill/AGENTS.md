@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-Orchestrator, 5 harness adapters, sandbox container management, tool execution, event bus, PostgreSQL persistence. All execution routes through Docker sandbox containers via gRPC. 102 source files, ~77k TS lines.
+Orchestrator, sandbox container management, tool execution, event bus, PostgreSQL persistence. All execution routes through Docker sandbox containers via gRPC. Harness adapters live in `@ctxmill/sandbox-daemon`, not here. 102 source files, ~75k TS lines.
 
 ## STRUCTURE
 
@@ -14,7 +14,7 @@ src/
   config/         DI container, docker preset, factories (6 files + 2 tests)
   database/       Drizzle ORM schema (16 tables), repository, migrations (6 files)
   events/         TypedEventBus (18 events), triggers, wait primitives, queue (8 files + 1 test)
-  harness/        5 adapters: LangGraph, OpenAI, Claude, Vercel AI, PI Agent (7 files)
+  harness/        Harness registry + types. Adapters live in sandbox-daemon package (7 files)
   knowledge/      KnowledgeStore abstraction — InMemory + Mem0 impls (5 files)
   learning/       Trace collection → reflection → knowledge update pipeline (7 files + 1 test)
   llm/            Provider-agnostic LLM factory for learning reflector (4 files)

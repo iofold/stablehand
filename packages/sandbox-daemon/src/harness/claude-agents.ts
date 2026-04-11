@@ -928,7 +928,8 @@ export class ClaudeAgentsHarness implements AgentHarness {
     try {
       return JSON.parse(raw) as unknown;
     } catch {
-      return raw;
+      console.error(`[claude-agents] Failed to parse tool args for call ${callId}, returning empty object. Raw: ${raw.slice(0, 200)}`);
+      return {};
     }
   }
 

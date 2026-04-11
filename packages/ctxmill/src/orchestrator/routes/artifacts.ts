@@ -144,17 +144,37 @@ export async function artifactRoutes(
   });
 
   app.post('/upload', async (req, reply) => {
-    const data = await req.file();
-    if (!data) {
+    // Use req.parts() to iterate through all parts and collect fields + file
+    const parts = req.parts();
+    let fileBuffer: Buffer | null = null;
+    let filename = '';
+    let mimetype = 'application/octet-stream';
+    const fields: Record<string, string> = {};
+
+    for await (const part of parts) {
+      if (part.type === 'file') {
+        filename = part.filename || '';
+        mimetype = part.mimetype || 'application/octet-stream';
+        // Buffer the file stream
+        const chunks: Buffer[] = [];
+        for await (const chunk of part.file) {
+          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+        }
+        fileBuffer = Buffer.concat(chunks);
+      } else if (part.type === 'field') {
+        fields[part.fieldname] = String(part.value);
+      }
+    }
+
+    if (!fileBuffer) {
       return reply.status(400).send({ error: 'No file provided' });
     }
 
-    const agentIdField = data.fields.agentId;
-    const nameField = data.fields.name;
+    const agentId = fields.agentId;
+    const nameOverride = fields.name;
 
-    const agentId = agentIdField && 'value' in agentIdField ? String(agentIdField.value) : undefined;
-    const name = (nameField && 'value' in nameField ? String(nameField.value) : undefined) || data.filename;
-    const mimeType = data.mimetype || 'application/octet-stream';
+    const name = nameOverride || filename;
+    const mimeType = mimetype;
 
     if (!agentId) {
       return reply.status(400).send({ error: 'agentId is required' });
@@ -166,14 +186,6 @@ export async function artifactRoutes(
     const artifactId = randomUUID();
     const storageKey = `${agentId}/${artifactId}/${name}`;
 
-    // Buffer the multipart file stream so we can pass an accurate Content-Length
-    // to S3. Streaming without ContentLength causes the AWS SDK v3 to set
-    // x-amz-decoded-content-length: undefined, which Node rejects.
-    const chunks: Buffer[] = [];
-    for await (const chunk of data.file) {
-      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-    }
-    const fileBuffer = Buffer.concat(chunks);
     await artifactStore.upload(storageKey, fileBuffer, mimeType, fileBuffer.length);
 
     const head = await artifactStore.headObject(storageKey);

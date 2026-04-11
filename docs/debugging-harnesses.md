@@ -11,8 +11,8 @@ Errors in CTXMill travel through several layers. Understanding this chain helps 
 3.  **Harness Event**: The adapter yields an event: `{ type: 'error', error: string }`.
 4.  **Sandbox Daemon**: The Bun-based daemon converts this to a `SessionEvent` proto message.
 5.  **gRPC**: The event is streamed over gRPC (ConnectRPC) to the orchestrator.
-6.  **Orchestrator**: The `SandboxRunService` receives the event and broadcasts it via the `TypedEventBus`.
-7.  **SSE**: The `RunRegistry` picks up the event and streams it to the UI via Server-Sent Events.
+6.  **Orchestrator**: `SandboxSessionManager` streams session events to `AgentSessionService`, which emits the normalized lifecycle and message events on the `TypedEventBus`.
+7.  **SSE**: `SSEBroadcaster` subscribes to those bus events and streams AG-UI frames to the dashboard over Server-Sent Events.
 8.  **UI**: The React dashboard displays the error message in the run log.
 
 **Crucial Note**: By default, only the error *string* survives this chain. Stack traces are lost unless they are explicitly logged to the container's `stderr`.
@@ -35,6 +35,8 @@ docker ps --filter "label=ctxmill.session-id=<sessionId>"
 Container names follow these patterns:
 - **Runs**: `ctxmill-run-<sessionId>`
 - **Sessions**: `ctxmill-session-<conversationIdHash>`
+
+`ctxmill.session-id=<sessionId>` is the most reliable selector when you already know the session ID, because the session container name is derived from the conversation ID hash.
 
 ### 2. Inspect Logs
 Once you have the container ID or name, check its `stdout` and `stderr`:

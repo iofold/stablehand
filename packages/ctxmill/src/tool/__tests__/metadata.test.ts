@@ -3,7 +3,6 @@ import { z } from 'zod';
 import {
   toToolMetadata,
   toToolMetadataList,
-  ORCHESTRATOR_TOOLS,
 } from '../metadata.js';
 import { jsonSchemaToZod } from '../schema-convert.js';
 import type { ToolDefinition } from '../types.js';
@@ -102,21 +101,19 @@ describe('toToolMetadata', () => {
     expect(meta.location).toBe('sandbox');
   });
 
-  it('auto-detects orchestrator tools by name', () => {
-    const tool = makeTool({ name: 'emit-event' });
+  it('uses explicit orchestrator location on the tool', () => {
+    const tool = makeTool({ name: 'emit-event', location: 'orchestrator' });
     const meta = toToolMetadata(tool);
     expect(meta.location).toBe('orchestrator');
   });
 
-  it('auto-detects request-approval as orchestrator tool', () => {
-    const tool = makeTool({ name: 'request-approval' });
+  it('uses explicit daemon location on the tool', () => {
+    const tool = makeTool({ name: 'artifact_upload', location: 'daemon' });
     const meta = toToolMetadata(tool);
-    expect(meta.location).toBe('orchestrator');
+    expect(meta.location).toBe('daemon');
   });
 
   it('explicit location override works for sandbox', () => {
-    // Even though emit-event would be auto-detected as orchestrator,
-    // an explicit override should be honored.
     const tool = makeTool({ name: 'emit-event' });
     const meta = toToolMetadata(tool, 'sandbox');
     expect(meta.location).toBe('sandbox');
@@ -146,14 +143,13 @@ describe('toToolMetadata', () => {
     expect(meta.location).toBe('sandbox');
   });
 
-  it('falls back to ORCHESTRATOR_TOOLS when tool.location is unset', () => {
-    const tool = makeTool({ name: 'emit-event' });
-    expect(tool.location).toBeUndefined();
+  it('respects tool.location when explicitly set to orchestrator', () => {
+    const tool = makeTool({ name: 'plain-tool', location: 'orchestrator' });
     const meta = toToolMetadata(tool);
     expect(meta.location).toBe('orchestrator');
   });
 
-  it('falls back to sandbox when tool.location is unset and name not in ORCHESTRATOR_TOOLS', () => {
+  it('defaults to sandbox when tool.location is unset', () => {
     const tool = makeTool({ name: 'plain-tool' });
     expect(tool.location).toBeUndefined();
     const meta = toToolMetadata(tool);
@@ -170,7 +166,7 @@ describe('toToolMetadataList', () => {
     const tools = [
       makeTool({ name: 'tool-a', description: 'Tool A' }),
       makeTool({ name: 'tool-b', description: 'Tool B' }),
-      makeTool({ name: 'emit-event', description: 'Emit event' }),
+      makeTool({ name: 'emit-event', description: 'Emit event', location: 'orchestrator' }),
     ];
 
     const metaList = toToolMetadataList(tools);
@@ -187,24 +183,6 @@ describe('toToolMetadataList', () => {
   it('handles empty array', () => {
     const metaList = toToolMetadataList([]);
     expect(metaList).toEqual([]);
-  });
-});
-
-/* -------------------------------------------------------------------------- */
-/*  ORCHESTRATOR_TOOLS set                                                     */
-/* -------------------------------------------------------------------------- */
-
-describe('ORCHESTRATOR_TOOLS', () => {
-  it('contains emit-event', () => {
-    expect(ORCHESTRATOR_TOOLS.has('emit-event')).toBe(true);
-  });
-
-  it('contains request-approval', () => {
-    expect(ORCHESTRATOR_TOOLS.has('request-approval')).toBe(true);
-  });
-
-  it('does not contain arbitrary tool names', () => {
-    expect(ORCHESTRATOR_TOOLS.has('some-random-tool')).toBe(false);
   });
 });
 

@@ -4,7 +4,7 @@ export type AGUIEventType =
   | 'RUN_STARTED'
   | 'RUN_FINISHED'
   | 'RUN_ERROR'
-  | 'RUN_FAILED'
+  | 'TURN_PENDING'
   | 'TEXT_MESSAGE_START'
   | 'TEXT_MESSAGE_CONTENT'
   | 'TEXT_MESSAGE_END'

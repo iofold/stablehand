@@ -86,8 +86,6 @@ services:
       CTXMILL_ALLOWED_EGRESS_DOMAINS: ${CTXMILL_ALLOWED_EGRESS_DOMAINS:-}
     networks:
       - ctxmill-agents
-    profiles:
-      - sandbox
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 3128 || exit 1"]
@@ -129,9 +127,9 @@ services:
       - debug
 
   # ── Sandbox harness images ──────────────────────────────────────────────────
-  # These services exist only for building sandbox images via:
-  # They are NOT started by `docker compose up` (profiles: ["sandbox-build"]).
-  # The orchestrator spawns sandbox containers dynamically via the Docker socket.
+  # Build-only services: `docker compose up --build` builds the images, but
+  # the containers exit immediately (no CMD). The orchestrator spawns sandbox
+  # containers dynamically via the Docker socket using these images.
   #
   # To clean up orphan sandbox containers after `docker compose down`:
   #   docker ps -aq --filter "label=ctxmill.sandbox=true" | xargs -r docker rm -f
@@ -142,7 +140,7 @@ services:
       dockerfile: Dockerfile.sandbox
       target: harness-langgraph
     image: ctxmill/harness-langgraph:latest
-    profiles: ["sandbox-build"]
+    restart: "no"
 
   sandbox-claude-agents:
     build:
@@ -150,7 +148,7 @@ services:
       dockerfile: Dockerfile.sandbox
       target: harness-claude-agents
     image: ctxmill/harness-claude-agents:latest
-    profiles: ["sandbox-build"]
+    restart: "no"
 
   sandbox-pi-agent:
     build:
@@ -158,7 +156,7 @@ services:
       dockerfile: Dockerfile.sandbox
       target: harness-pi-agent
     image: ctxmill/harness-pi-agent:latest
-    profiles: ["sandbox-build"]
+    restart: "no"
 
 volumes:
   pgdata:

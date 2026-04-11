@@ -293,7 +293,6 @@ async function buildApp(options?: {
   const sessionManager = options?.sessionManager ?? createMockSessionManager();
   const agentSessionService = options?.agentSessionService ?? ({
     executeSession: vi.fn(async () => {}),
-    resumeSession: vi.fn(async () => {}),
   } as unknown as AgentSessionService);
 
   const app = Fastify();
@@ -653,7 +652,6 @@ describe('Pilot integration', () => {
           });
           return new Promise<void>(() => {});
         }),
-        resumeSession: vi.fn(async () => {}),
       } as unknown as AgentSessionService;
 
       const system = await buildApp({ db, eventBus, sessionManager, agentSessionService });

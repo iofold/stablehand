@@ -16,8 +16,8 @@ import { TypedEventBus } from '../../../events/bus.js';
 
 function makeEventBus() {
   const bus = new TypedEventBus();
-  // Spy on emitCustom
   vi.spyOn(bus, 'emitCustom');
+  vi.spyOn(bus, 'emitCustomAsync');
   return bus;
 }
 
@@ -177,7 +177,7 @@ describe('OrchestratorService — EmitEvent', () => {
     const resp = await svc.emitEvent(req);
 
     expect(resp).toBeDefined();
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'agent.progress',
       'agent-1',
       expect.objectContaining({ step: 3, agentId: 'agent-1', runId: 'run-1' }),
@@ -196,7 +196,7 @@ describe('OrchestratorService — EmitEvent', () => {
 
     await svc.emitEvent(req);
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'test.event',
       '',
       expect.objectContaining({ data: 'hello', runId: 'run-42' }),
@@ -241,7 +241,7 @@ describe('OrchestratorService — EmitEvent', () => {
 
     await svc.emitEvent(req);
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'simple.event',
       '',
       expect.objectContaining({ runId: 'run-1' }),

@@ -1,6 +1,7 @@
 import { eq, sql, gt, lt, and, desc, asc, inArray, isNotNull, isNull, ilike } from 'drizzle-orm';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
+import { sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
 
 type AgentInsert = typeof pgSchema.agents.$inferInsert;
 type AgentSelect = typeof pgSchema.agents.$inferSelect;
@@ -34,6 +35,13 @@ export type SandboxSessionRow = Omit<typeof pgSchema.sandboxSessions.$inferSelec
 export type SystemSettingRow = typeof pgSchema.systemSettings.$inferSelect;
 type ArtifactInsert = typeof pgSchema.artifacts.$inferInsert;
 type ArtifactRow = typeof pgSchema.artifacts.$inferSelect;
+
+const sanitizeTypedDbValue = <T>(value: T, context: string): T => sanitizeDbValue(value, context) as T;
+
+const sanitizeOptionalDbText = <T extends string | null | undefined>(value: T, context: string): T => {
+  if (value == null) return value;
+  return sanitizeDbText(value, context) as T;
+};
 
 export interface Checkpoint {
   id: string;
@@ -101,7 +109,8 @@ export class DatabaseRepository {
   // ── Agents ──────────────────────────────────────────────
 
   async createAgent(data: AgentInsert): Promise<AgentSelect> {
-    const [agent] = await this.db.insert(this.schema.agents).values(data).returning();
+    const sanitizedData = sanitizeTypedDbValue(data, 'agents.insert');
+    const [agent] = await this.db.insert(this.schema.agents).values(sanitizedData).returning();
     if (!agent) {
       throw new Error('Expected insert to return a row but got undefined');
     }
@@ -119,9 +128,10 @@ export class DatabaseRepository {
   }
 
   async updateAgent(id: string, data: Partial<Omit<AgentInsert, 'id'>>): Promise<AgentSelect | undefined> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'agents.update');
     const [updated] = await this.db
       .update(this.schema.agents)
-      .set({ ...data, updatedAt: Date.now() })
+      .set({ ...sanitizedData, updatedAt: Date.now() })
       .where(eq(this.schema.agents.id, id))
       .returning();
     return updated;
@@ -166,9 +176,10 @@ export class DatabaseRepository {
   // ── Conversations ───────────────────────────────────────
 
   async createConversation(agentId: string): Promise<ConversationSelect> {
+    const sanitizedAgentId = sanitizeDbText(agentId, 'conversations.agentId');
     const [conversation] = await this.db
       .insert(this.schema.conversations)
-      .values({ agentId })
+      .values({ agentId: sanitizedAgentId })
       .returning();
     if (!conversation) {
       throw new Error('Expected insert to return a row but got undefined');
@@ -190,22 +201,31 @@ export class DatabaseRepository {
   }
 
   async addMessage(data: MessageInsert): Promise<MessageSelect> {
+    const sanitizedData: MessageInsert = {
+      ...data,
+      content: sanitizeDbText(data.content, 'messages.content'),
+      parts: sanitizeTypedDbValue(data.parts, 'messages.parts'),
+      toolCalls: sanitizeTypedDbValue(data.toolCalls, 'messages.toolCalls'),
+      toolCallId: sanitizeOptionalDbText(data.toolCallId, 'messages.toolCallId'),
+    };
+
     return this.db.transaction(async (tx: any) => {
-      const rows = await tx.insert(this.schema.messages).values(data).returning();
+      const rows = await tx.insert(this.schema.messages).values(sanitizedData).returning();
       const message = rows[0];
       if (!message) throw new Error('Expected insert to return a row but got undefined');
-      if (data.conversationId) {
+      if (sanitizedData.conversationId) {
         await tx.update(this.schema.conversations)
           .set({ updatedAt: Date.now() })
-          .where(eq(this.schema.conversations.id, data.conversationId));
+          .where(eq(this.schema.conversations.id, sanitizedData.conversationId));
       }
       return message;
     });
   }
 
   async updateMessageToolCalls(id: string, toolCalls: unknown[]): Promise<void> {
+    const sanitizedToolCalls = sanitizeTypedDbValue(toolCalls, 'messages.toolCalls');
     await this.db.update(this.schema.messages)
-      .set({ toolCalls })
+      .set({ toolCalls: sanitizedToolCalls })
       .where(eq(this.schema.messages.id, id));
   }
 
@@ -263,7 +283,8 @@ export class DatabaseRepository {
   // ── Knowledge Items ─────────────────────────────────────
 
   async addKnowledgeItem(data: KnowledgeInsert): Promise<KnowledgeSelect> {
-    const [item] = await this.db.insert(this.schema.knowledgeItems).values(data).returning();
+    const sanitizedData = sanitizeTypedDbValue(data, 'knowledgeItems.insert');
+    const [item] = await this.db.insert(this.schema.knowledgeItems).values(sanitizedData).returning();
     if (!item) {
       throw new Error('Expected insert to return a row but got undefined');
     }
@@ -286,9 +307,10 @@ export class DatabaseRepository {
     id: string,
     data: Partial<Omit<KnowledgeInsert, 'id'>>,
   ): Promise<KnowledgeSelect | undefined> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'knowledgeItems.update');
     const [updated] = await this.db
       .update(this.schema.knowledgeItems)
-      .set({ ...data, updatedAt: Date.now() })
+      .set({ ...sanitizedData, updatedAt: Date.now() })
       .where(eq(this.schema.knowledgeItems.id, id))
       .returning();
     return updated;
@@ -307,15 +329,16 @@ export class DatabaseRepository {
   // ── Execution Traces ────────────────────────────────────
 
   async saveTrace(data: TraceInsert): Promise<TraceSelect> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'executionTraces.upsert');
     const [trace] = await this.db
       .insert(this.schema.executionTraces)
-      .values(data)
+      .values(sanitizedData)
       .onConflictDoUpdate({
         target: [this.schema.executionTraces.sessionId, this.schema.executionTraces.agentId],
         set: {
-          steps: data.steps,
-          completedAt: data.completedAt,
-          outcome: data.outcome,
+          steps: sanitizedData.steps,
+          completedAt: sanitizedData.completedAt,
+          outcome: sanitizedData.outcome,
         },
       })
       .returning();
@@ -343,7 +366,8 @@ export class DatabaseRepository {
   // ── Feedback Signals ────────────────────────────────────
 
   async saveFeedback(data: FeedbackInsert): Promise<FeedbackSelect> {
-    const [feedback] = await this.db.insert(this.schema.feedbackSignals).values(data).returning();
+    const sanitizedData = sanitizeTypedDbValue(data, 'feedbackSignals.insert');
+    const [feedback] = await this.db.insert(this.schema.feedbackSignals).values(sanitizedData).returning();
     if (!feedback) {
       throw new Error('Expected insert to return a row but got undefined');
     }
@@ -357,7 +381,8 @@ export class DatabaseRepository {
   }
 
   async createTurn(data: TurnInsert): Promise<TurnSelect> {
-    const [turn] = await this.db.insert(this.schema.turns).values(data).returning();
+    const sanitizedData = sanitizeTypedDbValue(data, 'turns.insert');
+    const [turn] = await this.db.insert(this.schema.turns).values(sanitizedData).returning();
     if (!turn) {
       throw new Error('Expected insert to return a row but got undefined');
     }
@@ -368,9 +393,10 @@ export class DatabaseRepository {
     id: string,
     updates: Partial<Omit<TurnInsert, 'id'>>,
   ): Promise<TurnSelect | undefined> {
+    const sanitizedUpdates = sanitizeTypedDbValue(updates, 'turns.update');
     const [updated] = await this.db
       .update(this.schema.turns)
-      .set(updates)
+      .set(sanitizedUpdates)
       .where(eq(this.schema.turns.id, id))
       .returning();
     return updated;
@@ -648,9 +674,11 @@ export class DatabaseRepository {
   // ── Event Store ──────────────────────────────────────────
 
   async saveEvent(type: string, agentId: string, payload: string): Promise<number> {
+    const sanitizedType = sanitizeDbText(type, 'eventStore.type');
+    const sanitizedPayload = sanitizeDbText(payload, 'eventStore.payload');
     const [row] = await this.db
       .insert(this.schema.eventStore)
-      .values({ type, agentId, payload, createdAt: Date.now() })
+      .values({ type: sanitizedType, agentId, payload: sanitizedPayload, createdAt: Date.now() })
       .returning({ seq: this.schema.eventStore.seq });
     if (!row) {
       throw new Error('Expected insert to return a row but got undefined');
@@ -659,7 +687,8 @@ export class DatabaseRepository {
   }
 
   async createSuspendedSession(data: SuspendedSessionInsert): Promise<void> {
-    await this.db.insert(this.schema.suspendedSessions).values(data);
+    const sanitizedData = sanitizeTypedDbValue(data, 'suspendedSessions.insert');
+    await this.db.insert(this.schema.suspendedSessions).values(sanitizedData);
   }
 
   async getSuspendedSessionsByEventType(eventType: string): Promise<SuspendedSessionRow[]> {
@@ -815,12 +844,13 @@ export class DatabaseRepository {
   // ── Scheduled Events ──────────────────────────────────────
 
   async createScheduledEvent(data: { id: string; agentId: string; type: string; payload: string; wakeAt: number }): Promise<void> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'scheduledEvents.insert');
     await this.db.insert(this.schema.scheduledEvents).values({
-      id: data.id,
-      agentId: data.agentId,
-      type: data.type,
-      payload: data.payload,
-      wakeAt: data.wakeAt,
+      id: sanitizedData.id,
+      agentId: sanitizedData.agentId,
+      type: sanitizedData.type,
+      payload: sanitizedData.payload,
+      wakeAt: sanitizedData.wakeAt,
       status: 'pending',
       createdAt: Date.now(),
     });
@@ -848,16 +878,17 @@ export class DatabaseRepository {
   // ── Event Triggers ──────────────────────────────────────
 
   async saveTrigger(data: TriggerInsert): Promise<TriggerSelect> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'eventTriggers.upsert');
     const [trigger] = await this.db
       .insert(this.schema.eventTriggers)
-      .values(data)
+      .values(sanitizedData)
       .onConflictDoUpdate({
         target: this.schema.eventTriggers.id,
         set: {
-          eventType: data.eventType,
-          selector: data.selector,
-          taskTemplate: data.taskTemplate,
-          enabled: data.enabled,
+          eventType: sanitizedData.eventType,
+          selector: sanitizedData.selector,
+          taskTemplate: sanitizedData.taskTemplate,
+          enabled: sanitizedData.enabled,
         },
       })
       .returning();
@@ -906,9 +937,17 @@ export class DatabaseRepository {
 
     const newVersion = (agent.version ?? 0) + 1;
 
-    const versionData = { agentId, version: newVersion, manifest, changedBy: changedBy ?? null, changeNote: changeNote ?? null, createdAt: Date.now() };
+    const sanitizedManifest = sanitizeTypedDbValue(manifest, 'agents.manifest');
+    const versionData = sanitizeTypedDbValue({
+      agentId,
+      version: newVersion,
+      manifest: sanitizedManifest,
+      changedBy: changedBy ?? null,
+      changeNote: changeNote ?? null,
+      createdAt: Date.now(),
+    }, 'agentVersions.insert');
     await this.db.transaction(async (tx: any) => {
-      await tx.update(this.schema.agents).set({ manifest, version: newVersion, updatedAt: Date.now() }).where(eq(this.schema.agents.id, agentId));
+      await tx.update(this.schema.agents).set({ manifest: sanitizedManifest, version: newVersion, updatedAt: Date.now() }).where(eq(this.schema.agents.id, agentId));
       await tx.insert(this.schema.agentVersions).values(versionData);
     });
   }
@@ -937,18 +976,19 @@ export class DatabaseRepository {
   // ── Pending Interrupts (Durable HITL) ──────────────────
 
   async savePendingInterrupt(data: InterruptInsert): Promise<InterruptRow> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'pendingInterrupts.upsert');
     const [row] = await this.db
       .insert(this.schema.pendingInterrupts)
-      .values(data)
+      .values(sanitizedData)
       .onConflictDoUpdate({
         target: this.schema.pendingInterrupts.id,
         set: {
-          toolCallId: data.toolCallId,
-          toolName: data.toolName,
-          args: data.args,
-          timeoutMs: data.timeoutMs,
-          expiresAt: data.expiresAt,
-          status: data.status ?? 'pending',
+          toolCallId: sanitizedData.toolCallId,
+          toolName: sanitizedData.toolName,
+          args: sanitizedData.args,
+          timeoutMs: sanitizedData.timeoutMs,
+          expiresAt: sanitizedData.expiresAt,
+          status: sanitizedData.status ?? 'pending',
         },
       })
       .returning();
@@ -996,13 +1036,15 @@ export class DatabaseRepository {
     action: string,
     data?: unknown,
   ): Promise<InterruptRow | undefined> {
+    const sanitizedAction = sanitizeDbText(action, 'pendingInterrupts.resolvedAction');
+    const sanitizedData = sanitizeTypedDbValue(data ?? null, 'pendingInterrupts.resolvedData');
     const [updated] = await this.db
       .update(this.schema.pendingInterrupts)
       .set({
         status: 'resolved',
         resolvedAt: Date.now(),
-        resolvedAction: action,
-        resolvedData: data ?? null,
+        resolvedAction: sanitizedAction,
+        resolvedData: sanitizedData,
       })
       .where(eq(this.schema.pendingInterrupts.id, id))
       .returning();
@@ -1015,8 +1057,8 @@ export class DatabaseRepository {
       .set({
         status: 'resolved',
         resolvedAt: Date.now(),
-        resolvedAction: 'timeout',
-        resolvedData: 'Approval expired',
+        resolvedAction: sanitizeDbText('timeout', 'pendingInterrupts.resolvedAction'),
+        resolvedData: sanitizeDbText('Approval expired', 'pendingInterrupts.resolvedData'),
       })
       .where(
         and(
@@ -1040,9 +1082,10 @@ export class DatabaseRepository {
   // ── Callback Outbox ──────────────────────────────────────
 
   async enqueueCallback(data: CallbackOutboxInsert): Promise<CallbackOutboxRow> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'callbackOutbox.insert');
     const [row] = await this.db
       .insert(this.schema.callbackOutbox)
-      .values(data)
+      .values(sanitizedData)
       .returning();
     if (!row) {
       throw new Error('Expected insert to return a row but got undefined');
@@ -1085,12 +1128,14 @@ export class DatabaseRepository {
     const newAttempts = current.attempts + 1;
     const isFinal = newAttempts >= current.maxAttempts;
 
+    const sanitizedError = sanitizeDbText(error, 'callbackOutbox.lastError');
+
     await this.db
       .update(this.schema.callbackOutbox)
       .set({
         attempts: newAttempts,
         lastAttemptAt: Date.now(),
-        lastError: error,
+        lastError: sanitizedError,
         status: isFinal ? 'failed' : 'pending',
         nextAttemptAt: isFinal ? current.nextAttemptAt : (nextAttemptAt ?? Date.now()),
       })
@@ -1104,7 +1149,8 @@ export class DatabaseRepository {
   }
 
   async createWebhook(data: WebhookInsert): Promise<WebhookRow> {
-    const [row] = await this.db.insert(this.schema.webhooks).values(data).returning();
+    const sanitizedData = sanitizeTypedDbValue(data, 'webhooks.insert');
+    const [row] = await this.db.insert(this.schema.webhooks).values(sanitizedData).returning();
     if (!row) {
       throw new Error('Expected insert to return a row but got undefined');
     }
@@ -1146,18 +1192,19 @@ export class DatabaseRepository {
     checkpointRef?: string;
     pausedReason?: string;
   }): Promise<SandboxSessionRow> {
+    const sanitizedSession = sanitizeTypedDbValue(session, 'sandboxSessions.insert');
     const [row] = await this.db
       .insert(this.schema.sandboxSessions)
       .values({
-        ...(session.id !== undefined ? { id: session.id } : {}),
-        conversationId: session.conversationId,
-        agentId: session.agentId,
-        containerName: session.containerName ?? null,
-        containerId: session.containerId ?? null,
-        status: session.status ?? 'ACTIVE',
-        harnessName: session.harnessName,
-        checkpointRef: session.checkpointRef ?? null,
-        pausedReason: session.pausedReason ?? null,
+        ...(sanitizedSession.id !== undefined ? { id: sanitizedSession.id } : {}),
+        conversationId: sanitizedSession.conversationId,
+        agentId: sanitizedSession.agentId,
+        containerName: sanitizedSession.containerName ?? null,
+        containerId: sanitizedSession.containerId ?? null,
+        status: sanitizedSession.status ?? 'ACTIVE',
+        harnessName: sanitizedSession.harnessName,
+        checkpointRef: sanitizedSession.checkpointRef ?? null,
+        pausedReason: sanitizedSession.pausedReason ?? null,
       })
       .returning();
     if (!row) throw new Error('Expected insert to return a row but got undefined');
@@ -1194,22 +1241,24 @@ export class DatabaseRepository {
       pausedReason?: string | null;
     },
   ): Promise<void> {
+    const sanitizedStatus = sanitizeDbText(status, 'sandboxSessions.status');
+    const sanitizedExtra = extra ? sanitizeTypedDbValue(extra, 'sandboxSessions.update') : undefined;
     const pauseMetadata = status === 'ACTIVE'
       ? { pausedAt: null, pausedReason: null }
       : {
-          ...(extra?.pausedAt !== undefined ? { pausedAt: extra.pausedAt } : {}),
-          ...(extra?.pausedReason !== undefined ? { pausedReason: extra.pausedReason } : {}),
+          ...(sanitizedExtra?.pausedAt !== undefined ? { pausedAt: sanitizedExtra.pausedAt } : {}),
+          ...(sanitizedExtra?.pausedReason !== undefined ? { pausedReason: sanitizedExtra.pausedReason } : {}),
         };
 
     await this.db
       .update(this.schema.sandboxSessions)
       .set({
-        status,
+        status: sanitizedStatus,
         updatedAt: Date.now(),
         lastActivityAt: Date.now(),
-        ...(extra?.containerName !== undefined ? { containerName: extra.containerName } : {}),
-        ...(extra?.containerId !== undefined ? { containerId: extra.containerId } : {}),
-        ...(extra?.checkpointRef !== undefined ? { checkpointRef: extra.checkpointRef } : {}),
+        ...(sanitizedExtra?.containerName !== undefined ? { containerName: sanitizedExtra.containerName } : {}),
+        ...(sanitizedExtra?.containerId !== undefined ? { containerId: sanitizedExtra.containerId } : {}),
+        ...(sanitizedExtra?.checkpointRef !== undefined ? { checkpointRef: sanitizedExtra.checkpointRef } : {}),
         ...pauseMetadata,
       })
       .where(eq(this.schema.sandboxSessions.id, id));
@@ -1484,16 +1533,17 @@ export class DatabaseRepository {
     workspaceRef?: string;
     suspendReason?: string;
   }): Promise<{ id: string }> {
+    const sanitizedCheckpoint = sanitizeTypedDbValue(checkpoint, 'agentCheckpoints.insert');
     const [row] = await this.db
       .insert(this.schema.agentCheckpoints)
       .values({
-        sessionId: checkpoint.sessionId,
-        agentId: checkpoint.agentId,
-        checkpointVersion: checkpoint.checkpointVersion ?? 2,
-        checkpointData: checkpoint.checkpointData,
-        harnessState: checkpoint.harnessState ?? null,
-        workspaceRef: checkpoint.workspaceRef ?? null,
-        suspendReason: checkpoint.suspendReason ?? null,
+        sessionId: sanitizedCheckpoint.sessionId,
+        agentId: sanitizedCheckpoint.agentId,
+        checkpointVersion: sanitizedCheckpoint.checkpointVersion ?? 2,
+        checkpointData: sanitizedCheckpoint.checkpointData,
+        harnessState: sanitizedCheckpoint.harnessState ?? null,
+        workspaceRef: sanitizedCheckpoint.workspaceRef ?? null,
+        suspendReason: sanitizedCheckpoint.suspendReason ?? null,
       })
       .returning({ id: this.schema.agentCheckpoints.id });
     if (!row) throw new Error('Expected insert to return a row but got undefined');
@@ -1552,12 +1602,14 @@ export class DatabaseRepository {
   }
 
   async setSystemSetting(key: string, value: string): Promise<void> {
+    const sanitizedKey = sanitizeDbText(key, 'systemSettings.key');
+    const sanitizedValue = sanitizeDbText(value, 'systemSettings.value');
     await this.db
       .insert(this.schema.systemSettings)
-      .values({ key, value })
+      .values({ key: sanitizedKey, value: sanitizedValue })
       .onConflictDoUpdate({
         target: this.schema.systemSettings.key,
-        set: { value, updatedAt: new Date().toISOString() },
+        set: { value: sanitizedValue, updatedAt: new Date().toISOString() },
       });
   }
 
@@ -1566,10 +1618,59 @@ export class DatabaseRepository {
     return Object.fromEntries(rows.map((r: SystemSettingRow) => [r.key, r.value]));
   }
 
+  async tryInsertToolDedup(requestId: string, sessionId: string, toolName: string): Promise<boolean> {
+    try {
+      await this.db.insert(this.schema.toolRequestDedup).values(
+        sanitizeTypedDbValue({ requestId, sessionId, toolName, status: 'in_progress' }, 'toolRequestDedup.insert'),
+      );
+      return true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('unique') || msg.includes('duplicate') || msg.includes('23505')) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  async getToolDedup(requestId: string): Promise<{
+    requestId: string;
+    sessionId: string;
+    toolName: string;
+    status: string;
+    result: string | null;
+    error: string | null;
+  } | undefined> {
+    return this.db.query.toolRequestDedup.findFirst({
+      where: eq(this.schema.toolRequestDedup.requestId, requestId),
+    });
+  }
+
+  async completeToolDedup(requestId: string, result: string | null, error: string | null): Promise<void> {
+    const status = error ? 'failed' : 'completed';
+    await this.db.update(this.schema.toolRequestDedup)
+      .set(sanitizeTypedDbValue({
+        status,
+        result,
+        error,
+        completedAt: Date.now(),
+      }, 'toolRequestDedup.complete'))
+      .where(eq(this.schema.toolRequestDedup.requestId, requestId));
+  }
+
+  async cleanupToolDedup(maxAgeMs: number = 10 * 60 * 1000): Promise<number> {
+    const cutoff = Date.now() - maxAgeMs;
+    const deleted = await this.db.delete(this.schema.toolRequestDedup)
+      .where(lt(this.schema.toolRequestDedup.createdAt, cutoff))
+      .returning();
+    return deleted.length;
+  }
+
   // ── Artifacts ──────────────────────────────────────────────
 
   async saveArtifact(data: ArtifactInsert): Promise<ArtifactRow> {
-    const [row] = await this.db.insert(this.schema.artifacts).values(data).returning();
+    const sanitizedData = sanitizeTypedDbValue(data, 'artifacts.insert');
+    const [row] = await this.db.insert(this.schema.artifacts).values(sanitizedData).returning();
     if (!row) throw new Error('Expected insert to return a row but got undefined');
     return row;
   }

@@ -33,13 +33,12 @@
 | GET | `/api/agents/:id/sessions` | List agent sessions |
 | GET | `/api/agents/:id/turns` | List raw turn history |
 | POST | `/api/agents/:id/sessions/:sessionId/suspend` | Checkpoint a sandbox session |
-| POST | `/api/agents/:id/sessions/:sessionId/freeze` | Pause a sandbox session |
-| POST | `/api/agents/:id/sessions/:sessionId/unfreeze` | Resume a paused sandbox session |
 | POST | `/api/agents/:id/sessions/:sessionId/kill` | Terminate a sandbox session |
 | GET | `/api/sessions` | List active conversation summaries or sandbox sessions |
-| POST | `/api/sessions/:id/resume` | Resume a paused sandbox session |
 | **SSE Streaming** |  |  |
 | GET | `/api/agents/:id/stream` | Subscribe to live agent events |
+| **AG-UI Compatibility** |  |  |
+| POST | `/api/ag-ui/agents/:id/run` | AG-UI protocol endpoint — accepts `RunAgentInput`, returns run-scoped SSE ([docs](ag-ui-compat.md)) |
 | **Conversations & Messages** |  |  |
 | GET | `/api/agents/:id/conversations` | List conversations |
 | GET | `/api/agents/:id/conversations/summary` | List enriched conversation summaries |
@@ -465,7 +464,7 @@ Per-agent sandbox resource limits:
 - **Notes:**
   - If `conversationId` is omitted, CTXMill creates one.
   - The actual run starts asynchronously.
-  - SSE clients immediately receive synthetic `TEXT_MESSAGE_*` events for the user message and a synthetic `RUN_STARTED`.
+  - SSE clients receive `TEXT_MESSAGE_*` user-message bootstrap events plus `TURN_PENDING` before the canonical `RUN_STARTED`.
 
 #### `POST /api/agents/:id/session`
 
@@ -604,32 +603,6 @@ Per-agent sandbox resource limits:
   - Requires sandbox session management to be enabled.
   - Returns `501` if session management is unavailable.
 
-#### `POST /api/agents/:id/sessions/:sessionId/freeze`
-
-- **Description:** Pauses a sandbox session.
-- **Request body:** None.
-- **Query params:** None.
-- **Response:**
-
-```json
-{ "sessionId": "sbx_123", "status": "paused" }
-```
-
-- **Notes:** Returns `501` if sandbox session management is unavailable.
-
-#### `POST /api/agents/:id/sessions/:sessionId/unfreeze`
-
-- **Description:** Resumes a paused sandbox session.
-- **Request body:** None.
-- **Query params:** None.
-- **Response:**
-
-```json
-{ "sessionId": "sbx_123", "status": "active" }
-```
-
-- **Notes:** Returns `404` when the sandbox session does not belong to the agent.
-
 #### `POST /api/agents/:id/sessions/:sessionId/kill`
 
 - **Description:** Terminates a sandbox session.
@@ -682,23 +655,6 @@ Per-agent sandbox resource limits:
 ```
 
 - **Notes:** Default mode only returns active conversation summaries.
-
-#### `POST /api/sessions/:id/resume`
-
-- **Description:** Resumes a paused sandbox session by sandbox session ID.
-- **Request body:** None.
-- **Query params:** None.
-- **Response:**
-
-```json
-{
-  "id": "sbx_123",
-  "agentId": "agent_123",
-  "status": "ACTIVE"
-}
-```
-
-- **Notes:** Returns `400` unless the session status is exactly `PAUSED`.
 
 ### e. SSE Streaming
 
@@ -1464,26 +1420,25 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 ```json
 {
   "maxWorkspaceTarBytes": 104857600,
-  "maxCheckpointBytes": 5242880,
+  "maxCheckpointBytes": 104857600,
   "maxTarUploadBytes": 104857600,
   "idleTimeoutMs": 300000,
-  "freezePromotionMs": 600000,
-  "maxPauseDurationMs": 300000,
-  "pauseDelayMs": 5000,
-  "turnTimeoutMs": 300000,
+  "turnTimeoutMs": 1800000,
   "reconciliationIntervalMs": 300000,
   "maxGlobalContainers": 20,
-  "queueTimeoutMs": 60000,
-  "maxConcurrentRunsPerAgent": 3,
+  "queueTimeoutMs": 600000,
+  "maxConcurrentSessionsPerAgent": 3,
   "maxTriggerDepth": 5,
   "defaultCpus": 1,
   "defaultMemoryMb": 1024,
   "defaultPidsLimit": 256,
-  "defaultTimeoutSec": 600
+  "defaultTimeoutSec": 43200
 }
 ```
 
-- **Notes:** This endpoint only exists when the settings service is configured.
+- **Notes:**
+  - This endpoint only exists when the settings service is configured.
+  - The settings surface includes `maxCheckpointBytes`, but the sandbox-daemon checkpoint validator still defaults to a stricter 5 MiB limit unless a larger limit is explicitly wired through.
 
 #### `PUT /api/settings`
 
@@ -1492,8 +1447,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 
 ```json
 {
-  "maxConcurrentRunsPerAgent": 5,
-  "queueTimeoutMs": 120000,
+  "maxConcurrentSessionsPerAgent": 5,
+  "queueTimeoutMs": 1200000,
   "defaultCpus": 1.5,
   "defaultMemoryMb": 2048
 }
@@ -1506,17 +1461,14 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 | Field | Range |
 |---|---|
 | `maxWorkspaceTarBytes` | `1 MiB` to `1024 MiB` |
-| `maxCheckpointBytes` | `1 MiB` to `50 MiB` |
+| `maxCheckpointBytes` | `1 MiB` to `200 MiB` |
 | `maxTarUploadBytes` | `1 MiB` to `1024 MiB` |
 | `idleTimeoutMs` | `10000` to `3600000` |
-| `freezePromotionMs` | `30000` to `7200000` |
-| `maxPauseDurationMs` | `10000` to `3600000` |
-| `pauseDelayMs` | `0` to `60000` |
-| `turnTimeoutMs` | `30000` to `3600000` |
+| `turnTimeoutMs` | `30000` to `7200000` |
 | `reconciliationIntervalMs` | `10000` to `3600000` |
 | `maxGlobalContainers` | `1` to `100` |
-| `queueTimeoutMs` | `5000` to `600000` |
-| `maxConcurrentRunsPerAgent` | `1` to `20` |
+| `queueTimeoutMs` | `5000` to `1800000` |
+| `maxConcurrentSessionsPerAgent` | `1` to `20` |
 | `maxTriggerDepth` | `1` to `20` |
 | `defaultCpus` | `0.1` to `16.0` |
 | `defaultMemoryMb` | `128` to `32768` |
@@ -1923,6 +1875,7 @@ data: <json>
 ```
 
 - **Common event types:**
+  - `TURN_PENDING`
   - `RUN_STARTED`
   - `TEXT_MESSAGE_START`
   - `TEXT_MESSAGE_CONTENT`
@@ -1941,8 +1894,9 @@ data: <json>
 Notes on actual stream behavior today:
 
 - `CONNECTED` and `CUSTOM` `state_snapshot` are emitted by the stream endpoint itself.
-- `RUN_STARTED`, `TEXT_MESSAGE_CONTENT`, `TOOL_CALL_START`, `TOOL_CALL_ARGS`, `TOOL_CALL_RESULT`, `RUN_FINISHED`, `RUN_ERROR`, `MESSAGE_COMMITTED`, and `HITL_PAUSE` are actively used by the runtime.
-- `STATE_DELTA` is part of the shared event type surface but is not emitted by the route code covered here.
+- `TURN_PENDING` is emitted before the canonical `RUN_STARTED` when a turn has been accepted but the sandbox session is not fully ready yet.
+- `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `MESSAGE_COMMITTED`, `HITL_PAUSE`, and forwarded `CUSTOM` events can all appear on the live stream.
+- `STATE_DELTA` remains part of the shared event type surface but is not emitted by the route-owned code covered here.
 
 ### Connection lifecycle
 
@@ -1966,6 +1920,19 @@ Notes on actual stream behavior today:
 
 ### Event examples
 
+`TURN_PENDING`
+
+```json
+{
+  "type": "TURN_PENDING",
+  "runId": "turn_123",
+  "conversationId": "conv_123",
+  "agentId": "agent_123",
+  "mode": "interactive",
+  "timestamp": 1712140000000
+}
+```
+
 `RUN_STARTED`
 
 ```json
@@ -1973,7 +1940,9 @@ Notes on actual stream behavior today:
   "type": "RUN_STARTED",
   "runId": "turn_123",
   "conversationId": "conv_123",
+  "sessionId": "sbx_123",
   "agentId": "agent_123",
+  "mode": "interactive",
   "timestamp": 1712140000000
 }
 ```
@@ -1987,6 +1956,7 @@ Notes on actual stream behavior today:
   "conversationId": "conv_123",
   "messageId": "msg_2",
   "content": "Here is the summary...",
+  "delta": "Here is the summary...",
   "timestamp": 1712140000100
 }
 ```
@@ -2037,6 +2007,7 @@ Notes on actual stream behavior today:
   "type": "MESSAGE_COMMITTED",
   "runId": "turn_123",
   "turnId": "turn_123",
+  "conversationId": "conv_123",
   "messageSeq": 4,
   "role": "assistant",
   "content": "Here is the summary...",
@@ -2052,6 +2023,8 @@ Notes on actual stream behavior today:
   "type": "RUN_FINISHED",
   "runId": "turn_123",
   "conversationId": "conv_123",
+  "status": "completed",
+  "durationMs": 600,
   "timestamp": 1712140000600
 }
 ```

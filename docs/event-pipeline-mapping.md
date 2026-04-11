@@ -1,7 +1,7 @@
 # CTXMill Protocol Mapping Spec
 
-> Authoritative reference for how AG-UI wire events and gRPC proto fields map to ctxmill internal abstractions.
-> Updated: 2026-03-31 (post runId→sessionId/turnId migration)
+> Working reference for how AG-UI wire events and gRPC proto fields map to current ctxmill runtime behavior.
+> Updated: 2026-04-07 (post `turn.pending`, broadcaster centralization, and durable HITL refinements)
 
 ## Core Entities
 
@@ -17,19 +17,22 @@ Table of the 4 key identifiers:
 
 The AG-UI protocol defines `runId` as a required field on all events. In ctxmill:
 
+Bootstrap SSE frames such as `CONNECTED` and `state_snapshot` are written directly by the stream route and are not part of the standard AG-UI run-lifecycle table below.
+
 | AG-UI Event Type | Wire `runId` value | Source location |
 |---|---|---|
-| RUN_STARTED | turnId | SSEBroadcaster (from bus `turn.started`) or direct broadcast in routes |
+| TURN_PENDING | turnId | SSEBroadcaster (from bus `turn.pending`) |
+| RUN_STARTED | turnId | SSEBroadcaster (from bus `turn.started`) |
 | RUN_FINISHED | turnId | SSEBroadcaster (from bus `turn.completed`) |
-| RUN_ERROR | turnId | AgentSessionService catch block |
-| TEXT_MESSAGE_START | conversationId (user msg) or turnId (assistant) | Route handler (user), SSEBroadcaster (assistant) |
-| TEXT_MESSAGE_CONTENT | turnId | SSEBroadcaster (from bus `run.text_chunk`) |
-| TEXT_MESSAGE_END | conversationId (user msg) or turnId (assistant) | Route handler (user), SSEBroadcaster (assistant) |
+| RUN_ERROR | turnId | Usually SSEBroadcaster (from `turn.completed` with `status = error/cancelled`); low-level `RUN_ERROR` AG-UI events may also be forwarded via `run.ag_ui_event` |
+| TEXT_MESSAGE_START | conversationId (user msg) or turnId (assistant) | SSEBroadcaster (from `user.message` for user echoes or `run.ag_ui_event` for assistant events) |
+| TEXT_MESSAGE_CONTENT | turnId | SSEBroadcaster (from bus `run.text_chunk` or forwarded `run.ag_ui_event`) |
+| TEXT_MESSAGE_END | conversationId (user msg) or turnId (assistant) | SSEBroadcaster (from `user.message` for user echoes or `run.ag_ui_event` for assistant events) |
 | TOOL_CALL_START | turnId | SSEBroadcaster (from bus `run.tool_started`) |
 | TOOL_CALL_ARGS | turnId | SSEBroadcaster (synthetic, emitted after TOOL_CALL_START) |
 | TOOL_CALL_RESULT | turnId | SSEBroadcaster (from bus `run.tool_result`) |
-| MESSAGE_COMMITTED | turnId | SessionTurnService |
-| CUSTOM | varies (turnId, sessionId, or agentId) | Various direct broadcasts and EmitEvent RPC |
+| MESSAGE_COMMITTED | turnId | SSEBroadcaster (from bus `message.committed`; source commit event is created by `AgentSessionService`) |
+| CUSTOM | varies (turnId, sessionId, or agentId) | Mixed: `session.paused`, `run.interrupt_resolved`, `run.ag_ui_event`, and direct stream-route bootstrap snapshots |
 
 ### SSE Broadcast Resolution
 
@@ -40,33 +43,37 @@ payload.turnId ?? payload.sessionId ?? payload.runId
 
 ### Emission Paths
 
-1. **EventBus → SSEBroadcaster → SSE** — Most run events (text, tool, started, finished). SSEBroadcaster subscribes to internal events and re-emits as AG-UI.
-2. **SessionTurnService → AGUIEvent yield** — `MESSAGE_COMMITTED` events are yielded directly from the turn service as AGUIEvents.
-3. **AgentSessionService → direct SSE** — `RUN_ERROR` on unhandled exceptions during turn execution.
-4. **Route handlers → direct SSE** — User message events (`TEXT_MESSAGE_*`) and session control (`CUSTOM` interrupt_resolved, run_cancelled).
-5. **gRPC EmitEvent → EventBus → SSEBroadcaster** — Custom events emitted by sandbox harnesses via the `emit-event` tool.
+1. **EventBus → SSEBroadcaster → SSE** — Most run-lifecycle, preview, and committed-message events. This includes `turn.pending`, `turn.started`, `run.text_chunk`, `run.tool_*`, `message.committed`, `session.paused`, and `turn.completed`.
+2. **SessionTurnService → AgentSessionService** — Sandbox `message_committed` events first become internal AG-UI `MESSAGE_COMMITTED` events in the turn service, then `AgentSessionService` persists them and re-emits a canonical `message.committed` bus event.
+3. **AgentSessionService → `run.ag_ui_event` → SSEBroadcaster** — AG-UI events that are not individually normalized onto first-class bus events are forwarded through `run.ag_ui_event`.
+4. **Stream route → direct SSE** — Bootstrap frames only (`CONNECTED`, `state_snapshot`).
+5. **gRPC `EmitEvent` / `emit-event` tool → raw event-bus subscribers** — Custom agent-emitted events are persisted and dispatched to matching subscribers (for example triggers). They are not part of the standard AG-UI run-lifecycle mapping unless another layer explicitly re-emits them.
 
 ## Section 2: Internal Event Bus Mapping
 
-Table of all 18 event types from `packages/ctxmill/src/events/bus.ts`:
+Key runtime event types from `packages/ctxmill/src/events/bus.ts` that affect AG-UI mapping:
 
 | Internal Event | Key Fields | AG-UI Mapping | Notes |
 |---|---|---|---|
+| turn.pending | turnId, agentId, conversationId, mode | TURN_PENDING | Pre-start indicator emitted before full session readiness |
 | turn.started | turnId, sessionId, agentId, conversationId, mode | RUN_STARTED | — |
+| user.message | agentId, conversationId, messageId, content | TEXT_MESSAGE_START / CONTENT / END | SSEBroadcaster synthesizes user-message echo events |
 | run.text_chunk | turnId, agentId, messageId, content | TEXT_MESSAGE_CONTENT | — |
 | run.tool_started | turnId, agentId, toolCallId, toolName, args | TOOL_CALL_START + TOOL_CALL_ARGS | — |
 | run.tool_result | turnId, agentId, toolCallId, toolName, result, durationMs | TOOL_CALL_RESULT | — |
-| run.interrupted | turnId, agentId, toolCallId, toolName, args, interruptId | CUSTOM | — |
-| run.interrupt_resolved | turnId, agentId, interruptId, action | CUSTOM | — |
-| session.paused | sessionId, agentId, conversationId, reason | CUSTOM | Uses sessionId not turnId |
-| turn.completed | turnId, sessionId, agentId, conversationId, status, durationMs | RUN_FINISHED | — |
+| run.interrupted | turnId, agentId, toolCallId, toolName, args, interruptId | HITL_PAUSE | Durable HITL pause signal |
+| run.interrupt_resolved | turnId, agentId, interruptId, action | CUSTOM | Interrupt resolution marker |
+| session.paused | sessionId, agentId, conversationId, reason | CUSTOM | Idle-only session pause event; uses sessionId rather than turnId |
+| message.committed | turnId, agentId, conversationId, messageSeq, role, content | MESSAGE_COMMITTED | Canonical assistant/tool commit emitted by `AgentSessionService` |
+| run.ag_ui_event | turnId, agentId, conversationId?, event | Passthrough | Forwards AG-UI events not otherwise normalized |
+| turn.completed | turnId, sessionId, agentId, conversationId, status, durationMs | RUN_FINISHED (+ RUN_ERROR on error/cancelled) | Terminal lifecycle event |
 | run.resumed | turnId, agentId, triggeredBy, suspendedDurationMs | Not mapped to AG-UI | — |
 | feedback.received | feedbackId, turnId, agentId, type | Not mapped to AG-UI | — |
 | trigger.fired | triggerId, agentId, eventType, turnId | Not mapped to AG-UI | — |
 | learning.* (3 events) | varies | Not mapped to AG-UI | Internal only |
 | agent.created/deleted | agentId | Not mapped to AG-UI | Internal only |
 | client.connected/disconnected | agentId, clientId | Not mapped to AG-UI | Internal only |
-| custom | type, agentId, payload | CUSTOM | Passthrough |
+| custom | type, agentId, payload | Not part of standard AG-UI run-lifecycle mapping | Persisted/dispatched to raw subscribers such as triggers |
 
 ## Section 3: gRPC Proto Mapping
 

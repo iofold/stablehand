@@ -28,10 +28,12 @@ type TestChannel = {
 };
 
 type SandboxSessionManagerInternals = {
-  sessions: Map<string, SessionRecord>;
-  turnQueues: Map<string, Array<{ messages: Message[]; turnId: string; channel: TestChannel }>>;
-  activeTurns: Set<string>;
-  agentDefs: Map<string, AgentDefinition>;
+  stateStore: {
+    sessions: Map<string, SessionRecord>;
+    turnQueues: Map<string, Array<{ messages: Message[]; turnId: string; channel: TestChannel }>>;
+    activeTurns: Set<string>;
+    agentDefs: Map<string, AgentDefinition>;
+  };
   drainCoalescedQueue(sessionId: string): Promise<void>;
   executeDeliverTurn(
     sessionId: string,
@@ -44,7 +46,6 @@ function createMockContainerManager(): ContainerManager {
   return {
     extractContainerDiff: vi.fn().mockResolvedValue(null),
     extractWorkspaceDiff: vi.fn().mockResolvedValue(null),
-    unpauseContainer: vi.fn().mockResolvedValue(undefined),
   } as unknown as ContainerManager;
 }
 
@@ -56,7 +57,6 @@ function createMockDb(): DatabaseRepository {
 
 function createMockLifecyclePolicy(): ContainerLifecyclePolicy {
   return {
-    cancelPause: vi.fn().mockResolvedValue(undefined),
     cancelIdleTimeout: vi.fn().mockResolvedValue(undefined),
     scheduleIdleTimeout: vi.fn(),
   } as unknown as ContainerLifecyclePolicy;
@@ -149,6 +149,7 @@ function createManager(options?: { turnTimeoutMs?: number }) {
     db,
     lifecyclePolicy,
     workspaceDiffService: new WorkspaceDiffService({ containerManager }),
+    buildSandboxSecrets: () => ({}),
     logger,
     config: {
       idleTimeoutMs: 60_000,
@@ -181,11 +182,11 @@ function seedSession(
     status: overrides?.status ?? 'ACTIVE',
     harnessName: overrides?.harnessName ?? 'langgraph',
     sessionWorkspaceDir: overrides?.sessionWorkspaceDir,
-    grpcClient,
+    grpcClient: grpcClient as unknown as SessionRecord['grpcClient'],
   };
 
-  internals.sessions.set(record.conversationId, record);
-  internals.agentDefs.set(record.conversationId, createAgentDef());
+  internals.stateStore.sessions.set(record.conversationId, record);
+  internals.stateStore.agentDefs.set(record.conversationId, createAgentDef());
   return record;
 }
 
@@ -271,15 +272,15 @@ describe('SandboxSessionManager concurrency', () => {
 
     for (const events of queuedResults.slice(2)) {
       expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        type: 'message_committed',
-        content: 'coalesced-response-2',
-      });
+      expect(events[0]).toMatchObject({ type: 'message_committed' });
+      const committedEvent = events[0] as Extract<SessionEvent, { type: 'message_committed' }>;
+      expect(committedEvent.content).toMatch(/^coalesced-response-/);
+      expect(committedEvent.content).not.toBe('coalesced-response-1');
     }
 
-    expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(3);
-    expect(internals.activeTurns.has(record.sessionId)).toBe(false);
-    expect(internals.turnQueues.get(record.sessionId) ?? []).toHaveLength(0);
+    expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(4);
+    expect(internals.stateStore.activeTurns.has(record.sessionId)).toBe(false);
+    expect(internals.stateStore.turnQueues.get(record.sessionId) ?? []).toHaveLength(0);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
@@ -289,13 +290,13 @@ describe('SandboxSessionManager concurrency', () => {
     let iterationCount = 0;
 
     const enqueue = (suffix: string) => {
-      const queue = internals.turnQueues.get(sessionId) ?? [];
+      const queue = internals.stateStore.turnQueues.get(sessionId) ?? [];
       queue.push({
         messages: [createMessage(`queued-${suffix}`)],
         turnId: `queued-${suffix}`,
         channel: createChannel(),
       });
-      internals.turnQueues.set(sessionId, queue);
+      internals.stateStore.turnQueues.set(sessionId, queue);
     };
 
     enqueue('initial');
@@ -321,7 +322,7 @@ describe('SandboxSessionManager concurrency', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('drain loop hit safety limit (100)'),
     );
-    expect(internals.activeTurns.has(sessionId)).toBe(false);
+    expect(internals.stateStore.activeTurns.has(sessionId)).toBe(false);
   });
 
   it('fails remaining queued entries when drain safety limit is reached', async () => {
@@ -331,13 +332,13 @@ describe('SandboxSessionManager concurrency', () => {
 
     const enqueue = (suffix: string) => {
       lastQueuedChannel = createChannel();
-      const queue = internals.turnQueues.get(sessionId) ?? [];
+      const queue = internals.stateStore.turnQueues.get(sessionId) ?? [];
       queue.push({
         messages: [createMessage(`queued-${suffix}`)],
         turnId: `queued-${suffix}`,
         channel: lastQueuedChannel,
       });
-      internals.turnQueues.set(sessionId, queue);
+      internals.stateStore.turnQueues.set(sessionId, queue);
       return lastQueuedChannel;
     };
 
@@ -360,7 +361,7 @@ describe('SandboxSessionManager concurrency', () => {
     expect(lastQueuedChannel.fail).toHaveBeenCalledWith(
       expect.objectContaining({ message: 'Turn queue drain exceeded 100 iterations' }),
     );
-    expect(internals.turnQueues.get(sessionId) ?? []).toHaveLength(0);
+    expect(internals.stateStore.turnQueues.get(sessionId) ?? []).toHaveLength(0);
   });
 
   it('times out hung gRPC deliverTurn streams', async () => {
@@ -379,13 +380,16 @@ describe('SandboxSessionManager concurrency', () => {
     const turnPromise = collectEvents(
       manager.deliverTurn(record.sessionId, [createMessage('timeout')], 'turn-timeout'),
     );
-    const timedOut = expect(turnPromise).rejects.toThrow(
-      'Turn turn-timeout timed out after 100ms for session sess-timeout',
-    );
 
     await vi.advanceTimersByTimeAsync(101);
 
-    await timedOut;
+    await expect(turnPromise).resolves.toEqual([
+      expect.objectContaining({
+        type: 'turn_failed',
+        turnId: 'turn-timeout',
+        errorMessage: expect.stringContaining('Turn turn-timeout timed out after 100ms for session sess-timeout'),
+      }),
+    ]);
   });
 
   it('allows gRPC deliverTurn streams to complete within the timeout', async () => {

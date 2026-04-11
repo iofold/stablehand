@@ -50,10 +50,6 @@ function createMockSessionManager(events: SessionEvent[] = []): SandboxSessionMa
     },
     killSession: vi.fn(async () => {}),
     suspendSession: vi.fn(async () => {}),
-    pauseSession: vi.fn(async () => {}),
-    resumeSession: vi.fn(async () => {}),
-    freezeSession: vi.fn(async () => {}),
-    unfreezeSession: vi.fn(async () => {}),
   };
 }
 
@@ -217,14 +213,10 @@ describe('SandboxRunService', () => {
           yield {
             type: 'ag_ui_event' as const,
             event: { type: 'RUN_STARTED', timestamp: 1, runId: 'turn-1' } as AGUIEvent,
-          };
+      };
         },
         killSession: vi.fn(async () => {}),
         suspendSession: vi.fn(async () => {}),
-        pauseSession: vi.fn(async () => {}),
-        resumeSession: vi.fn(async () => {}),
-        freezeSession: vi.fn(async () => {}),
-        unfreezeSession: vi.fn(async () => {}),
       };
       const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
@@ -256,10 +248,6 @@ describe('SandboxRunService', () => {
         deliverTurn: (async function* () {}) as SandboxSessionManager['deliverTurn'],
         killSession: vi.fn(async () => {}),
         suspendSession: vi.fn(async () => {}),
-        pauseSession: vi.fn(async () => {}),
-        resumeSession: vi.fn(async () => {}),
-        freezeSession: vi.fn(async () => {}),
-        unfreezeSession: vi.fn(async () => {}),
       };
       const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 
@@ -279,10 +267,6 @@ describe('SandboxRunService', () => {
         },
         killSession: vi.fn(async () => {}),
         suspendSession: vi.fn(async () => {}),
-        pauseSession: vi.fn(async () => {}),
-        resumeSession: vi.fn(async () => {}),
-        freezeSession: vi.fn(async () => {}),
-        unfreezeSession: vi.fn(async () => {}),
       };
       const service = new SessionTurnService({ sessionManager: sm, eventBus, logger: silentLogger });
 

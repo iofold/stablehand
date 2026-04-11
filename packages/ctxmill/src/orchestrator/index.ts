@@ -1,5 +1,6 @@
 export { createServer } from './server.js';
 export type { ServerOptions } from './server.js';
+export * from './ag-ui-compat/index.js';
 export { SSEManager } from './sse.js';
 export { InterruptManager } from './interrupt.js';
 export type { PendingInterrupt, InterruptResolution } from './interrupt.js';

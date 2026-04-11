@@ -242,6 +242,44 @@ export function makeRunResumedEvent(
   };
 }
 
+export function makeTurnPendingEvent(
+  overrides?: Partial<EventMap['turn.pending']>,
+): EventMap['turn.pending'] {
+  return {
+    turnId: 'run-test-1',
+    agentId: 'agent-test-1',
+    conversationId: 'conv-test-1',
+    mode: 'interactive',
+    timestamp: Date.now(),
+    ...overrides,
+  };
+}
+
+export function makeAgUiEventPayload(
+  overrides?: Partial<EventMap['run.ag_ui_event']>,
+): EventMap['run.ag_ui_event'] {
+  return {
+    turnId: 'run-test-1',
+    agentId: 'agent-test-1',
+    event: { type: 'CUSTOM', timestamp: Date.now(), runId: 'run-test-1' },
+    timestamp: Date.now(),
+    ...overrides,
+  };
+}
+
+export function makeUserMessageEvent(
+  overrides?: Partial<EventMap['user.message']>,
+): EventMap['user.message'] {
+  return {
+    agentId: 'agent-test-1',
+    conversationId: 'conv-test-1',
+    messageId: 'msg-test-1',
+    content: 'hello',
+    timestamp: Date.now(),
+    ...overrides,
+  };
+}
+
 // ── Suspended Run Helpers ───────────────────────────────────────
 
 export interface SuspendedRunRow {

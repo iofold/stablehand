@@ -17,7 +17,7 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-> To enable full sandbox execution, add the sandbox profile: `docker compose --profile sandbox up --build -d`
+> Sandbox harness images and the egress proxy are included in the default compose stack. They build automatically with `docker compose up --build -d`.
 
 The UI is available at `http://localhost:3200` and the API at `http://localhost:3002`.
 
@@ -29,7 +29,7 @@ Start the stack:
 docker compose up --build -d
 ```
 
-> To enable full sandbox execution, add the sandbox profile: `docker compose --profile sandbox up --build -d`
+> Sandbox harness images and the egress proxy are included in the default compose stack. They build automatically with `docker compose up --build -d`.
 
 View logs:
 

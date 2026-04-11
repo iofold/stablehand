@@ -61,7 +61,14 @@ import { setSessionTools } from './daemon.js';
 import { generatePtcScripts } from './ptc-codegen.js';
 
 async function mkdirSafe(dir: string): Promise<void> {
-  await mkdir(dir, { recursive: true }).catch(() => {});
+  try {
+    await mkdir(dir, { recursive: true });
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') return;
+    console.error(`[runner] Failed to create directory ${dir}:`, err);
+    throw err;
+  }
 }
 
 function createDaemonHandlersForSession(
@@ -165,6 +172,7 @@ function getOrchestratorClient(): OrchestratorServiceClient | undefined {
   const transport = createConnectTransport({
     baseUrl: url,
     httpVersion: '1.1',
+    nodeOptions: { timeout: 0 },
   });
 
   const client = createClient(OrchestratorService, transport);
@@ -179,16 +187,24 @@ export function resetOrchestratorClient(): void {
   orchestratorClient = undefined;
 }
 
+interface SessionContext {
+  readonly session: HarnessSession;
+  readonly sessionId: string;
+  readonly conversationId: string;
+  readonly harnessName: string;
+  readonly stateCollector: SessionStateCollector;
+  readonly phaseTracker: ExecutionPhaseTracker;
+  readonly abortController: AbortController;
+  currentTurnId: string | null;
+}
+
 /* -------------------------------------------------------------------------- */
-/*  Module-level session state (one session per daemon process)               */
+/*  Module-level session state: SessionContext bundles session state with      */
+/*  AbortController for race-safe lifecycle handling.                          */
 /* -------------------------------------------------------------------------- */
 
-let activeSession: HarnessSession | null = null;
-let activeSessionId: string | null = null;
-let stateCollector: SessionStateCollector | null = null;
-let phaseTracker: ExecutionPhaseTracker | null = null;
-let activeConversationId: string | null = null;
-let activeHarnessName: string | null = null;
+let activeContext: SessionContext | null = null;
+let openingContext: Promise<SessionContext> | null = null;
 const activeRunId: { current: string } = { current: '' };
 
 /* -------------------------------------------------------------------------- */
@@ -241,133 +257,154 @@ export async function openSession(
     orchestratorClient?: OrchestratorServiceClient;
   },
 ): Promise<OpenSessionResponse> {
-  if (activeSession) {
+  if (activeContext) {
     throw new Error('[sandbox] openSession: a session is already active — call killSession() first');
   }
-
-  const orcClient = opts?.orchestratorClient ?? getOrchestratorClient();
-  let harnessName: string;
-
-  if (req.bootstrap.case === 'fresh') {
-    const fresh = req.bootstrap.value;
-    harnessName = fresh.harnessName;
-
-    const daemonHandlers = createDaemonHandlersForSession(
-      secrets,
-      orcClient,
-      fresh.agentId,
-      fresh.workspaceDir || '/workspace',
-    );
-
-    const tools = protoToToolDefs(fresh.tools, {
-      orchestratorClient: orcClient,
-      agentId: fresh.agentId,
-      sessionIdRef: activeRunId,
-      daemonHandlers,
-    });
-    setSessionTools(tools);
-
-    const config = protoFreshBootstrapToSessionConfig(fresh, tools, secrets);
-    const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
-
-    try {
-      const ptcEligible = tools.filter((t) => t.programmatic === true);
-      console.error(`[sandbox] PTC: ${ptcEligible.length}/${tools.length} tools are programmatic`);
-
-      const ptcScripts = await generatePtcScripts({
-        tools,
-        scriptDir: `${config.workspaceDir}/.tools`,
-        daemonPort: ptcPort,
-      });
-
-      if (ptcScripts.length > 0) {
-        console.error(`[sandbox] PTC: generated ${ptcScripts.length} scripts in ${config.workspaceDir}/.tools`);
-        config.systemPrompt += '\n\nSome tools use programmatic tool calling (PTC) — large results stay in code scope instead of your context. Call ctxmill-guide({ topic: "ptc" }) for usage details, or run `ls /workspace/.tools/` to see available scripts.';
-      }
-    } catch (err) {
-      console.error('[sandbox] PTC script generation failed, continuing without PTC:', err);
-    }
-
-    if (opts?.signal) {
-      config.signal = opts.signal;
-    }
-
-    await mkdirSafe(config.workspaceDir);
-
-    const harness = await resolveHarness(harnessName);
-    activeSession = await harness.openSession(config);
-    activeConversationId = fresh.conversationId;
-  } else if (req.bootstrap.case === 'restore') {
-    const restore = req.bootstrap.value;
-    const checkpoint = restore.sessionCheckpoint;
-    if (!checkpoint) {
-      throw new Error('[sandbox] openSession: RestoreBootstrap missing session_checkpoint');
-    }
-    harnessName = checkpoint.harnessName;
-
-    const restorePoint = protoRestoreBootstrapToRestorePoint(restore);
-    const workspaceDir = checkpoint.workspaceRef?.reference || '/workspace';
-    const daemonHandlers = createDaemonHandlersForSession(
-      secrets,
-      orcClient,
-      restore.agentId,
-      workspaceDir,
-    );
-    const tools = protoToToolDefs(restore.tools, {
-      orchestratorClient: orcClient,
-      agentId: restore.agentId,
-      sessionIdRef: activeRunId,
-      daemonHandlers,
-    });
-    setSessionTools(tools);
-
-    const config = {
-      agentId: restore.agentId,
-      conversationId: checkpoint.conversationId,
-      systemPrompt: restore.systemPrompt,
-      tools,
-      secrets,
-      harnessConfigJson: restore.harnessConfigJson,
-      workspaceDir,
-      signal: opts?.signal,
-    };
-
-    const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
-
-    try {
-      const ptcEligible = tools.filter((t) => t.programmatic === true);
-      console.error(`[sandbox] PTC restore: ${ptcEligible.length}/${tools.length} tools are programmatic`);
-
-      await generatePtcScripts({
-        tools,
-        scriptDir: `${config.workspaceDir}/.tools`,
-        daemonPort: ptcPort,
-      });
-    } catch (err) {
-      console.error('[sandbox] PTC script generation failed during restore, continuing without PTC:', err);
-    }
-
-    await mkdirSafe(config.workspaceDir);
-
-    const harness = await resolveHarness(harnessName);
-    activeSession = await harness.openSession(config, restorePoint);
-    activeConversationId = checkpoint.conversationId;
-  } else {
-    throw new Error('[sandbox] openSession: missing bootstrap (neither fresh nor restore)');
+  if (openingContext) {
+    throw new Error('[sandbox] openSession: session is already being opened');
   }
 
-  const sessionId = crypto.randomUUID();
-  activeSessionId = sessionId;
-  activeHarnessName = harnessName;
-  stateCollector = new SessionStateCollector();
-  phaseTracker = new ExecutionPhaseTracker();
+  openingContext = (async (): Promise<SessionContext> => {
+    const orcClient = opts?.orchestratorClient ?? getOrchestratorClient();
+    let harnessName: string;
+    let session: HarnessSession;
+    let conversationId: string;
 
-  console.error(`[sandbox] session ${sessionId} opened with harness "${harnessName}"`);
+    if (req.bootstrap.case === 'fresh') {
+      const fresh = req.bootstrap.value;
+      harnessName = fresh.harnessName;
+      conversationId = fresh.conversationId;
 
-  return create(OpenSessionResponseSchema, {
-    sessionId,
-    status: 'ready',
-  });
+      const daemonHandlers = createDaemonHandlersForSession(
+        secrets,
+        orcClient,
+        fresh.agentId,
+        fresh.workspaceDir || '/workspace',
+      );
+
+      const tools = protoToToolDefs(fresh.tools, {
+        orchestratorClient: orcClient,
+        agentId: fresh.agentId,
+        sessionIdRef: activeRunId,
+        daemonHandlers,
+      });
+      setSessionTools(tools);
+
+      const config = protoFreshBootstrapToSessionConfig(fresh, tools, secrets);
+      const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
+
+      try {
+        const ptcEligible = tools.filter((t) => t.programmatic === true);
+        console.error(`[sandbox] PTC: ${ptcEligible.length}/${tools.length} tools are programmatic`);
+
+        const ptcScripts = await generatePtcScripts({
+          tools,
+          scriptDir: `${config.workspaceDir}/.tools`,
+          daemonPort: ptcPort,
+        });
+
+        if (ptcScripts.length > 0) {
+          console.error(`[sandbox] PTC: generated ${ptcScripts.length} scripts in ${config.workspaceDir}/.tools`);
+          config.systemPrompt += '\n\nSome tools use programmatic tool calling (PTC) — large results stay in code scope instead of your context. Call ctxmill-guide({ topic: "ptc" }) for usage details, or run `ls /workspace/.tools/` to see available scripts.';
+        }
+      } catch (err) {
+        console.error('[sandbox] PTC script generation failed, continuing without PTC:', err);
+      }
+
+      if (opts?.signal) {
+        config.signal = opts.signal;
+      }
+
+      await mkdirSafe(config.workspaceDir);
+
+      const harness = await resolveHarness(harnessName);
+      session = await harness.openSession(config);
+    } else if (req.bootstrap.case === 'restore') {
+      const restore = req.bootstrap.value;
+      const checkpoint = restore.sessionCheckpoint;
+      if (!checkpoint) {
+        throw new Error('[sandbox] openSession: RestoreBootstrap missing session_checkpoint');
+      }
+      harnessName = checkpoint.harnessName;
+      conversationId = checkpoint.conversationId;
+
+      const restorePoint = protoRestoreBootstrapToRestorePoint(restore);
+      const workspaceDir = checkpoint.workspaceRef?.reference || '/workspace';
+      const daemonHandlers = createDaemonHandlersForSession(
+        secrets,
+        orcClient,
+        restore.agentId,
+        workspaceDir,
+      );
+      const tools = protoToToolDefs(restore.tools, {
+        orchestratorClient: orcClient,
+        agentId: restore.agentId,
+        sessionIdRef: activeRunId,
+        daemonHandlers,
+      });
+      setSessionTools(tools);
+
+      const config = {
+        agentId: restore.agentId,
+        conversationId: checkpoint.conversationId,
+        systemPrompt: restore.systemPrompt,
+        tools,
+        secrets,
+        harnessConfigJson: restore.harnessConfigJson,
+        workspaceDir,
+        signal: opts?.signal,
+      };
+
+      const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
+
+      try {
+        const ptcEligible = tools.filter((t) => t.programmatic === true);
+        console.error(`[sandbox] PTC restore: ${ptcEligible.length}/${tools.length} tools are programmatic`);
+
+        await generatePtcScripts({
+          tools,
+          scriptDir: `${config.workspaceDir}/.tools`,
+          daemonPort: ptcPort,
+        });
+      } catch (err) {
+        console.error('[sandbox] PTC script generation failed during restore, continuing without PTC:', err);
+      }
+
+      await mkdirSafe(config.workspaceDir);
+
+      const harness = await resolveHarness(harnessName);
+      session = await harness.openSession(config, restorePoint);
+    } else {
+      throw new Error('[sandbox] openSession: missing bootstrap (neither fresh nor restore)');
+    }
+
+    const sessionId = crypto.randomUUID();
+    activeContext = {
+      session,
+      sessionId,
+      conversationId,
+      harnessName,
+      stateCollector: new SessionStateCollector(),
+      phaseTracker: new ExecutionPhaseTracker(),
+      abortController: new AbortController(),
+      currentTurnId: null,
+    };
+
+    return activeContext;
+  })();
+
+  try {
+    const ctx = await openingContext;
+    console.error(`[sandbox] session ${ctx.sessionId} opened with harness "${ctx.harnessName}"`);
+
+    return create(OpenSessionResponseSchema, {
+      sessionId: ctx.sessionId,
+      status: 'ready',
+    });
+  } catch (err) {
+    openingContext = null;
+    throw err;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -391,34 +428,52 @@ export async function* deliverTurn(
     onApprovalNeeded?: ApprovalCallback;
   },
 ): AsyncGenerator<SessionEvent> {
-  if (!activeSession || !stateCollector || !phaseTracker) {
+  let ctx = activeContext;
+  if (!ctx && openingContext) {
+    try {
+      ctx = await openingContext;
+    } catch (err) {
+      throw new Error(`[sandbox] deliverTurn: session open failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (!ctx) {
     throw new Error('[sandbox] deliverTurn: no active session — call openSession() first');
+  }
+  if (ctx.currentTurnId) {
+    throw new Error('[sandbox] deliverTurn: turn already in progress');
   }
 
   const turnId = req.turnId;
   let seq = 0;
 
+  ctx.currentTurnId = turnId;
   activeRunId.current = turnId;
-  phaseTracker.startTurn(turnId);
-  stateCollector.startTurn(turnId);
+  ctx.phaseTracker.startTurn(turnId);
+  ctx.stateCollector.startTurn(turnId);
 
   try {
     const input = protoDeliverTurnToInput(req);
     const context = {
-      signal: opts?.signal,
+      signal: ctx.abortController.signal,
       onApprovalNeeded: opts?.onApprovalNeeded,
     };
 
-    for await (const event of activeSession.deliverTurn(input, context)) {
+    for await (const event of ctx.session.deliverTurn(input, context)) {
       if (!event || !event.type) continue;
+
+      if (ctx.abortController.signal.aborted) {
+        console.error(`[sandbox] turn ${turnId} aborted — session killed mid-stream after ${seq} events`);
+        break;
+      }
+
       seq++;
 
       const newPhase = phaseForEvent(event);
       if (newPhase) {
-        phaseTracker.setPhase(newPhase);
+        ctx.phaseTracker.setPhase(newPhase);
       }
 
-      stateCollector.processTurnEvent(event);
+      ctx.stateCollector.processTurnEvent(event);
 
       if (event.type === 'message_committed') {
         yield messageToCommittedEvent(event, turnId, seq);
@@ -426,9 +481,9 @@ export async function* deliverTurn(
         yield agentEventToSessionEvent(event);
       }
 
-      if (phaseTracker.checkSuspendAtSafePoint()) {
+      if (ctx.phaseTracker.checkSuspendAtSafePoint()) {
         console.error(
-          `[sandbox] turn ${turnId} suspending at phase="${phaseTracker.getPhase()}" after event #${seq}`,
+          `[sandbox] turn ${turnId} suspending at phase="${ctx.phaseTracker.getPhase()}" after event #${seq}`,
         );
         break;
       }
@@ -455,8 +510,9 @@ export async function* deliverTurn(
 
     console.error(`[sandbox] turn ${turnId} failed:`, err);
   } finally {
-    phaseTracker?.endTurn();
-    stateCollector?.endTurn();
+    ctx.phaseTracker.endTurn();
+    ctx.stateCollector.endTurn();
+    ctx.currentTurnId = null;
   }
 }
 
@@ -473,24 +529,23 @@ export async function* deliverTurn(
  * @param reason - Human-readable reason for the suspension (logged only).
  */
 export async function suspendSession(reason: string): Promise<SuspendSessionResponse> {
-  if (
-    !activeSession ||
-    !stateCollector ||
-    !activeSessionId ||
-    !activeConversationId ||
-    !activeHarnessName
-  ) {
+  const ctx = activeContext;
+  if (!ctx) {
     throw new Error('[sandbox] suspendSession: no active session');
   }
 
-  console.error(`[sandbox] suspending session ${activeSessionId}: ${reason}`);
+  console.error(`[sandbox] suspending session ${ctx.sessionId}: ${reason}`);
 
-  const harnessState = await activeSession.exportState();
+  const harnessState = await ctx.session.exportState();
 
-  const checkpointFromCollector = stateCollector.getCheckpointSnapshot(
-    activeSessionId,
-    activeConversationId,
-    activeHarnessName,
+  if (ctx.abortController.signal.aborted) {
+    throw new Error('[sandbox] suspendSession: session killed during state export');
+  }
+
+  const checkpointFromCollector = ctx.stateCollector.getCheckpointSnapshot(
+    ctx.sessionId,
+    ctx.conversationId,
+    ctx.harnessName,
     harnessState,
     { strategy: 'none', reference: '' },
   );
@@ -519,6 +574,8 @@ export async function suspendSession(reason: string): Promise<SuspendSessionResp
 
   const protoCheckpoint = sessionCheckpointToProto(protoConvertCheckpoint);
 
+  openingContext = null;
+
   return create(SuspendSessionResponseSchema, {
     sessionCheckpoint: protoCheckpoint,
   });
@@ -534,24 +591,22 @@ export async function suspendSession(reason: string): Promise<SuspendSessionResp
  * Safe to call when no session is active — returns `no_session` status.
  */
 export async function killSession(): Promise<KillSessionResponse> {
-  if (!activeSession) {
+  if (!activeContext) {
     return create(KillSessionResponseSchema, { finalStatus: 'no_session' });
   }
 
-  const sessionId = activeSessionId;
+  const ctx = activeContext;
+  const sessionId = ctx.sessionId;
   console.error(`[sandbox] killing session ${sessionId}`);
 
   try {
-    await activeSession.close();
+    ctx.abortController.abort();
+    await ctx.session.close();
   } catch (err: unknown) {
     console.error(`[sandbox] session ${sessionId} close error:`, err);
   } finally {
-    activeSession = null;
-    activeSessionId = null;
-    stateCollector = null;
-    phaseTracker = null;
-    activeConversationId = null;
-    activeHarnessName = null;
+    activeContext = null;
+    openingContext = null;
     setSessionTools([]);
   }
 

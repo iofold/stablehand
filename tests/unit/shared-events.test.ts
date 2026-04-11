@@ -4,12 +4,12 @@ import type { AGUIEventType, AGUIEvent, MessageCommittedEvent } from '../../pack
 describe('Shared AG-UI event types', () => {
   it('should type-check all event types', () => {
     const types: AGUIEventType[] = [
-      'RUN_STARTED', 'RUN_FINISHED', 'RUN_ERROR',
+      'RUN_STARTED', 'RUN_FINISHED', 'RUN_ERROR', 'TURN_PENDING',
       'TEXT_MESSAGE_START', 'TEXT_MESSAGE_CONTENT', 'TEXT_MESSAGE_END',
       'TOOL_CALL_START', 'TOOL_CALL_ARGS', 'TOOL_CALL_END', 'TOOL_CALL_RESULT',
       'STATE_DELTA', 'HITL_PAUSE', 'MESSAGE_COMMITTED', 'CUSTOM',
     ];
-    expect(types).toHaveLength(14);
+    expect(types).toHaveLength(15);
   });
 
   it('should type-check AGUIEvent structure', () => {

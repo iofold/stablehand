@@ -10,7 +10,7 @@ For those already familiar with Docker Compose, follow these steps to integrate 
 2.  **Network**: Connect the `orchestrator` to your application network and a new `ctxmill-agents` bridge network.
 3.  **Callback URL**: Set `ORCHESTRATOR_CALLBACK_URL=http://<your-orchestrator-service-name>:3001`.
 4.  **Docker Socket**: Mount `/var/run/docker.sock` into the `orchestrator` container.
-5.  **Build Harnesses**: Build sandbox images separately using `docker compose --profile sandbox-build build`.
+5.  **Build Harnesses**: Sandbox images now build by default with `docker compose up --build`.
 
 ---
 
@@ -149,9 +149,9 @@ docker build --target harness-claude-agents -t ctxmill/harness-claude-agents -f 
 docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile.sandbox .
 ```
 
-Alternatively, if you included the build profiles in your compose file:
+Alternatively, build all services including sandbox images via compose:
 ```bash
-docker compose --profile sandbox-build build
+docker compose build
 ```
 
 ## Secret Injection
@@ -197,6 +197,16 @@ If you are hosting the ctxmill UI on a different domain than the API, you must c
 *   **Session Immutability**: Once a session is created, its configuration (harness, resource limits) is immutable. To change these, you must start a new conversation.
 *   **Disk Sizing**: Sandbox builds and agent workspaces can consume significant disk space. Ensure your Docker host has at least 10GB of free space.
 *   **iptables vs nftables**: On some modern Linux distributions (like Ubuntu 24.04), Docker may struggle with `nftables`. If containers fail to start or have no network access, try switching to `iptables-legacy`.
+
+## Using AG-UI Renderers
+
+If you want to use a third-party AG-UI renderer (CopilotKit, agui-hooks, @assistant-ui/react, etc.) instead of ctxmill's built-in React UI, the orchestrator exposes an AG-UI compatible endpoint:
+
+```
+POST http://<orchestrator>:3002/api/ag-ui/agents/:agentId/run
+```
+
+Point any `@ag-ui/client` HttpAgent at this URL and it works out of the box. See [AG-UI Compatibility](ag-ui-compat.md) for full details and quick start examples.
 
 ## Troubleshooting Checklist
 

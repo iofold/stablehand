@@ -1,7 +1,8 @@
 # ADR 004: Session Architecture Refactor
 
 **Date:** 2026-03-31  
-**Status:** Accepted
+**Status:** Accepted  
+**Amended:** 2026-04-07 (runtime-semantics refresh)
 
 ## Context
 
@@ -32,23 +33,33 @@ The `sessions` table actually tracked individual user-message to agent-response 
 *   **Concurrency limiting:** Max active sessions per agent is now checked against `sandbox_sessions`.
 *   **Event emissions:** `turn.started` and `turn.completed` events are now emitted via the central `eventBus`.
 
-### 4. Add `PAUSED` state to sandbox session state machine
+### 4. Use `PAUSED` for idle container pause; model HITL separately
 
-Human-in-the-loop (HITL) approval creates a gap between "approval requested" and "container Docker-paused" (which has a 5s delay). We added a `PAUSED` state to the sandbox session to track this.
-*   **`PAUSED`:** Container is still running, but the turn is blocked on approval.
-*   **`FROZEN`:** Container is Docker-paused, and CPU resources are freed.
+The current runtime persists one pause-like sandbox session state: `PAUSED`.
+
+*   **`PAUSED`:** The sandbox session is temporarily paused for idle preservation and can be resumed in place.
+*   There is **no separate persisted `FROZEN` state** in the current runtime.
+*   Human-in-the-loop (HITL) approval is modeled through durable interrupt records plus `run.interrupted` / `run.interrupt_resolved` events, not through a separate sandbox-session status.
+*   The `freeze` / `unfreeze` endpoints were removed in Phase 0 dead-code cleanup.
 
 ### 5. Soft-delete sandbox sessions (`TERMINATED` state)
 
-Instead of hard-deleting `sandbox_sessions` rows in `killSession()`, we now set their status to `TERMINATED`. This ensures that dashboard status dots sum correctly: `active + paused + frozen + checkpointed + terminated = total`.
+Instead of hard-deleting `sandbox_sessions` rows in `killSession()`, we now set their status to `TERMINATED`. This ensures that dashboard status dots sum correctly: `active + paused + checkpointed + terminated = total`.
 
 ### 6. Rename events `session.started` → `turn.started` and `session.completed` → `turn.completed`
 
-These events fire per turn (per user message), not per session. We renamed them to be more accurate. `session.paused` remains at the session level because the HITL pause affects the sandbox session (the container), not just the turn. This is a clean break for webhook subscribers; no backward compatibility layer was added.
+These events fire per turn (per user message), not per session. We renamed them to be more accurate. In the current runtime:
+
+*   `turn.pending` is the pre-start UI/event-bus signal
+*   `turn.started` and `turn.completed` are the canonical per-turn lifecycle events
+*   `session.paused` is an idle session/container pause signal
+*   `run.interrupted` and `run.interrupt_resolved` cover HITL
+
+This remains a clean break for webhook subscribers; no backward compatibility layer was added.
 
 ### 7. Status is session-level, not turn-level
 
-A turn is an audit log entry and does not have its own state machine. The pause, freeze, and checkpoint lifecycle applies to the container (the sandbox session), not the individual message-response cycle.
+A turn is an audit log entry and does not have its own state machine. The pause, checkpoint, restore, and termination lifecycle applies to the container (the sandbox session), not the individual message-response cycle. HITL interrupt state is stored separately from sandbox-session status.
 
 ## Data Model
 
@@ -60,24 +71,25 @@ A turn is an audit log entry and does not have its own state machine. The pause,
 ## State Machine
 
 ```text
-ACTIVE ───► PAUSED ───► FROZEN ───► CHECKPOINTED ───► TERMINATED
-  ▲          │           │             │
-  └──────────┴───────────┴─────────────┘
-             (Resume)
+ACTIVE -> PAUSED -> CHECKPOINTED -> TERMINATED
+PAUSED -> ACTIVE
+CHECKPOINTED -> RESTORING -> ACTIVE
 ```
 
 ## Event Mapping
 
 | Old Event | New Event | Level |
 | :--- | :--- | :--- |
+| `n/a` | `turn.pending` | Turn (pre-start) |
 | `session.started` | `turn.started` | Turn |
 | `session.completed` | `turn.completed` | Turn |
-| `session.paused` | `session.paused` | Session |
+| `session.paused` | `session.paused` | Session (idle pause only) |
+| `n/a` | `run.interrupted` / `run.interrupt_resolved` | Turn / HITL |
 
 ## Consequences
 
 ### Positive
-*   **Single Source of Truth:** `SandboxSessionManager` is now the sole authority for execution state.
+*   **Clearer Ownership Target:** `SandboxSessionManager` is the primary request-path owner of execution state, while reconciliation logic continues to be cleaned up around it.
 *   **UI Consistency:** Dashboard counts are now accurate and sum to the total number of conversations.
 *   **Reduced Complexity:** Removing `SessionRegistry` eliminated redundant in-memory state tracking.
 *   **Clearer Domain Model:** The distinction between a conversation, a container session, and an execution turn is now explicit.

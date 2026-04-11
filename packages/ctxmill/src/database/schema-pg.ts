@@ -274,6 +274,20 @@ export const artifacts = pgTable('artifacts', {
   statusIdx: index('idx_artifacts_status').on(table.status),
 }));
 
+export const toolRequestDedup = pgTable('tool_request_dedup', {
+  requestId: text('request_id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  toolName: text('tool_name').notNull(),
+  status: text('status').notNull().default('in_progress'),
+  result: text('result'),
+  error: text('error'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  completedAt: bigint('completed_at', { mode: 'number' }),
+}, (table) => ({
+  createdIdx: index('idx_tool_dedup_created').on(table.createdAt),
+  statusIdx: index('idx_tool_dedup_status').on(table.status),
+}));
+
 export type SandboxSessionRow = Omit<typeof sandboxSessions.$inferSelect, 'pausedAt' | 'pausedReason'> & {
   pausedAt?: number | null;
   pausedReason?: string | null;

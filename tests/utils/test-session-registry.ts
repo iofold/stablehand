@@ -140,56 +140,10 @@ export class TestSessionRegistry {
     return { ...updated };
   }
 
-  async pauseSession(id: string, reason: string): Promise<TestSessionRecord | undefined> {
-    const existing = this.sessions.get(id);
-    if (!existing || existing.status !== 'running') return undefined;
-    const pausedAt = Date.now();
-    const updated = await this.updateSession(id, { status: 'paused', pausedAt, pausedReason: reason });
-    if (!updated) return undefined;
-    this.eventBus?.emit('session.paused', {
-      sessionId: id,
-      agentId: updated.agentId,
-      conversationId: updated.conversationId,
-      reason,
-      timestamp: pausedAt,
-    });
-    return updated;
-  }
-
-  pauseRun(id: string, reason: string): Promise<TestSessionRecord | undefined> {
-    return this.pauseSession(id, reason);
-  }
-
   async suspendSession(id: string, reason: string): Promise<TestSessionRecord | undefined> {
     const existing = this.sessions.get(id);
     if (!existing || existing.status !== 'running') return undefined;
     return this.updateSession(id, { status: 'suspended', pausedAt: Date.now(), pausedReason: reason });
-  }
-
-  async resumeSession(id: string): Promise<TestSessionRecord | undefined> {
-    const existing = this.sessions.get(id);
-    if (!existing || (existing.status !== 'paused' && existing.status !== 'suspended')) return undefined;
-    this.controllers.set(id, new AbortController());
-    const resumedAt = Date.now();
-    const updated = await this.updateSession(id, {
-      status: 'running',
-      resumedAt,
-    });
-    if (!updated) return undefined;
-    this.eventBus?.emit('turn.started', {
-      turnId: id,
-      sessionId: id,
-      agentId: updated.agentId,
-      conversationId: updated.conversationId,
-      mode: updated.mode,
-      taskDescription: updated.taskDescription ?? '',
-      timestamp: resumedAt,
-    });
-    return updated;
-  }
-
-  resumeRun(id: string): Promise<TestSessionRecord | undefined> {
-    return this.resumeSession(id);
   }
 
   async completeSession(id: string, error?: string): Promise<TestSessionRecord | undefined> {

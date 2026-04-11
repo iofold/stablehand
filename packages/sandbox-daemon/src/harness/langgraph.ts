@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { tool as lcTool } from '@langchain/core/tools';
@@ -44,6 +45,7 @@ export const LangGraphConfigSchema = z.object({
     temperature: z.number().min(0).max(2).optional(),
     maxTokens: z.number().int().positive().optional(),
   })).optional(),
+  middleware: z.array(z.string()).optional(),
 });
 
 export type LangGraphConfig = z.infer<typeof LangGraphConfigSchema>;
@@ -62,7 +64,15 @@ interface StreamableAgent {
         tool_call_id?: string;
       }>;
     },
-    options: { version: 'v1' | 'v2' },
+    options: {
+      version: 'v1' | 'v2';
+      configurable?: {
+        harnessConfig: LangGraphConfig;
+        agentId: string;
+        conversationId: string;
+        workspaceDir?: string;
+      };
+    },
   ): AsyncIterable<StreamEvent>;
 }
 
@@ -106,6 +116,11 @@ class LangGraphSession implements HarnessSession {
     this.transcript = [...messages];
   }
 
+  // TODO(tech-debt): context.signal is ignored — killSession cannot interrupt a blocked
+  // LLM API call. The runner's signal.aborted loop-break prevents crashes but the
+  // for-await hangs until the in-flight streamEvents call returns naturally.
+  // Fix: pass context.signal to agent.streamEvents() options (if deepagents supports it)
+  // or wrap the iterator with an abort-aware race. See runner.ts SessionContext comments.
   async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<AgentEvent> {
     const { agentId, conversationId, workspaceDir, tools, systemPrompt } = this.config;
 
@@ -138,7 +153,24 @@ class LangGraphSession implements HarnessSession {
       });
 
       const allBlocklisted = this.config.nativeTools?.flatMap((c) => c.blocklist ?? []) ?? [];
-      const resolvedSubagents = await this.buildSubagentParams(this.harnessConfig.subagents, lcTools);
+      // Load workspace middleware once — used for both main agent and subagent propagation
+      const workspaceMiddleware: Record<string, unknown>[] = [];
+      for (const mwPath of (this.harnessConfig.middleware ?? [])) {
+        try {
+          const resolved = path.resolve(workspaceDir ?? process.cwd(), mwPath);
+          const mod = await import(resolved);
+          const mw = mod.default ?? mod;
+          workspaceMiddleware.push(typeof mw === 'function' ? mw() : mw);
+        } catch (err) {
+          console.error(`[langgraph] Failed to load middleware: ${mwPath}`, err);
+        }
+      }
+
+      const resolvedSubagents = await this.buildSubagentParams(
+        this.harnessConfig.subagents,
+        lcTools,
+        workspaceMiddleware,
+      );
 
       const hasSystemMessage = this.transcript.some((message) => message.role === 'system');
 
@@ -155,6 +187,9 @@ class LangGraphSession implements HarnessSession {
       if (allBlocklisted.length > 0) {
         middlewares.push(this.createToolBlocklistMiddleware(allBlocklisted));
       }
+
+      middlewares.push(...workspaceMiddleware);
+
       deepAgentParams.middleware = middlewares;
 
       const agent = createDeepAgent(deepAgentParams as Parameters<typeof createDeepAgent>[0]) as unknown as StreamableAgent;
@@ -170,7 +205,15 @@ class LangGraphSession implements HarnessSession {
       // Step 7: Stream events from the agent, accumulating assistant text for transcript
       const eventStream = agent.streamEvents(
         { messages: langchainMessages },
-        { version: 'v2' },
+        {
+          version: 'v2',
+          configurable: {
+            harnessConfig: this.harnessConfig,
+            agentId: this.config.agentId,
+            conversationId: this.config.conversationId,
+            workspaceDir,
+          },
+        },
       );
 
       const pendingToolCalls: Array<{ id: string; name: string }> = [];
@@ -427,10 +470,10 @@ class LangGraphSession implements HarnessSession {
   private async buildSubagentParams(
     subagentConfigs: z.infer<typeof LangGraphConfigSchema>['subagents'],
     parentTools?: unknown[],
+    workspaceMiddleware?: Record<string, unknown>[],
   ): Promise<Record<string, unknown>[] | undefined> {
     if (!subagentConfigs?.length) return undefined;
 
-    // Build a lookup from tool name → tool object for subagent tool filtering
     const toolsByName = new Map<string, unknown>();
     if (parentTools) {
       for (const tool of parentTools) {
@@ -458,12 +501,15 @@ class LangGraphSession implements HarnessSession {
           });
         }
 
-        // Resolve tool name strings to actual tool objects from the parent tool set
         if (config.tools && parentTools) {
           const resolved = config.tools
             .map((name: string) => toolsByName.get(name))
             .filter((t): t is NonNullable<typeof t> => t != null);
           if (resolved.length > 0) result.tools = resolved;
+        }
+
+        if (workspaceMiddleware?.length) {
+          result.middleware = [...workspaceMiddleware];
         }
 
         return result;

@@ -142,6 +142,7 @@ interface ConversationStore {
   currentTurnId: string | null;
   activeConversationId: string | null;
   isStreaming: boolean;
+  committedMessageCount: number;
   streamingContent: string;
   streamingRole: 'user' | 'assistant';
   toolCalls: Map<string, ToolCallState>;
@@ -225,11 +226,52 @@ function buildAssistantMessage(state: Pick<ConversationStore, 'streamingContent'
   };
 }
 
+function normalizeEventToolCall(
+  value: Record<string, unknown>,
+  fallbackId: string,
+): ToolCallState {
+  const error = typeof value.error === 'string' ? value.error : undefined;
+
+  return {
+    id: (typeof value.id === 'string' && value.id.length > 0) ? value.id : fallbackId,
+    name: (typeof value.name === 'string' && value.name.length > 0) ? value.name : 'unknown',
+    args: typeof value.args === 'string' ? value.args : '',
+    result: typeof value.result === 'string' ? value.result : undefined,
+    error,
+    status: normalizeToolCallStatus(value.status, error),
+  };
+}
+
+function mergeCommittedToolCall(
+  canonical: ToolCallState,
+  preview: ToolCallState | undefined,
+): ToolCallState {
+  if (!preview) return canonical;
+
+  const status = preview.error
+    ? 'error'
+    : preview.result !== undefined
+      ? preview.status
+      : preview.status === 'complete' || preview.status === 'error'
+        ? preview.status
+        : canonical.status;
+
+  return {
+    id: canonical.id,
+    name: canonical.name || preview.name,
+    args: preview.args || canonical.args,
+    result: preview.result ?? canonical.result,
+    error: preview.error ?? canonical.error,
+    status,
+  };
+}
+
 export const useConversationStore = create<ConversationStore>((set, get) => ({
   messages: [],
   currentTurnId: null,
   activeConversationId: null,
   isStreaming: false,
+  committedMessageCount: 0,
   streamingContent: '',
   streamingRole: 'assistant',
   toolCalls: new Map(),
@@ -262,7 +304,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   },
 
   loadMessages: (msgs: Message[]) => {
-    const { isStreaming, streamingContent, streamingRole, toolCalls } = get();
+    const { isStreaming, committedMessageCount, streamingContent, streamingRole, toolCalls } = get();
     const normalizedMessages = msgs.map((msg, index) => (
       normalizeConversationMessage(msg as unknown as Record<string, unknown>, msg.id || `loaded-${index}`)
     ));
@@ -270,6 +312,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       messages: normalizedMessages,
       // Preserve streaming state if a run is active — don't clobber
       isStreaming,
+      committedMessageCount: isStreaming ? committedMessageCount : 0,
       streamingContent: isStreaming ? streamingContent : '',
       streamingRole: isStreaming ? streamingRole : 'assistant',
       toolCalls: isStreaming ? toolCalls : new Map(),
@@ -292,6 +335,19 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     }
 
     switch (type) {
+      case 'TURN_PENDING': {
+        toolCallsWithStartArgs.clear();
+        set({
+          isStreaming: true,
+          currentTurnId: (event.runId as string) || null,
+          committedMessageCount: 0,
+          streamingContent: '',
+          toolCalls: new Map(),
+          seenEventIds: new Set(),
+        });
+        break;
+      }
+
       case 'RUN_STARTED': {
         set({
           isStreaming: true,
@@ -303,22 +359,6 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       }
 
       case 'TEXT_MESSAGE_START': {
-        const pendingTCs = Array.from(get().toolCalls.values());
-        if (pendingTCs.length > 0) {
-          const parts: MessagePart[] = pendingTCs.map((tc) => ({ type: 'tool_call', ...tc }));
-          const tcMsg: Message = {
-            id: nextId(),
-            role: 'assistant',
-            content: '',
-            parts,
-            toolCalls: pendingTCs,
-            createdAt: new Date().toISOString(),
-          };
-          set((prev) => ({
-            messages: [...prev.messages, tcMsg],
-            toolCalls: new Map(),
-          }));
-        }
         const role = ((event.role as string) || 'assistant') as 'user' | 'assistant';
         set({ streamingContent: '', streamingRole: role });
         break;
@@ -326,7 +366,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
       case 'TEXT_MESSAGE_CONTENT': {
         if (get().streamingRole === 'user') break;
-        const delta = (event.content as string) || (event.delta as string) || '';
+        const delta = (event.delta as string) || (event.content as string) || '';
         pendingDelta += delta;
         scheduleDeltaFlush(set);
         break;
@@ -339,41 +379,19 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         // Skip user message echoes — they were already added via addUserMessage()
         if (state.streamingRole === 'user') {
           set({ streamingContent: '', streamingRole: 'assistant' });
-          break;
         }
-        const msg = buildAssistantMessage(state);
-        set((prev) => ({
-          messages: msg ? [...prev.messages, msg] : prev.messages,
-          streamingContent: '',
-          streamingRole: 'assistant',
-          toolCalls: new Map(),
-        }));
         break;
       }
 
       case 'TOOL_CALL_START': {
         flushPendingDelta(set);
-        const pendingText = get().streamingContent;
-        if (pendingText) {
-          const textMsg: Message = {
-            id: nextId(),
-            role: 'assistant',
-            content: pendingText,
-            parts: [{ type: 'text', content: pendingText }],
-            createdAt: new Date().toISOString(),
-          };
-          set((prev) => ({
-            messages: [...prev.messages, textMsg],
-            streamingContent: '',
-          }));
-        }
         const startArgs = event.args;
         const argsStr = startArgs
           ? (typeof startArgs === 'string' ? startArgs : JSON.stringify(startArgs))
           : '';
         const tc: ToolCallState = {
           id: (event.toolCallId as string) || nextId(),
-          name: (event.name as string) || (event.toolName as string) || 'unknown',
+          name: (event.toolCallName as string) || (event.name as string) || (event.toolName as string) || 'unknown',
           args: argsStr,
           status: 'running',
         };
@@ -389,7 +407,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       case 'TOOL_CALL_ARGS': {
         const tcId = event.toolCallId as string;
         if (toolCallsWithStartArgs.has(tcId)) break;
-        const delta = (event.args as string) || (event.delta as string) || '';
+        const delta = (event.delta as string) || (event.args as string) || '';
         set((state) => {
           const next = new Map(state.toolCalls);
           const existing = next.get(tcId);
@@ -422,7 +440,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         }
         if (!tcId) break;
         toolCallsWithStartArgs.delete(tcId);
-        const result = (event.result as string) || '';
+        const result = (event.content as string) || (event.result as string) || '';
         const error = event.error as string | undefined;
 
         const state = get();
@@ -436,26 +454,11 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           status: error ? 'error' : 'complete',
         };
 
-        const pendingText = state.streamingContent;
-        const parts: MessagePart[] = [];
-        if (pendingText) parts.push({ type: 'text', content: pendingText });
-        parts.push({ type: 'tool_call', ...finalTc });
-        set((prev) => ({
-          messages: [...prev.messages, {
-            id: nextId(),
-            role: 'assistant' as const,
-            content: pendingText,
-            parts,
-            toolCalls: [finalTc],
-            createdAt: new Date().toISOString(),
-          }],
-          toolCalls: (() => {
-            const next = new Map(prev.toolCalls);
-            next.delete(tcId);
-            return next;
-          })(),
-          streamingContent: '',
-        }));
+        set((prev) => {
+          const next = new Map(prev.toolCalls);
+          next.set(tcId, finalTc);
+          return { toolCalls: next };
+        });
         break;
       }
 
@@ -501,42 +504,43 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
       case 'MESSAGE_COMMITTED': {
         flushPendingDelta(set);
+        const state = get();
         const role = ((event.role as string) || 'assistant') as Message['role'];
         const content = (event.content as string) || '';
-        const rawParts = event.parts as Array<Record<string, unknown>> | undefined;
+        const rawParts = Array.isArray(event.parts) ? event.parts as Array<Record<string, unknown>> : [];
+        const rawToolCalls = Array.isArray(event.toolCalls) ? event.toolCalls as Array<Record<string, unknown>> : [];
+
+        const mergedToolCalls = rawToolCalls.map((rawToolCall, index) => {
+          const canonical = normalizeEventToolCall(rawToolCall, `committed-tool-${index}`);
+          return mergeCommittedToolCall(canonical, state.toolCalls.get(canonical.id));
+        });
+        const mergedToolCallIds = new Set(mergedToolCalls.map((toolCall) => toolCall.id));
 
         const parts: MessagePart[] = [];
-        if (Array.isArray(rawParts) && rawParts.length > 0) {
-          for (const p of rawParts) {
-            if (p.type === 'text') {
-              parts.push({ type: 'text', content: (p.content as string) || '' });
-            } else if (p.type === 'tool_call') {
-              parts.push({
-                type: 'tool_call',
-                id: (p.id as string) || '',
-                name: (p.name as string) || 'unknown',
-                args: (p.args as string) || '',
-                result: p.result as string | undefined,
-                error: p.error as string | undefined,
-                status: normalizeToolCallStatus(p.status, p.error as string | undefined),
-              });
+        if (rawParts.length > 0) {
+          for (const part of rawParts) {
+            if (part.type === 'text') {
+              parts.push({ type: 'text', content: (part.content as string) || '' });
+              continue;
+            }
+
+            if (part.type !== 'tool_call') continue;
+            const canonical = normalizeEventToolCall(part, `committed-part-${parts.length}`);
+            const merged = mergeCommittedToolCall(canonical, state.toolCalls.get(canonical.id));
+            mergedToolCallIds.add(merged.id);
+            parts.push({ type: 'tool_call', ...merged });
+          }
+
+          for (const toolCall of mergedToolCalls) {
+            const alreadyIncluded = parts.some((part) => part.type === 'tool_call' && part.id === toolCall.id);
+            if (!alreadyIncluded) {
+              parts.push({ type: 'tool_call', ...toolCall });
             }
           }
         } else {
           if (content) parts.push({ type: 'text', content });
-          const tcs = event.toolCalls as Array<Record<string, unknown>> | undefined;
-          if (Array.isArray(tcs)) {
-            for (const tc of tcs) {
-              parts.push({
-                type: 'tool_call',
-                id: (tc.id as string) || '',
-                name: (tc.name as string) || 'unknown',
-                args: (tc.args as string) || '',
-                result: tc.result as string | undefined,
-                error: tc.error as string | undefined,
-                status: normalizeToolCallStatus(tc.status, tc.error as string | undefined),
-              });
-            }
+          for (const toolCall of mergedToolCalls) {
+            parts.push({ type: 'tool_call', ...toolCall });
           }
         }
 
@@ -545,15 +549,25 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           role,
           content,
           parts: parts.length > 0 ? parts : undefined,
+          toolCalls: mergedToolCalls.length > 0 ? mergedToolCalls : undefined,
           createdAt: new Date().toISOString(),
         };
 
-        set((prev) => ({
-          messages: [...prev.messages, msg],
-          streamingContent: '',
-          streamingRole: 'assistant',
-          toolCalls: new Map(),
-        }));
+        set((prev) => {
+          const nextToolCalls = new Map(prev.toolCalls);
+          for (const toolCallId of mergedToolCallIds) {
+            nextToolCalls.delete(toolCallId);
+            toolCallsWithStartArgs.delete(toolCallId);
+          }
+
+          return {
+            messages: [...prev.messages, msg],
+            committedMessageCount: prev.committedMessageCount + 1,
+            streamingContent: '',
+            streamingRole: 'assistant',
+            toolCalls: nextToolCalls,
+          };
+        });
         break;
       }
 
@@ -561,23 +575,32 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         useInterruptStore.getState().clear();
         flushPendingDelta(set);
         const state = get();
-        const msg = buildAssistantMessage(state);
-        if (msg) {
+        const hasPendingPreview = state.streamingContent.length > 0 || state.toolCalls.size > 0;
+
+        // Fallback only: the canonical path is MESSAGE_COMMITTED. If the run ends
+        // with unconsumed preview state, emit one last assistant message so crashes
+        // or truncated streams do not drop visible output.
+        if (hasPendingPreview) {
+          const msg = buildAssistantMessage(state);
           set((prev) => ({
-            messages: [...prev.messages, msg],
+            messages: msg ? [...prev.messages, msg] : prev.messages,
             streamingContent: '',
             streamingRole: 'assistant',
             toolCalls: new Map(),
           }));
+        } else if (state.committedMessageCount > 0) {
+          toolCallsWithStartArgs.clear();
         }
         set({
           isStreaming: false,
           currentTurnId: null,
+          committedMessageCount: 0,
           streamingContent: '',
           streamingRole: 'assistant',
           toolCalls: new Map(),
           seenEventIds: new Set(),
         });
+        toolCallsWithStartArgs.clear();
         break;
       }
 
@@ -595,6 +618,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           messages: [...prev.messages, msg],
           isStreaming: false,
           currentTurnId: null,
+          committedMessageCount: 0,
           streamingContent: '',
         }));
         break;
@@ -621,6 +645,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       currentTurnId: null,
       activeConversationId: null,
       isStreaming: false,
+      committedMessageCount: 0,
       streamingContent: '',
       streamingRole: 'assistant',
       toolCalls: new Map(),

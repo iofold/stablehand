@@ -30,6 +30,16 @@ function collectEvents<K extends keyof EventMap>(bus: TypedEventBus, event: K): 
   return collected;
 }
 
+type MockEventBus = TypedEventBus & {
+  emit: ReturnType<typeof vi.fn>;
+};
+
+function createEventBusMock(): MockEventBus {
+  return {
+    emit: vi.fn(),
+  } as unknown as MockEventBus;
+}
+
 function makeAgentDef(): AgentDefinition {
   return {
     name: 'test-agent',
@@ -69,8 +79,6 @@ type MockSessionManager = {
   ensureSession: ReturnType<typeof vi.fn>;
   startTurn: ReturnType<typeof vi.fn>;
   completeTurn: ReturnType<typeof vi.fn>;
-  pauseSession: ReturnType<typeof vi.fn>;
-  resumeSession: ReturnType<typeof vi.fn>;
 };
 
 function makeCommittedEvent(
@@ -116,8 +124,6 @@ function createDeps(overrides: {
     ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
     startTurn: vi.fn().mockReturnValue(undefined),
     completeTurn: vi.fn().mockResolvedValue(undefined),
-    pauseSession: vi.fn().mockResolvedValue(undefined),
-    resumeSession: vi.fn().mockResolvedValue(undefined),
   };
   const learningPipeline = overrides.learningPipeline;
   const eventBus = overrides.eventBus;
@@ -163,7 +169,7 @@ describe('AgentSessionService', () => {
     );
   });
 
-  it('broadcasts each streamed event to SSE', async () => {
+  it('emits run.ag_ui_event for streamed events not handled individually', async () => {
     const events: StreamEvent[] = [
       { type: 'RUN_STARTED', timestamp: 1, runId: 'run-1' },
       { type: 'TEXT_MESSAGE_START', timestamp: 2, runId: 'run-1', messageId: 'm1', role: 'assistant' },
@@ -172,18 +178,29 @@ describe('AgentSessionService', () => {
       { type: 'RUN_FINISHED', timestamp: 5, runId: 'run-1' },
     ];
 
-    const broadcasterForwarded = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT', 'MESSAGE_COMMITTED']);
-    const directEvents = events.filter((e) => !broadcasterForwarded.has(e.type));
+    const individuallyHandled = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT', 'MESSAGE_COMMITTED']);
+    const forwardedEvents = events.filter((event) => !individuallyHandled.has(event.type));
 
-    const { deps, sessionTurnService, sse } = createDeps();
+    const eventBus = createEventBusMock();
+    const { deps, sessionTurnService } = createDeps({ eventBus });
     sessionTurnService.executeSessionTurn.mockReturnValue(eventStream(events));
 
     const service = new AgentSessionService(deps);
     await service.executeSession(makeParams());
 
-    expect(sse.broadcast).toHaveBeenCalledTimes(directEvents.length);
-    for (const [index, event] of directEvents.entries()) {
-      expect(sse.broadcast).toHaveBeenNthCalledWith(index + 1, 'agent-1', event);
+    const agUiEventCalls = eventBus.emit.mock.calls.filter(([eventName]) => eventName === 'run.ag_ui_event');
+    expect(agUiEventCalls).toHaveLength(forwardedEvents.length);
+    for (const [index, event] of forwardedEvents.entries()) {
+      expect(agUiEventCalls[index]).toEqual([
+        'run.ag_ui_event',
+        expect.objectContaining({
+          turnId: 'run-1',
+          agentId: 'agent-1',
+          conversationId: 'conv-1',
+          event,
+          timestamp: expect.any(Number),
+        }),
+      ]);
     }
   });
 
@@ -237,7 +254,7 @@ describe('AgentSessionService', () => {
     }));
   });
 
-  it('does not persist TEXT_MESSAGE_CONTENT events without MESSAGE_COMMITTED', async () => {
+  it('flushes accumulated assistant text when the stream ends without MESSAGE_COMMITTED', async () => {
     const events: StreamEvent[] = [
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', content: 'Hello ' },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 2, runId: 'run-1', messageId: 'm1', content: 'world' },
@@ -250,10 +267,19 @@ describe('AgentSessionService', () => {
     const service = new AgentSessionService(deps);
     await service.executeSession(makeParams());
 
-    expect(db.addMessage).not.toHaveBeenCalled();
+    expect(db.addMessage).toHaveBeenCalledTimes(1);
+    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      role: 'assistant',
+      content: 'Hello world',
+      toolCalls: undefined,
+      toolCallId: undefined,
+      parts: [{ type: 'text', content: 'Hello world' }],
+    }));
   });
 
-  it('does not persist TOOL_CALL lifecycle events before a result arrives', async () => {
+  it('flushes pending tool-call state when the stream ends before a result arrives', async () => {
     const events: StreamEvent[] = [
       { type: 'TOOL_CALL_START', timestamp: 1, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
       { type: 'TOOL_CALL_END', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1' },
@@ -266,7 +292,16 @@ describe('AgentSessionService', () => {
     const service = new AgentSessionService(deps);
     await service.executeSession(makeParams());
 
-    expect(db.addMessage).not.toHaveBeenCalled();
+    expect(db.addMessage).toHaveBeenCalledTimes(1);
+    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      role: 'assistant',
+      content: '',
+      toolCallId: undefined,
+      parts: [{ type: 'tool_call', id: 'tc-1', name: 'search', args: '', status: 'complete' }],
+      toolCalls: [{ id: 'tc-1', name: 'search', args: '', status: 'complete' }],
+    }));
   });
 
   it('persists assistant and tool messages separately for tool-use turns', async () => {
@@ -344,7 +379,7 @@ describe('AgentSessionService', () => {
     const events: StreamEvent[] = [
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', content: 'partial' },
       { type: 'RUN_ERROR', timestamp: 2, runId: 'run-1', error: 'tool execution failed' },
-      { type: 'RUN_FAILED', timestamp: 3, runId: 'run-1' },
+      { type: 'RUN_ERROR', timestamp: 3, runId: 'run-1' },
     ];
 
     const { deps, sessionTurnService, sessionManager } = createDeps();
@@ -364,10 +399,10 @@ describe('AgentSessionService', () => {
     );
   });
 
-  it('uses a fallback error message when RUN_FAILED is streamed without detail', async () => {
+  it('uses a fallback error message when RUN_ERROR is streamed without detail', async () => {
     const { deps, sessionTurnService, sessionManager } = createDeps();
     sessionTurnService.executeSessionTurn.mockReturnValue(
-      eventStream([{ type: 'RUN_FAILED', timestamp: 1, runId: 'run-1' }]),
+      eventStream([{ type: 'RUN_ERROR', timestamp: 1, runId: 'run-1' }]),
     );
 
     const service = new AgentSessionService(deps);
@@ -396,8 +431,6 @@ describe('AgentSessionService', () => {
     const service = new AgentSessionService(deps);
     await service.executeSession(makeParams());
 
-    expect(sessionManager.pauseSession).not.toHaveBeenCalled();
-    expect(sessionManager.resumeSession).not.toHaveBeenCalled();
     expect(sessionManager.completeTurn).toHaveBeenCalled();
   });
 
@@ -449,7 +482,7 @@ describe('AgentSessionService', () => {
     expect(sessionManager.completeTurn).toHaveBeenCalled();
   });
 
-  it('broadcasts RUN_ERROR and completes the run when sandbox streaming throws', async () => {
+  it('completes the run with error status when sandbox streaming throws', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const thrown = new TypeError('Cannot read properties of undefined');
     async function* failingStream() {
@@ -457,21 +490,14 @@ describe('AgentSessionService', () => {
       throw thrown;
     }
 
-    const { deps, sessionTurnService, sse, sessionManager } = createDeps();
+    const eventBus = createEventBusMock();
+    const { deps, sessionTurnService, sessionManager } = createDeps({ eventBus });
     sessionTurnService.executeSessionTurn.mockReturnValue(failingStream());
 
     const service = new AgentSessionService(deps);
     await service.executeSession(makeParams());
 
     expect(consoleErrorSpy).toHaveBeenCalled();
-    expect(sse.broadcast).toHaveBeenCalledWith(
-      'agent-1',
-      expect.objectContaining({
-        type: 'RUN_ERROR',
-        runId: 'run-1',
-        error: 'TypeError: Cannot read properties of undefined',
-      }),
-    );
     expect(sessionManager.completeTurn).toHaveBeenCalledWith(
       'sandbox-1',
       'run-1',
@@ -479,8 +505,9 @@ describe('AgentSessionService', () => {
       'conv-1',
       'error',
       expect.any(Number),
-      'TypeError: Cannot read properties of undefined',
+      'Cannot read properties of undefined',
     );
+    expect(eventBus.emit).not.toHaveBeenCalledWith('run.ag_ui_event', expect.anything());
   });
 
   describe('event bus integration', () => {
@@ -847,32 +874,38 @@ describe('AgentSessionService', () => {
   });
 
   describe('AG-UI event payload shape', () => {
-    it('RUN_ERROR payload contains required fields when sandbox streaming throws', async () => {
+    it('turn.completed payload contains required fields when no sandbox session exists', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      async function* failingStream() {
-        yield* eventStream([]);
-        throw new Error('connection refused');
-      }
+      const eventBus = createEventBusMock();
+      const sessionManager = {
+        ensureSession: vi.fn().mockResolvedValue({ sessionId: undefined }),
+        startTurn: vi.fn().mockReturnValue(undefined),
+        completeTurn: vi.fn().mockResolvedValue(undefined),
+      };
 
-      const { deps, sessionTurnService, sse } = createDeps();
-      sessionTurnService.executeSessionTurn.mockReturnValue(failingStream());
+      const { deps, sessionTurnService } = createDeps({ eventBus, sessionManager });
+      sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]));
 
       const service = new AgentSessionService(deps);
       await service.executeSession(makeParams());
 
-      expect(sse.broadcast).toHaveBeenCalledTimes(1);
-      expect(sse.broadcast).toHaveBeenCalledWith(
-        'agent-1',
+      expect(eventBus.emit).toHaveBeenCalledWith(
+        'turn.completed',
         expect.objectContaining({
-          type: 'RUN_ERROR',
-          runId: 'run-1',
-          error: 'Error: connection refused',
+          turnId: 'run-1',
+          sessionId: '',
+          agentId: 'agent-1',
+          conversationId: 'conv-1',
+          status: 'completed',
+          error: undefined,
+          durationMs: expect.any(Number),
           timestamp: expect.any(Number),
         }),
       );
+      expect(sessionManager.completeTurn).not.toHaveBeenCalled();
     });
 
-    it('preserves original event fields when broadcasting', async () => {
+    it('preserves original event fields when emitting run.ag_ui_event', async () => {
       const originalEvent = {
         type: 'RUN_STARTED',
         timestamp: 12345,
@@ -880,16 +913,18 @@ describe('AgentSessionService', () => {
         customField: 'should-be-preserved',
       } satisfies AGUIEvent;
 
-      const { deps, sessionTurnService, sse } = createDeps();
+      const eventBus = createEventBusMock();
+      const { deps, sessionTurnService } = createDeps({ eventBus });
       sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([originalEvent]));
 
       const service = new AgentSessionService(deps);
       await service.executeSession(makeParams());
 
-      expect(sse.broadcast).toHaveBeenCalledWith('agent-1', originalEvent);
-      const broadcastPayload = sse.broadcast.mock.lastCall?.[1] as Record<string, unknown>;
-      expect(broadcastPayload.customField).toBe('should-be-preserved');
-      expect(broadcastPayload.timestamp).toBe(12345);
+      const forwardedPayload = eventBus.emit.mock.calls.find(([eventName]) => eventName === 'run.ag_ui_event')?.[1] as {
+        event: Record<string, unknown>;
+      };
+      expect(forwardedPayload.event.customField).toBe('should-be-preserved');
+      expect(forwardedPayload.event.timestamp).toBe(12345);
     });
   });
 });

@@ -69,6 +69,14 @@ export interface ToolRegistryDelegate {
 
 export type ToolContextFactory = (ctx: ToolHandlerContext) => import('../../tool/types.js').ToolContext;
 
+function ensureConnectError(err: unknown): ConnectError {
+  if (err instanceof ConnectError) return err;
+  const message = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? err.stack : undefined;
+  const detail = stack ? `${message}\n${stack}` : message;
+  return new ConnectError(detail, Code.Internal);
+}
+
 export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry {
   private handlers = new Map<string, OrchestratorToolHandler>();
   private delegate?: ToolRegistryDelegate;
@@ -131,47 +139,105 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
      * the handler, and returns the result (or an error).
      */
     async requestTool(req: RequestToolRequest): Promise<RequestToolResponse> {
-      const { sessionId, agentId, toolName, argsJson, requestId } = req;
+      try {
+        const { sessionId, agentId, toolName, argsJson, requestId } = req;
 
-      if (!toolName) {
-        throw new ConnectError('tool_name is required', Code.InvalidArgument);
-      }
+        if (!toolName) {
+          throw new ConnectError('tool_name is required', Code.InvalidArgument);
+        }
 
-      const handler = toolRegistry.get(toolName);
-      if (!handler) {
-        return create(RequestToolResponseSchema, {
-          requestId,
-          result: '',
-          error: `Unknown orchestrator tool: ${toolName}`,
-        });
-      }
+        let dedupInserted = false;
+        if (requestId && deps.repository) {
+          const inserted = await deps.repository.tryInsertToolDedup(requestId, sessionId, toolName);
+          if (!inserted) {
+            const existing = await deps.repository.getToolDedup(requestId);
+            if (existing) {
+              if (existing.sessionId !== sessionId || existing.toolName !== toolName) {
+                throw new ConnectError(
+                  `Request ID ${requestId} collision: different session/tool`,
+                  Code.InvalidArgument,
+                );
+              }
 
-      let args: Record<string, unknown> = {};
-      if (argsJson) {
-        try {
-          args = JSON.parse(argsJson) as Record<string, unknown>;
-        } catch {
+              if (existing.status === 'completed') {
+                return create(RequestToolResponseSchema, {
+                  requestId,
+                  result: existing.result ?? '',
+                });
+              }
+
+              if (existing.status === 'failed') {
+                return create(RequestToolResponseSchema, {
+                  requestId,
+                  result: '',
+                  error: existing.error ?? 'Tool execution failed (cached)',
+                });
+              }
+
+              throw new ConnectError(
+                `Tool ${toolName} already executing for request ${requestId}`,
+                Code.Unavailable,
+              );
+            }
+          } else {
+            dedupInserted = true;
+          }
+        }
+
+        const handler = toolRegistry.get(toolName);
+        if (!handler) {
+          if (dedupInserted && deps.repository) {
+            await deps.repository.completeToolDedup(requestId, null, `Unknown orchestrator tool: ${toolName}`).catch(() => {});
+          }
           return create(RequestToolResponseSchema, {
             requestId,
             result: '',
-            error: `Invalid args_json: failed to parse JSON`,
+            error: `Unknown orchestrator tool: ${toolName}`,
           });
         }
-      }
 
-      try {
-        const result = await handler(args, { sessionId, agentId, requestId });
-        return create(RequestToolResponseSchema, {
-          requestId,
-          result,
-        });
+        let args: Record<string, unknown> = {};
+        if (argsJson) {
+          try {
+            args = JSON.parse(argsJson) as Record<string, unknown>;
+          } catch {
+            if (dedupInserted && deps.repository) {
+              await deps.repository.completeToolDedup(requestId, null, 'Invalid args_json: failed to parse JSON').catch(() => {});
+            }
+            return create(RequestToolResponseSchema, {
+              requestId,
+              result: '',
+              error: `Invalid args_json: failed to parse JSON`,
+            });
+          }
+        }
+
+        try {
+          const result = await handler(args, { sessionId, agentId, requestId });
+          if (dedupInserted && deps.repository) {
+            await deps.repository.completeToolDedup(requestId, result, null).catch((err) => {
+              console.error(`[OrchestratorService] Failed to update tool dedup for ${requestId}:`, err);
+            });
+          }
+          return create(RequestToolResponseSchema, {
+            requestId,
+            result,
+          });
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          if (dedupInserted && deps.repository) {
+            await deps.repository.completeToolDedup(requestId, null, errorMsg).catch((dedupErr) => {
+              console.error(`[OrchestratorService] Failed to update tool dedup for ${requestId}:`, dedupErr);
+            });
+          }
+          return create(RequestToolResponseSchema, {
+            requestId,
+            result: '',
+            error: errorMsg,
+          });
+        }
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        return create(RequestToolResponseSchema, {
-          requestId,
-          result: '',
-          error: errorMsg,
-        });
+        throw ensureConnectError(err);
       }
     },
 
@@ -181,29 +247,38 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
      * The event is dispatched for SSE broadcast and trigger processing.
      */
     async emitEvent(req: EmitEventRequest): Promise<EmitEventResponse> {
-      const { sessionId, eventType, payloadJson } = req;
+      try {
+        const { sessionId, eventType, payloadJson } = req;
 
-      if (!eventType) {
-        throw new ConnectError('event_type is required', Code.InvalidArgument);
-      }
-
-      let payload: Record<string, unknown> = {};
-      if (payloadJson) {
-        try {
-          payload = JSON.parse(payloadJson) as Record<string, unknown>;
-        } catch {
-          throw new ConnectError('Invalid payload_json: failed to parse JSON', Code.InvalidArgument);
+        if (!eventType) {
+          throw new ConnectError('event_type is required', Code.InvalidArgument);
         }
+
+        let payload: Record<string, unknown> = {};
+        if (payloadJson) {
+          try {
+            payload = JSON.parse(payloadJson) as Record<string, unknown>;
+          } catch {
+            throw new ConnectError('Invalid payload_json: failed to parse JSON', Code.InvalidArgument);
+          }
+        }
+
+        payload.runId = sessionId;
+
+        // Extract agentId from payload if present, otherwise use empty string
+        const agentId = typeof payload.agentId === 'string' ? payload.agentId : '';
+
+        try {
+          await eventBus.emitCustomAsync(eventType, agentId, payload);
+        } catch (err) {
+          console.error(`[OrchestratorService] EmitEvent failed for ${eventType}:`, err);
+          throw ensureConnectError(err);
+        }
+
+        return create(EmitEventResponseSchema, {});
+      } catch (err) {
+        throw ensureConnectError(err);
       }
-
-      payload.runId = sessionId;
-
-      // Extract agentId from payload if present, otherwise use empty string
-      const agentId = typeof payload.agentId === 'string' ? payload.agentId : '';
-
-      eventBus.emitCustom(eventType, agentId, payload);
-
-      return create(EmitEventResponseSchema, {});
     },
 
     /**
@@ -324,7 +399,7 @@ export function registerDefaultToolHandlers(
       ? { eventBus: eventBusOrDeps }
       : eventBusOrDeps;
 
-  const { eventBus, interruptManager, sessionManager, repository } = deps;
+  const { eventBus, interruptManager, repository } = deps;
 
   registry.set('emit-event', async (args, ctx) => {
     const eventType = typeof args.type === 'string' ? args.type

@@ -284,24 +284,6 @@ describe('ContainerManager', () => {
     });
   });
 
-  // ── injectSecrets ───────────────────────────────────────
-
-  describe('injectSecrets', () => {
-    it('creates tar archive and calls putArchive', async () => {
-      const secrets = { OPENAI_API_KEY: 'sk-test123', DB_PASSWORD: 'secret' };
-      await manager.injectSecrets('sha256-abc123', secrets);
-
-      expect(docker.getContainer).toHaveBeenCalledWith('sha256-abc123');
-      expect(docker._mockContainer.putArchive).toHaveBeenCalledTimes(1);
-
-      const [archive, opts] = docker._mockContainer.putArchive.mock.calls[0];
-      expect(opts).toEqual({ path: '/run/secrets' });
-      // Archive should be a readable stream (tar-stream pack)
-      expect(archive).toBeTruthy();
-      expect(typeof archive.pipe === 'function' || typeof archive.read === 'function').toBe(true);
-    });
-  });
-
   // ── extractWorkspaceDiff ────────────────────────────────
 
   describe('extractWorkspaceDiff', () => {

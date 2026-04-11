@@ -1,8 +1,18 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { normalizeConversationMessage, useConversationStore } from '../conversation';
 
 function getStore() {
   return useConversationStore.getState();
+}
+
+function makeEvent(type: string, event: Record<string, unknown> = {}): Record<string, unknown> {
+  return { type, ...event };
+}
+
+async function flushStreamingContent(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
 }
 
 beforeEach(() => {
@@ -10,8 +20,6 @@ beforeEach(() => {
 });
 
 describe('conversation store', () => {
-  // ── addUserMessage ─────────────────────────────────────────────
-
   it('addUserMessage appends a user message', () => {
     getStore().addUserMessage('hello');
 
@@ -33,8 +41,6 @@ describe('conversation store', () => {
     expect(messages[1].content).toBe('second');
   });
 
-  // ── loadMessages ───────────────────────────────────────────────
-
   it('loadMessages replaces all messages and resets state', () => {
     getStore().addUserMessage('existing');
     const loaded = [
@@ -43,12 +49,21 @@ describe('conversation store', () => {
     getStore().loadMessages(loaded);
 
     const state = getStore();
-    expect(state.messages).toEqual(loaded);
+    expect(state.messages).toEqual([
+      {
+        id: 'x1',
+        role: 'assistant',
+        content: 'loaded',
+        parts: [{ type: 'text', content: 'loaded' }],
+        toolCallId: undefined,
+        toolCalls: undefined,
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+    ]);
     expect(state.isStreaming).toBe(false);
     expect(state.streamingContent).toBe('');
+    expect(state.committedMessageCount).toBe(0);
   });
-
-  // ── reset ──────────────────────────────────────────────────────
 
   it('reset clears all state', () => {
     getStore().addUserMessage('test');
@@ -58,106 +73,268 @@ describe('conversation store', () => {
     expect(state.messages).toEqual([]);
     expect(state.isStreaming).toBe(false);
     expect(state.currentTurnId).toBeNull();
+    expect(state.committedMessageCount).toBe(0);
   });
 
-  // ── handleSSEEvent: RUN_STARTED ────────────────────────────────
+  it('sets streaming state on TURN_PENDING', () => {
+    getStore().handleSSEEvent(makeEvent('TURN_PENDING', { runId: 'turn-1', timestamp: Date.now() }));
+
+    expect(getStore().isStreaming).toBe(true);
+    expect(getStore().currentTurnId).toBe('turn-1');
+    expect(getStore().committedMessageCount).toBe(0);
+  });
 
   it('RUN_STARTED sets streaming state', () => {
-    getStore().handleSSEEvent({ type: 'RUN_STARTED', runId: 'run-1' });
+    getStore().handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'run-1' }));
 
     const state = getStore();
     expect(state.isStreaming).toBe(true);
     expect(state.currentTurnId).toBe('run-1');
   });
 
-  // ── handleSSEEvent: TEXT_MESSAGE flow ──────────────────────────
-
-  it('streams assistant text and finalizes on TEXT_MESSAGE_END', async () => {
+  it('MESSAGE_COMMITTED creates a message with text content', async () => {
     const { handleSSEEvent } = getStore();
 
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_START', role: 'assistant' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_CONTENT', content: 'Hello ' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_CONTENT', content: 'world' });
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'Hello ' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'world' }));
 
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await flushStreamingContent();
 
     expect(getStore().streamingContent).toBe('Hello world');
+    expect(getStore().messages).toHaveLength(0);
 
-    handleSSEEvent({ type: 'TEXT_MESSAGE_END' });
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_END'));
 
-    const { messages, streamingContent } = getStore();
-    expect(streamingContent).toBe('');
-    expect(messages).toHaveLength(1);
-    expect(messages[0].role).toBe('assistant');
-    expect(messages[0].content).toBe('Hello world');
+    expect(getStore().streamingContent).toBe('Hello world');
+    expect(getStore().messages).toHaveLength(0);
+
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: 'Hello world',
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+
+    const state = getStore();
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].role).toBe('assistant');
+    expect(state.messages[0].content).toBe('Hello world');
+    expect(state.messages[0].parts).toEqual([{ type: 'text', content: 'Hello world' }]);
+    expect(state.streamingContent).toBe('');
+    expect(state.committedMessageCount).toBe(1);
   });
 
-  it('skips user message echoes (TEXT_MESSAGE_CONTENT with user role)', () => {
+  it('skips user message echoes', () => {
     const { handleSSEEvent } = getStore();
 
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_START', role: 'user' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_CONTENT', content: 'echo' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_END' });
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'user' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'echo' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_END'));
 
     expect(getStore().messages).toHaveLength(0);
     expect(getStore().streamingContent).toBe('');
   });
 
-  // ── handleSSEEvent: TOOL_CALL flow ─────────────────────────────
-
-  it('tracks tool calls through start/args/end/result', () => {
+  it('streaming tool events update preview state only', () => {
     const { handleSSEEvent } = getStore();
 
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_START', role: 'assistant' });
-    handleSSEEvent({ type: 'TOOL_CALL_START', toolCallId: 'tc1', name: 'search' });
-    handleSSEEvent({ type: 'TOOL_CALL_ARGS', toolCallId: 'tc1', args: '{"q":"test"}' });
-    handleSSEEvent({ type: 'TOOL_CALL_END', toolCallId: 'tc1' });
-    handleSSEEvent({ type: 'TOOL_CALL_RESULT', toolCallId: 'tc1', result: 'found it' });
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"test"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_END', { toolCallId: 'tc1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'found it' }));
 
-    const { messages } = getStore();
-    const tcMsg = messages.find((m) => m.toolCalls && m.toolCalls.some((t) => t.id === 'tc1'));
-    expect(tcMsg).toEqual(expect.objectContaining({ toolCalls: expect.any(Array) }));
-    const tc = tcMsg!.toolCalls!.find((t) => t.id === 'tc1')!;
-    expect(tc.name).toBe('search');
-    expect(tc.args).toBe('{"q":"test"}');
-    expect(tc.result).toBe('found it');
-    expect(tc.status).toBe('complete');
+    const state = getStore();
+    expect(state.messages).toHaveLength(0);
+    expect(state.toolCalls.size).toBe(1);
+    expect(state.toolCalls.get('tc1')).toEqual({
+      id: 'tc1',
+      name: 'search',
+      args: '{"q":"test"}',
+      result: 'found it',
+      error: undefined,
+      status: 'complete',
+    });
   });
 
-  it('tool calls are attached to message on TEXT_MESSAGE_END', () => {
+  it('MESSAGE_COMMITTED creates a message with tool calls merged from preview state', () => {
     const { handleSSEEvent } = getStore();
 
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_START', role: 'assistant' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_CONTENT', content: 'result' });
-    handleSSEEvent({ type: 'TOOL_CALL_START', toolCallId: 'tc1', name: 'search' });
-    handleSSEEvent({ type: 'TOOL_CALL_END', toolCallId: 'tc1' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_END' });
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: '',
+      toolCalls: [
+        { id: 'tc1', name: 'search', args: '', status: 'running' },
+      ],
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
 
-    const { messages } = getStore();
-    const textMsg = messages.find((m) => m.content === 'result');
-    expect(textMsg).toEqual(expect.objectContaining({ content: 'result' }));
-    const tcMsg = messages.find((m) => m.toolCalls && m.toolCalls.length > 0);
-    expect(tcMsg).toEqual(expect.objectContaining({ toolCalls: expect.any(Array) }));
-    expect(tcMsg!.toolCalls).toHaveLength(1);
-    expect(tcMsg!.toolCalls![0].name).toBe('search');
+    const state = getStore();
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].toolCalls).toEqual([
+      {
+        id: 'tc1',
+        name: 'search',
+        args: '{"q":"ctxmill"}',
+        result: 'done',
+        error: undefined,
+        status: 'complete',
+      },
+    ]);
+    expect(state.toolCalls.size).toBe(0);
   });
 
-  // ── handleSSEEvent: RUN_FINISHED ───────────────────────────────
-
-  it('RUN_FINISHED finalizes remaining streaming content', () => {
+  it('full tool-call flow produces one committed message with merged result', () => {
     const { handleSSEEvent } = getStore();
 
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_START', role: 'assistant' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_CONTENT', content: 'partial' });
-    // No TEXT_MESSAGE_END — go straight to RUN_FINISHED
-    handleSSEEvent({ type: 'RUN_FINISHED' });
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"test"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_END', { toolCallId: 'tc1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'found it' }));
+
+    expect(getStore().messages).toHaveLength(0);
+
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: '',
+      toolCalls: [
+        { id: 'tc1', name: 'search', args: '{"q":"test"}', status: 'running' },
+      ],
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+
+    const state = getStore();
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].parts).toEqual([
+      {
+        type: 'tool_call',
+        id: 'tc1',
+        name: 'search',
+        args: '{"q":"test"}',
+        result: 'found it',
+        error: undefined,
+        status: 'complete',
+      },
+    ]);
+  });
+
+  it('full text flow creates a single committed message', async () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'partial' }));
+
+    await flushStreamingContent();
+
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_END'));
+
+    expect(getStore().messages).toHaveLength(0);
+    expect(getStore().streamingContent).toBe('partial');
+
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: 'partial',
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+
+    expect(getStore().messages).toHaveLength(1);
+    expect(getStore().messages[0].content).toBe('partial');
+  });
+
+  it('mixed text and tool-call flow creates a single committed message', async () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'Using a tool' }));
+
+    await flushStreamingContent();
+
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'result payload' }));
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: 'Using a tool',
+      parts: [
+        { type: 'text', content: 'Using a tool' },
+      ],
+      toolCalls: [
+        { id: 'tc1', name: 'search', args: '{"q":"ctxmill"}', status: 'running' },
+      ],
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+
+    const state = getStore();
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].parts).toEqual([
+      { type: 'text', content: 'Using a tool' },
+      {
+        type: 'tool_call',
+        id: 'tc1',
+        name: 'search',
+        args: '{"q":"ctxmill"}',
+        result: 'result payload',
+        error: undefined,
+        status: 'complete',
+      },
+    ]);
+  });
+
+  it('supports multiple committed messages in one turn without duplicates', async () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('TURN_PENDING', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: 'first',
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'second' }));
+
+    await flushStreamingContent();
+
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_END'));
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: 'second',
+      messageSeq: 2,
+      turnId: 'r1',
+    }));
+
+    const state = getStore();
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages.map((message) => message.content)).toEqual(['first', 'second']);
+    expect(state.committedMessageCount).toBe(2);
+  });
+
+  it('RUN_FINISHED falls back to preview state when MESSAGE_COMMITTED never arrives', async () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'partial' }));
+
+    await flushStreamingContent();
+
+    handleSSEEvent(makeEvent('RUN_FINISHED'));
 
     const state = getStore();
     expect(state.isStreaming).toBe(false);
@@ -166,23 +343,61 @@ describe('conversation store', () => {
     expect(state.messages[0].content).toBe('partial');
   });
 
-  it('RUN_FINISHED with no streaming content does not add empty message', () => {
+  it('RUN_FINISHED is a no-op after canonical commit with no pending preview state', () => {
     const { handleSSEEvent } = getStore();
 
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({ type: 'RUN_FINISHED' });
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: 'done',
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+    handleSSEEvent(makeEvent('RUN_FINISHED'));
 
-    expect(getStore().messages).toHaveLength(0);
-    expect(getStore().isStreaming).toBe(false);
+    const state = getStore();
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].content).toBe('done');
+    expect(state.isStreaming).toBe(false);
   });
 
-  // ── handleSSEEvent: RUN_ERROR ──────────────────────────────────
+  it('TOOL_CALL_RESULT with error updates preview state and commits as error later', () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'fail' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: '', error: 'boom' }));
+
+    expect(getStore().messages).toHaveLength(0);
+    expect(getStore().toolCalls.get('tc1')).toEqual({
+      id: 'tc1',
+      name: 'fail',
+      args: '',
+      result: '',
+      error: 'boom',
+      status: 'error',
+    });
+
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: '',
+      toolCalls: [
+        { id: 'tc1', name: 'fail', args: '', status: 'running' },
+      ],
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+
+    const committed = getStore().messages[0].toolCalls?.[0];
+    expect(committed?.status).toBe('error');
+    expect(committed?.error).toBe('boom');
+  });
 
   it('RUN_ERROR adds system error message and stops streaming', () => {
     const { handleSSEEvent } = getStore();
 
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({ type: 'RUN_ERROR', message: 'Something broke' });
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('RUN_ERROR', { message: 'Something broke' }));
 
     const state = getStore();
     expect(state.isStreaming).toBe(false);
@@ -245,23 +460,5 @@ describe('conversation store', () => {
     expect(message.role).toBe('tool');
     expect(message.toolCallId).toBe('tc-9');
     expect(message.content).toBe('done');
-  });
-
-  // ── handleSSEEvent: TOOL_CALL_RESULT with error ────────────────
-
-  it('TOOL_CALL_RESULT with error marks tool as error status', () => {
-    const { handleSSEEvent } = getStore();
-
-    handleSSEEvent({ type: 'RUN_STARTED', runId: 'r1' });
-    handleSSEEvent({ type: 'TEXT_MESSAGE_START', role: 'assistant' });
-    handleSSEEvent({ type: 'TOOL_CALL_START', toolCallId: 'tc1', name: 'fail' });
-    handleSSEEvent({ type: 'TOOL_CALL_RESULT', toolCallId: 'tc1', result: '', error: 'boom' });
-
-    const { messages } = getStore();
-    const tcMsg = messages.find((m) => m.toolCalls && m.toolCalls.some((t) => t.id === 'tc1'));
-    expect(tcMsg).toEqual(expect.objectContaining({ toolCalls: expect.any(Array) }));
-    const tc = tcMsg!.toolCalls!.find((t) => t.id === 'tc1')!;
-    expect(tc.status).toBe('error');
-    expect(tc.error).toBe('boom');
   });
 });

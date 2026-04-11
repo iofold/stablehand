@@ -1,7 +1,6 @@
 import { createHash } from 'crypto';
 import { PassThrough } from 'node:stream';
 import Dockerode from 'dockerode';
-import * as tar from 'tar-stream';
 
 // ── Public interfaces ─────────────────────────────────────────
 
@@ -97,17 +96,6 @@ export interface ContainerMetrics {
 }
 
 // ── Helpers ──────────────────────────────────────────────────
-
-/**
- * Build a tar archive containing a single file.
- * Used to inject secrets into a container via `putArchive`.
- */
-function createTarWithFile(filename: string, content: string): NodeJS.ReadableStream {
-  const pack = tar.pack();
-  pack.entry({ name: filename }, content);
-  pack.finalize();
-  return pack as unknown as NodeJS.ReadableStream;
-}
 
 /**
  * Derive a stable, short container name from a conversation ID.
@@ -541,38 +529,6 @@ export class ContainerManager {
     console.debug(`${TAG} container ${containerId} started`);
   }
 
-  async pauseContainer(containerId: string): Promise<void> {
-    console.debug(`${TAG} pausing container ${containerId}`);
-    const container = this.docker.getContainer(containerId);
-    try {
-      await container.pause();
-      console.debug(`${TAG} container ${containerId} paused`);
-    } catch (err: unknown) {
-      // Docker returns 409 if container is already paused or not running
-      if (isDockerError(err) && err.statusCode === 409) {
-        console.debug(`${TAG} container ${containerId} already paused or not running`);
-        return;
-      }
-      throw err;
-    }
-  }
-
-  async unpauseContainer(containerId: string): Promise<void> {
-    console.debug(`${TAG} unpausing container ${containerId}`);
-    const container = this.docker.getContainer(containerId);
-    try {
-      await container.unpause();
-      console.debug(`${TAG} container ${containerId} unpaused`);
-    } catch (err: unknown) {
-      // Docker returns 409 if container is not paused
-      if (isDockerError(err) && err.statusCode === 409) {
-        console.debug(`${TAG} container ${containerId} not paused`);
-        return;
-      }
-      throw err;
-    }
-  }
-
   async stopContainer(containerId: string, timeoutSec?: number): Promise<void> {
     console.debug(`${TAG} stopping container ${containerId} (timeout=${timeoutSec ?? 10}s)`);
     const container = this.docker.getContainer(containerId);
@@ -608,18 +564,6 @@ export class ContainerManager {
       }
       throw err;
     }
-  }
-
-  // ── Secret injection ────────────────────────────────────
-
-  async injectSecrets(containerId: string, secrets: Record<string, string>): Promise<void> {
-    console.debug(`${TAG} injecting ${Object.keys(secrets).length} secrets into container ${containerId}`);
-
-    const container = this.docker.getContainer(containerId);
-    const archive = createTarWithFile('config.json', JSON.stringify(secrets));
-    await container.putArchive(archive, { path: '/run/secrets' });
-
-    console.debug(`${TAG} secrets injected into container ${containerId}`);
   }
 
   // ── Workspace ───────────────────────────────────────────

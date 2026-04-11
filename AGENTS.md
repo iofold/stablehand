@@ -1,6 +1,6 @@
 # CTXMILL — PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-26 · **Commit:** e2f30a0 · **Branch:** master
+**Generated:** 2026-04-06 · **Commit:** c2561f2 · **Branch:** master
 
 ## OVERVIEW
 
@@ -11,6 +11,7 @@ Multi-harness agent runtime. Agents defined in YAML, execute inside Docker sandb
 ```
 packages/
   ctxmill/              Core runtime — orchestrator, 3 harnesses, sandbox, tools, events, DB (126 src files)
+  sandbox-daemon/       Daemon process inside sandbox containers — gRPC server, harness adapters, tool proxy (30 src files)
   ui/                   React dashboard — Vite, React 18, Zustand, Tailwind, SSE streaming (84 files)
   shared/               Types only — AG-UI events, API contracts (no build step, src/index.ts direct)
   proto/                Protobuf (buf) — HarnessService + OrchestratorService gRPC definitions
@@ -47,9 +48,10 @@ docs/
 | Define a tool | Use `defineTool({ name, description, input: z.object(...), handler })` | Zod schema for input validation |
 | Define an agent | Use `defineAgent({ tools, systemPrompt })` or YAML manifest | `{{knowledge}}` placeholder for dynamic injection |
 | Understand DI wiring | `packages/ctxmill/src/config/container.ts` | `createContainer()` builds all services |
-| Trace a run execution | `orchestrator/agent-run-service.ts` → `sandbox-run-service.ts` → `sandbox/runner.ts` | All runs go through sandbox containers |
-| Understand session lifecycle | `orchestrator/sandbox-session-manager.ts` | Session state machine: pause → freeze → checkpoint |
-| Configure runtime settings | `packages/ctxmill/src/settings/service.ts` | 17 system knobs, DB-persisted, Settings UI |
+| Trace a run execution | `orchestrator/agent-session-service.ts` → `orchestrator/sandbox-session-manager.ts` → `packages/sandbox-daemon/src/sandbox/runner.ts` | All runs go through sandbox containers |
+| Modify sandbox daemon | `packages/sandbox-daemon/src/` | gRPC server, harness adapters, tool proxy. Runs inside containers, NOT orchestrator |
+| Understand session lifecycle | `orchestrator/sandbox-session-manager.ts` | Active ↔ paused compatibility path plus checkpoint/restore lifecycle |
+| Configure runtime settings | `packages/ctxmill/src/settings/service.ts` | DB-persisted system settings, Settings UI |
 | Manage artifacts | `packages/ctxmill/src/artifact/artifact-store.ts` | S3/MinIO, signed URLs, daemon tools |
 
 ## CONVENTIONS
@@ -81,11 +83,11 @@ docs/
 ## ANTI-PATTERNS
 
 - **NEVER store secrets in checkpoints** — Secrets injected fresh on resume via tmpfs (`/run/secrets/config.json`), never persisted
-- **NEVER suppress types** — No `as any`, `@ts-ignore`, `@ts-expect-error` (32 existing `as any` in source are documented tech debt from Zod/EventEmitter/Drizzle library limitations)
+- **NEVER suppress types** — No `as any`, `@ts-ignore`, `@ts-expect-error` (existing `as any` in source are documented tech debt from Zod/EventEmitter/Drizzle library limitations)
 - **NEVER use empty catch blocks** — `catch(e) {}` forbidden
 - **NEVER delete failing tests** to make CI pass
-- **NEVER call harness.run() directly** — All execution goes through `SandboxRunService` → Docker containers
-- **NEVER exceed checkpoint limits** — 5 MB checkpoint, 100 MB workspace tar. Oversized checkpoints are rejected
+- **NEVER call harness.run() directly** — All execution goes through `AgentSessionService` → `SandboxSessionManager` → Docker containers
+- **NEVER exceed checkpoint limits** — The daemon checkpoint validator currently rejects oversized state payloads (>5 MB by default), and workspace tar snapshots are capped at 100 MB
 - **NO path aliases in source** — Relative imports only (with `.js`). Aliases only in `vitest.config.ts` and `vite.config.ts`
 - **NO Prettier** — No formatting enforcer configured; follow existing style
 - **NO callback patterns** — async/await only throughout
@@ -95,7 +97,7 @@ docs/
 ```bash
 # Development
 docker compose up --build -d               # Start full stack (postgres + orchestrator + UI)
-docker compose --profile sandbox up -d      # Include sandbox containers + egress proxy
+docker compose up --build -d               # Builds all services including sandbox harness images
 pnpm dev                                    # Same as docker compose up --build
 
 # Build & Check
@@ -133,18 +135,19 @@ docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile
 - **gRPC IPC** — Orchestrator ↔ sandbox via ConnectRPC on port 50051. Two services: HarnessService (OpenSession, DeliverTurn, SuspendSession, KillSession), OrchestratorService (RequestTool, EmitEvent, RefreshSecrets).
 - **SSE streaming** — UI connects to `/api/agents/:id/stream` via EventSource. Events flow: harness → proto → gRPC → SSE → React.
 - **Event chaining** — Agents emit events via `emit-event` tool → EventTriggerManager matches → spawns background run on another agent. Cascade protection: `MAX_TRIGGER_DEPTH=5`.
-- **Checkpoint/Resume** — Sessions suspend cooperatively at safe execution phases. Checkpoint v2 format (5 MB max). Workspace captured as tar.gz (100 MB max). Secrets NEVER in checkpoints.
-- **HITL pause flow** — Tool requests approval → Docker pause (5s delay) → freeze promotion (5 min) → checkpoint promotion (10 min).
+- **Checkpoint/Resume** — Sessions suspend cooperatively at safe execution phases. Checkpoint v2 format; workspace captured as tar.gz (100 MB max). Secrets NEVER in checkpoints.
+- **HITL flow** — Tool requests approval → interrupt is persisted → the user resolves it via the dashboard/API → the matching sandbox session resumes or restores from checkpoint.
 - **`--experimental-strip-types`** — Node 22 flag in Dockerfile CMD for TypeScript enum handling in proto-generated code.
-- **19 DB tables** via Drizzle ORM — see `packages/ctxmill/src/database/schema-pg.ts`. Test DB uses advisory lock (ID: 424242) for concurrent resets.
+- **Drizzle ORM schema** — see `packages/ctxmill/src/database/schema-pg.ts`. Test DB uses advisory lock (ID: 424242) for concurrent resets.
 - **Default model** — `gpt-5.4-mini` (OpenAI). Override via `OPENAI_MODEL` env var. Per-agent override in YAML manifest.
+- **Sandbox-daemon package** — Separate package (`@ctxmill/sandbox-daemon`) deployed inside sandbox containers. Contains gRPC server, harness adapters (LangGraph, Claude Agents, PI Agent), tool proxy, proto-convert, and checkpoint logic. Changes here require rebuilding harness Docker images (not just orchestrator).
 - **Workspace isolation** — Workspace diff capture/restore during suspend/resume. Legacy FUSE/mock overlay abstractions removed.
 - **Container concurrency** — Semaphore limits concurrent sandbox containers (default 20). FIFO queue with 60s timeout.
 - **Tool providers** — 5 types: Local (in-process), MCP (stdio/HTTP), HTTP (REST endpoints), Composio (500+ SaaS), Artifact (daemon-handled S3/MinIO upload/download).
 - **Agent manifests** — YAML format (`apiVersion: ctxmill.io/v1`). Supports `{{knowledge}}` placeholder in instructions, `$secret:KEY_NAME` for secrets.
 - **Artifact storage** — S3/MinIO-backed file persistence. Tools (artifact_upload, artifact_download) run at daemon location, bypassing gRPC byte-proxying. Requires S3_ENDPOINT + S3_ACCESS_KEY + S3_SECRET_KEY env vars. MinIO container in docker-compose.
-- **System settings** — 17 runtime-configurable knobs (timeouts, limits, resource defaults) persisted in system_settings table. Settings UI at /settings. 5-minute cache TTL. No restart required.
-- **Container lifecycle policy** — Unified module replacing separate pause-manager, timeout-enforcer, and orphan-cleanup. Handles idle timeout, freeze promotion, checkpoint promotion, and reconciliation.
+- **System settings** — Runtime-configurable knobs (timeouts, limits, resource defaults) persisted in `system_settings`. Settings UI at `/settings`. 5-minute cache TTL. No restart required.
+- **Container lifecycle policy** — Unified module replacing separate pause-manager, timeout-enforcer, and orphan-cleanup. Handles idle checkpoint scheduling, compatibility pause/resume, and reconciliation.
 - **Durable HITL** — Interrupt resolution persisted DB-first. Sessions resume from DB state on restart. Replaces in-memory-only interrupt tracking.
 - **A2UI render tool** — Intrinsic tool (a2ui-render) for agent-driven structured UI blocks. Replaces legacy inline A2UI extraction from message content.
 - **Daemon tools** — Tool location 'daemon' for tools executed by sandbox daemon process (not harness or orchestrator). Currently: artifact_upload, artifact_download.

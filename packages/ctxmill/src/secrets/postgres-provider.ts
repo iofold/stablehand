@@ -114,35 +114,40 @@ export class CachedPostgresSecretProvider implements SecretProvider {
     return this.cache.get(this.cacheKey(agentId, toolId ?? '', key)) ?? null;
   }
 
-  set(agentId: string, key: string, value: string, toolId?: string): void {
+  async set(agentId: string, key: string, value: string, toolId?: string): Promise<void> {
     const tid = toolId ?? '';
     const { iv, ciphertext, tag } = encrypt(value, this.masterKey);
     this.cache.set(this.cacheKey(agentId, tid, key), value);
 
-    // Fire-and-forget write to PG
     const id = randomUUID();
-    void this.sql`
-      INSERT INTO secrets (id, agent_id, tool_id, key, iv, ciphertext, auth_tag, created_at, updated_at)
-      VALUES (${id}, ${agentId}, ${tid}, ${key}, ${iv}, ${ciphertext}, ${tag}, now(), now())
-      ON CONFLICT (agent_id, tool_id, key) DO UPDATE SET
-        iv = EXCLUDED.iv,
-        ciphertext = EXCLUDED.ciphertext,
-        auth_tag = EXCLUDED.auth_tag,
-        updated_at = now()
-    `.catch((err) => {
+    try {
+      await this.sql`
+        INSERT INTO secrets (id, agent_id, tool_id, key, iv, ciphertext, auth_tag, created_at, updated_at)
+        VALUES (${id}, ${agentId}, ${tid}, ${key}, ${iv}, ${ciphertext}, ${tag}, now(), now())
+        ON CONFLICT (agent_id, tool_id, key) DO UPDATE SET
+          iv = EXCLUDED.iv,
+          ciphertext = EXCLUDED.ciphertext,
+          auth_tag = EXCLUDED.auth_tag,
+          updated_at = now()
+      `;
+    } catch (err) {
       console.error('[PostgresSecretProvider] write error:', err);
-    });
+      throw err;
+    }
   }
 
-  delete(agentId: string, key: string, toolId?: string): void {
+  async delete(agentId: string, key: string, toolId?: string): Promise<void> {
     const tid = toolId ?? '';
     this.cache.delete(this.cacheKey(agentId, tid, key));
 
-    void this.sql`
-      DELETE FROM secrets WHERE agent_id = ${agentId} AND key = ${key} AND tool_id = ${tid}
-    `.catch((err) => {
+    try {
+      await this.sql`
+        DELETE FROM secrets WHERE agent_id = ${agentId} AND key = ${key} AND tool_id = ${tid}
+      `;
+    } catch (err) {
       console.error('[PostgresSecretProvider] delete error:', err);
-    });
+      throw err;
+    }
   }
 
   list(agentId: string, toolId?: string): string[] {

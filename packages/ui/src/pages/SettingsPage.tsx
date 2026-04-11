@@ -301,7 +301,7 @@ export function SettingsPage() {
                     <h3 className="text-sm font-semibold text-surface-100">Session Lifecycle</h3>
                     <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400 ring-1 ring-inset ring-amber-500/25">Restart required</span>
                   </div>
-                  <p className="text-xs text-surface-400">Container pause, freeze, and checkpoint promotion timings</p>
+                  <p className="text-xs text-surface-400">Container checkpoint and lifecycle timings</p>
                 </div>
               </div>
               {settingsLoading ? (

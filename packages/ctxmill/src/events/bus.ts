@@ -23,6 +23,7 @@ export type EventMap = {
     toolCallId: string;
     toolName: string;
     args: Record<string, unknown>;
+    requiresApproval?: boolean;
     timestamp: number;
   };
   'run.tool_result': {
@@ -139,6 +140,28 @@ export type EventMap = {
     parts?: Array<{ type: string; [key: string]: unknown }>;
     toolCalls?: Array<{ id: string; name: string; args: string; status: string }>;
     toolCallId?: string;
+    timestamp: number;
+  };
+  'turn.pending': {
+    turnId: string;
+    agentId: string;
+    conversationId: string;
+    mode: 'interactive' | 'background';
+    taskDescription?: string;
+    timestamp: number;
+  };
+  'run.ag_ui_event': {
+    turnId: string;
+    agentId: string;
+    conversationId?: string;
+    event: Record<string, unknown>;
+    timestamp: number;
+  };
+  'user.message': {
+    agentId: string;
+    conversationId: string;
+    messageId: string;
+    content: string;
     timestamp: number;
   };
   'custom': {
@@ -274,6 +297,31 @@ export class TypedEventBus {
     }
 
     // Dispatch to subscribers (trigger manager subscribes with raw event type strings)
+    const listeners = this.emitter.rawListeners(eventType);
+    for (const listener of listeners) {
+      try {
+        const result = listener(fullPayload);
+        if (result && typeof (result as Promise<unknown>).catch === 'function') {
+          (result as Promise<unknown>).catch((err: unknown) => {
+            console.error(`[EventBus] handler error for custom ${eventType}:`, err);
+          });
+        }
+      } catch (err) {
+        console.error(`[EventBus] handler error for custom ${eventType}:`, err);
+      }
+    }
+  }
+
+  async emitCustomAsync(eventType: string, agentId: string, payload: Record<string, unknown>): Promise<void> {
+    const fullPayload = { ...payload, timestamp: payload.timestamp ?? Date.now() };
+
+    if (this.persistEvent) {
+      const result = this.persistEvent(eventType, agentId, JSON.stringify(fullPayload));
+      if (result && typeof (result as Promise<void>).then === 'function') {
+        await (result as Promise<void>);
+      }
+    }
+
     const listeners = this.emitter.rawListeners(eventType);
     for (const listener of listeners) {
       try {

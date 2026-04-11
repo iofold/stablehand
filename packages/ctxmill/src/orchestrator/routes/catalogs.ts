@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
 import { builtinToolNames } from '../../tool/builtin/index.js';
-import { DAEMON_TOOLS, ORCHESTRATOR_TOOLS } from '../../tool/metadata.js';
 import type { ToolContext } from '../../tool/types.js';
 
 interface CatalogToolResponse {
@@ -30,12 +29,6 @@ interface TestToolResponse {
 }
 
 const TOOL_TEST_TIMEOUT_MS = 30_000;
-
-function resolveToolLocation(name: string, requiresApproval?: boolean): 'sandbox' | 'orchestrator' | 'daemon' {
-  if (ORCHESTRATOR_TOOLS.has(name) || requiresApproval) return 'orchestrator';
-  if (DAEMON_TOOLS.has(name)) return 'daemon';
-  return 'sandbox';
-}
 
 function detectToolSource(name: string): 'local' | 'mcp' | 'composio' {
   if (name.startsWith('composio.')) {
@@ -137,7 +130,7 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
           requiresApproval: toolDef.requiresApproval ?? false,
           secrets: toolDef.secrets,
           builtin: builtinToolNames.has(toolDef.name),
-          location: resolveToolLocation(toolDef.name, toolDef.requiresApproval),
+          location: toolDef.location ?? 'sandbox',
         };
 
         if (toolDef.input !== undefined) {

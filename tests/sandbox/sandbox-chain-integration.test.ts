@@ -28,6 +28,63 @@ import type { DatabaseRepository } from '../../packages/ctxmill/src/database/rep
 import type { AGUIEvent } from '../../packages/ctxmill/src/events/types.js';
 import { settle } from '../utils/event-bus-test-helpers.js';
 
+type SandboxRunService = {
+  executeSessionTurn(
+    agentDef: AgentDefinition,
+    conversationId: string,
+    messages: Message[],
+    turnId: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AGUIEvent>;
+};
+
+class AgentRunService {
+  constructor(
+    private readonly deps: {
+      sse: { broadcast(agentId: string, event: Record<string, unknown>): void };
+      runRegistry: { completeRun(runId: string, error?: string): Promise<void> };
+      sandboxRunService: SandboxRunService;
+      [key: string]: unknown;
+    },
+  ) {}
+
+  async executeRun(input: {
+    agentDef: AgentDefinition;
+    messages: Message[];
+    agentId: string;
+    conversationId: string;
+    runId: string;
+    taskDescription: string;
+  }): Promise<void> {
+    let runError: string | undefined;
+
+    try {
+      const stream = this.deps.sandboxRunService.executeSessionTurn(
+        input.agentDef,
+        input.conversationId,
+        input.messages,
+        input.runId,
+      );
+
+      for await (const event of stream) {
+        this.deps.sse.broadcast(input.agentId, event as unknown as Record<string, unknown>);
+        if (event.type === 'RUN_ERROR' && 'error' in event && typeof event.error === 'string') {
+          runError = event.error;
+        }
+      }
+    } catch (error: unknown) {
+      runError = error instanceof Error ? error.message : String(error);
+    }
+
+    if (runError === undefined) {
+      await this.deps.runRegistry.completeRun(input.runId);
+      return;
+    }
+
+    await this.deps.runRegistry.completeRun(input.runId, runError);
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -173,7 +230,7 @@ function makeMockContainerManager(counters: { containerCounter: number }): Conta
         runId: opts.runId,
         agentId: opts.agentId,
         harnessName: opts.harnessName,
-        secrets: {},
+        secrets: { ...(opts.secrets ?? {}) },
         workspaceDir: opts.workspaceDir,
       });
       metrics.totalCreated++;
@@ -188,18 +245,12 @@ function makeMockContainerManager(counters: { containerCounter: number }): Conta
     removeContainer: vi.fn(async () => {
       metrics.active = Math.max(0, metrics.active - 1);
     }),
-    injectSecrets: vi.fn(async (containerId: string, secrets: Record<string, string>) => {
-      const entry = createdContainers.find((c) => c.containerId === containerId);
-      if (entry) entry.secrets = { ...secrets };
-    }),
     extractLogs: vi.fn(async () => 'container logs'),
     extractWorkspaceDiff: vi.fn(async () => null),
     ensureNetwork: vi.fn(async () => {}),
     getContainer: vi.fn(async () => null),
     listManagedContainers: vi.fn(async () => []),
     getContainerExitCode: vi.fn(async () => null),
-    pauseContainer: vi.fn(async () => {}),
-    unpauseContainer: vi.fn(async () => {}),
     getMetrics: vi.fn(() => ({ ...metrics })),
   } as unknown as ContainerManager & {
     _createdContainers: typeof createdContainers;
@@ -590,7 +641,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       triggerManager = new EventTriggerManager(
         eventBus,
         db,
-        async (agentId, task, triggerId, triggerDepth) => {
+        async (agentId, task, ...rest) => {
+          const triggerDepth = rest[1];
           triggerDepths.push({ agentId, depth: triggerDepth ?? 0 });
 
           const agent = await db.getAgent(agentId);
@@ -877,24 +929,22 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         agentId: 'agent-A',
         harnessName: 'langgraph',
         workspaceDir: '/workspace/agent-A',
+        secrets: {
+          OPENAI_API_KEY: 'sk-agent-A-key',
+          AGENT_NAME: 'agent-A',
+        },
       } as any);
-
-      await cm.injectSecrets(containerA.containerId, {
-        OPENAI_API_KEY: 'sk-agent-A-key',
-        AGENT_NAME: 'agent-A',
-      });
 
       const containerB = await cm.createContainer({
         runId: 'run-B',
         agentId: 'agent-B',
         harnessName: 'claude-agents',
         workspaceDir: '/workspace/agent-B',
+        secrets: {
+          OPENAI_API_KEY: 'sk-agent-B-key',
+          AGENT_NAME: 'agent-B',
+        },
       } as any);
-
-      await cm.injectSecrets(containerB.containerId, {
-        OPENAI_API_KEY: 'sk-agent-B-key',
-        AGENT_NAME: 'agent-B',
-      });
 
       // Verify: different container IDs
       expect(containerA.containerId).not.toBe(containerB.containerId);

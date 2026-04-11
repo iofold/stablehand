@@ -13,7 +13,7 @@ CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persi
 - **Event bus and triggers**: persisted event flow plus background-run triggers
 - **Workspace isolation**: session-scoped workspace diff capture/restore during suspend/resume
 - **Artifact storage**: S3/MinIO-backed persistent file upload/download with signed URLs
-- **System settings**: 17 runtime-configurable knobs with DB persistence and Settings UI
+- **System settings**: 14 runtime-configurable knobs with DB persistence and Settings UI
 - **Learning pipeline**: optional trace reflection and knowledge updates
 - **PostgreSQL persistence**: agents, runs, messages, events, traces, triggers, and secrets
 - **React operations UI**: dashboard, chat, knowledge, files, triggers, tools, and run detail views
@@ -44,7 +44,7 @@ docker compose up --build -d
 # http://localhost:3200
 ```
 
-> To enable full sandbox execution, add the sandbox profile: `docker compose --profile sandbox up --build -d`
+> Sandbox harness images and the egress proxy are included in the default compose stack. They build automatically with `docker compose up --build -d`.
 
 ### Common Commands
 
@@ -162,10 +162,12 @@ The shipped UI includes:
 | [API Reference](docs/api-reference.md) | Complete REST API and SSE streaming protocol reference |
 | [Environment Variables](docs/environment-variables.md) | Complete env var reference — core, sandbox, AI, storage, and system settings |
 | [Harness Comparison](docs/harness-comparison.md) | Feature matrix for choosing between LangGraph, Claude Agents, and PI Agent |
+| [Custom Providers](docs/custom-providers.md) | Using OpenRouter, Cloudflare AI Gateway, or any OpenAI-compatible endpoint |
 
 ### Guides
 | Document | Description |
 |----------|-------------|
+| [AG-UI Compatibility](docs/ag-ui-compat.md) | Drop-in AG-UI renderer support (CopilotKit, agui-hooks, assistant-ui) |
 | [Embedding in Foreign Stacks](docs/embedding-in-foreign-stacks.md) | Integrating CTXMill into your existing application |
 | [Writing Tool Providers](docs/writing-tool-providers.md) | Adding custom tools (Local, MCP, HTTP, Composio) |
 | [Writing Skills](docs/writing-skills.md) | Creating agent skills with SKILL.md format |

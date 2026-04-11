@@ -52,7 +52,7 @@ interface Logger {
 
 export interface ReconciliationCallbacks {
   onSessionReconnected: (session: SandboxSessionRow, grpcClient?: HarnessGrpcClient) => void;
-  onSessionEvicted: (sessionId: string, conversationId: string) => void;
+  onSessionEvicted: (sessionId: string, conversationId: string) => void | Promise<void>;
 }
 
 export interface ContainerLifecyclePolicyDeps {
@@ -181,18 +181,6 @@ export class ContainerLifecyclePolicy {
   private clearEntryTimers(entry: PauseEntry): void {
     clearTimeoutSafe(entry.idleTimer);
     entry.idleTimer = undefined;
-  }
-
-  async cancelPause(sessionId: string): Promise<void> {
-    const entry = this.entries.get(sessionId);
-    if (!entry) {
-      return;
-    }
-
-    this.clearEntryTimers(entry);
-    entry.state = 'none';
-    this.maybeDeleteEntry(sessionId, entry);
-    this.logger.debug(`${TAG} cancelled pause for session ${sessionId}`);
   }
 
   getState(sessionId: string): PauseState {
@@ -346,17 +334,34 @@ export class ContainerLifecyclePolicy {
       const container = containerByName.get(containerName);
       const alive = container !== undefined && isAliveStatus(container.status);
 
+      if (session.status === 'PAUSED') {
+        const checkpoint = await this.db.getCheckpointV2(session.id);
+        if (checkpoint) {
+          this.logger.info(`${TAG} session ${session.id}: legacy PAUSED state -> CHECKPOINTED`);
+          await this.db.updateSandboxSessionStatus(session.id, 'CHECKPOINTED');
+          await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
+          markedCheckpointed++;
+        } else {
+          this.logger.info(`${TAG} session ${session.id}: legacy PAUSED state with no checkpoint -> TERMINATED`);
+          await this.db.updateSandboxSessionStatus(session.id, 'TERMINATED');
+          await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
+          deleted++;
+        }
+        this.cleanup(session.id);
+        continue;
+      }
+
       if (!alive) {
         const checkpoint = await this.db.getCheckpointV2(session.id);
         if (checkpoint) {
            this.logger.info(`${TAG} session ${session.id}: container gone, checkpoint exists -> CHECKPOINTED`);
            await this.db.updateSandboxSessionStatus(session.id, 'CHECKPOINTED');
-           this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
+           await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
            markedCheckpointed++;
          } else {
            this.logger.info(`${TAG} session ${session.id}: container gone, no checkpoint -> TERMINATED`);
            await this.db.updateSandboxSessionStatus(session.id, 'TERMINATED');
-          this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
+           await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
           deleted++;
         }
         this.cleanup(session.id);
@@ -368,10 +373,6 @@ export class ContainerLifecyclePolicy {
         const baseUrl = `http://${containerName}:${GRPC_PORT}`;
         const { grpcClient } = await waitForContainerReady(baseUrl);
         this.reconciliationCallbacks.onSessionReconnected(session, grpcClient);
-        reconnected++;
-      } else if (session.status === 'PAUSED' && container.status === 'paused') {
-        this.logger.info(`${TAG} session ${session.id}: container paused (${session.status}), caching lazy unfreeze state`);
-        this.reconciliationCallbacks.onSessionReconnected(session);
         reconnected++;
       }
     }
@@ -398,6 +399,15 @@ export class ContainerLifecyclePolicy {
       } finally {
         this.removingContainers.delete(container.containerId);
       }
+    }
+
+    try {
+      const cleaned = await this.db.cleanupToolDedup()
+      if (cleaned > 0) {
+        this.logger.info(`${TAG} cleaned up ${cleaned} stale tool dedup entries`);
+      }
+    } catch (err) {
+      this.logger.warn(`${TAG} tool dedup cleanup failed:`, err);
     }
 
     this.logger.info(
@@ -541,7 +551,7 @@ export class ContainerLifecyclePolicy {
     if (checkpoint) {
       await this.db.updateSandboxSessionStatus(sessionId, 'CHECKPOINTED');
       if (conversationId) {
-        this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
+        await this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
       }
       this.cleanup(sessionId);
       this.logger.info(`${TAG} session ${sessionId}: dead container ${containerId}, checkpoint exists -> CHECKPOINTED`);
@@ -550,7 +560,7 @@ export class ContainerLifecyclePolicy {
 
     await this.db.updateSandboxSessionStatus(sessionId, 'TERMINATED');
     if (conversationId) {
-      this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
+      await this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
     }
     this.cleanup(sessionId);
     this.logger.info(`${TAG} session ${sessionId}: dead container ${containerId}, no checkpoint -> TERMINATED`);

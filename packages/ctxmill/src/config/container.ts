@@ -26,6 +26,7 @@ import { EventTriggerManager } from '../events/trigger-manager.js';
 import { AgentSessionService } from '../orchestrator/agent-session-service.js';
 import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
 import { ManifestService } from '../manifest/index.js';
+import { RunStartupService } from '../orchestrator/run-startup-service.js';
 import { CachedPostgresSecretProvider } from '../secrets/postgres-provider.js';
 import { deriveKey } from '../secrets/crypto.js';
 import type { SecretProvider } from '../secrets/types.js';
@@ -41,9 +42,10 @@ import { LocalToolProvider } from '../tool/providers/local.js';
 import { ArtifactToolProvider } from '../tool/providers/artifact.js';
 import { builtinTools, builtinToolNames } from '../tool/builtin/index.js';
 import { createCtxmillGuideTool } from '../tool/builtin/ctxmill-guide.js';
-import { ORCHESTRATOR_TOOLS, DAEMON_TOOLS } from '../tool/metadata.js';
+import { resolveToolLocation } from '../tool/metadata.js';
 import { zodToJsonSchema } from '../tool/schema-convert.js';
 import { ArtifactStore } from '../artifact/artifact-store.js';
+import { mapMessagesToInternal } from '../orchestrator/routes/agent-helpers.js';
 
 export interface AppContainer {
   config: ResolvedConfig;
@@ -66,6 +68,7 @@ export interface AppContainer {
   manifestService: ManifestService;
   secretProvider: SecretProvider;
   callbackDispatcher: CallbackDispatcher;
+  runStartupService: RunStartupService;
   /** Container manager for sandbox container lifecycle. */
   containerManager: ContainerManager;
   workspaceDiffService: WorkspaceDiffService;
@@ -228,6 +231,14 @@ export async function createContainer(
   toolExecutor.register(ctxmillGuideTool);
   const toolRegistry = new DefaultToolRegistry();
   toolRegistry.addProvider(new LocalToolProvider(toolExecutor));
+  const runStartupService = new RunStartupService({
+    logger: {
+      info: (msg: string, ...args: unknown[]) => console.log('[RunStartupService]', msg, ...args),
+      warn: (msg: string, ...args: unknown[]) => console.warn('[RunStartupService]', msg, ...args),
+      error: (msg: string, ...args: unknown[]) => console.error('[RunStartupService]', msg, ...args),
+      debug: (msg: string, ...args: unknown[]) => console.debug('[RunStartupService]', msg, ...args),
+    },
+  });
 
   let artifactStore: ArtifactStore | undefined;
   const s3Endpoint = process.env.S3_ENDPOINT;
@@ -254,12 +265,8 @@ export async function createContainer(
 
   // ── Events ──────────────────────────────────────────────
   const eventBus = new TypedEventBus({
-    persistEvent: (type, agentId, payload) => {
-      try {
-        db.saveEvent(type, agentId, payload);
-      } catch (err) {
-        console.error('[EventBus] persist error:', err);
-      }
+    persistEvent: async (type, agentId, payload) => {
+      await db.saveEvent(type, agentId, payload);
     },
   });
 
@@ -326,40 +333,8 @@ export async function createContainer(
     // Persist the synthetic user message
     await db.addMessage({ agentId, conversationId: conv.id, role: 'user', content: task });
     const allMessages = await db.getMessages(conv.id);
-    const messages = allMessages.map((m) => ({
-      id: m.id,
-      agentId: m.agentId ?? agentId,
-      role: m.role as 'user' | 'assistant' | 'system',
-      content: m.content,
-      toolCallId: m.toolCallId ?? undefined,
-      createdAt: new Date(m.createdAt),
-    }));
-
-    let parsedHarnessConfig: Record<string, unknown> = {};
-    try {
-      const rawHarnessConfig = JSON.parse(agent.harnessConfig);
-      if (typeof rawHarnessConfig === 'object' && rawHarnessConfig !== null && !Array.isArray(rawHarnessConfig)) {
-        parsedHarnessConfig = rawHarnessConfig as Record<string, unknown>;
-      }
-    } catch {
-      parsedHarnessConfig = {};
-    }
-
-    // Extract per-agent resourceLimits from the manifest
-    const manifest = agent.manifest as Record<string, unknown> | null;
-    const perAgentResourceLimits = manifest?.resourceLimits as import('../types.js').AgentResourceLimits | undefined;
-
-    const agentDef: import('../types.js').AgentDefinition = {
-      name: agent.name,
-      harness: agent.harness,
-      harnessConfig: parsedHarnessConfig,
-      systemPrompt: agent.systemPrompt,
-      tools: agent.tools,
-      description: agent.description ?? undefined,
-      metadata: agent.metadata ?? undefined,
-      workspaceDir: agent.workspaceDir ?? undefined,
-      resourceLimits: perAgentResourceLimits,
-    };
+    const messages = mapMessagesToInternal(allMessages, agentId);
+    const agentDef = runStartupService.buildAgentDefinition(agent);
 
     // Fire-and-forget — AgentSessionService handles SSE broadcasting, run.text_chunk events,
     // message persistence, session completion, and learning traces.
@@ -425,24 +400,11 @@ export async function createContainer(
     },
     reconciliationCallbacks: {
       onSessionReconnected: (session, grpcClient) => {
-        if (sessionManagerRef) {
-          sessionManagerRef.onSessionReconnected(session.conversationId, {
-            sessionId: session.id,
-            conversationId: session.conversationId,
-            agentId: session.agentId,
-            containerName: session.containerName ?? '',
-            containerId: session.containerId ?? '',
-            status: (session.status as 'ACTIVE' | 'PAUSED' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED') ?? 'ACTIVE',
-            harnessName: session.harnessName,
-            ...(grpcClient ? { grpcClient } : {}),
-          });
-        }
+        sessionManagerRef?.getSessionReconciler().onSessionReconnected(session, grpcClient);
       },
       onSessionEvicted: (sessionId, conversationId) => {
-        if (sessionManagerRef) {
-          sessionManagerRef.onSessionEvicted(sessionId, conversationId);
-        }
-      }
+        return sessionManagerRef?.getSessionReconciler().onSessionEvicted(sessionId, conversationId);
+      },
     },
   });
 
@@ -464,16 +426,20 @@ export async function createContainer(
     'LANGSMITH_WORKSPACE_ID',
   ] as const;
 
-  const sandboxSecrets: Readonly<Record<string, string>> = Object.fromEntries(
-    SANDBOX_SECRET_ALLOWLIST
-      .filter((key) => process.env[key])
-      .map((key) => [key, process.env[key]!]),
-  );
+  function buildSandboxSecrets(): Readonly<Record<string, string>> {
+    const secrets = Object.fromEntries(
+      SANDBOX_SECRET_ALLOWLIST
+        .filter((key) => process.env[key])
+        .map((key) => [key, process.env[key]!]),
+    );
+    return secrets;
+  }
 
   const resolveToolsForAgent = (toolNames: string[], excludeBuiltins?: string[]) => {
     const declaredTools = new Set(toolNames);
     const excluded = excludeBuiltins ? new Set(excludeBuiltins) : undefined;
     const allTools = new Map<string, { name: string; description: string; input: unknown; requiresApproval?: boolean; location?: 'sandbox' | 'orchestrator' | 'daemon'; programmatic?: boolean }>();
+    const LOCATION_TO_PROTO = { sandbox: 1, orchestrator: 2, daemon: 3 } as const;
 
     for (const tool of toolExecutor.list()) {
       if (declaredTools.has(tool.name) || builtinToolNames.has(tool.name)) {
@@ -490,9 +456,7 @@ export async function createContainer(
       }
     }
 
-  return Array.from(allTools.values()).map((tool) => {
-      const isDaemon = DAEMON_TOOLS.has(tool.name) || tool.location === 'daemon';
-      const isOrchestrator = !isDaemon && (tool.location === 'orchestrator' || ORCHESTRATOR_TOOLS.has(tool.name) || tool.requiresApproval);
+    return Array.from(allTools.values()).map((tool) => {
       let inputSchemaJson = '{"type":"object","properties":{}}';
       try {
         const schema = zodToJsonSchema(tool.input as any) as Record<string, unknown>;
@@ -506,7 +470,7 @@ export async function createContainer(
         name: tool.name,
         description: tool.description,
         inputSchemaJson,
-        location: isDaemon ? 3 : isOrchestrator ? 2 : 1,
+        location: LOCATION_TO_PROTO[resolveToolLocation(tool)],
         programmatic: tool.programmatic ?? false,
       };
     });
@@ -519,7 +483,7 @@ export async function createContainer(
     eventBus,
     maxConcurrentSessionsPerAgent: startupSettings.maxConcurrentSessionsPerAgent,
     interruptManager,
-    sandboxSecrets,
+    buildSandboxSecrets,
     resolveToolsForAgent,
     dataDir,
     workspaceDiffService,
@@ -591,6 +555,7 @@ export async function createContainer(
     manifestService,
     secretProvider,
     callbackDispatcher,
+    runStartupService,
     containerManager,
     workspaceDiffService,
     settingsService,

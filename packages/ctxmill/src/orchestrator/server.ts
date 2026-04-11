@@ -2,6 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { fastifyConnectPlugin } from '@connectrpc/connect-fastify';
+import { agUiCompatRoutes } from './ag-ui-compat/index.js';
+import { toAgentDefinition } from './session-manager/session-agent-definition.js';
 import { agentRoutes, sessionsRoutes } from './routes/agents.js';
 import { artifactRoutes } from './routes/artifacts.js';
 import { catalogRoutes } from './routes/catalogs.js';
@@ -17,6 +19,7 @@ import type { AgentSessionService } from './agent-session-service.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { LearningPipeline } from '../learning/types.js';
 import type { KnowledgeStore } from '../knowledge/types.js';
+import type { RunStartupService } from './run-startup-service.js';
 import type { TypedEventBus } from '../events/bus.js';
 import type { SecretProvider } from '../secrets/types.js';
 import { createGrpcRoutes } from './grpc/router.js';
@@ -64,6 +67,7 @@ export interface ServerOptions {
   artifactBucket?: string;
   /** Pre-wired AgentSessionService from DI container. */
   agentSessionService: AgentSessionService;
+  runStartupService?: RunStartupService;
   sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
 }
@@ -206,8 +210,18 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, learningPipeline, knowledgeStore, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, sessionManager: opts.sessionManager, settingsService: opts.settingsService });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, learningPipeline, knowledgeStore, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService });
   await app.register(sessionsRoutes, { prefix: '/api/sessions', db, sessionManager: opts.sessionManager });
+  if (eventBus) {
+    await app.register(agUiCompatRoutes, {
+      prefix: '/api/ag-ui',
+      db,
+      eventBus,
+      agentSessionService,
+      sessionManager: opts.sessionManager,
+      buildAgentDefinition: (agent) => toAgentDefinition(agent),
+    });
+  }
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
   await app.register(eventRoutes, { prefix: '/api/events', db });
   await app.register(knowledgeRoutes, { prefix: '/api/knowledge', knowledgeStore });

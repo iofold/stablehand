@@ -38,7 +38,7 @@ log_fail()  { echo -e "${RED}[FAIL]${NC}  $*"; ((fail++)); }
 cleanup() {
   log_info "Cleaning up..."
   docker rm -f "$TEST_CONTAINER" 2>/dev/null || true
-  cd "$REPO_ROOT" && docker compose --profile sandbox stop "$PROXY_SERVICE" 2>/dev/null || true
+  cd "$REPO_ROOT" && docker compose stop "$PROXY_SERVICE" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -46,20 +46,20 @@ trap cleanup EXIT
 
 log_info "Building egress proxy image..."
 cd "$REPO_ROOT"
-docker compose --profile sandbox build "$PROXY_SERVICE"
+docker compose build "$PROXY_SERVICE"
 
 log_info "Starting egress proxy..."
-docker compose --profile sandbox up -d "$PROXY_SERVICE"
+docker compose up -d "$PROXY_SERVICE"
 
 # Wait for proxy to be healthy
 log_info "Waiting for egress proxy to be healthy..."
 for i in $(seq 1 30); do
-  if docker compose --profile sandbox ps "$PROXY_SERVICE" 2>/dev/null | grep -q "healthy"; then
+  if docker compose ps "$PROXY_SERVICE" 2>/dev/null | grep -q "healthy"; then
     break
   fi
   if [ "$i" -eq 30 ]; then
     log_fail "Egress proxy did not become healthy within 30 seconds"
-    docker compose --profile sandbox logs "$PROXY_SERVICE"
+    docker compose logs "$PROXY_SERVICE"
     exit 1
   fi
   sleep 1
@@ -179,7 +179,7 @@ fi
 # ── Step 6: Check proxy logs ────────────────────────────────────────────────
 
 log_info "Checking egress proxy logs..."
-PROXY_CONTAINER_ID=$(docker compose --profile sandbox ps -q "$PROXY_SERVICE" 2>/dev/null)
+PROXY_CONTAINER_ID=$(docker compose ps -q "$PROXY_SERVICE" 2>/dev/null)
 if [ -n "$PROXY_CONTAINER_ID" ]; then
   LOG_OUTPUT=$(docker exec "$PROXY_CONTAINER_ID" cat /var/log/nginx/egress.log 2>/dev/null || echo "")
   if [ -n "$LOG_OUTPUT" ]; then

@@ -313,8 +313,21 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
+  // ── 21. tool_request_dedup ──────────────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS tool_request_dedup (
+      request_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'in_progress',
+      result TEXT,
+      error TEXT,
+      created_at BIGINT NOT NULL,
+      completed_at BIGINT
+    )
+  `;
+
   // ── Indexes ────────────────────────────────────────────────────────
-  // Matches indexes defined in schema-pg.ts table definitions
 
   // conversations
   await sql`CREATE INDEX IF NOT EXISTS idx_conversations_agent_updated ON conversations(agent_id, updated_at)`;
@@ -380,4 +393,8 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_agent_created ON artifacts(agent_id, created_at)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status)`;
+
+  // tool_request_dedup
+  await sql`CREATE INDEX IF NOT EXISTS idx_tool_dedup_created ON tool_request_dedup(created_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_tool_dedup_status ON tool_request_dedup(status)`;
 }

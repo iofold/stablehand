@@ -276,6 +276,7 @@ describe('Artifact REST API Integration', () => {
     const formData = new FormData();
     formData.append('file', new Blob([fileContent], { type: 'text/plain' }), fileName);
     formData.append('agentId', testAgentId);
+    formData.append('name', fileName);
 
     const uploadResponse = await fetch(`${ARTIFACTS_BASE}/upload`, {
       method: 'POST',
@@ -310,9 +311,9 @@ describe('Artifact REST API Integration', () => {
 
   it('accepts an optional name override in multipart upload', async () => {
     const formData = new FormData();
-    formData.append('file', new Blob(['custom-name-test'], { type: 'application/octet-stream' }), 'original.bin');
     formData.append('agentId', testAgentId);
     formData.append('name', 'renamed-artifact.bin');
+    formData.append('file', new Blob(['custom-name-test'], { type: 'application/octet-stream' }), 'original.bin');
 
     const response = await fetch(`${ARTIFACTS_BASE}/upload`, {
       method: 'POST',

@@ -51,10 +51,10 @@ These variables control the behavior of agent sandbox containers.
 
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
-| `OPENAI_API_KEY` | - | No | API key for OpenAI. | `sk-...` |
+| `OPENAI_API_KEY` | - | No | API key for OpenAI. Also accepts OpenRouter or other provider keys when using a custom `baseUrl` in agent manifests. See [Custom Providers](custom-providers.md). | `sk-...` |
 | `OPENAI_MODEL` | `gpt-5.4-mini` | No | Default model for the learning pipeline and agents. | `gpt-5.4` |
-| `OPENAI_BASE_URL` | - | No | Base URL for OpenAI-compatible APIs (e.g., Cloudflare AI Gateway). | `https://gateway...` |
-| `ANTHROPIC_API_KEY` | - | No | API key for Anthropic. | `sk-ant-...` |
+| `OPENAI_BASE_URL` | - | No | Base URL for OpenAI-compatible APIs (e.g., Cloudflare AI Gateway, OpenRouter). | `https://openrouter.ai/api/v1` |
+| `ANTHROPIC_API_KEY` | - | No | API key for Anthropic. Also accepts OpenRouter keys when using a custom `baseUrl`. See [Custom Providers](custom-providers.md). | `sk-ant-...` |
 | `GOOGLE_API_KEY` | - | No | API key for Google Gemini. | `AIza...` |
 | `LLM_PROVIDER` | `openai` | No | Default LLM provider. | `anthropic` |
 | `DEFAULT_HARNESS` | `langgraph` | No | Default harness for new agents. | `claude-agents` |
@@ -116,22 +116,19 @@ Each setting also supports an **environment variable override** that sets the de
 
 | Key | Env Var Override | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `turnTimeoutMs` | `CTXMILL_TURN_TIMEOUT_MS` | `300,000` (5m) | Timeout for a single agent turn (LLM call + tools). |
-| `idleTimeoutMs` | `CTXMILL_IDLE_TIMEOUT_MS` | `300,000` (5m) | Time before an idle session is frozen (Docker pause). |
-| `freezePromotionMs` | `CTXMILL_FREEZE_PROMOTION_MS` | `600,000` (10m) | Time before a frozen session is promoted to a checkpoint. |
-| `maxPauseDurationMs` | `CTXMILL_MAX_PAUSE_DURATION_MS` | `300,000` (5m) | Maximum time a session can stay paused during HITL. |
-| `pauseDelayMs` | `CTXMILL_PAUSE_DELAY_MS` | `5,000` (5s) | Delay before pausing a container after HITL request. |
+| `turnTimeoutMs` | `CTXMILL_TURN_TIMEOUT_MS` | `1,800,000` (30m) | Timeout for a single agent turn (LLM call + tools). |
+| `idleTimeoutMs` | `CTXMILL_IDLE_TIMEOUT_MS` | `300,000` (5m) | Time before an idle session is checkpointed by lifecycle policy. |
 | `maxGlobalContainers` | `CTXMILL_MAX_GLOBAL_CONTAINERS` | `20` | Maximum concurrent sandbox containers globally. |
-| `maxConcurrentRunsPerAgent` | `CTXMILL_MAX_CONCURRENT_RUNS_PER_AGENT` | `3` | Maximum concurrent runs for a single agent. |
+| `maxConcurrentSessionsPerAgent` | `CTXMILL_MAX_CONCURRENT_SESSIONS_PER_AGENT` | `3` | Maximum concurrent live sandbox sessions for a single agent. |
 | `maxTriggerDepth` | `CTXMILL_MAX_TRIGGER_DEPTH` | `5` | Maximum depth for event-triggered background runs. |
 | `defaultCpus` | `CTXMILL_DEFAULT_CPUS` | `1.0` | Default CPU allocation for sandboxes. |
 | `defaultMemoryMb` | `CTXMILL_DEFAULT_MEMORY_MB` | `1024` | Default memory limit for sandboxes. |
 | `defaultPidsLimit` | `CTXMILL_DEFAULT_PIDS_LIMIT` | `256` | Default PID limit for sandboxes. |
-| `defaultTimeoutSec` | `CTXMILL_DEFAULT_TIMEOUT_SEC` | `600` (10m) | Default hard timeout for sandbox containers. |
+| `defaultTimeoutSec` | `CTXMILL_DEFAULT_TIMEOUT_SEC` | `43,200` (12h) | Default hard timeout for sandbox containers. |
 | `maxWorkspaceTarBytes` | `CTXMILL_MAX_WORKSPACE_TAR_BYTES` | `100MB` | Maximum size for workspace snapshots. |
-| `maxCheckpointBytes` | `CTXMILL_MAX_CHECKPOINT_BYTES` | `5MB` | Maximum size for harness state checkpoints. |
+| `maxCheckpointBytes` | `CTXMILL_MAX_CHECKPOINT_BYTES` | `100MB` | Stored settings/API cap for checkpoint payloads. Note: the sandbox-daemon validator still defaults to `5MB` today. |
 | `maxTarUploadBytes` | `CTXMILL_MAX_TAR_UPLOAD_BYTES` | `100MB` | Maximum size for tar uploads. |
-| `queueTimeoutMs` | `CTXMILL_QUEUE_TIMEOUT_MS` | `60,000` (1m) | Timeout for container queue wait. |
+| `queueTimeoutMs` | `CTXMILL_QUEUE_TIMEOUT_MS` | `600,000` (10m) | Timeout for container queue wait. |
 | `reconciliationIntervalMs` | `CTXMILL_RECONCILIATION_INTERVAL_MS` | `300,000` (5m) | Interval for session reconciliation checks. |
 
 ---

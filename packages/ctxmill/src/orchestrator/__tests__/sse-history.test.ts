@@ -17,7 +17,21 @@ function createMockReply(): { reply: any; written: string[] } {
 }
 
 function getHistory(manager: SSEManager, agentId: string): Array<{ id: string; event: Record<string, unknown> }> {
-  return (((manager as any).eventHistory as Map<string, Array<{ id: string; event: Record<string, unknown> }>>).get(agentId) ?? []);
+  const eventHistory = (manager as any).eventHistory as Map<
+    string,
+    Map<string, Array<{ id: string; event: Record<string, unknown> }>>
+  >;
+  const conversationHistory = eventHistory.get(agentId);
+  if (!conversationHistory) {
+    return [];
+  }
+  const history = Array.from(conversationHistory.values()).flat();
+  history.sort((a, b) => {
+    const sequenceA = Number(a.id.slice(a.id.lastIndexOf('-') + 1));
+    const sequenceB = Number(b.id.slice(b.id.lastIndexOf('-') + 1));
+    return sequenceA - sequenceB;
+  });
+  return history;
 }
 
 function broadcastContentEvents(manager: SSEManager, agentId: string, count: number): void {
@@ -46,8 +60,14 @@ describe('SSEManager history retention', () => {
 
     const history = getHistory(manager, 'agent-1');
 
-    expect(history).toHaveLength(5);
+    expect(history).toHaveLength(11);
     expect(history.map((entry) => entry.event)).toEqual([
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-1' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-2' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-3' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-4' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-5' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-6' },
       { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-7' },
       { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-8' },
       { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-9' },
@@ -62,8 +82,14 @@ describe('SSEManager history retention', () => {
 
     const history = getHistory(manager, 'agent-1');
 
-    expect(history).toHaveLength(5);
+    expect(history).toHaveLength(11);
     expect(history.map((entry) => entry.event)).toEqual([
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-1' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-2' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-3' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-4' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-5' },
+      { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-6' },
       { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-7' },
       { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-8' },
       { type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-9' },
@@ -77,7 +103,7 @@ describe('SSEManager history retention', () => {
     manager.broadcast('agent-1', { type: 'RUN_FINISHED' });
 
     const { reply, written } = createMockReply();
-    manager.subscribe('agent-1', reply);
+    manager.subscribe('agent-1', reply, 'agent-1-4');
 
     expect(written).toEqual([
       'id: agent-1-5\ndata: {"type":"TEXT_MESSAGE_CONTENT","content":"chunk-5"}\n\n',
@@ -88,14 +114,14 @@ describe('SSEManager history retention', () => {
     ]);
   });
 
-  it('normal operation caps at MAX_EVENT_HISTORY', () => {
-    broadcastContentEvents(manager, 'agent-1', 60);
+  it('normal operation caps at MAX_EVENTS_PER_CONVERSATION', () => {
+    broadcastContentEvents(manager, 'agent-1', 560);
 
     const history = getHistory(manager, 'agent-1');
 
-    expect(history).toHaveLength(50);
-    expect(history[0]?.event).toEqual({ type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-11' });
-    expect(history.at(-1)?.event).toEqual({ type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-60' });
+    expect(history).toHaveLength(500);
+    expect(history[0]?.event).toEqual({ type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-61' });
+    expect(history.at(-1)?.event).toEqual({ type: 'TEXT_MESSAGE_CONTENT', content: 'chunk-560' });
   });
 
   it('empty history after completion for new agent', () => {

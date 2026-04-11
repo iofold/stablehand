@@ -15,7 +15,7 @@
  * sees sub-agent activity as normal tool_call_start/end events in the gRPC stream.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { agentEventToSessionEvent } from '../../packages/ctxmill/src/sandbox/proto-convert.js';
 import { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
 import {
@@ -248,8 +248,8 @@ describe('Harness-Native Sub-Agents', () => {
     beforeEach(() => {
       const mockContainer = createMockContainer();
       docker = createMockDocker({
-        createContainer: async () => mockContainer,
-        getContainer: () => mockContainer,
+        createContainer: vi.fn(async () => mockContainer),
+        getContainer: vi.fn(() => mockContainer),
         _mockContainer: mockContainer,
       });
       manager = new ContainerManager(undefined, docker as any);
@@ -257,7 +257,7 @@ describe('Harness-Native Sub-Agents', () => {
 
     it('should apply a single set of resource limits to the container (no per-sub-agent splitting)', async () => {
       const info = await manager.createContainer({
-        runId: 'run-subagent-001',
+        sessionId: 'run-subagent-001',
         agentId: 'multi-agent',
         harnessName: 'claude-agents',
         cpus: 2.0,
@@ -273,8 +273,8 @@ describe('Harness-Native Sub-Agents', () => {
       // Resource limits are applied once to the container,
       // covering both parent and all sub-agents.
       expect(arg.HostConfig.CpuQuota).toBe(200_000); // 2.0 * 100000
-      expect(arg.HostConfig.Memory).toBe(1024 * 1024 * 1024);
-      expect(arg.HostConfig.MemorySwap).toBe(1024 * 1024 * 1024); // No swap
+      expect(arg.HostConfig.Memory).toBe(2048 * 1024 * 1024);
+      expect(arg.HostConfig.MemorySwap).toBe(2048 * 1024 * 1024); // No swap
       expect(arg.HostConfig.PidsLimit).toBe(512);
     });
 
@@ -284,7 +284,7 @@ describe('Harness-Native Sub-Agents', () => {
       // a single set of resource fields (cpus, memoryMb, pidsLimit).
       // Verify there's no sub-agent resource field.
       const opts = {
-        runId: 'run-1',
+        sessionId: 'run-1',
         agentId: 'a1',
         harnessName: 'claude-agents',
         cpus: 1.0,
@@ -305,7 +305,7 @@ describe('Harness-Native Sub-Agents', () => {
 
     it('should set NODE_OPTIONS heap size for combined workload', async () => {
       await manager.createContainer({
-        runId: 'run-heap-test',
+        sessionId: 'run-heap-test',
         agentId: 'agent-heap',
         harnessName: 'pi-agent',
         memoryMb: 2048,

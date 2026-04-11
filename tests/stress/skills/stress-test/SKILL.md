@@ -7,10 +7,10 @@ description: Full stress-test suite for ctxmill — exercises tools, chaining, H
 
 ## Prerequisites
 
-The full stack **must** be running with the sandbox profile before starting.
+The full stack **must** be running before starting.
 
 ```bash
-docker compose --profile sandbox up --build -d
+docker compose up --build -d
 ```
 
 Verify readiness:
@@ -24,7 +24,7 @@ docker compose ps egress-proxy --format '{{.Status}}' | grep -q healthy && echo 
 
 # Sandbox harness images exist
 for img in langgraph claude-agents pi-agent; do
-  docker image inspect "ctxmill/harness-${img}:latest" > /dev/null 2>&1 && echo "Image ${img}: OK" || echo "Image ${img}: MISSING — run: docker compose --profile sandbox-build build"
+  docker image inspect "ctxmill/harness-${img}:latest" > /dev/null 2>&1 && echo "Image ${img}: OK" || echo "Image ${img}: MISSING — run: docker compose up --build"
 done
 ```
 
@@ -280,15 +280,13 @@ Pass/fail:
 
 ---
 
-## Phase 8: Cleanup
+## Post-run cleanup (manual, after human verification)
+
+Do NOT run cleanup as part of the test. Cleanup deletes agents and cascade-deletes
+their events, sessions, and messages — making post-hoc verification impossible.
+
+Run only after the human has reviewed all results:
 
 ```bash
 npx tsx tests/stress/seed.ts --clean
 ```
-
-Expected:
-- All `stress-*` agents deleted cleanly
-
-Pass/fail:
-- Pass if cleanup exits 0
-- Fail if any stress agent remains undeleted

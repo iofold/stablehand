@@ -62,7 +62,7 @@ describe('HITL Interrupt Lifecycle', () => {
       expect(mockSSE.broadcast).toHaveBeenCalledTimes(1);
       expect(mockSSE.broadcast).toHaveBeenCalledWith(
         'agent-1',
-        expect.objectContaining({ type: 'CUSTOM', internalType: 'run.interrupted' }),
+        expect.objectContaining({ type: 'HITL_PAUSE', internalType: 'run.interrupted' }),
       );
 
       // Resolve with approve

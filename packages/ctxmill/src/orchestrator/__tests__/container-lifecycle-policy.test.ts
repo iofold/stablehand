@@ -3,8 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 
 const mockContainerManager = {
-  pauseContainer: vi.fn(),
-  unpauseContainer: vi.fn(),
   isContainerAlive: vi.fn(),
   listManagedContainers: vi.fn(),
   listManagedContainersWithLabels: vi.fn(),
@@ -22,7 +20,7 @@ const mockDb = {
 } as any;
 
 const mockOnSessionReconnected = vi.fn();
-const mockOnSessionEvicted = vi.fn();
+const mockOnSessionEvicted = vi.fn().mockResolvedValue(undefined);
 
 const mockLogger = {
   info: vi.fn(),
@@ -98,8 +96,6 @@ describe('ContainerLifecyclePolicy', () => {
     vi.useFakeTimers();
     vi.resetAllMocks();
 
-    mockContainerManager.pauseContainer.mockResolvedValue(undefined);
-    mockContainerManager.unpauseContainer.mockResolvedValue(undefined);
     mockContainerManager.isContainerAlive.mockResolvedValue(true);
     mockContainerManager.listManagedContainers.mockResolvedValue([]);
     mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([]);
@@ -242,6 +238,38 @@ describe('ContainerLifecyclePolicy', () => {
   });
 
   describe('reconciliation', () => {
+    it('reconcileOnStartup converts legacy PAUSED session with checkpoint to CHECKPOINTED', async () => {
+      mockDb.getActiveSandboxSessions.mockResolvedValue([
+        createSession({ status: 'PAUSED', pausedAt: Date.now(), pausedReason: 'idle' }),
+      ]);
+      mockDb.getCheckpointV2.mockResolvedValue({ id: 'checkpoint-1' });
+      mockContainerManager.listManagedContainers.mockResolvedValue([
+        createContainer({ status: 'paused' }),
+      ]);
+
+      await getReconcileOnStartup(policy)();
+
+      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith('session-1', 'CHECKPOINTED');
+      expect(mockOnSessionEvicted).toHaveBeenCalledWith('session-1', 'conversation-1');
+      expect(mockOnSessionReconnected).not.toHaveBeenCalled();
+    });
+
+    it('reconcileOnStartup converts legacy PAUSED session without checkpoint to TERMINATED', async () => {
+      mockDb.getActiveSandboxSessions.mockResolvedValue([
+        createSession({ status: 'PAUSED', pausedAt: Date.now(), pausedReason: 'idle' }),
+      ]);
+      mockDb.getCheckpointV2.mockResolvedValue(null);
+      mockContainerManager.listManagedContainers.mockResolvedValue([
+        createContainer({ status: 'paused' }),
+      ]);
+
+      await getReconcileOnStartup(policy)();
+
+      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith('session-1', 'TERMINATED');
+      expect(mockOnSessionEvicted).toHaveBeenCalledWith('session-1', 'conversation-1');
+      expect(mockOnSessionReconnected).not.toHaveBeenCalled();
+    });
+
     it('start calls reconcileOnStartup then starts periodic timer', async () => {
       const reconcileOnStartup = vi.spyOn(
         policy as unknown as { reconcileOnStartup: () => Promise<void> },

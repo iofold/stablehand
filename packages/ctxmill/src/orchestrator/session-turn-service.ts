@@ -43,10 +43,6 @@ export interface SandboxSessionManager {
   deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<SessionEvent>;
   killSession(sessionId: string): Promise<void>;
   suspendSession(sessionId: string, reason: string): Promise<unknown>;
-  pauseSession(sessionId: string, reason: 'hitl' | 'idle'): Promise<void>;
-  resumeSession(sessionId: string): Promise<void>;
-  freezeSession(sessionId: string): Promise<void>;
-  unfreezeSession(sessionId: string): Promise<void>;
   resumeWithInterruptResolution?(sessionId: string, agentSessionId: string, agentId: string): Promise<void>;
 }
 
@@ -108,9 +104,17 @@ export class SessionTurnService {
     } finally {
       if (signal?.aborted) {
         this.logger.info(`Killing session ${sessionId} due to abort`);
-        await sessionManager.killSession(sessionId).catch((e: unknown) => {
-          this.logger.warn(`Failed to kill session ${sessionId}:`, e);
-        });
+        try {
+          await sessionManager.killSession(sessionId);
+        } catch (killErr: unknown) {
+          this.logger.warn(`Failed to kill session ${sessionId}, retrying once:`, killErr);
+          try {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            await sessionManager.killSession(sessionId);
+          } catch (retryErr: unknown) {
+            this.logger.error(`Failed to kill session ${sessionId} after retry — container may be orphaned:`, retryErr);
+          }
+        }
       }
     }
   }

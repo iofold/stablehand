@@ -97,7 +97,6 @@ async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
     },
     agentSessionService: {
       executeSession: vi.fn(),
-      resumeSession: vi.fn(),
     } as unknown as AgentSessionService,
     eventBus: new TypedEventBus(),
   });

@@ -392,8 +392,6 @@ describe('HTTP tool registration', () => {
       deliverTurn: async function* (): AsyncGenerator<SessionEvent> {},
       killSession: vi.fn(async () => {}),
       suspendSession: vi.fn(async () => {}),
-      freezeSession: vi.fn(async () => {}),
-      unfreezeSession: vi.fn(async () => {}),
     } as unknown as SandboxSessionManager;
 
     const service = new SessionTurnService({

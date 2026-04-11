@@ -1,46 +1,55 @@
 # Container Lifecycle Reference
 
-This document describes the lifecycle of sandbox containers in ctxmill, including the state machine, timeout thresholds, resource limits, and reconciliation logic.
+This document describes the current lifecycle of sandbox containers in CTXMill, including the active state machine, timeout thresholds, resource limits, and reconciliation logic.
 
 ## Container State Machine
 
-Sandbox containers follow a multi-stage state machine managed by the `SandboxSessionManager` and `ContainerLifecyclePolicy`.
+Sandbox containers are managed jointly by `SandboxSessionManager` (request path) and `ContainerLifecyclePolicy` (idle timeout + reconciliation).
 
 ```text
        [ Start ]
            |
            v
-      +---------+      (1)       +---------+
-      | Created | -------------> | Running | <------------------+
-      +---------+                +---------+                    |
-           |                          |                         |
-           | (6)                      | (2)                     | (5)
-           |                          v                         |
-           |                    +---------+      (3)       +---------+
-           +------------------> | Paused  | -------------> | Frozen  |
-           |                    +---------+                +---------+
-           |                          |                         |
-           | (6)                      | (4)                     | (4)
-           |                          v                         |
-           |                   +--------------+                 |
-           +-----------------> | Checkpointed | <---------------+
-                               +--------------+
-                                      |
-                                      | (7)
-                                      v
-                                 +---------+
-                                 | Removed |
-                                 +---------+
+      +---------+      open/ready      +---------+
+      | Created | -------------------> | Active  |
+      +---------+                      +---------+
+                                           |   \
+                                           |    \
+                                manual     |     \ idle timeout / suspend
+                                pause      |      \
+                                           v       v
+                                      +---------+ +--------------+
+                                      | Paused  | | Checkpointed |
+                                      +---------+ +--------------+
+                                           |   \         |
+                                           |    \        | restore
+                                     resume |     \      v
+                                           |      +--> +-----------+
+                                           +---------- | Restoring |
+                                                      +-----------+
+                                                           |
+                                                           v
+                                                       +---------+
+                                                       | Active  |
+                                                       +---------+
+
+Any live container can also be terminated and removed.
 ```
 
+Key points:
+- There is no persisted `FROZEN` state in the current runtime.
+- Automatic idle handling checkpoints sessions directly.
+- `PAUSED` is a compatibility/manual pause state reached via `pauseSession()` or the `/freeze` API alias.
+- HITL is modeled through durable interrupt records plus `run.interrupted` / `run.interrupt_resolved`, not through a distinct sandbox-session status.
+
 ### Transitions
-1.  **Start**: Container created and started via `ContainerManager`.
-2.  **Idle/HITL Pause**: Container is paused via `docker pause` after a period of inactivity or when waiting for human approval.
-3.  **Freeze Promotion**: Paused container is promoted to "Frozen" (app-level checkpoint) if it remains idle.
-4.  **Checkpoint Promotion**: Frozen or Paused container is fully suspended. Workspace diff is captured, harness state is persisted to DB, and the container is removed.
-5.  **Resume**: Paused or Frozen container is unpaused via `docker unpause` when a new turn is delivered.
-6.  **Direct Checkpoint**: Idle containers may be checkpointed directly if they were never paused.
-7.  **Cleanup**: Container is stopped and removed from Docker.
+1. **Start**: Container created and started via `ContainerManager`.
+2. **Activate**: The orchestrator opens the sandbox session and begins delivering turns.
+3. **Manual Pause**: A live container is paused via `docker pause` through `pauseSession()` / `/freeze`.
+4. **Resume**: A paused container is unpaused via `resumeSession()` / `/unfreeze`.
+5. **Checkpoint**: The harness exports checkpoint state, workspace diff is captured, and the container is removed.
+6. **Restore**: A checkpointed session provisions a fresh container and restores harness/workspace state.
+7. **Cleanup**: Explicit kill, reconciliation, or timeout removes the container and marks the session terminal.
 
 ## Lifecycle Phases
 
@@ -49,72 +58,71 @@ Containers are created using the `ctxmill/harness-{harness}:latest` images.
 - **Network**: Attached to the `ctxmill-agents` bridge network.
 - **Labels**:
   - `ctxmill.managed`: `true`
-  - `ctxmill.session-id`: UUID of the session
+  - `ctxmill.session-id`: UUID of the sandbox session
   - `ctxmill.agent-id`: ID of the agent
-  - `ctxmill.harness`: Harness type (e.g., `langgraph`)
+  - `ctxmill.harness`: Harness type (for example `langgraph`)
   - `ctxmill.started-at`: ISO timestamp
   - `ctxmill.timeout`: Maximum run duration in seconds
 - **Secrets**: Injected via a `tmpfs` mount at `/run/secrets/config.json`.
 
 ### 2. Startup
-- **Health Check**: The orchestrator polls the container's gRPC endpoint (port 50051) until it responds.
-- **OpenSession**: A gRPC `OpenSession` call initializes the harness with agent configuration, system prompts, and tool metadata.
+- **Health Check**: The orchestrator polls the container gRPC endpoint on port `50051` until it responds.
+- **OpenSession**: A gRPC `OpenSession` call initializes the harness with agent configuration, prompts, and tool metadata.
 
 ### 3. Active
-- **DeliverTurn**: Messages are sent to the harness via gRPC streaming.
-- **Tool Execution**: Tools are executed either locally in the container or proxied back to the orchestrator.
-- **Event Streaming**: Agent events (text deltas, tool calls, etc.) are streamed back to the UI via SSE.
+- **DeliverTurn**: Messages are streamed to the harness via gRPC.
+- **Tool Execution**: Tools run either inside the sandbox or proxied back to the orchestrator.
+- **Event Streaming**: Turn, tool, and message events are rebroadcast to SSE clients through `SSEBroadcaster`.
 
-### 4. Idle
-When a turn completes, an idle timer starts. If no new turn is delivered within the timeout, the container enters the **Paused** state.
+### 4. Paused
+- **Trigger**: Manual compatibility pause via `pauseSession()` / `/freeze`.
+- **Action**: `docker pause` freezes processes while keeping container memory intact.
+- **Note**: Automatic idle lifecycle does not pass through `PAUSED`; it checkpoints directly.
 
-### 5. Paused
-- **Trigger**: 5 minutes of inactivity (default).
-- **Action**: `docker pause` is called on the container. This freezes all processes and stops CPU usage while keeping memory intact.
-
-### 6. Frozen
-- **Trigger**: Continued inactivity while paused.
-- **Action**: The harness performs a cooperative suspend, saving its internal state to the database.
-
-### 7. Checkpointed
-- **Trigger**: Final escalation of the idle/HITL timer.
+### 5. Checkpointed
+- **Trigger**: Idle timeout, explicit suspend, or recovery flow.
 - **Action**:
-  1.  Workspace diff is captured (tarball of changed files).
-  2.  Harness state is saved to the `sandbox_session_checkpoints_v2` table.
-  3.  Container is stopped and removed.
-  4.  Session status in DB becomes `CHECKPOINTED`.
+  1. Harness state is exported to checkpoint payloads.
+  2. Workspace diff is captured as `workspace.tar.gz`.
+  3. Container is stopped and removed.
+  4. Session status in DB becomes `CHECKPOINTED`.
 
-### 8. Cleanup
+### 6. Restoring
+- **Trigger**: A new turn or interrupt resolution targets a checkpointed session.
+- **Action**: A new container is provisioned, secrets are re-injected, checkpoint state is restored, and the session returns to `ACTIVE`.
+
+### 7. Cleanup
 Containers are removed when:
 - The session is explicitly killed.
-- The container exceeds its `ctxmill.timeout` label.
-- The orchestrator detects an "orphan" container (no matching active session in DB).
+- Reconciliation determines the container is orphaned or expired.
+- Recovery decides the session must be terminated instead of restored.
 
 ## Timeout Thresholds
 
-These values are defined in `ContainerLifecyclePolicy` and `SandboxSessionManager`.
+These values are defined in `ContainerLifecyclePolicy`, `SandboxSessionManager`, `InterruptManager`, and the settings service.
 
-| Threshold | Value | Description |
-|-----------|-------|-------------|
-| **Idle Timeout** | 5 minutes | Time before an active container is paused or checkpointed. |
-| **HITL Grace** | 5 minutes | Time allowed for human approval before the container is checkpointed. |
-| **Turn Timeout** | 5 minutes | Maximum time for a single gRPC `deliverTurn` stream. |
+| Threshold | Default | Description |
+|-----------|---------|-------------|
+| **Idle Timeout** | 5 minutes | Time before an idle `ACTIVE` session is checkpointed directly. |
+| **Interrupt Wait** | 5 minutes | Default `request-approval` wait before an interrupt times out. |
+| **Turn Timeout** | 30 minutes | Default max time for a single turn execution. |
 | **Health Check** | 10 seconds | Max time to wait for a new container to become ready. |
-| **Reconciliation** | 5 minutes | Interval for the background orphan cleanup process. |
-| **Queue Timeout** | 60 seconds | Max time a request waits in the concurrency semaphore queue. |
+| **Reconciliation** | 5 minutes | Interval for orphan/session reconciliation. |
+| **Queue Timeout** | 10 minutes | Max time a request waits in the container semaphore queue. |
 
 ## Resource Limits
 
 Default limits are applied by `ContainerManager` unless overridden in the agent manifest.
 
-- **CPU**: 1.0 (fractional cores).
-- **Memory**: 1024 MiB (default).
-  - *Note*: `claude-agents` harness has a hard floor of **2048 MiB**.
-- **PIDs**: 256 (prevents fork bombs).
-- **Storage**: Workspace changes are capped at 100 MB for tarballs.
+- **CPU**: `1.0` fractional cores.
+- **Memory**: `1024 MiB` by default.
+  - `claude-agents` has a hard floor of `2048 MiB`.
+- **PIDs**: `256`.
+- **Workspace Tar**: `100 MB` cap for checkpoint workspace snapshots.
 
 ### Configuration
 Limits can be set in the agent YAML under `resourceLimits`:
+
 ```yaml
 resourceLimits:
   cpus: 2.0
@@ -125,15 +133,15 @@ resourceLimits:
 
 ## Concurrency & Semaphore
 
-To prevent resource exhaustion, the orchestrator uses a global semaphore (`ContainerSemaphore`).
+To prevent resource exhaustion, the orchestrator uses a global `ContainerSemaphore`.
 
-- **Max Concurrent Containers**: 20 (configurable via `CTXMILL_MAX_CONTAINERS`).
-- **Queueing**: If the limit is reached, new container requests enter a FIFO queue.
-- **Timeout**: If a request stays in the queue for more than 60 seconds, it fails with a `503 Service Unavailable` (`ContainerLimitError`).
+- **Max Concurrent Containers**: `20` by default (`CTXMILL_MAX_GLOBAL_CONTAINERS`).
+- **Queueing**: Requests wait in FIFO order when capacity is exhausted.
+- **Timeout**: If a request exceeds `queueTimeoutMs` (default `10 minutes`), it fails with `503 Service Unavailable` / `ContainerLimitError`.
 
 ## Manual Operations
 
-Operators can interact with sandbox containers using standard Docker commands.
+Operators can inspect or remove managed containers with standard Docker commands.
 
 ### List Managed Containers
 ```bash
@@ -142,50 +150,46 @@ docker ps --filter "label=ctxmill.managed=true"
 
 ### Inspect a Session
 ```bash
-docker inspect ctxmill-run-<session-id>
+docker inspect "$(docker ps -aq --filter "label=ctxmill.session-id=<session-id>")"
 ```
 
 ### View Logs
 ```bash
-docker logs ctxmill-run-<session-id>
+docker logs "$(docker ps -aq --filter "label=ctxmill.session-id=<session-id>")"
 ```
 
 ### Manually Kill a Container
 ```bash
-docker rm -f ctxmill-run-<session-id>
+docker rm -f "$(docker ps -aq --filter "label=ctxmill.session-id=<session-id>")"
 ```
-*Note: The orchestrator will detect the missing container during the next reconciliation cycle and mark the session as `TERMINATED` or `CHECKPOINTED`.*
+
+The orchestrator will reconcile the missing container on the next lifecycle pass and mark the session `TERMINATED` or `CHECKPOINTED`, depending on checkpoint availability.
 
 ## Orphan Reconciliation
 
-The `ContainerLifecyclePolicy` runs a reconciliation loop every 5 minutes to ensure the Docker state matches the database.
+`ContainerLifecyclePolicy` runs a reconciliation loop every 5 minutes to keep Docker state aligned with the database.
 
-1.  **Dead Sessions**: If a session is `ACTIVE` in the DB but its container is gone, it is marked `CHECKPOINTED` (if a checkpoint exists) or `TERMINATED`.
-2.  **Orphan Containers**: If a container has the `ctxmill.managed` label but no corresponding `ACTIVE` session in the DB, it is forcefully removed.
-3.  **Expired Containers**: Containers exceeding their `ctxmill.timeout` are stopped and removed.
+1. **Dead sessions**: If a DB session is live but its container is gone, reconciliation marks it `CHECKPOINTED` when checkpoint data exists, otherwise `TERMINATED`.
+2. **Orphan containers**: Managed containers with no corresponding live DB session are removed.
+3. **Expired containers**: Containers exceeding their timeout labels are stopped and removed.
 
 ## HITL Integration
 
-Human-in-the-loop (HITL) approvals interact with the lifecycle to save resources:
+Human-in-the-loop approvals are durable, but they are not modeled as a separate lifecycle state.
 
-1.  **Pause**: When an agent requests approval, the container is immediately paused (`docker pause`) after a 5-second grace period.
-2.  **Escalation**: If no approval is received within 5 minutes, the container is promoted to a full **Checkpoint** and removed.
-3.  **Resume**: When the user submits the approval, the orchestrator unpauses the container (or restores it from checkpoint) and delivers the resolution as a new turn.
+1. An approval request persists a pending interrupt and emits `run.interrupted`.
+2. The session may stay live, be manually paused, or later be checkpointed through normal lifecycle rules.
+3. When the user resolves the interrupt, the orchestrator resumes the matching session or restores it from checkpoint and delivers a continuation turn.
 
 ## Troubleshooting
 
-### Stuck Containers
-If a container is stuck in `paused` state and won't resume:
-- Check orchestrator logs for `unpauseContainer` failures.
-- Manually unpause: `docker unpause <container-id>`.
-
 ### Resource Exhaustion
-If you see `ContainerLimitError` (503) in the UI:
-- Increase `CTXMILL_MAX_CONTAINERS` in your `.env` file.
+If you see `ContainerLimitError` (`503`) in the UI:
+- Increase `CTXMILL_MAX_GLOBAL_CONTAINERS` or `queueTimeoutMs`.
 - Check for orphan containers that reconciliation might have missed.
 
 ### Health Check Failures
 If containers are created but fail to start:
-- Ensure the `ctxmill-agents` network exists: `docker network ls`.
-- Check container logs for gRPC server startup errors.
-- Verify that the harness image is built correctly.
+- Ensure the `ctxmill-agents` network exists with `docker network ls`.
+- Check container logs for gRPC startup errors.
+- Verify the harness image was rebuilt after sandbox-daemon changes.

@@ -11,7 +11,9 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts', 'packages/ctxmill/**/*.test.ts', 'packages/sandbox-daemon/**/*.test.ts', 'packages/examples/**/*.test.ts'],
+    exclude: ['tests/e2e/**'],
     setupFiles: ['./tests/setup-strict.ts'],
+    teardownTimeout: 5000,
     server: {
       deps: {
         inline: [/@langchain\//],

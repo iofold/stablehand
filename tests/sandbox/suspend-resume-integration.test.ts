@@ -204,13 +204,10 @@ function createCheckpointFromCollector(options: {
 
 function createMockContainerManager(): ContainerManager {
   return {
-    pauseContainer: vi.fn().mockResolvedValue(undefined),
-    unpauseContainer: vi.fn().mockResolvedValue(undefined),
     createContainer: vi.fn(),
     startContainer: vi.fn(),
     stopContainer: vi.fn(),
     removeContainer: vi.fn(),
-    injectSecrets: vi.fn(),
     extractContainerDiff: vi.fn(),
     extractLogs: vi.fn(),
     getContainer: vi.fn(),

@@ -1,0 +1,195 @@
+import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { create } from '@bufbuild/protobuf';
+import {
+  OpenSessionRequestSchema,
+  ToolMetadataSchema,
+} from '@ctxmill/proto/sandbox/v1';
+
+import type { DatabaseRepository } from '../../database/repository.js';
+import type { ContainerManager } from '../../sandbox/container-manager.js';
+import { WorkspacePreparationService } from '../../sandbox/workspace-preparation.js';
+import type { AgentDefinition } from '../../types.js';
+import {
+  copyBaseToSession,
+  getSessionDir,
+  getSessionWorkspacePath,
+} from '../../workspace/session-workspace.js';
+import {
+  retryGrpcCall,
+  waitForContainerReady,
+} from './grpc-session-client.js';
+import type {
+  Logger,
+  SessionRecord,
+  ToolMetadata,
+} from './types.js';
+
+const TAG = '[SandboxSessionManager]';
+const GRPC_PORT = 50051;
+
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((entry): entry is string => typeof entry === 'string');
+  return strings.length > 0 ? strings : undefined;
+}
+
+export interface SessionRuntimeFactoryDeps {
+  containerManager: Pick<ContainerManager, 'createContainer' | 'startContainer'>;
+  db: Pick<DatabaseRepository, 'createSandboxSession'>;
+  buildSandboxSecrets: () => Readonly<Record<string, string>>;
+  resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[]) => ToolMetadata[];
+  checkConcurrencyLimit: (agentId: string) => void;
+  logger: Logger;
+  dataDir?: string;
+}
+
+export class SessionRuntimeFactory {
+  constructor(private readonly deps: SessionRuntimeFactoryDeps) {}
+
+  async createFreshSession(
+    conversationId: string,
+    agentDef: AgentDefinition,
+    agentId?: string,
+  ): Promise<SessionRecord> {
+    const harnessName = agentDef.harness ?? 'langgraph';
+    const sessionId = randomUUID();
+    const effectiveAgentId = agentId ?? agentDef.name;
+
+    this.deps.checkConcurrencyLimit(effectiveAgentId);
+
+    this.deps.logger.info(
+      `${TAG} creating fresh session ${sessionId} for conversation ${conversationId} (harness=${harnessName})`,
+    );
+
+    let workspaceDir = agentDef.workspaceDir;
+    let sessionWorkspaceDir: string | undefined;
+
+    if (this.deps.dataDir && agentDef.workspaceDir) {
+      const sessionDir = getSessionDir(this.deps.dataDir, effectiveAgentId, sessionId);
+      await copyBaseToSession(agentDef.workspaceDir, sessionDir);
+      sessionWorkspaceDir = getSessionWorkspacePath(this.deps.dataDir, effectiveAgentId, sessionId);
+      workspaceDir = sessionWorkspaceDir;
+
+      this.deps.logger.debug(`${TAG} created session workspace at ${sessionWorkspaceDir}`);
+    }
+
+    if (workspaceDir && agentDef.workspaceContent) {
+      const workspacePreparation = new WorkspacePreparationService({ logger: this.deps.logger });
+      await workspacePreparation.prepare({
+        workspaceDir,
+        projectDir: agentDef.projectDir,
+        harnessName,
+        workspaceContent: agentDef.workspaceContent,
+      });
+    }
+
+    const setup = agentDef.harnessConfig['setup'];
+    const symlinks =
+      workspaceDir && typeof setup === 'object' && setup !== null && 'symlinks' in setup && Array.isArray(setup.symlinks)
+        ? setup.symlinks
+        : undefined;
+
+    if (workspaceDir && symlinks) {
+      for (const link of symlinks) {
+        const srcPath = join(workspaceDir, link.src);
+        const destPath = join(workspaceDir, link.dest);
+        await fs.mkdir(dirname(destPath), { recursive: true });
+        try {
+          await fs.symlink(srcPath, destPath);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+            throw err;
+          }
+        }
+      }
+    }
+
+    const sandboxSecrets = this.deps.buildSandboxSecrets();
+    const secretKeys = Object.keys(sandboxSecrets);
+    this.deps.logger.info(`${TAG} injecting ${secretKeys.length} secrets: [${secretKeys.join(', ')}]`);
+
+    const containerInfo = await this.deps.containerManager.createContainer({
+      sessionId,
+      agentId: effectiveAgentId,
+      harnessName,
+      workspaceDir,
+      cpus: agentDef.resourceLimits?.cpus,
+      memoryMb: agentDef.resourceLimits?.memoryMb,
+      pidsLimit: agentDef.resourceLimits?.pidsLimit,
+      timeoutSec: agentDef.resourceLimits?.timeoutSec,
+      secrets: sandboxSecrets,
+    });
+
+    await this.deps.containerManager.startContainer(containerInfo.containerId);
+
+    const baseUrl = `http://${containerInfo.containerName}:${GRPC_PORT}`;
+    this.deps.logger.debug(`${TAG} waiting for container at ${baseUrl}`);
+    const { grpcClient } = await waitForContainerReady(baseUrl);
+
+    const resolvedTools = this.deps.resolveToolsForAgent(
+      agentDef.tools ?? [],
+      asStringArray(agentDef.metadata?.excludeBuiltinTools),
+    );
+    const openReq = create(OpenSessionRequestSchema, {
+      bootstrap: {
+        case: 'fresh',
+        value: {
+          agentId: effectiveAgentId,
+          conversationId,
+          harnessName,
+          harnessConfigJson: JSON.stringify(agentDef.harnessConfig),
+          systemPrompt: agentDef.systemPrompt,
+          workspaceDir: '/workspace',
+          tools: resolvedTools.map((tool) => create(ToolMetadataSchema, {
+            name: tool.name,
+            description: tool.description,
+            inputSchemaJson: tool.inputSchemaJson,
+            location: tool.location,
+            programmatic: tool.programmatic ?? false,
+          })),
+        },
+      },
+    });
+
+    this.deps.logger.debug(`${TAG} opening session on container ${containerInfo.containerName}`);
+    await retryGrpcCall(() => grpcClient.openSession(openReq), 5, 1000);
+
+    const dbSession = await this.deps.db.createSandboxSession({
+      id: sessionId,
+      conversationId,
+      agentId: effectiveAgentId,
+      containerName: containerInfo.containerName,
+      containerId: containerInfo.containerId,
+      harnessName,
+      status: 'ACTIVE',
+    });
+
+    return {
+      sessionId: dbSession.id,
+      conversationId,
+      agentId: effectiveAgentId,
+      containerName: containerInfo.containerName,
+      containerId: containerInfo.containerId,
+      status: 'ACTIVE',
+      harnessName,
+      grpcClient,
+      sessionWorkspaceDir,
+    };
+  }
+
+  async getExistingSessionWorkspaceDir(agentId: string, sessionId: string): Promise<string | undefined> {
+    if (!this.deps.dataDir) {
+      return undefined;
+    }
+
+    const candidatePath = getSessionWorkspacePath(this.deps.dataDir, agentId, sessionId);
+    try {
+      await fs.access(candidatePath);
+      return candidatePath;
+    } catch {
+      return undefined;
+    }
+  }
+}

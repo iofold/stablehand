@@ -55,7 +55,9 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 
 RUN deluser --remove-home node 2>/dev/null; \
-    addgroup -g 1000 ctxmill && adduser -u 1000 -G ctxmill -D -s /bin/sh ctxmill
+    addgroup -g 1000 ctxmill && adduser -u 1000 -G ctxmill -D -s /bin/sh -h /home/ctxmill ctxmill
+
+ENV HOME=/home/ctxmill
 
 WORKDIR /app
 RUN chown ctxmill:ctxmill /app
@@ -72,12 +74,14 @@ COPY --chown=ctxmill:ctxmill --from=build /app/packages/sandbox-daemon/src/ pack
 COPY --chown=ctxmill:ctxmill --from=build /app/packages/proto/ packages/proto/
 
 USER root
+ENV HOME=/root
 RUN mkdir -p /workspace && chown ctxmill:ctxmill /workspace
 RUN cd /app && npm install --no-save playwright 2>/dev/null || true
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     /root/.local/bin/uv venv /opt/venv && \
     /root/.local/bin/uv pip install --python /opt/venv/bin/python python-docx python-pptx openpyxl pdfplumber pillow trafilatura
 ENV PATH="/opt/venv/bin:$PATH"
+ENV HOME=/home/ctxmill
 USER ctxmill
 
 EXPOSE 50051
@@ -97,7 +101,6 @@ FROM harness-base AS harness-claude-agents
 USER root
 RUN npm install -g @anthropic-ai/claude-code \
     && printf '#!/bin/sh\nexec /usr/local/bin/node "$@"\n' > /usr/local/bin/claude-wrapper && chmod +x /usr/local/bin/claude-wrapper
-ENV HOME=/home/ctxmill
 ENV CLAUDE_CODE_PATH=/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js
 USER ctxmill
 WORKDIR /app

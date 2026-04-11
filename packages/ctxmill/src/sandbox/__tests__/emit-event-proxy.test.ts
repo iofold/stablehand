@@ -25,7 +25,7 @@ import {
   type OrchestratorServiceClient,
 } from '../tool-proxy.js';
 import { protoToToolDefs } from '../proto-convert.js';
-import { toToolMetadata, toToolMetadataList, ORCHESTRATOR_TOOLS } from '../../tool/metadata.js';
+import { toToolMetadata, toToolMetadataList } from '../../tool/metadata.js';
 import { emitEventTool } from '../../tool/builtin/emit-event.js';
 import { builtinTools, builtinToolNames } from '../../tool/builtin/index.js';
 import {
@@ -77,13 +77,9 @@ function makeEmitEventProtoMetadata(): ProtoToolMetadata {
   });
 }
 
-/* -------------------------------------------------------------------------- */
-/*  ORCHESTRATOR_TOOLS and ToolMetadata verification                           */
-/* -------------------------------------------------------------------------- */
-
-describe('emit-event in ORCHESTRATOR_TOOLS', () => {
-  it('is included in the ORCHESTRATOR_TOOLS set', () => {
-    expect(ORCHESTRATOR_TOOLS.has('emit-event')).toBe(true);
+describe('emit-event builtin registration', () => {
+  it('is explicitly marked as an orchestrator tool', () => {
+    expect(emitEventTool.location).toBe('orchestrator');
   });
 
   it('is included in the builtinTools array', () => {

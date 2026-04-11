@@ -31,4 +31,3 @@ export type {
   CheckpointSizeResult,
 } from './checkpoint.js';
 export * from './execution-phase.js';
-export * from './secret-reader.js';

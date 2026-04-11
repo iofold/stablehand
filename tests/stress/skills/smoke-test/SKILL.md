@@ -185,10 +185,12 @@ curl -s "$API_BASE/api/events?type=stress.tools.complete&limit=20" | jq '.events
 
 Pass if at least one `stress.tools.complete` event exists from this run.
 
-## 6) Cleanup
+## Post-run cleanup (manual, after human verification)
+
+Do NOT run cleanup as part of the test. Cleanup cascade-deletes events/sessions/messages.
+
+Run only after the human has reviewed all results:
 
 ```bash
 npx tsx tests/stress/seed.ts --clean
 ```
-
-Pass if the cleanup script removes the imported `stress-*` agents without errors.

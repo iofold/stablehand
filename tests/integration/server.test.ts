@@ -197,61 +197,31 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
 
     expect(res.statusCode).toBe(404);
   });
-});
-
-describe('Module integration', () => {
-  beforeEach(() => { allowConsoleErrors(); });
 
   it('container creates all services with interface types', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'integration-module-'));
-    try {
-      const container = await createContainer(
-        {
-          preset: 'docker',
-          database: {
-            url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
-          },
-          llm: {
-            provider: 'anthropic',
-            model: 'claude-sonnet-4-6',
-            apiKey: 'test-key-not-used',
-          },
-        },
-        dir,
-      );
+    expect(container.knowledgeStore).toBeDefined();
+    expect(container.contextProvider).toBeDefined();
+    expect(container.toolExecutor).toBeDefined();
+    expect(container.agentSessionService).toBeDefined();
+    expect(container.eventBus).toBeDefined();
+    expect(container.sseManager).toBeDefined();
+    expect(container.interruptManager).toBeDefined();
+    expect(container.sessionManager).toBeDefined();
 
-      // All services exist
-      expect(container.knowledgeStore).toBeDefined();
-      expect(container.contextProvider).toBeDefined();
-      expect(container.toolExecutor).toBeDefined();
-      expect(container.agentSessionService).toBeDefined();
-      expect(container.eventBus).toBeDefined();
-      expect(container.sseManager).toBeDefined();
-      expect(container.interruptManager).toBeDefined();
-      expect(container.sessionManager).toBeDefined();
+    expect(typeof container.knowledgeStore.add).toBe('function');
+    expect(typeof container.knowledgeStore.render).toBe('function');
 
-      // Interface methods exist — KnowledgeStore
-      expect(typeof container.knowledgeStore.add).toBe('function');
-      expect(typeof container.knowledgeStore.render).toBe('function');
-
-      // Interface methods exist — LLMProvider
-      if (container.llmProvider) {
-        expect(typeof container.llmProvider.invoke).toBe('function');
-        expect(typeof container.llmProvider.healthy).toBe('function');
-      }
-
-      // Interface methods exist — LearningPipeline
-      if (container.learningPipeline) {
-        expect(typeof container.learningPipeline.process).toBe('function');
-        expect(typeof container.learningPipeline.getKnowledge).toBe('function');
-      }
-
-      // Interface methods exist — ContextProvider
-      expect(typeof container.contextProvider.query).toBe('function');
-      expect(typeof container.contextProvider.healthy).toBe('function');
-      await container.close();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    if (container.llmProvider) {
+      expect(typeof container.llmProvider.invoke).toBe('function');
+      expect(typeof container.llmProvider.healthy).toBe('function');
     }
+
+    if (container.learningPipeline) {
+      expect(typeof container.learningPipeline.process).toBe('function');
+      expect(typeof container.learningPipeline.getKnowledge).toBe('function');
+    }
+
+    expect(typeof container.contextProvider.query).toBe('function');
+    expect(typeof container.contextProvider.healthy).toBe('function');
   });
 });
