@@ -96,7 +96,7 @@ export const eventStore = pgTable('event_store', {
 export const suspendedSessions = pgTable('suspended_sessions', {
   id: text('id').primaryKey(),
   agentSessionId: text('agent_session_id').notNull(),
-  agentId: text('agent_id').notNull(),
+  agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
   waitEventType: text('wait_event_type').notNull(),
   waitSelector: text('wait_selector').notNull(),
   waitExpiresAt: bigint('wait_expires_at', { mode: 'number' }),
@@ -110,14 +110,19 @@ export const suspendedSessions = pgTable('suspended_sessions', {
 
 export const scheduledEvents = pgTable('scheduled_events', {
   id: text('id').primaryKey(),
-  agentId: text('agent_id').notNull(),
+  agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
   type: text('type').notNull(),
   payload: text('payload').notNull(),
   wakeAt: bigint('wake_at', { mode: 'number' }).notNull(),
   status: text('status').notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  claimedAt: bigint('claimed_at', { mode: 'number' }),
+  claimExpiresAt: bigint('claim_expires_at', { mode: 'number' }),
+  lastError: text('last_error'),
   createdAt: bigint('created_at', { mode: 'number' }).notNull(),
 }, (table) => ({
   wakeIdx: index('idx_scheduled_events_wake').on(table.status, table.wakeAt),
+  claimExpiresIdx: index('idx_scheduled_events_claim_expires').on(table.status, table.claimExpiresAt),
 }));
 
 export const eventTriggers = pgTable('event_triggers', {
@@ -225,12 +230,15 @@ export const callbackOutbox = pgTable('callback_outbox', {
   attempts: integer('attempts').notNull().default(0),
   maxAttempts: integer('max_attempts').notNull().default(5),
   nextAttemptAt: bigint('next_attempt_at', { mode: 'number' }).notNull(),
+  claimedAt: bigint('claimed_at', { mode: 'number' }),
+  claimExpiresAt: bigint('claim_expires_at', { mode: 'number' }),
   lastAttemptAt: bigint('last_attempt_at', { mode: 'number' }),
   lastError: text('last_error'),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   deliveredAt: bigint('delivered_at', { mode: 'number' }),
 }, (table) => ({
   statusIdx: index('idx_outbox_status').on(table.status, table.nextAttemptAt),
+  claimExpiresIdx: index('idx_outbox_claim_expires').on(table.status, table.claimExpiresAt),
   agentIdx: index('idx_outbox_agent').on(table.agentId),
 }));
 
@@ -255,7 +263,7 @@ export const systemSettings = pgTable('system_settings', {
 
 export const artifacts = pgTable('artifacts', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
-  agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id').references(() => agents.id, { onDelete: 'set null' }),
   sessionId: text('session_id').references(() => turns.id, { onDelete: 'set null' }),
   conversationId: text('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
   name: text('name').notNull(),

@@ -12,11 +12,34 @@ export interface ArtifactRouteOptions {
   eventBus?: TypedEventBus;
 }
 
+function buildArtifactStorageKey(artifactId: string, name: string): string {
+  const safeName = name.trim().replace(/[/\\]+/g, '_') || 'artifact';
+  return `artifacts/${artifactId}/${safeName}`;
+}
+
 export async function artifactRoutes(
   app: FastifyInstance,
   opts: ArtifactRouteOptions,
 ): Promise<void> {
   const { artifactStore, repository, bucket, eventBus } = opts;
+
+  const resolveArtifactForRead = async (id: string) => {
+    const artifact = await repository.getArtifact(id);
+    if (!artifact) return undefined;
+    if (artifact.status !== 'pending_upload') {
+      return artifact;
+    }
+
+    const head = await artifactStore.headObject(artifact.storageKey);
+    if (!head) {
+      return artifact;
+    }
+
+    return await repository.markArtifactUploadConfirmed(id, {
+      sizeBytes: head.sizeBytes,
+      mimeType: head.contentType,
+    }) ?? artifact;
+  };
 
   app.get('/', async (req, reply) => {
     const { agentId, sessionId, limit, offset } = req.query as {
@@ -55,9 +78,13 @@ export async function artifactRoutes(
   app.get('/:id/download', async (req, reply) => {
     const { id } = req.params as { id: string };
 
-    const artifact = await repository.getArtifact(id);
+    const artifact = await resolveArtifactForRead(id);
     if (!artifact) {
       return reply.status(404).send({ error: 'Artifact not found' });
+    }
+
+    if (artifact.status !== 'active') {
+      return reply.status(409).send({ error: 'Artifact upload is not confirmed', status: artifact.status });
     }
 
     const { body, contentType } = await artifactStore.download(artifact.storageKey);
@@ -76,9 +103,13 @@ export async function artifactRoutes(
     const { id } = req.params as { id: string };
     const { expiresIn } = req.query as { expiresIn?: string };
 
-    const artifact = await repository.getArtifact(id);
+    const artifact = await resolveArtifactForRead(id);
     if (!artifact) {
       return reply.status(404).send({ error: 'Artifact not found' });
+    }
+
+    if (artifact.status !== 'active') {
+      return reply.status(409).send({ error: 'Artifact upload is not confirmed', status: artifact.status });
     }
 
     const ttl = Math.min(Number(expiresIn) || 3600, 86400);
@@ -106,7 +137,7 @@ export async function artifactRoutes(
     }
 
     const artifactId = randomUUID();
-    const storageKey = `${body.agentId}/${artifactId}/${body.name}`;
+    const storageKey = buildArtifactStorageKey(artifactId, body.name);
     const ttl = 3600;
 
     const uploadUrl = await artifactStore.getSignedUploadUrl(storageKey, body.mimeType, ttl);
@@ -120,7 +151,8 @@ export async function artifactRoutes(
       sizeBytes: body.sizeBytes ?? 0,
       storageKey,
       bucket,
-      status: 'active',
+      status: 'pending_upload',
+      expiresAt: Date.now() + ttl * 1000,
     });
 
     eventBus?.emit('custom', {
@@ -184,7 +216,7 @@ export async function artifactRoutes(
     }
 
     const artifactId = randomUUID();
-    const storageKey = `${agentId}/${artifactId}/${name}`;
+    const storageKey = buildArtifactStorageKey(artifactId, name);
 
     await artifactStore.upload(storageKey, fileBuffer, mimeType, fileBuffer.length);
 
@@ -231,7 +263,7 @@ export async function artifactRoutes(
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
 
-    const artifact = await repository.getArtifact(id);
+    const artifact = await resolveArtifactForRead(id);
     if (!artifact) {
       return reply.status(404).send({ error: 'Artifact not found' });
     }
@@ -247,7 +279,7 @@ export async function artifactRoutes(
     await repository.deleteArtifact(id);
     eventBus?.emit('custom', {
       type: 'artifact.deleted',
-      agentId: artifact.agentId,
+      agentId: artifact.agentId ?? 'global',
       payload: { artifactId: id },
       timestamp: Date.now(),
     });

@@ -19,17 +19,47 @@ export interface HttpToolDefinition {
 
 // ── Internal fetch helpers ───────────────────────────────────────────
 
+function extractErrorDetail(body: unknown): string {
+  if (body && typeof body === 'object') {
+    const record = body as Record<string, unknown>;
+    for (const key of ['error', 'message', 'detail']) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value;
+      }
+    }
+
+    if (Object.keys(record).length === 0) {
+      return '';
+    }
+  }
+
+  if (typeof body === 'string') {
+    return body;
+  }
+
+  if (body == null) {
+    return '';
+  }
+
+  return JSON.stringify(body);
+}
+
+async function readErrorDetail(res: Response): Promise<string> {
+  try {
+    return extractErrorDetail(await res.json());
+  } catch {
+    return await res.text().catch(() => '');
+  }
+}
+
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
-    let errorDetail = '';
-    try {
-      const body = await res.json();
-      errorDetail = body.error || body.message || body.detail || JSON.stringify(body);
-    } catch {
-      errorDetail = await res.text().catch(() => '');
-    }
-    throw new Error(errorDetail || `API ${init?.method ?? 'GET'} ${url} failed: ${res.status}`);
+    const method = init?.method ?? 'GET';
+    const baseMessage = `API ${method} ${url} failed: ${res.status}`;
+    const errorDetail = await readErrorDetail(res);
+    throw new Error(errorDetail ? `${baseMessage} - ${errorDetail}` : baseMessage);
   }
   // 204 No Content — nothing to parse
   if (res.status === 204) return undefined as unknown as T;

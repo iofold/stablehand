@@ -423,8 +423,8 @@ if curl -sf http://localhost:9000/minio/health/live > /dev/null 2>&1; then
   # List: GET /api/artifacts?agentId=... returns { artifacts: [...] }
   curl -s "$API_BASE/api/artifacts?agentId=$LG_OPENAI_ID" | jq '.artifacts | length'
 
-  # Get single: GET /api/artifacts/:id returns { artifact: {...} }
-  curl -s "$API_BASE/api/artifacts/$ARTIFACT_ID" | jq '.artifact | {id, name, mimeType, sizeBytes}'
+  # Get single: GET /api/artifacts/:id returns the raw Artifact object (no wrapper)
+  curl -s "$API_BASE/api/artifacts/$ARTIFACT_ID" | jq '{id, name, mimeType, sizeBytes}'
 
   ARTIFACT_DOWNLOAD_RESPONSE="$(curl -s "$API_BASE/api/artifacts/$ARTIFACT_ID/download-url")"
   ARTIFACT_DOWNLOAD_URL="$(echo "$ARTIFACT_DOWNLOAD_RESPONSE" | jq -r '.url')"

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createTestAgent, deleteTestAgent } from './support.js';
+import { createTestAgent, deleteTestAgent, waitForRunStatus } from './support.js';
 import { hasHarnessKey } from './visual-qa/support.js';
 import { ScreenshotCapture } from './visual-qa/screenshot-capture.js';
 
@@ -35,14 +35,21 @@ Always output the JSON block as part of your natural text response. Surround it 
     if (agentId) await deleteTestAgent(request, agentId);
   });
 
-  test('renders BarChart from inline JSON block', async ({ page }) => {
+  test('renders BarChart from inline JSON block', async ({ page, request }) => {
     const capture = new ScreenshotCapture(page, 'a2ui-barchart', 'live');
 
     await page.goto(`/agents/${agentId}/sessions/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
+    const sendResponsePromise = page.waitForResponse((response) =>
+      response.request().method() === 'POST' &&
+      response.url().includes(`/api/agents/${agentId}/message`) &&
+      response.ok(),
+    );
     await page.getByTestId('session-input').fill('Generate a bar chart of city temperatures');
     await page.getByTestId('send-button').click();
+    const sendBody = await (await sendResponsePromise).json() as { sessionId: string };
+    await waitForRunStatus(request, agentId, sendBody.sessionId, ['completed', 'error'], 120_000);
 
     await page.waitForSelector('[data-testid="run-finished"]', { state: 'attached', timeout: 120_000 });
     await capture.captureViewport('a2ui-barchart-finished', 'Run complete with BarChart');
@@ -61,8 +68,7 @@ Always output the JSON block as part of your natural text response. Surround it 
 
     // Check for recharts containers
     const rechartsContainers = page.locator('[class*="recharts"]');
-    const rechartsCount = await rechartsContainers.count();
-    expect(rechartsCount).toBeGreaterThan(0);
+    await expect(rechartsContainers.first()).toBeVisible({ timeout: 15_000 });
 
     // Capture the assistant message area
     const assistantMsg = page.getByTestId('message-bubble-assistant').last();

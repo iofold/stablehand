@@ -78,7 +78,7 @@ export function AgentDetailPage() {
 
   const { filteredSessions } = useAgentSessions(allSessions, sessionsFilter);
   const totalSessions = agent?.totalSessions ?? 0;
-  const activeSessionsCount = (agent?.sessionsByStatus?.active ?? 0) + (agent?.sessionsByStatus?.paused ?? 0);
+  const activeSessionsCount = (agent?.sessionsByStatus?.ACTIVE ?? 0) + (agent?.sessionsByStatus?.PAUSED ?? 0) + (agent?.sessionsByStatus?.RESTORING ?? 0);
 
   const recentSessions = useMemo(() => {
     return [...allSessions]

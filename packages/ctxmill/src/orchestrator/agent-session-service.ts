@@ -11,12 +11,15 @@ import type { SandboxSessionManager, SessionRecord } from './sandbox-session-man
 import type { LocalFunctionExecutor } from '../tool/executor.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
 import { sanitizeDbText } from '../util/sanitize.js';
+import { traceToDbRow } from '../learning/trace-convert.js';
 
 const INDIVIDUALLY_HANDLED = new Set([
   'MESSAGE_COMMITTED',
   'TEXT_MESSAGE_CONTENT',
   'TOOL_CALL_START',
   'TOOL_CALL_RESULT',
+  'RUN_ERROR',
+  'RUN_FINISHED',
 ]);
 
 /** Extended AG-UI event fields used when extracting tool/message data. */
@@ -120,6 +123,7 @@ export class AgentSessionService {
     let accumulatedText = '';
     let assistantFlushedForBatch = false;
     let flushedAssistantMessageId: string | null = null;
+    let lastCommittedMessageSeq = -1;
 
     const normalizeContent = (value: unknown): string => {
       if (typeof value === 'string') return sanitizeDbText(value, 'normalizeContent');
@@ -182,6 +186,39 @@ export class AgentSessionService {
       return msg.id;
     };
 
+    const emitCommittedMessage = (
+      role: MessageCommittedEvent['role'],
+      content: string,
+      options?: {
+        toolCalls?: ReturnType<typeof buildPersistedToolCalls>;
+        toolCallId?: string;
+        parts?: StreamingPart[];
+        messageId?: string;
+        messageSeq?: number;
+      },
+    ): void => {
+      if (!this.eventBus) {
+        return;
+      }
+
+      const messageSeq = options?.messageSeq ?? (lastCommittedMessageSeq + 1);
+      lastCommittedMessageSeq = Math.max(lastCommittedMessageSeq, messageSeq);
+
+      this.eventBus.emit('message.committed', {
+        turnId,
+        agentId,
+        conversationId,
+        messageId: options?.messageId,
+        messageSeq,
+        role,
+        content,
+        parts: options?.parts,
+        toolCalls: options?.toolCalls as unknown as EventMap['message.committed']['toolCalls'],
+        toolCallId: options?.toolCallId,
+        timestamp: Date.now(),
+      } as unknown as EventMap['message.committed']);
+    };
+
     const finalizeTurn = async (status: 'completed' | 'error' | 'cancelled', error?: string) => {
       const completedAt = Date.now();
       await this.db.updateTurn(turnId, {
@@ -219,17 +256,29 @@ export class AgentSessionService {
 
     const flushUncommittedMessages = async () => {
       if (pendingToolCalls.size > 0 && !assistantFlushedForBatch) {
-        await persistMessage('assistant', accumulatedText, {
-          parts: [...streamingParts],
-          toolCalls: buildPersistedToolCalls(),
+        const parts = [...streamingParts];
+        const toolCalls = buildPersistedToolCalls();
+        const messageId = await persistMessage('assistant', accumulatedText, {
+          parts,
+          toolCalls,
+        });
+        emitCommittedMessage('assistant', accumulatedText, {
+          parts,
+          toolCalls,
+          messageId,
         });
         accumulatedText = '';
         assistantFlushedForBatch = true;
       } else if (pendingToolCalls.size > 0 && assistantFlushedForBatch && flushedAssistantMessageId) {
         await this.db.updateMessageToolCalls(flushedAssistantMessageId, buildPersistedToolCalls());
       } else if (accumulatedText) {
-        await persistMessage('assistant', accumulatedText, {
-          parts: [...streamingParts],
+        const parts = [...streamingParts];
+        const messageId = await persistMessage('assistant', accumulatedText, {
+          parts,
+        });
+        emitCommittedMessage('assistant', accumulatedText, {
+          parts,
+          messageId,
         });
         accumulatedText = '';
       }
@@ -334,9 +383,16 @@ export class AgentSessionService {
           }
 
           if (!assistantFlushedForBatch && pendingToolCalls.size > 0) {
+            const parts = [...streamingParts];
+            const toolCalls = buildPersistedToolCalls();
             flushedAssistantMessageId = await persistMessage('assistant', accumulatedText, {
-              parts: [...streamingParts],
-              toolCalls: buildPersistedToolCalls(),
+              parts,
+              toolCalls,
+            });
+            emitCommittedMessage('assistant', accumulatedText, {
+              parts,
+              toolCalls,
+              messageId: flushedAssistantMessageId ?? undefined,
             });
             accumulatedText = '';
             assistantFlushedForBatch = true;
@@ -351,10 +407,11 @@ export class AgentSessionService {
 
         if (event.type === 'MESSAGE_COMMITTED') {
           const committed = event as unknown as MessageCommittedEvent;
+          lastCommittedMessageSeq = Math.max(lastCommittedMessageSeq, committed.messageSeq);
           const finalParts = buildCommittedParts(committed);
           if (assistantFlushedForBatch) {
             if (accumulatedText) {
-              await persistMessage(committed.role, accumulatedText, {
+              flushedAssistantMessageId = await persistMessage(committed.role, accumulatedText, {
                 parts: finalParts,
               });
             }
@@ -362,7 +419,7 @@ export class AgentSessionService {
             pendingToolCalls.clear();
             accumulatedText = '';
           } else {
-            await persistMessage(committed.role, committed.content, {
+            flushedAssistantMessageId = await persistMessage(committed.role, committed.content, {
               parts: finalParts,
               toolCalls: committed.toolCalls as ReturnType<typeof buildPersistedToolCalls> | undefined,
               toolCallId: committed.toolCallId,
@@ -370,20 +427,13 @@ export class AgentSessionService {
             accumulatedText = '';
           }
 
-          if (this.eventBus) {
-            this.eventBus.emit('message.committed', {
-              turnId,
-              agentId,
-              conversationId,
-              messageSeq: committed.messageSeq,
-              role: committed.role,
-              content: committed.content,
-              parts: finalParts,
-              toolCalls: committed.toolCalls as unknown as EventMap['message.committed']['toolCalls'],
-              toolCallId: committed.toolCallId,
-              timestamp: Date.now(),
-            } as unknown as EventMap['message.committed']);
-          }
+          emitCommittedMessage(committed.role, committed.content, {
+            parts: finalParts,
+            toolCalls: committed.toolCalls as ReturnType<typeof buildPersistedToolCalls> | undefined,
+            toolCallId: committed.toolCallId,
+            messageId: flushedAssistantMessageId ?? undefined,
+            messageSeq: committed.messageSeq,
+          });
 
           streamingParts = [];
         }
@@ -407,6 +457,7 @@ export class AgentSessionService {
             this.eventBus.emit('run.text_chunk', {
               turnId,
               agentId,
+              conversationId,
               messageId: textEvent.messageId ?? '',
               content: textEvent.content,
               timestamp: Date.now(),
@@ -426,6 +477,7 @@ export class AgentSessionService {
             this.eventBus.emit('run.tool_started', {
               turnId,
               agentId,
+              conversationId,
               toolCallId: toolStart.toolCallId ?? '',
               toolName: toolStart.toolName,
               args: toolStart.args ?? {},
@@ -446,6 +498,7 @@ export class AgentSessionService {
             this.eventBus.emit('run.tool_result', {
               turnId,
               agentId,
+              conversationId,
               toolCallId: toolResult.toolCallId ?? '',
               toolName: toolResult.toolName ?? '',
               result: String(toolResult.result).slice(0, 500),
@@ -490,6 +543,18 @@ export class AgentSessionService {
         : runError?.message ?? flushError?.message;
       const finalStatus = finalError ? (status === 'completed' ? 'error' : status) : status;
 
+      const finalTrace = this.learningPipeline
+        ? traceCollector.finalize(finalStatus === 'completed' ? 'success' : 'failure')
+        : undefined;
+
+      if (finalTrace && this.eventBus) {
+        try {
+          await this.db.saveTrace(traceToDbRow(finalTrace));
+        } catch (traceErr) {
+          console.error(`[AgentSessionService] Failed to persist trace before turn.completed for turn ${turnId}:`, traceErr);
+        }
+      }
+
       try {
         await finalizeTurn(finalStatus, finalError);
       } catch (finalizeErr) {
@@ -517,10 +582,9 @@ export class AgentSessionService {
         }
       }
 
-      if (this.learningPipeline) {
+      if (this.learningPipeline && finalTrace && !this.eventBus) {
         try {
-          const trace = traceCollector.finalize(finalStatus === 'completed' ? 'success' : 'failure');
-          await this.learningPipeline.process(trace);
+          await this.learningPipeline.process(finalTrace);
         } catch (learningErr) {
           console.error('Learning pipeline error:', learningErr);
         }

@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import {
   createTestAgent,
   deleteTestAgent,
+  waitForRunStatus,
 } from './support';
 
 /**
@@ -182,6 +183,8 @@ test.describe('Chat conversation flow', () => {
     await chatInput.press('Enter');
     await expect(page.getByTestId('message-bubble-user').last()).toContainText('What is 2 + 2?');
     const firstBody = await (await firstSendResponse).json();
+    await waitForRunStatus(page.request, agentId, firstBody.sessionId, ['completed', 'error'], 120_000);
+    await expect(chatInput).toBeEnabled({ timeout: 15_000 });
 
     const secondSendResponse = page.waitForResponse((response) =>
       response.request().method() === 'POST' &&

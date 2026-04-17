@@ -75,6 +75,16 @@ describe('SSEManager', () => {
       expect(getRaw(reply).write).not.toHaveBeenCalled();
       expect(manager.getClientCount('agent-1')).toBe(0);
     });
+
+    it('should keep a quiet connection open as long as heartbeats succeed', () => {
+      const reply = createMockReply();
+      manager.subscribe('agent-1', reply);
+
+      vi.advanceTimersByTime(6 * 60 * 1000);
+
+      expect(manager.getClientCount('agent-1')).toBe(1);
+      expect(getRaw(reply).end).not.toHaveBeenCalled();
+    });
   });
 
   // ORC-15: Multiple clients get same broadcast
@@ -279,39 +289,16 @@ describe('SSEManager', () => {
     });
   });
 
-  // Task 18: Idle connection timeout
-  describe('Task 18: idle connection timeout', () => {
-    it('should close connection idle for more than 5 minutes', () => {
-      const reply = createMockReply();
-      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
-      manager.subscribe('agent-1', reply);
-
-      // Advance past the 5-minute idle threshold + a heartbeat interval
-      vi.advanceTimersByTime(5 * 60 * 1000 + 15_000);
-
-      expect(manager.getClientCount('agent-1')).toBe(0);
-      expect(infoSpy).toHaveBeenCalledWith(
-        '[SSE] Closing idle connection for agent',
-        'agent-1',
-      );
-      expect(getRaw(reply).end).toHaveBeenCalled();
-
-      infoSpy.mockRestore();
-    });
-
-    it('should keep connection alive when events are broadcast', () => {
+  // Task 18: quiet connection handling
+  describe('Task 18: quiet connection handling', () => {
+    it('should keep quiet connections alive when heartbeats continue to succeed', () => {
       const reply = createMockReply();
       manager.subscribe('agent-1', reply);
 
-      // Advance 4 minutes, then broadcast an event (resets idle timer)
-      vi.advanceTimersByTime(4 * 60 * 1000);
-      manager.broadcast('agent-1', { type: 'keep-alive' });
+      vi.advanceTimersByTime(10 * 60 * 1000);
 
-      // Advance another 4 minutes — total 8 mins, but only 4 since last event
-      vi.advanceTimersByTime(4 * 60 * 1000);
-
-      // Should still be connected (4 min idle < 5 min threshold)
       expect(manager.getClientCount('agent-1')).toBe(1);
+      expect(getRaw(reply).end).not.toHaveBeenCalled();
     });
   });
 

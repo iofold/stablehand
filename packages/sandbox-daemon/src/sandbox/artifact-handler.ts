@@ -9,6 +9,7 @@ import {
 } from '@ctxmill/proto/sandbox/v1';
 
 import { ArtifactStore } from '../artifact/artifact-store.js';
+import { stringifyJsonWithBigInts } from './json-serialization.js';
 import type { OrchestratorServiceClient } from './tool-proxy.js';
 
 interface Logger {
@@ -52,6 +53,11 @@ const MIME_TYPES: Record<string, string> = {
 const _maxSizeMb = Number(process.env.CTXMILL_MAX_ARTIFACT_SIZE_MB ?? 100);
 const MAX_ARTIFACT_SIZE_BYTES = (Number.isFinite(_maxSizeMb) && _maxSizeMb > 0 ? _maxSizeMb : 100) * 1024 * 1024;
 
+function buildArtifactStorageKey(artifactId: string, name: string): string {
+  const safeName = name.trim().replace(/[/\\]+/g, '_') || 'artifact';
+  return `artifacts/${artifactId}/${safeName}`;
+}
+
 function detectMimeType(filename: string): string {
   const ext = extname(filename).toLowerCase();
   return MIME_TYPES[ext] ?? 'application/octet-stream';
@@ -87,18 +93,18 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
     };
 
     if (!input.path) {
-      return JSON.stringify({ error: 'path is required' });
+      return stringifyJsonWithBigInts({ error: 'path is required' });
     }
 
     const fullPath = resolveWorkspacePath(workspaceDir, input.path);
     if (!fullPath) {
-      return JSON.stringify({ error: `Path must be within workspace: ${workspaceDir}` });
+      return stringifyJsonWithBigInts({ error: `Path must be within workspace: ${workspaceDir}` });
     }
 
     try {
       const fileBuffer = await readFile(fullPath);
       if (fileBuffer.byteLength > MAX_ARTIFACT_SIZE_BYTES) {
-        return JSON.stringify({
+        return stringifyJsonWithBigInts({
           error: `File exceeds max artifact size: ${fileBuffer.byteLength} bytes > ${MAX_ARTIFACT_SIZE_BYTES} bytes`,
         });
       }
@@ -107,7 +113,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       const mimeType = input.mimeType ?? detectMimeType(fullPath);
       const artifactId = randomUUID();
       const effectiveSessionId = getEffectiveSessionId(sessionId);
-      const storageKey = `${agentId}/${artifactId}/${filename}`;
+      const storageKey = buildArtifactStorageKey(artifactId, filename);
 
       await artifactStore.upload(storageKey, fileBuffer, mimeType);
       logger.info(`[artifact] uploaded ${storageKey} (${fileBuffer.byteLength} bytes)`);
@@ -127,7 +133,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
               sizeBytes: BigInt(fileBuffer.byteLength),
               storageKey,
               bucket: artifactStore.getBucket(),
-              metadataJson: input.metadata ? JSON.stringify(input.metadata) : '',
+              metadataJson: input.metadata ? stringifyJsonWithBigInts(input.metadata) : '',
               createdAt: BigInt(Date.now()),
             }),
           }),
@@ -145,7 +151,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
         logger.warn(`[artifact] metadata registration warning: ${response.error}`);
       }
 
-      return JSON.stringify({
+      return stringifyJsonWithBigInts({
         artifactId: response.artifactId || artifactId,
         name: filename,
         mimeType,
@@ -154,7 +160,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error('[artifact] upload failed:', error);
-      return JSON.stringify({ error: `Upload failed: ${message}` });
+      return stringifyJsonWithBigInts({ error: `Upload failed: ${message}` });
     }
   });
 
@@ -162,7 +168,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
     const input = rawInput as { artifactId?: string; path?: string };
 
     if (!input.artifactId) {
-      return JSON.stringify({ error: 'artifactId is required' });
+      return stringifyJsonWithBigInts({ error: 'artifactId is required' });
     }
 
     try {
@@ -174,7 +180,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       );
 
       if (response.error || !response.artifact) {
-        return JSON.stringify({ error: response.error || 'Artifact not found' });
+        return stringifyJsonWithBigInts({ error: response.error || 'Artifact not found' });
       }
 
       const artifact = response.artifact;
@@ -184,13 +190,13 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       const destination = input.path ?? artifact.name;
       const fullPath = resolveWorkspacePath(workspaceDir, destination);
       if (!fullPath) {
-        return JSON.stringify({ error: `Path must be within workspace: ${workspaceDir}` });
+        return stringifyJsonWithBigInts({ error: `Path must be within workspace: ${workspaceDir}` });
       }
 
       await mkdir(dirname(fullPath), { recursive: true });
       await writeFile(fullPath, body);
 
-      return JSON.stringify({
+      return stringifyJsonWithBigInts({
         path: fullPath,
         name: artifact.name,
         mimeType: contentType || artifact.mimeType,
@@ -199,7 +205,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error('[artifact] download failed:', error);
-      return JSON.stringify({ error: `Download failed: ${message}` });
+      return stringifyJsonWithBigInts({ error: `Download failed: ${message}` });
     }
   });
 

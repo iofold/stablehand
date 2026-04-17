@@ -35,9 +35,11 @@ export function createKnowledgeStoreFromConfig(
       console.log('[Factory] Knowledge provider: memory (in-memory)');
       return new InMemoryKnowledgeStore(dataDir);
     case 'pgvector':
-      // PgVectorKnowledgeStore not yet implemented — fall back to in-memory
-      console.log('[Factory] Knowledge provider: pgvector (not yet implemented, using in-memory fallback)');
-      return new InMemoryKnowledgeStore(dataDir);
+      throw new Error(
+        '[Factory] knowledge.providers[0]="pgvector" is not yet supported. ' +
+        'PgVectorKnowledgeStore implementation is pending. ' +
+        'Set knowledge.providers to ["memory"] in your config/preset.'
+      );
     default:
       throw new Error(`Unknown knowledge provider: ${provider}`);
   }

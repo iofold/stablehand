@@ -28,10 +28,25 @@ export async function streamRoutes(
         `data: ${JSON.stringify({ type: 'CONNECTED', agentId: id, timestamp: Date.now() })}\n\n`,
       );
 
-      const sandboxSessions = await db.getSandboxSessionsByAgent(id);
+      const [sandboxSessions, turns] = await Promise.all([
+        db.getSandboxSessionsByAgent(id),
+        db.getTurnsByAgent(id),
+      ]);
       const activeSessions = sandboxSessions.filter(
         (s) => s.status === 'ACTIVE' || s.status === 'RESTORING',
       );
+      const activeTurnBySandboxSessionId = new Map<string, string>();
+
+      const candidateTurns = turns
+        .filter((turn) => turn.completedAt == null && typeof turn.sessionId === 'string' && turn.sessionId.length > 0)
+        .sort((a, b) => b.startedAt - a.startedAt);
+
+      for (const turn of candidateTurns) {
+        if (!turn.sessionId || activeTurnBySandboxSessionId.has(turn.sessionId)) {
+          continue;
+        }
+        activeTurnBySandboxSessionId.set(turn.sessionId, turn.id);
+      }
 
       for (const session of activeSessions) {
         reply.raw.write(
@@ -41,6 +56,7 @@ export async function streamRoutes(
             agentId: id,
             conversationId: session.conversationId,
             sessionId: session.id,
+            turnId: activeTurnBySandboxSessionId.get(session.id),
             status: session.status,
             harnessName: session.harnessName,
             containerName: session.containerName,

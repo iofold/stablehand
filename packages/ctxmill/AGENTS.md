@@ -19,13 +19,13 @@ src/
   learning/       Trace collection → reflection → knowledge update pipeline (7 files + 1 test)
   llm/            Provider-agnostic LLM factory for learning reflector (4 files)
   manifest/       YAML agent manifest parsing, validation, conversion (6 files + 1 test)
-  orchestrator/   Fastify server, SSE, HITL, routes, sandbox run service (12 files + 7 routes + 8 tests)
-  sandbox/        Container lifecycle, gRPC daemon, checkpoint, pause, timeout (15 files + 13 tests)
+  orchestrator/   Fastify server, SSE, HITL, routes, session manager (12 files + 7 routes + 8 tests)
+  sandbox/        Container lifecycle, gRPC daemon, checkpoint/restore, timeout (15 files + 13 tests)
   secrets/        Encrypted per-agent secret storage via PostgreSQL (4 files)
   skills/         SKILL.md loader (frontmatter + markdown body) (1 file)
   tool/           Tool executor, 4 providers (Local, MCP, HTTP, Composio), registry (7 files + 3 tests)
   util/           Shared error utilities (2 files + 1 test)
-  workspace/      Session overlays — MockOverlay + FuseOverlay (5 files)
+  workspace/      Session workspace + tar upload helpers (4 files)
 ```
 
 ## WHERE TO LOOK
@@ -33,7 +33,7 @@ src/
 | Task | File(s) | Notes |
 |------|---------|-------|
 | Understand the public API | `src/index.ts` | 60+ exports, 3 factory functions |
-| Trace a run execution | `orchestrator/agent-run-service.ts` → `sandbox-run-service.ts` → `sandbox/runner.ts` | All runs go through sandbox containers |
+| Trace a run execution | `orchestrator/agent-session-service.ts` → `orchestrator/sandbox-session-manager.ts` → `packages/sandbox-daemon/src/sandbox/runner.ts` | All runs go through sandbox containers |
 | Add an API endpoint | `orchestrator/routes/*.ts` → register in `orchestrator/server.ts` | Fastify plugin pattern |
 | Add a harness | `harness/*.ts` → register in `harness/registry.ts` | Implement `AgentHarness` interface |
 | Add a tool provider | `tool/providers/*.ts` → register in `tool/registry.ts` | Implement `ToolProvider` interface |
@@ -42,7 +42,7 @@ src/
 | Add an event type | `events/bus.ts` EventMap type | Add payload interface, emit via bus |
 | Understand proto conversion | `sandbox/proto-convert.ts` | AgentEvent ↔ proto ↔ AG-UI mapping |
 | Modify checkpoint format | `sandbox/checkpoint.ts` | Full run state serialization (v2, 5 MB limit) |
-| Understand session lifecycle | `orchestrator/sandbox-session-manager.ts` | Session state machine, pause/freeze/checkpoint promotion |
+| Understand session lifecycle | `orchestrator/sandbox-session-manager.ts` | Session state machine, checkpoint promotion, restoration, and terminal cleanup |
 | Track active runs | `orchestrator/run-registry.ts` | In-memory run state, SSE broadcasting, event routing |
 | Understand event chaining | `events/trigger-manager.ts` | EventTriggerManager, cascade protection (depth 5) |
 | Understand tool proxying | `sandbox/tool-proxy.ts` | gRPC RequestTool RPC, 3 retries, exponential backoff |
@@ -73,8 +73,8 @@ src/
 ## EXECUTION FLOW
 
 ```
-User message → orchestrator/agent-run-service.ts
-  → sandbox-run-service.ts (creates container)
+User message → orchestrator/agent-session-service.ts
+  → orchestrator/sandbox-session-manager.ts (creates container)
     → container-manager.ts (Docker create/start, semaphore acquire)
       → daemon.ts (gRPC server in container, port 50051)
         → runner.ts (harness resolution, session lifecycle)
@@ -114,11 +114,11 @@ Harness code runs INSIDE sandbox containers, not in the orchestrator. This chang
 
 **Tool proxy** — `createToolProxy()` in `tool-proxy.ts`. Orchestrator-location tools serialized via gRPC `RequestTool` RPC. 3 retries, exponential backoff (100ms/500ms/2s), 5min timeout.
 
-**Pause state machine** — `PauseManager` in `pause-manager.ts`. States: `none` → `scheduled` → `paused` → `promoting` → `idle_frozen`. HITL: 5s delay → docker pause → 5min checkpoint promotion. Idle: 5min freeze → 10min checkpoint.
+**Session status machine** — `session-status-machine.ts`. States: `ACTIVE` → `CHECKPOINTED` → `RESTORING` → `ACTIVE`, with `PAUSED` kept only as a legacy compatibility state and `TERMINATED` as terminal.
 
 ## ANTI-PATTERNS (beyond root)
 
-- **NEVER call harness.run() directly** — All execution goes through `SandboxRunService` → Docker containers
+- **NEVER call harness.run() directly** — All execution goes through `AgentSessionService` → `SandboxSessionManager` → Docker containers
 - **NEVER store secrets in checkpoint data** — Injected fresh on resume via tmpfs mount (`/run/secrets/config.json`)
 - **NEVER import from path aliases** — Relative `.js` imports only in source. Aliases only in `vitest.config.ts`
 - **NEVER exceed checkpoint limits** — 5 MB checkpoint, 100 MB workspace tar. Oversized checkpoints are rejected

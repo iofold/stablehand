@@ -46,6 +46,8 @@
 | **HTTP** | REST | Static config | fetch() | Bearer/API-Key | Yes (tools) | Custom headers; timeout 30s; X-Agent-Id injection |
 | **Composio** | REST | Session-based | executeSessionTool() | API key | Yes (session) | 500+ SaaS integrations; session lifecycle |
 
+Artifact upload/download are daemon tools, not provider-managed HTTP uploads: `artifact_upload` and `artifact_download` stream directly to object storage and bypass orchestrator-side byte proxying.
+
 **Stress Test Coverage**:
 - MCP stdio transport failure (command not found)
 - MCP HTTP transport timeout
@@ -162,7 +164,7 @@
 
 **Stress Test Coverage**:
 - Circular trigger chains (depth > 5)
-- Subagent workspace isolation (overlay correctness)
+- Subagent workspace isolation (snapshot/restore correctness)
 - Event payload size limits
 - Concurrent subagent spawning (semaphore: max 20 containers)
 - Subagent failure propagation
@@ -276,15 +278,15 @@ agents/{agentId}/
     skills/             ← auto-discovered SKILL.md files
     notes/              ← agent-written notes
   sessions/
-    {sessionId}/        ← overlay mount point (FUSE or mock)
+    {sessionId}/        ← session workspace snapshot data
 ```
 
 ### Workspace Isolation
 - **Base**: Shared, persistent agent workspace
-- **Session Overlay**: FUSE overlayfs (Linux) or MockOverlay (fallback)
+- **Session Workspace**: session-scoped workspace capture/restore
   - Copy-on-write semantics
   - Workspace tar.gz snapshot (100 MB max)
-  - Promoted to base on session completion
+  - Restored into a fresh container on checkpoint recovery
 
 ### File Operations Available
 - **read-file**: Read with 10KB truncation

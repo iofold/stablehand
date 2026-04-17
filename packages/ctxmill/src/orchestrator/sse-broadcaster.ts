@@ -37,7 +37,11 @@ type EventPayloadRecord = Record<string, unknown>;
 
 /**
  * Bridges the internal TypedEventBus to SSE clients via SSEManager.
-  * Subscribes to session and run events and broadcasts them as AG-UI events.
+ * Subscribes to session and run events and broadcasts them as AG-UI events.
+ *
+ * Identity contract note: CTXMILL maps AG-UI `threadId` to the persisted
+ * `conversationId`, not to a turn/run id or sandbox session id. See
+ * docs/contracts/session-identity.md.
  */
 export class SSEBroadcaster {
   private sseManager: SSEManager;

@@ -4,6 +4,7 @@ import type { SessionRecord, TurnQueueEntry } from './types.js';
 
 export class SessionStateStore implements SessionStatePort {
   private readonly sessions = new Map<string, SessionRecord>();
+  private readonly sessionsById = new Map<string, SessionRecord>();
 
   private readonly turnQueues = new Map<string, TurnQueueEntry[]>();
 
@@ -18,19 +19,35 @@ export class SessionStateStore implements SessionStatePort {
   }
 
   getSessionById(sessionId: string): SessionRecord | undefined {
+    const indexed = this.sessionsById.get(sessionId);
+    if (indexed) {
+      return indexed;
+    }
+
     for (const record of this.sessions.values()) {
       if (record.sessionId === sessionId) {
+        this.sessionsById.set(sessionId, record);
         return record;
       }
     }
+
     return undefined;
   }
 
   setSession(conversationId: string, record: SessionRecord): void {
+    const existing = this.sessions.get(conversationId);
+    if (existing && existing.sessionId !== record.sessionId) {
+      this.sessionsById.delete(existing.sessionId);
+    }
     this.sessions.set(conversationId, record);
+    this.sessionsById.set(record.sessionId, record);
   }
 
   deleteSession(conversationId: string): void {
+    const existing = this.sessions.get(conversationId);
+    if (existing) {
+      this.sessionsById.delete(existing.sessionId);
+    }
     this.sessions.delete(conversationId);
   }
 
@@ -85,6 +102,7 @@ export class SessionStateStore implements SessionStatePort {
 
   cleanupSession(sessionId: string, conversationId: string): void {
     this.sessions.delete(conversationId);
+    this.sessionsById.delete(sessionId);
     this.turnQueues.delete(sessionId);
     this.activeTurns.delete(sessionId);
     this.agentDefs.delete(conversationId);

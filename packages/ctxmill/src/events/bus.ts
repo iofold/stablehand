@@ -13,6 +13,7 @@ export type EventMap = {
   'run.text_chunk': {
     turnId: string;
     agentId: string;
+    conversationId: string;
     messageId: string;
     content: string;
     timestamp: number;
@@ -20,6 +21,7 @@ export type EventMap = {
   'run.tool_started': {
     turnId: string;
     agentId: string;
+    conversationId: string;
     toolCallId: string;
     toolName: string;
     args: Record<string, unknown>;
@@ -29,6 +31,7 @@ export type EventMap = {
   'run.tool_result': {
     turnId: string;
     agentId: string;
+    conversationId: string;
     toolCallId: string;
     toolName: string;
     result: string;
@@ -39,6 +42,7 @@ export type EventMap = {
   'run.interrupted': {
     turnId: string;
     agentId: string;
+    conversationId: string;
     toolCallId: string;
     toolName: string;
     args: Record<string, unknown>;
@@ -48,6 +52,7 @@ export type EventMap = {
   'run.interrupt_resolved': {
     turnId: string;
     agentId: string;
+    conversationId: string;
     interruptId: string;
     action: 'approve' | 'reject' | 'suspend' | 'timeout';
     timestamp: number;
@@ -128,12 +133,14 @@ export type EventMap = {
     agentId: string;
     eventType: string;
     turnId: string;
+    _triggerDepth?: number;
     timestamp: number;
   };
   'message.committed': {
     turnId: string;
     agentId: string;
     conversationId: string;
+    messageId?: string;
     messageSeq: number;
     role: 'assistant' | 'tool';
     content: string;

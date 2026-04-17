@@ -14,7 +14,7 @@ function stubHarness(name: string, configSchema: z.ZodType): AgentHarness {
     name,
     configSchema,
     async openSession(): Promise<HarnessSession> {
-      throw new Error('not implemented');
+      throw new Error('stubHarness.openSession not implemented');
     },
   };
 }

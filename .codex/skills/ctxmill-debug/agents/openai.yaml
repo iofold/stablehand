@@ -1,0 +1,3 @@
+display_name: ctxmill Debug
+short_description: Inspect and debug running ctxmill apps through agent-friendly Bun CLIs.
+default_prompt: Debug this ctxmill app by checking health, agents, sessions, messages, tool calls, interrupts, events, and artifacts. Use the bundled Bun TypeScript scripts and produce evidence-backed findings.

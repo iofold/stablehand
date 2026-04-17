@@ -99,6 +99,88 @@ describe('serializeCheckpoint / deserializeCheckpoint', () => {
   it('throws on invalid JSON', () => {
     expect(() => deserializeCheckpoint('not json')).toThrow();
   });
+
+  it('serializes bigint checkpoint payloads as strings without throwing', () => {
+    const original = makeMinimalCheckpoint({
+      runnerState: {
+        status: 'WAITING_INPUT',
+        pendingRequests: [
+          {
+            type: 'tool_call',
+            id: 'tc-bigint',
+            payload: {
+              count: 9007199254740993n,
+            },
+          },
+        ],
+      },
+      harnessState: makeHarnessState({
+        payload: {
+          checkpoints: [1n, 2n],
+          nested: {
+            seq: 9007199254740997n,
+          },
+        },
+      }),
+    });
+
+    const json = serializeCheckpoint(original);
+
+    expect(JSON.parse(json)).toEqual({
+      checkpointVersion: 2,
+      sessionId: 'sess-1',
+      conversationId: 'conv-1',
+      harnessName: 'pi-agent',
+      cursor: { nextMessageSeq: 0 },
+      runnerState: {
+        status: 'WAITING_INPUT',
+        pendingRequests: [
+          {
+            type: 'tool_call',
+            id: 'tc-bigint',
+            payload: {
+              count: '9007199254740993',
+            },
+          },
+        ],
+      },
+      workspaceRef: WORKSPACE_NONE,
+      harnessState: {
+        stateVersion: '1',
+        payload: {
+          checkpoints: ['1', '2'],
+          nested: {
+            seq: '9007199254740997',
+          },
+        },
+      },
+    });
+
+    expect(deserializeCheckpoint(json)).toEqual({
+      ...original,
+      runnerState: {
+        status: 'WAITING_INPUT',
+        pendingRequests: [
+          {
+            type: 'tool_call',
+            id: 'tc-bigint',
+            payload: {
+              count: '9007199254740993',
+            },
+          },
+        ],
+      },
+      harnessState: {
+        stateVersion: '1',
+        payload: {
+          checkpoints: ['1', '2'],
+          nested: {
+            seq: '9007199254740997',
+          },
+        },
+      },
+    });
+  });
 });
 
 /* -------------------------------------------------------------------------- */

@@ -1,12 +1,12 @@
 # Checkpoint and Resume Operational Guide
 
-CTXMill uses application-level checkpoint/restore for sandbox sessions. There is no persisted `FROZEN` state in the current runtime.
+CTXMill uses application-level checkpoint/restore for sandbox sessions. Session status values are uppercase (`ACTIVE`, `PAUSED`, `CHECKPOINTED`, `RESTORING`, `TERMINATED`), with `PAUSED` kept only as a legacy compatibility state. There is no persisted `FROZEN` state in the current runtime.
 
 ## How Checkpoint and Resume Works
 
 The runtime has two distinct mechanisms:
 
-1. **Manual Pause / Resume**: `pauseSession()` uses `docker pause` to pause a live container in place.
+1. **Compatibility Pause / Resume**: A live container can still be paused in place for legacy/manual workflows, but the current runtime does not promote idle sessions through a persisted frozen state.
 2. **Checkpoint / Restore**: The harness exports structured state, the orchestrator captures workspace changes, the container is removed, and a later restore provisions a fresh container and rehydrates the session.
 
 Automatic idle handling uses the second path: idle sessions are checkpointed directly rather than promoted through a persisted frozen state.
@@ -16,7 +16,7 @@ Automatic idle handling uses the second path: idle sessions are checkpointed dir
 Sessions move through these states:
 
 - **ACTIVE**: The agent is running or ready to run in a live container.
-- **PAUSED**: The container is paused via `docker pause`. This is a manual/compatibility state.
+- **PAUSED**: The container is paused for legacy compatibility only.
 - **CHECKPOINTED**: The container is removed. Harness state and workspace diff are stored for later restore.
 - **RESTORING**: A new container is being provisioned and restored from checkpoint data.
 - **TERMINATED**: The session is closed and resources are cleaned up.

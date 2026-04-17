@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { normalizeConversationMessage, useConversationStore } from '../conversation';
+import { useInterruptStore } from '../interrupt';
 
 function getStore() {
   return useConversationStore.getState();
@@ -10,13 +11,45 @@ function makeEvent(type: string, event: Record<string, unknown> = {}): Record<st
 }
 
 async function flushStreamingContent(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
+  const frameIds = getScheduledFrameIds();
+  for (const frameId of frameIds) {
+    runAnimationFrame(frameId);
+  }
+  await Promise.resolve();
+}
+
+let nextFrameId = 1;
+let scheduledFrames = new Map<number, FrameRequestCallback>();
+
+function getScheduledFrameIds(): number[] {
+  return Array.from(scheduledFrames.keys());
+}
+
+function runAnimationFrame(frameId: number): void {
+  const callback = scheduledFrames.get(frameId);
+  if (!callback) return;
+  scheduledFrames.delete(frameId);
+  callback(performance.now());
 }
 
 beforeEach(() => {
+  nextFrameId = 1;
+  scheduledFrames = new Map();
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    const frameId = nextFrameId;
+    nextFrameId += 1;
+    scheduledFrames.set(frameId, callback);
+    return frameId;
+  });
+  vi.stubGlobal('cancelAnimationFrame', (frameId: number) => {
+    scheduledFrames.delete(frameId);
+  });
   useConversationStore.getState().reset();
+  useInterruptStore.getState().clear();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('conversation store', () => {
@@ -76,6 +109,51 @@ describe('conversation store', () => {
     expect(state.committedMessageCount).toBe(0);
   });
 
+  it('ignores stale scheduled flush callbacks after reset and conversation switch', () => {
+    const { handleSSEEvent, reset, setActiveConversation } = getStore();
+
+    setActiveConversation('conv-a');
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1', conversationId: 'conv-a' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant', turnId: 'r1', conversationId: 'conv-a' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'stale', turnId: 'r1', conversationId: 'conv-a' }));
+
+    const [staleFrameId] = getScheduledFrameIds();
+
+    reset();
+    setActiveConversation('conv-b');
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r2', conversationId: 'conv-b' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant', turnId: 'r2', conversationId: 'conv-b' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'fresh', turnId: 'r2', conversationId: 'conv-b' }));
+
+    const frameIds = getScheduledFrameIds();
+    expect(frameIds).toHaveLength(1);
+    expect(frameIds).not.toContain(staleFrameId);
+
+    runAnimationFrame(staleFrameId!);
+    expect(getStore().streamingContent).toBe('');
+
+    runAnimationFrame(frameIds[0]!);
+    expect(getStore().streamingContent).toBe('fresh');
+  });
+
+  it('ignores streaming deltas when no run is active or when they target a different turn', async () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'ignored while idle' }));
+    await flushStreamingContent();
+
+    expect(getStore().streamingContent).toBe('');
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r2' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'stale', turnId: 'r1' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'fresh', turnId: 'r2' }));
+
+    await flushStreamingContent();
+
+    expect(getStore().streamingContent).toBe('fresh');
+  });
+
   it('sets streaming state on TURN_PENDING', () => {
     getStore().handleSSEEvent(makeEvent('TURN_PENDING', { runId: 'turn-1', timestamp: Date.now() }));
 
@@ -90,6 +168,41 @@ describe('conversation store', () => {
     const state = getStore();
     expect(state.isStreaming).toBe(true);
     expect(state.currentTurnId).toBe('run-1');
+  });
+
+  it('state_snapshot restores streaming state using the active turn id instead of sandbox session id', () => {
+    const { setActiveConversation, handleSSEEvent } = getStore();
+
+    setActiveConversation('conv-1');
+    handleSSEEvent(makeEvent('CUSTOM', {
+      subtype: 'state_snapshot',
+      conversationId: 'conv-1',
+      sessionId: 'sandbox-session-1',
+      turnId: 'turn-1',
+      status: 'ACTIVE',
+    }));
+
+    const state = getStore();
+    expect(state.isStreaming).toBe(true);
+    expect(state.currentTurnId).toBe('turn-1');
+  });
+
+  it('HITL_PAUSE forwards the pending interrupt payload to the interrupt store', () => {
+    getStore().handleSSEEvent(makeEvent('HITL_PAUSE', {
+      agentId: 'agent-1',
+      runId: 'turn-1',
+      toolName: 'search',
+      toolCallId: 'tc-1',
+      args: { q: 'ctxmill' },
+    }));
+
+    expect(useInterruptStore.getState().pending).toEqual({
+      agentId: 'agent-1',
+      sessionId: 'turn-1',
+      toolName: 'search',
+      toolCallId: 'tc-1',
+      args: { q: 'ctxmill' },
+    });
   });
 
   it('MESSAGE_COMMITTED creates a message with text content', async () => {
@@ -114,11 +227,13 @@ describe('conversation store', () => {
       role: 'assistant',
       content: 'Hello world',
       messageSeq: 1,
+      messageId: 'persisted-message-1',
       turnId: 'r1',
     }));
 
     const state = getStore();
     expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].id).toBe('persisted-message-1');
     expect(state.messages[0].role).toBe('assistant');
     expect(state.messages[0].content).toBe('Hello world');
     expect(state.messages[0].parts).toEqual([{ type: 'text', content: 'Hello world' }]);
@@ -325,7 +440,7 @@ describe('conversation store', () => {
     expect(state.committedMessageCount).toBe(2);
   });
 
-  it('RUN_FINISHED falls back to preview state when MESSAGE_COMMITTED never arrives', async () => {
+  it('RUN_FINISHED clears preview state when MESSAGE_COMMITTED never arrives', async () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
@@ -339,8 +454,25 @@ describe('conversation store', () => {
     const state = getStore();
     expect(state.isStreaming).toBe(false);
     expect(state.currentTurnId).toBeNull();
-    expect(state.messages).toHaveLength(1);
-    expect(state.messages[0].content).toBe('partial');
+    expect(state.streamingContent).toBe('');
+    expect(state.messages).toHaveLength(0);
+  });
+
+  it('RUN_FINISHED drops uncommitted tool preview state instead of materializing a message', () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
+
+    handleSSEEvent(makeEvent('RUN_FINISHED'));
+
+    const state = getStore();
+    expect(state.isStreaming).toBe(false);
+    expect(state.currentTurnId).toBeNull();
+    expect(state.toolCalls.size).toBe(0);
+    expect(state.messages).toHaveLength(0);
   });
 
   it('RUN_FINISHED is a no-op after canonical commit with no pending preview state', () => {

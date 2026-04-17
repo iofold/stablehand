@@ -10,6 +10,22 @@ export interface ApiAgentResourceLimits {
   timeoutSec?: number;
 }
 
+export const API_SESSION_STATUSES = [
+  'QUEUED',
+  'ACTIVE',
+  'PAUSED',
+  'CHECKPOINTED',
+  'RESTORING',
+  'TERMINATED',
+  'COMPLETED',
+  'ERROR',
+  'CANCELLED',
+  'IDLE',
+] as const;
+
+export type ApiSessionStatus = typeof API_SESSION_STATUSES[number];
+export type SandboxSessionStatus = Extract<ApiSessionStatus, 'ACTIVE' | 'PAUSED' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED'>;
+
 /** Agent as returned by GET /api/agents and GET /api/agents/:id */
 export interface ApiAgent {
   id: string;
@@ -38,19 +54,14 @@ export interface ApiAgent {
 }
 
 /** Session counts grouped by sandbox lifecycle state. */
-export interface ApiSessionStatusCounts {
-  active: number;
-  paused: number;
-  checkpointed: number;
-  terminated: number;
-}
+export type ApiSessionStatusCounts = Record<SandboxSessionStatus, number>;
 
 /** Session as returned by GET /api/agents/:id/sessions */
 export interface ApiAgentSession {
   id: string;
   agentId: string;
   conversationId: string;
-  status: 'queued' | 'running' | 'paused' | 'suspended' | 'completed' | 'error' | 'cancelled';
+  status: ApiSessionStatus;
   mode: 'interactive' | 'background';
   startedAt: number;
   completedAt?: number;
@@ -140,7 +151,7 @@ export interface ApiSharedKnowledgeItem extends ApiKnowledgeItem {
 export interface ApiConversationSummary {
   id: string;
   agentId: string;
-  status: 'running' | 'paused' | 'suspended' | 'completed' | 'error' | 'idle';
+  status: ApiSessionStatus;
   mode: 'interactive' | 'background';
   turnCount: number;
   messageCount: number;
@@ -149,12 +160,9 @@ export interface ApiConversationSummary {
   updatedAt: number;
   latestTurnId?: string;
   sandboxSessionId?: string;
-  sandboxStatus?: SandboxSessionStatus;
 }
 
 // ── Sandbox Session types ───────────────────────────────────────
-
-export type SandboxSessionStatus = 'ACTIVE' | 'PAUSED' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED';
 
 /** Persistent sandbox session as returned by sandbox session APIs. */
 export interface ApiSandboxSession {

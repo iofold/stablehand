@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ApiAgentSession } from '@ctxmill/shared';
+import type { ApiAgentSession, ApiSessionStatusCounts } from '@ctxmill/shared';
 import {
   fetchAgents as apiFetchAgents,
   startBackgroundRun as apiStartRun,
@@ -26,7 +26,7 @@ export interface Agent {
   harnessConfig: Record<string, unknown>;
   sseClients?: number;
   conversationCount?: number;
-  sessionsByStatus?: { active: number; paused: number; checkpointed: number; terminated: number };
+  sessionsByStatus?: ApiSessionStatusCounts;
   hasPendingInterrupt?: boolean;
   lastActivity?: number;
   totalSessions?: number;

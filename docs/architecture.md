@@ -13,7 +13,7 @@ CTXMill is a self-hosted framework for running tool-using agents behind a Fastif
 - SSE streaming to the UI
 - HITL interrupt handling
 - Event-triggered background runs
-- Session-scoped workspace overlays
+- Session-scoped workspace snapshots
 
 Agent harnesses execute inside Docker containers managed by the sandbox subsystem. The orchestrator creates a container per run, communicates with the in-container gRPC daemon, and streams events back to the UI. Firecracker-based sandboxing is not implemented yet.
 
@@ -116,7 +116,7 @@ Relevant code:
 
 ### 5. HITL and Suspend/Resume
 
-HITL is implemented through durable interrupt records and UI responses. Sandbox sessions can also be paused manually, checkpointed, restored, and resumed through the session manager. Separately, `SuspendedSessionMatcher` can emit `run.resumed` for event-driven resumptions. This is application-level checkpoint/restore of harness and workspace state, not raw Docker memory snapshotting.
+HITL is implemented through durable interrupt records and UI responses. Sandbox sessions can be checkpointed, restored, and resumed through the session manager; `PAUSED` remains only as a legacy compatibility state for recovery. Separately, `SuspendedSessionMatcher` can emit `run.resumed` for event-driven resumptions. This is application-level checkpoint/restore of harness and workspace state, not raw Docker memory snapshotting.
 
 Relevant code:
 
@@ -127,18 +127,13 @@ Relevant code:
 
 ### 6. Workspace Isolation
 
-Each run can execute against a session-scoped workspace abstraction. The shipped implementations are:
-
-- `MockOverlayEnvironment`
-- `FuseOverlayEnvironment`
-
-Sandbox containers use FUSE overlays for workspace isolation when `fuse-overlayfs` is available, falling back to a mock overlay otherwise.
+Each run can execute against a session-scoped workspace abstraction. The shipped implementation uses session workspace capture/restore helpers. Workspace changes are snapshotted into tar archives and restored into fresh containers during checkpoint recovery.
 
 Relevant code:
 
-- [workspace/types.ts](/path/to/stablehand/packages/ctxmill/src/workspace/types.ts)
-- [workspace/mock-overlay.ts](/path/to/stablehand/packages/ctxmill/src/workspace/mock-overlay.ts)
-- [workspace/fuse-overlay.ts](/path/to/stablehand/packages/ctxmill/src/workspace/fuse-overlay.ts)
+- [workspace/session-workspace.ts](/path/to/stablehand/packages/ctxmill/src/workspace/session-workspace.ts)
+- [workspace/tar-upload.ts](/path/to/stablehand/packages/ctxmill/src/workspace/tar-upload.ts)
+- [workspace/ensure.ts](/path/to/stablehand/packages/ctxmill/src/workspace/ensure.ts)
 - [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
 
 ### 7. Knowledge and Learning
@@ -164,13 +159,14 @@ Relevant code:
 
 ### 8. Sandbox Infrastructure
 
-All harness execution routes through the sandbox subsystem. The orchestrator creates a Docker container per sandbox session, injects secrets via tmpfs, waits for gRPC health, opens the session, delivers turns, and streams events back. The subsystem also handles tool call proxying, checkpoint/restore, lifecycle reconciliation, and workspace-diff capture.
+All harness execution routes through the sandbox subsystem. The orchestrator creates a Docker container per sandbox session, injects secrets via tmpfs, waits for gRPC health, opens the session, delivers turns, and streams events back. The subsystem also handles tool call proxying, checkpoint/restore, lifecycle reconciliation, workspace-diff capture, and direct artifact upload/download through daemon tools rather than orchestrator-side byte proxying.
 
 Relevant code:
 
 - [sandbox/container-manager.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/container-manager.ts)
 - [orchestrator/sandbox-session-manager.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-session-manager.ts)
 - [orchestrator/container-lifecycle-policy.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/container-lifecycle-policy.ts)
+- [artifact-store.ts](/path/to/stablehand/packages/ctxmill/src/artifact/artifact-store.ts)
 - [sandbox/runner.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/runner.ts)
 - [sandbox/daemon.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/daemon.ts)
 - [sandbox/tool-proxy.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/tool-proxy.ts)

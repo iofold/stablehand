@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 
+const grpcSessionClientMocks = vi.hoisted(() => ({
+  waitForContainerReady: vi.fn(),
+}));
+
+vi.mock('../session-manager/grpc-session-client.js', () => ({
+  waitForContainerReady: grpcSessionClientMocks.waitForContainerReady,
+}));
+
 const mockContainerManager = {
   isContainerAlive: vi.fn(),
   listManagedContainers: vi.fn(),
@@ -82,7 +90,7 @@ function getShouldKillContainer(policy: ContainerLifecyclePolicy) {
   return Reflect.get(policy, 'shouldKillContainer').bind(policy) as (
     containerId: string,
     sessionId?: string,
-  ) => Promise<'kill' | 'skip'>;
+  ) => Promise<'kill' | 'kill-after-checkpoint' | 'skip'>;
 }
 
 function getReconcileOnStartup(policy: ContainerLifecyclePolicy) {
@@ -101,6 +109,10 @@ describe('ContainerLifecyclePolicy', () => {
     mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([]);
     mockContainerManager.stopContainer.mockResolvedValue(undefined);
     mockContainerManager.removeContainer.mockResolvedValue(undefined);
+    grpcSessionClientMocks.waitForContainerReady.mockResolvedValue({
+      grpcClient: { killSession: vi.fn() },
+      transport: {},
+    });
 
     mockDb.getActiveSandboxSessions.mockResolvedValue([]);
     mockDb.updateSandboxSessionStatus.mockResolvedValue(undefined);
@@ -209,7 +221,7 @@ describe('ContainerLifecyclePolicy', () => {
       expect(mockContainerManager.isContainerAlive).toHaveBeenCalledWith('container-1');
     });
 
-    it('container dead with checkpoint marks CHECKPOINTED, evicts session, and returns skip', async () => {
+    it('container dead with checkpoint marks CHECKPOINTED, evicts session, and returns kill-after-checkpoint', async () => {
       const shouldKillContainer = getShouldKillContainer(policy);
 
       mockContainerManager.isContainerAlive.mockResolvedValue(false);
@@ -218,8 +230,17 @@ describe('ContainerLifecyclePolicy', () => {
       const conversationIds = Reflect.get(policy, 'sessionConversationIds') as Map<string, string>;
       conversationIds.set('session-1', 'conversation-1');
 
-      await expect(shouldKillContainer('container-1', 'session-1')).resolves.toBe('skip');
-      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith('session-1', 'CHECKPOINTED');
+      await expect(shouldKillContainer('container-1', 'session-1')).resolves.toBe('kill-after-checkpoint');
+      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'session-1',
+        'CHECKPOINTED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(mockOnSessionEvicted).toHaveBeenCalledWith('session-1', 'conversation-1');
     });
 
@@ -232,7 +253,16 @@ describe('ContainerLifecyclePolicy', () => {
       conversationIds.set('session-1', 'conversation-1');
 
       await expect(shouldKillContainer('container-1', 'session-1')).resolves.toBe('kill');
-      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith('session-1', 'TERMINATED');
+      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'session-1',
+        'TERMINATED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(mockOnSessionEvicted).toHaveBeenCalledWith('session-1', 'conversation-1');
     });
   });
@@ -249,7 +279,16 @@ describe('ContainerLifecyclePolicy', () => {
 
       await getReconcileOnStartup(policy)();
 
-      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith('session-1', 'CHECKPOINTED');
+      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'session-1',
+        'CHECKPOINTED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(mockOnSessionEvicted).toHaveBeenCalledWith('session-1', 'conversation-1');
       expect(mockOnSessionReconnected).not.toHaveBeenCalled();
     });
@@ -265,9 +304,85 @@ describe('ContainerLifecyclePolicy', () => {
 
       await getReconcileOnStartup(policy)();
 
-      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith('session-1', 'TERMINATED');
+      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'session-1',
+        'TERMINATED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(mockOnSessionEvicted).toHaveBeenCalledWith('session-1', 'conversation-1');
       expect(mockOnSessionReconnected).not.toHaveBeenCalled();
+    });
+
+    it('reconcileOnStartup removes dead containers that were checkpointed during startup reconciliation', async () => {
+      mockDb.getActiveSandboxSessions.mockResolvedValue([
+        createSession({
+          containerId: 'container-dead',
+          containerName: 'ctxmill-run-session-1',
+          status: 'ACTIVE',
+        }),
+      ]);
+      mockDb.getCheckpointV2.mockResolvedValue({ id: 'checkpoint-1' });
+      mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
+        createContainer({
+          containerId: 'container-dead',
+          containerName: 'ctxmill-run-session-1',
+          status: 'dead',
+          labels: { 'ctxmill.session-id': 'session-1' },
+        }),
+      ]);
+
+      await getReconcileOnStartup(policy)();
+
+      expect(mockContainerManager.stopContainer).toHaveBeenCalledWith('container-dead', 10);
+      expect(mockContainerManager.removeContainer).toHaveBeenCalledWith('container-dead', true);
+    });
+
+    it('reconcileOnStartup matches a live container by persisted session-id label when runtime metadata is missing', async () => {
+      mockDb.getActiveSandboxSessions.mockResolvedValue([
+        createSession({
+          containerId: null,
+          containerName: null,
+          status: 'ACTIVE',
+        }),
+      ]);
+      mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
+        createContainer({
+          containerId: 'container-live',
+          containerName: 'ctxmill-run-session-1',
+          labels: { 'ctxmill.session-id': 'session-1' },
+        }),
+      ]);
+
+      await getReconcileOnStartup(policy)();
+
+      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'session-1',
+        'ACTIVE',
+        expect.objectContaining({
+          containerId: 'container-live',
+          containerName: 'ctxmill-run-session-1',
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
+      expect(grpcSessionClientMocks.waitForContainerReady).toHaveBeenCalledWith(
+        'http://ctxmill-run-session-1:50051',
+      );
+      expect(mockOnSessionReconnected).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'session-1',
+          containerId: 'container-live',
+          containerName: 'ctxmill-run-session-1',
+        }),
+        expect.any(Object),
+      );
+      expect(mockContainerManager.stopContainer).not.toHaveBeenCalled();
+      expect(mockContainerManager.removeContainer).not.toHaveBeenCalled();
     });
 
     it('start calls reconcileOnStartup then starts periodic timer', async () => {
@@ -306,7 +421,7 @@ describe('ContainerLifecyclePolicy', () => {
       const session = createSession();
       const shouldKillContainer = vi.spyOn(
         policy as unknown as {
-          shouldKillContainer: (containerId: string, sessionId?: string) => Promise<'kill' | 'skip'>;
+          shouldKillContainer: (containerId: string, sessionId?: string) => Promise<'kill' | 'kill-after-checkpoint' | 'skip'>;
         },
         'shouldKillContainer',
       );
@@ -323,6 +438,40 @@ describe('ContainerLifecyclePolicy', () => {
       await getRunReconciliation(policy)();
 
       expect(shouldKillContainer).toHaveBeenCalledWith('container-1', 'session-1');
+    });
+
+    it('runReconciliation removes dead checkpointed containers after promoting the session', async () => {
+      const session = createSession({
+        containerId: 'container-dead',
+        containerName: 'ctxmill-run-session-1',
+      });
+
+      mockDb.getActiveSandboxSessions.mockResolvedValue([session]);
+      mockDb.getCheckpointV2.mockResolvedValue({ id: 'checkpoint-1' });
+      mockContainerManager.isContainerAlive.mockResolvedValue(false);
+      mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
+        createContainer({
+          containerId: 'container-dead',
+          containerName: 'ctxmill-run-session-1',
+          status: 'dead',
+          labels: { 'ctxmill.session-id': 'session-1' },
+        }),
+      ]);
+
+      await getRunReconciliation(policy)();
+
+      expect(mockDb.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'session-1',
+        'CHECKPOINTED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
+      expect(mockContainerManager.stopContainer).toHaveBeenCalledWith('container-dead', 10);
+      expect(mockContainerManager.removeContainer).toHaveBeenCalledWith('container-dead', true);
     });
 
     it('containers with active sessions skip timeout-based cleanup', async () => {

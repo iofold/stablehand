@@ -1,7 +1,10 @@
 import { dirname } from 'node:path';
 
+import type { TypedEventBus } from '../events/bus.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { AgentDefinition, AgentResourceLimits } from '../types.js';
+import type { AgentSessionService } from './agent-session-service.js';
+import { mapMessagesToInternal } from './routes/agent-helpers.js';
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -18,13 +21,51 @@ type StoredAgent = NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']
 
 type NativeTools = { allowlist?: string[]; blocklist?: string[] };
 type WorkspaceContent = { files?: Array<{ src: string; dest: string }> };
+type RunMode = 'interactive' | 'background';
+
+type ExecutionDeps = {
+  db: Pick<
+    DatabaseRepository,
+    'addMessage' | 'createConversation' | 'createTurn' | 'deleteMessage' | 'getConversation' | 'getMessages' | 'getTurn' | 'updateTurn'
+  >;
+  eventBus?: Pick<TypedEventBus, 'emit'>;
+  sessionManager?: { checkConcurrencyLimit(agentId: string): void } | null;
+  agentSessionService: Pick<AgentSessionService, 'executeSession'>;
+};
+
+export interface PrepareRunStartParams {
+  agent: StoredAgent;
+  agentId: string;
+  content: string;
+  mode: RunMode;
+  conversationId?: string;
+  requestedTurnId?: string;
+  requireExistingConversation?: boolean;
+  emitUserMessageEvent?: boolean;
+}
+
+export interface PreparedRunStart {
+  agentDef: AgentDefinition;
+  conversationId: string;
+  turnId: string;
+  messageId: string;
+  messages: ReturnType<typeof mapMessagesToInternal>;
+  mode: RunMode;
+  taskDescription: string;
+}
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export class RunStartupService {
+  private executionDeps: ExecutionDeps | null = null;
+
   constructor(private readonly deps: RunStartupServiceDeps) {}
+
+  configureExecution(deps: ExecutionDeps): void {
+    this.executionDeps = deps;
+  }
 
   buildAgentDefinition(agent: StoredAgent): AgentDefinition {
     this.deps.logger.debug('Building startup agent definition for %s', agent.name);
@@ -48,6 +89,123 @@ export class RunStartupService {
       ...(nativeTools ? { nativeTools } : {}),
       ...(workspaceContent ? { workspaceContent } : {}),
     };
+  }
+
+  async prepareRunStart(params: PrepareRunStartParams): Promise<PreparedRunStart> {
+    const executionDeps = this.getExecutionDeps();
+    const {
+      agent,
+      agentId,
+      content,
+      mode,
+      conversationId,
+      requestedTurnId,
+      requireExistingConversation = false,
+      emitUserMessageEvent = mode === 'interactive',
+    } = params;
+
+    if (!agent.harness) {
+      throw new Error('Agent harness is not set');
+    }
+
+    const resolvedConversationId = await this.resolveConversationId(
+      executionDeps.db,
+      agentId,
+      conversationId,
+      requireExistingConversation,
+    );
+
+    if (requestedTurnId) {
+      const existingTurn = await executionDeps.db.getTurn(requestedTurnId);
+      if (existingTurn) {
+        throw new Error(`Turn already exists for id ${requestedTurnId}`);
+      }
+    }
+
+    const message = await executionDeps.db.addMessage({
+      agentId,
+      conversationId: resolvedConversationId,
+      role: 'user',
+      content,
+    });
+
+    let turn: Awaited<ReturnType<ExecutionDeps['db']['createTurn']>>;
+    try {
+      executionDeps.sessionManager?.checkConcurrencyLimit(agentId);
+      turn = await executionDeps.db.createTurn({
+        ...(requestedTurnId ? { id: requestedTurnId } : {}),
+        agentId,
+        conversationId: resolvedConversationId,
+        mode,
+        ...(mode === 'background' ? { taskDescription: content } : {}),
+      });
+    } catch (err) {
+      await executionDeps.db.deleteMessage(message.id).catch((deleteErr) => {
+        this.deps.logger.error('[RunStartupService] failed to rollback user message %s:', message.id, deleteErr);
+      });
+      throw err;
+    }
+
+    if (emitUserMessageEvent && executionDeps.eventBus) {
+      executionDeps.eventBus.emit('user.message', {
+        agentId,
+        conversationId: resolvedConversationId,
+        messageId: message.id,
+        content,
+        timestamp: Date.now(),
+      });
+    }
+
+    executionDeps.eventBus?.emit('turn.pending', {
+      turnId: turn.id,
+      agentId,
+      conversationId: resolvedConversationId,
+      mode,
+      ...(mode === 'background' ? { taskDescription: content } : {}),
+      timestamp: Date.now(),
+    });
+
+    const agentDef = this.buildAgentDefinition(agent);
+    const allMessages = await executionDeps.db.getMessages(resolvedConversationId);
+
+    return {
+      agentDef,
+      conversationId: resolvedConversationId,
+      turnId: turn.id,
+      messageId: message.id,
+      messages: mapMessagesToInternal(allMessages, agentId),
+      mode,
+      taskDescription: content,
+    };
+  }
+
+  launchPreparedRun(
+    start: PreparedRunStart,
+    agentId: string,
+    options?: { rethrowOnError?: boolean },
+  ): Promise<void> {
+    const executionDeps = this.getExecutionDeps();
+
+    return executionDeps.agentSessionService.executeSession({
+      agentDef: start.agentDef,
+      messages: start.messages,
+      agentId,
+      conversationId: start.conversationId,
+      sessionId: start.turnId,
+      mode: start.mode,
+      taskDescription: start.taskDescription,
+    }).catch(async (err) => {
+      this.deps.logger.error(`[RunStartupService] executeSession failed for agent ${agentId}, turn ${start.turnId}:`, err);
+      await executionDeps.db.updateTurn(start.turnId, {
+        completedAt: Date.now(),
+        error: err instanceof Error ? err.message : String(err),
+      }).catch((dbErr) => {
+        this.deps.logger.error(`[RunStartupService] failed to update turn ${start.turnId} after session error:`, dbErr);
+      });
+      if (options?.rethrowOnError) {
+        throw err;
+      }
+    });
   }
 
   parseHarnessConfig(configJson: string | null | undefined): Record<string, unknown> {
@@ -90,6 +248,37 @@ export class RunStartupService {
       ...(nativeTools ? { nativeTools } : {}),
       ...(workspaceContent ? { workspaceContent } : {}),
     };
+  }
+
+  private getExecutionDeps(): ExecutionDeps {
+    if (!this.executionDeps) {
+      throw new Error('RunStartupService execution dependencies are not configured');
+    }
+
+    return this.executionDeps;
+  }
+
+  private async resolveConversationId(
+    db: ExecutionDeps['db'],
+    agentId: string,
+    conversationId: string | undefined,
+    requireExistingConversation: boolean,
+  ): Promise<string> {
+    if (!conversationId) {
+      if (requireExistingConversation) {
+        throw new Error('Conversation id is required');
+      }
+
+      const conversation = await db.createConversation(agentId);
+      return conversation.id;
+    }
+
+    const conversation = await db.getConversation(conversationId);
+    if (!conversation || conversation.agentId !== agentId) {
+      throw new Error(`Conversation ${conversationId} not found for agent ${agentId}`);
+    }
+
+    return conversation.id;
   }
 }
 

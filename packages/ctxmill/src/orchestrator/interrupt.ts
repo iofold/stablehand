@@ -27,6 +27,7 @@ export interface PendingInterrupt {
   args: Record<string, unknown>;
   createdAt: number;
   sessionId?: string;
+  conversationId?: string;
 }
 
 export interface InterruptResolution {
@@ -46,6 +47,26 @@ export class InterruptManager {
     this.onTimeout = onTimeout;
   }
 
+  private emitResolvedEvent(
+    turnId: string,
+    action: 'approve' | 'reject' | 'suspend' | 'timeout',
+    agentId?: string,
+    conversationId?: string,
+  ): void {
+    if (!this.eventBus) {
+      return;
+    }
+
+    this.eventBus.emit('run.interrupt_resolved', {
+      turnId,
+      agentId: agentId ?? turnId,
+      conversationId: conversationId ?? turnId,
+      interruptId: turnId,
+      action,
+      timestamp: Date.now(),
+    } as unknown as EventMap['run.interrupt_resolved']);
+  }
+
   private createPendingPromise(
     turnId: string,
     agentId: string,
@@ -56,6 +77,7 @@ export class InterruptManager {
     timeoutMs: number,
     emitInterruptedEvent: boolean,
     sessionId?: string,
+    conversationId?: string,
   ): Promise<InterruptResolution> {
     return new Promise<InterruptResolution>((resolve) => {
       const wrappedResolve = (value: InterruptResolution) => {
@@ -66,42 +88,21 @@ export class InterruptManager {
 
       const timeoutId = timeoutMs > 0
         ? setTimeout(() => {
-            const entry = this.pending.get(turnId);
-            if (entry) {
-              this.pending.delete(turnId);
-              resolve({ action: 'suspend', data: 'Session suspended for HITL approval — awaiting human decision' });
-
-              if (this.db) {
-                this.db.resolveInterrupt(turnId, 'suspend', 'Session suspended for HITL approval — awaiting human decision').catch((err) => {
-                  console.error('[InterruptManager] failed to persist timeout resolution:', err);
-                });
-              }
-
-              if (this.eventBus) {
-                this.eventBus.emit('run.interrupt_resolved', {
-                  turnId,
-                  agentId,
-                  interruptId: turnId,
-                  action: 'suspend',
-                  timestamp: Date.now(),
-                } as unknown as EventMap['run.interrupt_resolved']);
-              }
-
-              // Cooperatively checkpoint the session on HITL timeout.
-              // The InterruptManager is the sole owner of the HITL deadline —
-              // the container lifecycle policy has no knowledge of HITL.
-              if (this.onTimeout && entry.info.sessionId) {
-                void this.onTimeout(entry.info.sessionId).catch((err) => {
-                  console.error('[InterruptManager] onTimeout callback failed:', err);
-                });
-              }
-            }
-          }, timeoutMs)
+          const entry = this.pending.get(turnId);
+          if (entry) {
+            void this.handleTimeout(
+              turnId,
+              agentId,
+              entry.info.sessionId,
+              'Session suspended for HITL approval — awaiting human decision',
+            );
+          }
+        }, timeoutMs)
         : undefined;
 
       this.pending.set(turnId, {
         resolve: wrappedResolve,
-        info: { toolCallId, toolName, args, createdAt, sessionId },
+        info: { toolCallId, toolName, args, createdAt, sessionId, conversationId },
         agentId,
         timeoutId,
       });
@@ -110,6 +111,7 @@ export class InterruptManager {
         this.eventBus.emit('run.interrupted', {
           turnId,
           agentId,
+          conversationId: conversationId ?? turnId,
           toolCallId,
           toolName,
           args,
@@ -153,6 +155,8 @@ export class InterruptManager {
           record.createdAt,
           remainingMs,
           false,
+          record.sessionId ?? undefined,
+          undefined,
         );
         reloadedCount += 1;
       }
@@ -170,7 +174,7 @@ export class InterruptManager {
    * Keyed by turnId so that concurrent turns of the same agent don't
    * interfere with each other.
    */
-  waitForApproval(
+  async waitForApproval(
     turnId: string,
     agentId: string,
     toolCallId: string,
@@ -178,21 +182,22 @@ export class InterruptManager {
     args: Record<string, unknown>,
     timeoutMs: number = 300_000,
     sessionId?: string,
+    conversationId?: string,
   ): Promise<InterruptResolution> {
     // If there is already a pending interrupt for this run, reject it
     const existing = this.pending.get(turnId);
     if (existing) {
-      if (existing.timeoutId) clearTimeout(existing.timeoutId);
-      existing.resolve({ action: 'reject', data: 'Superseded by new interrupt' });
-      this.pending.delete(turnId);
+      const superseded = await this.resolve(turnId, 'reject', 'Superseded by new interrupt', existing.agentId, existing.info.conversationId);
+      if (!superseded) {
+        throw new Error(`Failed to supersede pending interrupt ${turnId}`);
+      }
     }
 
     const now = Date.now();
     const expiresAt = now + timeoutMs;
 
-    // Persist to DB (fire-and-forget, don't block the Promise creation)
     if (this.db) {
-      this.db.savePendingInterrupt({
+      await this.db.savePendingInterrupt({
         id: turnId,
         agentSessionId: turnId,
         agentId,
@@ -204,8 +209,6 @@ export class InterruptManager {
         expiresAt,
         status: 'pending',
         sessionId,
-      }).catch((err) => {
-        console.error('[InterruptManager] failed to persist pending interrupt:', err);
       });
     }
 
@@ -219,6 +222,7 @@ export class InterruptManager {
       timeoutMs,
       true,
       sessionId,
+      conversationId,
     );
   }
 
@@ -226,38 +230,40 @@ export class InterruptManager {
    * Resolve a pending interrupt with the user's decision.
    * Returns true if there was a pending interrupt, false otherwise.
    */
-  resolve(turnId: string, action: 'approve' | 'reject' | 'suspend' | 'timeout', data?: unknown, agentId?: string): boolean {
+  async resolve(
+    turnId: string,
+    action: 'approve' | 'reject' | 'suspend' | 'timeout',
+    data?: unknown,
+    agentId?: string,
+    conversationId?: string,
+  ): Promise<boolean> {
     const entry = this.pending.get(turnId);
     if (!entry) return false;
+
+    if (this.db) {
+      const persisted = await this.db.resolveInterrupt(turnId, action, data);
+      if (!persisted) {
+        return false;
+      }
+    }
+
     if (entry.timeoutId) clearTimeout(entry.timeoutId);
     entry.resolve({ action, data });
     this.pending.delete(turnId);
-
-    // Persist resolution to DB
-    if (this.db) {
-      this.db.resolveInterrupt(turnId, action, data).catch((err) => {
-        console.error('[InterruptManager] failed to persist interrupt resolution:', err);
-      });
-    }
-
-    if (this.eventBus) {
-      this.eventBus.emit('run.interrupt_resolved', {
-        turnId,
-        agentId: agentId ?? turnId,
-        interruptId: turnId,
-        action,
-        timestamp: Date.now(),
-      } as unknown as EventMap['run.interrupt_resolved']);
-    }
+    this.emitResolvedEvent(turnId, action, agentId ?? entry.agentId, conversationId ?? entry.info.conversationId);
 
     return true;
   }
 
   /** Resolve a pending interrupt by sessionId. Returns true if a match was found. */
-  resolveForSession(sessionId: string, action: 'approve' | 'reject' | 'suspend' | 'timeout', data?: unknown): boolean {
+  async resolveForSession(
+    sessionId: string,
+    action: 'approve' | 'reject' | 'suspend' | 'timeout',
+    data?: unknown,
+  ): Promise<boolean> {
     for (const [turnId, entry] of this.pending) {
       if (entry.info.sessionId === sessionId) {
-        return this.resolve(turnId, action, data, entry.agentId);
+        return this.resolve(turnId, action, data, entry.agentId, entry.info.conversationId);
       }
     }
     return false;
@@ -316,5 +322,25 @@ export class InterruptManager {
       }
     }
     this.pending.clear();
+  }
+
+  private async handleTimeout(
+    turnId: string,
+    agentId: string,
+    sessionId: string | undefined,
+    message: string,
+  ): Promise<void> {
+    try {
+      const resolved = await this.resolve(turnId, 'suspend', message, agentId);
+      if (!resolved) {
+        return;
+      }
+
+      if (this.onTimeout && sessionId) {
+        await this.onTimeout(sessionId);
+      }
+    } catch (err) {
+      console.error('[InterruptManager] failed to handle timeout resolution:', err);
+    }
   }
 }

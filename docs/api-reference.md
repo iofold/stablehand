@@ -32,7 +32,7 @@
 | **Sessions** |  |  |
 | GET | `/api/agents/:id/sessions` | List agent sessions |
 | GET | `/api/agents/:id/turns` | List raw turn history |
-| POST | `/api/agents/:id/sessions/:sessionId/suspend` | Checkpoint a sandbox session |
+| POST | `/api/agents/:id/sandbox-sessions/:sessionId/suspend` | Checkpoint a sandbox session |
 | POST | `/api/agents/:id/sessions/:sessionId/kill` | Terminate a sandbox session |
 | GET | `/api/sessions` | List active conversation summaries or sandbox sessions |
 | **SSE Streaming** |  |  |
@@ -276,10 +276,10 @@ Per-agent sandbox resource limits:
     "sseClients": 2,
     "hasPendingInterrupt": false,
     "sessionsByStatus": {
-      "active": 1,
-      "paused": 0,
-      "checkpointed": 0,
-      "terminated": 0
+      "ACTIVE": 1,
+      "PAUSED": 0,
+      "CHECKPOINTED": 0,
+      "TERMINATED": 0
     },
     "sessions": [
       {
@@ -378,10 +378,10 @@ Per-agent sandbox resource limits:
   "sseClients": 1,
   "hasPendingInterrupt": false,
   "sessionsByStatus": {
-    "active": 1,
-    "paused": 0,
-    "checkpointed": 0,
-    "terminated": 0
+    "ACTIVE": 1,
+    "PAUSED": 0,
+    "CHECKPOINTED": 0,
+    "TERMINATED": 0
   },
   "sessions": []
 }
@@ -552,7 +552,7 @@ Per-agent sandbox resource limits:
       "agentId": "agent_123",
       "conversationId": "conv_123",
       "sandboxSessionId": "sbx_123",
-      "status": "paused",
+      "status": "PAUSED",
       "mode": "background",
       "startedAt": 1712140000000,
       "taskDescription": "Index artifacts",
@@ -588,7 +588,7 @@ Per-agent sandbox resource limits:
 
 - **Notes:** Use `/api/agents/:id/sessions` for a friendlier operational view.
 
-#### `POST /api/agents/:id/sessions/:sessionId/suspend`
+#### `POST /api/agents/:id/sandbox-sessions/:sessionId/suspend`
 
 - **Description:** Checkpoints a sandbox session.
 - **Request body:** None.
@@ -729,7 +729,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 }
 ```
 
-- **Notes:** Status can be `running`, `paused`, `suspended`, `completed`, `error`, or `idle`.
+- **Notes:** Sandbox session statuses are uppercase (`ACTIVE`, `PAUSED`, `CHECKPOINTED`, `RESTORING`, `TERMINATED`) when a response includes sandbox state. Conversation lifecycle status fields remain lower-case (`running`, `paused`, `suspended`, `completed`, `error`, `idle`).
 
 #### `GET /api/agents/:id/conversations/:convId/messages`
 
@@ -1501,7 +1501,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
       "name": "summary.pdf",
       "mimeType": "application/pdf",
       "sizeBytes": 23456,
-      "storageKey": "agent_123/art_123/summary.pdf",
+      "storageKey": "artifacts/art_123/summary.pdf",
       "bucket": "ctxmill-artifacts",
       "status": "active",
       "createdAt": 1712140000000
@@ -1525,7 +1525,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 - **Description:** Downloads artifact bytes.
 - **Query params:** None.
 - **Response:** raw file bytes.
-- **Notes:** Sets `Content-Type`, `Content-Disposition`, and `Content-Length`.
+- **Notes:** Sets `Content-Type`, `Content-Disposition`, and `Content-Length`. Returns `409` while a signed-upload artifact is still `pending_upload`.
 
 #### `GET /api/artifacts/:id/download-url`
 
@@ -1544,7 +1544,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 }
 ```
 
-- **Notes:** Good for browser-side downloads without proxying file bytes through your app.
+- **Notes:** Good for browser-side downloads without proxying file bytes through your app. Returns `409` while a signed-upload artifact is still `pending_upload`; the server confirms the upload from object-storage metadata before issuing the download URL.
 
 #### `POST /api/artifacts/upload-url`
 
@@ -1567,12 +1567,12 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 {
   "artifactId": "art_123",
   "uploadUrl": "https://storage.example.com/signed-upload",
-  "storageKey": "agent_123/art_123/summary.pdf",
+  "storageKey": "artifacts/art_123/summary.pdf",
   "expiresIn": 3600
 }
 ```
 
-- **Notes:** There is no multipart upload endpoint in CTXMill itself; upload directly to object storage using the returned URL.
+- **Notes:** The metadata row starts as `pending_upload` and is hidden from list endpoints until the object exists and a download/download-url request confirms it. Direct multipart upload is available at `POST /api/artifacts/upload`; daemon-side direct uploads use the `artifact_upload` tool. Artifact object keys are globally scoped by artifact ID, not by agent ID, so deleting an agent does not imply artifact-object cleanup.
 
 #### `DELETE /api/artifacts/:id`
 
@@ -1798,7 +1798,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 ]
 ```
 
-- **Notes:** `location` is one of `sandbox`, `orchestrator`, or `daemon`.
+- **Notes:** `location` is one of `sandbox`, `orchestrator`, or `daemon`. Daemon tools such as `artifact_upload` and `artifact_download` talk directly to object storage instead of proxying bytes through the API.
 
 #### `POST /api/catalogs/tools/test`
 

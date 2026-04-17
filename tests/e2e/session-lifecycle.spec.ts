@@ -36,30 +36,24 @@ test.describe('Session lifecycle', () => {
     await page.goto(`/agents/${agentId}`);
     await expect(page.getByTestId('agent-name')).toBeVisible();
 
-    await page.getByTestId('runs-tab').click();
-    const runsHistory = page.getByTestId('runs-history');
+    await page.getByTestId('sessions-tab').click();
+    const runsHistory = page.getByTestId('sessions-history');
     await expect(runsHistory).toBeVisible();
 
-    const runRow = runsHistory.locator('tbody tr').filter({
-      has: page.getByText(sessionId.slice(0, 8), { exact: true }),
-    });
-    await expect(runRow.first()).toBeVisible();
-    await runRow.first().click();
+    const runRows = runsHistory.locator('tbody tr');
+    await expect(runRows.first()).toBeVisible();
+    await runRows.first().click();
 
-    await expect(page.getByTestId('run-detail')).toBeVisible();
-    await expect(page.getByText('Session workspace')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Browse Files' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'View Diff' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Promote' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Fork' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Discard' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Continue Conversation' })).toBeVisible();
+    await expect(page.getByTestId('session-detail').getByText('Turns')).toBeVisible();
+    await expect(page.getByText('Generate a short report and finish cleanly for session UI testing.')).toBeVisible();
   });
 
-  test('session diff endpoint returns valid response', async ({ request }) => {
-    const diffRes = await request.get(`/api/agents/${agentId}/sessions/${sessionId}/diff`);
-    expect(diffRes.ok()).toBeTruthy();
-    const body = await diffRes.json();
-    expect(body).toHaveProperty('changes');
-    expect(Array.isArray(body.changes)).toBe(true);
+  test('session detail endpoint returns valid response', async ({ request }) => {
+    const detailRes = await request.get(`/api/agents/${agentId}/sessions/${sessionId}`);
+    expect(detailRes.ok()).toBeTruthy();
+    const body = await detailRes.json();
+    expect(body.session).toHaveProperty('id', sessionId);
+    expect(Array.isArray(body.messages)).toBe(true);
   });
 });

@@ -200,7 +200,7 @@ describe('SandboxSessionManager concurrency', () => {
     vi.useRealTimers();
   });
 
-  it('drains queued follow-up turns iteratively without recursive re-entry', async () => {
+  it('drains queued follow-up turns one queued turn at a time without recursive re-entry', async () => {
     const { manager, logger, internals } = createManager();
     const firstRelease = deferred();
     const secondStarted = deferred();
@@ -222,11 +222,11 @@ describe('SandboxSessionManager concurrency', () => {
           return (async function* () {
             secondStarted.resolve();
             await secondRelease.promise;
-            yield protoCommittedEvent('coalesced-response-1', request.turnId);
+            yield protoCommittedEvent('queued-response-1', request.turnId);
           })();
         }
 
-        return streamProtoEvents(protoCommittedEvent(`coalesced-response-${grpcCallCount - 1}`, request.turnId));
+        return streamProtoEvents(protoCommittedEvent(`queued-response-${grpcCallCount - 1}`, request.turnId));
       }),
     };
 
@@ -262,23 +262,15 @@ describe('SandboxSessionManager concurrency', () => {
       turnId: 'turn-direct',
     });
 
-    for (const events of queuedResults.slice(0, 2)) {
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        type: 'message_committed',
-        content: 'coalesced-response-1',
-      });
-    }
-
-    for (const events of queuedResults.slice(2)) {
+    for (const [index, events] of queuedResults.entries()) {
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ type: 'message_committed' });
       const committedEvent = events[0] as Extract<SessionEvent, { type: 'message_committed' }>;
-      expect(committedEvent.content).toMatch(/^coalesced-response-/);
-      expect(committedEvent.content).not.toBe('coalesced-response-1');
+      expect(committedEvent.turnId).toMatch(/^turn-/);
+      expect(committedEvent.content).toBe(`queued-response-${index + 1}`);
     }
 
-    expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(4);
+    expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(6);
     expect(internals.stateStore.activeTurns.has(record.sessionId)).toBe(false);
     expect(internals.stateStore.turnQueues.get(record.sessionId) ?? []).toHaveLength(0);
     expect(logger.warn).not.toHaveBeenCalled();

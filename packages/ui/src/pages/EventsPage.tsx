@@ -90,6 +90,8 @@ export function EventsPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<number | undefined>();
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [eventTypesError, setEventTypesError] = useState<string | null>(null);
 
   // Filters
   const [typeFilter, setTypeFilter] = useState<string>('');
@@ -113,10 +115,25 @@ export function EventsPage() {
     return range ? Date.now() - range.ms : undefined;
   }, [timeRange]);
 
+  const loadEventTypes = useCallback(async () => {
+    setEventTypesError(null);
+
+    try {
+      const data = await fetchEventTypes();
+      setEventTypes(data.types);
+    } catch (err) {
+      console.debug('[Events] Event types load failed:', err);
+      setEventTypes([]);
+      setEventTypesError('Event type filters are unavailable.');
+    }
+  }, []);
+
   const loadEvents = useCallback(
     async (append = false, cursor?: number) => {
       if (append) setLoadingMore(true);
-      else setLoading(true);
+      else {
+        setLoading(true);
+      }
 
       try {
         const [eventsData, statsData] = await Promise.all([
@@ -137,8 +154,10 @@ export function EventsPage() {
         }
         setNextCursor(eventsData.nextCursor);
         setStats(statsData);
+        setLoadError(null);
       } catch (err) {
         console.debug('[Events] Load failed:', err);
+        setLoadError(append ? 'Failed to load more events.' : 'Failed to load event log.');
       } finally {
         setLoading(false);
         setLoadingMore(false);
@@ -150,10 +169,8 @@ export function EventsPage() {
   // Initial load + fetch agents and event types
   useEffect(() => {
     if (agents.length === 0) fetchAgents();
-    fetchEventTypes()
-      .then((data) => setEventTypes(data.types))
-      .catch(() => {});
-  }, [agents.length, fetchAgents]);
+    void loadEventTypes();
+  }, [agents.length, fetchAgents, loadEventTypes]);
 
   // Load events when filters change
   useEffect(() => {
@@ -173,6 +190,8 @@ export function EventsPage() {
   const handleLoadMore = () => {
     if (nextCursor) loadEvents(true, nextCursor);
   };
+
+  const hasLoadedEventData = events.length > 0 || stats !== null;
 
   const clearFilters = () => {
     setTypeFilter('');
@@ -256,6 +275,40 @@ export function EventsPage() {
           )}
         </div>
 
+        {loadError && hasLoadedEventData && (
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+          >
+            <span>{loadError}</span>
+            <button
+              type="button"
+              data-testid="events-retry-button"
+              onClick={() => loadEvents()}
+              className="rounded-md border border-red-400/30 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-500/10"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {eventTypesError && (
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+          >
+            <span>{eventTypesError}</span>
+            <button
+              type="button"
+              data-testid="events-type-retry-button"
+              onClick={() => void loadEventTypes()}
+              className="rounded-md border border-amber-400/30 px-3 py-1.5 text-xs font-medium text-amber-100 transition-colors hover:bg-amber-500/10"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1.5 text-xs text-surface-400">
@@ -337,6 +390,24 @@ export function EventsPage() {
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="h-6 w-6 text-accent-400 animate-spin" />
+          </div>
+        ) : loadError && !hasLoadedEventData ? (
+          <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
+            <Activity className="h-8 w-8 text-red-300" />
+            <div className="space-y-1">
+              <p className="text-sm text-red-200">{loadError}</p>
+              <p className="text-xs text-surface-400">
+                The event log could not be loaded. Try again when the API is reachable.
+              </p>
+            </div>
+            <button
+              type="button"
+              data-testid="events-retry-button"
+              onClick={() => loadEvents()}
+              className="btn-secondary"
+            >
+              Retry
+            </button>
           </div>
         ) : events.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">

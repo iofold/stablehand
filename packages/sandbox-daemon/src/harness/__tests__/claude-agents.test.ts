@@ -168,3 +168,71 @@ describe('ClaudeSession JSONL persistence', () => {
     await session.close();
   });
 });
+
+
+describe('ClaudeAgentsHarness stream mapping fallbacks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('surfaces malformed streamed tool arguments as degraded args instead of an empty object', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const harness = new ClaudeAgentsHarness();
+    const toolStartTimes = new Map<string, number>();
+    const streamState = harness.createStreamMappingState();
+
+    expect([...harness.mapSDKMessage({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 0,
+        content_block: {
+          type: 'tool_use',
+          id: 'tool-call-1',
+          name: 'search',
+        },
+      },
+    } as never, toolStartTimes, streamState)]).toEqual([]);
+
+    expect([...harness.mapSDKMessage({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: {
+          type: 'input_json_delta',
+          partial_json: '{"query":',
+        },
+      },
+    } as never, toolStartTimes, streamState)]).toEqual([]);
+
+    const events = [...harness.mapSDKMessage({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'tool-call-1',
+          name: 'search',
+        }],
+      },
+    } as never, toolStartTimes, streamState)];
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'tool_call_start',
+        id: 'tool-call-1',
+        name: 'search',
+        args: expect.objectContaining({
+          __ctxmillDegraded: true,
+          __ctxmillError: expect.stringContaining('Failed to parse streamed Claude tool arguments'),
+          __ctxmillRawArgsPreview: '{"query":',
+        }),
+      }),
+    ]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('surfacing degraded args'),
+      expect.any(SyntaxError),
+    );
+    errorSpy.mockRestore();
+  });
+});

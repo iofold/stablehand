@@ -19,15 +19,6 @@ import { create } from '@bufbuild/protobuf';
 import { ConnectError, Code, type ConnectRouter } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 
-// LangGraph and other libraries use BigInt internally (checkpoint sequences, etc.).
-// JSON.stringify throws on BigInt by default. This global polyfill makes BigInt
-// JSON-serializable everywhere — the standard approach used by Prisma, Discord.js, etc.
-// See: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt#use_within_json
-declare global { interface BigInt { toJSON(): number; } }
-BigInt.prototype.toJSON = function () {
-  return Number(this);
-};
-
 import {
   HarnessService,
   type OpenSessionRequest,
@@ -40,6 +31,7 @@ import {
 
 import { openSession, deliverTurn, suspendSession, killSession } from './runner.js';
 import { validateCheckpointSize } from './checkpoint.js';
+import { stringifyJsonWithBigInts } from './json-serialization.js';
 
 import type { ResolvedSecrets } from '../harness/types.js';
 import type { ToolContext, ToolDefinition } from '../tool/types.js';
@@ -78,7 +70,7 @@ function getBun(): BunGlobal | null {
 }
 
 function jsonResponse(body: unknown, status: number = 200): Response {
-  return new Response(JSON.stringify(body), {
+  return new Response(stringifyJsonWithBigInts(body), {
     status,
     headers: {
       'content-type': 'application/json',
@@ -89,9 +81,10 @@ function jsonResponse(body: unknown, status: number = 200): Response {
 function parseToolResult(result: string): unknown {
   try {
     return JSON.parse(result);
-  } catch {
-    console.error('[daemon] Failed to parse tool result as JSON, returning raw string.');
-    return result;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[daemon] Failed to parse tool result as JSON:', err);
+    throw new Error(`Tool returned invalid JSON: ${message}`, { cause: err });
   }
 }
 
@@ -213,7 +206,7 @@ async function handleSuspendSession(req: SuspendSessionRequest) {
   try {
     const response = await suspendSession(req.reason);
 
-    const json = JSON.stringify(response.sessionCheckpoint);
+    const json = stringifyJsonWithBigInts(response.sessionCheckpoint);
     const sizeResult = validateCheckpointSize(json);
 
     if (!sizeResult.ok) {

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
+import { vi } from 'vitest';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -40,8 +41,10 @@ describe('Agent CRUD & related endpoints', () => {
       agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
       harnessRegistry: container.harnessRegistry,
+      containerManager: container.containerManager,
       sessionManager: container.sessionManager,
       dataDir,
+      runStartupService: container.runStartupService,
     });
 
     await app.ready();
@@ -74,6 +77,8 @@ describe('Agent CRUD & related endpoints', () => {
       agentId,
       harnessName: agent.harness,
       status: 'ACTIVE',
+      containerId: 'test-container-id',
+      containerName: 'test-container',
     });
     const session = await container.db.createTurn({
       agentId,
@@ -361,6 +366,52 @@ describe('Agent CRUD & related endpoints', () => {
       expect(getRes.statusCode).toBe(404);
     });
 
+    it('kills active sandbox sessions before deleting the agent', async () => {
+      const created = await createAgent({ name: 'delete-active-agent' });
+      const id = created.json().id as string;
+      const stopSpy = vi.spyOn(container.containerManager, 'stopContainer');
+      const removeSpy = vi.spyOn(container.containerManager, 'removeContainer');
+
+      await createActiveSession(id, 'Delete me while active');
+
+      const delRes = await app.inject({
+        method: 'DELETE',
+        url: `/api/agents/${id}`,
+      });
+
+      expect(delRes.statusCode).toBe(204);
+      expect(stopSpy).toHaveBeenCalledWith('test-container-id', 10);
+      expect(removeSpy).toHaveBeenCalledWith('test-container-id', true);
+      expect(await container.db.getSandboxSessionsByAgent(id)).toEqual([]);
+    });
+
+    it('removes label-matched orphan containers while deleting the agent', async () => {
+      const created = await createAgent({ name: 'delete-orphaned-agent' });
+      const id = created.json().id as string;
+      const stopSpy = vi.spyOn(container.containerManager, 'stopContainer').mockResolvedValueOnce(undefined);
+      const removeSpy = vi.spyOn(container.containerManager, 'removeContainer').mockResolvedValueOnce(undefined);
+      vi.spyOn(container.containerManager, 'listManagedContainersWithLabels').mockResolvedValueOnce([
+        {
+          containerId: 'orphan-container-id',
+          containerName: 'ctxmill-run-orphan',
+          sessionId: 'orphan-session-id',
+          agentId: id,
+          harnessName: 'langgraph',
+          status: 'running',
+          labels: { 'ctxmill.agent-id': id },
+        },
+      ]);
+
+      const delRes = await app.inject({
+        method: 'DELETE',
+        url: `/api/agents/${id}`,
+      });
+
+      expect(delRes.statusCode).toBe(204);
+      expect(stopSpy).toHaveBeenCalledWith('orphan-container-id', 10);
+      expect(removeSpy).toHaveBeenCalledWith('orphan-container-id', true);
+    });
+
     it('returns 404 for non-existent agent', async () => {
       const res = await app.inject({
         method: 'DELETE',
@@ -479,6 +530,55 @@ describe('Agent CRUD & related endpoints', () => {
         url: `/api/agents/${agentId}/sessions/nonexistent-run`,
       });
       expect(res.statusCode).toBe(404);
+    });
+
+    it('returns 404 when given a conversationId instead of a runId', async () => {
+      const conversation = await container.db.createConversation(agentId);
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/agents/${agentId}/sessions/${conversation.id}`,
+      });
+      expect(res.statusCode).toBe(404);
+    });
+  });
+
+  describe('POST /api/ag-ui/:id/run', () => {
+    let agentId: string;
+    let conversationId: string;
+    let runId: string;
+
+    beforeAll(async () => {
+      const res = await createAgent({ name: 'ag-ui-route-agent' });
+      agentId = res.json().id;
+      const conversation = await container.db.createConversation(agentId);
+      conversationId = conversation.id;
+      const run = await container.db.createTurn({
+        id: `ag-ui-existing-run-${Date.now()}`,
+        agentId,
+        conversationId,
+        mode: 'interactive',
+      });
+      runId = run.id;
+    });
+
+    it('rejects reconnect when runId and threadId do not match', async () => {
+      const wrongConversation = await container.db.createConversation(agentId);
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/ag-ui/${agentId}/run`,
+        payload: {
+          threadId: wrongConversation.id,
+          runId,
+          messages: [{ id: 'msg-1', role: 'user', content: 'hello' }],
+        },
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual(expect.objectContaining({
+        error: 'Run does not belong to the supplied threadId',
+        runId,
+        threadId: wrongConversation.id,
+      }));
     });
   });
 

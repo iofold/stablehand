@@ -46,14 +46,35 @@ describe('LearningEventSubscriber', () => {
       bus.emit('turn.completed', makeRunCompletedEvent({ status: 'completed' }));
       await settle();
 
-      expect(db.getRecentTraces).toHaveBeenCalledWith('agent-test-1', 1);
-       expect(pipeline.process).toHaveBeenCalledWith(
-         expect.objectContaining({
-           id: 'trace-1',
-           agentId: 'agent-test-1',
-           turnId: 'run-test-1',
-         }),
-       );
+      expect(db.getRecentTraces).toHaveBeenCalledWith('agent-test-1', 5);
+      expect(pipeline.process).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'trace-1',
+          agentId: 'agent-test-1',
+          turnId: 'run-test-1',
+        }),
+      );
+    });
+
+    it('matches trace by turnId when sandbox sessionId differs', async () => {
+      db.getRecentTraces.mockResolvedValue([
+        makeTraceRow({ id: 'older-trace', sessionId: 'sandbox-session-1' }),
+        makeTraceRow({ id: 'turn-trace', sessionId: 'run-test-1' }),
+      ]);
+
+      bus.emit('turn.completed', makeRunCompletedEvent({
+        status: 'completed',
+        sessionId: 'sandbox-session-1',
+        turnId: 'run-test-1',
+      }));
+      await settle();
+
+      expect(pipeline.process).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'turn-trace',
+          turnId: 'run-test-1',
+        }),
+      );
     });
 
     it('status error - pipeline NOT called', async () => {

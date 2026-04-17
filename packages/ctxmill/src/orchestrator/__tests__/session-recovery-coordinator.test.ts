@@ -142,6 +142,13 @@ function createAgentDef(): AgentDefinition {
   } as unknown as AgentDefinition;
 }
 
+function createWorkspaceAgentDef(): AgentDefinition {
+  return {
+    ...createAgentDef(),
+    workspaceDir: '/repo/base',
+  } as AgentDefinition;
+}
+
 function createDbSession(
   status: SandboxSessionRow['status'],
   overrides: Partial<SandboxSessionRow> = {},
@@ -298,6 +305,85 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
       status: 'ACTIVE',
     }));
     expect(manager.findSessionById('sess-1')).toBe(session);
+  });
+
+  it('fails closed and removes the newly-created container when workspace restore fails', async () => {
+    vi.useFakeTimers();
+    const restoreSpy = vi
+      .spyOn(WorkspaceDiffService.prototype, 'restore')
+      .mockRejectedValueOnce(new Error('workspace restore failed'));
+    const { manager, containerManager, db, grpcClient } = createManager();
+    const failingClient = createMockGrpcClient();
+    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+
+    connectMocks.createClientMock
+      .mockReturnValueOnce(failingClient)
+      .mockReturnValue(grpcClient);
+    (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('ACTIVE'));
+    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
+
+    const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+    const rejection = expect(sessionPromise).rejects.toThrow('workspace restore failed');
+    await vi.advanceTimersByTimeAsync(10_500);
+    await rejection;
+
+    expect(statusTransitions(db)).toEqual(['CHECKPOINTED', 'RESTORING', 'CHECKPOINTED']);
+    expect(containerManager.startContainer).toHaveBeenCalledWith('c-2');
+    expect(containerManager.stopContainer).toHaveBeenCalledWith('c-2', 10);
+    expect(containerManager.removeContainer).toHaveBeenCalledWith('c-2', true);
+    expect(grpcClient.openSession).not.toHaveBeenCalled();
+    expect(manager.findSessionById('sess-1')).toBeUndefined();
+
+    restoreSpy.mockRestore();
+  });
+
+  it('reuses the persisted session workspace during checkpoint restore', async () => {
+    vi.useFakeTimers();
+    const restoreSpy = vi.spyOn(WorkspaceDiffService.prototype, 'restore');
+    const { manager, containerManager, db, grpcClient } = createManager();
+    vi.spyOn(manager, 'getExistingSessionWorkspaceDir').mockResolvedValue('/tmp/data/sessions/sess-1/workspace');
+    const failingClient = createMockGrpcClient();
+    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+
+    connectMocks.createClientMock
+      .mockReturnValueOnce(failingClient)
+      .mockReturnValue(grpcClient);
+    (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('ACTIVE'));
+    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
+
+    const sessionPromise = manager.ensureSession('conv-1', createWorkspaceAgentDef(), 'agent-1');
+    await vi.advanceTimersByTimeAsync(10_500);
+    const session = await sessionPromise;
+
+    expect(containerManager.createContainer).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceDir: expect.stringContaining('/sessions/sess-1/workspace'),
+    }));
+    expect(restoreSpy).not.toHaveBeenCalled();
+    expect(session.sessionWorkspaceDir).toMatch(/\/sessions\/sess-1\/workspace$/);
+  });
+
+  it('fails checkpoint restore when a session workspace was expected but is missing', async () => {
+    vi.useFakeTimers();
+    const restoreSpy = vi.spyOn(WorkspaceDiffService.prototype, 'restore');
+    const { manager, containerManager, db, grpcClient } = createManager();
+    vi.spyOn(manager, 'getExistingSessionWorkspaceDir').mockResolvedValue(undefined);
+    const failingClient = createMockGrpcClient();
+    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+
+    connectMocks.createClientMock
+      .mockReturnValueOnce(failingClient)
+      .mockReturnValue(grpcClient);
+    (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('ACTIVE'));
+    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
+
+    const sessionPromise = manager.ensureSession('conv-1', createWorkspaceAgentDef(), 'agent-1');
+    const rejection = expect(sessionPromise).rejects.toThrow(/missing persisted session workspace/i);
+    await vi.advanceTimersByTimeAsync(10_500);
+    await rejection;
+
+    expect(containerManager.createContainer).not.toHaveBeenCalled();
+    expect(restoreSpy).not.toHaveBeenCalled();
+    expect(statusTransitions(db)).toEqual(['CHECKPOINTED', 'RESTORING', 'CHECKPOINTED']);
   });
 
   it('evicts an unreachable ACTIVE session with no checkpoint by creating a fresh replacement session', async () => {

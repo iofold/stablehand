@@ -5,7 +5,6 @@ import type { TypedEventBus } from '../events/bus.js';
 const MAX_QUEUE_SIZE = 100;
 const MAX_EVENTS_PER_CONVERSATION = 500;
 const RETENTION_AFTER_COMPLETION = 50;
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_HEARTBEAT_FAILURES = 3;
 const CONVERSATION_EXPIRY_MS = 30 * 60 * 1000;
 
@@ -64,34 +63,15 @@ export class SSEManager {
     this.connectionState.set(reply, state);
 
     if (lastEventId) {
-      const agentMap = this.eventHistory.get(agentId);
-      if (agentMap) {
-        try {
-          const allEntries: HistoryEntry[] = [];
-          for (const entries of agentMap.values()) {
-            allEntries.push(...entries);
-          }
-          allEntries.sort((a, b) => {
-            const seqA = parseInt(a.id.substring(a.id.lastIndexOf('-') + 1), 10);
-            const seqB = parseInt(b.id.substring(b.id.lastIndexOf('-') + 1), 10);
-            return seqA - seqB;
-          });
-
-          let replaying = false;
-          for (const entry of allEntries) {
-            if (!replaying) {
-              if (entry.id === lastEventId) {
-                replaying = true;
-              }
-              continue;
-            }
-            reply.raw.write(`id: ${entry.id}\ndata: ${JSON.stringify(entry.event)}\n\n`);
-          }
-        } catch (writeErr) {
-          console.debug('[SSE] Failed to replay history for agent', agentId, writeErr);
-          this.connectionState.delete(reply);
-          return;
+      try {
+        const replayEntries = this.getReplayEntries(agentId, lastEventId);
+        for (const entry of replayEntries) {
+          reply.raw.write(`id: ${entry.id}\ndata: ${JSON.stringify(entry.event)}\n\n`);
         }
+      } catch (writeErr) {
+        console.debug('[SSE] Failed to replay history for agent', agentId, writeErr);
+        this.connectionState.delete(reply);
+        return;
       }
     }
 
@@ -140,18 +120,6 @@ export class SSEManager {
         // Reset consecutive failures on success
         if (st) {
           st.consecutiveHeartbeatFailures = 0;
-        }
-
-        // Check idle timeout: idle > 5 minutes with no active runs
-        if (st && Date.now() - st.lastEventTime > IDLE_TIMEOUT_MS) {
-          console.info('[SSE] Closing idle connection for agent', agentId);
-          this.unsubscribe(agentId, reply);
-          try {
-            reply.raw.end();
-          } catch (endErr) {
-            console.debug('[SSE] Failed to end idle connection for agent', agentId, endErr);
-          }
-          return;
         }
       } catch (err) {
         console.warn('[SSE] Heartbeat failed for agent', agentId, err);
@@ -301,6 +269,25 @@ export class SSEManager {
     const agentMap = this.eventHistory.get(agentId);
     if (!agentMap) return [];
     return agentMap.get(conversationId) ?? [];
+  }
+
+  private getReplayEntries(agentId: string, lastEventId: string): HistoryEntry[] {
+    const agentMap = this.eventHistory.get(agentId);
+    if (!agentMap) {
+      return [];
+    }
+
+    // Reconnect replay stays within the conversation bucket that produced
+    // the acknowledged event id so agent streams do not splice together
+    // unrelated conversation histories.
+    for (const entries of agentMap.values()) {
+      const replayStart = entries.findIndex((entry) => entry.id === lastEventId);
+      if (replayStart >= 0) {
+        return entries.slice(replayStart + 1);
+      }
+    }
+
+    return [];
   }
 
   private cleanupExpiredConversations(): void {

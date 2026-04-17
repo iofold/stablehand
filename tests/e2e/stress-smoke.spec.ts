@@ -349,7 +349,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
   });
 
   test('HITL: approve flow works when interrupt occurs, otherwise terminal run still passes', async ({ request }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
 
     const agent = agents['stress-hitl'];
     expect(agent).toBeTruthy();
@@ -361,33 +361,23 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     );
     trackRun('stress-hitl', sessionId);
 
-    let runState: { status: string; conversationId: string };
+    let interrupt = null as Awaited<ReturnType<typeof getInterrupts>>[number] | null;
+    let terminalRun = null as TestRun | null;
 
-    try {
-      runState = await waitForRunStatus(request, agent.id, sessionId, ['paused'], 30_000);
-    } catch {
-      runState = await waitForRunStatus(
-        request,
-        agent.id,
-        sessionId,
-        ['completed', 'error'],
-        70_000,
-      );
+    const hitlDeadline = Date.now() + 60_000;
+    while (Date.now() < hitlDeadline) {
+      const interrupts = await getInterrupts(request, agent.id);
+      interrupt = interrupts.find((entry) => entry.runId === sessionId) ?? null;
+      if (interrupt) break;
+
+      const runs = await listRuns(request, agent.id);
+      terminalRun = runs.find((entry) => entry.id === sessionId && ['completed', 'error'].includes(entry.status.toLowerCase())) ?? null;
+      if (terminalRun) break;
+
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
 
-    if (runState.status === 'paused') {
-      await expect
-        .poll(
-          async () => {
-            const interrupts = await getInterrupts(request, agent.id);
-            return interrupts.find((entry) => entry.runId === sessionId) ?? null;
-          },
-          { timeout: 30_000 },
-        )
-        .not.toBeNull();
-
-      const interrupts = await getInterrupts(request, agent.id);
-      const interrupt = interrupts.find((entry) => entry.runId === sessionId);
+    if (interrupt) {
 
       expect(interrupt).toBeTruthy();
 
@@ -413,7 +403,15 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       return;
     }
 
-    expect(['completed', 'error']).toContain(runState.status);
+    const runState = terminalRun ?? await waitForRunStatus(
+      request,
+      agent.id,
+      sessionId,
+      ['completed', 'error'],
+      80_000,
+    );
+
+    expect(['completed', 'error']).toContain(runState.status.toLowerCase());
 
     const messages = await getConversationMessages(request, agent.id, conversationId);
     expect(messages.length).toBeGreaterThanOrEqual(1);

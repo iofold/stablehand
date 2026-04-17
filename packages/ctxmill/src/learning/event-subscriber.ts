@@ -32,11 +32,12 @@ export class LearningEventSubscriber {
       try {
         // Look up the trace for this session
         if (!this.db) return;
-        const traces = await this.db.getRecentTraces(payload.agentId, 1);
-        const trace = traces.find((t) => t.sessionId === payload.sessionId);
+        const traces = await this.db.getRecentTraces(payload.agentId, 5);
+        const trace = traces.find((t) => t.sessionId === payload.turnId)
+          ?? traces.find((t) => t.sessionId === payload.sessionId);
         if (!trace) {
           console.warn(
-            `[LearningEventSubscriber] No trace found for completed session ${payload.sessionId} (agent=${payload.agentId}). ` +
+            `[LearningEventSubscriber] No trace found for completed turn ${payload.turnId} / session ${payload.sessionId} (agent=${payload.agentId}). ` +
              'This may indicate a code bug — the trace should have been persisted before turn.completed fires.',
           );
           return;

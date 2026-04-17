@@ -114,6 +114,22 @@ describe('SSEManager history retention', () => {
     ]);
   });
 
+  it('replays only the conversation bucket that contains the last event id', () => {
+    manager.broadcast('agent-1', { type: 'TEXT_MESSAGE_CONTENT', conversationId: 'conv-a', content: 'a1' });
+    manager.broadcast('agent-1', { type: 'TEXT_MESSAGE_CONTENT', conversationId: 'conv-b', content: 'b1' });
+    manager.broadcast('agent-1', { type: 'TEXT_MESSAGE_CONTENT', conversationId: 'conv-a', content: 'a2' });
+    manager.broadcast('agent-1', { type: 'RUN_FINISHED', conversationId: 'conv-a' });
+    manager.broadcast('agent-1', { type: 'TEXT_MESSAGE_CONTENT', conversationId: 'conv-b', content: 'b2' });
+
+    const { reply, written } = createMockReply();
+    manager.subscribe('agent-1', reply, 'agent-1-1');
+
+    expect(written).toEqual([
+      'id: agent-1-3\ndata: {"type":"TEXT_MESSAGE_CONTENT","conversationId":"conv-a","content":"a2"}\n\n',
+      'id: agent-1-4\ndata: {"type":"RUN_FINISHED","conversationId":"conv-a"}\n\n',
+    ]);
+  });
+
   it('normal operation caps at MAX_EVENTS_PER_CONVERSATION', () => {
     broadcastContentEvents(manager, 'agent-1', 560);
 

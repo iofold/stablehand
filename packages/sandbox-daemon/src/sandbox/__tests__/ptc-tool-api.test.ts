@@ -190,4 +190,27 @@ describe('startToolApi', () => {
     expect(payload.error).not.toContain('Error: Tool exploded');
     expect(payload.error).not.toContain('at ');
   });
+
+  it('POST /tools/:name returns 500 when handler returns invalid JSON', async () => {
+    const mockBun = installMockBun();
+
+    setSessionTools([
+      makeTool('search', async () => 'not-json'),
+    ]);
+
+    startToolApi(8080, getSessionTools);
+
+    const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ query: 'hello' }),
+    }));
+
+    const payload = await response.json() as { error: string };
+
+    expect(response.status).toBe(500);
+    expect(payload.error).toContain('Tool returned invalid JSON');
+  });
 });

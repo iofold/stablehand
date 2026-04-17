@@ -145,6 +145,7 @@ function createControllableGenerator() {
 describe('runner openSession PTC bootstrap', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.ORCHESTRATOR_URL = 'http://127.0.0.1:3002';
     mocks.harnessOpenSession.mockResolvedValue({
       deliverTurn: async function* () {},
       exportState: async () => ({ stateVersion: '2', payload: {} }),
@@ -153,6 +154,7 @@ describe('runner openSession PTC bootstrap', () => {
   });
 
   afterEach(async () => {
+    delete process.env.ORCHESTRATOR_URL;
     const { killSession, resetOrchestratorClient } = await importRunner();
     await killSession();
     resetOrchestratorClient();
@@ -167,6 +169,20 @@ describe('runner openSession PTC bootstrap', () => {
     expect(mocks.generatePtcScripts).toHaveBeenCalledWith(expect.objectContaining({
       scriptDir: '/tmp/custom-workspace/.tools',
       tools: [expect.objectContaining({ name: 'search', programmatic: true })],
+    }));
+  });
+
+  it('surfaces PTC generation failures in the harness prompt instead of silently looking healthy', async () => {
+    const { openSession } = await importRunner();
+    mocks.generatePtcScripts.mockRejectedValueOnce(new Error('bun is unavailable'));
+
+    await openSession(createOpenSessionRequest('/tmp/ptc-degraded'), {});
+
+    expect(mocks.harnessOpenSession).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining('[CTXMill degraded mode] Programmatic tool-calling (PTC) setup failed'),
+    }));
+    expect(mocks.harnessOpenSession).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining('bun is unavailable'),
     }));
   });
 
@@ -281,6 +297,49 @@ describe('runner openSession PTC bootstrap', () => {
     expect(mocks.harnessClose).toHaveBeenCalledTimes(1);
   });
 
+  it('suspendSession serializes bigint checkpoint payloads without global prototype patches', async () => {
+    const { deliverTurn, openSession, suspendSession } = await importRunner();
+
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: async function* () {
+        yield {
+          type: 'approval_needed',
+          id: 'approval-bigint',
+          tool: 'delete-file',
+          args: { sequence: 9007199254740993n },
+        } satisfies AgentEvent;
+      },
+      exportState: async () => ({
+        stateVersion: '2',
+        payload: {
+          checkpointSeq: 9007199254740995n,
+        },
+      }),
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/bigint-checkpoint'), {});
+
+    for await (const event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-bigint'))) {
+      void event;
+    }
+
+    const response = await suspendSession('serialize-bigint');
+
+    expect(response.sessionCheckpoint?.runnerState?.pendingRequests).toEqual([
+      expect.objectContaining({
+        id: 'approval-bigint',
+        payloadJson: '{"tool":"delete-file","args":{"sequence":"9007199254740993"}}',
+      }),
+    ]);
+    expect(response.sessionCheckpoint?.harnessState).toEqual({
+      stateVersion: '2',
+      payload: {
+        checkpointSeq: '9007199254740995',
+      },
+    });
+  });
+
   it('rejects concurrent deliverTurn calls', async () => {
     const { deliverTurn, killSession, openSession } = await importRunner();
     const stream = createControllableGenerator();
@@ -293,7 +352,8 @@ describe('runner openSession PTC bootstrap', () => {
 
     const session = await openSession(createOpenSessionRequest('/tmp/concurrent-turns'), {});
     const firstTurnPromise = (async () => {
-      for await (const _event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-a'))) {
+      for await (const event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-a'))) {
+        void event;
       }
     })();
 

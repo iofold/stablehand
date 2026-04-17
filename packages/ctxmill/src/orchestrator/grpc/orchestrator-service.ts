@@ -5,7 +5,6 @@
  * containers for:
  *   - Tool callbacks (RequestTool)
  *   - Event bus emissions (EmitEvent)
- *   - Secret refresh (RefreshSecrets) — stub for P2+
  */
 
 import { ConnectError, Code } from '@connectrpc/connect';
@@ -13,7 +12,6 @@ import { create } from '@bufbuild/protobuf';
 import {
   RequestToolResponseSchema,
   EmitEventResponseSchema,
-  RefreshSecretsResponseSchema,
   RegisterArtifactResponseSchema,
   ResolveArtifactResponseSchema,
   ArtifactMetaSchema,
@@ -21,8 +19,6 @@ import {
   type RequestToolResponse,
   type EmitEventRequest,
   type EmitEventResponse,
-  type RefreshSecretsRequest,
-  type RefreshSecretsResponse,
   type RegisterArtifactRequest,
   type RegisterArtifactResponse,
   type ResolveArtifactRequest,
@@ -75,6 +71,25 @@ function ensureConnectError(err: unknown): ConnectError {
   const stack = err instanceof Error ? err.stack : undefined;
   const detail = stack ? `${message}\n${stack}` : message;
   return new ConnectError(detail, Code.Internal);
+}
+
+async function completeToolDedupOrThrow(
+  repository: DatabaseRepository,
+  requestId: string,
+  result: string | null,
+  error: string | null,
+  phase: string,
+): Promise<void> {
+  try {
+    await repository.completeToolDedup(requestId, result, error);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[OrchestratorService] Failed to finalize tool dedup for ${requestId}:`, err);
+    throw new ConnectError(
+      `Failed to finalize tool request ${requestId} after ${phase}: ${message}`,
+      Code.Unavailable,
+    );
+  }
 }
 
 export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry {
@@ -187,7 +202,13 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
         const handler = toolRegistry.get(toolName);
         if (!handler) {
           if (dedupInserted && deps.repository) {
-            await deps.repository.completeToolDedup(requestId, null, `Unknown orchestrator tool: ${toolName}`).catch(() => {});
+            await completeToolDedupOrThrow(
+              deps.repository,
+              requestId,
+              null,
+              `Unknown orchestrator tool: ${toolName}`,
+              'unknown tool',
+            );
           }
           return create(RequestToolResponseSchema, {
             requestId,
@@ -202,7 +223,13 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
             args = JSON.parse(argsJson) as Record<string, unknown>;
           } catch {
             if (dedupInserted && deps.repository) {
-              await deps.repository.completeToolDedup(requestId, null, 'Invalid args_json: failed to parse JSON').catch(() => {});
+              await completeToolDedupOrThrow(
+                deps.repository,
+                requestId,
+                null,
+                'Invalid args_json: failed to parse JSON',
+                'invalid args_json',
+              );
             }
             return create(RequestToolResponseSchema, {
               requestId,
@@ -212,23 +239,19 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           }
         }
 
+        let result: string;
         try {
-          const result = await handler(args, { sessionId, agentId, requestId });
-          if (dedupInserted && deps.repository) {
-            await deps.repository.completeToolDedup(requestId, result, null).catch((err) => {
-              console.error(`[OrchestratorService] Failed to update tool dedup for ${requestId}:`, err);
-            });
-          }
-          return create(RequestToolResponseSchema, {
-            requestId,
-            result,
-          });
+          result = await handler(args, { sessionId, agentId, requestId });
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           if (dedupInserted && deps.repository) {
-            await deps.repository.completeToolDedup(requestId, null, errorMsg).catch((dedupErr) => {
-              console.error(`[OrchestratorService] Failed to update tool dedup for ${requestId}:`, dedupErr);
-            });
+            await completeToolDedupOrThrow(
+              deps.repository,
+              requestId,
+              null,
+              errorMsg,
+              'failed execution',
+            );
           }
           return create(RequestToolResponseSchema, {
             requestId,
@@ -236,6 +259,20 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
             error: errorMsg,
           });
         }
+
+        if (dedupInserted && deps.repository) {
+          await completeToolDedupOrThrow(
+            deps.repository,
+            requestId,
+            result,
+            null,
+            'successful execution',
+          );
+        }
+        return create(RequestToolResponseSchema, {
+          requestId,
+          result,
+        });
       } catch (err) {
         throw ensureConnectError(err);
       }
@@ -279,21 +316,6 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
       } catch (err) {
         throw ensureConnectError(err);
       }
-    },
-
-    /**
-     * RefreshSecrets — stub for P2+ feature.
-     *
-     * In future, this will re-derive secrets for a running sandbox without
-     * requiring a restart.
-     */
-    async refreshSecrets(_req: RefreshSecretsRequest): Promise<RefreshSecretsResponse> {
-      // Stub — not implemented yet
-      return create(RefreshSecretsResponseSchema, {
-        success: false,
-        error: 'RefreshSecrets is not yet implemented (P2+ feature)',
-        secretsPath: '',
-      });
     },
 
     async registerArtifact(req: RegisterArtifactRequest): Promise<RegisterArtifactResponse> {
@@ -357,7 +379,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
         return create(ResolveArtifactResponseSchema, {
           artifact: create(ArtifactMetaSchema, {
             id: row.id,
-            agentId: row.agentId,
+            agentId: row.agentId ?? '',
             sessionId: row.sessionId ?? '',
             name: row.name,
             mimeType: row.mimeType,
@@ -432,6 +454,7 @@ export function registerDefaultToolHandlers(
         { ...args, reason },
         300_000,
         sandboxSessionId,
+        turn?.conversationId ?? undefined,
       );
 
       if (resolution.action === 'approve') {

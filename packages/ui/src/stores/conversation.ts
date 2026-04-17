@@ -156,10 +156,12 @@ interface ConversationStore {
   addSystemMessage: (content: string) => void;
 }
 
-// Track tool calls that received complete args via TOOL_CALL_START.
-// When the harness provides full args upfront, subsequent TOOL_CALL_ARGS
-// deltas (echoed by the SSE broadcaster) must be skipped to avoid doubling.
-const toolCallsWithStartArgs = new Set<string>();
+interface PreviewController {
+  pendingDelta: string;
+  flushFrameId: number | null;
+  flushGeneration: number;
+  toolCallsWithStartArgs: Set<string>;
+}
 
 let messageCounter = 0;
 function nextId() {
@@ -167,63 +169,39 @@ function nextId() {
   return `msg-${Date.now()}-${messageCounter}`;
 }
 
-// Streaming content throttle: batch TEXT_MESSAGE_CONTENT deltas to prevent UI freeze
-let pendingDelta = '';
-let flushScheduled = false;
-let flushCallback: (() => void) | null = null;
-
-function scheduleDeltaFlush(set: (updater: (state: ConversationStore) => Partial<ConversationStore>) => void): void {
-  if (flushScheduled) return;
-  flushScheduled = true;
-
-  flushCallback = () => {
-    if (pendingDelta.length > 0) {
-      set((state) => ({
-        streamingContent: state.streamingContent + pendingDelta,
-      }));
-      pendingDelta = '';
-    }
-    flushScheduled = false;
-    flushCallback = null;
-  };
-
-  requestAnimationFrame(flushCallback);
-}
-
-function flushPendingDelta(set: (updater: (state: ConversationStore) => Partial<ConversationStore>) => void): void {
-  if (pendingDelta.length > 0) {
-    set((state) => ({
-      streamingContent: state.streamingContent + pendingDelta,
-    }));
-    pendingDelta = '';
-  }
-  flushScheduled = false;
-  flushCallback = null;
-}
-
-function buildAssistantMessage(state: Pick<ConversationStore, 'streamingContent' | 'toolCalls'>): Message | undefined {
-  const toolCalls = Array.from(state.toolCalls.values());
-  if (!state.streamingContent && toolCalls.length === 0) {
-    return undefined;
-  }
-
-  const msgId = nextId();
-
-  const content = state.streamingContent;
-  const parts: MessagePart[] = [];
-  if (state.streamingContent) parts.push({ type: 'text', content: state.streamingContent });
-  for (const tc of toolCalls) {
-    parts.push({ type: 'tool_call', ...tc });
-  }
-
+function createPreviewController(): PreviewController {
   return {
-    id: msgId,
-    role: 'assistant',
-    content,
-    parts: parts.length > 0 ? parts : undefined,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    createdAt: new Date().toISOString(),
+    pendingDelta: '',
+    flushFrameId: null,
+    flushGeneration: 0,
+    toolCallsWithStartArgs: new Set<string>(),
   };
+}
+
+function resolveEventTurnId(event: Record<string, unknown>): string | undefined {
+  const turnId = event.turnId;
+  if (typeof turnId === 'string' && turnId.length > 0) return turnId;
+
+  const runId = event.runId;
+  if (typeof runId === 'string' && runId.length > 0) return runId;
+
+  const sessionId = event.sessionId;
+  if (typeof sessionId === 'string' && sessionId.length > 0) return sessionId;
+
+  return undefined;
+}
+
+function isTurnScopedEvent(type: string): boolean {
+  return type === 'TEXT_MESSAGE_START' ||
+    type === 'TEXT_MESSAGE_CONTENT' ||
+    type === 'TEXT_MESSAGE_END' ||
+    type === 'TOOL_CALL_START' ||
+    type === 'TOOL_CALL_ARGS' ||
+    type === 'TOOL_CALL_END' ||
+    type === 'TOOL_CALL_RESULT' ||
+    type === 'MESSAGE_COMMITTED' ||
+    type === 'RUN_FINISHED' ||
+    type === 'RUN_ERROR';
 }
 
 function normalizeEventToolCall(
@@ -266,7 +244,59 @@ function mergeCommittedToolCall(
   };
 }
 
-export const useConversationStore = create<ConversationStore>((set, get) => ({
+export const useConversationStore = create<ConversationStore>((set, get) => {
+  const previewController = createPreviewController();
+
+  const invalidateScheduledFlush = (): void => {
+    previewController.flushGeneration += 1;
+    if (previewController.flushFrameId !== null) {
+      cancelAnimationFrame(previewController.flushFrameId);
+      previewController.flushFrameId = null;
+    }
+  };
+
+  const discardPendingPreview = (): void => {
+    invalidateScheduledFlush();
+    previewController.pendingDelta = '';
+  };
+
+  const resetPreviewController = (): void => {
+    discardPendingPreview();
+    previewController.toolCallsWithStartArgs.clear();
+  };
+
+  const flushPendingDelta = (): void => {
+    const delta = previewController.pendingDelta;
+    invalidateScheduledFlush();
+    previewController.pendingDelta = '';
+    if (delta.length === 0) return;
+    set((state) => ({
+      streamingContent: state.streamingContent + delta,
+    }));
+  };
+
+  const scheduleDeltaFlush = (): void => {
+    if (previewController.flushFrameId !== null) return;
+
+    const flushGeneration = previewController.flushGeneration;
+    const frameId = requestAnimationFrame(() => {
+      if (previewController.flushFrameId !== frameId) return;
+      previewController.flushFrameId = null;
+      if (flushGeneration !== previewController.flushGeneration) return;
+
+      const delta = previewController.pendingDelta;
+      previewController.pendingDelta = '';
+      if (delta.length === 0) return;
+
+      set((state) => ({
+        streamingContent: state.streamingContent + delta,
+      }));
+    });
+
+    previewController.flushFrameId = frameId;
+  };
+
+  return ({
   messages: [],
   currentTurnId: null,
   activeConversationId: null,
@@ -308,6 +338,10 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     const normalizedMessages = msgs.map((msg, index) => (
       normalizeConversationMessage(msg as unknown as Record<string, unknown>, msg.id || `loaded-${index}`)
     ));
+    if (!isStreaming) {
+      discardPendingPreview();
+      previewController.toolCallsWithStartArgs.clear();
+    }
     set({
       messages: normalizedMessages,
       // Preserve streaming state if a run is active — don't clobber
@@ -329,14 +363,26 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     }
 
     const eventConvId = event.conversationId as string | undefined;
-    const { activeConversationId } = get();
+    const state = get();
+    const { activeConversationId, currentTurnId, isStreaming } = state;
     if (activeConversationId && eventConvId && eventConvId !== activeConversationId) {
       return;
     }
 
+    if (isTurnScopedEvent(type)) {
+      if (!isStreaming && !currentTurnId) {
+        return;
+      }
+
+      const eventTurnId = resolveEventTurnId(event);
+      if (currentTurnId && eventTurnId && eventTurnId !== currentTurnId) {
+        return;
+      }
+    }
+
     switch (type) {
       case 'TURN_PENDING': {
-        toolCallsWithStartArgs.clear();
+        resetPreviewController();
         set({
           isStreaming: true,
           currentTurnId: (event.runId as string) || null,
@@ -349,9 +395,13 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       }
 
       case 'RUN_STARTED': {
+        const nextTurnId = (event.runId as string) || null;
+        if (currentTurnId && nextTurnId && currentTurnId !== nextTurnId) {
+          resetPreviewController();
+        }
         set({
           isStreaming: true,
-          currentTurnId: (event.runId as string) || null,
+          currentTurnId: nextTurnId,
           streamingContent: get().streamingContent || '',
           toolCalls: get().toolCalls.size > 0 ? get().toolCalls : new Map(),
         });
@@ -367,14 +417,14 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       case 'TEXT_MESSAGE_CONTENT': {
         if (get().streamingRole === 'user') break;
         const delta = (event.delta as string) || (event.content as string) || '';
-        pendingDelta += delta;
-        scheduleDeltaFlush(set);
+        previewController.pendingDelta += delta;
+        scheduleDeltaFlush();
         break;
       }
 
       case 'TEXT_MESSAGE_END': {
         // Flush any pending delta before finalizing the message
-        flushPendingDelta(set);
+        flushPendingDelta();
         const state = get();
         // Skip user message echoes — they were already added via addUserMessage()
         if (state.streamingRole === 'user') {
@@ -384,7 +434,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       }
 
       case 'TOOL_CALL_START': {
-        flushPendingDelta(set);
+        flushPendingDelta();
         const startArgs = event.args;
         const argsStr = startArgs
           ? (typeof startArgs === 'string' ? startArgs : JSON.stringify(startArgs))
@@ -395,7 +445,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           args: argsStr,
           status: 'running',
         };
-        if (argsStr) toolCallsWithStartArgs.add(tc.id);
+        if (argsStr) previewController.toolCallsWithStartArgs.add(tc.id);
         set((state) => {
           const next = new Map(state.toolCalls);
           next.set(tc.id, tc);
@@ -406,7 +456,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
       case 'TOOL_CALL_ARGS': {
         const tcId = event.toolCallId as string;
-        if (toolCallsWithStartArgs.has(tcId)) break;
+        if (previewController.toolCallsWithStartArgs.has(tcId)) break;
         const delta = (event.delta as string) || (event.args as string) || '';
         set((state) => {
           const next = new Map(state.toolCalls);
@@ -439,7 +489,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           if (running) tcId = running[0];
         }
         if (!tcId) break;
-        toolCallsWithStartArgs.delete(tcId);
+        previewController.toolCallsWithStartArgs.delete(tcId);
         const result = (event.content as string) || (event.result as string) || '';
         const error = event.error as string | undefined;
 
@@ -471,7 +521,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           if (convId && convId === activeConv) {
             set({
               isStreaming: status === 'ACTIVE' || status === 'RESTORING',
-              currentTurnId: (event.sessionId as string) || null,
+              currentTurnId: (event.turnId as string) || get().currentTurnId,
             });
           }
           break;
@@ -502,8 +552,19 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         break;
       }
 
+      case 'HITL_PAUSE': {
+        useInterruptStore.getState().setPending({
+          agentId: (event.agentId as string) || '',
+          toolName: (event.toolName as string) || '',
+          args: (event.args as Record<string, unknown>) || {},
+          toolCallId: (event.toolCallId as string) || '',
+          sessionId: (event.runId as string) || undefined,
+        });
+        break;
+      }
+
       case 'MESSAGE_COMMITTED': {
-        flushPendingDelta(set);
+        flushPendingDelta();
         const state = get();
         const role = ((event.role as string) || 'assistant') as Message['role'];
         const content = (event.content as string) || '';
@@ -545,7 +606,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         }
 
         const msg: Message = {
-          id: nextId(),
+          id: typeof event.messageId === 'string' && event.messageId.length > 0 ? event.messageId : nextId(),
           role,
           content,
           parts: parts.length > 0 ? parts : undefined,
@@ -557,7 +618,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           const nextToolCalls = new Map(prev.toolCalls);
           for (const toolCallId of mergedToolCallIds) {
             nextToolCalls.delete(toolCallId);
-            toolCallsWithStartArgs.delete(toolCallId);
+            previewController.toolCallsWithStartArgs.delete(toolCallId);
           }
 
           return {
@@ -573,23 +634,12 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
 
       case 'RUN_FINISHED': {
         useInterruptStore.getState().clear();
-        flushPendingDelta(set);
+        flushPendingDelta();
         const state = get();
-        const hasPendingPreview = state.streamingContent.length > 0 || state.toolCalls.size > 0;
-
-        // Fallback only: the canonical path is MESSAGE_COMMITTED. If the run ends
-        // with unconsumed preview state, emit one last assistant message so crashes
-        // or truncated streams do not drop visible output.
-        if (hasPendingPreview) {
-          const msg = buildAssistantMessage(state);
-          set((prev) => ({
-            messages: msg ? [...prev.messages, msg] : prev.messages,
-            streamingContent: '',
-            streamingRole: 'assistant',
-            toolCalls: new Map(),
-          }));
-        } else if (state.committedMessageCount > 0) {
-          toolCallsWithStartArgs.clear();
+        // Transcript recovery is owned by the backend via MESSAGE_COMMITTED.
+        // The UI only clears preview state here; it does not synthesize final messages.
+        if (state.committedMessageCount > 0) {
+          previewController.toolCallsWithStartArgs.clear();
         }
         set({
           isStreaming: false,
@@ -600,15 +650,16 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           toolCalls: new Map(),
           seenEventIds: new Set(),
         });
-        toolCallsWithStartArgs.clear();
+        resetPreviewController();
         break;
       }
 
       case 'RUN_ERROR': {
         const errorMsg = (event.message as string) || (event.error as string) || 'Unknown error';
         useInterruptStore.getState().clear();
+        resetPreviewController();
         const msg: Message = {
-          id: nextId(),
+          id: typeof event.messageId === 'string' && event.messageId.length > 0 ? event.messageId : nextId(),
           role: 'system',
           content: `Error: ${errorMsg}`,
           parts: [{ type: 'text', content: `Error: ${errorMsg}` }],
@@ -636,10 +687,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   },
 
   reset: () => {
-    pendingDelta = '';
-    flushScheduled = false;
-    flushCallback = null;
-    toolCallsWithStartArgs.clear();
+    resetPreviewController();
     set({
       messages: [],
       currentTurnId: null,
@@ -652,4 +700,5 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       seenEventIds: new Set(),
     });
   },
-}));
+  });
+});

@@ -17,6 +17,8 @@ import {
 } from './helpers.js';
 import type { AgentHttpToolDefinition, AgentSubRouteOptions } from './types.js';
 
+const defaultSessionCounts = () => ({ ACTIVE: 0, PAUSED: 0, CHECKPOINTED: 0, RESTORING: 0, TERMINATED: 0 });
+
 export async function crudRoutes(
   app: FastifyInstance,
   opts: AgentSubRouteOptions,
@@ -30,6 +32,8 @@ export async function crudRoutes(
     dataDir,
     secretProvider,
     toolRegistry,
+    containerManager,
+    sessionManager,
     loadAgent,
   } = opts;
 
@@ -39,8 +43,6 @@ export async function crudRoutes(
       Promise.all(agentList.map((agent) => db.getConversationCount(agent.id))),
       db.getSessionStatusCountsByAgent(),
     ]);
-
-    const defaultSessionCounts = { active: 0, paused: 0, checkpointed: 0, terminated: 0 };
 
     const enriched = agentList.map(async (agent, idx) => {
       const allRunsPromise = db.getTurnsByAgent(agent.id);
@@ -63,7 +65,7 @@ export async function crudRoutes(
         conversationCount: conversationCounts[idx],
         hasPendingInterrupt: interrupts.hasPendingForAgent(agent.id),
         sessions: recentRuns.map((turn) => toApiAgentSession(turn)),
-        sessionsByStatus: sessionStatusMap.get(agent.id) ?? defaultSessionCounts,
+        sessionsByStatus: sessionStatusMap.get(agent.id) ?? defaultSessionCounts(),
       };
     });
 
@@ -341,6 +343,45 @@ export async function crudRoutes(
         await toolRegistry.refresh();
       }
 
+      await secretProvider?.deleteForAgent?.(id);
+
+      if (sessionManager) {
+        const sessions = await sessionManager.getSessionsByAgent(id);
+        for (const session of sessions) {
+          if (!session.containerId && session.status === 'TERMINATED') {
+            continue;
+          }
+
+          try {
+            sessionManager.onSessionReconnected(session.conversationId, session);
+            await sessionManager.killSession(session.sessionId);
+          } catch (err) {
+            console.warn(`[agents] failed to clean runtime for agent ${id} session ${session.sessionId}:`, err);
+          }
+        }
+      }
+
+      if (containerManager) {
+        const managedContainers = await containerManager.listManagedContainersWithLabels();
+        for (const container of managedContainers) {
+          if (container.labels['ctxmill.agent-id'] !== id) {
+            continue;
+          }
+
+          try {
+            await containerManager.stopContainer(container.containerId, 10);
+          } catch (err) {
+            console.warn(`[agents] failed stopping orphan container ${container.containerId} for agent ${id}:`, err);
+          }
+
+          try {
+            await containerManager.removeContainer(container.containerId, true);
+          } catch (err) {
+            console.warn(`[agents] failed removing orphan container ${container.containerId} for agent ${id}:`, err);
+          }
+        }
+      }
+
       await db.deleteAgentCascade(id);
 
       if (eventBus) {
@@ -376,9 +417,9 @@ export async function crudRoutes(
         .sort((a, b) => b.startedAt - a.startedAt)
         .slice(0, 5);
 
-      const sessionsByStatus = { active: 0, paused: 0, checkpointed: 0, terminated: 0 };
+      const sessionsByStatus = defaultSessionCounts();
       for (const session of sandboxSessions) {
-        const key = session.status.toLowerCase() as keyof typeof sessionsByStatus;
+        const key = session.status as keyof typeof sessionsByStatus;
         if (key in sessionsByStatus) sessionsByStatus[key]++;
       }
 

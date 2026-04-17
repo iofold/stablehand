@@ -29,9 +29,9 @@ describe('Config Resolution', () => {
       expect(config.execution.type).toBe('docker');
     });
 
-    it('should resolve knowledge providers to pgvector', () => {
+    it('should resolve knowledge providers to memory', () => {
       const config = resolveConfig({ preset: 'docker' });
-      expect(config.knowledge.providers).toEqual(['pgvector']);
+      expect(config.knowledge.providers).toEqual(['memory']);
     });
 
     it('should resolve learning strategy to ace', () => {

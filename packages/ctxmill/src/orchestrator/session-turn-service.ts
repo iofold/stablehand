@@ -7,7 +7,7 @@
  *  3. For each SessionEvent:
  *     - ag_ui_event      → yield the inner AGUIEvent as-is
  *     - message_committed → yield as a MESSAGE_COMMITTED AGUIEvent
- *  4. On abort: killSession(sessionId) to release resources
+ *  4. On abort: stop consuming the turn stream and preserve the persistent session
  */
 
 import type { MessageCommittedEvent } from '@ctxmill/shared';
@@ -103,18 +103,7 @@ export class SessionTurnService {
       }
     } finally {
       if (signal?.aborted) {
-        this.logger.info(`Killing session ${sessionId} due to abort`);
-        try {
-          await sessionManager.killSession(sessionId);
-        } catch (killErr: unknown) {
-          this.logger.warn(`Failed to kill session ${sessionId}, retrying once:`, killErr);
-          try {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            await sessionManager.killSession(sessionId);
-          } catch (retryErr: unknown) {
-            this.logger.error(`Failed to kill session ${sessionId} after retry — container may be orphaned:`, retryErr);
-          }
-        }
+        this.logger.info(`Turn ${turnId} aborted; preserving session ${sessionId}`);
       }
     }
   }

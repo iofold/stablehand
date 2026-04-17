@@ -32,6 +32,7 @@ describe('DatabaseRepository', () => {
         'artifacts',
         'callback_outbox',
         'conversations',
+        'ctxmill_schema_version',
         'event_store',
         'event_triggers',
         'execution_traces',
@@ -74,6 +75,15 @@ describe('DatabaseRepository', () => {
       expect(columnNames).toContain('harness_config');
       expect(columnNames).not.toContain('model');
       expect(columnNames).not.toContain('model_config');
+    });
+
+    it('initializes the current schema baseline marker', async () => {
+      const [baseline] = await testDb.conn.pgClient`
+        SELECT version, baseline FROM ctxmill_schema_version WHERE id = 'baseline'
+      `;
+
+      expect(Number(baseline.version)).toBe(1);
+      expect(baseline.baseline).toBe('pre-release');
     });
   });
 
@@ -152,6 +162,115 @@ describe('DatabaseRepository', () => {
       await repo.deleteAgent(created.id);
       const fetched = await repo.getAgent(created.id);
       expect(fetched).toBeUndefined();
+    });
+
+    it('deleteAgentCascade cleans owned runtime state while preserving artifact metadata as global', async () => {
+      const agent = await repo.createAgent({ ...agentData, name: 'Cascade Delete Owner' });
+      const conversation = await repo.createConversation(agent.id);
+      const sandboxSession = await repo.createSandboxSession({
+        conversationId: conversation.id,
+        agentId: agent.id,
+        harnessName: 'claude-agents',
+      });
+      const turn = await repo.createTurn({
+        id: 'delete-cascade-turn',
+        sessionId: sandboxSession.id,
+        agentId: agent.id,
+        conversationId: conversation.id,
+        mode: 'interactive',
+      });
+
+      await repo.createSuspendedSession({
+        id: 'delete-cascade-suspended',
+        agentSessionId: turn.id,
+        agentId: agent.id,
+        waitEventType: 'custom',
+        waitSelector: '{}',
+        snapshotState: '{}',
+        createdAt: Date.now(),
+      });
+      await repo.createScheduledEvent({
+        id: 'delete-cascade-scheduled',
+        agentId: agent.id,
+        type: 'turn.started',
+        payload: '{}',
+        wakeAt: Date.now(),
+      });
+      await repo.enqueueCallback({
+        id: 'delete-cascade-callback',
+        agentId: agent.id,
+        sessionId: turn.id,
+        callbackUrl: 'https://example.test/callback',
+        eventType: 'turn.completed',
+        payload: {},
+        status: 'pending',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: Date.now(),
+        createdAt: Date.now(),
+      });
+      await repo.savePendingInterrupt({
+        id: 'delete-cascade-interrupt',
+        agentSessionId: turn.id,
+        agentId: agent.id,
+        sessionId: sandboxSession.id,
+        toolCallId: 'tool-call-1',
+        toolName: 'bash',
+        args: {},
+        timeoutMs: 60_000,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+      });
+      const artifact = await repo.saveArtifact({
+        id: 'delete-cascade-artifact',
+        agentId: agent.id,
+        sessionId: turn.id,
+        conversationId: conversation.id,
+        name: 'survives.txt',
+        mimeType: 'text/plain',
+        sizeBytes: 12,
+        storageKey: 'agent/artifact/survives.txt',
+        bucket: 'test-bucket',
+        status: 'active',
+      });
+      await testDb.conn.pgClient`
+        INSERT INTO secrets (id, agent_id, tool_id, key, iv, ciphertext, auth_tag)
+        VALUES ('delete-cascade-secret', ${agent.id}, '', 'TOKEN', 'iv', 'ciphertext', 'tag')
+      `;
+      await testDb.conn.pgClient`
+        INSERT INTO tool_request_dedup (request_id, session_id, tool_name, status, created_at)
+        VALUES ('delete-cascade-dedup', ${sandboxSession.id}, 'bash', 'in_progress', ${Date.now()})
+      `;
+
+      await repo.deleteAgentCascade(agent.id);
+
+      expect(await repo.getAgent(agent.id)).toBeUndefined();
+      expect(await repo.getArtifact(artifact.id)).toMatchObject({
+        id: artifact.id,
+        agentId: null,
+        sessionId: null,
+        conversationId: null,
+        status: 'active',
+      });
+      expect(await repo.getPendingInterrupt('delete-cascade-interrupt')).toBeUndefined();
+      expect(await repo.getScheduledEventsDue(Date.now() + 1_000)).toEqual([]);
+
+      const [suspendedCount] = await testDb.conn.pgClient`
+        SELECT count(*)::int AS count FROM suspended_sessions WHERE agent_id = ${agent.id}
+      `;
+      const [callbackCount] = await testDb.conn.pgClient`
+        SELECT count(*)::int AS count FROM callback_outbox WHERE agent_id = ${agent.id}
+      `;
+      const [secretCount] = await testDb.conn.pgClient`
+        SELECT count(*)::int AS count FROM secrets WHERE agent_id = ${agent.id}
+      `;
+      const [dedupCount] = await testDb.conn.pgClient`
+        SELECT count(*)::int AS count FROM tool_request_dedup WHERE request_id = 'delete-cascade-dedup'
+      `;
+      expect(suspendedCount.count).toBe(0);
+      expect(callbackCount.count).toBe(0);
+      expect(secretCount.count).toBe(0);
+      expect(dedupCount.count).toBe(0);
     });
   });
 
@@ -390,6 +509,12 @@ describe('DatabaseRepository', () => {
       expect(fetched!.checkpointRef).toBe('checkpoint-ref-1');
     });
 
+    it('should throw when updating a missing sandbox session status', async () => {
+      await expect(
+        repo.updateSandboxSessionStatus('missing-session-id', 'ACTIVE'),
+      ).rejects.toThrow('Sandbox session missing-session-id not found for status update');
+    });
+
     it('should list active and paused sandbox sessions', async () => {
       const active = await repo.createSandboxSession({
         conversationId,
@@ -548,6 +673,147 @@ describe('DatabaseRepository', () => {
 
       const checkpoint = await repo.getCheckpointV2(session.id);
       expect(checkpoint).toBeNull();
+    });
+  });
+
+  describe('Durable claims and HITL interrupts', () => {
+    async function createRuntimeTurn(prefix: string) {
+      const agent = await repo.createAgent({
+        name: `${prefix} Agent`,
+        harness: 'claude-agents',
+        harnessConfig: JSON.stringify({ model: 'claude-sonnet-4-6' }),
+        systemPrompt: 'Persistence test prompt',
+        tools: [],
+      });
+      const conversation = await repo.createConversation(agent.id);
+      const sandboxSession = await repo.createSandboxSession({
+        conversationId: conversation.id,
+        agentId: agent.id,
+        harnessName: 'claude-agents',
+      });
+      const turn = await repo.createTurn({
+        sessionId: sandboxSession.id,
+        agentId: agent.id,
+        conversationId: conversation.id,
+        mode: 'interactive',
+      });
+      return { agent, conversation, sandboxSession, turn };
+    }
+
+    it('atomically claims due scheduled events and reclaims expired leases', async () => {
+      const { agent } = await createRuntimeTurn('Scheduled Claim');
+      const now = Date.now();
+      await repo.createScheduledEvent({
+        id: 'scheduled-claim-1',
+        agentId: agent.id,
+        type: 'turn.started',
+        payload: JSON.stringify({ runId: 'scheduled-claim-1' }),
+        wakeAt: now - 1,
+      });
+
+      const firstClaim = await repo.getScheduledEventsDue(now, 10);
+      expect(firstClaim.map((event) => event.id)).toEqual(['scheduled-claim-1']);
+      expect(firstClaim[0].status).toBe('in_progress');
+      expect(firstClaim[0].claimedAt).toBeTypeOf('number');
+
+      const secondClaim = await repo.getScheduledEventsDue(now + 1, 10);
+      expect(secondClaim).toEqual([]);
+
+      await testDb.conn.pgClient`
+        UPDATE scheduled_events
+        SET claim_expires_at = ${now - 10_000}
+        WHERE id = 'scheduled-claim-1'
+      `;
+      const reclaimed = await repo.getScheduledEventsDue(now + 2, 10);
+      expect(reclaimed.map((event) => event.id)).toEqual(['scheduled-claim-1']);
+
+      await repo.markScheduledEventCompleted(reclaimed[0].id, reclaimed[0].claimedAt);
+      const afterComplete = await repo.getScheduledEventsDue(now + 3, 10);
+      expect(afterComplete).toEqual([]);
+    });
+
+    it('atomically claims due callbacks and only the active claim can complete', async () => {
+      const { agent, turn } = await createRuntimeTurn('Callback Claim');
+      const now = Date.now();
+      await repo.enqueueCallback({
+        id: 'callback-claim-1',
+        agentId: agent.id,
+        sessionId: turn.id,
+        callbackUrl: 'https://example.test/hook',
+        eventType: 'turn.completed',
+        payload: { ok: true },
+        status: 'pending',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: now - 1,
+        createdAt: now,
+      });
+
+      const firstClaim = await repo.getPendingCallbacks(10, now);
+      expect(firstClaim.map((callback) => callback.id)).toEqual(['callback-claim-1']);
+      expect(firstClaim[0].status).toBe('in_progress');
+      const staleClaimedAt = firstClaim[0].claimedAt;
+
+      const secondClaim = await repo.getPendingCallbacks(10, now + 1);
+      expect(secondClaim).toEqual([]);
+
+      await testDb.conn.pgClient`
+        UPDATE callback_outbox
+        SET claim_expires_at = ${now - 10_000}
+        WHERE id = 'callback-claim-1'
+      `;
+      const reclaimed = await repo.getPendingCallbacks(10, now + 2);
+      expect(reclaimed.map((callback) => callback.id)).toEqual(['callback-claim-1']);
+      expect(reclaimed[0].claimedAt).not.toBe(staleClaimedAt);
+
+      await repo.markCallbackDelivered('callback-claim-1', staleClaimedAt);
+      expect((await repo.getCallbacksForAgent(agent.id))[0].status).toBe('in_progress');
+
+      await repo.markCallbackDelivered('callback-claim-1', reclaimed[0].claimedAt);
+      expect((await repo.getCallbacksForAgent(agent.id))[0].status).toBe('delivered');
+    });
+
+    it('uses compare-and-set for HITL resolution and clears stale resolved fields on pending upsert', async () => {
+      const { agent, sandboxSession, turn } = await createRuntimeTurn('Interrupt CAS');
+      const now = Date.now();
+      await repo.savePendingInterrupt({
+        id: 'interrupt-cas-1',
+        agentSessionId: turn.id,
+        agentId: agent.id,
+        sessionId: sandboxSession.id,
+        toolCallId: 'tool-call-1',
+        toolName: 'bash',
+        args: { cmd: 'ls' },
+        timeoutMs: 60_000,
+        createdAt: now,
+        expiresAt: now + 60_000,
+      });
+
+      const resolved = await repo.resolveInterrupt('interrupt-cas-1', 'approve', { approved: true });
+      expect(resolved?.status).toBe('resolved');
+
+      const secondResolve = await repo.resolveInterrupt('interrupt-cas-1', 'reject', { approved: false });
+      expect(secondResolve).toBeUndefined();
+
+      const upserted = await repo.savePendingInterrupt({
+        id: 'interrupt-cas-1',
+        agentSessionId: turn.id,
+        agentId: agent.id,
+        sessionId: sandboxSession.id,
+        toolCallId: 'tool-call-2',
+        toolName: 'shell',
+        args: { cmd: 'pwd' },
+        timeoutMs: 120_000,
+        createdAt: now + 1,
+        expiresAt: now + 120_000,
+        status: 'pending',
+      });
+
+      expect(upserted.status).toBe('pending');
+      expect(upserted.resolvedAt).toBeNull();
+      expect(upserted.resolvedAction).toBeNull();
+      expect(upserted.resolvedData).toBeNull();
+      expect(upserted.toolCallId).toBe('tool-call-2');
     });
   });
 });

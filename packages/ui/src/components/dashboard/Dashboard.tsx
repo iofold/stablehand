@@ -75,7 +75,7 @@ export function Dashboard({ agents, loading, onFilteredCountChange }: DashboardP
       const matchesSearch = agent.name.toLowerCase().includes(searchQuery.toLowerCase());
       
       let matchesStatus = true;
-      const activeOrPaused = (agent.sessionsByStatus?.active ?? 0) + (agent.sessionsByStatus?.paused ?? 0);
+      const activeOrPaused = (agent.sessionsByStatus?.ACTIVE ?? 0) + (agent.sessionsByStatus?.PAUSED ?? 0) + (agent.sessionsByStatus?.RESTORING ?? 0);
       if (statusFilter === 'running') {
         matchesStatus = agent.status === 'running' || agent.status === 'booting' || activeOrPaused > 0;
       } else if (statusFilter === 'error') {

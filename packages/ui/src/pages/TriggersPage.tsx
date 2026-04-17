@@ -52,6 +52,7 @@ export function TriggersPage() {
   const [eventTypes, setEventTypes] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [eventTypesError, setEventTypesError] = useState<string | null>(null);
 
   // Filters
   const [agentFilter, setAgentFilter] = useState<string>('');
@@ -80,19 +81,30 @@ export function TriggersPage() {
       const data = await fetchTriggers(agentFilter || undefined);
       setTriggers(Array.isArray(data) ? data : []);
     } catch (err) {
-      setError('Failed to load triggers');
+      setError('Failed to load triggers.');
       console.debug('[Triggers] Load failed:', err);
     } finally {
       setLoading(false);
     }
   }, [agentFilter]);
 
+  const loadEventTypes = useCallback(async () => {
+    setEventTypesError(null);
+
+    try {
+      const data = await fetchEventTypes();
+      setEventTypes(data.types);
+    } catch (err) {
+      console.debug('[Triggers] Event types load failed:', err);
+      setEventTypes([]);
+      setEventTypesError('Event type suggestions are unavailable.');
+    }
+  }, []);
+
   useEffect(() => {
     if (agents.length === 0) fetchAgents();
-    fetchEventTypes()
-      .then((data) => setEventTypes(data.types))
-      .catch(() => {});
-  }, [agents.length, fetchAgents]);
+    void loadEventTypes();
+  }, [agents.length, fetchAgents, loadEventTypes]);
 
   useEffect(() => {
     loadTriggers();
@@ -214,6 +226,7 @@ export function TriggersPage() {
   };
 
   const hasActiveFilters = agentFilter || typeFilter;
+  const hasLoadedTriggers = triggers.length > 0;
 
   return (
     <div className="flex min-h-screen flex-col bg-surface-950">
@@ -263,6 +276,40 @@ export function TriggersPage() {
             </div>
           </div>
         </div>
+
+        {error && hasLoadedTriggers && (
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+          >
+            <span>{error}</span>
+            <button
+              type="button"
+              data-testid="triggers-retry-button"
+              onClick={() => void loadTriggers()}
+              className="rounded-md border border-red-400/30 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-500/10"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {eventTypesError && (
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+          >
+            <span>{eventTypesError}</span>
+            <button
+              type="button"
+              data-testid="triggers-type-retry-button"
+              onClick={() => void loadEventTypes()}
+              className="rounded-md border border-amber-400/30 px-3 py-1.5 text-xs font-medium text-amber-100 transition-colors hover:bg-amber-500/10"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-3">
@@ -317,10 +364,23 @@ export function TriggersPage() {
           <div className="flex items-center justify-center py-20">
             <Loader2 className="h-6 w-6 text-accent-400 animate-spin" />
           </div>
-        ) : error ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Zap className="h-8 w-8 text-surface-400 mb-3" />
-            <p className="text-sm text-surface-400">{error}</p>
+        ) : error && !hasLoadedTriggers ? (
+          <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
+            <Zap className="h-8 w-8 text-red-300" />
+            <div className="space-y-1">
+              <p className="text-sm text-red-200">{error}</p>
+              <p className="text-xs text-surface-400">
+                Trigger configuration is unavailable until the API responds.
+              </p>
+            </div>
+            <button
+              type="button"
+              data-testid="triggers-retry-button"
+              onClick={() => void loadTriggers()}
+              className="btn-secondary"
+            >
+              Retry
+            </button>
           </div>
         ) : filteredTriggers.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">

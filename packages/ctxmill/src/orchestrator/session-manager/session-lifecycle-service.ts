@@ -14,6 +14,7 @@ import type { AgentDefinition } from '../../types.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { SessionReconciler } from './ports.js';
 import { SessionRecoveryCoordinator } from './session-recovery-coordinator.js';
+import { SessionStatusCoordinator } from './session-status-coordinator.js';
 import type { SessionStateStore } from './session-state-store.js';
 import type {
   Logger,
@@ -36,9 +37,9 @@ export interface SessionLifecycleServiceDeps {
     | 'getActiveSandboxSessions'
     | 'getSandboxSessionByConversation'
     | 'getSandboxSessionsByAgent'
-    | 'updateSandboxSessionStatus'
   >;
-  containerManager: Pick<ContainerManager, 'removeContainer' | 'stopContainer'>;
+  statusCoordinator: SessionStatusCoordinator;
+  containerManager: Pick<ContainerManager, 'getContainer' | 'removeContainer' | 'stopContainer'>;
   lifecyclePolicy: Pick<ContainerLifecyclePolicy, 'cancelIdleTimeout'>;
   workspaceDiffService: WorkspaceDiffService;
   logger: Logger;
@@ -111,18 +112,10 @@ export class SessionLifecycleService {
       payload: this.deps.parsePendingRequestPayload(request.payloadJson),
     }));
 
-    let workspaceRef = 'none';
-    try {
-      workspaceRef = await this.deps.workspaceDiffService.capture(sessionId, record.containerId);
-      this.deps.logger.info(`${TAG} workspace captured for session ${sessionId}: ${workspaceRef}`);
-    } catch (err) {
-      this.deps.logger.warn(
-        `${TAG} workspace capture failed for session ${sessionId}, continuing without workspace snapshot:`,
-        err,
-      );
-    }
+    const workspaceRef = await this.deps.workspaceDiffService.capture(sessionId, record.containerId);
+    this.deps.logger.info(`${TAG} workspace captured for session ${sessionId}: ${workspaceRef}`);
 
-    await this.deps.db.createCheckpointV2({
+    const checkpointRow: { id: string } = await this.deps.db.createCheckpointV2({
       sessionId,
       agentId: record.agentId,
       checkpointData: {
@@ -141,11 +134,18 @@ export class SessionLifecycleService {
       suspendReason: reason,
     });
 
-    await this.deps.db.updateSandboxSessionStatus(sessionId, 'CHECKPOINTED');
-    record.status = 'CHECKPOINTED';
-
     await this.deps.lifecyclePolicy.cancelIdleTimeout(sessionId);
     await this.cleanupRuntime(record, sessionId, false);
+
+    await this.deps.statusCoordinator.transition({
+      sessionId,
+      fromStatus: record.status,
+      toStatus: 'CHECKPOINTED',
+      clearRuntime: true,
+      extra: {
+        checkpointRef: checkpointRow.id,
+      },
+    });
 
     this.deps.stateStore.cleanupSession(sessionId, record.conversationId);
     this.deps.logger.info(`${TAG} session ${sessionId} suspended`);
@@ -169,7 +169,12 @@ export class SessionLifecycleService {
     }
 
     await this.cleanupRuntime(record, sessionId, false);
-    await this.deps.db.updateSandboxSessionStatus(sessionId, 'TERMINATED');
+    await this.deps.statusCoordinator.transition({
+      sessionId,
+      fromStatus: record?.status ?? 'ACTIVE',
+      toStatus: 'TERMINATED',
+      clearRuntime: true,
+    });
 
     if (record) {
       this.deps.stateStore.cleanupSession(sessionId, record.conversationId);
@@ -206,12 +211,21 @@ export class SessionLifecycleService {
     sessionId: string,
     cleanupWorkspace: boolean,
   ): Promise<void> {
-    if (record?.containerId) {
+    const runtimeContainer = record?.containerId
+      ? { containerId: record.containerId }
+      : await this.deps.containerManager.getContainer(sessionId);
+
+    if (runtimeContainer?.containerId) {
       try {
-        await this.deps.containerManager.stopContainer(record.containerId, 10);
-        await this.deps.containerManager.removeContainer(record.containerId, true);
+        await this.deps.containerManager.stopContainer(runtimeContainer.containerId, 10);
       } catch (err) {
-        this.deps.logger.warn(`${TAG} container cleanup failed for session ${sessionId}:`, err);
+        this.deps.logger.warn(`${TAG} container stop failed for session ${sessionId}:`, err);
+      }
+
+      try {
+        await this.deps.containerManager.removeContainer(runtimeContainer.containerId, true);
+      } catch (err) {
+        this.deps.logger.warn(`${TAG} container removal failed for session ${sessionId}:`, err);
       }
     }
 

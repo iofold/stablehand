@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Code, ConnectError } from '@connectrpc/connect';
+import type { ConnectRouter } from '@connectrpc/connect';
 import { create } from '@bufbuild/protobuf';
 import {
   RequestToolRequestSchema,
   EmitEventRequestSchema,
-  RefreshSecretsRequestSchema,
 } from '@ctxmill/proto/sandbox/v1';
 import {
   createOrchestratorServiceImpl,
@@ -13,6 +14,7 @@ import {
 } from '../orchestrator-service.js';
 import { createGrpcRoutes } from '../router.js';
 import { TypedEventBus } from '../../../events/bus.js';
+import type { DatabaseRepository } from '../../../database/repository.js';
 
 function makeEventBus() {
   const bus = new TypedEventBus();
@@ -29,6 +31,58 @@ function makeRegistry(handlers?: Record<string, OrchestratorToolHandler>) {
     }
   }
   return registry;
+}
+
+type ToolDedupRepository = Pick<
+  DatabaseRepository,
+  'tryInsertToolDedup' | 'getToolDedup' | 'completeToolDedup'
+>;
+
+function makeDedupRepository(overrides: Partial<ToolDedupRepository> = {}): DatabaseRepository {
+  const repository: ToolDedupRepository = {
+    tryInsertToolDedup: vi.fn().mockResolvedValue(true),
+    getToolDedup: vi.fn().mockResolvedValue(undefined),
+    completeToolDedup: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+
+  return repository as unknown as DatabaseRepository;
+}
+
+async function expectFinalizationFailure(promise: Promise<unknown>, phase: string): Promise<ConnectError> {
+  const err = await promise.then(
+    () => undefined,
+    (caught: unknown) => caught,
+  );
+
+  expect(err).toBeInstanceOf(ConnectError);
+  if (!(err instanceof ConnectError)) {
+    throw new Error('Expected finalization failure to be a ConnectError');
+  }
+  expect(err.code).toBe(Code.Unavailable);
+  expect(err.message).toContain(phase);
+  return err;
+}
+
+async function withSilencedConsoleError<T>(fn: () => Promise<T>): Promise<T> {
+  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    consoleError.mockRestore();
+  }
+}
+
+type MockConnectRouter = ConnectRouter & {
+  service: ReturnType<typeof vi.fn>;
+  rpc: ReturnType<typeof vi.fn>;
+};
+
+function makeMockConnectRouter(): MockConnectRouter {
+  return {
+    service: vi.fn(),
+    rpc: vi.fn(),
+  } as unknown as MockConnectRouter;
 }
 
 describe('OrchestratorService — RequestTool', () => {
@@ -155,6 +209,129 @@ describe('OrchestratorService — RequestTool', () => {
       { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-6' },
     );
   });
+
+  it('surfaces dedup finalization failures after handler success as retriable RPC failures', async () => {
+    const handler = vi.fn().mockResolvedValue('{"ok": true}');
+    const repository = makeDedupRepository({
+      completeToolDedup: vi.fn().mockRejectedValue(new Error('dedup write failed')),
+    });
+    const registry = makeRegistry({ 'my-tool': handler });
+    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry, repository });
+
+    const req = create(RequestToolRequestSchema, {
+      sessionId: 'run-1',
+      agentId: 'agent-1',
+      toolName: 'my-tool',
+      argsJson: '{"x": 1}',
+      requestId: 'req-finalize-success',
+    });
+
+    const err = await withSilencedConsoleError(() => expectFinalizationFailure(
+      svc.requestTool(req),
+      'successful execution',
+    ));
+
+    expect(err.message).toContain('req-finalize-success');
+    expect(err.message).toContain('dedup write failed');
+    expect(handler).toHaveBeenCalledWith(
+      { x: 1 },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-finalize-success' },
+    );
+    expect(repository.completeToolDedup).toHaveBeenCalledWith(
+      'req-finalize-success',
+      '{"ok": true}',
+      null,
+    );
+  });
+
+  it('surfaces dedup finalization failures after handler errors instead of returning cached-looking errors', async () => {
+    const handler = vi.fn().mockRejectedValue(new Error('tool exploded'));
+    const repository = makeDedupRepository({
+      completeToolDedup: vi.fn().mockRejectedValue(new Error('dedup write failed')),
+    });
+    const registry = makeRegistry({ boom: handler });
+    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry, repository });
+
+    const req = create(RequestToolRequestSchema, {
+      sessionId: 'run-1',
+      agentId: 'agent-1',
+      toolName: 'boom',
+      argsJson: '{}',
+      requestId: 'req-finalize-error',
+    });
+
+    const err = await withSilencedConsoleError(() => expectFinalizationFailure(
+      svc.requestTool(req),
+      'failed execution',
+    ));
+
+    expect(err.message).toContain('req-finalize-error');
+    expect(err.message).toContain('dedup write failed');
+    expect(handler).toHaveBeenCalledOnce();
+    expect(repository.completeToolDedup).toHaveBeenCalledWith(
+      'req-finalize-error',
+      null,
+      'tool exploded',
+    );
+  });
+
+  it('surfaces dedup finalization failures for unknown tools instead of returning a normal tool error', async () => {
+    const repository = makeDedupRepository({
+      completeToolDedup: vi.fn().mockRejectedValue(new Error('dedup write failed')),
+    });
+    const registry = makeRegistry();
+    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry, repository });
+
+    const req = create(RequestToolRequestSchema, {
+      sessionId: 'run-1',
+      agentId: 'agent-1',
+      toolName: 'missing-tool',
+      argsJson: '{}',
+      requestId: 'req-finalize-unknown',
+    });
+
+    const err = await withSilencedConsoleError(() => expectFinalizationFailure(
+      svc.requestTool(req),
+      'unknown tool',
+    ));
+
+    expect(err.message).toContain('req-finalize-unknown');
+    expect(repository.completeToolDedup).toHaveBeenCalledWith(
+      'req-finalize-unknown',
+      null,
+      'Unknown orchestrator tool: missing-tool',
+    );
+  });
+
+  it('surfaces dedup finalization failures for malformed args_json instead of returning a normal parse error', async () => {
+    const handler = vi.fn();
+    const repository = makeDedupRepository({
+      completeToolDedup: vi.fn().mockRejectedValue(new Error('dedup write failed')),
+    });
+    const registry = makeRegistry({ 'my-tool': handler });
+    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry, repository });
+
+    const req = create(RequestToolRequestSchema, {
+      sessionId: 'run-1',
+      agentId: 'agent-1',
+      toolName: 'my-tool',
+      argsJson: 'not-json',
+      requestId: 'req-finalize-json',
+    });
+
+    const err = await withSilencedConsoleError(() => expectFinalizationFailure(
+      svc.requestTool(req),
+      'invalid args_json',
+    ));
+
+    expect(err.message).toContain('req-finalize-json');
+    expect(handler).not.toHaveBeenCalled();
+    expect(repository.completeToolDedup).toHaveBeenCalledWith(
+      'req-finalize-json',
+      null,
+      'Invalid args_json: failed to parse JSON',
+    );
+  });
 });
 
 describe('OrchestratorService — EmitEvent', () => {
@@ -249,25 +426,6 @@ describe('OrchestratorService — EmitEvent', () => {
   });
 });
 
-describe('OrchestratorService — RefreshSecrets', () => {
-  it('returns a stub response indicating not implemented', async () => {
-    const eventBus = makeEventBus();
-    const registry = makeRegistry();
-    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: registry });
-
-    const req = create(RefreshSecretsRequestSchema, {
-      sessionId: 'run-1',
-      agentId: 'agent-1',
-    });
-
-    const resp = await svc.refreshSecrets(req);
-
-    expect(resp.success).toBe(false);
-    expect(resp.error).toContain('not yet implemented');
-    expect(resp.secretsPath).toBe('');
-  });
-});
-
 describe('DefaultOrchestratorToolRegistry', () => {
   it('stores and retrieves tool handlers', () => {
     const registry = new DefaultOrchestratorToolRegistry();
@@ -335,13 +493,10 @@ describe('createGrpcRoutes', () => {
     expect(typeof routesFn).toBe('function');
 
     // Verify it can be called with a mock router without errors
-    const mockRouter = {
-      service: vi.fn(),
-      rpc: vi.fn(),
-    };
+    const mockRouter = makeMockConnectRouter();
 
     // The routes function should call router.service with the OrchestratorService descriptor
-    routesFn(mockRouter as any);
+    routesFn(mockRouter);
 
     expect(mockRouter.service).toHaveBeenCalledTimes(1);
     // First arg should be the OrchestratorService descriptor
@@ -350,7 +505,6 @@ describe('createGrpcRoutes', () => {
     expect(impl).toBeDefined();
     expect(typeof impl.requestTool).toBe('function');
     expect(typeof impl.emitEvent).toBe('function');
-    expect(typeof impl.refreshSecrets).toBe('function');
   });
 
   it('accepts a pre-built tool registry', () => {
@@ -366,8 +520,8 @@ describe('createGrpcRoutes', () => {
     // Should still have the custom one
     expect(registry.has('custom-tool')).toBe(true);
 
-    const mockRouter = { service: vi.fn(), rpc: vi.fn() };
-    routesFn(mockRouter as any);
+    const mockRouter = makeMockConnectRouter();
+    routesFn(mockRouter);
     expect(mockRouter.service).toHaveBeenCalledTimes(1);
   });
 

@@ -1,6 +1,8 @@
 import type { TypedEventBus, EventName, EventMap } from '../events/bus.js';
 import type { DatabaseRepository, SuspendedSessionRow } from '../database/repository.js';
 import type { WaitCondition } from '../events/wait-condition.js';
+
+export type ResumeMatchResult = void | { outcome: 'retryable-failure'; reason?: string };
 import { matchesSelector } from '../events/wait-condition.js';
 
 /** Event types the matcher subscribes to for resume evaluation. */
@@ -27,14 +29,14 @@ const RECONCILIATION_INTERVAL_MS = 30_000;
 export class SuspendedSessionMatcher {
   private eventBus: TypedEventBus;
   private db: DatabaseRepository;
-  private onResume: (condition: WaitCondition, triggerEvent: unknown) => Promise<void>;
+  private onResume: (condition: WaitCondition, triggerEvent: unknown) => Promise<ResumeMatchResult>;
   private handlers: Map<EventName, (payload: unknown) => void> = new Map();
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     eventBus: TypedEventBus,
     db: DatabaseRepository,
-    onResume: (condition: WaitCondition, triggerEvent: unknown) => Promise<void>,
+    onResume: (condition: WaitCondition, triggerEvent: unknown) => Promise<ResumeMatchResult>,
   ) {
     this.eventBus = eventBus;
     this.db = db;
@@ -80,26 +82,12 @@ export class SuspendedSessionMatcher {
       const payloadObj = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
 
       if (matchesSelector(payloadObj, selector)) {
-        try {
-          await this.db.deleteSuspendedSession(row.id);
-        } catch (err) {
-          console.error(`[SuspendedSessionMatcher] failed to delete suspended session ${row.id}:`, err);
-          continue;
-        }
-
         const suspendedDurationMs = Date.now() - row.createdAt;
-
         const sessionId = row.agentSessionId;
 
-         this.eventBus.emit('run.resumed', {
-           turnId: sessionId,
-           agentId: row.agentId,
-           triggeredBy: eventType,
-           suspendedDurationMs,
-           timestamp: Date.now(),
-         } as unknown as EventMap['run.resumed']);
-
-        // Build WaitCondition from the row
+        // Build WaitCondition from the row before mutating DB state. The wait
+        // row is the durable retry handle; keep it until the resume callback has
+        // either completed successfully or explicitly reports a retryable miss.
         let snapshotState: WaitCondition['contextSnapshot'];
         try {
           snapshotState = JSON.parse(row.snapshotState);
@@ -119,10 +107,32 @@ export class SuspendedSessionMatcher {
         } as unknown as WaitCondition;
 
         try {
-          await this.onResume(condition, payload);
+          const resumeResult = await this.onResume(condition, payload);
+          if (resumeResult?.outcome === 'retryable-failure') {
+            console.warn(
+              `[SuspendedSessionMatcher] resume for ${row.id} deferred as retryable: ${resumeResult.reason ?? 'no reason provided'}`,
+            );
+            continue;
+          }
         } catch (err) {
-          console.error(`[SuspendedSessionMatcher] onResume callback error for ${row.id}:`, err);
+          console.error(`[SuspendedSessionMatcher] onResume callback error for ${row.id}; keeping wait row for retry:`, err);
+          continue;
         }
+
+        try {
+          await this.db.deleteSuspendedSession(row.id);
+        } catch (err) {
+          console.error(`[SuspendedSessionMatcher] failed to delete suspended session ${row.id}:`, err);
+          continue;
+        }
+
+        this.eventBus.emit('run.resumed', {
+          turnId: sessionId,
+          agentId: row.agentId,
+          triggeredBy: eventType,
+          suspendedDurationMs,
+          timestamp: Date.now(),
+        } as unknown as EventMap['run.resumed']);
       }
     }
   }

@@ -178,7 +178,7 @@ describe('AgentSessionService', () => {
       { type: 'RUN_FINISHED', timestamp: 5, runId: 'run-1' },
     ];
 
-    const individuallyHandled = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT', 'MESSAGE_COMMITTED']);
+    const individuallyHandled = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT', 'MESSAGE_COMMITTED', 'RUN_ERROR', 'RUN_FINISHED']);
     const forwardedEvents = events.filter((event) => !individuallyHandled.has(event.type));
 
     const eventBus = createEventBusMock();
@@ -511,6 +511,86 @@ describe('AgentSessionService', () => {
   });
 
   describe('event bus integration', () => {
+    it('does not forward streamed RUN_FINISHED as run.ag_ui_event because turn completion is emitted canonically after finalize', async () => {
+      const eventBus = createEventBusMock();
+      const { deps, sessionTurnService, sessionManager } = createDeps({ eventBus });
+      sessionTurnService.executeSessionTurn.mockReturnValue(
+        eventStream([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]),
+      );
+
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
+
+      expect(eventBus.emit).not.toHaveBeenCalledWith('run.ag_ui_event', expect.objectContaining({
+        event: expect.objectContaining({ type: 'RUN_FINISHED' }),
+      }));
+      expect(sessionManager.completeTurn).toHaveBeenCalledWith(
+        'sandbox-1',
+        'run-1',
+        'agent-1',
+        'conv-1',
+        'completed',
+        expect.any(Number),
+        undefined,
+      );
+    });
+
+    it('emits message.committed when assistant text is flushed at RUN_FINISHED without a sandbox commit event', async () => {
+      const eventBus = createEventBusMock();
+      const { deps, sessionTurnService } = createDeps({ eventBus });
+      sessionTurnService.executeSessionTurn.mockReturnValue(
+        eventStream([
+          { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'msg-1', content: 'Hello ' },
+          { type: 'TEXT_MESSAGE_CONTENT', timestamp: 2, runId: 'run-1', messageId: 'msg-1', content: 'world' },
+          { type: 'RUN_FINISHED', timestamp: 3, runId: 'run-1' },
+        ]),
+      );
+
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
+
+      expect(eventBus.emit).toHaveBeenCalledWith('message.committed', expect.objectContaining({
+        turnId: 'run-1',
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: 'Hello world',
+        parts: [{ type: 'text', content: 'Hello world' }],
+      }));
+    });
+
+    it('emits message.committed when assistant/tool preview state is flushed before final completion', async () => {
+      const eventBus = new TypedEventBus();
+      const committedMessages = collectEvents(eventBus, 'message.committed');
+
+      const { deps, sessionTurnService } = createDeps({ eventBus });
+      sessionTurnService.executeSessionTurn.mockReturnValue(
+        eventStream([
+          { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', content: 'Let me check.' },
+          { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
+          { type: 'TOOL_CALL_ARGS', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', args: '{"q":"test"}' },
+          { type: 'TOOL_CALL_END', timestamp: 4, runId: 'run-1', toolCallId: 'tc-1' },
+          { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search', result: 'Found 3 results', durationMs: 42 },
+          { type: 'TEXT_MESSAGE_CONTENT', timestamp: 6, runId: 'run-1', messageId: 'm1', content: 'Based on the results:' },
+          makeCommittedEvent({ timestamp: 7, content: 'Based on the results:' }),
+          { type: 'RUN_FINISHED', timestamp: 8, runId: 'run-1' },
+        ]),
+      );
+
+      const service = new AgentSessionService(deps);
+      await service.executeSession(makeParams());
+
+      expect(committedMessages).toHaveLength(2);
+      expect(committedMessages[0]).toMatchObject({
+        role: 'assistant',
+        content: 'Let me check.',
+      });
+      expect(committedMessages[1]).toMatchObject({
+        role: 'assistant',
+        content: 'Based on the results:',
+      });
+    });
+
     it('emits run.text_chunk for each TEXT_MESSAGE_CONTENT event', async () => {
       const eventBus = new TypedEventBus();
       const textChunks = collectEvents(eventBus, 'run.text_chunk');

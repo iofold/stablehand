@@ -300,13 +300,9 @@ test.describe('Kitchen Sink — Multi-Agent Chain', () => {
       .poll(
         async () => {
           const res = await request.get(
-            `${API_BASE}/api/events?agentId=${analyst!.id}&type=run.started&since=${startedAt - 1_000}&limit=20`,
+            `${API_BASE}/api/agents/${analyst!.id}/sessions/${body.sessionId}`,
           );
-          expect(res.ok()).toBeTruthy();
-          const data = await res.json();
-          return data.events.some(
-            (event: { payload: string }) => JSON.parse(event.payload).sessionId === body.sessionId,
-          );
+          return res.ok();
         },
         { timeout: 30_000 },
       )
@@ -347,21 +343,15 @@ test.describe('Kitchen Sink — Multi-Agent Chain', () => {
       )
       .toBe(true);
 
-    await expect
-      .poll(
-        async () => {
-          const res = await request.get(
-            `${API_BASE}/api/events?agentId=${reviewer!.id}&type=run.started&limit=20`,
-          );
-          expect(res.ok()).toBeTruthy();
-          const data = await res.json();
-          return data.events.some((event: { payload: string }) =>
-            JSON.parse(event.payload).taskDescription?.includes(emittedAnalysis) ?? false,
-          );
-        },
-        { timeout: 30_000 },
-      )
-      .toBe(true);
+    const reviewerRuns = await getRuns(request, reviewer!.id);
+    const matchingRun = reviewerRuns.find((run) =>
+      run.taskDescription?.includes(emittedAnalysis) ?? false,
+    );
+    expect(matchingRun).toBeTruthy();
+    if (matchingRun) {
+      const detailRes = await request.get(`${API_BASE}/api/agents/${reviewer!.id}/sessions/${matchingRun.id}`);
+      expect(detailRes.ok()).toBeTruthy();
+    }
   });
 
   // ── 5. Triggers are registered correctly ───────────────────

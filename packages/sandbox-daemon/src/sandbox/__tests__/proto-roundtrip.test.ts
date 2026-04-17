@@ -653,7 +653,7 @@ describe('tool metadata conversions', () => {
       },
     );
 
-    await expect(definitions[0].handler({ path: '/tmp/demo' }, TOOL_CONTEXT)).resolves.toContain(
+    await expect(definitions[0].handler({ path: '/tmp/demo' }, TOOL_CONTEXT)).rejects.toThrow(
       'handled by the harness SDK',
     );
     await expect(definitions[1].handler({ name: 'report.ready' }, TOOL_CONTEXT)).resolves.toBe(

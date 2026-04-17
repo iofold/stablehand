@@ -66,7 +66,7 @@ describe('HITL Interrupt Lifecycle', () => {
       );
 
       // Resolve with approve
-      const resolved = interrupts.resolve('run-1', 'approve', { reason: 'ok' }, 'agent-1');
+      const resolved = await interrupts.resolve('run-1', 'approve', { reason: 'ok' }, 'agent-1');
       expect(resolved).toBe(true);
 
       // Verify the promise resolves correctly
@@ -106,7 +106,7 @@ describe('HITL Interrupt Lifecycle', () => {
         { path: '/important.txt' },
       );
 
-      const resolved = interrupts.resolve('run-rej', 'reject', { reason: 'too dangerous' }, 'agent-rej');
+      const resolved = await interrupts.resolve('run-rej', 'reject', { reason: 'too dangerous' }, 'agent-rej');
       expect(resolved).toBe(true);
 
       const result = await promise;
@@ -184,8 +184,8 @@ describe('HITL Interrupt Lifecycle', () => {
        expect(interruptedEvents.events[1].turnId).toBe('run-c2');
 
        // Resolve run-1 with approve, run-2 with reject
-       interrupts.resolve('run-c1', 'approve', { ok: true }, 'agent-shared');
-       interrupts.resolve('run-c2', 'reject', { reason: 'no' }, 'agent-shared');
+       await interrupts.resolve('run-c1', 'approve', { ok: true }, 'agent-shared');
+       await interrupts.resolve('run-c2', 'reject', { reason: 'no' }, 'agent-shared');
 
        const result1 = await promise1;
        const result2 = await promise2;
@@ -228,7 +228,7 @@ describe('HITL Interrupt Lifecycle', () => {
       expect(interruptedEvents.events[1].toolCallId).toBe('tc-sup-2');
 
       // Resolve the second interrupt with approve
-      interrupts.resolve('run-sup', 'approve', { good: true }, 'agent-sup');
+      await interrupts.resolve('run-sup', 'approve', { good: true }, 'agent-sup');
 
       const result2 = await promise2;
       expect(result2).toEqual({ action: 'approve', data: { good: true } });
@@ -240,15 +240,15 @@ describe('HITL Interrupt Lifecycle', () => {
   // ── Resolve non-existent interrupt ─────────────────────────────
 
   describe('Resolve non-existent interrupt', () => {
-    it('resolve() with unknown runId returns false', () => {
-      const result = interrupts.resolve('run-nonexistent', 'approve', undefined, 'agent-x');
+    it('resolve() with unknown runId returns false', async () => {
+      const result = await interrupts.resolve('run-nonexistent', 'approve', undefined, 'agent-x');
       expect(result).toBe(false);
     });
 
-    it('resolve() with unknown runId does not emit any events', () => {
+    it('resolve() with unknown runId does not emit any events', async () => {
       const resolvedEvents = collectEvents(bus, 'run.interrupt_resolved');
 
-      interrupts.resolve('run-ghost', 'approve', undefined, 'agent-y');
+      await interrupts.resolve('run-ghost', 'approve', undefined, 'agent-y');
 
       expect(resolvedEvents.events).toHaveLength(0);
 

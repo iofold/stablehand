@@ -11,7 +11,7 @@ const TAG = '[SandboxSessionManager]';
 type PendingRequest = {
   type: string;
   id: string;
-  payload: { tool?: unknown; args?: unknown };
+  payload: Record<string, unknown>;
 };
 
 interface InterruptResumeServiceDeps {
@@ -103,7 +103,6 @@ export class InterruptResumeService implements InterruptResumePort {
       dbSession.harnessName,
       checkpoint?.checkpointData,
     );
-    const record = await this.deps.ensureSession(conversationId, agentDef, agentId);
 
     const resolvedInterrupts = await this.deps.db.getResolvedInterruptsForSession(sessionId);
     const interrupt = resolvedInterrupts.find((entry) => entry.agentSessionId === turnId);
@@ -116,6 +115,7 @@ export class InterruptResumeService implements InterruptResumePort {
 
     const pendingApprovals = this.getPendingApprovalRequests(checkpoint?.checkpointData)
       .filter((request) => request.type === 'approval');
+    const record = await this.deps.ensureSession(conversationId, agentDef, agentId);
     const resolutionContent = interrupt.resolvedAction === 'approve' ? 'APPROVED' : 'REJECTED';
 
     const continuationMessages: Message[] = [];
@@ -259,20 +259,28 @@ export class InterruptResumeService implements InterruptResumePort {
     });
   }
 
-  parsePendingRequestPayload(rawPayload: unknown): { tool?: unknown; args?: unknown } {
+  parsePendingRequestPayload(rawPayload: unknown): Record<string, unknown> {
     if (isRecord(rawPayload)) {
       return rawPayload;
     }
 
     if (typeof rawPayload !== 'string') {
-      return {};
+      throw new Error(
+        `Malformed HITL checkpoint pending request payload: expected object or JSON object string, got ${typeof rawPayload}`,
+      );
     }
 
     try {
       const parsed = JSON.parse(rawPayload) as unknown;
-      return isRecord(parsed) ? parsed : {};
-    } catch {
-      return {};
+      if (isRecord(parsed)) {
+        return parsed;
+      }
+      throw new Error(`expected JSON object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`);
+    } catch (err) {
+      throw new Error(
+        `Malformed HITL checkpoint pending request payload JSON: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
     }
   }
 
@@ -306,18 +314,9 @@ export class InterruptResumeService implements InterruptResumePort {
       return checkpointAgentDef;
     }
 
-    this.deps.logger.warn(
-      `${TAG} agent definition cache miss for conversation ${conversationId} / agent ${agentId}; continuing with degraded minimal stub`,
+    throw new Error(
+      `${TAG} cannot resume session for conversation ${conversationId} / agent ${agentId}: missing agent definition for harness ${harnessName}`,
     );
-    const degradedAgentDef: AgentDefinition = {
-      name: agentId,
-      harness: harnessName,
-      harnessConfig: {},
-      tools: [],
-      systemPrompt: '',
-    };
-    this.deps.stateStore.setAgentDef(conversationId, degradedAgentDef);
-    return degradedAgentDef;
   }
 
   private readAgentDefinitionFromCheckpoint(

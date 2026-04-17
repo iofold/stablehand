@@ -13,7 +13,6 @@ service HarnessService {
 service OrchestratorService {
   rpc RequestTool(RequestToolRequest) returns (RequestToolResponse);
   rpc EmitEvent(EmitEventRequest) returns (EmitEventResponse);
-  rpc RefreshSecrets(RefreshSecretsRequest) returns (RefreshSecretsResponse);
   rpc RegisterArtifact(RegisterArtifactRequest) returns (RegisterArtifactResponse);
   rpc ResolveArtifact(ResolveArtifactRequest) returns (ResolveArtifactResponse);
 }
@@ -153,17 +152,6 @@ message EmitEventRequest {
 }
 
 message EmitEventResponse {}
-
-message RefreshSecretsRequest {
-  string session_id = 1;
-  string agent_id = 2;
-}
-
-message RefreshSecretsResponse {
-  bool success = 1;
-  optional string error = 2;
-  string secrets_path = 3;
-}
 
 message NativeToolConfig {
   repeated string allowlist = 1;

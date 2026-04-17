@@ -148,7 +148,7 @@ describe('SuspendedRunMatcher', () => {
       );
     });
 
-    it('resumed run is deleted from DB', async () => {
+    it('resumed run is deleted from DB only after onResume succeeds', async () => {
       const row = makeSuspendedRunRow();
       mockDb = createMockDb({
         getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
@@ -159,6 +159,51 @@ describe('SuspendedRunMatcher', () => {
       await vi.advanceTimersByTimeAsync(50);
 
       expect(mockDb.deleteSuspendedSession).toHaveBeenCalledWith('sr-1');
+      expect(onResume.mock.invocationCallOrder[0]).toBeLessThan(
+        mockDb.deleteSuspendedSession.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('keeps wait row when onResume fails so the event can be retried', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const row = makeSuspendedRunRow();
+      mockDb = createMockDb({
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
+      });
+      const failingResume = vi.fn().mockRejectedValue(new Error('resume failed'));
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, failingResume);
+
+      bus.emit('feedback.received', makeFeedbackReceivedEvent({ agentId: 'agent-1', type: 'thumbs_up' }));
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(failingResume).toHaveBeenCalledTimes(1);
+      expect(mockDb.deleteSuspendedSession).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('keeping wait row for retry'),
+        expect.any(Error),
+      );
+      errorSpy.mockRestore();
+    });
+
+    it('keeps wait row when onResume reports an explicit retryable failure', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const row = makeSuspendedRunRow();
+      mockDb = createMockDb({
+        getSuspendedSessionsByEventType: vi.fn().mockResolvedValue([row]),
+      });
+      const retryableResume = vi.fn().mockResolvedValue({
+        outcome: 'retryable-failure',
+        reason: 'session manager not ready',
+      });
+      matcher = new SuspendedSessionMatcher(bus, mockDb as any, retryableResume);
+
+      bus.emit('feedback.received', makeFeedbackReceivedEvent({ agentId: 'agent-1', type: 'thumbs_up' }));
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(retryableResume).toHaveBeenCalledTimes(1);
+      expect(mockDb.deleteSuspendedSession).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('session manager not ready'));
+      warnSpy.mockRestore();
     });
 
     it('run.resumed event emitted on bus', async () => {

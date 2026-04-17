@@ -1,7 +1,8 @@
-import { eq, sql, gt, lt, and, desc, asc, inArray, isNotNull, isNull, ilike } from 'drizzle-orm';
+import { eq, sql, gt, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike } from 'drizzle-orm';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 import { sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
+import type { ApiSessionStatus, ApiSessionStatusCounts, SandboxSessionStatus } from '@ctxmill/shared';
 
 type AgentInsert = typeof pgSchema.agents.$inferInsert;
 type AgentSelect = typeof pgSchema.agents.$inferSelect;
@@ -37,6 +38,7 @@ type ArtifactInsert = typeof pgSchema.artifacts.$inferInsert;
 type ArtifactRow = typeof pgSchema.artifacts.$inferSelect;
 
 const sanitizeTypedDbValue = <T>(value: T, context: string): T => sanitizeDbValue(value, context) as T;
+const DEFAULT_CLAIM_LEASE_MS = 60_000;
 
 const sanitizeOptionalDbText = <T extends string | null | undefined>(value: T, context: string): T => {
   if (value == null) return value;
@@ -69,7 +71,7 @@ export interface CheckpointV2 {
 export interface ConversationSummaryRow {
   id: string;
   agentId: string;
-  status: 'running' | 'paused' | 'suspended' | 'completed' | 'error' | 'idle';
+  status: ApiSessionStatus;
   mode: string;
   turnCount: number;
   messageCount: number;
@@ -78,7 +80,6 @@ export interface ConversationSummaryRow {
   updatedAt: number;
   latestTurnId: string | null;
   sandboxSessionId: string | null;
-  sandboxStatus: string | null;
 }
 
 export class DatabaseRepository {
@@ -152,9 +153,21 @@ export class DatabaseRepository {
         .from(this.schema.conversations)
         .where(eq(this.schema.conversations.agentId, agentId));
       const conversationIds = conversations.map((c: any) => c.id);
+      const sandboxSessions = await tx
+        .select({ id: this.schema.sandboxSessions.id })
+        .from(this.schema.sandboxSessions)
+        .where(eq(this.schema.sandboxSessions.agentId, agentId));
+      const sandboxSessionIds = sandboxSessions.map((session: any) => session.id);
       if (conversationIds.length > 0) {
         await tx.delete(this.schema.messages).where(inArray(this.schema.messages.conversationId, conversationIds));
       }
+      await tx.delete(this.schema.suspendedSessions).where(eq(this.schema.suspendedSessions.agentId, agentId));
+      await tx.delete(this.schema.scheduledEvents).where(eq(this.schema.scheduledEvents.agentId, agentId));
+      await tx.delete(this.schema.pendingInterrupts).where(eq(this.schema.pendingInterrupts.agentId, agentId));
+      if (sandboxSessionIds.length > 0) {
+        await tx.delete(this.schema.toolRequestDedup).where(inArray(this.schema.toolRequestDedup.sessionId, sandboxSessionIds));
+      }
+      await tx.execute(sql`DELETE FROM secrets WHERE agent_id = ${agentId}`);
       await tx.delete(this.schema.agentCheckpoints).where(eq(this.schema.agentCheckpoints.agentId, agentId));
       await tx.delete(this.schema.callbackOutbox).where(eq(this.schema.callbackOutbox.agentId, agentId));
       await tx.delete(this.schema.turns).where(eq(this.schema.turns.agentId, agentId));
@@ -277,7 +290,7 @@ export class DatabaseRepository {
   }
 
   async getActiveConversationSummaries(): Promise<ConversationSummaryRow[]> {
-    return this.queryConversationSummaries({ sandboxStatuses: ['ACTIVE', 'PAUSED'] });
+    return this.queryConversationSummaries({ sandboxStatuses: ['ACTIVE', 'PAUSED', 'RESTORING'] });
   }
 
   // ── Knowledge Items ─────────────────────────────────────
@@ -856,23 +869,90 @@ export class DatabaseRepository {
     });
   }
 
-  async getScheduledEventsDue(beforeTime: number): Promise<ScheduledEventRow[]> {
-    return this.db
-      .select()
-      .from(this.schema.scheduledEvents)
-      .where(
-        and(
-          eq(this.schema.scheduledEvents.status, 'pending'),
-          lt(this.schema.scheduledEvents.wakeAt, beforeTime),
-        ),
-      );
+  async getScheduledEventsDue(beforeTime: number, limit = 100): Promise<ScheduledEventRow[]> {
+    return this.claimScheduledEventsDue(limit, beforeTime);
   }
 
-  async markScheduledEventCompleted(id: string): Promise<void> {
+  async claimScheduledEventsDue(
+    limit: number,
+    beforeTime: number,
+    leaseMs = DEFAULT_CLAIM_LEASE_MS,
+  ): Promise<ScheduledEventRow[]> {
+    const now = Date.now();
+    const claimExpiresAt = now + leaseMs;
+    const rows = await this.db
+      .update(this.schema.scheduledEvents)
+      .set({
+        status: 'in_progress',
+        claimedAt: now,
+        claimExpiresAt,
+        attempts: sql`${this.schema.scheduledEvents.attempts} + 1`,
+      })
+      .where(
+        inArray(
+          this.schema.scheduledEvents.id,
+          this.db
+            .select({ id: this.schema.scheduledEvents.id })
+            .from(this.schema.scheduledEvents)
+            .where(
+              and(
+                lte(this.schema.scheduledEvents.wakeAt, beforeTime),
+                or(
+                  eq(this.schema.scheduledEvents.status, 'pending'),
+                  and(
+                    eq(this.schema.scheduledEvents.status, 'in_progress'),
+                    lt(this.schema.scheduledEvents.claimExpiresAt, now),
+                  ),
+                ),
+              ),
+            )
+            .orderBy(this.schema.scheduledEvents.wakeAt)
+            .limit(limit)
+            .for('update', { skipLocked: true }),
+        ),
+      )
+      .returning();
+    return rows;
+  }
+
+  async markScheduledEventCompleted(id: string, claimedAt?: number | null): Promise<void> {
+    const conditions = [
+      eq(this.schema.scheduledEvents.id, id),
+      eq(this.schema.scheduledEvents.status, 'in_progress'),
+    ];
+    if (claimedAt != null) {
+      conditions.push(eq(this.schema.scheduledEvents.claimedAt, claimedAt));
+    }
+
     await this.db
       .update(this.schema.scheduledEvents)
-      .set({ status: 'completed' })
-      .where(eq(this.schema.scheduledEvents.id, id));
+      .set({
+        status: 'completed',
+        claimedAt: null,
+        claimExpiresAt: null,
+      })
+      .where(and(...conditions));
+  }
+
+  async releaseScheduledEventClaim(id: string, error: string, claimedAt?: number | null): Promise<void> {
+    const sanitizedError = sanitizeDbText(error, 'scheduledEvents.lastError');
+    const conditions = [
+      eq(this.schema.scheduledEvents.id, id),
+      eq(this.schema.scheduledEvents.status, 'in_progress'),
+    ];
+    if (claimedAt != null) {
+      conditions.push(eq(this.schema.scheduledEvents.claimedAt, claimedAt));
+    }
+
+    await this.db
+      .update(this.schema.scheduledEvents)
+      .set({
+        status: 'pending',
+        claimedAt: null,
+        claimExpiresAt: null,
+        lastError: sanitizedError,
+      })
+      .where(and(...conditions));
   }
 
   // ── Event Triggers ──────────────────────────────────────
@@ -983,12 +1063,19 @@ export class DatabaseRepository {
       .onConflictDoUpdate({
         target: this.schema.pendingInterrupts.id,
         set: {
+          agentSessionId: sanitizedData.agentSessionId,
+          agentId: sanitizedData.agentId,
+          sessionId: sanitizedData.sessionId ?? null,
           toolCallId: sanitizedData.toolCallId,
           toolName: sanitizedData.toolName,
           args: sanitizedData.args,
           timeoutMs: sanitizedData.timeoutMs,
+          createdAt: sanitizedData.createdAt,
           expiresAt: sanitizedData.expiresAt,
           status: sanitizedData.status ?? 'pending',
+          resolvedAt: null,
+          resolvedAction: null,
+          resolvedData: null,
         },
       })
       .returning();
@@ -1046,7 +1133,12 @@ export class DatabaseRepository {
         resolvedAction: sanitizedAction,
         resolvedData: sanitizedData,
       })
-      .where(eq(this.schema.pendingInterrupts.id, id))
+      .where(
+        and(
+          eq(this.schema.pendingInterrupts.id, id),
+          eq(this.schema.pendingInterrupts.status, 'pending'),
+        ),
+      )
       .returning();
     return updated;
   }
@@ -1094,35 +1186,80 @@ export class DatabaseRepository {
   }
 
   async getPendingCallbacks(limit: number, beforeTime: number): Promise<CallbackOutboxRow[]> {
-    return this.db
-      .select()
-      .from(this.schema.callbackOutbox)
-      .where(
-        and(
-          eq(this.schema.callbackOutbox.status, 'pending'),
-          lt(this.schema.callbackOutbox.nextAttemptAt, beforeTime),
-        ),
-      )
-      .orderBy(this.schema.callbackOutbox.nextAttemptAt)
-      .limit(limit);
+    return this.claimPendingCallbacks(limit, beforeTime);
   }
 
-  async markCallbackDelivered(id: string): Promise<void> {
+  async claimPendingCallbacks(
+    limit: number,
+    beforeTime: number,
+    leaseMs = DEFAULT_CLAIM_LEASE_MS,
+  ): Promise<CallbackOutboxRow[]> {
+    const now = Date.now();
+    const claimExpiresAt = now + leaseMs;
+    const rows = await this.db
+      .update(this.schema.callbackOutbox)
+      .set({
+        status: 'in_progress',
+        claimedAt: now,
+        claimExpiresAt,
+      })
+      .where(
+        inArray(
+          this.schema.callbackOutbox.id,
+          this.db
+            .select({ id: this.schema.callbackOutbox.id })
+            .from(this.schema.callbackOutbox)
+            .where(
+              and(
+                lte(this.schema.callbackOutbox.nextAttemptAt, beforeTime),
+                or(
+                  eq(this.schema.callbackOutbox.status, 'pending'),
+                  and(
+                    eq(this.schema.callbackOutbox.status, 'in_progress'),
+                    lt(this.schema.callbackOutbox.claimExpiresAt, now),
+                  ),
+                ),
+              ),
+            )
+            .orderBy(this.schema.callbackOutbox.nextAttemptAt)
+            .limit(limit)
+            .for('update', { skipLocked: true }),
+        ),
+      )
+      .returning();
+    return rows;
+  }
+
+  async markCallbackDelivered(id: string, claimedAt?: number | null): Promise<void> {
+    const conditions = [
+      eq(this.schema.callbackOutbox.id, id),
+      eq(this.schema.callbackOutbox.status, 'in_progress'),
+    ];
+    if (claimedAt != null) {
+      conditions.push(eq(this.schema.callbackOutbox.claimedAt, claimedAt));
+    }
+
     await this.db
       .update(this.schema.callbackOutbox)
       .set({
         status: 'delivered',
         deliveredAt: Date.now(),
+        claimedAt: null,
+        claimExpiresAt: null,
       })
-      .where(eq(this.schema.callbackOutbox.id, id));
+      .where(and(...conditions));
   }
 
-  async markCallbackFailed(id: string, error: string, nextAttemptAt?: number): Promise<void> {
+  async markCallbackFailed(id: string, error: string, nextAttemptAt?: number, claimedAt?: number | null): Promise<void> {
     // Get current row to check attempts
+    const currentConditions = [eq(this.schema.callbackOutbox.id, id)];
+    if (claimedAt != null) {
+      currentConditions.push(eq(this.schema.callbackOutbox.claimedAt, claimedAt));
+    }
     const [current] = await this.db
       .select()
       .from(this.schema.callbackOutbox)
-      .where(eq(this.schema.callbackOutbox.id, id));
+      .where(and(...currentConditions));
     if (!current) return;
 
     const newAttempts = current.attempts + 1;
@@ -1138,8 +1275,10 @@ export class DatabaseRepository {
         lastError: sanitizedError,
         status: isFinal ? 'failed' : 'pending',
         nextAttemptAt: isFinal ? current.nextAttemptAt : (nextAttemptAt ?? Date.now()),
+        claimedAt: null,
+        claimExpiresAt: null,
       })
-      .where(eq(this.schema.callbackOutbox.id, id));
+      .where(and(...currentConditions));
   }
 
   async getCallbacksForAgent(agentId: string): Promise<CallbackOutboxRow[]> {
@@ -1234,9 +1373,9 @@ export class DatabaseRepository {
     id: string,
     status: string,
     extra?: {
-      containerName?: string;
-      containerId?: string;
-      checkpointRef?: string;
+      containerName?: string | null;
+      containerId?: string | null;
+      checkpointRef?: string | null;
       pausedAt?: number | null;
       pausedReason?: string | null;
     },
@@ -1250,7 +1389,7 @@ export class DatabaseRepository {
           ...(sanitizedExtra?.pausedReason !== undefined ? { pausedReason: sanitizedExtra.pausedReason } : {}),
         };
 
-    await this.db
+    const [updated] = await this.db
       .update(this.schema.sandboxSessions)
       .set({
         status: sanitizedStatus,
@@ -1261,7 +1400,12 @@ export class DatabaseRepository {
         ...(sanitizedExtra?.checkpointRef !== undefined ? { checkpointRef: sanitizedExtra.checkpointRef } : {}),
         ...pauseMetadata,
       })
-      .where(eq(this.schema.sandboxSessions.id, id));
+      .where(eq(this.schema.sandboxSessions.id, id))
+      .returning({ id: this.schema.sandboxSessions.id });
+
+    if (!updated) {
+      throw new Error(`Sandbox session ${id} not found for status update`);
+    }
   }
 
   async deleteSandboxSession(id: string): Promise<void> {
@@ -1284,7 +1428,7 @@ export class DatabaseRepository {
       .where(eq(this.schema.sandboxSessions.agentId, agentId));
   }
 
-  async getSessionStatusCountsByAgent(): Promise<Map<string, { active: number; paused: number; checkpointed: number; terminated: number }>> {
+  async getSessionStatusCountsByAgent(): Promise<Map<string, ApiSessionStatusCounts>> {
     const rows = await this.db
       .select({
         agentId: this.schema.sandboxSessions.agentId,
@@ -1294,15 +1438,23 @@ export class DatabaseRepository {
       .from(this.schema.sandboxSessions)
       .groupBy(this.schema.sandboxSessions.agentId, this.schema.sandboxSessions.status);
 
-    const result = new Map<string, { active: number; paused: number; checkpointed: number; terminated: number }>();
+    const emptyCounts = (): ApiSessionStatusCounts => ({
+      ACTIVE: 0,
+      PAUSED: 0,
+      CHECKPOINTED: 0,
+      RESTORING: 0,
+      TERMINATED: 0,
+    });
+
+    const result = new Map<string, ApiSessionStatusCounts>();
     for (const row of rows) {
       if (!result.has(row.agentId)) {
-        result.set(row.agentId, { active: 0, paused: 0, checkpointed: 0, terminated: 0 });
+        result.set(row.agentId, emptyCounts());
       }
       const counts = result.get(row.agentId)!;
-      const key = row.status.toLowerCase() as 'active' | 'paused' | 'checkpointed' | 'terminated';
+      const key = row.status as SandboxSessionStatus;
       if (key in counts) {
-        counts[key as keyof typeof counts] += row.count;
+        counts[key] += row.count;
       }
     }
     return result;
@@ -1429,17 +1581,13 @@ export class DatabaseRepository {
       .orderBy(desc(this.schema.conversations.updatedAt));
 
     return rows.map((row): ConversationSummaryRow => {
-      let status: ConversationSummaryRow['status'] = 'idle';
+      let status: ApiSessionStatus = 'IDLE';
       if (row.error) {
-        status = 'error';
+        status = 'ERROR';
       } else if (row.completedAt != null) {
-        status = 'completed';
-      } else if (row.sandboxStatus === 'PAUSED') {
-        status = 'paused';
-      } else if (row.sandboxStatus === 'CHECKPOINTED') {
-        status = 'suspended';
-      } else if (row.sandboxStatus === 'ACTIVE') {
-        status = 'running';
+        status = 'COMPLETED';
+      } else if (row.sandboxStatus) {
+        status = row.sandboxStatus as SandboxSessionStatus;
       }
 
       return {
@@ -1454,7 +1602,6 @@ export class DatabaseRepository {
         updatedAt: row.updatedAt,
         latestTurnId: row.latestTurnId ?? null,
         sandboxSessionId: row.sandboxSessionId ?? null,
-        sandboxStatus: row.sandboxStatus ?? null,
       };
     });
   }
@@ -1680,6 +1827,33 @@ export class DatabaseRepository {
       .select()
       .from(this.schema.artifacts)
       .where(eq(this.schema.artifacts.id, id));
+    return row;
+  }
+
+
+  async markArtifactUploadConfirmed(
+    id: string,
+    data: { sizeBytes: number; mimeType?: string },
+  ): Promise<ArtifactRow | undefined> {
+    const [row] = await this.db
+      .update(this.schema.artifacts)
+      .set({
+        status: 'active',
+        sizeBytes: data.sizeBytes,
+        ...(data.mimeType ? { mimeType: sanitizeDbText(data.mimeType, 'artifacts.mimeType') } : {}),
+        updatedAt: Date.now(),
+      })
+      .where(eq(this.schema.artifacts.id, id))
+      .returning();
+    return row;
+  }
+
+  async markArtifactUploadFailed(id: string): Promise<ArtifactRow | undefined> {
+    const [row] = await this.db
+      .update(this.schema.artifacts)
+      .set({ status: 'upload_failed', updatedAt: Date.now() })
+      .where(eq(this.schema.artifacts.id, id))
+      .returning();
     return row;
   }
 

@@ -33,3 +33,10 @@ agent.md
 *.db-shm
 *.db-wal
 .sisyphus/notepads/
+
+# bv (beads viewer) local config and caches
+.bv/
+
+# oh-my-claudecode runtime state (ephemeral, per-session / auto-regenerated)
+.omc/
+.omx/

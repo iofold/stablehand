@@ -130,7 +130,7 @@ describe('Artifact REST API Integration', () => {
     createdArtifactIds.add(data.artifactId);
 
     expect(data.artifactId).toBeTruthy();
-    expect(data.storageKey).toContain(testAgentId);
+    expect(data.storageKey).toBe(`artifacts/${data.artifactId}/test-upload.txt`);
     expect(data.expiresIn).toBe(3600);
 
     const uploadUrl = new URL(data.uploadUrl);
@@ -146,7 +146,15 @@ describe('Artifact REST API Integration', () => {
     expect(metadata.name).toBe('test-upload.txt');
     expect(metadata.mimeType).toBe('text/plain');
     expect(metadata.sizeBytes).toBe(100);
-    expect(metadata.status).toBe('active');
+    expect(metadata.status).toBe('pending_upload');
+
+    const downloadBeforeUpload = await fetch(`${ARTIFACTS_BASE}/${data.artifactId}/download-url`);
+    expect(downloadBeforeUpload.status).toBe(409);
+
+    const listResponse = await fetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(testAgentId)}&limit=100&offset=0`);
+    expect(listResponse.status).toBe(200);
+    const listed: ArtifactListEnvelope = await listResponse.json();
+    expect(listed.artifacts.some((artifact) => artifact.id === data.artifactId)).toBe(false);
   });
 
   it('rejects invalid upload-url requests', async () => {
@@ -200,6 +208,14 @@ describe('Artifact REST API Integration', () => {
 
     expect(uploadObjectResponse.status).toBe(200);
 
+    const pendingMetadataResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
+    expect(pendingMetadataResponse.status).toBe(200);
+    const pendingMetadata: ArtifactRecord = await pendingMetadataResponse.json();
+    expect(pendingMetadata.status).toBe('pending_upload');
+
+    const downloadResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}/download-url?expiresIn=120`);
+    expect(downloadResponse.status).toBe(200);
+
     const metadataResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
     expect(metadataResponse.status).toBe(200);
 
@@ -210,9 +226,7 @@ describe('Artifact REST API Integration', () => {
     expect(metadata.mimeType).toBe('text/plain');
     expect(metadata.sizeBytes).toBe(Buffer.byteLength(fileContent));
     expect(metadata.storageKey).toBe(uploadData.storageKey);
-
-    const downloadResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}/download-url?expiresIn=120`);
-    expect(downloadResponse.status).toBe(200);
+    expect(metadata.status).toBe('active');
 
     const downloadData: DownloadUrlResponse = await downloadResponse.json();
     expect(downloadData.expiresIn).toBe(120);
@@ -292,7 +306,7 @@ describe('Artifact REST API Integration', () => {
     expect(artifact.name).toBe(fileName);
     expect(artifact.mimeType).toBe('text/plain');
     expect(artifact.sizeBytes).toBe(Buffer.byteLength(fileContent));
-    expect(artifact.storageKey).toContain(testAgentId);
+    expect(artifact.storageKey).toBe(`artifacts/${artifact.id}/${fileName}`);
     expect(artifact.status).toBe('active');
 
     // Verify download via proxy

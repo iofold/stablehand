@@ -8,7 +8,8 @@ import {
   waitForRunStatus,
 } from './support';
 
-const SESSION_STATUSES = new Set(['ACTIVE', 'PAUSED', 'CHECKPOINTED', 'TERMINATED']);
+// This suite locks the route/SSE identity contract in docs/contracts/session-identity.md.
+const SESSION_STATUSES = new Set(['ACTIVE', 'PAUSED', 'CHECKPOINTED', 'RESTORING', 'TERMINATED', 'COMPLETED', 'ERROR', 'CANCELLED', 'IDLE']);
 
 test.describe('Streaming fixes', () => {
   let agentId = '';
@@ -40,10 +41,14 @@ test.describe('Streaming fixes', () => {
     expect(sessionsResponse.ok()).toBeTruthy();
     const sessionsBody = await sessionsResponse.json();
 
-    expect(Array.isArray(sessionsBody)).toBe(true);
-    expect(sessionsBody.length).toBeGreaterThan(0);
+    const sessions = Array.isArray(sessionsBody)
+      ? sessionsBody
+      : ((sessionsBody as Record<string, unknown>).sessions ?? []);
 
-    const session = sessionsBody.find((candidate: Record<string, unknown>) =>
+    expect(Array.isArray(sessions)).toBe(true);
+    expect(sessions.length).toBeGreaterThan(0);
+
+    const session = sessions.find((candidate: Record<string, unknown>) =>
       candidate.conversationId === conversationId || candidate.id === sessionId,
     ) as Record<string, unknown> | undefined;
 
@@ -52,7 +57,8 @@ test.describe('Streaming fixes', () => {
     expect(SESSION_STATUSES.has(String(session?.status))).toBe(true);
     expect(session?.conversationId).toBe(conversationId);
     expect(session?.agentId).toBe(agentId);
-    expect(typeof session?.harnessName).toBe('string');
+    expect(typeof session?.mode).toBe('string');
+    expect(session).not.toHaveProperty('sandboxSessionStatus');
 
     const turnsResponse = await request.get(`${API_BASE}/api/agents/${agentId}/turns`);
     expect(turnsResponse.ok()).toBeTruthy();

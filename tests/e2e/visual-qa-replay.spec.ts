@@ -35,6 +35,7 @@ for (const harness of HARNESSES) {
 
     let agentId = '';
     let sessionId = '';
+    let conversationId = '';
 
     test.beforeEach(async ({ request }) => {
       // Create agent
@@ -51,6 +52,7 @@ for (const harness of HARNESSES) {
       // Start background run and wait for completion
       const run = await startBackgroundRun(request, agentId, 'Run the visual QA sequence');
       sessionId = run.sessionId;
+      conversationId = run.conversationId;
 
       // Wait for run to complete (120s timeout for safety)
       await waitForRunStatus(request, agentId, sessionId, ['completed', 'error'], 120_000);
@@ -80,7 +82,7 @@ for (const harness of HARNESSES) {
 
       // Navigate to the run detail page
       // Try direct URL navigation to the run
-      await page.goto(`/agents/${agentId}/sessions/run/${sessionId}`);
+      await page.goto(`/agents/${agentId}/sessions/${conversationId}`);
       await page.waitForLoadState('domcontentloaded');
 
       // Wait for the page to load content

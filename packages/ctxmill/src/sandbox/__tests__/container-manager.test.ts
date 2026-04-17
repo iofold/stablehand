@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import type { Writable } from 'node:stream';
+import type Dockerode from 'dockerode';
+import * as tar from 'tar-stream';
 import { ContainerManager } from '../container-manager.js';
 import type { CreateContainerOptions, ContainerManagerOptions } from '../container-manager.js';
 
@@ -65,12 +67,52 @@ function createMockDocker(overrides: Record<string, unknown> = {}) {
   return docker;
 }
 
+function createSequencedDocker(containerIds: string[]) {
+  const containers = new Map<string, ReturnType<typeof createMockContainer>>();
+  let nextContainerIndex = 0;
+
+  const docker = createMockDocker({
+    createContainer: vi.fn().mockImplementation(() => {
+      const id = containerIds[nextContainerIndex] ?? `sha256-container-${nextContainerIndex + 1}`;
+      nextContainerIndex++;
+      const container = createMockContainer({ id });
+      containers.set(id, container);
+      return Promise.resolve(container);
+    }),
+    getContainer: vi.fn().mockImplementation((containerId: string) => (
+      containers.get(containerId) ?? createMockContainer({ id: containerId })
+    )),
+  });
+
+  return docker;
+}
+
 function defaultCreateOpts(): CreateContainerOptions {
   return {
     sessionId: 'run-001',
     agentId: 'agent-abc',
     harnessName: 'claude-agents',
   };
+}
+
+async function createTarArchive(entries: Array<{ name: string; data: string | Buffer }>): Promise<Buffer> {
+  const pack = tar.pack();
+  const chunks: Buffer[] = [];
+  const done = new Promise<Buffer>((resolve, reject) => {
+    pack.on('data', (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    pack.on('end', () => resolve(Buffer.concat(chunks)));
+    pack.on('error', reject);
+  });
+
+  for (const entry of entries) {
+    const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data);
+    pack.entry({ name: entry.name, size: data.length, type: 'file' }, data);
+  }
+
+  pack.finalize();
+  return done;
 }
 
 // ── Tests ───────────────────────────────────────────────────
@@ -81,7 +123,7 @@ describe('ContainerManager', () => {
 
   beforeEach(() => {
     docker = createMockDocker();
-    manager = new ContainerManager(undefined, docker as any);
+    manager = new ContainerManager(undefined, docker as unknown as Dockerode);
   });
 
   // ── createContainer ─────────────────────────────────────
@@ -193,7 +235,7 @@ describe('ContainerManager', () => {
         defaultPidsLimit: 128,
         defaultTimeoutSec: 300,
       };
-      const customManager = new ContainerManager(opts, docker as any);
+      const customManager = new ContainerManager(opts, docker as unknown as Dockerode);
       await customManager.createContainer({
         ...defaultCreateOpts(),
         harnessName: 'langgraph', // use non-claude harness to test raw defaults (claude has a memory floor)
@@ -274,6 +316,33 @@ describe('ContainerManager', () => {
       await expect(manager.removeContainer('sha256-abc123')).resolves.toBeUndefined();
     });
 
+    it('does not release a slot for a container this manager does not own', async () => {
+      const info = await manager.createContainer(defaultCreateOpts());
+
+      await manager.removeContainer('sha256-foreign');
+
+      expect(manager.getMetrics().active).toBe(1);
+      expect(manager.getMetrics().byHarness).toEqual({ 'claude-agents': 1 });
+
+      await manager.removeContainer(info.containerId);
+      expect(manager.getMetrics().active).toBe(0);
+    });
+
+    it('does not release a slot for an unowned container that Docker reports as missing', async () => {
+      const info = await manager.createContainer(defaultCreateOpts());
+      docker._mockContainer.remove
+        .mockRejectedValueOnce({ statusCode: 404, message: 'not found' })
+        .mockResolvedValueOnce(undefined);
+
+      await manager.removeContainer('sha256-foreign');
+
+      expect(manager.getMetrics().active).toBe(1);
+      expect(manager.getMetrics().byHarness).toEqual({ 'claude-agents': 1 });
+
+      await manager.removeContainer(info.containerId);
+      expect(manager.getMetrics().active).toBe(0);
+    });
+
     it('re-throws non-404 errors', async () => {
       docker._mockContainer.remove.mockRejectedValue({ statusCode: 409, message: 'conflict' });
 
@@ -287,29 +356,104 @@ describe('ContainerManager', () => {
   // ── extractWorkspaceDiff ────────────────────────────────
 
   describe('extractWorkspaceDiff', () => {
-    it('returns buffer from container archive', async () => {
+    it('returns workspace-scoped archive and tombstones from container changes', async () => {
+      docker._mockContainer.changes.mockResolvedValue([
+        { Path: '/workspace/file.txt', Kind: 0 },
+        { Path: '/workspace/new-dir', Kind: 1 },
+        { Path: '/workspace/deleted.txt', Kind: 2 },
+        { Path: '/tmp/cache-file', Kind: 1 },
+        { Path: '/home/ctxmill/.claude/settings.json', Kind: 1 },
+      ]);
+
       const result = await manager.extractWorkspaceDiff('sha256-abc123');
 
       expect(docker.getContainer).toHaveBeenCalledWith('sha256-abc123');
       expect(docker._mockContainer.changes).toHaveBeenCalledTimes(1);
       expect(docker._mockContainer.exec).toHaveBeenCalledWith({
-        Cmd: ['tar', 'cf', '-', '--no-recursion', '--ignore-failed-read', '-T', '-'],
+        Cmd: ['tar', '-C', '/workspace', 'cf', '-', '--no-recursion', '--ignore-failed-read', '-T', '-'],
         AttachStdin: true,
         AttachStdout: true,
         AttachStderr: true,
       });
-      expect(result).toBeInstanceOf(Buffer);
-      expect(result!.toString()).toBe('fake-diff-tar-data');
+      expect(result?.archive).toBeInstanceOf(Buffer);
+      expect(result?.archive?.toString()).toBe('fake-diff-tar-data');
+      expect(result?.deletedPaths).toEqual(['deleted.txt']);
     });
 
     it('returns null when there are no meaningful changes', async () => {
       docker._mockContainer.changes.mockResolvedValue([
         { Path: '/tmp/cache-file', Kind: 1 },
-        { Path: '/workspace/deleted.txt', Kind: 2 },
+        { Path: '/workspace/node_modules/pkg/index.js', Kind: 2 },
       ]);
 
       const result = await manager.extractWorkspaceDiff('sha256-abc123');
       expect(result).toBeNull();
+    });
+  });
+
+  describe('restoreArchive', () => {
+    it('streams a tar archive into the container workspace', async () => {
+      const archive = await createTarArchive([{ name: 'file.txt', data: 'workspace data' }]);
+
+      await manager.restoreArchive('sha256-abc123', archive);
+
+      expect(docker.getContainer).toHaveBeenCalledWith('sha256-abc123');
+      expect(docker._mockContainer.putArchive).toHaveBeenCalledTimes(1);
+
+      const [stream, opts] = docker._mockContainer.putArchive.mock.calls[0];
+      expect(opts).toEqual({ path: '/workspace' });
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+
+      expect(Buffer.concat(chunks)).toEqual(archive);
+    });
+
+    it('applies deletion tombstones under /workspace before restoring archive', async () => {
+      const deleteStream = new PassThrough();
+      const mockExec = {
+        start: vi.fn().mockImplementation(async () => {
+          process.nextTick(() => deleteStream.end());
+          return deleteStream;
+        }),
+        inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+      };
+      docker._mockContainer.exec.mockResolvedValueOnce(mockExec);
+
+      await manager.restoreArchive('sha256-abc123', Buffer.alloc(0), {
+        deletedPaths: ['deleted.txt', 'dir/removed.txt'],
+      });
+
+      expect(docker._mockContainer.exec).toHaveBeenCalledWith({
+        Cmd: [
+          'sh',
+          '-c',
+          'for target do rm -rf -- "/workspace/$target"; done',
+          'sh',
+          'deleted.txt',
+          'dir/removed.txt',
+        ],
+        AttachStdout: true,
+        AttachStderr: true,
+      });
+      expect(docker._mockContainer.putArchive).not.toHaveBeenCalled();
+    });
+
+    it('rejects unsafe deletion tombstones', async () => {
+      await expect(manager.restoreArchive('sha256-abc123', Buffer.alloc(0), {
+        deletedPaths: ['../outside.txt'],
+      })).rejects.toThrow(/unsafe deleted path/);
+    });
+
+    it('rejects archives with entries that could escape /workspace', async () => {
+      const archive = await createTarArchive([{ name: '../outside.txt', data: 'escape' }]);
+
+      await expect(manager.restoreArchive('sha256-abc123', archive)).rejects.toThrow(
+        /unsafe path/,
+      );
+      expect(docker._mockContainer.putArchive).not.toHaveBeenCalled();
     });
   });
 
@@ -334,9 +478,8 @@ describe('ContainerManager', () => {
       expect(result?.toString()).toBe('fake-diff-tar-data');
       expect(docker.modem.demuxStream).toHaveBeenCalledTimes(1);
       expect(Buffer.concat(writtenChunks).toString('utf-8')).toBe([
-        '/workspace/file.txt',
-        '/workspace/new-dir',
-        '/home/ctxmill/.claude/settings.json',
+        'file.txt',
+        'new-dir',
         '',
       ].join('\n'));
     });
@@ -546,7 +689,7 @@ describe('ContainerManager', () => {
     });
 
     it('uses custom network name from options', async () => {
-      const customManager = new ContainerManager({ networkName: 'my-net' }, docker as any);
+      const customManager = new ContainerManager({ networkName: 'my-net' }, docker as unknown as Dockerode);
       docker.getNetwork.mockReturnValue({
         inspect: vi.fn().mockRejectedValue({ statusCode: 404 }),
       });
@@ -598,7 +741,7 @@ describe('semaphore slot release (FIX-4)', () => {
     const docker = createMockDocker({
       createContainer: vi.fn().mockRejectedValue(new Error('docker create failed')),
     });
-    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as any);
+    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as unknown as Dockerode);
 
     await expect(manager.createContainer(defaultCreateOpts())).rejects.toThrow('docker create failed');
     expect(manager.getMetrics().active).toBe(0);
@@ -606,7 +749,7 @@ describe('semaphore slot release (FIX-4)', () => {
 
   it('does NOT release semaphore on successful container creation', async () => {
     const docker = createMockDocker();
-    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as any);
+    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as unknown as Dockerode);
 
     const info = await manager.createContainer(defaultCreateOpts());
 
@@ -618,8 +761,8 @@ describe('semaphore slot release (FIX-4)', () => {
 
   it('releases semaphore when post-Docker metrics code throws', async () => {
     const docker = createMockDocker();
-    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as any);
-    const activeByHarness = (manager as any).activeByHarness as Map<string, number>;
+    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as unknown as Dockerode);
+    const activeByHarness = Reflect.get(manager, 'activeByHarness') as Map<string, number>;
     const setSpy = vi.spyOn(activeByHarness, 'set').mockImplementation(() => {
       throw new Error('metrics failed');
     });
@@ -630,21 +773,35 @@ describe('semaphore slot release (FIX-4)', () => {
     setSpy.mockRestore();
   });
 
-  it('releases session semaphore when Docker createContainer throws', async () => {
-    const docker = createMockDocker({
-      createContainer: vi.fn().mockRejectedValue(new Error('session create failed')),
+  it('releases a slot only once when removeContainer is called repeatedly for the same container', async () => {
+    const docker = createSequencedDocker(['sha256-owned-1', 'sha256-owned-2']);
+    const manager = new ContainerManager(
+      { maxGlobalContainers: 1 },
+      docker as unknown as Dockerode,
+    );
+    const first = await manager.createContainer(defaultCreateOpts());
+    const secondPromise = manager.createContainer({
+      ...defaultCreateOpts(),
+      sessionId: 'run-002',
     });
-    const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as any);
 
-    await expect(
-      manager.createSessionContainer({
-        conversationId: 'conv-001',
-        sessionId: 'session-001',
-        agentId: 'agent-abc',
-        harnessName: 'claude-agents',
-      }),
-    ).rejects.toThrow('session create failed');
+    expect(manager.getMetrics().active).toBe(1);
+    expect(manager.getQueuedCount()).toBe(1);
 
+    await manager.removeContainer(first.containerId);
+    const second = await secondPromise;
+    expect(second.containerId).toBe('sha256-owned-2');
+    expect(manager.getMetrics().active).toBe(1);
+
+    const firstContainer = docker.getContainer(first.containerId) as ReturnType<typeof createMockContainer>;
+    firstContainer.remove.mockRejectedValueOnce({ statusCode: 404, message: 'not found' });
+
+    await manager.removeContainer(first.containerId);
+
+    expect(manager.getMetrics().active).toBe(1);
+    expect(manager.getMetrics().byHarness).toEqual({ 'claude-agents': 1 });
+
+    await manager.removeContainer(second.containerId);
     expect(manager.getMetrics().active).toBe(0);
   });
 });

@@ -192,6 +192,7 @@ describe('ContainerSemaphore', () => {
       expect(sem.getQueued()).toBe(0);
     });
   });
+
 });
 
 // ── ContainerManager concurrency integration tests ───────────

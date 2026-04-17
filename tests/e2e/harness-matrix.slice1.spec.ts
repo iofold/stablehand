@@ -1,0 +1,89 @@
+import { test, expect } from '@playwright/test';
+
+import {
+  API_BASE,
+  cancelSession,
+  deleteTestAgent,
+  getConversationMessages,
+  importStressAgent,
+  startBackgroundRun,
+  waitForRunStatus,
+  type TestAgent,
+} from './support';
+
+type HarnessSliceCase = {
+  agentDir: 'stress-lg-openai' | 'stress-claude-sonnet' | 'stress-pi-openai';
+  prompt: string;
+  expectedEventType: string;
+};
+
+const SLICE_1_CASES: HarnessSliceCase[] = [
+  {
+    agentDir: 'stress-lg-openai',
+    prompt: 'Run the matrix slice smoke test now. Confirm you are operational and emit stress.tools.complete.',
+    expectedEventType: 'stress.tools.complete',
+  },
+  {
+    agentDir: 'stress-claude-sonnet',
+    prompt: 'Confirm you are operational, emit stress.claude.complete with payload {"agent":"stress-claude-sonnet","status":"ok"}, then say the matrix slice is complete.',
+    expectedEventType: 'stress.claude.complete',
+  },
+  {
+    agentDir: 'stress-pi-openai',
+    prompt: 'Run the matrix slice smoke test now. Confirm you are operational and emit stress.pi.complete.',
+    expectedEventType: 'stress.pi.complete',
+  },
+];
+
+test.describe('Harness matrix slice 1 — fresh turns across native harnesses', () => {
+  const agents: Partial<Record<HarnessSliceCase['agentDir'], TestAgent>> = {};
+  const runsByAgent = new Map<string, Set<string>>();
+
+  test.beforeAll(async ({ request }) => {
+    for (const testCase of SLICE_1_CASES) {
+      agents[testCase.agentDir] = await importStressAgent(request, testCase.agentDir);
+    }
+  });
+
+  test.afterAll(async ({ request }) => {
+    for (const [agentDir, runIds] of runsByAgent.entries()) {
+      const agent = agents[agentDir as HarnessSliceCase['agentDir']];
+      if (!agent) continue;
+      for (const runId of runIds) {
+        await cancelSession(request, agent.id, runId);
+      }
+    }
+
+    for (const agent of Object.values(agents)) {
+      if (agent) {
+        await deleteTestAgent(request, agent.id);
+      }
+    }
+  });
+
+  for (const testCase of SLICE_1_CASES) {
+    test(`${testCase.agentDir} completes a fresh background run`, async ({ request }) => {
+      test.setTimeout(180_000);
+
+      const agent = agents[testCase.agentDir];
+      expect(agent).toBeTruthy();
+
+      const { sessionId, conversationId } = await startBackgroundRun(request, agent!.id, testCase.prompt);
+      const runs = runsByAgent.get(testCase.agentDir) ?? new Set<string>();
+      runs.add(sessionId);
+      runsByAgent.set(testCase.agentDir, runs);
+
+      const finalRun = await waitForRunStatus(request, agent!.id, sessionId, ['completed', 'error'], 150_000);
+      expect(finalRun.status).toBe('completed');
+
+      const messages = await getConversationMessages(request, agent!.id, conversationId);
+      const assistantMessages = messages.filter((message) => message.role === 'assistant');
+      expect(assistantMessages.length).toBeGreaterThan(0);
+
+      const eventsResponse = await request.get(`${API_BASE}/api/events?type=${encodeURIComponent(testCase.expectedEventType)}&agentId=${encodeURIComponent(agent!.id)}&limit=20`);
+      expect(eventsResponse.ok()).toBe(true);
+      const eventsBody = await eventsResponse.json() as { events?: Array<{ payload?: string }> };
+      expect(eventsBody.events?.some((event) => (event.payload ?? '').includes(sessionId))).toBe(true);
+    });
+  }
+});

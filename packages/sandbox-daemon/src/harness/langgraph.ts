@@ -18,6 +18,7 @@ import type {
 } from './types.js';
 import type { Message } from '../types.js';
 import { createStubKnowledgeContext, resolveSecretRef, normalizeStreamTextDeltas } from './shared.js';
+import { makeIterableAbortable } from './abort-iterator.js';
 
 export const LangGraphConfigSchema = z.object({
   provider: z.enum(['openai', 'anthropic', 'google']).default('openai'),
@@ -116,13 +117,19 @@ class LangGraphSession implements HarnessSession {
     this.transcript = [...messages];
   }
 
-  // TODO(tech-debt): context.signal is ignored — killSession cannot interrupt a blocked
-  // LLM API call. The runner's signal.aborted loop-break prevents crashes but the
-  // for-await hangs until the in-flight streamEvents call returns naturally.
-  // Fix: pass context.signal to agent.streamEvents() options (if deepagents supports it)
-  // or wrap the iterator with an abort-aware race. See runner.ts SessionContext comments.
   async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<AgentEvent> {
     const { agentId, conversationId, workspaceDir, tools, systemPrompt } = this.config;
+
+    const ac = new AbortController();
+    const linkSignal = (s: AbortSignal | undefined) => {
+      if (!s) return () => {};
+      if (s.aborted) { ac.abort(); return () => {}; }
+      const on = () => ac.abort();
+      s.addEventListener('abort', on, { once: true });
+      return () => s.removeEventListener('abort', on);
+    };
+    const unlinkConfig = linkSignal(this.config.signal);
+    const unlinkContext = linkSignal(context.signal);
 
     try {
       this.transcript = [...input.messages];
@@ -223,7 +230,7 @@ class LangGraphSession implements HarnessSession {
         NonNullable<Message['toolCalls']>[number] & { args: string; status: 'complete' | 'error' }
       > = [];
 
-      for await (const ev of eventStream) {
+      for await (const ev of makeIterableAbortable(eventStream, ac.signal)) {
         const event = ev.event;
         const data = ev.data;
 
@@ -380,8 +387,14 @@ class LangGraphSession implements HarnessSession {
 
       yield { type: 'done' };
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
       console.error('[langgraph] deliverTurn error:', err);
       yield { type: 'error', error: String(err) };
+    } finally {
+      unlinkConfig();
+      unlinkContext();
     }
   }
 

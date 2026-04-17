@@ -39,6 +39,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
       db: container.db,
       agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
+      interrupts: container.interruptManager,
       sessionManager: container.sessionManager,
       dataDir,
     });
@@ -79,6 +80,18 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     });
   }
 
+  async function waitForPendingInterrupt(sessionId: string): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const pending = await container.db.getPendingInterrupt(sessionId);
+      if (pending) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    throw new Error(`Timed out waiting for pending interrupt ${sessionId}`);
+  }
+
   it('valid approve action resolves the pending interrupt', async () => {
     const agentId = await createAgent('approve-test');
     const session = await createSession(agentId);
@@ -87,6 +100,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     const pendingPromise = app.interrupts.waitForApproval(
       sessionId, agentId, 'tc-1', 'dangerousTool', { path: '/etc' }, 0,
     );
+    await waitForPendingInterrupt(sessionId);
 
     // POST the interrupt resolution
     const res = await app.inject({
@@ -103,6 +117,38 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     expect(resolution.action).toBe('approve');
   });
 
+  it('emits run.interrupt_resolved only once for an approved interrupt', async () => {
+    const agentId = await createAgent('single-event-test');
+    const session = await createSession(agentId);
+    const sessionId = session.id;
+    const resolvedEvents: Array<{ turnId: string; action: string }> = [];
+    const onResolved = (payload: { turnId: string; action: string }) => {
+      resolvedEvents.push(payload);
+    };
+
+    container.eventBus.on('run.interrupt_resolved', onResolved);
+
+    try {
+      const pendingPromise = app.interrupts.waitForApproval(
+        sessionId, agentId, 'tc-1b', 'dangerousTool', { path: '/etc' }, 0,
+      );
+      await waitForPendingInterrupt(sessionId);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/interrupt`,
+        payload: { action: 'approve', sessionId },
+      });
+
+      expect(res.statusCode).toBe(200);
+      await pendingPromise;
+      expect(resolvedEvents).toHaveLength(1);
+      expect(resolvedEvents[0]).toMatchObject({ turnId: sessionId, action: 'approve' });
+    } finally {
+      container.eventBus.off('run.interrupt_resolved', onResolved);
+    }
+  });
+
   it('valid reject action resolves the pending interrupt', async () => {
     const agentId = await createAgent('reject-test');
     const session = await createSession(agentId);
@@ -111,6 +157,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     const pendingPromise = app.interrupts.waitForApproval(
       sessionId, agentId, 'tc-2', 'deleteTool', { id: '42' }, 0,
     );
+    await waitForPendingInterrupt(sessionId);
 
     const res = await app.inject({
       method: 'POST',
@@ -133,6 +180,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     const pendingPromise = app.interrupts.waitForApproval(
       sessionId, agentId, 'tc-3', 'editDocument', { docId: 'abc' }, 0,
     );
+    await waitForPendingInterrupt(sessionId);
 
     const submitData = { content: 'edited doc' };
 
@@ -214,6 +262,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     const pendingPromise = app.interrupts.waitForApproval(
       sessionId, agentId, 'tc-4', 'tool', {}, 0,
     );
+    await waitForPendingInterrupt(sessionId);
 
     const res = await app.inject({
       method: 'POST',

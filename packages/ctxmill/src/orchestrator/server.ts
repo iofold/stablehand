@@ -3,7 +3,6 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { fastifyConnectPlugin } from '@connectrpc/connect-fastify';
 import { agUiCompatRoutes } from './ag-ui-compat/index.js';
-import { toAgentDefinition } from './session-manager/session-agent-definition.js';
 import { agentRoutes, sessionsRoutes } from './routes/agents.js';
 import { artifactRoutes } from './routes/artifacts.js';
 import { catalogRoutes } from './routes/catalogs.js';
@@ -210,7 +209,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, learningPipeline, knowledgeStore, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, learningPipeline, knowledgeStore, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService });
   await app.register(sessionsRoutes, { prefix: '/api/sessions', db, sessionManager: opts.sessionManager });
   if (eventBus) {
     await app.register(agUiCompatRoutes, {
@@ -219,7 +218,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
       eventBus,
       agentSessionService,
       sessionManager: opts.sessionManager,
-      buildAgentDefinition: (agent) => toAgentDefinition(agent),
+      runStartupService: opts.runStartupService,
     });
   }
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });

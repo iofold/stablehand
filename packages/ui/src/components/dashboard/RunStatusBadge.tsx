@@ -7,23 +7,25 @@ interface RunStatusBadgeProps {
 }
 
 const config: Record<string, { color: string }> = {
-  queued: { color: 'bg-surface-500' },
-  running: { color: 'bg-status-success' },
-  paused: { color: 'bg-status-warning' },
+  QUEUED: { color: 'bg-surface-500' },
+  ACTIVE: { color: 'bg-status-success' },
   PAUSED: { color: 'bg-status-warning' },
-  completed: { color: 'bg-surface-400' },
-  error: { color: 'bg-status-error' },
-  cancelled: { color: 'bg-surface-500' },
-  suspended: { color: 'bg-status-warning' },
+  CHECKPOINTED: { color: 'bg-status-warning' },
+  RESTORING: { color: 'bg-sky-400' },
+  TERMINATED: { color: 'bg-surface-500' },
+  COMPLETED: { color: 'bg-surface-400' },
+  ERROR: { color: 'bg-status-error' },
+  CANCELLED: { color: 'bg-surface-500' },
+  IDLE: { color: 'bg-surface-500' },
 };
 
 export function RunStatusBadge({ status, pausedReason, className }: RunStatusBadgeProps) {
-  const normalizedStatus = status.toLowerCase();
-  const { color } = config[status] ?? config[normalizedStatus] ?? config.queued;
+  const normalizedStatus = status.toUpperCase();
+  const { color } = config[normalizedStatus] ?? config.QUEUED;
 
-  let displayStatus = status;
-  if (normalizedStatus === 'paused') {
-    displayStatus = pausedReason === 'idle' ? 'Paused (Idle)' : 'Paused (HITL)';
+  let displayStatus = normalizedStatus.replace(/_/g, ' ').toLowerCase();
+  if (normalizedStatus === 'PAUSED') {
+    displayStatus = pausedReason === 'idle' ? 'paused (idle)' : 'paused (HITL)';
   }
 
   return (

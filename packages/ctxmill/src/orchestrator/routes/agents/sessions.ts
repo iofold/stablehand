@@ -5,17 +5,121 @@ import { mapMessagesToInternal } from '../agent-helpers.js';
 import { getRequestAgent, safeError, toApiAgentSession } from './helpers.js';
 import type { AgentSubRouteOptions, StoredAgent } from './types.js';
 
+// Session/conversation/run ID semantics are documented in
+// docs/contracts/session-identity.md. In particular, the `sessionId` returned
+// by message/session creation routes is the turn/run id, not the persistent
+// sandbox session id.
 export async function sessionRoutes(
   app: FastifyInstance,
   opts: AgentSubRouteOptions,
 ): Promise<void> {
   const { db, agentSessionService, sessionManager, eventBus, runStartupService, loadAgent } = opts;
 
-  const buildAgentDefinition = (agent: StoredAgent) => (
-    runStartupService
-      ? runStartupService.buildAgentDefinition(agent)
-      : toAgentDefinition(agent)
-  );
+  const prepareRunStart = async (
+    agent: StoredAgent,
+    agentId: string,
+    content: string,
+    mode: 'interactive' | 'background',
+    options?: {
+      conversationId?: string;
+      requestedTurnId?: string;
+      requireExistingConversation?: boolean;
+      emitUserMessageEvent?: boolean;
+    },
+  ) => {
+    if (runStartupService) {
+      return runStartupService.prepareRunStart({
+        agent,
+        agentId,
+        content,
+        mode,
+        conversationId: options?.conversationId,
+        requestedTurnId: options?.requestedTurnId,
+        requireExistingConversation: options?.requireExistingConversation,
+        emitUserMessageEvent: options?.emitUserMessageEvent,
+      });
+    }
+
+    const agentDef = toAgentDefinition(agent);
+    let conversationId: string;
+    if (options?.conversationId) {
+      const conversation = await db.getConversation(options.conversationId);
+      if (!conversation || conversation.agentId !== agentId) {
+        throw new Error(`Conversation ${options.conversationId} not found for agent ${agentId}`);
+      }
+      conversationId = conversation.id;
+    } else {
+      conversationId = (await db.createConversation(agentId)).id;
+    }
+    const message = await db.addMessage({
+      agentId,
+      conversationId,
+      role: 'user',
+      content,
+    });
+    sessionManager?.checkConcurrencyLimit(agentId);
+    const session = await db.createTurn({
+      agentId,
+      conversationId,
+      mode,
+      ...(mode === 'background' ? { taskDescription: content } : {}),
+    });
+    if (options?.emitUserMessageEvent !== false && eventBus) {
+      eventBus.emit('user.message', {
+        agentId,
+        conversationId,
+        messageId: message.id,
+        content,
+        timestamp: Date.now(),
+      });
+    }
+    eventBus?.emit('turn.pending', {
+      turnId: session.id,
+      agentId,
+      conversationId,
+      mode,
+      ...(mode === 'background' ? { taskDescription: content } : {}),
+      timestamp: Date.now(),
+    });
+    const allMessages = await db.getMessages(conversationId);
+
+    return {
+      agentDef,
+      conversationId,
+      turnId: session.id,
+      messageId: message.id,
+      messages: mapMessagesToInternal(allMessages, agentId),
+      mode,
+      taskDescription: content,
+    };
+  };
+
+  const launchPreparedRun = (
+    agentId: string,
+    start: Awaited<ReturnType<typeof prepareRunStart>>,
+  ) => {
+    if (runStartupService) {
+      void runStartupService.launchPreparedRun(start, agentId).catch((err) => {
+        console.error(`[agents] executeSession failed for agent ${agentId}, session ${start.turnId}:`, err);
+      });
+      return;
+    }
+
+    void agentSessionService.executeSession({
+      agentDef: start.agentDef,
+      messages: start.messages,
+      agentId,
+      conversationId: start.conversationId,
+      sessionId: start.turnId,
+      mode: start.mode,
+      taskDescription: start.taskDescription,
+    }).catch(async (err) => {
+      console.error(`[agents] executeSession failed for agent ${agentId}, session ${start.turnId}:`, err);
+      await db.updateTurn(start.turnId, { completedAt: Date.now(), error: String(err) }).catch((dbErr) => {
+        console.error(`[agents] Failed to update turn ${start.turnId} after session error:`, dbErr);
+      });
+    });
+  };
 
   app.post(
     '/:id/message',
@@ -36,82 +140,23 @@ export async function sessionRoutes(
 
       const agent = getRequestAgent(request);
 
-      let conversationId = body.conversationId;
-      let createdConversation = false;
-      if (!conversationId) {
-        const conversation = await db.createConversation(id);
-        conversationId = conversation.id;
-        createdConversation = true;
-      }
-
-      const message = await db.addMessage({
-        agentId: id,
-        conversationId,
-        role: 'user',
-        content: body.content,
-      });
-
-      let session: Awaited<ReturnType<typeof db.createTurn>>;
       try {
-        sessionManager?.checkConcurrencyLimit(id);
-        session = await db.createTurn({ agentId: id, conversationId, mode: 'interactive' });
-      } catch (err) {
-        await db.deleteMessage(message.id).catch((deleteErr) => {
-          console.error(`[agents] failed to rollback user message ${message.id}:`, deleteErr);
+        const start = await prepareRunStart(agent, id, body.content, 'interactive', {
+          conversationId: body.conversationId,
+          emitUserMessageEvent: true,
         });
-        if (createdConversation) {
-          console.error(`[agents] interactive session start failed after creating conversation ${conversationId}`);
+        launchPreparedRun(id, start);
+        return reply.status(201).send({
+          messageId: start.messageId,
+          conversationId: start.conversationId,
+          sessionId: start.turnId,
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('Conversation ')) {
+          return reply.status(404).send({ error: err.message });
         }
         return reply.status(500).send(safeError('Failed to start session', err));
       }
-
-      if (eventBus) {
-        eventBus.emit('user.message', {
-          agentId: id,
-          conversationId,
-          messageId: message.id,
-          content: body.content,
-          timestamp: Date.now(),
-        });
-      }
-
-      if (eventBus) {
-        eventBus.emit('turn.pending', {
-          turnId: session.id,
-          agentId: id,
-          conversationId,
-          mode: 'interactive' as const,
-          timestamp: Date.now(),
-        });
-      }
-
-      if (!agent.harness) {
-        return reply.status(500).send({ error: 'Agent harness is not set' });
-      }
-      const agentDef = buildAgentDefinition(agent);
-      const allMessages = await db.getMessages(conversationId);
-      const messages = mapMessagesToInternal(allMessages, id);
-
-      void agentSessionService.executeSession({
-        agentDef,
-        messages,
-        agentId: id,
-        conversationId,
-        sessionId: session.id,
-        mode: 'interactive',
-        taskDescription: body.content,
-      }).catch(async (err) => {
-        console.error(`[agents] executeSession failed for agent ${id}, session ${session.id}:`, err);
-        await db.updateTurn(session.id, { completedAt: Date.now(), error: String(err) }).catch((dbErr) => {
-          console.error(`[agents] Failed to update turn ${session.id} after session error:`, dbErr);
-        });
-      });
-
-      return reply.status(201).send({
-        messageId: message.id,
-        conversationId,
-        sessionId: session.id,
-      });
     },
   );
 
@@ -133,64 +178,19 @@ export async function sessionRoutes(
       }
 
       const agent = getRequestAgent(request);
-      const conversation = await db.createConversation(id);
-      const conversationId = conversation.id;
-
-      sessionManager?.checkConcurrencyLimit(id);
-      const session = await db.createTurn({
-        agentId: id,
-        conversationId,
-        mode: 'background',
-        taskDescription: body.task,
-      });
-
-      await db.updateAgentStatus(id, 'running');
-
-      if (eventBus) {
-        eventBus.emit('turn.pending', {
-          turnId: session.id,
-          agentId: id,
-          conversationId,
-          mode: 'background' as const,
-          taskDescription: body.task,
-          timestamp: Date.now(),
+      try {
+        const start = await prepareRunStart(agent, id, body.task, 'background', {
+          emitUserMessageEvent: false,
         });
-      }
-
-      if (!agent.harness) {
-        return reply.status(500).send({ error: 'Agent harness is not set' });
-      }
-      const agentDef = buildAgentDefinition(agent);
-
-      await db.addMessage({
-        agentId: id,
-        conversationId,
-        role: 'user',
-        content: body.task,
-      });
-
-      const allMessages = await db.getMessages(conversationId);
-      const messages = mapMessagesToInternal(allMessages, id);
-
-      void agentSessionService.executeSession({
-        agentDef,
-        messages,
-        agentId: id,
-        conversationId,
-        sessionId: session.id,
-        mode: 'background',
-        taskDescription: body.task ?? 'background session',
-      }).catch(async (err) => {
-        console.error(`[agents] executeSession failed for agent ${id}, session ${session.id}:`, err);
-        await db.updateTurn(session.id, { completedAt: Date.now(), error: String(err) }).catch((dbErr) => {
-          console.error(`[agents] Failed to update turn ${session.id} after session error:`, dbErr);
+        await db.updateAgentStatus(id, 'running');
+        launchPreparedRun(id, start);
+        return reply.status(201).send({
+          sessionId: start.turnId,
+          conversationId: start.conversationId,
         });
-      });
-
-      return reply.status(201).send({
-        sessionId: session.id,
-        conversationId,
-      });
+      } catch (err) {
+        return reply.status(500).send(safeError('Failed to start session', err));
+      }
     },
   );
 
@@ -234,13 +234,7 @@ export async function sessionRoutes(
     ) => {
       const { id, sessionId } = request.params;
 
-      let session = await db.getTurn(sessionId);
-      if (!session) {
-        const conversation = await db.getConversation(sessionId);
-        if (conversation?.agentId === id) {
-          session = await db.getLatestTurnForConversation(conversation.id);
-        }
-      }
+      const session = await db.getTurn(sessionId);
 
       if (!session || session.agentId !== id) {
         return reply.status(404).send({ error: 'Session not found', sessionId });
@@ -295,6 +289,18 @@ export async function sessionRoutes(
     async (
       request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
       reply: FastifyReply,
+    ) => reply.status(410).send({
+      error: 'Legacy session admin route removed. Use /api/agents/:id/sandbox-sessions/:sessionId/suspend.',
+      sessionId: request.params.sessionId,
+    }),
+  );
+
+  app.post(
+    '/:id/sandbox-sessions/:sessionId/suspend',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
+      reply: FastifyReply,
     ) => {
       const agent = getRequestAgent(request);
       const { sessionId } = request.params;
@@ -320,6 +326,18 @@ export async function sessionRoutes(
 
   app.post(
     '/:id/sessions/:sessionId/kill',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
+      reply: FastifyReply,
+    ) => reply.status(410).send({
+      error: 'Legacy session admin route removed. Use /api/agents/:id/sandbox-sessions/:sessionId/kill.',
+      sessionId: request.params.sessionId,
+    }),
+  );
+
+  app.post(
+    '/:id/sandbox-sessions/:sessionId/kill',
     { preHandler: [loadAgent] },
     async (
       request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,

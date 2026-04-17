@@ -1,6 +1,6 @@
-import { createHash } from 'crypto';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import Dockerode from 'dockerode';
+import * as tar from 'tar-stream';
 
 // ── Public interfaces ─────────────────────────────────────────
 
@@ -50,19 +50,6 @@ export interface CreateContainerOptions {
   secrets?: Record<string, string>;
 }
 
-export interface CreateSessionContainerOptions {
-  conversationId: string;
-  sessionId: string;
-  agentId: string;
-  harnessName: string;
-  workspaceDir?: string;
-  cpus?: number;
-  memoryMb?: number;
-  pidsLimit?: number;
-  timeoutSec?: number;
-  secrets?: Record<string, string>;
-}
-
 export interface ContainerInfo {
   containerId: string;
   containerName: string;
@@ -95,15 +82,12 @@ export interface ContainerMetrics {
   maxGlobalContainers: number;
 }
 
-// ── Helpers ──────────────────────────────────────────────────
-
-/**
- * Derive a stable, short container name from a conversation ID.
- * Uses the first 12 hex chars of SHA-256(conversationId).
- */
-export function sessionContainerName(conversationId: string): string {
-  return `ctxmill-session-${createHash('sha256').update(conversationId).digest('hex').slice(0, 12)}`;
+export interface WorkspaceDiffSnapshot {
+  archive: Buffer | null;
+  deletedPaths: string[];
 }
+
+// ── Helpers ──────────────────────────────────────────────────
 
 /**
  * Map a Docker container state string to our simplified status enum.
@@ -222,29 +206,62 @@ export class ContainerSemaphore {
 
 const TAG = '[ContainerManager]';
 
-const DIFF_EXCLUDE_PREFIXES: ReadonlySet<string> = new Set([
-  '/tmp', '/var', '/proc', '/sys', '/dev', '/run',
-  '/usr', '/etc',
+const WORKSPACE_ROOT = '/workspace';
+const WORKSPACE_EXCLUDED_SEGMENTS: ReadonlySet<string> = new Set([
+  'node_modules',
+  '.npm',
+  '.cache',
+  '.bun',
 ]);
 
 /**
  * Return true when a diff path should be included in snapshots.
  */
-function shouldIncludeDiffPath(filePath: string): boolean {
-  for (const prefix of DIFF_EXCLUDE_PREFIXES) {
-    if (filePath === prefix || filePath.startsWith(prefix + '/')) {
-      return false;
-    }
+function workspaceRelativePath(filePath: string): string | null {
+  if (filePath === WORKSPACE_ROOT || !filePath.startsWith(`${WORKSPACE_ROOT}/`)) {
+    return null;
   }
+
+  const relativePath = filePath.slice(WORKSPACE_ROOT.length + 1);
+  return isSafeWorkspaceRelativePath(relativePath) ? relativePath : null;
+}
+
+function isSafeWorkspaceRelativePath(filePath: string): boolean {
   if (
-    filePath.includes('/node_modules/')
-    || filePath.includes('/.npm/')
-    || filePath.includes('/.cache/')
-    || filePath.includes('/.bun/')
+    filePath === ''
+    || filePath.startsWith('/')
+    || filePath.includes('\0')
   ) {
     return false;
   }
+
+  const segments = filePath.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return false;
+  }
+
   return true;
+}
+
+function normalizeArchiveEntryName(entryName: string): string {
+  return entryName
+    .replace(/^(\.\/)+/, '')
+    .replace(/\/+$/, '');
+}
+
+function shouldIncludeWorkspacePath(filePath: string): boolean {
+  const relativePath = workspaceRelativePath(filePath);
+  if (!relativePath) {
+    return false;
+  }
+
+  return !relativePath
+    .split('/')
+    .some((segment) => WORKSPACE_EXCLUDED_SEGMENTS.has(segment));
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return Array.from(new Set(paths));
 }
 
 /**
@@ -411,117 +428,6 @@ export class ContainerManager {
     }
   }
 
-  async createSessionContainer(opts: CreateSessionContainerOptions): Promise<ContainerInfo> {
-    await this.semaphore.acquire();
-    let containerCreated = false;
-
-    try {
-      const cpus = opts.cpus ?? this.defaultCpus;
-      const harnessFloor = HARNESS_MEMORY_FLOOR.get(opts.harnessName) ?? 0;
-      const memoryMb = Math.max(opts.memoryMb ?? this.defaultMemoryMb, harnessFloor);
-      const pidsLimit = opts.pidsLimit ?? this.defaultPidsLimit;
-      const timeoutSec = opts.timeoutSec ?? this.defaultTimeoutSec;
-      const containerName = sessionContainerName(opts.conversationId);
-
-      console.debug(
-        `${TAG} creating session container ${containerName} (harness=${opts.harnessName}, session=${opts.sessionId}, cpus=${cpus}, mem=${memoryMb}MiB)`,
-      );
-
-      const dataVolume = process.env.CTXMILL_DATA_VOLUME;
-      const dataRoot = '/app/project/.ctxmill';
-      const binds: string[] = [];
-      const volumeMounts: unknown[] = [];
-
-      if (opts.workspaceDir && dataVolume && opts.workspaceDir.startsWith(dataRoot)) {
-        const subpath = opts.workspaceDir.slice(dataRoot.length + 1);
-        volumeMounts.push({
-          Type: 'volume',
-          Source: dataVolume,
-          Target: '/workspace',
-          ReadOnly: false,
-          VolumeOptions: { Subpath: subpath },
-        });
-      } else if (opts.workspaceDir) {
-        binds.push(`${opts.workspaceDir}:/workspace:rw`);
-      }
-
-      const container = await this.docker.createContainer({
-        Image: `${this.imagePrefix}-${opts.harnessName}:latest`,
-        name: containerName,
-        Labels: {
-          'ctxmill.managed': 'true',
-          'ctxmill.session-id': opts.sessionId,
-          'ctxmill.conversation-id': opts.conversationId,
-          'ctxmill.agent-id': opts.agentId,
-          'ctxmill.harness': opts.harnessName,
-          'ctxmill.started-at': new Date().toISOString(),
-          'ctxmill.timeout': String(timeoutSec),
-        },
-        HostConfig: {
-          CpuPeriod: 100_000,
-          CpuQuota: cpus * 100_000,
-          Memory: memoryMb * 1024 * 1024,
-          MemorySwap: memoryMb * 1024 * 1024,
-          PidsLimit: pidsLimit,
-          Tmpfs: { '/run/secrets': 'rw,noexec,nosuid,size=1m' },
-          NetworkMode: this.networkName,
-          SecurityOpt: ['no-new-privileges'],
-          ReadonlyRootfs: false,
-          LogConfig: {
-            Type: 'json-file',
-            Config: {
-              'max-size': '50m',
-              'max-file': '3',
-            },
-          },
-          Binds: binds.length > 0 ? binds : undefined,
-          Mounts: volumeMounts.length > 0 ? volumeMounts : undefined,
-        } as Record<string, unknown>,
-        Env: [
-          `NODE_OPTIONS=--max-old-space-size=${Math.floor(memoryMb * 0.9)}`,
-          'SANDBOX_PORT=50051',
-          `CTXMILL_HARNESS=${opts.harnessName}`,
-          `ORCHESTRATOR_URL=${process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001'}`,
-          ...(opts.secrets
-            ? Object.entries(opts.secrets).map(([k, v]) => `${k}=${v}`)
-            : []),
-          ...(this.egressProxy
-            ? [
-                `HTTP_PROXY=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                `HTTPS_PROXY=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                `http_proxy=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                `https_proxy=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                'NO_PROXY=orchestrator,localhost,127.0.0.1,minio',
-                'no_proxy=orchestrator,localhost,127.0.0.1,minio',
-              ]
-            : []),
-        ],
-      });
-
-      console.debug(`${TAG} session container ${containerName} created (id=${container.id})`);
-
-      this.totalCreated++;
-      const currentHarnessCount = this.activeByHarness.get(opts.harnessName) ?? 0;
-      this.activeByHarness.set(opts.harnessName, currentHarnessCount + 1);
-      this.containerStartTimes.set(container.id, Date.now());
-      this.containerHarness.set(container.id, opts.harnessName);
-
-      containerCreated = true;
-      return {
-        containerId: container.id,
-        containerName,
-        sessionId: opts.sessionId,
-        agentId: opts.agentId,
-        harnessName: opts.harnessName,
-        status: 'created',
-      };
-    } finally {
-      if (!containerCreated) {
-        this.semaphore.release();
-      }
-    }
-  }
-
   async startContainer(containerId: string): Promise<void> {
     console.debug(`${TAG} starting container ${containerId}`);
     const container = this.docker.getContainer(containerId);
@@ -551,15 +457,12 @@ export class ContainerManager {
     try {
       await container.remove({ force: force ?? false });
       console.debug(`${TAG} container ${containerId} removed`);
-      this.semaphore.release();
-      this.recordContainerCompletion(containerId);
+      this.releaseOwnedContainerSlot(containerId);
     } catch (err: unknown) {
       // Docker returns 404 if container doesn't exist
       if (isDockerError(err) && err.statusCode === 404) {
         console.debug(`${TAG} container ${containerId} not found (already removed)`);
-        // Still release the semaphore slot — the container is gone
-        this.semaphore.release();
-        this.recordContainerCompletion(containerId);
+        this.releaseOwnedContainerSlot(containerId);
         return;
       }
       throw err;
@@ -568,8 +471,66 @@ export class ContainerManager {
 
   // ── Workspace ───────────────────────────────────────────
 
-  async extractWorkspaceDiff(containerId: string): Promise<Buffer | null> {
-    return this.extractContainerDiff(containerId);
+  async extractWorkspaceDiff(containerId: string): Promise<WorkspaceDiffSnapshot | null> {
+    console.debug(`${TAG} extracting workspace diff from container ${containerId}`);
+    const container = this.docker.getContainer(containerId);
+    const changes = await container.changes();
+
+    const changedPaths = uniquePaths(
+      changes
+        .filter((change) => (change.Kind === 0 || change.Kind === 1) && shouldIncludeWorkspacePath(change.Path))
+        .map((change) => workspaceRelativePath(change.Path))
+        .filter((pathValue): pathValue is string => pathValue !== null),
+    );
+    const deletedPaths = uniquePaths(
+      changes
+        .filter((change) => change.Kind === 2 && shouldIncludeWorkspacePath(change.Path))
+        .map((change) => workspaceRelativePath(change.Path))
+        .filter((pathValue): pathValue is string => pathValue !== null),
+    );
+
+    if (changedPaths.length === 0 && deletedPaths.length === 0) {
+      console.debug(`${TAG} no meaningful workspace changes in container ${containerId}`);
+      return null;
+    }
+
+    const archive = changedPaths.length > 0
+      ? await this.createWorkspaceArchive(container, changedPaths)
+      : null;
+
+    return {
+      archive,
+      deletedPaths,
+    };
+  }
+
+  /**
+   * Restore a tar archive into the container workspace.
+   * This is intentionally narrow so callers do not reach through Docker internals.
+   */
+  async restoreArchive(
+    containerId: string,
+    archive: Buffer,
+    options?: { deletedPaths?: string[] },
+  ): Promise<void> {
+    console.debug(`${TAG} restoring archive into workspace for container ${containerId}`);
+    const container = this.docker.getContainer(containerId);
+    const deletedPaths = uniquePaths(options?.deletedPaths ?? []);
+
+    if (deletedPaths.some((deletedPath) => !isSafeWorkspaceRelativePath(deletedPath))) {
+      throw new Error('Workspace restore rejected unsafe deleted path');
+    }
+
+    if (deletedPaths.length > 0) {
+      await this.deleteWorkspacePaths(container, deletedPaths);
+    }
+
+    if (archive.length === 0) {
+      return;
+    }
+
+    await this.validateWorkspaceArchive(archive);
+    await container.putArchive(Readable.from(archive), { path: WORKSPACE_ROOT });
   }
 
   /**
@@ -578,22 +539,16 @@ export class ContainerManager {
    * out noise, then creates a tar via `docker exec tar` inside the container.
    */
   async extractContainerDiff(containerId: string): Promise<Buffer | null> {
-    console.debug(`${TAG} extracting container diff from container ${containerId}`);
-    const container = this.docker.getContainer(containerId);
-    const changes = await container.changes();
-    const paths = Array.from(new Set(
-      changes
-        .filter((change) => (change.Kind === 0 || change.Kind === 1) && shouldIncludeDiffPath(change.Path))
-        .map((change) => change.Path),
-    ));
+    const snapshot = await this.extractWorkspaceDiff(containerId);
+    return snapshot?.archive ?? null;
+  }
 
-    if (paths.length === 0) {
-      console.debug(`${TAG} no meaningful filesystem changes in container ${containerId}`);
-      return null;
-    }
-
+  private async createWorkspaceArchive(
+    container: Dockerode.Container,
+    paths: string[],
+  ): Promise<Buffer> {
     const exec = await container.exec({
-      Cmd: ['tar', 'cf', '-', '--no-recursion', '--ignore-failed-read', '-T', '-'],
+      Cmd: ['tar', '-C', WORKSPACE_ROOT, 'cf', '-', '--no-recursion', '--ignore-failed-read', '-T', '-'],
       AttachStdin: true,
       AttachStdout: true,
       AttachStderr: true,
@@ -646,6 +601,117 @@ export class ContainerManager {
     }
 
     return Buffer.concat(stdoutChunks);
+  }
+
+  private async deleteWorkspacePaths(
+    container: Dockerode.Container,
+    paths: string[],
+  ): Promise<void> {
+    const exec = await container.exec({
+      Cmd: [
+        'sh',
+        '-c',
+        'for target do rm -rf -- "/workspace/$target"; done',
+        'sh',
+        ...paths,
+      ],
+      AttachStdout: true,
+      AttachStderr: true,
+    });
+    const stream = await exec.start({});
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stderrChunks: Buffer[] = [];
+
+    stderr.on('data', (chunk: Buffer | string) => {
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+
+    this.docker.modem.demuxStream(stream, stdout, stderr);
+
+    const streamDone = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        stdout.end();
+        stderr.end();
+        resolve();
+      };
+      stream.on('error', reject);
+      stream.on('end', finish);
+      stream.on('finish', finish);
+      stream.on('close', finish);
+    });
+
+    await streamDone;
+
+    const execResult = await exec.inspect();
+    if ((execResult.ExitCode ?? 0) !== 0) {
+      const stderrText = Buffer.concat(stderrChunks).toString('utf-8').trim();
+      throw new Error(
+        stderrText.length > 0
+          ? `Failed to apply workspace tombstones: ${stderrText}`
+          : `Failed to apply workspace tombstones: rm exited with code ${execResult.ExitCode}`,
+      );
+    }
+  }
+
+  private async validateWorkspaceArchive(archive: Buffer): Promise<void> {
+    const extract = tar.extract();
+
+    await new Promise<void>((resolve, reject) => {
+      let finished = false;
+      const fail = (err: unknown) => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        extract.destroy();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+
+      extract.on('entry', (header, entryStream, next) => {
+        const originalName = String(header.name ?? '');
+        const normalizedName = normalizeArchiveEntryName(originalName);
+
+        try {
+          if (!isSafeWorkspaceRelativePath(normalizedName)) {
+            throw new Error(`Workspace archive rejected unsafe path: ${originalName}`);
+          }
+
+          if (header.type === 'symlink' || header.type === 'link') {
+            throw new Error(`Workspace archive rejected ${header.type} entry: ${originalName}`);
+          }
+
+          if (
+            header.type !== undefined
+            && header.type !== 'file'
+            && header.type !== 'directory'
+          ) {
+            throw new Error(`Workspace archive rejected special entry '${header.type}': ${originalName}`);
+          }
+
+          entryStream.resume();
+          next();
+        } catch (err) {
+          entryStream.resume();
+          fail(err);
+        }
+      });
+
+      extract.on('finish', () => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        resolve();
+      });
+      extract.on('error', fail);
+      Readable.from(archive).on('error', fail).pipe(extract);
+    });
   }
 
   async extractLogs(containerId: string, tail?: number): Promise<string> {
@@ -798,6 +864,17 @@ export class ContainerManager {
 
 
   // ── Private helpers ─────────────────────────────────────
+
+  /** Release the semaphore slot only for containers created by this manager. */
+  private releaseOwnedContainerSlot(containerId: string): void {
+    if (!this.containerHarness.has(containerId)) {
+      console.debug(`${TAG} container ${containerId} is not owned by this manager; slot not released`);
+      return;
+    }
+
+    this.semaphore.release();
+    this.recordContainerCompletion(containerId);
+  }
 
   /**
    * Record completion of a container: update average lifetime and

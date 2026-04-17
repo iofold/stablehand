@@ -95,7 +95,7 @@ describe('InterruptManager', () => {
     it('should resolve promise when approved', async () => {
       const promise = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
 
-      const resolved = manager.resolve('run-1', 'approve');
+      const resolved = await manager.resolve('run-1', 'approve');
       expect(resolved).toBe(true);
 
       const result = await promise;
@@ -105,23 +105,23 @@ describe('InterruptManager', () => {
     it('should resolve promise when rejected', async () => {
       const promise = manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'rm -rf /' });
 
-      manager.resolve('run-1', 'reject', 'Too dangerous');
+      await manager.resolve('run-1', 'reject', 'Too dangerous');
 
       const result = await promise;
       expect(result.action).toBe('reject');
       expect(result.data).toBe('Too dangerous');
     });
 
-    it('should return false when resolving non-existent interrupt', () => {
-      const resolved = manager.resolve('no-run', 'approve');
+    it('should return false when resolving non-existent interrupt', async () => {
+      const resolved = await manager.resolve('no-run', 'approve');
       expect(resolved).toBe(false);
     });
 
-    it('should clear pending after resolve', () => {
+    it('should clear pending after resolve', async () => {
       manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
       expect(manager.hasPending('run-1')).toBe(true);
 
-      manager.resolve('run-1', 'approve');
+      await manager.resolve('run-1', 'approve');
       expect(manager.hasPending('run-1')).toBe(false);
     });
 
@@ -157,7 +157,7 @@ describe('InterruptManager', () => {
       expect(pending!.toolCallId).toBe('tc-2');
 
       // Resolve the second one
-      manager.resolve('run-1', 'approve');
+      await manager.resolve('run-1', 'approve');
       const result2 = await promise2;
       expect(result2.action).toBe('approve');
     });
@@ -196,14 +196,14 @@ describe('InterruptManager', () => {
       expect(manager.hasPending('run-1')).toBe(true);
       expect(manager.hasPending('run-2')).toBe(true);
 
-      manager.resolve('run-1', 'approve');
+      await manager.resolve('run-1', 'approve');
       const r1 = await p1;
       expect(r1.action).toBe('approve');
 
       // run-2 still pending
       expect(manager.hasPending('run-2')).toBe(true);
 
-      manager.resolve('run-2', 'reject', 'No access');
+      await manager.resolve('run-2', 'reject', 'No access');
       const r2 = await p2;
       expect(r2.action).toBe('reject');
       expect(r2.data).toBe('No access');
@@ -221,7 +221,7 @@ describe('InterruptManager', () => {
       expect(manager.hasPending('run-2')).toBe(true);
 
       // Resolve run-1; run-2 should be unaffected
-      manager.resolve('run-1', 'approve');
+      await manager.resolve('run-1', 'approve');
       const r1 = await p1;
       expect(r1.action).toBe('approve');
 
@@ -229,7 +229,7 @@ describe('InterruptManager', () => {
       expect(manager.hasPending('run-2')).toBe(true);
 
       // Resolve run-2
-      manager.resolve('run-2', 'reject', 'Denied');
+      await manager.resolve('run-2', 'reject', 'Denied');
       const r2 = await p2;
       expect(r2.action).toBe('reject');
       expect(r2.data).toBe('Denied');
@@ -240,7 +240,7 @@ describe('InterruptManager', () => {
       const p2 = manager.waitForApproval('run-2', 'agent-1', 'tc-2', 'deploy', { target: 'staging' });
 
       // Resolve run-1
-      manager.resolve('run-1', 'approve');
+      await manager.resolve('run-1', 'approve');
       const r1 = await p1;
       expect(r1.action).toBe('approve');
       expect(manager.hasPending('run-1')).toBe(false);
@@ -254,7 +254,7 @@ describe('InterruptManager', () => {
       expect(pending2!.args).toEqual({ target: 'staging' });
 
       // Resolve run-2
-      manager.resolve('run-2', 'approve');
+      await manager.resolve('run-2', 'approve');
       const r2 = await p2;
       expect(r2.action).toBe('approve');
     });
@@ -295,7 +295,7 @@ describe('InterruptManager', () => {
       });
 
       busManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' });
-      busManager.resolve('run-1', 'approve', undefined, 'agent-1');
+      await busManager.resolve('run-1', 'approve', undefined, 'agent-1');
 
        expect(events).toHaveLength(1);
        expect(events[0].turnId).toBe('run-1');
@@ -331,13 +331,43 @@ describe('InterruptManager', () => {
   });
 
   describe('loadFromDb', () => {
+    it('does not expose a pending interrupt when the durable create write fails', async () => {
+      const bus = new TypedEventBus();
+      const events: Array<{ turnId: string }> = [];
+      bus.on('run.interrupted', (payload) => {
+        events.push({ turnId: payload.turnId });
+      });
+
+      const failingDb: InterruptStore = {
+        savePendingInterrupt: vi.fn(async () => {
+          throw new Error('DB down');
+        }),
+        resolveInterrupt: vi.fn(),
+        cleanupExpiredInterrupts: vi.fn(async () => 0),
+        getAllPendingInterrupts: vi.fn(async () => []),
+      };
+
+      const durableManager = new InterruptManager(bus, failingDb);
+
+      await expect(
+        durableManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 60_000),
+      ).rejects.toThrow('DB down');
+
+      expect(durableManager.hasPending('run-1')).toBe(false);
+      expect(events).toEqual([]);
+
+      durableManager.shutdown();
+    });
+
     it('reloads non-expired pending interrupts so they can be resolved after restart', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2026-03-25T12:00:00.000Z'));
 
       const { db } = createMockInterruptDb();
       const firstManager = new InterruptManager(undefined, db);
-      firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 60_000);
+      firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 60_000, 'session-1');
+      await Promise.resolve();
+      await Promise.resolve();
 
       const restartedManager = new InterruptManager(undefined, db);
       await restartedManager.loadFromDb();
@@ -350,10 +380,10 @@ describe('InterruptManager', () => {
         toolName: 'bash',
         args: { cmd: 'ls' },
         createdAt: Date.now(),
-        sessionId: undefined,
+        sessionId: 'session-1',
       });
 
-      expect(restartedManager.resolve('run-1', 'approve', 'approved', 'agent-1')).toBe(true);
+      await expect(restartedManager.resolve('run-1', 'approve', 'approved', 'agent-1')).resolves.toBe(true);
       expect(restartedManager.hasPending('run-1')).toBe(false);
       expect(db.resolveInterrupt).toHaveBeenCalledWith('run-1', 'approve', 'approved');
 
@@ -368,6 +398,8 @@ describe('InterruptManager', () => {
       const { db, rows } = createMockInterruptDb();
       const firstManager = new InterruptManager(undefined, db);
       firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 1_000);
+      await Promise.resolve();
+      await Promise.resolve();
 
       vi.setSystemTime(new Date('2026-03-25T12:00:02.000Z'));
 
@@ -377,7 +409,7 @@ describe('InterruptManager', () => {
       expect(db.cleanupExpiredInterrupts).toHaveBeenCalledWith(Date.now());
       expect(rows.has('run-1')).toBe(false);
       expect(restartedManager.hasPending('run-1')).toBe(false);
-      expect(restartedManager.resolve('run-1', 'approve')).toBe(false);
+      await expect(restartedManager.resolve('run-1', 'approve')).resolves.toBe(false);
 
       firstManager.shutdown();
       restartedManager.shutdown();

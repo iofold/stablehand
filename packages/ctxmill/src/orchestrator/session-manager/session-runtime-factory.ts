@@ -38,7 +38,7 @@ function asStringArray(value: unknown): string[] | undefined {
 export interface SessionRuntimeFactoryDeps {
   containerManager: Pick<ContainerManager, 'createContainer' | 'startContainer'>;
   db: Pick<DatabaseRepository, 'createSandboxSession'>;
-  buildSandboxSecrets: () => Readonly<Record<string, string>>;
+  buildSandboxSecrets: (agentId: string) => Readonly<Record<string, string>>;
   resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[]) => ToolMetadata[];
   checkConcurrencyLimit: (agentId: string) => void;
   logger: Logger;
@@ -106,7 +106,7 @@ export class SessionRuntimeFactory {
       }
     }
 
-    const sandboxSecrets = this.deps.buildSandboxSecrets();
+    const sandboxSecrets = this.deps.buildSandboxSecrets(effectiveAgentId);
     const secretKeys = Object.keys(sandboxSecrets);
     this.deps.logger.info(`${TAG} injecting ${secretKeys.length} secrets: [${secretKeys.join(', ')}]`);
 

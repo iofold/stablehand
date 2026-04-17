@@ -3,27 +3,14 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { createGunzip } from 'node:zlib';
+import type { ContainerManager } from '../container-manager.js';
 import { WorkspaceDiffService } from '../workspace-diff.js';
 
-// ── Mock helpers ─────────────────────────────────────────────
-
-function createMockContainer(overrides: Record<string, unknown> = {}) {
-  return {
-    putArchive: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
-  };
-}
-
 function createMockContainerManager(overrides: Record<string, unknown> = {}) {
-  const mockContainer = createMockContainer();
-
   return {
     extractContainerDiff: vi.fn().mockResolvedValue(Buffer.from('fake-tar-data')),
-    extractWorkspaceDiff: vi.fn().mockResolvedValue(Buffer.from('fake-tar-data')),
-    docker: {
-      getContainer: vi.fn().mockReturnValue(mockContainer),
-    },
-    _mockContainer: mockContainer,
+    extractWorkspaceDiff: vi.fn().mockResolvedValue({ archive: Buffer.from('fake-tar-data'), deletedPaths: [] }),
+    restoreArchive: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -51,7 +38,7 @@ describe('WorkspaceDiffService', () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workspace-diff-test-'));
     cm = createMockContainerManager();
     service = new WorkspaceDiffService({
-      containerManager: cm as any,
+      containerManager: cm as unknown as ContainerManager,
       checkpointDir: tmpDir,
     });
   });
@@ -65,11 +52,11 @@ describe('WorkspaceDiffService', () => {
   describe('capture', () => {
     it('creates tar.gz file and returns path when container has changes', async () => {
       const tarData = Buffer.from('fake-tar-data-for-capture');
-      cm.extractContainerDiff.mockResolvedValue(tarData);
+      cm.extractWorkspaceDiff.mockResolvedValue({ archive: tarData, deletedPaths: [] });
 
       const result = await service.capture('run-001', 'container-abc');
 
-      expect(cm.extractContainerDiff).toHaveBeenCalledWith('container-abc');
+      expect(cm.extractWorkspaceDiff).toHaveBeenCalledWith('container-abc');
 
       // Should return the correct path
       const expectedPath = path.join(tmpDir, 'run-001', 'workspace.tar.gz');
@@ -83,10 +70,15 @@ describe('WorkspaceDiffService', () => {
       const compressed = await fs.readFile(expectedPath);
       const decompressed = await gzipDecompress(compressed);
       expect(decompressed.toString()).toBe('fake-tar-data-for-capture');
+
+      const tombstones = JSON.parse(
+        await fs.readFile(path.join(tmpDir, 'run-001', 'workspace-tombstones.json'), 'utf-8'),
+      ) as { deletedPaths: string[] };
+      expect(tombstones.deletedPaths).toEqual([]);
     });
 
-    it('returns "none" when extractContainerDiff returns empty buffer', async () => {
-      cm.extractContainerDiff.mockResolvedValue(Buffer.alloc(0));
+    it('returns "none" when extractWorkspaceDiff returns empty archive and no tombstones', async () => {
+      cm.extractWorkspaceDiff.mockResolvedValue({ archive: Buffer.alloc(0), deletedPaths: [] });
 
       const result = await service.capture('run-002', 'container-def');
 
@@ -98,8 +90,8 @@ describe('WorkspaceDiffService', () => {
       ).rejects.toThrow(/ENOENT/);
     });
 
-    it('returns "none" when extractContainerDiff returns null', async () => {
-      cm.extractContainerDiff.mockResolvedValue(null);
+    it('returns "none" when extractWorkspaceDiff returns null', async () => {
+      cm.extractWorkspaceDiff.mockResolvedValue(null);
 
       const result = await service.capture('run-003', 'container-ghi');
 
@@ -110,10 +102,10 @@ describe('WorkspaceDiffService', () => {
       const tarData1 = Buffer.from('first-capture');
       const tarData2 = Buffer.from('second-capture');
 
-      cm.extractContainerDiff.mockResolvedValue(tarData1);
+      cm.extractWorkspaceDiff.mockResolvedValue({ archive: tarData1, deletedPaths: [] });
       const path1 = await service.capture('run-idem', 'c1');
 
-      cm.extractContainerDiff.mockResolvedValue(tarData2);
+      cm.extractWorkspaceDiff.mockResolvedValue({ archive: tarData2, deletedPaths: [] });
       const path2 = await service.capture('run-idem', 'c2');
 
       expect(path1).toBe(path2);
@@ -127,7 +119,7 @@ describe('WorkspaceDiffService', () => {
     it('rejects workspace > 100 MB with workspace_diff_too_large error', async () => {
       // Create a buffer larger than 100 MB
       const largeBuffer = Buffer.alloc(101 * 1024 * 1024, 'x');
-      cm.extractContainerDiff.mockResolvedValue(largeBuffer);
+      cm.extractWorkspaceDiff.mockResolvedValue({ archive: largeBuffer, deletedPaths: [] });
 
       await expect(service.capture('run-large', 'container-large')).rejects.toMatchObject({
         code: 'workspace_diff_too_large',
@@ -145,7 +137,7 @@ describe('WorkspaceDiffService', () => {
 
       // Create a buffer larger than 50 MB but under 100 MB
       const mediumBuffer = Buffer.alloc(51 * 1024 * 1024, 'y');
-      cm.extractContainerDiff.mockResolvedValue(mediumBuffer);
+      cm.extractWorkspaceDiff.mockResolvedValue({ archive: mediumBuffer, deletedPaths: [] });
 
       const result = await service.capture('run-medium', 'container-medium');
 
@@ -161,37 +153,72 @@ describe('WorkspaceDiffService', () => {
   // ── restore ──────────────────────────────────────────────
 
   describe('restore', () => {
-    it('extracts tar into container at /workspace', async () => {
+    it('delegates tar restore to ContainerManager', async () => {
       // First capture a workspace diff
       const tarData = Buffer.from('restore-test-tar-data');
-      cm.extractContainerDiff.mockResolvedValue(tarData);
+      cm.extractWorkspaceDiff.mockResolvedValue({ archive: tarData, deletedPaths: [] });
       await service.capture('run-restore', 'container-src');
 
       // Now restore into a different container
       await service.restore('run-restore', 'container-dst');
 
-      // Should have called getContainer and putArchive
-      expect(cm.docker.getContainer).toHaveBeenCalledWith('container-dst');
-      expect(cm._mockContainer.putArchive).toHaveBeenCalledTimes(1);
+      expect(cm.restoreArchive).toHaveBeenCalledTimes(1);
+      expect(cm.restoreArchive).toHaveBeenCalledWith(
+        'container-dst',
+        Buffer.from('restore-test-tar-data'),
+        { deletedPaths: [] },
+      );
+    });
 
-      const [stream, opts] = cm._mockContainer.putArchive.mock.calls[0];
-      expect(opts).toEqual({ path: '/' });
+    it('persists and restores deleted file tombstones', async () => {
+      cm.extractWorkspaceDiff.mockResolvedValue({
+        archive: Buffer.alloc(0),
+        deletedPaths: ['deleted.txt', 'nested/removed.md'],
+      });
 
-      // The injected data should be readable and match the original tar
-      const chunks: Buffer[] = [];
-      for await (const chunk of stream) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      const injectedData = Buffer.concat(chunks);
-      expect(injectedData.toString()).toBe('restore-test-tar-data');
+      const result = await service.capture('run-tombstones', 'container-src');
+
+      expect(result).toBe(path.join(tmpDir, 'run-tombstones', 'workspace.tar.gz'));
+
+      const tombstones = JSON.parse(
+        await fs.readFile(path.join(tmpDir, 'run-tombstones', 'workspace-tombstones.json'), 'utf-8'),
+      ) as { deletedPaths: string[] };
+      expect(tombstones.deletedPaths).toEqual(['deleted.txt', 'nested/removed.md']);
+
+      await service.restore('run-tombstones', 'container-dst');
+
+      expect(cm.restoreArchive).toHaveBeenCalledWith(
+        'container-dst',
+        Buffer.alloc(0),
+        { deletedPaths: ['deleted.txt', 'nested/removed.md'] },
+      );
+    });
+
+    it('fails closed when tombstone metadata is corrupt', async () => {
+      const runDir = path.join(tmpDir, 'run-corrupt');
+      await fs.mkdir(runDir, { recursive: true });
+      await fs.writeFile(path.join(runDir, 'workspace-tombstones.json'), '{not-json');
+
+      await expect(service.restore('run-corrupt', 'container-dst')).rejects.toThrow();
+      expect(cm.restoreArchive).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when an archive exists without tombstone metadata', async () => {
+      const runDir = path.join(tmpDir, 'run-missing-tombstones');
+      await fs.mkdir(runDir, { recursive: true });
+      await fs.writeFile(path.join(runDir, 'workspace.tar.gz'), Buffer.from('not-used'));
+
+      await expect(
+        service.restore('run-missing-tombstones', 'container-dst'),
+      ).rejects.toThrow(/Missing workspace tombstones file/);
+      expect(cm.restoreArchive).not.toHaveBeenCalled();
     });
 
     it('silently skips restore when no checkpoint exists', async () => {
       // No capture was done for this run
       await expect(service.restore('run-nonexistent', 'container-x')).resolves.toBeUndefined();
 
-      // putArchive should not have been called
-      expect(cm._mockContainer.putArchive).not.toHaveBeenCalled();
+      expect(cm.restoreArchive).not.toHaveBeenCalled();
     });
   });
 
@@ -201,7 +228,7 @@ describe('WorkspaceDiffService', () => {
     it('deletes the checkpoint directory', async () => {
       // Create a checkpoint first
       const tarData = Buffer.from('cleanup-test-data');
-      cm.extractContainerDiff.mockResolvedValue(tarData);
+      cm.extractWorkspaceDiff.mockResolvedValue({ archive: tarData, deletedPaths: [] });
       await service.capture('run-cleanup', 'container-z');
 
       const runDir = path.join(tmpDir, 'run-cleanup');
@@ -226,14 +253,14 @@ describe('WorkspaceDiffService', () => {
   describe('getSize', () => {
     it('returns correct byte count for stored diff', async () => {
       const tarData = Buffer.from('size-test-data-for-measurement');
-      cm.extractWorkspaceDiff.mockResolvedValue(tarData);
+      cm.extractWorkspaceDiff.mockResolvedValue({ archive: tarData, deletedPaths: [] });
       const archivePath = await service.capture('run-size', 'container-s');
 
       const size = await service.getSize('run-size');
 
-      // Size should match the actual file size
       const actualStat = await fs.stat(archivePath);
-      expect(size).toBe(actualStat.size);
+      const tombstonesStat = await fs.stat(path.join(tmpDir, 'run-size', 'workspace-tombstones.json'));
+      expect(size).toBe(actualStat.size + tombstonesStat.size);
       expect(size).toBeGreaterThan(0);
     });
 

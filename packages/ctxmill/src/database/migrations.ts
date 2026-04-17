@@ -1,5 +1,61 @@
 import type postgres from 'postgres';
 
+export const MIGRATION_ADVISORY_LOCK_ID = 424242;
+export const CURRENT_SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION_TABLE = 'ctxmill_schema_version';
+
+async function assertSchemaBaseline(sql: postgres.Sql): Promise<void> {
+  const [versionTable] = await sql`
+    SELECT to_regclass('public.ctxmill_schema_version') AS table_name
+  `;
+
+  if (versionTable?.table_name) {
+    const [versionRow] = await sql`
+      SELECT version FROM ctxmill_schema_version WHERE id = 'baseline'
+    `;
+    const version = Number(versionRow?.version);
+    if (version !== CURRENT_SCHEMA_VERSION) {
+      throw new Error(
+        `Unsupported ctxmill schema version ${Number.isFinite(version) ? version : 'unknown'}; expected ${CURRENT_SCHEMA_VERSION}. ` +
+        'Pre-release schema migrations only support the current baseline.',
+      );
+    }
+    return;
+  }
+
+  const existingTables = await sql`
+    SELECT tablename
+    FROM pg_tables
+    WHERE schemaname = 'public'
+      AND tablename <> ${SCHEMA_VERSION_TABLE}
+    ORDER BY tablename
+  `;
+
+  if (existingTables.length > 0) {
+    const names = existingTables.map((row) => row.tablename).join(', ');
+    throw new Error(
+      `Refusing to initialize ctxmill schema: found existing unversioned public tables (${names}). ` +
+      'Start with an empty database or restore from a versioned ctxmill baseline.',
+    );
+  }
+}
+
+async function initializeSchemaBaseline(sql: postgres.Sql): Promise<void> {
+  await sql`
+    CREATE TABLE IF NOT EXISTS ctxmill_schema_version (
+      id TEXT PRIMARY KEY NOT NULL,
+      version INTEGER NOT NULL,
+      baseline TEXT NOT NULL,
+      initialized_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `;
+  await sql`
+    INSERT INTO ctxmill_schema_version (id, version, baseline)
+    VALUES ('baseline', ${CURRENT_SCHEMA_VERSION}, 'pre-release')
+    ON CONFLICT (id) DO NOTHING
+  `;
+}
+
 /**
  * Single-pass schema creation for a fresh database.
  *
@@ -10,12 +66,17 @@ import type postgres from 'postgres';
  * `secrets` table used via raw SQL in secrets/postgres-provider.ts.
  */
 export async function runMigrations(sql: postgres.Sql): Promise<void> {
-  // ── Extensions ──────────────────────────────────────────────────────
-  await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
-  await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+  await sql`SELECT pg_advisory_lock(${MIGRATION_ADVISORY_LOCK_ID})`;
+  try {
+    await assertSchemaBaseline(sql);
+    await initializeSchemaBaseline(sql);
 
-  // ── 1. agents (root table) ─────────────────────────────────────────
-  await sql`
+    // ── Extensions ──────────────────────────────────────────────────────
+    await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+    await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+
+    // ── 1. agents (root table) ─────────────────────────────────────────
+    await sql`
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,
@@ -137,7 +198,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     CREATE TABLE IF NOT EXISTS suspended_sessions (
       id TEXT PRIMARY KEY NOT NULL,
       agent_session_id TEXT NOT NULL,
-      agent_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
       wait_event_type TEXT NOT NULL,
       wait_selector TEXT NOT NULL,
       wait_expires_at BIGINT,
@@ -150,11 +211,15 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`
     CREATE TABLE IF NOT EXISTS scheduled_events (
       id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
       type TEXT NOT NULL,
       payload TEXT NOT NULL,
       wake_at BIGINT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      claimed_at BIGINT,
+      claim_expires_at BIGINT,
+      last_error TEXT,
       created_at BIGINT NOT NULL
     )
   `;
@@ -246,6 +311,8 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       attempts INTEGER NOT NULL DEFAULT 0,
       max_attempts INTEGER NOT NULL DEFAULT 5,
       next_attempt_at BIGINT NOT NULL,
+      claimed_at BIGINT,
+      claim_expires_at BIGINT,
       last_attempt_at BIGINT,
       last_error TEXT,
       created_at BIGINT NOT NULL,
@@ -280,7 +347,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`
     CREATE TABLE IF NOT EXISTS artifacts (
       id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
       session_id TEXT REFERENCES turns(id) ON DELETE SET NULL,
       conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
       name TEXT NOT NULL,
@@ -362,6 +429,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
 
   // scheduled_events
   await sql`CREATE INDEX IF NOT EXISTS idx_scheduled_events_wake ON scheduled_events(status, wake_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_scheduled_events_claim_expires ON scheduled_events(status, claim_expires_at)`;
 
   // event_triggers
   await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_agent ON event_triggers(agent_id)`;
@@ -384,6 +452,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
 
   // callback_outbox
   await sql`CREATE INDEX IF NOT EXISTS idx_outbox_status ON callback_outbox(status, next_attempt_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_outbox_claim_expires ON callback_outbox(status, claim_expires_at)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_outbox_agent ON callback_outbox(agent_id)`;
 
   // webhooks
@@ -397,4 +466,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // tool_request_dedup
   await sql`CREATE INDEX IF NOT EXISTS idx_tool_dedup_created ON tool_request_dedup(created_at)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_tool_dedup_status ON tool_request_dedup(status)`;
+  } finally {
+    await sql`SELECT pg_advisory_unlock(${MIGRATION_ADVISORY_LOCK_ID})`;
+  }
 }

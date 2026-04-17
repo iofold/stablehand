@@ -4,7 +4,7 @@ export const presets: Record<string, ResolvedConfig> = {
   docker: {
     execution: { type: 'docker' as const, warmPool: 0, maxGlobalContainers: 20 },
     database: { type: 'postgres' as const, url: 'env:DATABASE_URL' },
-    knowledge: { providers: ['pgvector'] },
+    knowledge: { providers: ['memory'] },
     tools: { executors: ['local', 'mcp'] },
     security: { preset: 'docker' },
     learning: { strategy: 'ace' as const, async: false },

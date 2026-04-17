@@ -209,6 +209,7 @@ function createMockContainerManager(): ContainerManager {
     stopContainer: vi.fn(),
     removeContainer: vi.fn(),
     extractContainerDiff: vi.fn(),
+    extractWorkspaceDiff: vi.fn(),
     extractLogs: vi.fn(),
     getContainer: vi.fn(),
     listManagedContainers: vi.fn(),
@@ -635,7 +636,7 @@ describe('Workspace diff size limits', () => {
 
     try {
       const mockCm = {
-        extractContainerDiff: vi.fn(async () => Buffer.alloc(101 * 1024 * 1024, 'x')),
+        extractWorkspaceDiff: vi.fn(async () => ({ archive: Buffer.alloc(101 * 1024 * 1024, 'x'), deletedPaths: [] })),
       } as unknown as ContainerManager;
 
       const wds = new WorkspaceDiffService({
@@ -664,7 +665,7 @@ describe('Workspace diff size limits', () => {
 
     try {
       const mockCm = {
-        extractContainerDiff: vi.fn(async () => Buffer.from('small-workspace-data')),
+        extractWorkspaceDiff: vi.fn(async () => ({ archive: Buffer.from('small-workspace-data'), deletedPaths: [] })),
       } as unknown as ContainerManager;
 
       const wds = new WorkspaceDiffService({

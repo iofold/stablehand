@@ -132,7 +132,7 @@ describe('LangGraphHarness message history', () => {
         { role: 'tool', content: 'Tool output: success', tool_call_id: 'call_1' },
         { role: 'user', content: 'Continue from that result' },
       ],
-    }, { version: 'v2' });
+    }, expect.objectContaining({ version: 'v2' }));
   });
 
   it('still passes config systemPrompt when transcript has no system message', async () => {
@@ -150,5 +150,31 @@ describe('LangGraphHarness message history', () => {
     expect(mockCreateDeepAgent).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: 'You are a test agent.',
     }));
+  });
+
+  it('returns cleanly (no error event) when context.signal is aborted while streamEvents hangs', async () => {
+    // Simulate a blocked LLM call that never yields
+    mockStreamEvents.mockImplementation(async function* () {
+      await new Promise<never>(() => {});
+      yield undefined as never;
+    });
+
+    const messages = [makeMessage('user', 'Hello')];
+    const session = await openRestoredTestSession({
+      stateVersion: '1',
+      messages,
+      payload: { transcript: messages },
+    });
+
+    const ac = new AbortController();
+    // Abort after a short delay to simulate killSession firing mid-stream
+    setTimeout(() => ac.abort(), 20);
+
+    const events = await collectEvents(
+      session.deliverTurn({ messages, turnId: 'turn-abort' }, { signal: ac.signal }),
+    );
+
+    // AbortError should be swallowed — no error event, no hang
+    expect(events.every((e) => (e as Record<string, unknown>).type !== 'error')).toBe(true);
   });
 });

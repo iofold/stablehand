@@ -151,7 +151,7 @@ OPENAI_API_KEY=sk-your-openai-key
 ANTHROPIC_API_KEY=sk-ant-your-anthropic-key
 ```
 
-The following environment variables are forwarded to sandbox containers.
+The following **host environment variables** are forwarded to sandbox containers via the orchestrator allowlist.
 
 | Env Var | Forwarded to Sandbox | Notes |
 |---------|---------------------|-------|
@@ -161,6 +161,29 @@ The following environment variables are forwarded to sandbox containers.
 | `OPENAI_BASE_URL` | ✅ Yes | In secret allowlist |
 
 There is no `OPENROUTER_API_KEY` env var. Reuse `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` with your OpenRouter key.
+
+### Current behavior for custom secret keys
+
+Two different secret paths exist today:
+
+1. **Host env passthrough** — only keys in the orchestrator's hardcoded sandbox allowlist are forwarded.
+2. **Per-agent Secret Store** — all keys stored for a specific agent are currently injected into that agent's sandbox as environment variables.
+
+So if you need a custom key such as `OPENROUTER_API_KEY`, `MY_INTERNAL_TOKEN`, or `CUSTOM_BASE_URL`, the supported behavior today is:
+
+- store it under **Agent → Secrets**
+- reference it from your harness/tooling by that exact env-var name inside the sandbox
+
+That is different from host env passthrough: adding `OPENROUTER_API_KEY` to the orchestrator shell or compose env alone does **not** forward it unless the codebase adds it to `SANDBOX_SECRET_ALLOWLIST`.
+
+### Caveat: HTTP tool provider fallback
+
+The HTTP tool provider has a separate fallback path on the orchestrator side: if a required secret is not found in the pre-resolved agent secret map, it still falls back to `process.env[secretName]`.
+
+That means:
+
+- **sandbox secret injection** is constrained by the host allowlist + agent secret store merge
+- **HTTP tool auth resolution** is currently broader because it can still read arbitrary orchestrator env names directly
 
 ## Quick Reference Table
 

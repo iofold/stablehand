@@ -11,7 +11,7 @@ import type { JsonObject, Message as Message$1 } from "@bufbuild/protobuf";
  * Describes the file ctxmill/sandbox/v1/sandbox.proto.
  */
 export const file_ctxmill_sandbox_v1_sandbox: GenFile = /*@__PURE__*/
-  fileDesc("CiBjdHhtaWxsL3NhbmRib3gvdjEvc2FuZGJveC5wcm90bxISY3R4bWlsbC5zYW5kYm94LnYxIo8BChJPcGVuU2Vzc2lvblJlcXVlc3QSMwoFZnJlc2gYASABKAsyIi5jdHhtaWxsLnNhbmRib3gudjEuRnJlc2hCb290c3RyYXBIABI3CgdyZXN0b3JlGAIgASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLlJlc3RvcmVCb290c3RyYXBIAEILCglib290c3RyYXAi0wEKDkZyZXNoQm9vdHN0cmFwEhAKCGFnZW50X2lkGAEgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgCIAEoCRIUCgxoYXJuZXNzX25hbWUYAyABKAkSGwoTaGFybmVzc19jb25maWdfanNvbhgEIAEoCRIVCg1zeXN0ZW1fcHJvbXB0GAYgASgJEi8KBXRvb2xzGAcgAygLMiAuY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xNZXRhZGF0YRIVCg13b3Jrc3BhY2VfZGlyGAggASgJSgQIBRAGIswBChBSZXN0b3JlQm9vdHN0cmFwEkEKEnNlc3Npb25fY2hlY2twb2ludBgBIAEoCzIlLmN0eG1pbGwuc2FuZGJveC52MS5TZXNzaW9uQ2hlY2twb2ludBIvCgV0b29scxgCIAMoCzIgLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sTWV0YWRhdGESEAoIYWdlbnRfaWQYAyABKAkSGwoTaGFybmVzc19jb25maWdfanNvbhgEIAEoCRIVCg1zeXN0ZW1fcHJvbXB0GAUgASgJIjkKE09wZW5TZXNzaW9uUmVzcG9uc2USEgoKc2Vzc2lvbl9pZBgBIAEoCRIOCgZzdGF0dXMYAiABKAkiaAoSRGVsaXZlclR1cm5SZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSLQoIbWVzc2FnZXMYAiADKAsyGy5jdHhtaWxsLnNhbmRib3gudjEuTWVzc2FnZRIPCgd0dXJuX2lkGAMgASgJIocCCgxTZXNzaW9uRXZlbnQSNQoLYWdfdWlfZXZlbnQYASABKAsyHi5jdHhtaWxsLnNhbmRib3gudjEuQWdlbnRFdmVudEgAEkEKEW1lc3NhZ2VfY29tbWl0dGVkGAIgASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLk1lc3NhZ2VDb21taXR0ZWRIABI7Cg50dXJuX2NvbXBsZXRlZBgDIAEoCzIhLmN0eG1pbGwuc2FuZGJveC52MS5UdXJuQ29tcGxldGVkSAASNQoLdHVybl9mYWlsZWQYBCABKAsyHi5jdHhtaWxsLnNhbmRib3gudjEuVHVybkZhaWxlZEgAQgkKB3BheWxvYWQitQEKEE1lc3NhZ2VDb21taXR0ZWQSDAoEcm9sZRgBIAEoCRIPCgdjb250ZW50GAIgASgJEjAKCnRvb2xfY2FsbHMYAyADKAsyHC5jdHhtaWxsLnNhbmRib3gudjEuVG9vbENhbGwSGQoMdG9vbF9jYWxsX2lkGAQgASgJSACIAQESDwoHdHVybl9pZBgFIAEoCRITCgttZXNzYWdlX3NlcRgGIAEoBEIPCg1fdG9vbF9jYWxsX2lkIiAKDVR1cm5Db21wbGV0ZWQSDwoHdHVybl9pZBgBIAEoCSI0CgpUdXJuRmFpbGVkEg8KB3R1cm5faWQYASABKAkSFQoNZXJyb3JfbWVzc2FnZRgCIAEoCSI7ChVTdXNwZW5kU2Vzc2lvblJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkiWwoWU3VzcGVuZFNlc3Npb25SZXNwb25zZRJBChJzZXNzaW9uX2NoZWNrcG9pbnQYASABKAsyJS5jdHhtaWxsLnNhbmRib3gudjEuU2Vzc2lvbkNoZWNrcG9pbnQiYgoGQ3Vyc29yEhgKEG5leHRfbWVzc2FnZV9zZXEYASABKAQSIwoWbGFzdF9jb21wbGV0ZWRfdHVybl9pZBgCIAEoCUgAiAEBQhkKF19sYXN0X2NvbXBsZXRlZF90dXJuX2lkIlsKC1J1bm5lclN0YXRlEg4KBnN0YXR1cxgBIAEoCRI8ChBwZW5kaW5nX3JlcXVlc3RzGAIgAygLMiIuY3R4bWlsbC5zYW5kYm94LnYxLlBlbmRpbmdSZXF1ZXN0IkAKDlBlbmRpbmdSZXF1ZXN0EgwKBHR5cGUYASABKAkSCgoCaWQYAiABKAkSFAoMcGF5bG9hZF9qc29uGAMgASgJIjMKDFdvcmtzcGFjZVJlZhIQCghzdHJhdGVneRgBIAEoCRIRCglyZWZlcmVuY2UYAiABKAkivgIKEVNlc3Npb25DaGVja3BvaW50EhoKEmNoZWNrcG9pbnRfdmVyc2lvbhgBIAEoBRISCgpzZXNzaW9uX2lkGAIgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgDIAEoCRIUCgxoYXJuZXNzX25hbWUYBCABKAkSKgoGY3Vyc29yGAUgASgLMhouY3R4bWlsbC5zYW5kYm94LnYxLkN1cnNvchI1CgxydW5uZXJfc3RhdGUYBiABKAsyHy5jdHhtaWxsLnNhbmRib3gudjEuUnVubmVyU3RhdGUSNwoNd29ya3NwYWNlX3JlZhgHIAEoCzIgLmN0eG1pbGwuc2FuZGJveC52MS5Xb3Jrc3BhY2VSZWYSLgoNaGFybmVzc19zdGF0ZRgIIAEoCzIXLmdvb2dsZS5wcm90b2J1Zi5TdHJ1Y3QiOAoSS2lsbFNlc3Npb25SZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSDgoGcmVhc29uGAIgASgJIisKE0tpbGxTZXNzaW9uUmVzcG9uc2USFAoMZmluYWxfc3RhdHVzGAEgASgJInQKElJlcXVlc3RUb29sUmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhEKCXRvb2xfbmFtZRgDIAEoCRIRCglhcmdzX2pzb24YBCABKAkSEgoKcmVxdWVzdF9pZBgFIAEoCSJXChNSZXF1ZXN0VG9vbFJlc3BvbnNlEhIKCnJlcXVlc3RfaWQYASABKAkSDgoGcmVzdWx0GAIgASgJEhIKBWVycm9yGAMgASgJSACIAQFCCAoGX2Vycm9yIlAKEEVtaXRFdmVudFJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRISCgpldmVudF90eXBlGAIgASgJEhQKDHBheWxvYWRfanNvbhgDIAEoCSITChFFbWl0RXZlbnRSZXNwb25zZSI9ChVSZWZyZXNoU2VjcmV0c1JlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRIQCghhZ2VudF9pZBgCIAEoCSJdChZSZWZyZXNoU2VjcmV0c1Jlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSEgoFZXJyb3IYAiABKAlIAIgBARIUCgxzZWNyZXRzX3BhdGgYAyABKAlCCAoGX2Vycm9yIjgKEE5hdGl2ZVRvb2xDb25maWcSEQoJYWxsb3dsaXN0GAEgAygJEhEKCWJsb2NrbGlzdBgCIAMoCSKuAQoHTWVzc2FnZRIKCgJpZBgBIAEoCRIMCgRyb2xlGAIgASgJEg8KB2NvbnRlbnQYAyABKAkSMAoKdG9vbF9jYWxscxgEIAMoCzIcLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sQ2FsbBIZCgx0b29sX2NhbGxfaWQYBSABKAlIAIgBARIRCgRuYW1lGAYgASgJSAGIAQFCDwoNX3Rvb2xfY2FsbF9pZEIHCgVfbmFtZSI8CghUb29sQ2FsbBIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhYKDmFyZ3VtZW50c19qc29uGAMgASgJIpYBCgxUb29sTWV0YWRhdGESDAoEbmFtZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCRIZChFpbnB1dF9zY2hlbWFfanNvbhgDIAEoCRIyCghsb2NhdGlvbhgEIAEoDjIgLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sTG9jYXRpb24SFAoMcHJvZ3JhbW1hdGljGAUgASgIIqQDCgpBZ2VudEV2ZW50EjMKCnRleHRfZGVsdGEYASABKAsyHS5jdHhtaWxsLnNhbmRib3gudjEuVGV4dERlbHRhSAASPAoPdG9vbF9jYWxsX3N0YXJ0GAIgASgLMiEuY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xDYWxsU3RhcnRIABI4Cg10b29sX2NhbGxfZW5kGAMgASgLMh8uY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xDYWxsRW5kSAASPQoPYXBwcm92YWxfbmVlZGVkGAQgASgLMiIuY3R4bWlsbC5zYW5kYm94LnYxLkFwcHJvdmFsTmVlZGVkSAASQQoRYXBwcm92YWxfcmVzb2x2ZWQYBSABKAsyJC5jdHhtaWxsLnNhbmRib3gudjEuQXBwcm92YWxSZXNvbHZlZEgAEi8KBWVycm9yGAYgASgLMh4uY3R4bWlsbC5zYW5kYm94LnYxLkVycm9yRXZlbnRIABItCgRkb25lGAcgASgLMh0uY3R4bWlsbC5zYW5kYm94LnYxLkRvbmVFdmVudEgAQgcKBWV2ZW50IhwKCVRleHREZWx0YRIPCgdjb250ZW50GAEgASgJIjwKDVRvb2xDYWxsU3RhcnQSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIRCglhcmdzX2pzb24YAyABKAkiXAoLVG9vbENhbGxFbmQSCgoCaWQYASABKAkSDgoGcmVzdWx0GAIgASgJEhIKBWVycm9yGAMgASgJSACIAQESEwoLZHVyYXRpb25fbXMYBCABKANCCAoGX2Vycm9yIkIKDkFwcHJvdmFsTmVlZGVkEgoKAmlkGAEgASgJEhEKCXRvb2xfbmFtZRgCIAEoCRIRCglhcmdzX2pzb24YAyABKAkiLgoQQXBwcm92YWxSZXNvbHZlZBIKCgJpZBgBIAEoCRIOCgZhY3Rpb24YAiABKAkiWQoKRXJyb3JFdmVudBIPCgdtZXNzYWdlGAEgASgJEhgKC3N0YWNrX3RyYWNlGAIgASgJSACIAQESEAoIY2F0ZWdvcnkYAyABKAlCDgoMX3N0YWNrX3RyYWNlIn4KCURvbmVFdmVudBITCgZyZXN1bHQYASABKAlIAIgBARIyCgV1c2FnZRgCIAEoCzIeLmN0eG1pbGwuc2FuZGJveC52MS5Ub2tlblVzYWdlSAGIAQESEwoLaW50ZXJydXB0ZWQYAyABKAhCCQoHX3Jlc3VsdEIICgZfdXNhZ2UiawoKVG9rZW5Vc2FnZRIUCgxpbnB1dF90b2tlbnMYASABKAMSFQoNb3V0cHV0X3Rva2VucxgCIAEoAxIUCgx0b3RhbF90b2tlbnMYAyABKAMSEQoEY29zdBgEIAEoAUgAiAEBQgcKBV9jb3N0IsUBCgxBcnRpZmFjdE1ldGESCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSEgoKc2Vzc2lvbl9pZBgDIAEoCRIMCgRuYW1lGAQgASgJEhEKCW1pbWVfdHlwZRgFIAEoCRISCgpzaXplX2J5dGVzGAYgASgDEhMKC3N0b3JhZ2Vfa2V5GAcgASgJEg4KBmJ1Y2tldBgIIAEoCRIVCg1tZXRhZGF0YV9qc29uGAkgASgJEhIKCmNyZWF0ZWRfYXQYCiABKAMicwoXUmVnaXN0ZXJBcnRpZmFjdFJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRIQCghhZ2VudF9pZBgCIAEoCRIyCghhcnRpZmFjdBgDIAEoCzIgLmN0eG1pbGwuc2FuZGJveC52MS5BcnRpZmFjdE1ldGEiPgoYUmVnaXN0ZXJBcnRpZmFjdFJlc3BvbnNlEhMKC2FydGlmYWN0X2lkGAEgASgJEg0KBWVycm9yGAIgASgJIj8KFlJlc29sdmVBcnRpZmFjdFJlcXVlc3QSEwoLYXJ0aWZhY3RfaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkiXAoXUmVzb2x2ZUFydGlmYWN0UmVzcG9uc2USMgoIYXJ0aWZhY3QYASABKAsyIC5jdHhtaWxsLnNhbmRib3gudjEuQXJ0aWZhY3RNZXRhEg0KBWVycm9yGAIgASgJKoIBCgxUb29sTG9jYXRpb24SHQoZVE9PTF9MT0NBVElPTl9VTlNQRUNJRklFRBAAEhkKFVRPT0xfTE9DQVRJT05fU0FOREJPWBABEh4KGlRPT0xfTE9DQVRJT05fT1JDSEVTVFJBVE9SEAISGAoUVE9PTF9MT0NBVElPTl9EQUVNT04QAzKUAwoOSGFybmVzc1NlcnZpY2USXgoLT3BlblNlc3Npb24SJi5jdHhtaWxsLnNhbmRib3gudjEuT3BlblNlc3Npb25SZXF1ZXN0GicuY3R4bWlsbC5zYW5kYm94LnYxLk9wZW5TZXNzaW9uUmVzcG9uc2USWQoLRGVsaXZlclR1cm4SJi5jdHhtaWxsLnNhbmRib3gudjEuRGVsaXZlclR1cm5SZXF1ZXN0GiAuY3R4bWlsbC5zYW5kYm94LnYxLlNlc3Npb25FdmVudDABEmcKDlN1c3BlbmRTZXNzaW9uEikuY3R4bWlsbC5zYW5kYm94LnYxLlN1c3BlbmRTZXNzaW9uUmVxdWVzdBoqLmN0eG1pbGwuc2FuZGJveC52MS5TdXNwZW5kU2Vzc2lvblJlc3BvbnNlEl4KC0tpbGxTZXNzaW9uEiYuY3R4bWlsbC5zYW5kYm94LnYxLktpbGxTZXNzaW9uUmVxdWVzdBonLmN0eG1pbGwuc2FuZGJveC52MS5LaWxsU2Vzc2lvblJlc3BvbnNlMpMEChNPcmNoZXN0cmF0b3JTZXJ2aWNlEl4KC1JlcXVlc3RUb29sEiYuY3R4bWlsbC5zYW5kYm94LnYxLlJlcXVlc3RUb29sUmVxdWVzdBonLmN0eG1pbGwuc2FuZGJveC52MS5SZXF1ZXN0VG9vbFJlc3BvbnNlElgKCUVtaXRFdmVudBIkLmN0eG1pbGwuc2FuZGJveC52MS5FbWl0RXZlbnRSZXF1ZXN0GiUuY3R4bWlsbC5zYW5kYm94LnYxLkVtaXRFdmVudFJlc3BvbnNlEmcKDlJlZnJlc2hTZWNyZXRzEikuY3R4bWlsbC5zYW5kYm94LnYxLlJlZnJlc2hTZWNyZXRzUmVxdWVzdBoqLmN0eG1pbGwuc2FuZGJveC52MS5SZWZyZXNoU2VjcmV0c1Jlc3BvbnNlEm0KEFJlZ2lzdGVyQXJ0aWZhY3QSKy5jdHhtaWxsLnNhbmRib3gudjEuUmVnaXN0ZXJBcnRpZmFjdFJlcXVlc3QaLC5jdHhtaWxsLnNhbmRib3gudjEuUmVnaXN0ZXJBcnRpZmFjdFJlc3BvbnNlEmoKD1Jlc29sdmVBcnRpZmFjdBIqLmN0eG1pbGwuc2FuZGJveC52MS5SZXNvbHZlQXJ0aWZhY3RSZXF1ZXN0GisuY3R4bWlsbC5zYW5kYm94LnYxLlJlc29sdmVBcnRpZmFjdFJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_struct]);
+  fileDesc("CiBjdHhtaWxsL3NhbmRib3gvdjEvc2FuZGJveC5wcm90bxISY3R4bWlsbC5zYW5kYm94LnYxIo8BChJPcGVuU2Vzc2lvblJlcXVlc3QSMwoFZnJlc2gYASABKAsyIi5jdHhtaWxsLnNhbmRib3gudjEuRnJlc2hCb290c3RyYXBIABI3CgdyZXN0b3JlGAIgASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLlJlc3RvcmVCb290c3RyYXBIAEILCglib290c3RyYXAi0wEKDkZyZXNoQm9vdHN0cmFwEhAKCGFnZW50X2lkGAEgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgCIAEoCRIUCgxoYXJuZXNzX25hbWUYAyABKAkSGwoTaGFybmVzc19jb25maWdfanNvbhgEIAEoCRIVCg1zeXN0ZW1fcHJvbXB0GAYgASgJEi8KBXRvb2xzGAcgAygLMiAuY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xNZXRhZGF0YRIVCg13b3Jrc3BhY2VfZGlyGAggASgJSgQIBRAGIswBChBSZXN0b3JlQm9vdHN0cmFwEkEKEnNlc3Npb25fY2hlY2twb2ludBgBIAEoCzIlLmN0eG1pbGwuc2FuZGJveC52MS5TZXNzaW9uQ2hlY2twb2ludBIvCgV0b29scxgCIAMoCzIgLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sTWV0YWRhdGESEAoIYWdlbnRfaWQYAyABKAkSGwoTaGFybmVzc19jb25maWdfanNvbhgEIAEoCRIVCg1zeXN0ZW1fcHJvbXB0GAUgASgJIjkKE09wZW5TZXNzaW9uUmVzcG9uc2USEgoKc2Vzc2lvbl9pZBgBIAEoCRIOCgZzdGF0dXMYAiABKAkiaAoSRGVsaXZlclR1cm5SZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSLQoIbWVzc2FnZXMYAiADKAsyGy5jdHhtaWxsLnNhbmRib3gudjEuTWVzc2FnZRIPCgd0dXJuX2lkGAMgASgJIocCCgxTZXNzaW9uRXZlbnQSNQoLYWdfdWlfZXZlbnQYASABKAsyHi5jdHhtaWxsLnNhbmRib3gudjEuQWdlbnRFdmVudEgAEkEKEW1lc3NhZ2VfY29tbWl0dGVkGAIgASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLk1lc3NhZ2VDb21taXR0ZWRIABI7Cg50dXJuX2NvbXBsZXRlZBgDIAEoCzIhLmN0eG1pbGwuc2FuZGJveC52MS5UdXJuQ29tcGxldGVkSAASNQoLdHVybl9mYWlsZWQYBCABKAsyHi5jdHhtaWxsLnNhbmRib3gudjEuVHVybkZhaWxlZEgAQgkKB3BheWxvYWQitQEKEE1lc3NhZ2VDb21taXR0ZWQSDAoEcm9sZRgBIAEoCRIPCgdjb250ZW50GAIgASgJEjAKCnRvb2xfY2FsbHMYAyADKAsyHC5jdHhtaWxsLnNhbmRib3gudjEuVG9vbENhbGwSGQoMdG9vbF9jYWxsX2lkGAQgASgJSACIAQESDwoHdHVybl9pZBgFIAEoCRITCgttZXNzYWdlX3NlcRgGIAEoBEIPCg1fdG9vbF9jYWxsX2lkIiAKDVR1cm5Db21wbGV0ZWQSDwoHdHVybl9pZBgBIAEoCSI0CgpUdXJuRmFpbGVkEg8KB3R1cm5faWQYASABKAkSFQoNZXJyb3JfbWVzc2FnZRgCIAEoCSI7ChVTdXNwZW5kU2Vzc2lvblJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkiWwoWU3VzcGVuZFNlc3Npb25SZXNwb25zZRJBChJzZXNzaW9uX2NoZWNrcG9pbnQYASABKAsyJS5jdHhtaWxsLnNhbmRib3gudjEuU2Vzc2lvbkNoZWNrcG9pbnQiYgoGQ3Vyc29yEhgKEG5leHRfbWVzc2FnZV9zZXEYASABKAQSIwoWbGFzdF9jb21wbGV0ZWRfdHVybl9pZBgCIAEoCUgAiAEBQhkKF19sYXN0X2NvbXBsZXRlZF90dXJuX2lkIlsKC1J1bm5lclN0YXRlEg4KBnN0YXR1cxgBIAEoCRI8ChBwZW5kaW5nX3JlcXVlc3RzGAIgAygLMiIuY3R4bWlsbC5zYW5kYm94LnYxLlBlbmRpbmdSZXF1ZXN0IkAKDlBlbmRpbmdSZXF1ZXN0EgwKBHR5cGUYASABKAkSCgoCaWQYAiABKAkSFAoMcGF5bG9hZF9qc29uGAMgASgJIjMKDFdvcmtzcGFjZVJlZhIQCghzdHJhdGVneRgBIAEoCRIRCglyZWZlcmVuY2UYAiABKAkivgIKEVNlc3Npb25DaGVja3BvaW50EhoKEmNoZWNrcG9pbnRfdmVyc2lvbhgBIAEoBRISCgpzZXNzaW9uX2lkGAIgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgDIAEoCRIUCgxoYXJuZXNzX25hbWUYBCABKAkSKgoGY3Vyc29yGAUgASgLMhouY3R4bWlsbC5zYW5kYm94LnYxLkN1cnNvchI1CgxydW5uZXJfc3RhdGUYBiABKAsyHy5jdHhtaWxsLnNhbmRib3gudjEuUnVubmVyU3RhdGUSNwoNd29ya3NwYWNlX3JlZhgHIAEoCzIgLmN0eG1pbGwuc2FuZGJveC52MS5Xb3Jrc3BhY2VSZWYSLgoNaGFybmVzc19zdGF0ZRgIIAEoCzIXLmdvb2dsZS5wcm90b2J1Zi5TdHJ1Y3QiOAoSS2lsbFNlc3Npb25SZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSDgoGcmVhc29uGAIgASgJIisKE0tpbGxTZXNzaW9uUmVzcG9uc2USFAoMZmluYWxfc3RhdHVzGAEgASgJInQKElJlcXVlc3RUb29sUmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhEKCXRvb2xfbmFtZRgDIAEoCRIRCglhcmdzX2pzb24YBCABKAkSEgoKcmVxdWVzdF9pZBgFIAEoCSJXChNSZXF1ZXN0VG9vbFJlc3BvbnNlEhIKCnJlcXVlc3RfaWQYASABKAkSDgoGcmVzdWx0GAIgASgJEhIKBWVycm9yGAMgASgJSACIAQFCCAoGX2Vycm9yIlAKEEVtaXRFdmVudFJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRISCgpldmVudF90eXBlGAIgASgJEhQKDHBheWxvYWRfanNvbhgDIAEoCSITChFFbWl0RXZlbnRSZXNwb25zZSI4ChBOYXRpdmVUb29sQ29uZmlnEhEKCWFsbG93bGlzdBgBIAMoCRIRCglibG9ja2xpc3QYAiADKAkirgEKB01lc3NhZ2USCgoCaWQYASABKAkSDAoEcm9sZRgCIAEoCRIPCgdjb250ZW50GAMgASgJEjAKCnRvb2xfY2FsbHMYBCADKAsyHC5jdHhtaWxsLnNhbmRib3gudjEuVG9vbENhbGwSGQoMdG9vbF9jYWxsX2lkGAUgASgJSACIAQESEQoEbmFtZRgGIAEoCUgBiAEBQg8KDV90b29sX2NhbGxfaWRCBwoFX25hbWUiPAoIVG9vbENhbGwSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIWCg5hcmd1bWVudHNfanNvbhgDIAEoCSKWAQoMVG9vbE1ldGFkYXRhEgwKBG5hbWUYASABKAkSEwoLZGVzY3JpcHRpb24YAiABKAkSGQoRaW5wdXRfc2NoZW1hX2pzb24YAyABKAkSMgoIbG9jYXRpb24YBCABKA4yIC5jdHhtaWxsLnNhbmRib3gudjEuVG9vbExvY2F0aW9uEhQKDHByb2dyYW1tYXRpYxgFIAEoCCKkAwoKQWdlbnRFdmVudBIzCgp0ZXh0X2RlbHRhGAEgASgLMh0uY3R4bWlsbC5zYW5kYm94LnYxLlRleHREZWx0YUgAEjwKD3Rvb2xfY2FsbF9zdGFydBgCIAEoCzIhLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sQ2FsbFN0YXJ0SAASOAoNdG9vbF9jYWxsX2VuZBgDIAEoCzIfLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sQ2FsbEVuZEgAEj0KD2FwcHJvdmFsX25lZWRlZBgEIAEoCzIiLmN0eG1pbGwuc2FuZGJveC52MS5BcHByb3ZhbE5lZWRlZEgAEkEKEWFwcHJvdmFsX3Jlc29sdmVkGAUgASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLkFwcHJvdmFsUmVzb2x2ZWRIABIvCgVlcnJvchgGIAEoCzIeLmN0eG1pbGwuc2FuZGJveC52MS5FcnJvckV2ZW50SAASLQoEZG9uZRgHIAEoCzIdLmN0eG1pbGwuc2FuZGJveC52MS5Eb25lRXZlbnRIAEIHCgVldmVudCIcCglUZXh0RGVsdGESDwoHY29udGVudBgBIAEoCSI8Cg1Ub29sQ2FsbFN0YXJ0EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSEQoJYXJnc19qc29uGAMgASgJIlwKC1Rvb2xDYWxsRW5kEgoKAmlkGAEgASgJEg4KBnJlc3VsdBgCIAEoCRISCgVlcnJvchgDIAEoCUgAiAEBEhMKC2R1cmF0aW9uX21zGAQgASgDQggKBl9lcnJvciJCCg5BcHByb3ZhbE5lZWRlZBIKCgJpZBgBIAEoCRIRCgl0b29sX25hbWUYAiABKAkSEQoJYXJnc19qc29uGAMgASgJIi4KEEFwcHJvdmFsUmVzb2x2ZWQSCgoCaWQYASABKAkSDgoGYWN0aW9uGAIgASgJIlkKCkVycm9yRXZlbnQSDwoHbWVzc2FnZRgBIAEoCRIYCgtzdGFja190cmFjZRgCIAEoCUgAiAEBEhAKCGNhdGVnb3J5GAMgASgJQg4KDF9zdGFja190cmFjZSJ+CglEb25lRXZlbnQSEwoGcmVzdWx0GAEgASgJSACIAQESMgoFdXNhZ2UYAiABKAsyHi5jdHhtaWxsLnNhbmRib3gudjEuVG9rZW5Vc2FnZUgBiAEBEhMKC2ludGVycnVwdGVkGAMgASgIQgkKB19yZXN1bHRCCAoGX3VzYWdlImsKClRva2VuVXNhZ2USFAoMaW5wdXRfdG9rZW5zGAEgASgDEhUKDW91dHB1dF90b2tlbnMYAiABKAMSFAoMdG90YWxfdG9rZW5zGAMgASgDEhEKBGNvc3QYBCABKAFIAIgBAUIHCgVfY29zdCLFAQoMQXJ0aWZhY3RNZXRhEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhIKCnNlc3Npb25faWQYAyABKAkSDAoEbmFtZRgEIAEoCRIRCgltaW1lX3R5cGUYBSABKAkSEgoKc2l6ZV9ieXRlcxgGIAEoAxITCgtzdG9yYWdlX2tleRgHIAEoCRIOCgZidWNrZXQYCCABKAkSFQoNbWV0YWRhdGFfanNvbhgJIAEoCRISCgpjcmVhdGVkX2F0GAogASgDInMKF1JlZ2lzdGVyQXJ0aWZhY3RSZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSMgoIYXJ0aWZhY3QYAyABKAsyIC5jdHhtaWxsLnNhbmRib3gudjEuQXJ0aWZhY3RNZXRhIj4KGFJlZ2lzdGVyQXJ0aWZhY3RSZXNwb25zZRITCgthcnRpZmFjdF9pZBgBIAEoCRINCgVlcnJvchgCIAEoCSI/ChZSZXNvbHZlQXJ0aWZhY3RSZXF1ZXN0EhMKC2FydGlmYWN0X2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJIlwKF1Jlc29sdmVBcnRpZmFjdFJlc3BvbnNlEjIKCGFydGlmYWN0GAEgASgLMiAuY3R4bWlsbC5zYW5kYm94LnYxLkFydGlmYWN0TWV0YRINCgVlcnJvchgCIAEoCSqCAQoMVG9vbExvY2F0aW9uEh0KGVRPT0xfTE9DQVRJT05fVU5TUEVDSUZJRUQQABIZChVUT09MX0xPQ0FUSU9OX1NBTkRCT1gQARIeChpUT09MX0xPQ0FUSU9OX09SQ0hFU1RSQVRPUhACEhgKFFRPT0xfTE9DQVRJT05fREFFTU9OEAMylAMKDkhhcm5lc3NTZXJ2aWNlEl4KC09wZW5TZXNzaW9uEiYuY3R4bWlsbC5zYW5kYm94LnYxLk9wZW5TZXNzaW9uUmVxdWVzdBonLmN0eG1pbGwuc2FuZGJveC52MS5PcGVuU2Vzc2lvblJlc3BvbnNlElkKC0RlbGl2ZXJUdXJuEiYuY3R4bWlsbC5zYW5kYm94LnYxLkRlbGl2ZXJUdXJuUmVxdWVzdBogLmN0eG1pbGwuc2FuZGJveC52MS5TZXNzaW9uRXZlbnQwARJnCg5TdXNwZW5kU2Vzc2lvbhIpLmN0eG1pbGwuc2FuZGJveC52MS5TdXNwZW5kU2Vzc2lvblJlcXVlc3QaKi5jdHhtaWxsLnNhbmRib3gudjEuU3VzcGVuZFNlc3Npb25SZXNwb25zZRJeCgtLaWxsU2Vzc2lvbhImLmN0eG1pbGwuc2FuZGJveC52MS5LaWxsU2Vzc2lvblJlcXVlc3QaJy5jdHhtaWxsLnNhbmRib3gudjEuS2lsbFNlc3Npb25SZXNwb25zZTKqAwoTT3JjaGVzdHJhdG9yU2VydmljZRJeCgtSZXF1ZXN0VG9vbBImLmN0eG1pbGwuc2FuZGJveC52MS5SZXF1ZXN0VG9vbFJlcXVlc3QaJy5jdHhtaWxsLnNhbmRib3gudjEuUmVxdWVzdFRvb2xSZXNwb25zZRJYCglFbWl0RXZlbnQSJC5jdHhtaWxsLnNhbmRib3gudjEuRW1pdEV2ZW50UmVxdWVzdBolLmN0eG1pbGwuc2FuZGJveC52MS5FbWl0RXZlbnRSZXNwb25zZRJtChBSZWdpc3RlckFydGlmYWN0EisuY3R4bWlsbC5zYW5kYm94LnYxLlJlZ2lzdGVyQXJ0aWZhY3RSZXF1ZXN0GiwuY3R4bWlsbC5zYW5kYm94LnYxLlJlZ2lzdGVyQXJ0aWZhY3RSZXNwb25zZRJqCg9SZXNvbHZlQXJ0aWZhY3QSKi5jdHhtaWxsLnNhbmRib3gudjEuUmVzb2x2ZUFydGlmYWN0UmVxdWVzdBorLmN0eG1pbGwuc2FuZGJveC52MS5SZXNvbHZlQXJ0aWZhY3RSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_struct]);
 
 /**
  * @generated from message ctxmill.sandbox.v1.OpenSessionRequest
@@ -625,55 +625,6 @@ export const EmitEventResponseSchema: GenMessage<EmitEventResponse> = /*@__PURE_
   messageDesc(file_ctxmill_sandbox_v1_sandbox, 21);
 
 /**
- * @generated from message ctxmill.sandbox.v1.RefreshSecretsRequest
- */
-export type RefreshSecretsRequest = Message$1<"ctxmill.sandbox.v1.RefreshSecretsRequest"> & {
-  /**
-   * @generated from field: string session_id = 1;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: string agent_id = 2;
-   */
-  agentId: string;
-};
-
-/**
- * Describes the message ctxmill.sandbox.v1.RefreshSecretsRequest.
- * Use `create(RefreshSecretsRequestSchema)` to create a new message.
- */
-export const RefreshSecretsRequestSchema: GenMessage<RefreshSecretsRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 22);
-
-/**
- * @generated from message ctxmill.sandbox.v1.RefreshSecretsResponse
- */
-export type RefreshSecretsResponse = Message$1<"ctxmill.sandbox.v1.RefreshSecretsResponse"> & {
-  /**
-   * @generated from field: bool success = 1;
-   */
-  success: boolean;
-
-  /**
-   * @generated from field: optional string error = 2;
-   */
-  error?: string;
-
-  /**
-   * @generated from field: string secrets_path = 3;
-   */
-  secretsPath: string;
-};
-
-/**
- * Describes the message ctxmill.sandbox.v1.RefreshSecretsResponse.
- * Use `create(RefreshSecretsResponseSchema)` to create a new message.
- */
-export const RefreshSecretsResponseSchema: GenMessage<RefreshSecretsResponse> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 23);
-
-/**
  * @generated from message ctxmill.sandbox.v1.NativeToolConfig
  */
 export type NativeToolConfig = Message$1<"ctxmill.sandbox.v1.NativeToolConfig"> & {
@@ -693,7 +644,7 @@ export type NativeToolConfig = Message$1<"ctxmill.sandbox.v1.NativeToolConfig"> 
  * Use `create(NativeToolConfigSchema)` to create a new message.
  */
 export const NativeToolConfigSchema: GenMessage<NativeToolConfig> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 24);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 22);
 
 /**
  * @generated from message ctxmill.sandbox.v1.Message
@@ -735,7 +686,7 @@ export type Message = Message$1<"ctxmill.sandbox.v1.Message"> & {
  * Use `create(MessageSchema)` to create a new message.
  */
 export const MessageSchema: GenMessage<Message> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 25);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 23);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ToolCall
@@ -762,7 +713,7 @@ export type ToolCall = Message$1<"ctxmill.sandbox.v1.ToolCall"> & {
  * Use `create(ToolCallSchema)` to create a new message.
  */
 export const ToolCallSchema: GenMessage<ToolCall> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 26);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 24);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ToolMetadata
@@ -799,7 +750,7 @@ export type ToolMetadata = Message$1<"ctxmill.sandbox.v1.ToolMetadata"> & {
  * Use `create(ToolMetadataSchema)` to create a new message.
  */
 export const ToolMetadataSchema: GenMessage<ToolMetadata> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 27);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 25);
 
 /**
  * @generated from message ctxmill.sandbox.v1.AgentEvent
@@ -858,7 +809,7 @@ export type AgentEvent = Message$1<"ctxmill.sandbox.v1.AgentEvent"> & {
  * Use `create(AgentEventSchema)` to create a new message.
  */
 export const AgentEventSchema: GenMessage<AgentEvent> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 28);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 26);
 
 /**
  * @generated from message ctxmill.sandbox.v1.TextDelta
@@ -875,7 +826,7 @@ export type TextDelta = Message$1<"ctxmill.sandbox.v1.TextDelta"> & {
  * Use `create(TextDeltaSchema)` to create a new message.
  */
 export const TextDeltaSchema: GenMessage<TextDelta> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 29);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 27);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ToolCallStart
@@ -902,7 +853,7 @@ export type ToolCallStart = Message$1<"ctxmill.sandbox.v1.ToolCallStart"> & {
  * Use `create(ToolCallStartSchema)` to create a new message.
  */
 export const ToolCallStartSchema: GenMessage<ToolCallStart> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 30);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 28);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ToolCallEnd
@@ -934,7 +885,7 @@ export type ToolCallEnd = Message$1<"ctxmill.sandbox.v1.ToolCallEnd"> & {
  * Use `create(ToolCallEndSchema)` to create a new message.
  */
 export const ToolCallEndSchema: GenMessage<ToolCallEnd> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 31);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 29);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ApprovalNeeded
@@ -961,7 +912,7 @@ export type ApprovalNeeded = Message$1<"ctxmill.sandbox.v1.ApprovalNeeded"> & {
  * Use `create(ApprovalNeededSchema)` to create a new message.
  */
 export const ApprovalNeededSchema: GenMessage<ApprovalNeeded> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 32);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 30);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ApprovalResolved
@@ -983,7 +934,7 @@ export type ApprovalResolved = Message$1<"ctxmill.sandbox.v1.ApprovalResolved"> 
  * Use `create(ApprovalResolvedSchema)` to create a new message.
  */
 export const ApprovalResolvedSchema: GenMessage<ApprovalResolved> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 33);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 31);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ErrorEvent
@@ -1010,7 +961,7 @@ export type ErrorEvent = Message$1<"ctxmill.sandbox.v1.ErrorEvent"> & {
  * Use `create(ErrorEventSchema)` to create a new message.
  */
 export const ErrorEventSchema: GenMessage<ErrorEvent> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 34);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 32);
 
 /**
  * @generated from message ctxmill.sandbox.v1.DoneEvent
@@ -1037,7 +988,7 @@ export type DoneEvent = Message$1<"ctxmill.sandbox.v1.DoneEvent"> & {
  * Use `create(DoneEventSchema)` to create a new message.
  */
 export const DoneEventSchema: GenMessage<DoneEvent> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 35);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 33);
 
 /**
  * @generated from message ctxmill.sandbox.v1.TokenUsage
@@ -1069,7 +1020,7 @@ export type TokenUsage = Message$1<"ctxmill.sandbox.v1.TokenUsage"> & {
  * Use `create(TokenUsageSchema)` to create a new message.
  */
 export const TokenUsageSchema: GenMessage<TokenUsage> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 36);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 34);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ArtifactMeta
@@ -1131,7 +1082,7 @@ export type ArtifactMeta = Message$1<"ctxmill.sandbox.v1.ArtifactMeta"> & {
  * Use `create(ArtifactMetaSchema)` to create a new message.
  */
 export const ArtifactMetaSchema: GenMessage<ArtifactMeta> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 37);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 35);
 
 /**
  * @generated from message ctxmill.sandbox.v1.RegisterArtifactRequest
@@ -1158,7 +1109,7 @@ export type RegisterArtifactRequest = Message$1<"ctxmill.sandbox.v1.RegisterArti
  * Use `create(RegisterArtifactRequestSchema)` to create a new message.
  */
 export const RegisterArtifactRequestSchema: GenMessage<RegisterArtifactRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 38);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 36);
 
 /**
  * @generated from message ctxmill.sandbox.v1.RegisterArtifactResponse
@@ -1180,7 +1131,7 @@ export type RegisterArtifactResponse = Message$1<"ctxmill.sandbox.v1.RegisterArt
  * Use `create(RegisterArtifactResponseSchema)` to create a new message.
  */
 export const RegisterArtifactResponseSchema: GenMessage<RegisterArtifactResponse> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 39);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 37);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ResolveArtifactRequest
@@ -1202,7 +1153,7 @@ export type ResolveArtifactRequest = Message$1<"ctxmill.sandbox.v1.ResolveArtifa
  * Use `create(ResolveArtifactRequestSchema)` to create a new message.
  */
 export const ResolveArtifactRequestSchema: GenMessage<ResolveArtifactRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 40);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 38);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ResolveArtifactResponse
@@ -1224,7 +1175,7 @@ export type ResolveArtifactResponse = Message$1<"ctxmill.sandbox.v1.ResolveArtif
  * Use `create(ResolveArtifactResponseSchema)` to create a new message.
  */
 export const ResolveArtifactResponseSchema: GenMessage<ResolveArtifactResponse> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 41);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 39);
 
 /**
  * @generated from enum ctxmill.sandbox.v1.ToolLocation
@@ -1315,14 +1266,6 @@ export const OrchestratorService: GenService<{
     methodKind: "unary";
     input: typeof EmitEventRequestSchema;
     output: typeof EmitEventResponseSchema;
-  },
-  /**
-   * @generated from rpc ctxmill.sandbox.v1.OrchestratorService.RefreshSecrets
-   */
-  refreshSecrets: {
-    methodKind: "unary";
-    input: typeof RefreshSecretsRequestSchema;
-    output: typeof RefreshSecretsResponseSchema;
   },
   /**
    * @generated from rpc ctxmill.sandbox.v1.OrchestratorService.RegisterArtifact

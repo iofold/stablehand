@@ -25,7 +25,9 @@ export class ArtifactToolProvider implements ToolProvider {
           metadata: z.record(z.string(), z.unknown()).optional().describe('Optional key-value metadata'),
         }),
         location: 'daemon' as const,
-        handler: async () => JSON.stringify({ error: 'artifact_upload must be handled by the sandbox daemon' }),
+        handler: async () => {
+          throw new Error('artifact_upload must be handled by the sandbox daemon');
+        },
       },
       {
         name: 'artifact_download',
@@ -35,7 +37,9 @@ export class ArtifactToolProvider implements ToolProvider {
           path: z.string().optional().describe('Workspace path to save to (defaults to original filename)'),
         }),
         location: 'daemon' as const,
-        handler: async () => JSON.stringify({ error: 'artifact_download must be handled by the sandbox daemon' }),
+        handler: async () => {
+          throw new Error('artifact_download must be handled by the sandbox daemon');
+        },
       },
     ];
   }

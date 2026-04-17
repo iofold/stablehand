@@ -94,7 +94,6 @@ Key runtime event types from `packages/ctxmill/src/events/bus.ts` that affect AG
 |---|---|---|---|
 | RequestTool | tool_name, arguments_json, request_id | ToolCallResult | orchestrator-side tool execution |
 | EmitEvent | event_type, payload (JSON) | Empty | payload.runId = sessionId (injected by orchestrator) |
-| RefreshSecrets | — | SecretsPayload | P2+ stub |
 | RegisterArtifact | metadata, upload_url | ArtifactRecord | S3/MinIO registration |
 | ResolveArtifact | artifact_id | ArtifactRecord | S3/MinIO lookup |
 

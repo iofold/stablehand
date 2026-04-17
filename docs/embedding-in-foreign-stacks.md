@@ -156,7 +156,14 @@ docker compose build
 
 ## Secret Injection
 
-Secrets are injected into sandbox containers using a `tmpfs` mount at `/run/secrets/config.json`. 
+Today, sandbox containers receive secrets as **environment variables** assembled by the orchestrator at session startup / restore time.
+
+The container still mounts a tmpfs at `/run/secrets`, but the current orchestrator path does **not** write a `config.json` secret bundle there. The effective runtime contract is:
+
+1. read a hardcoded allowlist of host env vars from the orchestrator process
+2. read all per-agent secrets from the CTXMILL Secret Store
+3. merge them (`agent` secrets win on key collision)
+4. inject the merged map into the sandbox container's `Env`
 
 ### SANDBOX_SECRET_ALLOWLIST
 The orchestrator only passes specific environment variables to the sandbox. The current allowlist includes:
@@ -165,7 +172,17 @@ The orchestrator only passes specific environment variables to the sandbox. The 
 *   `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_REGION`
 *   `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, `LANGSMITH_WORKSPACE_ID`
 
-If you need to pass custom secrets to your tools, you should store them in the ctxmill Secret Store (via the API/UI) rather than relying on environment variable passthrough.
+### Important distinction: host env allowlist vs per-agent secrets
+
+- **Arbitrary host environment variables are _not_ forwarded** unless you add them to `SANDBOX_SECRET_ALLOWLIST`.
+- **Arbitrary per-agent secret keys _are_ forwarded today**. If you store a secret such as `MY_INTERNAL_TOKEN` or `FOO_BAR` through the API/UI secret store, the sandbox container currently receives that exact key as an environment variable.
+
+This means the current model is:
+
+- host env → sandbox: **allowlisted only**
+- per-agent secret store → sandbox: **any key name**
+
+If you need custom secrets for tools or harnesses, the supported path today is to store them in the CTXMILL Secret Store (via the API/UI) rather than expecting arbitrary host env passthrough.
 
 ## Egress Proxy
 
@@ -217,4 +234,4 @@ Point any `@ag-ui/client` HttpAgent at this URL and it works out of the box. See
 | **"No space left on device"** | Docker root partition is full. | Prune unused images or increase disk size. |
 | **"network web not found"** | External network missing. | Create it manually: `docker network create web`. |
 | **CORS errors in browser** | `CORS_ORIGINS` missing your domain. | Add your UI domain to the environment variable. |
-| **Secrets not found in agent** | Secret not in allowlist. | Use the built-in Secret Store for custom keys. |
+| **Secrets not found in agent** | Arbitrary host env var is not in `SANDBOX_SECRET_ALLOWLIST`, or the key was never added to the agent's Secret Store. | Add the key to the agent Secret Store for current behavior, or widen the host allowlist intentionally. |

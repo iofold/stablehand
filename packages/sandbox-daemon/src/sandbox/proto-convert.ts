@@ -45,6 +45,7 @@ import type {
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
 import { jsonSchemaToZod } from '../tool/schema-convert.js';
+import { stringifyJsonWithBigInts, toJsonCompatibleValue } from './json-serialization.js';
 import { createToolProxy, type OrchestratorServiceClient } from './tool-proxy.js';
 
 /* -------------------------------------------------------------------------- */
@@ -204,7 +205,7 @@ export function messageToCommittedEvent(
           argumentsJson:
             typeof tc.arguments === 'string'
               ? tc.arguments
-              : JSON.stringify(tc.arguments),
+              : stringifyJsonWithBigInts(tc.arguments),
         }),
       ),
       toolCallId: msg.toolCallId,
@@ -249,7 +250,7 @@ export function sessionCheckpointToProto(
       strategy: checkpoint.workspaceRef.strategy,
       reference: checkpoint.workspaceRef.reference,
     }),
-    harnessState: sanitizeBigInts(checkpoint.harnessState) as unknown as JsonObject,
+    harnessState: toJsonCompatibleValue(checkpoint.harnessState) as JsonObject,
   });
 }
 
@@ -288,9 +289,9 @@ export function protoSessionCheckpointToInternal(
 /**
  * Options for wiring orchestrator-location tool proxies.
  *
- * When provided, orchestrator-location tools will get a real gRPC proxy handler
- * instead of the placeholder stub. If not provided (e.g., in tests), the
- * placeholder handler is used as a fallback.
+ * When provided, orchestrator-location tools will get a real gRPC proxy handler.
+ * Missing routing metadata is treated as a wiring error instead of silently
+ * degrading to a placeholder stub.
  */
 export interface ProtoToolDefsOptions {
   orchestratorClient?: OrchestratorServiceClient;
@@ -306,8 +307,8 @@ export interface ProtoToolDefsOptions {
  * - **Sandbox-location tools**: Get a reconstructed Zod schema from the JSON
  *   Schema and a no-op handler (the harness SDK handles execution).
  * - **Orchestrator-location tools**: Get a proxy handler that calls back to
- *   the orchestrator via gRPC. If `opts.orchestratorClient` is provided the
- *   real proxy is used; otherwise a placeholder stub is returned.
+ *   the orchestrator via gRPC. Missing client/routing metadata throws during
+ *   tool-definition construction so miswired plumbing fails fast at startup.
  */
 export function protoToToolDefs(
   tools: ProtoToolMetadata[],
@@ -326,11 +327,15 @@ export function protoToToolDefs(
     if (isDaemon && opts?.daemonHandlers?.has(t.name)) {
       handler = opts.daemonHandlers.get(t.name)!;
     } else if (isDaemon) {
-      handler = createDaemonStub(t.name);
+      throw new Error(
+        `Daemon handler for "${t.name}" is not configured. Ensure artifact storage and orchestrator routing are enabled before opening the session.`,
+      );
     } else if (isOrchestrator && opts?.orchestratorClient && effectiveSessionId && opts.agentId) {
       handler = createToolProxy(t.name, opts.orchestratorClient, effectiveSessionId, opts.agentId);
     } else if (isOrchestrator) {
-      handler = createOrchestratorProxyStub(t.name);
+      throw new Error(
+        `Orchestrator proxy for "${t.name}" is not connected. Session startup requires ORCHESTRATOR_URL and routing metadata.`,
+      );
     } else {
       handler = createSandboxHandler(t.name);
     }
@@ -354,33 +359,12 @@ export function protoToToolDefs(
  */
 function createSandboxHandler(toolName: string) {
   return async (_input: unknown): Promise<string> => {
-    return JSON.stringify({
-      error: `Sandbox handler for "${toolName}" was called directly — this should be handled by the harness SDK.`,
-    });
+    throw new Error(
+      `Sandbox handler for "${toolName}" was called directly — this should be handled by the harness SDK.`,
+    );
   };
 }
 
-function createDaemonStub(toolName: string) {
-  return async (_input: unknown): Promise<string> => {
-    return JSON.stringify({
-      error: `Daemon handler for "${toolName}" is not configured. Ensure artifact storage is enabled.`,
-    });
-  };
-}
-
-/**
- * Create a stub proxy handler for orchestrator-location tools.
- *
- * Used as a fallback when the orchestrator gRPC client is not available
- * (e.g., in unit tests or when the sandbox is not connected to an orchestrator).
- */
-function createOrchestratorProxyStub(toolName: string) {
-  return async (input: unknown): Promise<string> => {
-    return JSON.stringify({
-      error: `Orchestrator proxy for "${toolName}" is not yet connected. Args: ${JSON.stringify(input)}`,
-    });
-  };
-}
 
 /* -------------------------------------------------------------------------- */
 /*  Private helpers                                                            */
@@ -407,7 +391,10 @@ function convertAgentEvent(event: AgentEvent): ProtoAgentEvent {
           value: create(ToolCallStartSchema, {
             id: event.id,
             name: event.name,
-            argsJson: typeof event.args === 'string' ? event.args : JSON.stringify(event.args),
+            argsJson:
+              typeof event.args === 'string'
+                ? event.args
+                : stringifyJsonWithBigInts(event.args),
           }),
         },
       });
@@ -432,7 +419,10 @@ function convertAgentEvent(event: AgentEvent): ProtoAgentEvent {
           value: create(ApprovalNeededSchema, {
             id: event.id,
             toolName: event.tool,
-            argsJson: typeof event.args === 'string' ? event.args : JSON.stringify(event.args),
+            argsJson:
+              typeof event.args === 'string'
+                ? event.args
+                : stringifyJsonWithBigInts(event.args),
           }),
         },
       });
@@ -685,17 +675,4 @@ export function protoSessionEventToCustom(
     default:
       return null;
   }
-}
-
-function sanitizeBigInts(obj: unknown): unknown {
-  if (typeof obj === 'bigint') return Number(obj);
-  if (Array.isArray(obj)) return obj.map(sanitizeBigInts);
-  if (obj !== null && typeof obj === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj)) {
-      result[key] = sanitizeBigInts(value);
-    }
-    return result;
-  }
-  return obj;
 }

@@ -7,7 +7,7 @@ import {
 } from '@ctxmill/proto/sandbox/v1';
 import { createHash } from 'node:crypto';
 
-import type { ContainerManager } from '../../sandbox/container-manager.js';
+import type { ContainerInfo, ContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../../database/repository.js';
 import type { AgentDefinition } from '../../types.js';
@@ -16,6 +16,7 @@ import {
   retryGrpcCall,
   waitForContainerReady,
 } from './grpc-session-client.js';
+import { SessionStatusCoordinator } from './session-status-coordinator.js';
 import type {
   HarnessGrpcClient,
   Logger,
@@ -42,9 +43,10 @@ function asStringArray(value: unknown): string[] | undefined {
 
 export interface SessionRecoveryCoordinatorDeps {
   containerManager: Pick<ContainerManager, 'createContainer' | 'startContainer' | 'stopContainer' | 'removeContainer'>;
-  db: Pick<DatabaseRepository, 'getCheckpointV2' | 'updateSandboxSessionStatus'>;
+  db: Pick<DatabaseRepository, 'getCheckpointV2'>;
+  statusCoordinator: SessionStatusCoordinator;
   stateStore: SessionStatePort;
-  buildSandboxSecrets: () => Readonly<Record<string, string>>;
+  buildSandboxSecrets: (agentId: string) => Readonly<Record<string, string>>;
   resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[]) => ToolMetadata[];
   workspaceDiffService: WorkspaceDiffService;
   logger: Logger;
@@ -152,7 +154,13 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     const sessionId = dbSession.id;
 
     this.deps.logger.info(`${TAG} restoring session ${sessionId} from checkpoint`);
-    await this.deps.db.updateSandboxSessionStatus(sessionId, 'RESTORING');
+    await this.deps.statusCoordinator.transition({
+      sessionId,
+      fromStatus: dbSession.status as SessionRecord['status'],
+      toStatus: 'RESTORING',
+    });
+
+    let createdContainer: ContainerInfo | undefined;
 
     try {
       const checkpoint = await this.deps.db.getCheckpointV2(sessionId);
@@ -160,8 +168,17 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         throw new Error(`No checkpoint found for session ${sessionId}`);
       }
 
-      const workspaceDir = agentDef.workspaceDir;
-      const sandboxSecrets = this.deps.buildSandboxSecrets();
+      const sessionWorkspaceDir = agentDef.workspaceDir
+        ? await this.deps.getExistingSessionWorkspaceDir(dbSession.agentId, sessionId)
+        : undefined;
+      if (agentDef.workspaceDir && !sessionWorkspaceDir) {
+        throw new Error(
+          `Missing persisted session workspace for checkpointed session ${sessionId}`,
+        );
+      }
+
+      const workspaceDir = sessionWorkspaceDir ?? agentDef.workspaceDir;
+      const sandboxSecrets = this.deps.buildSandboxSecrets(dbSession.agentId);
       const secretKeys = Object.keys(sandboxSecrets);
       this.deps.logger.info(`${TAG} injecting ${secretKeys.length} secrets: [${secretKeys.join(', ')}]`);
 
@@ -176,16 +193,16 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         timeoutSec: agentDef.resourceLimits?.timeoutSec,
         secrets: sandboxSecrets,
       });
+      createdContainer = containerInfo;
 
       await this.deps.containerManager.startContainer(containerInfo.containerId);
 
-      try {
+      if (!sessionWorkspaceDir) {
         await this.deps.workspaceDiffService.restore(sessionId, containerInfo.containerId);
         this.deps.logger.info(`${TAG} workspace restored for session ${sessionId}`);
-      } catch (err) {
-        this.deps.logger.warn(
-          `${TAG} workspace restore failed for session ${sessionId}, continuing with base workspace:`,
-          err,
+      } else {
+        this.deps.logger.info(
+          `${TAG} reusing persisted session workspace for session ${sessionId}: ${sessionWorkspaceDir}`,
         );
       }
 
@@ -223,10 +240,17 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
 
       await retryGrpcCall(() => grpcClient.openSession(openReq), 5, 1000);
 
-      await this.deps.db.updateSandboxSessionStatus(sessionId, 'ACTIVE', {
-        containerName: containerInfo.containerName,
-        containerId: containerInfo.containerId,
+      await this.deps.statusCoordinator.transition({
+        sessionId,
+        fromStatus: 'RESTORING',
+        toStatus: 'ACTIVE',
+        extra: {
+          containerName: containerInfo.containerName,
+          containerId: containerInfo.containerId,
+          checkpointRef: null,
+        },
       });
+      createdContainer = undefined;
 
       const record: SessionRecord = {
         sessionId,
@@ -237,14 +261,46 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         status: 'ACTIVE',
         harnessName,
         grpcClient,
-        sessionWorkspaceDir: undefined,
+        sessionWorkspaceDir,
       };
 
       this.deps.logger.info(`${TAG} session ${sessionId} restored from checkpoint`);
       return record;
     } catch (err) {
-      await this.deps.db.updateSandboxSessionStatus(sessionId, 'CHECKPOINTED');
+      if (createdContainer) {
+        await this.rollbackCreatedContainer(sessionId, createdContainer);
+      }
+
+      await this.deps.statusCoordinator.transition({
+        sessionId,
+        fromStatus: 'RESTORING',
+        toStatus: 'CHECKPOINTED',
+        clearRuntime: true,
+      });
       throw err;
+    }
+  }
+
+  private async rollbackCreatedContainer(
+    sessionId: string,
+    container: ContainerInfo,
+  ): Promise<void> {
+    try {
+      await this.deps.containerManager.stopContainer(container.containerId, 10);
+    } catch (stopErr) {
+      this.deps.logger.warn(
+        `${TAG} rollback stop failed for newly-created container ${container.containerId} (session ${sessionId}):`,
+        stopErr,
+      );
+    }
+
+    try {
+      await this.deps.containerManager.removeContainer(container.containerId, true);
+    } catch (removeErr) {
+      this.deps.logger.warn(
+        `${TAG} rollback removal failed for newly-created container ${container.containerId} (session ${sessionId}):`,
+        removeErr,
+      );
     }
   }
 
@@ -266,8 +322,16 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       this.deps.logger.info(
         `${TAG} checkpoint found for session ${dbSession.id}, restoring from checkpoint`,
       );
-      await this.deps.db.updateSandboxSessionStatus(dbSession.id, 'CHECKPOINTED');
-      const record = await this.restoreFromCheckpoint(dbSession, agentDef);
+      await this.deps.statusCoordinator.transition({
+        sessionId: dbSession.id,
+        fromStatus: dbSession.status as SessionRecord['status'],
+        toStatus: 'CHECKPOINTED',
+        clearRuntime: true,
+      });
+      const record = await this.restoreFromCheckpoint({
+        ...dbSession,
+        status: 'CHECKPOINTED',
+      }, agentDef);
       this.deps.stateStore.setSession(conversationId, record);
       return record;
     }

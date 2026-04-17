@@ -106,7 +106,7 @@ describe('HITL lifecycle boundary conditions', () => {
       expect(registry.getRun(run.id)?.status).toBe('running');
       expect(onTimeout).not.toHaveBeenCalled();
 
-      expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).toBe(true);
+      await expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
       await expect(approval).resolves.toEqual({ action: 'approve', data: { ok: true } });
       expect(registry.getRun(run.id)?.status).toBe('running');
 
@@ -167,7 +167,7 @@ describe('HITL lifecycle boundary conditions', () => {
       );
       expect(interruptedEvents.events).toHaveLength(1);
 
-      expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).toBe(true);
+      await expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
       await expect(approval).resolves.toEqual({ action: 'approve', data: { ok: true } });
       expect(manager.hasPending('run-1')).toBe(false);
 
@@ -187,10 +187,10 @@ describe('HITL lifecycle boundary conditions', () => {
       manager.shutdown();
     });
 
-    it('resolve on unknown runId returns false', () => {
+    it('resolve on unknown runId returns false', async () => {
       const manager = new InterruptManager(createTestBus());
 
-      expect(manager.resolve('missing-run', 'approve')).toBe(false);
+      await expect(manager.resolve('missing-run', 'approve')).resolves.toBe(false);
 
       manager.shutdown();
     });
@@ -206,7 +206,7 @@ describe('HITL lifecycle boundary conditions', () => {
         data: 'Superseded by new interrupt',
       });
 
-      expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).toBe(true);
+      await expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
       await expect(second).resolves.toEqual({ action: 'approve', data: { ok: true } });
 
       manager.shutdown();
@@ -225,7 +225,9 @@ describe('HITL lifecycle boundary conditions', () => {
         'session-1',
       );
 
-      expect(manager.resolveForSession('session-1', 'suspend', 'Session suspended for HITL approval — awaiting human decision')).toBe(true);
+      await expect(
+        manager.resolveForSession('session-1', 'suspend', 'Session suspended for HITL approval — awaiting human decision'),
+      ).resolves.toBe(true);
 
       await expect(approval).resolves.toEqual({
         action: 'suspend',
@@ -236,10 +238,10 @@ describe('HITL lifecycle boundary conditions', () => {
       manager.shutdown();
     });
 
-    it('resolveForSession returns false for unknown sessionId', () => {
+    it('resolveForSession returns false for unknown sessionId', async () => {
       const manager = new InterruptManager(createTestBus());
 
-      expect(manager.resolveForSession('no-such-session', 'suspend')).toBe(false);
+      await expect(manager.resolveForSession('no-such-session', 'suspend')).resolves.toBe(false);
 
       manager.shutdown();
     });
@@ -253,12 +255,13 @@ describe('HITL lifecycle boundary conditions', () => {
       const firstManager = new InterruptManager(undefined, db);
       firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 60_000);
       await Promise.resolve();
+      await Promise.resolve();
 
       const restartedManager = new InterruptManager(undefined, db);
       await restartedManager.loadFromDb();
 
       expect(restartedManager.hasPending('run-1')).toBe(true);
-      expect(restartedManager.resolve('run-1', 'approve', 'approved', 'agent-1')).toBe(true);
+      await expect(restartedManager.resolve('run-1', 'approve', 'approved', 'agent-1')).resolves.toBe(true);
       expect(db.resolveInterrupt).toHaveBeenCalledWith('run-1', 'approve', 'approved');
 
       firstManager.shutdown();
@@ -272,6 +275,7 @@ describe('HITL lifecycle boundary conditions', () => {
       const firstManager = new InterruptManager(undefined, db);
       firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 1_000);
       await Promise.resolve();
+      await Promise.resolve();
 
       vi.setSystemTime(new Date('2026-03-25T12:00:02.000Z'));
 
@@ -280,7 +284,7 @@ describe('HITL lifecycle boundary conditions', () => {
 
       expect(rows.has('run-1')).toBe(false);
       expect(restartedManager.hasPending('run-1')).toBe(false);
-      expect(restartedManager.resolve('run-1', 'approve')).toBe(false);
+      await expect(restartedManager.resolve('run-1', 'approve')).resolves.toBe(false);
 
       firstManager.shutdown();
       restartedManager.shutdown();

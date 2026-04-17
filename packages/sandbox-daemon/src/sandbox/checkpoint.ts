@@ -8,6 +8,7 @@
  */
 
 import type { AgentEvent, HarnessExportedState } from '../harness/types.js';
+import { stringifyJsonWithBigInts } from './json-serialization.js';
 
 /* -------------------------------------------------------------------------- */
 /*  Checkpoint types                                                           */
@@ -135,7 +136,7 @@ export class SessionStateCollector {
 /* -------------------------------------------------------------------------- */
 
 export function serializeCheckpoint(state: SessionCheckpoint): string {
-  return JSON.stringify(state);
+  return stringifyJsonWithBigInts(state);
 }
 
 export function deserializeCheckpoint(json: string): SessionCheckpoint {

@@ -193,7 +193,7 @@ describe('emit-event through sandbox tool proxy', () => {
     expect(echoed.payload.special).toBe('line\nbreak\ttab');
   });
 
-  it('propagates orchestrator error back through proxy', async () => {
+  it('throws orchestrator errors back through the proxy', async () => {
     const requestTool = vi.fn().mockResolvedValue(
       makeErrorResponse('rpc-1', 'EventBus is down'),
     );
@@ -203,13 +203,10 @@ describe('emit-event through sandbox tool proxy', () => {
       retryDelays: [],
     });
 
-    const result = await handler({
+    await expect(handler({
       type: 'test.event',
       payload: {},
-    });
-
-    const parsed = JSON.parse(result);
-    expect(parsed.error).toBe('EventBus is down');
+    })).rejects.toThrow('EventBus is down');
   });
 
   it('retries on transport failure and succeeds on subsequent attempt', async () => {
@@ -263,26 +260,19 @@ describe('protoToToolDefs wires emit-event proxy', () => {
     expect(requestTool).toHaveBeenCalledTimes(1);
   });
 
-  it('uses stub handler when orchestratorClient is not provided', async () => {
+  it('fails fast when orchestratorClient is not provided', async () => {
     const tools = [makeEmitEventProtoMetadata()];
 
-    const defs = protoToToolDefs(tools);
-
-    expect(defs).toHaveLength(1);
-    expect(defs[0].name).toBe('emit-event');
-
-    // Call the handler — should return a not-connected error
-    const result = await defs[0].handler(
-      { type: 'test.event', payload: {} },
-      {} as any,
-    );
-    const parsed = JSON.parse(result);
-    expect(parsed.error).toContain('not yet connected');
+    expect(() => protoToToolDefs(tools)).toThrow(/proxy for "emit-event" is not connected/i);
   });
 
   it('reconstructs a working Zod schema from the proto metadata', () => {
     const tools = [makeEmitEventProtoMetadata()];
-    const defs = protoToToolDefs(tools);
+    const defs = protoToToolDefs(tools, {
+      orchestratorClient: makeMockClient(),
+      sessionId: 'run-1',
+      agentId: 'agent-1',
+    });
 
     // Should validate correctly
     const valid = (defs[0].input as { safeParse: (input: unknown) => { success: boolean } }).safeParse({
@@ -471,14 +461,10 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
       retryDelays: [],
     });
 
-    const result = await handler({
+    await expect(handler({
       type: 'will.fail',
       payload: {},
-    });
-
-    const parsed = JSON.parse(result);
-    // The error should be propagated as a tool error, not crash the proxy
-    expect(parsed.error).toContain('EventBus internal error: queue full');
+    })).rejects.toThrow('EventBus internal error: queue full');
   });
 
   it('complete flow with complex payload data preserved end-to-end', async () => {

@@ -7,19 +7,22 @@
  */
 
 import { createDatabase, type DatabaseConnection } from '../../packages/ctxmill/src/database/connection.js';
-import { runMigrations } from '../../packages/ctxmill/src/database/migrations.js';
+import { MIGRATION_ADVISORY_LOCK_ID, SCHEMA_VERSION_TABLE, runMigrations } from '../../packages/ctxmill/src/database/migrations.js';
 import { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL
   || 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill';
-const TEST_DB_ADVISORY_LOCK_ID = 424242;
 
 /** Tables to drop for test isolation (order matters for FK constraints) */
 const ALL_TABLES = [
+  SCHEMA_VERSION_TABLE,
   'secrets',
+  'tool_request_dedup',
+  'artifacts',
   'agent_checkpoints',
-  'sandbox_sessions',
+  'pending_interrupts',
   'turns',
+  'sandbox_sessions',
   'agent_versions',
   'event_triggers',
   'scheduled_events',
@@ -32,6 +35,7 @@ const ALL_TABLES = [
   'knowledge_items',
   'webhooks',
   'callback_outbox',
+  'system_settings',
   'agents',
 ];
 
@@ -42,18 +46,11 @@ export interface TestDb {
 }
 
 export async function createTestDb(): Promise<TestDb> {
-  const lockConn = await createDatabase(TEST_DATABASE_URL);
-  await lockConn.pgClient`SELECT pg_advisory_lock(${TEST_DB_ADVISORY_LOCK_ID})`;
-
   let conn: DatabaseConnection | undefined;
-
-  const releaseLock = async () => {
-    await lockConn.pgClient`SELECT pg_advisory_unlock(${TEST_DB_ADVISORY_LOCK_ID})`;
-    await lockConn.close();
-  };
 
   try {
     conn = await createDatabase(TEST_DATABASE_URL);
+    await conn.pgClient`SELECT pg_advisory_lock(${MIGRATION_ADVISORY_LOCK_ID})`;
 
     // Drop all tables for isolation, then re-run migrations
     for (const table of ALL_TABLES) {
@@ -68,19 +65,21 @@ export async function createTestDb(): Promise<TestDb> {
       repo,
       close: async () => {
         try {
-          await activeConn.close();
+          await activeConn.pgClient`SELECT pg_advisory_unlock(${MIGRATION_ADVISORY_LOCK_ID})`;
         } finally {
-          await releaseLock();
+          await activeConn.close();
         }
       },
     };
   } catch (error) {
-    try {
-      if (conn) {
+    if (conn) {
+      try {
+        await conn.pgClient`SELECT pg_advisory_unlock(${MIGRATION_ADVISORY_LOCK_ID})`;
+      } catch {
+        // Ignore unlock failures during setup cleanup.
+      } finally {
         await conn.close();
       }
-    } finally {
-      await releaseLock();
     }
     throw error;
   }

@@ -130,7 +130,7 @@ export class CallbackDispatcher {
       });
 
       if (response.ok) {
-        await this.db.markCallbackDelivered(entry.id);
+        await this.db.markCallbackDelivered(entry.id, entry.claimedAt);
         return true;
       }
 
@@ -138,13 +138,13 @@ export class CallbackDispatcher {
       const errorText = `HTTP ${response.status}: ${response.statusText}`;
       const nextAttempt = entry.attempts + 1;
       const delay = getRetryDelay(nextAttempt + 1);
-      await this.db.markCallbackFailed(entry.id, errorText, Date.now() + delay);
+      await this.db.markCallbackFailed(entry.id, errorText, Date.now() + delay, entry.claimedAt);
       return false;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       const nextAttempt = entry.attempts + 1;
       const delay = getRetryDelay(nextAttempt + 1);
-      await this.db.markCallbackFailed(entry.id, errorMsg, Date.now() + delay);
+      await this.db.markCallbackFailed(entry.id, errorMsg, Date.now() + delay, entry.claimedAt);
       return false;
     }
   }

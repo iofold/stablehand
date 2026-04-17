@@ -78,6 +78,19 @@ describe('SessionStateStore', () => {
     expect(store.getSessionById('sess-1')).toBeUndefined();
   });
 
+  it('updates the sessionId index when a conversation is rebound to a new session', () => {
+    const store = new SessionStateStore();
+    const first = createSessionRecord({ conversationId: 'conv-1', sessionId: 'sess-1' });
+    const second = createSessionRecord({ conversationId: 'conv-1', sessionId: 'sess-2' });
+
+    store.setSession(first.conversationId, first);
+    store.setSession(second.conversationId, second);
+
+    expect(store.getSessionByConversation('conv-1')).toBe(second);
+    expect(store.getSessionById('sess-1')).toBeUndefined();
+    expect(store.getSessionById('sess-2')).toBe(second);
+  });
+
   it('supports agent definition CRUD', () => {
     const store = new SessionStateStore();
     const agentDef = createAgentDef();

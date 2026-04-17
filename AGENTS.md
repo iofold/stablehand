@@ -23,7 +23,7 @@ tests/
   integration/          23 files — orchestrator scenarios, event flows, CRUD
   e2e/                  32 Playwright specs — chat, background runs, visual regression, visual QA
   compliance/           13 files — interface contract conformance via pluggable factories
-  contract/             EMPTY — FUSE overlay tests removed (overlay abstractions deleted)
+  contract/             EMPTY — no shipped contract suite currently
   sandbox/              4 files — container lifecycle, suspend/resume, harness integration
   stress/               Stress test agents and tools (not in main test suite)
   utils/                Shared helpers — test-db.ts, event-bus-test-helpers.ts
@@ -108,7 +108,7 @@ pnpm typecheck                             # TypeScript check all packages
 # Test
 pnpm test                                  # Vitest (unit + integration + compliance)
 pnpm test:e2e                              # Playwright (requires Docker stack running)
-pnpm vitest run tests/contract/            # FUSE contract tests (needs fuse-overlayfs)
+# No contract test command/job unless restored
 
 # Docker Helpers
 pnpm docker:up                             # Start detached
@@ -141,15 +141,135 @@ docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile
 - **Drizzle ORM schema** — see `packages/ctxmill/src/database/schema-pg.ts`. Test DB uses advisory lock (ID: 424242) for concurrent resets.
 - **Default model** — `gpt-5.4-mini` (OpenAI). Override via `OPENAI_MODEL` env var. Per-agent override in YAML manifest.
 - **Sandbox-daemon package** — Separate package (`@ctxmill/sandbox-daemon`) deployed inside sandbox containers. Contains gRPC server, harness adapters (LangGraph, Claude Agents, PI Agent), tool proxy, proto-convert, and checkpoint logic. Changes here require rebuilding harness Docker images (not just orchestrator).
-- **Workspace isolation** — Workspace diff capture/restore during suspend/resume. Legacy FUSE/mock overlay abstractions removed.
+- **Workspace isolation** — Workspace diff capture/restore during suspend/resume.
 - **Container concurrency** — Semaphore limits concurrent sandbox containers (default 20). FIFO queue with 60s timeout.
 - **Tool providers** — 5 types: Local (in-process), MCP (stdio/HTTP), HTTP (REST endpoints), Composio (500+ SaaS), Artifact (daemon-handled S3/MinIO upload/download).
 - **Agent manifests** — YAML format (`apiVersion: ctxmill.io/v1`). Supports `{{knowledge}}` placeholder in instructions, `$secret:KEY_NAME` for secrets.
 - **Artifact storage** — S3/MinIO-backed file persistence. Tools (artifact_upload, artifact_download) run at daemon location, bypassing gRPC byte-proxying. Requires S3_ENDPOINT + S3_ACCESS_KEY + S3_SECRET_KEY env vars. MinIO container in docker-compose.
 - **System settings** — Runtime-configurable knobs (timeouts, limits, resource defaults) persisted in `system_settings`. Settings UI at `/settings`. 5-minute cache TTL. No restart required.
-- **Container lifecycle policy** — Unified module replacing separate pause-manager, timeout-enforcer, and orphan-cleanup. Handles idle checkpoint scheduling, compatibility pause/resume, and reconciliation.
+- **Container lifecycle policy** — Unified module handling idle checkpoint scheduling, compatibility pause/resume, and reconciliation.
 - **Durable HITL** — Interrupt resolution persisted DB-first. Sessions resume from DB state on restart. Replaces in-memory-only interrupt tracking.
 - **A2UI render tool** — Intrinsic tool (a2ui-render) for agent-driven structured UI blocks. Replaces legacy inline A2UI extraction from message content.
 - **Daemon tools** — Tool location 'daemon' for tools executed by sandbox daemon process (not harness or orchestrator). Currently: artifact_upload, artifact_download.
-- **CI matrix** — Node 22 + 24. Three jobs: test (unit/integration), e2e (Playwright + Docker), fuse-tests (contract, continue-on-error).
+- **CI matrix** — Node 22 + 24. Two jobs: test (unit/integration), e2e (Playwright + Docker).
 - **Service ports** — UI: 3200, API: 3002 (nginx-proxied 3001), PostgreSQL: 5433, gRPC sandbox: 50051, Egress proxy: 3128, PgAdmin: 5050 (debug profile).
+
+<!-- br-agent-instructions-v1 -->
+
+---
+
+## Beads Workflow Integration
+
+This project uses [beads_rust](https://github.com/Dicklesworthstone/beads_rust) (`br`/`bd`) for issue tracking. Issues are stored in `.beads/` and tracked in git.
+
+### Essential Commands
+
+```bash
+# View ready issues (open, unblocked, not deferred)
+br ready              # or: bd ready
+
+# List and search
+br list --status=open # All open issues
+br show <id>          # Full issue details with dependencies
+br search "keyword"   # Full-text search
+
+# Create and update
+br create --title="..." --description="..." --type=task --priority=2
+br update <id> --status=in_progress
+br close <id> --reason="Completed"
+br close <id1> <id2>  # Close multiple issues at once
+
+# Sync with git
+br sync --flush-only  # Export DB to JSONL
+br sync --status      # Check sync status
+```
+
+### Workflow Pattern
+
+1. **Start**: Run `br ready` to find actionable work
+2. **Claim**: Use `br update <id> --status=in_progress`
+3. **Work**: Implement the task
+4. **Complete**: Use `br close <id>`
+5. **Sync**: Always run `br sync --flush-only` at session end
+
+### Key Concepts
+
+- **Dependencies**: Issues can block other issues. `br ready` shows only open, unblocked work.
+- **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (use numbers 0-4, not words)
+- **Types**: task, bug, feature, epic, chore, docs, question
+- **Blocking**: `br dep add <issue> <depends-on>` to add dependencies
+
+### Session Protocol
+
+**Before ending any session, run this checklist:**
+
+```bash
+git status              # Check what changed
+git add <files>         # Stage code changes
+br sync --flush-only    # Export beads changes to JSONL
+git commit -m "..."     # Commit everything
+# Push only when the user explicitly asks
+```
+
+### Best Practices
+
+- Check `br ready` at session start to find available work
+- Update status as you work (in_progress → closed)
+- Create new issues with `br create` when you discover tasks
+- Use descriptive titles and set appropriate priority/type
+- Always sync before ending session
+
+<!-- end-br-agent-instructions -->
+
+<!-- bv-agent-instructions-v2 -->
+
+---
+
+## Beads Viewer (`bv`) — Graph-Aware Triage
+
+`bv` is a graph-aware triage engine for the `.beads/` project ([beads_viewer](https://github.com/Dicklesworthstone/beads_viewer)). It computes PageRank, betweenness, critical path, cycles, HITS, eigenvector, and k-core — use it instead of parsing JSONL or guessing at dependencies.
+
+**Scope:** `bv` decides *what to work on* (triage, priority, planning). `br` creates, modifies, and closes issues.
+
+**CRITICAL: use only `--robot-*` flags. Bare `bv` launches an interactive TUI that will block your session.**
+
+### Single entry point: `bv --robot-triage`
+
+```bash
+bv --robot-triage        # THE mega-command: top picks + quick wins + blockers + health
+bv --robot-next          # Minimal: single top pick + claim command
+bv --robot-triage --format toon   # Token-optimized output for lower LLM context cost
+```
+
+`--robot-triage` returns `quick_ref`, `recommendations`, `quick_wins`, `blockers_to_clear`, `project_health`, and copy-pasteable `commands`.
+
+### Other robot commands
+
+| Command | Returns |
+|---------|---------|
+| `bv --robot-plan` | Parallel execution tracks with unblocks lists |
+| `bv --robot-priority` | Priority misalignment detection |
+| `bv --robot-insights` | Full metrics: PageRank, betweenness, HITS, eigenvector, critical path, cycles, k-core |
+| `bv --robot-alerts` | Stale issues, blocking cascades, priority mismatches |
+| `bv --robot-suggest` | Hygiene: duplicates, missing deps, label suggestions, cycle breaks |
+| `bv --robot-diff --diff-since <ref>` | New/closed/modified issues since a commit/branch/date |
+| `bv --robot-graph --graph-format=mermaid` | Dependency graph export |
+
+### Scoping
+
+```bash
+bv --robot-plan --label ptc              # Scope to label subgraph
+bv --robot-insights --as-of HEAD~30      # Historical point-in-time
+bv --recipe actionable --robot-plan      # Pre-filter: ready to work (no blockers)
+bv --recipe high-impact --robot-triage   # Pre-filter: top PageRank scores
+```
+
+### Workflow
+
+1. `bv --robot-triage` — find highest-impact actionable work
+2. `br update <id> --status=in_progress` — claim it
+3. Implement the task
+4. `br close <id> --reason="..."`
+5. `br sync --flush-only` — export to JSONL before committing
+
+<!-- end-bv-agent-instructions -->

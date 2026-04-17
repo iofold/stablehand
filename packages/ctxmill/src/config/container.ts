@@ -22,7 +22,8 @@ import { SSEBroadcaster } from '../orchestrator/sse-broadcaster.js';
 import { InterruptManager } from '../orchestrator/interrupt.js';
 import { LearningEventSubscriber } from '../learning/event-subscriber.js';
 import { SuspendedSessionMatcher } from '../orchestrator/suspended-session-matcher.js';
-import { EventTriggerManager } from '../events/trigger-manager.js';
+import type { ResumeMatchResult } from '../orchestrator/suspended-session-matcher.js';
+import { EventTriggerManager, type TriggerRunCallback } from '../events/trigger-manager.js';
 import { AgentSessionService } from '../orchestrator/agent-session-service.js';
 import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
 import { ManifestService } from '../manifest/index.js';
@@ -45,7 +46,6 @@ import { createCtxmillGuideTool } from '../tool/builtin/ctxmill-guide.js';
 import { resolveToolLocation } from '../tool/metadata.js';
 import { zodToJsonSchema } from '../tool/schema-convert.js';
 import { ArtifactStore } from '../artifact/artifact-store.js';
-import { mapMessagesToInternal } from '../orchestrator/routes/agent-helpers.js';
 
 export interface AppContainer {
   config: ResolvedConfig;
@@ -177,6 +177,50 @@ export function registerCallbackSubscriptions(
   });
 }
 
+interface TriggerRunCallbackDeps {
+  db: Pick<DatabaseRepository, 'getAgent'>;
+  runStartupService: Pick<RunStartupService, 'prepareRunStart' | 'launchPreparedRun'>;
+  eventBus: Pick<TypedEventBus, 'emit'>;
+}
+
+export function createTriggerRunCallback({
+  db,
+  runStartupService,
+  eventBus,
+}: TriggerRunCallbackDeps): TriggerRunCallback {
+  return async (agentId, task, triggerId, triggerDepth) => {
+    const agent = await db.getAgent(agentId);
+    if (!agent) {
+      console.error(`[EventTriggerManager] agent ${agentId} not found for trigger ${triggerId}`);
+      return;
+    }
+    const start = await runStartupService.prepareRunStart({
+      agent,
+      agentId,
+      content: task,
+      mode: 'background',
+      emitUserMessageEvent: false,
+    });
+
+    // Fire-and-forget — AgentSessionService handles SSE broadcasting, run.text_chunk events,
+    // message persistence, session completion, and learning traces.
+    void runStartupService.launchPreparedRun(start, agentId, { rethrowOnError: true }).then(() => {
+      // Emit trigger.fired event after successful run while preserving the cascade depth
+      // that EventTriggerManager already computed for this triggered run.
+      eventBus.emit('trigger.fired', {
+        triggerId,
+        agentId,
+        eventType: 'trigger.fired',
+        turnId: start.turnId,
+        ...(triggerDepth === undefined ? {} : { _triggerDepth: triggerDepth }),
+        timestamp: Date.now(),
+      });
+    }).catch((err) => {
+      console.error(`[event-trigger] executeSession failed for agent ${agentId}:`, err);
+    });
+  };
+}
+
 /**
  * Build the application dependency graph. This is the single composition root
  * that wires every provider. PostgreSQL is always used as the database backend.
@@ -290,14 +334,52 @@ export async function createContainer(
   });
   await interruptManager.loadFromDb();
 
+  let sessionManagerRef: SandboxSessionManagerImpl | null = null;
+
   // ── Event Subscribers ─────────────────────────────────
   const learningSubscriber = learningPipeline
     ? new LearningEventSubscriber(learningPipeline, eventBus, db)
     : undefined;
 
   // ── Suspend/Resume ──────────────────────────────────────
-  const suspendedSessionMatcher = new SuspendedSessionMatcher(eventBus, db, async (condition, _triggerEvent) => {
+  const suspendedSessionMatcher = new SuspendedSessionMatcher(eventBus, db, async (condition, triggerEvent): Promise<ResumeMatchResult> => {
     console.log(`[SuspendedSessionMatcher] resuming session ${condition.sessionId} for agent ${condition.agentId} (event: ${condition.eventType})`);
+
+    if (!sessionManagerRef) {
+      return { outcome: 'retryable-failure', reason: 'session manager not initialized yet' };
+    }
+
+    if (condition.eventType !== 'run.interrupt_resolved') {
+      throw new Error(`No resume strategy registered for suspended-session event ${condition.eventType}`);
+    }
+
+    const resolvedEvent = triggerEvent && typeof triggerEvent === 'object'
+      ? triggerEvent as { action?: unknown }
+      : undefined;
+    if (resolvedEvent?.action !== 'approve' && resolvedEvent?.action !== 'reject') {
+      return {
+        outcome: 'retryable-failure',
+        reason: `interrupt resolution action ${String(resolvedEvent?.action)} does not resume the session`,
+      };
+    }
+
+    const metadata = condition.contextSnapshot.metadata;
+    const sandboxSessionId = typeof metadata?.sandboxSessionId === 'string'
+      ? metadata.sandboxSessionId
+      : typeof metadata?.sessionId === 'string'
+        ? metadata.sessionId
+        : undefined;
+    if (!sandboxSessionId) {
+      throw new Error(
+        `Cannot resume suspended turn ${condition.sessionId}: context snapshot metadata is missing sandboxSessionId`,
+      );
+    }
+
+    await sessionManagerRef.resumeWithInterruptResolution(
+      sandboxSessionId,
+      condition.sessionId,
+      condition.agentId,
+    );
   });
 
   // ── Harness Registry ────────────────────────────────────
@@ -308,58 +390,13 @@ export async function createContainer(
   harnessRegistry.register(new ClaudeAgentsHarness());
   harnessRegistry.register(new PIAgentHarness());
 
-  // ── Agent Execution ─────────────────────────────────────
-  // ── Agent Run Service ────────────────────────────────────
-  // Lazy ref so the onFire callback (defined below) can access it after construction.
-  let agentSessionServiceRef: AgentSessionService | null = null;
-
   // ── Event Triggers ─────────────────────────────────────
-  const triggerManager = new EventTriggerManager(eventBus, db, async (agentId, task, triggerId) => {
-    const agent = await db.getAgent(agentId);
-    if (!agent) {
-      console.error(`[EventTriggerManager] agent ${agentId} not found for trigger ${triggerId}`);
-      return;
-    }
-    // Create conversation + session for the triggered background session
-    const conv = await db.createConversation(agentId);
-    sessionManagerRef?.checkConcurrencyLimit(agentId);
-    const session = await db.createTurn({
-      agentId,
-      conversationId: conv.id,
-      mode: 'background',
-      taskDescription: task,
-    });
-
-    // Persist the synthetic user message
-    await db.addMessage({ agentId, conversationId: conv.id, role: 'user', content: task });
-    const allMessages = await db.getMessages(conv.id);
-    const messages = mapMessagesToInternal(allMessages, agentId);
-    const agentDef = runStartupService.buildAgentDefinition(agent);
-
-    // Fire-and-forget — AgentSessionService handles SSE broadcasting, run.text_chunk events,
-    // message persistence, session completion, and learning traces.
-    void agentSessionServiceRef!.executeSession({
-      agentDef,
-      messages,
-        agentId,
-        conversationId: conv.id,
-        sessionId: session.id,
-        mode: 'background',
-        taskDescription: task,
-      }).then(() => {
-      // Emit trigger.fired event after successful run
-      eventBus.emit('trigger.fired', {
-        triggerId,
-        agentId,
-        eventType: 'trigger.fired',
-        turnId: session.id,
-        timestamp: Date.now(),
-      });
-    }).catch((err) => {
-      console.error(`[event-trigger] executeSession failed for agent ${agentId}:`, err);
-    });
-  }, startupSettings.maxTriggerDepth);
-  await triggerManager.start();
+  const triggerManager = new EventTriggerManager(
+    eventBus,
+    db,
+    createTriggerRunCallback({ db, runStartupService, eventBus }),
+    startupSettings.maxTriggerDepth,
+  );
 
   // ── Sandbox Run Service ─────────────────────────────────
   const containerManager = new ContainerManager({
@@ -382,8 +419,6 @@ export async function createContainer(
     containerManager,
     settingsService,
   });
-
-  let sessionManagerRef: SandboxSessionManagerImpl | null = null;
 
   const lifecyclePolicy = new ContainerLifecyclePolicy({
     containerManager,
@@ -426,13 +461,24 @@ export async function createContainer(
     'LANGSMITH_WORKSPACE_ID',
   ] as const;
 
-  function buildSandboxSecrets(): Readonly<Record<string, string>> {
-    const secrets = Object.fromEntries(
+  function buildSandboxSecrets(agentId: string): Readonly<Record<string, string>> {
+    const envSecrets = Object.fromEntries(
       SANDBOX_SECRET_ALLOWLIST
         .filter((key) => process.env[key])
         .map((key) => [key, process.env[key]!]),
     );
-    return secrets;
+
+    const agentSecrets = Object.fromEntries(
+      secretProvider
+        .list(agentId)
+        .map((key) => [key, secretProvider.get(agentId, key)])
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+
+    return {
+      ...envSecrets,
+      ...agentSecrets,
+    };
   }
 
   const resolveToolsForAgent = (toolNames: string[], excludeBuiltins?: string[]) => {
@@ -523,7 +569,13 @@ export async function createContainer(
     toolExecutor,
     toolRegistry,
   });
-  agentSessionServiceRef = agentSessionService;
+  runStartupService.configureExecution({
+    db,
+    eventBus,
+    sessionManager: realSessionManager,
+    agentSessionService,
+  });
+  await triggerManager.start();
 
   const manifestService = new ManifestService(db, dataDir);
 

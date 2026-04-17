@@ -109,9 +109,14 @@ export class EventQueueImpl implements EventQueue {
       try {
         const payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
         this.bus.emit(event.type as EventName, payload);
-        await this.db.markScheduledEventCompleted(event.id);
+        await this.db.markScheduledEventCompleted(event.id, event.claimedAt);
       } catch (err) {
         console.error(`[EventQueueImpl] error firing scheduled event ${event.id}:`, err);
+        await this.db.releaseScheduledEventClaim(
+          event.id,
+          err instanceof Error ? err.message : String(err),
+          event.claimedAt,
+        );
       }
     }
   }

@@ -16,6 +16,14 @@ let testDb: TestDb | null = null;
 describe('EventQueueImpl compliance (Postgres)', () => {
   beforeAll(async () => {
     testDb = await createTestDb();
+    await testDb.repo.createAgent({
+      id: 'agent-1',
+      name: 'Event Queue Compliance Agent',
+      harness: 'langgraph',
+      harnessConfig: JSON.stringify({}),
+      systemPrompt: 'Test agent for scheduled event FK coverage.',
+      tools: [],
+    });
   });
 
   afterAll(async () => {

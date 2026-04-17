@@ -110,7 +110,7 @@ export interface SandboxSessionManagerDeps {
   eventBus?: TypedEventBus;
   maxConcurrentSessionsPerAgent?: number;
   interruptManager?: InterruptManager;
-  buildSandboxSecrets: () => Readonly<Record<string, string>>;
+  buildSandboxSecrets: (agentId: string) => Readonly<Record<string, string>>;
   resolveToolsForAgent?: (toolNames: string[], excludeBuiltins?: string[]) => ToolMetadata[];
   logger: Logger;
   config: {

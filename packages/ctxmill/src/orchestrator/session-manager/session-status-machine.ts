@@ -2,7 +2,7 @@ import type { SessionStatus } from './types.js';
 
 const VALID_TRANSITIONS: ReadonlyMap<SessionStatus, readonly SessionStatus[]> = new Map([
   ['ACTIVE', ['CHECKPOINTED', 'TERMINATED']],
-  ['PAUSED', ['CHECKPOINTED', 'ACTIVE']],
+  ['PAUSED', ['CHECKPOINTED', 'ACTIVE', 'TERMINATED']],
   ['CHECKPOINTED', ['RESTORING', 'TERMINATED']],
   ['RESTORING', ['ACTIVE', 'CHECKPOINTED']],
   ['TERMINATED', []],

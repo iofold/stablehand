@@ -5,21 +5,7 @@ import { useAgentsStore } from '@/stores/agents';
 import { Dashboard } from '@/components/dashboard/Dashboard';
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { fetchActiveConversations, fetchConversationSummaries } from '@/lib/api';
-
-export interface ApiConversationSummary {
-  id: string;
-  agentId: string;
-  status: 'running' | 'paused' | 'suspended' | 'completed' | 'error' | 'idle';
-  mode: 'interactive' | 'background';
-  turnCount: number;
-  messageCount: number;
-  taskDescription?: string;
-  startedAt: number;
-  updatedAt: number;
-  latestTurnId?: string;
-  sandboxSessionId?: string;
-  sandboxStatus?: string;
-}
+import type { ApiConversationSummary } from '@ctxmill/shared';
 
 export function DashboardPage() {
   const agents = useAgentsStore((s) => s.agents);
@@ -76,7 +62,7 @@ export function DashboardPage() {
   const stats = useMemo(() => {
     const totalTools = agents.reduce((sum, a) => sum + a.tools.length, 0);
     const activeAgents = agents.filter(
-      (a) => ((a.sessionsByStatus?.active ?? 0) + (a.sessionsByStatus?.paused ?? 0)) > 0 || a.status === 'running' || a.status === 'booting',
+      (a) => ((a.sessionsByStatus?.ACTIVE ?? 0) + (a.sessionsByStatus?.PAUSED ?? 0) + (a.sessionsByStatus?.RESTORING ?? 0)) > 0 || a.status === 'running' || a.status === 'booting',
     ).length;
     return { totalTools, activeAgents };
   }, [agents]);
@@ -88,8 +74,8 @@ export function DashboardPage() {
   }, [agents]);
 
   const handleCancelRun = async (conv: ApiConversationSummary) => {
-    if (conv.sandboxSessionId) {
-      await cancelRun(conv.agentId, conv.sandboxSessionId);
+    if (conv.latestTurnId) {
+      await cancelRun(conv.agentId, conv.latestTurnId);
     }
     setActiveConversations((prev) => prev.filter((entry) => entry.id !== conv.id));
   };

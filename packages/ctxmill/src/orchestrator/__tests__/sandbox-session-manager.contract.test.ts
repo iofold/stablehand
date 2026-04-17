@@ -258,6 +258,7 @@ function createManager(options?: { turnTimeoutMs?: number }) {
   const grpcClient = createMockGrpcClient();
   const resolveToolsForAgent = vi.fn().mockReturnValue([]);
   const logger = createLogger();
+  const buildSandboxSecrets = vi.fn().mockReturnValue({});
 
   connectMocks.createConnectTransportMock.mockReturnValue({});
   connectMocks.createClientMock.mockReturnValue(grpcClient);
@@ -267,7 +268,7 @@ function createManager(options?: { turnTimeoutMs?: number }) {
     db,
     lifecyclePolicy,
     workspaceDiffService: new WorkspaceDiffService({ containerManager }),
-    buildSandboxSecrets: () => ({}),
+    buildSandboxSecrets,
     resolveToolsForAgent,
     logger,
     config: {
@@ -284,6 +285,7 @@ function createManager(options?: { turnTimeoutMs?: number }) {
     lifecyclePolicy,
     grpcClient,
     logger,
+    buildSandboxSecrets,
     resolveToolsForAgent,
     internals: manager as unknown as SandboxSessionManagerInternals,
   };
@@ -301,11 +303,12 @@ describe('SandboxSessionManager contract', () => {
 
   describe('ensure/create', () => {
     it('creates a fresh session, opens gRPC, and caches it when no DB row exists', async () => {
-      const { manager, containerManager, db, grpcClient, internals } = createManager();
+      const { manager, containerManager, db, grpcClient, internals, buildSandboxSecrets } = createManager();
 
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
 
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
+      expect(buildSandboxSecrets).toHaveBeenCalledWith('agent-1');
       expect(grpcClient.openSession).toHaveBeenCalledTimes(1);
       expect(db.createSandboxSession).toHaveBeenCalledTimes(1);
       expect(session).toMatchObject({
@@ -332,7 +335,7 @@ describe('SandboxSessionManager contract', () => {
     });
 
     it('restores a CHECKPOINTED session from its checkpoint', async () => {
-      const { manager, containerManager, db } = createManager();
+      const { manager, containerManager, db, buildSandboxSecrets } = createManager();
       (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(
         createDbSession('CHECKPOINTED'),
       );
@@ -341,7 +344,15 @@ describe('SandboxSessionManager contract', () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
 
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'RESTORING');
+      expect(buildSandboxSecrets).toHaveBeenCalledWith('agent-1');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'sess-1',
+        'RESTORING',
+        expect.objectContaining({
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         'sess-1',
         'ACTIVE',
@@ -370,8 +381,24 @@ describe('SandboxSessionManager contract', () => {
       await vi.advanceTimersByTimeAsync(10_500);
       const session = await sessionPromise;
 
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'CHECKPOINTED');
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'RESTORING');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'sess-1',
+        'CHECKPOINTED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'sess-1',
+        'RESTORING',
+        expect.objectContaining({
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(session).toMatchObject({ sessionId: 'sess-1', status: 'ACTIVE' });
     });
 
@@ -544,7 +571,17 @@ describe('SandboxSessionManager contract', () => {
       expect(db.createCheckpointV2).toHaveBeenCalledWith(
         expect.objectContaining({ sessionId: session.sessionId, suspendReason: 'manual-checkpoint' }),
       );
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'CHECKPOINTED');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        session.sessionId,
+        'CHECKPOINTED',
+        expect.objectContaining({
+          checkpointRef: 'ckpt-1',
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(lifecyclePolicy.cancelIdleTimeout).toHaveBeenCalledWith(session.sessionId);
       expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
       expect(containerManager.removeContainer).toHaveBeenCalledWith('c-1', true);
@@ -598,7 +635,14 @@ describe('SandboxSessionManager contract', () => {
 
       const restored = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
 
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'RESTORING');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        session.sessionId,
+        'RESTORING',
+        expect.objectContaining({
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         session.sessionId,
         'ACTIVE',
@@ -621,7 +665,16 @@ describe('SandboxSessionManager contract', () => {
       expect(lifecyclePolicy.cancelIdleTimeout).toHaveBeenCalledWith(session.sessionId);
       expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
       expect(containerManager.removeContainer).toHaveBeenCalledWith('c-1', true);
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'TERMINATED');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        session.sessionId,
+        'TERMINATED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(internals.stateStore.sessions.has('conv-1')).toBe(false);
       expect(internals.stateStore.agentDefs.has('conv-1')).toBe(false);
       expect(internals.stateStore.turnQueues.has(session.sessionId)).toBe(false);
@@ -636,8 +689,28 @@ describe('SandboxSessionManager contract', () => {
       await expect(manager.killSession(session.sessionId)).resolves.toBeUndefined();
 
       expect(containerManager.removeContainer).toHaveBeenCalledTimes(1);
-      expect(db.updateSandboxSessionStatus).toHaveBeenNthCalledWith(1, session.sessionId, 'TERMINATED');
-      expect(db.updateSandboxSessionStatus).toHaveBeenNthCalledWith(2, session.sessionId, 'TERMINATED');
+      expect(db.updateSandboxSessionStatus).toHaveBeenNthCalledWith(
+        1,
+        session.sessionId,
+        'TERMINATED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
+      expect(db.updateSandboxSessionStatus).toHaveBeenNthCalledWith(
+        2,
+        session.sessionId,
+        'TERMINATED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
     });
   });
 });

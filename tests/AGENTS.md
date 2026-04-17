@@ -10,7 +10,7 @@
 unit/                 51 files — Component-level tests (harness, tools, events, DB, LLM, learning, workspace, sandbox)
 integration/          19 files — Multi-component workflows (orchestrator, CRUD, lifecycle, event flows, HITL)
 compliance/           13 files — Interface contract suites (event bus, queue, learning, knowledge, context, executor)
-contract/             1 file  — FUSE overlay lifecycle tests (MockOverlay + FuseOverlay against same spec)
+contract/             EMPTY — no shipped contract suite currently
 sandbox/              4 files — Container manager, suspend/resume, harness subagents (mocked Docker)
 e2e/                  8 Playwright specs + visual snapshots — Chat, background runs, dashboard, session lifecycle
 stress/               Stress test agents and tools — NOT in main test suite, run separately
@@ -19,8 +19,8 @@ setup-strict.ts       Strict mode — console.error/warn interception
 ```
 
 **Colocated tests** (in `packages/ctxmill/src/*/__tests__/`):
-- `sandbox/__tests__/` — 13 files (checkpoint, container-manager, proto-convert, pause-manager, etc.)
-- `orchestrator/__tests__/` — 7 files (webhook-routes, sandbox-run-service, pilot-integration, etc.)
+- `sandbox/__tests__/` — 13 files (checkpoint, container-manager, proto-convert, session-recovery, session-status-machine, etc.)
+- `orchestrator/__tests__/` — 7 files (webhook-routes, session-manager, session-recovery-coordinator, pilot-integration, etc.)
 - `tool/__tests__/` — 4 files (metadata, schema-convert, executor)
 - `events/__tests__/`, `config/__tests__/`, `learning/__tests__/`, `manifest/__tests__/`, `util/__tests__/`
 

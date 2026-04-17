@@ -66,6 +66,24 @@ describe('Ownership enforcement on routes', () => {
     return res.json().id;
   }
 
+  describe('POST /agents/:id/message', () => {
+    it('returns 404 when conversationId belongs to a different agent', async () => {
+      const agentAId = await createAgent('message-owner-A');
+      const agentBId = await createAgent('message-owner-B');
+
+      const conversation = await container.db.createConversation(agentAId);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentBId}/message`,
+        payload: { content: 'hello', conversationId: conversation.id },
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json().error).toMatch(/Conversation .* not found for agent/);
+    });
+  });
+
   // ── POST /agents/:id/sessions/:runId/cancel ──────────────────
 
   describe('POST /agents/:id/sessions/:runId/cancel', () => {

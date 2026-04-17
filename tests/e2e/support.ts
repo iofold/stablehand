@@ -91,8 +91,24 @@ export async function waitForRunStatus(
   timeoutMs = 60_000,
 ): Promise<{ id: string; sessionId?: string; status: string; conversationId: string }> {
   const deadline = Date.now() + timeoutMs;
+  const expectedStatuses = new Set(statuses.map((status) => status.toLowerCase()));
 
   while (Date.now() < deadline) {
+    const sessionsResponse = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
+    if (sessionsResponse.ok()) {
+      const body = await sessionsResponse.json();
+      const sessions = Array.isArray(body) ? body : body.sessions ?? [];
+      const session = sessions.find((entry: Record<string, unknown>) =>
+        entry.id === sessionId || entry.sessionId === sessionId || entry.conversationId === sessionId,
+      );
+      if (session) {
+        const status = normalizeSessionStatus(String(session.status ?? ''));
+        if (expectedStatuses.has(status)) {
+          return { ...session, status } as { id: string; sessionId?: string; status: string; conversationId: string };
+        }
+      }
+    }
+
     const response = await request.get(`${API_BASE}/api/agents/${agentId}/turns`);
     if (!response.ok()) {
       await delay(1_000);
@@ -109,7 +125,7 @@ export async function waitForRunStatus(
         : turn.completedAt !== null
           ? 'completed'
           : 'running';
-      if (statuses.includes(derivedStatus)) {
+      if (expectedStatuses.has(derivedStatus)) {
         return { ...turn, status: derivedStatus } as { id: string; sessionId?: string; status: string; conversationId: string };
       }
     }
@@ -119,6 +135,30 @@ export async function waitForRunStatus(
   throw new Error(
     `Timed out waiting for session ${sessionId} to reach one of: ${statuses.join(', ')}`,
   );
+}
+
+function normalizeSessionStatus(status: string): string {
+  switch (status.toUpperCase()) {
+    case 'QUEUED':
+      return 'queued';
+    case 'ACTIVE':
+    case 'RESTORING':
+      return 'running';
+    case 'PAUSED':
+    case 'CHECKPOINTED':
+      return 'paused';
+    case 'TERMINATED':
+    case 'COMPLETED':
+      return 'completed';
+    case 'ERROR':
+      return 'error';
+    case 'CANCELLED':
+      return 'cancelled';
+    case 'IDLE':
+      return 'idle';
+    default:
+      return status.toLowerCase();
+  }
 }
 
 export async function getConversationMessages(
@@ -193,6 +233,14 @@ export async function importStressAgent(
   const model = spec.model as Record<string, unknown> | undefined;
   const harnessConfig = (spec.harnessConfig ?? (model ? { provider: model.provider, model: model.id } : {})) as Record<string, unknown>;
 
+  const existingAgentsResponse = await request.get(`${API_BASE}/api/agents`);
+  expect(existingAgentsResponse.ok()).toBeTruthy();
+  const existingAgents = await existingAgentsResponse.json() as Array<{ id: string; name: string }>;
+  const sameNameAgents = existingAgents.filter((agent) => agent.name === (meta.name as string));
+  for (const agent of sameNameAgents) {
+    await deleteTestAgent(request, agent.id);
+  }
+
   const response = await request.post(`${API_BASE}/api/agents`, {
     data: {
       name: meta.name as string,
@@ -211,11 +259,21 @@ export async function importStressAgent(
 export async function getInterrupts(
   request: APIRequestContext,
   agentId: string,
-): Promise<Array<{ id: string; runId: string; toolName: string; args: Record<string, unknown> }>> {
+): Promise<Array<{ id: string; sessionId: string; runId: string; toolName: string; args: Record<string, unknown> }>> {
   const response = await request.get(`${API_BASE}/api/agents/${agentId}/interrupts`);
   expect(response.ok()).toBeTruthy();
   const body = await response.json();
-  return body.interrupts ?? [];
+  return (body.interrupts ?? []).map((entry: {
+    id: string;
+    sessionId?: string;
+    runId?: string;
+    toolName: string;
+    args: Record<string, unknown>;
+  }) => ({
+    ...entry,
+    sessionId: entry.sessionId ?? entry.runId ?? entry.id,
+    runId: entry.runId ?? entry.sessionId ?? entry.id,
+  }));
 }
 
 export async function resolveInterrupt(
@@ -225,7 +283,7 @@ export async function resolveInterrupt(
   action: 'approve' | 'reject',
 ): Promise<{ resolved: boolean; action: string }> {
   const response = await request.post(`${API_BASE}/api/agents/${agentId}/interrupt`, {
-    data: { action, runId },
+    data: { action, sessionId: runId },
   });
   expect(response.ok()).toBeTruthy();
   return (await response.json()) as { resolved: boolean; action: string };

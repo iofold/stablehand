@@ -65,9 +65,9 @@ describe('fetchSessions', () => {
 });
 
 describe('fetchAllActiveSessions', () => {
-  it('calls GET /api/sessions', async () => {
+  it('calls GET /api/sessions with sandbox format', async () => {
     await fetchAllActiveSessions();
-    expect(mockFetch).toHaveBeenCalledWith('/api/sessions', undefined);
+    expect(mockFetch).toHaveBeenCalledWith('/api/sessions?format=sandbox', undefined);
   });
 });
 
@@ -80,6 +80,15 @@ describe('fetchTraces', () => {
   it('throws on failure', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500, json: mockJson });
     await expect(fetchTraces('a1')).rejects.toThrow('API GET /api/agents/a1/traces failed: 500');
+  });
+
+  it('preserves HTTP context when including server error details', async () => {
+    mockJson.mockResolvedValue({ error: 'trace service down' });
+    mockFetch.mockResolvedValue({ ok: false, status: 503, json: mockJson });
+
+    await expect(fetchTraces('a1')).rejects.toThrow(
+      'API GET /api/agents/a1/traces failed: 503 - trace service down',
+    );
   });
 });
 

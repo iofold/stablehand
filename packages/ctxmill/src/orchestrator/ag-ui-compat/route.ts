@@ -4,8 +4,8 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import type { EventMap, EventName, TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition } from '../../types.js';
 import type { AgentSessionService } from '../agent-session-service.js';
+import type { RunStartupService } from '../run-startup-service.js';
 import { mapMessagesToInternal } from '../routes/agent-helpers.js';
-import type { StoredAgent } from '../routes/agents/types.js';
 import { AGUIEventNormalizer } from './event-normalizer.js';
 import type { AGUIMessage, AGUIMessageRole, AGUIRunAgentInput } from './types.js';
 
@@ -14,7 +14,7 @@ export interface AGUICompatRouteOptions {
   eventBus: TypedEventBus;
   agentSessionService: AgentSessionService;
   sessionManager?: { checkConcurrencyLimit(agentId: string): void } | null;
-  buildAgentDefinition: (agent: StoredAgent) => AgentDefinition;
+  runStartupService?: RunStartupService;
 }
 
 type AGUIRunRequest = FastifyRequest<{
@@ -99,7 +99,7 @@ export async function agUiCompatRoutes(
   app: FastifyInstance,
   opts: AGUICompatRouteOptions,
 ): Promise<void> {
-  const { db, eventBus, agentSessionService, sessionManager, buildAgentDefinition } = opts;
+  const { db, eventBus, agentSessionService, sessionManager, runStartupService } = opts;
 
   app.post(
     '/:id/run',
@@ -121,6 +121,18 @@ export async function agUiCompatRoutes(
         return reply.status(404).send({ error: 'Run not found for agent', runId: body.runId });
       }
 
+      if (turn && turn.conversationId !== body.threadId) {
+        return reply.status(409).send({
+          error: 'Run does not belong to the supplied threadId',
+          runId: body.runId,
+          threadId: body.threadId,
+        });
+      }
+
+      if (turn?.completedAt) {
+        return reply.status(409).send({ error: 'Run already completed', runId: body.runId });
+      }
+
       const isReconnect = Boolean(turn && !turn.completedAt);
       let conversationId = turn?.conversationId;
       let executionParams: {
@@ -139,60 +151,103 @@ export async function agUiCompatRoutes(
           return reply.status(400).send({ error: 'A non-empty user message is required' });
         }
 
-        const existingConversation = await db.getConversation(body.threadId);
-        const conversation = existingConversation && existingConversation.agentId === id
-          ? existingConversation
-          : await db.createConversation(id);
-        conversationId = conversation.id;
-
-        const message = await db.addMessage({
-          agentId: id,
-          conversationId,
-          role: 'user',
-          content: userContent,
-        });
-
         try {
-          sessionManager?.checkConcurrencyLimit(id);
-          turn = await db.createTurn({
-            agentId: id,
-            conversationId,
-            mode: 'interactive',
-          });
+          if (runStartupService) {
+            const start = await runStartupService.prepareRunStart({
+              agent,
+              agentId: id,
+              content: userContent,
+              mode: 'interactive',
+              conversationId: body.threadId,
+              requestedTurnId: body.runId,
+              requireExistingConversation: true,
+              emitUserMessageEvent: true,
+            });
+            conversationId = start.conversationId;
+            turn = await db.getTurn(start.turnId);
+            executionParams = {
+              agentDef: start.agentDef,
+              messages: start.messages,
+              conversationId: start.conversationId,
+              turnId: start.turnId,
+              taskDescription: userContent,
+            };
+          } else {
+            const existingConversation = await db.getConversation(body.threadId);
+            if (!existingConversation || existingConversation.agentId !== id) {
+              return reply.status(404).send({ error: 'Conversation not found for agent', threadId: body.threadId });
+            }
+
+            conversationId = existingConversation.id;
+            const message = await db.addMessage({
+              agentId: id,
+              conversationId,
+              role: 'user',
+              content: userContent,
+            });
+
+            try {
+              sessionManager?.checkConcurrencyLimit(id);
+              turn = await db.createTurn({
+                id: body.runId,
+                agentId: id,
+                conversationId,
+                mode: 'interactive',
+              });
+            } catch (err) {
+              await db.deleteMessage(message.id).catch((deleteErr) => {
+                console.error(`[ag-ui] failed to rollback user message ${message.id}:`, deleteErr);
+              });
+              throw err;
+            }
+
+            eventBus.emit('user.message', {
+              agentId: id,
+              conversationId,
+              messageId: message.id,
+              content: userContent,
+              timestamp: Date.now(),
+            });
+            eventBus.emit('turn.pending', {
+              turnId: turn.id,
+              agentId: id,
+              conversationId,
+              mode: 'interactive',
+              timestamp: Date.now(),
+            });
+
+            if (!agent.harness) {
+              return reply.status(500).send({ error: 'Agent harness is not set' });
+            }
+
+            const agentDef: AgentDefinition = {
+              name: agent.name,
+              harness: agent.harness,
+              harnessConfig: {},
+              tools: agent.tools,
+              systemPrompt: agent.systemPrompt,
+            };
+            const allMessages = await db.getMessages(conversationId);
+            const messages = mapMessagesToInternal(allMessages, id);
+
+            executionParams = {
+              agentDef,
+              messages,
+              conversationId,
+              turnId: turn.id,
+              taskDescription: userContent,
+            };
+          }
         } catch (err) {
-          await db.deleteMessage(message.id).catch((deleteErr) => {
-            console.error(`[ag-ui] failed to rollback user message ${message.id}:`, deleteErr);
-          });
-          return reply.status(500).send({
-            error: err instanceof Error ? err.message : 'Failed to start session',
-          });
+          const message = err instanceof Error ? err.message : 'Failed to start session';
+          if (message.startsWith('Conversation ')) {
+            return reply.status(404).send({ error: message, threadId: body.threadId });
+          }
+          if (message.startsWith('Turn already exists')) {
+            return reply.status(409).send({ error: message, runId: body.runId });
+          }
+          return reply.status(500).send({ error: message });
         }
-
-        if (eventBus) {
-          eventBus.emit('turn.pending', {
-            turnId: turn.id,
-            agentId: id,
-            conversationId,
-            mode: 'interactive',
-            timestamp: Date.now(),
-          });
-        }
-
-        if (!agent.harness) {
-          return reply.status(500).send({ error: 'Agent harness is not set' });
-        }
-
-        const agentDef = buildAgentDefinition(agent);
-        const allMessages = await db.getMessages(conversationId);
-        const messages = mapMessagesToInternal(allMessages, id);
-
-        executionParams = {
-          agentDef,
-          messages,
-          conversationId,
-          turnId: turn.id,
-          taskDescription: userContent,
-        };
       }
 
       if (!turn || !conversationId) {
@@ -267,8 +322,6 @@ export async function agUiCompatRoutes(
       subscribe('run.ag_ui_event');
       subscribe('turn.completed');
       subscribe('message.committed');
-      subscribe('turn.pending');
-      subscribe('user.message');
       subscribe('session.paused');
 
       const heartbeat = setInterval(() => {
@@ -284,23 +337,37 @@ export async function agUiCompatRoutes(
       });
 
       if (executionParams) {
-        void agentSessionService.executeSession({
-          agentDef: executionParams.agentDef,
-          messages: executionParams.messages,
-          agentId: id,
-          conversationId: executionParams.conversationId,
-          sessionId: executionParams.turnId,
-          mode: 'interactive',
-          taskDescription: executionParams.taskDescription,
-        }).catch(async (err) => {
-          console.error(`[ag-ui] executeSession failed for agent ${id}, turn ${executionParams?.turnId}:`, err);
-          await db.updateTurn(executionParams.turnId, {
-            completedAt: Date.now(),
-            error: err instanceof Error ? err.message : String(err),
-          }).catch((dbErr) => {
-            console.error(`[ag-ui] failed to update turn ${executionParams?.turnId} after session error:`, dbErr);
+        if (runStartupService) {
+          void runStartupService.launchPreparedRun({
+            agentDef: executionParams.agentDef,
+            messages: executionParams.messages,
+            conversationId: executionParams.conversationId,
+            turnId: executionParams.turnId,
+            messageId: '',
+            mode: 'interactive',
+            taskDescription: executionParams.taskDescription,
+          }, id).catch((err) => {
+            console.error(`[ag-ui] executeSession failed for agent ${id}, turn ${executionParams?.turnId}:`, err);
           });
-        });
+        } else {
+          void agentSessionService.executeSession({
+            agentDef: executionParams.agentDef,
+            messages: executionParams.messages,
+            agentId: id,
+            conversationId: executionParams.conversationId,
+            sessionId: executionParams.turnId,
+            mode: 'interactive',
+            taskDescription: executionParams.taskDescription,
+          }).catch(async (err) => {
+            console.error(`[ag-ui] executeSession failed for agent ${id}, turn ${executionParams?.turnId}:`, err);
+            await db.updateTurn(executionParams.turnId, {
+              completedAt: Date.now(),
+              error: err instanceof Error ? err.message : String(err),
+            }).catch((dbErr) => {
+              console.error(`[ag-ui] failed to update turn ${executionParams?.turnId} after session error:`, dbErr);
+            });
+          });
+        }
       }
 
       return reply;

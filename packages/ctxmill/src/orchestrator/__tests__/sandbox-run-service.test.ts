@@ -204,7 +204,7 @@ describe('SandboxRunService', () => {
       expect(deliverSpy).not.toHaveBeenCalled();
     });
 
-    it('should kill session when signal fires during streaming', async () => {
+    it('should preserve session when signal fires during streaming', async () => {
       const controller = new AbortController();
       const sm: SandboxSessionManager & { killSession: ReturnType<typeof vi.fn> } = {
         ensureSession: vi.fn(async () => ({ sessionId: 'session-abc' })),
@@ -224,7 +224,7 @@ describe('SandboxRunService', () => {
         service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1', controller.signal),
       );
 
-      expect(sm.killSession).toHaveBeenCalledWith('session-abc');
+      expect(sm.killSession).not.toHaveBeenCalled();
     });
 
     it('should not kill session when signal is not aborted', async () => {

@@ -189,6 +189,77 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
     }
   });
 
+  it('GET /api/agents/:id/stream bootstraps active turn identity in state snapshots', async () => {
+    const agent = await container.db.createAgent({
+      name: 'Streaming Snapshot Agent',
+      harness: 'langgraph',
+      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5.4-mini' }),
+      systemPrompt: 'You are a test agent.',
+      tools: [],
+    });
+    const turnId = `turn-stream-test-${Date.now()}`;
+    const conversation = await container.db.createConversation(agent.id);
+    const sandboxSession = await container.db.createSandboxSession({
+      conversationId: conversation.id,
+      agentId: agent.id,
+      containerName: 'ctxmill-run-stream-test',
+      containerId: 'container-stream-test',
+      harnessName: 'langgraph',
+      status: 'ACTIVE',
+    });
+    await container.db.createTurn({
+      id: turnId,
+      agentId: agent.id,
+      conversationId: conversation.id,
+      sessionId: sandboxSession.id,
+      mode: 'interactive',
+    });
+
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    try {
+      const controller = new AbortController();
+      const res = await fetch(`${address}/api/agents/${agent.id}/stream`, {
+        signal: controller.signal,
+      });
+
+      expect(res.status).toBe(200);
+      const reader = res.body!.getReader();
+      let text = '';
+
+      while (!text.includes('state_snapshot')) {
+        const { value, done } = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for state snapshot')), 2_000)),
+        ]);
+
+        if (done) {
+          break;
+        }
+
+        text += new TextDecoder().decode(value);
+      }
+
+      expect(text).toContain('state_snapshot');
+      expect(text).toContain(`"sessionId":"${sandboxSession.id}"`);
+      expect(text).toContain(`"turnId":"${turnId}"`);
+
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    } finally {
+      await app.close();
+      app = await createServer({
+        db: container.db,
+        agentSessionService: container.agentSessionService,
+        eventBus: container.eventBus,
+        harnessRegistry: container.harnessRegistry,
+        sessionManager: container.sessionManager,
+        dataDir,
+      });
+      await app.ready();
+    }
+  }, 15_000);
+
   it('GET /api/agents/:id/stream returns 404 for non-existent agent', async () => {
     const res = await app.inject({
       method: 'GET',

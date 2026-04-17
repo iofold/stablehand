@@ -218,6 +218,7 @@ export async function startDev() {
           container.eventBus.emit('run.tool_started', {
             turnId: ctx.sessionId,
             agentId: ctx.agentId,
+            conversationId: ctx.sessionId,
             toolCallId: ctx.requestId,
             toolName: tool.name,
             args: args as Record<string, unknown>,
@@ -227,7 +228,7 @@ export async function startDev() {
         }
 
         const resolution = await container.interruptManager.waitForApproval(
-            ctx.sessionId, ctx.agentId, ctx.requestId, tool.name, args as Record<string, unknown>,
+            ctx.sessionId, ctx.agentId, ctx.requestId, tool.name, args as Record<string, unknown>, undefined, undefined, ctx.sessionId,
         );
 
         if (resolution.action !== 'approve') {

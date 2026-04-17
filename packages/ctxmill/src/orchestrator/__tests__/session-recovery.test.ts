@@ -263,8 +263,24 @@ describe('SandboxSessionManager session recovery', () => {
       await vi.advanceTimersByTimeAsync(10_500);
       const session = await sessionPromise;
 
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'CHECKPOINTED');
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'RESTORING');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'sess-1',
+        'CHECKPOINTED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'sess-1',
+        'RESTORING',
+        expect.objectContaining({
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(session.sessionId).toBe('sess-1');
       expect(session.status).toBe('ACTIVE');
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
@@ -328,8 +344,24 @@ describe('SandboxSessionManager session recovery', () => {
 
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
 
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'CHECKPOINTED');
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith('sess-1', 'RESTORING');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'sess-1',
+        'CHECKPOINTED',
+        expect.objectContaining({
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        'sess-1',
+        'RESTORING',
+        expect.objectContaining({
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(session.sessionId).toBe('sess-1');
       expect(session.status).toBe('ACTIVE');
     });
@@ -482,7 +514,17 @@ describe('SandboxSessionManager session recovery', () => {
         sessionId: session.sessionId,
         suspendReason: 'idle-checkpoint',
       }));
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'CHECKPOINTED');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        session.sessionId,
+        'CHECKPOINTED',
+        expect.objectContaining({
+          checkpointRef: 'ckpt-1',
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
     });
 
     it('suspendSession checkpoints, cleans runtime state, and removes the old container', async () => {
@@ -498,7 +540,17 @@ describe('SandboxSessionManager session recovery', () => {
         sessionId: session.sessionId,
         reason: 'manual-checkpoint',
       }));
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(session.sessionId, 'CHECKPOINTED');
+      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+        session.sessionId,
+        'CHECKPOINTED',
+        expect.objectContaining({
+          checkpointRef: 'ckpt-1',
+          containerId: null,
+          containerName: null,
+          pausedAt: null,
+          pausedReason: null,
+        }),
+      );
       expect(db.updateSandboxSessionStatus).not.toHaveBeenCalledWith(session.sessionId, 'TERMINATED');
       expect(lifecyclePolicy.cancelIdleTimeout).toHaveBeenCalledWith(session.sessionId);
       expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
@@ -507,6 +559,32 @@ describe('SandboxSessionManager session recovery', () => {
       expect(privateManager.stateStore.agentDefs.has('conv-1')).toBe(false);
       expect(privateManager.stateStore.turnQueues.has(session.sessionId)).toBe(false);
       expect(privateManager.stateStore.activeTurns.has(session.sessionId)).toBe(false);
+    });
+
+    it('fails closed when workspace capture fails during suspend', async () => {
+      const captureSpy = vi
+        .spyOn(WorkspaceDiffService.prototype, 'capture')
+        .mockRejectedValueOnce(new Error('workspace capture failed'));
+      const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+
+      await expect(manager.suspendSession(session.sessionId, 'manual-checkpoint')).rejects.toThrow(
+        'workspace capture failed',
+      );
+
+      expect(grpcClient.suspendSession).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: session.sessionId,
+        reason: 'manual-checkpoint',
+      }));
+      expect(db.createCheckpointV2).not.toHaveBeenCalled();
+      expect(db.updateSandboxSessionStatus).not.toHaveBeenCalledWith(
+        session.sessionId,
+        'CHECKPOINTED',
+        expect.anything(),
+      );
+      expect(containerManager.stopContainer).not.toHaveBeenCalled();
+      expect(containerManager.removeContainer).not.toHaveBeenCalled();
+
+      captureSpy.mockRestore();
     });
   });
 

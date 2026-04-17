@@ -11,8 +11,9 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts', 'packages/ctxmill/**/*.test.ts', 'packages/sandbox-daemon/**/*.test.ts', 'packages/examples/**/*.test.ts'],
-    exclude: ['tests/e2e/**'],
+    exclude: ['tests/e2e/**', '**/node_modules/**', '**/dist/**'],
     setupFiles: ['./tests/setup-strict.ts'],
+    fileParallelism: false,
     teardownTimeout: 5000,
     server: {
       deps: {

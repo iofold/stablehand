@@ -404,6 +404,62 @@ describe('SandboxSessionManager interrupt resume characterization', () => {
     ]);
   });
 
+  it('fails visibly when a checkpoint pending request payload is malformed', async () => {
+    const internals = manager as unknown as SandboxSessionManagerInternals;
+    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
+
+    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
+    (db.getResolvedInterruptsForSession as ReturnType<typeof vi.fn>).mockResolvedValue([
+      createResolvedInterrupt(),
+    ]);
+    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
+      createCheckpointWithPendingRequests([
+        {
+          type: 'approval',
+          id: 'approval-1',
+          payload: '{"tool":',
+        },
+      ]),
+    );
+
+    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
+    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
+      streamSessionEvents(),
+    );
+
+    await expect(
+      manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1'),
+    ).rejects.toThrow(/Malformed HITL checkpoint pending request payload JSON/);
+
+    expect(ensureSessionSpy).not.toHaveBeenCalled();
+    expect(db.addMessage).not.toHaveBeenCalled();
+    expect(deliverTurnSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails visibly instead of using a degraded stub when an agent definition cannot be resolved', async () => {
+    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
+    (db.getAgent as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (db.getResolvedInterruptsForSession as ReturnType<typeof vi.fn>).mockResolvedValue([
+      createResolvedInterrupt(),
+    ]);
+    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
+      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
+    );
+
+    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
+    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
+      streamSessionEvents(),
+    );
+
+    await expect(
+      manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1'),
+    ).rejects.toThrow(/missing agent definition/);
+
+    expect(ensureSessionSpy).not.toHaveBeenCalled();
+    expect(db.addMessage).not.toHaveBeenCalled();
+    expect(deliverTurnSpy).not.toHaveBeenCalled();
+  });
+
   it('scenario 5: resolves agent definition from the database on cache miss', async () => {
     (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(
       createDbSession({ harnessName: 'claude' }),

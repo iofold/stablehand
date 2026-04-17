@@ -6,6 +6,7 @@ import { SessionLifecycleService } from './session-manager/session-lifecycle-ser
 import type { SessionReconciler } from './session-manager/ports.js';
 import { SessionRecoveryCoordinator } from './session-manager/session-recovery-coordinator.js';
 import { SessionRuntimeFactory } from './session-manager/session-runtime-factory.js';
+import { SessionStatusCoordinator } from './session-manager/session-status-coordinator.js';
 import { SessionStateStore } from './session-manager/session-state-store.js';
 import { SessionTurnOrchestrator } from './session-manager/session-turn-orchestrator.js';
 import type { SandboxSessionManagerDeps, SessionRecord } from './session-manager/types.js';
@@ -20,11 +21,17 @@ export class SandboxSessionManager {
   private readonly logger: SandboxSessionManagerDeps['logger'];
   private readonly recoveryCoordinator: SessionRecoveryCoordinator;
   private readonly runtimeFactory: SessionRuntimeFactory;
+  private readonly statusCoordinator: SessionStatusCoordinator;
   private readonly turnOrchestrator: SessionTurnOrchestrator;
 
   constructor(deps: SandboxSessionManagerDeps) {
     this.logger = deps.logger;
     this.stateStore = new SessionStateStore();
+    this.statusCoordinator = new SessionStatusCoordinator({
+      db: deps.db,
+      logger: deps.logger,
+      stateStore: this.stateStore,
+    });
     this.runtimeFactory = new SessionRuntimeFactory({
       containerManager: deps.containerManager,
       db: deps.db,
@@ -37,6 +44,7 @@ export class SandboxSessionManager {
     this.recoveryCoordinator = new SessionRecoveryCoordinator({
       containerManager: deps.containerManager,
       db: deps.db,
+      statusCoordinator: this.statusCoordinator,
       stateStore: this.stateStore,
       buildSandboxSecrets: deps.buildSandboxSecrets,
       resolveToolsForAgent: deps.resolveToolsForAgent ?? (() => []),
@@ -47,7 +55,7 @@ export class SandboxSessionManager {
     });
     this.turnOrchestrator = new SessionTurnOrchestrator({
       stateStore: this.stateStore,
-      db: deps.db,
+      statusCoordinator: this.statusCoordinator,
       lifecyclePolicy: deps.lifecyclePolicy,
       eventBus: deps.eventBus,
       interruptManager: deps.interruptManager,
@@ -80,6 +88,7 @@ export class SandboxSessionManager {
       recoveryCoordinator: this.recoveryCoordinator,
       createFreshSession: (conversationId, agentDef, agentId) => this.createFreshSession(conversationId, agentDef, agentId),
       db: deps.db,
+      statusCoordinator: this.statusCoordinator,
       containerManager: deps.containerManager,
       lifecyclePolicy: deps.lifecyclePolicy,
       workspaceDiffService: deps.workspaceDiffService,

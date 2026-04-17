@@ -34,42 +34,49 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
 
   const renderSessions = () => {
     const stats = agent.sessionsByStatus;
-    const total = (stats?.active ?? 0) + (stats?.paused ?? 0) + (stats?.checkpointed ?? 0) + (stats?.terminated ?? 0);
+    const total = (stats?.ACTIVE ?? 0) + (stats?.PAUSED ?? 0) + (stats?.CHECKPOINTED ?? 0) + (stats?.RESTORING ?? 0) + (stats?.TERMINATED ?? 0);
     if (!stats || total === 0) {
       return <span className="tabular-nums font-medium text-surface-200">0</span>;
     }
 
     const parts = [];
-    if (stats.active > 0) parts.push(`${stats.active} active`);
-    if (stats.paused > 0) parts.push(`${stats.paused} paused`);
-    if (stats.checkpointed > 0) parts.push(`${stats.checkpointed} checkpointed`);
-    if (stats.terminated > 0) parts.push(`${stats.terminated} terminated`);
+    if (stats.ACTIVE > 0) parts.push(`${stats.ACTIVE} active`);
+    if (stats.PAUSED > 0) parts.push(`${stats.PAUSED} paused`);
+    if (stats.RESTORING > 0) parts.push(`${stats.RESTORING} restoring`);
+    if (stats.CHECKPOINTED > 0) parts.push(`${stats.CHECKPOINTED} checkpointed`);
+    if (stats.TERMINATED > 0) parts.push(`${stats.TERMINATED} terminated`);
     const title = parts.join(', ');
 
     return (
       <div role="status" aria-label={`${total} sessions: ${title}`} className="flex items-center gap-2 tabular-nums font-medium text-surface-200" title={title}>
-        {stats.active > 0 && (
+        {stats.ACTIVE > 0 && (
           <span className="inline-flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-            {stats.active}
+            {stats.ACTIVE}
           </span>
         )}
-        {stats.paused > 0 && (
+        {stats.PAUSED > 0 && (
           <span className="inline-flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>
-            {stats.paused}
+            {stats.PAUSED}
           </span>
         )}
-        {stats.checkpointed > 0 && (
+        {stats.RESTORING > 0 && (
+          <span className="inline-flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
+            {stats.RESTORING}
+          </span>
+        )}
+        {stats.CHECKPOINTED > 0 && (
           <span className="inline-flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-            {stats.checkpointed}
+            {stats.CHECKPOINTED}
           </span>
         )}
-        {stats.terminated > 0 && (
+        {stats.TERMINATED > 0 && (
           <span className="inline-flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span>
-            {stats.terminated}
+            {stats.TERMINATED}
           </span>
         )}
       </div>
@@ -79,11 +86,20 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
   return (
     <div
       data-testid="agent-card"
+      role="button"
+      tabIndex={0}
+      onClick={() => navigate(`/agents/${agent.id}`)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          navigate(`/agents/${agent.id}`);
+        }
+      }}
       className={cn(
         'group relative w-full text-left rounded-lg border border-surface-700',
         'bg-gradient-to-b from-surface-800 to-surface-800/60',
         'border-l-2', statusConfig.borderColor,
-        'transition-all duration-200'
+        'cursor-pointer transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-950'
       )}
     >
       <div className="relative p-5 flex flex-col md:flex-row items-start gap-6 min-h-[120px]">
@@ -149,10 +165,10 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
                 Approval Needed
               </span>
             )}
-            {((agent.sessionsByStatus?.active ?? 0) + (agent.sessionsByStatus?.paused ?? 0)) > 0 && (
+            {((agent.sessionsByStatus?.ACTIVE ?? 0) + (agent.sessionsByStatus?.PAUSED ?? 0) + (agent.sessionsByStatus?.RESTORING ?? 0)) > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
                 <Activity className="h-3 w-3" />
-                {(agent.sessionsByStatus?.active ?? 0) + (agent.sessionsByStatus?.paused ?? 0)} Active
+                {(agent.sessionsByStatus?.ACTIVE ?? 0) + (agent.sessionsByStatus?.PAUSED ?? 0) + (agent.sessionsByStatus?.RESTORING ?? 0)} Active
               </span>
             )}
             <span className="inline-flex items-center gap-1 text-[11px] text-surface-400">

@@ -98,7 +98,7 @@ describe('createToolProxy', () => {
     expect(callArgs.requestId).toBeTruthy();
   });
 
-  it('returns orchestrator error as tool error JSON', async () => {
+  it('throws orchestrator errors instead of returning tool error JSON', async () => {
     const client = makeMockClient({
       requestTool: vi.fn().mockResolvedValue(
         makeErrorResponse('rpc-1', 'Unknown orchestrator tool: foo'),
@@ -108,10 +108,7 @@ describe('createToolProxy', () => {
     const handler = createToolProxy('foo', client, 'run-1', 'agent-1', {
       retryDelays: [],
     });
-    const result = await handler({});
-    const parsed = JSON.parse(result);
-
-    expect(parsed.error).toBe('Unknown orchestrator tool: foo');
+    await expect(handler({})).rejects.toThrow('Unknown orchestrator tool: foo');
   });
 
   it('retries on gRPC transport failure', async () => {
@@ -131,7 +128,7 @@ describe('createToolProxy', () => {
     expect(requestTool).toHaveBeenCalledTimes(3);
   });
 
-  it('returns error when all retries are exhausted', async () => {
+  it('throws when all retries are exhausted', async () => {
     const requestTool = vi.fn()
       .mockRejectedValue(new Error('network failure'));
 
@@ -140,11 +137,9 @@ describe('createToolProxy', () => {
     const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
       retryDelays: [1, 1], // 2 retries + 1 initial = 3 attempts
     });
-    const result = await handler({ event_type: 'test' });
-    const parsed = JSON.parse(result);
-
-    expect(parsed.error).toContain('failed after 3 attempts');
-    expect(parsed.error).toContain('network failure');
+    await expect(handler({ event_type: 'test' })).rejects.toThrow(
+      /failed after 3 attempts: network failure/,
+    );
     expect(requestTool).toHaveBeenCalledTimes(3);
   });
 
@@ -157,11 +152,7 @@ describe('createToolProxy', () => {
     const handler = createToolProxy('bad-tool', client, 'run-1', 'agent-1', {
       retryDelays: [1, 1, 1],
     });
-    const result = await handler({});
-    const parsed = JSON.parse(result);
-
-    // Should fail after only 1 attempt (no retries for InvalidArgument)
-    expect(parsed.error).toContain('failed after');
+    await expect(handler({})).rejects.toThrow(/failed after/);
     expect(requestTool).toHaveBeenCalledTimes(1);
   });
 
@@ -193,6 +184,21 @@ describe('createToolProxy', () => {
 
     const callArgs = requestTool.mock.calls[0][0];
     expect(callArgs.argsJson).toBe('{}');
+  });
+
+  it('serializes bigint tool input as lossless strings', async () => {
+    const requestTool = vi.fn().mockResolvedValue(
+      makeSuccessResponse('rpc-1', 'ok'),
+    );
+    const client = makeMockClient({ requestTool });
+
+    const handler = createToolProxy('tool', client, 'run-1', 'agent-1', {
+      retryDelays: [],
+    });
+    await handler({ count: 9007199254740993n });
+
+    const callArgs = requestTool.mock.calls[0][0];
+    expect(callArgs.argsJson).toBe('{"count":"9007199254740993"}');
   });
 });
 
@@ -296,6 +302,19 @@ describe('createOrchestratorToolProxies', () => {
     const client = makeMockClient();
     const defs = createOrchestratorToolProxies([], client, 'run-1', 'agent-1');
     expect(defs).toEqual([]);
+  });
+
+  it('throws for malformed orchestrator tool schemas', () => {
+    const client = makeMockClient();
+
+    expect(() => createOrchestratorToolProxies([
+      create(ToolMetadataSchema, {
+        name: 'emit-event',
+        description: 'Emit event',
+        inputSchemaJson: '{bad-json',
+        location: ToolLocation.ORCHESTRATOR,
+      }),
+    ], client, 'run-1', 'agent-1')).toThrow(/Failed to parse tool emit-event input schema/);
   });
 
   it('filters out UNSPECIFIED location tools', () => {

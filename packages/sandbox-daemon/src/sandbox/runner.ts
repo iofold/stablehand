@@ -58,6 +58,7 @@ import {
 import { createArtifactHandlers } from './artifact-handler.js';
 import type { OrchestratorServiceClient } from './tool-proxy.js';
 import { setSessionTools } from './daemon.js';
+import { stringifyJsonWithBigInts } from './json-serialization.js';
 import { generatePtcScripts } from './ptc-codegen.js';
 
 async function mkdirSafe(dir: string): Promise<void> {
@@ -157,15 +158,15 @@ let orchestratorClient: OrchestratorServiceClient | undefined;
  * Lazily create or reuse a ConnectRPC client for the OrchestratorService.
  *
  * The orchestrator URL is read from the `ORCHESTRATOR_URL` environment variable
- * (e.g., `http://orchestrator:3001`). If not set, returns undefined and
- * orchestrator-location tools will use the placeholder stub.
+ * (e.g., `http://orchestrator:3001`). If not set, returns undefined so
+ * session startup can fail loudly when orchestrator-location tools are present.
  */
 function getOrchestratorClient(): OrchestratorServiceClient | undefined {
   if (orchestratorClient) return orchestratorClient;
 
   const url = process.env.ORCHESTRATOR_URL;
   if (!url) {
-    console.error('[sandbox] ORCHESTRATOR_URL not set — orchestrator tool proxies will be stubbed');
+    console.error('[sandbox] ORCHESTRATOR_URL not set');
     return undefined;
   }
 
@@ -206,6 +207,14 @@ interface SessionContext {
 let activeContext: SessionContext | null = null;
 let openingContext: Promise<SessionContext> | null = null;
 const activeRunId: { current: string } = { current: '' };
+
+
+function appendPtcDegradedNotice(systemPrompt: string, err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return `${systemPrompt}
+
+[CTXMill degraded mode] Programmatic tool-calling (PTC) setup failed, so /workspace/.tools scripts may be missing or stale. Use MCP/orchestrator tools directly and surface that PTC support is degraded if the task depends on generated scripts. Error: ${message}`;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Phase tracking helper                                                      */
@@ -308,7 +317,8 @@ export async function openSession(
           config.systemPrompt += '\n\nSome tools use programmatic tool calling (PTC) — large results stay in code scope instead of your context. Call ctxmill-guide({ topic: "ptc" }) for usage details, or run `ls /workspace/.tools/` to see available scripts.';
         }
       } catch (err) {
-        console.error('[sandbox] PTC script generation failed, continuing without PTC:', err);
+        console.error('[sandbox] PTC script generation failed, continuing in degraded PTC mode:', err);
+        config.systemPrompt = appendPtcDegradedNotice(config.systemPrompt, err);
       }
 
       if (opts?.signal) {
@@ -367,7 +377,8 @@ export async function openSession(
           daemonPort: ptcPort,
         });
       } catch (err) {
-        console.error('[sandbox] PTC script generation failed during restore, continuing without PTC:', err);
+        console.error('[sandbox] PTC script generation failed during restore, continuing in degraded PTC mode:', err);
+        config.systemPrompt = appendPtcDegradedNotice(config.systemPrompt, err);
       }
 
       await mkdirSafe(config.workspaceDir);
@@ -433,7 +444,10 @@ export async function* deliverTurn(
     try {
       ctx = await openingContext;
     } catch (err) {
-      throw new Error(`[sandbox] deliverTurn: session open failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(
+        `[sandbox] deliverTurn: session open failed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
     }
   }
   if (!ctx) {
@@ -565,7 +579,7 @@ export async function suspendSession(reason: string): Promise<SuspendSessionResp
       pendingRequests: (checkpointFromCollector.runnerState.pendingRequests ?? []).map((pr) => ({
         type: pr.type,
         id: pr.id,
-        payloadJson: JSON.stringify(pr.payload),
+        payloadJson: stringifyJsonWithBigInts(pr.payload),
       })),
     },
     workspaceRef: checkpointFromCollector.workspaceRef,

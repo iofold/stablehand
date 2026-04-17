@@ -542,6 +542,57 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
       },
     ]);
   });
+
+  it('serializes bigint event arguments and harness state as strings', () => {
+    const toolEvent = agentEventToSessionEvent({
+      type: 'tool_call_start',
+      id: 'tc-bigint',
+      name: 'search',
+      args: {
+        sequence: 9007199254740993n,
+      },
+    });
+    const approvalEvent = agentEventToSessionEvent({
+      type: 'approval_needed',
+      id: 'approval-bigint',
+      tool: 'delete-file',
+      args: {
+        limit: 9007199254740995n,
+      },
+    });
+    const checkpoint = sessionCheckpointToProto(
+      makeSessionCheckpoint({
+        harnessState: {
+          checkpointSeq: 9007199254740997n,
+          nested: {
+            values: [1n, 2n],
+          },
+        },
+      }),
+    );
+
+    const toolPayload = getAgUiPayload(toolEvent);
+    const approvalPayload = getAgUiPayload(approvalEvent);
+
+    expect(toolPayload.event.case).toBe('toolCallStart');
+    if (toolPayload.event.case !== 'toolCallStart') {
+      throw new Error('Expected toolCallStart payload');
+    }
+    expect(toolPayload.event.value.argsJson).toBe('{"sequence":"9007199254740993"}');
+
+    expect(approvalPayload.event.case).toBe('approvalNeeded');
+    if (approvalPayload.event.case !== 'approvalNeeded') {
+      throw new Error('Expected approvalNeeded payload');
+    }
+    expect(approvalPayload.event.value.argsJson).toBe('{"limit":"9007199254740995"}');
+
+    expect(checkpoint.harnessState).toEqual({
+      checkpointSeq: '9007199254740997',
+      nested: {
+        values: ['1', '2'],
+      },
+    });
+  });
 });
 
 describe('sessionCheckpointToProto and protoSessionCheckpointToInternal', () => {
@@ -639,8 +690,8 @@ describe('protoToToolDefs', () => {
     }).success).toBe(false);
   });
 
-  it('uses fallback handlers for sandbox and disconnected orchestrator tools', async () => {
-    const definitions = protoToToolDefs([
+  it('fails fast for disconnected orchestrator tools and direct sandbox handlers', async () => {
+    const sandboxDefinitions = protoToToolDefs([
       makeProtoToolMetadata(
         'read-file',
         'Read a file',
@@ -651,6 +702,13 @@ describe('protoToToolDefs', () => {
         },
         ToolLocation.SANDBOX,
       ),
+    ]);
+
+    await expect(sandboxDefinitions[0].handler({ path: '/tmp/file' }, TOOL_CONTEXT)).rejects.toThrow(
+      'handled by the harness SDK',
+    );
+
+    expect(() => protoToToolDefs([
       makeProtoToolMetadata(
         'emit-event',
         'Emit event',
@@ -661,14 +719,7 @@ describe('protoToToolDefs', () => {
         },
         ToolLocation.ORCHESTRATOR,
       ),
-    ]);
-
-    await expect(definitions[0].handler({ path: '/tmp/file' }, TOOL_CONTEXT)).resolves.toContain(
-      'handled by the harness SDK',
-    );
-    await expect(definitions[1].handler({ name: 'session.ready' }, TOOL_CONTEXT)).resolves.toContain(
-      'not yet connected',
-    );
+    ])).toThrow(/proxy for "emit-event" is not connected/i);
   });
 
   it('wires a real orchestrator proxy when client and routing metadata are provided', async () => {

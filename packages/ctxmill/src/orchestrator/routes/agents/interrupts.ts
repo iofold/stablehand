@@ -6,7 +6,7 @@ export async function interruptRoutes(
   app: FastifyInstance,
   opts: AgentSubRouteOptions,
 ): Promise<void> {
-  const { db, interrupts, sessionManager, eventBus, loadAgent } = opts;
+  const { db, interrupts, sessionManager, loadAgent } = opts;
 
   app.get(
     '/:id/interrupts',
@@ -92,11 +92,9 @@ export async function interruptRoutes(
         if (dbInterrupt.status === 'resolved') {
           return reply.send({ alreadyResolved: true, action: dbInterrupt.resolvedAction });
         }
-
-        await db.resolveInterrupt(body.sessionId, resolveAction, body.data);
       }
 
-      const inMemoryResolved = interrupts.resolve(body.sessionId, resolveAction, body.data, id);
+      const inMemoryResolved = await interrupts.resolve(body.sessionId, resolveAction, body.data, id);
 
       if (!dbInterrupt && !inMemoryResolved) {
         return reply.status(404).send({ error: 'No pending interrupt for agent', agentId: id });
@@ -106,15 +104,6 @@ export async function interruptRoutes(
       }
 
       if (inMemoryResolved) {
-        if (eventBus) {
-          eventBus.emit('run.interrupt_resolved', {
-            turnId: dbInterrupt?.agentSessionId ?? body.sessionId,
-            agentId: id,
-            interruptId: dbInterrupt?.id ?? body.sessionId,
-            action: resolveAction as 'approve' | 'reject' | 'suspend' | 'timeout',
-            timestamp: Date.now(),
-          });
-        }
         return reply.send({ resolved: true, action: resolveAction });
       }
 
@@ -124,27 +113,7 @@ export async function interruptRoutes(
           console.error(`[agents] async resume failed for session ${sessionId}:`, err);
         });
 
-        if (eventBus) {
-          eventBus.emit('run.interrupt_resolved', {
-            turnId: dbInterrupt.agentSessionId,
-            agentId: id,
-            interruptId: dbInterrupt.id,
-            action: resolveAction as 'approve' | 'reject' | 'suspend' | 'timeout',
-            timestamp: Date.now(),
-          });
-        }
-
         return reply.status(202).send({ accepted: true, resuming: true, action: resolveAction });
-      }
-
-      if (eventBus) {
-        eventBus.emit('run.interrupt_resolved', {
-          turnId: dbInterrupt?.agentSessionId ?? '',
-          agentId: id,
-          interruptId: dbInterrupt?.id ?? body.sessionId,
-          action: resolveAction as 'approve' | 'reject' | 'suspend' | 'timeout',
-          timestamp: Date.now(),
-        });
       }
 
       return reply.send({ resolved: true, action: resolveAction, note: 'Resolved in DB; session resume not available' });

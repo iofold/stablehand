@@ -46,8 +46,11 @@ export async function waitForContainerReady(
       );
       return { transport, grpcClient };
     } catch (err) {
-      if (err instanceof ConnectError) {
+      if (isAppLevelProbeError(err)) {
         return { transport, grpcClient };
+      }
+      if (!isRetryableTransportProbeError(err)) {
+        throw err;
       }
     }
 
@@ -58,6 +61,18 @@ export async function waitForContainerReady(
   }
 
   throw new Error(`Container health check timed out after ${timeoutMs}ms at ${baseUrl}`);
+}
+
+function isAppLevelProbeError(err: unknown): err is ConnectError {
+  return err instanceof ConnectError && !isRetryableTransportProbeError(err);
+}
+
+function isRetryableTransportProbeError(err: unknown): boolean {
+  if (err instanceof ConnectError) {
+    return err.code === Code.Unavailable || err.code === Code.Internal;
+  }
+
+  return err instanceof Error && /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN/.test(err.message);
 }
 
 export async function retryGrpcCall<T>(

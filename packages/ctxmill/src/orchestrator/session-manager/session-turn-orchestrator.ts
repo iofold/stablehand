@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import {
@@ -6,7 +5,6 @@ import {
   type SessionEvent as ProtoSessionEvent,
 } from '@ctxmill/proto/sandbox/v1';
 
-import type { DatabaseRepository } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
 import { protoSessionEventToCustom } from '../../sandbox/proto-convert.js';
 import type { AgentDefinition, Message } from '../../types.js';
@@ -21,6 +19,7 @@ import {
   type SessionRecord,
 } from './types.js';
 import { unrefTimer } from './grpc-session-client.js';
+import { SessionStatusCoordinator } from './session-status-coordinator.js';
 
 const TAG = '[SandboxSessionManager]';
 const MAX_DRAIN_ITERATIONS = 100;
@@ -28,7 +27,7 @@ const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface SessionTurnOrchestratorDeps {
   stateStore: SessionStateStore;
-  db: Pick<DatabaseRepository, 'updateSandboxSessionStatus'>;
+  statusCoordinator: SessionStatusCoordinator;
   lifecyclePolicy: Pick<ContainerLifecyclePolicy, 'cancelIdleTimeout' | 'scheduleIdleTimeout'>;
   eventBus?: TypedEventBus;
   interruptManager?: InterruptManager;
@@ -212,17 +211,21 @@ export class SessionTurnOrchestrator {
       unrefTimer(timeoutId);
       let hitlActive = false;
 
+      let iterator: AsyncIterator<ProtoSessionEvent> | undefined;
       try {
-        const iterator = stream[Symbol.asyncIterator]();
+        iterator = stream[Symbol.asyncIterator]();
+        const turnAbortSignal = record.currentTurnAbortController?.signal;
         const timeoutError = () =>
           new Error(`Turn ${turnId} timed out after ${turnTimeout}ms for session ${sessionId}`);
+        const cancellationError = () => new Error(`Turn ${turnId} cancelled for session ${sessionId}`);
         const waitForNext = async () => {
-          let onAbort: (() => void) | null = null;
+          let onTimeoutAbort: (() => void) | null = null;
+          let onTurnAbort: (() => void) | null = null;
           const onAbortError = new Promise<never>((_, reject) => {
             const listener = () => {
               reject(timeoutError());
             };
-            onAbort = listener;
+            onTimeoutAbort = listener;
 
             if (abortController.signal.aborted) {
               listener();
@@ -231,15 +234,36 @@ export class SessionTurnOrchestrator {
 
             abortController.signal.addEventListener('abort', listener, { once: true });
           });
+          const onTurnAbortError = new Promise<never>((_, reject) => {
+            if (!turnAbortSignal) {
+              return;
+            }
+
+            const listener = () => {
+              reject(cancellationError());
+            };
+            onTurnAbort = listener;
+
+            if (turnAbortSignal.aborted) {
+              listener();
+              return;
+            }
+
+            turnAbortSignal.addEventListener('abort', listener, { once: true });
+          });
 
           try {
             return await Promise.race<IteratorResult<ProtoSessionEvent>>([
-              iterator.next(),
+              iterator!.next(),
               onAbortError,
+              onTurnAbortError,
             ]);
           } finally {
-            if (onAbort) {
-              abortController.signal.removeEventListener('abort', onAbort);
+            if (onTimeoutAbort) {
+              abortController.signal.removeEventListener('abort', onTimeoutAbort);
+            }
+            if (turnAbortSignal && onTurnAbort) {
+              turnAbortSignal.removeEventListener('abort', onTurnAbort);
             }
           }
         };
@@ -276,11 +300,27 @@ export class SessionTurnOrchestrator {
           }
         }
       } finally {
+        if (iterator?.return) {
+          void iterator.return().catch((returnErr: unknown) => {
+            this.deps.logger.debug(`${TAG} iterator.return() failed for turn ${turnId}:`, returnErr);
+          });
+        }
         if (timeoutId !== undefined) {
           clearTimeout(timeoutId);
         }
       }
     } catch (err) {
+      if (err instanceof Error && err.message === `Turn ${turnId} cancelled for session ${sessionId}`) {
+        this.deps.logger.info(`${TAG} turn ${turnId} cancelled for session ${sessionId}`);
+        await this.deps.statusCoordinator.transition({
+          sessionId,
+          fromStatus: record.status,
+          toStatus: 'ACTIVE',
+        });
+        this.scheduleIdleTimeoutForActiveSession(sessionId, record);
+        return;
+      }
+
       const isAbort = err instanceof ConnectError && err.code === Code.Aborted;
 
       if (!_retried && eventCount === 0 && isAbort) {
@@ -296,7 +336,12 @@ export class SessionTurnOrchestrator {
           `${TAG} stream aborted mid-turn (${eventCount} events received) for turn ${turnId} on session ${sessionId} — connection dropped during tool execution`,
         );
         this.deps.stateStore.deleteSession(record.conversationId);
-        await this.deps.db.updateSandboxSessionStatus(sessionId, 'TERMINATED');
+        await this.deps.statusCoordinator.transition({
+          sessionId,
+          fromStatus: record.status,
+          toStatus: 'TERMINATED',
+          clearRuntime: true,
+        });
       }
 
       const agentDef = this.deps.stateStore.getAgentDef(record.conversationId);
@@ -305,7 +350,12 @@ export class SessionTurnOrchestrator {
           `${TAG} stale container for session ${sessionId}, recovering and retrying turn`,
         );
         this.deps.stateStore.deleteSession(record.conversationId);
-        await this.deps.db.updateSandboxSessionStatus(sessionId, 'TERMINATED');
+        await this.deps.statusCoordinator.transition({
+          sessionId,
+          fromStatus: record.status,
+          toStatus: 'TERMINATED',
+          clearRuntime: true,
+        });
         const newRecord = await this.deps.onStaleContainer(
           sessionId,
           record.conversationId,
@@ -332,23 +382,12 @@ export class SessionTurnOrchestrator {
       return;
     }
 
-    await this.deps.db.updateSandboxSessionStatus(sessionId, 'ACTIVE');
-    this.deps.lifecyclePolicy.scheduleIdleTimeout(sessionId, record.containerId, {
-      onCheckpoint: async (sid) => {
-        await this.deps.onCheckpoint(sid);
-      },
-      onContainerGone: async (sid) => {
-        this.deps.logger.warn(`${TAG} container gone for session ${sid}, marking TERMINATED`);
-        const rec = this.deps.stateStore.getSessionById(sid);
-        if (rec) {
-          await this.deps.db.updateSandboxSessionStatus(sid, 'TERMINATED');
-          this.deps.stateStore.deleteSession(rec.conversationId);
-          this.deps.stateStore.deleteAgentDef(rec.conversationId);
-        }
-        this.deps.stateStore.deleteQueue(sid);
-        this.deps.stateStore.markTurnInactive(sid);
-      },
+    await this.deps.statusCoordinator.transition({
+      sessionId,
+      fromStatus: record.status,
+      toStatus: 'ACTIVE',
     });
+    this.scheduleIdleTimeoutForActiveSession(sessionId, record);
 
     this.deps.logger.debug(`${TAG} turn ${turnId} completed for session ${sessionId}`);
   }
@@ -360,29 +399,28 @@ export class SessionTurnOrchestrator {
       if (!queue || queue.length === 0) return;
 
       iterations++;
-      const coalesced = queue.splice(0);
-      const mergedMessages = coalesced.flatMap((entry) => entry.messages);
-      const coalescedTurnId = `coalesced-${randomUUID().slice(0, 8)}`;
+      const nextEntry = queue.shift();
+      if (!nextEntry) {
+        return;
+      }
 
       this.deps.logger.debug(
-        `${TAG} coalescing ${coalesced.length} buffered turn(s) → ${coalescedTurnId} (session ${sessionId})`,
+        `${TAG} draining queued turn ${nextEntry.turnId} (remaining depth: ${queue.length}) for session ${sessionId}`,
       );
 
       this.deps.stateStore.markTurnActive(sessionId);
       try {
-        for await (const event of this.deps.executeDeliverTurn(sessionId, mergedMessages, coalescedTurnId)) {
-          for (const entry of coalesced) {
-            entry.channel.push(event);
-          }
+        for await (const event of this.deps.executeDeliverTurn(
+          sessionId,
+          nextEntry.messages,
+          nextEntry.turnId,
+        )) {
+          nextEntry.channel.push(event);
         }
-        for (const entry of coalesced) {
-          entry.channel.close();
-        }
+        nextEntry.channel.close();
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
-        for (const entry of coalesced) {
-          entry.channel.fail(error);
-        }
+        nextEntry.channel.fail(error);
       } finally {
         this.deps.stateStore.markTurnInactive(sessionId);
       }
@@ -400,6 +438,34 @@ export class SessionTurnOrchestrator {
         }
       }
     }
+  }
+
+  private scheduleIdleTimeoutForActiveSession(sessionId: string, record: SessionRecord): void {
+    this.deps.lifecyclePolicy.scheduleIdleTimeout(sessionId, record.containerId, {
+      onCheckpoint: async (sid) => {
+        await this.deps.onCheckpoint(sid);
+      },
+      onContainerGone: async (sid) => {
+        await this.handleContainerGone(sid);
+      },
+    });
+  }
+
+  private async handleContainerGone(sessionId: string): Promise<void> {
+    this.deps.logger.warn(`${TAG} container gone for session ${sessionId}, marking TERMINATED`);
+    const record = this.deps.stateStore.getSessionById(sessionId);
+    if (record) {
+      await this.deps.statusCoordinator.transition({
+        sessionId,
+        fromStatus: record.status,
+        toStatus: 'TERMINATED',
+        clearRuntime: true,
+      });
+      this.deps.stateStore.deleteSession(record.conversationId);
+      this.deps.stateStore.deleteAgentDef(record.conversationId);
+    }
+    this.deps.stateStore.deleteQueue(sessionId);
+    this.deps.stateStore.markTurnInactive(sessionId);
   }
 }
 

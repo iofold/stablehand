@@ -144,16 +144,14 @@ export function SessionPage() {
               : ((sessionsRaw as Record<string, unknown>)?.sessions ?? []) as Record<string, unknown>[];
             const turns = Array.isArray(turnsRaw) ? turnsRaw : [] as Record<string, unknown>[];
 
-            const hasActiveContainer = resolvedConversationId
-              ? sessions.some(
-                  (s: Record<string, unknown>) =>
-                    s.conversationId === resolvedConversationId &&
-                    (s.status === 'ACTIVE' || s.status === 'RESTORING'),
-                )
-              : sessions.some(
-                  (s: Record<string, unknown>) =>
-                    s.status === 'ACTIVE' || s.status === 'RESTORING',
-                );
+            const isRuntimeActiveStatus = (status: unknown) =>
+              status === 'ACTIVE' || status === 'PAUSED' || status === 'RESTORING';
+            const matchingSessions = resolvedConversationId
+              ? sessions.filter((s: Record<string, unknown>) => s.conversationId === resolvedConversationId)
+              : sessions;
+            const hasActiveContainer = matchingSessions.some(
+              (s: Record<string, unknown>) => isRuntimeActiveStatus(s.status),
+            );
             // Container being ACTIVE is not enough — we also need an incomplete turn.
             // Sandbox sessions stay ACTIVE even after a turn completes (container persists).
             const hasActiveTurn = resolvedConversationId
@@ -183,13 +181,10 @@ export function SessionPage() {
                 setPastRunError(null);
               }
 
-              // Only lock read-only when sandbox session is TERMINATED (no checkpoint to restore).
-              // ACTIVE/CHECKPOINTED/PAUSED sessions can always resume.
-              const sandboxStatuses = convTurns
-                .map((t: Record<string, unknown>) => t.sandboxSessionStatus as string | undefined)
-                .filter(Boolean);
-              const isTerminated = sandboxStatuses.length > 0 &&
-                sandboxStatuses.every((s) => s === 'TERMINATED');
+              // Only lock read-only when the unified session status is TERMINATED
+              // (no checkpoint to restore). ACTIVE/CHECKPOINTED/PAUSED/RESTORING sessions can resume.
+              const isTerminated = matchingSessions.length > 0 &&
+                matchingSessions.every((s: Record<string, unknown>) => s.status === 'TERMINATED');
               if (isTerminated && !hasActiveTurn && convTurns.length > 0) {
                 setIsReadOnly(true);
               }

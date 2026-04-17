@@ -16,7 +16,7 @@ Restart the stack. All subsequent agent runs produce traces in the configured pr
 
 ## How It Works
 
-Tracing is **harness-level** — each harness self-instruments using its SDK's native tracing capabilities. The orchestrator passes `LANGSMITH_*` environment variables to sandbox containers via `SANDBOX_SECRET_ALLOWLIST`.
+Tracing is **harness-level** — each harness self-instruments using its SDK's native tracing capabilities. The orchestrator passes `LANGSMITH_*` host environment variables to sandbox containers via `SANDBOX_SECRET_ALLOWLIST`.
 
 ```
 .env → docker-compose → orchestrator → SANDBOX_SECRET_ALLOWLIST → sandbox container → harness
@@ -32,6 +32,8 @@ Tracing is **harness-level** — each harness self-instruments using its SDK's n
 | `LANGSMITH_WORKSPACE_ID` | Conditional | Required for service account keys (`lsv2_sk_`). Not needed for personal keys (`lsv2_pt_`). |
 
 All variables are added to `SANDBOX_SECRET_ALLOWLIST` in `packages/ctxmill/src/config/container.ts` and forwarded to sandbox containers alongside LLM API keys.
+
+If you prefer not to rely on host env passthrough, you can also store these keys as per-agent secrets. The current runtime injects arbitrary per-agent secret keys into the sandbox env, while host env passthrough remains allowlist-only.
 
 ## Per-Harness Behavior
 

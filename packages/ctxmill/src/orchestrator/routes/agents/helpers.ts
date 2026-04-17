@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { chown, readdir, stat } from 'node:fs/promises';
 import type { FastifyRequest } from 'fastify';
+import type { ApiSessionStatus, SandboxSessionStatus } from '@ctxmill/shared';
 
 import type { HarnessRegistry } from '../../../harness/types.js';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared } from '../../../workspace/ensure.js';
@@ -139,17 +140,15 @@ export function toApiAgentSession(
   turn: { id: string; agentId: string; conversationId: string | null; sessionId: string | null; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null },
   sandboxSession?: { status: string; pausedAt?: number | null; pausedReason?: string | null } | null,
 ) {
-  let status: string;
+  let status: ApiSessionStatus;
   if (turn.error) {
-    status = 'error';
+    status = 'ERROR';
   } else if (turn.completedAt != null) {
-    status = 'completed';
-  } else if (sandboxSession?.status === 'PAUSED') {
-    status = 'paused';
-  } else if (sandboxSession?.status === 'CHECKPOINTED') {
-    status = 'suspended';
+    status = 'COMPLETED';
+  } else if (sandboxSession?.status) {
+    status = sandboxSession.status as SandboxSessionStatus;
   } else {
-    status = 'running';
+    status = 'ACTIVE';
   }
 
   return {
@@ -157,7 +156,6 @@ export function toApiAgentSession(
     agentId: turn.agentId,
     conversationId: turn.conversationId ?? '',
     ...(turn.sessionId ? { sandboxSessionId: turn.sessionId } : {}),
-    ...(sandboxSession ? { sandboxSessionStatus: sandboxSession.status } : {}),
     status,
     mode: turn.mode || 'interactive',
     startedAt: turn.startedAt,

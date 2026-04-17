@@ -11,7 +11,7 @@
  */
 
 import { create } from '@bufbuild/protobuf';
-import { ConnectError } from '@connectrpc/connect';
+import { Code, ConnectError } from '@connectrpc/connect';
 import {
   type RegisterArtifactRequest,
   type RegisterArtifactResponse,
@@ -26,6 +26,7 @@ import {
 import type { ToolDefinition } from '../tool/types.js';
 import { jsonSchemaToZod } from '../tool/schema-convert.js';
 import { retryWithBackoff } from '../util/retry.js';
+import { stringifyJsonWithBigInts } from './json-serialization.js';
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -104,7 +105,7 @@ export function createToolProxy(
   return async (input: unknown): Promise<string> => {
     const resolvedSessionId = typeof sessionId === 'string' ? sessionId : sessionId.current;
     const requestId = generateRequestId();
-    const argsJson = typeof input === 'string' ? input : JSON.stringify(input ?? {});
+    const argsJson = typeof input === 'string' ? input : stringifyJsonWithBigInts(input ?? {});
 
     const req = create(RequestToolRequestSchema, {
       sessionId: resolvedSessionId,
@@ -118,12 +119,12 @@ export function createToolProxy(
       return await retryWithBackoff(
         async () => {
           const response = await callWithTimeout(
-            () => orchestratorClient.requestTool(req, { timeoutMs }),
+            (signal) => orchestratorClient.requestTool(req, { timeoutMs, signal }),
             timeoutMs,
           );
 
           if (response.error) {
-            return JSON.stringify({ error: response.error });
+            throw new ConnectError(response.error, Code.FailedPrecondition);
           }
 
           return response.result;
@@ -143,9 +144,10 @@ export function createToolProxy(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[tool-proxy] "${toolName}" all retries exhausted: ${msg}`);
-      return JSON.stringify({
-        error: `Tool proxy for "${toolName}" failed after ${retryDelays.length + 1} attempts: ${msg}`,
-      });
+      throw new Error(
+        `Tool proxy for "${toolName}" failed after ${retryDelays.length + 1} attempts: ${msg}`,
+        { cause: err },
+      );
     }
   };
 }
@@ -171,7 +173,7 @@ export function createOrchestratorToolProxies(
   return tools
     .filter((t) => t.location === ToolLocation.ORCHESTRATOR)
     .map((t) => {
-      const inputJsonSchema = safeParseJson(t.inputSchemaJson);
+      const inputJsonSchema = parseJsonOrThrow(t.inputSchemaJson, `tool ${t.name} input schema`);
       const zodSchema = jsonSchemaToZod(inputJsonSchema);
 
       const handler = createToolProxy(
@@ -217,14 +219,14 @@ function isNonRetryableCode(code: number): boolean {
  * Execute an async function with a timeout.
  */
 async function callWithTimeout<T>(
-  fn: () => Promise<T>,
+  fn: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const result = await fn();
+    const result = await fn(controller.signal);
     return result;
   } finally {
     clearTimeout(timer);
@@ -238,10 +240,11 @@ function generateRequestId(): string {
   return `rpc-${Date.now()}-${requestCounter}`;
 }
 
-function safeParseJson(s: string): Record<string, unknown> {
+function parseJsonOrThrow(s: string, context: string): Record<string, unknown> {
   try {
     return JSON.parse(s);
-  } catch {
-    return {};
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to parse ${context}: ${message}`, { cause: err });
   }
 }
