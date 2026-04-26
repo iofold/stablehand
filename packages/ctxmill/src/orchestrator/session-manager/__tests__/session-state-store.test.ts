@@ -107,11 +107,34 @@ describe('SessionStateStore', () => {
 
     expect(store.isActiveTurn('sess-1')).toBe(false);
 
-    store.markTurnActive('sess-1');
+    store.markTurnActive('sess-1', 'turn-1');
+    expect(store.isActiveTurn('sess-1')).toBe(true);
+    expect(store.getActiveTurnId('sess-1')).toBe('turn-1');
+
+    store.markTurnInactive('sess-1', 'wrong-turn');
     expect(store.isActiveTurn('sess-1')).toBe(true);
 
-    store.markTurnInactive('sess-1');
+    store.markTurnInactive('sess-1', 'turn-1');
     expect(store.isActiveTurn('sess-1')).toBe(false);
+  });
+
+  it('tracks abort controllers by turn id', () => {
+    const store = new SessionStateStore();
+    const first = new AbortController();
+    const second = new AbortController();
+
+    store.registerTurnController('sess-1', 'turn-1', first);
+    store.registerTurnController('sess-1', 'turn-2', second);
+
+    expect(store.getTurnAbortSignal('sess-1', 'turn-1')).toBe(first.signal);
+    expect(store.getTurnAbortSignal('sess-1', 'turn-2')).toBe(second.signal);
+    expect(store.abortTurn('sess-1', 'turn-1')).toBe(true);
+    expect(first.signal.aborted).toBe(true);
+    expect(second.signal.aborted).toBe(false);
+
+    store.clearTurnController('sess-1', 'turn-1');
+    expect(store.getTurnAbortSignal('sess-1', 'turn-1')).toBeUndefined();
+    expect(store.getTurnAbortSignal('sess-1', 'turn-2')).toBe(second.signal);
   });
 
   it('creates, reuses, and deletes turn queues', () => {
@@ -183,7 +206,8 @@ describe('SessionStateStore', () => {
     store.setSession(record.conversationId, record);
     store.setAgentDef(record.conversationId, createAgentDef());
     store.getOrCreateQueue(record.sessionId).push(createQueueEntry());
-    store.markTurnActive(record.sessionId);
+    store.markTurnActive(record.sessionId, 'turn-1');
+    store.registerTurnController(record.sessionId, 'turn-1', new AbortController());
 
     store.cleanupSession(record.sessionId, record.conversationId);
 
@@ -191,6 +215,7 @@ describe('SessionStateStore', () => {
     expect(store.getAgentDef(record.conversationId)).toBeUndefined();
     expect(store.getQueue(record.sessionId)).toBeUndefined();
     expect(store.isActiveTurn(record.sessionId)).toBe(false);
+    expect(store.getTurnAbortSignal(record.sessionId, 'turn-1')).toBeUndefined();
   });
 
   it('returns all sessions and filters by agent', () => {

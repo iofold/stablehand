@@ -270,7 +270,24 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // ── 14. feedback_signals ───────────────────────────────────────────
+  // ── 14. interrupt_resume_attempts (→ pending_interrupts, turns, agents) ──
+  await sql`
+    CREATE TABLE IF NOT EXISTS interrupt_resume_attempts (
+      id TEXT PRIMARY KEY NOT NULL,
+      interrupt_id TEXT NOT NULL REFERENCES pending_interrupts(id) ON DELETE CASCADE,
+      agent_session_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+      session_id TEXT,
+      agent_id TEXT NOT NULL REFERENCES agents(id),
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      completed_at BIGINT
+    )
+  `;
+
+  // ── 15. feedback_signals ───────────────────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS feedback_signals (
       id TEXT PRIMARY KEY NOT NULL,
@@ -442,6 +459,11 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_agent_session ON pending_interrupts(agent_session_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_agent ON pending_interrupts(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_status ON pending_interrupts(status, expires_at)`;
+
+  // interrupt_resume_attempts
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_interrupt_resume_attempts_interrupt ON interrupt_resume_attempts(interrupt_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_interrupt_resume_attempts_agent_status ON interrupt_resume_attempts(agent_id, status)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_interrupt_resume_attempts_session ON interrupt_resume_attempts(session_id)`;
 
   // feedback_signals
   await sql`CREATE INDEX IF NOT EXISTS idx_feedback_signals_agent_created ON feedback_signals(agent_id, created_at)`;

@@ -27,3 +27,23 @@ export function sanitizeDbValue(value: unknown, context?: string): unknown {
   }
   return value;
 }
+
+/**
+ * Sanitize JSONB-bound values and coerce BigInt values to decimal strings.
+ * This is intentionally separate from sanitizeDbValue so callers opt in where
+ * JSON.stringify compatibility is required and lossless BigInt strings are OK.
+ */
+export function sanitizeDbJsonValue(value: unknown, context?: string): unknown {
+  if (typeof value === 'bigint') return value.toString();
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return sanitizeDbText(value, context);
+  if (Array.isArray(value)) return value.map((item) => sanitizeDbJsonValue(item, context));
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = sanitizeDbJsonValue(v, context);
+    }
+    return out;
+  }
+  return value;
+}

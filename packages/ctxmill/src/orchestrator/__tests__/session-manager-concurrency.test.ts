@@ -31,7 +31,7 @@ type SandboxSessionManagerInternals = {
   stateStore: {
     sessions: Map<string, SessionRecord>;
     turnQueues: Map<string, Array<{ messages: Message[]; turnId: string; channel: TestChannel }>>;
-    activeTurns: Set<string>;
+    activeTurns: Map<string, string>;
     agentDefs: Map<string, AgentDefinition>;
   };
   drainCoalescedQueue(sessionId: string): Promise<void>;

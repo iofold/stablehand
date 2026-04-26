@@ -38,7 +38,9 @@ export interface SessionRecord {
   status: SessionStatus;
   harnessName: string;
   sessionWorkspaceDir?: string;
+  /** @deprecated Turn ownership is tracked by SessionStateStore. */
   currentTurnAbortController?: AbortController;
+  /** @deprecated Turn ownership is tracked by SessionStateStore. */
   currentTurnId?: string;
   grpcClient?: HarnessGrpcClient;
 }

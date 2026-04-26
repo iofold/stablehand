@@ -74,6 +74,7 @@
 | **Webhooks** |  |  |
 | GET | `/api/agents/:id/webhooks` | List webhooks |
 | POST | `/api/agents/:id/webhooks` | Create webhook |
+| PUT | `/api/agents/:id/webhooks/:webhookId` | Update webhook |
 | DELETE | `/api/agents/:id/webhooks/:webhookId` | Delete webhook |
 | **Feedback & Learning Traces** |  |  |
 | POST | `/api/agents/:id/feedback` | Submit thumbs-up/thumbs-down feedback |
@@ -474,7 +475,10 @@ Per-agent sandbox resource limits:
 ```json
 {
   "task": "Index the uploaded artifacts and prepare a summary.",
-  "mode": "background"
+  "mode": "background",
+  "sandboxSecrets": {
+    "MYAPP_SERVICE_TOKEN": "jwt-or-token-value"
+  }
 }
 ```
 
@@ -488,7 +492,9 @@ Per-agent sandbox resource limits:
 }
 ```
 
-- **Notes:** Updates the agent status to `running` and returns before the run completes.
+- **Notes:**
+  - Updates the agent status to `running` and returns before the run completes.
+  - `sandboxSecrets` is optional and memory-only for the created run. Values are merged into the sandbox container environment for the initial session start, override same-named stored agent/env secrets for that run, and are not written to task messages, checkpoints, or agent records.
 
 #### `POST /api/agents/:id/sessions/:sessionId/cancel`
 
@@ -1292,12 +1298,29 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 
 - **Notes:** Returns only active webhooks.
 
+#### `PUT /api/agents/:id/webhooks/:webhookId`
+
+- **Description:** Updates a webhook subscription for the agent.
+- **Request body:**
+
+```json
+{
+  "url": "https://example.com/ctxmill/webhook",
+  "events": ["turn.completed", "message.committed"],
+  "secret": "optional-shared-secret"
+}
+```
+
+- **Query params:** None.
+- **Response:** updated webhook object.
+- **Notes:** Returns `404` when the webhook does not belong to the agent.
+
 #### `DELETE /api/agents/:id/webhooks/:webhookId`
 
 - **Description:** Deletes a webhook subscription.
 - **Query params:** None.
 - **Response:** no body.
-- **Notes:** Returns `204` on success.
+- **Notes:** Returns `204` on success. Returns `404` when the webhook does not belong to the agent.
 
 ### m. Feedback & Learning Traces
 
@@ -2079,6 +2102,7 @@ es.onerror = (err) => {
 - `run.tool_result`
 - `run.interrupted`
 - `run.interrupt_resolved`
+- `message.committed`
 
 ### Delivery format
 
@@ -2125,10 +2149,26 @@ Body = raw JSON payload for the event.
 {
   "turnId": "turn_123",
   "agentId": "agent_123",
+  "conversationId": "conv_123",
   "toolCallId": "tc_1",
   "toolName": "artifact_search",
   "args": { "query": "alerts" },
   "timestamp": 1712140000200
+}
+```
+
+`message.committed` example payload:
+
+```json
+{
+  "turnId": "turn_123",
+  "agentId": "agent_123",
+  "conversationId": "conv_123",
+  "messageId": "msg_123",
+  "messageSeq": 3,
+  "role": "assistant",
+  "content": "The run completed successfully.",
+  "timestamp": 1712140001200
 }
 ```
 

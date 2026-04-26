@@ -12,6 +12,7 @@ import type { LocalFunctionExecutor } from '../tool/executor.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
 import { sanitizeDbText } from '../util/sanitize.js';
 import { traceToDbRow } from '../learning/trace-convert.js';
+import { withRuntimeSandboxSecrets, type RuntimeSandboxSecrets } from './session-manager/runtime-sandbox-secrets.js';
 
 const INDIVIDUALLY_HANDLED = new Set([
   'MESSAGE_COMMITTED',
@@ -74,6 +75,7 @@ export interface ExecuteSessionParams {
   sessionId: string;
   mode: 'interactive' | 'background';
   taskDescription: string;
+  sandboxSecrets?: RuntimeSandboxSecrets;
 }
 
 /**
@@ -107,6 +109,7 @@ export class AgentSessionService {
    */
   async executeSession(params: ExecuteSessionParams): Promise<void> {
     const { agentDef, messages, agentId, conversationId, sessionId: turnId, mode, taskDescription } = params;
+    const runtimeAgentDef = withRuntimeSandboxSecrets(agentDef, params.sandboxSecrets);
 
     const traceCollector = new TraceCollector(agentId, turnId, taskDescription);
     const startedAt = Date.now();
@@ -285,14 +288,14 @@ export class AgentSessionService {
     };
 
     try {
-      const sandboxSession: SessionRecord = await this.sessionManager.ensureSession(conversationId, agentDef, agentId);
+      const sandboxSession: SessionRecord = await this.sessionManager.ensureSession(conversationId, runtimeAgentDef, agentId);
       sandboxSessionId = sandboxSession.sessionId;
 
       await this.db.updateTurn(turnId, { sessionId: sandboxSessionId });
       signal = this.sessionManager.startTurn(sandboxSessionId, turnId, agentId, conversationId, mode, taskDescription);
 
       const eventSource: AsyncGenerator<AGUIEvent> = this.sessionTurnService.executeSessionTurn(
-        agentDef,
+        runtimeAgentDef,
         conversationId,
         messages,
         turnId,

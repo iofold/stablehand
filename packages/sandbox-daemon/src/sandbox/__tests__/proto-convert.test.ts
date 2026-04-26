@@ -67,6 +67,7 @@ function makeFreshBootstrap(overrides: Partial<FreshBootstrap> = {}): FreshBoots
     systemPrompt: 'You are a focused sandbox harness.',
     tools: [],
     workspaceDir: '/tmp/workspace',
+    sessionId: 'session-123',
     ...overrides,
   });
 }

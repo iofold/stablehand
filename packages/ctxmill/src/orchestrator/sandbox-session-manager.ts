@@ -103,8 +103,8 @@ export class SandboxSessionManager {
   async onSessionEvicted(sessionId: string, conversationId: string): Promise<void> { await this.lifecycleService.onSessionEvicted(sessionId, conversationId); }
   startTurn(sessionId: string, turnId: string, agentId: string, conversationId: string, mode: 'interactive' | 'background', taskDescription?: string): AbortSignal { return this.turnOrchestrator.startTurn(sessionId, turnId, agentId, conversationId, mode, taskDescription); }
   completeTurn(sessionId: string, turnId: string, agentId: string, conversationId: string, status: 'completed' | 'error' | 'cancelled', durationMs: number, error?: string): void { this.turnOrchestrator.completeTurn(sessionId, turnId, agentId, conversationId, status, durationMs, error); }
-  cancelCurrentTurn(sessionId: string): boolean { return this.turnOrchestrator.cancelCurrentTurn(sessionId); }
-  getAbortSignal(sessionId: string): AbortSignal | undefined { return this.turnOrchestrator.getAbortSignal(sessionId); }
+  cancelCurrentTurn(sessionId: string, turnId?: string): boolean { return this.turnOrchestrator.cancelCurrentTurn(sessionId, turnId); }
+  getAbortSignal(sessionId: string, turnId?: string): AbortSignal | undefined { return this.turnOrchestrator.getAbortSignal(sessionId, turnId); }
   checkConcurrencyLimit(agentId: string): void { this.turnOrchestrator.checkConcurrencyLimit(agentId); }
   async *deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<CustomSessionEvent> { yield* this.turnOrchestrator.deliverTurn(sessionId, messages, turnId); }
   suspendSession(sessionId: string, reason: string) { return this.lifecycleService.suspendSession(sessionId, reason); }

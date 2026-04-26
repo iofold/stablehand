@@ -81,10 +81,11 @@ function jsonResponse(body: unknown, status: number = 200): Response {
 function parseToolResult(result: string): unknown {
   try {
     return JSON.parse(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('[daemon] Failed to parse tool result as JSON:', err);
-    throw new Error(`Tool returned invalid JSON: ${message}`, { cause: err });
+  } catch {
+    // Tool results are not guaranteed to be JSON (e.g. markdown, plain text).
+    // Return the raw string so the caller can pass it through rather than crashing.
+    console.debug('[daemon] Tool result is not JSON, returning raw string');
+    return result;
   }
 }
 
@@ -204,7 +205,7 @@ async function handleSuspendSession(req: SuspendSessionRequest) {
   console.error(`[sandbox] SuspendSession called — sessionId=${req.sessionId}, reason=${req.reason}`);
 
   try {
-    const response = await suspendSession(req.reason);
+    const response = await suspendSession(req.reason, req.sessionId);
 
     const json = stringifyJsonWithBigInts(response.sessionCheckpoint);
     const sizeResult = validateCheckpointSize(json);
@@ -242,7 +243,7 @@ async function handleSuspendSession(req: SuspendSessionRequest) {
 async function handleKillSession(req: KillSessionRequest) {
   console.error(`[sandbox] KillSession called — sessionId=${req.sessionId}, reason=${req.reason}`);
 
-  await killSession();
+  await killSession(req.sessionId);
 
   return create(KillSessionResponseSchema, {
     finalStatus: 'killed',

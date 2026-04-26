@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import { sanitizeDbText, sanitizeDbValue } from '../sanitize.js';
+import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../sanitize.js';
 
 describe('sanitizeDbText', () => {
   afterEach(() => {
@@ -49,5 +49,21 @@ describe('sanitizeDbValue', () => {
   it('handles null and undefined', () => {
     expect(sanitizeDbValue(null)).toBeNull();
     expect(sanitizeDbValue(undefined)).toBeUndefined();
+  });
+});
+
+describe('sanitizeDbJsonValue', () => {
+  it('coerces nested bigint values to decimal strings', () => {
+    expect(sanitizeDbJsonValue({
+      cursor: { nextMessageSeq: 9007199254740993n },
+      values: [1n, { nested: 2n }],
+    })).toEqual({
+      cursor: { nextMessageSeq: '9007199254740993' },
+      values: ['1', { nested: '2' }],
+    });
+  });
+
+  it('still strips null bytes from nested strings', () => {
+    expect(sanitizeDbJsonValue({ value: 'a\0b' })).toEqual({ value: 'ab' });
   });
 });

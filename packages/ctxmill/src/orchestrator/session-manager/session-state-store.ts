@@ -8,7 +8,9 @@ export class SessionStateStore implements SessionStatePort {
 
   private readonly turnQueues = new Map<string, TurnQueueEntry[]>();
 
-  private readonly activeTurns = new Set<string>();
+  private readonly activeTurns = new Map<string, string>();
+
+  private readonly turnControllers = new Map<string, Map<string, AbortController>>();
 
   private readonly agentDefs = new Map<string, AgentDefinition>();
 
@@ -92,12 +94,52 @@ export class SessionStateStore implements SessionStatePort {
     return this.activeTurns.has(sessionId);
   }
 
-  markTurnActive(sessionId: string): void {
-    this.activeTurns.add(sessionId);
+  getActiveTurnId(sessionId: string): string | undefined {
+    return this.activeTurns.get(sessionId);
   }
 
-  markTurnInactive(sessionId: string): void {
+  markTurnActive(sessionId: string, turnId: string): void {
+    this.activeTurns.set(sessionId, turnId);
+  }
+
+  markTurnInactive(sessionId: string, turnId?: string): void {
+    if (turnId !== undefined && this.activeTurns.get(sessionId) !== turnId) {
+      return;
+    }
     this.activeTurns.delete(sessionId);
+  }
+
+  registerTurnController(sessionId: string, turnId: string, controller: AbortController): void {
+    let controllers = this.turnControllers.get(sessionId);
+    if (!controllers) {
+      controllers = new Map<string, AbortController>();
+      this.turnControllers.set(sessionId, controllers);
+    }
+    controllers.set(turnId, controller);
+  }
+
+  getTurnAbortSignal(sessionId: string, turnId: string): AbortSignal | undefined {
+    return this.turnControllers.get(sessionId)?.get(turnId)?.signal;
+  }
+
+  abortTurn(sessionId: string, turnId: string): boolean {
+    const controller = this.turnControllers.get(sessionId)?.get(turnId);
+    if (!controller) {
+      return false;
+    }
+    controller.abort();
+    return true;
+  }
+
+  clearTurnController(sessionId: string, turnId: string): void {
+    const controllers = this.turnControllers.get(sessionId);
+    if (!controllers) {
+      return;
+    }
+    controllers.delete(turnId);
+    if (controllers.size === 0) {
+      this.turnControllers.delete(sessionId);
+    }
   }
 
   cleanupSession(sessionId: string, conversationId: string): void {
@@ -105,6 +147,7 @@ export class SessionStateStore implements SessionStatePort {
     this.sessionsById.delete(sessionId);
     this.turnQueues.delete(sessionId);
     this.activeTurns.delete(sessionId);
+    this.turnControllers.delete(sessionId);
     this.agentDefs.delete(conversationId);
   }
 

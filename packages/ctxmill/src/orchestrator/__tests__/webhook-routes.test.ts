@@ -57,6 +57,23 @@ function createMockDb() {
       },
     ] satisfies WebhookRow[]),
     deleteWebhook: vi.fn(async (id: string) => id === 'hook-1'),
+    deleteWebhookForAgent: vi.fn(async (id: string, agentId?: string) => id === 'hook-1' && (!agentId || agentId === 'agent-1')),
+    updateWebhookForAgent: vi.fn(async (
+      id: string,
+      agentId: string,
+      data: { url: string; events: string[]; secret?: string | null },
+    ) => (id === 'hook-1' && agentId === 'agent-1'
+      ? {
+          id,
+          agentId,
+          url: data.url,
+          events: data.events,
+          secret: data.secret ?? null,
+          active: true,
+          createdAt: 10,
+          updatedAt: 20,
+        } satisfies WebhookRow
+      : undefined)),
     getWebhooksForAgent: vi.fn(async () => [] as WebhookRow[]),
   };
 
@@ -165,9 +182,67 @@ describe('webhook routes', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({
       error: 'Invalid event types: run.unknown',
-      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'],
+      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed'],
     });
     expect(db.createWebhook).not.toHaveBeenCalled();
+  });
+
+  it('updates a webhook with valid events', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/agents/agent-1/webhooks/hook-1',
+      payload: {
+        url: 'https://hooks.example/updated',
+        events: ['turn.completed', 'message.committed'],
+        secret: 'rotated-secret',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(db.updateWebhookForAgent).toHaveBeenCalledWith('hook-1', 'agent-1', {
+      url: 'https://hooks.example/updated',
+      events: ['turn.completed', 'message.committed'],
+      secret: 'rotated-secret',
+    });
+    expect(response.json()).toEqual(expect.objectContaining({
+      id: 'hook-1',
+      agentId: 'agent-1',
+      url: 'https://hooks.example/updated',
+      events: ['turn.completed', 'message.committed'],
+      secret: 'rotated-secret',
+    }));
+  });
+
+  it('rejects invalid event types when updating a webhook', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/agents/agent-1/webhooks/hook-1',
+      payload: {
+        url: 'https://hooks.example/updated',
+        events: ['message.committed', 'run.unknown'],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(db.updateWebhookForAgent).not.toHaveBeenCalled();
+    expect(response.json()).toEqual({
+      error: 'Invalid event types: run.unknown',
+      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed'],
+    });
+  });
+
+  it('returns 404 when updating a webhook outside the agent', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/agents/agent-1/webhooks/other-hook',
+      payload: {
+        url: 'https://hooks.example/updated',
+        events: ['turn.completed'],
+      },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Webhook not found' });
   });
 
   it('lists webhooks for an agent', async () => {
@@ -194,7 +269,7 @@ describe('webhook routes', () => {
     });
 
     expect(response.statusCode).toBe(204);
-    expect(db.deleteWebhook).toHaveBeenCalledWith('hook-1');
+    expect(db.deleteWebhookForAgent).toHaveBeenCalledWith('hook-1', 'agent-1');
   });
 });
 
@@ -214,22 +289,19 @@ describe('callback subscriptions', () => {
     return dispatcher as unknown as CallbackDispatcher & typeof dispatcher;
   }
 
-  it('enqueues run.started to subscribed webhooks', async () => {
+  it('enqueues every valid webhook event to subscribed webhooks', async () => {
     const eventBus = new TypedEventBus();
-    const db = createSubscriptionDb({
-      webhooks: [
-        {
-          id: 'hook-1',
-          agentId: 'agent-1',
-          url: 'https://hooks.example/run-started',
-          events: ['turn.started'],
-          secret: null,
-          active: true,
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
-    });
+    const events = ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed'];
+    const db = createSubscriptionDb({ webhooks: events.map((event, index) => ({
+      id: `hook-${index}`,
+      agentId: 'agent-1',
+      url: `https://hooks.example/${event}`,
+      events: [event],
+      secret: null,
+      active: true,
+      createdAt: 1,
+      updatedAt: 1,
+    })) as WebhookRow[] });
     const callbackDispatcher = createDispatcher();
 
     registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
@@ -242,13 +314,70 @@ describe('callback subscriptions', () => {
       taskDescription: 'Start task',
       timestamp: 123,
     });
+    eventBus.emit('turn.completed', {
+      turnId: 'run-1',
+      sessionId: 'run-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      status: 'completed',
+      durationMs: 400,
+      timestamp: 456,
+    });
+    eventBus.emit('run.tool_started', {
+      turnId: 'run-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-1',
+      toolName: 'search',
+      args: { query: 'ctxmill' },
+      timestamp: 789,
+    });
+    eventBus.emit('run.tool_result', {
+      turnId: 'run-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-1',
+      toolName: 'search',
+      result: '{"ok":true}',
+      durationMs: 12,
+      timestamp: 790,
+    });
+    eventBus.emit('run.interrupted', {
+      turnId: 'run-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-2',
+      toolName: 'approve',
+      args: { amount: 5 },
+      interruptId: 'int-1',
+      timestamp: 791,
+    });
+    eventBus.emit('run.interrupt_resolved', {
+      turnId: 'run-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      interruptId: 'int-1',
+      action: 'approve',
+      timestamp: 792,
+    });
+    eventBus.emit('message.committed', {
+      turnId: 'run-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      messageSeq: 2,
+      role: 'assistant',
+      content: 'done',
+      timestamp: 793,
+    });
     await flushEvents();
 
-    expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
+    expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(events.length);
+    expect(callbackDispatcher.enqueue.mock.calls.map(([delivery]) => delivery.eventType)).toEqual(events);
     expect(callbackDispatcher.enqueue).toHaveBeenNthCalledWith(1, {
       agentId: 'agent-1',
       sessionId: 'run-1',
-      callbackUrl: 'https://hooks.example/run-started',
+      callbackUrl: 'https://hooks.example/turn.started',
       eventType: 'turn.started',
       payload: {
         turnId: 'run-1',
@@ -343,6 +472,7 @@ describe('callback subscriptions', () => {
     eventBus.emit('run.tool_started', {
       turnId: 'run-1',
       agentId: 'agent-1',
+      conversationId: 'conv-1',
       toolCallId: 'tool-1',
       toolName: 'search',
       args: { query: 'ctxmill' },
@@ -359,9 +489,11 @@ describe('callback subscriptions', () => {
        payload: {
          turnId: 'run-1',
          agentId: 'agent-1',
+         conversationId: 'conv-1',
          toolCallId: 'tool-1',
          toolName: 'search',
          args: { query: 'ctxmill' },
+         requiresApproval: undefined,
          timestamp: 789,
        },
      });

@@ -78,8 +78,10 @@ ENV HOME=/root
 RUN mkdir -p /workspace && chown ctxmill:ctxmill /workspace
 RUN cd /app && npm install --no-save playwright 2>/dev/null || true
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    /root/.local/bin/uv venv /opt/venv && \
-    /root/.local/bin/uv pip install --python /opt/venv/bin/python python-docx python-pptx openpyxl pdfplumber pillow trafilatura
+    install -m 0755 /root/.local/bin/uv /usr/local/bin/uv && \
+    install -m 0755 /root/.local/bin/uvx /usr/local/bin/uvx && \
+    /usr/local/bin/uv venv /opt/venv && \
+    /usr/local/bin/uv pip install --python /opt/venv/bin/python python-docx python-pptx openpyxl pdfplumber pillow trafilatura
 ENV PATH="/opt/venv/bin:$PATH"
 ENV HOME=/home/ctxmill
 USER ctxmill

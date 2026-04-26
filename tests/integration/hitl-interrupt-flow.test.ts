@@ -152,11 +152,11 @@ describe('HITL Interrupt Lifecycle', () => {
 
        expect(resolvedEvents.events).toHaveLength(1);
        expect(resolvedEvents.events[0]).toEqual(
-         expect.objectContaining({
-           turnId: 'run-to',
-           agentId: 'agent-to',
-            action: 'suspend',
-          }),
+	         expect.objectContaining({
+	           turnId: 'run-to',
+	           agentId: 'agent-to',
+	            action: 'timeout',
+	          }),
         );
 
       resolvedEvents.unsubscribe();

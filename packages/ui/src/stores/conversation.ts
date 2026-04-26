@@ -515,13 +515,15 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       case 'CUSTOM': {
         const subtype = (event.subtype as string) || '';
         if (subtype === 'state_snapshot') {
-          const status = event.status as string;
           const convId = event.conversationId as string;
           const activeConv = get().activeConversationId;
+          const activeTurnId = typeof event.activeTurnId === 'string'
+            ? event.activeTurnId
+            : (typeof event.turnId === 'string' ? event.turnId : '');
           if (convId && convId === activeConv) {
             set({
-              isStreaming: status === 'ACTIVE' || status === 'RESTORING',
-              currentTurnId: (event.turnId as string) || get().currentTurnId,
+              isStreaming: activeTurnId.length > 0,
+              currentTurnId: activeTurnId || get().currentTurnId,
             });
           }
           break;

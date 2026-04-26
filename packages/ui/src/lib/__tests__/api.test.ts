@@ -19,6 +19,7 @@ import {
   fetchTraceStats,
   fetchTraces,
   fetchFeedbackStats,
+  fetchInterrupts,
 } from '../api';
 
 const mockJson = vi.fn();
@@ -117,6 +118,27 @@ describe('sendInterrupt', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'approve', data: { reason: 'ok' } }),
     });
+  });
+});
+
+describe('fetchInterrupts', () => {
+  it('unwraps GET /api/agents/:id/interrupts response', async () => {
+    const interrupts = [{
+      id: 'turn-1',
+      sessionId: 'turn-1',
+      agentId: 'a1',
+      toolCallId: 'tc-1',
+      toolName: 'approve',
+      args: { ok: true },
+      status: 'pending',
+      createdAt: 1,
+    }];
+    mockJson.mockResolvedValue({ interrupts });
+
+    const result = await fetchInterrupts('a1');
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/interrupts', undefined);
+    expect(result).toEqual(interrupts);
   });
 });
 

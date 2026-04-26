@@ -198,7 +198,7 @@ export function SessionPage() {
           try {
             const pendingInterrupts = await fetchInterrupts(id!);
             if (mounted && Array.isArray(pendingInterrupts) && pendingInterrupts.length > 0) {
-              const first = pendingInterrupts[0];
+              const first = [...pendingInterrupts].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))[0];
               useInterruptStore.getState().setPending({
                 agentId: id!,
                 toolName: first.toolName,

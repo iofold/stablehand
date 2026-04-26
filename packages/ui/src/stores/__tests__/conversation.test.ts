@@ -178,6 +178,7 @@ describe('conversation store', () => {
       subtype: 'state_snapshot',
       conversationId: 'conv-1',
       sessionId: 'sandbox-session-1',
+      activeTurnId: 'turn-1',
       turnId: 'turn-1',
       status: 'ACTIVE',
     }));
@@ -185,6 +186,23 @@ describe('conversation store', () => {
     const state = getStore();
     expect(state.isStreaming).toBe(true);
     expect(state.currentTurnId).toBe('turn-1');
+  });
+
+  it('state_snapshot does not mark an idle active container as streaming', () => {
+    const { setActiveConversation, handleSSEEvent } = getStore();
+
+    setActiveConversation('conv-1');
+    handleSSEEvent(makeEvent('CUSTOM', {
+      subtype: 'state_snapshot',
+      conversationId: 'conv-1',
+      sessionId: 'sandbox-session-1',
+      activeTurnId: null,
+      status: 'ACTIVE',
+    }));
+
+    const state = getStore();
+    expect(state.isStreaming).toBe(false);
+    expect(state.currentTurnId).toBeNull();
   });
 
   it('HITL_PAUSE forwards the pending interrupt payload to the interrupt store', () => {

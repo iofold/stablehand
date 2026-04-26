@@ -20,6 +20,7 @@ const ALL_TABLES = [
   'tool_request_dedup',
   'artifacts',
   'agent_checkpoints',
+  'interrupt_resume_attempts',
   'pending_interrupts',
   'turns',
   'sandbox_sessions',

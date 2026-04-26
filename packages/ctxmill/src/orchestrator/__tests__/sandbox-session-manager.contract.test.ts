@@ -43,7 +43,7 @@ type SandboxSessionManagerInternals = {
   stateStore: {
     sessions: Map<string, SessionRecord>;
     turnQueues: Map<string, Array<{ messages: Message[]; turnId: string; channel: TestChannel }>>;
-    activeTurns: Set<string>;
+    activeTurns: Map<string, string>;
     agentDefs: Map<string, AgentDefinition>;
   };
   drainCoalescedQueue(sessionId: string): Promise<void>;
@@ -318,6 +318,30 @@ describe('SandboxSessionManager contract', () => {
       });
       expect(internals.stateStore.sessions.get('conv-1')?.sessionId).toBe(session.sessionId);
       expect(internals.stateStore.agentDefs.get('conv-1')).toMatchObject({ name: 'agent-1' });
+    });
+
+    it('merges runtime sandbox secrets into fresh session containers', async () => {
+      const { manager, containerManager, buildSandboxSecrets } = createManager();
+      buildSandboxSecrets.mockReturnValue({
+        OPENAI_API_KEY: 'base-key',
+        PILOT_SERVICE_TOKEN: 'stored-token',
+      });
+
+      await manager.ensureSession('conv-1', {
+        ...createAgentDef(),
+        runtimeSandboxSecrets: {
+          PILOT_SERVICE_TOKEN: 'runtime-token',
+          PILOT_API_BASE: 'http://api:3000',
+        },
+      } as unknown as AgentDefinition, 'agent-1');
+
+      expect(containerManager.createContainer).toHaveBeenCalledWith(expect.objectContaining({
+        secrets: {
+          OPENAI_API_KEY: 'base-key',
+          PILOT_SERVICE_TOKEN: 'runtime-token',
+          PILOT_API_BASE: 'http://api:3000',
+        },
+      }));
     });
 
     it('reconnects to an ACTIVE DB session when the container is still alive', async () => {

@@ -1,4 +1,5 @@
 import { create } from '@bufbuild/protobuf';
+import { Code } from '@connectrpc/connect';
 import {
   DeliverTurnRequestSchema,
   FreshBootstrapSchema,
@@ -43,10 +44,11 @@ function createOpenSessionRequest(workspaceDir = '/tmp/custom-workspace') {
         agentId: 'agent-1',
         conversationId: 'conv-1',
         harnessName: 'langgraph',
-        harnessConfigJson: '{}',
-        systemPrompt: 'Prompt',
-        workspaceDir,
-        tools: [
+	        harnessConfigJson: '{}',
+	        systemPrompt: 'Prompt',
+	        workspaceDir,
+	        sessionId: 'session-fresh',
+	        tools: [
           create(ToolMetadataSchema, {
             name: 'search',
             description: 'Search docs',
@@ -143,9 +145,10 @@ function createControllableGenerator() {
 }
 
 describe('runner openSession PTC bootstrap', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    process.env.ORCHESTRATOR_URL = 'http://127.0.0.1:3002';
+	  beforeEach(() => {
+	    vi.clearAllMocks();
+	    mocks.generatePtcScripts.mockResolvedValue([]);
+	    process.env.ORCHESTRATOR_URL = 'http://127.0.0.1:3002';
     mocks.harnessOpenSession.mockResolvedValue({
       deliverTurn: async function* () {},
       exportState: async () => ({ stateVersion: '2', payload: {} }),
@@ -277,6 +280,25 @@ describe('runner openSession PTC bootstrap', () => {
     expect(mocks.harnessClose).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects deliverTurn when request session id does not match active session', async () => {
+    const { deliverTurn, openSession } = await importRunner();
+    const harnessDeliverTurn = vi.fn(async function* () {});
+
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: harnessDeliverTurn,
+      exportState: async () => ({ stateVersion: '2', payload: {} }),
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/session-id-deliver-mismatch'), {});
+    const stream = deliverTurn(createDeliverTurnRequest(`${session.sessionId}-wrong`, 'turn-wrong-session'));
+
+    await expect(stream.next()).rejects.toMatchObject({
+      code: Code.FailedPrecondition,
+    });
+    expect(harnessDeliverTurn).not.toHaveBeenCalled();
+  });
+
   it('suspendSession throws when killSession fires during exportState', async () => {
     const { killSession, openSession, suspendSession } = await importRunner();
     const exportStateDeferred = createDeferred<{ stateVersion: string; payload: Record<string, unknown> }>();
@@ -294,6 +316,44 @@ describe('runner openSession PTC bootstrap', () => {
     exportStateDeferred.resolve({ stateVersion: '2', payload: {} });
 
     await expect(suspendPromise).rejects.toThrow('session killed during state export');
+    expect(mocks.harnessClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects suspendSession when request session id does not match active session', async () => {
+    const { openSession, suspendSession } = await importRunner();
+    const exportState = vi.fn(async () => ({ stateVersion: '2', payload: {} }));
+
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: async function* () {},
+      exportState,
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/session-id-suspend-mismatch'), {});
+
+    await expect(suspendSession('mismatch-test', `${session.sessionId}-wrong`)).rejects.toMatchObject({
+      code: Code.FailedPrecondition,
+    });
+    expect(exportState).not.toHaveBeenCalled();
+  });
+
+  it('rejects killSession when request session id does not match active session', async () => {
+    const { killSession, openSession } = await importRunner();
+
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: async function* () {},
+      exportState: async () => ({ stateVersion: '2', payload: {} }),
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/session-id-kill-mismatch'), {});
+
+    await expect(killSession(`${session.sessionId}-wrong`)).rejects.toMatchObject({
+      code: Code.FailedPrecondition,
+    });
+    expect(mocks.harnessClose).not.toHaveBeenCalled();
+
+    await killSession(session.sessionId);
     expect(mocks.harnessClose).toHaveBeenCalledTimes(1);
   });
 

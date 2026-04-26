@@ -193,6 +193,32 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
     deleteWebhook: vi.fn(async (webhookId: string) => {
       return webhooks.delete(webhookId);
     }),
+    deleteWebhookForAgent: vi.fn(async (webhookId: string, agentId?: string) => {
+      const hook = webhooks.get(webhookId);
+      if (!hook || (agentId && hook.agentId !== agentId)) {
+        return false;
+      }
+      return webhooks.delete(webhookId);
+    }),
+    updateWebhookForAgent: vi.fn(async (
+      webhookId: string,
+      agentId: string,
+      data: { url: string; events: string[]; secret?: string | null },
+    ) => {
+      const hook = webhooks.get(webhookId);
+      if (!hook || hook.agentId !== agentId) {
+        return undefined;
+      }
+      const updated = {
+        ...hook,
+        url: data.url,
+        events: data.events,
+        secret: data.secret ?? null,
+        updatedAt: Date.now(),
+      };
+      webhooks.set(webhookId, updated);
+      return { ...updated };
+    }),
     enqueueCallback: vi.fn(async (data: CallbackOutboxRow) => {
       const row = { ...data };
       callbackOutbox.set(row.id, row);
@@ -640,11 +666,12 @@ describe('Pilot integration', () => {
 
       const sessionManager = createMockSessionManager();
       const cancelSessionSpy = vi.spyOn(sessionManager, 'cancelCurrentTurn');
-        const agentSessionService = {
-        executeSession: vi.fn(async (params: { agentId: string; sessionId: string }) => {
+      const agentSessionService = {
+        executeSession: vi.fn(async (params: { agentId: string; sessionId: string; conversationId: string }) => {
           eventBus.emit('run.tool_started', {
             turnId: params.sessionId,
             agentId: params.agentId,
+            conversationId: params.conversationId,
             toolCallId: 'tool-1',
             toolName: 'remote-search',
             args: { query: 'pilot shipment 42' },
@@ -688,11 +715,23 @@ describe('Pilot integration', () => {
       const startResponse = await app.inject({
         method: 'POST',
         url: '/api/agents/agent-1/session',
-        payload: { task: 'Dispatch Pilot order sync' },
+        payload: {
+          task: 'Dispatch Pilot order sync',
+          sandboxSecrets: {
+            PILOT_SERVICE_TOKEN: 'runtime-token',
+            PILOT_API_BASE: 'http://api:3000',
+          },
+        },
       });
 
       expect(startResponse.statusCode).toBe(201);
       expect(agentSessionService.executeSession).toHaveBeenCalledTimes(1);
+      expect(agentSessionService.executeSession).toHaveBeenCalledWith(expect.objectContaining({
+        sandboxSecrets: {
+          PILOT_SERVICE_TOKEN: 'runtime-token',
+          PILOT_API_BASE: 'http://api:3000',
+        },
+      }));
 
       const { sessionId } = startResponse.json() as { sessionId: string; conversationId: string };
 
@@ -719,7 +758,7 @@ describe('Pilot integration', () => {
       });
 
       expect(cancelResponse.statusCode).toBe(200);
-      expect(cancelSessionSpy).toHaveBeenCalledWith(`sandbox-${sessionId}`);
+      expect(cancelSessionSpy).toHaveBeenCalledWith(`sandbox-${sessionId}`, sessionId);
 
       eventBus.emit('turn.completed', {
         turnId: sessionId,

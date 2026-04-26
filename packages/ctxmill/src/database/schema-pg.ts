@@ -171,6 +171,24 @@ export const pendingInterrupts = pgTable('pending_interrupts', {
   statusExpiresIdx: index('idx_interrupts_status').on(table.status, table.expiresAt),
 }));
 
+export const interruptResumeAttempts = pgTable('interrupt_resume_attempts', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  interruptId: text('interrupt_id').notNull().references(() => pendingInterrupts.id, { onDelete: 'cascade' }),
+  agentSessionId: text('agent_session_id').notNull().references(() => turns.id, { onDelete: 'cascade' }),
+  sessionId: text('session_id'),
+  agentId: text('agent_id').notNull().references(() => agents.id),
+  status: text('status').notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  completedAt: bigint('completed_at', { mode: 'number' }),
+}, (table) => ({
+  interruptUniqueIdx: uniqueIndex('idx_interrupt_resume_attempts_interrupt').on(table.interruptId),
+  agentStatusIdx: index('idx_interrupt_resume_attempts_agent_status').on(table.agentId, table.status),
+  sessionIdx: index('idx_interrupt_resume_attempts_session').on(table.sessionId),
+}));
+
 export const feedbackSignals = pgTable('feedback_signals', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   traceId: text('trace_id').notNull(),

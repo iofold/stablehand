@@ -80,6 +80,7 @@ function makeFreshBootstrap(overrides: Partial<FreshBootstrap> = {}): FreshBoots
     systemPrompt: 'Round-trip harness prompt',
     tools: [],
     workspaceDir: '/workspace/session',
+    sessionId: 'session-rt',
     ...overrides,
   });
 }

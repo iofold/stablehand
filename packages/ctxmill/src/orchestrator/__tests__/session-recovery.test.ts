@@ -205,7 +205,7 @@ type SandboxSessionManagerInternals = {
     sessions: Map<string, SessionRecord>;
     agentDefs: Map<string, AgentDefinition>;
     turnQueues: Map<string, unknown[]>;
-    activeTurns: Set<string>;
+    activeTurns: Map<string, string>;
   };
   isStaleContainerError(err: unknown): boolean;
 };
@@ -532,7 +532,7 @@ describe('SandboxSessionManager session recovery', () => {
       const privateManager = manager as unknown as SandboxSessionManagerInternals;
 
       privateManager.stateStore.turnQueues.set(session.sessionId, []);
-      privateManager.stateStore.activeTurns.add(session.sessionId);
+      privateManager.stateStore.activeTurns.set(session.sessionId, 'turn-active');
 
       await manager.suspendSession(session.sessionId, 'manual-checkpoint');
 

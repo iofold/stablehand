@@ -1,16 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
+import { VALID_WEBHOOK_EVENTS, isValidWebhookEvent } from '../../webhook-events.js';
 import type { AgentSubRouteOptions } from './types.js';
-
-const VALID_WEBHOOK_EVENTS = [
-  'turn.started',
-  'turn.completed',
-  'run.tool_started',
-  'run.tool_result',
-  'run.interrupted',
-  'run.interrupt_resolved',
-];
 
 export async function webhookRoutes(
   app: FastifyInstance,
@@ -26,7 +18,7 @@ export async function webhookRoutes(
       return reply.status(400).send({ error: 'url and events are required' });
     }
 
-    const invalidEvents = body.events.filter((eventType) => !VALID_WEBHOOK_EVENTS.includes(eventType));
+    const invalidEvents = body.events.filter((eventType) => !isValidWebhookEvent(eventType));
     if (invalidEvents.length > 0) {
       return reply.status(400).send({
         error: `Invalid event types: ${invalidEvents.join(', ')}`,
@@ -48,6 +40,34 @@ export async function webhookRoutes(
     return reply.status(201).send(webhook);
   });
 
+  app.put('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {
+    const { id, webhookId } = request.params as { id: string; webhookId: string };
+    const body = request.body as { url?: string; events?: string[]; secret?: string | null } | undefined;
+
+    if (!body?.url || !body?.events?.length) {
+      return reply.status(400).send({ error: 'url and events are required' });
+    }
+
+    const invalidEvents = body.events.filter((eventType) => !isValidWebhookEvent(eventType));
+    if (invalidEvents.length > 0) {
+      return reply.status(400).send({
+        error: `Invalid event types: ${invalidEvents.join(', ')}`,
+        validEvents: VALID_WEBHOOK_EVENTS,
+      });
+    }
+
+    const updated = await db.updateWebhookForAgent(webhookId, id, {
+      url: body.url,
+      events: body.events,
+      secret: body.secret ?? null,
+    });
+    if (!updated) {
+      return reply.status(404).send({ error: 'Webhook not found' });
+    }
+
+    return reply.send(updated);
+  });
+
   app.get('/:id/webhooks', { preHandler: [loadAgent] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const hooks = await db.listWebhooks(id);
@@ -55,8 +75,8 @@ export async function webhookRoutes(
   });
 
   app.delete('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {
-    const { webhookId } = request.params as { id: string; webhookId: string };
-    const deleted = await db.deleteWebhook(webhookId);
+    const { id, webhookId } = request.params as { id: string; webhookId: string };
+    const deleted = await db.deleteWebhookForAgent(webhookId, id);
     if (!deleted) {
       return reply.status(404).send({ error: 'Webhook not found' });
     }

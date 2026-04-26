@@ -49,6 +49,7 @@ export async function streamRoutes(
       }
 
       for (const session of activeSessions) {
+        const activeTurnId = activeTurnBySandboxSessionId.get(session.id) ?? null;
         reply.raw.write(
           `data: ${JSON.stringify({
             type: 'CUSTOM',
@@ -56,7 +57,8 @@ export async function streamRoutes(
             agentId: id,
             conversationId: session.conversationId,
             sessionId: session.id,
-            turnId: activeTurnBySandboxSessionId.get(session.id),
+            activeTurnId,
+            turnId: activeTurnId,
             status: session.status,
             harnessName: session.harnessName,
             containerName: session.containerName,

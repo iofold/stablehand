@@ -37,6 +37,7 @@ describe('DatabaseRepository', () => {
         'event_triggers',
         'execution_traces',
         'feedback_signals',
+        'interrupt_resume_attempts',
         'knowledge_items',
         'messages',
         'pending_interrupts',
@@ -649,6 +650,48 @@ describe('DatabaseRepository', () => {
       expect(checkpoint!.harnessState).toEqual(harnessState);
     });
 
+    it('coerces checkpoint BigInt values before JSONB persistence', async () => {
+      await repo.createCheckpointV2({
+        sessionId,
+        agentId,
+        checkpointData: {
+          cursor: { nextMessageSeq: 9007199254740993n },
+          runnerState: {
+            pendingRequests: [
+              {
+                id: 'approval-1',
+                payload: { sequence: 9007199254740995n },
+              },
+            ],
+          },
+        },
+        harnessState: {
+          payload: {
+            checkpointSeq: 9007199254740997n,
+          },
+        },
+      });
+
+      const checkpoint = await repo.getCheckpointV2(sessionId);
+      expect(checkpoint).not.toBeNull();
+      expect(checkpoint!.checkpointData).toEqual({
+        cursor: { nextMessageSeq: '9007199254740993' },
+        runnerState: {
+          pendingRequests: [
+            {
+              id: 'approval-1',
+              payload: { sequence: '9007199254740995' },
+            },
+          ],
+        },
+      });
+      expect(checkpoint!.harnessState).toEqual({
+        payload: {
+          checkpointSeq: '9007199254740997',
+        },
+      });
+    });
+
     it('should delete all v2 checkpoints for a session', async () => {
       const conversation = await repo.createConversation(agentId);
       const session = await repo.createSandboxSession({
@@ -814,6 +857,56 @@ describe('DatabaseRepository', () => {
       expect(upserted.resolvedAction).toBeNull();
       expect(upserted.resolvedData).toBeNull();
       expect(upserted.toolCallId).toBe('tool-call-2');
+    });
+
+    it('tracks timed-out interrupts and durable resume attempts', async () => {
+      const { agent, sandboxSession, turn } = await createRuntimeTurn('Interrupt Resume Attempt');
+      const now = Date.now();
+      await repo.savePendingInterrupt({
+        id: 'interrupt-resume-1',
+        agentSessionId: turn.id,
+        agentId: agent.id,
+        sessionId: sandboxSession.id,
+        toolCallId: 'tool-call-resume',
+        toolName: 'bash',
+        args: { cmd: 'cat report.md' },
+        timeoutMs: 60_000,
+        createdAt: now,
+        expiresAt: now + 60_000,
+      });
+
+      const timedOut = await repo.markInterruptTimedOut('interrupt-resume-1', 'Approval expired');
+      expect(timedOut?.status).toBe('timed_out');
+      expect(timedOut?.resolvedAction).toBe('timeout');
+
+      const resolved = await repo.resolveInterrupt('interrupt-resume-1', 'approve', { ok: true });
+      expect(resolved?.status).toBe('resolved');
+
+      const attempt = await repo.upsertInterruptResumeAttempt({
+        interruptId: 'interrupt-resume-1',
+        agentSessionId: turn.id,
+        sessionId: sandboxSession.id,
+        agentId: agent.id,
+        status: 'pending',
+      });
+      expect(attempt.status).toBe('pending');
+
+      const inProgress = await repo.markInterruptResumeAttemptInProgress(attempt.id);
+      expect(inProgress?.status).toBe('in_progress');
+      expect(inProgress?.attempts).toBe(1);
+
+      const failed = await repo.markInterruptResumeAttemptFailed(attempt.id, 'restore failed');
+      expect(failed?.status).toBe('failed');
+      expect(failed?.lastError).toBe('restore failed');
+
+      const actionable = await repo.getActionableInterruptsForAgent(agent.id);
+      expect(actionable).toHaveLength(1);
+      expect(actionable[0].interrupt.id).toBe('interrupt-resume-1');
+      expect(actionable[0].resumeAttempt?.status).toBe('failed');
+
+      const completed = await repo.markInterruptResumeAttemptCompleted(attempt.id);
+      expect(completed?.status).toBe('completed');
+      expect(completed?.completedAt).toBeTypeOf('number');
     });
   });
 });

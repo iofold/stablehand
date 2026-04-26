@@ -5,6 +5,7 @@ import type { DatabaseRepository } from '../database/repository.js';
 import type { AgentDefinition, AgentResourceLimits } from '../types.js';
 import type { AgentSessionService } from './agent-session-service.js';
 import { mapMessagesToInternal } from './routes/agent-helpers.js';
+import { withRuntimeSandboxSecrets, type RuntimeSandboxSecrets } from './session-manager/runtime-sandbox-secrets.js';
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -42,6 +43,7 @@ export interface PrepareRunStartParams {
   requestedTurnId?: string;
   requireExistingConversation?: boolean;
   emitUserMessageEvent?: boolean;
+  sandboxSecrets?: RuntimeSandboxSecrets;
 }
 
 export interface PreparedRunStart {
@@ -52,6 +54,7 @@ export interface PreparedRunStart {
   messages: ReturnType<typeof mapMessagesToInternal>;
   mode: RunMode;
   taskDescription: string;
+  sandboxSecrets?: RuntimeSandboxSecrets;
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -102,6 +105,7 @@ export class RunStartupService {
       requestedTurnId,
       requireExistingConversation = false,
       emitUserMessageEvent = mode === 'interactive',
+      sandboxSecrets,
     } = params;
 
     if (!agent.harness) {
@@ -165,7 +169,7 @@ export class RunStartupService {
       timestamp: Date.now(),
     });
 
-    const agentDef = this.buildAgentDefinition(agent);
+    const agentDef = withRuntimeSandboxSecrets(this.buildAgentDefinition(agent), sandboxSecrets);
     const allMessages = await executionDeps.db.getMessages(resolvedConversationId);
 
     return {
@@ -176,6 +180,7 @@ export class RunStartupService {
       messages: mapMessagesToInternal(allMessages, agentId),
       mode,
       taskDescription: content,
+      sandboxSecrets,
     };
   }
 
@@ -194,6 +199,7 @@ export class RunStartupService {
       sessionId: start.turnId,
       mode: start.mode,
       taskDescription: start.taskDescription,
+      sandboxSecrets: start.sandboxSecrets,
     }).catch(async (err) => {
       this.deps.logger.error(`[RunStartupService] executeSession failed for agent ${agentId}, turn ${start.turnId}:`, err);
       await executionDeps.db.updateTurn(start.turnId, {

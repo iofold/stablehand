@@ -20,6 +20,7 @@ import {
   retryGrpcCall,
   waitForContainerReady,
 } from './grpc-session-client.js';
+import { getRuntimeSandboxSecrets } from './runtime-sandbox-secrets.js';
 import type {
   Logger,
   SessionRecord,
@@ -106,7 +107,10 @@ export class SessionRuntimeFactory {
       }
     }
 
-    const sandboxSecrets = this.deps.buildSandboxSecrets(effectiveAgentId);
+    const sandboxSecrets = {
+      ...this.deps.buildSandboxSecrets(effectiveAgentId),
+      ...getRuntimeSandboxSecrets(agentDef),
+    };
     const secretKeys = Object.keys(sandboxSecrets);
     this.deps.logger.info(`${TAG} injecting ${secretKeys.length} secrets: [${secretKeys.join(', ')}]`);
 
@@ -137,6 +141,7 @@ export class SessionRuntimeFactory {
         case: 'fresh',
         value: {
           agentId: effectiveAgentId,
+          sessionId,
           conversationId,
           harnessName,
           harnessConfigJson: JSON.stringify(agentDef.harnessConfig),

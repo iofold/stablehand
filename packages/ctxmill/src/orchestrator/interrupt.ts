@@ -11,7 +11,7 @@ import type { DatabaseRepository } from '../database/repository.js';
 
 type InterruptStore = Pick<
   DatabaseRepository,
-  'cleanupExpiredInterrupts' | 'getAllPendingInterrupts' | 'savePendingInterrupt' | 'resolveInterrupt'
+  'cleanupExpiredInterrupts' | 'getAllPendingInterrupts' | 'savePendingInterrupt' | 'resolveInterrupt' | 'markInterruptTimedOut'
 >;
 
 interface PendingEntry {
@@ -331,10 +331,22 @@ export class InterruptManager {
     message: string,
   ): Promise<void> {
     try {
-      const resolved = await this.resolve(turnId, 'suspend', message, agentId);
-      if (!resolved) {
+      const entry = this.pending.get(turnId);
+      if (!entry) {
         return;
       }
+
+      if (this.db) {
+        const timedOut = await this.db.markInterruptTimedOut(turnId, message);
+        if (!timedOut) {
+          return;
+        }
+      }
+
+      if (entry.timeoutId) clearTimeout(entry.timeoutId);
+      entry.resolve({ action: 'suspend', data: message });
+      this.pending.delete(turnId);
+      this.emitResolvedEvent(turnId, 'timeout', agentId ?? entry.agentId, entry.info.conversationId);
 
       if (this.onTimeout && sessionId) {
         await this.onTimeout(sessionId);

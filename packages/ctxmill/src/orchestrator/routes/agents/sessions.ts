@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { toAgentDefinition } from '../../session-manager/session-agent-definition.js';
+import type { RuntimeSandboxSecrets } from '../../session-manager/runtime-sandbox-secrets.js';
+import { withRuntimeSandboxSecrets } from '../../session-manager/runtime-sandbox-secrets.js';
 import { mapMessagesToInternal } from '../agent-helpers.js';
 import { getRequestAgent, safeError, toApiAgentSession } from './helpers.js';
 import type { AgentSubRouteOptions, StoredAgent } from './types.js';
@@ -15,6 +17,25 @@ export async function sessionRoutes(
 ): Promise<void> {
   const { db, agentSessionService, sessionManager, eventBus, runStartupService, loadAgent } = opts;
 
+  const parseSandboxSecrets = (value: unknown): RuntimeSandboxSecrets | undefined => {
+    if (value === undefined) return undefined;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('sandboxSecrets must be an object of environment variable names to string values');
+    }
+
+    const secrets: Record<string, string> = {};
+    for (const [key, secretValue] of Object.entries(value)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        throw new Error(`Invalid sandbox secret key: ${key}`);
+      }
+      if (typeof secretValue !== 'string') {
+        throw new Error(`sandboxSecrets.${key} must be a string`);
+      }
+      secrets[key] = secretValue;
+    }
+    return secrets;
+  };
+
   const prepareRunStart = async (
     agent: StoredAgent,
     agentId: string,
@@ -25,6 +46,7 @@ export async function sessionRoutes(
       requestedTurnId?: string;
       requireExistingConversation?: boolean;
       emitUserMessageEvent?: boolean;
+      sandboxSecrets?: RuntimeSandboxSecrets;
     },
   ) => {
     if (runStartupService) {
@@ -37,10 +59,11 @@ export async function sessionRoutes(
         requestedTurnId: options?.requestedTurnId,
         requireExistingConversation: options?.requireExistingConversation,
         emitUserMessageEvent: options?.emitUserMessageEvent,
+        sandboxSecrets: options?.sandboxSecrets,
       });
     }
 
-    const agentDef = toAgentDefinition(agent);
+    const agentDef = withRuntimeSandboxSecrets(toAgentDefinition(agent), options?.sandboxSecrets);
     let conversationId: string;
     if (options?.conversationId) {
       const conversation = await db.getConversation(options.conversationId);
@@ -91,6 +114,7 @@ export async function sessionRoutes(
       messages: mapMessagesToInternal(allMessages, agentId),
       mode,
       taskDescription: content,
+      sandboxSecrets: options?.sandboxSecrets,
     };
   };
 
@@ -113,6 +137,7 @@ export async function sessionRoutes(
       sessionId: start.turnId,
       mode: start.mode,
       taskDescription: start.taskDescription,
+      sandboxSecrets: start.sandboxSecrets,
     }).catch(async (err) => {
       console.error(`[agents] executeSession failed for agent ${agentId}, session ${start.turnId}:`, err);
       await db.updateTurn(start.turnId, { completedAt: Date.now(), error: String(err) }).catch((dbErr) => {
@@ -166,12 +191,12 @@ export async function sessionRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Body: { task: string; mode?: string };
+        Body: { task: string; mode?: string; sandboxSecrets?: Record<string, string> };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const body = request.body as { task?: string; mode?: string } | undefined;
+      const body = request.body as { task?: string; mode?: string; sandboxSecrets?: unknown } | undefined;
 
       if (!body || typeof body.task !== 'string' || body.task.trim() === '') {
         return reply.status(400).send({ error: 'task is required and must be a non-empty string' });
@@ -179,16 +204,22 @@ export async function sessionRoutes(
 
       const agent = getRequestAgent(request);
       try {
+        const sandboxSecrets = parseSandboxSecrets(body.sandboxSecrets);
         const start = await prepareRunStart(agent, id, body.task, 'background', {
           emitUserMessageEvent: false,
+          sandboxSecrets,
         });
         await db.updateAgentStatus(id, 'running');
         launchPreparedRun(id, start);
         return reply.status(201).send({
           sessionId: start.turnId,
           conversationId: start.conversationId,
+          sandboxSessionId: null,  // populated asynchronously; poll GET /:id/sessions/:sessionId until non-null to get the id required by /sandbox-sessions/:id/suspend
         });
       } catch (err) {
+        if (err instanceof Error && /sandbox secret|sandboxSecrets/i.test(err.message)) {
+          return reply.status(400).send({ error: err.message });
+        }
         return reply.status(500).send(safeError('Failed to start session', err));
       }
     },
@@ -208,7 +239,7 @@ export async function sessionRoutes(
         return reply.status(404).send({ error: 'Session not found', sessionId });
       }
 
-      const cancelled = session.sessionId ? sessionManager?.cancelCurrentTurn(session.sessionId) : false;
+      const cancelled = session.sessionId ? sessionManager?.cancelCurrentTurn(session.sessionId, sessionId) : false;
       if (!cancelled) {
         return reply.status(404).send({ error: 'Session not found', sessionId });
       }
@@ -316,7 +347,26 @@ export async function sessionRoutes(
           return reply.status(404).send({ error: 'Session not found', sessionId });
         }
 
-        await sessionManager.suspendSession(sessionId, 'api_request');
+        // Gate: reject suspend if the owning turn is already completed
+        const turn = await db.getLatestTurnForConversation(session.conversationId);
+        if (turn && (turn.completedAt != null || turn.error)) {
+          const status = turn.error ? 'ERROR' : 'COMPLETED';
+          return reply.status(409).send({
+            error: 'Session not active',
+            status,
+            sessionId,
+          });
+        }
+
+        try {
+          await sessionManager.suspendSession(sessionId, 'api_request');
+        } catch (suspendErr) {
+          return reply.status(409).send({
+            error: 'Session no longer active',
+            status: 'UNKNOWN',
+            sessionId,
+          });
+        }
         return reply.status(200).send({ sessionId, status: 'checkpointed' });
       } catch (err) {
         return reply.status(500).send(safeError('Failed to suspend session', err));

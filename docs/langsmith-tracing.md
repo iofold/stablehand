@@ -65,6 +65,8 @@ Uses `wrapClaudeAgentSDK()` from `langsmith/experimental/anthropic`. The wrapper
 - Graceful fallback — if import fails, harness runs without tracing
 - SDK wrapper intercepts all Claude API calls and creates spans
 
+> **Stability note**: the import path is `langsmith/experimental/anthropic` — LangSmith reserves the `experimental/` namespace for APIs that may break across minor versions. Pin `langsmith` to a known-good minor (currently `^0.5.25`) and review the [LangSmith JS releases](https://github.com/langchain-ai/langsmith-sdk/releases) before bumping. The PI Agent custom tracer also depends on the (stable but pre-1.0) `RunTree` API — same pin strategy applies.
+
 Example trace:
 ```
 claude.conversation (chain) [87.68s]
@@ -112,6 +114,38 @@ pi-agent-{id} (chain) [2.05s]
 **Files:**
 - `packages/sandbox-daemon/src/harness/pi-langsmith-tracer.ts` — Tracer module
 - `packages/sandbox-daemon/src/harness/pi-agent.ts` — Wiring (subscribe + flush)
+
+## Verifying It Works
+
+After setting the env vars and restarting the stack, send one test message:
+
+```bash
+curl -sS -XPOST -H 'Content-Type: application/json' \
+  -d '{"content":"hi"}' \
+  http://localhost:3002/api/agents/<any-agent-id>/message
+```
+
+Then in LangSmith (`https://smith.langchain.com`):
+
+1. Open the project named in `LANGSMITH_PROJECT` (default `ctxmill`).
+2. The run should appear within 5–15s of the agent completing.
+3. The root span name reflects the harness: `LangGraph` (chain), `claude.conversation` (chain), or `pi-agent-<id>` (chain).
+
+**Common reasons traces don't appear:**
+
+| Symptom | Likely cause |
+|---|---|
+| Run never appears in any project | `LANGSMITH_TRACING` not exactly `"true"` (case-sensitive), or `LANGSMITH_API_KEY` empty |
+| `403`/`401` warnings in sandbox logs | Service-account key (`lsv2_sk_…`) without `LANGSMITH_WORKSPACE_ID` set |
+| Run appears in `default` project, not yours | `LANGSMITH_PROJECT` only forwarded to the sandbox via `SANDBOX_SECRET_ALLOWLIST` — orchestrator restart picks it up; sandbox containers are launched per run, so the next run will pick it up |
+| Spans for Claude harness missing tool calls | `langsmith` version mismatch with `@anthropic-ai/claude-agent-sdk` — `wrapClaudeAgentSDK` lives in `experimental/` and the field schema can shift between minor versions |
+| `[pi-langsmith] Failed to post …` warnings | Network egress to `api.smith.langchain.com` blocked by `CTXMILL_ALLOWED_EGRESS_DOMAINS`; add it to the egress allowlist |
+
+To see what the sandbox logged during a run:
+
+```bash
+docker logs $(docker ps --filter "label=ctxmill.managed=true" --format "{{.Names}}" | head -1)
+```
 
 ## Disabling Tracing
 

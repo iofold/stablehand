@@ -162,8 +162,10 @@ The container still mounts a tmpfs at `/run/secrets`, but the current orchestrat
 
 1. read a hardcoded allowlist of host env vars from the orchestrator process
 2. read all per-agent secrets from the CTXMILL Secret Store
-3. merge them (`agent` secrets win on key collision)
+3. merge any explicit per-run `sandboxSecrets` from `POST /api/agents/:id/session`
 4. inject the merged map into the sandbox container's `Env`
+
+Merge precedence is: allowlisted host env < per-agent Secret Store < per-run `sandboxSecrets`.
 
 ### SANDBOX_SECRET_ALLOWLIST
 The orchestrator only passes specific environment variables to the sandbox. The current allowlist includes:
@@ -181,8 +183,51 @@ This means the current model is:
 
 - host env → sandbox: **allowlisted only**
 - per-agent secret store → sandbox: **any key name**
+- per-run `sandboxSecrets` → sandbox: **only for that initial background run**
 
 If you need custom secrets for tools or harnesses, the supported path today is to store them in the CTXMILL Secret Store (via the API/UI) rather than expecting arbitrary host env passthrough.
+
+For short-lived integration tokens that should not be stored on the agent, pass `sandboxSecrets` when starting a background run:
+
+```bash
+curl -X POST http://orchestrator:3001/api/agents/$AGENT_ID/session \
+  -H 'content-type: application/json' \
+  -d '{"task":"Run the monthly close workflow","sandboxSecrets":{"MYAPP_SERVICE_TOKEN":"jwt-or-token"}}'
+```
+
+Per-run sandbox secrets are memory-only. They are not persisted to task messages, agent records, or checkpoints; a later restore from checkpoint uses the host allowlist and per-agent Secret Store again.
+
+### Registering a custom secret end-to-end
+
+The Secret Store API is per-agent. Once stored, the key is injected as an env var at every session start and every session restore.
+
+```bash
+# Store a secret on the target agent. The key name here is the exact name
+# the sandbox process will see in its environment — pick whatever your tool
+# code expects to read.
+curl -X POST http://orchestrator:3001/api/agents/$AGENT_ID/secrets \
+  -H 'content-type: application/json' \
+  -d '{"key":"MYAPP_SERVICE_TOKEN","value":"sk-..."}'
+
+# List stored keys (values are never returned).
+curl http://orchestrator:3001/api/agents/$AGENT_ID/secrets
+
+# Delete when rotating.
+curl -X DELETE http://orchestrator:3001/api/agents/$AGENT_ID/secrets/MYAPP_SERVICE_TOKEN
+```
+
+Inside the sandbox, tool/harness code just reads the env var directly:
+
+```ts
+const token = process.env.MYAPP_SERVICE_TOKEN;
+await fetch('http://myapp:3000/api/tools/persist', {
+  method: 'POST',
+  headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+  body: JSON.stringify(payload),
+});
+```
+
+Values are encrypted at rest with AES-256-GCM using `SECRET_MASTER_KEY`; plaintext only exists in the sandbox process environment for the lifetime of the session.
 
 ## Egress Proxy
 

@@ -57,6 +57,21 @@ function createMockInterruptDb(): {
       rows.set(id, updated);
       return updated;
     }),
+    markInterruptTimedOut: vi.fn(async (id: string, data?: unknown) => {
+      const row = rows.get(id);
+      if (!row) {
+        return undefined;
+      }
+      const updated: InterruptRow = {
+        ...row,
+        status: 'timed_out',
+        resolvedAt: Date.now(),
+        resolvedAction: 'timeout',
+        resolvedData: data ?? null,
+      };
+      rows.set(id, updated);
+      return updated;
+    }),
     cleanupExpiredInterrupts: vi.fn(async (beforeTime: number) => {
       let deleted = 0;
       for (const [id, row] of rows) {

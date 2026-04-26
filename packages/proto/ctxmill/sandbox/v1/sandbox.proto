@@ -33,6 +33,7 @@ message FreshBootstrap {
   string system_prompt = 6;
   repeated ToolMetadata tools = 7;
   string workspace_dir = 8;
+  string session_id = 9;
 }
 
 message RestoreBootstrap {

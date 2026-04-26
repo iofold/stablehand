@@ -1,7 +1,7 @@
 import { eq, sql, gt, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike } from 'drizzle-orm';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
-import { sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
+import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
 import type { ApiSessionStatus, ApiSessionStatusCounts, SandboxSessionStatus } from '@ctxmill/shared';
 
 type AgentInsert = typeof pgSchema.agents.$inferInsert;
@@ -25,6 +25,8 @@ type TriggerSelect = typeof pgSchema.eventTriggers.$inferSelect;
 type VersionSelect = typeof pgSchema.agentVersions.$inferSelect;
 type InterruptInsert = typeof pgSchema.pendingInterrupts.$inferInsert;
 export type InterruptRow = typeof pgSchema.pendingInterrupts.$inferSelect;
+type InterruptResumeAttemptInsert = typeof pgSchema.interruptResumeAttempts.$inferInsert;
+export type InterruptResumeAttemptRow = typeof pgSchema.interruptResumeAttempts.$inferSelect;
 type CallbackOutboxInsert = typeof pgSchema.callbackOutbox.$inferInsert;
 export type CallbackOutboxRow = typeof pgSchema.callbackOutbox.$inferSelect;
 type WebhookInsert = typeof pgSchema.webhooks.$inferInsert;
@@ -1097,7 +1099,48 @@ export class DatabaseRepository {
         eq(this.schema.pendingInterrupts.agentId, agentId),
         eq(this.schema.pendingInterrupts.status, 'pending'),
       ),
+      orderBy: (row: any, { asc }: any) => [asc(row.createdAt)],
     });
+  }
+
+  async getActionableInterruptsForAgent(
+    agentId: string,
+  ): Promise<Array<{ interrupt: InterruptRow; resumeAttempt?: InterruptResumeAttemptRow }>> {
+    const interrupts = await this.db.query.pendingInterrupts.findMany({
+      where: and(
+        eq(this.schema.pendingInterrupts.agentId, agentId),
+        inArray(this.schema.pendingInterrupts.status, ['pending', 'timed_out']),
+      ),
+      orderBy: (row: any, { asc }: any) => [asc(row.createdAt)],
+    });
+
+    const failedAttempts = await this.db.query.interruptResumeAttempts.findMany({
+      where: and(
+        eq(this.schema.interruptResumeAttempts.agentId, agentId),
+        eq(this.schema.interruptResumeAttempts.status, 'failed'),
+      ),
+      orderBy: (row: any, { asc }: any) => [asc(row.updatedAt)],
+    });
+
+    const missingInterruptIds = failedAttempts
+      .map((attempt: InterruptResumeAttemptRow) => attempt.interruptId)
+      .filter((interruptId: string) => !interrupts.some((interrupt: InterruptRow) => interrupt.id === interruptId));
+
+    const failedInterrupts = missingInterruptIds.length > 0
+      ? await this.db.query.pendingInterrupts.findMany({
+          where: inArray(this.schema.pendingInterrupts.id, missingInterruptIds),
+        })
+      : [];
+
+    const attemptByInterruptId = new Map<string, InterruptResumeAttemptRow>(
+      failedAttempts.map((attempt: InterruptResumeAttemptRow) => [attempt.interruptId, attempt]),
+    );
+    return [...interrupts, ...failedInterrupts]
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((interrupt) => ({
+        interrupt,
+        resumeAttempt: attemptByInterruptId.get(interrupt.id),
+      }));
   }
 
   async getPendingInterruptsForSession(sessionId: string): Promise<InterruptRow[]> {
@@ -1136,6 +1179,26 @@ export class DatabaseRepository {
       .where(
         and(
           eq(this.schema.pendingInterrupts.id, id),
+          inArray(this.schema.pendingInterrupts.status, ['pending', 'timed_out']),
+        ),
+      )
+      .returning();
+    return updated;
+  }
+
+  async markInterruptTimedOut(id: string, data?: unknown): Promise<InterruptRow | undefined> {
+    const sanitizedData = sanitizeTypedDbValue(data ?? 'Approval expired', 'pendingInterrupts.resolvedData');
+    const [updated] = await this.db
+      .update(this.schema.pendingInterrupts)
+      .set({
+        status: 'timed_out',
+        resolvedAt: Date.now(),
+        resolvedAction: sanitizeDbText('timeout', 'pendingInterrupts.resolvedAction'),
+        resolvedData: sanitizedData,
+      })
+      .where(
+        and(
+          eq(this.schema.pendingInterrupts.id, id),
           eq(this.schema.pendingInterrupts.status, 'pending'),
         ),
       )
@@ -1147,7 +1210,7 @@ export class DatabaseRepository {
     const updated = await this.db
       .update(this.schema.pendingInterrupts)
       .set({
-        status: 'resolved',
+        status: 'timed_out',
         resolvedAt: Date.now(),
         resolvedAction: sanitizeDbText('timeout', 'pendingInterrupts.resolvedAction'),
         resolvedData: sanitizeDbText('Approval expired', 'pendingInterrupts.resolvedData'),
@@ -1169,6 +1232,85 @@ export class DatabaseRepository {
         eq(this.schema.pendingInterrupts.status, 'resolved'),
       ),
     });
+  }
+
+  async upsertInterruptResumeAttempt(
+    data: InterruptResumeAttemptInsert,
+  ): Promise<InterruptResumeAttemptRow> {
+    const now = Date.now();
+    const sanitizedData = sanitizeTypedDbValue(data, 'interruptResumeAttempts.upsert');
+    const [row] = await this.db
+      .insert(this.schema.interruptResumeAttempts)
+      .values({
+        ...sanitizedData,
+        createdAt: sanitizedData.createdAt ?? now,
+        updatedAt: sanitizedData.updatedAt ?? now,
+      })
+      .onConflictDoUpdate({
+        target: this.schema.interruptResumeAttempts.interruptId,
+        set: {
+          status: 'pending',
+          sessionId: sanitizedData.sessionId ?? null,
+          agentSessionId: sanitizedData.agentSessionId,
+          agentId: sanitizedData.agentId,
+          updatedAt: now,
+          lastError: null,
+          completedAt: null,
+        },
+      })
+      .returning();
+    if (!row) {
+      throw new Error('Expected interrupt resume attempt upsert to return a row but got undefined');
+    }
+    return row;
+  }
+
+  async getInterruptResumeAttemptForInterrupt(interruptId: string): Promise<InterruptResumeAttemptRow | undefined> {
+    return this.db.query.interruptResumeAttempts.findFirst({
+      where: eq(this.schema.interruptResumeAttempts.interruptId, interruptId),
+    });
+  }
+
+  async markInterruptResumeAttemptInProgress(id: string): Promise<InterruptResumeAttemptRow | undefined> {
+    const [row] = await this.db
+      .update(this.schema.interruptResumeAttempts)
+      .set({
+        status: 'in_progress',
+        attempts: sql`${this.schema.interruptResumeAttempts.attempts} + 1`,
+        updatedAt: Date.now(),
+        lastError: null,
+      })
+      .where(eq(this.schema.interruptResumeAttempts.id, id))
+      .returning();
+    return row;
+  }
+
+  async markInterruptResumeAttemptCompleted(id: string): Promise<InterruptResumeAttemptRow | undefined> {
+    const now = Date.now();
+    const [row] = await this.db
+      .update(this.schema.interruptResumeAttempts)
+      .set({
+        status: 'completed',
+        updatedAt: now,
+        completedAt: now,
+        lastError: null,
+      })
+      .where(eq(this.schema.interruptResumeAttempts.id, id))
+      .returning();
+    return row;
+  }
+
+  async markInterruptResumeAttemptFailed(id: string, error: string): Promise<InterruptResumeAttemptRow | undefined> {
+    const [row] = await this.db
+      .update(this.schema.interruptResumeAttempts)
+      .set({
+        status: 'failed',
+        updatedAt: Date.now(),
+        lastError: sanitizeDbText(error, 'interruptResumeAttempts.lastError'),
+      })
+      .where(eq(this.schema.interruptResumeAttempts.id, id))
+      .returning();
+    return row;
   }
 
   // ── Callback Outbox ──────────────────────────────────────
@@ -1304,11 +1446,38 @@ export class DatabaseRepository {
   }
 
   async deleteWebhook(id: string): Promise<boolean> {
+    return this.deleteWebhookForAgent(id);
+  }
+
+  async deleteWebhookForAgent(id: string, agentId?: string): Promise<boolean> {
+    const conditions = [eq(this.schema.webhooks.id, id)];
+    if (agentId) {
+      conditions.push(eq(this.schema.webhooks.agentId, agentId));
+    }
     const deleted = await this.db
       .delete(this.schema.webhooks)
-      .where(eq(this.schema.webhooks.id, id))
+      .where(and(...conditions))
       .returning({ id: this.schema.webhooks.id });
     return deleted.length > 0;
+  }
+
+  async updateWebhookForAgent(
+    id: string,
+    agentId: string,
+    data: { url: string; events: string[]; secret?: string | null },
+  ): Promise<WebhookRow | undefined> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'webhooks.update');
+    const [row] = await this.db
+      .update(this.schema.webhooks)
+      .set({
+        url: sanitizedData.url,
+        events: sanitizedData.events,
+        secret: sanitizedData.secret ?? null,
+        updatedAt: Date.now(),
+      })
+      .where(and(eq(this.schema.webhooks.id, id), eq(this.schema.webhooks.agentId, agentId)))
+      .returning();
+    return row;
   }
 
   async getWebhooksForAgent(agentId: string): Promise<WebhookRow[]> {
@@ -1680,15 +1849,28 @@ export class DatabaseRepository {
     workspaceRef?: string;
     suspendReason?: string;
   }): Promise<{ id: string }> {
-    const sanitizedCheckpoint = sanitizeTypedDbValue(checkpoint, 'agentCheckpoints.insert');
+    const sanitizedCheckpoint = sanitizeTypedDbValue({
+      sessionId: checkpoint.sessionId,
+      agentId: checkpoint.agentId,
+      checkpointVersion: checkpoint.checkpointVersion,
+      workspaceRef: checkpoint.workspaceRef,
+      suspendReason: checkpoint.suspendReason,
+    }, 'agentCheckpoints.insert');
+    const checkpointData = sanitizeDbJsonValue(
+      checkpoint.checkpointData,
+      'agentCheckpoints.checkpointData',
+    ) as Record<string, unknown>;
+    const harnessState = checkpoint.harnessState
+      ? sanitizeDbJsonValue(checkpoint.harnessState, 'agentCheckpoints.harnessState') as Record<string, unknown>
+      : null;
     const [row] = await this.db
       .insert(this.schema.agentCheckpoints)
       .values({
         sessionId: sanitizedCheckpoint.sessionId,
         agentId: sanitizedCheckpoint.agentId,
         checkpointVersion: sanitizedCheckpoint.checkpointVersion ?? 2,
-        checkpointData: sanitizedCheckpoint.checkpointData,
-        harnessState: sanitizedCheckpoint.harnessState ?? null,
+        checkpointData,
+        harnessState,
         workspaceRef: sanitizedCheckpoint.workspaceRef ?? null,
         suspendReason: sanitizedCheckpoint.suspendReason ?? null,
       })

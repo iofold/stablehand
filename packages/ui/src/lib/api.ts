@@ -189,7 +189,7 @@ export async function sendInterrupt(agentId: string, action: string, data?: unkn
   return apiMutate(`${API_BASE}/agents/${agentId}/interrupt`, 'POST', { action, data, sessionId });
 }
 
-export async function fetchInterrupts(agentId: string): Promise<Array<{
+export type PendingInterrupt = {
   id: string;
   sessionId: string;
   agentId: string;
@@ -197,8 +197,18 @@ export async function fetchInterrupts(agentId: string): Promise<Array<{
   toolName: string;
   args: Record<string, unknown>;
   status: string;
-}>> {
-  return apiFetch(`${API_BASE}/agents/${agentId}/interrupts`);
+  createdAt?: number;
+  resumeError?: string;
+};
+
+export async function fetchInterrupts(agentId: string): Promise<PendingInterrupt[]> {
+  const data = await apiFetch<{ interrupts?: PendingInterrupt[] } | PendingInterrupt[]>(
+    `${API_BASE}/agents/${agentId}/interrupts`,
+  );
+  if (Array.isArray(data)) {
+    return data;
+  }
+  return Array.isArray(data.interrupts) ? data.interrupts : [];
 }
 
 export function createSSEConnection(agentId: string): EventSource {

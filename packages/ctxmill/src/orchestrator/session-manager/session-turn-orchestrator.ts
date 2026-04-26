@@ -68,8 +68,7 @@ export class SessionTurnOrchestrator {
     }
 
     const controller = new AbortController();
-    record.currentTurnAbortController = controller;
-    record.currentTurnId = turnId;
+    this.deps.stateStore.registerTurnController(sessionId, turnId, controller);
     this.deps.eventBus?.emit('turn.started', {
       turnId,
       sessionId,
@@ -93,10 +92,13 @@ export class SessionTurnOrchestrator {
   ): void {
     const record = this.deps.stateStore.getSessionById(sessionId);
     if (record) {
-      record.currentTurnAbortController = undefined;
-      record.currentTurnId = undefined;
+      if (record.currentTurnId === turnId) {
+        record.currentTurnAbortController = undefined;
+        record.currentTurnId = undefined;
+      }
     }
-    this.deps.stateStore.markTurnInactive(sessionId);
+    this.deps.stateStore.clearTurnController(sessionId, turnId);
+    this.deps.stateStore.markTurnInactive(sessionId, turnId);
     this.deps.eventBus?.emit('turn.completed', {
       turnId,
       sessionId,
@@ -109,17 +111,32 @@ export class SessionTurnOrchestrator {
     });
   }
 
-  cancelCurrentTurn(sessionId: string): boolean {
-    const record = this.deps.stateStore.getSessionById(sessionId);
-    if (!record?.currentTurnAbortController) {
+  cancelCurrentTurn(sessionId: string, turnId?: string): boolean {
+    const targetTurnId = turnId ?? this.deps.stateStore.getActiveTurnId(sessionId);
+    if (!targetTurnId) {
       return false;
     }
-    record.currentTurnAbortController.abort();
-    return true;
+
+    const queue = this.deps.stateStore.getQueue(sessionId);
+    const queuedIndex = queue?.findIndex((entry) => entry.turnId === targetTurnId) ?? -1;
+    if (queue && queuedIndex >= 0) {
+      const [entry] = queue.splice(queuedIndex, 1);
+      entry?.channel.fail(new Error(`Turn ${targetTurnId} cancelled for session ${sessionId}`));
+      this.deps.stateStore.clearTurnController(sessionId, targetTurnId);
+      return true;
+    }
+
+    const activeTurnId = this.deps.stateStore.getActiveTurnId(sessionId);
+    if (activeTurnId && activeTurnId !== targetTurnId) {
+      return false;
+    }
+
+    return this.deps.stateStore.abortTurn(sessionId, targetTurnId);
   }
 
-  getAbortSignal(sessionId: string): AbortSignal | undefined {
-    return this.deps.stateStore.getSessionById(sessionId)?.currentTurnAbortController?.signal;
+  getAbortSignal(sessionId: string, turnId?: string): AbortSignal | undefined {
+    const targetTurnId = turnId ?? this.deps.stateStore.getActiveTurnId(sessionId);
+    return targetTurnId ? this.deps.stateStore.getTurnAbortSignal(sessionId, targetTurnId) : undefined;
   }
 
   checkConcurrencyLimit(agentId: string): void {
@@ -146,7 +163,7 @@ export class SessionTurnOrchestrator {
       if (this.deps.stateStore.isActiveTurn(sessionId)) {
         return true;
       }
-      this.deps.stateStore.markTurnActive(sessionId);
+      this.deps.stateStore.markTurnActive(sessionId, turnId);
       return false;
     });
 
@@ -170,7 +187,7 @@ export class SessionTurnOrchestrator {
       yield* this.executeDeliverTurn(sessionId, messages, turnId);
     } finally {
       await this.deps.stateStore.withConversationLock(conversationId, async () => {
-        this.deps.stateStore.markTurnInactive(sessionId);
+        this.deps.stateStore.markTurnInactive(sessionId, turnId);
         await this.drainCoalescedQueue(sessionId);
       });
     }
@@ -214,10 +231,13 @@ export class SessionTurnOrchestrator {
       let iterator: AsyncIterator<ProtoSessionEvent> | undefined;
       try {
         iterator = stream[Symbol.asyncIterator]();
-        const turnAbortSignal = record.currentTurnAbortController?.signal;
+        const turnAbortSignal = this.deps.stateStore.getTurnAbortSignal(sessionId, turnId);
         const timeoutError = () =>
           new Error(`Turn ${turnId} timed out after ${turnTimeout}ms for session ${sessionId}`);
         const cancellationError = () => new Error(`Turn ${turnId} cancelled for session ${sessionId}`);
+        if (turnAbortSignal?.aborted) {
+          throw cancellationError();
+        }
         const waitForNext = async () => {
           let onTimeoutAbort: (() => void) | null = null;
           let onTurnAbort: (() => void) | null = null;
@@ -408,8 +428,12 @@ export class SessionTurnOrchestrator {
         `${TAG} draining queued turn ${nextEntry.turnId} (remaining depth: ${queue.length}) for session ${sessionId}`,
       );
 
-      this.deps.stateStore.markTurnActive(sessionId);
+      this.deps.stateStore.markTurnActive(sessionId, nextEntry.turnId);
       try {
+        const turnAbortSignal = this.deps.stateStore.getTurnAbortSignal(sessionId, nextEntry.turnId);
+        if (turnAbortSignal?.aborted) {
+          throw new Error(`Turn ${nextEntry.turnId} cancelled for session ${sessionId}`);
+        }
         for await (const event of this.deps.executeDeliverTurn(
           sessionId,
           nextEntry.messages,
@@ -422,7 +446,8 @@ export class SessionTurnOrchestrator {
         const error = err instanceof Error ? err : new Error(String(err));
         nextEntry.channel.fail(error);
       } finally {
-        this.deps.stateStore.markTurnInactive(sessionId);
+        this.deps.stateStore.clearTurnController(sessionId, nextEntry.turnId);
+        this.deps.stateStore.markTurnInactive(sessionId, nextEntry.turnId);
       }
     }
 

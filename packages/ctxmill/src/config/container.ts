@@ -46,6 +46,7 @@ import { createCtxmillGuideTool } from '../tool/builtin/ctxmill-guide.js';
 import { resolveToolLocation } from '../tool/metadata.js';
 import { zodToJsonSchema } from '../tool/schema-convert.js';
 import { ArtifactStore } from '../artifact/artifact-store.js';
+import { VALID_WEBHOOK_EVENTS } from '../orchestrator/webhook-events.js';
 
 export interface AppContainer {
   config: ResolvedConfig;
@@ -81,7 +82,7 @@ export interface AppContainer {
   close: () => Promise<void>;
 }
 
-export const VALID_WEBHOOK_EVENTS = ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved'] as const;
+export { VALID_WEBHOOK_EVENTS };
 
 type EnqueueCallbackArgs = Parameters<CallbackDispatcher['enqueue']>[0];
 
@@ -150,9 +151,11 @@ export function registerCallbackSubscriptions(
       await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.tool_started', {
         turnId: payload.turnId,
         agentId: payload.agentId,
+        conversationId: payload.conversationId,
         toolCallId: payload.toolCallId,
         toolName: payload.toolName,
         args: payload.args,
+        requiresApproval: payload.requiresApproval,
         timestamp: payload.timestamp,
       }, payload.turnId);
     } catch (err) {
@@ -165,6 +168,7 @@ export function registerCallbackSubscriptions(
       await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.interrupted', {
         turnId: payload.turnId,
         agentId: payload.agentId,
+        conversationId: payload.conversationId,
         toolCallId: payload.toolCallId,
         toolName: payload.toolName,
         args: payload.args,
@@ -173,6 +177,59 @@ export function registerCallbackSubscriptions(
       }, payload.turnId);
     } catch (err) {
       console.error('[CallbackDispatcher] failed to enqueue run.interrupted callback:', err);
+    }
+  });
+
+  eventBus.on('run.tool_result', async (payload) => {
+    try {
+      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.tool_result', {
+        turnId: payload.turnId,
+        agentId: payload.agentId,
+        conversationId: payload.conversationId,
+        toolCallId: payload.toolCallId,
+        toolName: payload.toolName,
+        result: payload.result,
+        durationMs: payload.durationMs,
+        error: payload.error,
+        timestamp: payload.timestamp,
+      }, payload.turnId);
+    } catch (err) {
+      console.error('[CallbackDispatcher] failed to enqueue run.tool_result callback:', err);
+    }
+  });
+
+  eventBus.on('run.interrupt_resolved', async (payload) => {
+    try {
+      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.interrupt_resolved', {
+        turnId: payload.turnId,
+        agentId: payload.agentId,
+        conversationId: payload.conversationId,
+        interruptId: payload.interruptId,
+        action: payload.action,
+        timestamp: payload.timestamp,
+      }, payload.turnId);
+    } catch (err) {
+      console.error('[CallbackDispatcher] failed to enqueue run.interrupt_resolved callback:', err);
+    }
+  });
+
+  eventBus.on('message.committed', async (payload) => {
+    try {
+      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'message.committed', {
+        turnId: payload.turnId,
+        agentId: payload.agentId,
+        conversationId: payload.conversationId,
+        messageId: payload.messageId,
+        messageSeq: payload.messageSeq,
+        role: payload.role,
+        content: payload.content,
+        parts: payload.parts,
+        toolCalls: payload.toolCalls,
+        toolCallId: payload.toolCallId,
+        timestamp: payload.timestamp,
+      }, payload.turnId);
+    } catch (err) {
+      console.error('[CallbackDispatcher] failed to enqueue message.committed callback:', err);
     }
   });
 }

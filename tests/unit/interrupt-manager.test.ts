@@ -48,6 +48,21 @@ function createMockInterruptDb() {
       rows.set(id, updated);
       return updated;
     }),
+    markInterruptTimedOut: vi.fn(async (id: string, data?: unknown) => {
+      const row = rows.get(id);
+      if (!row) {
+        return undefined;
+      }
+      const updated: InterruptRow = {
+        ...row,
+        status: 'timed_out',
+        resolvedAt: Date.now(),
+        resolvedAction: 'timeout',
+        resolvedData: data ?? null,
+      };
+      rows.set(id, updated);
+      return updated;
+    }),
     cleanupExpiredInterrupts: vi.fn(async (beforeTime: number) => {
       let deleted = 0;
       for (const [id, row] of rows) {
@@ -306,7 +321,7 @@ describe('InterruptManager', () => {
        busManager.shutdown();
      });
 
-     it('timeout emits run.interrupt_resolved with action suspend', async () => {
+     it('timeout emits run.interrupt_resolved with action timeout', async () => {
        vi.useFakeTimers();
        const bus = new TypedEventBus();
        const busManager = new InterruptManager(bus);
@@ -322,7 +337,7 @@ describe('InterruptManager', () => {
        expect(events).toHaveLength(1);
        expect(events[0].turnId).toBe('run-1');
       expect(events[0].agentId).toBe('agent-1');
-      expect(events[0].action).toBe('suspend');
+      expect(events[0].action).toBe('timeout');
       expect(events[0].timestamp).toBeTypeOf('number');
 
       busManager.shutdown();
@@ -343,6 +358,7 @@ describe('InterruptManager', () => {
           throw new Error('DB down');
         }),
         resolveInterrupt: vi.fn(),
+        markInterruptTimedOut: vi.fn(),
         cleanupExpiredInterrupts: vi.fn(async () => 0),
         getAllPendingInterrupts: vi.fn(async () => []),
       };

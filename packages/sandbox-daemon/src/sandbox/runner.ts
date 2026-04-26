@@ -14,6 +14,7 @@
 
 import { mkdir } from 'node:fs/promises';
 import { create } from '@bufbuild/protobuf';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { createClient } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-node';
 import type {
@@ -208,6 +209,45 @@ let activeContext: SessionContext | null = null;
 let openingContext: Promise<SessionContext> | null = null;
 const activeRunId: { current: string } = { current: '' };
 
+function validateRequestedSessionId(sessionId: string, operation: string): string {
+  const requestedSessionId = sessionId.trim();
+  if (!requestedSessionId) {
+    throw new ConnectError(`[sandbox] ${operation}: session_id is required`, Code.InvalidArgument);
+  }
+  return requestedSessionId;
+}
+
+async function getContextForSession(
+  requestedSessionId: string,
+  operation: string,
+): Promise<SessionContext> {
+  const sessionId = validateRequestedSessionId(requestedSessionId, operation);
+  let ctx = activeContext;
+  if (!ctx && openingContext) {
+    try {
+      ctx = await openingContext;
+    } catch (err) {
+      throw new Error(
+        `[sandbox] ${operation}: session open failed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
+  }
+
+  if (!ctx) {
+    throw new ConnectError(`[sandbox] ${operation}: no active session`, Code.NotFound);
+  }
+
+  if (ctx.sessionId !== sessionId) {
+    throw new ConnectError(
+      `[sandbox] ${operation}: requested session ${sessionId} does not match active session ${ctx.sessionId}`,
+      Code.FailedPrecondition,
+    );
+  }
+
+  return ctx;
+}
+
 
 function appendPtcDegradedNotice(systemPrompt: string, err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
@@ -278,11 +318,13 @@ export async function openSession(
     let harnessName: string;
     let session: HarnessSession;
     let conversationId: string;
+    let sessionId: string;
 
     if (req.bootstrap.case === 'fresh') {
       const fresh = req.bootstrap.value;
       harnessName = fresh.harnessName;
       conversationId = fresh.conversationId;
+      sessionId = validateRequestedSessionId(fresh.sessionId, 'openSession');
 
       const daemonHandlers = createDaemonHandlersForSession(
         secrets,
@@ -337,6 +379,7 @@ export async function openSession(
       }
       harnessName = checkpoint.harnessName;
       conversationId = checkpoint.conversationId;
+      sessionId = checkpoint.sessionId;
 
       const restorePoint = protoRestoreBootstrapToRestorePoint(restore);
       const workspaceDir = checkpoint.workspaceRef?.reference || '/workspace';
@@ -389,7 +432,6 @@ export async function openSession(
       throw new Error('[sandbox] openSession: missing bootstrap (neither fresh nor restore)');
     }
 
-    const sessionId = crypto.randomUUID();
     activeContext = {
       session,
       sessionId,
@@ -439,20 +481,7 @@ export async function* deliverTurn(
     onApprovalNeeded?: ApprovalCallback;
   },
 ): AsyncGenerator<SessionEvent> {
-  let ctx = activeContext;
-  if (!ctx && openingContext) {
-    try {
-      ctx = await openingContext;
-    } catch (err) {
-      throw new Error(
-        `[sandbox] deliverTurn: session open failed: ${err instanceof Error ? err.message : String(err)}`,
-        { cause: err },
-      );
-    }
-  }
-  if (!ctx) {
-    throw new Error('[sandbox] deliverTurn: no active session — call openSession() first');
-  }
+  const ctx = await getContextForSession(req.sessionId, 'deliverTurn');
   if (ctx.currentTurnId) {
     throw new Error('[sandbox] deliverTurn: turn already in progress');
   }
@@ -542,8 +571,10 @@ export async function* deliverTurn(
  *
  * @param reason - Human-readable reason for the suspension (logged only).
  */
-export async function suspendSession(reason: string): Promise<SuspendSessionResponse> {
-  const ctx = activeContext;
+export async function suspendSession(reason: string, sessionId?: string): Promise<SuspendSessionResponse> {
+  const ctx = sessionId
+    ? await getContextForSession(sessionId, 'suspendSession')
+    : activeContext;
   if (!ctx) {
     throw new Error('[sandbox] suspendSession: no active session');
   }
@@ -604,7 +635,11 @@ export async function suspendSession(reason: string): Promise<SuspendSessionResp
  *
  * Safe to call when no session is active — returns `no_session` status.
  */
-export async function killSession(): Promise<KillSessionResponse> {
+export async function killSession(requestedSessionId?: string): Promise<KillSessionResponse> {
+  if (requestedSessionId) {
+    await getContextForSession(requestedSessionId, 'killSession');
+  }
+
   if (!activeContext) {
     return create(KillSessionResponseSchema, { finalStatus: 'no_session' });
   }

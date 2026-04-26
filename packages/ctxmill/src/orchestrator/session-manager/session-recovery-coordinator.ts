@@ -16,6 +16,7 @@ import {
   retryGrpcCall,
   waitForContainerReady,
 } from './grpc-session-client.js';
+import { getRuntimeSandboxSecrets } from './runtime-sandbox-secrets.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
 import type {
   HarnessGrpcClient,
@@ -178,7 +179,10 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       }
 
       const workspaceDir = sessionWorkspaceDir ?? agentDef.workspaceDir;
-      const sandboxSecrets = this.deps.buildSandboxSecrets(dbSession.agentId);
+      const sandboxSecrets = {
+        ...this.deps.buildSandboxSecrets(dbSession.agentId),
+        ...getRuntimeSandboxSecrets(agentDef),
+      };
       const secretKeys = Object.keys(sandboxSecrets);
       this.deps.logger.info(`${TAG} injecting ${secretKeys.length} secrets: [${secretKeys.join(', ')}]`);
 

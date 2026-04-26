@@ -53,8 +53,13 @@ export interface SessionStatePort {
   getOrCreateQueue(sessionId: string): TurnQueueEntry[];
   deleteQueue(sessionId: string): void;
   isActiveTurn(sessionId: string): boolean;
-  markTurnActive(sessionId: string): void;
-  markTurnInactive(sessionId: string): void;
+  getActiveTurnId(sessionId: string): string | undefined;
+  markTurnActive(sessionId: string, turnId: string): void;
+  markTurnInactive(sessionId: string, turnId?: string): void;
+  registerTurnController(sessionId: string, turnId: string, controller: AbortController): void;
+  getTurnAbortSignal(sessionId: string, turnId: string): AbortSignal | undefined;
+  abortTurn(sessionId: string, turnId: string): boolean;
+  clearTurnController(sessionId: string, turnId: string): void;
   cleanupSession(sessionId: string, conversationId: string): void;
   getCheckpoint?(sessionId: string): Promise<CheckpointV2 | null>;
   withConversationLock<T>(conversationId: string, fn: () => Promise<T>): Promise<T>;
