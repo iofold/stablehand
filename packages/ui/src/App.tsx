@@ -11,6 +11,13 @@ import { SettingsPage } from './pages/SettingsPage';
 import { ArtifactsPage } from './pages/ArtifactsPage';
 import { Sidebar } from './components/ui/Sidebar';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
+import {
+  CONVERSATION_ROUTE,
+  LEGACY_CHAT_ROUTE,
+  LEGACY_NEW_SESSION_ROUTE,
+  LEGACY_SESSION_ROUTE,
+  NEW_CONVERSATION_ROUTE,
+} from './lib/routes';
 
 export function App() {
   const location = useLocation();
@@ -28,13 +35,13 @@ export function App() {
             <Route path="/triggers" element={<TriggersPage />} />
             <Route path="/artifacts" element={<ArtifactsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/agents/:id/conversations/new" element={<SessionPage />} />
-            <Route path="/agents/:id/conversations/:conversationId" element={<SessionPage />} />
+            <Route path={NEW_CONVERSATION_ROUTE} element={<SessionPage />} />
+            <Route path={CONVERSATION_ROUTE} element={<SessionPage />} />
             {/* Backwards-compatible session/chat routes stay mounted directly so older deep links
                 still render the composer/history even outside nested route resolution. */}
-            <Route path="/agents/:id/sessions/new" element={<SessionPage />} />
-            <Route path="/agents/:id/sessions/:conversationId" element={<SessionPage />} />
-            <Route path="/agents/:id/chat" element={<SessionPage />} />
+            <Route path={LEGACY_NEW_SESSION_ROUTE} element={<SessionPage />} />
+            <Route path={LEGACY_SESSION_ROUTE} element={<SessionPage />} />
+            <Route path={LEGACY_CHAT_ROUTE} element={<SessionPage />} />
             <Route path="/agents/:id" element={<AgentDetailPage />} />
           </Routes>
         </ErrorBoundary>

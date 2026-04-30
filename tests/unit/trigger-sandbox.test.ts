@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventTriggerManager, MAX_TRIGGER_DEPTH } from '../../packages/ctxmill/src/events/trigger-manager.js';
 import { AgentSessionService } from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
+import type { AgentSessionServiceDeps } from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
 import { createTestBus, createMockTriggerDb } from '../utils/event-bus-test-helpers.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 import type { AgentDefinition } from '../../packages/sandbox-daemon/src/types.js';
@@ -14,13 +15,44 @@ async function* mockEventStream(events: Array<Record<string, unknown>>) {
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
 
-function makeMockSessionTurnService() {
+type MockSessionTurnService = SessionTurnService & {
+  executeSessionTurn: ReturnType<typeof vi.fn>;
+};
+
+function makeMockSessionTurnService(): MockSessionTurnService {
   return {
     executeSessionTurn: vi.fn().mockReturnValue(mockEventStream([
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), messageId: 'msg-1', content: 'sandbox response' },
     ])),
-  } as SessionTurnService & {
-    executeSessionTurn: ReturnType<typeof vi.fn>;
+  } as MockSessionTurnService;
+}
+
+function makeAgentRunService(): ReturnType<typeof buildAgentRunService> & { sessionTurnService: MockSessionTurnService };
+function makeAgentRunService(sessionTurnService: SessionTurnService): ReturnType<typeof buildAgentRunService>;
+function makeAgentRunService(sessionTurnService: SessionTurnService = makeMockSessionTurnService()) {
+  return buildAgentRunService(sessionTurnService);
+}
+
+function buildAgentRunService(sessionTurnService: SessionTurnService) {
+  const sessionManager = {
+    ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
+    startTurn: vi.fn().mockReturnValue(undefined),
+    completeTurn: vi.fn().mockResolvedValue(undefined),
+  };
+  const deps: AgentSessionServiceDeps = {
+    sse: { broadcast: vi.fn() } as unknown as AgentSessionServiceDeps['sse'],
+    db: {
+      addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
+      updateTurn: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AgentSessionServiceDeps['db'],
+    sessionManager: sessionManager as unknown as AgentSessionServiceDeps['sessionManager'],
+    sessionTurnService,
+  };
+
+  return {
+    agentRunService: new AgentSessionService(deps),
+    sessionManager,
+    sessionTurnService,
   };
 }
 
@@ -34,19 +66,7 @@ describe('EventTriggerManager sandbox mode', () => {
 
   describe('sandbox routing via AgentRunService', () => {
     it('routes triggered run to SandboxRunService', async () => {
-      const mockSessionTurnService = makeMockSessionTurnService();
-
-      const agentRunService = new AgentSessionService({
-        sse: { broadcast: vi.fn() },
-        db: { addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }), updateTurn: vi.fn().mockResolvedValue(undefined) },
-        sessionManager: {
-          ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
-          startTurn: vi.fn().mockReturnValue(undefined),
-          completeTurn: vi.fn().mockResolvedValue(undefined),
-        },
-        sessionTurnService: mockSessionTurnService,
-        toolExecutor: { list: vi.fn().mockReturnValue([]) },
-      } as any);
+      const { agentRunService, sessionTurnService } = makeAgentRunService();
 
       const agentDef: AgentDefinition = {
         name: 'triggered-agent',
@@ -66,25 +86,13 @@ describe('EventTriggerManager sandbox mode', () => {
         taskDescription: 'triggered task',
       });
 
-      expect(mockSessionTurnService.executeSessionTurn).toHaveBeenCalledTimes(1);
+      expect(sessionTurnService.executeSessionTurn).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('triggered run secret isolation', () => {
     it('sandbox executeSessionTurn receives the triggered agent name (not triggering agent)', async () => {
-      const mockSessionTurnService = makeMockSessionTurnService();
-
-      const agentRunService = new AgentSessionService({
-        sse: { broadcast: vi.fn() },
-        db: { addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }), updateTurn: vi.fn().mockResolvedValue(undefined) },
-        sessionManager: {
-          ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
-          startTurn: vi.fn().mockReturnValue(undefined),
-          completeTurn: vi.fn().mockResolvedValue(undefined),
-        },
-        sessionTurnService: mockSessionTurnService,
-        toolExecutor: { list: vi.fn().mockReturnValue([]) },
-      } as any);
+      const { agentRunService, sessionTurnService } = makeAgentRunService();
 
       const triggeredAgentDef: AgentDefinition = {
         name: 'agent-B',
@@ -104,8 +112,8 @@ describe('EventTriggerManager sandbox mode', () => {
         taskDescription: 'event payload',
       });
 
-      expect(mockSessionTurnService.executeSessionTurn).toHaveBeenCalledTimes(1);
-      const [agentDef, conversationId, messages, turnId] = mockSessionTurnService.executeSessionTurn.mock.lastCall ?? [];
+      expect(sessionTurnService.executeSessionTurn).toHaveBeenCalledTimes(1);
+      const [agentDef, conversationId, messages, turnId] = sessionTurnService.executeSessionTurn.mock.lastCall ?? [];
       expect(agentDef.name).toBe('agent-B');
       expect(conversationId).toBe('conv-B');
       expect(messages).toHaveLength(1);
@@ -203,20 +211,7 @@ describe('EventTriggerManager sandbox mode', () => {
         }),
       } as unknown as SessionTurnService;
 
-      const sse = { broadcast: vi.fn() };
-      const sessionManager = {
-        ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
-        startTurn: vi.fn().mockReturnValue(undefined),
-        completeTurn: vi.fn().mockResolvedValue(undefined),
-      };
-
-      const agentRunService = new AgentSessionService({
-        sse,
-        db: { addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }), updateTurn: vi.fn().mockResolvedValue(undefined) },
-        sessionManager,
-        sessionTurnService: failingSandbox,
-        toolExecutor: { list: vi.fn().mockReturnValue([]) },
-      } as any);
+      const { agentRunService, sessionManager } = makeAgentRunService(failingSandbox);
 
       await agentRunService.executeSession({
         agentDef: {

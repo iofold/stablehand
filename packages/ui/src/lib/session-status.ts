@@ -1,0 +1,81 @@
+import type { ApiSessionStatusCounts } from '@ctxmill/shared';
+
+const SESSION_STATUS_ALIASES: Record<string, string> = {
+  active: 'ACTIVE',
+  running: 'ACTIVE',
+  paused: 'PAUSED',
+  checkpointed: 'CHECKPOINTED',
+  restoring: 'RESTORING',
+  terminated: 'TERMINATED',
+  completed: 'completed',
+  error: 'error',
+  failed: 'error',
+  cancelled: 'cancelled',
+  canceled: 'cancelled',
+};
+
+export function normalizeSessionStatus(status: string | null | undefined): string {
+  if (!status) return '';
+  const trimmed = String(status).trim();
+  return SESSION_STATUS_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+}
+
+export function normalizeRunStatus(status: string | null | undefined): string {
+  const normalized = normalizeSessionStatus(status);
+  if (normalized === 'ACTIVE' || normalized === 'PAUSED' || normalized === 'RESTORING') return 'running';
+  if (normalized === 'CHECKPOINTED') return 'completed';
+  if (normalized === 'TERMINATED') return 'cancelled';
+  return normalized.toLowerCase();
+}
+
+export function normalizeSessionStatusCounts(
+  stats?: Partial<ApiSessionStatusCounts> | null,
+): ApiSessionStatusCounts | null | undefined {
+  if (!stats) return stats;
+
+  const normalized: ApiSessionStatusCounts = {
+    ACTIVE: 0,
+    PAUSED: 0,
+    CHECKPOINTED: 0,
+    RESTORING: 0,
+    TERMINATED: 0,
+  };
+  for (const [rawStatus, rawCount] of Object.entries(stats) as Array<[string, number | undefined]>) {
+    const status = normalizeSessionStatus(rawStatus) as keyof ApiSessionStatusCounts;
+    const count = Number(rawCount ?? 0);
+    if (!Number.isFinite(count)) continue;
+    if (status in normalized) {
+      normalized[status] = (normalized[status] ?? 0) + count;
+    }
+  }
+  return normalized;
+}
+
+export function countActiveSessions(stats?: Partial<ApiSessionStatusCounts> | null): number {
+  const normalized = normalizeSessionStatusCounts(stats);
+  return (normalized?.ACTIVE ?? 0) + (normalized?.PAUSED ?? 0) + (normalized?.RESTORING ?? 0);
+}
+
+export function countAllSessions(stats?: Partial<ApiSessionStatusCounts> | null): number {
+  const normalized = normalizeSessionStatusCounts(stats);
+  return (
+    (normalized?.ACTIVE ?? 0)
+    + (normalized?.PAUSED ?? 0)
+    + (normalized?.CHECKPOINTED ?? 0)
+    + (normalized?.RESTORING ?? 0)
+    + (normalized?.TERMINATED ?? 0)
+  );
+}
+
+export function describeSessionCounts(stats?: Partial<ApiSessionStatusCounts> | null): string {
+  const normalized = normalizeSessionStatusCounts(stats);
+  if (!normalized) return '';
+
+  const parts = [];
+  if ((normalized.ACTIVE ?? 0) > 0) parts.push(`${normalized.ACTIVE} active`);
+  if ((normalized.PAUSED ?? 0) > 0) parts.push(`${normalized.PAUSED} paused`);
+  if ((normalized.RESTORING ?? 0) > 0) parts.push(`${normalized.RESTORING} restoring`);
+  if ((normalized.CHECKPOINTED ?? 0) > 0) parts.push(`${normalized.CHECKPOINTED} checkpointed`);
+  if ((normalized.TERMINATED ?? 0) > 0) parts.push(`${normalized.TERMINATED} terminated`);
+  return parts.join(', ');
+}

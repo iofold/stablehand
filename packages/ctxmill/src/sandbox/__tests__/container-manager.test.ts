@@ -155,6 +155,7 @@ describe('ContainerManager', () => {
 
       // Network
       expect(arg.HostConfig.NetworkMode).toBe('ctxmill-agents');
+      expect(arg.HostConfig.ExtraHosts).toEqual(['host.docker.internal:host-gateway']);
 
       // Security
       expect(arg.HostConfig.SecurityOpt).toEqual(['no-new-privileges']);
@@ -254,11 +255,35 @@ describe('ContainerManager', () => {
   // ── startContainer ──────────────────────────────────────
 
   describe('startContainer', () => {
-    it('calls docker start on the container', async () => {
-      await manager.startContainer('sha256-abc123');
+    it('calls docker start on the container and returns its network IP', async () => {
+      docker._mockContainer.inspect.mockResolvedValueOnce({
+        State: { Status: 'running', ExitCode: 0, Running: true },
+        Name: '/ctxmill-run-run-001',
+        Config: {
+          Labels: {
+            'ctxmill.managed': 'true',
+            'ctxmill.session-id': 'run-001',
+            'ctxmill.agent-id': 'agent-abc',
+            'ctxmill.harness': 'claude-agents',
+          },
+        },
+        NetworkSettings: {
+          Networks: {
+            'ctxmill-agents': { IPAddress: '172.18.0.5' },
+          },
+        },
+      });
+
+      const info = await manager.startContainer('sha256-abc123');
 
       expect(docker.getContainer).toHaveBeenCalledWith('sha256-abc123');
       expect(docker._mockContainer.start).toHaveBeenCalledTimes(1);
+      expect(info).toMatchObject({
+        containerId: 'sha256-abc123',
+        containerName: 'ctxmill-run-run-001',
+        sessionId: 'run-001',
+        networkIp: '172.18.0.5',
+      });
     });
   });
 

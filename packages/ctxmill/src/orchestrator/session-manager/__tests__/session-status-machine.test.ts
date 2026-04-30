@@ -12,6 +12,7 @@ describe('session-status-machine', () => {
     ['CHECKPOINTED', 'TERMINATED'],
     ['RESTORING', 'ACTIVE'],
     ['RESTORING', 'CHECKPOINTED'],
+    ['RESTORING', 'TERMINATED'],
   ] as const)('allows %s -> %s', (from, to) => {
     expect(canTransition(from, to)).toBe(true);
     expect(() => assertTransition(from, to)).not.toThrow();
@@ -22,7 +23,6 @@ describe('session-status-machine', () => {
     ['ACTIVE', 'PAUSED'],
     ['PAUSED', 'RESTORING'],
     ['CHECKPOINTED', 'ACTIVE'],
-    ['RESTORING', 'TERMINATED'],
     ['TERMINATED', 'ACTIVE'],
   ] as const)('rejects %s -> %s', (from, to) => {
     expect(canTransition(from, to)).toBe(false);

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useAgentsStore } from '@/stores/agents';
 import { cn } from '@/lib/utils';
+import { countActiveSessions } from '@/lib/session-status';
 import { AgentStatusBadge } from '@/components/dashboard/AgentStatusBadge';
 import { AgentFormModal } from '@/components/agents/AgentFormModal';
 
@@ -68,17 +69,15 @@ export function AgentDetailPage() {
     agents,
     allSessions,
     sessionsLoading,
+    error: agentDetailError,
     loadSessions,
-    traces,
     overviewKnowledgeItems,
     overviewKnowledgeStats,
-    traceStats,
-    feedbackStats,
   } = useAgentDetail(id, activeTab);
 
   const { filteredSessions } = useAgentSessions(allSessions, sessionsFilter);
   const totalSessions = agent?.totalSessions ?? 0;
-  const activeSessionsCount = (agent?.sessionsByStatus?.ACTIVE ?? 0) + (agent?.sessionsByStatus?.PAUSED ?? 0) + (agent?.sessionsByStatus?.RESTORING ?? 0);
+  const activeSessionsCount = countActiveSessions(agent?.sessionsByStatus);
 
   const recentSessions = useMemo(() => {
     return [...allSessions]
@@ -122,6 +121,24 @@ export function AgentDetailPage() {
         <div className="text-center">
           <div className="h-8 w-8 border-2 border-accent-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
           <p className="text-surface-400 text-sm">Loading agent…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!agent && agentDetailError) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-surface-950">
+        <div role="alert" className="text-center">
+          <h2 className="text-xl font-semibold text-red-200 mb-2">Failed to load agent</h2>
+          <p className="text-surface-400 mb-4">{agentDetailError}</p>
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="px-4 py-2 bg-accent-600 text-white rounded-lg hover:bg-accent-500 transition-colors"
+          >
+            Back to Dashboard
+          </button>
         </div>
       </div>
     );
@@ -283,8 +300,6 @@ export function AgentDetailPage() {
             }}
             knowledgeStats={overviewKnowledgeStats}
             recentKnowledgeItems={overviewKnowledgeItems}
-            traceStats={traceStats}
-            feedbackStats={feedbackStats}
           />
         )}
 
@@ -304,10 +319,10 @@ export function AgentDetailPage() {
           <AgentSessionsTab
             sessions={filteredSessions}
             loading={sessionsLoading}
+            error={agentDetailError}
             filter={sessionsFilter}
             onFilterChange={setSessionsFilter}
             agentId={id!}
-            traces={traces}
             onViewSessionFiles={(sessionId) => {
               setSelectedSessionId(sessionId);
               setActiveTab('files');

@@ -74,6 +74,21 @@ async function apiMutate<T>(url: string, method: string, body?: unknown): Promis
   });
 }
 
+function withQuery(
+  path: string,
+  params?: Record<string, string | number | boolean | null | undefined>,
+): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value != null && value !== '') {
+      search.set(key, String(value));
+    }
+  }
+
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
+}
+
 // ── Query operations (throw on failure) ─────────────────────────────
 
 export async function fetchAgents() {
@@ -113,10 +128,7 @@ export async function fetchMessages(agentId: string, conversationId: string) {
 }
 
 export async function fetchKnowledge(agentId: string, params?: { q?: string; category?: string }) {
-  const url = new URL(`${API_BASE}/agents/${agentId}/knowledge`, window.location.origin);
-  if (params?.q) url.searchParams.set('q', params.q);
-  if (params?.category) url.searchParams.set('category', params.category);
-  return apiFetch(url.toString());
+  return apiFetch(withQuery(`${API_BASE}/agents/${agentId}/knowledge`, params));
 }
 
 export async function fetchKnowledgeStats(agentId: string) {
@@ -126,10 +138,7 @@ export async function fetchKnowledgeStats(agentId: string) {
 // ── Shared knowledge operations ─────────────────────────────────────
 
 export async function fetchSharedKnowledge(params?: { q?: string; category?: string }) {
-  const url = new URL(`${API_BASE}/knowledge/shared`, window.location.origin);
-  if (params?.q) url.searchParams.set('q', params.q);
-  if (params?.category) url.searchParams.set('category', params.category);
-  return apiFetch(url.toString());
+  return apiFetch(withQuery(`${API_BASE}/knowledge/shared`, params));
 }
 
 export async function fetchSharedKnowledgeStats() {
@@ -145,23 +154,7 @@ export async function deleteSharedKnowledge(itemId: string) {
 }
 
 export async function searchAllKnowledge(params?: { q?: string; category?: string; limit?: number }) {
-  const url = new URL(`${API_BASE}/knowledge/search`, window.location.origin);
-  if (params?.q) url.searchParams.set('q', params.q);
-  if (params?.category) url.searchParams.set('category', params.category);
-  if (params?.limit) url.searchParams.set('limit', String(params.limit));
-  return apiFetch(url.toString());
-}
-
-export async function fetchTraceStats(agentId: string) {
-  return apiFetch(`${API_BASE}/agents/${agentId}/traces/stats`);
-}
-
-export async function fetchTraces(agentId: string) {
-  return apiFetch(`${API_BASE}/agents/${agentId}/traces`);
-}
-
-export async function fetchFeedbackStats(agentId: string) {
-  return apiFetch(`${API_BASE}/agents/${agentId}/feedback/stats`);
+  return apiFetch(withQuery(`${API_BASE}/knowledge/search`, params));
 }
 
 export async function submitFeedback(
@@ -202,12 +195,9 @@ export type PendingInterrupt = {
 };
 
 export async function fetchInterrupts(agentId: string): Promise<PendingInterrupt[]> {
-  const data = await apiFetch<{ interrupts?: PendingInterrupt[] } | PendingInterrupt[]>(
+  const data = await apiFetch<{ interrupts?: PendingInterrupt[] }>(
     `${API_BASE}/agents/${agentId}/interrupts`,
   );
-  if (Array.isArray(data)) {
-    return data;
-  }
   return Array.isArray(data.interrupts) ? data.interrupts : [];
 }
 
@@ -237,22 +227,23 @@ export interface ReadFileResponse {
 }
 
 export async function listFiles(agentId: string, path: string, sessionId?: string): Promise<ListFilesResponse> {
-  const params = new URLSearchParams({ path });
-  if (sessionId) params.set('sessionId', sessionId);
-  return apiFetch<ListFilesResponse>(`${API_BASE}/agents/${agentId}/files?${params}`);
+  return apiFetch<ListFilesResponse>(
+    withQuery(`${API_BASE}/agents/${agentId}/files`, { path, sessionId }),
+  );
 }
 
 export async function readFile(agentId: string, path: string, sessionId?: string): Promise<ReadFileResponse> {
-  const params = new URLSearchParams({ path });
-  if (sessionId) params.set('sessionId', sessionId);
-  return apiFetch<ReadFileResponse>(`${API_BASE}/agents/${agentId}/files/read?${params}`);
+  return apiFetch<ReadFileResponse>(
+    withQuery(`${API_BASE}/agents/${agentId}/files/read`, { path, sessionId }),
+  );
 }
 
 export async function createFile(agentId: string, path: string, content: string, sessionId?: string) {
-  const params = new URLSearchParams();
-  if (sessionId) params.set('sessionId', sessionId);
-  const url = `${API_BASE}/agents/${agentId}/files${params.size > 0 ? `?${params}` : ''}`;
-  return apiMutate<{ path: string; size: number }>(url, 'POST', { path, content });
+  return apiMutate<{ path: string; size: number }>(
+    withQuery(`${API_BASE}/agents/${agentId}/files`, { sessionId }),
+    'POST',
+    { path, content },
+  );
 }
 
 export async function updateFile(agentId: string, path: string, content: string, sessionId?: string) {
@@ -266,6 +257,26 @@ export async function deleteFile(agentId: string, path: string, sessionId?: stri
   const params = new URLSearchParams({ path });
   if (sessionId) params.set('sessionId', sessionId);
   await apiFetch(`${API_BASE}/agents/${agentId}/files?${params}`, { method: 'DELETE' });
+}
+
+export interface UploadWorkspaceResponse {
+  files: number;
+  totalBytes: number;
+}
+
+export async function uploadWorkspaceTarball(
+  agentId: string,
+  file: File,
+  options?: { force?: boolean },
+): Promise<UploadWorkspaceResponse> {
+  return apiFetch<UploadWorkspaceResponse>(
+    withQuery(`${API_BASE}/agents/${agentId}/workspace`, { force: options?.force ? 'true' : undefined }),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/gzip' },
+      body: file,
+    },
+  );
 }
 
 export async function createAgent(data: {
@@ -325,8 +336,7 @@ export interface Trigger {
 }
 
 export async function fetchTriggers(agentId?: string): Promise<Trigger[]> {
-  const params = agentId ? `?agentId=${agentId}` : '';
-  return apiFetch<Trigger[]>(`${API_BASE}/triggers${params}`);
+  return apiFetch<Trigger[]>(withQuery(`${API_BASE}/triggers`, { agentId }));
 }
 
 export async function createTrigger(data: {
@@ -381,11 +391,6 @@ export async function testTool(toolName: string, input?: Record<string, unknown>
 // ── Config operations ───────────────────────────────────────────────
 
 export interface AppConfig {
-  llm?: {
-    provider?: string;
-    model?: string;
-    baseUrl?: string;
-  };
   system?: {
     version?: string;
     uptime?: number;
@@ -462,19 +467,11 @@ export async function fetchEvents(params?: {
   agentId?: string;
   since?: number;
 }): Promise<EventsResponse> {
-  const url = new URL(`${API_BASE}/events`, window.location.origin);
-  if (params?.cursor) url.searchParams.set('cursor', String(params.cursor));
-  if (params?.limit) url.searchParams.set('limit', String(params.limit));
-  if (params?.type) url.searchParams.set('type', params.type);
-  if (params?.agentId) url.searchParams.set('agentId', params.agentId);
-  if (params?.since) url.searchParams.set('since', String(params.since));
-  return apiFetch<EventsResponse>(url.toString());
+  return apiFetch<EventsResponse>(withQuery(`${API_BASE}/events`, params));
 }
 
 export async function fetchEventStats(range?: string): Promise<EventStats> {
-  const url = new URL(`${API_BASE}/events/stats`, window.location.origin);
-  if (range) url.searchParams.set('range', range);
-  return apiFetch<EventStats>(url.toString());
+  return apiFetch<EventStats>(withQuery(`${API_BASE}/events/stats`, { range }));
 }
 
 export async function fetchEventTypes(): Promise<{ types: string[] }> {
@@ -498,9 +495,9 @@ export interface Artifact {
 }
 
 export async function fetchArtifacts(agentId: string, sessionId?: string): Promise<{ artifacts: Artifact[] }> {
-  const params = new URLSearchParams({ agentId });
-  if (sessionId) params.set('sessionId', sessionId);
-  return apiFetch<{ artifacts: Artifact[] }>(`${API_BASE}/artifacts?${params}`);
+  return apiFetch<{ artifacts: Artifact[] }>(
+    withQuery(`${API_BASE}/artifacts`, { agentId, sessionId }),
+  );
 }
 
 export async function fetchAllArtifacts(options?: {
@@ -508,11 +505,9 @@ export async function fetchAllArtifacts(options?: {
   offset?: number;
   search?: string;
 }): Promise<{ artifacts: Artifact[]; total: number }> {
-  const params = new URLSearchParams();
-  if (options?.limit) params.set('limit', String(options.limit));
-  if (options?.offset) params.set('offset', String(options.offset));
-  if (options?.search) params.set('search', options.search);
-  return apiFetch<{ artifacts: Artifact[]; total: number }>(`${API_BASE}/artifacts?${params}`);
+  return apiFetch<{ artifacts: Artifact[]; total: number }>(
+    withQuery(`${API_BASE}/artifacts`, options),
+  );
 }
 
 export async function fetchArtifact(id: string): Promise<Artifact> {

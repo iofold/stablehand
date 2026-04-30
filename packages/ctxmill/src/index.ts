@@ -60,19 +60,6 @@ export { InMemoryContextProvider } from './knowledge/context.js';
 
 export { ensureAgentWorkspace, seedAgentWorkspace } from './workspace/index.js';
 
-// Learning types and implementations
-export type {
-  ExecutionTrace,
-  TraceStep,
-  FeedbackSignal,
-  Insight,
-  LearningPipeline,
-  LearningResult,
-} from './learning/types.js';
-export { TraceCollector } from './learning/trace.js';
-export { SimpleReflector } from './learning/reflector.js';
-export { DefaultLearningPipeline } from './learning/pipeline.js';
-
 // Harness types and implementations
 export type {
   AgentHarness, AgentEvent,

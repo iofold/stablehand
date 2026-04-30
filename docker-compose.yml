@@ -78,21 +78,6 @@ services:
       - "traefik.http.routers.ctxmill.tls.certresolver=letsencrypt"
       - "traefik.http.services.ctxmill.loadbalancer.server.port=80"
 
-  egress-proxy:
-    build:
-      context: ./nginx
-      dockerfile: Dockerfile.egress-proxy
-    environment:
-      CTXMILL_ALLOWED_EGRESS_DOMAINS: ${CTXMILL_ALLOWED_EGRESS_DOMAINS:-}
-    networks:
-      - ctxmill-agents
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 3128 || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
-
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"

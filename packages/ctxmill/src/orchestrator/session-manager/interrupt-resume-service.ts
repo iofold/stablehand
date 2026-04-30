@@ -78,6 +78,48 @@ function readAgentDefinitionCandidate(candidate: unknown): AgentDefinition | nul
   return definition;
 }
 
+function resolutionContentForAction(action: string | null | undefined): string {
+  return action === 'approve' ? 'APPROVED' : 'REJECTED';
+}
+
+function buildContinuationTurnId(turnId: string): string {
+  return `hitl-resume-${turnId.slice(0, 8)}-${Date.now()}`;
+}
+
+function normalizeFallbackArgs(args: unknown): Record<string, unknown> {
+  return isRecord(args) ? args : { value: args };
+}
+
+function buildContinuationMessages(input: {
+  agentId: string;
+  toolCallId: string;
+  toolArgs: Record<string, unknown>;
+  resolutionContent: string;
+}): Message[] {
+  return [
+    {
+      id: `hitl-assistant-${randomUUID().slice(0, 8)}`,
+      agentId: input.agentId,
+      role: 'assistant',
+      content: '',
+      toolCalls: [{
+        id: input.toolCallId,
+        name: 'request-approval',
+        arguments: input.toolArgs,
+      }],
+      createdAt: new Date(),
+    },
+    {
+      id: `hitl-tool-${randomUUID().slice(0, 8)}`,
+      agentId: input.agentId,
+      role: 'tool',
+      content: input.resolutionContent,
+      toolCallId: input.toolCallId,
+      createdAt: new Date(),
+    },
+  ];
+}
+
 export class InterruptResumeService implements InterruptResumePort {
   constructor(private readonly deps: InterruptResumeServiceDeps) {}
 
@@ -116,22 +158,20 @@ export class InterruptResumeService implements InterruptResumePort {
     const pendingApprovals = this.getPendingApprovalRequests(checkpoint?.checkpointData)
       .filter((request) => request.type === 'approval');
     const record = await this.deps.ensureSession(conversationId, agentDef, agentId);
-    const resolutionContent = interrupt.resolvedAction === 'approve' ? 'APPROVED' : 'REJECTED';
+    const resolutionContent = resolutionContentForAction(interrupt.resolvedAction);
 
     const continuationMessages: Message[] = [];
-    for (const approval of pendingApprovals) {
-      const toolArgs = {
-        tool: approval.payload.tool,
-        args: approval.payload.args,
-      };
-
+    const addContinuationMessages = async (
+      toolCallId: string,
+      toolArgs: Record<string, unknown>,
+    ) => {
       await this.deps.db.addMessage({
         agentId,
         conversationId,
         role: 'assistant',
         content: '',
         toolCalls: [{
-          id: approval.id,
+          id: toolCallId,
           name: 'request-approval',
           args: JSON.stringify(toolArgs),
           status: 'complete',
@@ -142,80 +182,31 @@ export class InterruptResumeService implements InterruptResumePort {
         conversationId,
         role: 'tool',
         content: resolutionContent,
-        toolCallId: approval.id,
+        toolCallId,
       });
+      continuationMessages.push(...buildContinuationMessages({
+        agentId,
+        toolCallId,
+        toolArgs,
+        resolutionContent,
+      }));
+    };
 
-      continuationMessages.push({
-        id: `hitl-assistant-${randomUUID().slice(0, 8)}`,
-        agentId,
-        role: 'assistant',
-        content: '',
-        toolCalls: [{
-          id: approval.id,
-          name: 'request-approval',
-          arguments: toolArgs,
-        }],
-        createdAt: new Date(),
-      });
-      continuationMessages.push({
-        id: `hitl-tool-${randomUUID().slice(0, 8)}`,
-        agentId,
-        role: 'tool',
-        content: resolutionContent,
-        toolCallId: approval.id,
-        createdAt: new Date(),
-      });
+    for (const approval of pendingApprovals) {
+      const toolArgs = {
+        tool: approval.payload.tool,
+        args: approval.payload.args,
+      };
+      await addContinuationMessages(approval.id, toolArgs);
     }
 
     if (continuationMessages.length === 0) {
       const fallbackToolCallId = interrupt.toolCallId || `hitl-${turnId}`;
-      const fallbackArgs = typeof interrupt.args === 'object' && interrupt.args !== null
-        ? interrupt.args as Record<string, unknown>
-        : { value: interrupt.args };
-
-      await this.deps.db.addMessage({
-        agentId,
-        conversationId,
-        role: 'assistant',
-        content: '',
-        toolCalls: [{
-          id: fallbackToolCallId,
-          name: 'request-approval',
-          args: JSON.stringify(fallbackArgs),
-          status: 'complete',
-        }],
-      });
-      await this.deps.db.addMessage({
-        agentId,
-        conversationId,
-        role: 'tool',
-        content: resolutionContent,
-        toolCallId: fallbackToolCallId,
-      });
-
-      continuationMessages.push({
-        id: `hitl-assistant-${randomUUID().slice(0, 8)}`,
-        agentId,
-        role: 'assistant',
-        content: '',
-        toolCalls: [{
-          id: fallbackToolCallId,
-          name: 'request-approval',
-          arguments: fallbackArgs,
-        }],
-        createdAt: new Date(),
-      });
-      continuationMessages.push({
-        id: `hitl-tool-${randomUUID().slice(0, 8)}`,
-        agentId,
-        role: 'tool',
-        content: resolutionContent,
-        toolCallId: fallbackToolCallId,
-        createdAt: new Date(),
-      });
+      const fallbackArgs = normalizeFallbackArgs(interrupt.args);
+      await addContinuationMessages(fallbackToolCallId, fallbackArgs);
     }
 
-    const continuationTurnId = `hitl-resume-${turnId.slice(0, 8)}-${Date.now()}`;
+    const continuationTurnId = buildContinuationTurnId(turnId);
     this.deps.logger.info(
       `${TAG} delivering continuation turn ${continuationTurnId} for session ${record.sessionId}`,
     );

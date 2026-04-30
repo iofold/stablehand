@@ -322,7 +322,7 @@ describe('HTTPToolProvider – authentication', () => {
     );
   });
 
-  it('should fall back to process.env for secrets', async () => {
+  it('should fall back to process.env for secrets only when explicitly allowed', async () => {
     const originalEnv = process.env.FALLBACK_SECRET;
     process.env.FALLBACK_SECRET = 'env-secret';
 
@@ -331,7 +331,7 @@ describe('HTTPToolProvider – authentication', () => {
       const provider = new HTTPToolProvider(
         [
           makeEndpoint({
-            authentication: { type: 'bearer', secretName: 'FALLBACK_SECRET' },
+            authentication: { type: 'bearer', secretName: 'FALLBACK_SECRET', allowEnvFallback: true },
           }),
         ],
         { fetchFn },
@@ -356,7 +356,7 @@ describe('HTTPToolProvider – authentication', () => {
     }
   });
 
-  it('should not set auth header when secret is not found', async () => {
+  it('should fail deterministically when a configured secret is not found', async () => {
     const fetchFn = mockFetch();
     const provider = new HTTPToolProvider(
       [
@@ -367,16 +367,10 @@ describe('HTTPToolProvider – authentication', () => {
       { fetchFn },
     );
 
-    await provider.execute('test-tool', {}, mockCtx);
-
-    expect(fetchFn).toHaveBeenCalledWith(
-      'https://api.example.com/action',
-      expect.objectContaining({
-        headers: expect.not.objectContaining({
-          Authorization: expect.anything(),
-        }),
-      }),
+    await expect(provider.execute('test-tool', {}, mockCtx)).rejects.toThrow(
+      'missing secret "MISSING_SECRET"',
     );
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 });
 

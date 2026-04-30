@@ -10,6 +10,7 @@ import {
   deleteAgent as apiDeleteAgent,
   type HttpToolDefinition,
 } from '@/lib/api';
+import { normalizeSessionStatusCounts } from '@/lib/session-status';
 
 export type AgentSession = ApiAgentSession & { sandboxSessionId?: string };
 
@@ -82,8 +83,12 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
     if (isInitial) set({ loading: true });
     try {
       const data = await apiFetchAgents();
-      const agents: Agent[] = Array.isArray(data) ? data : ((data as Record<string, unknown>)?.agents as Agent[] ?? []);
-      set({ agents, loading: false });
+      const rawAgents: Agent[] = Array.isArray(data) ? data : ((data as Record<string, unknown>)?.agents as Agent[] ?? []);
+      const agents = rawAgents.map((agent) => ({
+        ...agent,
+        sessionsByStatus: normalizeSessionStatusCounts(agent.sessionsByStatus) ?? undefined,
+      }));
+      set({ agents, loading: false, error: null });
     } catch (err) {
       set({ error: String(err), loading: false });
     }
@@ -149,9 +154,7 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
   fetchSessions: async (agentId) => {
     try {
       const data = await apiFetchSessions(agentId);
-      const sessions = Array.isArray(data)
-        ? data
-        : (data as { sessions?: AgentSession[] })?.sessions;
+      const sessions = (data as { sessions?: AgentSession[] }).sessions;
       return Array.isArray(sessions) ? sessions : [];
     } catch (err) {
       console.error('[agents] fetchSessions failed:', err);

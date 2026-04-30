@@ -31,7 +31,6 @@ describe('Agent CRUD & related endpoints', () => {
       {
         preset: 'docker',
         database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
-        llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
       },
       dataDir,
     );
@@ -542,6 +541,31 @@ describe('Agent CRUD & related endpoints', () => {
     });
   });
 
+  describe('legacy sandbox admin shims', () => {
+    let agentId: string;
+
+    beforeAll(async () => {
+      const res = await createAgent({ name: 'legacy-admin-agent' });
+      agentId = res.json().id;
+    });
+
+    it.each([
+      ['suspend', 'Use /api/agents/:id/sandbox-sessions/:sessionId/suspend.'],
+      ['kill', 'Use /api/agents/:id/sandbox-sessions/:sessionId/kill.'],
+    ])('keeps %s shim as a 410 guidance response', async (action, guidance) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/sessions/legacy-session/${action}`,
+      });
+
+      expect(res.statusCode).toBe(410);
+      expect(res.json()).toEqual({
+        error: `Legacy session admin route removed. ${guidance}`,
+        sessionId: 'legacy-session',
+      });
+    });
+  });
+
   describe('POST /api/ag-ui/:id/run', () => {
     let agentId: string;
     let conversationId: string;
@@ -633,14 +657,15 @@ describe('Agent CRUD & related endpoints', () => {
   // ── GET /api/config ────────────────────────────────────────
 
   describe('GET /api/config', () => {
-    it('returns config with llm, system, agentDefaults sections', async () => {
+    it('returns config with system and agentDefaults sections', async () => {
       const res = await app.inject({
         method: 'GET',
         url: '/api/config',
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body).toEqual(expect.objectContaining({ llm: expect.any(Object), system: expect.any(Object), agentDefaults: expect.any(Object) }));
+      expect(body).toEqual(expect.objectContaining({ system: expect.any(Object), agentDefaults: expect.any(Object) }));
+      expect(body).not.toHaveProperty('llm');
     });
   });
 

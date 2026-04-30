@@ -21,6 +21,7 @@ import { useAgentsStore } from '@/stores/agents';
 import { useSSE, useSSEStatus } from '@/lib/useSSE';
 import { sendMessage, sendInterrupt, fetchMessages, fetchConversations, fetchSessions, fetchTurns, fetchInterrupts } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { isNewConversationPath } from '@/lib/routes';
 
 function humanizeError(raw: string): { summary: string; details: string } {
   if (raw.includes('ConnectError') || raw.includes('stream closed')) {
@@ -98,7 +99,7 @@ export function SessionPage() {
     async function loadHistory() {
       try {
         let resolvedConversationId = routeConversationId;
-        const isNewSession = location.pathname.endsWith('/conversations/new') || location.pathname.endsWith('/sessions/new');
+        const isNewSession = isNewConversationPath(location.pathname);
 
         if (!resolvedConversationId && !isNewSession) {
           const convs = await fetchConversations(id!) as Array<{ id: string }>;
@@ -139,9 +140,7 @@ export function SessionPage() {
             ]);
             if (!mounted) return;
 
-            const sessions = Array.isArray(sessionsRaw)
-              ? sessionsRaw
-              : ((sessionsRaw as Record<string, unknown>)?.sessions ?? []) as Record<string, unknown>[];
+            const sessions = ((sessionsRaw as { sessions?: Record<string, unknown>[] }).sessions ?? []);
             const turns = Array.isArray(turnsRaw) ? turnsRaw : [] as Record<string, unknown>[];
 
             const isRuntimeActiveStatus = (status: unknown) =>

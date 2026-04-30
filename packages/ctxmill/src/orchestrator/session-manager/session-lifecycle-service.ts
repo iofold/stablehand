@@ -7,7 +7,7 @@ import {
 import { resolve } from 'node:path';
 
 import type { DatabaseRepository, SandboxSessionRow } from '../../database/repository.js';
-import type { ContainerManager } from '../../sandbox/container-manager.js';
+import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 import type { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import { cleanupSession } from '../../workspace/session-workspace.js';
 import type { AgentDefinition } from '../../types.js';
@@ -39,7 +39,7 @@ export interface SessionLifecycleServiceDeps {
     | 'getSandboxSessionsByAgent'
   >;
   statusCoordinator: SessionStatusCoordinator;
-  containerManager: Pick<ContainerManager, 'getContainer' | 'removeContainer' | 'stopContainer'>;
+  containerManager: Pick<SandboxContainerManager, 'getContainer' | 'removeContainer' | 'stopContainer'>;
   lifecyclePolicy: Pick<ContainerLifecyclePolicy, 'cancelIdleTimeout'>;
   workspaceDiffService: WorkspaceDiffService;
   logger: Logger;

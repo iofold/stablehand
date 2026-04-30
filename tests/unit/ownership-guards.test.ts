@@ -36,7 +36,6 @@ describe('Ownership enforcement on routes', () => {
       {
         preset: 'docker',
         database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
-        llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
       },
       dataDir,
     );
@@ -45,6 +44,7 @@ describe('Ownership enforcement on routes', () => {
       db: container.db,
       agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
+      runStartupService: container.runStartupService,
       dataDir,
     });
 

@@ -66,7 +66,7 @@ test.describe('Background Run Lifecycle', () => {
     await expect(async () => {
       const runsRes = await page.request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
       const body = await runsRes.json();
-      const runs = body.sessions ?? body;
+      const runs = body.sessions;
       const matchingRun = runs.find((entry: { id: string; sessionId?: string; status: string }) => entry.sessionId === run.sessionId || entry.id === run.sessionId);
       expect(matchingRun).toBeTruthy();
       expect(['queued', 'active', 'paused', 'checkpointed', 'restoring', 'terminated', 'completed', 'error', 'cancelled', 'idle'])
@@ -114,7 +114,7 @@ test.describe('Background Run Lifecycle', () => {
     await expect(async () => {
       const runsRes = await page.request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
       const body = await runsRes.json();
-      const runs = body.sessions ?? body;
+      const runs = body.sessions;
       expect(runs.some((entry: { id: string; sessionId?: string }) => entry.sessionId === run.sessionId || entry.id === run.sessionId)).toBe(true);
     }).toPass({ timeout: 60000, intervals: [1000, 2000, 5000] });
   });

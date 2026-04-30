@@ -152,12 +152,6 @@ export class AGUIEventNormalizer {
         }];
       }
 
-      case 'turn.pending':
-      case 'message.committed':
-      case 'session.paused':
-      case 'user.message':
-        return [];
-
       default:
         return [];
     }

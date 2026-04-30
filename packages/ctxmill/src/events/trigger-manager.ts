@@ -40,9 +40,6 @@ const KNOWN_EVENT_TYPES: EventName[] = [
   'agent.deleted',
   'client.connected',
   'client.disconnected',
-  'learning.trace_captured',
-  'learning.insight_extracted',
-  'learning.knowledge_updated',
 ];
 
 /**

@@ -64,6 +64,7 @@ export function TriggersPage() {
   const [form, setForm] = useState<TriggerFormData>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Delete confirmation
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -137,6 +138,7 @@ export function TriggersPage() {
     setEditingTrigger(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    setActionError(null);
     setModalOpen(true);
   };
 
@@ -150,6 +152,7 @@ export function TriggersPage() {
       enabled: trigger.enabled,
     });
     setFormError(null);
+    setActionError(null);
     setModalOpen(true);
   };
 
@@ -178,6 +181,7 @@ export function TriggersPage() {
 
     setSaving(true);
     setFormError(null);
+    setActionError(null);
 
     try {
       if (editingTrigger) {
@@ -212,6 +216,7 @@ export function TriggersPage() {
       setDeletingId(null);
       await loadTriggers();
     } catch (err) {
+      setActionError('Failed to delete trigger.');
       console.debug('[Triggers] Delete failed:', err);
     }
   };
@@ -221,6 +226,7 @@ export function TriggersPage() {
       await updateTrigger(trigger.id, { enabled: !trigger.enabled });
       await loadTriggers();
     } catch (err) {
+      setActionError('Failed to update trigger status.');
       console.debug('[Triggers] Toggle failed:', err);
     }
   };
@@ -307,6 +313,23 @@ export function TriggersPage() {
               className="rounded-md border border-amber-400/30 px-3 py-1.5 text-xs font-medium text-amber-100 transition-colors hover:bg-amber-500/10"
             >
               Retry
+            </button>
+          </div>
+        )}
+
+        {actionError && (
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
+          >
+            <span>{actionError}</span>
+            <button
+              type="button"
+              data-testid="triggers-action-error-dismiss"
+              onClick={() => setActionError(null)}
+              className="rounded-md border border-red-400/30 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-500/10"
+            >
+              Dismiss
             </button>
           </div>
         )}

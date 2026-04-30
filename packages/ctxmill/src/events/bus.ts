@@ -74,26 +74,6 @@ export type EventMap = {
     durationMs: number;
     timestamp: number;
   };
-  'learning.trace_captured': {
-    traceId: string;
-    turnId: string;
-    agentId: string;
-    stepCount: number;
-    outcome: 'success' | 'failure' | 'partial';
-    timestamp: number;
-  };
-  'learning.insight_extracted': {
-    traceId: string;
-    agentId: string;
-    insightCount: number;
-    timestamp: number;
-  };
-  'learning.knowledge_updated': {
-    agentId: string;
-    itemId: string;
-    category: string;
-    timestamp: number;
-  };
   'feedback.received': {
     feedbackId: string;
     turnId: string;
@@ -212,73 +192,23 @@ export class TypedEventBus {
   }
 
   emit<K extends EventName>(event: K, payload: EventMap[K]): void {
-    // Auto-fill timestamp if not provided
-    if (!payload.timestamp) {
-      payload.timestamp = Date.now();
+    const prepared = this.preparePayload(payload);
+    const persisted = this.persist(event, this.agentIdFor(prepared), JSON.stringify(prepared));
+    if (persisted && typeof persisted.then === 'function') {
+      persisted.then(() => this.dispatch(event, prepared)).catch((err: unknown) => {
+        this.reportBusError('persist', event, err);
+      });
+      return;
     }
+    if (persisted !== false) {
+      this.dispatch(event, prepared);
+    }
+  }
 
-    // Persist if configured
-    if (this.persistEvent) {
-      const agentId = 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
-      try {
-        const result = this.persistEvent(event, agentId, JSON.stringify(payload));
-        if (result && typeof (result as Promise<void>).catch === 'function') {
-          (result as Promise<void>).catch((err) => {
-            console.error(`[EventBus] persist error for ${event}:`, err);
-            try {
-              this.emitter.emit('bus.error', {
-                source: 'persist',
-                event,
-                error: err instanceof Error ? err.message : String(err),
-                timestamp: Date.now(),
-              });
-            } catch { /* prevent infinite loop if bus.error handler itself fails */ }
-          });
-        }
-      } catch (err) {
-        console.error(`[EventBus] persist error for ${event}:`, err);
-        try {
-          this.emitter.emit('bus.error', {
-            source: 'persist',
-            event,
-            error: err instanceof Error ? err.message : String(err),
-            timestamp: Date.now(),
-          });
-        } catch { /* prevent infinite loop if bus.error handler itself fails */ }
-      }
-    }
-
-    // Get all listeners; call each in a try/catch so one failure doesn't block others
-    const listeners = this.emitter.rawListeners(event);
-    for (const listener of listeners) {
-      try {
-        const result = listener(payload);
-        // If the handler returns a promise, catch rejections
-        if (result && typeof result.catch === 'function') {
-          (result as Promise<unknown>).catch((err: unknown) => {
-            console.error(`[EventBus] handler error for ${event}:`, err);
-            try {
-              this.emitter.emit('bus.error', {
-                source: 'handler',
-                event,
-                error: err instanceof Error ? err.message : String(err),
-                timestamp: Date.now(),
-              });
-            } catch { /* prevent infinite loop if bus.error handler itself fails */ }
-          });
-        }
-      } catch (err) {
-        console.error(`[EventBus] handler error for ${event}:`, err);
-        try {
-          this.emitter.emit('bus.error', {
-            source: 'handler',
-            event,
-            error: err instanceof Error ? err.message : String(err),
-            timestamp: Date.now(),
-          });
-        } catch { /* prevent infinite loop if bus.error handler itself fails */ }
-      }
-    }
+  async emitAsync<K extends EventName>(event: K, payload: EventMap[K]): Promise<void> {
+    const prepared = this.preparePayload(payload);
+    await this.persistAsync(event, this.agentIdFor(prepared), JSON.stringify(prepared));
+    this.dispatch(event, prepared);
   }
 
   /**
@@ -288,60 +218,79 @@ export class TypedEventBus {
    */
   emitCustom(eventType: string, agentId: string, payload: Record<string, unknown>): void {
     const fullPayload = { ...payload, timestamp: payload.timestamp ?? Date.now() };
-
-    // Persist
-    if (this.persistEvent) {
-      try {
-        const result = this.persistEvent(eventType, agentId, JSON.stringify(fullPayload));
-        if (result && typeof (result as Promise<void>).catch === 'function') {
-          (result as Promise<void>).catch((err) => {
-            console.error(`[EventBus] persist error for custom ${eventType}:`, err);
-          });
-        }
-      } catch (err) {
-        console.error(`[EventBus] persist error for custom ${eventType}:`, err);
-      }
+    const persisted = this.persist(eventType, agentId, JSON.stringify(fullPayload));
+    if (persisted && typeof persisted.then === 'function') {
+      persisted.then(() => this.dispatch(eventType, fullPayload)).catch((err: unknown) => {
+        this.reportBusError('persist', eventType, err);
+      });
+      return;
     }
-
-    // Dispatch to subscribers (trigger manager subscribes with raw event type strings)
-    const listeners = this.emitter.rawListeners(eventType);
-    for (const listener of listeners) {
-      try {
-        const result = listener(fullPayload);
-        if (result && typeof (result as Promise<unknown>).catch === 'function') {
-          (result as Promise<unknown>).catch((err: unknown) => {
-            console.error(`[EventBus] handler error for custom ${eventType}:`, err);
-          });
-        }
-      } catch (err) {
-        console.error(`[EventBus] handler error for custom ${eventType}:`, err);
-      }
+    if (persisted !== false) {
+      this.dispatch(eventType, fullPayload);
     }
   }
 
   async emitCustomAsync(eventType: string, agentId: string, payload: Record<string, unknown>): Promise<void> {
     const fullPayload = { ...payload, timestamp: payload.timestamp ?? Date.now() };
+    await this.persistAsync(eventType, agentId, JSON.stringify(fullPayload));
+    this.dispatch(eventType, fullPayload);
+  }
 
-    if (this.persistEvent) {
-      const result = this.persistEvent(eventType, agentId, JSON.stringify(fullPayload));
-      if (result && typeof (result as Promise<void>).then === 'function') {
-        await (result as Promise<void>);
-      }
+  private preparePayload<T extends { timestamp: number }>(payload: T): T {
+    if (!payload.timestamp) {
+      payload.timestamp = Date.now();
     }
+    return payload;
+  }
 
-    const listeners = this.emitter.rawListeners(eventType);
+  private agentIdFor(payload: object): string {
+    return 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
+  }
+
+  private persist(type: string, agentId: string, payload: string): false | void | Promise<void> {
+    if (!this.persistEvent) return undefined;
+    try {
+      return this.persistEvent(type, agentId, payload);
+    } catch (err) {
+      this.reportBusError('persist', type, err);
+      return false;
+    }
+  }
+
+  private async persistAsync(type: string, agentId: string, payload: string): Promise<void> {
+    const persisted = this.persist(type, agentId, payload);
+    if (persisted === false) {
+      throw new Error(`Event persistence failed for ${type}`);
+    }
+    await persisted;
+  }
+
+  private dispatch(event: string, payload: unknown): void {
+    const listeners = this.emitter.rawListeners(event);
     for (const listener of listeners) {
       try {
-        const result = listener(fullPayload);
-        if (result && typeof (result as Promise<unknown>).catch === 'function') {
+        const result = listener(payload);
+        if (result && typeof result.catch === 'function') {
           (result as Promise<unknown>).catch((err: unknown) => {
-            console.error(`[EventBus] handler error for custom ${eventType}:`, err);
+            this.reportBusError('handler', event, err);
           });
         }
       } catch (err) {
-        console.error(`[EventBus] handler error for custom ${eventType}:`, err);
+        this.reportBusError('handler', event, err);
       }
     }
+  }
+
+  private reportBusError(source: 'persist' | 'handler', event: string, err: unknown): void {
+    console.error(`[EventBus] ${source} error for ${event}:`, err);
+    try {
+      this.emitter.emit('bus.error', {
+        source,
+        event,
+        error: err instanceof Error ? err.message : String(err),
+        timestamp: Date.now(),
+      });
+    } catch { /* prevent infinite loop if bus.error handler itself fails */ }
   }
 
   on<K extends EventName>(event: K, handler: (payload: EventMap[K]) => void | Promise<void>): void;

@@ -32,16 +32,19 @@ This document provides a comprehensive reference for all environment variables u
 
 ## Sandbox
 
-These variables control the behavior of agent sandbox containers.
+These variables control the behavior of agent sandbox containers or Kubernetes
+sandbox Jobs.
 
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
 | `ORCHESTRATOR_CALLBACK_URL` | `http://orchestrator:3001` | **Yes*** | URL for sandboxes to call back to the orchestrator. *Required in foreign stacks. | `http://ctxmill-api:3001` |
-| `CTXMILL_IMAGE_PREFIX` | `ctxmill/harness` | No | Prefix for sandbox Docker images. | `myregistry.com/ctxmill` |
+| `CTXMILL_SANDBOX_RUNTIME` | `docker` | No | Sandbox runtime. Use `kubernetes` or `k8s` to create sandbox sessions as Kubernetes Jobs. | `kubernetes` |
+| `CTXMILL_IMAGE_PREFIX` | `ctxmill/harness` | No | Prefix for sandbox harness images. Runtime image = `<prefix>-<harness>:latest`. | `myregistry.com/ctxmill` |
 | `CTXMILL_MAX_CONTAINERS` | `20` | No | Maximum number of concurrent sandbox containers globally. | `50` |
 | `CTXMILL_DATA_VOLUME` | - | No | Docker volume name for persistent agent data. Required for volume-based persistence. | `myapp_ctxmill-data` |
-| `CTXMILL_EGRESS_PROXY` | `0` | No | Enable egress proxy for sandboxes (`1` to enable). | `1` |
-| `CTXMILL_ALLOWED_EGRESS_DOMAINS` | - | No | Comma-separated list of allowed domains for the egress proxy. | `api.openai.com,github.com` |
+| `CTXMILL_K8S_NAMESPACE` | service account namespace or `default` | No | Kubernetes namespace where sandbox Jobs are created. Used only by the Kubernetes sandbox runtime. | `ctxmill` |
+| `CTXMILL_K8S_DATA_HOST_PATH` | `CTXMILL_DATA_DIR` or `/var/lib/ctxmill/data` | No | Host path mounted into Kubernetes sandbox Jobs for workspace data. Use only on single-node/dev clusters unless the path is backed by cluster storage. | `/var/lib/ctxmill/dev2/data` |
+| `CTXMILL_K8S_POD_READY_TIMEOUT_MS` | `60000` | No | How long the Kubernetes runtime waits for a sandbox Job Pod to become `Running` and get a Pod IP. | `120000` |
 | `SANDBOX_PORT` | `50051` | No | Port the sandbox gRPC daemon listens on. | `50051` |
 | `PTC_PORT` | `8080` | No | Port for the Programmatic Tool Calling (PTC) API in sandboxes. | `8080` |
 | `SECRETS_PATH` | `/run/secrets/config.json` | No | Path to the secrets JSON file inside the sandbox. | `/tmp/secrets.json` |
@@ -52,7 +55,7 @@ These variables control the behavior of agent sandbox containers.
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
 | `OPENAI_API_KEY` | - | No | API key for OpenAI. Also accepts OpenRouter or other provider keys when using a custom `baseUrl` in agent manifests. See [Custom Providers](custom-providers.md). | `sk-...` |
-| `OPENAI_MODEL` | `gpt-5.4-mini` | No | Default model for the learning pipeline and agents. | `gpt-5.4` |
+| `OPENAI_MODEL` | `gpt-5.4-mini` | No | Optional sandbox-visible model default for harnesses/tools that choose to read it. Agent manifests should prefer explicit harness config. | `gpt-5.4` |
 | `OPENAI_BASE_URL` | - | No | Base URL for OpenAI-compatible APIs (e.g., Cloudflare AI Gateway, OpenRouter). | `https://openrouter.ai/api/v1` |
 | `ANTHROPIC_API_KEY` | - | No | API key for Anthropic. Also accepts OpenRouter keys when using a custom `baseUrl`. See [Custom Providers](custom-providers.md). | `sk-ant-...` |
 | `GOOGLE_API_KEY` | - | No | API key for Google Gemini. | `AIza...` |
@@ -90,8 +93,6 @@ Used for persistent artifact storage (file uploads/downloads).
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
 | `CORS_ORIGINS` | `http://localhost:3200` | No | Comma-separated list of allowed CORS origins. | `https://app.ctxmill.com` |
-| `HTTP_PROXY` | - | No | HTTP proxy URL (injected into sandboxes if `CTXMILL_EGRESS_PROXY=1`). | `http://proxy:3128` |
-| `HTTPS_PROXY` | - | No | HTTPS proxy URL (injected into sandboxes if `CTXMILL_EGRESS_PROXY=1`). | `http://proxy:3128` |
 
 ## Security
 

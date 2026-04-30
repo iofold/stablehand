@@ -24,11 +24,6 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
         database: {
           url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
         },
-        llm: {
-          provider: 'anthropic',
-          model: 'claude-sonnet-4-6',
-          apiKey: 'test-key-not-used',
-        },
       },
       dataDir,
     );
@@ -39,6 +34,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
       eventBus: container.eventBus,
       harnessRegistry: container.harnessRegistry,
       sessionManager: container.sessionManager,
+      runStartupService: container.runStartupService,
       dataDir,
     });
 
@@ -183,6 +179,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
           eventBus: container.eventBus,
           harnessRegistry: container.harnessRegistry,
           sessionManager: container.sessionManager,
+          runStartupService: container.runStartupService,
           dataDir,
         });
         await app.ready();
@@ -241,7 +238,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
 
       expect(text).toContain('state_snapshot');
       expect(text).toContain(`"sessionId":"${sandboxSession.id}"`);
-      expect(text).toContain(`"turnId":"${turnId}"`);
+      expect(text).toContain(`"activeTurnId":"${turnId}"`);
 
       controller.abort();
       await reader.cancel().catch(() => undefined);
@@ -254,6 +251,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
         eventBus: container.eventBus,
         harnessRegistry: container.harnessRegistry,
         sessionManager: container.sessionManager,
+        runStartupService: container.runStartupService,
         dataDir,
       });
       await app.ready();
@@ -281,16 +279,6 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
 
     expect(typeof container.knowledgeStore.add).toBe('function');
     expect(typeof container.knowledgeStore.render).toBe('function');
-
-    if (container.llmProvider) {
-      expect(typeof container.llmProvider.invoke).toBe('function');
-      expect(typeof container.llmProvider.healthy).toBe('function');
-    }
-
-    if (container.learningPipeline) {
-      expect(typeof container.learningPipeline.process).toBe('function');
-      expect(typeof container.learningPipeline.getKnowledge).toBe('function');
-    }
 
     expect(typeof container.contextProvider.query).toBe('function');
     expect(typeof container.contextProvider.healthy).toBe('function');

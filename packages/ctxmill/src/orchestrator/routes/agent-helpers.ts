@@ -56,6 +56,10 @@ export function validateSandboxPath(
 
 /**
  * Map raw DB message rows to the internal `Message[]` format.
+ *
+ * This is the canonical transcript assembly path used when preparing a run.
+ * It sorts by `(createdAt, id)` and de-duplicates by message id so replaying
+ * the same persisted rows always yields the same transcript in the same order.
  */
 export function mapMessagesToInternal(
   allMessages: Array<{
@@ -68,14 +72,35 @@ export function mapMessagesToInternal(
   }>,
   fallbackAgentId: string,
 ): Message[] {
-  return allMessages.map((m) => ({
-    id: m.id,
-    agentId: m.agentId ?? fallbackAgentId,
-    role: m.role as Message['role'],
-    content: m.content,
-    toolCallId: m.toolCallId ?? undefined,
-    createdAt: new Date(m.createdAt),
-  }));
+  const byId = new Map<string, {
+    id: string;
+    agentId?: string | null;
+    role: string;
+    content: string;
+    toolCallId?: string | null;
+    createdAt: string | number | Date;
+  }>();
+
+  for (const message of allMessages) {
+    if (!byId.has(message.id)) {
+      byId.set(message.id, message);
+    }
+  }
+
+  return [...byId.values()]
+    .sort((a, b) => {
+      const createdDelta = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      if (createdDelta !== 0) return createdDelta;
+      return a.id.localeCompare(b.id);
+    })
+    .map((m) => ({
+      id: m.id,
+      agentId: m.agentId ?? fallbackAgentId,
+      role: m.role as Message['role'],
+      content: m.content,
+      toolCallId: m.toolCallId ?? undefined,
+      createdAt: new Date(m.createdAt),
+    }));
 }
 
 /**

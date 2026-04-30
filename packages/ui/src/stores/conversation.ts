@@ -517,9 +517,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         if (subtype === 'state_snapshot') {
           const convId = event.conversationId as string;
           const activeConv = get().activeConversationId;
-          const activeTurnId = typeof event.activeTurnId === 'string'
-            ? event.activeTurnId
-            : (typeof event.turnId === 'string' ? event.turnId : '');
+          const activeTurnId = typeof event.activeTurnId === 'string' ? event.activeTurnId : '';
           if (convId && convId === activeConv) {
             set({
               isStreaming: activeTurnId.length > 0,

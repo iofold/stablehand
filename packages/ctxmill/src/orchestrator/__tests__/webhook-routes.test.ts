@@ -9,6 +9,7 @@ import type { CallbackDispatcher } from '../callback-dispatcher.js';
 import { SSEManager } from '../sse.js';
 import { InterruptManager } from '../interrupt.js';
 import type { AgentSessionService } from '../agent-session-service.js';
+import type { RunStartupService } from '../run-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 
 function createMockDb() {
@@ -80,6 +81,13 @@ function createMockDb() {
   return db as unknown as DatabaseRepository & typeof db;
 }
 
+function createRunStartupServiceStub(): RunStartupService {
+  return {
+    prepareRunStart: vi.fn(),
+    launchPreparedRun: vi.fn(),
+  } as unknown as RunStartupService;
+}
+
 async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
   const app = Fastify();
   const configSchema = z.object({ model: z.string().min(1) }).passthrough();
@@ -115,6 +123,7 @@ async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
     agentSessionService: {
       executeSession: vi.fn(),
     } as unknown as AgentSessionService,
+    runStartupService: createRunStartupServiceStub(),
     eventBus: new TypedEventBus(),
   });
   await app.ready();
@@ -182,7 +191,7 @@ describe('webhook routes', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({
       error: 'Invalid event types: run.unknown',
-      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed'],
+      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed', 'feedback.received'],
     });
     expect(db.createWebhook).not.toHaveBeenCalled();
   });
@@ -227,7 +236,7 @@ describe('webhook routes', () => {
     expect(db.updateWebhookForAgent).not.toHaveBeenCalled();
     expect(response.json()).toEqual({
       error: 'Invalid event types: run.unknown',
-      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed'],
+      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed', 'feedback.received'],
     });
   });
 

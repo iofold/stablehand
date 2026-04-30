@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { AgentSession } from '@/stores/agents';
+import { normalizeRunStatus } from '@/lib/session-status';
 
 export interface UseAgentSessionsReturn {
   filteredSessions: AgentSession[];
@@ -20,7 +21,7 @@ export function useAgentSessions(allSessions: AgentSession[], sessionsFilter: st
     
     const matchingConversationIds = new Set<string>();
     for (const [conversationId, latestSession] of latestSessionByConversation.entries()) {
-      if (latestSession.status === sessionsFilter) {
+      if (normalizeRunStatus(latestSession.status) === sessionsFilter) {
         matchingConversationIds.add(conversationId);
       }
     }

@@ -377,66 +377,6 @@ describe('AGUIEventNormalizer', () => {
     });
   });
 
-  describe('Skipped events', () => {
-    it('should return empty array for turn.pending', () => {
-      const payload: EventMap['turn.pending'] = {
-        turnId: 'turn-1',
-        agentId: 'agent-1',
-        conversationId: 'conv-1',
-        mode: 'interactive',
-        timestamp,
-      };
-
-      const result = normalizer.normalize('turn.pending', payload);
-
-      expect(result).toEqual([]);
-    });
-
-    it('should return empty array for message.committed', () => {
-      const payload: EventMap['message.committed'] = {
-        turnId: 'turn-1',
-        agentId: 'agent-1',
-        conversationId: 'conv-1',
-        messageSeq: 1,
-        role: 'assistant',
-        content: 'Test message',
-        timestamp,
-      };
-
-      const result = normalizer.normalize('message.committed', payload);
-
-      expect(result).toEqual([]);
-    });
-
-    it('should return empty array for session.paused', () => {
-      const payload: EventMap['session.paused'] = {
-        sessionId: 'session-1',
-        agentId: 'agent-1',
-        conversationId: 'conv-1',
-        reason: 'User paused',
-        timestamp,
-      };
-
-      const result = normalizer.normalize('session.paused', payload);
-
-      expect(result).toEqual([]);
-    });
-
-    it('should return empty array for user.message', () => {
-      const payload: EventMap['user.message'] = {
-        agentId: 'agent-1',
-        conversationId: 'conv-1',
-        messageId: 'msg-1',
-        content: 'User input',
-        timestamp,
-      };
-
-      const result = normalizer.normalize('user.message', payload);
-
-      expect(result).toEqual([]);
-    });
-  });
-
   describe('HITL events', () => {
     it('should emit CUSTOM with subtype hitl_pause on run.interrupted', () => {
       const payload: EventMap['run.interrupted'] = {

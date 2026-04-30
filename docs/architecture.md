@@ -80,7 +80,7 @@ Relevant code:
 
 ### 4. Event Bus and Triggers
 
-CTXMill uses a typed in-process event bus. It persists events, powers SSE broadcasting, feeds the learning pipeline, drives suspended-session matching, and can fire background runs through persisted event triggers.
+CTXMill uses a typed in-process event bus. It persists events, powers SSE broadcasting, exposes run/feedback signals for external learning modules, drives suspended-session matching, and can fire background runs through persisted event triggers.
 
 The TypedEventBus emits the following events:
 
@@ -97,10 +97,7 @@ The TypedEventBus emits the following events:
 - `run.interrupt_resolved` — HITL approval/rejection received
 - `session.paused` — Manual/compatibility session pause event
 - `run.resumed` — Suspended run resumed after event match
-- `learning.trace_captured` — Execution trace saved for reflection
-- `learning.insight_extracted` — Reflector produced new insights
-- `learning.knowledge_updated` — Knowledge store updated from learning
-- `feedback.received` — User thumbs up/down on a run
+- `feedback.received` — User thumbs up/down signal for external consumers
 - `agent.created` — New agent registered
 - `agent.deleted` — Agent removed
 - `client.connected` — SSE client connected
@@ -136,7 +133,7 @@ Relevant code:
 - [workspace/ensure.ts](/path/to/stablehand/packages/ctxmill/src/workspace/ensure.ts)
 - [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
 
-### 7. Knowledge and Learning
+### 7. Knowledge and External Learning Hooks
 
 The repo ships:
 
@@ -144,7 +141,7 @@ The repo ships:
 - An in-memory knowledge store
 - A Mem0-backed store
 - A simple context provider
-- A learning pipeline that stores traces, reflects on them, and writes insights back into knowledge
+- Event/webhook signals that external learning modules can consume and use to write curated knowledge back through the knowledge APIs
 
 The Docker preset currently selects `pgvector`, but the factory still falls back to the in-memory knowledge store because a pgvector-backed knowledge store is not wired into the shipped runtime yet.
 
@@ -152,8 +149,8 @@ Relevant code:
 
 - [knowledge/store.ts](/path/to/stablehand/packages/ctxmill/src/knowledge/store.ts)
 - [knowledge/mem0-store.ts](/path/to/stablehand/packages/ctxmill/src/knowledge/mem0-store.ts)
-- [learning/pipeline.ts](/path/to/stablehand/packages/ctxmill/src/learning/pipeline.ts)
-- [learning/event-subscriber.ts](/path/to/stablehand/packages/ctxmill/src/learning/event-subscriber.ts)
+- [events/bus.ts](/path/to/stablehand/packages/ctxmill/src/events/bus.ts)
+- [orchestrator/webhook-events.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/webhook-events.ts)
 - [config/presets.ts](/path/to/stablehand/packages/ctxmill/src/config/presets.ts)
 - [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
 
@@ -182,15 +179,14 @@ Relevant code:
 - [tool/builtin/a2ui-render.ts](/path/to/stablehand/packages/ctxmill/src/tool/builtin/a2ui-render.ts)
 - [ToolCallCard.tsx](/path/to/stablehand/packages/ui/src/components/chat/ToolCallCard.tsx)
 
-### 10. LLM Abstraction Layer
+### 10. Harness Model Configuration
 
-A provider-agnostic LLM interface used by the learning reflector and other subsystems that need direct LLM access outside of harness execution.
+Models are configured per agent/harness. Core CTXMill does not own a global LLM provider; direct model access belongs inside harnesses, tools, or external modules.
 
 Relevant code:
 
-- [llm/factory.ts](/path/to/stablehand/packages/ctxmill/src/llm/factory.ts)
-- [llm/langchain.ts](/path/to/stablehand/packages/ctxmill/src/llm/langchain.ts)
-- [llm/types.ts](/path/to/stablehand/packages/ctxmill/src/llm/types.ts)
+- [manifest/index.ts](/path/to/stablehand/packages/ctxmill/src/manifest/index.ts)
+- [harness/index.ts](/path/to/stablehand/packages/ctxmill/src/harness/index.ts)
 
 ### 11. Skills Loader
 
@@ -234,7 +230,7 @@ Relevant code:
 1. An event is emitted on the bus.
 2. The trigger manager matches persisted triggers for that event type.
 3. A background run is created for the target agent.
-4. The same run service handles execution, persistence, SSE, and learning side effects.
+4. The same run service handles execution, persistence, and SSE.
 
 ## Persistence Model
 
@@ -244,7 +240,6 @@ PostgreSQL is the current system of record for:
 - `conversations` — Chat conversation sessions per agent
 - `messages` — Individual messages within conversations
 - `knowledgeItems` — Agent-specific knowledge entries
-- `executionTraces` — Run execution trace data (steps, outcome)
 - `agentRuns` — Run lifecycle (status, timing, errors, session, pause/resume)
 - `eventStore` — Persisted event log
 - `suspendedRuns` — Runs waiting on external events
@@ -252,7 +247,6 @@ PostgreSQL is the current system of record for:
 - `eventTriggers` — Event-driven agent trigger rules
 - `agentVersions` — Agent manifest version history
 - `pendingInterrupts` — HITL approval requests in progress
-- `feedbackSignals` — User feedback on traces
 - `agentCheckpoints` — Sandbox checkpoint/resume state
 - `callbackOutbox` — Outbound webhook delivery queue with retry
 - `webhooks` — Registered webhook endpoints per agent
@@ -289,7 +283,7 @@ Relevant code:
 
 - Harnesses execute inside Docker containers (one container per run).
 - `pgvector` and `AGE` are not part of the active shipped knowledge path.
-- The learning pipeline is optional and is disabled when no global learning LLM key is configured.
+- Learning/reflection is external to core CTXMill; use webhooks/events plus knowledge APIs for that layer.
 - Suspend/resume is event-driven run resumption, not compute snapshot restoration.
 - Shared knowledge APIs are present, but the default in-memory fallback does not provide full shared-search behavior.
 

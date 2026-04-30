@@ -9,6 +9,8 @@ export interface HttpAuthConfig {
   type: 'bearer' | 'api-key';
   /** Name of the secret (resolved from environment or SecretProvider). */
   secretName: string;
+  /** Explicitly opt in to process.env fallback when no scoped secret exists. */
+  allowEnvFallback?: boolean;
 }
 
 /**
@@ -85,16 +87,18 @@ function buildZodObject(
  * Resolve an authentication secret by name.
  *
  * Looks in `secrets` (agent-scoped secrets passed in ToolContext-adjacent
- * config) first, then falls back to `process.env`.
+ * config) first. Ambient process.env fallback is disabled unless explicitly
+ * requested by endpoint config.
  */
 function resolveSecret(
   secretName: string,
   secrets?: Record<string, string>,
+  allowEnvFallback = false,
 ): string | undefined {
   if (secrets && secrets[secretName]) {
     return secrets[secretName];
   }
-  return process.env[secretName];
+  return allowEnvFallback ? process.env[secretName] : undefined;
 }
 
 /**
@@ -184,14 +188,16 @@ export class HTTPToolProvider implements ToolProvider {
       const secret = resolveSecret(
         ep.authentication.secretName,
         this.secrets,
+        ep.authentication.allowEnvFallback === true,
       );
-      if (secret) {
-        if (ep.authentication.type === 'bearer') {
-          headers['Authorization'] = `Bearer ${secret}`;
-        } else {
-          // api-key: use X-API-Key header
-          headers['X-API-Key'] = secret;
-        }
+      if (!secret) {
+        throw new Error(`HTTPToolProvider: missing secret "${ep.authentication.secretName}" for tool "${ep.name}"`);
+      }
+      if (ep.authentication.type === 'bearer') {
+        headers['Authorization'] = `Bearer ${secret}`;
+      } else {
+        // api-key: use X-API-Key header
+        headers['X-API-Key'] = secret;
       }
     }
 

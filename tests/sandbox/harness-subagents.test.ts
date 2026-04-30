@@ -60,8 +60,6 @@ function agentEventToProto(event: AgentEvent, seq: number, runId: string) {
   };
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
 /**
  * Create a mock harness that yields a configurable sequence of AgentEvents.
  * Simulates parent-to-sub-agent handoff patterns that different SDKs produce.
@@ -111,12 +109,30 @@ async function collectEvents(harness: MockHarness, config: MockHarnessRunConfig)
   return events;
 }
 
-// ── Test suites ──────────────────────────────────────────────────────────────
+function protoEnvelopes(events: AgentEvent[], runId: string) {
+  return events.map((event, idx) => agentEventToProto(event, idx + 1, runId));
+}
+
+async function collectProtoEnvelopes(harness: MockHarness, config: MockHarnessRunConfig) {
+  return protoEnvelopes(await collectEvents(harness, config), config.runId);
+}
+
+function expectSequentialProtos(
+  protos: Array<ReturnType<typeof agentEventToProto>>,
+  runId?: string,
+) {
+  for (let i = 0; i < protos.length; i++) {
+    expect(protos[i].sequence).toBe(BigInt(i + 1));
+    expect(protos[i].timestamp!.seconds).toBeGreaterThan(BigInt(0));
+    if (runId) expect(protos[i].runId).toBe(runId);
+  }
+  for (let i = 1; i < protos.length; i++) {
+    expect(protos[i].sequence).toBeGreaterThan(protos[i - 1].sequence);
+  }
+}
 
 describe('Harness-Native Sub-Agents', () => {
-  // ─────────────────────────────────────────────────────────────────────────
   // 1. Sub-agent events appear in the event stream
-  // ─────────────────────────────────────────────────────────────────────────
 
   describe('sub-agent events appear in the event stream', () => {
     it('should yield tool_call_start/end events from a simulated parent-to-sub-agent handoff', async () => {
@@ -200,8 +216,6 @@ describe('Harness-Native Sub-Agents', () => {
       for (const event of subAgentEvents) {
         seq++;
         const protoEnvelope = agentEventToProto(event, seq, runId);
-
-        // Every envelope should have the correct metadata
         expect(protoEnvelope.sequence).toBe(BigInt(seq));
         expect(protoEnvelope.runId).toBe(runId);
         expect(protoEnvelope.timestamp).toEqual(expect.any(Object));
@@ -227,8 +241,6 @@ describe('Harness-Native Sub-Agents', () => {
 
       const parentProto = agentEventToProto(parentEvent, 1, 'run-1');
       const subProto = agentEventToProto(subAgentEvent, 2, 'run-1');
-
-      // Both should have the same event case
       expect(parentProto.event?.event.case).toBe('toolCallStart');
       expect(subProto.event?.event.case).toBe('toolCallStart');
 
@@ -236,10 +248,7 @@ describe('Harness-Native Sub-Agents', () => {
       expect(parentProto.runId).toBe(subProto.runId);
     });
   });
-
-  // ─────────────────────────────────────────────────────────────────────────
   // 2. Container resource limits apply to combined workload
-  // ─────────────────────────────────────────────────────────────────────────
 
   describe('container resource limits apply to combined parent + sub-agent workload', () => {
     let docker: ReturnType<typeof createMockDocker>;
@@ -318,10 +327,7 @@ describe('Harness-Native Sub-Agents', () => {
       expect(nodeOpts).toBe(`NODE_OPTIONS=--max-old-space-size=${Math.floor(2048 * 0.9)}`);
     });
   });
-
-  // ─────────────────────────────────────────────────────────────────────────
   // 3. Sub-agent errors surface as error events
-  // ─────────────────────────────────────────────────────────────────────────
 
   describe('sub-agent errors surface as error events', () => {
     it('should propagate sub-agent error events through the stream', async () => {
@@ -415,51 +421,31 @@ describe('Harness-Native Sub-Agents', () => {
       expect(toolEnd.error).toBe('Permission denied in sub-agent sandbox');
     });
   });
-
-  // ─────────────────────────────────────────────────────────────────────────
   // 4. Each harness can be instantiated without orchestrator deps
-  // ─────────────────────────────────────────────────────────────────────────
 
   describe('each harness can be instantiated without orchestrator deps', () => {
-    it('should construct PIAgentHarness with no arguments', async () => {
-      const { PIAgentHarness } = await import(
-        '../../packages/ctxmill/src/harness/pi-agent.js'
-      );
-      const harness = new PIAgentHarness();
-      expect(harness.name).toBe('pi-agent');
-      expect(typeof harness.openSession).toBe('function');
-    });
+    async function constructHarness(name: 'pi-agent' | 'langgraph' | 'claude-agents'): Promise<AgentHarness> {
+      const constructors = {
+        'pi-agent': async () => new (await import('../../packages/ctxmill/src/harness/pi-agent.js')).PIAgentHarness(),
+        langgraph: async () => new (await import('../../packages/ctxmill/src/harness/langgraph.js')).LangGraphHarness(),
+        'claude-agents': async () => new (await import('../../packages/ctxmill/src/harness/claude-agents.js')).ClaudeAgentsHarness(),
+      };
+      return constructors[name]();
+    }
 
-    it('should construct LangGraphHarness with no arguments', async () => {
-      const { LangGraphHarness } = await import(
-        '../../packages/ctxmill/src/harness/langgraph.js'
-      );
-      const harness = new LangGraphHarness();
-      expect(harness.name).toBe('langgraph');
-      expect(typeof harness.openSession).toBe('function');
-    });
-
-    it('should construct ClaudeAgentsHarness with no arguments', async () => {
-      const { ClaudeAgentsHarness } = await import(
-        '../../packages/ctxmill/src/harness/claude-agents.js'
-      );
-      const harness = new ClaudeAgentsHarness();
-      expect(harness.name).toBe('claude-agents');
-      expect(typeof harness.openSession).toBe('function');
-    });
+    it.each(['pi-agent', 'langgraph', 'claude-agents'] as const)(
+      'should construct %s harness with no arguments',
+      async (name) => {
+        const harness = await constructHarness(name);
+        expect(harness.name).toBe(name);
+        expect(typeof harness.openSession).toBe('function');
+      },
+    );
 
     it('all 3 harnesses should implement the AgentHarness interface', async () => {
-      const [pi, lg, claude] = await Promise.all([
-        import('../../packages/ctxmill/src/harness/pi-agent.js'),
-        import('../../packages/ctxmill/src/harness/langgraph.js'),
-        import('../../packages/ctxmill/src/harness/claude-agents.js'),
-      ]);
-
-      const harnesses: AgentHarness[] = [
-        new pi.PIAgentHarness(),
-        new lg.LangGraphHarness(),
-        new claude.ClaudeAgentsHarness(),
-      ];
+      const harnesses = await Promise.all(
+        (['pi-agent', 'langgraph', 'claude-agents'] as const).map(constructHarness),
+      );
 
       const names = new Set(harnesses.map((h) => h.name));
       expect(names.size).toBe(3);
@@ -471,38 +457,9 @@ describe('Harness-Native Sub-Agents', () => {
       }
     });
   });
-
-  // ─────────────────────────────────────────────────────────────────────────
   // 5. Harness selection in runner.ts
-  // ─────────────────────────────────────────────────────────────────────────
 
   describe('harness selection in runner', () => {
-    // We test resolveHarness indirectly through the module's exports.
-    // The runner.ts module uses a switch statement to select harnesses by name.
-    it('should support "pi-agent" harness name', async () => {
-      const { PIAgentHarness } = await import(
-        '../../packages/ctxmill/src/harness/pi-agent.js'
-      );
-      const harness = new PIAgentHarness();
-      expect(harness.name).toBe('pi-agent');
-    });
-
-    it('should support "langgraph" harness name', async () => {
-      const { LangGraphHarness } = await import(
-        '../../packages/ctxmill/src/harness/langgraph.js'
-      );
-      const harness = new LangGraphHarness();
-      expect(harness.name).toBe('langgraph');
-    });
-
-    it('should support "claude-agents" harness name', async () => {
-      const { ClaudeAgentsHarness } = await import(
-        '../../packages/ctxmill/src/harness/claude-agents.js'
-      );
-      const harness = new ClaudeAgentsHarness();
-      expect(harness.name).toBe('claude-agents');
-    });
-
     it('runner.ts switch covers all 3 harness names', async () => {
       // Read the runner source and verify the switch statement covers all names.
       // This is a structural assertion — we import the module and verify the
@@ -534,10 +491,7 @@ describe('Harness-Native Sub-Agents', () => {
       }
     });
   });
-
-  // ─────────────────────────────────────────────────────────────────────────
   // 6. Proto event envelope preserves sub-agent context
-  // ─────────────────────────────────────────────────────────────────────────
 
   describe('proto event envelope preserves sub-agent context', () => {
     it('should assign monotonically increasing sequence numbers to all events including sub-agent tool calls', () => {
@@ -571,19 +525,7 @@ describe('Harness-Native Sub-Agents', () => {
       ];
 
       const runId = 'run-seq-test';
-      const protos = events.map((event, idx) =>
-        agentEventToProto(event, idx + 1, runId),
-      );
-
-      // Verify monotonically increasing sequence numbers
-      for (let i = 0; i < protos.length; i++) {
-        expect(protos[i].sequence).toBe(BigInt(i + 1));
-      }
-
-      // Verify strict ordering
-      for (let i = 1; i < protos.length; i++) {
-        expect(protos[i].sequence).toBeGreaterThan(protos[i - 1].sequence);
-      }
+      expectSequentialProtos(protoEnvelopes(events, runId), runId);
     });
 
     it('should set valid timestamps on all events', () => {
@@ -602,14 +544,7 @@ describe('Harness-Native Sub-Agents', () => {
         },
       ];
 
-      const protos = events.map((event, idx) =>
-        agentEventToProto(event, idx + 1, 'run-ts-test'),
-      );
-
-      for (const proto of protos) {
-        // Timestamp should have seconds > 0 (not the epoch)
-        expect(proto.timestamp!.seconds).toBeGreaterThan(BigInt(0));
-      }
+      expectSequentialProtos(protoEnvelopes(events, 'run-ts-test'));
     });
 
     it('should use the parent run_id for all events (not a sub-agent run_id)', () => {
@@ -634,14 +569,7 @@ describe('Harness-Native Sub-Agents', () => {
         { type: 'done' },
       ];
 
-      const protos = events.map((event, idx) =>
-        agentEventToProto(event, idx + 1, parentRunId),
-      );
-
-      // Every single proto envelope must carry the parent's run_id
-      for (const proto of protos) {
-        expect(proto.runId).toBe(parentRunId);
-      }
+      expectSequentialProtos(protoEnvelopes(events, parentRunId), parentRunId);
     });
 
     it('should preserve correct event case in proto for each event type', () => {
@@ -758,33 +686,12 @@ describe('Harness-Native Sub-Agents', () => {
       ];
 
       const runId = 'run-multi-step';
-      const protos = events.map((event, idx) =>
-        agentEventToProto(event, idx + 1, runId),
-      );
-
-      // All 9 events should be present with correct sequencing
+      const protos = protoEnvelopes(events, runId);
       expect(protos).toHaveLength(9);
-
-      // All use the same run_id
-      for (const p of protos) {
-        expect(p.runId).toBe(runId);
-      }
-
-      // Sequence numbers are 1..9
-      for (let i = 0; i < protos.length; i++) {
-        expect(protos[i].sequence).toBe(BigInt(i + 1));
-      }
-
-      // Timestamps should be non-null and valid
-      for (const p of protos) {
-        expect(p.timestamp!.seconds).toBeGreaterThan(BigInt(0));
-      }
+      expectSequentialProtos(protos, runId);
     });
   });
-
-  // ─────────────────────────────────────────────────────────────────────────
   // Integration: simulated full sub-agent flow through proto conversion
-  // ─────────────────────────────────────────────────────────────────────────
 
   describe('integration: full sub-agent flow through proto conversion', () => {
     it('should simulate a complete OpenAI Agents SDK handoff flow', async () => {
@@ -833,29 +740,9 @@ describe('Harness-Native Sub-Agents', () => {
 
       const harness = createMockHarness('claude-agents', handoffEvents);
       const config = createTestConfig({ runId: 'run-handoff-flow' });
-
-      // Simulate runner.ts loop
-      let seq = 0;
-      const protoEnvelopes: Array<ReturnType<typeof agentEventToProto>> = [];
-
-      for await (const event of harness.run(config)) {
-        seq++;
-        const envelope = agentEventToProto(event, seq, config.runId);
-        protoEnvelopes.push(envelope);
-      }
-
-      // All 8 events should be captured
+      const protoEnvelopes = await collectProtoEnvelopes(harness, config);
       expect(protoEnvelopes).toHaveLength(8);
-
-      // Verify monotonic sequence
-      for (let i = 0; i < protoEnvelopes.length; i++) {
-        expect(protoEnvelopes[i].sequence).toBe(BigInt(i + 1));
-      }
-
-      // Verify all use parent run_id
-      for (const envelope of protoEnvelopes) {
-        expect(envelope.runId).toBe('run-handoff-flow');
-      }
+      expectSequentialProtos(protoEnvelopes, 'run-handoff-flow');
 
       // Verify the done event has usage info
       const doneEnvelope = protoEnvelopes[protoEnvelopes.length - 1];
@@ -913,14 +800,7 @@ describe('Harness-Native Sub-Agents', () => {
 
       const harness = createMockHarness('langgraph', subGraphEvents);
       const config = createTestConfig({ runId: 'run-subgraph' });
-
-      let seq = 0;
-      const envelopes: Array<ReturnType<typeof agentEventToProto>> = [];
-
-      for await (const event of harness.run(config)) {
-        seq++;
-        envelopes.push(agentEventToProto(event, seq, config.runId));
-      }
+      const envelopes = await collectProtoEnvelopes(harness, config);
 
       expect(envelopes).toHaveLength(8);
 

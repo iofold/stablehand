@@ -39,6 +39,7 @@ type ArtifactRecord = {
 
 type ArtifactListEnvelope = {
   artifacts: ArtifactRecord[];
+  total?: number;
 };
 
 const createdAgentIds = new Set<string>();
@@ -272,10 +273,31 @@ describe('Artifact REST API Integration', () => {
     expect(response.status).toBe(404);
   });
 
-  it('requires agentId for list and returns an empty list for a fresh agent', async () => {
-    const missingAgentIdResponse = await fetch(ARTIFACTS_BASE);
-    expect(missingAgentIdResponse.status).toBe(400);
+  it('lists active artifacts across agents when no agentId is provided', async () => {
+    const fileContent = `global-list-${Date.now()}`;
+    const fileName = uniqueName('global-list') + '.txt';
+    const formData = new FormData();
+    formData.append('file', new Blob([fileContent], { type: 'text/plain' }), fileName);
+    formData.append('agentId', testAgentId);
+    formData.append('name', fileName);
 
+    const uploadResponse = await fetch(`${ARTIFACTS_BASE}/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    expect(uploadResponse.status).toBe(201);
+    const artifact: ArtifactRecord = await uploadResponse.json();
+    createdArtifactIds.add(artifact.id);
+
+    const globalListResponse = await fetch(`${ARTIFACTS_BASE}?limit=20&offset=0&search=${encodeURIComponent(fileName)}`);
+    expect(globalListResponse.status).toBe(200);
+
+    const globalList: ArtifactListEnvelope = await globalListResponse.json();
+    expect(globalList.total).toBeGreaterThanOrEqual(1);
+    expect(globalList.artifacts.some((item) => item.id === artifact.id)).toBe(true);
+  });
+
+  it('returns an empty list for a fresh agent', async () => {
     const emptyListResponse = await fetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(emptyAgentId)}`);
     expect(emptyListResponse.status).toBe(200);
 

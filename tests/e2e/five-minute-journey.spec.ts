@@ -26,12 +26,10 @@ import {
  *   thumbs-up                  - thumbs up button             (FeedbackButtons)
  *   thumbs-down                - thumbs down button           (FeedbackButtons)
  *   back-button                - back navigation              (AgentDetailPage)
- *   learning-dashboard         - learning dashboard section   (AgentDetailPage)
+ *   knowledge-snapshot         - knowledge snapshot section   (AgentDetailPage)
  *   knowledge-tab              - knowledge tab button         (AgentDetailPage)
  *   knowledge-explorer         - knowledge explorer section   (AgentDetailPage)
  *   knowledge-growth           - knowledge growth card        (AgentDetailPage)
- *   trace-stats                - trace stats card             (AgentDetailPage)
- *   feedback-summary           - feedback summary card        (AgentDetailPage)
  */
 
 test.describe('Five-Minute Journey (E2E-01)', () => {
@@ -145,14 +143,12 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     await page.goto(`/agents/${agentId}`);
     await page.waitForLoadState('networkidle');
 
-    // The learning dashboard should be visible on the overview tab
-    const learningDashboard = page.getByTestId('learning-dashboard');
-    await expect(learningDashboard).toBeVisible({ timeout: 10_000 });
+    // The knowledge snapshot should be visible on the overview tab
+    const knowledgeSnapshot = page.getByTestId('knowledge-snapshot');
+    await expect(knowledgeSnapshot).toBeVisible({ timeout: 10_000 });
 
-    // Verify sub-sections of the learning dashboard are present
+    // Verify sub-sections of the knowledge snapshot are present
     await expect(page.getByTestId('knowledge-growth')).toBeVisible();
-    await expect(page.getByTestId('trace-stats')).toBeVisible();
-    await expect(page.getByTestId('feedback-summary')).toBeVisible();
 
     // ---------------------------------------------------------------
     // 7. Knowledge tab — switch to knowledge and verify explorer

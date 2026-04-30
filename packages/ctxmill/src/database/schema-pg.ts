@@ -54,20 +54,6 @@ export const knowledgeItems = pgTable('knowledge_items', {
   agentCategoryIdx: index('idx_knowledge_items_agent_category').on(table.agentId, table.category),
 }));
 
-export const executionTraces = pgTable('execution_traces', {
-  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
-  agentId: text('agent_id').notNull(),
-  sessionId: text('session_id').notNull(),
-  taskDescription: text('task_description').notNull(),
-  steps: jsonb('steps').notNull().$type<unknown[]>(),
-  startedAt: bigint('started_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
-  completedAt: bigint('completed_at', { mode: 'number' }),
-  outcome: text('outcome'),
-}, (table) => ({
-  agentStartedIdx: index('idx_execution_traces_agent_started').on(table.agentId, table.startedAt),
-  sessionAgentUniqueIdx: uniqueIndex('idx_execution_traces_session_agent').on(table.sessionId, table.agentId),
-}));
-
 export const turns = pgTable('turns', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   sessionId: text('session_id').references(() => sandboxSessions.id),
@@ -147,7 +133,7 @@ export const agentVersions = pgTable('agent_versions', {
   changeNote: text('change_note'),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
-  agentVersionIdx: index('idx_agent_versions_agent_version').on(table.agentId, table.version),
+  agentVersionIdx: uniqueIndex('idx_agent_versions_agent_version').on(table.agentId, table.version),
 }));
 
 export const pendingInterrupts = pgTable('pending_interrupts', {
@@ -187,18 +173,6 @@ export const interruptResumeAttempts = pgTable('interrupt_resume_attempts', {
   interruptUniqueIdx: uniqueIndex('idx_interrupt_resume_attempts_interrupt').on(table.interruptId),
   agentStatusIdx: index('idx_interrupt_resume_attempts_agent_status').on(table.agentId, table.status),
   sessionIdx: index('idx_interrupt_resume_attempts_session').on(table.sessionId),
-}));
-
-export const feedbackSignals = pgTable('feedback_signals', {
-  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
-  traceId: text('trace_id').notNull(),
-  agentId: text('agent_id').notNull(),
-  source: text('source').notNull(),
-  type: text('type').notNull(),
-  value: jsonb('value').notNull().$type<Record<string, unknown>>(),
-  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
-}, (table) => ({
-  agentCreatedIdx: index('idx_feedback_signals_agent_created').on(table.agentId, table.createdAt),
 }));
 
 export const sandboxSessions = pgTable('sandbox_sessions', {

@@ -14,7 +14,6 @@ import type { DefaultToolRegistry } from '../../tool/registry.js';
 import type { ToolContext } from '../../tool/types.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { ArtifactStore } from '../../artifact/index.js';
-import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 import {
   createOrchestratorServiceImpl,
   DefaultOrchestratorToolRegistry,
@@ -27,7 +26,6 @@ export interface GrpcRouterOptions {
   eventBus: TypedEventBus;
   toolRegistry?: OrchestratorToolRegistry;
   interruptManager?: InterruptManager;
-  sessionManager?: SandboxSessionManager;
   toolExecutor?: LocalFunctionExecutor;
   toolDefinitionRegistry?: DefaultToolRegistry;
   repository?: DatabaseRepository;
@@ -35,7 +33,7 @@ export interface GrpcRouterOptions {
 }
 
 export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRouter) => void {
-  const { eventBus, interruptManager, sessionManager } = opts;
+  const { eventBus, interruptManager } = opts;
 
   const makeToolContext = (grpcCtx: ToolHandlerContext): ToolContext => ({
     agentId: grpcCtx.agentId,
@@ -49,7 +47,7 @@ export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRoute
 
   const toolRegistry = opts.toolRegistry
     ?? new DefaultOrchestratorToolRegistry(opts.toolDefinitionRegistry, makeToolContext);
-  registerDefaultToolHandlers(toolRegistry, { eventBus, interruptManager, sessionManager, repository: opts.repository });
+  registerDefaultToolHandlers(toolRegistry, { eventBus, interruptManager, repository: opts.repository });
 
   if (opts.toolExecutor) {
     for (const tool of opts.toolExecutor.list()) {

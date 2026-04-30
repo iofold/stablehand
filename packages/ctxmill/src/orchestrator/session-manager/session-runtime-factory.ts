@@ -8,7 +8,7 @@ import {
 } from '@ctxmill/proto/sandbox/v1';
 
 import type { DatabaseRepository } from '../../database/repository.js';
-import type { ContainerManager } from '../../sandbox/container-manager.js';
+import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspacePreparationService } from '../../sandbox/workspace-preparation.js';
 import type { AgentDefinition } from '../../types.js';
 import {
@@ -21,6 +21,7 @@ import {
   waitForContainerReady,
 } from './grpc-session-client.js';
 import { getRuntimeSandboxSecrets } from './runtime-sandbox-secrets.js';
+import { sandboxGrpcBaseUrl } from './sandbox-endpoint.js';
 import type {
   Logger,
   SessionRecord,
@@ -28,7 +29,6 @@ import type {
 } from './types.js';
 
 const TAG = '[SandboxSessionManager]';
-const GRPC_PORT = 50051;
 
 function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -37,7 +37,7 @@ function asStringArray(value: unknown): string[] | undefined {
 }
 
 export interface SessionRuntimeFactoryDeps {
-  containerManager: Pick<ContainerManager, 'createContainer' | 'startContainer'>;
+  containerManager: Pick<SandboxContainerManager, 'createContainer' | 'startContainer'>;
   db: Pick<DatabaseRepository, 'createSandboxSession'>;
   buildSandboxSecrets: (agentId: string) => Readonly<Record<string, string>>;
   resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[]) => ToolMetadata[];
@@ -126,9 +126,10 @@ export class SessionRuntimeFactory {
       secrets: sandboxSecrets,
     });
 
-    await this.deps.containerManager.startContainer(containerInfo.containerId);
+    const startedContainerInfo = await this.deps.containerManager.startContainer(containerInfo.containerId);
+    const reachableContainerInfo = startedContainerInfo?.containerName ? startedContainerInfo : containerInfo;
 
-    const baseUrl = `http://${containerInfo.containerName}:${GRPC_PORT}`;
+    const baseUrl = sandboxGrpcBaseUrl(reachableContainerInfo);
     this.deps.logger.debug(`${TAG} waiting for container at ${baseUrl}`);
     const { grpcClient } = await waitForContainerReady(baseUrl);
 
@@ -158,15 +159,15 @@ export class SessionRuntimeFactory {
       },
     });
 
-    this.deps.logger.debug(`${TAG} opening session on container ${containerInfo.containerName}`);
+    this.deps.logger.debug(`${TAG} opening session on container ${reachableContainerInfo.containerName}`);
     await retryGrpcCall(() => grpcClient.openSession(openReq), 5, 1000);
 
     const dbSession = await this.deps.db.createSandboxSession({
       id: sessionId,
       conversationId,
       agentId: effectiveAgentId,
-      containerName: containerInfo.containerName,
-      containerId: containerInfo.containerId,
+      containerName: reachableContainerInfo.containerName,
+      containerId: reachableContainerInfo.containerId,
       harnessName,
       status: 'ACTIVE',
     });
@@ -175,8 +176,8 @@ export class SessionRuntimeFactory {
       sessionId: dbSession.id,
       conversationId,
       agentId: effectiveAgentId,
-      containerName: containerInfo.containerName,
-      containerId: containerInfo.containerId,
+      containerName: reachableContainerInfo.containerName,
+      containerId: reachableContainerInfo.containerId,
       status: 'ACTIVE',
       harnessName,
       grpcClient,

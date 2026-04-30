@@ -4,10 +4,9 @@ import type { DatabaseRepository } from '../../../database/repository.js';
 import type { TypedEventBus } from '../../../events/bus.js';
 import type { HarnessRegistry } from '../../../harness/types.js';
 import type { KnowledgeStore } from '../../../knowledge/types.js';
-import type { LearningPipeline } from '../../../learning/types.js';
 import type { SecretProvider } from '../../../secrets/types.js';
 import type { SystemSettingsService } from '../../../settings/service.js';
-import type { ContainerManager } from '../../../sandbox/container-manager.js';
+import type { SandboxContainerManager } from '../../../sandbox/container-manager.js';
 import type { HttpAuthConfig, HttpEndpointConfig } from '../../../tool/providers/http.js';
 import type { DefaultToolRegistry } from '../../../tool/registry.js';
 import type { AgentResourceLimits } from '../../../types.js';
@@ -35,17 +34,16 @@ export interface AgentRouteOptions {
   sse: SSEManager;
   interrupts: InterruptManager;
   harnessRegistry: HarnessRegistry;
-  learningPipeline?: LearningPipeline;
   knowledgeStore?: KnowledgeStore;
   agentSessionService: AgentSessionService;
   eventBus?: TypedEventBus;
   dataDir?: string;
   secretProvider?: SecretProvider;
   toolRegistry?: DefaultToolRegistry;
-  containerManager?: Pick<ContainerManager, 'listManagedContainersWithLabels' | 'removeContainer' | 'stopContainer'>;
+  containerManager?: Pick<SandboxContainerManager, 'listManagedContainersWithLabels' | 'removeContainer' | 'stopContainer'>;
   sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
-  runStartupService?: RunStartupService;
+  runStartupService: RunStartupService;
 }
 
 export interface AgentSubRouteOptions extends AgentRouteOptions {
@@ -57,7 +55,6 @@ export interface AgentSubRouteOptions extends AgentRouteOptions {
 
 export interface SessionsRouteOptions {
   db: DatabaseRepository;
-  sessionManager?: SandboxSessionManager;
 }
 
 export type AgentRouteBody = {

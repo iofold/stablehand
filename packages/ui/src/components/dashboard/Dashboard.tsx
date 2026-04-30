@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Plus, Search } from 'lucide-react';
+import { AlertTriangle, Plus, Search } from 'lucide-react';
 import { AgentCard } from './AgentCard';
 import { AgentFormModal } from '@/components/agents/AgentFormModal';
 import { cn } from '@/lib/utils';
+import { countActiveSessions } from '@/lib/session-status';
 import type { Agent } from '@/stores/agents';
 import { EmptyDashboard } from './illustrations/EmptyDashboard';
 import { HoverGlow } from './MicroInteractions';
@@ -10,6 +11,7 @@ import { HoverGlow } from './MicroInteractions';
 interface DashboardProps {
   agents: Agent[];
   loading: boolean;
+  error?: string | null;
   onFilteredCountChange?: (count: number) => void;
 }
 
@@ -64,7 +66,7 @@ function SkeletonCard() {
   );
 }
 
-export function Dashboard({ agents, loading, onFilteredCountChange }: DashboardProps) {
+export function Dashboard({ agents, loading, error, onFilteredCountChange }: DashboardProps) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -75,7 +77,7 @@ export function Dashboard({ agents, loading, onFilteredCountChange }: DashboardP
       const matchesSearch = agent.name.toLowerCase().includes(searchQuery.toLowerCase());
       
       let matchesStatus = true;
-      const activeOrPaused = (agent.sessionsByStatus?.ACTIVE ?? 0) + (agent.sessionsByStatus?.PAUSED ?? 0) + (agent.sessionsByStatus?.RESTORING ?? 0);
+      const activeOrPaused = countActiveSessions(agent.sessionsByStatus);
       if (statusFilter === 'running') {
         matchesStatus = agent.status === 'running' || agent.status === 'booting' || activeOrPaused > 0;
       } else if (statusFilter === 'error') {
@@ -98,6 +100,19 @@ export function Dashboard({ agents, loading, onFilteredCountChange }: DashboardP
         {[1, 2, 3].map((id) => (
           <SkeletonCard key={id} />
         ))}
+      </div>
+    );
+  }
+
+  if (error && agents.length === 0) {
+    return (
+      <div role="alert" className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
+        <div className="rounded-2xl bg-red-500/10 border border-red-500/30 p-10 max-w-md">
+          <AlertTriangle className="mx-auto mb-5 h-10 w-10 text-red-300" />
+          <h2 className="text-xl font-semibold text-red-100">Failed to load agents</h2>
+          <p className="mt-2.5 text-sm text-red-200/80 leading-relaxed">{error}</p>
+          <p className="mt-2 text-xs text-surface-400">The dashboard is unavailable until the API responds.</p>
+        </div>
       </div>
     );
   }

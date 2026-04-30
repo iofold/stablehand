@@ -134,21 +134,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // ── 5. execution_traces ────────────────────────────────────────────
-  await sql`
-    CREATE TABLE IF NOT EXISTS execution_traces (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL,
-      session_id TEXT NOT NULL,
-      task_description TEXT NOT NULL,
-      steps JSONB NOT NULL,
-      started_at BIGINT NOT NULL,
-      completed_at BIGINT,
-      outcome TEXT
-    )
-  `;
-
-  // ── 6. sandbox_sessions (→ conversations, agents) ──────────────────
+  // ── 5. sandbox_sessions (→ conversations, agents) ──────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS sandbox_sessions (
       id TEXT PRIMARY KEY NOT NULL,
@@ -287,19 +273,6 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // ── 15. feedback_signals ───────────────────────────────────────────
-  await sql`
-    CREATE TABLE IF NOT EXISTS feedback_signals (
-      id TEXT PRIMARY KEY NOT NULL,
-      trace_id TEXT NOT NULL,
-      agent_id TEXT NOT NULL,
-      source TEXT NOT NULL,
-      type TEXT NOT NULL,
-      value JSONB NOT NULL,
-      created_at BIGINT NOT NULL
-    )
-  `;
-
   // ── 15. agent_checkpoints (→ sandbox_sessions) ─────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS agent_checkpoints (
@@ -422,10 +395,6 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // knowledge_items
   await sql`CREATE INDEX IF NOT EXISTS idx_knowledge_items_agent_category ON knowledge_items(agent_id, category)`;
 
-  // execution_traces
-  await sql`CREATE INDEX IF NOT EXISTS idx_execution_traces_agent_started ON execution_traces(agent_id, started_at)`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_traces_session_agent ON execution_traces(session_id, agent_id)`;
-
   // sandbox_sessions
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_conversation ON sandbox_sessions(conversation_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_agent ON sandbox_sessions(agent_id)`;
@@ -453,7 +422,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_event_type ON event_triggers(event_type)`;
 
   // agent_versions
-  await sql`CREATE INDEX IF NOT EXISTS idx_agent_versions_agent_version ON agent_versions(agent_id, version)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_versions_agent_version ON agent_versions(agent_id, version)`;
 
   // pending_interrupts
   await sql`CREATE INDEX IF NOT EXISTS idx_interrupts_agent_session ON pending_interrupts(agent_session_id)`;
@@ -464,9 +433,6 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_interrupt_resume_attempts_interrupt ON interrupt_resume_attempts(interrupt_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_interrupt_resume_attempts_agent_status ON interrupt_resume_attempts(agent_id, status)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_interrupt_resume_attempts_session ON interrupt_resume_attempts(session_id)`;
-
-  // feedback_signals
-  await sql`CREATE INDEX IF NOT EXISTS idx_feedback_signals_agent_created ON feedback_signals(agent_id, created_at)`;
 
   // agent_checkpoints
   await sql`CREATE INDEX IF NOT EXISTS idx_checkpoints_session_id ON agent_checkpoints(session_id)`;

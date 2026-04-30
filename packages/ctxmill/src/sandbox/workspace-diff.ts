@@ -3,12 +3,12 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { SystemSettingsService } from '../settings/service.js';
 import { DEFAULT_MAX_WORKSPACE_TAR_BYTES } from '../settings/service.js';
-import type { ContainerManager } from './container-manager.js';
+import type { SandboxContainerManager } from './container-manager.js';
 
 // ── Public interfaces ─────────────────────────────────────────
 
 export interface WorkspaceDiffOptions {
-  containerManager: ContainerManager;
+  containerManager: SandboxContainerManager;
   /** Directory for storing checkpoint data. Default: 'data/checkpoints' */
   checkpointDir?: string;
   settingsService?: SystemSettingsService;
@@ -20,7 +20,7 @@ const TAG = '[WorkspaceDiff]';
 const WORKSPACE_TOMBSTONES_FILE = 'workspace-tombstones.json';
 
 export class WorkspaceDiffService {
-  private readonly containerManager: ContainerManager;
+  private readonly containerManager: SandboxContainerManager;
   private readonly checkpointDir: string;
   private readonly settingsService: SystemSettingsService | undefined;
 

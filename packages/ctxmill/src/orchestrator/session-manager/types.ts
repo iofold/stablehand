@@ -3,7 +3,7 @@ import { HarnessService } from '@ctxmill/proto/sandbox/v1';
 
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
-import type { ContainerManager } from '../../sandbox/container-manager.js';
+import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 import type { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { Message } from '../../types.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
@@ -106,7 +106,7 @@ export class AsyncChannel<T> {
 }
 
 export interface SandboxSessionManagerDeps {
-  containerManager: ContainerManager;
+  containerManager: SandboxContainerManager;
   db: DatabaseRepository;
   lifecyclePolicy: ContainerLifecyclePolicy;
   eventBus?: TypedEventBus;

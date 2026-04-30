@@ -1,12 +1,11 @@
 import type { CTXMillConfig, ResolvedConfig } from './types.js';
 import { resolveConfig } from './resolve.js';
-import { createKnowledgeStoreFromConfig, createLLMProviderFromConfig } from './factories.js';
+import { createKnowledgeStoreFromConfig } from './factories.js';
 import { createDatabase, type DatabaseConnection } from '../database/connection.js';
 import { runMigrations } from '../database/migrations.js';
 import { DatabaseRepository } from '../database/repository.js';
 import type { KnowledgeStore, ContextProvider } from '../knowledge/types.js';
 import { InMemoryContextProvider } from '../knowledge/context.js';
-import type { LLMProvider } from '../llm/types.js';
 import { LocalFunctionExecutor } from '../tool/executor.js';
 import { DefaultHarnessRegistry } from '../harness/registry.js';
 import { LangGraphHarness } from '../harness/langgraph.js';
@@ -14,13 +13,9 @@ import { ClaudeAgentsHarness } from '../harness/claude-agents.js';
 import { PIAgentHarness } from '../harness/pi-agent.js';
 import type { HarnessRegistry } from '../harness/types.js';
 import { TypedEventBus } from '../events/bus.js';
-import { SimpleReflector } from '../learning/reflector.js';
-import type { LearningPipeline } from '../learning/types.js';
-import { DefaultLearningPipeline } from '../learning/pipeline.js';
 import { SSEManager } from '../orchestrator/sse.js';
 import { SSEBroadcaster } from '../orchestrator/sse-broadcaster.js';
 import { InterruptManager } from '../orchestrator/interrupt.js';
-import { LearningEventSubscriber } from '../learning/event-subscriber.js';
 import { SuspendedSessionMatcher } from '../orchestrator/suspended-session-matcher.js';
 import type { ResumeMatchResult } from '../orchestrator/suspended-session-matcher.js';
 import { EventTriggerManager, type TriggerRunCallback } from '../events/trigger-manager.js';
@@ -31,7 +26,8 @@ import { RunStartupService } from '../orchestrator/run-startup-service.js';
 import { CachedPostgresSecretProvider } from '../secrets/postgres-provider.js';
 import { deriveKey } from '../secrets/crypto.js';
 import type { SecretProvider } from '../secrets/types.js';
-import { ContainerManager } from '../sandbox/container-manager.js';
+import { ContainerManager, type SandboxContainerManager } from '../sandbox/container-manager.js';
+import { KubernetesContainerManager } from '../sandbox/kubernetes-container-manager.js';
 import { WorkspaceDiffService } from '../sandbox/workspace-diff.js';
 import { SystemSettingsService } from '../settings/service.js';
 import { ContainerLifecyclePolicy } from '../orchestrator/container-lifecycle-policy.js';
@@ -53,15 +49,12 @@ export interface AppContainer {
   db: DatabaseRepository;
   knowledgeStore: KnowledgeStore;
   contextProvider: ContextProvider;
-  llmProvider: LLMProvider | null;
   toolExecutor: LocalFunctionExecutor;
   toolRegistry: DefaultToolRegistry;
   eventBus: TypedEventBus;
-  learningPipeline?: LearningPipeline;
   sseManager: SSEManager;
   sseBroadcaster: SSEBroadcaster;
   interruptManager: InterruptManager;
-  learningSubscriber?: LearningEventSubscriber;
   suspendedSessionMatcher: SuspendedSessionMatcher;
   triggerManager: EventTriggerManager;
   agentSessionService: AgentSessionService;
@@ -70,8 +63,8 @@ export interface AppContainer {
   secretProvider: SecretProvider;
   callbackDispatcher: CallbackDispatcher;
   runStartupService: RunStartupService;
-  /** Container manager for sandbox container lifecycle. */
-  containerManager: ContainerManager;
+  /** Container manager for sandbox lifecycle. */
+  containerManager: SandboxContainerManager;
   workspaceDiffService: WorkspaceDiffService;
   settingsService: SystemSettingsService;
   lifecyclePolicy: ContainerLifecyclePolicy;
@@ -232,6 +225,21 @@ export function registerCallbackSubscriptions(
       console.error('[CallbackDispatcher] failed to enqueue message.committed callback:', err);
     }
   });
+
+  eventBus.on('feedback.received', async (payload) => {
+    try {
+      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'feedback.received', {
+        feedbackId: payload.feedbackId,
+        turnId: payload.turnId,
+        agentId: payload.agentId,
+        type: payload.type,
+        messageId: payload.messageId,
+        timestamp: payload.timestamp,
+      }, payload.turnId);
+    } catch (err) {
+      console.error('[CallbackDispatcher] failed to enqueue feedback.received callback:', err);
+    }
+  });
 }
 
 interface TriggerRunCallbackDeps {
@@ -260,7 +268,7 @@ export function createTriggerRunCallback({
     });
 
     // Fire-and-forget — AgentSessionService handles SSE broadcasting, run.text_chunk events,
-    // message persistence, session completion, and learning traces.
+    // message persistence, and session completion.
     void runStartupService.launchPreparedRun(start, agentId, { rethrowOnError: true }).then(() => {
       // Emit trigger.fired event after successful run while preserving the cascade depth
       // that EventTriggerManager already computed for this triggered run.
@@ -314,11 +322,6 @@ export async function createContainer(
   const knowledgeStore = createKnowledgeStoreFromConfig(config, dataDir);
   const contextProvider = new InMemoryContextProvider();
 
-  // ── LLM ──────────────────────────────────────────────────
-  // Global LLM provider is only used for the learning reflector.
-  // Agent harnesses resolve their own keys from the secrets pipeline.
-  const llmProvider = createLLMProviderFromConfig(config);
-
   // ── Tools ───────────────────────────────────────────────
   const toolExecutor = new LocalFunctionExecutor();
   // Register built-in tools so resolveToolsForAgent() can find them.
@@ -371,16 +374,6 @@ export async function createContainer(
     },
   });
 
-  // ── Learning ────────────────────────────────────────────
-  // Learning pipeline is optional — disabled when no global LLM key is configured.
-  let learningPipeline: LearningPipeline | undefined;
-  if (llmProvider) {
-    const reflector = new SimpleReflector(llmProvider);
-    learningPipeline = new DefaultLearningPipeline(reflector, knowledgeStore, db, eventBus);
-  } else {
-    console.warn('[Container] Learning pipeline disabled — no global LLM API key configured');
-  }
-
   // ── SSE + Interrupts ───────────────────────────────────
   const sseManager = new SSEManager(eventBus);
   const sseBroadcaster = new SSEBroadcaster(sseManager, eventBus);
@@ -392,11 +385,6 @@ export async function createContainer(
   await interruptManager.loadFromDb();
 
   let sessionManagerRef: SandboxSessionManagerImpl | null = null;
-
-  // ── Event Subscribers ─────────────────────────────────
-  const learningSubscriber = learningPipeline
-    ? new LearningEventSubscriber(learningPipeline, eventBus, db)
-    : undefined;
 
   // ── Suspend/Resume ──────────────────────────────────────
   const suspendedSessionMatcher = new SuspendedSessionMatcher(eventBus, db, async (condition, triggerEvent): Promise<ResumeMatchResult> => {
@@ -456,21 +444,30 @@ export async function createContainer(
   );
 
   // ── Sandbox Run Service ─────────────────────────────────
-  const containerManager = new ContainerManager({
-    maxGlobalContainers: startupSettings.maxGlobalContainers,
-    queueTimeoutMs: startupSettings.queueTimeoutMs,
-    defaultCpus: startupSettings.defaultCpus,
-    defaultMemoryMb: startupSettings.defaultMemoryMb,
-    defaultPidsLimit: startupSettings.defaultPidsLimit,
-    defaultTimeoutSec: startupSettings.defaultTimeoutSec,
-  });
-  // Ensure the Docker bridge network exists before any containers are created.
-  // This is best-effort — if Docker is not available (e.g. in tests), the
-  // container manager will still function; sandbox runs will fail at runtime.
+  const sandboxRuntime = (process.env.CTXMILL_SANDBOX_RUNTIME ?? 'docker').toLowerCase();
+  const containerManager: SandboxContainerManager =
+    sandboxRuntime === 'kubernetes' || sandboxRuntime === 'k8s'
+      ? new KubernetesContainerManager({
+        maxGlobalContainers: startupSettings.maxGlobalContainers,
+        queueTimeoutMs: startupSettings.queueTimeoutMs,
+        defaultCpus: startupSettings.defaultCpus,
+        defaultMemoryMb: startupSettings.defaultMemoryMb,
+        defaultPidsLimit: startupSettings.defaultPidsLimit,
+        defaultTimeoutSec: startupSettings.defaultTimeoutSec,
+      })
+      : new ContainerManager({
+        maxGlobalContainers: startupSettings.maxGlobalContainers,
+        queueTimeoutMs: startupSettings.queueTimeoutMs,
+        defaultCpus: startupSettings.defaultCpus,
+        defaultMemoryMb: startupSettings.defaultMemoryMb,
+        defaultPidsLimit: startupSettings.defaultPidsLimit,
+        defaultTimeoutSec: startupSettings.defaultTimeoutSec,
+      });
+  // Docker needs an explicit bridge network. Kubernetes supplies pod networking.
   try {
     await containerManager.ensureNetwork();
   } catch (err) {
-    console.warn('[Container] Docker network setup failed (sandbox runs will not work):', (err as Error).message);
+    console.warn(`[Container] ${sandboxRuntime} sandbox runtime setup failed (sandbox runs will not work):`, (err as Error).message);
   }
   const workspaceDiffService = new WorkspaceDiffService({
     containerManager,
@@ -620,7 +617,6 @@ export async function createContainer(
     sse: sseManager,
     db,
     sessionManager: realSessionManager,
-    learningPipeline,
     eventBus,
     sessionTurnService,
     toolExecutor,
@@ -648,15 +644,12 @@ export async function createContainer(
     db,
     knowledgeStore,
     contextProvider,
-    llmProvider,
     toolExecutor,
     toolRegistry,
     eventBus,
-    learningPipeline,
     sseManager,
     sseBroadcaster,
     interruptManager,
-    learningSubscriber,
     suspendedSessionMatcher,
     triggerManager,
     agentSessionService,

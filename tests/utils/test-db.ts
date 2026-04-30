@@ -29,6 +29,8 @@ const ALL_TABLES = [
   'scheduled_events',
   'suspended_sessions',
   'event_store',
+  // Legacy tables removed from the runtime schema; keep them in test cleanup so
+  // old local databases do not block fresh migrations.
   'feedback_signals',
   'execution_traces',
   'messages',

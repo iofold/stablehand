@@ -24,7 +24,6 @@ describe('Failure injection — rollback and cleanup', () => {
           {
             preset: 'docker',
             database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
-            llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
           },
           dataDir,
         );
@@ -49,6 +48,7 @@ describe('Failure injection — rollback and cleanup', () => {
       agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
       sessionManager: container.sessionManager,
+      runStartupService: container.runStartupService,
       dataDir,
     });
 

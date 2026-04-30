@@ -20,15 +20,10 @@ describe('Session API lifecycle', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-session-test-'));
 
     container = await createContainer(
-        {
-          preset: 'docker',
-          database: {
-            url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
-        },
-        llm: {
-          provider: 'anthropic',
-          model: 'claude-sonnet-4-6',
-          apiKey: 'test-key-not-used',
+      {
+        preset: 'docker',
+        database: {
+          url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
         },
       },
       dataDir,
@@ -39,6 +34,7 @@ describe('Session API lifecycle', () => {
       agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
       sessionManager: container.sessionManager,
+      runStartupService: container.runStartupService,
       dataDir,
     });
 

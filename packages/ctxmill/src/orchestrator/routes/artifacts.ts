@@ -42,11 +42,12 @@ export async function artifactRoutes(
   };
 
   app.get('/', async (req, reply) => {
-    const { agentId, sessionId, limit, offset } = req.query as {
+    const { agentId, sessionId, limit, offset, search } = req.query as {
       agentId?: string;
       sessionId?: string;
       limit?: string;
       offset?: string;
+      search?: string;
     };
 
     if (sessionId) {
@@ -55,7 +56,12 @@ export async function artifactRoutes(
     }
 
     if (!agentId) {
-      return reply.status(400).send({ error: 'agentId or sessionId is required' });
+      const result = await repository.listAllArtifacts(
+        Number(limit) || 100,
+        Number(offset) || 0,
+        search,
+      );
+      return reply.send(result);
     }
 
     const artifacts = await repository.listArtifactsForAgent(

@@ -9,7 +9,6 @@ interface RunTreeLike {
   end(outputs?: Record<string, unknown>): Promise<void>;
   patchRun(): Promise<void>;
   createChild(config: Record<string, unknown>): RunTreeLike;
-  token_usage?: LangSmithTokenUsage;
 }
 
 export interface PiTracingContext {
@@ -94,6 +93,13 @@ export async function createPiLangSmithTracer(
           run_type: 'chain',
           inputs: { agentId, conversationId },
           project_name: process.env.LANGSMITH_PROJECT || 'ctxmill',
+          extra: {
+            metadata: {
+              agentId,
+              conversationId,
+              ls_integration: 'ctxmill-pi-agent',
+            },
+          },
           client,
         }) as unknown as RunTreeLike;
         trackOperation(rootRun.postRun()).catch((err: unknown) => {
@@ -147,8 +153,7 @@ export async function createPiLangSmithTracer(
       }
 
       if (data?.usage) {
-        span.token_usage = data.usage;
-        outputs.usage = data.usage;
+        outputs.usage_metadata = data.usage;
       }
 
       llmTextBuffer = '';
@@ -156,7 +161,7 @@ export async function createPiLangSmithTracer(
       currentProvider = undefined;
       currentApi = undefined;
 
-      const endPayload = Object.keys(outputs).length > 0 ? { outputs } : undefined;
+      const endPayload = Object.keys(outputs).length > 0 ? outputs : undefined;
       await trackOperation(endAndPatch(span, endPayload)).catch((err: unknown) => {
         console.warn('[pi-langsmith] Failed to end llm span:', err);
       });
@@ -312,7 +317,7 @@ export async function createPiLangSmithTracer(
           const toolCallId = typeof piEvent.toolCallId === 'string' ? piEvent.toolCallId : 'unknown';
           const toolSpan = activeToolSpans.get(toolCallId);
           if (toolSpan) {
-            await trackOperation(endAndPatch(toolSpan, { outputs: { result: piEvent.result } })).catch((err: unknown) => {
+            await trackOperation(endAndPatch(toolSpan, { result: piEvent.result })).catch((err: unknown) => {
               console.warn('[pi-langsmith] Failed to end tool span:', err);
             });
             activeToolSpans.delete(toolCallId);
@@ -344,13 +349,13 @@ export async function createPiLangSmithTracer(
               outputs.stopReason = messageData.stopReason;
             }
             if (usage) {
-              outputs.usage = usage;
+              outputs.usage_metadata = usage;
             }
             if (Array.isArray(piEvent.toolResults)) {
               outputs.toolResults = piEvent.toolResults;
             }
 
-            const endPayload = Object.keys(outputs).length > 0 ? { outputs } : undefined;
+            const endPayload = Object.keys(outputs).length > 0 ? outputs : undefined;
             await trackOperation(endAndPatch(currentTurnRun, endPayload)).catch((err: unknown) => {
               console.warn('[pi-langsmith] Failed to end turn run:', err);
             });
@@ -372,7 +377,7 @@ export async function createPiLangSmithTracer(
             currentTurnRun = null;
           }
           if (rootRun) {
-            await trackOperation(endAndPatch(rootRun, { outputs: { status: 'completed' } })).catch((err: unknown) => {
+            await trackOperation(endAndPatch(rootRun, { status: 'completed' })).catch((err: unknown) => {
               console.warn('[pi-langsmith] Failed to end root run:', err);
             });
             rootRun = null;
@@ -413,7 +418,7 @@ export async function createPiLangSmithTracer(
         currentTurnRun = null;
       }
       if (rootRun) {
-        await trackOperation(endAndPatch(rootRun, { outputs: { status: 'flushed' } })).catch((err: unknown) => {
+        await trackOperation(endAndPatch(rootRun, { status: 'flushed' })).catch((err: unknown) => {
           console.warn('[pi-langsmith] Failed to flush root run:', err);
         });
         rootRun = null;

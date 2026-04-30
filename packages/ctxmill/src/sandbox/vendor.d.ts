@@ -15,6 +15,9 @@ declare module 'dockerode' {
 
   interface ContainerInspectInfo {
     State: { Status: string; ExitCode: number; Running: boolean };
+    Name?: string;
+    Config?: { Labels?: Record<string, string> };
+    NetworkSettings?: { Networks?: Record<string, { IPAddress?: string; [key: string]: unknown }> };
     [key: string]: unknown;
   }
 

@@ -11,10 +11,6 @@ type MessageInsert = typeof pgSchema.messages.$inferInsert;
 type MessageSelect = typeof pgSchema.messages.$inferSelect;
 type KnowledgeInsert = typeof pgSchema.knowledgeItems.$inferInsert;
 type KnowledgeSelect = typeof pgSchema.knowledgeItems.$inferSelect;
-type TraceInsert = typeof pgSchema.executionTraces.$inferInsert;
-type TraceSelect = typeof pgSchema.executionTraces.$inferSelect;
-type FeedbackInsert = typeof pgSchema.feedbackSignals.$inferInsert;
-type FeedbackSelect = typeof pgSchema.feedbackSignals.$inferSelect;
 type TurnInsert = typeof pgSchema.turns.$inferInsert;
 type TurnSelect = typeof pgSchema.turns.$inferSelect;
 type SuspendedSessionInsert = typeof pgSchema.suspendedSessions.$inferInsert;
@@ -46,17 +42,6 @@ const sanitizeOptionalDbText = <T extends string | null | undefined>(value: T, c
   if (value == null) return value;
   return sanitizeDbText(value, context) as T;
 };
-
-export interface Checkpoint {
-  id: string;
-  sessionId: string;
-  agentId: string;
-  version: number;
-  checkpointData: Record<string, unknown>;
-  workspaceRef: string | null;
-  suspendReason: string | null;
-  createdAt: Date;
-}
 
 export interface CheckpointV2 {
   id: string;
@@ -146,7 +131,7 @@ export class DatabaseRepository {
 
   /**
    * Delete an agent and all its related data in a single transaction.
-   * Order: messages -> conversations -> runs -> traces -> feedback -> knowledge -> events -> agent
+   * Order: messages -> conversations -> runs -> knowledge -> events -> agent
    */
   async deleteAgentCascade(agentId: string): Promise<void> {
     await this.db.transaction(async (tx: any) => {
@@ -175,8 +160,6 @@ export class DatabaseRepository {
       await tx.delete(this.schema.turns).where(eq(this.schema.turns.agentId, agentId));
       await tx.delete(this.schema.sandboxSessions).where(eq(this.schema.sandboxSessions.agentId, agentId));
       await tx.delete(this.schema.conversations).where(eq(this.schema.conversations.agentId, agentId));
-      await tx.delete(this.schema.executionTraces).where(eq(this.schema.executionTraces.agentId, agentId));
-      await tx.delete(this.schema.feedbackSignals).where(eq(this.schema.feedbackSignals.agentId, agentId));
       await tx.delete(this.schema.knowledgeItems).where(eq(this.schema.knowledgeItems.agentId, agentId));
       await tx.delete(this.schema.eventStore).where(eq(this.schema.eventStore.agentId, agentId));
       await tx.delete(this.schema.eventTriggers).where(eq(this.schema.eventTriggers.agentId, agentId));
@@ -341,60 +324,6 @@ export class DatabaseRepository {
     });
   }
 
-  // ── Execution Traces ────────────────────────────────────
-
-  async saveTrace(data: TraceInsert): Promise<TraceSelect> {
-    const sanitizedData = sanitizeTypedDbValue(data, 'executionTraces.upsert');
-    const [trace] = await this.db
-      .insert(this.schema.executionTraces)
-      .values(sanitizedData)
-      .onConflictDoUpdate({
-        target: [this.schema.executionTraces.sessionId, this.schema.executionTraces.agentId],
-        set: {
-          steps: sanitizedData.steps,
-          completedAt: sanitizedData.completedAt,
-          outcome: sanitizedData.outcome,
-        },
-      })
-      .returning();
-    if (!trace) {
-      throw new Error('Expected insert to return a row but got undefined');
-    }
-    return trace;
-  }
-
-  async getTraces(agentId: string): Promise<TraceSelect[]> {
-    return this.db.query.executionTraces.findMany({
-      where: eq(this.schema.executionTraces.agentId, agentId),
-    });
-  }
-
-  async getRecentTraces(agentId: string, limit = 20): Promise<TraceSelect[]> {
-    return this.db
-      .select()
-      .from(this.schema.executionTraces)
-      .where(eq(this.schema.executionTraces.agentId, agentId))
-      .orderBy(sql`${this.schema.executionTraces.startedAt} DESC`)
-      .limit(limit);
-  }
-
-  // ── Feedback Signals ────────────────────────────────────
-
-  async saveFeedback(data: FeedbackInsert): Promise<FeedbackSelect> {
-    const sanitizedData = sanitizeTypedDbValue(data, 'feedbackSignals.insert');
-    const [feedback] = await this.db.insert(this.schema.feedbackSignals).values(sanitizedData).returning();
-    if (!feedback) {
-      throw new Error('Expected insert to return a row but got undefined');
-    }
-    return feedback;
-  }
-
-  async getFeedbackForTrace(traceId: string): Promise<FeedbackSelect[]> {
-    return this.db.query.feedbackSignals.findMany({
-      where: eq(this.schema.feedbackSignals.traceId, traceId),
-    });
-  }
-
   async createTurn(data: TurnInsert): Promise<TurnSelect> {
     const sanitizedData = sanitizeTypedDbValue(data, 'turns.insert');
     const [turn] = await this.db.insert(this.schema.turns).values(sanitizedData).returning();
@@ -502,133 +431,6 @@ export class DatabaseRepository {
       .groupBy(this.schema.knowledgeItems.category);
   }
 
-  // ── Trace Analysis ─────────────────────────────────────
-
-  async getTraceWithFeedback(traceId: string): Promise<{
-    trace: TraceSelect | undefined;
-    feedback: FeedbackSelect[];
-  }> {
-    const trace = await this.db.query.executionTraces.findFirst({
-      where: eq(this.schema.executionTraces.id, traceId),
-    });
-    const feedback = await this.db.query.feedbackSignals.findMany({
-      where: eq(this.schema.feedbackSignals.traceId, traceId),
-    });
-    return { trace, feedback };
-  }
-
-  async getTracesForAgent(
-    agentId: string,
-    options: { limit?: number; offset?: number; outcome?: string } = {},
-  ): Promise<{ traces: TraceSelect[]; total: number }> {
-    const { limit = 20, offset = 0, outcome } = options;
-
-    const whereClause = outcome
-      ? sql`${this.schema.executionTraces.agentId} = ${agentId} AND ${this.schema.executionTraces.outcome} = ${outcome}`
-      : eq(this.schema.executionTraces.agentId, agentId);
-
-    const countRows = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(this.schema.executionTraces)
-      .where(whereClause);
-
-    const traces = await this.db
-      .select()
-      .from(this.schema.executionTraces)
-      .where(whereClause)
-      .orderBy(sql`${this.schema.executionTraces.startedAt} DESC`)
-      .limit(limit)
-      .offset(offset);
-
-    return { traces, total: countRows[0]?.count ?? 0 };
-  }
-
-  async getTraceStats(agentId: string): Promise<{
-    total: number;
-    byOutcome: Record<string, number>;
-    avgSteps: number;
-    recentCount: number;
-  }> {
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-
-    // Aggregate by outcome in SQL
-    const outcomeRows = await this.db
-      .select({
-        outcome: sql<string>`coalesce(${this.schema.executionTraces.outcome}, 'unknown')`.as('outcome'),
-        count: sql<number>`count(*)`.as('count'),
-      })
-      .from(this.schema.executionTraces)
-      .where(eq(this.schema.executionTraces.agentId, agentId))
-      .groupBy(sql`coalesce(${this.schema.executionTraces.outcome}, 'unknown')`);
-
-    const byOutcome: Record<string, number> = {};
-    let total = 0;
-    for (const row of outcomeRows) {
-      byOutcome[row.outcome] = row.count;
-      total += row.count;
-    }
-
-    // Avg steps via JSON array length + recent count in a single query
-    const [statsRow] = await this.db
-      .select({
-        avgSteps: sql<number>`coalesce(avg(jsonb_array_length(${this.schema.executionTraces.steps})), 0)`.as('avg_steps'),
-        recentCount: sql<number>`sum(case when ${this.schema.executionTraces.startedAt} >= ${oneDayAgo} then 1 else 0 end)`.as('recent_count'),
-      })
-      .from(this.schema.executionTraces)
-      .where(eq(this.schema.executionTraces.agentId, agentId));
-
-    return {
-      total,
-      byOutcome,
-      avgSteps: Math.round(statsRow?.avgSteps ?? 0),
-      recentCount: statsRow?.recentCount ?? 0,
-    };
-  }
-
-  // ── Feedback Analysis ──────────────────────────────────
-
-  async getFeedbackForAgent(agentId: string): Promise<FeedbackSelect[]> {
-    return this.db.query.feedbackSignals.findMany({
-      where: eq(this.schema.feedbackSignals.agentId, agentId),
-    });
-  }
-
-  async getFeedbackStats(agentId: string): Promise<{
-    total: number;
-    byType: Record<string, number>;
-    recentCount: number;
-  }> {
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-
-    // Aggregate by type in SQL
-    const typeRows = await this.db
-      .select({
-        type: this.schema.feedbackSignals.type,
-        count: sql<number>`count(*)`.as('count'),
-      })
-      .from(this.schema.feedbackSignals)
-      .where(eq(this.schema.feedbackSignals.agentId, agentId))
-      .groupBy(this.schema.feedbackSignals.type);
-
-    const byType: Record<string, number> = {};
-    let total = 0;
-    for (const row of typeRows) {
-      const count = Number(row.count);
-      byType[row.type] = count;
-      total += count;
-    }
-
-    // Recent count in SQL
-    const [recentRow] = await this.db
-      .select({
-        recentCount: sql<number>`count(*)`.as('recent_count'),
-      })
-      .from(this.schema.feedbackSignals)
-      .where(sql`${this.schema.feedbackSignals.agentId} = ${agentId} AND ${this.schema.feedbackSignals.createdAt} >= ${oneDayAgo}`);
-
-    return { total, byType, recentCount: Number(recentRow?.recentCount ?? 0) };
-  }
-
   // ── Conversation Analysis ──────────────────────────────
 
   async getConversationCount(agentId: string): Promise<number> {
@@ -653,8 +455,6 @@ export class DatabaseRepository {
     failedSessions: number;
     totalConversations: number;
     totalKnowledge: number;
-    totalTraces: number;
-    totalFeedback: number;
     avgSessionDuration: number;
   }> {
     const [sessionStats] = await this.db
@@ -667,11 +467,9 @@ export class DatabaseRepository {
       .from(this.schema.turns)
       .where(eq(this.schema.turns.agentId, agentId));
 
-    const [conversationCount, knowledgeCount, traceStats, feedbackStats] = await Promise.all([
+    const [conversationCount, knowledgeCount] = await Promise.all([
       this.getConversationCount(agentId),
       this.getKnowledgeCount(agentId),
-      this.getTraceStats(agentId),
-      this.getFeedbackStats(agentId),
     ]);
 
     return {
@@ -680,8 +478,6 @@ export class DatabaseRepository {
       failedSessions: sessionStats?.failedSessions ?? 0,
       totalConversations: conversationCount,
       totalKnowledge: knowledgeCount,
-      totalTraces: traceStats.total,
-      totalFeedback: feedbackStats.total,
       avgSessionDuration: Math.round(sessionStats?.avgSessionDuration ?? 0),
     };
   }
@@ -1013,22 +809,28 @@ export class DatabaseRepository {
     changedBy?: string,
     changeNote?: string,
   ): Promise<void> {
-    // 1. Get current agent to find current version
-    const agent = await this.getAgent(agentId);
-    if (!agent) throw new Error(`Agent ${agentId} not found`);
-
-    const newVersion = (agent.version ?? 0) + 1;
-
     const sanitizedManifest = sanitizeTypedDbValue(manifest, 'agents.manifest');
-    const versionData = sanitizeTypedDbValue({
-      agentId,
-      version: newVersion,
-      manifest: sanitizedManifest,
-      changedBy: changedBy ?? null,
-      changeNote: changeNote ?? null,
-      createdAt: Date.now(),
-    }, 'agentVersions.insert');
     await this.db.transaction(async (tx: any) => {
+      const lockedAgents = await tx.execute(sql`
+        SELECT version
+        FROM agents
+        WHERE id = ${agentId}
+        FOR UPDATE
+      `);
+      const lockedAgent = Array.isArray(lockedAgents) ? lockedAgents[0] : lockedAgents?.[0];
+      if (!lockedAgent) throw new Error(`Agent ${agentId} not found`);
+
+      const currentVersion = Number(lockedAgent.version ?? 0);
+      const newVersion = currentVersion + 1;
+      const versionData = sanitizeTypedDbValue({
+        agentId,
+        version: newVersion,
+        manifest: sanitizedManifest,
+        changedBy: changedBy ?? null,
+        changeNote: changeNote ?? null,
+        createdAt: Date.now(),
+      }, 'agentVersions.insert');
+
       await tx.update(this.schema.agents).set({ manifest: sanitizedManifest, version: newVersion, updatedAt: Date.now() }).where(eq(this.schema.agents.id, agentId));
       await tx.insert(this.schema.agentVersions).values(versionData);
     });
@@ -1775,69 +1577,6 @@ export class DatabaseRepository {
     });
   }
 
-  async createCheckpoint(checkpoint: {
-    sessionId: string;
-    agentId: string;
-    version?: number;
-    checkpointData: Record<string, unknown>;
-    workspaceRef?: string;
-    suspendReason?: string;
-  }): Promise<{ id: string }> {
-      const existingSession = await this.getSandboxSession(checkpoint.sessionId);
-      if (!existingSession) {
-      const turn = await this.db.query.turns.findFirst({
-        where: eq(this.schema.turns.id, checkpoint.sessionId),
-      });
-      if (!turn?.conversationId) {
-        throw new Error(`Cannot create checkpoint without sandbox session or session conversation for ${checkpoint.sessionId}`);
-      }
-
-      const harnessName = typeof checkpoint.checkpointData.harnessName === 'string'
-        ? checkpoint.checkpointData.harnessName
-        : 'unknown';
-
-      await this.createSandboxSession({
-        id: checkpoint.sessionId,
-        conversationId: turn.conversationId,
-        agentId: checkpoint.agentId,
-        harnessName,
-        status: 'PAUSED',
-        pausedReason: 'idle',
-      });
-    }
-
-    return this.createCheckpointV2({
-      sessionId: checkpoint.sessionId,
-      agentId: checkpoint.agentId,
-      checkpointVersion: checkpoint.version,
-      checkpointData: checkpoint.checkpointData,
-      workspaceRef: checkpoint.workspaceRef,
-      suspendReason: checkpoint.suspendReason,
-    });
-  }
-
-  async getCheckpoint(sessionId: string): Promise<Checkpoint | null> {
-    const row = await this.getCheckpointV2(sessionId);
-    if (!row) {
-      return null;
-    }
-
-    return {
-      id: row.id,
-      sessionId: row.sessionId,
-      agentId: row.agentId,
-      version: row.checkpointVersion,
-      checkpointData: row.checkpointData,
-      workspaceRef: row.workspaceRef,
-      suspendReason: row.suspendReason,
-      createdAt: new Date(row.createdAt),
-    };
-  }
-
-  async deleteCheckpoints(sessionId: string): Promise<number> {
-    return this.deleteCheckpointsForSession(sessionId);
-  }
-
   // ── Checkpoints v2 (Session-based) ────────────────────────
 
   async createCheckpointV2(checkpoint: {
@@ -1909,16 +1648,6 @@ export class DatabaseRepository {
       .where(eq(this.schema.agentCheckpoints.sessionId, sessionId))
       .returning({ id: this.schema.agentCheckpoints.id });
     return deleted.length;
-  }
-
-  async getCheckpointSize(sessionId: string): Promise<number> {
-    const [row] = await this.db
-      .select({
-        totalSize: sql<number>`coalesce(sum(pg_column_size(${this.schema.agentCheckpoints.checkpointData})), 0)`.as('total_size'),
-      })
-      .from(this.schema.agentCheckpoints)
-      .where(eq(this.schema.agentCheckpoints.sessionId, sessionId));
-    return Number(row?.totalSize ?? 0);
   }
 
   async getSystemSetting(key: string): Promise<string | null> {

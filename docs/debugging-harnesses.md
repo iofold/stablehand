@@ -87,7 +87,7 @@ This is the most common signal for a harness-level crash. A healthy turn typical
 ### Container Fails to Start
 -   **Image Not Found**: Ensure you have built the harness images: `docker build --target harness-<name> -t ctxmill/harness-<name> -f Dockerfile.sandbox .`.
 -   **Resource Limits**: If the container is killed immediately (OOMKilled), check the `memoryMb` setting. Claude agents, in particular, require at least 2GiB of RAM.
--   **Network**: If the harness cannot reach the LLM provider (OpenAI/Anthropic), check the `egress-proxy` logs and ensure `CTXMILL_EGRESS_PROXY=1` is set if needed.
+-   **Network**: If the harness cannot reach the LLM provider (OpenAI/Anthropic), check the host or cluster-level firewall, DNS, NAT, service mesh, or Kubernetes NetworkPolicy. CTXMill does not currently enforce its own outbound proxy.
 
 ### gRPC Health Check Timeout
 The orchestrator waits for the sandbox daemon to become ready. If you see a health check timeout:

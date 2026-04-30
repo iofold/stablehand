@@ -4,6 +4,13 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from './App';
+import {
+  CONVERSATION_ROUTE,
+  LEGACY_CHAT_ROUTE,
+  LEGACY_NEW_SESSION_ROUTE,
+  LEGACY_SESSION_ROUTE,
+  NEW_CONVERSATION_ROUTE,
+} from './lib/routes';
 
 vi.mock('./components/ui/Sidebar', () => ({
   Sidebar: () => null,
@@ -82,11 +89,11 @@ describe('App routes', () => {
   }
 
   it.each([
-    '/agents/agent-1/conversations/new',
-    '/agents/agent-1/conversations/conversation-1',
-    '/agents/agent-1/sessions/new',
-    '/agents/agent-1/sessions/conversation-1',
-    '/agents/agent-1/chat',
+    NEW_CONVERSATION_ROUTE.replace(':id', 'agent-1'),
+    CONVERSATION_ROUTE.replace(':id', 'agent-1').replace(':conversationId', 'conversation-1'),
+    LEGACY_NEW_SESSION_ROUTE.replace(':id', 'agent-1'),
+    LEGACY_SESSION_ROUTE.replace(':id', 'agent-1').replace(':conversationId', 'conversation-1'),
+    LEGACY_CHAT_ROUTE.replace(':id', 'agent-1'),
   ])('renders SessionPage for %s', (path) => {
     renderAt(path);
     expect(container.querySelector('[data-testid="session-page"]')).not.toBeNull();

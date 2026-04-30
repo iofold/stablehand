@@ -7,7 +7,7 @@ import {
 } from '@ctxmill/proto/sandbox/v1';
 import { createHash } from 'node:crypto';
 
-import type { ContainerInfo, ContainerManager } from '../../sandbox/container-manager.js';
+import type { ContainerInfo, SandboxContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../../database/repository.js';
 import type { AgentDefinition } from '../../types.js';
@@ -17,6 +17,7 @@ import {
   waitForContainerReady,
 } from './grpc-session-client.js';
 import { getRuntimeSandboxSecrets } from './runtime-sandbox-secrets.js';
+import { sandboxGrpcBaseUrl } from './sandbox-endpoint.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
 import type {
   HarnessGrpcClient,
@@ -26,7 +27,6 @@ import type {
 } from './types.js';
 
 const TAG = '[SandboxSessionManager]';
-const GRPC_PORT = 50051;
 
 function shortHash(input: string): string {
   return createHash('sha256').update(input).digest('hex').slice(0, 12);
@@ -42,8 +42,19 @@ function asStringArray(value: unknown): string[] | undefined {
   return strings.length > 0 ? strings : undefined;
 }
 
+class InvalidCheckpointError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidCheckpointError';
+  }
+}
+
+function isInvalidCheckpointError(err: unknown): boolean {
+  return err instanceof InvalidCheckpointError;
+}
+
 export interface SessionRecoveryCoordinatorDeps {
-  containerManager: Pick<ContainerManager, 'createContainer' | 'startContainer' | 'stopContainer' | 'removeContainer'>;
+  containerManager: Pick<SandboxContainerManager, 'createContainer' | 'startContainer' | 'stopContainer' | 'removeContainer' | 'getContainer'>;
   db: Pick<DatabaseRepository, 'getCheckpointV2'>;
   statusCoordinator: SessionStatusCoordinator;
   stateStore: SessionStatePort;
@@ -124,8 +135,10 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
   }
 
   async reconnectToContainer(dbSession: SandboxSessionRow): Promise<SessionRecord> {
-    const containerName = dbSession.containerName ?? sessionContainerName(dbSession.conversationId);
-    const baseUrl = `http://${containerName}:${GRPC_PORT}`;
+    const runtimeContainer = await this.deps.containerManager.getContainer(dbSession.id);
+    const containerName = runtimeContainer?.containerName ?? dbSession.containerName ?? sessionContainerName(dbSession.conversationId);
+    const containerId = runtimeContainer?.containerId ?? dbSession.containerId ?? '';
+    const baseUrl = sandboxGrpcBaseUrl(runtimeContainer ?? { containerName });
 
     this.deps.logger.info(
       `${TAG} reconnecting to container ${containerName} for session ${dbSession.id}`,
@@ -139,7 +152,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       conversationId: dbSession.conversationId,
       agentId: dbSession.agentId,
       containerName,
-      containerId: dbSession.containerId ?? '',
+      containerId,
       status: 'ACTIVE',
       harnessName: dbSession.harnessName,
       grpcClient,
@@ -166,14 +179,14 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     try {
       const checkpoint = await this.deps.db.getCheckpointV2(sessionId);
       if (!checkpoint) {
-        throw new Error(`No checkpoint found for session ${sessionId}`);
+        throw new InvalidCheckpointError(`No checkpoint found for session ${sessionId}`);
       }
 
       const sessionWorkspaceDir = agentDef.workspaceDir
         ? await this.deps.getExistingSessionWorkspaceDir(dbSession.agentId, sessionId)
         : undefined;
       if (agentDef.workspaceDir && !sessionWorkspaceDir) {
-        throw new Error(
+        throw new InvalidCheckpointError(
           `Missing persisted session workspace for checkpointed session ${sessionId}`,
         );
       }
@@ -199,7 +212,8 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       });
       createdContainer = containerInfo;
 
-      await this.deps.containerManager.startContainer(containerInfo.containerId);
+      const startedContainerInfo = await this.deps.containerManager.startContainer(containerInfo.containerId);
+      const reachableContainerInfo = startedContainerInfo?.containerName ? startedContainerInfo : containerInfo;
 
       if (!sessionWorkspaceDir) {
         await this.deps.workspaceDiffService.restore(sessionId, containerInfo.containerId);
@@ -210,7 +224,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         );
       }
 
-      const baseUrl = `http://${containerInfo.containerName}:${GRPC_PORT}`;
+      const baseUrl = sandboxGrpcBaseUrl(reachableContainerInfo);
       const { grpcClient } = await waitForContainerReady(baseUrl);
 
       const restoreTools = this.deps.resolveToolsForAgent(
@@ -249,8 +263,8 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         fromStatus: 'RESTORING',
         toStatus: 'ACTIVE',
         extra: {
-          containerName: containerInfo.containerName,
-          containerId: containerInfo.containerId,
+          containerName: reachableContainerInfo.containerName,
+          containerId: reachableContainerInfo.containerId,
           checkpointRef: null,
         },
       });
@@ -260,8 +274,8 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         sessionId,
         conversationId: dbSession.conversationId,
         agentId: dbSession.agentId,
-        containerName: containerInfo.containerName,
-        containerId: containerInfo.containerId,
+        containerName: reachableContainerInfo.containerName,
+        containerId: reachableContainerInfo.containerId,
         status: 'ACTIVE',
         harnessName,
         grpcClient,
@@ -275,10 +289,11 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         await this.rollbackCreatedContainer(sessionId, createdContainer);
       }
 
+      const terminal = isInvalidCheckpointError(err);
       await this.deps.statusCoordinator.transition({
         sessionId,
         fromStatus: 'RESTORING',
-        toStatus: 'CHECKPOINTED',
+        toStatus: terminal ? 'TERMINATED' : 'CHECKPOINTED',
         clearRuntime: true,
       });
       throw err;

@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import type { ContainerManager } from '../../sandbox/container-manager.js';
+import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 
 export interface SandboxRouteOptions {
-  containerManager: ContainerManager;
+  containerManager: SandboxContainerManager;
 }
 
 /**

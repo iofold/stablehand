@@ -1,9 +1,7 @@
 import type { ResolvedConfig } from './types.js';
 import type { KnowledgeStore } from '../knowledge/types.js';
-import type { LLMProvider } from '../llm/types.js';
 import { InMemoryKnowledgeStore } from '../knowledge/store.js';
 import { Mem0KnowledgeStore } from '../knowledge/mem0-store.js';
-import { createLLMProvider } from '../llm/factory.js';
 
 /**
  * Create a KnowledgeStore from resolved config.
@@ -43,29 +41,4 @@ export function createKnowledgeStoreFromConfig(
     default:
       throw new Error(`Unknown knowledge provider: ${provider}`);
   }
-}
-
-/**
- * Create an LLMProvider from resolved config.
- * Returns null if no global LLM API key or model is configured
- * (learning pipeline will be disabled).
- */
-export function createLLMProviderFromConfig(config: ResolvedConfig): LLMProvider | null {
-  const { provider, apiKey, model, baseUrl } = config.llm;
-
-  if (!apiKey || !model) {
-    console.warn('[Factory] Global LLM reflector is disabled because apiKey or model is not configured. Agent harnesses resolve their own keys from the secrets pipeline.');
-    return null;
-  }
-
-  const validProviders = ['anthropic', 'openai'] as const;
-  if (!validProviders.includes(provider as (typeof validProviders)[number])) {
-    throw new Error(`Invalid LLM provider: ${provider}. Must be one of: ${validProviders.join(', ')}`);
-  }
-  return createLLMProvider({
-    apiKey,
-    baseUrl: baseUrl || undefined,
-    model,
-    provider: provider as 'anthropic' | 'openai',
-  });
 }

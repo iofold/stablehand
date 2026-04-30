@@ -75,7 +75,7 @@ export function FeedbackButtons({ agentId, messageId, conversationId }: Feedback
       {/* Post-feedback toast */}
       {showToast && (
         <span className="ml-2 text-[11px] text-surface-400 animate-fade-in">
-          Feedback saved — agent will learn from this
+          Feedback sent
         </span>
       )}
     </div>

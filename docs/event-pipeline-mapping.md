@@ -68,9 +68,8 @@ Key runtime event types from `packages/ctxmill/src/events/bus.ts` that affect AG
 | run.ag_ui_event | turnId, agentId, conversationId?, event | Passthrough | Forwards AG-UI events not otherwise normalized |
 | turn.completed | turnId, sessionId, agentId, conversationId, status, durationMs | RUN_FINISHED (+ RUN_ERROR on error/cancelled) | Terminal lifecycle event |
 | run.resumed | turnId, agentId, triggeredBy, suspendedDurationMs | Not mapped to AG-UI | — |
-| feedback.received | feedbackId, turnId, agentId, type | Not mapped to AG-UI | — |
+| feedback.received | feedbackId, turnId, agentId, type | Not mapped to AG-UI | External learning/analytics signal |
 | trigger.fired | triggerId, agentId, eventType, turnId | Not mapped to AG-UI | — |
-| learning.* (3 events) | varies | Not mapped to AG-UI | Internal only |
 | agent.created/deleted | agentId | Not mapped to AG-UI | Internal only |
 | client.connected/disconnected | agentId, clientId | Not mapped to AG-UI | Internal only |
 | custom | type, agentId, payload | Not part of standard AG-UI run-lifecycle mapping | Persisted/dispatched to raw subscribers such as triggers |

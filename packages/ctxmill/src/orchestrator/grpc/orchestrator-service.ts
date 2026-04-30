@@ -28,7 +28,6 @@ import type { TypedEventBus } from '../../events/bus.js';
 import type { InterruptManager } from '../interrupt.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { ArtifactStore } from '../../artifact/index.js';
-import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 
 /**
  * Context passed to each orchestrator-side tool handler when dispatching
@@ -408,7 +407,6 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
 export interface RegisterToolHandlersDeps {
   eventBus: TypedEventBus;
   interruptManager?: InterruptManager;
-  sessionManager?: SandboxSessionManager;
   repository?: DatabaseRepository;
 }
 

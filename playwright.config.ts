@@ -2,20 +2,9 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: 'tests/e2e',
+  // Narrow discovery: Playwright only executes .spec.ts files. Vitest-owned .test.ts
+  // files under tests/e2e stay excluded unless they are deliberately renamed.
   testMatch: ['**/*.spec.ts'],
-  testIgnore: [
-    '**/chart-*.spec.ts',
-    '**/debug-*.spec.ts',
-    '**/detailed-*.spec.ts',
-    '**/final-*.spec.ts',
-    '**/inspect-api-response.spec.ts',
-    '**/orchestrator-scenarios.test.ts',
-    '**/screenshot-full-chart.spec.ts',
-    '**/simple-chart-check.spec.ts',
-    '**/test-correct-route.spec.ts',
-    '**/trace-conv-id.spec.ts',
-    '**/verify-existing-conversation.spec.ts',
-  ],
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

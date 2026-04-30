@@ -26,19 +26,8 @@ export interface CTXMillConfig {
     extensions?: string[];
   };
   security?: { preset: string; authz?: Record<string, unknown> };
-  learning?: {
-    strategy: 'simple' | 'ace';
-    async?: boolean;
-    qualityGate?: Record<string, unknown>;
-  };
   orchestration?: { eventBus?: boolean; reconciliation?: boolean };
   observability?: { sink?: string; sinks?: string[]; path?: string };
-  llm?: {
-    provider: 'anthropic' | 'openai' | 'google';
-    model: string;
-    apiKey?: string;
-    baseUrl?: string;
-  };
 }
 
 // Resolved config (all fields required after preset expansion)
@@ -48,8 +37,6 @@ export interface ResolvedConfig {
   knowledge: { providers: string[] };
   tools: { executors: string[] };
   security: { preset: string };
-  learning: { strategy: 'simple' | 'ace'; async: boolean };
   orchestration: { eventBus: boolean; reconciliation: boolean };
   observability: { sink: string; path: string };
-  llm: { provider: string; model: string; apiKey: string; baseUrl: string };
 }

@@ -7,6 +7,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { AsyncContentState } from '@/components/ui/AsyncContentState';
 import {
   fetchSharedKnowledge,
   fetchSharedKnowledgeStats,
@@ -212,20 +213,24 @@ export function KnowledgePage() {
         )}
       </div>
 
-      {/* Knowledge items list */}
-      {loading ? (
-        <div className="text-center py-12 text-surface-400 text-sm">Loading knowledge...</div>
-      ) : items.length === 0 ? (
-        <div className="text-center py-16">
-          <Brain className="mx-auto h-10 w-10 text-surface-700 mb-3" />
-          <p className="text-surface-400 font-medium">No knowledge items yet</p>
-          <p className="text-surface-400 text-sm mt-1">
-            {viewMode === 'shared'
-              ? 'Add shared knowledge that all agents can access.'
-              : 'No knowledge items found across any agents.'}
-          </p>
-        </div>
-      ) : (
+      <AsyncContentState
+        loading={loading}
+        empty={items.length === 0}
+        loadingFallback={
+          <div className="text-center py-12 text-surface-400 text-sm">Loading knowledge...</div>
+        }
+        emptyFallback={
+          <div className="text-center py-16">
+            <Brain className="mx-auto h-10 w-10 text-surface-700 mb-3" />
+            <p className="text-surface-400 font-medium">No knowledge items yet</p>
+            <p className="text-surface-400 text-sm mt-1">
+              {viewMode === 'shared'
+                ? 'Add shared knowledge that all agents can access.'
+                : 'No knowledge items found across any agents.'}
+            </p>
+          </div>
+        }
+      >
         <div className="space-y-0">
           {items.map((item) => (
             <div
@@ -264,7 +269,7 @@ export function KnowledgePage() {
             </div>
           ))}
         </div>
-      )}
+      </AsyncContentState>
 
       {/* Add Knowledge Modal */}
       {showAddModal && (

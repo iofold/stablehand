@@ -11,6 +11,7 @@ import { InterruptManager } from '../interrupt.js';
 import { agentRoutes } from '../routes/agents.js';
 import { mapAgentHttpToolsToConfigs } from '../http-tools.js';
 import { SSEManager } from '../sse.js';
+import { RunStartupService } from '../run-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 
 type AgentRow = {
@@ -141,6 +142,16 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
       existing.push(row);
       messages.set(row.conversationId, existing);
       return { ...row };
+    }),
+    deleteMessage: vi.fn(async (id: string) => {
+      for (const [conversationId, rows] of messages.entries()) {
+        const next = rows.filter((message) => message.id !== id);
+        if (next.length !== rows.length) {
+          messages.set(conversationId, next);
+          return true;
+        }
+      }
+      return false;
     }),
     getMessages: vi.fn(async (conversationId: string) => {
       return (messages.get(conversationId) ?? []).map((message) => ({ ...message }));
@@ -302,6 +313,10 @@ function createMockSessionManager(): SandboxSessionManager {
   } as unknown as SandboxSessionManager;
 }
 
+function createRunStartupServiceStub(): RunStartupService {
+  return new RunStartupService({ logger: console });
+}
+
 async function buildApp(options?: {
   db?: ReturnType<typeof createMockDb>;
   eventBus?: TypedEventBus;
@@ -320,6 +335,13 @@ async function buildApp(options?: {
   const agentSessionService = options?.agentSessionService ?? ({
     executeSession: vi.fn(async () => {}),
   } as unknown as AgentSessionService);
+  const runStartupService = createRunStartupServiceStub();
+  runStartupService.configureExecution({
+    db,
+    eventBus,
+    sessionManager,
+    agentSessionService,
+  });
 
   const app = Fastify();
   const configSchema = z.object({ model: z.string().min(1) }).passthrough();
@@ -341,6 +363,7 @@ async function buildApp(options?: {
       list: vi.fn(() => ['langgraph']),
     },
     agentSessionService,
+    runStartupService,
     eventBus,
   });
   await app.ready();

@@ -2,6 +2,8 @@ import { useNavigate } from 'react-router-dom';
 import { MessageSquare, Settings, AlertCircle, Activity, Clock, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getAgentStatusConfig } from '@/lib/agent-status';
+import { agentLegacyNewSessionPath } from '@/lib/routes';
+import { countActiveSessions, countAllSessions, describeSessionCounts } from '@/lib/session-status';
 import type { Agent } from '@/stores/agents';
 import { AgentAvatar } from './illustrations/AgentAvatar';
 import { StatusPulse } from './illustrations/StatusPulse';
@@ -34,18 +36,12 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
 
   const renderSessions = () => {
     const stats = agent.sessionsByStatus;
-    const total = (stats?.ACTIVE ?? 0) + (stats?.PAUSED ?? 0) + (stats?.CHECKPOINTED ?? 0) + (stats?.RESTORING ?? 0) + (stats?.TERMINATED ?? 0);
+    const total = countAllSessions(stats);
     if (!stats || total === 0) {
       return <span className="tabular-nums font-medium text-surface-200">0</span>;
     }
 
-    const parts = [];
-    if (stats.ACTIVE > 0) parts.push(`${stats.ACTIVE} active`);
-    if (stats.PAUSED > 0) parts.push(`${stats.PAUSED} paused`);
-    if (stats.RESTORING > 0) parts.push(`${stats.RESTORING} restoring`);
-    if (stats.CHECKPOINTED > 0) parts.push(`${stats.CHECKPOINTED} checkpointed`);
-    if (stats.TERMINATED > 0) parts.push(`${stats.TERMINATED} terminated`);
-    const title = parts.join(', ');
+    const title = describeSessionCounts(stats);
 
     return (
       <div role="status" aria-label={`${total} sessions: ${title}`} className="flex items-center gap-2 tabular-nums font-medium text-surface-200" title={title}>
@@ -165,10 +161,10 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
                 Approval Needed
               </span>
             )}
-            {((agent.sessionsByStatus?.ACTIVE ?? 0) + (agent.sessionsByStatus?.PAUSED ?? 0) + (agent.sessionsByStatus?.RESTORING ?? 0)) > 0 && (
+            {countActiveSessions(agent.sessionsByStatus) > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
                 <Activity className="h-3 w-3" />
-                {(agent.sessionsByStatus?.ACTIVE ?? 0) + (agent.sessionsByStatus?.PAUSED ?? 0) + (agent.sessionsByStatus?.RESTORING ?? 0)} Active
+                {countActiveSessions(agent.sessionsByStatus)} Active
               </span>
             )}
             <span className="inline-flex items-center gap-1 text-[11px] text-surface-400">
@@ -180,7 +176,7 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
           <div className="flex items-center gap-2 mt-1 w-full md:w-auto">
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); navigate(`/agents/${agent.id}/sessions/new`); }}
+              onClick={(e) => { e.stopPropagation(); navigate(agentLegacyNewSessionPath(agent.id)); }}
               aria-label={`Open session for ${agent.name}`}
               className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-md bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 transition-colors shadow-sm focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
             >

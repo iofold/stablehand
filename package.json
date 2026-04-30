@@ -8,7 +8,7 @@
     "test": "pnpm test:backend",
     "lint": "eslint packages/ tests/",
     "test:e2e": "playwright test --config=playwright.config.ts",
-    "test:e2e:smoke": "playwright test --config=playwright.smoke.config.ts",
+    "test:e2e:smoke": "playwright test --config=playwright.smoke.config.ts --project=chromium",
     "test:e2e:harness-matrix:slice1": "playwright test --config=playwright.harness-matrix.config.ts",
     "typecheck": "pnpm -r typecheck",
     "verify:fresh-deploy": "node scripts/verify-fresh-deploy.mjs",
@@ -18,7 +18,9 @@
     "docker:clean": "docker compose down -v",
     "test:backend": "NODE_OPTIONS='--max-old-space-size=4096' timeout 120 vitest run",
     "test:ui": "pnpm -C packages/ui test",
-    "verify:stabilization": "node scripts/verify-stabilization.mjs"
+    "verify:stabilization": "node scripts/verify-stabilization.mjs",
+    "test:e2e:required": "playwright test --config=playwright.config.ts --project=chromium --grep @smoke",
+    "test:e2e:harness-matrix:extended": "playwright test --config=playwright.harness-matrix.config.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

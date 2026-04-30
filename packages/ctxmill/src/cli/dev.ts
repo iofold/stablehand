@@ -127,7 +127,6 @@ export async function startDev() {
   console.log(`  \x1b[1mAgents:\x1b[0m   ${agents.length} [${agents.join(', ')}]`);
   console.log(`  \x1b[1mTools:\x1b[0m    ${tools.length} [${tools.join(', ')}]`);
   console.log(`  \x1b[1mKnowledge:\x1b[0m ${knowledgeCount} items`);
-  console.log(`  \x1b[1mLearning:\x1b[0m  enabled`);
   console.log('');
 
   // ── Build DI container (database + services) ─────────
@@ -136,12 +135,6 @@ export async function startDev() {
 
   const userConfig: CTXMillConfig = {
     preset: config.preset as CTXMillConfig['preset'],
-    llm: {
-      provider,
-      model,
-      apiKey: apiKey,
-      baseUrl: process.env.OPENAI_BASE_URL,
-    },
   };
   const container: AppContainer = await createContainer(userConfig, dataDir);
   console.log('  \x1b[32m✓\x1b[0m Database initialized');
@@ -244,7 +237,6 @@ export async function startDev() {
     db: container.db,
     port: apiPort,
     host: '0.0.0.0',
-    learningPipeline: container.learningPipeline,
     knowledgeStore: container.knowledgeStore,
     eventBus: container.eventBus,
     dataDir,
@@ -330,7 +322,6 @@ export async function startDev() {
       viteProcess.kill('SIGTERM');
     }
     container.sseBroadcaster.shutdown();
-    container.learningSubscriber?.shutdown();
     await server.close();
     await container.close();
     process.exit(0);

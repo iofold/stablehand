@@ -6,6 +6,7 @@ import type { ApiSessionStatus, SandboxSessionStatus } from '@ctxmill/shared';
 import type { HarnessRegistry } from '../../../harness/types.js';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared } from '../../../workspace/ensure.js';
 import { parseStoredHarnessConfig } from '../../session-manager/session-agent-definition.js';
+import { validateAgentHttpToolsConfig } from '../../http-tools.js';
 import type { AgentHttpToolDefinition, AgentRouteOptions, StoredAgent } from './types.js';
 
 export function safeError(message: string, err: unknown): { error: string; detail?: string; stack?: string } {

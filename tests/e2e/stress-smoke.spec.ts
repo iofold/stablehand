@@ -39,8 +39,8 @@ async function listRuns(
 ): Promise<TestRun[]> {
   const response = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
   expect(response.ok()).toBeTruthy();
-  const body = (await response.json()) as { sessions?: TestRun[] } | TestRun[];
-  return Array.isArray(body) ? body : (body.sessions ?? []);
+  const body = (await response.json()) as { sessions?: TestRun[] };
+  return body.sessions ?? [];
 }
 
 async function ensureStressTrigger(

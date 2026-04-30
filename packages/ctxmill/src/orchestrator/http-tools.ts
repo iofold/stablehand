@@ -17,24 +17,27 @@ function isStringRecord(value: unknown): value is Record<string, string> {
   return Object.values(value).every((entry) => typeof entry === 'string');
 }
 
-function toHttpMethod(value: unknown): HttpEndpointConfig['method'] {
-  switch (value) {
-    case 'GET':
-    case 'POST':
-    case 'PUT':
-    case 'DELETE':
-    case 'PATCH':
-      return value;
-    default:
-      return 'POST';
-  }
+const HTTP_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as const;
+
+function isHttpMethod(value: unknown): value is HttpEndpointConfig['method'] {
+  return typeof value === 'string' && (HTTP_METHODS as readonly string[]).includes(value);
+}
+
+function parseHttpMethod(value: unknown): HttpEndpointConfig['method'] {
+  if (value === undefined) return 'POST';
+  if (isHttpMethod(value)) return value;
+  throw new Error(`Invalid HTTP tool method: ${String(value)}`);
 }
 
 function toHttpAuthentication(value: unknown): HttpEndpointConfig['authentication'] | undefined {
   if (!isRecord(value)) return undefined;
   const { type, secretName } = value;
   if ((type === 'bearer' || type === 'api-key') && isNonEmptyString(secretName)) {
-    return { type, secretName };
+    return {
+      type,
+      secretName,
+      ...(value.allowEnvFallback === true ? { allowEnvFallback: true } : {}),
+    };
   }
   return undefined;
 }
@@ -54,7 +57,7 @@ export function mapAgentHttpToolsToConfigs(agentDef: AgentDefinition): HttpEndpo
     const config: HttpEndpointConfig = {
       name,
       url: endpoint,
-      method: toHttpMethod(tool.method),
+      method: parseHttpMethod(tool.method),
       description,
     };
 
@@ -77,6 +80,29 @@ export function mapAgentHttpToolsToConfigs(agentDef: AgentDefinition): HttpEndpo
 
     return [config];
   });
+}
+
+export function validateAgentHttpToolsConfig(httpTools: unknown): string | null {
+  if (httpTools === undefined) return null;
+  if (!Array.isArray(httpTools)) return 'HTTP tool requires name, description, and endpoint';
+
+  const names = new Set<string>();
+  for (const httpTool of httpTools) {
+    if (!isRecord(httpTool) || !isNonEmptyString(httpTool.name) || !isNonEmptyString(httpTool.description) || !isNonEmptyString(httpTool.endpoint)) {
+      return 'HTTP tool requires name, description, and endpoint';
+    }
+    if (names.has(httpTool.name)) {
+      return `Duplicate HTTP tool name: ${httpTool.name}`;
+    }
+    names.add(httpTool.name);
+    if (httpTool.method !== undefined && !isHttpMethod(httpTool.method)) {
+      return `Invalid HTTP tool method: ${String(httpTool.method)}`;
+    }
+    if (httpTool.authentication !== undefined && toHttpAuthentication(httpTool.authentication) === undefined) {
+      return 'HTTP tool authentication requires type bearer or api-key and secretName';
+    }
+  }
+  return null;
 }
 
 export function getAgentHttpToolProviderName(agentId: string): string {

@@ -4,7 +4,7 @@
  * Reusable test utilities for event bus testing:
  * - createTestBus() factory
  * - collectEvents() / waitForEmit() collectors
- * - Mock factories for SSEManager, DatabaseRepository, LearningPipeline
+ * - Mock factories for SSEManager and DatabaseRepository
  * - Event data builders for all EventMap event types
  */
 
@@ -103,12 +103,6 @@ export function createMockDatabase() {
     addKnowledgeItem: vi.fn(),
     listKnowledgeItems: vi.fn(),
     deleteKnowledgeItem: vi.fn(),
-    saveTrace: vi.fn(),
-    getTrace: vi.fn(),
-    getTraceByRunId: vi.fn(),
-    listTraces: vi.fn(),
-    saveFeedback: vi.fn(),
-    getFeedbackByTraceId: vi.fn(),
     createRun: vi.fn(),
     getRun: vi.fn(),
     updateRun: vi.fn(),
@@ -117,17 +111,6 @@ export function createMockDatabase() {
     listRuns: vi.fn(),
     persistEvent: vi.fn(),
     getEventsSince: vi.fn(),
-    getRecentTraces: vi.fn().mockResolvedValue([]),
-    getFeedbackForTrace: vi.fn().mockResolvedValue([]),
-    getTraceStats: vi.fn().mockResolvedValue({}),
-    getFeedbackStats: vi.fn().mockResolvedValue({}),
-  };
-}
-
-export function createMockLearningPipeline() {
-  return {
-    process: vi.fn().mockResolvedValue({ insights: [], errors: [] }),
-    getKnowledge: vi.fn().mockResolvedValue(''),
   };
 }
 
@@ -347,36 +330,6 @@ export function createMockSuspendDb(
 // ── Timing Helpers ──────────────────────────────────────────────
 
 export const settle = (ms = 15) => new Promise((r) => setTimeout(r, ms));
-
-// ── Data Builders ───────────────────────────────────────────────
-
-export function makeTraceRow(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 'trace-1',
-    agentId: 'agent-test-1',
-    sessionId: 'run-test-1',
-    taskDescription: 'Test task',
-    steps: [],
-    startedAt: Date.now() - 1000,
-    completedAt: Date.now(),
-    outcome: 'success',
-    metadata: '{}',
-    ...overrides,
-  };
-}
-
-export function makeFeedbackRow(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 'fb-row-1',
-    traceId: 'trace-1',
-    agentId: 'agent-test-1',
-    source: 'human',
-    type: 'thumbs',
-    value: 'positive',
-    createdAt: Date.now(),
-    ...overrides,
-  };
-}
 
 // ── Container Mock Factories ────────────────────────────────────
 

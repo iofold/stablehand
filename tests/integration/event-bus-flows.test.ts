@@ -1,53 +1,35 @@
 /**
  * Event Bus Integration Flow Tests (Phase 3, Task 5)
  *
- * Wires real TypedEventBus + real SSEBroadcaster + real LearningEventSubscriber
- * with mock externals (SSEManager, LearningPipeline, DatabaseRepository).
+ * Wires real TypedEventBus + real SSEBroadcaster with mock SSE externals.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { allowConsoleErrors } from '../setup-strict.js';
 import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import { SSEBroadcaster } from '../../packages/ctxmill/src/orchestrator/sse-broadcaster.js';
-import { LearningEventSubscriber } from '../../packages/ctxmill/src/learning/event-subscriber.js';
 import { TestSessionRegistry } from '../utils/test-session-registry.js';
 import {
   createTestBus,
   collectEvents,
   createMockSSEManager,
-  createMockDatabase,
-  createMockLearningPipeline,
   makeRunStartedEvent,
   makeRunCompletedEvent,
   makeTextChunkEvent,
-  makeFeedbackReceivedEvent,
 } from '../../tests/utils/event-bus-test-helpers.js';
-
-const settle = () => new Promise((r) => setTimeout(r, 10));
 
 describe('Event Bus Integration Flows', () => {
   let bus: TypedEventBus;
   let mockSSE: ReturnType<typeof createMockSSEManager>;
-  let mockDB: ReturnType<typeof createMockDatabase>;
-  let mockPipeline: ReturnType<typeof createMockLearningPipeline>;
   let broadcaster: SSEBroadcaster;
-  let subscriber: LearningEventSubscriber;
 
   beforeEach(() => {
-    allowConsoleErrors();
     bus = createTestBus();
     mockSSE = createMockSSEManager();
-    mockDB = createMockDatabase();
-    mockPipeline = createMockLearningPipeline();
-
-    // Wire real subscribers with mock externals
     broadcaster = new SSEBroadcaster(mockSSE as any, bus);
-    subscriber = new LearningEventSubscriber(mockPipeline as any, bus, mockDB as any);
   });
 
   afterEach(() => {
     broadcaster.shutdown();
-    subscriber.shutdown();
   });
 
   // ── Run lifecycle → SSE broadcast ──────────────────────────────
@@ -85,203 +67,6 @@ describe('Event Bus Integration Flows', () => {
         event.agentId,
         expect.objectContaining({ type: 'RUN_FINISHED', internalType: 'turn.completed' }),
       );
-    });
-  });
-
-  // ── Run completion → learning trigger ──────────────────────────
-
-  describe('Run completion → learning trigger', () => {
-    it('emit run.completed status=completed → pipeline.process called with trace', async () => {
-      const event = makeRunCompletedEvent({ status: 'completed' });
-
-      // Mock DB to return a matching trace
-      (mockDB.getRecentTraces as any) = vi.fn().mockResolvedValue([
-        {
-          id: 'trace-1',
-          agentId: event.agentId,
-          sessionId: event.sessionId,
-          taskDescription: 'Test task',
-          steps: [],
-          startedAt: Date.now() - 1000,
-          completedAt: Date.now(),
-          outcome: 'success',
-        },
-      ]);
-
-      // Rebuild subscriber with updated mock
-      subscriber.shutdown();
-      subscriber = new LearningEventSubscriber(mockPipeline as any, bus, mockDB as any);
-
-      bus.emit('turn.completed', event);
-      await settle();
-
-      expect(mockPipeline.process).toHaveBeenCalledTimes(1);
-      expect(mockPipeline.process).toHaveBeenCalledWith(
-        expect.objectContaining({ turnId: event.sessionId, agentId: event.agentId }),
-      );
-    });
-
-    it('emit run.completed status=error → pipeline NOT called', async () => {
-      const event = makeRunCompletedEvent({ status: 'error', error: 'Something broke' });
-
-      bus.emit('turn.completed', event);
-      await settle();
-
-      expect(mockPipeline.process).not.toHaveBeenCalled();
-    });
-  });
-
-  // ── Feedback → learning with signals ───────────────────────────
-
-  describe('Feedback → learning with signals', () => {
-    it('emit feedback.received → pipeline.process called with trace + feedback signals', async () => {
-      const event = makeFeedbackReceivedEvent({ turnId: 'run-fb-1', agentId: 'agent-fb-1' });
-
-      // Mock DB to return matching trace and feedback rows
-      (mockDB.getRecentTraces as any) = vi.fn().mockResolvedValue([
-        {
-          id: 'trace-fb-1',
-          agentId: 'agent-fb-1',
-          sessionId: 'run-fb-1',
-          taskDescription: 'Feedback task',
-          steps: [],
-          startedAt: Date.now() - 2000,
-          completedAt: Date.now() - 1000,
-          outcome: 'success',
-        },
-      ]);
-      (mockDB.getFeedbackForTrace as any) = vi.fn().mockResolvedValue([
-        {
-          id: 'fb-row-1',
-          traceId: 'trace-fb-1',
-          agentId: 'agent-fb-1',
-          source: 'human',
-          type: 'thumbs',
-          value: 1,
-          createdAt: Date.now(),
-        },
-      ]);
-
-      // Rebuild subscriber with updated mock
-      subscriber.shutdown();
-      subscriber = new LearningEventSubscriber(mockPipeline as any, bus, mockDB as any);
-
-      bus.emit('feedback.received', event);
-      await settle();
-
-      expect(mockPipeline.process).toHaveBeenCalledTimes(1);
-      expect(mockPipeline.process).toHaveBeenCalledWith(
-        expect.objectContaining({ turnId: 'run-fb-1' }),
-        expect.arrayContaining([
-          expect.objectContaining({ source: 'human', type: 'thumbs', value: 1 }),
-        ]),
-      );
-    });
-  });
-
-  // ── Error isolation between subscribers ────────────────────────
-
-  describe('Error isolation between subscribers', () => {
-    it('SSE broadcast throws → learning pipeline still called', async () => {
-      mockSSE.broadcast.mockImplementation(() => {
-        throw new Error('SSE exploded');
-      });
-
-      const event = makeRunCompletedEvent({ status: 'completed' });
-
-      // Mock DB for learning subscriber
-      (mockDB.getRecentTraces as any) = vi.fn().mockResolvedValue([
-        {
-          id: 'trace-err-1',
-          agentId: event.agentId,
-          sessionId: event.sessionId,
-          taskDescription: 'Error test',
-          steps: [],
-          startedAt: Date.now() - 1000,
-          completedAt: Date.now(),
-          outcome: 'success',
-        },
-      ]);
-
-      subscriber.shutdown();
-      subscriber = new LearningEventSubscriber(mockPipeline as any, bus, mockDB as any);
-
-      // Suppress expected console.error
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      bus.emit('turn.completed', event);
-      await settle();
-
-      expect(mockPipeline.process).toHaveBeenCalledTimes(1);
-      expect(consoleSpy).toHaveBeenCalled();
-      consoleSpy.mockRestore();
-    });
-
-    it('learning pipeline throws → SSE broadcast still happened', async () => {
-      mockPipeline.process.mockRejectedValue(new Error('Pipeline exploded'));
-
-      const event = makeRunCompletedEvent({ status: 'completed' });
-
-      (mockDB.getRecentTraces as any) = vi.fn().mockResolvedValue([
-        {
-          id: 'trace-err-2',
-          agentId: event.agentId,
-          sessionId: event.sessionId,
-          taskDescription: 'Error test 2',
-          steps: [],
-          startedAt: Date.now() - 1000,
-          completedAt: Date.now(),
-          outcome: 'success',
-        },
-      ]);
-
-      subscriber.shutdown();
-      subscriber = new LearningEventSubscriber(mockPipeline as any, bus, mockDB as any);
-
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      bus.emit('turn.completed', event);
-      await settle();
-
-      // SSE broadcast should have happened regardless
-      expect(mockSSE.broadcast).toHaveBeenCalledWith(
-        event.agentId,
-        expect.objectContaining({ type: 'RUN_FINISHED' }),
-      );
-      expect(consoleSpy).toHaveBeenCalled();
-      consoleSpy.mockRestore();
-    });
-
-    it('both throw → no unhandled rejections', async () => {
-      mockSSE.broadcast.mockImplementation(() => {
-        throw new Error('SSE exploded');
-      });
-      mockPipeline.process.mockRejectedValue(new Error('Pipeline exploded'));
-
-      const event = makeRunCompletedEvent({ status: 'completed' });
-
-      (mockDB.getRecentTraces as any) = vi.fn().mockResolvedValue([
-        {
-          id: 'trace-err-3',
-          agentId: event.agentId,
-          sessionId: event.sessionId,
-          taskDescription: 'Error test 3',
-          steps: [],
-          startedAt: Date.now() - 1000,
-          completedAt: Date.now(),
-          outcome: 'success',
-        },
-      ]);
-
-      subscriber.shutdown();
-      subscriber = new LearningEventSubscriber(mockPipeline as any, bus, mockDB as any);
-
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-      // This should not throw or cause unhandled rejections
-      expect(() => bus.emit('turn.completed', event)).not.toThrow();
-      await settle();
-
-      expect(consoleSpy).toHaveBeenCalled();
-      consoleSpy.mockRestore();
     });
   });
 

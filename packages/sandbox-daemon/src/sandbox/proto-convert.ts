@@ -202,10 +202,7 @@ export function messageToCommittedEvent(
         create(ToolCallSchema, {
           id: tc.id,
           name: tc.name,
-          argumentsJson:
-            typeof tc.arguments === 'string'
-              ? tc.arguments
-              : stringifyJsonWithBigInts(tc.arguments),
+          argumentsJson: stringifyProtoJsonPayload(tc.arguments),
         }),
       ),
       toolCallId: msg.toolCallId,
@@ -391,10 +388,7 @@ function convertAgentEvent(event: AgentEvent): ProtoAgentEvent {
           value: create(ToolCallStartSchema, {
             id: event.id,
             name: event.name,
-            argsJson:
-              typeof event.args === 'string'
-                ? event.args
-                : stringifyJsonWithBigInts(event.args),
+            argsJson: stringifyProtoJsonPayload(event.args),
           }),
         },
       });
@@ -419,10 +413,7 @@ function convertAgentEvent(event: AgentEvent): ProtoAgentEvent {
           value: create(ApprovalNeededSchema, {
             id: event.id,
             toolName: event.tool,
-            argsJson:
-              typeof event.args === 'string'
-                ? event.args
-                : stringifyJsonWithBigInts(event.args),
+            argsJson: stringifyProtoJsonPayload(event.args),
           }),
         },
       });
@@ -517,6 +508,10 @@ function parseJsonOrThrow(s: string, context: string): Record<string, unknown> {
       { cause: err },
     );
   }
+}
+
+function stringifyProtoJsonPayload(value: unknown): string {
+  return typeof value === 'string' ? value : stringifyJsonWithBigInts(value);
 }
 
 /**

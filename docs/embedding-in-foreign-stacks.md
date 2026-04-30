@@ -229,13 +229,9 @@ await fetch('http://myapp:3000/api/tools/persist', {
 
 Values are encrypted at rest with AES-256-GCM using `SECRET_MASTER_KEY`; plaintext only exists in the sandbox process environment for the lifetime of the session.
 
-## Egress Proxy
+## Sandbox Egress
 
-If your environment requires all outbound traffic to go through a proxy, you can enable the egress proxy feature.
-
-1.  Set `CTXMILL_EGRESS_PROXY=1` in the orchestrator environment.
-2.  The orchestrator will automatically set `HTTP_PROXY` and `HTTPS_PROXY` in sandbox containers to point to `http://egress-proxy:3128`.
-3.  Ensure a service named `egress-proxy` is running on the `ctxmill-agents` network.
+CTXMill does not currently enforce an outbound proxy or domain allowlist for sandbox containers. If your environment requires egress control, apply it outside CTXMill with your Docker network, firewall, Kubernetes NetworkPolicy, service mesh, or gateway.
 
 ## Volume Mounting
 

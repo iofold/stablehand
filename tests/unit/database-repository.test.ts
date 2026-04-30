@@ -35,8 +35,6 @@ describe('DatabaseRepository', () => {
         'ctxmill_schema_version',
         'event_store',
         'event_triggers',
-        'execution_traces',
-        'feedback_signals',
         'interrupt_resume_attempts',
         'knowledge_items',
         'messages',
@@ -273,6 +271,21 @@ describe('DatabaseRepository', () => {
       expect(secretCount.count).toBe(0);
       expect(dedupCount.count).toBe(0);
     });
+
+    it('saves agent manifest versions sequentially with a unique database constraint', async () => {
+      const agent = await repo.createAgent({ ...agentData, name: 'Manifest Version Agent' });
+
+      await repo.saveAgentManifest(agent.id, { metadata: { name: 'v2' } }, 'tester', 'first update');
+      await repo.saveAgentManifest(agent.id, { metadata: { name: 'v3' } }, 'tester', 'second update');
+
+      const versions = await repo.getAgentVersions(agent.id);
+      expect(versions.map((version) => version.version)).toEqual([3, 2]);
+
+      await expect(testDb.conn.pgClient`
+        INSERT INTO agent_versions (id, agent_id, version, manifest, created_at)
+        VALUES ('duplicate-manifest-version', ${agent.id}, 3, '{}', ${Date.now()})
+      `).rejects.toThrow(/duplicate|unique/i);
+    });
   });
 
   // --- Conversations & Messages (CFG-05) ---
@@ -380,54 +393,6 @@ describe('DatabaseRepository', () => {
       const strategies = await repo.getKnowledgeItems('a1', 'strategy');
       expect(strategies).toHaveLength(1);
       expect(strategies[0].category).toBe('strategy');
-    });
-  });
-
-  // --- Execution Traces ---
-
-  describe('Execution Traces', () => {
-    it('should save and retrieve execution traces', async () => {
-      const trace = await repo.saveTrace({
-        agentId: 'agent-1',
-        sessionId: 'run-1',
-        taskDescription: 'Test task',
-        steps: [{ ordinal: 0, type: 'llm_call', content: 'hello', durationMs: 100 }],
-        outcome: 'success',
-      });
-      expect(trace.id).toBeDefined();
-      expect(trace.taskDescription).toBe('Test task');
-
-      const traces = await repo.getTraces('agent-1');
-      expect(traces).toHaveLength(1);
-      expect(traces[0].sessionId).toBe('run-1');
-    });
-  });
-
-  // --- Feedback Signals ---
-
-  describe('Feedback Signals', () => {
-    it('should save and retrieve feedback signals', async () => {
-      const trace = await repo.saveTrace({
-        agentId: 'agent-1',
-        sessionId: 'run-1',
-        taskDescription: 'Test',
-        steps: [],
-        outcome: 'success',
-      });
-
-      const feedback = await repo.saveFeedback({
-        traceId: trace.id,
-        agentId: 'agent-1',
-        source: 'human',
-        type: 'thumbs',
-        value: { thumbs: 'up' },
-      });
-      expect(feedback.id).toBeDefined();
-      expect(feedback.source).toBe('human');
-
-      const feedbacks = await repo.getFeedbackForTrace(trace.id);
-      expect(feedbacks).toHaveLength(1);
-      expect(feedbacks[0].type).toBe('thumbs');
     });
   });
 

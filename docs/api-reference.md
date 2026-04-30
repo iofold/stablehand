@@ -76,11 +76,8 @@
 | POST | `/api/agents/:id/webhooks` | Create webhook |
 | PUT | `/api/agents/:id/webhooks/:webhookId` | Update webhook |
 | DELETE | `/api/agents/:id/webhooks/:webhookId` | Delete webhook |
-| **Feedback & Learning Traces** |  |  |
+| **Feedback** |  |  |
 | POST | `/api/agents/:id/feedback` | Submit thumbs-up/thumbs-down feedback |
-| GET | `/api/agents/:id/feedback/stats` | Feedback stats |
-| GET | `/api/agents/:id/traces` | List learning traces |
-| GET | `/api/agents/:id/traces/stats` | Trace stats |
 | GET | `/api/agents/:id/versions` | List stored agent versions |
 | **Settings** |  |  |
 | GET | `/api/settings` | Get system settings |
@@ -680,7 +677,7 @@ Example initial frames:
 ```text
 data: {"type":"CONNECTED","agentId":"agent_123","timestamp":1712140000000}
 
-data: {"type":"CUSTOM","subtype":"state_snapshot","agentId":"agent_123","conversationId":"conv_123","sessionId":"sbx_123","status":"PAUSED","timestamp":1712140001000}
+data: {"type":"CUSTOM","subtype":"state_snapshot","agentId":"agent_123","conversationId":"conv_123","sessionId":"sbx_123","status":"PAUSED","activeTurnId":null,"timestamp":1712140001000}
 
 id: agent_123-42
 data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","timestamp":1712140002000}
@@ -1322,11 +1319,11 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 - **Response:** no body.
 - **Notes:** Returns `204` on success. Returns `404` when the webhook does not belong to the agent.
 
-### m. Feedback & Learning Traces
+### m. Feedback
 
 #### `POST /api/agents/:id/feedback`
 
-- **Description:** Stores thumbs-up or thumbs-down feedback for a conversation, and optionally triggers the learning pipeline.
+- **Description:** Emits a thumbs-up or thumbs-down feedback event for a conversation. External learning modules can subscribe to `feedback.received` through the event/webhook surfaces.
 - **Request body:**
 
 ```json
@@ -1345,68 +1342,11 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 {
   "feedbackId": "fb_123",
   "type": "thumbs_up",
-  "learningTriggered": true,
-  "insightsGenerated": 2
+  "turnId": "turn_123"
 }
 ```
 
-- **Notes:** If learning fails after feedback is stored, the endpoint still returns `201` and includes `learningError`.
-
-#### `GET /api/agents/:id/feedback/stats`
-
-- **Description:** Returns aggregate feedback stats.
-- **Query params:** None.
-- **Response:**
-
-```json
-{
-  "total": 10,
-  "byType": { "thumbs": 10 },
-  "recentCount": 3
-}
-```
-
-- **Notes:** `recentCount` covers the last 24 hours.
-
-#### `GET /api/agents/:id/traces`
-
-- **Description:** Lists recent learning traces.
-- **Query params:**
-  - `limit` (default `20`)
-- **Response:** raw array.
-
-```json
-[
-  {
-    "id": "trace_123",
-    "agentId": "agent_123",
-    "sessionId": "turn_123",
-    "outcome": "success",
-    "steps": [],
-    "startedAt": 1712140000000,
-    "completedAt": 1712140015000
-  }
-]
-```
-
-- **Notes:** Good for audit/debugging, not just analytics.
-
-#### `GET /api/agents/:id/traces/stats`
-
-- **Description:** Returns aggregate trace stats.
-- **Query params:** None.
-- **Response:**
-
-```json
-{
-  "total": 24,
-  "byOutcome": { "success": 20, "failure": 4 },
-  "avgSteps": 6,
-  "recentCount": 5
-}
-```
-
-- **Notes:** `recentCount` covers the last 24 hours.
+- **Notes:** The endpoint does not persist feedback analytics or run an in-process learner. Register a webhook for `feedback.received` when an external learning service needs the signal.
 
 #### `GET /api/agents/:id/versions`
 

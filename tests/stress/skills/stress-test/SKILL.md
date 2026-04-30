@@ -19,16 +19,13 @@ Verify readiness:
 # API responds
 curl -sf http://localhost:3002/api/agents > /dev/null && echo "API: OK" || echo "API: DOWN"
 
-# Egress proxy is healthy (required for sandbox → LLM API connectivity)
-docker compose ps egress-proxy --format '{{.Status}}' | grep -q healthy && echo "Proxy: OK" || echo "Proxy: DOWN"
-
 # Sandbox harness images exist
 for img in langgraph claude-agents pi-agent; do
   docker image inspect "ctxmill/harness-${img}:latest" > /dev/null 2>&1 && echo "Image ${img}: OK" || echo "Image ${img}: MISSING — run: docker compose up --build"
 done
 ```
 
-All checks must pass before proceeding. Without the sandbox profile, agents cannot reach external LLM APIs and tool proxying (emit-event, request-approval) will fail silently.
+All checks must pass before proceeding. Sandbox egress is controlled by the host or cluster network; CTXMill does not currently run a built-in outbound proxy.
 
 ## Shared setup
 
@@ -41,18 +38,64 @@ agent_id() {
   curl -s "$API_BASE/api/agents" | jq -r --arg name "$name" 'first(.[] | select(.name == $name) | .id)'
 }
 
+post_message() {
+  local agent_id="$1"
+  local content="$2"
+  curl -s -X POST "$API_BASE/api/agents/$agent_id/message" \
+    -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg content "$content" '{content: $content}')" \
+    | jq -r '.runId // .sessionId // .id'
+}
+
 wait_for_status() {
   local agent_id="$1"
-  local run_id="$2"
+  local session_id="$2"
   local ok_statuses="$3"
 
   while true; do
-    status="$(curl -s "$API_BASE/api/agents/$agent_id/runs" | jq -r --arg run_id "$run_id" 'first(.[] | select(.id == $run_id) | .status) // empty')"
-    echo "run=$run_id status=${status:-missing}"
+    status="$(curl -s "$API_BASE/api/agents/$agent_id/sessions" \
+      | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
+      | tr '[:upper:]' '[:lower:]')"
+    echo "session=$session_id status=${status:-missing}"
     [[ " $ok_statuses " == *" $status "* ]] && return 0
-    [[ "$status" =~ ^(failed|cancelled|rejected)$ ]] && return 1
+    [[ "$status" =~ ^(failed|cancelled|rejected|error)$ ]] && return 1
     sleep 2
   done
+}
+
+wait_for_interrupt() {
+  local agent_id="$1"
+  local session_id="$2"
+
+  while true; do
+    interrupt_session_id="$(curl -s "$API_BASE/api/agents/$agent_id/interrupts" \
+      | jq -r --arg session_id "$session_id" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId) // empty')"
+    [[ -n "$interrupt_session_id" ]] && return 0
+
+    status="$(curl -s "$API_BASE/api/agents/$agent_id/sessions" \
+      | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
+      | tr '[:upper:]' '[:lower:]')"
+    echo "session=$session_id status=${status:-missing} waiting_for_interrupt"
+    [[ "$status" =~ ^(completed|error|failed|cancelled|rejected)$ ]] && return 1
+    sleep 2
+  done
+}
+
+event_count() {
+  local type="$1"
+  local agent_id="$2"
+  curl -s "$API_BASE/api/events?type=$type&agentId=$agent_id&limit=50" | jq '.events | length'
+}
+
+expect_event_after() {
+  local type="$1"
+  local agent_id="$2"
+  local before="$3"
+  local after
+
+  after="$(event_count "$type" "$agent_id")"
+  echo "event=$type agent=$agent_id before=$before after=$after"
+  (( after > before ))
 }
 ```
 
@@ -87,20 +130,16 @@ Pass/fail:
 Run the LangGraph agent with GPT-5.4 and verify it can call emit-event.
 
 ```bash
-LG_OPENAI_RUN="$(curl -s -X POST "$API_BASE/api/agents/$LG_OPENAI_ID/message" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"Run the stress test now. Confirm you are operational and emit stress.tools.complete."}' \
-  | jq -r '.runId')"
+LG_OPENAI_EVENTS_BEFORE="$(event_count stress.tools.complete "$LG_OPENAI_ID")"
+LG_OPENAI_RUN="$(post_message "$LG_OPENAI_ID" "Run the stress test now. Confirm you are operational and emit stress.tools.complete.")"
 
-wait_for_status "$LG_OPENAI_ID" "$LG_OPENAI_RUN" "completed error"
-
-curl -s "$API_BASE/api/events?type=stress.tools.complete&agentId=$LG_OPENAI_ID&limit=20" \
-  | jq --arg run_id "$LG_OPENAI_RUN" '.events | map(select((.payload // "") | contains($run_id)))'
+wait_for_status "$LG_OPENAI_ID" "$LG_OPENAI_RUN" "completed"
+expect_event_after stress.tools.complete "$LG_OPENAI_ID" "$LG_OPENAI_EVENTS_BEFORE"
 ```
 
 Expected:
 - Run reaches `completed` after emitting the event
-- `stress.tools.complete` event exists for this run
+- The persisted `stress.tools.complete` count for this agent increases
 
 Pass/fail:
 - Pass if event is persisted
@@ -108,43 +147,45 @@ Pass/fail:
 
 ---
 
-## Phase 3: Multi-model validation (`stress-lg-gemini`, `stress-pi-gemini`)
+## Phase 3: Multi-model validation (`stress-lg-gemini`, `stress-pi-openai`, `stress-pi-gemini`)
 
 ### LangGraph + Gemini
 
 ```bash
-LG_GEMINI_RUN="$(curl -s -X POST "$API_BASE/api/agents/$LG_GEMINI_ID/message" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"Verify Gemini LangGraph execution and emit stress.gemini.complete."}' \
-  | jq -r '.runId')"
+LG_GEMINI_EVENTS_BEFORE="$(event_count stress.gemini.complete "$LG_GEMINI_ID")"
+LG_GEMINI_RUN="$(post_message "$LG_GEMINI_ID" "Verify Gemini LangGraph execution and emit stress.gemini.complete.")"
 
 wait_for_status "$LG_GEMINI_ID" "$LG_GEMINI_RUN" "completed"
+expect_event_after stress.gemini.complete "$LG_GEMINI_ID" "$LG_GEMINI_EVENTS_BEFORE"
+```
 
-curl -s "$API_BASE/api/events?type=stress.gemini.complete&agentId=$LG_GEMINI_ID&limit=20" \
-  | jq --arg run_id "$LG_GEMINI_RUN" '.events | map(select((.payload // "") | contains($run_id)))'
+### PI Agent + OpenAI
+
+```bash
+PI_OPENAI_EVENTS_BEFORE="$(event_count stress.pi.complete "$PI_OPENAI_ID")"
+PI_OPENAI_RUN="$(post_message "$PI_OPENAI_ID" "Verify PI-agent OpenAI execution and emit stress.pi.complete.")"
+
+wait_for_status "$PI_OPENAI_ID" "$PI_OPENAI_RUN" "completed"
+expect_event_after stress.pi.complete "$PI_OPENAI_ID" "$PI_OPENAI_EVENTS_BEFORE"
 ```
 
 ### PI Agent + Gemini
 
 ```bash
-PI_GEMINI_RUN="$(curl -s -X POST "$API_BASE/api/agents/$PI_GEMINI_ID/message" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"Verify Gemini PI-agent execution and emit stress.pi-gemini.complete."}' \
-  | jq -r '.runId')"
+PI_GEMINI_EVENTS_BEFORE="$(event_count stress.pi-gemini.complete "$PI_GEMINI_ID")"
+PI_GEMINI_RUN="$(post_message "$PI_GEMINI_ID" "Verify Gemini PI-agent execution and emit stress.pi-gemini.complete.")"
 
 wait_for_status "$PI_GEMINI_ID" "$PI_GEMINI_RUN" "completed"
-
-curl -s "$API_BASE/api/events?type=stress.pi-gemini.complete&agentId=$PI_GEMINI_ID&limit=20" \
-  | jq --arg run_id "$PI_GEMINI_RUN" '.events | map(select((.payload // "") | contains($run_id)))'
+expect_event_after stress.pi-gemini.complete "$PI_GEMINI_ID" "$PI_GEMINI_EVENTS_BEFORE"
 ```
 
 Expected:
-- Both Gemini-backed agents complete successfully
-- Each emits its model-specific event
+- LangGraph Gemini, PI OpenAI, and PI Gemini complete successfully
+- Each increases its model-specific persisted event count
 
 Pass/fail:
-- Pass if both runs are `completed` and both event arrays are non-empty
-- Fail if either run errors or either event is missing
+- Pass if all three sessions are `completed` and all event counts increase
+- Fail if any session errors or any event is missing
 
 ---
 
@@ -153,7 +194,7 @@ Pass/fail:
 Emit the trigger event externally, then verify the responder runs.
 
 ```bash
-CHAIN_BEFORE="$(curl -s "$API_BASE/api/agents/$CHAIN_ID/runs" | jq 'length')"
+CHAIN_BEFORE="$(curl -s "$API_BASE/api/agents/$CHAIN_ID/sessions" | jq '.sessions | length')"
 
 curl -s -X POST "$API_BASE/api/triggers/emit" \
   -H 'Content-Type: application/json' \
@@ -161,16 +202,13 @@ curl -s -X POST "$API_BASE/api/triggers/emit" \
   | jq .
 
 while true; do
-  CHAIN_RUN_ID="$(curl -s "$API_BASE/api/agents/$CHAIN_ID/runs" \
-    | jq -r --argjson before "$CHAIN_BEFORE" 'if length > $before then first(.[] | .id) else empty end')"
+  CHAIN_RUN_ID="$(curl -s "$API_BASE/api/agents/$CHAIN_ID/sessions" \
+    | jq -r --argjson before "$CHAIN_BEFORE" 'if (.sessions | length) > $before then first(.sessions[] | .id) else empty end')"
   [[ -n "$CHAIN_RUN_ID" ]] && break
   sleep 2
 done
 
 wait_for_status "$CHAIN_ID" "$CHAIN_RUN_ID" "completed"
-
-curl -s "$API_BASE/api/events?type=stress.chain.done&agentId=$CHAIN_ID&limit=20" \
-  | jq --arg run_id "$CHAIN_RUN_ID" '.events | map(select((.payload // "") | contains($run_id)))'
 ```
 
 Expected:
@@ -187,15 +225,11 @@ Pass/fail:
 ## Phase 5: Code execution (`stress-claude-sonnet`)
 
 ```bash
-CLAUDE_RUN="$(curl -s -X POST "$API_BASE/api/agents/$CLAUDE_ID/message" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"Write the stress test file now, verify it exists, and emit stress.claude.complete."}' \
-  | jq -r '.runId')"
+CLAUDE_EVENTS_BEFORE="$(event_count stress.claude.complete "$CLAUDE_ID")"
+CLAUDE_RUN="$(post_message "$CLAUDE_ID" "Write the stress test file now, verify it exists, and emit stress.claude.complete.")"
 
 wait_for_status "$CLAUDE_ID" "$CLAUDE_RUN" "completed"
-
-curl -s "$API_BASE/api/events?type=stress.claude.complete&agentId=$CLAUDE_ID&limit=20" \
-  | jq --arg run_id "$CLAUDE_RUN" '.events | map(select((.payload // "") | contains($run_id)))'
+expect_event_after stress.claude.complete "$CLAUDE_ID" "$CLAUDE_EVENTS_BEFORE"
 ```
 
 Expected:
@@ -213,50 +247,48 @@ Pass/fail:
 ### Approve path
 
 ```bash
-HITL_APPROVE_RUN="$(curl -s -X POST "$API_BASE/api/agents/$HITL_ID/message" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"Request approval for writing stress test results, then emit stress.hitl.complete."}' \
-  | jq -r '.runId')"
+HITL_EVENTS_BEFORE="$(event_count stress.hitl.complete "$HITL_ID")"
+HITL_APPROVE_RUN="$(post_message "$HITL_ID" "Request approval for writing stress test results, then emit stress.hitl.complete.")"
 
-wait_for_status "$HITL_ID" "$HITL_APPROVE_RUN" "paused"
+wait_for_interrupt "$HITL_ID" "$HITL_APPROVE_RUN"
 
-APPROVE_RUN_ID="$(curl -s "$API_BASE/api/agents/$HITL_ID/interrupts" | jq -r 'first(.interrupts[]? | .runId)')"
+APPROVE_SESSION_ID="$(curl -s "$API_BASE/api/agents/$HITL_ID/interrupts" \
+  | jq -r --arg session_id "$HITL_APPROVE_RUN" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId)')"
 
 curl -s -X POST "$API_BASE/api/agents/$HITL_ID/interrupt" \
   -H 'Content-Type: application/json' \
-  -d "$(jq -nc --arg action approve --arg runId "$APPROVE_RUN_ID" '{action: $action, runId: $runId}')" \
+  -d "$(jq -nc --arg action approve --arg sessionId "$APPROVE_SESSION_ID" '{action: $action, sessionId: $sessionId}')" \
   | jq .
 
 wait_for_status "$HITL_ID" "$HITL_APPROVE_RUN" "completed"
+expect_event_after stress.hitl.complete "$HITL_ID" "$HITL_EVENTS_BEFORE"
 ```
 
 ### Reject path
 
 ```bash
-HITL_REJECT_RUN="$(curl -s -X POST "$API_BASE/api/agents/$HITL_ID/message" \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"Request approval again — this one will be rejected."}' \
-  | jq -r '.runId')"
+HITL_REJECT_RUN="$(post_message "$HITL_ID" "Request approval again — this one will be rejected.")"
 
-wait_for_status "$HITL_ID" "$HITL_REJECT_RUN" "paused"
+wait_for_interrupt "$HITL_ID" "$HITL_REJECT_RUN"
 
-REJECT_RUN_ID="$(curl -s "$API_BASE/api/agents/$HITL_ID/interrupts" | jq -r 'first(.interrupts[]? | .runId)')"
+REJECT_SESSION_ID="$(curl -s "$API_BASE/api/agents/$HITL_ID/interrupts" \
+  | jq -r --arg session_id "$HITL_REJECT_RUN" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId)')"
 
 curl -s -X POST "$API_BASE/api/agents/$HITL_ID/interrupt" \
   -H 'Content-Type: application/json' \
-  -d "$(jq -nc --arg action reject --arg runId "$REJECT_RUN_ID" '{action: $action, runId: $runId}')" \
+  -d "$(jq -nc --arg action reject --arg sessionId "$REJECT_SESSION_ID" '{action: $action, sessionId: $sessionId}')" \
   | jq .
 
 wait_for_status "$HITL_ID" "$HITL_REJECT_RUN" "error rejected"
 ```
 
 Expected:
-- First run pauses, resumes after approval, and completes
-- Second run pauses, then ends in `error` or `rejected` after rejection
+- First session creates a pending interrupt, resumes after approval, completes, and emits `stress.hitl.complete`
+- Second session creates a pending interrupt, then ends in `error` or `rejected` after rejection
 
 Pass/fail:
 - Pass if both interrupt actions resolve and produce the expected terminal states
-- Fail if the run never pauses or the interrupt endpoint does not resolve
+- Fail if no pending interrupt appears or the interrupt endpoint does not resolve
 
 ---
 

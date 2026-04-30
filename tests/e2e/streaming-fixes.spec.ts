@@ -41,9 +41,7 @@ test.describe('Streaming fixes', () => {
     expect(sessionsResponse.ok()).toBeTruthy();
     const sessionsBody = await sessionsResponse.json();
 
-    const sessions = Array.isArray(sessionsBody)
-      ? sessionsBody
-      : ((sessionsBody as Record<string, unknown>).sessions ?? []);
+    const sessions = (sessionsBody as { sessions?: Record<string, unknown>[] }).sessions ?? [];
 
     expect(Array.isArray(sessions)).toBe(true);
     expect(sessions.length).toBeGreaterThan(0);

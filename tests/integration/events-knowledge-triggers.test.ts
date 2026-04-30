@@ -28,19 +28,17 @@ describe('Events, Knowledge, and Triggers Integration', () => {
       {
         preset: 'local',
         database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
-        llm: { provider: 'anthropic', model: 'claude-sonnet-4-6', apiKey: 'test-key-not-used' },
       },
       dataDir,
     );
 
     app = await createServer({
       db: container.db,
-      agentRunService: container.agentRunService,
-      runRegistry: container.runRegistry,
+      agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
       knowledgeStore: container.knowledgeStore,
-      learningPipeline: container.learningPipeline,
       triggerManager: container.triggerManager,
+      runStartupService: container.runStartupService,
       dataDir,
     });
     await app.ready();
@@ -534,72 +532,48 @@ describe('Events, Knowledge, and Triggers Integration', () => {
   });
 
   // ────────────────────────────────────────────────────────
-  // Traces & Feedback Stats (/api/agents/:id/traces, feedback)
+  // Feedback signal endpoint and removed trace/stat endpoints
   // ────────────────────────────────────────────────────────
 
-  describe('Traces & Feedback', () => {
-    it('GET /api/agents/:id/traces returns array', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `/api/agents/${agentId}/traces`,
+  describe('Feedback and removed learning endpoints', () => {
+    it('POST /api/agents/:id/feedback emits feedback.received', async () => {
+      const received = new Promise<unknown>((resolve) => {
+        container.eventBus.once('feedback.received', resolve);
       });
-      expect(res.statusCode).toBe(200);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/feedback`,
+        payload: {
+          conversationId: 'conversation-feedback-test',
+          messageId: 'message-feedback-test',
+          type: 'thumbs_up',
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
       const body = res.json();
-      expect(Array.isArray(body)).toBe(true);
+      expect(body.feedbackId).toEqual(expect.any(String));
+      expect(body.turnId).toBe('conversation-feedback-test');
+      await expect(received).resolves.toMatchObject({
+        feedbackId: body.feedbackId,
+        turnId: 'conversation-feedback-test',
+        agentId,
+        type: 'thumbs_up',
+        messageId: 'message-feedback-test',
+      });
     });
 
-    it('GET /api/agents/:id/traces accepts limit parameter', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `/api/agents/${agentId}/traces?limit=5`,
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(Array.isArray(body)).toBe(true);
-    });
-
-    it('GET /api/agents/:id/traces returns 404 for non-existent agent', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/agents/non-existent/traces',
-      });
-      expect(res.statusCode).toBe(404);
-    });
-
-    it('GET /api/agents/:id/traces/stats returns stats structure', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `/api/agents/${agentId}/traces/stats`,
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(typeof body).toBe('object');
-    });
-
-    it('GET /api/agents/:id/traces/stats returns 404 for non-existent agent', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/agents/non-existent/traces/stats',
-      });
-      expect(res.statusCode).toBe(404);
-    });
-
-    it('GET /api/agents/:id/feedback/stats returns stats structure', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `/api/agents/${agentId}/feedback/stats`,
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(typeof body).toBe('object');
-    });
-
-    it('GET /api/agents/:id/feedback/stats returns 404 for non-existent agent', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/agents/non-existent/feedback/stats',
-      });
-      expect(res.statusCode).toBe(404);
+    it('trace and feedback stats endpoints are removed', async () => {
+      for (const url of [
+        `/api/agents/${agentId}/traces`,
+        `/api/agents/${agentId}/traces?limit=5`,
+        `/api/agents/${agentId}/traces/stats`,
+        `/api/agents/${agentId}/feedback/stats`,
+      ]) {
+        const res = await app.inject({ method: 'GET', url });
+        expect(res.statusCode).toBe(404);
+      }
     });
   });
 });

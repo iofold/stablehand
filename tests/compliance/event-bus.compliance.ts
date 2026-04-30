@@ -5,7 +5,7 @@
  * behavioral contract. Consumers provide a factory that returns
  * a fresh bus instance.
  *
- * Pattern follows learning-pipeline.compliance.ts.
+ * Pattern follows the shared compliance-suite factory style.
  */
 
 import { describe, it, expect, vi } from 'vitest';

@@ -21,21 +21,6 @@ export interface ContainerManagerOptions {
   maxGlobalContainers?: number;
   /** Timeout in ms for queued container requests. Default: 60000 (60 seconds) */
   queueTimeoutMs?: number;
-  /**
-   * Enable egress proxy for sandbox containers. When true, sets HTTP_PROXY,
-   * HTTPS_PROXY, and NO_PROXY env vars so traffic is routed through the
-   * nginx egress-proxy service. Default: true when CTXMILL_EGRESS_PROXY=1,
-   * false otherwise.
-   */
-  egressProxy?: boolean;
-  /**
-   * Hostname of the egress proxy service. Default: 'egress-proxy'
-   */
-  egressProxyHost?: string;
-  /**
-   * Port of the egress proxy service. Default: 3128
-   */
-  egressProxyPort?: number;
 }
 
 export interface CreateContainerOptions {
@@ -85,6 +70,28 @@ export interface ContainerMetrics {
 export interface WorkspaceDiffSnapshot {
   archive: Buffer | null;
   deletedPaths: string[];
+}
+
+export interface SandboxContainerManager {
+  createContainer(opts: CreateContainerOptions): Promise<ContainerInfo>;
+  startContainer(containerId: string): Promise<ContainerInfo | undefined>;
+  stopContainer(containerId: string, timeoutSec?: number): Promise<void>;
+  removeContainer(containerId: string, force?: boolean): Promise<void>;
+  extractWorkspaceDiff(containerId: string): Promise<WorkspaceDiffSnapshot | null>;
+  extractContainerDiff(containerId: string): Promise<Buffer | null>;
+  restoreArchive(containerId: string, archive: Buffer, options?: { deletedPaths?: string[] }): Promise<void>;
+  extractLogs(containerId: string, tail?: number): Promise<string>;
+  getContainer(sessionId: string): Promise<ContainerInfo | null>;
+  listManagedContainers(): Promise<ContainerInfo[]>;
+  listManagedContainersWithLabels(): Promise<ManagedContainerWithLabels[]>;
+  getContainerExitCode(containerId: string): Promise<number | null>;
+  getContainerByLabel(label: string, value: string): Promise<ContainerInfo | null>;
+  isContainerAlive(containerId: string): Promise<boolean>;
+  ensureNetwork(): Promise<void>;
+  getActiveCount(): number;
+  getQueuedCount(): number;
+  getPeakCount(): number;
+  getMetrics(): ContainerMetrics;
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -273,7 +280,7 @@ const HARNESS_MEMORY_FLOOR: ReadonlyMap<string, number> = new Map([
   ['claude-agents', 2048],
 ]);
 
-export class ContainerManager {
+export class ContainerManager implements SandboxContainerManager {
   private readonly docker: Dockerode;
   private readonly networkName: string;
   private readonly imagePrefix: string;
@@ -283,9 +290,6 @@ export class ContainerManager {
   private readonly defaultTimeoutSec: number;
   private readonly semaphore: ContainerSemaphore;
   private readonly maxGlobalContainers: number;
-  private readonly egressProxy: boolean;
-  private readonly egressProxyHost: string;
-  private readonly egressProxyPort: number;
 
   // ── Metrics tracking (in-memory, not persisted) ──────────
   private totalCreated = 0;
@@ -303,10 +307,6 @@ export class ContainerManager {
     this.defaultMemoryMb = options?.defaultMemoryMb ?? 1024;
     this.defaultPidsLimit = options?.defaultPidsLimit ?? 256;
     this.defaultTimeoutSec = options?.defaultTimeoutSec ?? 600;
-    this.egressProxy =
-      options?.egressProxy ?? process.env.CTXMILL_EGRESS_PROXY === '1';
-    this.egressProxyHost = options?.egressProxyHost ?? 'egress-proxy';
-    this.egressProxyPort = options?.egressProxyPort ?? 3128;
 
     this.maxGlobalContainers = options?.maxGlobalContainers
       ?? (process.env.CTXMILL_MAX_CONTAINERS ? parseInt(process.env.CTXMILL_MAX_CONTAINERS, 10) : 20);
@@ -370,6 +370,7 @@ export class ContainerManager {
           PidsLimit: pidsLimit,
           Tmpfs: { '/run/secrets': 'rw,noexec,nosuid,size=1m' },
           NetworkMode: this.networkName,
+          ExtraHosts: ['host.docker.internal:host-gateway'],
           SecurityOpt: ['no-new-privileges'],
           ReadonlyRootfs: false,
           LogConfig: {
@@ -389,16 +390,6 @@ export class ContainerManager {
           `ORCHESTRATOR_URL=${process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001'}`,
           ...(opts.secrets
             ? Object.entries(opts.secrets).map(([k, v]) => `${k}=${v}`)
-            : []),
-          ...(this.egressProxy
-            ? [
-                `HTTP_PROXY=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                `HTTPS_PROXY=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                `http_proxy=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                `https_proxy=http://${this.egressProxyHost}:${this.egressProxyPort}`,
-                'NO_PROXY=orchestrator,localhost,127.0.0.1,minio',
-                'no_proxy=orchestrator,localhost,127.0.0.1,minio',
-              ]
             : []),
         ],
       });
@@ -428,11 +419,13 @@ export class ContainerManager {
     }
   }
 
-  async startContainer(containerId: string): Promise<void> {
+  async startContainer(containerId: string): Promise<ContainerInfo> {
     console.debug(`${TAG} starting container ${containerId}`);
     const container = this.docker.getContainer(containerId);
     await container.start();
     console.debug(`${TAG} container ${containerId} started`);
+    const info = await container.inspect();
+    return this.containerInspectItemToInfo(containerId, info);
   }
 
   async stopContainer(containerId: string, timeoutSec?: number): Promise<void> {
@@ -923,6 +916,36 @@ export class ContainerManager {
     const networks = c.NetworkSettings?.Networks;
     if (networks) {
       const net = networks[this.networkName];
+      if (net?.IPAddress) {
+        info.networkIp = net.IPAddress;
+      }
+    }
+
+    return info;
+  }
+
+  private containerInspectItemToInfo(
+    containerId: string,
+    c: Dockerode.ContainerInspectInfo,
+  ): ContainerInfo {
+    const labels = c.Config?.Labels ?? {};
+    const info: ContainerInfo = {
+      containerId,
+      containerName: c.Name?.replace(/^\//, '') ?? '',
+      sessionId: labels['ctxmill.session-id'] || labels['ctxmill.run-id'] || '',
+      agentId: labels['ctxmill.agent-id'] ?? '',
+      harnessName: labels['ctxmill.harness'] ?? '',
+      status: dockerStateToStatus(c.State.Status),
+    };
+
+    const startedAt = labels['ctxmill.started-at'];
+    if (startedAt) {
+      info.startedAt = new Date(startedAt);
+    }
+
+    const networks = c.NetworkSettings?.Networks;
+    if (networks) {
+      const net = networks[this.networkName] ?? Object.values(networks).find((candidate) => candidate?.IPAddress);
       if (net?.IPAddress) {
         info.networkIp = net.IPAddress;
       }

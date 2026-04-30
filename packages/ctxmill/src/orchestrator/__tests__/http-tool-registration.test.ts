@@ -5,8 +5,9 @@ import { agentRoutes } from '../routes/agents.js';
 import { createServer } from '../server.js';
 import { SessionTurnService } from '../session-turn-service.js';
 import type { SessionEvent } from '../session-turn-service.js';
-import { mapAgentHttpToolsToConfigs } from '../http-tools.js';
+import { mapAgentHttpToolsToConfigs, validateAgentHttpToolsConfig } from '../http-tools.js';
 import type { AgentSessionService } from '../agent-session-service.js';
+import type { RunStartupService } from '../run-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 import type { SSEManager } from '../sse.js';
 import type { InterruptManager } from '../interrupt.js';
@@ -32,6 +33,13 @@ function createHarnessRegistry() {
     getConfigSchema: vi.fn(() => configSchema),
     list: vi.fn(() => ['langgraph']),
   };
+}
+
+function createRunStartupServiceStub(): RunStartupService {
+  return {
+    prepareRunStart: vi.fn(),
+    launchPreparedRun: vi.fn(),
+  } as unknown as RunStartupService;
 }
 
 let mockStartRunIterator: AsyncGenerator<unknown>;
@@ -102,6 +110,7 @@ async function buildAgentsApp(db: DatabaseRepository, toolRegistry?: DefaultTool
     sessionManager,
     harnessRegistry: createHarnessRegistry() as never,
     agentSessionService,
+    runStartupService: createRunStartupServiceStub(),
     toolRegistry,
   });
   await app.ready();
@@ -318,6 +327,7 @@ describe('HTTP tool registration', () => {
     const app = await createServer({
       db,
       agentSessionService: { executeSession: vi.fn() } as unknown as AgentSessionService,
+      runStartupService: createRunStartupServiceStub(),
       toolDefinitionRegistry: toolRegistry,
     });
 
@@ -364,6 +374,27 @@ describe('HTTP tool registration', () => {
       timeout: 1234,
       authentication: { type: 'bearer', secretName: 'REMOTE_API_KEY' },
     }]);
+  });
+
+  it('rejects invalid HTTP tool methods deterministically', () => {
+    const httpTools = [{
+      name: 'remote-search',
+      description: 'Search remote API',
+      endpoint: 'https://api.example.com/search',
+      method: 'TRACE',
+    }];
+
+    expect(validateAgentHttpToolsConfig(httpTools)).toBe('Invalid HTTP tool method: TRACE');
+    expect(() => mapAgentHttpToolsToConfigs(createAgentDef({ metadata: { httpTools } }))).toThrow(
+      /Invalid HTTP tool method: TRACE/,
+    );
+  });
+
+  it('rejects duplicate HTTP tool names deterministically', () => {
+    expect(validateAgentHttpToolsConfig([
+      { name: 'remote-search', description: 'Search A', endpoint: 'https://api.example.com/a' },
+      { name: 'remote-search', description: 'Search B', endpoint: 'https://api.example.com/b' },
+    ])).toBe('Duplicate HTTP tool name: remote-search');
   });
 
   it('routes executeSessionTurn through sessionManager and passes agentDef with http tools', async () => {

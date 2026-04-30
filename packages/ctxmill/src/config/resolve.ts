@@ -24,24 +24,12 @@ export function resolveConfig(userConfig: CTXMillConfig): ResolvedConfig {
     }
   }
   if (userConfig.security) base.security = { ...base.security, ...userConfig.security };
-  if (userConfig.learning) base.learning = { ...base.learning, ...userConfig.learning };
   if (userConfig.orchestration) base.orchestration = { ...base.orchestration, ...userConfig.orchestration };
   if (userConfig.observability) base.observability = { ...base.observability, ...userConfig.observability };
-  if (userConfig.llm) base.llm = { ...base.llm, ...userConfig.llm };
 
   // Resolve env: references in database URL
   if (base.database.url.startsWith('env:')) {
     base.database.url = process.env[base.database.url.slice(4)] || '';
-  }
-
-  // Resolve LLM credentials from environment when not explicitly set.
-  // This key is only used by the learning pipeline reflector (OpenAI-compatible).
-  // Individual agent harnesses resolve their own keys from the secrets pipeline.
-  if (!base.llm.apiKey) {
-    base.llm.apiKey = process.env.OPENAI_API_KEY || '';
-  }
-  if (!base.llm.baseUrl) {
-    base.llm.baseUrl = process.env.OPENAI_BASE_URL || '';
   }
 
   // ── Max global containers ─────────────────────────────────
@@ -66,12 +54,6 @@ export function resolveConfig(userConfig: CTXMillConfig): ResolvedConfig {
       `Set the DATABASE_URL environment variable or provide database.url in your config.`,
     );
   }
-
-  // LLM API key is optional at the global level.
-  // It powers the learning pipeline reflector (OpenAI-compatible).
-  // Individual agent harnesses resolve their own keys from the secrets pipeline
-  // (env vars + per-agent DB secrets), so the system runs fine without a global key.
-  // The learning pipeline will gracefully skip reflection if no key is configured.
 
   return base;
 }

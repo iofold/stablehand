@@ -27,20 +27,15 @@ describe('File endpoint integration tests', () => {
         database: {
           url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
         },
-        llm: {
-          provider: 'anthropic',
-          model: 'claude-sonnet-4-6',
-          apiKey: 'test-key-not-used',
-        },
       },
       dataDir,
     );
 
     app = await createServer({
       db: container.db,
-      agentRunService: container.agentRunService,
-      runRegistry: container.runRegistry,
+      agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
+      runStartupService: container.runStartupService,
       dataDir,
     });
 

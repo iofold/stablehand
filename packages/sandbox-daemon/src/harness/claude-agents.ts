@@ -427,16 +427,69 @@ class ClaudeSession implements HarnessSession {
         ? { ANTHROPIC_BASE_URL: this.harnessConfig.baseUrl }
         : {}),
     };
-    // Copy remaining env vars, but exclude model-related keys that could
-    // override the explicit model option passed to the SDK.
-    const MODEL_ENV_BLOCKLIST: ReadonlySet<string> = new Set([
+    // Keys that must never be forwarded into the agent env — either because
+    // they're irrelevant to the Claude Code subprocess (model overrides) or
+    // because they are secret credentials that would appear in LangSmith
+    // trace inputs.options.env when LANGSMITH_TRACING=true.
+    const ENV_BLOCKLIST: ReadonlySet<string> = new Set([
+      // Model override keys — prevent these from clobbering the explicit
+      // model option passed to the SDK.
       'OPENAI_MODEL',
       'ANTHROPIC_MODEL',
       'MODEL',
       'CLAUDE_MODEL',
+      // LLM provider credentials — not needed by the agent subprocess; the
+      // only key it needs is ANTHROPIC_API_KEY which is already set above.
+      'OPENAI_API_KEY',
+      'GOOGLE_API_KEY',
+      'GOOGLE_GENERATIVE_AI_API_KEY',
+      'GEMINI_API_KEY',
+      'COHERE_API_KEY',
+      'MISTRAL_API_KEY',
+      'AZURE_OPENAI_API_KEY',
+      'AZURE_OPENAI_ENDPOINT',
+      // Observability / tracing credentials.
+      'LANGSMITH_API_KEY',
+      'LANGSMITH_ENDPOINT',
+      'LANGSMITH_WORKSPACE_ID',
+      'LANGFUSE_SECRET_KEY',
+      'LANGFUSE_PUBLIC_KEY',
+      'LANGFUSE_HOST',
+      'OTEL_EXPORTER_OTLP_HEADERS',
+      // Object-storage credentials (MinIO / S3 / GCS).
+      'S3_SECRET_KEY',
+      'S3_ACCESS_KEY',
+      'MINIO_ROOT_USER',
+      'MINIO_ROOT_PASSWORD',
+      'MINIO_ACCESS_KEY',
+      'MINIO_SECRET_KEY',
+      'AWS_SECRET_ACCESS_KEY',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SESSION_TOKEN',
+      'GCS_KEY_FILE',
+      'GOOGLE_APPLICATION_CREDENTIALS',
+      // Database / broker connection strings.
+      'DATABASE_URL',
+      'REDIS_URL',
+      'POSTGRES_PASSWORD',
+      'POSTGRES_URL',
+      // Auth-service secrets.
+      'WORKOS_API_KEY',
+      'WORKOS_CLIENT_SECRET',
+      'JWT_SECRET',
+      'SESSION_SECRET',
+      'ENCRYPTION_KEY',
+      'NEXTAUTH_SECRET',
+      // Notification / webhook secrets.
+      'NOVU_API_KEY',
+      'NOVU_SECRET_KEY',
+      'SLACK_BOT_TOKEN',
+      'SLACK_SIGNING_SECRET',
+      'STRIPE_SECRET_KEY',
+      'STRIPE_WEBHOOK_SECRET',
     ]);
     for (const [k, v] of Object.entries(process.env)) {
-      if (v !== undefined && !(k in claudeEnv) && !MODEL_ENV_BLOCKLIST.has(k)) claudeEnv[k] = v;
+      if (v !== undefined && !(k in claudeEnv) && !ENV_BLOCKLIST.has(k)) claudeEnv[k] = v;
     }
     return claudeEnv;
   }
@@ -472,7 +525,9 @@ export class ClaudeAgentsHarness implements AgentHarness {
   readonly name = 'claude-agents';
   readonly configSchema = ClaudeAgentsConfigSchema;
 
-  protected async loadSdkModule(): Promise<ClaudeSdkModule> {
+  protected async loadSdkModule(
+    sessionMetadata?: { agentId?: string; conversationId?: string },
+  ): Promise<ClaudeSdkModule> {
     const baseSdk: ClaudeSdkModule = {
       query: sdkQuery,
       tool: sdkTool as unknown as SdkToolFactory,
@@ -485,7 +540,13 @@ export class ClaudeAgentsHarness implements AgentHarness {
 
     try {
       const { wrapClaudeAgentSDK } = await import('langsmith/experimental/anthropic');
-      const wrapped = wrapClaudeAgentSDK(baseSdk);
+      const metadata: Record<string, unknown> = {};
+      if (sessionMetadata?.agentId) metadata.agentId = sessionMetadata.agentId;
+      if (sessionMetadata?.conversationId) metadata.conversationId = sessionMetadata.conversationId;
+      const wrapped = wrapClaudeAgentSDK(
+        baseSdk,
+        Object.keys(metadata).length > 0 ? { metadata } : undefined,
+      );
       console.log('[claude-agents] LangSmith tracing enabled');
       return {
         query: wrapped.query ?? baseSdk.query,
@@ -502,7 +563,10 @@ export class ClaudeAgentsHarness implements AgentHarness {
     config: HarnessSessionConfig,
     restore?: HarnessRestorePoint,
   ): Promise<HarnessSession> {
-    const sdk = await this.loadSdkModule();
+    const sdk = await this.loadSdkModule({
+      agentId: config.agentId,
+      conversationId: config.conversationId,
+    });
     const harnessConfig = ClaudeAgentsConfigSchema.parse(
       JSON.parse(z.string().parse(config.harnessConfigJson)),
     );

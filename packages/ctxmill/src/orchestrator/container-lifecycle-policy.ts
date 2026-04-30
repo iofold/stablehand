@@ -1,17 +1,17 @@
-import { ContainerManager, type ContainerInfo } from '../sandbox/container-manager.js';
+import type { ContainerInfo, SandboxContainerManager } from '../sandbox/container-manager.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../database/repository.js';
 import { retryWithBackoff } from '../util/retry.js';
 import {
   type HarnessGrpcClient,
   waitForContainerReady,
 } from './session-manager/grpc-session-client.js';
+import { sandboxGrpcBaseUrl } from './session-manager/sandbox-endpoint.js';
 import { SessionStatusCoordinator } from './session-manager/session-status-coordinator.js';
 import type { SessionStatus } from './session-manager/types.js';
 
 const TAG = '[LifecyclePolicy]';
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
-const GRPC_PORT = 50051;
 
 export type PauseState = 'none' | 'promoting';
 
@@ -42,7 +42,7 @@ export interface ReconciliationCallbacks {
 }
 
 export interface ContainerLifecyclePolicyDeps {
-  containerManager: ContainerManager;
+  containerManager: SandboxContainerManager;
   db: DatabaseRepository;
   logger: Logger;
   config: {
@@ -79,7 +79,7 @@ function isAliveStatus(status: ContainerInfo['status']): boolean {
 }
 
 export class ContainerLifecyclePolicy {
-  private readonly containerManager: ContainerManager;
+  private readonly containerManager: SandboxContainerManager;
   private readonly db: DatabaseRepository;
   private readonly logger: Logger;
   private readonly reconciliationCallbacks: ReconciliationCallbacks;
@@ -374,7 +374,7 @@ export class ContainerLifecyclePolicy {
         }
 
         this.logger.info(`${TAG} session ${session.id}: container running, reconnecting gRPC client`);
-        const baseUrl = `http://${container.containerName}:${GRPC_PORT}`;
+        const baseUrl = sandboxGrpcBaseUrl(container);
         const { grpcClient } = await waitForContainerReady(baseUrl);
         this.reconciliationCallbacks.onSessionReconnected(reconnectedSession, grpcClient);
         reconnected++;

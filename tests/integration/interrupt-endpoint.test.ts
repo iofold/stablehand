@@ -23,14 +23,9 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-interrupt-'));
 
     container = await createContainer(
-        {
-          preset: 'docker',
-          database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
-          llm: {
-          provider: 'anthropic',
-          model: 'claude-sonnet-4-6',
-          apiKey: 'test-key-not-used',
-        },
+      {
+        preset: 'docker',
+        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
       },
       dataDir,
     );
@@ -41,6 +36,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
       eventBus: container.eventBus,
       interrupts: container.interruptManager,
       sessionManager: container.sessionManager,
+      runStartupService: container.runStartupService,
       dataDir,
     });
 

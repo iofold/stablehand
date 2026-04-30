@@ -8,6 +8,7 @@ export const VALID_WEBHOOK_EVENTS = [
   'run.interrupted',
   'run.interrupt_resolved',
   'message.committed',
+  'feedback.received',
 ] as const satisfies readonly EventName[];
 
 export type ValidWebhookEvent = typeof VALID_WEBHOOK_EVENTS[number];

@@ -18,6 +18,7 @@ import {
   type Logger,
   type SessionRecord,
 } from './types.js';
+import { ConcurrencyLimitError } from './concurrency-limit-error.js';
 import { unrefTimer } from './grpc-session-client.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
 
@@ -144,7 +145,7 @@ export class SessionTurnOrchestrator {
     const activeForAgent = this.deps.stateStore.getAllSessions().filter((session) =>
       session.agentId === agentId && session.status === 'ACTIVE');
     if (activeForAgent.length >= maxConcurrentSessionsPerAgent) {
-      throw new Error(`Concurrent session limit (${maxConcurrentSessionsPerAgent}) reached for agent ${agentId}`);
+      throw new ConcurrencyLimitError(agentId, maxConcurrentSessionsPerAgent, 5);
     }
   }
 

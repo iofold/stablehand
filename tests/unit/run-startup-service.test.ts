@@ -451,6 +451,28 @@ describe('RunStartupService', () => {
       expect(mocks.db.deleteMessage).toHaveBeenCalledWith('msg-1');
       expect(mocks.db.createTurn).not.toHaveBeenCalled();
     });
+
+
+    test('marks the turn failed and rolls back the user message when post-createTurn startup work fails', async () => {
+      const service = createService();
+      const mocks = createExecutionMocks();
+      mocks.db.getMessages.mockRejectedValue(new Error('message load failed'));
+      service.configureExecution(mocks);
+
+      await expect(service.prepareRunStart({
+        agent: createAgent(),
+        agentId: 'agent-1',
+        content: 'hello there',
+        mode: 'interactive',
+      })).rejects.toThrow('message load failed');
+
+      expect(mocks.db.createTurn).toHaveBeenCalledTimes(1);
+      expect(mocks.db.updateTurn).toHaveBeenCalledWith('turn-1', expect.objectContaining({
+        error: 'message load failed',
+        completedAt: expect.any(Number),
+      }));
+      expect(mocks.db.deleteMessage).toHaveBeenCalledWith('msg-1');
+    });
   });
 
   describe('launchPreparedRun', () => {

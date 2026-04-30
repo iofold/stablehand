@@ -153,8 +153,8 @@ async function getRuns(
   expect(res.ok()).toBeTruthy();
   const body = (await res.json()) as {
     sessions?: Array<{ id: string; taskDescription?: string }>;
-  } | Array<{ id: string; taskDescription?: string }>;
-  return Array.isArray(body) ? body : (body.sessions ?? []);
+  };
+  return body.sessions ?? [];
 }
 
 // ── Tests ────────────────────────────────────────────────────

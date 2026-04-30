@@ -1,17 +1,14 @@
-import { TraceCollector } from '../learning/trace.js';
 import type { AGUIEvent } from '../events/types.js';
 import type { MessageCommittedEvent } from '@ctxmill/shared';
 import type { AgentDefinition, Message } from '../types.js';
 import type { SSEManager } from './sse.js';
 import type { DatabaseRepository } from '../database/repository.js';
-import type { LearningPipeline } from '../learning/types.js';
 import type { EventMap, TypedEventBus } from '../events/bus.js';
 import type { SessionTurnService } from './session-turn-service.js';
 import type { SandboxSessionManager, SessionRecord } from './sandbox-session-manager.js';
 import type { LocalFunctionExecutor } from '../tool/executor.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
 import { sanitizeDbText } from '../util/sanitize.js';
-import { traceToDbRow } from '../learning/trace-convert.js';
 import { withRuntimeSandboxSecrets, type RuntimeSandboxSecrets } from './session-manager/runtime-sandbox-secrets.js';
 
 const INDIVIDUALLY_HANDLED = new Set([
@@ -58,7 +55,6 @@ export interface AgentSessionServiceDeps {
   sse: SSEManager;
   db: DatabaseRepository;
   sessionManager: SandboxSessionManager;
-  learningPipeline?: LearningPipeline;
   eventBus?: TypedEventBus;
   /** SessionTurnService for executing sessions in Docker containers. */
   sessionTurnService: SessionTurnService;
@@ -83,27 +79,25 @@ export interface ExecuteSessionParams {
  *
  * Streams events from the sandbox, broadcasts ALL events via SSE,
  * persists messages only from MESSAGE_COMMITTED events (sandbox is source of truth),
-  * triggers learning pipeline, and completes the session in the registry.
+  * completes the session in the registry.
  */
 export class AgentSessionService {
   private db: DatabaseRepository;
   private sessionManager: SandboxSessionManager;
-  private learningPipeline?: LearningPipeline;
   private eventBus?: TypedEventBus;
   private sessionTurnService: SessionTurnService;
 
   constructor(deps: AgentSessionServiceDeps) {
     this.db = deps.db;
     this.sessionManager = deps.sessionManager;
-    this.learningPipeline = deps.learningPipeline;
     this.eventBus = deps.eventBus;
     this.sessionTurnService = deps.sessionTurnService;
   }
 
   /**
    * Execute an agent run: iterate over sandbox events, broadcast ALL via SSE,
-   * persist messages only from MESSAGE_COMMITTED events, trigger learning,
-   * and complete the run in the registry.
+   * persist messages only from MESSAGE_COMMITTED events and complete the run
+   * in the registry.
    *
    * The sandbox is the source of truth — no delta accumulation occurs here.
    */
@@ -111,7 +105,6 @@ export class AgentSessionService {
     const { agentDef, messages, agentId, conversationId, sessionId: turnId, mode, taskDescription } = params;
     const runtimeAgentDef = withRuntimeSandboxSecrets(agentDef, params.sandboxSecrets);
 
-    const traceCollector = new TraceCollector(agentId, turnId, taskDescription);
     const startedAt = Date.now();
 
     let sandboxSessionId: string | undefined;
@@ -468,14 +461,8 @@ export class AgentSessionService {
           }
         }
 
-        // Collect trace steps from tool events
         if (event.type === 'TOOL_CALL_START' && 'toolName' in event) {
           const toolStart = event as unknown as ToolCallStartEvent;
-          traceCollector.addStep('tool_call', toolStart.toolName, 0, {
-            toolCallId: toolStart.toolCallId,
-            args: toolStart.args ?? {},
-          });
-
           if (this.eventBus) {
             this.eventBus.emit('run.tool_started', {
               turnId,
@@ -490,13 +477,6 @@ export class AgentSessionService {
         }
         if (event.type === 'TOOL_CALL_RESULT' && 'result' in event) {
           const toolResult = event as unknown as ToolCallResultEvent;
-          traceCollector.addStep(
-            'tool_result',
-            String(toolResult.result).slice(0, 500),
-            toolResult.durationMs ?? 0,
-            { toolCallId: toolResult.toolCallId },
-          );
-
           if (this.eventBus) {
             this.eventBus.emit('run.tool_result', {
               turnId,
@@ -546,18 +526,6 @@ export class AgentSessionService {
         : runError?.message ?? flushError?.message;
       const finalStatus = finalError ? (status === 'completed' ? 'error' : status) : status;
 
-      const finalTrace = this.learningPipeline
-        ? traceCollector.finalize(finalStatus === 'completed' ? 'success' : 'failure')
-        : undefined;
-
-      if (finalTrace && this.eventBus) {
-        try {
-          await this.db.saveTrace(traceToDbRow(finalTrace));
-        } catch (traceErr) {
-          console.error(`[AgentSessionService] Failed to persist trace before turn.completed for turn ${turnId}:`, traceErr);
-        }
-      }
-
       try {
         await finalizeTurn(finalStatus, finalError);
       } catch (finalizeErr) {
@@ -582,14 +550,6 @@ export class AgentSessionService {
           }
         } catch (dbErr) {
           console.error(`[AgentSessionService] Failed to update turn ${turnId} even directly:`, dbErr);
-        }
-      }
-
-      if (this.learningPipeline && finalTrace && !this.eventBus) {
-        try {
-          await this.learningPipeline.process(finalTrace);
-        } catch (learningErr) {
-          console.error('Learning pipeline error:', learningErr);
         }
       }
     }

@@ -29,7 +29,7 @@ type ExecutionDeps = {
     DatabaseRepository,
     'addMessage' | 'createConversation' | 'createTurn' | 'deleteMessage' | 'getConversation' | 'getMessages' | 'getTurn' | 'updateTurn'
   >;
-  eventBus?: Pick<TypedEventBus, 'emit'>;
+  eventBus?: Pick<TypedEventBus, 'emit' | 'emitAsync'>;
   sessionManager?: { checkConcurrencyLimit(agentId: string): void } | null;
   agentSessionService: Pick<AgentSessionService, 'executeSession'>;
 };
@@ -150,38 +150,52 @@ export class RunStartupService {
       throw err;
     }
 
-    if (emitUserMessageEvent && executionDeps.eventBus) {
-      executionDeps.eventBus.emit('user.message', {
+    try {
+      if (emitUserMessageEvent && executionDeps.eventBus) {
+        await this.emitStartupEvent('user.message', {
+          agentId,
+          conversationId: resolvedConversationId,
+          messageId: message.id,
+          content,
+          timestamp: Date.now(),
+        });
+      }
+
+      await this.emitStartupEvent('turn.pending', {
+        turnId: turn.id,
         agentId,
         conversationId: resolvedConversationId,
-        messageId: message.id,
-        content,
+        mode,
+        ...(mode === 'background' ? { taskDescription: content } : {}),
         timestamp: Date.now(),
       });
+
+      const agentDef = withRuntimeSandboxSecrets(this.buildAgentDefinition(agent), sandboxSecrets);
+      const allMessages = await executionDeps.db.getMessages(resolvedConversationId);
+
+      return {
+        agentDef,
+        conversationId: resolvedConversationId,
+        turnId: turn.id,
+        messageId: message.id,
+        messages: mapMessagesToInternal(allMessages, agentId),
+        mode,
+        taskDescription: content,
+        sandboxSecrets,
+      };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      await executionDeps.db.updateTurn(turn.id, {
+        completedAt: Date.now(),
+        error: errorMessage,
+      }).catch((updateErr) => {
+        this.deps.logger.error('[RunStartupService] failed to mark startup turn %s failed:', turn.id, updateErr);
+      });
+      await executionDeps.db.deleteMessage(message.id).catch((deleteErr) => {
+        this.deps.logger.error('[RunStartupService] failed to rollback user message %s after turn creation:', message.id, deleteErr);
+      });
+      throw err;
     }
-
-    executionDeps.eventBus?.emit('turn.pending', {
-      turnId: turn.id,
-      agentId,
-      conversationId: resolvedConversationId,
-      mode,
-      ...(mode === 'background' ? { taskDescription: content } : {}),
-      timestamp: Date.now(),
-    });
-
-    const agentDef = withRuntimeSandboxSecrets(this.buildAgentDefinition(agent), sandboxSecrets);
-    const allMessages = await executionDeps.db.getMessages(resolvedConversationId);
-
-    return {
-      agentDef,
-      conversationId: resolvedConversationId,
-      turnId: turn.id,
-      messageId: message.id,
-      messages: mapMessagesToInternal(allMessages, agentId),
-      mode,
-      taskDescription: content,
-      sandboxSecrets,
-    };
   }
 
   launchPreparedRun(
@@ -212,6 +226,20 @@ export class RunStartupService {
         throw err;
       }
     });
+  }
+
+
+  private async emitStartupEvent<K extends Parameters<TypedEventBus['emit']>[0]>(
+    eventBus: Pick<TypedEventBus, 'emit' | 'emitAsync'> | undefined,
+    event: K,
+    payload: Parameters<TypedEventBus['emit']>[1],
+  ): Promise<void> {
+    if (!eventBus) return;
+    if ('emitAsync' in eventBus && typeof eventBus.emitAsync === 'function') {
+      await eventBus.emitAsync(event, payload as never);
+      return;
+    }
+    eventBus.emit(event, payload as never);
   }
 
   parseHarnessConfig(configJson: string | null | undefined): Record<string, unknown> {

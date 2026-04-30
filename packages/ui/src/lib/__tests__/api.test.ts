@@ -13,13 +13,13 @@ import {
   fetchMessages,
   fetchKnowledge,
   fetchKnowledgeStats,
+  fetchEvents,
+  fetchAllArtifacts,
   deleteKnowledgeItem,
   listFiles,
   readFile,
-  fetchTraceStats,
-  fetchTraces,
-  fetchFeedbackStats,
   fetchInterrupts,
+  uploadWorkspaceTarball,
 } from '../api';
 
 const mockJson = vi.fn();
@@ -69,27 +69,6 @@ describe('fetchAllActiveSessions', () => {
   it('calls GET /api/sessions with sandbox format', async () => {
     await fetchAllActiveSessions();
     expect(mockFetch).toHaveBeenCalledWith('/api/sessions?format=sandbox', undefined);
-  });
-});
-
-describe('fetchTraces', () => {
-  it('calls GET /api/agents/:id/traces', async () => {
-    await fetchTraces('a1');
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/traces', undefined);
-  });
-
-  it('throws on failure', async () => {
-    mockFetch.mockResolvedValue({ ok: false, status: 500, json: mockJson });
-    await expect(fetchTraces('a1')).rejects.toThrow('API GET /api/agents/a1/traces failed: 500');
-  });
-
-  it('preserves HTTP context when including server error details', async () => {
-    mockJson.mockResolvedValue({ error: 'trace service down' });
-    mockFetch.mockResolvedValue({ ok: false, status: 503, json: mockJson });
-
-    await expect(fetchTraces('a1')).rejects.toThrow(
-      'API GET /api/agents/a1/traces failed: 503 - trace service down',
-    );
   });
 });
 
@@ -202,11 +181,10 @@ describe('fetchMessages', () => {
 
 describe('fetchKnowledge', () => {
   it('calls with q and category params', async () => {
-    // fetchKnowledge uses window.location.origin for URL construction
     await fetchKnowledge('a1', { q: 'test', category: 'faq' });
 
     const calledUrl = (mockFetch.mock.calls[0] as string[])[0];
-    expect(calledUrl).toContain('/api/agents/a1/knowledge');
+    expect(calledUrl).toContain('/api/agents/a1/knowledge?');
     expect(calledUrl).toContain('q=test');
     expect(calledUrl).toContain('category=faq');
   });
@@ -217,24 +195,24 @@ describe('fetchKnowledge', () => {
   });
 });
 
+describe('query serialization', () => {
+  it('keeps zero-valued query parameters and omits empty strings', async () => {
+    await fetchEvents({ cursor: 0, limit: 0, type: '', since: 0 });
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/events?cursor=0&limit=0&since=0', undefined);
+  });
+
+  it('omits the query marker when every optional value is empty', async () => {
+    await fetchAllArtifacts({ search: '' });
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/artifacts', undefined);
+  });
+});
+
 describe('fetchKnowledgeStats', () => {
   it('throws on failure', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 503, json: mockJson });
     await expect(fetchKnowledgeStats('a1')).rejects.toThrow('API GET /api/agents/a1/knowledge/stats failed: 503');
-  });
-});
-
-describe('fetchTraceStats', () => {
-  it('throws on failure', async () => {
-    mockFetch.mockResolvedValue({ ok: false, status: 500, json: mockJson });
-    await expect(fetchTraceStats('a1')).rejects.toThrow('API GET /api/agents/a1/traces/stats failed: 500');
-  });
-});
-
-describe('fetchFeedbackStats', () => {
-  it('throws on failure', async () => {
-    mockFetch.mockResolvedValue({ ok: false, status: 502, json: mockJson });
-    await expect(fetchFeedbackStats('a1')).rejects.toThrow('API GET /api/agents/a1/feedback/stats failed: 502');
   });
 });
 
@@ -348,5 +326,33 @@ describe('createSSEConnection', () => {
     createSSEConnection('a1');
 
     expect(MockEventSource).toHaveBeenCalledWith('/api/agents/a1/stream');
+  });
+});
+
+
+describe('uploadWorkspaceTarball', () => {
+  it('posts a gzip tarball to the workspace upload endpoint', async () => {
+    const file = new File(['bytes'], 'workspace.tar.gz', { type: 'application/gzip' });
+    mockJson.mockResolvedValue({ files: 2, totalBytes: 5 });
+
+    const result = await uploadWorkspaceTarball('a1', file);
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/workspace', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/gzip' },
+      body: file,
+    });
+    expect(result).toEqual({ files: 2, totalBytes: 5 });
+  });
+
+  it('uses the explicit force flag rather than artifact upload routes', async () => {
+    const file = new File(['bytes'], 'workspace.tgz', { type: 'application/x-gzip' });
+
+    await uploadWorkspaceTarball('a1', file, { force: true });
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/workspace?force=true', expect.objectContaining({
+      method: 'POST',
+      body: file,
+    }));
   });
 });

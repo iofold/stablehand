@@ -10,7 +10,7 @@
     }
   },
   "scripts": {
-    "build": "buf generate",
+    "build": "buf generate && tsc -p tsconfig.build.json",
     "build:js": "tsc -p tsconfig.build.json",
     "lint": "buf lint",
     "clean": "rm -rf gen dist"

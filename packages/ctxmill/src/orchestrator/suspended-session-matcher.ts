@@ -19,9 +19,6 @@ const WATCHABLE_EVENTS: EventName[] = [
   'agent.deleted',
   'client.connected',
   'client.disconnected',
-  'learning.trace_captured',
-  'learning.insight_extracted',
-  'learning.knowledge_updated',
 ];
 
 const RECONCILIATION_INTERVAL_MS = 30_000;

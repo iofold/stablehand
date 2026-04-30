@@ -236,3 +236,140 @@ describe('ClaudeAgentsHarness stream mapping fallbacks', () => {
     errorSpy.mockRestore();
   });
 });
+
+describe('buildClaudeEnv secret redaction (mr-9486.57)', () => {
+  const SECRET_KEYS = [
+    'OPENAI_API_KEY',
+    'GOOGLE_API_KEY',
+    'GOOGLE_GENERATIVE_AI_API_KEY',
+    'GEMINI_API_KEY',
+    'COHERE_API_KEY',
+    'MISTRAL_API_KEY',
+    'AZURE_OPENAI_API_KEY',
+    'AZURE_OPENAI_ENDPOINT',
+    'LANGSMITH_API_KEY',
+    'LANGSMITH_ENDPOINT',
+    'LANGSMITH_WORKSPACE_ID',
+    'LANGFUSE_SECRET_KEY',
+    'LANGFUSE_PUBLIC_KEY',
+    'LANGFUSE_HOST',
+    'OTEL_EXPORTER_OTLP_HEADERS',
+    'S3_SECRET_KEY',
+    'S3_ACCESS_KEY',
+    'MINIO_ROOT_USER',
+    'MINIO_ROOT_PASSWORD',
+    'MINIO_ACCESS_KEY',
+    'MINIO_SECRET_KEY',
+    'AWS_SECRET_ACCESS_KEY',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SESSION_TOKEN',
+    'DATABASE_URL',
+    'REDIS_URL',
+    'POSTGRES_PASSWORD',
+    'WORKOS_API_KEY',
+    'JWT_SECRET',
+    'SESSION_SECRET',
+    'NOVU_API_KEY',
+    'STRIPE_SECRET_KEY',
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not forward known secret env keys into the env passed to sdk.query()', async () => {
+    // Inject synthetic secret values into process.env so buildClaudeEnv() can pick them up.
+    const FAKE_SECRET_VALUES: Record<string, string> = {};
+    for (const key of SECRET_KEYS) {
+      FAKE_SECRET_VALUES[key] = `fake-secret-value-for-${key}`;
+      process.env[key] = FAKE_SECRET_VALUES[key];
+    }
+
+    try {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 1, output_tokens: 1 },
+        };
+      });
+
+      const session = await harness.openSession(makeConfig());
+      const events: unknown[] = [];
+      for await (const event of session.deliverTurn(
+        { messages: [makeMessage('user', 'Hello')], turnId: 'turn-secret-test' },
+        {},
+      )) {
+        events.push(event);
+      }
+
+      const queryCall = mockQuery.mock.calls[0]?.[0] as { options?: { env?: Record<string, string> } } | undefined;
+      const capturedEnv = queryCall?.options?.env ?? {};
+
+      // None of the blocked secret keys should appear in the env passed to the SDK.
+      for (const key of SECRET_KEYS) {
+        expect(capturedEnv, `env must not contain secret key ${key}`).not.toHaveProperty(key);
+      }
+
+      // ANTHROPIC_API_KEY is required for the SDK to authenticate — it must still be present.
+      expect(capturedEnv).toHaveProperty('ANTHROPIC_API_KEY', 'test-key');
+
+      await session.close();
+    } finally {
+      // Restore process.env so we don't leak state into other tests.
+      for (const key of SECRET_KEYS) {
+        delete process.env[key];
+      }
+    }
+  });
+
+  it('does not carry fake secret values in the env (verifies value-level exclusion)', async () => {
+    const FAKE_OPENAI_KEY = 'sk-openai-FAKEFAKEFAKE123';
+    const FAKE_LANGSMITH_KEY = 'ls-FAKEFAKEFAKE456';
+    process.env.OPENAI_API_KEY = FAKE_OPENAI_KEY;
+    process.env.LANGSMITH_API_KEY = FAKE_LANGSMITH_KEY;
+
+    try {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 1, output_tokens: 1 },
+        };
+      });
+
+      const session = await harness.openSession(makeConfig());
+      for await (const _ of session.deliverTurn(
+        { messages: [makeMessage('user', 'Hello')], turnId: 'turn-value-test' },
+        {},
+      )) { /* drain */ }
+
+      const queryCall = mockQuery.mock.calls[0]?.[0] as { options?: { env?: Record<string, string> } } | undefined;
+      const capturedEnv = queryCall?.options?.env ?? {};
+      const capturedEnvValues = Object.values(capturedEnv);
+
+      // The fake secret values must not appear anywhere in the env passed to the SDK.
+      expect(capturedEnvValues).not.toContain(FAKE_OPENAI_KEY);
+      expect(capturedEnvValues).not.toContain(FAKE_LANGSMITH_KEY);
+
+      await session.close();
+    } finally {
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.LANGSMITH_API_KEY;
+    }
+  });
+});

@@ -6,7 +6,7 @@ import { crudRoutes } from './agents/crud.js';
 import { fileRoutes } from './agents/files.js';
 import { interruptRoutes } from './agents/interrupts.js';
 import { knowledgeRoutes } from './agents/knowledge.js';
-import { learningRoutes } from './agents/learning.js';
+import { feedbackRoutes } from './agents/feedback.js';
 import { secretRoutes } from './agents/secrets.js';
 import { sessionRoutes } from './agents/sessions.js';
 import { streamRoutes } from './agents/stream.js';
@@ -23,7 +23,6 @@ export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions)
     sse,
     interrupts,
     harnessRegistry,
-    learningPipeline,
     knowledgeStore,
     agentSessionService,
     eventBus,
@@ -41,7 +40,6 @@ export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions)
     sse,
     interrupts,
     harnessRegistry,
-    learningPipeline,
     knowledgeStore,
     agentSessionService,
     eventBus,
@@ -60,7 +58,7 @@ export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions)
   await app.register(conversationRoutes, subOpts);
   await app.register(streamRoutes, subOpts);
   await app.register(interruptRoutes, subOpts);
-  await app.register(learningRoutes, subOpts);
+  await app.register(feedbackRoutes, subOpts);
   await app.register(knowledgeRoutes, subOpts);
   await app.register(fileRoutes, subOpts);
   await app.register(secretRoutes, subOpts);

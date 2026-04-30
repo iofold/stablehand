@@ -2,105 +2,12 @@ import { useState, useMemo, Fragment } from 'react';
 import {
   ChevronDown,
   ChevronRight,
-  Wrench,
-  CheckCircle,
   MessageSquare,
 } from 'lucide-react';
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { cn } from '@/lib/utils';
 import type { AgentSession } from '@/stores/agents';
-import type { Trace, TraceStep } from './types';
 import { formatTime, formatDuration } from './types';
-
-/* ------------------------------------------------------------------ */
-/*  TraceTimeline                                                      */
-/* ------------------------------------------------------------------ */
-
-function TraceTimeline({ steps }: { steps: TraceStep[] }) {
-  const sortedSteps = useMemo(
-    () => [...steps].sort((a, b) => a.ordinal - b.ordinal),
-    [steps],
-  );
-
-  return (
-    <div data-testid="trace-timeline" className="relative">
-      {sortedSteps.map((step, idx) => {
-        const isToolCall = step.type === 'tool_call';
-        const isLast = idx === sortedSteps.length - 1;
-
-        return (
-          <div
-            key={`${step.ordinal}-${step.type}-${step.content}`}
-            data-testid="trace-step"
-            className="relative flex gap-3"
-          >
-            {/* Vertical line + dot */}
-            <div className="flex flex-col items-center flex-shrink-0">
-              <div
-                className={cn(
-                  'flex h-7 w-7 items-center justify-center rounded-full border',
-                  isToolCall
-                    ? 'bg-accent-900/30 border-accent-700/30'
-                    : 'bg-emerald-900/30 border-emerald-700/30',
-                )}
-              >
-                {isToolCall ? (
-                  <Wrench className="h-3.5 w-3.5 text-accent-400" />
-                ) : (
-                  <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />
-                )}
-              </div>
-              {!isLast && (
-                <div className="w-px flex-1 min-h-[16px] bg-surface-700/50" />
-              )}
-            </div>
-
-            {/* Step content */}
-            <div className={cn('flex-1 pb-3', isLast ? 'pb-0' : '')}>
-              <div
-                className={cn(
-                  'rounded-lg border px-3 py-2',
-                  isToolCall
-                    ? 'bg-accent-900/30 border-accent-700/30'
-                    : 'bg-emerald-900/30 border-emerald-700/30',
-                )}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-[11px] text-surface-400 tabular-nums flex-shrink-0">
-                      #{step.ordinal}
-                    </span>
-                    <span className={cn(
-                      'text-xs font-medium truncate',
-                      isToolCall ? 'text-accent-300' : 'text-emerald-300',
-                    )}>
-                      {isToolCall ? 'Tool Call' : 'Tool Result'}
-                    </span>
-                  </div>
-                  {step.durationMs != null && (
-                    <span className="inline-flex items-center rounded-full bg-surface-800/60 border border-surface-700/40 px-1.5 py-0.5 text-[10px] text-surface-400 tabular-nums flex-shrink-0">
-                      {step.durationMs}ms
-                    </span>
-                  )}
-                </div>
-                <p className="text-sm text-surface-300 mt-1 break-words line-clamp-3">
-                  {step.content}
-                </p>
-                {isToolCall && step.metadata?.args != null && (
-                  <pre className="text-[11px] text-surface-500 font-mono mt-1 max-h-20 overflow-y-auto whitespace-pre-wrap">
-                    {typeof step.metadata.args === 'string' 
-                      ? step.metadata.args 
-                      : JSON.stringify(step.metadata.args, null, 2)}
-                  </pre>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /*  AgentSessionsTab                                                   */
@@ -111,10 +18,10 @@ const RUN_FILTERS = ['all', 'running', 'completed', 'error', 'cancelled'] as con
 export interface AgentSessionsTabProps {
   sessions: AgentSession[];
   loading: boolean;
+  error?: string | null;
   filter: string;
   onFilterChange: (v: string) => void;
   agentId: string;
-  traces: Trace[];
   /** Called when user wants to view files for a specific run session */
   onViewSessionFiles?: (sessionId: string) => void;
   onContinueSession?: (conversationId: string) => void;
@@ -123,24 +30,14 @@ export interface AgentSessionsTabProps {
 export function AgentSessionsTab({
   sessions,
   loading,
+  error,
   filter,
   onFilterChange,
   agentId,
-  traces,
   onViewSessionFiles,
   onContinueSession,
 }: AgentSessionsTabProps) {
   const [expandedConversationId, setExpandedConversationId] = useState<string | null>(null);
-
-  const traceBySessionId = useMemo(() => {
-    const map: Record<string, Trace> = {};
-    for (const trace of traces) {
-      if (trace.sessionId) {
-        map[trace.sessionId] = trace;
-      }
-    }
-    return map;
-  }, [traces]);
 
   const groupedSessions = useMemo(() => {
     const grouped = new Map<string, AgentSession[]>();
@@ -154,14 +51,12 @@ export function AgentSessionsTab({
       conversationId,
       startedAt: Math.min(...sessionEntries.map((entry) => entry.startedAt)),
       messageCount: sessionEntries.reduce((acc, entry) => {
-        if (typeof entry.messageCount === 'number') return acc + entry.messageCount;
-        const trace = traceBySessionId[entry.id];
-        return acc + (trace?.steps?.length || 0);
+        return acc + (entry.messageCount ?? 0);
       }, 0),
       lastMessageAt: Math.max(...sessionEntries.map((entry) => entry.completedAt ?? entry.startedAt)),
       entries: sessionEntries.sort((a, b) => b.startedAt - a.startedAt),
     })).sort((a, b) => b.startedAt - a.startedAt);
-  }, [sessions, traceBySessionId]);
+  }, [sessions]);
 
   const handleToggleSession = (convId: string) => {
     setExpandedConversationId((prev) => (prev === convId ? null : convId));
@@ -194,11 +89,16 @@ export function AgentSessionsTab({
       {/* Conversations list */}
       {loading ? (
         <div className="text-center py-12 text-surface-400 text-sm">Loading conversations...</div>
+      ) : error ? (
+        <div role="alert" className="text-center py-16">
+          <p className="text-red-300 font-medium">Failed to load conversations</p>
+          <p className="text-surface-400 text-sm mt-1">{error}</p>
+        </div>
       ) : groupedSessions.length === 0 ? (
         <div className="text-center py-16">
           <p className="text-surface-400 font-medium">No conversations found</p>
           <p className="text-surface-400 text-sm mt-1">
-            {filter === 'all' ? 'Start a conversation to view activity and traces.' : `No ${filter} conversations.`}
+            {filter === 'all' ? 'Start a conversation to view activity.' : `No ${filter} conversations.`}
           </p>
         </div>
       ) : (
@@ -271,7 +171,6 @@ export function AgentSessionsTab({
                             <div className="space-y-3">
                               <p className="text-[11px] text-surface-400 uppercase tracking-wider">Turns</p>
                               {session.entries.map((entry, idx) => {
-                                 const trace = traceBySessionId[entry.id];
                                 return (
                                   <div key={entry.id} className="border border-surface-700/50 rounded-lg bg-surface-800/40 p-3 space-y-3">
                                     <div className="flex items-center justify-between">
@@ -288,17 +187,10 @@ export function AgentSessionsTab({
                                     </div>
                                     
                                     {/* Task description */}
-                                    {(entry.taskDescription || trace?.taskDescription) && (
+                                    {entry.taskDescription && (
                                       <p className="text-sm text-surface-300 bg-surface-900/60 rounded px-2 py-1.5 border border-surface-700/30">
-                                        {entry.taskDescription || trace?.taskDescription}
+                                        {entry.taskDescription}
                                       </p>
-                                    )}
-
-                                    {/* Trace timeline */}
-                                    {trace && trace.steps && trace.steps.length > 0 && (
-                                      <div className="mt-2 pl-2 border-l-2 border-surface-700/30">
-                                        <TraceTimeline steps={trace.steps} />
-                                      </div>
                                     )}
                                   </div>
                                 );

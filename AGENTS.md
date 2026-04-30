@@ -19,7 +19,7 @@ packages/
   examples/
     kitchen-sink/       3 agents (LangGraph, Claude, PI), 12 shared tools, event-chained
 tests/
-  unit/                 53 files — harness adapters, config, learning, sandbox, tools
+  unit/                 53 files — harness adapters, config, events, sandbox, tools
   integration/          23 files — orchestrator scenarios, event flows, CRUD
   e2e/                  32 Playwright specs — chat, background runs, visual regression, visual QA
   compliance/           13 files — interface contract conformance via pluggable factories
@@ -139,7 +139,7 @@ docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile
 - **HITL flow** — Tool requests approval → interrupt is persisted → the user resolves it via the dashboard/API → the matching sandbox session resumes or restores from checkpoint.
 - **`--experimental-strip-types`** — Node 22 flag in Dockerfile CMD for TypeScript enum handling in proto-generated code.
 - **Drizzle ORM schema** — see `packages/ctxmill/src/database/schema-pg.ts`. Test DB uses advisory lock (ID: 424242) for concurrent resets.
-- **Default model** — `gpt-5.4-mini` (OpenAI). Override via `OPENAI_MODEL` env var. Per-agent override in YAML manifest.
+- **Default model** — Agent model selection belongs in each agent's harness config or YAML manifest. Harnesses may still read provider-specific env vars inside sandbox containers.
 - **Sandbox-daemon package** — Separate package (`@ctxmill/sandbox-daemon`) deployed inside sandbox containers. Contains gRPC server, harness adapters (LangGraph, Claude Agents, PI Agent), tool proxy, proto-convert, and checkpoint logic. Changes here require rebuilding harness Docker images (not just orchestrator).
 - **Workspace isolation** — Workspace diff capture/restore during suspend/resume.
 - **Container concurrency** — Semaphore limits concurrent sandbox containers (default 20). FIFO queue with 60s timeout.

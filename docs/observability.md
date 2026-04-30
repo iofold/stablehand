@@ -101,7 +101,7 @@ Every significant action in ctxmill emits a typed event. These events are persis
 
 ### Event Types
 
-The current `EventMap` includes turn lifecycle, message-commit, tool, HITL, session, learning, and trigger events, including:
+The current `EventMap` includes turn lifecycle, message-commit, tool, HITL, session, feedback, and trigger events, including:
 - `turn.pending` / `turn.started` / `turn.completed`
 - `user.message` / `message.committed`
 - `run.tool_started` / `run.tool_result`
@@ -109,7 +109,7 @@ The current `EventMap` includes turn lifecycle, message-commit, tool, HITL, sess
 - `run.interrupted` / `run.interrupt_resolved`
 - `session.paused` / `run.resumed`
 - `run.ag_ui_event`
-- `learning.trace_captured`
+- `feedback.received`
 - `trigger.fired`
 
 ### Querying Events

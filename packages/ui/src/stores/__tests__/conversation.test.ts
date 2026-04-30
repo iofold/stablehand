@@ -179,7 +179,6 @@ describe('conversation store', () => {
       conversationId: 'conv-1',
       sessionId: 'sandbox-session-1',
       activeTurnId: 'turn-1',
-      turnId: 'turn-1',
       status: 'ACTIVE',
     }));
 

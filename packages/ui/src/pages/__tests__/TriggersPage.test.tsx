@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TriggersPage } from '../TriggersPage';
 import { useAgentsStore } from '@/stores/agents';
 import {
+  deleteTrigger,
   fetchEventTypes,
   fetchTriggers,
+  updateTrigger,
 } from '@/lib/api';
 
 vi.mock('@/lib/api', async () => {
@@ -14,11 +16,15 @@ vi.mock('@/lib/api', async () => {
     ...actual,
     fetchTriggers: vi.fn(),
     fetchEventTypes: vi.fn(),
+    updateTrigger: vi.fn(),
+    deleteTrigger: vi.fn(),
   };
 });
 
 const fetchTriggersMock = vi.mocked(fetchTriggers);
 const fetchEventTypesMock = vi.mocked(fetchEventTypes);
+const updateTriggerMock = vi.mocked(updateTrigger);
+const deleteTriggerMock = vi.mocked(deleteTrigger);
 
 async function flushEffects(): Promise<void> {
   await act(async () => {
@@ -53,6 +59,8 @@ describe('TriggersPage', () => {
       enabled: true,
     }]);
     fetchEventTypesMock.mockResolvedValue({ types: ['run.completed'] });
+    updateTriggerMock.mockResolvedValue({ id: 'trigger-1' } as never);
+    deleteTriggerMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -103,5 +111,55 @@ describe('TriggersPage', () => {
 
     expect(container.textContent).not.toContain('Event type suggestions are unavailable.');
     expect(fetchEventTypesMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a visible action error when toggling a trigger fails', async () => {
+    updateTriggerMock.mockRejectedValueOnce(new Error('toggle failed'));
+
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    const toggle = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.className.includes('relative inline-flex'),
+    );
+    expect(toggle).not.toBeNull();
+
+    await act(async () => {
+      toggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushEffects();
+
+    expect(container.textContent).toContain('Failed to update trigger status.');
+  });
+
+  it('shows a visible action error when deleting a trigger fails', async () => {
+    deleteTriggerMock.mockRejectedValueOnce(new Error('delete failed'));
+
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    const deleteButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.title === 'Delete trigger',
+    );
+    expect(deleteButton).not.toBeNull();
+
+    await act(async () => {
+      deleteButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const confirmButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Confirm'),
+    );
+    expect(confirmButton).not.toBeNull();
+
+    await act(async () => {
+      confirmButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushEffects();
+
+    expect(container.textContent).toContain('Failed to delete trigger.');
   });
 });

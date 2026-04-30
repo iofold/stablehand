@@ -23,8 +23,9 @@ describe('TypedEventBus', () => {
     bus.on('run.tool_started', handler1);
     bus.on('run.tool_started', handler2);
     bus.emit('run.tool_started', {
-      runId: 'r1',
+      turnId: 'r1',
       agentId: 'a',
+      conversationId: 'c1',
       toolCallId: 'c1',
       toolName: 'get-data',
       args: {},
@@ -54,8 +55,9 @@ describe('TypedEventBus', () => {
 
     bus.on('run.tool_result', handler);
     bus.emit('run.tool_result', {
-      runId: 'r1',
+      turnId: 'r1',
       agentId: 'a',
+      conversationId: 'c1',
       toolCallId: 'c1',
       toolName: 'test-tool',
       result: 'ok',
@@ -72,13 +74,13 @@ describe('TypedEventBus', () => {
     const bus = new TypedEventBus();
     const handler = vi.fn();
 
-    bus.once('learning.knowledge_updated', handler);
-    bus.emit('learning.knowledge_updated', { agentId: 'a', itemId: 'k1', category: 'strategy', timestamp: 0 });
-    bus.emit('learning.knowledge_updated', { agentId: 'a', itemId: 'k2', category: 'strategy', timestamp: 0 });
+    bus.once('feedback.received', handler);
+    bus.emit('feedback.received', { feedbackId: 'f1', turnId: 'r1', agentId: 'a', type: 'thumbs_up', timestamp: 0 });
+    bus.emit('feedback.received', { feedbackId: 'f2', turnId: 'r2', agentId: 'a', type: 'thumbs_down', timestamp: 0 });
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: 'a', itemId: 'k1' }),
+      expect.objectContaining({ agentId: 'a', feedbackId: 'f1' }),
     );
   });
 
@@ -109,7 +111,8 @@ describe('TypedEventBus', () => {
     bus.removeAllListeners();
     bus.emit('agent.created', { agentId: 'a', name: 'A', timestamp: 0 });
     bus.emit('turn.completed', {
-      runId: 'r1',
+      turnId: 'r1',
+      sessionId: 's1',
       agentId: 'a',
       conversationId: 'c1',
       status: 'error',
@@ -126,12 +129,11 @@ describe('TypedEventBus', () => {
     const bus = new TypedEventBus();
     // Should not throw
     expect(() => {
-      bus.emit('learning.trace_captured', {
-        traceId: 't1',
-        runId: 'r1',
+      bus.emit('feedback.received', {
+        feedbackId: 'f1',
+        turnId: 'r1',
         agentId: 'a',
-        stepCount: 3,
-        outcome: 'success',
+        type: 'thumbs_up',
         timestamp: 0,
       });
     }).not.toThrow();

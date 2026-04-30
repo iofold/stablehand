@@ -79,10 +79,6 @@ export function scaffold({ projectDir, packageName }: ScaffoldOptions): void {
 
 export default defineConfig({
   preset: 'docker',
-  llm: {
-    provider: 'anthropic',
-    model: 'claude-sonnet-4-6',
-  },
 });
 `,
   );

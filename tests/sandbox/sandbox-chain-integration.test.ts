@@ -181,6 +181,16 @@ function makeAgentRow(name: string, overrides: Record<string, unknown> = {}): Re
   };
 }
 
+function makeChainAgentRow(name: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return makeAgentRow(name, {
+    harness: 'claude-agents',
+    systemPrompt: name,
+    tools: [],
+    manifest: null,
+    ...overrides,
+  });
+}
+
 function makeMockContainerManager(counters: { containerCounter: number }): ContainerManager & {
   _createdContainers: Array<{
     containerId: string;
@@ -324,6 +334,71 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
   let sseBroadcaster: SSEBroadcaster | null;
   let testCounters: { containerCounter: number; runCounter: number };
 
+  function agentRowToDefinition(agent: Record<string, any>): AgentDefinition {
+    const manifest = agent.manifest as Record<string, unknown> | null;
+    return makeAgentDef(agent.name, {
+      harness: agent.harness ?? 'langgraph',
+      harnessConfig: JSON.parse(agent.harnessConfig as string) as Record<string, unknown>,
+      systemPrompt: agent.systemPrompt,
+      tools: agent.tools ?? [],
+      description: agent.description ?? undefined,
+      workspaceDir: agent.workspaceDir ?? undefined,
+      resourceLimits: manifest?.resourceLimits as any,
+    });
+  }
+
+  function makeTriggerMessage(agentId: string, task: string, messageId: string): Message {
+    return {
+      id: messageId,
+      agentId,
+      role: 'user',
+      content: task,
+      createdAt: new Date(),
+    };
+  }
+
+  async function startTriggeredRun(input: {
+    agentId: string;
+    task: string;
+    agentRunServiceRef: AgentRunService | null;
+    missingAgentMessage?: string;
+    persistUserMessage?: boolean;
+    messageIdPrefix?: string;
+    messages?: Message[];
+  }) {
+    const agent = await db.getAgent(input.agentId);
+    if (!agent) {
+      if (input.missingAgentMessage) console.error(input.missingAgentMessage);
+      return null;
+    }
+
+    const conv = await db.createConversation(input.agentId);
+    const run = await sessionRegistry.startRun(input.agentId, conv.id, 'background', input.task);
+    if (input.persistUserMessage) {
+      await db.addMessage({
+        agentId: input.agentId,
+        conversationId: conv.id,
+        role: 'user',
+        content: input.task,
+      });
+    }
+
+    void input.agentRunServiceRef!.executeRun({
+      agentDef: agentRowToDefinition(agent),
+      messages: input.messages ?? [
+        makeTriggerMessage(input.agentId, input.task, `${input.messageIdPrefix ?? 'msg'}-${run.id}`),
+      ],
+      agentId: input.agentId,
+      conversationId: conv.id,
+      runId: run.id,
+      taskDescription: input.task,
+    }).catch((err) => {
+      console.error('[Test] triggered run error:', err);
+    });
+
+    return run;
+  }
+
   beforeEach(() => {
     sseBroadcaster = null;
     testCounters = { containerCounter: 0, runCounter: 0 };
@@ -374,46 +449,13 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       eventBus,
       db,
       async (agentId, task, triggerId, _triggerDepth) => {
-        const agent = await db.getAgent(agentId);
-        if (!agent) {
-          console.error(`[Test] agent ${agentId} not found for trigger ${triggerId}`);
-          return;
-        }
-        const conv = await db.createConversation(agentId);
-        const run = await sessionRegistry.startRun(agentId, conv.id, 'background', task);
-
-        await db.addMessage({ agentId, conversationId: conv.id, role: 'user', content: task });
-        const messages: Message[] = [{
-          id: `msg-trigger-${run.id}`,
+        await startTriggeredRun({
           agentId,
-          role: 'user' as const,
-          content: task,
-          createdAt: new Date(),
-        }];
-
-        const manifest = agent.manifest as Record<string, unknown> | null;
-        const perAgentResourceLimits = manifest?.resourceLimits as any;
-
-        const agentDef = makeAgentDef(agent.name, {
-          harness: agent.harness ?? 'langgraph',
-          harnessConfig: JSON.parse(agent.harnessConfig as string) as Record<string, unknown>,
-          systemPrompt: agent.systemPrompt,
-          tools: agent.tools ?? [],
-          description: agent.description ?? undefined,
-          workspaceDir: agent.workspaceDir ?? undefined,
-          resourceLimits: perAgentResourceLimits,
-        });
-
-        // Fire-and-forget, matching container.ts pattern
-        void agentRunServiceRef!.executeRun({
-          agentDef,
-          messages,
-          agentId,
-          conversationId: conv.id,
-          runId: run.id,
-          taskDescription: task,
-        }).catch((err) => {
-          console.error(`[Test] run error for trigger ${triggerId}:`, err);
+          task,
+          agentRunServiceRef,
+          missingAgentMessage: `[Test] agent ${agentId} not found for trigger ${triggerId}`,
+          persistUserMessage: true,
+          messageIdPrefix: 'msg-trigger',
         });
       },
     );
@@ -440,18 +482,16 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     };
   }
 
-  // ── Test 1: Single-hop chain: Agent A triggers Agent B ────────
-
   describe('single-hop chain: Agent A triggers Agent B', () => {
     it('Agent A emits event -> EventTriggerManager matches -> Agent B starts in sandbox', async () => {
       const components = wireComponents({
         agentRows: {
-          'agent-B': makeAgentRow('agent-B', {
+          'agent-B': makeChainAgentRow('agent-B', {
             harness: 'claude-agents',
             systemPrompt: 'You are agent B.',
-            tools: ['search'],
             workspaceDir: '/workspace/agent-B',
             manifest: { executionMode: 'sandbox' },
+            tools: ['search'],
           }),
         },
       });
@@ -474,25 +514,17 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       // Wait for the async fire-and-forget chain
       await settle(50);
-
-      // Verify: Agent B was started
       expect(components.sandboxRunService._executedRuns.some((run) => run.agentName === 'agent-B')).toBe(true);
-
-      // Verify: AgentRunService received the run
       expect(components.runRegistry.startRun).toHaveBeenCalledWith(
         'agent-B',
         expect.any(String), // conv id
         'background',
         expect.stringContaining('Process analysis result: classification done'),
       );
-
-      // Verify: SSE events were broadcast for agent-B
       const agentBEvents = components.sse._events.filter(
         (e) => e.agentId === 'agent-B',
       );
       expect(agentBEvents.length).toBeGreaterThan(0);
-
-      // Verify: run completed
       expect(components.runRegistry.completeRun).toHaveBeenCalled();
     });
 
@@ -504,11 +536,9 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       const components = wireComponents({
         agentRows: {
-          'agent-B': makeAgentRow('agent-B', {
+          'agent-B': makeChainAgentRow('agent-B', {
             harness: 'pi-agent',
             systemPrompt: 'You are agent B.',
-            tools: [],
-            manifest: null,
           }),
         },
         sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, runId: string) {
@@ -566,11 +596,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     it('both Agent A and Agent B produce AGUIEvents via SSE', async () => {
       const components = wireComponents({
         agentRows: {
-          'agent-B': makeAgentRow('agent-B', {
-            harness: 'claude-agents',
+          'agent-B': makeChainAgentRow('agent-B', {
             systemPrompt: 'Agent B',
-            tools: [],
-            manifest: null,
           }),
         },
       });
@@ -602,17 +629,11 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       expect(agentAEvents.length).toBeGreaterThan(0);
       expect(agentBEvents.length).toBeGreaterThan(0);
-
-      // Both should have RUN_STARTED events
       expect(agentAEvents.some((e) => e.event.type === 'RUN_STARTED')).toBe(true);
       expect(agentBEvents.some((e) => e.event.type === 'RUN_STARTED')).toBe(true);
-
-      // Both should have text content
       expect(agentBEvents.some((e) => e.event.type === 'TEXT_MESSAGE_CONTENT')).toBe(true);
     });
   });
-
-  // ── Test 2: Multi-hop chain: A -> B -> C ──────────────────────
 
   describe('multi-hop chain: A -> B -> C', () => {
     it('three agents chain via events with correct trigger depth', async () => {
@@ -620,17 +641,12 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       // Use a custom wiring to intercept trigger depths
       eventBus = new TypedEventBus();
       db = makeMockDb({
-        'agent-B': makeAgentRow('agent-B', {
-          harness: 'claude-agents',
+        'agent-B': makeChainAgentRow('agent-B', {
           systemPrompt: 'Agent B',
-          tools: [],
-          manifest: null,
         }),
-        'agent-C': makeAgentRow('agent-C', {
+        'agent-C': makeChainAgentRow('agent-C', {
           harness: 'pi-agent',
           systemPrompt: 'Agent C',
-          tools: [],
-          manifest: null,
         }),
       }, testCounters);
       sessionRegistry = makeMockRunRegistry(testCounters);
@@ -644,34 +660,10 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         async (agentId, task, ...rest) => {
           const triggerDepth = rest[1];
           triggerDepths.push({ agentId, depth: triggerDepth ?? 0 });
-
-          const agent = await db.getAgent(agentId);
-          if (!agent) return;
-          const conv = await db.createConversation(agentId);
-          const run = await sessionRegistry.startRun(agentId, conv.id, 'background', task);
-
-          const messages: Message[] = [{
-            id: `msg-${run.id}`,
+          await startTriggeredRun({
             agentId,
-            role: 'user',
-            content: task,
-            createdAt: new Date(),
-          }];
-
-          void agentRunServiceRef!.executeRun({
-            agentDef: makeAgentDef(agent.name, {
-              harness: agent.harness ?? 'langgraph',
-              harnessConfig: JSON.parse(agent.harnessConfig as string) as Record<string, unknown>,
-              tools: agent.tools ?? [],
-              systemPrompt: agent.systemPrompt,
-            }),
-            messages,
-            agentId,
-            conversationId: conv.id,
-            runId: run.id,
-            taskDescription: task,
-          }).catch((err) => {
-            console.error('[Test] triggered run error:', err);
+            task,
+            agentRunServiceRef,
           });
         },
       );
@@ -732,24 +724,16 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       // Wait for full chain: A -> B -> C
       await settle(200);
-
-      // Verify: 3 containers created (A is not sandbox, but B and C are)
       expect(sandboxExecuteSessionTurn.mock.calls.length).toBeGreaterThanOrEqual(2);
-
-      // Verify: trigger depths are correct
       expect(triggerDepths).toEqual(expect.arrayContaining([
         { agentId: 'agent-B', depth: 1 },
         { agentId: 'agent-C', depth: 3 },
       ]));
-
-      // Verify: all depths < MAX_TRIGGER_DEPTH
       for (const td of triggerDepths) {
         expect(td.depth).toBeLessThan(MAX_TRIGGER_DEPTH);
       }
     });
   });
-
-  // ── Test 3: Trigger depth limit enforcement ───────────────────
 
   describe('trigger depth limit enforcement', () => {
     it('blocks triggers at MAX_TRIGGER_DEPTH (5)', async () => {
@@ -757,11 +741,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       eventBus = new TypedEventBus();
       db = makeMockDb({
-        'agent-deep': makeAgentRow('agent-deep', {
-          harness: 'claude-agents',
+        'agent-deep': makeChainAgentRow('agent-deep', {
           systemPrompt: 'Deep agent',
-          tools: [],
-          manifest: null,
         }),
       }, testCounters);
       sessionRegistry = makeMockRunRegistry(testCounters);
@@ -772,25 +753,13 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       triggerManager = new EventTriggerManager(
         eventBus,
         db,
-      async (agentId, _task, _triggerId, _triggerDepth) => {
+        async (agentId, _task, _triggerId, _triggerDepth) => {
           firedAgents.push(`${agentId}@depth=${_triggerDepth}`);
-          const agent = await db.getAgent(agentId);
-          if (!agent) return;
-          const conv = await db.createConversation(agentId);
-          const run = await sessionRegistry.startRun(agentId, conv.id, 'background', 'task');
-
-          void agentRunServiceRef!.executeRun({
-            agentDef: makeAgentDef(agent.name, {
-              harness: agent.harness ?? 'langgraph',
-              harnessConfig: JSON.parse(agent.harnessConfig as string) as Record<string, unknown>,
-            }),
-            messages: [],
+          await startTriggeredRun({
             agentId,
-            conversationId: conv.id,
-            runId: run.id,
-            taskDescription: 'task',
-          }).catch((err) => {
-            console.error('[Test] triggered run error:', err);
+            task: 'task',
+            agentRunServiceRef,
+            messages: [],
           });
         },
       );
@@ -840,11 +809,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       eventBus = new TypedEventBus();
       db = makeMockDb({
-        'chain-agent': makeAgentRow('chain-agent', {
-          harness: 'claude-agents',
+        'chain-agent': makeChainAgentRow('chain-agent', {
           systemPrompt: 'Chain',
-          tools: [],
-          manifest: null,
         }),
       }, testCounters);
       sessionRegistry = makeMockRunRegistry(testCounters);
@@ -856,25 +822,14 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         eventBus,
         db,
         async (agentId, _task, _triggerId, _triggerDepth) => {
-          const agent = await db.getAgent(agentId);
-          if (!agent) return;
-          const conv = await db.createConversation(agentId);
-          const run = await sessionRegistry.startRun(agentId, conv.id, 'background', 'task');
-          completedRuns.push(run.id);
-
-          void agentRunServiceRef!.executeRun({
-            agentDef: makeAgentDef(agent.name, {
-              harness: agent.harness ?? 'langgraph',
-              harnessConfig: JSON.parse(agent.harnessConfig as string) as Record<string, unknown>,
-            }),
-            messages: [],
+          const run = await startTriggeredRun({
             agentId,
-            conversationId: conv.id,
-            runId: run.id,
-            taskDescription: 'task',
-          }).catch((err) => {
-            console.error('[Test] triggered run error:', err);
+            task: 'task',
+            agentRunServiceRef,
+            messages: [],
           });
+          if (!run) return;
+          completedRuns.push(run.id);
         },
       );
 
@@ -917,8 +872,6 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
   });
 
-  // ── Test 4: Container isolation verification ──────────────────
-
   describe('container isolation verification', () => {
     it('Agent A and Agent B containers have different IDs, secrets, and workspace mounts', async () => {
       const cm = makeMockContainerManager(testCounters);
@@ -945,31 +898,19 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
           AGENT_NAME: 'agent-B',
         },
       } as any);
-
-      // Verify: different container IDs
       expect(containerA.containerId).not.toBe(containerB.containerId);
-
-      // Verify: different container names (based on runId)
       expect(containerA.containerName).not.toBe(containerB.containerName);
       expect(containerA.containerName).toContain('run-A');
       expect(containerB.containerName).toContain('run-B');
-
-      // Verify: different agent IDs
       expect(containerA.agentId).toBe('agent-A');
       expect(containerB.agentId).toBe('agent-B');
-
-      // Verify: different harness names
       expect(containerA.harnessName).toBe('langgraph');
       expect(containerB.harnessName).toBe('claude-agents');
-
-      // Verify: different secrets injected
       const secretsA = cm._createdContainers.find((c) => c.agentId === 'agent-A')!.secrets;
       const secretsB = cm._createdContainers.find((c) => c.agentId === 'agent-B')!.secrets;
       expect(secretsA.OPENAI_API_KEY).toBe('sk-agent-A-key');
       expect(secretsB.OPENAI_API_KEY).toBe('sk-agent-B-key');
       expect(secretsA.AGENT_NAME).not.toBe(secretsB.AGENT_NAME);
-
-      // Verify: different workspace mounts
       const workspaceA = cm._createdContainers.find((c) => c.agentId === 'agent-A')!.workspaceDir;
       const workspaceB = cm._createdContainers.find((c) => c.agentId === 'agent-B')!.workspaceDir;
       expect(workspaceA).toBe('/workspace/agent-A');
@@ -1003,19 +944,14 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
   });
 
-  // ── Test 5: Concurrency limit interaction ─────────────────────
-
   describe('concurrency limit interaction', () => {
     it('triggered run is queued when max containers reached, proceeds when slot opens', async () => {
       const executionOrder: string[] = [];
 
       const components = wireComponents({
         agentRows: {
-          'agent-queued': makeAgentRow('agent-queued', {
-            harness: 'claude-agents',
+          'agent-queued': makeChainAgentRow('agent-queued', {
             systemPrompt: 'Queued agent',
-            tools: [],
-            manifest: null,
           }),
         },
         sandboxExecuteSessionTurn: async function* (_agentDef: AgentDefinition, runId: string) {
@@ -1054,11 +990,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       const components = wireComponents({
         agentRows: {
-          'agent-concurrent': makeAgentRow('agent-concurrent', {
-            harness: 'claude-agents',
+          'agent-concurrent': makeChainAgentRow('agent-concurrent', {
             systemPrompt: 'Concurrent',
-            tools: [],
-            manifest: null,
           }),
         },
         sandboxExecuteSessionTurn: async function* (_agentDef: AgentDefinition, runId: string) {
@@ -1087,17 +1020,12 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
   });
 
-  // ── Test 6: Error in triggered agent doesn't affect triggering agent ──
-
   describe('error in triggered agent does not affect triggering agent', () => {
     it('Agent A succeeds even when Agent B fails', async () => {
       const components = wireComponents({
         agentRows: {
-          'agent-fail-B': makeAgentRow('agent-fail-B', {
-            harness: 'claude-agents',
+          'agent-fail-B': makeChainAgentRow('agent-fail-B', {
             systemPrompt: 'Failing agent',
-            tools: [],
-            manifest: null,
           }),
         },
         sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, runId: string) {
@@ -1159,11 +1087,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     it('Agent A events continue normally when Agent B throws', async () => {
       const components = wireComponents({
         agentRows: {
-          'agent-throw-B': makeAgentRow('agent-throw-B', {
-            harness: 'claude-agents',
+          'agent-throw-B': makeChainAgentRow('agent-throw-B', {
             systemPrompt: 'Throwing agent',
-            tools: [],
-            manifest: null,
           }),
         },
         sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, runId: string) {
@@ -1214,19 +1139,14 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
   });
 
-  // ── Test 7: Event payload flows through chain ─────────────────
-
   describe('event payload flows through chain', () => {
     it('Agent B receives event payload as task template interpolation', async () => {
       let receivedTask = '';
 
       const components = wireComponents({
         agentRows: {
-          'agent-payload-B': makeAgentRow('agent-payload-B', {
-            harness: 'claude-agents',
+          'agent-payload-B': makeChainAgentRow('agent-payload-B', {
             systemPrompt: 'Payload agent',
-            tools: [],
-            manifest: null,
           }),
         },
       });
@@ -1254,8 +1174,6 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       });
 
       await settle(50);
-
-      // Verify: the payload was interpolated into the task template
       expect(receivedTask).toBe('Analyze: result=sentiment-positive, count=42');
     });
 
@@ -1264,11 +1182,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       const components = wireComponents({
         agentRows: {
-          'agent-complex-B': makeAgentRow('agent-complex-B', {
-            harness: 'claude-agents',
+          'agent-complex-B': makeChainAgentRow('agent-complex-B', {
             systemPrompt: 'Complex payload agent',
-            tools: [],
-            manifest: null,
           }),
         },
       });
@@ -1303,8 +1218,6 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
   });
 
-  // ── Test 8: Sandbox metrics track chained containers ──────────
-
   describe('sandbox metrics track chained containers', () => {
     it('ContainerManager.getMetrics() reflects totalCreated across chain', async () => {
       const cm = makeMockContainerManager(testCounters);
@@ -1329,21 +1242,13 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       } as any);
 
       const metrics = cm.getMetrics();
-
-      // Verify: totalCreated matches chain length
       expect(metrics.totalCreated).toBe(3);
-
-      // Verify: active reflects containers that haven't been removed
       expect(metrics.active).toBe(3);
-
-      // Verify: byHarness breakdown is correct
       expect(metrics.byHarness).toEqual({
         langgraph: 1,
         'claude-agents': 1,
         'pi-agent': 1,
       });
-
-      // Verify: peak is at least as high as active
       expect(metrics.peak).toBeGreaterThanOrEqual(metrics.active);
     });
 
@@ -1406,8 +1311,6 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
   });
 
-  // ── Additional integration scenarios ──────────────────────────
-
   describe('end-to-end emit-event to trigger flow', () => {
     it('full flow: emit-event tool result -> emitCustom -> TriggerManager -> sandbox run', async () => {
       // This test verifies the real EventBus wiring between components
@@ -1415,11 +1318,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       eventBus = new TypedEventBus();
       db = makeMockDb({
-        'agent-listener': makeAgentRow('agent-listener', {
-          harness: 'claude-agents',
+        'agent-listener': makeChainAgentRow('agent-listener', {
           systemPrompt: 'Listener',
-          tools: [],
-          manifest: null,
         }),
       }, testCounters);
       sessionRegistry = makeMockRunRegistry(testCounters);
@@ -1432,29 +1332,10 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         db,
         async (agentId, task, _triggerId) => {
           triggeredRuns.push({ agentId, task });
-          const agent = await db.getAgent(agentId);
-          if (!agent) return;
-          const conv = await db.createConversation(agentId);
-          const run = await sessionRegistry.startRun(agentId, conv.id, 'background', task);
-
-          void agentRunServiceRef!.executeRun({
-            agentDef: makeAgentDef(agent.name, {
-              harness: agent.harness ?? 'langgraph',
-              harnessConfig: JSON.parse(agent.harnessConfig as string) as Record<string, unknown>,
-            }),
-            messages: [{
-              id: `msg-${run.id}`,
-              agentId,
-              role: 'user' as const,
-              content: task,
-              createdAt: new Date(),
-            }],
+          await startTriggeredRun({
             agentId,
-            conversationId: conv.id,
-            runId: run.id,
-            taskDescription: task,
-          }).catch((err) => {
-            console.error('[Test] triggered run error:', err);
+            task,
+            agentRunServiceRef,
           });
         },
       );
@@ -1492,8 +1373,6 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       // Wait for the triggerManager to handle via its custom subscription
       await settle(100);
-
-      // Verify: the trigger fired with interpolated task
       expect(triggeredRuns).toHaveLength(1);
       expect(triggeredRuns[0].agentId).toBe('agent-listener');
       expect(triggeredRuns[0].task).toContain('Handle classified email: category=billing');
@@ -1508,17 +1387,12 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       eventBus = new TypedEventBus();
       db = makeMockDb({
-        'agent-billing': makeAgentRow('agent-billing', {
-          harness: 'claude-agents',
+        'agent-billing': makeChainAgentRow('agent-billing', {
           systemPrompt: 'Billing',
-          tools: [],
-          manifest: null,
         }),
-        'agent-support': makeAgentRow('agent-support', {
+        'agent-support': makeChainAgentRow('agent-support', {
           harness: 'pi-agent',
           systemPrompt: 'Support',
-          tools: [],
-          manifest: null,
         }),
       }, testCounters);
       sessionRegistry = makeMockRunRegistry(testCounters);
@@ -1569,11 +1443,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       eventBus = new TypedEventBus();
       db = makeMockDb({
-        'agent-disabled': makeAgentRow('agent-disabled', {
-          harness: 'claude-agents',
+        'agent-disabled': makeChainAgentRow('agent-disabled', {
           systemPrompt: 'Disabled',
-          tools: [],
-          manifest: null,
         }),
       }, testCounters);
 
@@ -1603,19 +1474,18 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       const components = wireComponents({
         agentRows: {
-          'agent-alpha': makeAgentRow('agent-alpha', {
+          'agent-alpha': makeChainAgentRow('agent-alpha', {
             harness: 'langgraph',
             harnessConfig: makeHarnessConfig({ provider: 'openai', model: 'gpt-5.4-mini' }),
             systemPrompt: 'Alpha',
             tools: ['read_file'],
             manifest: { executionMode: 'sandbox', resourceLimits: { cpus: 2 } },
           }),
-          'agent-beta': makeAgentRow('agent-beta', {
+          'agent-beta': makeChainAgentRow('agent-beta', {
             harness: 'pi-agent',
             harnessConfig: makeHarnessConfig({ provider: 'anthropic', model: 'claude-sonnet-4-6' }),
             systemPrompt: 'Beta',
             tools: ['search'],
-            manifest: null,
           }),
         },
         sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, runId: string) {
@@ -1642,8 +1512,6 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       components.triggerManager.emitCustomEvent('custom.trigger_alpha', 'sender', {});
       components.triggerManager.emitCustomEvent('custom.trigger_beta', 'sender', {});
       await settle(100);
-
-      // Both should have been executed
       expect(new Set(capturedCalls.map((call) => call.name))).toEqual(new Set(['agent-alpha', 'agent-beta']));
 
       const alphaCall = capturedCalls.find((c) => c.name === 'agent-alpha')!;

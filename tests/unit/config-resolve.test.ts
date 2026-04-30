@@ -7,11 +7,7 @@ describe('Config Resolution', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_BASE_URL;
-    delete process.env.OPENAI_BASE_URL;
     process.env.DATABASE_URL = 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill';
-    process.env.OPENAI_API_KEY = 'sk-test-default';
   });
 
   afterEach(() => {
@@ -34,12 +30,6 @@ describe('Config Resolution', () => {
       expect(config.knowledge.providers).toEqual(['memory']);
     });
 
-    it('should resolve learning strategy to ace', () => {
-      const config = resolveConfig({ preset: 'docker' });
-      expect(config.learning.strategy).toBe('ace');
-      expect(config.learning.async).toBe(false);
-    });
-
     it('should resolve observability sink to postgres', () => {
       const config = resolveConfig({ preset: 'docker' });
       expect(config.observability.sink).toBe('postgres');
@@ -49,12 +39,6 @@ describe('Config Resolution', () => {
       const config = resolveConfig({ preset: 'docker' });
       expect(config.orchestration.eventBus).toBe(true);
       expect(config.orchestration.reconciliation).toBe(false);
-    });
-
-    it('should resolve LLM provider without a default model', () => {
-      const config = resolveConfig({ preset: 'docker' });
-      expect(config.llm.provider).toBe('openai');
-      expect(config.llm.model).toBe('');
     });
 
     it('should resolve tools executors to local and mcp', () => {
@@ -77,27 +61,6 @@ describe('Config Resolution', () => {
       expect(config.database.type).toBe('postgres');
       expect(config.database.url).toBe('postgres://localhost/test');
       expect(config.execution.type).toBe('docker');
-      expect(config.learning.strategy).toBe('ace');
-    });
-
-    it('should override learning strategy within docker preset', () => {
-      const config = resolveConfig({
-        preset: 'docker',
-        learning: { strategy: 'simple', async: true },
-      });
-      expect(config.learning.strategy).toBe('simple');
-      expect(config.learning.async).toBe(true);
-      expect(config.database.type).toBe('postgres');
-    });
-
-    it('should override LLM model within preset', () => {
-      const config = resolveConfig({
-        preset: 'docker',
-        llm: { provider: 'openai', model: 'gpt-4o', apiKey: 'sk-test' },
-      });
-      expect(config.llm.provider).toBe('openai');
-      expect(config.llm.model).toBe('gpt-4o');
-      expect(config.llm.apiKey).toBe('sk-test');
     });
 
     it('should override multiple subsystems simultaneously', () => {
@@ -114,19 +77,6 @@ describe('Config Resolution', () => {
       process.env.DATABASE_URL = 'postgres://user:pass@db:5432/ctxmill';
       const config = resolveConfig({ preset: 'docker' });
       expect(config.database.url).toBe('postgres://user:pass@db:5432/ctxmill');
-    });
-
-    it('should resolve LLM apiKey from OPENAI_API_KEY env var', () => {
-      process.env.OPENAI_API_KEY = 'sk-openai-test-key';
-      const config = resolveConfig({ preset: 'docker' });
-      expect(config.llm.apiKey).toBe('sk-openai-test-key');
-    });
-
-    it('should not resolve LLM apiKey from ANTHROPIC_API_KEY (harnesses resolve their own keys)', () => {
-      delete process.env.OPENAI_API_KEY;
-      process.env.ANTHROPIC_API_KEY = 'sk-ant-test-key';
-      const config = resolveConfig({ preset: 'docker' });
-      expect(config.llm.apiKey).toBe('');
     });
 
     it('should not mutate the preset object', () => {

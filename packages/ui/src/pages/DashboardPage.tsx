@@ -5,6 +5,7 @@ import { useAgentsStore } from '@/stores/agents';
 import { Dashboard } from '@/components/dashboard/Dashboard';
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { fetchActiveConversations, fetchConversationSummaries } from '@/lib/api';
+import { countActiveSessions } from '@/lib/session-status';
 import type { ApiConversationSummary } from '@ctxmill/shared';
 
 export function DashboardPage() {
@@ -12,6 +13,7 @@ export function DashboardPage() {
   const loading = useAgentsStore((s) => s.loading);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const cancelRun = useAgentsStore((s) => s.cancelRun);
+  const agentLoadError = useAgentsStore((s) => s.error);
 
   const navigate = useNavigate();
   const [activeConversations, setActiveConversations] = useState<ApiConversationSummary[]>([]);
@@ -62,7 +64,7 @@ export function DashboardPage() {
   const stats = useMemo(() => {
     const totalTools = agents.reduce((sum, a) => sum + a.tools.length, 0);
     const activeAgents = agents.filter(
-      (a) => ((a.sessionsByStatus?.ACTIVE ?? 0) + (a.sessionsByStatus?.PAUSED ?? 0) + (a.sessionsByStatus?.RESTORING ?? 0)) > 0 || a.status === 'running' || a.status === 'booting',
+      (a) => countActiveSessions(a.sessionsByStatus) > 0 || a.status === 'running' || a.status === 'booting',
     ).length;
     return { totalTools, activeAgents };
   }, [agents]);
@@ -126,7 +128,7 @@ export function DashboardPage() {
             </h3>
           </div>
 
-          <Dashboard agents={agents} loading={loading} onFilteredCountChange={setFilteredCount} />
+          <Dashboard agents={agents} loading={loading} error={agentLoadError} onFilteredCountChange={setFilteredCount} />
         </div>
 
         {activeConversations.length > 0 && (

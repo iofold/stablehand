@@ -234,15 +234,12 @@ describe('tool validation edge cases', () => {
       expect(configs).toEqual([]);
     });
 
-    it('should default invalid HTTP methods to POST', () => {
-      const configs = mapAgentHttpToolsToConfigs(createAgentDefinition({
+    it('should reject invalid HTTP methods instead of defaulting to POST', () => {
+      expect(() => mapAgentHttpToolsToConfigs(createAgentDefinition({
         metadata: {
           httpTools: [createHttpTool({ method: 'TRACE' })],
         },
-      }));
-
-      expect(configs).toHaveLength(1);
-      expect(configs[0].method).toBe('POST');
+      }))).toThrow('Invalid HTTP tool method: TRACE');
     });
 
     it('should skip malformed metadata entries and keep valid http tools', () => {

@@ -282,12 +282,39 @@ describe('http tools registration lifecycle', () => {
     );
   });
 
-  it('HTTPToolProvider falls back to process.env when provider secrets are missing', async () => {
+  it('HTTPToolProvider fails closed when provider secrets are missing', async () => {
     const fetchMock = vi.fn(async () => createFetchResponse());
     vi.stubGlobal('fetch', fetchMock);
     process.env.API_TOKEN = 'env-secret';
 
     await registerAgentHttpTools(registry, createRegistrationAgent());
+
+    const provider = registry.getProvider('search-api');
+    expect(provider).toBeDefined();
+
+    await expect(provider?.execute('search-api', { query: 'ctxmill' }, mockCtx)).rejects.toThrow(
+      'HTTPToolProvider: missing secret "API_TOKEN" for tool "search-api"',
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('HTTPToolProvider can opt in to process.env fallback for provider secrets', async () => {
+    const fetchMock = vi.fn(async () => createFetchResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.API_TOKEN = 'env-secret';
+
+    await registerAgentHttpTools(registry, createRegistrationAgent({
+      metadata: {
+        httpTools: [createHttpTool({
+          authentication: {
+            type: 'bearer',
+            secretName: 'API_TOKEN',
+            allowEnvFallback: true,
+          },
+        })],
+      },
+    }));
 
     const provider = registry.getProvider('search-api');
     expect(provider).toBeDefined();

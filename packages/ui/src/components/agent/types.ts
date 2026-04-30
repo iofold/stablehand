@@ -24,38 +24,6 @@ export interface KnowledgeStats {
   recentItems?: number;
 }
 
-export interface TraceStats {
-  total: number;
-  outcomes: Record<string, number>;
-  avgSteps: number;
-  recent24h: number;
-}
-
-export interface FeedbackStats {
-  total: number;
-  types: Record<string, number>;
-  recent24h: number;
-}
-
-export interface TraceStep {
-  type: string;
-  content: string;
-  durationMs: number;
-  ordinal: number;
-  metadata?: Record<string, unknown>;
-}
-
-export interface Trace {
-  id: string;
-  agentId: string;
-  sessionId: string;
-  taskDescription?: string;
-  steps: TraceStep[];
-  startedAt: string;
-  completedAt?: string;
-  outcome?: string;
-}
-
 export const TABS: { id: TabId; label: string; icon: string; testId?: string }[] = [
   { id: 'overview', label: 'Overview', icon: 'LayoutDashboard' },
   { id: 'knowledge', label: 'Knowledge', icon: 'Brain', testId: 'knowledge-tab' },

@@ -1,9 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { toAgentDefinition } from '../../session-manager/session-agent-definition.js';
+import { ConcurrencyLimitError } from '../../session-manager/concurrency-limit-error.js';
 import type { RuntimeSandboxSecrets } from '../../session-manager/runtime-sandbox-secrets.js';
-import { withRuntimeSandboxSecrets } from '../../session-manager/runtime-sandbox-secrets.js';
-import { mapMessagesToInternal } from '../agent-helpers.js';
 import { getRequestAgent, safeError, toApiAgentSession } from './helpers.js';
 import type { AgentSubRouteOptions, StoredAgent } from './types.js';
 
@@ -11,11 +9,22 @@ import type { AgentSubRouteOptions, StoredAgent } from './types.js';
 // docs/contracts/session-identity.md. In particular, the `sessionId` returned
 // by message/session creation routes is the turn/run id, not the persistent
 // sandbox session id.
+function sendLegacySandboxAdminGone(
+  reply: FastifyReply,
+  action: 'suspend' | 'kill',
+  sessionId: string,
+) {
+  return reply.status(410).send({
+    error: `Legacy session admin route removed. Use /api/agents/:id/sandbox-sessions/:sessionId/${action}.`,
+    sessionId,
+  });
+}
+
 export async function sessionRoutes(
   app: FastifyInstance,
   opts: AgentSubRouteOptions,
 ): Promise<void> {
-  const { db, agentSessionService, sessionManager, eventBus, runStartupService, loadAgent } = opts;
+  const { db, sessionManager, eventBus, runStartupService, loadAgent } = opts;
 
   const parseSandboxSecrets = (value: unknown): RuntimeSandboxSecrets | undefined => {
     if (value === undefined) return undefined;
@@ -49,100 +58,25 @@ export async function sessionRoutes(
       sandboxSecrets?: RuntimeSandboxSecrets;
     },
   ) => {
-    if (runStartupService) {
-      return runStartupService.prepareRunStart({
-        agent,
-        agentId,
-        content,
-        mode,
-        conversationId: options?.conversationId,
-        requestedTurnId: options?.requestedTurnId,
-        requireExistingConversation: options?.requireExistingConversation,
-        emitUserMessageEvent: options?.emitUserMessageEvent,
-        sandboxSecrets: options?.sandboxSecrets,
-      });
-    }
-
-    const agentDef = withRuntimeSandboxSecrets(toAgentDefinition(agent), options?.sandboxSecrets);
-    let conversationId: string;
-    if (options?.conversationId) {
-      const conversation = await db.getConversation(options.conversationId);
-      if (!conversation || conversation.agentId !== agentId) {
-        throw new Error(`Conversation ${options.conversationId} not found for agent ${agentId}`);
-      }
-      conversationId = conversation.id;
-    } else {
-      conversationId = (await db.createConversation(agentId)).id;
-    }
-    const message = await db.addMessage({
+    return runStartupService.prepareRunStart({
+      agent,
       agentId,
-      conversationId,
-      role: 'user',
       content,
-    });
-    sessionManager?.checkConcurrencyLimit(agentId);
-    const session = await db.createTurn({
-      agentId,
-      conversationId,
       mode,
-      ...(mode === 'background' ? { taskDescription: content } : {}),
-    });
-    if (options?.emitUserMessageEvent !== false && eventBus) {
-      eventBus.emit('user.message', {
-        agentId,
-        conversationId,
-        messageId: message.id,
-        content,
-        timestamp: Date.now(),
-      });
-    }
-    eventBus?.emit('turn.pending', {
-      turnId: session.id,
-      agentId,
-      conversationId,
-      mode,
-      ...(mode === 'background' ? { taskDescription: content } : {}),
-      timestamp: Date.now(),
-    });
-    const allMessages = await db.getMessages(conversationId);
-
-    return {
-      agentDef,
-      conversationId,
-      turnId: session.id,
-      messageId: message.id,
-      messages: mapMessagesToInternal(allMessages, agentId),
-      mode,
-      taskDescription: content,
+      conversationId: options?.conversationId,
+      requestedTurnId: options?.requestedTurnId,
+      requireExistingConversation: options?.requireExistingConversation,
+      emitUserMessageEvent: options?.emitUserMessageEvent,
       sandboxSecrets: options?.sandboxSecrets,
-    };
+    });
   };
 
   const launchPreparedRun = (
     agentId: string,
     start: Awaited<ReturnType<typeof prepareRunStart>>,
   ) => {
-    if (runStartupService) {
-      void runStartupService.launchPreparedRun(start, agentId).catch((err) => {
-        console.error(`[agents] executeSession failed for agent ${agentId}, session ${start.turnId}:`, err);
-      });
-      return;
-    }
-
-    void agentSessionService.executeSession({
-      agentDef: start.agentDef,
-      messages: start.messages,
-      agentId,
-      conversationId: start.conversationId,
-      sessionId: start.turnId,
-      mode: start.mode,
-      taskDescription: start.taskDescription,
-      sandboxSecrets: start.sandboxSecrets,
-    }).catch(async (err) => {
+    void runStartupService.launchPreparedRun(start, agentId).catch((err) => {
       console.error(`[agents] executeSession failed for agent ${agentId}, session ${start.turnId}:`, err);
-      await db.updateTurn(start.turnId, { completedAt: Date.now(), error: String(err) }).catch((dbErr) => {
-        console.error(`[agents] Failed to update turn ${start.turnId} after session error:`, dbErr);
-      });
     });
   };
 
@@ -177,6 +111,18 @@ export async function sessionRoutes(
           sessionId: start.turnId,
         });
       } catch (err) {
+        if (err instanceof ConcurrencyLimitError) {
+          return reply
+            .status(err.statusCode)
+            .header('Retry-After', String(err.retryAfterSec))
+            .send({
+              error: err.message,
+              code: 'concurrency_limit_reached',
+              agentId: err.agentId,
+              maxConcurrent: err.maxConcurrent,
+              retryAfterSec: err.retryAfterSec,
+            });
+        }
         if (err instanceof Error && err.message.startsWith('Conversation ')) {
           return reply.status(404).send({ error: err.message });
         }
@@ -217,6 +163,18 @@ export async function sessionRoutes(
           sandboxSessionId: null,  // populated asynchronously; poll GET /:id/sessions/:sessionId until non-null to get the id required by /sandbox-sessions/:id/suspend
         });
       } catch (err) {
+        if (err instanceof ConcurrencyLimitError) {
+          return reply
+            .status(err.statusCode)
+            .header('Retry-After', String(err.retryAfterSec))
+            .send({
+              error: err.message,
+              code: 'concurrency_limit_reached',
+              agentId: err.agentId,
+              maxConcurrent: err.maxConcurrent,
+              retryAfterSec: err.retryAfterSec,
+            });
+        }
         if (err instanceof Error && /sandbox secret|sandboxSecrets/i.test(err.message)) {
           return reply.status(400).send({ error: err.message });
         }
@@ -320,10 +278,7 @@ export async function sessionRoutes(
     async (
       request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
       reply: FastifyReply,
-    ) => reply.status(410).send({
-      error: 'Legacy session admin route removed. Use /api/agents/:id/sandbox-sessions/:sessionId/suspend.',
-      sessionId: request.params.sessionId,
-    }),
+    ) => sendLegacySandboxAdminGone(reply, 'suspend', request.params.sessionId),
   );
 
   app.post(
@@ -360,7 +315,7 @@ export async function sessionRoutes(
 
         try {
           await sessionManager.suspendSession(sessionId, 'api_request');
-        } catch (suspendErr) {
+        } catch {
           return reply.status(409).send({
             error: 'Session no longer active',
             status: 'UNKNOWN',
@@ -380,10 +335,7 @@ export async function sessionRoutes(
     async (
       request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
       reply: FastifyReply,
-    ) => reply.status(410).send({
-      error: 'Legacy session admin route removed. Use /api/agents/:id/sandbox-sessions/:sessionId/kill.',
-      sessionId: request.params.sessionId,
-    }),
+    ) => sendLegacySandboxAdminGone(reply, 'kill', request.params.sessionId),
   );
 
   app.post(

@@ -11,6 +11,7 @@ import {
 import { cn } from '@/lib/utils';
 import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
 import { ToolTester } from '@/components/tools/ToolTester';
+import { AsyncContentState } from '@/components/ui/AsyncContentState';
 
 function sourceBadgeClass(source: string): string {
   switch (source) {
@@ -147,27 +148,32 @@ export function ToolRegistryPage() {
           )}
         </div>
 
-        {/* Content */}
-        {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-6 w-6 text-accent-400 animate-spin" />
-          </div>
-        ) : error ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Wrench className="h-8 w-8 text-surface-400 mb-3" />
-            <p className="text-sm text-surface-400">{error}</p>
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Wrench className="h-8 w-8 text-surface-400 mb-3" />
-            <p className="text-sm text-surface-400">
-              {search ? 'No tools match your search.' : 'No tools registered yet.'}
-            </p>
-            <p className="text-xs text-surface-400 mt-1">
-              Tools will appear here when agents register them.
-            </p>
-          </div>
-        ) : (
+        <AsyncContentState
+          loading={loading}
+          error={error && (
+            <div className="flex flex-col items-center justify-center py-20 text-center">
+              <Wrench className="h-8 w-8 text-surface-400 mb-3" />
+              <p className="text-sm text-surface-400">{error}</p>
+            </div>
+          )}
+          empty={filtered.length === 0}
+          loadingFallback={
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="h-6 w-6 text-accent-400 animate-spin" />
+            </div>
+          }
+          emptyFallback={
+            <div className="flex flex-col items-center justify-center py-20 text-center">
+              <Wrench className="h-8 w-8 text-surface-400 mb-3" />
+              <p className="text-sm text-surface-400">
+                {search ? 'No tools match your search.' : 'No tools registered yet.'}
+              </p>
+              <p className="text-xs text-surface-400 mt-1">
+                Tools will appear here when agents register them.
+              </p>
+            </div>
+          }
+        >
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {filtered.map((tool) => {
               const isExpanded = expandedTool === tool.name;
@@ -292,7 +298,7 @@ export function ToolRegistryPage() {
               );
             })}
           </div>
-        )}
+        </AsyncContentState>
       </main>
     </div>
   );

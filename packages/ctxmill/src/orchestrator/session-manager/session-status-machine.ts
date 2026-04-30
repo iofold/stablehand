@@ -4,7 +4,7 @@ const VALID_TRANSITIONS: ReadonlyMap<SessionStatus, readonly SessionStatus[]> = 
   ['ACTIVE', ['CHECKPOINTED', 'TERMINATED']],
   ['PAUSED', ['CHECKPOINTED', 'ACTIVE', 'TERMINATED']],
   ['CHECKPOINTED', ['RESTORING', 'TERMINATED']],
-  ['RESTORING', ['ACTIVE', 'CHECKPOINTED']],
+  ['RESTORING', ['ACTIVE', 'CHECKPOINTED', 'TERMINATED']],
   ['TERMINATED', []],
 ]);
 

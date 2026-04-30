@@ -115,6 +115,21 @@ pi-agent-{id} (chain) [2.05s]
 - `packages/sandbox-daemon/src/harness/pi-langsmith-tracer.ts` — Tracer module
 - `packages/sandbox-daemon/src/harness/pi-agent.ts` — Wiring (subscribe + flush)
 
+## Subagent visibility
+
+| Harness | Subagent invocation | Subagent internals | Tokens |
+|---|---|---|---|
+| LangGraph | ✅ Full sub-chain (`task` → subagent name → `__start__` → `model_request` → provider-specific LLM span) | ✅ Each subagent's LLM call traced with its own provider (`ChatOpenAI`/`ChatGoogleGenerativeAI`/`ChatAnthropic`) | ✅ Aggregate up through parent |
+| Claude Agents | ✅ Visible as named chain marker under root | ❌ **Not traced** | ❌ Subagent-internal tokens missing |
+
+The Claude Agents subagent gap is a JS↔Python parity issue in the upstream `langsmith` SDK. The Anthropic claude-agent-sdk only streams the *first* assistant message of each subagent through the live iterator; subsequent turns are folded into the parent's `Agent` tool result and only appear in the SDK's session JSONL transcript file. The Python integration handles this with a post-conversation reconciler (`python/langsmith/integrations/claude_agent_sdk/_transcripts.py`) — the JS integration does not. Tracked upstream at [langchain-ai/langsmith-sdk#2813](https://github.com/langchain-ai/langsmith-sdk/issues/2813).
+
+Workaround options if subagent token attribution becomes critical:
+- Implement local transcript reconciliation in our harness (read `~/.claude/projects/<sanitized>/sessions/<conversationId>.jsonl` after each run, post fresh `RunTree`s for missing subagent turns, patch usage on existing LLM runs).
+- Subscribe to upstream issue #2813 and adopt JS parity once shipped.
+
+PI Agent does not currently support subagents.
+
 ## Verifying It Works
 
 After setting the env vars and restarting the stack, send one test message:
@@ -139,7 +154,7 @@ Then in LangSmith (`https://smith.langchain.com`):
 | `403`/`401` warnings in sandbox logs | Service-account key (`lsv2_sk_…`) without `LANGSMITH_WORKSPACE_ID` set |
 | Run appears in `default` project, not yours | `LANGSMITH_PROJECT` only forwarded to the sandbox via `SANDBOX_SECRET_ALLOWLIST` — orchestrator restart picks it up; sandbox containers are launched per run, so the next run will pick it up |
 | Spans for Claude harness missing tool calls | `langsmith` version mismatch with `@anthropic-ai/claude-agent-sdk` — `wrapClaudeAgentSDK` lives in `experimental/` and the field schema can shift between minor versions |
-| `[pi-langsmith] Failed to post …` warnings | Network egress to `api.smith.langchain.com` blocked by `CTXMILL_ALLOWED_EGRESS_DOMAINS`; add it to the egress allowlist |
+| `[pi-langsmith] Failed to post ...` warnings | Sandbox egress to `api.smith.langchain.com` is blocked by external network policy, DNS, firewall, or proxy configuration |
 
 To see what the sandbox logged during a run:
 
@@ -159,7 +174,7 @@ No performance overhead when disabled — `langsmith` is never imported.
 
 ## Dependency
 
-`langsmith@^0.5.15` is added to `packages/sandbox-daemon/package.json`. It runs inside sandbox containers only (not the orchestrator). The learning pipeline's own `ChatOpenAI` calls (from `@langchain/openai` in the orchestrator) also trace to the same project when `LANGSMITH_TRACING=true`.
+`langsmith@^0.5.15` is added to `packages/sandbox-daemon/package.json`. It runs inside sandbox containers only, not the orchestrator.
 
 ## Files Changed
 

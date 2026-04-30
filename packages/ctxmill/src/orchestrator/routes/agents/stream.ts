@@ -58,7 +58,6 @@ export async function streamRoutes(
             conversationId: session.conversationId,
             sessionId: session.id,
             activeTurnId,
-            turnId: activeTurnId,
             status: session.status,
             harnessName: session.harnessName,
             containerName: session.containerName,

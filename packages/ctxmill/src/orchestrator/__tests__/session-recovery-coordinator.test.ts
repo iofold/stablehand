@@ -383,7 +383,24 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
 
     expect(containerManager.createContainer).not.toHaveBeenCalled();
     expect(restoreSpy).not.toHaveBeenCalled();
-    expect(statusTransitions(db)).toEqual(['CHECKPOINTED', 'RESTORING', 'CHECKPOINTED']);
+    expect(statusTransitions(db)).toEqual(['CHECKPOINTED', 'RESTORING', 'TERMINATED']);
+  });
+
+  it('terminates RESTORING when the checkpoint row is missing', async () => {
+    vi.useFakeTimers();
+    const { manager, containerManager, db, grpcClient } = createManager();
+
+    connectMocks.createClientMock.mockReturnValue(grpcClient);
+    (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('CHECKPOINTED'));
+    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+    const rejection = expect(sessionPromise).rejects.toThrow('No checkpoint found for session sess-1');
+    await vi.advanceTimersByTimeAsync(10_500);
+    await rejection;
+
+    expect(containerManager.createContainer).not.toHaveBeenCalled();
+    expect(statusTransitions(db)).toEqual(['RESTORING', 'TERMINATED']);
   });
 
   it('evicts an unreachable ACTIVE session with no checkpoint by creating a fresh replacement session', async () => {

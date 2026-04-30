@@ -7,9 +7,9 @@
 ## STRUCTURE
 
 ```
-unit/                 51 files — Component-level tests (harness, tools, events, DB, LLM, learning, workspace, sandbox)
+unit/                 51 files — Component-level tests (harness, tools, events, DB, workspace, sandbox)
 integration/          19 files — Multi-component workflows (orchestrator, CRUD, lifecycle, event flows, HITL)
-compliance/           13 files — Interface contract suites (event bus, queue, learning, knowledge, context, executor)
+compliance/           13 files — Interface contract suites (event bus, queue, knowledge, context, executor)
 contract/             EMPTY — no shipped contract suite currently
 sandbox/              4 files — Container manager, suspend/resume, harness subagents (mocked Docker)
 e2e/                  8 Playwright specs + visual snapshots — Chat, background runs, dashboard, session lifecycle
@@ -22,7 +22,7 @@ setup-strict.ts       Strict mode — console.error/warn interception
 - `sandbox/__tests__/` — 13 files (checkpoint, container-manager, proto-convert, session-recovery, session-status-machine, etc.)
 - `orchestrator/__tests__/` — 7 files (webhook-routes, session-manager, session-recovery-coordinator, pilot-integration, etc.)
 - `tool/__tests__/` — 4 files (metadata, schema-convert, executor)
-- `events/__tests__/`, `config/__tests__/`, `learning/__tests__/`, `manifest/__tests__/`, `util/__tests__/`
+- `events/__tests__/`, `config/__tests__/`, `manifest/__tests__/`, `util/__tests__/`
 
 ## WHERE TO LOOK
 
@@ -69,7 +69,7 @@ setup-strict.ts       Strict mode — console.error/warn interception
 - `createTestBus()` — Fresh TypedEventBus instance
 - `collectEvents(bus, eventType)` — Accumulates events into array
 - `waitForEmit(bus, eventType)` — Promise that resolves on first emission (5s timeout default)
-- Mock factories: `createMockSSEManager()`, `createMockDatabase()`, `createMockLearningPipeline()`, `createMockSuspendDb()`, `createMockTriggerDb()`
+- Mock factories: `createMockSSEManager()`, `createMockDatabase()`, `createMockSuspendDb()`, `createMockTriggerDb()`
 - Event builders: `RunStarted`, `RunCompleted`, `TextChunk`, `ToolStarted`, `ToolResult`, `FeedbackReceived`, `AgentCreated`, `RunResumed`
 
 **`e2e/support.ts`** (233 lines) — E2E test helpers

@@ -7,9 +7,7 @@ export const presets: Record<string, ResolvedConfig> = {
     knowledge: { providers: ['memory'] },
     tools: { executors: ['local', 'mcp'] },
     security: { preset: 'docker' },
-    learning: { strategy: 'ace' as const, async: false },
     orchestration: { eventBus: true, reconciliation: false },
     observability: { sink: 'postgres', path: '' },
-    llm: { provider: 'openai', model: '', apiKey: '', baseUrl: '' },
   },
 };

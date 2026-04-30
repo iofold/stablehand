@@ -14,8 +14,8 @@ CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persi
 - **Workspace isolation**: session-scoped workspace diff capture/restore during suspend/resume
 - **Artifact storage**: S3/MinIO-backed persistent file upload/download with signed URLs
 - **System settings**: 14 runtime-configurable knobs with DB persistence and Settings UI
-- **Learning pipeline**: optional trace reflection and knowledge updates
-- **PostgreSQL persistence**: agents, runs, messages, events, traces, triggers, and secrets
+- **External learning hooks**: run lifecycle, message, tool, and feedback events for webhook-driven learners
+- **PostgreSQL persistence**: agents, runs, messages, events, triggers, and secrets
 - **React operations UI**: dashboard, chat, knowledge, files, triggers, tools, and run detail views
 - **Scaffold CLI**: `create-ctxmill` for a generic starter project
 
@@ -44,7 +44,7 @@ docker compose up --build -d
 # http://localhost:3200
 ```
 
-> Sandbox harness images and the egress proxy are included in the default compose stack. They build automatically with `docker compose up --build -d`.
+> Sandbox harness images are included in the default compose stack. They build automatically with `docker compose up --build -d`.
 
 ### Common Commands
 
@@ -87,8 +87,6 @@ packages/
       events/           Typed event bus, triggers, wait primitives
       harness/          Harness adapters (3 shipped: LangGraph, Claude Agents, PI Agent)
       knowledge/        Knowledge store abstractions and implementations
-      learning/         Trace reflection and learning pipeline
-      llm/              LLM abstraction layer and provider factory
       manifest/         YAML manifest parsing and conversion
       orchestrator/     Fastify server, SSE, HITL, routes
       sandbox/          Container lifecycle, gRPC daemon, checkpoint/resume

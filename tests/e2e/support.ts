@@ -97,7 +97,7 @@ export async function waitForRunStatus(
     const sessionsResponse = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
     if (sessionsResponse.ok()) {
       const body = await sessionsResponse.json();
-      const sessions = Array.isArray(body) ? body : body.sessions ?? [];
+      const sessions = body.sessions ?? [];
       const session = sessions.find((entry: Record<string, unknown>) =>
         entry.id === sessionId || entry.sessionId === sessionId || entry.conversationId === sessionId,
       );

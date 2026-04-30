@@ -9,8 +9,6 @@ import type { AgentSession } from '@/stores/agents';
 import type {
   KnowledgeItem,
   KnowledgeStats,
-  TraceStats,
-  FeedbackStats,
 } from './types';
 import { formatTime } from './types';
 
@@ -58,8 +56,6 @@ export interface AgentOverviewTabProps {
   onContinueSession: (conversationId: string) => void;
   knowledgeStats?: KnowledgeStats;
   recentKnowledgeItems?: KnowledgeItem[];
-  traceStats?: TraceStats;
-  feedbackStats?: FeedbackStats;
 }
 
 export function AgentOverviewTab({
@@ -72,8 +68,6 @@ export function AgentOverviewTab({
   onContinueSession,
   knowledgeStats,
   recentKnowledgeItems,
-  traceStats,
-  feedbackStats,
 }: AgentOverviewTabProps) {
   const [promptExpanded, setPromptExpanded] = useState(false);
   const parsedHarnessConfig = agent.harnessConfig;
@@ -147,13 +141,13 @@ export function AgentOverviewTab({
         )}
       </div>
 
-      {/* Learning Dashboard */}
-      <div data-testid="learning-dashboard" className="rounded-lg border border-surface-700 bg-surface-800 p-6 space-y-6">
+      {/* Knowledge Snapshot */}
+      <div data-testid="knowledge-snapshot" className="rounded-lg border border-surface-700 bg-surface-800 p-6 space-y-6">
         <h3 className="text-label">
-          Learning Dashboard
+          Knowledge Snapshot
         </h3>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Knowledge Growth */}
           <div data-testid="knowledge-growth" className="rounded-lg border border-surface-700 bg-surface-900 p-4">
             <p className="text-xs font-medium text-surface-300 mb-2">Knowledge Growth</p>
@@ -162,21 +156,6 @@ export function AgentOverviewTab({
               {Object.entries(knowledgeStats?.categories ?? {}).map(([cat, count]) => (
                 <span key={cat} className="inline-flex items-center rounded-full bg-surface-800 border border-surface-700 px-2 py-0.5 text-[10px] text-surface-300">
                   {cat}: {count as number}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          {/* Trace Stats */}
-          <div data-testid="trace-stats" className="rounded-lg border border-surface-700 bg-surface-900 p-4">
-            <p className="text-xs font-medium text-surface-300 mb-2">Trace Stats</p>
-            <p className="text-2xl font-bold text-surface-100 tabular-nums">{traceStats?.total ?? 0}</p>
-            <div className="mt-1 text-[11px] text-surface-400 space-y-0.5">
-              <p>Avg steps: <span className="text-surface-300 tabular-nums">{traceStats?.avgSteps?.toFixed(1) ?? '0'}</span></p>
-              <p>Last 24h: <span className="text-surface-300 tabular-nums">{traceStats?.recent24h ?? 0}</span></p>
-              {Object.entries(traceStats?.outcomes ?? {}).map(([outcome, count]) => (
-                <span key={outcome} className="inline-flex items-center gap-2 mr-2 text-surface-400">
-                  {outcome}: {count as number}
                 </span>
               ))}
             </div>
@@ -196,22 +175,6 @@ export function AgentOverviewTab({
             ) : (
               <p className="text-[11px] text-surface-400">No recent insights.</p>
             )}
-          </div>
-
-          {/* Feedback Summary */}
-          <div data-testid="feedback-summary" className="rounded-lg border border-surface-700 bg-surface-900 p-4">
-            <p className="text-xs font-medium text-surface-300 mb-2">Feedback Summary</p>
-            <p className="text-2xl font-bold text-surface-100 tabular-nums">{feedbackStats?.total ?? 0}</p>
-            <div className="mt-1 text-[11px] text-surface-400 space-y-0.5">
-              <p>Last 24h: <span className="text-surface-300 tabular-nums">{feedbackStats?.recent24h ?? 0}</span></p>
-              <div className="flex flex-wrap gap-2 mt-1">
-                {Object.entries(feedbackStats?.types ?? {}).map(([type, count]) => (
-                  <span key={type} className="inline-flex items-center gap-2 text-surface-400 capitalize">
-                    {type}: {count as number}
-                  </span>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
       </div>

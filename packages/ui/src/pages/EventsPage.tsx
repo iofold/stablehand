@@ -65,7 +65,6 @@ function formatTime(ts: number): string {
 function typeColor(type: string): string {
   if (type.startsWith('run.')) return 'text-blue-400';
   if (type.startsWith('agent.')) return 'text-green-400';
-  if (type.startsWith('learning.')) return 'text-amber-400';
   if (type.startsWith('feedback.')) return 'text-purple-400';
   if (type.startsWith('client.')) return 'text-cyan-400';
   return 'text-surface-300';
@@ -74,7 +73,6 @@ function typeColor(type: string): string {
 function typeBadgeBg(type: string): string {
   if (type.startsWith('run.')) return 'bg-blue-500/10 border-blue-500/20';
   if (type.startsWith('agent.')) return 'bg-green-500/10 border-green-500/20';
-  if (type.startsWith('learning.')) return 'bg-amber-500/10 border-amber-500/20';
   if (type.startsWith('feedback.')) return 'bg-purple-500/10 border-purple-500/20';
   if (type.startsWith('client.')) return 'bg-cyan-500/10 border-cyan-500/20';
   return 'bg-surface-700/30 border-surface-600/30';

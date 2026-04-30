@@ -5,7 +5,7 @@
  * the behavioral contract. Consumers provide a factory that returns
  * a fresh queue instance.
  *
- * Pattern follows learning-pipeline.compliance.ts and event-bus.compliance.ts.
+ * Pattern follows the shared compliance-suite factory style.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

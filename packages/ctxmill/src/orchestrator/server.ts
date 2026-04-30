@@ -16,14 +16,13 @@ import { SSEManager } from './sse.js';
 import { InterruptManager } from './interrupt.js';
 import type { AgentSessionService } from './agent-session-service.js';
 import type { DatabaseRepository } from '../database/repository.js';
-import type { LearningPipeline } from '../learning/types.js';
 import type { KnowledgeStore } from '../knowledge/types.js';
 import type { RunStartupService } from './run-startup-service.js';
 import type { TypedEventBus } from '../events/bus.js';
 import type { SecretProvider } from '../secrets/types.js';
 import { createGrpcRoutes } from './grpc/router.js';
 import type { OrchestratorToolRegistry } from './grpc/orchestrator-service.js';
-import type { ContainerManager } from '../sandbox/container-manager.js';
+import type { SandboxContainerManager } from '../sandbox/container-manager.js';
 import type { LocalFunctionExecutor } from '../tool/executor.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
 import type { ArtifactStore } from '../artifact/index.js';
@@ -41,7 +40,6 @@ export interface ServerOptions {
   host?: string;
   db: DatabaseRepository;
   harnessRegistry?: HarnessRegistry;
-  learningPipeline?: LearningPipeline;
   knowledgeStore?: KnowledgeStore;
   eventBus?: TypedEventBus;
   /** Path to the .ctxmill data directory for agent workspaces. */
@@ -59,14 +57,14 @@ export interface ServerOptions {
   toolDefinitionRegistry?: DefaultToolRegistry;
   /** Pre-wired LocalFunctionExecutor with built-in and user-defined tools. */
   toolExecutor?: LocalFunctionExecutor;
-  /** Pre-wired ContainerManager for sandbox concurrency stats. */
-  containerManager?: ContainerManager;
+  /** Pre-wired sandbox manager for sandbox concurrency stats. */
+  containerManager?: SandboxContainerManager;
   artifactStore?: ArtifactStore;
   /** S3 bucket name for artifact storage. Required when artifactStore is provided. */
   artifactBucket?: string;
   /** Pre-wired AgentSessionService from DI container. */
   agentSessionService: AgentSessionService;
-  runStartupService?: RunStartupService;
+  runStartupService: RunStartupService;
   sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
 }
@@ -86,7 +84,7 @@ function createDefaultHarnessRegistry(): HarnessRegistry {
  * the database, SSE manager, interrupt manager, and agent routes.
  */
 export async function createServer(opts: ServerOptions): Promise<FastifyInstance> {
-  const { db, harnessRegistry: optHarnessRegistry, learningPipeline, knowledgeStore, eventBus, dataDir, triggerManager } = opts;
+  const { db, harnessRegistry: optHarnessRegistry, knowledgeStore, eventBus, dataDir, triggerManager } = opts;
   const harnessRegistry = optHarnessRegistry ?? createDefaultHarnessRegistry();
   const toolDefinitionRegistry = opts.toolDefinitionRegistry ?? new DefaultToolRegistry();
 
@@ -135,7 +133,6 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         eventBus,
         toolRegistry: opts.toolRegistry,
         interruptManager: interrupts,
-        sessionManager: opts.sessionManager,
         toolExecutor: opts.toolExecutor,
         toolDefinitionRegistry: toolDefinitionRegistry,
         repository: db,
@@ -190,11 +187,6 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   app.get('/api/config', async () => {
     const startTime = process.uptime() * 1000;
     return {
-      llm: {
-        provider: process.env.OPENAI_BASE_URL ? 'openai-compatible' : (process.env.LLM_PROVIDER ?? 'openai'),
-        model: process.env.OPENAI_MODEL ?? process.env.LLM_MODEL ?? undefined,
-        baseUrl: process.env.OPENAI_BASE_URL ?? undefined,
-      },
       system: {
         version: process.env.npm_package_version ?? '0.1.0',
         uptime: startTime,
@@ -209,15 +201,13 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, learningPipeline, knowledgeStore, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService });
-  await app.register(sessionsRoutes, { prefix: '/api/sessions', db, sessionManager: opts.sessionManager });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, knowledgeStore, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService });
+  await app.register(sessionsRoutes, { prefix: '/api/sessions', db });
   if (eventBus) {
     await app.register(agUiCompatRoutes, {
       prefix: '/api/ag-ui',
       db,
       eventBus,
-      agentSessionService,
-      sessionManager: opts.sessionManager,
       runStartupService: opts.runStartupService,
     });
   }
