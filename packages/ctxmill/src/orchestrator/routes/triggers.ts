@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { EventTriggerManager } from '../../events/trigger-manager.js';
+import { TriggerConflictError, type EventTriggerManager } from '../../events/trigger-manager.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 
 export interface TriggerRouteOptions {
@@ -51,13 +51,21 @@ export async function triggerRoutes(
         return reply.status(404).send({ error: 'Agent not found', agentId: body.agentId });
       }
 
-      const trigger = await triggerManager.register({
-        agentId: body.agentId,
-        eventType: body.eventType,
-        selector: body.selector,
-        taskTemplate: body.taskTemplate,
-        enabled: body.enabled ?? true,
-      });
+      let trigger;
+      try {
+        trigger = await triggerManager.register({
+          agentId: body.agentId,
+          eventType: body.eventType,
+          selector: body.selector,
+          taskTemplate: body.taskTemplate,
+          enabled: body.enabled ?? true,
+        });
+      } catch (err) {
+        if (err instanceof TriggerConflictError) {
+          return reply.status(409).send({ error: err.message });
+        }
+        throw err;
+      }
 
       return reply.status(201).send(trigger);
     },
@@ -115,7 +123,15 @@ export async function triggerRoutes(
         return reply.status(400).send({ error: 'Request body is required' });
       }
 
-      const updated = await triggerManager.update(id, body);
+      let updated;
+      try {
+        updated = await triggerManager.update(id, body);
+      } catch (err) {
+        if (err instanceof TriggerConflictError) {
+          return reply.status(409).send({ error: err.message });
+        }
+        throw err;
+      }
       if (!updated) {
         return reply.status(404).send({ error: 'Trigger not found' });
       }

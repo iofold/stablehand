@@ -162,4 +162,69 @@ describe('TriggersPage', () => {
 
     expect(container.textContent).toContain('Failed to delete trigger.');
   });
+
+  it('rolls back optimistic toggle and shows row-level error when update fails', async () => {
+    updateTriggerMock.mockRejectedValueOnce(new Error('toggle failed'));
+
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    // Capture initial enabled state from the visible "Enabled" badge text.
+    expect(container.textContent).toContain('Enabled');
+
+    const toggle = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.className.includes('relative inline-flex'),
+    );
+    expect(toggle).not.toBeNull();
+
+    await act(async () => {
+      toggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushEffects();
+
+    // Row-level inline error rendered.
+    const rowError = container.querySelector('[data-testid="trigger-row-error"]');
+    expect(rowError).not.toBeNull();
+    expect(rowError!.textContent).toContain('Failed to update trigger status.');
+    // Optimistic toggle was rolled back: the trigger is still shown as Enabled.
+    expect(container.textContent).toContain('Enabled');
+  });
+
+  it('rolls back optimistic delete and re-shows the row when delete fails', async () => {
+    deleteTriggerMock.mockRejectedValueOnce(new Error('delete failed'));
+
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    // Trigger card present before action.
+    const cardsBefore = container.querySelectorAll('[data-testid="trigger-card"]');
+    expect(cardsBefore.length).toBe(1);
+
+    const deleteButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.title === 'Delete trigger',
+    );
+    expect(deleteButton).not.toBeNull();
+    await act(async () => {
+      deleteButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const confirmButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Confirm'),
+    );
+    expect(confirmButton).not.toBeNull();
+    await act(async () => {
+      confirmButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushEffects();
+
+    // Row was rolled back into the list and shows row-level error.
+    const cardsAfter = container.querySelectorAll('[data-testid="trigger-card"]');
+    expect(cardsAfter.length).toBe(1);
+    const rowError = container.querySelector('[data-testid="trigger-row-error"]');
+    expect(rowError).not.toBeNull();
+    expect(rowError!.textContent).toContain('Failed to delete trigger.');
+  });
 });

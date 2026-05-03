@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import { RunStartupService } from '../../packages/ctxmill/src/orchestrator/run-startup-service.js';
 
 type StoredAgent = NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
@@ -453,6 +454,39 @@ describe('RunStartupService', () => {
     });
 
 
+
+
+    test('cleans up created startup state when durable event persistence fails', async () => {
+      const service = createService();
+      const mocks = createExecutionMocks();
+      const durableBus = {
+        emit: vi.fn(),
+        emitAsync: vi.fn().mockRejectedValue(new Error('event persistence failed')),
+      };
+      service.configureExecution({
+        ...mocks,
+        eventBus: durableBus,
+      });
+
+      await expect(service.prepareRunStart({
+        agent: createAgent(),
+        agentId: 'agent-1',
+        content: 'hello there',
+        mode: 'interactive',
+      })).rejects.toThrow('event persistence failed');
+
+      expect(durableBus.emitAsync).toHaveBeenCalledWith('user.message', expect.objectContaining({
+        agentId: 'agent-1',
+        messageId: 'msg-1',
+      }));
+      expect(mocks.db.updateTurn).toHaveBeenCalledWith('turn-1', expect.objectContaining({
+        error: 'event persistence failed',
+        completedAt: expect.any(Number),
+      }));
+      expect(mocks.db.deleteMessage).toHaveBeenCalledWith('msg-1');
+      expect(mocks.db.getMessages).not.toHaveBeenCalled();
+    });
+
     test('marks the turn failed and rolls back the user message when post-createTurn startup work fails', async () => {
       const service = createService();
       const mocks = createExecutionMocks();
@@ -469,6 +503,40 @@ describe('RunStartupService', () => {
       expect(mocks.db.createTurn).toHaveBeenCalledTimes(1);
       expect(mocks.db.updateTurn).toHaveBeenCalledWith('turn-1', expect.objectContaining({
         error: 'message load failed',
+        completedAt: expect.any(Number),
+      }));
+      expect(mocks.db.deleteMessage).toHaveBeenCalledWith('msg-1');
+    });
+
+    test('marks the turn failed and rolls back the user message when durable startup event persistence fails', async () => {
+      const service = createService();
+      const mocks = createExecutionMocks();
+      const persistEvent = vi.fn().mockImplementation(async (type: string) => {
+        if (type === 'turn.pending') {
+          throw new Error('event store unavailable');
+        }
+      });
+      const eventBus = new TypedEventBus({ persistEvent });
+      const listener = vi.fn();
+      eventBus.on('turn.pending', listener);
+
+      service.configureExecution({
+        ...mocks,
+        eventBus,
+      });
+
+      await expect(service.prepareRunStart({
+        agent: createAgent(),
+        agentId: 'agent-1',
+        content: 'hello there',
+        mode: 'interactive',
+        emitUserMessageEvent: false,
+      })).rejects.toThrow('event store unavailable');
+
+      expect(mocks.db.createTurn).toHaveBeenCalledTimes(1);
+      expect(listener).not.toHaveBeenCalled();
+      expect(mocks.db.updateTurn).toHaveBeenCalledWith('turn-1', expect.objectContaining({
+        error: 'event store unavailable',
         completedAt: expect.any(Number),
       }));
       expect(mocks.db.deleteMessage).toHaveBeenCalledWith('msg-1');

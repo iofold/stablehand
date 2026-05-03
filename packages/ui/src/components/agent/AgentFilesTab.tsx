@@ -1,8 +1,9 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { FileExplorer } from '@/components/explorer/FileExplorer';
 import { FileViewer } from '@/components/explorer/FileViewer';
 import { File, Upload } from 'lucide-react';
-import { uploadWorkspaceTarball } from '@/lib/api';
+import { uploadWorkspaceTarball, fetchSettings } from '@/lib/api';
+import { validateWorkspaceArchive, DEFAULT_MAX_TAR_UPLOAD_BYTES } from '@/lib/workspace-upload';
 
 export interface AgentFilesTabProps {
   agentId: string;
@@ -16,7 +17,24 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [maxArchiveBytes, setMaxArchiveBytes] = useState<number>(DEFAULT_MAX_TAR_UPLOAD_BYTES);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Fetch the configured max upload size from settings (falls back to default).
+  useEffect(() => {
+    let mounted = true;
+    fetchSettings()
+      .then((s) => {
+        if (mounted && typeof s.maxTarUploadBytes === 'number' && s.maxTarUploadBytes > 0) {
+          setMaxArchiveBytes(s.maxTarUploadBytes);
+        }
+      })
+      .catch(() => {
+        // Settings fetch is best-effort; the server enforces the real limit.
+      });
+    return () => { mounted = false; };
+  }, []);
 
   const refreshExplorer = useCallback(() => {
     setExplorerKey((k) => k + 1);
@@ -29,6 +47,16 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
 
   const handleUpload = useCallback(async (file: File | undefined) => {
     if (!file || sessionId) return;
+
+    // Client-side pre-validation per ADR 010: tar.gz only, archive size limit.
+    const validation = validateWorkspaceArchive(file, { maxBytes: maxArchiveBytes });
+    if (!validation.ok) {
+      setUploadError(validation.error);
+      setUploadMessage(null);
+      if (inputRef.current) inputRef.current.value = '';
+      return;
+    }
+
     setUploading(true);
     setUploadError(null);
     setUploadMessage(null);
@@ -43,9 +71,31 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
       setUploading(false);
       if (inputRef.current) inputRef.current.value = '';
     }
-  }, [agentId, refreshExplorer, sessionId]);
+  }, [agentId, maxArchiveBytes, refreshExplorer, sessionId]);
 
   const uploadDisabled = uploading || Boolean(sessionId);
+
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (uploadDisabled) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setIsDragging(true);
+  }, [uploadDisabled]);
+
+  const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    if (uploadDisabled) return;
+    const file = event.dataTransfer.files?.[0];
+    if (file) {
+      void handleUpload(file);
+    }
+  }, [handleUpload, uploadDisabled]);
 
   return (
     <div data-testid="files-tab-content" className="space-y-3">
@@ -96,7 +146,13 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
         </div>
       )}
 
-      <div className="flex min-h-[500px] min-w-0 gap-4">
+      <div
+        data-testid="workspace-upload-dropzone"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`flex min-h-[500px] min-w-0 gap-4 rounded-lg transition-colors ${isDragging && !uploadDisabled ? 'ring-2 ring-accent-500/60 bg-accent-500/5' : ''}`}
+      >
         <div className="w-[280px] flex-shrink-0 rounded-lg border border-surface-700 bg-surface-850 overflow-hidden">
           <FileExplorer
             key={explorerKey}

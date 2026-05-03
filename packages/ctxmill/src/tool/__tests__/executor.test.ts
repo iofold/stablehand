@@ -8,9 +8,6 @@ function makeCtx(): ToolContext {
     agentId: 'test-agent',
     conversationId: 'test-conv',
     workspaceDir: '/tmp',
-    knowledge: {
-      query: async () => ({ items: [] }),
-    },
   };
 }
 

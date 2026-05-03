@@ -5,7 +5,6 @@ import { AgentDetailPage } from './pages/AgentDetailPage';
 import { EventsPage } from './pages/EventsPage';
 import { ToolRegistryPage } from './pages/ToolRegistryPage';
 import { AgentFlowPage } from './pages/AgentFlowPage';
-import { KnowledgePage } from './pages/KnowledgePage';
 import { TriggersPage } from './pages/TriggersPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ArtifactsPage } from './pages/ArtifactsPage';
@@ -31,7 +30,6 @@ export function App() {
             <Route path="/events" element={<EventsPage />} />
             <Route path="/tools" element={<ToolRegistryPage />} />
             <Route path="/flow" element={<AgentFlowPage />} />
-            <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/triggers" element={<TriggersPage />} />
             <Route path="/artifacts" element={<ArtifactsPage />} />
             <Route path="/settings" element={<SettingsPage />} />

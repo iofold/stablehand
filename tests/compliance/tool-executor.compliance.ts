@@ -35,9 +35,6 @@ export function createMockContext(overrides: Partial<ToolContext> = {}): ToolCon
   return {
     agentId: 'compliance-agent',
     conversationId: 'compliance-conv',
-    knowledge: {
-      query: async () => ({ items: [] }),
-    },
     ...overrides,
   };
 }

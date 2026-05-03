@@ -179,7 +179,7 @@ describe('DefaultToolRegistry CRUD operations and cache lifecycle', () => {
     expect(registry.getProvider('emit-event')).toBeUndefined();
   });
 
-  it('should prefer the last registered provider when tool names overlap', async () => {
+  it('should keep the first unscoped provider when tool names overlap', async () => {
     const firstProvider = createMockProvider('provider-a', [
       createToolDefinition('shared-tool', 'from provider a'),
     ]);
@@ -192,8 +192,8 @@ describe('DefaultToolRegistry CRUD operations and cache lifecycle', () => {
     await registry.refresh();
 
     expect(registry.listAll()).toHaveLength(1);
-    expect(registry.getTool('shared-tool')?.description).toBe('from provider b');
-    expect(registry.getProvider('shared-tool')).toBe(secondProvider);
+    expect(registry.getTool('shared-tool')?.description).toBe('from provider a');
+    expect(registry.getProvider('shared-tool')).toBe(firstProvider);
   });
 
   it('should return tools from all providers in listAll', async () => {

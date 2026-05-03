@@ -12,5 +12,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // ctx-0zk: strict console gate fails the test on any unexpected
+    // console.error/warn unless allowConsoleErrors() is called.
+    setupFiles: ['./src/test-setup-strict.ts'],
   },
 });

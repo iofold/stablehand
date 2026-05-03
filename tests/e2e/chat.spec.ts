@@ -29,7 +29,7 @@ import {
 // Tests
 // ---------------------------------------------------------------------------
 
-test.describe('Chat conversation flow', () => {
+test.describe('Chat conversation flow @extended', () => {
   let agentId = '';
 
   test.beforeEach(async ({ page, request }) => {

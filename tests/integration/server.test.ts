@@ -268,19 +268,11 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
   });
 
   it('container creates all services with interface types', async () => {
-    expect(container.knowledgeStore).toBeDefined();
-    expect(container.contextProvider).toBeDefined();
     expect(container.toolExecutor).toBeDefined();
     expect(container.agentSessionService).toBeDefined();
     expect(container.eventBus).toBeDefined();
     expect(container.sseManager).toBeDefined();
     expect(container.interruptManager).toBeDefined();
     expect(container.sessionManager).toBeDefined();
-
-    expect(typeof container.knowledgeStore.add).toBe('function');
-    expect(typeof container.knowledgeStore.render).toBe('function');
-
-    expect(typeof container.contextProvider.query).toBe('function');
-    expect(typeof container.contextProvider.healthy).toBe('function');
   });
 });

@@ -1,11 +1,8 @@
 import type { CTXMillConfig, ResolvedConfig } from './types.js';
 import { resolveConfig } from './resolve.js';
-import { createKnowledgeStoreFromConfig } from './factories.js';
 import { createDatabase, type DatabaseConnection } from '../database/connection.js';
 import { runMigrations } from '../database/migrations.js';
 import { DatabaseRepository } from '../database/repository.js';
-import type { KnowledgeStore, ContextProvider } from '../knowledge/types.js';
-import { InMemoryContextProvider } from '../knowledge/context.js';
 import { LocalFunctionExecutor } from '../tool/executor.js';
 import { DefaultHarnessRegistry } from '../harness/registry.js';
 import { LangGraphHarness } from '../harness/langgraph.js';
@@ -47,8 +44,6 @@ import { VALID_WEBHOOK_EVENTS } from '../orchestrator/webhook-events.js';
 export interface AppContainer {
   config: ResolvedConfig;
   db: DatabaseRepository;
-  knowledgeStore: KnowledgeStore;
-  contextProvider: ContextProvider;
   toolExecutor: LocalFunctionExecutor;
   toolRegistry: DefaultToolRegistry;
   eventBus: TypedEventBus;
@@ -291,7 +286,7 @@ export function createTriggerRunCallback({
  * that wires every provider. PostgreSQL is always used as the database backend.
  *
  * @param userConfig - Partial config supplied by the user (or defineConfig)
- * @param dataDir    - Root directory for persisted data (knowledge, audit)
+ * @param dataDir    - Root directory for persisted data and workspaces
  */
 export async function createContainer(
   userConfig: CTXMillConfig,
@@ -317,10 +312,6 @@ export async function createContainer(
     dbConn.pgClient,
     secretMasterKey,
   );
-
-  // ── Knowledge ───────────────────────────────────────────
-  const knowledgeStore = createKnowledgeStoreFromConfig(config, dataDir);
-  const contextProvider = new InMemoryContextProvider();
 
   // ── Tools ───────────────────────────────────────────────
   const toolExecutor = new LocalFunctionExecutor();
@@ -535,7 +526,7 @@ export async function createContainer(
     };
   }
 
-  const resolveToolsForAgent = (toolNames: string[], excludeBuiltins?: string[]) => {
+  const resolveToolsForAgent = (toolNames: string[], excludeBuiltins?: string[], agentId?: string) => {
     const declaredTools = new Set(toolNames);
     const excluded = excludeBuiltins ? new Set(excludeBuiltins) : undefined;
     const allTools = new Map<string, { name: string; description: string; input: unknown; requiresApproval?: boolean; location?: 'sandbox' | 'orchestrator' | 'daemon'; programmatic?: boolean }>();
@@ -546,7 +537,7 @@ export async function createContainer(
         allTools.set(tool.name, tool);
       }
     }
-    for (const tool of toolRegistry.listForAgent(toolNames)) {
+    for (const tool of toolRegistry.listForAgent(toolNames, agentId)) {
       allTools.set(tool.name, tool);
     }
 
@@ -642,8 +633,6 @@ export async function createContainer(
   return {
     config,
     db,
-    knowledgeStore,
-    contextProvider,
     toolExecutor,
     toolRegistry,
     eventBus,

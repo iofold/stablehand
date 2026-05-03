@@ -30,7 +30,7 @@ import { ScreenshotCapture } from './visual-qa/screenshot-capture.js';
 const HARNESSES = ['langgraph', 'claude-agents', 'pi-agent'] as const;
 
 for (const harness of HARNESSES) {
-  test.describe(`${harness} Replay Mode Visual QA`, () => {
+  test.describe(`${harness} Replay Mode Visual QA @extended`, () => {
     test.skip(!hasHarnessKey(harness), `Skipping: ${harness} API key not available`);
 
     let agentId = '';

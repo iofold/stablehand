@@ -319,6 +319,97 @@ describe('runner openSession PTC bootstrap', () => {
     expect(mocks.harnessClose).toHaveBeenCalledTimes(1);
   });
 
+  it('suspendSession rejects with FailedPrecondition when phase is unsafe and timeout is 0 (ctx-6nu)', async () => {
+    const { deliverTurn, killSession, openSession, suspendSession } = await importRunner();
+    const stream = createControllableGenerator();
+
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: stream.generator,
+      exportState: async () => ({ stateVersion: '2', payload: {} }),
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/suspend-unsafe'), {});
+
+    // Drive the harness into the unsafe `tool_execution` phase by emitting a
+    // tool_call_start event and consuming it on the deliverTurn stream.
+    const reachedToolStart = createDeferred<void>();
+    const turnPromise = (async () => {
+      for await (const _event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-unsafe-suspend'))) {
+        reachedToolStart.resolve();
+      }
+    })();
+
+    stream.emitEvent({
+      type: 'tool_call_start',
+      id: 'call-1',
+      name: 'long-op',
+      args: {},
+    });
+    await reachedToolStart.promise;
+
+    // Now phase is `tool_execution` (unsafe). With safePointTimeoutMs=0 the
+    // request must fail immediately rather than capturing a partial checkpoint.
+    await expect(suspendSession('reason', session.sessionId, 0)).rejects.toMatchObject({
+      code: Code.FailedPrecondition,
+    });
+
+    // Tear down: end the harness stream and kill the session so the
+    // deliverTurn loop can complete.
+    stream.finish();
+    await killSession().catch(() => undefined);
+    await turnPromise;
+  });
+
+  it('suspendSession waits for the next safe phase before exporting state (ctx-6nu)', async () => {
+    const { deliverTurn, killSession, openSession, suspendSession } = await importRunner();
+    const stream = createControllableGenerator();
+    const exportState = vi.fn(async () => ({ stateVersion: '2', payload: {} }));
+
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: stream.generator,
+      exportState,
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/suspend-wait-safe'), {});
+
+    const reachedToolStart = createDeferred<void>();
+    const reachedToolEnd = createDeferred<void>();
+    const turnPromise = (async () => {
+      let count = 0;
+      for await (const _event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-wait-safe'))) {
+        count++;
+        if (count === 1) reachedToolStart.resolve();
+        if (count === 2) reachedToolEnd.resolve();
+      }
+    })();
+
+    stream.emitEvent({ type: 'tool_call_start', id: 'call-1', name: 'op', args: {} });
+    await reachedToolStart.promise;
+
+    // Issue suspend while phase is unsafe; it should not export state yet.
+    const suspendPromise = suspendSession('wait-safe', session.sessionId, 30_000);
+    // Give the runner microtasks to process the suspend request.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(exportState).not.toHaveBeenCalled();
+
+    // Push a safe-phase event (`tool_call_end` -> `after_tool`). The runner's
+    // post-yield safe-point check resolves the queued suspend.
+    stream.emitEvent({ type: 'tool_call_end', id: 'call-1', result: 'ok', durationMs: 1 });
+    await reachedToolEnd.promise;
+
+    // Now suspend should be allowed to proceed.
+    const response = await suspendPromise;
+    expect(exportState).toHaveBeenCalledTimes(1);
+    expect(response.sessionCheckpoint).toBeDefined();
+
+    stream.finish();
+    await killSession().catch(() => undefined);
+    await turnPromise.catch(() => undefined);
+  });
+
   it('rejects suspendSession when request session id does not match active session', async () => {
     const { openSession, suspendSession } = await importRunner();
     const exportState = vi.fn(async () => ({ stateVersion: '2', payload: {} }));

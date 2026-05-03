@@ -63,11 +63,6 @@ function createToolTestContext(): ToolContext {
     agentId: 'tool-tester',
     conversationId: 'test',
     workspaceDir: process.cwd(),
-    knowledge: {
-      query: async () => ({
-        items: [],
-      }),
-    },
   };
 }
 

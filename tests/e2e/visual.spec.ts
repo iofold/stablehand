@@ -14,7 +14,7 @@ import { createTestAgent, deleteTestAgent } from './support';
  *   3. Chat (empty) – /agents/:id/conversations/new
  */
 
-test.describe('Visual regression', () => {
+test.describe('Visual regression @extended', () => {
   let agentId = '';
   const agentName = 'visual-agent-regression';
 

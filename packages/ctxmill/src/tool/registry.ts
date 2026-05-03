@@ -14,6 +14,18 @@ export class DefaultToolRegistry implements ToolRegistry {
   private toolCache = new Map<string, { tool: ToolDefinition; provider: string }>();
   private dirty = true;
 
+  private cacheKey(provider: string, toolName: string): string {
+    return `${provider}\u0000${toolName}`;
+  }
+
+  private scopedHttpProviderName(agentId: string): string {
+    return `http-${agentId}`;
+  }
+
+  private isScopedHttpProvider(providerName: string): boolean {
+    return providerName.startsWith('http-');
+  }
+
   addProvider(provider: ToolProvider): void {
     this.providers.set(provider.name, provider);
     this.dirty = true;
@@ -22,9 +34,9 @@ export class DefaultToolRegistry implements ToolRegistry {
   removeProvider(name: string): void {
     this.providers.delete(name);
     // Remove cached tools from this provider
-    for (const [toolName, entry] of this.toolCache) {
+    for (const [cacheKey, entry] of this.toolCache) {
       if (entry.provider === name) {
-        this.toolCache.delete(toolName);
+        this.toolCache.delete(cacheKey);
       }
     }
     this.dirty = true;
@@ -42,7 +54,7 @@ export class DefaultToolRegistry implements ToolRegistry {
     for (const [providerName, provider] of this.providers) {
       const tools = await provider.listTools();
       for (const tool of tools) {
-        newCache.set(tool.name, { tool, provider: providerName });
+        newCache.set(this.cacheKey(providerName, tool.name), { tool, provider: providerName });
       }
     }
     this.toolCache = newCache;
@@ -50,18 +62,67 @@ export class DefaultToolRegistry implements ToolRegistry {
   }
 
   listAll(): ToolDefinition[] {
-    return Array.from(this.toolCache.values()).map((entry) => entry.tool);
+    const byName = new Map<string, ToolDefinition>();
+    for (const entry of this.toolCache.values()) {
+      if (!byName.has(entry.tool.name)) {
+        byName.set(entry.tool.name, entry.tool);
+      }
+    }
+    return Array.from(byName.values());
   }
 
-  listForAgent(declaredToolNames: string[]): ToolDefinition[] {
+  listForAgent(declaredToolNames: string[], agentId?: string): ToolDefinition[] {
     const declared = new Set(declaredToolNames);
-    return this.listAll().filter(
-      (t) => declared.has(t.name) || builtinToolNames.has(t.name),
-    );
+    const scopedProvider = agentId ? this.scopedHttpProviderName(agentId) : undefined;
+    const result = new Map<string, ToolDefinition>();
+
+    for (const entry of this.toolCache.values()) {
+      if (this.isScopedHttpProvider(entry.provider)) {
+        continue;
+      }
+      if (declared.has(entry.tool.name) || builtinToolNames.has(entry.tool.name)) {
+        result.set(entry.tool.name, entry.tool);
+      }
+    }
+
+    for (const entry of this.toolCache.values()) {
+      if (scopedProvider && entry.provider !== scopedProvider) {
+        continue;
+      }
+      if (!scopedProvider && this.isScopedHttpProvider(entry.provider) && result.has(entry.tool.name)) {
+        continue;
+      }
+      if (declared.has(entry.tool.name) || builtinToolNames.has(entry.tool.name)) {
+        result.set(entry.tool.name, entry.tool);
+      }
+    }
+
+    return Array.from(result.values());
   }
 
-  getProvider(toolName: string): ToolProvider | undefined {
-    const entry = this.toolCache.get(toolName);
+  private findEntry(toolName: string, agentId?: string): { tool: ToolDefinition; provider: string } | undefined {
+    if (agentId) {
+      const scoped = this.toolCache.get(this.cacheKey(this.scopedHttpProviderName(agentId), toolName));
+      if (scoped) return scoped;
+    }
+
+    for (const entry of this.toolCache.values()) {
+      if (entry.tool.name === toolName && !this.isScopedHttpProvider(entry.provider)) {
+        return entry;
+      }
+    }
+
+    for (const entry of this.toolCache.values()) {
+      if (entry.tool.name === toolName) {
+        return entry;
+      }
+    }
+
+    return undefined;
+  }
+
+  getProvider(toolName: string, agentId?: string): ToolProvider | undefined {
+    const entry = this.findEntry(toolName, agentId);
     if (!entry) return undefined;
     return this.providers.get(entry.provider);
   }
@@ -69,8 +130,8 @@ export class DefaultToolRegistry implements ToolRegistry {
   /**
    * Get a specific tool definition by name.
    */
-  getTool(toolName: string): ToolDefinition | undefined {
-    return this.toolCache.get(toolName)?.tool;
+  getTool(toolName: string, agentId?: string): ToolDefinition | undefined {
+    return this.findEntry(toolName, agentId)?.tool;
   }
 
   /**

@@ -9,7 +9,8 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report-docker' }]],
+  outputDir: '.tmp/test-results/e2e',
+  reporter: [['list'], ['html', { open: 'never', outputFolder: '.tmp/playwright-report-docker' }]],
   timeout: 120_000,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3200',

@@ -161,23 +161,71 @@ describe('Event Bus Integration Flows', () => {
       localBroadcaster.shutdown();
     });
 
-    it('persist error → event still delivered to handlers', () => {
+    it('persistence failure prevents listener dispatch', () => {
       const persistFn = vi.fn().mockImplementation(() => {
         throw new Error('Persist failed');
       });
       const persistBus = createTestBus({ persistEvent: persistFn });
 
       const collector = collectEvents(persistBus, 'turn.started');
+      const busErrors = collectEvents(persistBus, 'bus.error' as never);
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       const event = makeRunStartedEvent();
       persistBus.emit('turn.started', event);
 
-      // Event should still be delivered despite persist error
+      expect(collector.events).toHaveLength(0);
+      expect(busErrors.events).toHaveLength(1);
+      expect(busErrors.events[0]).toEqual(expect.objectContaining({
+        source: 'persist',
+        event: 'turn.started',
+        error: 'Persist failed',
+      }));
+
+      collector.unsubscribe();
+      busErrors.unsubscribe();
+      consoleSpy.mockRestore();
+    });
+
+    it('async persistence success dispatches exactly once after persistence', async () => {
+      const persistFn = vi.fn(async () => undefined);
+      const persistBus = createTestBus({ persistEvent: persistFn });
+      const collector = collectEvents(persistBus, 'turn.started');
+
+      const event = makeRunStartedEvent();
+      persistBus.emit('turn.started', event);
+      expect(collector.events).toHaveLength(0);
+
+      await Promise.resolve();
+
+      expect(persistFn).toHaveBeenCalledTimes(1);
       expect(collector.events).toHaveLength(1);
       expect(collector.events[0].sessionId).toBe(event.sessionId);
 
       collector.unsubscribe();
+    });
+
+    it('listener failure does not retroactively mark persistence failed', () => {
+      const persistFn = vi.fn();
+      const persistBus = createTestBus({ persistEvent: persistFn });
+      const busErrors = collectEvents(persistBus, 'bus.error' as never);
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      persistBus.on('turn.started', () => {
+        throw new Error('listener failed');
+      });
+
+      persistBus.emit('turn.started', makeRunStartedEvent());
+
+      expect(persistFn).toHaveBeenCalledTimes(1);
+      expect(busErrors.events).toHaveLength(1);
+      expect(busErrors.events[0]).toEqual(expect.objectContaining({
+        source: 'handler',
+        event: 'turn.started',
+        error: 'listener failed',
+      }));
+
+      busErrors.unsubscribe();
       consoleSpy.mockRestore();
     });
   });

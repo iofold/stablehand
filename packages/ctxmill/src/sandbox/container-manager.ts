@@ -119,6 +119,52 @@ function dockerStateToStatus(
   }
 }
 
+export function buildSandboxOtelEnv(harnessName: string): string[] {
+  const tracesExporter = process.env.CTXMILL_SANDBOX_OTEL_TRACES_EXPORTER
+    ?? process.env.OTEL_TRACES_EXPORTER
+    ?? 'none';
+  const metricsExporter = process.env.CTXMILL_SANDBOX_OTEL_METRICS_EXPORTER
+    ?? process.env.OTEL_METRICS_EXPORTER
+    ?? 'none';
+  const logsExporter = process.env.CTXMILL_SANDBOX_OTEL_LOGS_EXPORTER
+    ?? process.env.OTEL_LOGS_EXPORTER
+    ?? 'none';
+  const endpoint = process.env.CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT
+    ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT
+    ?? 'http://host.docker.internal:4318';
+  const protocol = process.env.CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL
+    ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL
+    ?? 'http/protobuf';
+  const resourceDetectors = process.env.CTXMILL_SANDBOX_OTEL_NODE_RESOURCE_DETECTORS
+    ?? process.env.OTEL_NODE_RESOURCE_DETECTORS
+    ?? 'env,host,os';
+  const logLevel = process.env.CTXMILL_SANDBOX_OTEL_LOG_LEVEL
+    ?? process.env.OTEL_LOG_LEVEL
+    ?? 'error';
+  const serviceNamePrefix = process.env.CTXMILL_SANDBOX_OTEL_SERVICE_NAME_PREFIX
+    ?? 'ctxmill-sandbox';
+  const baseResourceAttributes = process.env.CTXMILL_SANDBOX_OTEL_RESOURCE_ATTRIBUTES
+    ?? process.env.OTEL_RESOURCE_ATTRIBUTES
+    ?? 'deployment.environment=local,service.namespace=ctxmill';
+  const resourceAttributes = [
+    baseResourceAttributes,
+    'ctxmill.component=sandbox',
+    `ctxmill.harness=${harnessName}`,
+  ].filter(Boolean).join(',');
+
+  return [
+    `OTEL_SERVICE_NAME=${serviceNamePrefix}-${harnessName}`,
+    `OTEL_RESOURCE_ATTRIBUTES=${resourceAttributes}`,
+    `OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}`,
+    `OTEL_EXPORTER_OTLP_PROTOCOL=${protocol}`,
+    `OTEL_TRACES_EXPORTER=${tracesExporter}`,
+    `OTEL_METRICS_EXPORTER=${metricsExporter}`,
+    `OTEL_LOGS_EXPORTER=${logsExporter}`,
+    `OTEL_NODE_RESOURCE_DETECTORS=${resourceDetectors}`,
+    `OTEL_LOG_LEVEL=${logLevel}`,
+  ];
+}
+
 // ── Container limit error ────────────────────────────────────
 
 export class ContainerLimitError extends Error {
@@ -385,6 +431,7 @@ export class ContainerManager implements SandboxContainerManager {
         } as Record<string, unknown>,
         Env: [
           `NODE_OPTIONS=--max-old-space-size=${Math.floor(memoryMb * 0.9)}`,
+          ...buildSandboxOtelEnv(opts.harnessName),
           'SANDBOX_PORT=50051',
           `CTXMILL_HARNESS=${opts.harnessName}`,
           `ORCHESTRATOR_URL=${process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001'}`,
@@ -803,7 +850,11 @@ export class ContainerManager implements SandboxContainerManager {
     try {
       await this.docker.getNetwork(this.networkName).inspect();
       console.debug(`${TAG} network ${this.networkName} already exists`);
-    } catch {
+    } catch (err) {
+      if (!isDockerError(err) || err.statusCode !== 404) {
+        console.warn(`${TAG} failed to inspect network ${this.networkName}:`, err);
+        throw err;
+      }
       console.debug(`${TAG} creating network ${this.networkName}`);
       await this.docker.createNetwork({
         Name: this.networkName,

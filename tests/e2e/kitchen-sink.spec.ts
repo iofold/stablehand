@@ -159,7 +159,7 @@ async function getRuns(
 
 // ── Tests ────────────────────────────────────────────────────
 
-test.describe('Kitchen Sink — Multi-Agent Chain', () => {
+test.describe('Kitchen Sink — Multi-Agent Chain @extended', () => {
   let importedAgents: Record<string, string> = {};
   const seededAgents: Record<string, AgentInfo> = {};
 

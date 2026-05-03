@@ -12,6 +12,7 @@
 
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
+import { randomUUID } from 'node:crypto';
 import {
   type RegisterArtifactRequest,
   type RegisterArtifactResponse,
@@ -237,7 +238,7 @@ let requestCounter = 0;
 
 function generateRequestId(): string {
   requestCounter++;
-  return `rpc-${Date.now()}-${requestCounter}`;
+  return `rpc-${Date.now()}-${requestCounter}-${randomUUID()}`;
 }
 
 function parseJsonOrThrow(s: string, context: string): Record<string, unknown> {

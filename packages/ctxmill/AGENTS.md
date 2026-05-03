@@ -11,11 +11,10 @@ src/
   a2ui/           Structured visual block extraction from agent output (2 files)
   agent/          Agent discovery from filesystem + defineAgent() builder (2 files)
   cli/            `ctxmill dev` and `ctxmill chat` entry points (3 files, dynamic imports)
-  config/         DI container, docker preset, factories (6 files + 2 tests)
+  config/         DI container, docker preset, config resolution (5 files + 1 test)
   database/       Drizzle ORM schema, repository, migrations (6 files)
   events/         TypedEventBus, triggers, wait primitives, queue (8 files + 1 test)
   harness/        Harness registry + types. Adapters live in sandbox-daemon package (7 files)
-  knowledge/      KnowledgeStore abstraction — InMemory + Mem0 impls (5 files)
   manifest/       YAML agent manifest parsing, validation, conversion (6 files + 1 test)
   orchestrator/   Fastify server, SSE, HITL, routes, session manager (12 files + 7 routes + 8 tests)
   sandbox/        Container lifecycle, gRPC daemon, checkpoint/restore, timeout (15 files + 13 tests)
@@ -51,7 +50,7 @@ src/
 |------|---------|-------|------|
 | `types.ts` | 22 | 82 | Core type definitions (AgentDefinition, HarnessRunConfig, etc.) |
 | `database/repository.ts` | 14 | 1262 | All data access — 16 tables, all query methods |
-| `orchestrator/routes/agents.ts` | — | 2213 | Agent CRUD, runs, conversations, skills, files, knowledge endpoints |
+| `orchestrator/routes/agents.ts` | — | 2213 | Agent CRUD, runs, conversations, skills, files, and workspace endpoints |
 | `orchestrator/sandbox-session-manager.ts` | — | 969 | Session state machine — pause/freeze/checkpoint promotion |
 | `sandbox/container-manager.ts` | 7 | 842 | Docker container lifecycle, concurrency semaphore (max 20) |
 | `events/bus.ts` | 12 | — | TypedEventBus with 18 event types |
@@ -96,7 +95,7 @@ Harness code runs INSIDE sandbox containers, not in the orchestrator. This chang
 
 **Every harness MUST yield `message_committed`.** The persistence chain is: harness yields `message_committed` → runner converts to proto `messageCommitted` → orchestrator converts to `MESSAGE_COMMITTED` → `db.addMessage()`. If a harness only yields `text_delta` + `done`, text streams to SSE but nothing persists. The harness must accumulate text from deltas and yield `message_committed` with the full content before `done`.
 
-**Mock tests won't catch harness integration bugs.** Unit tests mock `executeSessionTurn` to return fake `MESSAGE_COMMITTED` events — they pass even when no harness emits that event. Real validation requires `npx playwright test tests/e2e/stress-smoke.spec.ts` against the Docker stack.
+**Mock tests won't catch harness integration bugs.** Unit tests mock `executeSessionTurn` to return fake `MESSAGE_COMMITTED` events — they pass even when no harness emits that event. Real validation requires ctxmill CLI live runs plus agent-browser verification against the Docker stack.
 
 **Harness images must be rebuilt separately.** `docker compose up --build` only rebuilds the orchestrator. Harness code changes require: `docker build --target harness-{name} -t ctxmill/harness-{name} -f Dockerfile.sandbox .`
 

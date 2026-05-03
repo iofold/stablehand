@@ -15,15 +15,34 @@ function formatRequestFailure(request: Request): string {
 
 export async function assertNoUnexpectedTerminalErrorStates(
   sessions: Array<{ id?: string; sessionId?: string; status?: string | null; error?: unknown }>,
+  options: { allowCancelled?: boolean } = {},
 ): Promise<void> {
   const unexpected = sessions.filter((session) => {
     const status = String(session.status ?? '').toLowerCase();
-    return status === 'error' || status === 'failed' || status === 'cancelled';
+    if (status === 'error' || status === 'failed') return true;
+    if (status === 'cancelled' && !options.allowCancelled) return true;
+    return false;
   });
+
+  if (unexpected.length === 0) return;
+
+  // Surface error details inline so the gate failure points at the cause.
+  const summary = unexpected
+    .map((session) => {
+      const id = session.id ?? session.sessionId ?? '<unknown-id>';
+      const status = session.status ?? '<unknown-status>';
+      const error = session.error
+        ? typeof session.error === 'string'
+          ? session.error
+          : JSON.stringify(session.error)
+        : '<no error detail>';
+      return `  - session=${id} status=${status} error=${error}`;
+    })
+    .join('\n');
 
   expect(
     unexpected,
-    `unexpected terminal error sessions: ${JSON.stringify(unexpected, null, 2)}`,
+    `[ADR-008] unexpected terminal error sessions:\n${summary}`,
   ).toEqual([]);
 }
 

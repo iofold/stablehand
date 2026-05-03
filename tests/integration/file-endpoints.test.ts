@@ -246,13 +246,14 @@ describe('File endpoint integration tests', () => {
     expect([400, 403]).toContain(res.statusCode);
   });
 
-  it('returns 400 for nonexistent file', async () => {
+  it('returns 404 without internal path details for nonexistent file', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `/api/agents/${agentId}/files/read?path=nonexistent.txt`,
     });
 
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'File not found' });
   });
 
   it('returns 400 when path is a directory', async () => {

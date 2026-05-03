@@ -12,6 +12,10 @@ import {
   cancelSession,
   type TestAgent,
 } from './support';
+import {
+  assertStressComplete,
+  fetchStressEventsForSession,
+} from './helpers/stress-event';
 
 const STRESS_AGENT_DIRS = [
   'stress-lg-openai',
@@ -87,7 +91,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     }
   });
 
-  test('LangGraph + GPT-5.4: agent run reaches terminal state', async ({ request }) => {
+  test('LangGraph + GPT-5.4: required-matrix stress.tools.complete @smoke', async ({ request }) => {
     test.setTimeout(120_000);
 
     const agent = agents['stress-lg-openai'];
@@ -108,25 +112,24 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       100_000,
     );
 
-    expect(['completed', 'error']).toContain(finalRun.status);
+    expect(
+      finalRun.status,
+      `[ADR-011] required-matrix run must reach completed, got ${finalRun.status}`,
+    ).toBe('completed');
 
     const messages = await getConversationMessages(request, agent.id, conversationId);
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    if (!messages.some((message) => message.role === 'assistant')) {
-          console.warn('No assistant message found — run may have errored before generating output');
-        };
+    expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    const events = await getEvents(request, {
-      type: 'stress.tools.complete',
-      agentId: agent.id,
-      limit: 20,
-    });
-    if (!events.some((event) => event.payload.includes(sessionId))) {
-      console.warn(`Optional event stress.tools.complete missing for run ${sessionId}`);
-    }
+    await assertStressComplete(
+      request,
+      sessionId,
+      'stress.tools.complete',
+      'stress-lg-openai',
+      { agentId: agent.id },
+    );
   });
 
-  test('LangGraph + Gemini: agent run reaches terminal state', async ({ request }) => {
+  test('LangGraph + Gemini: extended stress.gemini.complete @extended', async ({ request }) => {
     test.setTimeout(120_000);
 
     const agent = agents['stress-lg-gemini'];
@@ -147,25 +150,24 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       100_000,
     );
 
-    expect(['completed', 'error']).toContain(finalRun.status);
+    expect(finalRun.status).toBe('completed');
 
     const messages = await getConversationMessages(request, agent.id, conversationId);
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    if (!messages.some((message) => message.role === 'assistant')) {
-          console.warn('No assistant message found — run may have errored before generating output');
-        };
+    expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    const events = await getEvents(request, {
-      type: 'stress.gemini.complete',
-      agentId: agent.id,
-      limit: 20,
-    });
-    if (!events.some((event) => event.payload.includes(sessionId))) {
-      console.warn(`Optional event stress.gemini.complete missing for run ${sessionId}`);
-    }
+    const matches = await fetchStressEventsForSession(
+      request,
+      'stress.gemini.complete',
+      sessionId,
+      { agentId: agent.id },
+    );
+    expect(
+      matches.length,
+      `[ADR-012] expected exactly one stress.gemini.complete event for session ${sessionId}, got ${matches.length}`,
+    ).toBe(1);
   });
 
-  test('PI Agent + GPT-5.4: agent run reaches terminal state', async ({ request }) => {
+  test('PI Agent + GPT-5.4: required-matrix stress.pi.complete @smoke', async ({ request }) => {
     test.setTimeout(120_000);
 
     const agent = agents['stress-pi-openai'];
@@ -186,25 +188,24 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       100_000,
     );
 
-    expect(['completed', 'error']).toContain(finalRun.status);
+    expect(
+      finalRun.status,
+      `[ADR-011] required-matrix run must reach completed, got ${finalRun.status}`,
+    ).toBe('completed');
 
     const messages = await getConversationMessages(request, agent.id, conversationId);
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    if (!messages.some((message) => message.role === 'assistant')) {
-          console.warn('No assistant message found — run may have errored before generating output');
-        };
+    expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    const events = await getEvents(request, {
-      type: 'stress.pi.complete',
-      agentId: agent.id,
-      limit: 20,
-    });
-    if (!events.some((event) => event.payload.includes(sessionId))) {
-      console.warn(`Optional event stress.pi.complete missing for run ${sessionId}`);
-    }
+    await assertStressComplete(
+      request,
+      sessionId,
+      'stress.pi.complete',
+      'stress-pi-openai',
+      { agentId: agent.id },
+    );
   });
 
-  test('PI Agent + Gemini: agent run reaches terminal state', async ({ request }) => {
+  test('PI Agent + Gemini: extended stress.pi-gemini.complete @extended', async ({ request }) => {
     test.setTimeout(120_000);
 
     const agent = agents['stress-pi-gemini'];
@@ -225,25 +226,24 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       100_000,
     );
 
-    expect(['completed', 'error']).toContain(finalRun.status);
+    expect(finalRun.status).toBe('completed');
 
     const messages = await getConversationMessages(request, agent.id, conversationId);
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    if (!messages.some((message) => message.role === 'assistant')) {
-          console.warn('No assistant message found — run may have errored before generating output');
-        };
+    expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    const events = await getEvents(request, {
-      type: 'stress.pi-gemini.complete',
-      agentId: agent.id,
-      limit: 20,
-    });
-    if (!events.some((event) => event.payload.includes(sessionId))) {
-      console.warn(`Optional event stress.pi-gemini.complete missing for run ${sessionId}`);
-    }
+    const matches = await fetchStressEventsForSession(
+      request,
+      'stress.pi-gemini.complete',
+      sessionId,
+      { agentId: agent.id },
+    );
+    expect(
+      matches.length,
+      `[ADR-012] expected exactly one stress.pi-gemini.complete event for session ${sessionId}, got ${matches.length}`,
+    ).toBe(1);
   });
 
-  test('Claude Agents + Sonnet: writes code, executes it, verifies output', async ({ request }) => {
+  test('Claude Agents + Sonnet: required-matrix stress.claude.complete @smoke', async ({ request }) => {
     test.setTimeout(180_000);
 
     const agent = agents['stress-claude-sonnet'];
@@ -264,25 +264,24 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       100_000,
     );
 
-    expect(['completed', 'error']).toContain(finalRun.status);
+    expect(
+      finalRun.status,
+      `[ADR-011] required-matrix run must reach completed, got ${finalRun.status}`,
+    ).toBe('completed');
 
     const messages = await getConversationMessages(request, agent.id, conversationId);
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    if (!messages.some((message) => message.role === 'assistant')) {
-          console.warn('No assistant message found — run may have errored before generating output');
-        };
+    expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    const events = await getEvents(request, {
-      type: 'stress.claude.complete',
-      agentId: agent.id,
-      limit: 20,
-    });
-    if (!events.some((event) => event.payload.includes(sessionId))) {
-      console.warn(`Optional event stress.claude.complete missing for run ${sessionId}`);
-    }
+    await assertStressComplete(
+      request,
+      sessionId,
+      'stress.claude.complete',
+      'stress-claude-sonnet',
+      { agentId: agent.id },
+    );
   });
 
-  test('Event chain: direct emit starts chain-responder run', async ({ request }) => {
+  test('Event chain: direct emit starts chain-responder run @extended', async ({ request }) => {
     test.setTimeout(120_000);
 
     const agent = agents['stress-chain-responder'];
@@ -326,29 +325,28 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       100_000,
     );
 
-    expect(['completed', 'error']).toContain(finalRun.status);
+    expect(finalRun.status).toBe('completed');
 
     const messages = await getConversationMessages(
       request,
       agent.id,
       triggeredRun!.conversationId,
     );
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    if (!messages.some((message) => message.role === 'assistant')) {
-          console.warn('No assistant message found — run may have errored before generating output');
-        };
+    expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    const events = await getEvents(request, {
-      type: 'stress.chain.done',
-      agentId: agent.id,
-      limit: 20,
-    });
-    if (!events.some((event) => event.payload.includes(triggeredRun!.id))) {
-      console.warn(`Optional event stress.chain.done missing for run ${triggeredRun!.id}`);
-    }
+    const matches = await fetchStressEventsForSession(
+      request,
+      'stress.chain.done',
+      triggeredRun!.id,
+      { agentId: agent.id },
+    );
+    expect(
+      matches.length,
+      `[ADR-012] expected exactly one stress.chain.done event for run ${triggeredRun!.id}, got ${matches.length}`,
+    ).toBe(1);
   });
 
-  test('HITL: approve flow works when interrupt occurs, otherwise terminal run still passes', async ({ request }) => {
+  test('HITL: approve flow emits stress.hitl.complete deterministically @extended', async ({ request }) => {
     test.setTimeout(180_000);
 
     const agent = agents['stress-hitl'];
@@ -362,7 +360,6 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     trackRun('stress-hitl', sessionId);
 
     let interrupt = null as Awaited<ReturnType<typeof getInterrupts>>[number] | null;
-    let terminalRun = null as TestRun | null;
 
     const hitlDeadline = Date.now() + 60_000;
     while (Date.now() < hitlDeadline) {
@@ -371,54 +368,45 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       if (interrupt) break;
 
       const runs = await listRuns(request, agent.id);
-      terminalRun = runs.find((entry) => entry.id === sessionId && ['completed', 'error'].includes(entry.status.toLowerCase())) ?? null;
-      if (terminalRun) break;
+      const terminal = runs.find((entry) =>
+        entry.id === sessionId &&
+        ['completed', 'error'].includes(entry.status.toLowerCase()),
+      );
+      if (terminal) break;
 
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
 
-    if (interrupt) {
+    expect(
+      interrupt,
+      `[ADR-011] HITL extended test requires an interrupt to occur for session ${sessionId}`,
+    ).toBeTruthy();
 
-      expect(interrupt).toBeTruthy();
+    const resolution = await resolveInterrupt(request, agent.id, sessionId, 'approve');
+    expect(resolution).toEqual({ resolved: true, action: 'approve' });
 
-      const resolution = await resolveInterrupt(request, agent.id, sessionId, 'approve');
-      expect(resolution).toEqual({ resolved: true, action: 'approve' });
-
-      const finalRun = await waitForRunStatus(
-        request,
-        agent.id,
-        sessionId,
-        ['completed', 'error'],
-        100_000,
-      );
-
-      expect(['completed', 'error']).toContain(finalRun.status);
-
-      const messages = await getConversationMessages(request, agent.id, conversationId);
-      expect(messages.length).toBeGreaterThanOrEqual(1);
-      if (!messages.some((message) => message.role === 'assistant')) {
-            console.warn('No assistant message found — run may have errored before generating output');
-          };
-
-      return;
-    }
-
-    const runState = terminalRun ?? await waitForRunStatus(
+    const finalRun = await waitForRunStatus(
       request,
       agent.id,
       sessionId,
       ['completed', 'error'],
-      80_000,
+      100_000,
     );
 
-    expect(['completed', 'error']).toContain(runState.status.toLowerCase());
+    expect(finalRun.status).toBe('completed');
 
     const messages = await getConversationMessages(request, agent.id, conversationId);
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    if (!messages.some((message) => message.role === 'assistant')) {
-          console.warn('No assistant message found — run may have errored before generating output');
-        };
+    expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    console.warn(`Optional HITL interrupt did not occur for run ${sessionId}`);
+    const matches = await getEvents(request, {
+      type: 'stress.hitl.complete',
+      agentId: agent.id,
+      limit: 50,
+    });
+    const sessionMatches = matches.filter((event) => (event.payload ?? '').includes(sessionId));
+    expect(
+      sessionMatches.length,
+      `[ADR-012] expected exactly one stress.hitl.complete event for session ${sessionId}, got ${sessionMatches.length}`,
+    ).toBe(1);
   });
 });

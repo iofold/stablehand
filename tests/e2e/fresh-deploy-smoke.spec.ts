@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 import { API_BASE, createTestAgent, deleteTestAgent } from './support';
 
-test.describe('Fresh deploy smoke', () => {
+test.describe('Fresh deploy smoke @extended', () => {
   let agentId = '';
   let agentName = '';
 

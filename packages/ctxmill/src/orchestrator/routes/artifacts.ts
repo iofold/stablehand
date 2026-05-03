@@ -224,21 +224,56 @@ export async function artifactRoutes(
     const artifactId = randomUUID();
     const storageKey = buildArtifactStorageKey(artifactId, name);
 
-    await artifactStore.upload(storageKey, fileBuffer, mimeType, fileBuffer.length);
-
-    const head = await artifactStore.headObject(storageKey);
-    const sizeBytes = head?.sizeBytes ?? 0;
-
     await repository.saveArtifact({
       id: artifactId,
       agentId,
       name,
       mimeType,
-      sizeBytes,
+      sizeBytes: 0,
       storageKey,
       bucket,
-      status: 'active',
+      status: 'pending_upload',
     });
+
+    try {
+      await artifactStore.upload(storageKey, fileBuffer, mimeType, fileBuffer.length);
+    } catch (err) {
+      await repository.markArtifactUploadFailed(artifactId);
+      app.log.warn('Failed to upload artifact object %s: %s', storageKey, err);
+      return reply.status(502).send({ error: 'Artifact object upload failed', artifactId });
+    }
+
+    const head = await artifactStore.headObject(storageKey);
+    if (!head) {
+      await repository.markArtifactUploadFailed(artifactId);
+      await artifactStore.deleteObject(storageKey).catch((err) => {
+        app.log.warn('Failed to clean up unconfirmed artifact object %s: %s', storageKey, err);
+      });
+      return reply.status(502).send({ error: 'Artifact object upload could not be confirmed', artifactId });
+    }
+
+    let artifact;
+    try {
+      artifact = await repository.markArtifactUploadConfirmed(artifactId, {
+        sizeBytes: head.sizeBytes,
+        mimeType: head.contentType,
+      });
+    } catch (err) {
+      await artifactStore.deleteObject(storageKey).catch((cleanupErr) => {
+        app.log.warn('Failed to clean up artifact object %s after DB activation failure: %s', storageKey, cleanupErr);
+      });
+      await repository.markArtifactUploadFailed(artifactId).catch((markErr) => {
+        app.log.warn('Failed to mark artifact upload failed %s: %s', artifactId, markErr);
+      });
+      throw err;
+    }
+
+    if (!artifact) {
+      await artifactStore.deleteObject(storageKey).catch((err) => {
+        app.log.warn('Failed to clean up artifact object %s after missing DB activation row: %s', storageKey, err);
+      });
+      return reply.status(500).send({ error: 'Artifact metadata activation failed', artifactId });
+    }
 
     if (eventBus) {
       eventBus.emit('custom', {
@@ -247,22 +282,22 @@ export async function artifactRoutes(
         payload: {
           artifactId,
           name,
-          mimeType,
-          sizeBytes,
+          mimeType: artifact.mimeType,
+          sizeBytes: artifact.sizeBytes,
         },
         timestamp: Date.now(),
       });
     }
 
     return reply.status(201).send({
-      id: artifactId,
-      agentId,
-      name,
-      mimeType,
-      sizeBytes,
-      storageKey,
-      bucket,
-      status: 'active',
+      id: artifact.id,
+      agentId: artifact.agentId,
+      name: artifact.name,
+      mimeType: artifact.mimeType,
+      sizeBytes: artifact.sizeBytes,
+      storageKey: artifact.storageKey,
+      bucket: artifact.bucket,
+      status: artifact.status,
     });
   });
 
@@ -274,12 +309,17 @@ export async function artifactRoutes(
       return reply.status(404).send({ error: 'Artifact not found' });
     }
 
-    if (artifactStore) {
-      try {
-        await artifactStore.deleteObject(artifact.storageKey);
-      } catch (err) {
-        app.log.warn('Failed to delete S3 object %s: %s', artifact.storageKey, err);
-      }
+    const deleting = await repository.markArtifactDeleting(id);
+    if (!deleting) {
+      return reply.status(404).send({ error: 'Artifact not found' });
+    }
+
+    try {
+      await artifactStore.deleteObject(artifact.storageKey);
+    } catch (err) {
+      app.log.warn('Failed to delete S3 object %s: %s', artifact.storageKey, err);
+      await repository.markArtifactDeleteFailed(id);
+      return reply.status(503).send({ error: 'Artifact object delete failed', id });
     }
 
     await repository.deleteArtifact(id);

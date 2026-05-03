@@ -25,17 +25,14 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-// These executable specs capture the Stage 3 durable-event contract. They stay skipped
-// until worker-2's Stage 2 lifecycle boundary is accepted, because behavior edits are
-// intentionally blocked until that prerequisite lands.
-describe.skip('TypedEventBus durable persistence contract', () => {
+describe('TypedEventBus durable persistence contract', () => {
   it('does not dispatch durable typed-event listeners when persistence fails', async () => {
     const listener = vi.fn();
     const persistEvent = vi.fn().mockRejectedValue(new Error('db unavailable'));
     const bus = new TypedEventBus({ persistEvent });
     bus.on('agent.created', listener);
 
-    await bus.emit('agent.created', agentCreatedPayload());
+    await expect(bus.emitAsync('agent.created', agentCreatedPayload())).rejects.toThrow('db unavailable');
     await flushMicrotasks();
 
     expect(persistEvent).toHaveBeenCalledTimes(1);
@@ -50,9 +47,11 @@ describe.skip('TypedEventBus durable persistence contract', () => {
       observedOrder.push('persist:done');
     });
     const bus = new TypedEventBus({ persistEvent });
-    bus.on('agent.created', () => observedOrder.push('listener'));
+    bus.on('agent.created', () => {
+      observedOrder.push('listener');
+    });
 
-    await bus.emit('agent.created', agentCreatedPayload());
+    await bus.emitAsync('agent.created', agentCreatedPayload());
     await flushMicrotasks();
 
     expect(persistEvent).toHaveBeenCalledTimes(1);
@@ -68,7 +67,7 @@ describe.skip('TypedEventBus durable persistence contract', () => {
       throw new Error('listener failed');
     });
 
-    await bus.emit('agent.created', agentCreatedPayload());
+    await bus.emitAsync('agent.created', agentCreatedPayload());
     await flushMicrotasks();
 
     expect(persistEvent).toHaveBeenCalledTimes(1);
@@ -92,11 +91,62 @@ describe.skip('TypedEventBus durable persistence contract', () => {
       enabled: true,
     });
 
-    bus.emitCustom('custom.ready', 'agent-1', { ok: true, value: 'persisted-only' });
+    await expect(
+      bus.emitCustomAsync('custom.ready', 'agent-1', { ok: true, value: 'persisted-only' }),
+    ).rejects.toThrow('persist rejected');
     await flushMicrotasks();
 
     expect(onFire).not.toHaveBeenCalled();
   });
 
-  it.todo('keeps post-createTurn startup cleanup consistent when event persistence fails after Stage 2 lifecycle boundary lands');
+  // Stage 2 lifecycle/retry-policy code (e.g. session-turn-orchestrator turn.started/turn.completed)
+  // uses the fire-and-forget bus.emit() path. Verify that path also defers listener dispatch until
+  // persistence resolves, and skips dispatch when persistence rejects, so the lifecycle emit sites
+  // cannot bypass the durable persistence contract.
+  it('fire-and-forget emit() defers dispatch until persistence settles and skips on persist failure', async () => {
+    const observedOrder: string[] = [];
+    let resolvePersist!: () => void;
+    const persistGate = new Promise<void>((resolve) => {
+      resolvePersist = resolve;
+    });
+    const persistEvent = vi.fn().mockImplementation(async () => {
+      observedOrder.push('persist:start');
+      await persistGate;
+      observedOrder.push('persist:done');
+    });
+    const bus = new TypedEventBus({ persistEvent });
+    bus.on('agent.created', () => {
+      observedOrder.push('listener');
+    });
+
+    bus.emit('agent.created', agentCreatedPayload());
+
+    // Listener must NOT have fired before persistence settles.
+    await flushMicrotasks();
+    expect(observedOrder).toEqual(['persist:start']);
+
+    resolvePersist();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(observedOrder).toEqual(['persist:start', 'persist:done', 'listener']);
+
+    // Persistence failure path: listener stays silent and the bus surfaces a bus.error.
+    const failingListener = vi.fn();
+    const errors: Array<{ source: string; event: string; error: string }> = [];
+    const failingBus = new TypedEventBus({
+      persistEvent: vi.fn().mockRejectedValue(new Error('lifecycle persist failed')),
+    });
+    failingBus.on('bus.error', (payload) => errors.push(payload));
+    failingBus.on('agent.created', failingListener);
+
+    failingBus.emit('agent.created', agentCreatedPayload({ agentId: 'agent-2' }));
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(failingListener).not.toHaveBeenCalled();
+    expect(errors).toEqual([
+      expect.objectContaining({ source: 'persist', event: 'agent.created', error: 'lifecycle persist failed' }),
+    ]);
+  });
 });

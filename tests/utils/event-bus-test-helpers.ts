@@ -100,9 +100,6 @@ export function createMockDatabase() {
     listConversations: vi.fn(),
     addMessage: vi.fn(),
     getMessages: vi.fn(),
-    addKnowledgeItem: vi.fn(),
-    listKnowledgeItems: vi.fn(),
-    deleteKnowledgeItem: vi.fn(),
     createRun: vi.fn(),
     getRun: vi.fn(),
     updateRun: vi.fn(),
@@ -383,9 +380,6 @@ export function createMockToolContext(overrides: Record<string, unknown> = {}) {
     conversationId: 'test-conv',
     instanceId: 'run-123',
     workspaceDir: '/tmp/test',
-    knowledge: {
-      query: async () => ({ items: [] }),
-    },
     ...overrides,
   };
 }

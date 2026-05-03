@@ -6,10 +6,6 @@ import {
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { cn } from '@/lib/utils';
 import type { AgentSession } from '@/stores/agents';
-import type {
-  KnowledgeItem,
-  KnowledgeStats,
-} from './types';
 import { formatTime } from './types';
 
 /* ------------------------------------------------------------------ */
@@ -51,11 +47,8 @@ export interface AgentOverviewTabProps {
   totalSessions: number;
   activeSessions: number;
   toolsCount: number;
-  knowledgeTotal: number;
   recentSessions: AgentSession[];
   onContinueSession: (conversationId: string) => void;
-  knowledgeStats?: KnowledgeStats;
-  recentKnowledgeItems?: KnowledgeItem[];
 }
 
 export function AgentOverviewTab({
@@ -63,11 +56,8 @@ export function AgentOverviewTab({
   totalSessions,
   activeSessions,
   toolsCount,
-  knowledgeTotal,
   recentSessions,
   onContinueSession,
-  knowledgeStats,
-  recentKnowledgeItems,
 }: AgentOverviewTabProps) {
   const [promptExpanded, setPromptExpanded] = useState(false);
   const parsedHarnessConfig = agent.harnessConfig;
@@ -90,7 +80,6 @@ export function AgentOverviewTab({
         <div className="flex-1 min-w-0"><StatCard label="Total Sessions" value={totalSessions} /></div>
         <div className="flex-1 min-w-0"><StatCard label="Active" value={activeSessions} /></div>
         <div className="flex-1 min-w-0"><StatCard label="Tools Count" value={toolsCount} /></div>
-        <div className="flex-1 min-w-0"><StatCard label="Knowledge Items" value={knowledgeTotal} /></div>
       </div>
 
       <div className="rounded-lg border border-surface-700 bg-surface-800 p-6">
@@ -139,44 +128,6 @@ export function AgentOverviewTab({
             )}
           </>
         )}
-      </div>
-
-      {/* Knowledge Snapshot */}
-      <div data-testid="knowledge-snapshot" className="rounded-lg border border-surface-700 bg-surface-800 p-6 space-y-6">
-        <h3 className="text-label">
-          Knowledge Snapshot
-        </h3>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Knowledge Growth */}
-          <div data-testid="knowledge-growth" className="rounded-lg border border-surface-700 bg-surface-900 p-4">
-            <p className="text-xs font-medium text-surface-300 mb-2">Knowledge Growth</p>
-            <p className="text-2xl font-bold text-surface-100 tabular-nums">{knowledgeStats?.totalItems ?? 0}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {Object.entries(knowledgeStats?.categories ?? {}).map(([cat, count]) => (
-                <span key={cat} className="inline-flex items-center rounded-full bg-surface-800 border border-surface-700 px-2 py-0.5 text-[10px] text-surface-300">
-                  {cat}: {count as number}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          {/* Recent Insights */}
-          <div data-testid="recent-insights" className="rounded-lg border border-surface-700 bg-surface-900 p-4">
-            <p className="text-xs font-medium text-surface-300 mb-2">Recent Insights</p>
-            {recentKnowledgeItems && recentKnowledgeItems.length > 0 ? (
-              <div className="space-y-1.5">
-                {recentKnowledgeItems.slice(0, 3).map((item) => (
-                  <p key={item.id} className="text-[11px] text-surface-400 line-clamp-2">
-                    {item.content}
-                  </p>
-                ))}
-              </div>
-            ) : (
-              <p className="text-[11px] text-surface-400">No recent insights.</p>
-            )}
-          </div>
-        </div>
       </div>
 
       {/* Configuration */}

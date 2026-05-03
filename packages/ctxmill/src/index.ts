@@ -46,18 +46,6 @@ export type { EventTrigger } from './events/triggers.js';
 export { interpolateTemplate } from './events/triggers.js';
 export { EventTriggerManager } from './events/trigger-manager.js';
 
-// Knowledge types and implementations
-export type {
-  KnowledgeItem,
-  ContextItem,
-  ContextQuery,
-  ContextResult,
-  KnowledgeStore,
-  ContextProvider,
-} from './knowledge/types.js';
-export { InMemoryKnowledgeStore } from './knowledge/store.js';
-export { InMemoryContextProvider } from './knowledge/context.js';
-
 export { ensureAgentWorkspace, seedAgentWorkspace } from './workspace/index.js';
 
 // Harness types and implementations

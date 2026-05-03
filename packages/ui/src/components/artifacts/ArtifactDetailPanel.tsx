@@ -56,7 +56,9 @@ export function ArtifactDetailPanel() {
 
           <div>
             <div className="text-xs font-medium text-surface-500 uppercase tracking-wider">Agent ID</div>
-            <p className="text-sm text-surface-100 mt-1 font-mono break-all">{selectedArtifact.agentId}</p>
+            <p className="text-sm text-surface-100 mt-1 font-mono break-all">
+              {selectedArtifact.agentId ?? 'No agent'}
+            </p>
           </div>
 
           {selectedArtifact.sessionId && (

@@ -31,14 +31,6 @@ export interface ToolContext {
   instanceId?: string;
   requestId?: string;
   workspaceDir: string;
-  knowledge: {
-    query: (opts: {
-      text: string;
-      limit?: number;
-    }) => Promise<{
-      items: Array<{ id: string; content: string; score: number }>;
-    }>;
-  };
   eventBus?: {
     emit(event: string, payload: unknown): void;
     emitCustom(event: string, agentId: string, payload: unknown): void;

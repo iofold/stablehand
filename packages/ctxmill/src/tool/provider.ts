@@ -10,6 +10,6 @@ export interface ToolRegistry {
   addProvider(provider: ToolProvider): void;
   removeProvider(name: string): void;
   listAll(): ToolDefinition[];
-  listForAgent(declaredToolNames: string[]): ToolDefinition[];
-  getProvider(toolName: string): ToolProvider | undefined;
+  listForAgent(declaredToolNames: string[], agentId?: string): ToolDefinition[];
+  getProvider(toolName: string, agentId?: string): ToolProvider | undefined;
 }

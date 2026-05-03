@@ -12,7 +12,18 @@ import {
 } from '@/lib/api';
 import { normalizeSessionStatusCounts } from '@/lib/session-status';
 
-export type AgentSession = ApiAgentSession & { sandboxSessionId?: string };
+export type AgentSession = ApiAgentSession & {
+  sandboxSessionId?: string;
+  /**
+   * TODO(Track 2): the orchestrator does not yet ship `lastRestoreError` /
+   * `last_restore_error` on session payloads. ADR 013 requires this field so
+   * the UI can surface an inline "Retry restore" affordance and tooltip when
+   * automatic restore failed (status remains CHECKPOINTED with a non-null
+   * error). The integration pass after Track 2 lands will reconcile this
+   * field with the canonical API contract.
+   */
+  lastRestoreError?: string | null;
+};
 
 export interface Agent {
   id: string;
@@ -34,7 +45,6 @@ export interface Agent {
   systemPrompt?: string;
   createdAt?: number;
 
-  knowledgeItems?: number;
   workspaceDir?: string | null;
   metadata?: Record<string, unknown> | null;
   manifest?: Record<string, unknown> | null;

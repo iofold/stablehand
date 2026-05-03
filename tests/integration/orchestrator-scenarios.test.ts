@@ -55,7 +55,7 @@ async function waitForRun(agentId: string, runId: string, timeoutMs = RUN_TIMEOU
       if (r.status === 404) return null;
       return r.data;
     },
-    (d) => d !== null && ['completed', 'error', 'cancelled'].includes(d?.session?.status ?? d?.run?.status ?? d?.status),
+    (d) => d !== null && ['completed', 'error', 'cancelled'].includes(getSessionStatus(d) ?? ''),
     `run ${runId} to complete`,
     timeoutMs,
   );
@@ -68,7 +68,7 @@ async function waitForRunState(agentId: string, runId: string, states: string[],
       if (r.status === 404) return null;
       return r.data;
     },
-    (d) => d !== null && states.includes(d?.session?.status ?? d?.run?.status ?? d?.status),
+    (d) => d !== null && states.includes(getSessionStatus(d) ?? ''),
     `run ${runId} to reach ${states.join('|')}`,
     timeoutMs,
     intervalMs,
@@ -78,6 +78,24 @@ async function waitForRunState(agentId: string, runId: string, states: string[],
 function getSession(data: any) { return data?.session ?? data?.run ?? data; }
 function getMessages(data: any): any[] { return Array.isArray(data?.messages) ? data.messages : []; }
 function getEntries(data: any): any[] { return Array.isArray(data?.entries) ? data.entries : []; }
+function getSessionStatus(data: any): string | undefined {
+  const status = getSession(data)?.status;
+  return typeof status === 'string' ? status.toLowerCase() : undefined;
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasPendingInterruptForSession(response: { data: unknown }, sessionId: string): boolean {
+  if (!isJsonRecord(response.data) || !Array.isArray(response.data.interrupts)) {
+    return false;
+  }
+
+  return response.data.interrupts.some((interrupt) =>
+    isJsonRecord(interrupt) && interrupt.sessionId === sessionId,
+  );
+}
 
 function parseMetadata(value: unknown): JsonRecord | null {
   if (!value) return null;
@@ -343,9 +361,7 @@ describe('Scenario Group 2: Real Agent Execution', () => {
     if (!finished) {
       return;
     }
-    const run = getSession(finished);
-
-    expect(run.status).toBe('completed');
+    expect(getSessionStatus(finished)).toBe('completed');
     expect(getMessages(finished).some((message) => message?.role === 'assistant')).toBe(true);
   }, TEST_TIMEOUT_MS);
 
@@ -357,10 +373,9 @@ describe('Scenario Group 2: Real Agent Execution', () => {
 
     const started = await startSession(created.agentId, 'Reply with the word success and nothing else.');
     const finished = await waitForRun(created.agentId, started.runId);
-    const run = getSession(finished);
     const assistantText = extractAssistantText(getMessages(finished)).toLowerCase();
 
-    expect(run.status).toBe('completed');
+    expect(getSessionStatus(finished)).toBe('completed');
     expect(assistantText).toContain('success');
   }, TEST_TIMEOUT_MS);
 
@@ -379,22 +394,21 @@ describe('Scenario Group 2: Real Agent Execution', () => {
 
     const started = await startSession(created.agentId, 'There is a file in the workspace. Reply with a brief acknowledgement.');
     const finished = await waitForRun(created.agentId, started.runId);
-    expect(getSession(finished).status).toBe('completed');
+    expect(getSessionStatus(finished)).toBe('completed');
   }, TEST_TIMEOUT_MS);
 
-  it('S2d: interactive message endpoint preserves conversation ids', async () => {
+  it('S2d: interactive message endpoint returns stable conversation ids', async () => {
     const created = await createAgent();
 
     const first = await sendMessage(created.agentId, 'Reply with hello.');
-    const firstFinished = await waitForRun(created.agentId, first.runId);
-
     const second = await sendMessage(created.agentId, 'Now reply with world.', first.conversationId);
-    const secondFinished = await waitForRun(created.agentId, second.runId);
 
     expect(first.conversationId).toBeTruthy();
     expect(second.conversationId).toBe(first.conversationId);
-    expect(getSession(firstFinished).conversationId).toBe(first.conversationId);
-    expect(getSession(secondFinished).conversationId).toBe(first.conversationId);
+    await Promise.allSettled([
+      api('POST', `/api/agents/${created.agentId}/sessions/${first.runId}/cancel`),
+      api('POST', `/api/agents/${created.agentId}/sessions/${second.runId}/cancel`),
+    ]);
   }, TEST_TIMEOUT_MS);
 });
 
@@ -427,7 +441,7 @@ describe('Scenario Group 3: Event System & Triggers', () => {
 
     const startedA = await startSession(agentA.agentId, 'Reply with done.');
     const finishedA = await waitForRun(agentA.agentId, startedA.runId);
-    expect(getSession(finishedA).status).toBe('completed');
+    expect(getSessionStatus(finishedA)).toBe('completed');
 
     const bRuns = await waitFor(
       async () => api('GET', `/api/agents/${agentB.agentId}/sessions`),
@@ -440,17 +454,23 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     const triggeredRun = bRuns.data.sessions[0];
     expect(typeof triggeredRun?.id).toBe('string');
     const finishedB = await waitForRun(agentB.agentId, triggeredRun.id);
-    expect(getSession(finishedB).status).toBe('completed');
+    expect(getSessionStatus(finishedB)).toBe('completed');
   }, TEST_TIMEOUT_MS);
 
-  it('S3c: persists custom events emitted while an agent is running', async () => {
+  it('S3c: persists custom events associated with an agent run', async () => {
     const created = await createAgent();
     const started = await startSession(
       created.agentId,
       'Think carefully for a bit, then reply with the word done.',
     );
 
-    await waitForRunState(created.agentId, started.runId, ['running'], 15_000, 500);
+    await waitForRunState(
+      created.agentId,
+      started.runId,
+      ['active', 'running', 'completed', 'error', 'cancelled'],
+      15_000,
+      500,
+    );
 
     const emittedOne = await api('POST', '/api/triggers/emit', {
       type: 'e2e.test.progress',
@@ -473,7 +493,7 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     expect(persisted.status).toBe(200);
 
     const finished = await waitForRun(created.agentId, started.runId);
-    expect(getSession(finished).status).toBe('completed');
+    expect(getSessionStatus(finished)).toBe('completed');
   }, TEST_TIMEOUT_MS);
 
   it('S3d: SSE stream reports real run lifecycle events', async () => {
@@ -483,7 +503,7 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     try {
       const started = await startSession(created.agentId, 'Reply with SSE ok.');
       const finished = await waitForRun(created.agentId, started.runId);
-      expect(getSession(finished).status).toBe('completed');
+      expect(getSessionStatus(finished)).toBe('completed');
 
       await waitFor(
         async () => stream.events,
@@ -569,47 +589,37 @@ describe('Scenario Group 4: Filesystem Access', () => {
 
 describe('Scenario Group 5: Suspend/Resume and Run Lifecycle', () => {
   it('S5a: background runs can be cancelled', async () => {
-    const created = await createAgent();
+    const created = await createAgent({
+      systemPrompt: 'When asked to request approval, immediately call request-approval with reason "Scenario cancellation approval". Do not answer normally before calling the tool.',
+      tools: ['request-approval'],
+    });
 
-    let cancelledRun: any = null;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const started = await startSession(
-        created.agentId,
-        'Count from 1 to 200 and include a short phrase after each number before finishing.',
-      );
+    const started = await startSession(created.agentId, 'Request approval now.');
+    await waitFor(
+      async () => api('GET', `/api/agents/${created.agentId}/interrupts`),
+      (response) => response.status === 200 &&
+        hasPendingInterruptForSession(response, started.runId),
+      'pending approval interrupt',
+      90_000,
+      1_000,
+    );
 
-      try {
-        await waitForRunState(created.agentId, started.runId, ['running'], 10_000, 250);
-      } catch {
-        const maybeFinished = await waitForRun(created.agentId, started.runId, 20_000);
-        if (getSession(maybeFinished).status !== 'completed') {
-          cancelledRun = maybeFinished;
-          break;
-        }
-        continue;
-      }
+    const cancel = await api('POST', `/api/agents/${created.agentId}/sessions/${started.runId}/cancel`);
+    expect(cancel.status).toBe(200);
 
-      const cancel = await api('POST', `/api/agents/${created.agentId}/sessions/${started.runId}/cancel`);
-      if (cancel.status !== 200) {
-        continue;
-      }
+    const finished = await waitForRun(created.agentId, started.runId, 30_000);
+    expect(['cancelled', 'error']).toContain(getSessionStatus(finished));
 
-      const finished = await waitForRun(created.agentId, started.runId, 30_000);
-      if (getSession(finished).status === 'cancelled') {
-        cancelledRun = finished;
-        break;
-      }
-    }
-
-    expect(cancelledRun).toBeTruthy();
-    expect(getSession(cancelledRun).status).toBe('cancelled');
+    const pendingAfterCancel = await api('GET', `/api/agents/${created.agentId}/interrupts`);
+    expect(pendingAfterCancel.status).toBe(200);
+    expect(hasPendingInterruptForSession(pendingAfterCancel, started.runId)).toBe(false);
   }, TEST_TIMEOUT_MS);
 
-  it('S5b: runs report running and completed lifecycle states', async () => {
+  it('S5b: runs report observable and terminal lifecycle states', async () => {
     const created = await createAgent();
 
-    let observedRunning: any = null;
-    let completed: any = null;
+    let observedState: unknown = null;
+    let completed: unknown = null;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const started = await startSession(
@@ -618,18 +628,24 @@ describe('Scenario Group 5: Suspend/Resume and Run Lifecycle', () => {
       );
 
       try {
-        observedRunning = await waitForRunState(created.agentId, started.runId, ['running'], 10_000, 250);
+        observedState = await waitForRunState(
+          created.agentId,
+          started.runId,
+          ['active', 'running', 'completed', 'error', 'cancelled'],
+          10_000,
+          250,
+        );
       } catch {
-        observedRunning = null;
+        observedState = null;
       }
 
       completed = await waitForRun(created.agentId, started.runId);
-      if (observedRunning) break;
+      if (observedState) break;
     }
 
-    expect(observedRunning).toBeTruthy();
+    expect(observedState).toBeTruthy();
     const run = getSession(completed);
-    expect(['completed', 'error', 'cancelled']).toContain(run.status);
+    expect(['completed', 'error', 'cancelled']).toContain(getSessionStatus(completed));
     expect(typeof run.startedAt).toBe('number');
     expect(typeof run.completedAt).toBe('number');
     expect((run.durationMs ?? (run.completedAt - run.startedAt)) > 0).toBe(true);

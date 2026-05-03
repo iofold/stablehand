@@ -213,57 +213,17 @@ custom (type: string, payload: object)
 
 ---
 
-## 7. KNOWLEDGE SYSTEM
+## 7. EXTERNAL LEARNING AND RETRIEVAL
 
-### Knowledge Store Interface
-
-```typescript
-interface KnowledgeStore {
-  // Agent-scoped
-  add(item: Omit<KnowledgeItem, 'id' | 'createdAt' | 'updatedAt'>): Promise<KnowledgeItem>
-  get(id: string): Promise<KnowledgeItem | null>
-  list(agentId: string): Promise<KnowledgeItem[]>
-  search(agentId: string, options: KnowledgeSearchOptions): Promise<KnowledgeSearchResult>
-  stats(agentId: string): Promise<KnowledgeStats>
-  update(id: string, updates: Partial<KnowledgeItem>): Promise<KnowledgeItem>
-  remove(id: string): Promise<void>
-  render(agentId: string): Promise<string>
-  
-  // Shared (cross-agent)
-  listShared(): Promise<KnowledgeItem[]>
-  addShared(item: Omit<KnowledgeItem, 'id' | 'createdAt' | 'updatedAt' | 'agentId'>): Promise<KnowledgeItem>
-  searchShared(options: KnowledgeSearchOptions): Promise<KnowledgeSearchResult>
-  sharedStats(): Promise<KnowledgeStats>
-  searchAll(options: KnowledgeSearchOptions): Promise<KnowledgeSearchResult>
-}
-```
-
-### Knowledge Item Structure
-```typescript
-interface KnowledgeItem {
-  id: string
-  agentId: string
-  content: string
-  category: 'strategy' | 'fact' | 'preference' | 'correction'
-  source: 'reflector' | 'human' | 'seed'
-  effectiveness: number  // -1 to 1
-  createdAt: Date
-  updatedAt: Date
-}
-```
-
-### Implementations
-- **InMemoryKnowledgeStore** — volatile, per-session
-- **Mem0KnowledgeStore** — persistent, shared agent knowledge
+CTXMill emits run, message, tool, feedback, and custom events so external learning and retrieval services can observe agent behavior. Runtime retrieval should be modeled as explicit tools, MCP servers, HTTP providers, or downstream services connected through webhooks/events.
 
 **Stress Test Coverage**:
-- Knowledge item CRUD operations
-- Search with filters (category, source)
-- Shared knowledge isolation (agent-scoped vs shared)
-- Effectiveness scoring edge cases (-1, 0, 1)
-- Large content serialization
-- Concurrent updates (race conditions)
-- Knowledge render output format
+- Webhook delivery retries
+- Large event payload serialization
+- Feedback event persistence
+- Retrieval tool timeout handling
+- Retrieval tool validation failures
+- Cross-agent trigger isolation
 
 ---
 
@@ -471,7 +431,6 @@ nativeTools:
 | **Streaming** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Token Tracking** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Abort Signal** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Knowledge Injection** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **A2UI Extraction** | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ---
@@ -523,12 +482,6 @@ nativeTools:
 - [ ] Event ordering
 - [ ] Cascade depth enforcement
 - [ ] Trigger race conditions
-
-### Knowledge
-- [ ] CRUD operations
-- [ ] Search with filters
-- [ ] Shared knowledge isolation
-- [ ] Concurrent updates
 
 ### Workspace
 - [ ] Overlay mount/unmount failures

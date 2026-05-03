@@ -1,0 +1,49 @@
+services:
+  orchestrator:
+    environment:
+      NODE_OPTIONS: ${NODE_OPTIONS:---import /app/packages/sandbox-daemon/dist/observability/otel-auto-register.js}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-ctxmill-orchestrator}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=ctxmill}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
+      OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
+      OTEL_LOGS_EXPORTER: ${OTEL_LOGS_EXPORTER:-none}
+      OTEL_NODE_RESOURCE_DETECTORS: ${OTEL_NODE_RESOURCE_DETECTORS:-env,host,os}
+      OTEL_LOG_LEVEL: ${OTEL_LOG_LEVEL:-error}
+
+  sandbox-langgraph:
+    environment:
+      OTEL_SERVICE_NAME: ctxmill-sandbox-langgraph
+      OTEL_RESOURCE_ATTRIBUTES: ${CTXMILL_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=ctxmill},ctxmill.component=sandbox,ctxmill.harness=langgraph
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      OTEL_TRACES_EXPORTER: ${CTXMILL_SANDBOX_OTEL_TRACES_EXPORTER:-otlp}
+      OTEL_METRICS_EXPORTER: ${CTXMILL_SANDBOX_OTEL_METRICS_EXPORTER:-none}
+      OTEL_LOGS_EXPORTER: ${CTXMILL_SANDBOX_OTEL_LOGS_EXPORTER:-none}
+      OTEL_NODE_RESOURCE_DETECTORS: ${CTXMILL_SANDBOX_OTEL_NODE_RESOURCE_DETECTORS:-env,host,os}
+      OTEL_LOG_LEVEL: ${CTXMILL_SANDBOX_OTEL_LOG_LEVEL:-error}
+
+  sandbox-claude-agents:
+    environment:
+      OTEL_SERVICE_NAME: ctxmill-sandbox-claude-agents
+      OTEL_RESOURCE_ATTRIBUTES: ${CTXMILL_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=ctxmill},ctxmill.component=sandbox,ctxmill.harness=claude-agents
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      OTEL_TRACES_EXPORTER: ${CTXMILL_SANDBOX_OTEL_TRACES_EXPORTER:-otlp}
+      OTEL_METRICS_EXPORTER: ${CTXMILL_SANDBOX_OTEL_METRICS_EXPORTER:-none}
+      OTEL_LOGS_EXPORTER: ${CTXMILL_SANDBOX_OTEL_LOGS_EXPORTER:-none}
+      OTEL_NODE_RESOURCE_DETECTORS: ${CTXMILL_SANDBOX_OTEL_NODE_RESOURCE_DETECTORS:-env,host,os}
+      OTEL_LOG_LEVEL: ${CTXMILL_SANDBOX_OTEL_LOG_LEVEL:-error}
+
+  sandbox-pi-agent:
+    environment:
+      OTEL_SERVICE_NAME: ctxmill-sandbox-pi-agent
+      OTEL_RESOURCE_ATTRIBUTES: ${CTXMILL_SANDBOX_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local,service.namespace=ctxmill},ctxmill.component=sandbox,ctxmill.harness=pi-agent
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otlp-signoz.staging.example.com}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      OTEL_TRACES_EXPORTER: ${CTXMILL_SANDBOX_OTEL_TRACES_EXPORTER:-otlp}
+      OTEL_METRICS_EXPORTER: ${CTXMILL_SANDBOX_OTEL_METRICS_EXPORTER:-none}
+      OTEL_LOGS_EXPORTER: ${CTXMILL_SANDBOX_OTEL_LOGS_EXPORTER:-none}
+      OTEL_NODE_RESOURCE_DETECTORS: ${CTXMILL_SANDBOX_OTEL_NODE_RESOURCE_DETECTORS:-env,host,os}
+      OTEL_LOG_LEVEL: ${CTXMILL_SANDBOX_OTEL_LOG_LEVEL:-error}

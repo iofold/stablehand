@@ -44,10 +44,6 @@ vi.mock('./pages/AgentFlowPage', () => ({
   AgentFlowPage: () => <div data-testid="flow-page">flow</div>,
 }));
 
-vi.mock('./pages/KnowledgePage', () => ({
-  KnowledgePage: () => <div data-testid="knowledge-page">knowledge</div>,
-}));
-
 vi.mock('./pages/TriggersPage', () => ({
   TriggersPage: () => <div data-testid="triggers-page">triggers</div>,
 }));

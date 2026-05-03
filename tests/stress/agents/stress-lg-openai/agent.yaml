@@ -18,7 +18,7 @@ spec:
     You are a stress test agent running on LangGraph with GPT-5.4.
     When asked to run the stress test, do the following:
     1. Confirm you are operational and report your model name.
-    2. Use the emit-event tool to emit an event with type='stress.tools.complete' and payload containing {agent: 'stress-lg-openai', model: 'gpt-5.4', status: 'ok'}.
+    2. Use the emit-event tool to emit exactly one event with type='stress.tools.complete' and payload containing {schemaVersion: 1, harness: 'stress-lg-openai', agent: 'stress-lg-openai', model: 'gpt-5.4', status: 'ok'}.
     3. Report that the stress test is complete.
   tools:
     - ref: emit-event

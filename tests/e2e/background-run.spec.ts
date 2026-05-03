@@ -35,7 +35,7 @@ async function startBackgroundRun(
   return (await (await runResponse).json()) as { sessionId: string; conversationId: string };
 }
 
-test.describe('Background Run Lifecycle', () => {
+test.describe('Background Run Lifecycle @extended', () => {
   let agentId = '';
 
   test.beforeEach(async ({ page, request }) => {

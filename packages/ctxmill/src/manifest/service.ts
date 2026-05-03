@@ -15,22 +15,25 @@ export class ManifestService {
     this.dataDir = dataDir;
   }
 
-  private parseHarnessConfig(harnessConfigJson: string): Record<string, unknown> {
+  private parseHarnessConfig(agentId: string, harnessConfigJson: string): Record<string, unknown> {
     try {
-      const parsed = JSON.parse(harnessConfigJson);
+      const parsed = JSON.parse(harnessConfigJson) as unknown;
       if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
         return parsed as Record<string, unknown>;
       }
-    } catch {
-      return {};
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`Invalid stored harnessConfig for agent ${agentId}: ${detail}`, {
+        cause: err,
+      });
     }
 
-    return {};
+    throw new Error(`Invalid stored harnessConfig for agent ${agentId}: expected JSON object`);
   }
 
   async importManifest(
     content: string,
-    opts?: { changedBy?: string; changeNote?: string; projectDir?: string },
+    opts?: { changedBy?: string; changeNote?: string; projectDir?: string; overwrite?: boolean },
   ): Promise<{ agentId: string; created: boolean; manifest: AgentManifest }> {
     const raw = parseManifestString(content);
     const manifest = validateManifest(raw);
@@ -40,6 +43,12 @@ export class ManifestService {
     const existing = agents.find((a) => a.name === manifest.metadata.name);
 
     if (existing) {
+      if (!opts?.overwrite) {
+        throw new Error(
+          `Agent manifest with name "${manifest.metadata.name}" already exists (id=${existing.id}). ` +
+          `Pass { overwrite: true } to importManifest to replace it.`,
+        );
+      }
       await this.db.updateAgent(existing.id, {
         name: def.name,
         harness: def.harness,
@@ -91,7 +100,7 @@ export class ManifestService {
       const def: AgentDefinition = {
         name: agent.name,
         harness: agent.harness,
-        harnessConfig: this.parseHarnessConfig(agent.harnessConfig),
+        harnessConfig: this.parseHarnessConfig(agent.id, agent.harnessConfig),
         systemPrompt: agent.systemPrompt,
         tools: agent.tools,
         description: agent.description ?? undefined,

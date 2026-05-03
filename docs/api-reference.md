@@ -8,7 +8,7 @@
   - `GET /api/agents/:id/stream` uses `text/event-stream`
   - `POST /api/agents/:id/workspace` expects `application/gzip` or `application/x-gzip`
 - **Authentication:** CTXMill ships with **no built-in auth**. Put auth, rate limits, and network controls at your reverse proxy or API gateway.
-- **Shared TypeScript types:** CTXMill exports API and streaming types from `@ctxmill/shared` (for example `ApiAgent`, `ApiAgentSession`, `ApiKnowledgeItem`, `AGUIEvent`, `MessageCommittedEvent`).
+- **Shared TypeScript types:** CTXMill exports API and streaming types from `@ctxmill/shared` (for example `ApiAgent`, `ApiAgentSession`, `ApiMessage`, `AGUIEvent`, `MessageCommittedEvent`).
 
 ## 2. Quick Reference Table
 
@@ -46,15 +46,6 @@
 | **Human-in-the-Loop** |  |  |
 | GET | `/api/agents/:id/interrupts` | List pending interrupts |
 | POST | `/api/agents/:id/interrupt` | Resolve an interrupt |
-| **Knowledge** |  |  |
-| GET | `/api/agents/:id/knowledge` | Search/list agent knowledge |
-| GET | `/api/agents/:id/knowledge/:itemId` | Get one knowledge item |
-| GET | `/api/agents/:id/knowledge/stats` | Agent knowledge stats |
-| GET | `/api/knowledge/shared` | List shared knowledge |
-| GET | `/api/knowledge/shared/stats` | Shared knowledge stats |
-| POST | `/api/knowledge/shared` | Create shared knowledge |
-| DELETE | `/api/knowledge/shared/:itemId` | Delete shared knowledge |
-| GET | `/api/knowledge/search` | Cross-agent knowledge search |
 | **Files & Workspace** |  |  |
 | GET | `/api/agents/:id/files` | List workspace directory entries |
 | GET | `/api/agents/:id/files/read` | Read a workspace file |
@@ -164,14 +155,13 @@ Also used by specific file/workspace endpoints:
 
 - **Events:** cursor-based via `cursor` / `nextCursor`
 - **Artifacts:** offset-based via `limit` + `offset`
-- **Knowledge search:** `limit` + `offset`
 - **Everything else:** no pagination
 
 ### Shared types
 
 Useful exported types from `@ctxmill/shared`:
 
-- API resources: `ApiAgent`, `ApiAgentSession`, `ApiMessage`, `ApiKnowledgeItem`, `ApiKnowledgeStats`, `ApiSandboxSession`
+- API resources: `ApiAgent`, `ApiAgentSession`, `ApiMessage`, `ApiSandboxSession`
 - Streaming: `AGUIEvent`, `AGUIEventType`, `MessageCommittedEvent`
 - Skills: `LoadedSkill`, `SkillFrontmatter`
 
@@ -826,185 +816,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
   - `submit` is normalized to `approve`
   - Returns `404` when the interrupt does not belong to that agent
 
-### h. Knowledge
-
-#### `GET /api/agents/:id/knowledge`
-
-- **Description:** Searches or lists one agent's knowledge items.
-- **Query params:**
-  - `q`
-  - `category`
-  - `limit`
-  - `offset`
-- **Response:**
-
-```json
-{
-  "items": [
-    {
-      "id": "know_1",
-      "content": "Customers usually need the workspace upload endpoint before file APIs.",
-      "category": "integration",
-      "source": "human",
-      "createdAt": "2026-04-03T10:00:00.000Z",
-      "relevance": 0.9
-    }
-  ],
-  "total": 1
-}
-```
-
-- **Notes:** Returns `{ items: [], total: 0 }` when no knowledge store is configured.
-
-#### `GET /api/agents/:id/knowledge/:itemId`
-
-- **Description:** Gets one agent knowledge item.
-- **Query params:** None.
-- **Response:**
-
-```json
-{
-  "id": "know_1",
-  "agentId": "agent_123",
-  "content": "Customers usually need the workspace upload endpoint before file APIs.",
-  "category": "integration",
-  "source": "human",
-  "effectiveness": 0.9,
-  "createdAt": "2026-04-03T10:00:00.000Z"
-}
-```
-
-- **Notes:** Returns `404` if the item is missing or belongs to another agent.
-
-#### `GET /api/agents/:id/knowledge/stats`
-
-- **Description:** Returns aggregate knowledge stats for one agent.
-- **Query params:** None.
-- **Response:**
-
-```json
-{
-  "totalItems": 12,
-  "categories": {
-    "integration": 8,
-    "ops": 4
-  },
-  "recentItems": 3
-}
-```
-
-- **Notes:** Returns zeros when no knowledge store is configured.
-
-#### `GET /api/knowledge/shared`
-
-- **Description:** Lists or searches shared knowledge items.
-- **Query params:** `q`, `category`, `limit`, `offset`
-- **Response:**
-
-```json
-{
-  "items": [
-    {
-      "id": "shared_1",
-      "agentId": "shared",
-      "content": "Artifacts support signed upload and download URLs.",
-      "category": "platform",
-      "source": "human",
-      "createdAt": "2026-04-03T09:00:00.000Z",
-      "relevance": 0.8
-    }
-  ],
-  "total": 1
-}
-```
-
-- **Notes:** When no filters are provided, CTXMill returns the full shared list.
-
-#### `GET /api/knowledge/shared/stats`
-
-- **Description:** Returns shared knowledge stats.
-- **Query params:** None.
-- **Response:**
-
-```json
-{
-  "totalItems": 24,
-  "categories": { "platform": 10, "ops": 14 },
-  "recentItems": 5
-}
-```
-
-- **Notes:** Returns zeros when the knowledge store is unavailable.
-
-#### `POST /api/knowledge/shared`
-
-- **Description:** Creates a shared knowledge item.
-- **Request body:**
-
-```json
-{
-  "content": "Workspace tar uploads replace the base workspace atomically.",
-  "category": "platform",
-  "source": "human",
-  "effectiveness": 0.7
-}
-```
-
-- **Query params:** None.
-- **Response:**
-
-```json
-{
-  "id": "shared_2",
-  "agentId": "shared",
-  "content": "Workspace tar uploads replace the base workspace atomically.",
-  "category": "platform",
-  "source": "human",
-  "createdAt": "2026-04-03T11:00:00.000Z",
-  "relevance": 0.7
-}
-```
-
-- **Notes:** Returns `503` if the knowledge store is unavailable.
-
-#### `DELETE /api/knowledge/shared/:itemId`
-
-- **Description:** Deletes one shared knowledge item.
-- **Query params:** None.
-- **Response:**
-
-```json
-{ "ok": true }
-```
-
-- **Notes:** Returns `503` if the knowledge store is unavailable.
-
-#### `GET /api/knowledge/search`
-
-- **Description:** Searches across all knowledge, not just one agent.
-- **Query params:** `q`, `category`, `limit`, `offset`
-- **Response:**
-
-```json
-{
-  "items": [
-    {
-      "id": "know_9",
-      "agentId": "agent_123",
-      "content": "Use /api/agents/:id/stream for real-time UI updates.",
-      "category": "integration",
-      "source": "human",
-      "createdAt": "2026-04-03T08:00:00.000Z",
-      "relevance": 0.95
-    }
-  ],
-  "total": 1
-}
-```
-
-- **Notes:** Returns `{ items: [], total: 0 }` when no knowledge store is configured.
-
-### i. Files & Workspace
+### h. Files & Workspace
 
 #### `GET /api/agents/:id/files`
 
@@ -1121,7 +933,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
   - Maximum upload size is controlled by `maxTarUploadBytes` in `/api/settings`.
   - The replacement is atomic: CTXMill extracts to a temp dir and swaps it into place.
 
-### j. Skills
+### i. Skills
 
 #### `GET /api/agents/:id/skills`
 
@@ -1198,7 +1010,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 - **Response:** no body.
 - **Notes:** Returns `204` on success.
 
-### k. Secrets
+### j. Secrets
 
 #### `GET /api/agents/:id/secrets`
 
@@ -1240,7 +1052,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 - **Response:** no body.
 - **Notes:** Returns `204` on success.
 
-### l. Webhooks
+### k. Webhooks
 
 #### `POST /api/agents/:id/webhooks`
 
@@ -1319,7 +1131,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 - **Response:** no body.
 - **Notes:** Returns `204` on success. Returns `404` when the webhook does not belong to the agent.
 
-### m. Feedback
+### l. Feedback
 
 #### `POST /api/agents/:id/feedback`
 
@@ -1372,7 +1184,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 
 - **Notes:** Useful for configuration audit trails.
 
-### n. Settings (`/api/settings`)
+### m. Settings (`/api/settings`)
 
 #### `GET /api/settings`
 
@@ -1438,7 +1250,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 | `defaultPidsLimit` | `32` to `2048` |
 | `defaultTimeoutSec` | `60` to `3600` |
 
-### o. Artifacts (`/api/artifacts`)
+### n. Artifacts (`/api/artifacts`)
 
 #### `GET /api/artifacts`
 
@@ -1549,7 +1361,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 
 - **Notes:** Returns `404` if the artifact does not exist.
 
-### p. Events (`/api/events`)
+### o. Events (`/api/events`)
 
 #### `GET /api/events`
 
@@ -1615,7 +1427,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 
 - **Notes:** Useful for building filters in dashboards.
 
-### q. Triggers (`/api/triggers`)
+### p. Triggers (`/api/triggers`)
 
 #### `POST /api/triggers`
 
@@ -1714,7 +1526,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 
 - **Notes:** `payload` must be an object.
 
-### r. Catalogs & Tools (`/api/catalogs`)
+### q. Catalogs & Tools (`/api/catalogs`)
 
 #### `GET /api/catalogs`
 
@@ -1790,7 +1602,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
   - The tool must exist and support execution.
   - Time limit is `30s`.
 
-### s. Sandbox Metrics (`/api/sandbox`)
+### r. Sandbox Metrics (`/api/sandbox`)
 
 #### `GET /api/sandbox/metrics`
 

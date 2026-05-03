@@ -1,4 +1,5 @@
 import { eq, sql, gt, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
@@ -9,14 +10,13 @@ type AgentSelect = typeof pgSchema.agents.$inferSelect;
 type ConversationSelect = typeof pgSchema.conversations.$inferSelect;
 type MessageInsert = typeof pgSchema.messages.$inferInsert;
 type MessageSelect = typeof pgSchema.messages.$inferSelect;
-type KnowledgeInsert = typeof pgSchema.knowledgeItems.$inferInsert;
-type KnowledgeSelect = typeof pgSchema.knowledgeItems.$inferSelect;
 type TurnInsert = typeof pgSchema.turns.$inferInsert;
 type TurnSelect = typeof pgSchema.turns.$inferSelect;
 type SuspendedSessionInsert = typeof pgSchema.suspendedSessions.$inferInsert;
 export type SuspendedSessionRow = typeof pgSchema.suspendedSessions.$inferSelect;
 export type ScheduledEventRow = typeof pgSchema.scheduledEvents.$inferSelect;
-type TriggerInsert = typeof pgSchema.eventTriggers.$inferInsert;
+type TriggerInsertBase = typeof pgSchema.eventTriggers.$inferInsert;
+type TriggerInsert = Omit<TriggerInsertBase, 'selectorHash'> & { selectorHash?: string };
 type TriggerSelect = typeof pgSchema.eventTriggers.$inferSelect;
 type VersionSelect = typeof pgSchema.agentVersions.$inferSelect;
 type InterruptInsert = typeof pgSchema.pendingInterrupts.$inferInsert;
@@ -27,9 +27,14 @@ type CallbackOutboxInsert = typeof pgSchema.callbackOutbox.$inferInsert;
 export type CallbackOutboxRow = typeof pgSchema.callbackOutbox.$inferSelect;
 type WebhookInsert = typeof pgSchema.webhooks.$inferInsert;
 export type WebhookRow = typeof pgSchema.webhooks.$inferSelect;
-export type SandboxSessionRow = Omit<typeof pgSchema.sandboxSessions.$inferSelect, 'pausedAt' | 'pausedReason'> & {
+export type SandboxSessionRow = Omit<
+  typeof pgSchema.sandboxSessions.$inferSelect,
+  'pausedAt' | 'pausedReason' | 'restoreAttempts' | 'lastRestoreError'
+> & {
   pausedAt?: number | null;
   pausedReason?: string | null;
+  restoreAttempts?: number | null;
+  lastRestoreError?: string | null;
 };
 export type SystemSettingRow = typeof pgSchema.systemSettings.$inferSelect;
 type ArtifactInsert = typeof pgSchema.artifacts.$inferInsert;
@@ -42,6 +47,32 @@ const sanitizeOptionalDbText = <T extends string | null | undefined>(value: T, c
   if (value == null) return value;
   return sanitizeDbText(value, context) as T;
 };
+
+function normalizeTriggerSelector(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeTriggerSelector(entry));
+  }
+  if (typeof value !== 'object') {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (keys.length === 0) return null;
+
+  const normalized: Record<string, unknown> = {};
+  for (const key of keys) {
+    normalized[key] = normalizeTriggerSelector(record[key]);
+  }
+  return normalized;
+}
+
+function triggerSelectorHash(selector: Record<string, unknown> | null | undefined): string {
+  return createHash('sha256')
+    .update(JSON.stringify(normalizeTriggerSelector(selector)))
+    .digest('hex');
+}
 
 export interface CheckpointV2 {
   id: string;
@@ -131,7 +162,7 @@ export class DatabaseRepository {
 
   /**
    * Delete an agent and all its related data in a single transaction.
-   * Order: messages -> conversations -> runs -> knowledge -> events -> agent
+   * Order: messages -> conversations -> runs -> events -> agent
    */
   async deleteAgentCascade(agentId: string): Promise<void> {
     await this.db.transaction(async (tx: any) => {
@@ -160,7 +191,6 @@ export class DatabaseRepository {
       await tx.delete(this.schema.turns).where(eq(this.schema.turns.agentId, agentId));
       await tx.delete(this.schema.sandboxSessions).where(eq(this.schema.sandboxSessions.agentId, agentId));
       await tx.delete(this.schema.conversations).where(eq(this.schema.conversations.agentId, agentId));
-      await tx.delete(this.schema.knowledgeItems).where(eq(this.schema.knowledgeItems.agentId, agentId));
       await tx.delete(this.schema.eventStore).where(eq(this.schema.eventStore.agentId, agentId));
       await tx.delete(this.schema.eventTriggers).where(eq(this.schema.eventTriggers.agentId, agentId));
       await tx.delete(this.schema.agents).where(eq(this.schema.agents.id, agentId));
@@ -278,52 +308,6 @@ export class DatabaseRepository {
     return this.queryConversationSummaries({ sandboxStatuses: ['ACTIVE', 'PAUSED', 'RESTORING'] });
   }
 
-  // ── Knowledge Items ─────────────────────────────────────
-
-  async addKnowledgeItem(data: KnowledgeInsert): Promise<KnowledgeSelect> {
-    const sanitizedData = sanitizeTypedDbValue(data, 'knowledgeItems.insert');
-    const [item] = await this.db.insert(this.schema.knowledgeItems).values(sanitizedData).returning();
-    if (!item) {
-      throw new Error('Expected insert to return a row but got undefined');
-    }
-    return item;
-  }
-
-  async getKnowledgeItems(agentId: string, category?: string): Promise<KnowledgeSelect[]> {
-    if (category) {
-      return this.db.query.knowledgeItems.findMany({
-        where: (ki: any, { and }: any) =>
-          and(eq(ki.agentId, agentId), eq(ki.category, category)),
-      });
-    }
-    return this.db.query.knowledgeItems.findMany({
-      where: eq(this.schema.knowledgeItems.agentId, agentId),
-    });
-  }
-
-  async updateKnowledgeItem(
-    id: string,
-    data: Partial<Omit<KnowledgeInsert, 'id'>>,
-  ): Promise<KnowledgeSelect | undefined> {
-    const sanitizedData = sanitizeTypedDbValue(data, 'knowledgeItems.update');
-    const [updated] = await this.db
-      .update(this.schema.knowledgeItems)
-      .set({ ...sanitizedData, updatedAt: Date.now() })
-      .where(eq(this.schema.knowledgeItems.id, id))
-      .returning();
-    return updated;
-  }
-
-  async removeKnowledgeItem(id: string): Promise<void> {
-    await this.db.delete(this.schema.knowledgeItems).where(eq(this.schema.knowledgeItems.id, id));
-  }
-
-  async getKnowledgeForAgent(agentId: string): Promise<KnowledgeSelect[]> {
-    return this.db.query.knowledgeItems.findMany({
-      where: eq(this.schema.knowledgeItems.agentId, agentId),
-    });
-  }
-
   async createTurn(data: TurnInsert): Promise<TurnSelect> {
     const sanitizedData = sanitizeTypedDbValue(data, 'turns.insert');
     const [turn] = await this.db.insert(this.schema.turns).values(sanitizedData).returning();
@@ -404,33 +388,6 @@ export class DatabaseRepository {
     return rows[0]?.count ?? 0;
   }
 
-  // ── Knowledge Stats ────────────────────────────────────
-
-  async getKnowledgeCount(agentId: string): Promise<number> {
-    const rows = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(this.schema.knowledgeItems)
-      .where(eq(this.schema.knowledgeItems.agentId, agentId));
-    return rows[0]?.count ?? 0;
-  }
-
-  async getKnowledgeItem(id: string): Promise<KnowledgeSelect | undefined> {
-    return this.db.query.knowledgeItems.findFirst({
-      where: eq(this.schema.knowledgeItems.id, id),
-    });
-  }
-
-  async getKnowledgeCategories(agentId: string): Promise<{ category: string; count: number }[]> {
-    return this.db
-      .select({
-        category: this.schema.knowledgeItems.category,
-        count: sql<number>`count(*)`.as('count'),
-      })
-      .from(this.schema.knowledgeItems)
-      .where(eq(this.schema.knowledgeItems.agentId, agentId))
-      .groupBy(this.schema.knowledgeItems.category);
-  }
-
   // ── Conversation Analysis ──────────────────────────────
 
   async getConversationCount(agentId: string): Promise<number> {
@@ -454,7 +411,6 @@ export class DatabaseRepository {
     completedSessions: number;
     failedSessions: number;
     totalConversations: number;
-    totalKnowledge: number;
     avgSessionDuration: number;
   }> {
     const [sessionStats] = await this.db
@@ -467,17 +423,13 @@ export class DatabaseRepository {
       .from(this.schema.turns)
       .where(eq(this.schema.turns.agentId, agentId));
 
-    const [conversationCount, knowledgeCount] = await Promise.all([
-      this.getConversationCount(agentId),
-      this.getKnowledgeCount(agentId),
-    ]);
+    const conversationCount = await this.getConversationCount(agentId);
 
     return {
       totalSessions: sessionStats?.totalSessions ?? 0,
       completedSessions: sessionStats?.completedSessions ?? 0,
       failedSessions: sessionStats?.failedSessions ?? 0,
       totalConversations: conversationCount,
-      totalKnowledge: knowledgeCount,
       avgSessionDuration: Math.round(sessionStats?.avgSessionDuration ?? 0),
     };
   }
@@ -757,16 +709,21 @@ export class DatabaseRepository {
 
   async saveTrigger(data: TriggerInsert): Promise<TriggerSelect> {
     const sanitizedData = sanitizeTypedDbValue(data, 'eventTriggers.upsert');
+    const row = {
+      ...sanitizedData,
+      selectorHash: triggerSelectorHash(sanitizedData.selector),
+    };
     const [trigger] = await this.db
       .insert(this.schema.eventTriggers)
-      .values(sanitizedData)
+      .values(row)
       .onConflictDoUpdate({
         target: this.schema.eventTriggers.id,
         set: {
-          eventType: sanitizedData.eventType,
-          selector: sanitizedData.selector,
-          taskTemplate: sanitizedData.taskTemplate,
-          enabled: sanitizedData.enabled,
+          eventType: row.eventType,
+          selector: row.selector,
+          selectorHash: row.selectorHash,
+          taskTemplate: row.taskTemplate,
+          enabled: row.enabled,
         },
       })
       .returning();
@@ -779,6 +736,20 @@ export class DatabaseRepository {
   async getTrigger(id: string): Promise<TriggerSelect | undefined> {
     return this.db.query.eventTriggers.findFirst({
       where: eq(this.schema.eventTriggers.id, id),
+    });
+  }
+
+  async getTriggerBySignature(
+    agentId: string,
+    eventType: string,
+    selector?: Record<string, unknown> | null,
+  ): Promise<TriggerSelect | undefined> {
+    return this.db.query.eventTriggers.findFirst({
+      where: and(
+        eq(this.schema.eventTriggers.agentId, agentId),
+        eq(this.schema.eventTriggers.eventType, eventType),
+        eq(this.schema.eventTriggers.selectorHash, triggerSelectorHash(selector)),
+      ),
     });
   }
 
@@ -1349,6 +1320,8 @@ export class DatabaseRepository {
       checkpointRef?: string | null;
       pausedAt?: number | null;
       pausedReason?: string | null;
+      restoreAttempts?: number | null;
+      lastRestoreError?: string | null;
     },
   ): Promise<void> {
     const sanitizedStatus = sanitizeDbText(status, 'sandboxSessions.status');
@@ -1369,6 +1342,12 @@ export class DatabaseRepository {
         ...(sanitizedExtra?.containerName !== undefined ? { containerName: sanitizedExtra.containerName } : {}),
         ...(sanitizedExtra?.containerId !== undefined ? { containerId: sanitizedExtra.containerId } : {}),
         ...(sanitizedExtra?.checkpointRef !== undefined ? { checkpointRef: sanitizedExtra.checkpointRef } : {}),
+        ...(sanitizedExtra?.restoreAttempts !== undefined && sanitizedExtra.restoreAttempts !== null
+          ? { restoreAttempts: sanitizedExtra.restoreAttempts }
+          : {}),
+        ...(sanitizedExtra?.lastRestoreError !== undefined
+          ? { lastRestoreError: sanitizedExtra.lastRestoreError }
+          : {}),
         ...pauseMetadata,
       })
       .where(eq(this.schema.sandboxSessions.id, id))
@@ -1390,6 +1369,32 @@ export class DatabaseRepository {
       .select()
       .from(this.schema.sandboxSessions)
       .where(inArray(this.schema.sandboxSessions.status, ['ACTIVE', 'PAUSED']));
+  }
+
+  /**
+   * Sessions that may be stranded mid-restore. The orchestrator's startup
+   * reconciler uses this to detect rows left in RESTORING after a crash.
+   * Optionally filtered by an updated_at cutoff so callers can require the
+   * row to be older than `updatedBeforeMs` (e.g. exclude in-flight restores
+   * from a process that just started).
+   */
+  async getStrandedRestoringSessions(updatedBeforeMs?: number): Promise<SandboxSessionRow[]> {
+    if (updatedBeforeMs === undefined) {
+      return this.db
+        .select()
+        .from(this.schema.sandboxSessions)
+        .where(eq(this.schema.sandboxSessions.status, 'RESTORING'));
+    }
+
+    return this.db
+      .select()
+      .from(this.schema.sandboxSessions)
+      .where(
+        and(
+          eq(this.schema.sandboxSessions.status, 'RESTORING'),
+          lt(this.schema.sandboxSessions.updatedAt, updatedBeforeMs),
+        ),
+      );
   }
 
   async getSandboxSessionsByAgent(agentId: string): Promise<SandboxSessionRow[]> {
@@ -1763,6 +1768,24 @@ export class DatabaseRepository {
     const [row] = await this.db
       .update(this.schema.artifacts)
       .set({ status: 'upload_failed', updatedAt: Date.now() })
+      .where(eq(this.schema.artifacts.id, id))
+      .returning();
+    return row;
+  }
+
+  async markArtifactDeleting(id: string): Promise<ArtifactRow | undefined> {
+    const [row] = await this.db
+      .update(this.schema.artifacts)
+      .set({ status: 'deleting', updatedAt: Date.now() })
+      .where(eq(this.schema.artifacts.id, id))
+      .returning();
+    return row;
+  }
+
+  async markArtifactDeleteFailed(id: string): Promise<ArtifactRow | undefined> {
+    const [row] = await this.db
+      .update(this.schema.artifacts)
+      .set({ status: 'delete_failed', updatedAt: Date.now() })
       .where(eq(this.schema.artifacts.id, id))
       .returning();
     return row;

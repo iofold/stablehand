@@ -483,6 +483,19 @@ describe('convert', () => {
       expect(m.spec.harnessConfig?.provider).toBe('anthropic');
     });
 
+    it('does not synthesize provider or model when harnessConfig omits them', () => {
+      const def: AgentDefinition = {
+        name: 'a1',
+        harness: 'custom-harness',
+        harnessConfig: { mode: 'local-only' },
+        tools: [],
+        systemPrompt: 'hi',
+      };
+
+      const m = definitionToManifest(def);
+      expect(m.spec.harnessConfig).toEqual({ mode: 'local-only' });
+    });
+
     it('preserves harness from definition', () => {
       const def: AgentDefinition = {
         name: 'a1',
@@ -575,16 +588,29 @@ describe('ManifestService', () => {
     });
   });
 
-  it('importManifest updates existing agent', async () => {
+  it('importManifest updates existing agent when overwrite: true is supplied', async () => {
     mockDb.listAgents.mockResolvedValue([{ id: 'existing-id', name: 'test-agent' }]);
 
     const yamlStr = serializeManifestYAML(minimalManifest());
-    const result = await service.importManifest(yamlStr);
+    const result = await service.importManifest(yamlStr, { overwrite: true });
 
     expect(result.created).toBe(false);
     expect(result.agentId).toBe('existing-id');
     expect(mockDb.updateAgent).toHaveBeenCalledOnce();
     expect(mockDb.saveAgentManifest).toHaveBeenCalledOnce();
+    expect(mockDb.createAgent).not.toHaveBeenCalled();
+  });
+
+  it('importManifest fails closed when an agent with the same name already exists and overwrite is not set', async () => {
+    mockDb.listAgents.mockResolvedValue([{ id: 'existing-id', name: 'test-agent' }]);
+
+    const yamlStr = serializeManifestYAML(minimalManifest());
+
+    await expect(service.importManifest(yamlStr)).rejects.toThrow(
+      /Agent manifest with name "test-agent" already exists/,
+    );
+    expect(mockDb.updateAgent).not.toHaveBeenCalled();
+    expect(mockDb.saveAgentManifest).not.toHaveBeenCalled();
     expect(mockDb.createAgent).not.toHaveBeenCalled();
   });
 
@@ -621,6 +647,38 @@ describe('ManifestService', () => {
     expect(yaml).toContain('gen-agent');
     expect(yaml).toContain('Be helpful.');
     expect(yaml).toContain('bash');
+  });
+
+  it('exportManifest throws when stored harnessConfig is invalid JSON', async () => {
+    mockDb.getAgent.mockResolvedValue({
+      id: 'a1',
+      name: 'bad-json-agent',
+      harness: 'langgraph',
+      harnessConfig: '{bad json',
+      systemPrompt: 'Be helpful.',
+      tools: [],
+    });
+    mockDb.getAgentManifest.mockResolvedValue(null);
+
+    await expect(service.exportManifest('a1', 'yaml')).rejects.toThrow(
+      /Invalid stored harnessConfig for agent a1/,
+    );
+  });
+
+  it('exportManifest throws when stored harnessConfig is not an object', async () => {
+    mockDb.getAgent.mockResolvedValue({
+      id: 'a1',
+      name: 'array-agent',
+      harness: 'langgraph',
+      harnessConfig: JSON.stringify([]),
+      systemPrompt: 'Be helpful.',
+      tools: [],
+    });
+    mockDb.getAgentManifest.mockResolvedValue(null);
+
+    await expect(service.exportManifest('a1', 'yaml')).rejects.toThrow(
+      'Invalid stored harnessConfig for agent a1: expected JSON object',
+    );
   });
 
   it('exportManifest throws for unknown agent', async () => {

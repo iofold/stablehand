@@ -180,7 +180,6 @@ describe('ClaudeAgentsHarness', () => {
           agentId: 'agent-1',
           conversationId: 'conversation-1',
           workspaceDir: '/tmp/workspace',
-          knowledge: expect.any(Object),
         }),
       );
     });

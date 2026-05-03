@@ -344,6 +344,56 @@ describe('SandboxSessionManager contract', () => {
       }));
     });
 
+    it('rolls back a fresh container when readiness fails before DB session creation', async () => {
+      const { manager, containerManager, db, grpcClient } = createManager();
+      grpcClient.killSession.mockRejectedValueOnce(new Error('probe failed'));
+
+      await expect(manager.ensureSession('conv-1', createAgentDef(), 'agent-1')).rejects.toThrow('probe failed');
+
+      expect(db.createSandboxSession).not.toHaveBeenCalled();
+      expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
+      expect(containerManager.removeContainer).toHaveBeenCalledWith('c-1', true);
+    });
+
+    it('rolls back a fresh container when OpenSession fails before DB session creation', async () => {
+      const { manager, containerManager, db, grpcClient } = createManager();
+      grpcClient.openSession.mockRejectedValueOnce(new Error('open failed'));
+
+      await expect(manager.ensureSession('conv-1', createAgentDef(), 'agent-1')).rejects.toThrow('open failed');
+
+      expect(db.createSandboxSession).not.toHaveBeenCalled();
+      expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
+      expect(containerManager.removeContainer).toHaveBeenCalledWith('c-1', true);
+    });
+
+    it('rolls back a fresh container when DB session creation fails', async () => {
+      const { manager, containerManager, db } = createManager();
+      (db.createSandboxSession as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('db insert failed'));
+
+      await expect(manager.ensureSession('conv-1', createAgentDef(), 'agent-1')).rejects.toThrow('db insert failed');
+
+      expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
+      expect(containerManager.removeContainer).toHaveBeenCalledWith('c-1', true);
+    });
+
+    it('logs cleanup failures during fresh startup rollback without hiding the original error', async () => {
+      const { manager, containerManager, grpcClient, logger } = createManager();
+      grpcClient.openSession.mockRejectedValueOnce(new Error('open failed'));
+      (containerManager.stopContainer as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('stop failed'));
+      (containerManager.removeContainer as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('remove failed'));
+
+      await expect(manager.ensureSession('conv-1', createAgentDef(), 'agent-1')).rejects.toThrow('open failed');
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('container stop failed during startup rollback'),
+        expect.any(Error),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('container removal failed during startup rollback'),
+        expect.any(Error),
+      );
+    });
+
     it('reconnects to an ACTIVE DB session when the container is still alive', async () => {
       const { manager, containerManager, db, grpcClient, internals } = createManager();
       (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(

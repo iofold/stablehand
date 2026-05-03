@@ -22,6 +22,7 @@ const mockContainerManager = {
 
 const mockDb = {
   getActiveSandboxSessions: vi.fn(),
+  getStrandedRestoringSessions: vi.fn(),
   updateSandboxSessionStatus: vi.fn(),
   getCheckpointV2: vi.fn(),
   deleteSandboxSession: vi.fn(),
@@ -97,6 +98,10 @@ function getReconcileOnStartup(policy: ContainerLifecyclePolicy) {
   return Reflect.get(policy, 'reconcileOnStartup').bind(policy) as () => Promise<void>;
 }
 
+function getExecuteIdleCheckpoint(policy: ContainerLifecyclePolicy) {
+  return Reflect.get(policy, 'executeIdleCheckpoint').bind(policy) as (sessionId: string) => Promise<void>;
+}
+
 describe('ContainerLifecyclePolicy', () => {
   let policy: ContainerLifecyclePolicy;
 
@@ -115,6 +120,7 @@ describe('ContainerLifecyclePolicy', () => {
     });
 
     mockDb.getActiveSandboxSessions.mockResolvedValue([]);
+    mockDb.getStrandedRestoringSessions.mockResolvedValue([]);
     mockDb.updateSandboxSessionStatus.mockResolvedValue(undefined);
     mockDb.getCheckpointV2.mockResolvedValue(null);
     mockDb.deleteSandboxSession.mockResolvedValue(undefined);
@@ -189,6 +195,80 @@ describe('ContainerLifecyclePolicy', () => {
 
       expect(callbacks.onCheckpoint).not.toHaveBeenCalled();
       expect(policy.getState('session-1')).toBe('promoting');
+    });
+
+    it('re-arms idle monitoring after a retryable checkpoint failure', async () => {
+      const callbacks = {
+        onCheckpoint: vi.fn()
+          .mockRejectedValueOnce(new Error('temporary checkpoint failure'))
+          .mockRejectedValueOnce(new Error('temporary checkpoint failure'))
+          .mockRejectedValueOnce(new Error('temporary checkpoint failure'))
+          .mockResolvedValue(undefined),
+      };
+      const entries = Reflect.get(policy, 'entries') as Map<string, unknown>;
+      entries.set('session-1', {
+        containerId: 'container-1',
+        state: 'none',
+        idleCallbacks: callbacks,
+      });
+      const executeIdleCheckpoint = getExecuteIdleCheckpoint(policy);
+
+      const firstAttempt = executeIdleCheckpoint('session-1');
+      await vi.advanceTimersByTimeAsync(3_000);
+      await firstAttempt;
+
+      expect(callbacks.onCheckpoint).toHaveBeenCalledTimes(3);
+      expect(policy.getState('session-1')).toBe('none');
+
+      await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
+
+      expect(callbacks.onCheckpoint).toHaveBeenCalledTimes(4);
+    });
+
+    it('does not re-arm idle monitoring for terminal container-gone failures', async () => {
+      const callbacks = {
+        onCheckpoint: vi.fn().mockRejectedValue({ statusCode: 404, message: 'not found' }),
+        onContainerGone: vi.fn().mockResolvedValue(undefined),
+      };
+      const entries = Reflect.get(policy, 'entries') as Map<string, unknown>;
+      entries.set('session-1', {
+        containerId: 'container-1',
+        state: 'none',
+        idleCallbacks: callbacks,
+      });
+      const executeIdleCheckpoint = getExecuteIdleCheckpoint(policy);
+
+      await executeIdleCheckpoint('session-1');
+      await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
+
+      expect(callbacks.onCheckpoint).toHaveBeenCalledTimes(1);
+      expect(callbacks.onContainerGone).toHaveBeenCalledWith('session-1');
+      expect(entries.has('session-1')).toBe(false);
+    });
+
+    it('cancelIdleTimeout after a retryable checkpoint failure prevents the re-armed retry', async () => {
+      const callbacks = {
+        onCheckpoint: vi.fn()
+          .mockRejectedValueOnce(new Error('temporary checkpoint failure'))
+          .mockRejectedValueOnce(new Error('temporary checkpoint failure'))
+          .mockRejectedValueOnce(new Error('temporary checkpoint failure'))
+          .mockResolvedValue(undefined),
+      };
+      const entries = Reflect.get(policy, 'entries') as Map<string, unknown>;
+      entries.set('session-1', {
+        containerId: 'container-1',
+        state: 'none',
+        idleCallbacks: callbacks,
+      });
+      const executeIdleCheckpoint = getExecuteIdleCheckpoint(policy);
+
+      const firstAttempt = executeIdleCheckpoint('session-1');
+      await vi.advanceTimersByTimeAsync(3_000);
+      await firstAttempt;
+      await policy.cancelIdleTimeout('session-1');
+      await vi.advanceTimersByTimeAsync(TEST_CONFIG.idleTimeoutMs);
+
+      expect(callbacks.onCheckpoint).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -493,6 +573,23 @@ describe('ContainerLifecyclePolicy', () => {
 
       expect(mockContainerManager.stopContainer).not.toHaveBeenCalled();
       expect(mockContainerManager.removeContainer).not.toHaveBeenCalled();
+    });
+
+    it('removes live managed containers with no active DB session', async () => {
+      mockDb.getActiveSandboxSessions.mockResolvedValue([]);
+      mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
+        createContainer({
+          containerId: 'orphan-live',
+          containerName: 'ctxmill-run-orphan-live',
+          status: 'running',
+          labels: { 'ctxmill.session-id': 'orphan-session' },
+        }),
+      ]);
+
+      await getRunReconciliation(policy)();
+
+      expect(mockContainerManager.stopContainer).toHaveBeenCalledWith('orphan-live', 10);
+      expect(mockContainerManager.removeContainer).toHaveBeenCalledWith('orphan-live', true);
     });
   });
 

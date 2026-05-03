@@ -20,7 +20,7 @@ test.describe('Dashboard', () => {
     }
   });
 
-  test('renders dashboard with agent cards', async ({ page }) => {
+  test('renders dashboard with agent cards @smoke', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
@@ -31,7 +31,7 @@ test.describe('Dashboard', () => {
     await expect(agentCard.getByTestId('agent-name')).toHaveText(agentName);
   });
 
-  test('clicking agent card navigates to agent detail', async ({ page }) => {
+  test('clicking agent card navigates to agent detail @extended', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 

@@ -287,7 +287,20 @@ export function SettingsPage() {
             >
               <LimitRow label="Max Workspace Snapshot" description="Maximum size of the workspace tar snapshot captured on suspend" value={draftTarMb} onChange={setDraftTarMb} min={1} max={1024} />
               <LimitRow label="Max Checkpoint State" description="Maximum size of the harness state checkpoint JSON" value={draftCheckpointMb} onChange={setDraftCheckpointMb} min={1} max={100} />
-              <LimitRow label="Max Workspace Upload" description="Maximum size of a workspace tarball uploaded via the Files tab" value={draftUploadMb} onChange={setDraftUploadMb} min={1} max={1024} />
+              <LimitRow label="Max Workspace Upload" description="Maximum total size of a workspace tarball uploaded via the Files tab (ADR 010)" value={draftUploadMb} onChange={setDraftUploadMb} min={1} max={1024} />
+              <ReadonlyLimitRow
+                label="Max Per-File (Workspace)"
+                description="Per-file cap inside an uploaded workspace archive. Enforced by ADR 010 server-side."
+                value="5"
+                unit="MB"
+                testId="setting-max-per-file"
+              />
+              <ReadonlyLimitRow
+                label="Workspace Archive Format"
+                description="Only .tar.gz / .tgz archives are accepted; symlinks and known executable types are rejected."
+                value=".tar.gz"
+                testId="setting-workspace-format"
+              />
             </SettingsSection>
 
             <SettingsSection
@@ -381,6 +394,33 @@ function ConfigRow({
       >
         {value || 'Not configured'}
       </span>
+    </div>
+  );
+}
+
+function ReadonlyLimitRow({
+  label,
+  description,
+  value,
+  unit,
+  testId,
+}: {
+  label: string;
+  description: string;
+  value: string;
+  unit?: string;
+  testId?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between px-5 py-3 gap-4" data-testid={testId}>
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-surface-200">{label}</p>
+        <p className="text-[11px] text-surface-400 mt-0.5">{description}</p>
+      </div>
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        <span className="text-xs text-surface-300 font-mono tabular-nums">{value}</span>
+        {unit && <span className="text-xs text-surface-400 w-8">{unit}</span>}
+      </div>
     </div>
   );
 }

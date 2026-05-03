@@ -76,7 +76,7 @@ COPY --chown=ctxmill:ctxmill --from=build /app/packages/proto/ packages/proto/
 USER root
 ENV HOME=/root
 RUN mkdir -p /workspace && chown ctxmill:ctxmill /workspace
-RUN cd /app && npm install --no-save playwright 2>/dev/null || true
+RUN cd /app && node -e "require.resolve('playwright')"
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     install -m 0755 /root/.local/bin/uv /usr/local/bin/uv && \
     install -m 0755 /root/.local/bin/uvx /usr/local/bin/uvx && \
@@ -94,7 +94,7 @@ EXPOSE 50051
 FROM harness-base AS harness-langgraph
 
 WORKDIR /app
-ENTRYPOINT ["bun", "run", "packages/sandbox-daemon/src/sandbox/daemon.ts"]
+ENTRYPOINT ["bun", "run", "--preload", "./packages/sandbox-daemon/src/observability/otel-auto-register.ts", "./packages/sandbox-daemon/src/sandbox/daemon.ts"]
 
 
 # ── Stage 4: harness-claude-agents ───────────────────────────────────────────
@@ -107,7 +107,7 @@ ENV CLAUDE_CODE_PATH=/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.j
 USER ctxmill
 WORKDIR /app
 
-ENTRYPOINT ["tini", "--", "bun", "run", "packages/sandbox-daemon/src/sandbox/daemon.ts"]
+ENTRYPOINT ["tini", "--", "bun", "run", "--preload", "./packages/sandbox-daemon/src/observability/otel-auto-register.ts", "./packages/sandbox-daemon/src/sandbox/daemon.ts"]
 
 
 # ── Stage 5: harness-pi-agent ───────────────────────────────────────────────
@@ -115,4 +115,4 @@ FROM harness-base AS harness-pi-agent
 
 WORKDIR /app
 
-ENTRYPOINT ["tini", "--", "bun", "run", "packages/sandbox-daemon/src/sandbox/daemon.ts"]
+ENTRYPOINT ["tini", "--", "bun", "run", "--preload", "./packages/sandbox-daemon/src/observability/otel-auto-register.ts", "./packages/sandbox-daemon/src/sandbox/daemon.ts"]

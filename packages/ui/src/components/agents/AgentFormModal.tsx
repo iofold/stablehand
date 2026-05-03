@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, type KeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Wrench, Check } from 'lucide-react';
 import { useAgentsStore, type Agent } from '@/stores/agents';
 import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
@@ -234,7 +235,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/80 animate-fade-in">
       <button
         type="button"
@@ -507,7 +508,8 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         excludedBuiltins={excludedBuiltins}
         onExcludedBuiltinsChange={setExcludedBuiltins}
       />
-    </div>
+    </div>,
+    document.body,
   );
 }
 

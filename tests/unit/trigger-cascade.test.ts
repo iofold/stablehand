@@ -161,6 +161,34 @@ describe('Trigger cascade protection', () => {
     expect(onFire).not.toHaveBeenCalled();
   });
 
+
+  it('does not fire triggers when durable custom event persistence fails', async () => {
+    const onFire = vi.fn().mockResolvedValue(undefined);
+    const persistEvent = vi.fn().mockImplementation(() => {
+      throw new Error('persist failed');
+    });
+    const bus = createTestBus({ persistEvent });
+    const mockDb = createMockTriggerDb();
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    manager = new EventTriggerManager(bus, mockDb as unknown as DatabaseRepository, onFire);
+
+    await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.persisted-chain',
+      taskTemplate: 'Should not fire',
+      enabled: true,
+    });
+
+    manager.emitCustomEvent('custom.persisted-chain', 'agent-1', { ok: true });
+    await settle();
+
+    expect(persistEvent).toHaveBeenCalledTimes(1);
+    expect(onFire).not.toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
+  });
+
   // ─── Regression: emitCustomEvent must fire triggers exactly once ──
 
   it('should fire onFire exactly once per emitCustomEvent (no double-fire)', async () => {

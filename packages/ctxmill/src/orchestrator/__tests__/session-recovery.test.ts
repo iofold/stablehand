@@ -284,7 +284,7 @@ describe('SandboxSessionManager session recovery', () => {
       expect(session.sessionId).toBe('sess-1');
       expect(session.status).toBe('ACTIVE');
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
-      expect(resolveToolsForAgent).toHaveBeenCalledWith([], undefined);
+      expect(resolveToolsForAgent).toHaveBeenCalledWith([], undefined, 'agent-1');
       expect(grpcClient.openSession).toHaveBeenCalledWith(expect.objectContaining({
         bootstrap: {
           case: 'restore',

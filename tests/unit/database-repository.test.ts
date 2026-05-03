@@ -36,7 +36,6 @@ describe('DatabaseRepository', () => {
         'event_store',
         'event_triggers',
         'interrupt_resume_attempts',
-        'knowledge_items',
         'messages',
         'pending_interrupts',
         'sandbox_sessions',
@@ -366,33 +365,6 @@ describe('DatabaseRepository', () => {
       const conv = await repo.createConversation(agentId);
       const messages = await repo.getMessages(conv.id);
       expect(messages).toEqual([]);
-    });
-  });
-
-  // --- Knowledge Items ---
-
-  describe('Knowledge Items', () => {
-    it('should add and retrieve knowledge items', async () => {
-      const item = await repo.addKnowledgeItem({
-        agentId: 'agent-1',
-        content: 'Always check input types',
-        category: 'strategy',
-        source: 'reflector',
-      });
-      expect(item.id).toBeDefined();
-      expect(item.content).toBe('Always check input types');
-
-      const items = await repo.getKnowledgeItems('agent-1');
-      expect(items).toHaveLength(1);
-    });
-
-    it('should filter knowledge items by category', async () => {
-      await repo.addKnowledgeItem({ agentId: 'a1', content: 'Strat 1', category: 'strategy', source: 'reflector' });
-      await repo.addKnowledgeItem({ agentId: 'a1', content: 'Fact 1', category: 'fact', source: 'human' });
-
-      const strategies = await repo.getKnowledgeItems('a1', 'strategy');
-      expect(strategies).toHaveLength(1);
-      expect(strategies[0].category).toBe('strategy');
     });
   });
 
@@ -738,6 +710,42 @@ describe('DatabaseRepository', () => {
       await repo.markScheduledEventCompleted(reclaimed[0].id, reclaimed[0].claimedAt);
       const afterComplete = await repo.getScheduledEventsDue(now + 3, 10);
       expect(afterComplete).toEqual([]);
+    });
+
+    it('enforces logical uniqueness for trigger agent, event type, and selector', async () => {
+      const { agent } = await createRuntimeTurn('Trigger Signature');
+
+      await repo.saveTrigger({
+        id: 'trigger-signature-1',
+        agentId: agent.id,
+        eventType: 'custom.ready',
+        selector: { b: 2, a: 1 },
+        taskTemplate: 'First',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      });
+
+      await expect(repo.saveTrigger({
+        id: 'trigger-signature-2',
+        agentId: agent.id,
+        eventType: 'custom.ready',
+        selector: { a: 1, b: 2 },
+        taskTemplate: 'Second',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      })).rejects.toMatchObject({ code: '23505' });
+
+      await expect(repo.saveTrigger({
+        id: 'trigger-signature-3',
+        agentId: agent.id,
+        eventType: 'custom.done',
+        selector: { a: 1, b: 2 },
+        taskTemplate: 'Third',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      })).resolves.toMatchObject({
+        id: 'trigger-signature-3',
+      });
     });
 
     it('atomically claims due callbacks and only the active claim can complete', async () => {

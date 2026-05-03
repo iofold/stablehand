@@ -6,7 +6,7 @@ import {
   waitForRunStatus,
 } from './support';
 
-test.describe('Session lifecycle', () => {
+test.describe('Session lifecycle @extended', () => {
   let agentId = '';
   let sessionId = '';
 

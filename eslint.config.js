@@ -5,7 +5,7 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['**/dist/', '**/node_modules/', '**/.ctxmill/', 'test-results/', 'playwright-report/'],
+    ignores: ['**/dist/', '**/node_modules/', '**/.ctxmill/', '**/.tmp/'],
   },
   {
     rules: {

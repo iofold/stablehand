@@ -387,7 +387,7 @@ interface TokenUsage {
 
 ---
 
-## PLAYWRIGHT E2E TEST TARGETS
+## AGENT-BROWSER E2E TEST TARGETS
 
 ### Per-Harness Coverage Needed
 1. **Text Streaming**: Verify `text_delta` events appear in UI
@@ -444,4 +444,3 @@ interface TokenUsage {
 | Tool Types | `packages/ctxmill/src/tool/types.ts` |
 | Kitchen Sink Agents | `packages/examples/kitchen-sink/agents/` |
 | Kitchen Sink Tools | `packages/examples/kitchen-sink/tools/` |
-

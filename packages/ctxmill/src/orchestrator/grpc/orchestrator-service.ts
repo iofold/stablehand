@@ -53,13 +53,13 @@ export type OrchestratorToolHandler = (
  * via the RequestTool RPC.
  */
 export interface OrchestratorToolRegistry {
-  get(toolName: string): OrchestratorToolHandler | undefined;
+  get(toolName: string, agentId?: string): OrchestratorToolHandler | undefined;
   set(toolName: string, handler: OrchestratorToolHandler): void;
-  has(toolName: string): boolean;
+  has(toolName: string, agentId?: string): boolean;
 }
 
 export interface ToolRegistryDelegate {
-  getTool(name: string): { handler: (input: unknown, ctx: import('../../tool/types.js').ToolContext) => Promise<string> } | undefined;
+  getTool(name: string, agentId?: string): { handler: (input: unknown, ctx: import('../../tool/types.js').ToolContext) => Promise<string> } | undefined;
 }
 
 export type ToolContextFactory = (ctx: ToolHandlerContext) => import('../../tool/types.js').ToolContext;
@@ -101,12 +101,12 @@ export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry
     this.makeToolContext = makeToolContext;
   }
 
-  get(toolName: string): OrchestratorToolHandler | undefined {
+  get(toolName: string, agentId?: string): OrchestratorToolHandler | undefined {
     const builtin = this.handlers.get(toolName);
     if (builtin) return builtin;
 
     if (this.delegate && this.makeToolContext) {
-      const tool = this.delegate.getTool(toolName);
+      const tool = this.delegate.getTool(toolName, agentId);
       if (tool) {
         const ctxFactory = this.makeToolContext;
         return async (args, ctx) => tool.handler(args, ctxFactory(ctx));
@@ -120,9 +120,9 @@ export class DefaultOrchestratorToolRegistry implements OrchestratorToolRegistry
     this.handlers.set(toolName, handler);
   }
 
-  has(toolName: string): boolean {
+  has(toolName: string, agentId?: string): boolean {
     if (this.handlers.has(toolName)) return true;
-    return this.delegate?.getTool(toolName) != null;
+    return this.delegate?.getTool(toolName, agentId) != null;
   }
 }
 
@@ -198,7 +198,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           }
         }
 
-        const handler = toolRegistry.get(toolName);
+        const handler = toolRegistry.get(toolName, agentId);
         if (!handler) {
           if (dedupInserted && deps.repository) {
             await completeToolDedupOrThrow(

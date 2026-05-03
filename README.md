@@ -58,8 +58,10 @@ docker compose down
 # Run the Vitest suite
 pnpm test
 
-# Run Playwright against an already-running stack
-pnpm test:e2e
+# Run browser E2E certification against an already-running stack
+agent-browser skills get core
+agent-browser skills get dogfood
+# Then follow docs/verification/e2e-testing-journey.md
 ```
 
 ### Service Endpoints
@@ -147,7 +149,7 @@ The shipped UI includes:
 | State | Zustand |
 | Agent harnesses | LangGraph, Claude Agents, PI Agent |
 | Tool providers | Local, MCP, HTTP, Composio, Artifact (S3) |
-| Testing | Vitest, Playwright |
+| Testing | Vitest, agent-browser E2E certification |
 | Monorepo | pnpm workspaces |
 
 ## Documentation

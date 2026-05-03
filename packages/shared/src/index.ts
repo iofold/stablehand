@@ -13,8 +13,6 @@ export type {
   ApiA2UIBlock,
   ApiInterruptPayload,
   ApiFeedbackRequest,
-  ApiKnowledgeItem,
-  ApiKnowledgeStats,
   ApiSandboxSession,
   ApiSessionTurn,
   SandboxSessionStatus,

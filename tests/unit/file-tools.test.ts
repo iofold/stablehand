@@ -39,9 +39,6 @@ beforeAll(() => {
     agentId: 'test-agent-id',
     conversationId: 'test-run-id',
     workspaceDir,
-    knowledge: {
-      query: async () => ({ items: [] }),
-    },
   };
 });
 

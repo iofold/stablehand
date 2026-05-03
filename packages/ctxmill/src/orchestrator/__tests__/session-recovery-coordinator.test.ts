@@ -64,6 +64,7 @@ function createMockContainerManager(): ContainerManager {
 function createMockDb(): DatabaseRepository {
   return {
     getSandboxSessionByConversation: vi.fn().mockResolvedValue(null),
+    getSandboxSession: vi.fn().mockResolvedValue(null),
     getCheckpointV2: vi.fn().mockResolvedValue(null),
     updateSandboxSessionStatus: vi.fn().mockResolvedValue(undefined),
     createSandboxSession: vi.fn().mockImplementation(async (session: {
@@ -91,6 +92,7 @@ function createMockDb(): DatabaseRepository {
     deleteSandboxSession: vi.fn().mockResolvedValue(undefined),
     createCheckpointV2: vi.fn().mockResolvedValue({ id: 'ckpt-1' }),
     getActiveSandboxSessions: vi.fn().mockResolvedValue([]),
+    getStrandedRestoringSessions: vi.fn().mockResolvedValue([]),
     getSandboxSessionsByAgent: vi.fn().mockResolvedValue([]),
   } as unknown as DatabaseRepository;
 }
@@ -307,11 +309,15 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     expect(manager.findSessionById('sess-1')).toBe(session);
   });
 
-  it('fails closed and removes the newly-created container when workspace restore fails', async () => {
+  it('fails closed and removes the newly-created container when workspace restore fails (retries exhausted)', async () => {
     vi.useFakeTimers();
+    // Always fail the workspace restore so the retry loop exhausts its
+    // budget and the session ends up in CHECKPOINTED with the container
+    // cleaned up. Make `getSandboxSession` return a row reflecting the
+    // post-failure attempts counter so the retry loop reads the latest state.
     const restoreSpy = vi
       .spyOn(WorkspaceDiffService.prototype, 'restore')
-      .mockRejectedValueOnce(new Error('workspace restore failed'));
+      .mockRejectedValue(new Error('workspace restore failed'));
     const { manager, containerManager, db, grpcClient } = createManager();
     const failingClient = createMockGrpcClient();
     failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
@@ -321,13 +327,36 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
       .mockReturnValue(grpcClient);
     (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('ACTIVE'));
     (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
+    let attempts = 0;
+    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      attempts += 1;
+      return { ...createDbSession('CHECKPOINTED'), restoreAttempts: attempts };
+    });
 
     const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
     const rejection = expect(sessionPromise).rejects.toThrow('workspace restore failed');
-    await vi.advanceTimersByTimeAsync(10_500);
+    // Advance past the retry backoff schedule (5s + 15s = 20s, plus container
+    // wait latency). 70_000ms covers the full budget.
+    await vi.advanceTimersByTimeAsync(70_000);
     await rejection;
 
-    expect(statusTransitions(db)).toEqual(['CHECKPOINTED', 'RESTORING', 'CHECKPOINTED']);
+    const transitions = statusTransitions(db);
+    // Each attempt: CHECKPOINTED -> RESTORING -> CHECKPOINTED. We have 3
+    // attempts plus the initial CHECKPOINTED demotion, so the sequence
+    // contains exactly 3x [RESTORING, CHECKPOINTED] pairs and ends with
+    // CHECKPOINTED.
+    expect(transitions[0]).toBe('CHECKPOINTED');
+    expect(transitions[transitions.length - 1]).toBe('CHECKPOINTED');
+    expect(transitions.filter((t) => t === 'RESTORING')).toHaveLength(3);
+    expect(transitions.filter((t) => t === 'CHECKPOINTED')).toHaveLength(4);
+    // The final transition has the retry budget consumed.
+    const finalCall = (db.updateSandboxSessionStatus as ReturnType<typeof vi.fn>).mock
+      .calls[(db.updateSandboxSessionStatus as ReturnType<typeof vi.fn>).mock.calls.length - 1] as unknown[];
+    expect(finalCall[2]).toMatchObject({
+      restoreAttempts: 3,
+      lastRestoreError: expect.stringContaining('workspace restore failed'),
+    });
+
     expect(containerManager.startContainer).toHaveBeenCalledWith('c-2');
     expect(containerManager.stopContainer).toHaveBeenCalledWith('c-2', 10);
     expect(containerManager.removeContainer).toHaveBeenCalledWith('c-2', true);

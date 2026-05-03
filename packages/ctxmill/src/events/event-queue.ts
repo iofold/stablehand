@@ -16,6 +16,17 @@ export interface EventQueue {
   shutdown(): Promise<void>;
 }
 
+function normalizeScheduledPayload(payload: unknown, agentId: string): unknown {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    agentId,
+  };
+}
+
 /**
  * Database-backed EventQueue implementation.
  *
@@ -45,8 +56,9 @@ export class EventQueueImpl implements EventQueue {
       event.agentId,
       JSON.stringify(event.payload),
     );
-    // Emit on the bus after persisting
-    this.bus.emit(event.type as EventName, event.payload as any);
+    // Dispatch only after explicit repository persistence succeeds; avoid a duplicate
+    // event_store write when the bus itself is persistence-configured.
+    this.bus.emitPersisted(event.type as EventName, event.payload as EventMap[EventName]);
     return String(seq);
   }
 
@@ -108,7 +120,9 @@ export class EventQueueImpl implements EventQueue {
     for (const event of dueEvents) {
       try {
         const payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
-        this.bus.emit(event.type as EventName, payload);
+        const dispatchPayload = normalizeScheduledPayload(payload, event.agentId);
+        await this.db.saveEvent(event.type, event.agentId, JSON.stringify(dispatchPayload));
+        this.bus.emitPersisted(event.type as EventName, dispatchPayload as EventMap[EventName]);
         await this.db.markScheduledEventCompleted(event.id, event.claimedAt);
       } catch (err) {
         console.error(`[EventQueueImpl] error firing scheduled event ${event.id}:`, err);

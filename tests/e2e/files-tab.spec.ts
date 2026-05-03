@@ -18,7 +18,7 @@ test.describe('Files Tab', () => {
     }
   });
 
-  test('Files tab shows seed files', async ({ page }) => {
+  test('Files tab shows seed files @smoke', async ({ page }) => {
     await page.goto(`/agents/${agentId}`, { waitUntil: 'networkidle' });
 
     // Click the Files tab
@@ -35,7 +35,7 @@ test.describe('Files Tab', () => {
     await expect(explorer.getByText('data')).toBeVisible();
   });
 
-  test('Click file shows content in viewer', async ({ page }) => {
+  test('Click file shows content in viewer @extended', async ({ page }) => {
     await page.goto(`/agents/${agentId}`, { waitUntil: 'networkidle' });
 
     // Navigate to Files tab
@@ -55,7 +55,7 @@ test.describe('Files Tab', () => {
     await expect(viewer).toContainText('Agent Workspace');
   });
 
-  test('Navigate nested directory', async ({ page }) => {
+  test('Navigate nested directory @extended', async ({ page }) => {
     await page.goto(`/agents/${agentId}`, { waitUntil: 'networkidle' });
 
     // Navigate to Files tab
@@ -73,7 +73,7 @@ test.describe('Files Tab', () => {
     await expect(explorer.getByText('sample-portfolio.json')).toBeVisible();
   });
 
-  test('Read nested file content', async ({ page }) => {
+  test('Read nested file content @extended', async ({ page }) => {
     await page.goto(`/agents/${agentId}`, { waitUntil: 'networkidle' });
 
     // Navigate to Files tab
@@ -106,7 +106,7 @@ test.describe('Files Tab', () => {
     ).toBe(true);
   });
 
-  test('Files API returns correct data', async ({ request }) => {
+  test('Files API returns correct data @smoke', async ({ request }) => {
     // List root directory
     const listRes = await request.get(
       `${API_BASE}/api/agents/${agentId}/files?path=.`,

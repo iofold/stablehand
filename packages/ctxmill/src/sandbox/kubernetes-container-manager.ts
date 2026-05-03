@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import * as tar from 'tar-stream';
 
 import {
+  buildSandboxOtelEnv,
   ContainerSemaphore,
   type ContainerInfo,
   type ContainerMetrics,
@@ -234,6 +235,13 @@ export class KubernetesContainerManager implements SandboxContainerManager {
                   },
                   env: [
                     { name: 'NODE_OPTIONS', value: `--max-old-space-size=${Math.floor(memoryMb * 0.9)}` },
+                    ...buildSandboxOtelEnv(opts.harnessName).map((entry) => {
+                      const separator = entry.indexOf('=');
+                      return {
+                        name: entry.slice(0, separator),
+                        value: entry.slice(separator + 1),
+                      };
+                    }),
                     { name: 'SANDBOX_PORT', value: '50051' },
                     { name: 'CTXMILL_HARNESS', value: opts.harnessName },
                     { name: 'ORCHESTRATOR_URL', value: process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001' },

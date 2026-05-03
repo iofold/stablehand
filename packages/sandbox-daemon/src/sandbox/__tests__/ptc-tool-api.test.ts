@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
-import type { ToolDefinition } from '../../tool/types.js';
-import { getSessionTools, setSessionTools, startToolApi } from '../daemon.js';
+import type { ToolContext, ToolDefinition } from '../../tool/types.js';
+import { getSessionTools, getToolApiToken, setSessionTools, startToolApi } from '../daemon.js';
 
 interface MockBunServeOptions {
+  hostname?: string;
   port: number;
   fetch(request: Request): Response | Promise<Response>;
 }
@@ -17,13 +19,36 @@ interface MockBunController {
 function makeTool(
   name: string,
   handler: ToolDefinition['handler'],
+  input: unknown = {},
 ): ToolDefinition {
   return {
     name,
     description: `${name} tool`,
-    input: {},
+    input,
     programmatic: true,
     handler,
+  };
+}
+
+function authHeaders(): Record<string, string> {
+  return {
+    authorization: `Bearer ${getToolApiToken()}`,
+  };
+}
+
+function jsonHeaders(): Record<string, string> {
+  return {
+    ...authHeaders(),
+    'content-type': 'application/json',
+  };
+}
+
+function makeContext(): ToolContext {
+  return {
+    agentId: 'agent-1',
+    conversationId: 'conversation-1',
+    instanceId: 'session-1',
+    workspaceDir: '/workspace/session',
   };
 }
 
@@ -75,6 +100,7 @@ describe('startToolApi', () => {
     expect(mockBun.serveSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         port: 9090,
+        hostname: '127.0.0.1',
         fetch: expect.any(Function),
       }),
     );
@@ -91,6 +117,7 @@ describe('startToolApi', () => {
 
     const response = await mockBun.dispatch(new Request('http://localhost:8080/tools', {
       method: 'GET',
+      headers: authHeaders(),
     }));
 
     expect(response.status).toBe(200);
@@ -109,6 +136,7 @@ describe('startToolApi', () => {
 
     const response = await mockBun.dispatch(new Request('http://localhost:8080/tools', {
       method: 'GET',
+      headers: authHeaders(),
     }));
 
     expect(response.status).toBe(200);
@@ -128,9 +156,7 @@ describe('startToolApi', () => {
 
     const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
+      headers: jsonHeaders(),
       body: JSON.stringify({ query: 'hello' }),
     }));
 
@@ -147,6 +173,66 @@ describe('startToolApi', () => {
     await expect(response.json()).resolves.toEqual({ ok: true, echoed: 'hello' });
   });
 
+  it('POST /tools/:name passes the current session context to handlers', async () => {
+    const mockBun = installMockBun();
+    const context = makeContext();
+    const handler = vi.fn<ToolDefinition['handler']>().mockResolvedValue(JSON.stringify({ ok: true }));
+
+    setSessionTools([makeTool('search', handler)], context);
+
+    startToolApi(8080, getSessionTools);
+
+    const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ query: 'hello' }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(handler).toHaveBeenCalledWith(
+      { query: 'hello' },
+      expect.objectContaining({
+        agentId: 'agent-1',
+        conversationId: 'conversation-1',
+        instanceId: 'session-1',
+        workspaceDir: '/workspace/session',
+      }),
+    );
+  });
+
+  it('rejects requests without the session bearer token', async () => {
+    const mockBun = installMockBun();
+
+    startToolApi(8080, getSessionTools);
+
+    const response = await mockBun.dispatch(new Request('http://localhost:8080/tools', {
+      method: 'GET',
+    }));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+  });
+
+  it('validates tool input before calling the handler', async () => {
+    const mockBun = installMockBun();
+    const handler = vi.fn<ToolDefinition['handler']>().mockResolvedValue(JSON.stringify({ ok: true }));
+
+    setSessionTools([makeTool('search', handler, z.object({ query: z.string() }))]);
+
+    startToolApi(8080, getSessionTools);
+
+    const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ query: 123 }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(handler).not.toHaveBeenCalled();
+    const payload = await response.json() as { error: string };
+    expect(payload.error).toBe('Invalid tool input');
+  });
+
   it('POST /tools/:name returns 404 for unknown tool', async () => {
     const mockBun = installMockBun();
 
@@ -154,9 +240,7 @@ describe('startToolApi', () => {
 
     const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/missing-tool', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
+      headers: jsonHeaders(),
       body: JSON.stringify({}),
     }));
 
@@ -177,9 +261,7 @@ describe('startToolApi', () => {
 
     const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
+      headers: jsonHeaders(),
       body: JSON.stringify({ query: 'hello' }),
     }));
 
@@ -202,9 +284,7 @@ describe('startToolApi', () => {
 
     const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
+      headers: jsonHeaders(),
       body: JSON.stringify({ query: 'hello' }),
     }));
 
@@ -223,9 +303,7 @@ describe('startToolApi', () => {
 
     const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/docs', {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
+      headers: jsonHeaders(),
       body: JSON.stringify({}),
     }));
 

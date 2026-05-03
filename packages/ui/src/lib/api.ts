@@ -127,36 +127,6 @@ export async function fetchMessages(agentId: string, conversationId: string) {
   return apiFetch(`${API_BASE}/agents/${agentId}/conversations/${conversationId}/messages`);
 }
 
-export async function fetchKnowledge(agentId: string, params?: { q?: string; category?: string }) {
-  return apiFetch(withQuery(`${API_BASE}/agents/${agentId}/knowledge`, params));
-}
-
-export async function fetchKnowledgeStats(agentId: string) {
-  return apiFetch(`${API_BASE}/agents/${agentId}/knowledge/stats`);
-}
-
-// ── Shared knowledge operations ─────────────────────────────────────
-
-export async function fetchSharedKnowledge(params?: { q?: string; category?: string }) {
-  return apiFetch(withQuery(`${API_BASE}/knowledge/shared`, params));
-}
-
-export async function fetchSharedKnowledgeStats() {
-  return apiFetch(`${API_BASE}/knowledge/shared/stats`);
-}
-
-export async function addSharedKnowledge(data: { content: string; category?: string; source?: string }) {
-  return apiMutate(`${API_BASE}/knowledge/shared`, 'POST', data);
-}
-
-export async function deleteSharedKnowledge(itemId: string) {
-  return apiMutate(`${API_BASE}/knowledge/shared/${itemId}`, 'DELETE');
-}
-
-export async function searchAllKnowledge(params?: { q?: string; category?: string; limit?: number }) {
-  return apiFetch(withQuery(`${API_BASE}/knowledge/search`, params));
-}
-
 export async function submitFeedback(
   agentId: string,
   data: { conversationId: string; messageId: string; type: 'thumbs_up' | 'thumbs_down' },
@@ -213,8 +183,13 @@ export async function cancelRun(agentId: string, sessionId: string) {
   return apiMutate(`${API_BASE}/agents/${agentId}/sessions/${sessionId}/cancel`, 'POST');
 }
 
-export async function deleteKnowledgeItem(agentId: string, itemId: string) {
-  return apiMutate(`${API_BASE}/agents/${agentId}/knowledge/${itemId}`, 'DELETE');
+/**
+ * Trigger a manual restore of a CHECKPOINTED sandbox session per ADR 013.
+ * The endpoint is owned by Track 2; this caller is the UI's "Retry restore"
+ * action surfaced when an automatic restore failed.
+ */
+export async function restoreSandboxSession(agentId: string, sandboxSessionId: string): Promise<void> {
+  await apiMutate(`${API_BASE}/agents/${agentId}/sandbox-sessions/${sandboxSessionId}/restore`, 'POST');
 }
 
 export interface ListFilesResponse {
@@ -482,8 +457,8 @@ export async function fetchEventTypes(): Promise<{ types: string[] }> {
 
 export interface Artifact {
   id: string;
-  agentId: string;
-  sessionId?: string;
+  agentId: string | null;
+  sessionId?: string | null;
   name: string;
   mimeType: string;
   sizeBytes: number;

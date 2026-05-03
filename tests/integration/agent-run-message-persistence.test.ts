@@ -18,7 +18,7 @@ function makeAgentDef(): AgentDefinition {
     name: 'test-agent',
     harness: 'langgraph',
     harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
-    systemPrompt: 'You are a test agent. {{knowledge}}',
+    systemPrompt: 'You are a test agent.',
     tools: ['search', 'weather'],
   };
 }

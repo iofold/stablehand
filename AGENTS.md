@@ -21,7 +21,7 @@ packages/
 tests/
   unit/                 53 files — harness adapters, config, events, sandbox, tools
   integration/          23 files — orchestrator scenarios, event flows, CRUD
-  e2e/                  32 Playwright specs — chat, background runs, visual regression, visual QA
+  e2e/                  Legacy scripted browser specs — chat, background runs, visual regression, visual QA
   compliance/           13 files — interface contract conformance via pluggable factories
   contract/             EMPTY — no shipped contract suite currently
   sandbox/              4 files — container lifecycle, suspend/resume, harness integration
@@ -61,7 +61,7 @@ docs/
 - **Constructor DI** — Services accept `Deps`/`Options` interface, stored as `private readonly` (209 instances)
 - **Logger interface** — Each service defines its own local `Logger` interface, injected via constructor (no global logger)
 - **Unused params** — Prefix with `_` (ESLint rule: `argsIgnorePattern: '^_'`)
-- **Test naming** — `*.test.ts` for Vitest (never `.spec.ts`), `*.spec.ts` for Playwright only. Colocated in `__tests__/` or top-level `tests/`
+- **Test naming** — `*.test.ts` for Vitest (never `.spec.ts`), `*.spec.ts` only for legacy scripted browser specs. Colocated in `__tests__/` or top-level `tests/`
 - **Type naming** — `*Deps` (constructor deps), `*Options` (config), `*Provider` (pluggable), `*Config` (settings)
 - **Constants** — `UPPER_SNAKE_CASE`, use `ReadonlySet<string>` for immutable collections
 - **Error classes** — Only 2 custom: `EventTimeoutError`, `ContainerLimitError`. All else uses generic `Error`
@@ -73,10 +73,11 @@ docs/
 - **ALWAYS commit after completing work** — Every agent session MUST `git add` + `git commit` its changes before stopping. Uncommitted work gets lost when other sessions clean the working tree. Do NOT push unless the user explicitly asks.
 - **Commit granularity** — One commit per logical unit of work (feature, fix, refactor). If a session implements multiple things, multiple commits are fine.
 - **Never leave dirty working tree** — If you made changes, commit them. No exceptions.
+- **Temporary files stay under `.tmp/`** — Put scratch scripts, screenshots, agent-browser artifacts, test result artifacts, logs, downloads, and other generated investigation files under `.tmp/`. Do not create root-level temporary directories such as browser reports, `test-results/`, or ad hoc scratch folders outside `.tmp/`.
 - **Visually verify UI changes** — After any change that touches routes returning data to the UI, API response shapes, or frontend components:
   1. Rebuild the Docker stack (`docker compose up --build -d`)
-  2. Write a Playwright script in `.tmp/` that navigates the affected screens, interacts with them, and takes screenshots
-  3. Run the script and feed each screenshot to `look_at` with a specific critique goal (e.g., "Are sessions listed? Do status badges render? Any broken layouts?")
+  2. Use `agent-browser` to navigate the affected screens, interact with them, and save screenshots/snapshots/console/error/network evidence under `.tmp/`
+  3. Feed each screenshot to `look_at` with a specific critique goal (e.g., "Are sessions listed? Do status badges render? Any broken layouts?")
   4. Fix any issues surfaced before marking the task complete
   This catches shape mismatches, empty states, and rendering failures that unit tests miss.
 
@@ -107,7 +108,8 @@ pnpm typecheck                             # TypeScript check all packages
 
 # Test
 pnpm test                                  # Vitest (unit + integration + compliance)
-pnpm test:e2e                              # Playwright (requires Docker stack running)
+agent-browser skills get core              # Browser E2E certification workflow
+agent-browser skills get dogfood           # Deep exploratory browser QA workflow
 # No contract test command/job unless restored
 
 # Docker Helpers
@@ -151,8 +153,9 @@ docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile
 - **Durable HITL** — Interrupt resolution persisted DB-first. Sessions resume from DB state on restart. Replaces in-memory-only interrupt tracking.
 - **A2UI render tool** — Intrinsic tool (a2ui-render) for agent-driven structured UI blocks. Replaces legacy inline A2UI extraction from message content.
 - **Daemon tools** — Tool location 'daemon' for tools executed by sandbox daemon process (not harness or orchestrator). Currently: artifact_upload, artifact_download.
-- **CI matrix** — Node 22 + 24. Two jobs: test (unit/integration), e2e (Playwright + Docker).
+- **CI matrix** — Node 22 + 24. The test job covers unit/integration gates; browser certification is agent-browser against Docker.
 - **Service ports** — UI: 3200, API: 3002 (nginx-proxied 3001), PostgreSQL: 5433, gRPC sandbox: 50051, Egress proxy: 3128, PgAdmin: 5050 (debug profile).
+- **Local stack URL** — Treat `https://platform.dev.example.com` as the canonical browser entrypoint for the local Docker stack. The direct fallback remains `http://localhost:3200` when the local domain route is unavailable.
 
 <!-- br-agent-instructions-v1 -->
 

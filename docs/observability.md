@@ -7,6 +7,7 @@ This guide describes the observability features available in ctxmill for monitor
 ctxmill provides several layers of observability:
 
 - **LangSmith Tracing**: Opt-in tracing for agent execution flows, LLM calls, and tool usage.
+- **SigNoz / OpenTelemetry Tracing**: Local Docker orchestrator traces via Node auto-instrumentation.
 - **Application Logging**: Fastify-based orchestrator logs and harness-level console output.
 - **Event Audit Trail**: A persistent record of all system events in PostgreSQL.
 - **Container Metrics**: Real-time stats on sandbox container concurrency and lifecycle.
@@ -40,6 +41,14 @@ Tracing is implemented at the harness level. The orchestrator forwards `LANGSMIT
 To disable tracing, remove or unset `LANGSMITH_TRACING` in your `.env` and restart. When disabled, the `langsmith` package is not imported, ensuring zero performance overhead.
 
 For more details, see [LangSmith Tracing](./langsmith-tracing.md).
+
+## SigNoz / OpenTelemetry Tracing
+
+The Docker Compose orchestrator service can be preloaded with Node OpenTelemetry auto-instrumentation using the optional `docker-compose.signoz.yml` override. Sandbox harness images preload the same instrumentation through Bun. The override exports to the centralized dev2 SigNoz collector, not to a local SigNoz or local ClickHouse stack.
+
+This captures orchestrator-side HTTP, Fastify, PostgreSQL, and related Node spans under `ctxmill-orchestrator`, plus sandbox daemon spans under `ctxmill-sandbox-<harness>`. Keep `deployment.environment` resource attributes accurate for the source environment so dev2 SigNoz can distinguish local, dev1, dev2, and sandbox traffic.
+
+For setup and trace verification commands, see [SigNoz for Debugging](./signoz-for-debugging.md).
 
 ## Application Logging
 
@@ -170,7 +179,7 @@ If a run hangs, check the event stream to see which step failed to complete. Not
 It's important to note that ctxmill currently lacks several standard observability features:
 
 - **No Structured Logging Library**: Logs are plain text or default Fastify JSON; there is no unified Pino or Winston setup across all services.
-- **No OpenTelemetry**: Distributed tracing is limited to LangSmith for agents; there is no OTEL collector or instrumentation for the orchestrator.
+- **Limited OpenTelemetry**: Local Docker deploys can emit orchestrator and sandbox daemon traces to an OTLP collector; Kubernetes sandbox Jobs receive the same sandbox OTEL environment. Detailed model/provider traces still rely on LangSmith unless a harness adds deeper model-level OTEL export.
 - **No Prometheus Exporter**: Metrics are available via JSON API but not exported in Prometheus format.
 - **No Grafana Dashboards**: No pre-built dashboards are provided.
 - **No Correlation IDs**: There is no unified ID to trace a single request across the orchestrator and sandbox containers.

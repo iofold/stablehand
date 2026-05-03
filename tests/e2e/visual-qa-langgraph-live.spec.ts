@@ -5,7 +5,7 @@ import { ScreenshotCapture } from './visual-qa/screenshot-capture.js';
 
 const HARNESS = 'langgraph';
 
-test.describe(`${HARNESS} Live Streaming Visual QA`, () => {
+test.describe(`${HARNESS} Live Streaming Visual QA @extended`, () => {
   test.skip(!hasHarnessKey(HARNESS), `Skipping: ${HARNESS} API key not available`);
 
   let agentId = '';

@@ -13,10 +13,6 @@ data/
 package-lock.json
 
 # Playwright
-test-results/
-playwright-report/
-playwright-report-docker/
-blob-report/
 .playwright-mcp/
 
 # Artifacts

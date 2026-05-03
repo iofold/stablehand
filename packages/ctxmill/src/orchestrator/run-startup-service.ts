@@ -29,7 +29,7 @@ type ExecutionDeps = {
     DatabaseRepository,
     'addMessage' | 'createConversation' | 'createTurn' | 'deleteMessage' | 'getConversation' | 'getMessages' | 'getTurn' | 'updateTurn'
   >;
-  eventBus?: Pick<TypedEventBus, 'emit' | 'emitAsync'>;
+  eventBus?: Pick<TypedEventBus, 'emit'> & Partial<Pick<TypedEventBus, 'emitAsync'>>;
   sessionManager?: { checkConcurrencyLimit(agentId: string): void } | null;
   agentSessionService: Pick<AgentSessionService, 'executeSession'>;
 };
@@ -59,6 +59,21 @@ export interface PreparedRunStart {
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function emitStartupEvent<K extends Parameters<TypedEventBus['emit']>[0]>(
+  eventBus: ExecutionDeps['eventBus'],
+  event: K,
+  payload: Parameters<TypedEventBus['emit']>[1],
+): Promise<void> {
+  if (!eventBus) return;
+
+  if (eventBus.emitAsync) {
+    await eventBus.emitAsync(event, payload as never);
+    return;
+  }
+
+  await eventBus.emit(event, payload as never);
 }
 
 export class RunStartupService {
@@ -151,8 +166,8 @@ export class RunStartupService {
     }
 
     try {
-      if (emitUserMessageEvent && executionDeps.eventBus) {
-        await this.emitStartupEvent('user.message', {
+      if (emitUserMessageEvent) {
+        await emitStartupEvent(executionDeps.eventBus, 'user.message', {
           agentId,
           conversationId: resolvedConversationId,
           messageId: message.id,
@@ -161,7 +176,7 @@ export class RunStartupService {
         });
       }
 
-      await this.emitStartupEvent('turn.pending', {
+      await emitStartupEvent(executionDeps.eventBus, 'turn.pending', {
         turnId: turn.id,
         agentId,
         conversationId: resolvedConversationId,
@@ -226,20 +241,6 @@ export class RunStartupService {
         throw err;
       }
     });
-  }
-
-
-  private async emitStartupEvent<K extends Parameters<TypedEventBus['emit']>[0]>(
-    eventBus: Pick<TypedEventBus, 'emit' | 'emitAsync'> | undefined,
-    event: K,
-    payload: Parameters<TypedEventBus['emit']>[1],
-  ): Promise<void> {
-    if (!eventBus) return;
-    if ('emitAsync' in eventBus && typeof eventBus.emitAsync === 'function') {
-      await eventBus.emitAsync(event, payload as never);
-      return;
-    }
-    eventBus.emit(event, payload as never);
   }
 
   parseHarnessConfig(configJson: string | null | undefined): Record<string, unknown> {

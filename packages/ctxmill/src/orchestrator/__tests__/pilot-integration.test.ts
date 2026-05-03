@@ -174,6 +174,8 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
       return { ...updated };
     }),
     getAllRuns: vi.fn(async () => Array.from(runs.values()).map((run) => ({ ...run }))),
+    getPendingInterrupt: vi.fn(async () => null),
+    resolveInterrupt: vi.fn(async () => undefined),
     createWebhook: vi.fn(async (data: {
       id: string;
       agentId: string;

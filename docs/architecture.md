@@ -26,7 +26,7 @@ The supported workflow in this repo is `docker compose`.
 | UI (React, nginx)         | <------------------> | Orchestrator         |
 | - dashboard               |                      | - Fastify API        |
 | - chat                    |                      | - SSE + HITL         |
-| - knowledge               |                      | - triggers / runs    |
+| - agent management        |                      | - triggers / runs    |
 | - triggers / flow / files |                      +----------+-----------+
 +---------------------------+                      |          |
                                                    | postgres | Docker socket
@@ -45,7 +45,7 @@ The supported workflow in this repo is `docker compose`.
 
 ### 1. Orchestrator
 
-The orchestrator is a Fastify server that wires together the database, SSE manager, interrupt manager, sandbox session manager, knowledge routes, trigger routes, and agent execution services.
+The orchestrator is a Fastify server that wires together the database, SSE manager, interrupt manager, sandbox session manager, trigger routes, and agent execution services.
 
 Relevant code:
 
@@ -133,26 +133,15 @@ Relevant code:
 - [workspace/ensure.ts](/path/to/stablehand/packages/ctxmill/src/workspace/ensure.ts)
 - [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
 
-### 7. Knowledge and External Learning Hooks
+### 7. External Learning Hooks
 
-The repo ships:
-
-- A `KnowledgeStore` abstraction
-- An in-memory knowledge store
-- A Mem0-backed store
-- A simple context provider
-- Event/webhook signals that external learning modules can consume and use to write curated knowledge back through the knowledge APIs
-
-The Docker preset currently selects `pgvector`, but the factory still falls back to the in-memory knowledge store because a pgvector-backed knowledge store is not wired into the shipped runtime yet.
+CTXMill emits run, message, tool, feedback, and custom events that external learning or evaluation services can consume. Core CTXMill does not own a memory layer; domain-specific retrieval should live in explicit tools, MCP servers, HTTP providers, or downstream services connected through webhooks/events.
 
 Relevant code:
 
-- [knowledge/store.ts](/path/to/stablehand/packages/ctxmill/src/knowledge/store.ts)
-- [knowledge/mem0-store.ts](/path/to/stablehand/packages/ctxmill/src/knowledge/mem0-store.ts)
 - [events/bus.ts](/path/to/stablehand/packages/ctxmill/src/events/bus.ts)
 - [orchestrator/webhook-events.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/webhook-events.ts)
 - [config/presets.ts](/path/to/stablehand/packages/ctxmill/src/config/presets.ts)
-- [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
 
 ### 8. Sandbox Infrastructure
 
@@ -239,7 +228,6 @@ PostgreSQL is the current system of record for:
 - `agents` — Agent definitions (name, model, harness, tools, status)
 - `conversations` — Chat conversation sessions per agent
 - `messages` — Individual messages within conversations
-- `knowledgeItems` — Agent-specific knowledge entries
 - `agentRuns` — Run lifecycle (status, timing, errors, session, pause/resume)
 - `eventStore` — Persisted event log
 - `suspendedRuns` — Runs waiting on external events
@@ -268,10 +256,9 @@ The shipped frontend is broader than a basic dashboard/chat shell. It includes:
 - Events
 - Tools
 - Agent flow
-- Knowledge
 - Triggers
 - Settings
-- Overview, Knowledge, Runs, Tools, Files, Subagents, and Secrets tabs inside agent detail
+- Overview, Sessions, Runs, Tools, Files, Subagents, and Secrets tabs inside agent detail
 
 Relevant code:
 
@@ -282,10 +269,8 @@ Relevant code:
 ## Current Limitations
 
 - Harnesses execute inside Docker containers (one container per run).
-- `pgvector` and `AGE` are not part of the active shipped knowledge path.
-- Learning/reflection is external to core CTXMill; use webhooks/events plus knowledge APIs for that layer.
+- Learning/reflection is external to core CTXMill; use webhooks/events plus explicit tools or services for that layer.
 - Suspend/resume is event-driven run resumption, not compute snapshot restoration.
-- Shared knowledge APIs are present, but the default in-memory fallback does not provide full shared-search behavior.
 
 ## Roadmap Boundary
 
@@ -293,7 +278,6 @@ If a document describes any of the following as current behavior, treat it as fu
 
 - Firecracker microVM execution
 - VM snapshots or exact process-state resume
-- AGE-backed graph knowledge search
-- A fully wired pgvector-backed knowledge store
+- Graph or vector-backed retrieval as a first-class runtime subsystem
 
 That future work is tracked in plan documents, especially [2026-03-17-sandbox-execution-requirements.md](/path/to/stablehand/docs/plans/2026-03-17-sandbox-execution-requirements.md).

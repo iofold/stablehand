@@ -191,24 +191,112 @@ export class TypedEventBus {
     this.persistEvent = options?.persistEvent;
   }
 
+  /**
+   * Fire-and-forget durable emit. Listener dispatch is deferred until persistence
+   * succeeds. Persistence failure emits bus.error and prevents listener dispatch.
+   * Use emitAsync() when caller rollback/cleanup depends on persistence success.
+   */
   emit<K extends EventName>(event: K, payload: EventMap[K]): void {
-    const prepared = this.preparePayload(payload);
-    const persisted = this.persist(event, this.agentIdFor(prepared), JSON.stringify(prepared));
-    if (persisted && typeof persisted.then === 'function') {
-      persisted.then(() => this.dispatch(event, prepared)).catch((err: unknown) => {
-        this.reportBusError('persist', event, err);
-      });
+    this.ensureTimestamp(payload);
+
+    if (!this.persistEvent) {
+      this.dispatchListeners(event, payload);
       return;
     }
-    if (persisted !== false) {
-      this.dispatch(event, prepared);
+
+    const agentId = 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
+    try {
+      const persisted = this.persistEvent(event, agentId, JSON.stringify(payload));
+      if (persisted && typeof persisted.then === 'function') {
+        persisted
+          .then(() => this.dispatchListeners(event, payload))
+          .catch((err: unknown) => {
+            this.reportBusError('persist', event, err, `[EventBus] persist error for ${event}:`);
+          });
+        return;
+      }
+    } catch (err) {
+      this.reportBusError('persist', event, err, `[EventBus] persist error for ${event}:`);
+      return;
+    }
+
+    this.dispatchListeners(event, payload);
+  }
+
+  /**
+   * Awaitable durable emit for boundaries that must roll back when persistence fails.
+   */
+  async emitAsync<K extends EventName>(event: K, payload: EventMap[K]): Promise<void> {
+    await this.persistThenDispatch(event, payload, { rejectOnPersistFailure: true });
+  }
+
+  /**
+   * Explicit post-persist dispatch hook. Use only when a repository/service already
+   * durably persisted the event and wants normal listener dispatch without writing a
+   * duplicate event_store row.
+   */
+  emitPersisted<K extends EventName>(event: K, payload: EventMap[K]): void {
+    this.ensureTimestamp(payload);
+    this.dispatchListeners(event, payload);
+  }
+
+  private ensureTimestamp(payload: EventPayloadBase): void {
+    if (!payload.timestamp) {
+      payload.timestamp = Date.now();
     }
   }
 
-  async emitAsync<K extends EventName>(event: K, payload: EventMap[K]): Promise<void> {
-    const prepared = this.preparePayload(payload);
-    await this.persistAsync(event, this.agentIdFor(prepared), JSON.stringify(prepared));
-    this.dispatch(event, prepared);
+  private async persistThenDispatch<K extends EventName>(
+    event: K,
+    payload: EventMap[K],
+    options: { rejectOnPersistFailure?: boolean } = {},
+  ): Promise<void> {
+    this.ensureTimestamp(payload);
+
+    if (this.persistEvent) {
+      const agentId = 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
+      try {
+        await this.persistEvent(event, agentId, JSON.stringify(payload));
+      } catch (err) {
+        this.reportBusError('persist', event, err, `[EventBus] persist error for ${event}:`);
+        if (options.rejectOnPersistFailure) {
+          throw err;
+        }
+        return;
+      }
+    }
+
+    this.dispatchListeners(event, payload);
+  }
+
+  private dispatchListeners(event: string, payload: unknown): void {
+    // Get all listeners; call each in a try/catch so one failure doesn't block others
+    const listeners = this.emitter.rawListeners(event);
+    for (const listener of listeners) {
+      try {
+        const result = listener(payload);
+        // If the handler returns a promise, catch rejections
+        if (result && typeof result.catch === 'function') {
+          (result as Promise<unknown>).catch((err: unknown) => {
+            this.reportBusError('handler', event, err, `[EventBus] handler error for ${event}:`);
+          });
+        }
+      } catch (err) {
+        this.reportBusError('handler', event, err, `[EventBus] handler error for ${event}:`);
+      }
+    }
+  }
+
+  private reportBusError(source: 'persist' | 'handler', event: string, err: unknown, message: string): void {
+    console.error(message, err);
+    try {
+      this.emitter.emit('bus.error', {
+        source,
+        event,
+        error: err instanceof Error ? err.message : String(err),
+        timestamp: Date.now(),
+      });
+    } catch { /* prevent infinite loop if bus.error handler itself fails */ }
   }
 
   /**
@@ -218,79 +306,61 @@ export class TypedEventBus {
    */
   emitCustom(eventType: string, agentId: string, payload: Record<string, unknown>): void {
     const fullPayload = { ...payload, timestamp: payload.timestamp ?? Date.now() };
-    const persisted = this.persist(eventType, agentId, JSON.stringify(fullPayload));
-    if (persisted && typeof persisted.then === 'function') {
-      persisted.then(() => this.dispatch(eventType, fullPayload)).catch((err: unknown) => {
-        this.reportBusError('persist', eventType, err);
-      });
+
+    if (!this.persistEvent) {
+      this.dispatchListeners(eventType, fullPayload);
       return;
     }
-    if (persisted !== false) {
-      this.dispatch(eventType, fullPayload);
+
+    try {
+      const persisted = this.persistEvent(eventType, agentId, JSON.stringify(fullPayload));
+      if (persisted && typeof persisted.then === 'function') {
+        persisted
+          .then(() => this.dispatchListeners(eventType, fullPayload))
+          .catch((err: unknown) => {
+            this.reportBusError('persist', eventType, err, `[EventBus] persist error for custom ${eventType}:`);
+          });
+        return;
+      }
+    } catch (err) {
+      this.reportBusError('persist', eventType, err, `[EventBus] persist error for custom ${eventType}:`);
+      return;
     }
+
+    this.dispatchListeners(eventType, fullPayload);
   }
 
   async emitCustomAsync(eventType: string, agentId: string, payload: Record<string, unknown>): Promise<void> {
+    await this.persistThenDispatchCustom(eventType, agentId, payload, { rejectOnPersistFailure: true });
+  }
+
+  emitCustomPersisted(eventType: string, payload: Record<string, unknown>): void {
     const fullPayload = { ...payload, timestamp: payload.timestamp ?? Date.now() };
-    await this.persistAsync(eventType, agentId, JSON.stringify(fullPayload));
-    this.dispatch(eventType, fullPayload);
+    this.dispatchListeners(eventType, fullPayload);
   }
 
-  private preparePayload<T extends { timestamp: number }>(payload: T): T {
-    if (!payload.timestamp) {
-      payload.timestamp = Date.now();
-    }
-    return payload;
-  }
+  private async persistThenDispatchCustom(
+    eventType: string,
+    agentId: string,
+    payload: Record<string, unknown>,
+    options: { rejectOnPersistFailure?: boolean } = {},
+  ): Promise<void> {
+    const fullPayload = { ...payload, timestamp: payload.timestamp ?? Date.now() };
 
-  private agentIdFor(payload: object): string {
-    return 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
-  }
-
-  private persist(type: string, agentId: string, payload: string): false | void | Promise<void> {
-    if (!this.persistEvent) return undefined;
-    try {
-      return this.persistEvent(type, agentId, payload);
-    } catch (err) {
-      this.reportBusError('persist', type, err);
-      return false;
-    }
-  }
-
-  private async persistAsync(type: string, agentId: string, payload: string): Promise<void> {
-    const persisted = this.persist(type, agentId, payload);
-    if (persisted === false) {
-      throw new Error(`Event persistence failed for ${type}`);
-    }
-    await persisted;
-  }
-
-  private dispatch(event: string, payload: unknown): void {
-    const listeners = this.emitter.rawListeners(event);
-    for (const listener of listeners) {
+    if (this.persistEvent) {
       try {
-        const result = listener(payload);
-        if (result && typeof result.catch === 'function') {
-          (result as Promise<unknown>).catch((err: unknown) => {
-            this.reportBusError('handler', event, err);
-          });
-        }
+        await this.persistEvent(eventType, agentId, JSON.stringify(fullPayload));
       } catch (err) {
-        this.reportBusError('handler', event, err);
+        this.reportBusError('persist', eventType, err, `[EventBus] persist error for custom ${eventType}:`);
+        if (options.rejectOnPersistFailure) {
+          throw err;
+        }
+        return;
       }
     }
-  }
 
-  private reportBusError(source: 'persist' | 'handler', event: string, err: unknown): void {
-    console.error(`[EventBus] ${source} error for ${event}:`, err);
-    try {
-      this.emitter.emit('bus.error', {
-        source,
-        event,
-        error: err instanceof Error ? err.message : String(err),
-        timestamp: Date.now(),
-      });
-    } catch { /* prevent infinite loop if bus.error handler itself fails */ }
+    // Dispatch to subscribers (trigger manager subscribes with raw event type strings)
+    this.dispatchListeners(eventType, fullPayload);
   }
 
   on<K extends EventName>(event: K, handler: (payload: EventMap[K]) => void | Promise<void>): void;

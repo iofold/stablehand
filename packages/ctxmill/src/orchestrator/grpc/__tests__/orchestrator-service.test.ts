@@ -576,7 +576,6 @@ describe('createGrpcRoutes', () => {
       instanceId: ctx.sessionId,
       requestId: ctx.requestId,
       workspaceDir: '/workspace',
-      knowledge: { query: async () => ({ items: [] }) },
     }));
 
     expect(registry.has('http-health-check')).toBe(true);
@@ -650,7 +649,6 @@ describe('createGrpcRoutes', () => {
       instanceId: ctx.sessionId,
       requestId: ctx.requestId,
       workspaceDir: '/workspace',
-      knowledge: { query: async () => ({ items: [] }) },
     }));
 
     expect(grpcRegistry.has('detect-column-mapping')).toBe(false);
@@ -695,7 +693,6 @@ describe('createGrpcRoutes', () => {
       instanceId: ctx.sessionId,
       requestId: ctx.requestId,
       workspaceDir: '/workspace',
-      knowledge: { query: async () => ({ items: [] }) },
     }));
     registerDefaultToolHandlers(grpcRegistry, eventBus);
 
@@ -710,5 +707,68 @@ describe('createGrpcRoutes', () => {
 
     expect(resp.error).toBeFalsy();
     expect(JSON.parse(resp.result)).toEqual({ columns: ['date', 'amount'] });
+  });
+
+  it('requestTool resolves duplicate HTTP tool names using the requesting agentId', async () => {
+    const { DefaultToolRegistry } = await import('../../../tool/registry.js');
+    const { z } = await import('zod');
+    const eventBus = makeEventBus();
+
+    const defRegistry = new DefaultToolRegistry();
+    defRegistry.addProvider({
+      name: 'http-agent-a',
+      async listTools() {
+        return [{
+          name: 'shared-http-tool',
+          description: 'Agent A tool',
+          input: z.object({}),
+          location: 'orchestrator' as const,
+          handler: async () => JSON.stringify({ owner: 'agent-a' }),
+        }];
+      },
+      async execute() { return ''; },
+    });
+    defRegistry.addProvider({
+      name: 'http-agent-b',
+      async listTools() {
+        return [{
+          name: 'shared-http-tool',
+          description: 'Agent B tool',
+          input: z.object({}),
+          location: 'orchestrator' as const,
+          handler: async () => JSON.stringify({ owner: 'agent-b' }),
+        }];
+      },
+      async execute() { return ''; },
+    });
+    await defRegistry.refresh();
+
+    const grpcRegistry = new DefaultOrchestratorToolRegistry(defRegistry, (ctx) => ({
+      agentId: ctx.agentId,
+      conversationId: '',
+      instanceId: ctx.sessionId,
+      requestId: ctx.requestId,
+      workspaceDir: '/workspace',
+    }));
+    registerDefaultToolHandlers(grpcRegistry, eventBus);
+    const impl = createOrchestratorServiceImpl({ eventBus, toolRegistry: grpcRegistry });
+
+    const agentAResp = await impl.requestTool(create(RequestToolRequestSchema, {
+      sessionId: 'run-a',
+      agentId: 'agent-a',
+      toolName: 'shared-http-tool',
+      argsJson: '{}',
+      requestId: 'req-a',
+    }));
+    const agentBResp = await impl.requestTool(create(RequestToolRequestSchema, {
+      sessionId: 'run-b',
+      agentId: 'agent-b',
+      toolName: 'shared-http-tool',
+      argsJson: '{}',
+      requestId: 'req-b',
+    }));
+
+    expect(JSON.parse(agentAResp.result)).toEqual({ owner: 'agent-a' });
+    expect(JSON.parse(agentBResp.result)).toEqual({ owner: 'agent-b' });
   });
 });

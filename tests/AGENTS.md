@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-96+ test files across 7 categories. Vitest for unit/integration/compliance/contract/sandbox, Playwright for E2E. Compliance suites enforce interface contracts via pluggable factory functions. Additionally, 33 colocated test files live in `__tests__/` directories within `packages/ctxmill/src/`.
+96+ test files across 7 categories. Vitest covers unit/integration/compliance/contract/sandbox. Browser E2E certification uses agent-browser; legacy scripted browser specs remain as supporting regression fixtures until migrated. Compliance suites enforce interface contracts via pluggable factory functions. Additionally, 33 colocated test files live in `__tests__/` directories within `packages/ctxmill/src/`.
 
 ## STRUCTURE
 
@@ -12,7 +12,7 @@ integration/          19 files — Multi-component workflows (orchestrator, CRUD
 compliance/           13 files — Interface contract suites (event bus, queue, knowledge, context, executor)
 contract/             EMPTY — no shipped contract suite currently
 sandbox/              4 files — Container manager, suspend/resume, harness subagents (mocked Docker)
-e2e/                  8 Playwright specs + visual snapshots — Chat, background runs, dashboard, session lifecycle
+e2e/                  Legacy scripted browser specs + visual snapshots — Chat, background runs, dashboard, session lifecycle
 stress/               Stress test agents and tools — NOT in main test suite, run separately
 utils/                Shared helpers — test-db.ts, event-bus-test-helpers.ts
 setup-strict.ts       Strict mode — console.error/warn interception
@@ -32,14 +32,15 @@ setup-strict.ts       Strict mode — console.error/warn interception
 | Mock event bus | `utils/event-bus-test-helpers.ts` | `createTestBus()`, `collectEvents()`, `waitForEmit()`, mock factories |
 | Write a compliance suite | `compliance/*.compliance.ts` | Export factory function, consumers pass their implementation |
 | Opt out of strict mode | Call `allowConsoleErrors()` in `beforeEach` | Suppresses CRITICAL/FOREIGN KEY/mount failure detection |
-| Add an E2E test | `e2e/*.spec.ts` + `e2e/support.ts` | Playwright, select by `data-testid`, requires Docker stack |
+| Add browser E2E certification | `docs/verification/e2e-testing-journey.md` + `.tmp/agent-browser-*` evidence | agent-browser, `snapshot -i` refs, requires Docker stack |
 | Add visual regression | `e2e/visual.spec.ts` | Snapshots in `visual.spec.ts-snapshots/` |
 | Add colocated unit test | `packages/ctxmill/src/{module}/__tests__/*.test.ts` | For module-specific tests close to source |
 
 ## CONVENTIONS (differs from source)
 
 - **Unit/Integration/Compliance** — `*.test.ts` naming (never `.spec.ts`)
-- **E2E** — `*.spec.ts` naming (Playwright convention)
+- **E2E** — agent-browser evidence is the canonical browser certification path; legacy `*.spec.ts` browser fixtures are supporting regression coverage.
+- **E2E artifacts** — Keep agent-browser snapshots, traces, videos, screenshots, and ad hoc test output under `.tmp/`; do not write `test-results/`, browser reports, or ad hoc output at the repo root.
 - **Compliance suites** — `*.compliance.ts` — export function that takes factory options, consumers call with their implementation
 - **Mocking** — Factory functions returning objects with `vi.fn()` methods (no class mocks). Pattern: `createMock*()` functions
 - **Async testing** — `await settle()` for event propagation; never callbacks. `waitForEmit()` for event-driven assertions
@@ -82,8 +83,7 @@ setup-strict.ts       Strict mode — console.error/warn interception
 - Docker stack must be running (`docker compose up --build -d`)
 - Sequential execution: `fullyParallel: false`, `workers: 1`
 - Timeout: 120 seconds per test
-- Base URL: `http://localhost:3200` (configurable via `PLAYWRIGHT_BASE_URL`)
-- API URL: `http://localhost:3002` (configurable via `PLAYWRIGHT_API_BASE_URL`)
-- Artifacts on failure: traces, screenshots, videos
-- CI retries: 1 retry in CI, 0 locally
-- Install browsers: `npx playwright install chromium`
+- Browser URL: `https://platform.dev.example.com` for local stack certification, with `http://localhost:3200` as direct fallback.
+- API URL: `https://platform.dev.example.com/api` for ctxmill CLI certification, with `http://localhost:3002` as direct fallback.
+- Artifacts on failure: agent-browser snapshots, screenshots, videos, console output, runtime errors, and network request logs.
+- Install browser support if needed: `agent-browser install`.

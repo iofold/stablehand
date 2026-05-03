@@ -94,15 +94,15 @@ const manifestModelConfigSchema = z.object({
 });
 
 const manifestHarnessConfigSchema = z.object({
-  provider: z.string().min(1),
-  model: z.string().min(1),
+  provider: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
   apiKeyRef: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().positive().optional(),
   topP: z.number().min(0).max(1).optional(),
   reasoning: z.enum(['off', 'low', 'medium', 'high']).optional(),
   baseUrl: z.url().optional(),
-});
+}).catchall(z.unknown());
 
 const manifestSpecSchema = z.object({
   harness: z.string().min(1),

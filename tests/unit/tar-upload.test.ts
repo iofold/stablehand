@@ -11,6 +11,7 @@ interface TarEntryInput {
   content?: string;
   type?: string;
   linkname?: string;
+  mode?: number;
 }
 
 interface TarPackEntry {
@@ -18,6 +19,7 @@ interface TarPackEntry {
   size?: number;
   type?: string;
   linkname?: string;
+  mode?: number;
 }
 
 interface TarPack {
@@ -37,17 +39,17 @@ async function createTarGz(entries: TarEntryInput[]): Promise<Buffer> {
 
   for (const entry of entries) {
     if (entry.type === 'directory') {
-      pack.entry({ name: entry.name, type: 'directory' });
+      pack.entry({ name: entry.name, type: 'directory', mode: entry.mode });
       continue;
     }
 
     if (entry.type === 'symlink' || entry.type === 'link' || entry.type === 'fifo') {
-      pack.entry({ name: entry.name, type: entry.type, linkname: entry.linkname ?? '' });
+      pack.entry({ name: entry.name, type: entry.type, linkname: entry.linkname ?? '', mode: entry.mode });
       continue;
     }
 
     const content = entry.content ?? '';
-    pack.entry({ name: entry.name, size: Buffer.byteLength(content), type: entry.type ?? 'file' }, content);
+    pack.entry({ name: entry.name, size: Buffer.byteLength(content), type: entry.type ?? 'file', mode: entry.mode }, content);
   }
 
   pack.finalize();
@@ -89,6 +91,20 @@ describe('validateAndExtractTarball', () => {
     expect(result).toEqual({ files: 2, totalBytes: 9 });
     await expect(fs.readFile(join(targetDir, 'a.txt'), 'utf8')).resolves.toBe('alpha');
     await expect(fs.readFile(join(targetDir, 'b.txt'), 'utf8')).resolves.toBe('beta');
+  });
+
+  it('preserves executable mode bits from tar headers', async () => {
+    const archive = await createTarGz([
+      { name: 'bin/pilot', content: '#!/bin/sh\necho ok\n', mode: 0o755 },
+      { name: 'plain.txt', content: 'not executable', mode: 0o644 },
+    ]);
+
+    await validateAndExtractTarball(bufferToStream(archive), targetDir);
+
+    const executableMode = (await fs.stat(join(targetDir, 'bin', 'pilot'))).mode & 0o777;
+    const plainMode = (await fs.stat(join(targetDir, 'plain.txt'))).mode & 0o777;
+    expect(executableMode).toBe(0o755);
+    expect(plainMode).toBe(0o644);
   });
 
   it('extracts valid tar.gz with nested directories', async () => {

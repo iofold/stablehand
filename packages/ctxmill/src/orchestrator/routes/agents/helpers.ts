@@ -9,11 +9,10 @@ import { parseStoredHarnessConfig } from '../../session-manager/session-agent-de
 import { validateAgentHttpToolsConfig } from '../../http-tools.js';
 import type { AgentHttpToolDefinition, AgentRouteOptions, StoredAgent } from './types.js';
 
-export function safeError(message: string, err: unknown): { error: string; detail?: string; stack?: string } {
+export function safeError(message: string, err: unknown): { error: string; detail?: string } {
   console.error('[agents] endpoint error:', err);
   const detail = err instanceof Error ? err.message : String(err);
-  const stack = err instanceof Error ? err.stack : undefined;
-  return { error: message, detail, ...(stack ? { stack } : {}) };
+  return { error: message, detail };
 }
 
 export async function chownRecursive(dir: string, uid: number, gid: number): Promise<void> {
@@ -83,21 +82,7 @@ export function getHttpToolNames(httpTools?: AgentHttpToolDefinition[] | unknown
 }
 
 export function validateHttpTools(httpTools?: AgentHttpToolDefinition[] | unknown): string | null {
-  if (httpTools === undefined) return null;
-  if (!Array.isArray(httpTools)) {
-    return 'HTTP tool requires name, description, and endpoint';
-  }
-  for (const httpTool of httpTools) {
-    if (
-      !isObjectRecord(httpTool) ||
-      !isNonEmptyString(httpTool.name) ||
-      !isNonEmptyString(httpTool.description) ||
-      !isNonEmptyString(httpTool.endpoint)
-    ) {
-      return 'HTTP tool requires name, description, and endpoint';
-    }
-  }
-  return null;
+  return validateAgentHttpToolsConfig(httpTools);
 }
 
 export function mergeToolNames(baseTools: string[], httpTools?: AgentHttpToolDefinition[] | unknown): string[] {
@@ -140,6 +125,7 @@ export function toAgentResponse(agent: StoredAgent): Record<string, unknown> {
 export function toApiAgentSession(
   turn: { id: string; agentId: string; conversationId: string | null; sessionId: string | null; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null },
   sandboxSession?: { status: string; pausedAt?: number | null; pausedReason?: string | null } | null,
+  messageCount?: number,
 ) {
   let status: ApiSessionStatus;
   if (turn.error) {
@@ -163,6 +149,7 @@ export function toApiAgentSession(
     ...(turn.completedAt != null ? { completedAt: turn.completedAt } : {}),
     ...(turn.error ? { error: turn.error } : {}),
     ...(turn.taskDescription ? { taskDescription: turn.taskDescription } : {}),
+    ...(messageCount !== undefined ? { messageCount } : {}),
     ...(sandboxSession?.pausedAt != null ? { pausedAt: sandboxSession.pausedAt } : {}),
     ...(sandboxSession?.pausedReason ? { pausedReason: sandboxSession.pausedReason } : {}),
   };

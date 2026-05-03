@@ -42,9 +42,6 @@ const TOOL_CONTEXT: ToolContext = {
   agentId: 'agent-ctx',
   conversationId: 'conv-ctx',
   workspaceDir: '/workspace',
-  knowledge: {
-    query: async () => ({ items: [] }),
-  },
 };
 
 function makeToolDefinition(name = 'search'): ToolDefinition {

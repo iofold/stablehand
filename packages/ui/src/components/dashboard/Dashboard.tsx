@@ -13,6 +13,7 @@ interface DashboardProps {
   loading: boolean;
   error?: string | null;
   onFilteredCountChange?: (count: number) => void;
+  onRetry?: () => void;
 }
 
 type FilterStatus = 'all' | 'running' | 'error' | 'idle';
@@ -66,7 +67,7 @@ function SkeletonCard() {
   );
 }
 
-export function Dashboard({ agents, loading, error, onFilteredCountChange }: DashboardProps) {
+export function Dashboard({ agents, loading, error, onFilteredCountChange, onRetry }: DashboardProps) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -106,12 +107,22 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange }: Das
 
   if (error && agents.length === 0) {
     return (
-      <div role="alert" className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
+      <div role="alert" data-testid="dashboard-load-error" className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
         <div className="rounded-2xl bg-red-500/10 border border-red-500/30 p-10 max-w-md">
           <AlertTriangle className="mx-auto mb-5 h-10 w-10 text-red-300" />
           <h2 className="text-xl font-semibold text-red-100">Failed to load agents</h2>
           <p className="mt-2.5 text-sm text-red-200/80 leading-relaxed">{error}</p>
           <p className="mt-2 text-xs text-surface-400">The dashboard is unavailable until the API responds.</p>
+          {onRetry && (
+            <button
+              type="button"
+              data-testid="dashboard-retry-button"
+              onClick={onRetry}
+              className="btn-secondary mt-6"
+            >
+              Retry
+            </button>
+          )}
         </div>
       </div>
     );
@@ -128,7 +139,7 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange }: Das
             <h2 className="text-xl font-semibold text-surface-100">No agents yet</h2>
             <p className="mt-2.5 text-sm text-surface-400 leading-relaxed">
               Create your first agent to get started. Agents run in isolated
-              sandboxes with tools, knowledge, and chat capabilities.
+              sandboxes with tools, artifacts, and chat capabilities.
             </p>
             <button type="button" className="btn-primary mt-6 w-full" onClick={() => setShowCreateModal(true)}>
               <Plus className="h-4 w-4" />

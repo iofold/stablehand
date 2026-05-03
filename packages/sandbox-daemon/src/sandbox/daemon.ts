@@ -14,6 +14,7 @@
  *   SANDBOX_PORT — Port to listen on (default: 50051)
  */
 
+import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { create } from '@bufbuild/protobuf';
 import { ConnectError, Code, type ConnectRouter } from '@connectrpc/connect';
@@ -44,6 +45,8 @@ let secrets: ResolvedSecrets = {};
 let server: Server | null = null;
 let toolApi: { stop: () => void } | null = null;
 let _sessionTools: ToolDefinition[] = [];
+let _sessionToolContext: ToolContext | null = null;
+let _toolApiToken = randomUUID();
 
 interface BunServer {
   stop(): void;
@@ -51,17 +54,28 @@ interface BunServer {
 
 interface BunGlobal {
   serve(options: {
+    hostname?: string;
     port: number;
     fetch(request: Request): Response | Promise<Response>;
   }): BunServer;
 }
 
-export function setSessionTools(tools: ToolDefinition[]) {
+export function setSessionTools(tools: ToolDefinition[], context?: ToolContext | null) {
   _sessionTools = tools;
+  _sessionToolContext = context ?? null;
+  _toolApiToken = randomUUID();
 }
 
 export function getSessionTools(): ToolDefinition[] {
   return _sessionTools;
+}
+
+export function setSessionToolContext(context: ToolContext | null): void {
+  _sessionToolContext = context;
+}
+
+export function getToolApiToken(): string {
+  return _toolApiToken;
 }
 
 function getBun(): BunGlobal | null {
@@ -94,15 +108,55 @@ function createMinimalToolContext(): ToolContext {
     agentId: 'sandbox-daemon',
     conversationId: 'sandbox-daemon',
     workspaceDir: '/workspace',
-    knowledge: {
-      query: async () => ({ items: [] }),
+  };
+}
+
+function getSessionToolContext(): ToolContext {
+  return _sessionToolContext ?? createMinimalToolContext();
+}
+
+type SafeParseResult =
+  | { success: true; data: unknown }
+  | { success: false; error?: { issues?: unknown; message?: string } };
+
+interface SafeParseSchema {
+  safeParse(input: unknown): SafeParseResult;
+}
+
+function hasSafeParse(input: unknown): input is SafeParseSchema {
+  return typeof input === 'object'
+    && input !== null
+    && 'safeParse' in input
+    && typeof (input as { safeParse?: unknown }).safeParse === 'function';
+}
+
+function validateToolInput(tool: ToolDefinition, input: unknown): { ok: true; data: unknown } | { ok: false; body: unknown } {
+  if (!hasSafeParse(tool.input)) {
+    return { ok: true, data: input };
+  }
+
+  const result = tool.input.safeParse(input);
+  if (result.success) {
+    return { ok: true, data: result.data };
+  }
+
+  return {
+    ok: false,
+    body: {
+      error: 'Invalid tool input',
+      details: result.error?.issues ?? result.error?.message ?? 'Schema validation failed',
     },
   };
+}
+
+function isAuthorized(request: Request, token: string): boolean {
+  return request.headers.get('authorization') === `Bearer ${token}`;
 }
 
 export function startToolApi(
   port: number = 8080,
   getTools: () => ToolDefinition[],
+  opts?: { token?: string; makeContext?: () => ToolContext },
 ): { stop: () => void } {
   const bun = getBun();
   if (!bun) {
@@ -113,9 +167,15 @@ export function startToolApi(
   }
 
   const toolServer = bun.serve({
+    hostname: '127.0.0.1',
     port,
     fetch: async (request: Request) => {
       const url = new URL(request.url);
+      const token = opts?.token ?? getToolApiToken();
+
+      if (!isAuthorized(request, token)) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
 
       if (request.method === 'GET' && url.pathname === '/tools') {
         return jsonResponse(getTools().map((tool) => tool.name));
@@ -138,7 +198,12 @@ export function startToolApi(
         }
 
         try {
-          const result = await tool.handler(parsedBody, createMinimalToolContext());
+          const inputResult = validateToolInput(tool, parsedBody);
+          if (!inputResult.ok) {
+            return jsonResponse(inputResult.body, 400);
+          }
+
+          const result = await tool.handler(inputResult.data, opts?.makeContext?.() ?? getSessionToolContext());
           return jsonResponse(parseToolResult(result));
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : String(error);
@@ -150,7 +215,7 @@ export function startToolApi(
     },
   });
 
-  console.error(`[sandbox] tool API listening on :${port}`);
+  console.error(`[sandbox] tool API listening on 127.0.0.1:${port}`);
 
   return {
     stop() {

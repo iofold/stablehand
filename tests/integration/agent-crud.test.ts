@@ -41,6 +41,7 @@ describe('Agent CRUD & related endpoints', () => {
       eventBus: container.eventBus,
       harnessRegistry: container.harnessRegistry,
       containerManager: container.containerManager,
+      interrupts: container.interruptManager,
       sessionManager: container.sessionManager,
       dataDir,
       runStartupService: container.runStartupService,
@@ -520,7 +521,29 @@ describe('Agent CRUD & related endpoints', () => {
       const body = res.json();
       expect(body.session).toEqual(expect.objectContaining({ id: runId }));
       expect(body.session.id).toBe(runId);
+      expect(body.session.status).toBe('ACTIVE');
       expect(Array.isArray(body.messages)).toBe(true);
+    });
+
+    it('returns derived COMPLETED status for a finished run', async () => {
+      const conv = await container.db.createConversation(agentId);
+      const run = await container.db.createTurn({
+        agentId,
+        conversationId: conv.id,
+        mode: 'background',
+        taskDescription: 'completed detail test',
+      });
+      await container.db.updateTurn(run.id, { completedAt: Date.now() });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/agents/${agentId}/sessions/${run.id}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().session).toEqual(expect.objectContaining({
+        id: run.id,
+        status: 'COMPLETED',
+      }));
     });
 
     it('returns 404 for non-existent runId', async () => {
@@ -620,6 +643,38 @@ describe('Agent CRUD & related endpoints', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json().cancelled).toBe(true);
+    });
+
+    it('resolves a pending HITL interrupt when cancelling a run', async () => {
+      const created = await createAgent({ name: 'cancel-hitl-agent' });
+      const agentId = created.json().id;
+      const { session } = await createActiveSession(agentId, 'cancel pending approval');
+      const now = Date.now();
+
+      await container.db.savePendingInterrupt({
+        id: session.id,
+        agentSessionId: session.id,
+        agentId,
+        sessionId: session.sessionId,
+        toolCallId: 'approval-call',
+        toolName: 'request-approval',
+        args: { reason: 'test cancellation cleanup' },
+        timeoutMs: 60_000,
+        createdAt: now,
+        expiresAt: now + 60_000,
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/sessions/${session.id}/cancel`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().cancelled).toBe(true);
+      const interrupt = await container.db.getPendingInterrupt(session.id);
+      expect(interrupt?.status).toBe('resolved');
+      expect(interrupt?.resolvedAction).toBe('reject');
+      expect(interrupt?.resolvedData).toBe('Session cancelled');
     });
   });
 

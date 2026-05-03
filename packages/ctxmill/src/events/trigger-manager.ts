@@ -8,18 +8,58 @@ import { matchesSelector } from './wait-condition.js';
 /** Maximum trigger depth to prevent infinite trigger chains. */
 export const MAX_TRIGGER_DEPTH = 5;
 
+export class TriggerConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TriggerConflictError';
+  }
+}
+
+function normalizeSelector(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeSelector(entry));
+  }
+  if (typeof value !== 'object') {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (keys.length === 0) return null;
+
+  const normalized: Record<string, unknown> = {};
+  for (const key of keys) {
+    normalized[key] = normalizeSelector(record[key]);
+  }
+  return normalized;
+}
+
 function selectorsEqual(
   a: Record<string, unknown> | null | undefined,
   b: Record<string, unknown> | null | undefined,
 ): boolean {
-  const aNorm = a && Object.keys(a).length > 0 ? a : null;
-  const bNorm = b && Object.keys(b).length > 0 ? b : null;
-  if (aNorm === null && bNorm === null) return true;
-  if (aNorm === null || bNorm === null) return false;
-  const aKeys = Object.keys(aNorm).sort();
-  const bKeys = Object.keys(bNorm).sort();
-  if (aKeys.length !== bKeys.length) return false;
-  return aKeys.every((k, i) => k === bKeys[i] && JSON.stringify(aNorm[k]) === JSON.stringify(bNorm[bKeys[i]]));
+  return JSON.stringify(normalizeSelector(a)) === JSON.stringify(normalizeSelector(b));
+}
+
+function hydrateTrigger(row: Awaited<ReturnType<DatabaseRepository['getTrigger']>>): EventTrigger | undefined {
+  if (!row) return undefined;
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    eventType: row.eventType,
+    selector: row.selector ?? undefined,
+    taskTemplate: row.taskTemplate,
+    enabled: row.enabled,
+    createdAt: row.createdAt,
+  };
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object'
+    && err !== null
+    && 'code' in err
+    && (err as { code?: unknown }).code === '23505';
 }
 
 /** Callback invoked when a trigger fires to start a background run. */
@@ -81,15 +121,8 @@ export class EventTriggerManager {
     // Load from DB
     const rows = await this.db.getTriggers();
     for (const row of rows) {
-      const trigger: EventTrigger = {
-        id: row.id,
-        agentId: row.agentId,
-        eventType: row.eventType,
-        selector: row.selector ?? undefined,
-        taskTemplate: row.taskTemplate,
-        enabled: row.enabled,
-        createdAt: row.createdAt,
-      };
+      const trigger = hydrateTrigger(row);
+      if (!trigger) continue;
       this.triggers.set(trigger.id, trigger);
     }
 
@@ -129,25 +162,40 @@ export class EventTriggerManager {
       createdAt: input.createdAt ?? new Date().toISOString(),
     };
 
-    // Persist
-    await this.db.saveTrigger({
-      id: trigger.id,
-      agentId: trigger.agentId,
-      eventType: trigger.eventType,
-      selector: trigger.selector ?? null,
-      taskTemplate: trigger.taskTemplate,
-      enabled: trigger.enabled,
-      createdAt: trigger.createdAt,
-    });
-
-    this.triggers.set(trigger.id, trigger);
-
-    // Subscribe to custom event type if needed
-    if (!KNOWN_EVENT_TYPES.includes(trigger.eventType as EventName)) {
-      this.ensureCustomSubscription(trigger.eventType);
+    let savedTrigger: EventTrigger;
+    try {
+      const saved = await this.db.saveTrigger({
+        id: trigger.id,
+        agentId: trigger.agentId,
+        eventType: trigger.eventType,
+        selector: trigger.selector ?? null,
+        taskTemplate: trigger.taskTemplate,
+        enabled: trigger.enabled,
+        createdAt: trigger.createdAt,
+      });
+      savedTrigger = hydrateTrigger(saved) ?? trigger;
+    } catch (err) {
+      if (!isUniqueViolation(err)) {
+        throw err;
+      }
+      const saved = await this.db.getTriggerBySignature(input.agentId, input.eventType, input.selector);
+      const duplicate = hydrateTrigger(saved);
+      if (!duplicate) {
+        throw new TriggerConflictError(
+          `Trigger already exists for ${input.agentId}/${input.eventType} with the same selector`,
+        );
+      }
+      savedTrigger = duplicate;
     }
 
-    return trigger;
+    this.triggers.set(savedTrigger.id, savedTrigger);
+
+    // Subscribe to custom event type if needed
+    if (!KNOWN_EVENT_TYPES.includes(savedTrigger.eventType as EventName)) {
+      this.ensureCustomSubscription(savedTrigger.eventType);
+    }
+
+    return savedTrigger;
   }
 
   /**
@@ -156,8 +204,8 @@ export class EventTriggerManager {
   async unregister(triggerId: string): Promise<boolean> {
     const existed = this.triggers.has(triggerId);
     if (existed) {
-      this.triggers.delete(triggerId);
       await this.db.deleteTrigger(triggerId);
+      this.triggers.delete(triggerId);
     }
     return existed;
   }
@@ -173,24 +221,42 @@ export class EventTriggerManager {
     if (!existing) return undefined;
 
     const updated: EventTrigger = { ...existing, ...updates };
-    this.triggers.set(triggerId, updated);
-
-    await this.db.saveTrigger({
-      id: updated.id,
-      agentId: updated.agentId,
-      eventType: updated.eventType,
-      selector: updated.selector ?? null,
-      taskTemplate: updated.taskTemplate,
-      enabled: updated.enabled,
-      createdAt: updated.createdAt,
-    });
-
-    // Subscribe to new custom event type if changed
-    if (updates.eventType && !KNOWN_EVENT_TYPES.includes(updates.eventType as EventName)) {
-      this.ensureCustomSubscription(updates.eventType);
+    const duplicate = this.findBySignature(updated.agentId, updated.eventType, updated.selector);
+    if (duplicate && duplicate.id !== triggerId) {
+      throw new TriggerConflictError(
+        `Trigger already exists for ${updated.agentId}/${updated.eventType} with the same selector`,
+      );
     }
 
-    return updated;
+    let savedTrigger: EventTrigger;
+    try {
+      const saved = await this.db.saveTrigger({
+        id: updated.id,
+        agentId: updated.agentId,
+        eventType: updated.eventType,
+        selector: updated.selector ?? null,
+        taskTemplate: updated.taskTemplate,
+        enabled: updated.enabled,
+        createdAt: updated.createdAt,
+      });
+      savedTrigger = hydrateTrigger(saved) ?? updated;
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new TriggerConflictError(
+          `Trigger already exists for ${updated.agentId}/${updated.eventType} with the same selector`,
+        );
+      }
+      throw err;
+    }
+
+    this.triggers.set(triggerId, savedTrigger);
+
+    // Subscribe to new custom event type if changed
+    if (updates.eventType && !KNOWN_EVENT_TYPES.includes(savedTrigger.eventType as EventName)) {
+      this.ensureCustomSubscription(savedTrigger.eventType);
+    }
+
+    return savedTrigger;
   }
 
   /**

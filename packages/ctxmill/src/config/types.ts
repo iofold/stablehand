@@ -10,8 +10,6 @@ export interface CTXMillConfig {
   agents?: string[];
   /** Tool file globs or executor config */
   tools?: string[] | { executors: string[] };
-  /** Knowledge sources or provider config */
-  knowledge?: { sources?: string[]; providers?: string[] };
   /** UI component whitelist */
   ui?: { components?: string[] };
   execution?: {
@@ -34,7 +32,6 @@ export interface CTXMillConfig {
 export interface ResolvedConfig {
   execution: { type: 'docker'; warmPool: number; maxGlobalContainers: number };
   database: { type: 'postgres'; url: string };
-  knowledge: { providers: string[] };
   tools: { executors: string[] };
   security: { preset: string };
   orchestration: { eventBus: boolean; reconciliation: boolean };

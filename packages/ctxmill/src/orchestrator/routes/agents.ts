@@ -5,7 +5,6 @@ import { conversationRoutes } from './agents/conversations.js';
 import { crudRoutes } from './agents/crud.js';
 import { fileRoutes } from './agents/files.js';
 import { interruptRoutes } from './agents/interrupts.js';
-import { knowledgeRoutes } from './agents/knowledge.js';
 import { feedbackRoutes } from './agents/feedback.js';
 import { secretRoutes } from './agents/secrets.js';
 import { sessionRoutes } from './agents/sessions.js';
@@ -23,7 +22,6 @@ export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions)
     sse,
     interrupts,
     harnessRegistry,
-    knowledgeStore,
     agentSessionService,
     eventBus,
     dataDir,
@@ -40,7 +38,6 @@ export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions)
     sse,
     interrupts,
     harnessRegistry,
-    knowledgeStore,
     agentSessionService,
     eventBus,
     dataDir,
@@ -59,7 +56,6 @@ export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions)
   await app.register(streamRoutes, subOpts);
   await app.register(interruptRoutes, subOpts);
   await app.register(feedbackRoutes, subOpts);
-  await app.register(knowledgeRoutes, subOpts);
   await app.register(fileRoutes, subOpts);
   await app.register(secretRoutes, subOpts);
   await app.register(webhookRoutes, subOpts);

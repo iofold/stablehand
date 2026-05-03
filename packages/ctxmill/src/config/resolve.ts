@@ -12,10 +12,6 @@ export function resolveConfig(userConfig: CTXMillConfig): ResolvedConfig {
   // Per-section shallow merge of user overrides
   if (userConfig.execution) base.execution = { ...base.execution, ...userConfig.execution };
   if (userConfig.database) base.database = { ...base.database, ...userConfig.database };
-  if (userConfig.knowledge) {
-    const k = userConfig.knowledge;
-    if (k.providers) base.knowledge = { ...base.knowledge, providers: k.providers };
-  }
   if (userConfig.tools) {
     if (Array.isArray(userConfig.tools)) {
       base.tools = { executors: userConfig.tools };

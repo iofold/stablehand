@@ -16,6 +16,11 @@ import {
   retryGrpcCall,
   waitForContainerReady,
 } from './grpc-session-client.js';
+import {
+  decideRestoreOutcome,
+  InvalidCheckpointError,
+  MAX_RESTORE_ATTEMPTS,
+} from './restore-retry-policy.js';
 import { getRuntimeSandboxSecrets } from './runtime-sandbox-secrets.js';
 import { sandboxGrpcBaseUrl } from './sandbox-endpoint.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
@@ -42,24 +47,37 @@ function asStringArray(value: unknown): string[] | undefined {
   return strings.length > 0 ? strings : undefined;
 }
 
-class InvalidCheckpointError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'InvalidCheckpointError';
-  }
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('aborted'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      reject(new Error('aborted'));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
-function isInvalidCheckpointError(err: unknown): boolean {
-  return err instanceof InvalidCheckpointError;
-}
+export { InvalidCheckpointError };
 
 export interface SessionRecoveryCoordinatorDeps {
   containerManager: Pick<SandboxContainerManager, 'createContainer' | 'startContainer' | 'stopContainer' | 'removeContainer' | 'getContainer'>;
-  db: Pick<DatabaseRepository, 'getCheckpointV2'>;
+  db: Pick<DatabaseRepository, 'getCheckpointV2' | 'getSandboxSession'>;
   statusCoordinator: SessionStatusCoordinator;
   stateStore: SessionStatePort;
   buildSandboxSecrets: (agentId: string) => Readonly<Record<string, string>>;
-  resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[]) => ToolMetadata[];
+  resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[], agentId?: string) => ToolMetadata[];
   workspaceDiffService: WorkspaceDiffService;
   logger: Logger;
   createFreshSession: (
@@ -68,6 +86,11 @@ export interface SessionRecoveryCoordinatorDeps {
     agentId?: string,
   ) => Promise<SessionRecord>;
   getExistingSessionWorkspaceDir: (agentId: string, sessionId: string) => Promise<string | undefined>;
+  /**
+   * Optional sleep injection for tests. Defaults to a real timer that supports
+   * AbortSignal cancellation.
+   */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export class SessionRecoveryCoordinator implements SessionReconciler {
@@ -164,6 +187,20 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     dbSession: SandboxSessionRow,
     agentDef: AgentDefinition,
   ): Promise<SessionRecord> {
+    return this.restoreFromCheckpointWithRetry(dbSession, agentDef);
+  }
+
+  /**
+   * Single restore attempt. Sets `RESTORING`, performs the restore, transitions
+   * to `ACTIVE` on success. On failure transitions to `CHECKPOINTED` (retryable)
+   * or `TERMINATED` (non-retryable) per ADR 005. Throws the underlying error.
+   *
+   * Callers that want auto-retry should use `restoreFromCheckpointWithRetry`.
+   */
+  async restoreFromCheckpointOnce(
+    dbSession: SandboxSessionRow,
+    agentDef: AgentDefinition,
+  ): Promise<SessionRecord> {
     const harnessName = dbSession.harnessName;
     const sessionId = dbSession.id;
 
@@ -230,6 +267,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       const restoreTools = this.deps.resolveToolsForAgent(
         agentDef.tools ?? [],
         asStringArray(agentDef.metadata?.excludeBuiltinTools),
+        dbSession.agentId,
       );
       const openReq = create(OpenSessionRequestSchema, {
         bootstrap: {
@@ -266,6 +304,8 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
           containerName: reachableContainerInfo.containerName,
           containerId: reachableContainerInfo.containerId,
           checkpointRef: null,
+          restoreAttempts: 0,
+          lastRestoreError: null,
         },
       });
       createdContainer = undefined;
@@ -288,16 +328,112 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       if (createdContainer) {
         await this.rollbackCreatedContainer(sessionId, createdContainer);
       }
-
-      const terminal = isInvalidCheckpointError(err);
-      await this.deps.statusCoordinator.transition({
-        sessionId,
-        fromStatus: 'RESTORING',
-        toStatus: terminal ? 'TERMINATED' : 'CHECKPOINTED',
-        clearRuntime: true,
-      });
+      // Failure-state bookkeeping is owned by `restoreFromCheckpointWithRetry`;
+      // here we just rethrow so the wrapper sees the error with the session
+      // still in `RESTORING`.
       throw err;
     }
+  }
+
+  /**
+   * Restore loop per ADR 013. Tries up to `MAX_RESTORE_ATTEMPTS` total times.
+   * Persists attempt count and `last_restore_error` after each failure. Lands
+   * the session in `CHECKPOINTED` (retryable budget exhausted) or `TERMINATED`
+   * (non-retryable failure) and rethrows the underlying error on final
+   * failure.
+   */
+  async restoreFromCheckpointWithRetry(
+    dbSession: SandboxSessionRow,
+    agentDef: AgentDefinition,
+  ): Promise<SessionRecord> {
+    const sessionId = dbSession.id;
+    const sleep = this.deps.sleep ?? delay;
+
+    let attemptsSoFar = Math.max(0, dbSession.restoreAttempts ?? 0);
+    let currentRow = dbSession;
+    let lastError: unknown;
+
+    while (attemptsSoFar < MAX_RESTORE_ATTEMPTS) {
+      const attemptNumber = attemptsSoFar + 1;
+      try {
+        return await this.restoreFromCheckpointOnce(currentRow, agentDef);
+      } catch (err) {
+        lastError = err;
+        attemptsSoFar += 1;
+        const outcome = decideRestoreOutcome(err, attemptsSoFar);
+
+        if (outcome.toStatus === 'TERMINATED') {
+          await this.deps.statusCoordinator.transition({
+            sessionId,
+            fromStatus: 'RESTORING',
+            toStatus: 'TERMINATED',
+            clearRuntime: true,
+            extra: {
+              restoreAttempts: attemptsSoFar,
+              lastRestoreError: outcome.classification.message,
+            },
+          });
+          this.deps.logger.warn(
+            `${TAG} session ${sessionId} restore non-retryable after attempt ${attemptNumber}: ${outcome.classification.message}`,
+          );
+          throw err;
+        }
+
+        if (outcome.toStatus === 'CHECKPOINTED') {
+          await this.deps.statusCoordinator.transition({
+            sessionId,
+            fromStatus: 'RESTORING',
+            toStatus: 'CHECKPOINTED',
+            clearRuntime: true,
+            extra: {
+              restoreAttempts: attemptsSoFar,
+              lastRestoreError: outcome.classification.message,
+            },
+          });
+          this.deps.logger.warn(
+            `${TAG} session ${sessionId} restore exhausted after ${attemptsSoFar} attempts: ${outcome.classification.message}`,
+          );
+          throw err;
+        }
+
+        // outcome.toStatus === 'RETRY'
+        await this.deps.statusCoordinator.transition({
+          sessionId,
+          fromStatus: 'RESTORING',
+          toStatus: 'CHECKPOINTED',
+          clearRuntime: true,
+          extra: {
+            restoreAttempts: attemptsSoFar,
+            lastRestoreError: outcome.classification.message,
+          },
+        });
+
+        if (outcome.retryDelayMs && outcome.retryDelayMs > 0) {
+          this.deps.logger.info(
+            `${TAG} session ${sessionId} retryable restore failure (attempt ${attemptNumber}/${MAX_RESTORE_ATTEMPTS}); sleeping ${outcome.retryDelayMs}ms before retry`,
+          );
+          await sleep(outcome.retryDelayMs);
+        }
+
+        // Refresh the row so the next attempt sees the updated status and
+        // attempts counter.
+        const refreshed = await this.deps.db.getSandboxSession(sessionId);
+        if (!refreshed) {
+          throw new Error(
+            `Sandbox session ${sessionId} disappeared during retry loop`,
+            { cause: err },
+          );
+        }
+        currentRow = refreshed;
+      }
+    }
+
+    // Loop terminated with budget exhausted but not yet persisted as
+    // CHECKPOINTED — defensive path.
+    if (lastError !== undefined) {
+      throw lastError;
+    }
+    throw new Error(`Restore retry budget exhausted for session ${sessionId}`);
   }
 
   private async rollbackCreatedContainer(
@@ -375,6 +511,120 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     return false;
   }
 
+  /**
+   * Reconcile a single session that is stranded in RESTORING (e.g. after an
+   * orchestrator crash mid-restore). The session is moved to CHECKPOINTED
+   * (with no checkpoint -> TERMINATED) and a fresh restore attempt is started
+   * if the auto-retry budget still has room.
+   */
+  async reconcileStrandedRestoring(
+    conversationId: string,
+    agentDef: AgentDefinition,
+    agentId: string | undefined,
+    dbSession: SandboxSessionRow,
+  ): Promise<SessionRecord> {
+    const sessionId = dbSession.id;
+    const checkpoint = await this.deps.db.getCheckpointV2(sessionId);
+
+    if (!checkpoint) {
+      this.deps.logger.warn(
+        `${TAG} stranded RESTORING session ${sessionId} has no checkpoint -> TERMINATED`,
+      );
+      await this.deps.statusCoordinator.transition({
+        sessionId,
+        fromStatus: 'RESTORING',
+        toStatus: 'TERMINATED',
+        clearRuntime: true,
+        extra: {
+          lastRestoreError: 'orchestrator restarted with no recoverable checkpoint',
+        },
+      });
+      return this.deps.createFreshSession(conversationId, agentDef, agentId);
+    }
+
+    this.deps.logger.info(
+      `${TAG} reconciling stranded RESTORING session ${sessionId} -> CHECKPOINTED (attempts=${dbSession.restoreAttempts ?? 0})`,
+    );
+    await this.deps.statusCoordinator.transition({
+      sessionId,
+      fromStatus: 'RESTORING',
+      toStatus: 'CHECKPOINTED',
+      clearRuntime: true,
+      extra: {
+        lastRestoreError:
+          dbSession.lastRestoreError ?? 'orchestrator restarted while restoring',
+      },
+    });
+
+    if ((dbSession.restoreAttempts ?? 0) >= MAX_RESTORE_ATTEMPTS) {
+      this.deps.logger.warn(
+        `${TAG} stranded RESTORING session ${sessionId} exceeded retry budget; staying CHECKPOINTED`,
+      );
+      throw new Error(
+        `Session ${sessionId} exceeded restore retry budget; manual retry required`,
+      );
+    }
+
+    return this.restoreFromCheckpoint(
+      { ...dbSession, status: 'CHECKPOINTED' },
+      agentDef,
+    );
+  }
+
+  /**
+   * Startup-time helper: scan for sessions stranded in RESTORING and roll them
+   * back to a recoverable state (CHECKPOINTED if a checkpoint exists,
+   * TERMINATED otherwise). Does not start a new restore loop — that happens on
+   * the next user-driven request.
+   *
+   * Returns the count of sessions reconciled.
+   */
+  async reconcileStrandedRestoringOnStartup(
+    rows: readonly SandboxSessionRow[],
+  ): Promise<{ checkpointed: number; terminated: number }> {
+    let checkpointed = 0;
+    let terminated = 0;
+
+    for (const row of rows) {
+      if (row.status !== 'RESTORING') continue;
+
+      const checkpoint = await this.deps.db.getCheckpointV2(row.id);
+      if (!checkpoint) {
+        await this.deps.statusCoordinator.transition({
+          sessionId: row.id,
+          fromStatus: 'RESTORING',
+          toStatus: 'TERMINATED',
+          clearRuntime: true,
+          extra: {
+            lastRestoreError: 'orchestrator restart: no recoverable checkpoint',
+          },
+        });
+        terminated++;
+        this.deps.logger.warn(
+          `${TAG} startup: stranded RESTORING session ${row.id} -> TERMINATED (no checkpoint)`,
+        );
+        continue;
+      }
+
+      await this.deps.statusCoordinator.transition({
+        sessionId: row.id,
+        fromStatus: 'RESTORING',
+        toStatus: 'CHECKPOINTED',
+        clearRuntime: true,
+        extra: {
+          lastRestoreError:
+            row.lastRestoreError ?? 'orchestrator restarted while restoring',
+        },
+      });
+      checkpointed++;
+      this.deps.logger.info(
+        `${TAG} startup: stranded RESTORING session ${row.id} -> CHECKPOINTED (attempts=${row.restoreAttempts ?? 0})`,
+      );
+    }
+
+    return { checkpointed, terminated };
+  }
+
   private async doRecover(
     conversationId: string,
     agentDef: AgentDefinition,
@@ -405,10 +655,13 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       }
       case 'CHECKPOINTED':
         return this.restoreFromCheckpoint(dbSession, agentDef);
-      case 'RESTORING':
-        throw new Error(
-          `Session ${dbSession.id} for conversation ${conversationId} is currently being restored. Try again shortly.`,
-        );
+      case 'RESTORING': {
+        // ctx-7fz: a session left in RESTORING means the previous restore
+        // attempt was interrupted (orchestrator crash, request abort, etc.).
+        // Demote to CHECKPOINTED and resume the retry loop, preserving the
+        // attempts counter so we honour the auto-retry budget.
+        return this.reconcileStrandedRestoring(conversationId, agentDef, agentId, dbSession);
+      }
       case 'TERMINATED':
         this.deps.logger.info(
           `${TAG} session ${dbSession.id} for conversation ${conversationId} is terminated, creating fresh session`,

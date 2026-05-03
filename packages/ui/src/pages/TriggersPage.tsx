@@ -69,6 +69,9 @@ export function TriggersPage() {
   // Delete confirmation
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Per-row inline error (id -> message). Cleared on row interaction or reload.
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+
   const agentNameMap = useMemo(() => {
     const map: Record<string, string> = {};
     for (const a of agents) map[a.id] = a.name;
@@ -80,7 +83,18 @@ export function TriggersPage() {
     setError(null);
     try {
       const data = await fetchTriggers(agentFilter || undefined);
-      setTriggers(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      setTriggers(list);
+      // A successful refresh clears any stale per-row errors for rows that
+      // are still present; rows that disappear no longer need surfacing.
+      setRowErrors((prev) => {
+        const next: Record<string, string> = {};
+        const ids = new Set(list.map((t) => t.id));
+        for (const [id, msg] of Object.entries(prev)) {
+          if (ids.has(id)) next[id] = msg;
+        }
+        return next;
+      });
     } catch (err) {
       setError('Failed to load triggers.');
       console.debug('[Triggers] Load failed:', err);
@@ -211,21 +225,51 @@ export function TriggersPage() {
   };
 
   const handleDelete = async (id: string) => {
+    // Optimistic remove. Snapshot the previous list so we can roll back on
+    // failure — otherwise users perceive the row as deleted but it reappears
+    // after the next list refresh, masking the real failure.
+    const previous = triggers;
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setTriggers((current) => current.filter((trigger) => trigger.id !== id));
+    setDeletingId(null);
+
     try {
       await deleteTrigger(id);
-      setDeletingId(null);
+      // Refresh quietly to pick up any server-side reconciliation.
       await loadTriggers();
     } catch (err) {
+      // Roll back the optimistic delete and surface the failure inline.
+      setTriggers(previous);
+      setRowErrors((prev) => ({ ...prev, [id]: 'Failed to delete trigger.' }));
       setActionError('Failed to delete trigger.');
       console.debug('[Triggers] Delete failed:', err);
     }
   };
 
   const handleToggleEnabled = async (trigger: Trigger) => {
+    const previous = triggers;
+    const nextEnabled = !trigger.enabled;
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[trigger.id];
+      return next;
+    });
+    // Optimistically flip the toggle locally.
+    setTriggers((current) => current.map((entry) => (
+      entry.id === trigger.id ? { ...entry, enabled: nextEnabled } : entry
+    )));
+
     try {
-      await updateTrigger(trigger.id, { enabled: !trigger.enabled });
+      await updateTrigger(trigger.id, { enabled: nextEnabled });
       await loadTriggers();
     } catch (err) {
+      // Roll back the optimistic toggle.
+      setTriggers(previous);
+      setRowErrors((prev) => ({ ...prev, [trigger.id]: 'Failed to update trigger status.' }));
       setActionError('Failed to update trigger status.');
       console.debug('[Triggers] Toggle failed:', err);
     }
@@ -418,8 +462,31 @@ export function TriggersPage() {
             {filteredTriggers.map((trigger) => (
               <div
                 key={trigger.id}
+                data-testid="trigger-card"
+                data-trigger-id={trigger.id}
                 className="card p-4 space-y-3"
               >
+                {rowErrors[trigger.id] && (
+                  <div
+                    role="alert"
+                    data-testid="trigger-row-error"
+                    className="rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-[11px] text-red-300 flex items-center justify-between gap-2"
+                  >
+                    <span>{rowErrors[trigger.id]}</span>
+                    <button
+                      type="button"
+                      onClick={() => setRowErrors((prev) => {
+                        const next = { ...prev };
+                        delete next[trigger.id];
+                        return next;
+                      })}
+                      className="text-red-200 hover:text-red-100 text-[11px]"
+                      aria-label="Dismiss row error"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
                 {/* Header row */}
                 <div className="flex items-start justify-between">
                   <div className="space-y-1 min-w-0 flex-1">

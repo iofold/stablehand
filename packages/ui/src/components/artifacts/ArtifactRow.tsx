@@ -37,6 +37,9 @@ export function ArtifactRow({ artifact, isSelected, showAgentName = false }: Art
   const agentName = showAgentName
     ? agents.find((a) => a.id === artifact.agentId)?.name
     : undefined;
+  const agentFallback = artifact.agentId
+    ? `${artifact.agentId.slice(0, 8)}...`
+    : 'No agent';
 
   const handleDownload = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -86,7 +89,9 @@ export function ArtifactRow({ artifact, isSelected, showAgentName = false }: Art
             {agentName}
           </span>
         ) : (
-          <span className="font-mono text-xs">{artifact.agentId.slice(0, 8)}...</span>
+          <span className={artifact.agentId ? 'font-mono text-xs' : 'text-xs text-surface-500'}>
+            {agentFallback}
+          </span>
         )}
       </td>
       <td className="px-4 py-3 text-sm text-surface-400">

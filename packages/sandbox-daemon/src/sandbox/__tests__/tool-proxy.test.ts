@@ -98,6 +98,42 @@ describe('createToolProxy', () => {
     expect(callArgs.requestId).toBeTruthy();
   });
 
+  it('generates distinct request IDs across isolated sandbox processes', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1777799375224);
+
+    vi.resetModules();
+    const firstModule = await import('../tool-proxy.js');
+    const firstRequestTool = vi.fn().mockImplementation((req) =>
+      Promise.resolve(makeSuccessResponse(req.requestId, '{"ok":true}')),
+    );
+    const firstHandler = firstModule.createToolProxy(
+      'emit-event',
+      makeMockClient({ requestTool: firstRequestTool }),
+      'session-a',
+      'agent-1',
+      { retryDelays: [] },
+    );
+    await firstHandler({ type: 'stress.tools.complete' });
+
+    vi.resetModules();
+    const secondModule = await import('../tool-proxy.js');
+    const secondRequestTool = vi.fn().mockImplementation((req) =>
+      Promise.resolve(makeSuccessResponse(req.requestId, '{"ok":true}')),
+    );
+    const secondHandler = secondModule.createToolProxy(
+      'emit-event',
+      makeMockClient({ requestTool: secondRequestTool }),
+      'session-b',
+      'agent-1',
+      { retryDelays: [] },
+    );
+    await secondHandler({ type: 'stress.tools.complete' });
+
+    const firstRequestId = firstRequestTool.mock.calls[0][0].requestId;
+    const secondRequestId = secondRequestTool.mock.calls[0][0].requestId;
+    expect(firstRequestId).not.toBe(secondRequestId);
+  });
+
   it('throws orchestrator errors instead of returning tool error JSON', async () => {
     const client = makeMockClient({
       requestTool: vi.fn().mockResolvedValue(

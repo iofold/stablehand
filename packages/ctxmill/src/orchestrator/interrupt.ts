@@ -47,17 +47,17 @@ export class InterruptManager {
     this.onTimeout = onTimeout;
   }
 
-  private emitResolvedEvent(
+  private async emitResolvedEvent(
     turnId: string,
     action: 'approve' | 'reject' | 'suspend' | 'timeout',
     agentId?: string,
     conversationId?: string,
-  ): void {
+  ): Promise<void> {
     if (!this.eventBus) {
       return;
     }
 
-    this.eventBus.emit('run.interrupt_resolved', {
+    await this.eventBus.emitAsync('run.interrupt_resolved', {
       turnId,
       agentId: agentId ?? turnId,
       conversationId: conversationId ?? turnId,
@@ -248,9 +248,9 @@ export class InterruptManager {
     }
 
     if (entry.timeoutId) clearTimeout(entry.timeoutId);
+    await this.emitResolvedEvent(turnId, action, agentId ?? entry.agentId, conversationId ?? entry.info.conversationId);
     entry.resolve({ action, data });
     this.pending.delete(turnId);
-    this.emitResolvedEvent(turnId, action, agentId ?? entry.agentId, conversationId ?? entry.info.conversationId);
 
     return true;
   }
@@ -344,9 +344,9 @@ export class InterruptManager {
       }
 
       if (entry.timeoutId) clearTimeout(entry.timeoutId);
+      await this.emitResolvedEvent(turnId, 'timeout', agentId ?? entry.agentId, entry.info.conversationId);
       entry.resolve({ action: 'suspend', data: message });
       this.pending.delete(turnId);
-      this.emitResolvedEvent(turnId, 'timeout', agentId ?? entry.agentId, entry.info.conversationId);
 
       if (this.onTimeout && sessionId) {
         await this.onTimeout(sessionId);

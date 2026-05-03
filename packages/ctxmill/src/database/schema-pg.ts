@@ -1,4 +1,4 @@
-import { pgTable, text, bigint, boolean, doublePrecision, serial, integer, index, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, bigint, boolean, serial, integer, index, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
 
 export const agents = pgTable('agents', {
@@ -39,19 +39,6 @@ export const messages = pgTable('messages', {
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
   conversationCreatedIdx: index('idx_messages_conversation_created').on(table.conversationId, table.createdAt),
-}));
-
-export const knowledgeItems = pgTable('knowledge_items', {
-  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
-  agentId: text('agent_id').notNull(),
-  content: text('content').notNull(),
-  category: text('category').notNull(),
-  source: text('source').notNull(),
-  effectiveness: doublePrecision('effectiveness').notNull().default(0),
-  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
-  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
-}, (table) => ({
-  agentCategoryIdx: index('idx_knowledge_items_agent_category').on(table.agentId, table.category),
 }));
 
 export const turns = pgTable('turns', {
@@ -116,12 +103,14 @@ export const eventTriggers = pgTable('event_triggers', {
   agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
   eventType: text('event_type').notNull(),
   selector: jsonb('selector').$type<Record<string, unknown> | null>(),
+  selectorHash: text('selector_hash').notNull(),
   taskTemplate: text('task_template').notNull(),
   enabled: boolean('enabled').notNull().default(true),
   createdAt: text('created_at').notNull(),
 }, (table) => ({
   agentIdx: index('idx_event_triggers_agent').on(table.agentId),
   eventTypeIdx: index('idx_event_triggers_event_type').on(table.eventType),
+  signatureIdx: uniqueIndex('idx_event_triggers_signature').on(table.agentId, table.eventType, table.selectorHash),
 }));
 
 export const agentVersions = pgTable('agent_versions', {
@@ -189,6 +178,8 @@ export const sandboxSessions = pgTable('sandbox_sessions', {
   pausedAt: bigint('paused_at', { mode: 'number' }),
   pausedReason: text('paused_reason'),
   lastActivityAt: bigint('last_activity_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  restoreAttempts: integer('restore_attempts').notNull().default(0),
+  lastRestoreError: text('last_restore_error'),
 }, (table) => ({
   conversationIdx: index('idx_sandbox_sessions_conversation').on(table.conversationId),
   agentIdx: index('idx_sandbox_sessions_agent').on(table.agentId),

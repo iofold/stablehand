@@ -129,7 +129,7 @@ describe('DefaultToolRegistry', () => {
     );
   });
 
-  it('should handle last-write-wins for duplicate tool names across providers', async () => {
+  it('should keep duplicate tool names provider-scoped and resolve the unscoped tool deterministically', async () => {
     const provider1 = createMockProvider('provider-1', [
       createToolDef('shared-tool', 'from provider 1'),
     ]);
@@ -141,11 +141,31 @@ describe('DefaultToolRegistry', () => {
     registry.addProvider(provider2);
     await registry.refresh();
 
-    // Map iteration order: provider-1 first, then provider-2 overwrites
     const tools = registry.listAll();
     expect(tools).toHaveLength(1);
-    expect(tools[0].description).toBe('from provider 2');
-    expect(registry.getProvider('shared-tool')?.name).toBe('provider-2');
+    expect(tools[0].description).toBe('from provider 1');
+    expect(registry.getProvider('shared-tool')?.name).toBe('provider-1');
+  });
+
+  it('resolves duplicate HTTP tool names by agent-scoped provider', async () => {
+    const provider1 = createMockProvider('http-agent-1', [
+      createToolDef('shared-tool', 'from agent 1'),
+    ]);
+    const provider2 = createMockProvider('http-agent-2', [
+      createToolDef('shared-tool', 'from agent 2'),
+    ]);
+
+    registry.addProvider(provider1);
+    registry.addProvider(provider2);
+    await registry.refresh();
+
+    expect(registry.getTool('shared-tool', 'agent-1')?.description).toBe('from agent 1');
+    expect(registry.getProvider('shared-tool', 'agent-1')?.name).toBe('http-agent-1');
+    expect(registry.getTool('shared-tool', 'agent-2')?.description).toBe('from agent 2');
+    expect(registry.getProvider('shared-tool', 'agent-2')?.name).toBe('http-agent-2');
+    expect(registry.listForAgent(['shared-tool'], 'agent-1').map((tool) => tool.description)).toEqual([
+      'from agent 1',
+    ]);
   });
 
   it('should track dirty state', async () => {

@@ -37,6 +37,7 @@ export interface SessionLifecycleServiceDeps {
     | 'getActiveSandboxSessions'
     | 'getSandboxSessionByConversation'
     | 'getSandboxSessionsByAgent'
+    | 'getStrandedRestoringSessions'
   >;
   statusCoordinator: SessionStatusCoordinator;
   containerManager: Pick<SandboxContainerManager, 'getContainer' | 'removeContainer' | 'stopContainer'>;
@@ -204,6 +205,30 @@ export class SessionLifecycleService {
   async getSessionsByAgent(agentId: string): Promise<SessionRecord[]> {
     const rows = await this.deps.db.getSandboxSessionsByAgent(agentId);
     return rows.map((row) => this.dbSessionToRecord(row));
+  }
+
+  /**
+   * Startup-time reconciliation per ctx-7fz: rolls any session stranded in
+   * RESTORING back to a recoverable state (CHECKPOINTED if a checkpoint
+   * exists, TERMINATED otherwise). Should be called once during orchestrator
+   * boot, before serving requests, to repair rows left behind by a crash
+   * mid-restore.
+   *
+   * @param updatedBeforeMs Optional cutoff (epoch ms). Only rows older than
+   *   this timestamp are considered stranded — useful when reconciliation runs
+   *   after some restores may have already started.
+   */
+  async reconcileStrandedRestoringSessions(
+    updatedBeforeMs?: number,
+  ): Promise<{ checkpointed: number; terminated: number }> {
+    const rows = await this.deps.db.getStrandedRestoringSessions(updatedBeforeMs);
+    if (rows.length === 0) {
+      return { checkpointed: 0, terminated: 0 };
+    }
+    this.deps.logger.info(
+      `${TAG} reconciling ${rows.length} stranded RESTORING session(s) on startup`,
+    );
+    return this.deps.recoveryCoordinator.reconcileStrandedRestoringOnStartup(rows);
   }
 
   private async cleanupRuntime(

@@ -128,7 +128,13 @@ export function DashboardPage() {
             </h3>
           </div>
 
-          <Dashboard agents={agents} loading={loading} error={agentLoadError} onFilteredCountChange={setFilteredCount} />
+          <Dashboard
+            agents={agents}
+            loading={loading}
+            error={agentLoadError}
+            onFilteredCountChange={setFilteredCount}
+            onRetry={() => { void fetchAgents(); }}
+          />
         </div>
 
         {activeConversations.length > 0 && (

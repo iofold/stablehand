@@ -3,7 +3,7 @@ import { createTestAgent, deleteTestAgent, waitForRunStatus } from './support.js
 import { hasHarnessKey } from './visual-qa/support.js';
 import { ScreenshotCapture } from './visual-qa/screenshot-capture.js';
 
-test.describe('A2UI Chart Rendering Visual QA', () => {
+test.describe('A2UI Chart Rendering Visual QA @extended', () => {
   test.skip(!hasHarnessKey('langgraph'), 'Skipping: OPENAI_API_KEY not available');
 
   let agentId = '';

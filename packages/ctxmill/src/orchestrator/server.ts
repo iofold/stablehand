@@ -7,7 +7,6 @@ import { agentRoutes, sessionsRoutes } from './routes/agents.js';
 import { artifactRoutes } from './routes/artifacts.js';
 import { catalogRoutes } from './routes/catalogs.js';
 import { eventRoutes } from './routes/events.js';
-import { knowledgeRoutes } from './routes/knowledge.js';
 import { settingsRoutes } from './routes/settings.js';
 import { triggerRoutes } from './routes/triggers.js';
 import { sandboxRoutes } from './routes/sandbox.js';
@@ -16,7 +15,6 @@ import { SSEManager } from './sse.js';
 import { InterruptManager } from './interrupt.js';
 import type { AgentSessionService } from './agent-session-service.js';
 import type { DatabaseRepository } from '../database/repository.js';
-import type { KnowledgeStore } from '../knowledge/types.js';
 import type { RunStartupService } from './run-startup-service.js';
 import type { TypedEventBus } from '../events/bus.js';
 import type { SecretProvider } from '../secrets/types.js';
@@ -40,7 +38,6 @@ export interface ServerOptions {
   host?: string;
   db: DatabaseRepository;
   harnessRegistry?: HarnessRegistry;
-  knowledgeStore?: KnowledgeStore;
   eventBus?: TypedEventBus;
   /** Path to the .ctxmill data directory for agent workspaces. */
   dataDir?: string;
@@ -84,7 +81,7 @@ function createDefaultHarnessRegistry(): HarnessRegistry {
  * the database, SSE manager, interrupt manager, and agent routes.
  */
 export async function createServer(opts: ServerOptions): Promise<FastifyInstance> {
-  const { db, harnessRegistry: optHarnessRegistry, knowledgeStore, eventBus, dataDir, triggerManager } = opts;
+  const { db, harnessRegistry: optHarnessRegistry, eventBus, dataDir, triggerManager } = opts;
   const harnessRegistry = optHarnessRegistry ?? createDefaultHarnessRegistry();
   const toolDefinitionRegistry = opts.toolDefinitionRegistry ?? new DefaultToolRegistry();
 
@@ -201,7 +198,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, knowledgeStore, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService });
   await app.register(sessionsRoutes, { prefix: '/api/sessions', db });
   if (eventBus) {
     await app.register(agUiCompatRoutes, {
@@ -213,7 +210,6 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   }
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
   await app.register(eventRoutes, { prefix: '/api/events', db });
-  await app.register(knowledgeRoutes, { prefix: '/api/knowledge', knowledgeStore });
   if (triggerManager) {
     await app.register(triggerRoutes, { prefix: '/api/triggers', triggerManager, db });
   }

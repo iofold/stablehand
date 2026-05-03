@@ -113,7 +113,7 @@ export interface SandboxSessionManagerDeps {
   maxConcurrentSessionsPerAgent?: number;
   interruptManager?: InterruptManager;
   buildSandboxSecrets: (agentId: string) => Readonly<Record<string, string>>;
-  resolveToolsForAgent?: (toolNames: string[], excludeBuiltins?: string[]) => ToolMetadata[];
+  resolveToolsForAgent?: (toolNames: string[], excludeBuiltins?: string[], agentId?: string) => ToolMetadata[];
   logger: Logger;
   config: {
     idleTimeoutMs: number;

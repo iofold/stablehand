@@ -35,6 +35,78 @@ export interface HttpEndpointConfig {
 
 const DEFAULT_TIMEOUT = 30_000;
 
+const HTTP_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as const;
+type SupportedHttpMethod = (typeof HTTP_METHODS)[number];
+
+function isSupportedHttpMethod(value: unknown): value is SupportedHttpMethod {
+  return typeof value === 'string' && (HTTP_METHODS as readonly string[]).includes(value);
+}
+
+/**
+ * Validate a single HttpEndpointConfig and throw a descriptive error if it
+ * is ambiguous, malformed, or specifies an invalid HTTP method.
+ *
+ * Fails closed: the HTTPToolProvider must never coerce bad config into
+ * plausible behavior (for example, silently rewriting `TRACE` to `POST`).
+ */
+function assertValidEndpointConfig(ep: HttpEndpointConfig, index: number): void {
+  const where = `endpoint[${index}]${ep?.name ? ` "${ep.name}"` : ''}`;
+
+  if (typeof ep !== 'object' || ep === null) {
+    throw new Error(`HTTPToolProvider: ${where} must be an object`);
+  }
+  if (typeof ep.name !== 'string' || ep.name.trim() === '') {
+    throw new Error(`HTTPToolProvider: ${where} requires a non-empty "name"`);
+  }
+  if (typeof ep.url !== 'string' || ep.url.trim() === '') {
+    throw new Error(`HTTPToolProvider: ${where} requires a non-empty "url"`);
+  }
+  if (typeof ep.description !== 'string' || ep.description.trim() === '') {
+    throw new Error(`HTTPToolProvider: ${where} requires a non-empty "description"`);
+  }
+  if (!isSupportedHttpMethod(ep.method)) {
+    throw new Error(
+      `HTTPToolProvider: ${where} has invalid HTTP method "${String(ep.method)}" (allowed: ${HTTP_METHODS.join(', ')})`,
+    );
+  }
+  if (ep.timeout !== undefined && (typeof ep.timeout !== 'number' || !Number.isFinite(ep.timeout) || ep.timeout <= 0)) {
+    throw new Error(`HTTPToolProvider: ${where} "timeout" must be a positive finite number`);
+  }
+  if (ep.headers !== undefined) {
+    if (typeof ep.headers !== 'object' || ep.headers === null || Array.isArray(ep.headers)) {
+      throw new Error(`HTTPToolProvider: ${where} "headers" must be a string-valued object`);
+    }
+    for (const [key, value] of Object.entries(ep.headers)) {
+      if (typeof value !== 'string') {
+        throw new Error(`HTTPToolProvider: ${where} header "${key}" must be a string`);
+      }
+    }
+  }
+  if (ep.authentication !== undefined) {
+    const auth = ep.authentication;
+    if (typeof auth !== 'object' || auth === null) {
+      throw new Error(`HTTPToolProvider: ${where} "authentication" must be an object`);
+    }
+    if (auth.type !== 'bearer' && auth.type !== 'api-key') {
+      throw new Error(
+        `HTTPToolProvider: ${where} authentication.type must be "bearer" or "api-key" (got "${String(auth.type)}")`,
+      );
+    }
+    if (typeof auth.secretName !== 'string' || auth.secretName.trim() === '') {
+      throw new Error(`HTTPToolProvider: ${where} authentication.secretName must be a non-empty string`);
+    }
+    if (auth.allowEnvFallback !== undefined && typeof auth.allowEnvFallback !== 'boolean') {
+      throw new Error(`HTTPToolProvider: ${where} authentication.allowEnvFallback must be boolean when set`);
+    }
+  }
+  if (ep.inputSchema !== undefined && (typeof ep.inputSchema !== 'object' || ep.inputSchema === null || Array.isArray(ep.inputSchema))) {
+    throw new Error(`HTTPToolProvider: ${where} "inputSchema" must be a JSON Schema object when set`);
+  }
+  if (ep.programmatic !== undefined && typeof ep.programmatic !== 'boolean') {
+    throw new Error(`HTTPToolProvider: ${where} "programmatic" must be boolean when set`);
+  }
+}
+
 /**
  * Converts a JSON Schema property object into a Zod schema.
  * Handles the common subset used by HTTP tool definitions.
@@ -129,6 +201,18 @@ export class HTTPToolProvider implements ToolProvider {
       fetchFn?: typeof fetch;
     },
   ) {
+    if (!Array.isArray(endpoints)) {
+      throw new Error('HTTPToolProvider: endpoints must be an array');
+    }
+    const seen = new Set<string>();
+    endpoints.forEach((ep, index) => {
+      assertValidEndpointConfig(ep, index);
+      if (seen.has(ep.name)) {
+        throw new Error(`HTTPToolProvider: duplicate endpoint name "${ep.name}"`);
+      }
+      seen.add(ep.name);
+    });
+
     this.endpoints = endpoints;
     this.name = options?.name ?? 'http';
     this.secrets = options?.secrets ?? {};

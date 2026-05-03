@@ -8,7 +8,7 @@ import {
  * E2E-01: Five-Minute Journey
  *
  * Full Day One acceptance test covering the complete user flow:
- *   Dashboard -> Pick agent -> Chat -> Tool calls -> Feedback -> Agent detail -> Knowledge
+ *   Dashboard -> Pick agent -> Chat -> Tool calls -> Feedback -> Agent detail
  *
  * Wall-clock budget: 120 seconds.
  *
@@ -26,13 +26,9 @@ import {
  *   thumbs-up                  - thumbs up button             (FeedbackButtons)
  *   thumbs-down                - thumbs down button           (FeedbackButtons)
  *   back-button                - back navigation              (AgentDetailPage)
- *   knowledge-snapshot         - knowledge snapshot section   (AgentDetailPage)
- *   knowledge-tab              - knowledge tab button         (AgentDetailPage)
- *   knowledge-explorer         - knowledge explorer section   (AgentDetailPage)
- *   knowledge-growth           - knowledge growth card        (AgentDetailPage)
  */
 
-test.describe('Five-Minute Journey (E2E-01)', () => {
+test.describe('Five-Minute Journey (E2E-01) @extended', () => {
   let agentId = '';
   let agentName = '';
 
@@ -51,7 +47,7 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     }
   });
 
-  test('complete user flow: dashboard -> chat -> feedback -> knowledge', async ({ page }) => {
+  test('complete user flow: dashboard -> chat -> feedback -> agent detail', async ({ page }) => {
     test.setTimeout(120_000);
     const start = Date.now();
 
@@ -143,22 +139,7 @@ test.describe('Five-Minute Journey (E2E-01)', () => {
     await page.goto(`/agents/${agentId}`);
     await page.waitForLoadState('networkidle');
 
-    // The knowledge snapshot should be visible on the overview tab
-    const knowledgeSnapshot = page.getByTestId('knowledge-snapshot');
-    await expect(knowledgeSnapshot).toBeVisible({ timeout: 10_000 });
-
-    // Verify sub-sections of the knowledge snapshot are present
-    await expect(page.getByTestId('knowledge-growth')).toBeVisible();
-
-    // ---------------------------------------------------------------
-    // 7. Knowledge tab — switch to knowledge and verify explorer
-    // ---------------------------------------------------------------
-    const knowledgeTab = page.getByTestId('knowledge-tab');
-    await expect(knowledgeTab).toBeVisible();
-    await knowledgeTab.click();
-
-    const knowledgeExplorer = page.getByTestId('knowledge-explorer');
-    await expect(knowledgeExplorer).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('sessions-tab')).toBeVisible({ timeout: 10_000 });
 
     // ---------------------------------------------------------------
     // Wall-clock timing assertion

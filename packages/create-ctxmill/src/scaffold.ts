@@ -90,11 +90,8 @@ export default defineConfig({
 export default defineAgent({
   name: 'assistant',
   model: 'claude-sonnet-4-6',
-  tools: ['search-knowledge', 'read-file', 'list-directory', 'search-files'],
+  tools: ['read-file', 'list-directory', 'search-files'],
   systemPrompt: \`You are a helpful AI assistant powered by CTXMill.
-
-## Learned Knowledge
-{{knowledge}}
 
 ## Instructions
 - Use available tools to help the user
@@ -113,38 +110,6 @@ You can render rich UI by outputting JSON blocks:
 - TableView: { component: "TableView", props: { title, columns, data } }
 - ApprovalCard: { component: "ApprovalCard", props: { title, description, action } }
 \`,
-});
-`,
-  );
-
-  writeFileSync(
-    join(projectDir, 'agents', 'assistant', 'knowledge.yaml'),
-    `# Seed knowledge for the assistant agent
-items:
-  - content: "I am a CTXMill-powered assistant. I can use tools, render charts, and learn from interactions."
-    category: fact
-`,
-  );
-
-  writeFileSync(
-    join(projectDir, 'tools', 'search-knowledge.ts'),
-    `import { defineTool } from 'ctxmill';
-import { z } from 'zod';
-
-export default defineTool({
-  name: 'search-knowledge',
-  description: 'Search the knowledge base for relevant information',
-  input: z.object({
-    query: z.string().describe('Search query'),
-    limit: z.number().default(5).describe('Max results to return'),
-  }),
-  handler: async ({ query, limit }, ctx) => {
-    const results = await ctx.knowledge.query({ text: query, limit });
-    if (results.items.length === 0) {
-      return 'No relevant knowledge found.';
-    }
-    return results.items.map((r) => r.content).join('\\n\\n---\\n\\n');
-  },
 });
 `,
   );
@@ -368,7 +333,6 @@ examples:
 agents:
   assistant:
     allowed_tools:
-      - search-knowledge
       - read-file
       - list-directory
       - search-files
@@ -386,17 +350,8 @@ describe('Assistant Agent', () => {
     const agent = mod.default;
 
     expect(agent.name).toBe('assistant');
-    expect(agent.tools).toContain('search-knowledge');
-    expect(agent.systemPrompt).toContain('{{knowledge}}');
-  });
-
-  it('search-knowledge tool has valid schema', async () => {
-    const mod = await import('../tools/search-knowledge.js');
-    const tool = mod.default;
-
-    expect(tool.name).toBe('search-knowledge');
-    expect(tool.input).toBeDefined();
-    expect(typeof tool.handler).toBe('function');
+    expect(agent.tools).toContain('read-file');
+    expect(agent.systemPrompt).toContain('Use available tools');
   });
 });
 `,
@@ -453,7 +408,7 @@ docker compose exec orchestrator npx ctxmill chat
 \`\`\`
 ${packageName}/
   agents/assistant/agent.ts    # Agent definition
-  tools/search-knowledge.ts    # Tool implementations
+  tools/read-file.ts           # Tool implementations
   feedback/examples.yaml       # Evaluation examples
   policies/tools.yaml          # Tool authorization
   tests/                       # Tests

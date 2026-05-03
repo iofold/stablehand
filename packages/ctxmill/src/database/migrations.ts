@@ -120,21 +120,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // ── 4. knowledge_items ─────────────────────────────────────────────
-  await sql`
-    CREATE TABLE IF NOT EXISTS knowledge_items (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL,
-      content TEXT NOT NULL,
-      category TEXT NOT NULL,
-      source TEXT NOT NULL,
-      effectiveness DOUBLE PRECISION NOT NULL DEFAULT 0,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL
-    )
-  `;
-
-  // ── 5. sandbox_sessions (→ conversations, agents) ──────────────────
+  // ── 4. sandbox_sessions (→ conversations, agents) ──────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS sandbox_sessions (
       id TEXT PRIMARY KEY NOT NULL,
@@ -149,9 +135,15 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       updated_at BIGINT NOT NULL,
       last_activity_at BIGINT NOT NULL,
       paused_at BIGINT,
-      paused_reason TEXT
+      paused_reason TEXT,
+      restore_attempts INTEGER NOT NULL DEFAULT 0,
+      last_restore_error TEXT
     )
   `;
+
+  // Idempotent column additions for pre-existing schemas (ADR 013 retry policy).
+  await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS restore_attempts INTEGER NOT NULL DEFAULT 0`;
+  await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS last_restore_error TEXT`;
 
   // ── 7. turns (→ sandbox_sessions, agents, conversations) ───────────
   await sql`
@@ -217,6 +209,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
       event_type TEXT NOT NULL,
       selector JSONB,
+      selector_hash TEXT NOT NULL,
       task_template TEXT NOT NULL,
       enabled BOOLEAN NOT NULL DEFAULT true,
       created_at TEXT NOT NULL
@@ -392,9 +385,6 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // messages
   await sql`CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages(conversation_id, created_at)`;
 
-  // knowledge_items
-  await sql`CREATE INDEX IF NOT EXISTS idx_knowledge_items_agent_category ON knowledge_items(agent_id, category)`;
-
   // sandbox_sessions
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_conversation ON sandbox_sessions(conversation_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_agent ON sandbox_sessions(agent_id)`;
@@ -418,10 +408,15 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE INDEX IF NOT EXISTS idx_scheduled_events_claim_expires ON scheduled_events(status, claim_expires_at)`;
 
   // event_triggers
+  await sql`ALTER TABLE event_triggers ADD COLUMN IF NOT EXISTS selector_hash TEXT`;
+  await sql`UPDATE event_triggers SET selector_hash = md5(COALESCE(selector::text, 'null')) WHERE selector_hash IS NULL`;
+  await sql`ALTER TABLE event_triggers ALTER COLUMN selector_hash SET NOT NULL`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_agent ON event_triggers(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_event_type ON event_triggers(event_type)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_event_triggers_signature ON event_triggers(agent_id, event_type, selector_hash)`;
 
   // agent_versions
+  await sql`DROP INDEX IF EXISTS idx_agent_versions_agent_version`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_versions_agent_version ON agent_versions(agent_id, version)`;
 
   // pending_interrupts

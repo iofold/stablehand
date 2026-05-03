@@ -11,7 +11,7 @@ import {
 // This suite locks the route/SSE identity contract in docs/contracts/session-identity.md.
 const SESSION_STATUSES = new Set(['ACTIVE', 'PAUSED', 'CHECKPOINTED', 'RESTORING', 'TERMINATED', 'COMPLETED', 'ERROR', 'CANCELLED', 'IDLE']);
 
-test.describe('Streaming fixes', () => {
+test.describe('Streaming fixes @extended', () => {
   let agentId = '';
 
   test.beforeEach(async ({ request }) => {
@@ -98,10 +98,10 @@ test.describe('Streaming fixes', () => {
       expect(await page.getByTestId('message-bubble-assistant').count()).toBeGreaterThan(0);
     }).toPass({ timeout: 90_000, intervals: [1_000, 2_000, 5_000] });
 
-    await page.screenshot({ path: 'test-results/streaming-active.png' });
+    await page.screenshot({ path: '.tmp/test-results/streaming-active.png' });
 
     await expect(page.getByTestId('run-finished')).toBeAttached({ timeout: 90_000 });
-    await page.screenshot({ path: 'test-results/streaming-complete.png' });
+    await page.screenshot({ path: '.tmp/test-results/streaming-complete.png' });
   });
 
   test('completed conversation reload shows persisted messages', async ({ page, request }) => {
@@ -121,7 +121,7 @@ test.describe('Streaming fixes', () => {
     }).toPass({ timeout: 20_000, intervals: [1_000, 2_000, 5_000] });
 
     await page.waitForTimeout(3_000);
-    await page.screenshot({ path: 'test-results/completed-reload.png' });
+    await page.screenshot({ path: '.tmp/test-results/completed-reload.png' });
 
     expect(await page.getByTestId('message-bubble-assistant').count()).toBeGreaterThan(0);
   });

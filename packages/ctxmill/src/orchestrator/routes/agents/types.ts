@@ -3,7 +3,6 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { DatabaseRepository } from '../../../database/repository.js';
 import type { TypedEventBus } from '../../../events/bus.js';
 import type { HarnessRegistry } from '../../../harness/types.js';
-import type { KnowledgeStore } from '../../../knowledge/types.js';
 import type { SecretProvider } from '../../../secrets/types.js';
 import type { SystemSettingsService } from '../../../settings/service.js';
 import type { SandboxContainerManager } from '../../../sandbox/container-manager.js';
@@ -34,7 +33,6 @@ export interface AgentRouteOptions {
   sse: SSEManager;
   interrupts: InterruptManager;
   harnessRegistry: HarnessRegistry;
-  knowledgeStore?: KnowledgeStore;
   agentSessionService: AgentSessionService;
   eventBus?: TypedEventBus;
   dataDir?: string;

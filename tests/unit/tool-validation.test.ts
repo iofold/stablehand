@@ -13,9 +13,6 @@ import {
 const mockCtx: ToolContext = {
   agentId: 'test-agent',
   conversationId: 'test-conv',
-  knowledge: {
-    query: async () => ({ items: [] }),
-  },
   workspaceDir: '/tmp/test',
 };
 
@@ -123,7 +120,7 @@ describe('tool validation edge cases', () => {
       expect(registry.getProvider('')?.name).toBe('local');
     });
 
-    it('should let the last provider win for duplicate tool names', async () => {
+    it('should keep duplicate tool names provider-scoped', async () => {
       registry.addProvider(createMockProvider('provider-1', [
         createToolDef('shared-tool', 'from provider 1'),
       ]));
@@ -133,8 +130,8 @@ describe('tool validation edge cases', () => {
       await registry.refresh();
 
       expect(registry.listAll()).toHaveLength(1);
-      expect(registry.getTool('shared-tool')?.description).toBe('from provider 2');
-      expect(registry.getProvider('shared-tool')?.name).toBe('provider-2');
+      expect(registry.getTool('shared-tool')?.description).toBe('from provider 1');
+      expect(registry.getProvider('shared-tool')?.name).toBe('provider-1');
     });
 
     it('should return only builtin tools when listForAgent receives an empty tools array', async () => {

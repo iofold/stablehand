@@ -102,18 +102,6 @@ export async function startDev() {
     }
   }
 
-  // Count knowledge items
-  let knowledgeCount = 0;
-  for (const agentName of agents) {
-    const knowledgePath = join(agentsDir, agentName, 'knowledge.yaml');
-    if (existsSync(knowledgePath)) {
-      const { readFileSync } = await import('node:fs');
-      const content = readFileSync(knowledgePath, 'utf-8');
-      const matches = content.match(/^\s*- content:/gm);
-      knowledgeCount += matches ? matches.length : 0;
-    }
-  }
-
   // Print startup banner
   console.log(`
   \x1b[36m╔═══════════════════════════════════════╗
@@ -126,7 +114,6 @@ export async function startDev() {
   console.log(`  \x1b[1mProvider:\x1b[0m ${provider} (${model})`);
   console.log(`  \x1b[1mAgents:\x1b[0m   ${agents.length} [${agents.join(', ')}]`);
   console.log(`  \x1b[1mTools:\x1b[0m    ${tools.length} [${tools.join(', ')}]`);
-  console.log(`  \x1b[1mKnowledge:\x1b[0m ${knowledgeCount} items`);
   console.log('');
 
   // ── Build DI container (database + services) ─────────
@@ -197,7 +184,6 @@ export async function startDev() {
       instanceId: ctx.sessionId,
       requestId: ctx.requestId,
       workspaceDir: '/workspace',
-      knowledge: { query: async () => ({ items: [] }) },
       eventBus: container.eventBus,
     }),
   );
@@ -237,7 +223,6 @@ export async function startDev() {
     db: container.db,
     port: apiPort,
     host: '0.0.0.0',
-    knowledgeStore: container.knowledgeStore,
     eventBus: container.eventBus,
     dataDir,
     triggerManager: container.triggerManager,

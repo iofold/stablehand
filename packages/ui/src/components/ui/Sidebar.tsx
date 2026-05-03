@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Activity, Brain, Zap, Settings, Wrench, GitBranch, Menu, X, Archive } from 'lucide-react';
+import { LayoutDashboard, Activity, Zap, Settings, Wrench, GitBranch, Menu, X, Archive } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -8,7 +8,6 @@ const navItems = [
   { icon: Activity, label: 'Events', path: '/events' },
   { icon: Wrench, label: 'Tools', path: '/tools' },
   { icon: GitBranch, label: 'Agent Flow', path: '/flow' },
-  { icon: Brain, label: 'Knowledge', path: '/knowledge' },
   { icon: Zap, label: 'Triggers', path: '/triggers' },
   { icon: Archive, label: 'Artifacts', path: '/artifacts' },
   { icon: Settings, label: 'Settings', path: '/settings' },

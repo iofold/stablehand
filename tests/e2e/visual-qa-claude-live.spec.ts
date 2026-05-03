@@ -5,7 +5,7 @@ import { ScreenshotCapture } from './visual-qa/screenshot-capture.js';
 
 const HARNESS = 'claude-agents';
 
-test.describe(`${HARNESS} Live Streaming Visual QA`, () => {
+test.describe(`${HARNESS} Live Streaming Visual QA @extended`, () => {
   // Skip entire suite if API key not available
   test.skip(!hasHarnessKey(HARNESS), `Skipping: ${HARNESS} API key not available`);
 

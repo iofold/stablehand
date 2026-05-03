@@ -113,6 +113,9 @@ export class SandboxSessionManager {
   getSession(conversationId: string) { return this.lifecycleService.getSession(conversationId); }
   getActiveSessions() { return this.lifecycleService.getActiveSessions(); }
   getSessionsByAgent(agentId: string) { return this.lifecycleService.getSessionsByAgent(agentId); }
+  reconcileStrandedRestoringSessions(updatedBeforeMs?: number) {
+    return this.lifecycleService.reconcileStrandedRestoringSessions(updatedBeforeMs);
+  }
   createFreshSession(conversationId: string, agentDef: AgentDefinition, agentId?: string) { return this.runtimeFactory.createFreshSession(conversationId, agentDef, agentId); }
   getExistingSessionWorkspaceDir(agentId: string, sessionId: string) { return this.runtimeFactory.getExistingSessionWorkspaceDir(agentId, sessionId); }
   parsePendingRequestPayload(payloadJson: string) { return this.interruptResumeService.parsePendingRequestPayload(payloadJson); }

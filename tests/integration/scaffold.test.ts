@@ -41,8 +41,7 @@ describe('create-ctxmill scaffold', () => {
     'tsconfig.json',
     'ctxmill.config.ts',
     'agents/assistant/agent.ts',
-    'agents/assistant/knowledge.yaml',
-    'tools/search-knowledge.ts',
+    'tools/read-file.ts',
     'tests/assistant.test.ts',
     '.gitignore',
     '.env.example',
@@ -182,12 +181,12 @@ describe('create-ctxmill scaffold', () => {
     });
   });
 
-  // --- tools/search-knowledge.ts ---
+  // --- tools/read-file.ts ---
 
-  describe('tools/search-knowledge.ts', () => {
+  describe('tools/read-file.ts', () => {
     it('imports defineTool from ctxmill', () => {
       const content = readFileSync(
-        join(projectDir, 'tools', 'search-knowledge.ts'),
+        join(projectDir, 'tools', 'read-file.ts'),
         'utf-8',
       );
       expect(content).toContain("import { defineTool } from 'ctxmill'");

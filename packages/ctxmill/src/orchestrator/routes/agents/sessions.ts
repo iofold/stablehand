@@ -24,7 +24,7 @@ export async function sessionRoutes(
   app: FastifyInstance,
   opts: AgentSubRouteOptions,
 ): Promise<void> {
-  const { db, sessionManager, eventBus, runStartupService, loadAgent } = opts;
+  const { db, interrupts, sessionManager, eventBus, runStartupService, loadAgent } = opts;
 
   const parseSandboxSecrets = (value: unknown): RuntimeSandboxSecrets | undefined => {
     if (value === undefined) return undefined;
@@ -202,6 +202,20 @@ export async function sessionRoutes(
         return reply.status(404).send({ error: 'Session not found', sessionId });
       }
 
+      const inMemoryInterruptResolved = await interrupts.resolve(
+        sessionId,
+        'reject',
+        'Session cancelled',
+        id,
+        session.conversationId ?? undefined,
+      );
+      if (!inMemoryInterruptResolved) {
+        const dbInterrupt = await db.getPendingInterrupt(sessionId);
+        if (dbInterrupt?.agentId === id && dbInterrupt.status === 'pending') {
+          await db.resolveInterrupt(sessionId, 'reject', 'Session cancelled');
+        }
+      }
+
       if (eventBus) {
         eventBus.emitCustom('run_cancelled', id, {
           runId: sessionId,
@@ -230,8 +244,15 @@ export async function sessionRoutes(
       }
 
       const conversationId = session.conversationId;
-      const messages = typeof conversationId === 'string' ? await db.getMessages(conversationId) : [];
-      return reply.send({ session, messages });
+      const [messages, sandboxSession] = await Promise.all([
+        typeof conversationId === 'string' ? db.getMessages(conversationId) : [],
+        session.sessionId ? db.getSandboxSession(session.sessionId) : Promise.resolve(null),
+      ]);
+
+      return reply.send({
+        session: toApiAgentSession(session, sandboxSession, messages.length),
+        messages,
+      });
     },
   );
 
@@ -244,15 +265,23 @@ export async function sessionRoutes(
     ) => {
       const { id } = request.params;
 
-      const [turns, sandboxSessions] = await Promise.all([
+      const [turns, sandboxSessions, conversationSummaries] = await Promise.all([
         db.getTurnsByAgent(id),
         db.getSandboxSessionsByAgent(id),
+        db.getConversationSummaries(id),
       ]);
       const sandboxBySessionId = new Map(sandboxSessions.map((session) => [session.id, session]));
+      const messageCountByConversationId = new Map(
+        conversationSummaries.map((conversation) => [conversation.id, conversation.messageCount]),
+      );
 
       const sessions = turns
         .sort((a, b) => b.startedAt - a.startedAt)
-        .map((turn) => toApiAgentSession(turn, turn.sessionId ? sandboxBySessionId.get(turn.sessionId) : null));
+        .map((turn) => toApiAgentSession(
+          turn,
+          turn.sessionId ? sandboxBySessionId.get(turn.sessionId) : null,
+          turn.conversationId ? messageCountByConversationId.get(turn.conversationId) ?? 0 : 0,
+        ));
 
       return reply.send({ sessions });
     },

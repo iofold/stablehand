@@ -255,7 +255,6 @@ describe('convertTools', () => {
         agentId: 'test-agent',
         conversationId: 'test-conv',
         workspaceDir: '/tmp/workspace',
-        knowledge: expect.any(Object),
         eventBus: undefined,
       }),
     );

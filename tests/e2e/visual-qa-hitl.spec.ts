@@ -6,7 +6,7 @@ import {
 import { hasHarnessKey } from './visual-qa/support.js';
 import { ScreenshotCapture } from './visual-qa/screenshot-capture.js';
 
-test.describe('HITL Approval Flow Visual QA', () => {
+test.describe('HITL Approval Flow Visual QA @extended', () => {
   test.skip(!hasHarnessKey('langgraph'), 'Skipping: OPENAI_API_KEY not available');
 
   let agentId = '';

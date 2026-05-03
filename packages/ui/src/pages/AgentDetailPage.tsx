@@ -13,11 +13,9 @@ import { AgentFormModal } from '@/components/agents/AgentFormModal';
 
 import { useAgentDetail } from '@/hooks/useAgentDetail';
 import { useAgentSessions } from '@/hooks/useAgentSessions';
-import { useAgentKnowledge } from '@/hooks/useAgentKnowledge';
 
 import {
   AgentOverviewTab,
-  AgentKnowledgeTab,
   AgentSessionsTab,
   AgentToolsTab,
   AgentFilesTab,
@@ -32,7 +30,6 @@ import type { TabId } from '@/components/agent';
 
 const TABS: { id: TabId; label: string; testId?: string }[] = [
   { id: 'overview', label: 'Overview' },
-  { id: 'knowledge', label: 'Knowledge', testId: 'knowledge-tab' },
   { id: 'sessions', label: 'Sessions', testId: 'sessions-tab' },
   { id: 'tools', label: 'Tools', testId: 'tools-tab' },
   { id: 'files', label: 'Files', testId: 'files-tab' },
@@ -71,8 +68,6 @@ export function AgentDetailPage() {
     sessionsLoading,
     error: agentDetailError,
     loadSessions,
-    overviewKnowledgeItems,
-    overviewKnowledgeStats,
   } = useAgentDetail(id, activeTab);
 
   const { filteredSessions } = useAgentSessions(allSessions, sessionsFilter);
@@ -84,16 +79,6 @@ export function AgentDetailPage() {
       .sort((a, b) => b.startedAt - a.startedAt)
       .slice(0, 10);
   }, [allSessions]);
-
-  const {
-    knowledgeItems,
-    knowledgeStats,
-    knowledgeLoading,
-    knowledgeSearch,
-    setKnowledgeSearch,
-    knowledgeCategoryFilter,
-    setKnowledgeCategoryFilter,
-  } = useAgentKnowledge(id, activeTab);
 
   const toolsCount = agent?.tools?.length ?? 0;
 
@@ -170,8 +155,8 @@ export function AgentDetailPage() {
     <div className="flex min-h-screen min-w-0 flex-col bg-surface-950">
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-surface-700 bg-surface-850">
-        <div className="mx-auto max-w-7xl px-6">
-          <div className="flex h-16 items-center gap-4">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6">
+          <div className="flex min-h-16 flex-wrap items-center gap-3 py-3 sm:h-16 sm:flex-nowrap sm:gap-4 sm:py-0">
              {/* Back button */}
              <button
                type="button"
@@ -183,9 +168,9 @@ export function AgentDetailPage() {
              </button>
 
             {/* Agent identity */}
-            <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
               <div className="min-w-0">
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2.5 min-w-0">
                   <h1
                     data-testid="agent-name"
                     className="text-xl font-semibold text-surface-100 truncate"
@@ -194,19 +179,21 @@ export function AgentDetailPage() {
                   </h1>
                   <AgentStatusBadge status={agent.status} />
                 </div>
-                <div className="flex items-center gap-2 font-mono text-sm text-surface-400">
+                <div className="flex min-w-0 items-center gap-2 font-mono text-sm text-surface-400">
                   {agent.harness && (
-                    <span className="rounded bg-surface-700/60 px-1.5 py-0.5 text-[11px] font-medium text-surface-200 uppercase tracking-wider">
+                    <span className="shrink-0 rounded bg-surface-700/60 px-1.5 py-0.5 text-[11px] font-medium text-surface-200 uppercase tracking-wider">
                       {agent.harness}
                     </span>
                   )}
-                  {(agent.harnessConfig as Record<string, unknown>)?.model as string}
+                  <span className="truncate">
+                    {(agent.harnessConfig as Record<string, unknown>)?.model as string}
+                  </span>
                 </div>
               </div>
             </div>
 
             {/* Action buttons */}
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex basis-full items-center gap-2 pl-7 sm:basis-auto sm:pl-0">
               <button
                 type="button"
                 onClick={() => setShowEditModal(true)}
@@ -232,7 +219,7 @@ export function AgentDetailPage() {
           {showRunForm && (
             <form
               onSubmit={handleStartRun}
-              className="flex items-center gap-2 pb-3 pt-1"
+              className="flex flex-col gap-2 pb-3 pt-1 sm:flex-row sm:items-center"
             >
               <input
                 type="text"
@@ -289,7 +276,6 @@ export function AgentDetailPage() {
             totalSessions={totalSessions}
             activeSessions={activeSessionsCount}
             toolsCount={toolsCount}
-            knowledgeTotal={overviewKnowledgeStats.totalItems ?? 0}
             recentSessions={recentSessions}
             onContinueSession={(conversationId) => {
               if (conversationId) {
@@ -298,20 +284,6 @@ export function AgentDetailPage() {
                 setActiveTab('sessions');
               }
             }}
-            knowledgeStats={overviewKnowledgeStats}
-            recentKnowledgeItems={overviewKnowledgeItems}
-          />
-        )}
-
-        {activeTab === 'knowledge' && (
-          <AgentKnowledgeTab
-            items={knowledgeItems}
-            stats={knowledgeStats}
-            loading={knowledgeLoading}
-            search={knowledgeSearch}
-            onSearchChange={setKnowledgeSearch}
-            categoryFilter={knowledgeCategoryFilter}
-            onCategoryFilterChange={setKnowledgeCategoryFilter}
           />
         )}
 
@@ -328,6 +300,7 @@ export function AgentDetailPage() {
               setActiveTab('files');
             }}
             onContinueSession={(conversationId) => navigate(`/agents/${id}/conversations/${conversationId}`)}
+            onRetry={() => { void loadSessions(); }}
           />
         )}
 

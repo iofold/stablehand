@@ -23,7 +23,6 @@ import type {
 import type { ToolContext, ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
 import {
-  createStubKnowledgeContext,
   normalizeStreamTextDeltas,
   resolveSecretRef,
 } from './shared.js';
@@ -862,7 +861,6 @@ export class ClaudeAgentsHarness implements AgentHarness {
       agentId: config?.agentId ?? '',
       conversationId: config?.conversationId ?? runId,
       workspaceDir: config?.workspaceDir ?? process.cwd(),
-      knowledge: createStubKnowledgeContext(),
     };
   }
 

@@ -11,11 +11,8 @@ import {
   fetchAllActiveSessions,
   fetchConversations,
   fetchMessages,
-  fetchKnowledge,
-  fetchKnowledgeStats,
   fetchEvents,
   fetchAllArtifacts,
-  deleteKnowledgeItem,
   listFiles,
   readFile,
   fetchInterrupts,
@@ -179,22 +176,6 @@ describe('fetchMessages', () => {
   });
 });
 
-describe('fetchKnowledge', () => {
-  it('calls with q and category params', async () => {
-    await fetchKnowledge('a1', { q: 'test', category: 'faq' });
-
-    const calledUrl = (mockFetch.mock.calls[0] as string[])[0];
-    expect(calledUrl).toContain('/api/agents/a1/knowledge?');
-    expect(calledUrl).toContain('q=test');
-    expect(calledUrl).toContain('category=faq');
-  });
-
-  it('throws on failure', async () => {
-    mockFetch.mockResolvedValue({ ok: false, status: 500, json: mockJson });
-    await expect(fetchKnowledge('a1')).rejects.toThrow('failed: 500');
-  });
-});
-
 describe('query serialization', () => {
   it('keeps zero-valued query parameters and omits empty strings', async () => {
     await fetchEvents({ cursor: 0, limit: 0, type: '', since: 0 });
@@ -209,35 +190,7 @@ describe('query serialization', () => {
   });
 });
 
-describe('fetchKnowledgeStats', () => {
-  it('throws on failure', async () => {
-    mockFetch.mockResolvedValue({ ok: false, status: 503, json: mockJson });
-    await expect(fetchKnowledgeStats('a1')).rejects.toThrow('API GET /api/agents/a1/knowledge/stats failed: 503');
-  });
-});
-
 // ── Endpoints that throw on failure ────────────────────────────────
-
-describe('deleteKnowledgeItem', () => {
-  it('calls DELETE and returns data', async () => {
-    mockJson.mockResolvedValue({ deleted: true });
-    const result = await deleteKnowledgeItem('a1', 'k1');
-
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/knowledge/k1', {
-      method: 'DELETE',
-      headers: undefined,
-      body: undefined,
-    });
-    expect(result).toEqual({ deleted: true });
-  });
-
-  it('throws on failure', async () => {
-    mockFetch.mockResolvedValue({ ok: false, status: 500, json: mockJson });
-    await expect(deleteKnowledgeItem('a1', 'k1')).rejects.toThrow(
-      'API DELETE /api/agents/a1/knowledge/k1 failed: 500',
-    );
-  });
-});
 
 describe('listFiles', () => {
   it('calls with encoded path param', async () => {

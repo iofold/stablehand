@@ -7,6 +7,7 @@ export interface PtcCodegenOptions {
   tools: ToolDefinition[];
   scriptDir: string;
   daemonPort: number;
+  token: string;
 }
 
 export async function generatePtcScripts(opts: PtcCodegenOptions): Promise<string[]> {
@@ -16,7 +17,7 @@ export async function generatePtcScripts(opts: PtcCodegenOptions): Promise<strin
   }
 
   await mkdir(opts.scriptDir, { recursive: true });
-  await writeFile(join(opts.scriptDir, '_runtime.ts'), buildRuntimeSource(opts.daemonPort), 'utf8');
+  await writeFile(join(opts.scriptDir, '_runtime.ts'), buildRuntimeSource(opts.daemonPort, opts.token), 'utf8');
 
   const scriptPaths: string[] = [];
 
@@ -29,8 +30,9 @@ export async function generatePtcScripts(opts: PtcCodegenOptions): Promise<strin
   return scriptPaths;
 }
 
-function buildRuntimeSource(daemonPort: number): string {
+function buildRuntimeSource(daemonPort: number, token: string): string {
   return `const TOOL_API_BASE_URL = ${JSON.stringify(`http://localhost:${daemonPort}`)};
+const TOOL_API_TOKEN = ${JSON.stringify(token)};
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -41,6 +43,7 @@ export async function callTool(name: string, args: unknown): Promise<unknown> {
     const response = await fetch(\`${'${TOOL_API_BASE_URL}'}/tools/${'${encodeURIComponent(name)}'}\`, {
       method: 'POST',
       headers: {
+        'authorization': \`Bearer ${'${TOOL_API_TOKEN}'}\`,
         'content-type': 'application/json',
       },
       body: JSON.stringify(args ?? {}),

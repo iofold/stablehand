@@ -1,12 +1,14 @@
-import { useState, useMemo, Fragment } from 'react';
+import { useState, useMemo, Fragment, useCallback } from 'react';
 import {
   ChevronDown,
   ChevronRight,
   MessageSquare,
+  RefreshCw,
 } from 'lucide-react';
-import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
+import { SessionStatusBadge } from './SessionStatusBadge';
 import { cn } from '@/lib/utils';
 import type { AgentSession } from '@/stores/agents';
+import { restoreSandboxSession } from '@/lib/api';
 import { formatTime, formatDuration } from './types';
 
 /* ------------------------------------------------------------------ */
@@ -25,6 +27,7 @@ export interface AgentSessionsTabProps {
   /** Called when user wants to view files for a specific run session */
   onViewSessionFiles?: (sessionId: string) => void;
   onContinueSession?: (conversationId: string) => void;
+  onRetry?: () => void;
 }
 
 export function AgentSessionsTab({
@@ -36,8 +39,31 @@ export function AgentSessionsTab({
   agentId,
   onViewSessionFiles,
   onContinueSession,
+  onRetry,
 }: AgentSessionsTabProps) {
   const [expandedConversationId, setExpandedConversationId] = useState<string | null>(null);
+  // Per-session restore state (ADR 013). Map of sessionId → 'pending' | error message.
+  const [restoreState, setRestoreState] = useState<Record<string, 'pending' | { error: string } | undefined>>({});
+  // Toast on final restore failure (ADR 013: only show on terminal failure, not auto-transitions).
+  const [restoreToast, setRestoreToast] = useState<string | null>(null);
+
+  const handleRetryRestore = useCallback(async (entry: AgentSession) => {
+    const sandboxSessionId = entry.sandboxSessionId ?? entry.id;
+    if (!sandboxSessionId) return;
+    setRestoreState((prev) => ({ ...prev, [entry.id]: 'pending' }));
+    try {
+      await restoreSandboxSession(agentId, sandboxSessionId);
+      setRestoreState((prev) => {
+        const next = { ...prev };
+        delete next[entry.id];
+        return next;
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setRestoreState((prev) => ({ ...prev, [entry.id]: { error: message } }));
+      setRestoreToast(`Restore failed: ${message}`);
+    }
+  }, [agentId]);
 
   const groupedSessions = useMemo(() => {
     const grouped = new Map<string, AgentSession[]>();
@@ -50,9 +76,7 @@ export function AgentSessionsTab({
     return Array.from(grouped.entries()).map(([conversationId, sessionEntries]) => ({
       conversationId,
       startedAt: Math.min(...sessionEntries.map((entry) => entry.startedAt)),
-      messageCount: sessionEntries.reduce((acc, entry) => {
-        return acc + (entry.messageCount ?? 0);
-      }, 0),
+      messageCount: Math.max(...sessionEntries.map((entry) => entry.messageCount ?? 0)),
       lastMessageAt: Math.max(...sessionEntries.map((entry) => entry.completedAt ?? entry.startedAt)),
       entries: sessionEntries.sort((a, b) => b.startedAt - a.startedAt),
     })).sort((a, b) => b.startedAt - a.startedAt);
@@ -67,6 +91,24 @@ export function AgentSessionsTab({
 
   return (
     <div data-testid="sessions-history" className="space-y-4">
+      {restoreToast && (
+        <div
+          role="alert"
+          data-testid="restore-failure-toast"
+          className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm text-red-300"
+        >
+          <span>{restoreToast}</span>
+          <button
+            type="button"
+            onClick={() => setRestoreToast(null)}
+            className="rounded-md border border-red-400/30 px-2 py-1 text-xs text-red-100 transition-colors hover:bg-red-500/10"
+            aria-label="Dismiss restore failure"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Status filter */}
       <div className="flex gap-1.5 flex-wrap">
         {RUN_FILTERS.map((f) => (
@@ -90,12 +132,29 @@ export function AgentSessionsTab({
       {loading ? (
         <div className="text-center py-12 text-surface-400 text-sm">Loading conversations...</div>
       ) : error ? (
-        <div role="alert" className="text-center py-16">
-          <p className="text-red-300 font-medium">Failed to load conversations</p>
-          <p className="text-surface-400 text-sm mt-1">{error}</p>
+        <div
+          role="alert"
+          data-testid="sessions-load-error"
+          className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-6 text-center"
+        >
+          <p className="text-red-200 font-medium">Failed to load conversations</p>
+          <p className="text-red-200/70 text-sm mt-1">{error}</p>
+          <p className="text-surface-400 text-xs mt-2">
+            This is a load failure, not an empty session list.
+          </p>
+          {onRetry && (
+            <button
+              type="button"
+              data-testid="sessions-retry-button"
+              onClick={onRetry}
+              className="btn-secondary mt-4"
+            >
+              Retry
+            </button>
+          )}
         </div>
       ) : groupedSessions.length === 0 ? (
-        <div className="text-center py-16">
+        <div data-testid="sessions-empty-state" className="text-center py-16">
           <p className="text-surface-400 font-medium">No conversations found</p>
           <p className="text-surface-400 text-sm mt-1">
             {filter === 'all' ? 'Start a conversation to view activity.' : `No ${filter} conversations.`}
@@ -129,7 +188,11 @@ export function AgentSessionsTab({
                         {session.conversationId.slice(0, 8)}
                       </td>
                       <td className="px-4 py-3">
-                        <RunStatusBadge status={latestEntry.status} pausedReason={latestEntry.pausedReason} />
+                        <SessionStatusBadge
+                          status={latestEntry.status}
+                          pausedReason={latestEntry.pausedReason}
+                          lastRestoreError={latestEntry.lastRestoreError}
+                        />
                       </td>
                       <td className="px-4 py-3 text-sm text-surface-400 tabular-nums">
                         {formatTime(session.startedAt)}
@@ -171,12 +234,18 @@ export function AgentSessionsTab({
                             <div className="space-y-3">
                               <p className="text-[11px] text-surface-400 uppercase tracking-wider">Turns</p>
                               {session.entries.map((entry, idx) => {
+                                const showRetryRestore = entry.status.toUpperCase() === 'CHECKPOINTED' && Boolean(entry.lastRestoreError);
+                                const restore = restoreState[entry.id];
                                 return (
                                   <div key={entry.id} className="border border-surface-700/50 rounded-lg bg-surface-800/40 p-3 space-y-3">
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="flex items-center gap-3 flex-wrap">
                                         <span className="text-xs font-mono text-surface-400">Turn {idx + 1}</span>
-                                        <RunStatusBadge status={entry.status} pausedReason={entry.pausedReason} />
+                                        <SessionStatusBadge
+                                          status={entry.status}
+                                          pausedReason={entry.pausedReason}
+                                          lastRestoreError={entry.lastRestoreError}
+                                        />
                                         <span className="text-xs text-surface-400 tabular-nums">
                                           {formatTime(entry.startedAt)}
                                         </span>
@@ -184,8 +253,35 @@ export function AgentSessionsTab({
                                           {entry.completedAt ? formatDuration(entry.startedAt, entry.completedAt) : 'In progress...'}
                                         </span>
                                       </div>
+                                      {showRetryRestore && (
+                                        <button
+                                          type="button"
+                                          data-testid="retry-restore-button"
+                                          onClick={(e) => { e.stopPropagation(); void handleRetryRestore(entry); }}
+                                          disabled={restore === 'pending'}
+                                          className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-200 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+                                          title={`Last restore error: ${entry.lastRestoreError}`}
+                                        >
+                                          <RefreshCw className={cn('h-3.5 w-3.5', restore === 'pending' && 'animate-spin')} />
+                                          {restore === 'pending' ? 'Retrying…' : 'Retry restore'}
+                                        </button>
+                                      )}
                                     </div>
-                                    
+
+                                    {showRetryRestore && entry.lastRestoreError && (
+                                      <p
+                                        data-testid="restore-error-detail"
+                                        className="text-[11px] text-red-300 bg-red-500/5 border border-red-500/20 rounded px-2 py-1"
+                                      >
+                                        Last restore error: {entry.lastRestoreError}
+                                      </p>
+                                    )}
+                                    {restore && typeof restore === 'object' && (
+                                      <p role="alert" className="text-[11px] text-red-300">
+                                        Retry failed: {restore.error}
+                                      </p>
+                                    )}
+
                                     {/* Task description */}
                                     {entry.taskDescription && (
                                       <p className="text-sm text-surface-300 bg-surface-900/60 rounded px-2 py-1.5 border border-surface-700/30">

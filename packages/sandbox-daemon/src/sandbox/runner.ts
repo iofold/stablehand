@@ -43,6 +43,7 @@ import type {
   ApprovalCallback,
   AgentEvent,
 } from '../harness/types.js';
+import type { ToolContext } from '../tool/types.js';
 import type { ExecutionPhase } from './execution-phase.js';
 import { ExecutionPhaseTracker } from './execution-phase.js';
 import { SessionStateCollector } from './checkpoint.js';
@@ -58,7 +59,7 @@ import {
 } from './proto-convert.js';
 import { createArtifactHandlers } from './artifact-handler.js';
 import type { OrchestratorServiceClient } from './tool-proxy.js';
-import { setSessionTools } from './daemon.js';
+import { getToolApiToken, setSessionTools } from './daemon.js';
 import { stringifyJsonWithBigInts } from './json-serialization.js';
 import { generatePtcScripts } from './ptc-codegen.js';
 
@@ -104,6 +105,15 @@ function createDaemonHandlersForSession(
     agentId,
     workspaceDir,
   });
+}
+
+function createToolContext(agentId: string, conversationId: string, sessionId: string, workspaceDir: string): ToolContext {
+  return {
+    agentId,
+    conversationId,
+    instanceId: sessionId,
+    workspaceDir,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -339,9 +349,8 @@ export async function openSession(
         sessionIdRef: activeRunId,
         daemonHandlers,
       });
-      setSessionTools(tools);
-
       const config = protoFreshBootstrapToSessionConfig(fresh, tools, secrets);
+      setSessionTools(tools, createToolContext(fresh.agentId, fresh.conversationId, sessionId, config.workspaceDir));
       const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
 
       try {
@@ -352,6 +361,7 @@ export async function openSession(
           tools,
           scriptDir: `${config.workspaceDir}/.tools`,
           daemonPort: ptcPort,
+          token: getToolApiToken(),
         });
 
         if (ptcScripts.length > 0) {
@@ -395,7 +405,6 @@ export async function openSession(
         sessionIdRef: activeRunId,
         daemonHandlers,
       });
-      setSessionTools(tools);
 
       const config = {
         agentId: restore.agentId,
@@ -407,6 +416,7 @@ export async function openSession(
         workspaceDir,
         signal: opts?.signal,
       };
+      setSessionTools(tools, createToolContext(restore.agentId, checkpoint.conversationId, sessionId, config.workspaceDir));
 
       const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
 
@@ -418,6 +428,7 @@ export async function openSession(
           tools,
           scriptDir: `${config.workspaceDir}/.tools`,
           daemonPort: ptcPort,
+          token: getToolApiToken(),
         });
       } catch (err) {
         console.error('[sandbox] PTC script generation failed during restore, continuing in degraded PTC mode:', err);
@@ -569,9 +580,24 @@ export async function* deliverTurn(
  * The checkpoint can be stored by the orchestrator and later provided to
  * `openSession` via a RestoreBootstrap to resume the conversation.
  *
+ * Suspend is cooperative: the runner first asks the phase tracker for a safe
+ * point. If the harness is mid-LLM/tool-execution the request is queued and
+ * resolves at the next safe phase (between turns or during idle). Callers can
+ * cap the wait via `safePointTimeoutMs`; on timeout we throw rather than
+ * capturing a partial checkpoint (ctx-6nu).
+ *
  * @param reason - Human-readable reason for the suspension (logged only).
+ * @param sessionId - Optional session id used to validate the request matches
+ *   the active context.
+ * @param safePointTimeoutMs - Maximum time to wait for the harness to reach
+ *   a safe-suspend phase. Defaults to 30s. Set to 0 to fail immediately on an
+ *   unsafe phase.
  */
-export async function suspendSession(reason: string, sessionId?: string): Promise<SuspendSessionResponse> {
+export async function suspendSession(
+  reason: string,
+  sessionId?: string,
+  safePointTimeoutMs = 30_000,
+): Promise<SuspendSessionResponse> {
   const ctx = sessionId
     ? await getContextForSession(sessionId, 'suspendSession')
     : activeContext;
@@ -580,6 +606,42 @@ export async function suspendSession(reason: string, sessionId?: string): Promis
   }
 
   console.error(`[sandbox] suspending session ${ctx.sessionId}: ${reason}`);
+
+  // Cooperative phase gate per ADR 005 / ctx-6nu.
+  // - Idle / between-turn / hitl-wait: resolves immediately.
+  // - In-flight tool/LLM execution: waits for the next safe phase boundary.
+  // - Unsafe phase that does not reach a safe point in time: throws.
+  if (!ctx.phaseTracker.isSuspendSafe()) {
+    if (safePointTimeoutMs <= 0) {
+      throw new ConnectError(
+        `[sandbox] suspendSession: harness is at unsafe phase '${ctx.phaseTracker.getPhase()}' and safePointTimeoutMs=0`,
+        Code.FailedPrecondition,
+      );
+    }
+    console.error(
+      `[sandbox] suspendSession: phase='${ctx.phaseTracker.getPhase()}' is unsafe; waiting up to ${safePointTimeoutMs}ms for a safe point`,
+    );
+    const reachedSafePoint = ctx.phaseTracker.requestSuspend();
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<'timeout'>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve('timeout'), safePointTimeoutMs);
+    });
+    try {
+      const winner = await Promise.race([
+        reachedSafePoint.then(() => 'ready' as const),
+        timedOut,
+      ]);
+      if (winner === 'timeout') {
+        ctx.phaseTracker.cancelSuspend();
+        throw new ConnectError(
+          `[sandbox] suspendSession: timed out after ${safePointTimeoutMs}ms waiting for safe phase (current='${ctx.phaseTracker.getPhase()}')`,
+          Code.DeadlineExceeded,
+        );
+      }
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+  }
 
   const harnessState = await ctx.session.exportState();
 

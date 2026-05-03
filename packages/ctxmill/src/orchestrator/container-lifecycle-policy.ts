@@ -12,6 +12,7 @@ import type { SessionStatus } from './session-manager/types.js';
 const TAG = '[LifecyclePolicy]';
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
+const MAX_IDLE_CHECKPOINT_FAILURES = 3;
 
 export type PauseState = 'none' | 'promoting';
 
@@ -25,6 +26,7 @@ export interface PauseEntry {
   state: PauseState;
   idleTimer?: ReturnType<typeof setTimeout>;
   idleCallbacks?: IdleCallbacks;
+  idleFailureCount?: number;
 }
 
 type ManagedContainerWithLabels = ContainerInfo & { labels: Record<string, string> };
@@ -157,6 +159,7 @@ export class ContainerLifecyclePolicy {
     entry.containerId = containerId;
     entry.state = 'none';
     entry.idleCallbacks = callbacks;
+    entry.idleFailureCount = 0;
     entry.idleTimer = setTimeout(() => {
       void this.executeIdleCheckpoint(sessionId).catch((err) => {
         this.logger.warn(`${TAG} idle checkpoint failed for session ${sessionId}:`, err);
@@ -211,6 +214,36 @@ export class ContainerLifecyclePolicy {
     this.entries.set(sessionId, entry);
   }
 
+  private rescheduleIdleCheckpointRetry(sessionId: string, entry: PauseEntry, callbacks: IdleCallbacks): void {
+    const failureCount = (entry.idleFailureCount ?? 0) + 1;
+    entry.idleFailureCount = failureCount;
+    entry.state = 'none';
+    entry.idleCallbacks = callbacks;
+
+    if (failureCount > MAX_IDLE_CHECKPOINT_FAILURES) {
+      this.logger.error(
+        `${TAG} idle checkpoint retry limit reached for session ${sessionId}; idle monitoring disabled until activity reschedules it`,
+      );
+      this.clearEntryTimers(entry);
+      entry.idleCallbacks = undefined;
+      this.entries.delete(sessionId);
+      return;
+    }
+
+    this.clearEntryTimers(entry);
+    entry.idleTimer = setTimeout(() => {
+      void this.executeIdleCheckpoint(sessionId).catch((err) => {
+        this.logger.warn(`${TAG} idle checkpoint retry failed for session ${sessionId}:`, err);
+      });
+    }, this.idleTimeoutMs);
+    unrefTimer(entry.idleTimer);
+    this.entries.set(sessionId, entry);
+    this.logger.warn(
+      `${TAG} re-armed idle checkpoint for session ${sessionId} after transient failure ` +
+      `(attempt ${failureCount}/${MAX_IDLE_CHECKPOINT_FAILURES})`,
+    );
+  }
+
   private async executeIdleCheckpoint(sessionId: string): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) {
@@ -237,6 +270,7 @@ export class ContainerLifecyclePolicy {
     try {
       await retryWithBackoff(() => callbacks.onCheckpoint(sessionId), {
         delays: [1_000, 2_000],
+        shouldRetry: (err) => !hasStatusCode(err, 404),
         onRetry: (err, attempt, delayMs) => {
           this.logger.warn(
             `${TAG} retrying idle checkpoint for session ${sessionId} after attempt ${attempt + 1} in ${delayMs}ms:`,
@@ -256,24 +290,73 @@ export class ContainerLifecyclePolicy {
         } catch (goneErr) {
           this.logger.warn(`${TAG} onContainerGone failed for session ${sessionId}:`, goneErr);
         }
+        this.clearEntryTimers(entry);
+        entry.state = 'none';
+        entry.idleCallbacks = undefined;
+        this.entries.delete(sessionId);
       } else {
         this.logger.error(`${TAG} failed to checkpoint idle session ${sessionId}:`, err);
+        this.rescheduleIdleCheckpointRetry(sessionId, entry, callbacks);
       }
-
-      this.clearEntryTimers(entry);
-      entry.state = 'none';
-      entry.idleCallbacks = undefined;
-      this.entries.delete(sessionId);
     }
   }
 
   private async reconcileOnStartup(): Promise<void> {
     this.logger.info(`${TAG} reconciling sandbox sessions on startup`);
 
-    const [dbSessions, liveContainers] = await Promise.all([
+    const [dbSessions, strandedRestoring, liveContainers] = await Promise.all([
       this.db.getActiveSandboxSessions(),
+      this.db.getStrandedRestoringSessions(),
       this.containerManager.listManagedContainersWithLabels(),
     ]);
+
+    // ctx-7fz: roll any session stranded in RESTORING back to a recoverable
+    // state. This must run before container reconciliation so the rest of the
+    // pass sees a consistent ACTIVE/PAUSED/CHECKPOINTED set.
+    let restoringReconciled = 0;
+    let restoringTerminated = 0;
+    for (const stranded of strandedRestoring) {
+      this.sessionConversationIds.set(stranded.id, stranded.conversationId);
+      const checkpoint = await this.db.getCheckpointV2(stranded.id);
+      if (checkpoint) {
+        this.logger.warn(
+          `${TAG} startup: session ${stranded.id} stranded in RESTORING (attempts=${stranded.restoreAttempts ?? 0}) -> CHECKPOINTED`,
+        );
+        await this.statusCoordinator.transition({
+          sessionId: stranded.id,
+          fromStatus: 'RESTORING',
+          toStatus: 'CHECKPOINTED',
+          clearRuntime: true,
+          extra: {
+            lastRestoreError:
+              stranded.lastRestoreError ?? 'orchestrator restarted while restoring',
+          },
+        });
+        await this.reconciliationCallbacks.onSessionEvicted(stranded.id, stranded.conversationId);
+        restoringReconciled++;
+      } else {
+        this.logger.warn(
+          `${TAG} startup: session ${stranded.id} stranded in RESTORING with no checkpoint -> TERMINATED`,
+        );
+        await this.statusCoordinator.transition({
+          sessionId: stranded.id,
+          fromStatus: 'RESTORING',
+          toStatus: 'TERMINATED',
+          clearRuntime: true,
+          extra: {
+            lastRestoreError: 'orchestrator restart: no recoverable checkpoint',
+          },
+        });
+        await this.reconciliationCallbacks.onSessionEvicted(stranded.id, stranded.conversationId);
+        restoringTerminated++;
+      }
+      this.cleanup(stranded.id);
+    }
+    if (strandedRestoring.length > 0) {
+      this.logger.info(
+        `${TAG} stranded-RESTORING reconciliation: checkpointed=${restoringReconciled}, terminated=${restoringTerminated}`,
+      );
+    }
 
     const containerByName = new Map(liveContainers.map((container) => [container.containerName, container]));
     const containerById = new Map(liveContainers.map((container) => [container.containerId, container]));
@@ -501,7 +584,7 @@ export class ContainerLifecyclePolicy {
           continue;
         }
 
-        const decision = cleanupReasons.has(container.containerId)
+        const decision = cleanupReasons.has(container.containerId) || !hasActiveSession
           ? 'kill'
           : await this.shouldKillContainer(container.containerId, sessionId);
 

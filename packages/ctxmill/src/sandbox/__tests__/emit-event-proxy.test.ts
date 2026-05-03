@@ -571,7 +571,6 @@ describe('emit-event in-process mode (direct EventBus call)', () => {
       agentId: 'agent-local',
       conversationId: 'conv-1',
       workspaceDir: '/tmp',
-      knowledge: { query: async () => ({ items: [] }) },
       eventBus,
     };
 
@@ -595,7 +594,6 @@ describe('emit-event in-process mode (direct EventBus call)', () => {
       agentId: 'agent-no-bus',
       conversationId: 'conv-1',
       workspaceDir: '/tmp',
-      knowledge: { query: async () => ({ items: [] }) },
       // no eventBus
     };
 

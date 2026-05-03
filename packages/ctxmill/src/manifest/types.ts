@@ -30,8 +30,8 @@ export interface ManifestSpec {
 }
 
 export interface ManifestHarnessConfig {
-  provider: string;
-  model: string;
+  provider?: string;
+  model?: string;
   apiKeyRef?: string;
   temperature?: number;
   maxTokens?: number;
@@ -42,6 +42,8 @@ export interface ManifestHarnessConfig {
 
   /** Subagent definitions (LangGraph: per-subagent model override; Claude: passed to SDK agents option) */
   subagents?: Record<string, ManifestSubagentConfig> | ManifestSubagentConfig[];
+
+  [key: string]: unknown;
 }
 
 /** Subagent definition for agent manifests */

@@ -136,10 +136,6 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
             <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Tools</span>
             <AnimatedCounter value={totalTools} className="tabular-nums font-medium text-surface-200" />
           </div>
-          <div className="flex flex-col min-w-[70px]">
-            <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Knowledge</span>
-            <AnimatedCounter value={agent.knowledgeItems ?? 0} className="tabular-nums font-medium text-surface-200" />
-          </div>
         </div>
 
         <div className="flex flex-col items-start md:items-end gap-3 flex-shrink-0 min-w-[200px]">

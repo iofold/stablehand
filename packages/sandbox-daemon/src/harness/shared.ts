@@ -39,9 +39,6 @@ export function normalizeStreamTextDeltas(content: unknown): string[] {
   return [];
 }
 
-export function createStubKnowledgeContext() {
-  return { query: async () => ({ items: [] as Array<{ id: string; content: string; score: number }> }) };
-}
 export function resolveSecretRef(
   ref: string | undefined,
   secrets: ResolvedSecrets,

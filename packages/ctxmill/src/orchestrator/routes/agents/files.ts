@@ -140,6 +140,9 @@ export async function fileRoutes(
           size: fileStat.size,
         });
       } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return reply.status(404).send({ error: 'File not found' });
+        }
         return reply.status(400).send(safeError('Cannot read file', err));
       }
     },

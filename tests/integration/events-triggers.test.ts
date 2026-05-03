@@ -9,14 +9,13 @@ import { createContainer } from '../../packages/ctxmill/src/config/container.js'
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
 
-describe('Events, Knowledge, and Triggers Integration', () => {
+describe('Events and Triggers Integration', () => {
   let app: FastifyInstance;
   let container: AppContainer;
   let dataDir: string;
 
   // Shared state across tests
   let agentId: string;
-  let knowledgeItemId: string;
   let triggerId: string;
 
   beforeEach(() => { allowConsoleErrors(); });
@@ -36,7 +35,6 @@ describe('Events, Knowledge, and Triggers Integration', () => {
       db: container.db,
       agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
-      knowledgeStore: container.knowledgeStore,
       triggerManager: container.triggerManager,
       runStartupService: container.runStartupService,
       dataDir,
@@ -148,154 +146,6 @@ describe('Events, Knowledge, and Triggers Integration', () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body.types).toContain('agent.created');
-    });
-  });
-
-  // ────────────────────────────────────────────────────────
-  // Knowledge (/api/knowledge)
-  // ────────────────────────────────────────────────────────
-
-  describe('Knowledge API', () => {
-    describe('Shared Knowledge', () => {
-      it('GET /api/knowledge/shared is initially empty', async () => {
-        const res = await app.inject({ method: 'GET', url: '/api/knowledge/shared' });
-        expect(res.statusCode).toBe(200);
-        const body = res.json();
-        expect(body).toHaveProperty('items');
-        expect(body).toHaveProperty('total');
-        expect(body.items).toEqual([]);
-        expect(body.total).toBe(0);
-      });
-
-      it('POST /api/knowledge/shared creates a knowledge item', async () => {
-        const res = await app.inject({
-          method: 'POST',
-          url: '/api/knowledge/shared',
-          payload: {
-            content: 'Always use parameterized queries to prevent SQL injection.',
-            category: 'security',
-            source: 'human',
-            effectiveness: 0.9,
-          },
-        });
-        expect(res.statusCode).toBe(201);
-        const body = res.json();
-        expect(body).toHaveProperty('id');
-        expect(body.content).toBe('Always use parameterized queries to prevent SQL injection.');
-        expect(body.category).toBe('security');
-        knowledgeItemId = body.id;
-      });
-
-      it('POST /api/knowledge/shared rejects missing content', async () => {
-        const res = await app.inject({
-          method: 'POST',
-          url: '/api/knowledge/shared',
-          payload: { category: 'test' },
-        });
-        expect(res.statusCode).toBe(400);
-        const body = res.json();
-        expect(body.error).toBeDefined();
-      });
-
-      it('GET /api/knowledge/shared returns result structure after add', async () => {
-        const res = await app.inject({ method: 'GET', url: '/api/knowledge/shared' });
-        expect(res.statusCode).toBe(200);
-        const body = res.json();
-        // InMemoryKnowledgeStore.listShared() is a stub that returns [],
-        // so we only verify the response shape here.
-        expect(body).toHaveProperty('items');
-        expect(body).toHaveProperty('total');
-        expect(Array.isArray(body.items)).toBe(true);
-        expect(typeof body.total).toBe('number');
-      });
-
-      it('GET /api/knowledge/shared/stats returns stats structure', async () => {
-        const res = await app.inject({ method: 'GET', url: '/api/knowledge/shared/stats' });
-        expect(res.statusCode).toBe(200);
-        const body = res.json();
-        expect(body).toHaveProperty('totalItems');
-        expect(body).toHaveProperty('categories');
-        expect(body).toHaveProperty('recentItems');
-        expect(typeof body.totalItems).toBe('number');
-      });
-
-      it('DELETE /api/knowledge/shared/:itemId removes the item', async () => {
-        const res = await app.inject({
-          method: 'DELETE',
-          url: `/api/knowledge/shared/${knowledgeItemId}`,
-        });
-        expect(res.statusCode).toBe(200);
-        const body = res.json();
-        expect(body.ok).toBe(true);
-      });
-
-      it('GET /api/knowledge/shared no longer contains deleted item', async () => {
-        const res = await app.inject({ method: 'GET', url: '/api/knowledge/shared' });
-        expect(res.statusCode).toBe(200);
-        const body = res.json();
-        const found = body.items.find((i: { id: string }) => i.id === knowledgeItemId);
-        expect(found).toBeUndefined();
-      });
-
-      it('DELETE /api/knowledge/shared/:itemId returns 404 for non-existent', async () => {
-        const res = await app.inject({
-          method: 'DELETE',
-          url: '/api/knowledge/shared/non-existent-id',
-        });
-        expect(res.statusCode).toBe(404);
-      });
-    });
-
-    describe('Search', () => {
-      it('GET /api/knowledge/search returns result structure', async () => {
-        const res = await app.inject({ method: 'GET', url: '/api/knowledge/search' });
-        expect(res.statusCode).toBe(200);
-        const body = res.json();
-        expect(body).toHaveProperty('items');
-        expect(body).toHaveProperty('total');
-        expect(Array.isArray(body.items)).toBe(true);
-      });
-
-      it('GET /api/knowledge/search accepts query parameters', async () => {
-        const res = await app.inject({
-          method: 'GET',
-          url: '/api/knowledge/search?q=test&category=general&limit=10&offset=0',
-        });
-        expect(res.statusCode).toBe(200);
-        const body = res.json();
-        expect(body).toHaveProperty('items');
-        expect(body).toHaveProperty('total');
-      });
-    });
-  });
-
-  // ────────────────────────────────────────────────────────
-  // Agent Knowledge (/api/agents/:id/knowledge)
-  // ────────────────────────────────────────────────────────
-
-  describe('Agent Knowledge', () => {
-    it('GET /api/agents/:id/knowledge returns empty for new agent', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `/api/agents/${agentId}/knowledge`,
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(body).toHaveProperty('items');
-      expect(body).toHaveProperty('total');
-      expect(body.total).toBe(0);
-    });
-
-    it('GET /api/agents/:id/knowledge/stats returns stats structure', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `/api/agents/${agentId}/knowledge/stats`,
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(body).toHaveProperty('totalItems');
-      expect(body).toHaveProperty('categories');
-      expect(body).toHaveProperty('recentItems');
     });
   });
 

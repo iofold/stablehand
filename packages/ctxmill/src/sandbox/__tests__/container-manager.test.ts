@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import type { Writable } from 'node:stream';
 import type Dockerode from 'dockerode';
@@ -126,6 +126,10 @@ describe('ContainerManager', () => {
     manager = new ContainerManager(undefined, docker as unknown as Dockerode);
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   // ── createContainer ─────────────────────────────────────
 
   describe('createContainer', () => {
@@ -166,6 +170,7 @@ describe('ContainerManager', () => {
       // Env
       expect(arg.Env).toContain('SANDBOX_PORT=50051');
       expect(arg.Env).toContain(`NODE_OPTIONS=--max-old-space-size=${Math.floor(2048 * 0.9)}`);
+      expect(arg.Env).toContain('OTEL_SERVICE_NAME=ctxmill-sandbox-claude-agents');
 
       // Return info
       expect(info.containerId).toBe('sha256-abc123');
@@ -249,6 +254,24 @@ describe('ContainerManager', () => {
       expect(arg.HostConfig.Memory).toBe(256 * 1024 * 1024);
       expect(arg.HostConfig.PidsLimit).toBe(128);
       expect(arg.Labels['ctxmill.timeout']).toBe('300');
+    });
+
+    it('passes sandbox-specific OTEL configuration to run containers', async () => {
+      vi.stubEnv('OTEL_TRACES_EXPORTER', 'otlp');
+      vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://otlp-signoz.staging.example.com');
+      vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', 'deployment.environment=local,service.namespace=ctxmill');
+
+      await manager.createContainer({
+        ...defaultCreateOpts(),
+        harnessName: 'langgraph',
+      });
+
+      const arg = docker.createContainer.mock.calls[0][0];
+      expect(arg.Env).toContain('OTEL_SERVICE_NAME=ctxmill-sandbox-langgraph');
+      expect(arg.Env).toContain('OTEL_TRACES_EXPORTER=otlp');
+      expect(arg.Env).toContain('OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-signoz.staging.example.com');
+      expect(arg.Env).toContain('OTEL_RESOURCE_ATTRIBUTES=deployment.environment=local,service.namespace=ctxmill,ctxmill.component=sandbox,ctxmill.harness=langgraph');
+      expect(arg.Env).not.toContain('OTEL_SERVICE_NAME=ctxmill-orchestrator');
     });
   });
 
@@ -725,6 +748,36 @@ describe('ContainerManager', () => {
       expect(docker.createNetwork).toHaveBeenCalledWith(
         expect.objectContaining({ Name: 'my-net' }),
       );
+    });
+
+    it('propagates non-404 inspect failures without creating the network', async () => {
+      const failure = { statusCode: 500, message: 'docker unavailable' };
+      docker.getNetwork.mockReturnValue({
+        inspect: vi.fn().mockRejectedValue(failure),
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        await expect(manager.ensureNetwork()).rejects.toEqual(failure);
+      } finally {
+        warnSpy.mockRestore();
+      }
+      expect(docker.createNetwork).not.toHaveBeenCalled();
+    });
+
+    it('propagates permission-shaped inspect failures without creating the network', async () => {
+      const failure = { statusCode: 403, message: 'permission denied' };
+      docker.getNetwork.mockReturnValue({
+        inspect: vi.fn().mockRejectedValue(failure),
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        await expect(manager.ensureNetwork()).rejects.toEqual(failure);
+      } finally {
+        warnSpy.mockRestore();
+      }
+      expect(docker.createNetwork).not.toHaveBeenCalled();
     });
   });
 

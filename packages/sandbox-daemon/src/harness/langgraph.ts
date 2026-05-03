@@ -17,7 +17,7 @@ import type {
   ApprovalRequest,
 } from './types.js';
 import type { Message } from '../types.js';
-import { createStubKnowledgeContext, resolveSecretRef, normalizeStreamTextDeltas } from './shared.js';
+import { resolveSecretRef, normalizeStreamTextDeltas } from './shared.js';
 import { makeIterableAbortable } from './abort-iterator.js';
 
 export const LangGraphConfigSchema = z.object({
@@ -143,7 +143,6 @@ class LangGraphSession implements HarnessSession {
         conversationId,
         instanceId: input.turnId,
         workspaceDir: workspaceDir ?? process.cwd(),
-        knowledge: createStubKnowledgeContext(),
       };
 
       // Step 3: Determine effective approval callback (turn-level takes precedence)
@@ -545,11 +544,6 @@ class LangGraphSession implements HarnessSession {
       conversationId: string;
       instanceId?: string;
       workspaceDir: string;
-      knowledge: {
-        query: (opts: { text: string; limit?: number }) => Promise<{
-          items: Array<{ id: string; content: string; score: number }>;
-        }>;
-      };
     },
     turnId: string,
     toolDefs: import('../tool/types.js').ToolDefinition[],

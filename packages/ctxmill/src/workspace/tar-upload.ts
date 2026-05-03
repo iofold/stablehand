@@ -133,6 +133,13 @@ export async function validateAndExtractTarball(
           await fs.mkdir(dirname(fullPath), { recursive: true });
           await pipeline(entryStream, createWriteStream(fullPath));
 
+          if (typeof header.mode === 'number') {
+            // Preserve POSIX permission bits from tar headers. Agent workspaces
+            // ship executable CLIs/scripts (for example /workspace/bin/pilot);
+            // createWriteStream() defaults to 0644 and would otherwise strip +x.
+            await fs.chmod(fullPath, header.mode & 0o7777);
+          }
+
           files += 1;
           next();
         } catch (error) {

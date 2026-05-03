@@ -78,7 +78,7 @@ jobs:
         if: always()
         with:
           name: playwright-report
-          path: playwright-report-docker/
+          path: .tmp/playwright-report-docker/
           retention-days: 7
       - name: Show Docker logs
         if: always()
@@ -86,3 +86,33 @@ jobs:
       - name: Stop Docker stack
         if: always()
         run: docker compose down -v
+
+  dev2-deploy:
+    name: Deploy to dev2 + smoke (ADR 009)
+    runs-on: ubuntu-latest
+    needs: e2e
+    # Manual approval gate today: dev2 image build + k3s import requires
+    # SSH access to [redacted-ip]. Track full CI wiring in beads (see
+    # docs/release-gates.md). Operators run this locally until then.
+    if: ${{ false }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - name: Build orchestrator + UI + harness images and import to dev2 k3s
+        run: deploy/k3s/dev2/deploy-dev2.sh
+        env:
+          KUBECONFIG: ${{ secrets.DEV2_KUBECONFIG_PATH }}
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: Run required smoke against dev2
+        run: pnpm test:e2e:smoke
+        env:
+          PLAYWRIGHT_BASE_URL: https://stablehand.staging.example.com
+          PLAYWRIGHT_API_BASE_URL: https://stablehand.staging.example.com

@@ -9,6 +9,8 @@ interface StatusExtra {
   checkpointRef?: string | null;
   pausedAt?: number | null;
   pausedReason?: string | null;
+  restoreAttempts?: number | null;
+  lastRestoreError?: string | null;
 }
 
 export interface SessionStatusCoordinatorDeps {

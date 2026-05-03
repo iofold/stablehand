@@ -9,7 +9,7 @@ import { createTestAgent, deleteTestAgent } from './support';
  *        /agents/:id/conversations/:conversationId (continued conversation)
  */
 
-test.describe('Conversation continuity', () => {
+test.describe('Conversation continuity @extended', () => {
   let agentId = '';
 
   test.beforeEach(async ({ request }) => {

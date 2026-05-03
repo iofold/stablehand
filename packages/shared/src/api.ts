@@ -121,30 +121,6 @@ export interface ApiFeedbackRequest {
   type: 'thumbs_up' | 'thumbs_down';
 }
 
-/** Knowledge item as returned by GET /api/agents/:id/knowledge */
-export interface ApiKnowledgeItem {
-  id: string;
-  content: string;
-  category: string;
-  source: string;
-  createdAt: string;
-  relevance: number;
-}
-
-/** Knowledge stats as returned by GET /api/agents/:id/knowledge/stats */
-export interface ApiKnowledgeStats {
-  totalItems: number;
-  categories: Record<string, number>;
-  recentItems: number;
-  oldestItem?: string;
-  newestItem?: string;
-}
-
-/** Shared knowledge item with agentId field */
-export interface ApiSharedKnowledgeItem extends ApiKnowledgeItem {
-  agentId: string;
-}
-
 // ── Conversation Summary types ──────────────────────────────────
 
 /** Enriched conversation as returned by GET /api/agents/:id/conversations/summary */

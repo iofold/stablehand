@@ -69,6 +69,24 @@ describe('Session API lifecycle', () => {
       mode: 'interactive',
       taskDescription: 'hello',
     });
+    await container.db.createTurn({
+      agentId,
+      conversationId: firstConversation.id,
+      mode: 'interactive',
+      taskDescription: 'follow-up turn without extra messages',
+    });
+    await container.db.addMessage({
+      conversationId: firstConversation.id,
+      agentId,
+      role: 'user',
+      content: 'hello',
+    });
+    await container.db.addMessage({
+      conversationId: firstConversation.id,
+      agentId,
+      role: 'assistant',
+      content: 'hi',
+    });
 
     const secondConversation = await container.db.createConversation(agentId);
     const secondSession = await container.db.createTurn({
@@ -76,6 +94,12 @@ describe('Session API lifecycle', () => {
       conversationId: secondConversation.id,
       mode: 'background',
       taskDescription: 'second',
+    });
+    await container.db.addMessage({
+      conversationId: secondConversation.id,
+      agentId,
+      role: 'user',
+      content: 'second',
     });
 
     const res = await app.inject({
@@ -90,24 +114,31 @@ describe('Session API lifecycle', () => {
         conversationId: string;
         mode: string;
         taskDescription: string | null;
+        messageCount: number;
       }>;
     };
     const sessions = body.sessions;
-    expect(sessions).toHaveLength(2);
+    expect(sessions).toHaveLength(3);
     expect(sessions).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: firstSession.id,
         conversationId: firstConversation.id,
         mode: 'interactive',
         taskDescription: 'hello',
+        messageCount: 2,
       }),
       expect.objectContaining({
         id: secondSession.id,
         conversationId: secondConversation.id,
         mode: 'background',
         taskDescription: 'second',
+        messageCount: 1,
       }),
     ]));
+    expect(sessions.filter((session) => session.conversationId === firstConversation.id))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ messageCount: 2 }),
+      ]));
   });
 
   it('returns 404 for non-existent agent', async () => {

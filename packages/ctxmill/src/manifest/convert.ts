@@ -83,34 +83,6 @@ export function definitionToManifest(
   def: AgentDefinition,
   existingLabels?: Record<string, string>,
 ): AgentManifest {
-  const provider = typeof def.harnessConfig.provider === 'string'
-    ? def.harnessConfig.provider
-    : 'openai';
-  const modelId = typeof def.harnessConfig.model === 'string'
-    ? def.harnessConfig.model
-    : 'gpt-5.4-mini';
-  const baseUrl = typeof def.harnessConfig.baseUrl === 'string'
-    ? def.harnessConfig.baseUrl
-    : undefined;
-  const apiKeyRef = typeof def.harnessConfig.apiKeyRef === 'string'
-    ? def.harnessConfig.apiKeyRef
-    : undefined;
-  const temperature = typeof def.harnessConfig.temperature === 'number'
-    ? def.harnessConfig.temperature
-    : undefined;
-  const maxTokens = typeof def.harnessConfig.maxTokens === 'number'
-    ? def.harnessConfig.maxTokens
-    : undefined;
-  const topP = typeof def.harnessConfig.topP === 'number'
-    ? def.harnessConfig.topP
-    : undefined;
-  const reasoning = def.harnessConfig.reasoning === 'off'
-    || def.harnessConfig.reasoning === 'low'
-    || def.harnessConfig.reasoning === 'medium'
-    || def.harnessConfig.reasoning === 'high'
-    ? def.harnessConfig.reasoning
-    : undefined;
-
   // Build resources section, including sandbox limits if present
   const resources: Record<string, unknown> = {};
   if (def.resourceLimits) {
@@ -137,16 +109,7 @@ export function definitionToManifest(
     spec: {
       harness: def.harness,
       ...(def.nativeTools ? { nativeTools: def.nativeTools } : {}),
-      harnessConfig: {
-        provider,
-        model: modelId,
-        ...(baseUrl ? { baseUrl } : {}),
-        ...(apiKeyRef ? { apiKeyRef } : {}),
-        ...(temperature !== undefined ? { temperature } : {}),
-        ...(maxTokens !== undefined ? { maxTokens } : {}),
-        ...(topP !== undefined ? { topP } : {}),
-        ...(reasoning ? { reasoning } : {}),
-      },
+      harnessConfig: { ...def.harnessConfig },
       instructions: def.systemPrompt,
       tools: def.tools.map((t) => ({ ref: t })),
       ...(def.mode ? { mode: def.mode } : {}),

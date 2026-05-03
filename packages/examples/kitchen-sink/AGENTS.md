@@ -74,7 +74,7 @@ spec:
     model: model-id
     apiKeyRef: "$secret:KEY_NAME"
   instructions: |
-    System prompt (supports {{knowledge}} placeholder)
+    System prompt
   tools:
     - ref: tool-name
   nativeTools:

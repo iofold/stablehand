@@ -37,6 +37,7 @@ describe('generatePtcScripts', () => {
       tools: [makeTool('search', false), makeTool('emit-event', false)],
       scriptDir,
       daemonPort: 8080,
+      token: 'test-token',
     });
 
     expect(scripts).toEqual([]);
@@ -49,6 +50,7 @@ describe('generatePtcScripts', () => {
       tools: [makeTool('search', true)],
       scriptDir,
       daemonPort: 4312,
+      token: 'test-token',
     });
 
     const runtimeSource = await readFile(join(scriptDir, '_runtime.ts'), 'utf8');
@@ -56,6 +58,8 @@ describe('generatePtcScripts', () => {
     expect(runtimeSource).toContain('export async function callTool');
     expect(runtimeSource).toContain('fetch(');
     expect(runtimeSource).toContain('http://localhost:4312');
+    expect(runtimeSource).toContain('const TOOL_API_TOKEN = "test-token";');
+    expect(runtimeSource).toContain("'authorization': `Bearer ${TOOL_API_TOKEN}`");
   });
 
   it('creates per-tool wrapper scripts', async () => {
@@ -65,6 +69,7 @@ describe('generatePtcScripts', () => {
       tools: [makeTool('lookup-record', true)],
       scriptDir,
       daemonPort: 8080,
+      token: 'test-token',
     });
 
     expect(scripts).toHaveLength(1);
@@ -86,6 +91,7 @@ describe('generatePtcScripts', () => {
       ],
       scriptDir,
       daemonPort: 8080,
+      token: 'test-token',
     });
 
     expect(scripts.map((script) => basename(script)).sort()).toEqual(['alpha.ts', 'beta.ts']);
@@ -98,6 +104,7 @@ describe('generatePtcScripts', () => {
       tools: [makeTool('dangerous-tool', true)],
       scriptDir,
       daemonPort: 8080,
+      token: 'test-token',
     });
 
     const runtimeSource = await readFile(join(scriptDir, '_runtime.ts'), 'utf8');

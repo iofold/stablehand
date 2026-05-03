@@ -20,22 +20,22 @@ type HarnessSliceCase = {
 const SLICE_1_CASES: HarnessSliceCase[] = [
   {
     agentDir: 'stress-lg-openai',
-    prompt: 'Run the matrix slice smoke test now. Confirm you are operational and emit stress.tools.complete.',
+    prompt: 'Run the matrix slice smoke test now. Confirm you are operational and emit exactly one stress.tools.complete event with payload {"schemaVersion":1,"harness":"stress-lg-openai","agent":"stress-lg-openai","model":"gpt-5.4","status":"ok"}.',
     expectedEventType: 'stress.tools.complete',
   },
   {
     agentDir: 'stress-claude-sonnet',
-    prompt: 'Confirm you are operational, emit stress.claude.complete with payload {"agent":"stress-claude-sonnet","status":"ok"}, then say the matrix slice is complete.',
+    prompt: 'Confirm you are operational, emit exactly one stress.claude.complete event with payload {"schemaVersion":1,"harness":"stress-claude-sonnet","agent":"stress-claude-sonnet","model":"claude-sonnet-4-6","status":"ok"}, then say the matrix slice is complete.',
     expectedEventType: 'stress.claude.complete',
   },
   {
     agentDir: 'stress-pi-openai',
-    prompt: 'Run the matrix slice smoke test now. Confirm you are operational and emit stress.pi.complete.',
+    prompt: 'Run the matrix slice smoke test now. Confirm you are operational and emit exactly one stress.pi.complete event with payload {"schemaVersion":1,"harness":"stress-pi-openai","agent":"stress-pi-openai","model":"gpt-5.4","status":"ok"}.',
     expectedEventType: 'stress.pi.complete',
   },
 ];
 
-test.describe('Harness matrix slice 1 — fresh turns across native harnesses', () => {
+test.describe('Harness matrix slice 1 — fresh turns across native harnesses @extended', () => {
   const agents: Partial<Record<HarnessSliceCase['agentDir'], TestAgent>> = {};
   const runsByAgent = new Map<string, Set<string>>();
 
@@ -62,7 +62,7 @@ test.describe('Harness matrix slice 1 — fresh turns across native harnesses', 
   });
 
   for (const testCase of SLICE_1_CASES) {
-    test(`${testCase.agentDir} completes a fresh background run`, async ({ request }) => {
+    test(`${testCase.agentDir} completes a fresh background run @extended`, async ({ request }) => {
       test.setTimeout(180_000);
 
       const agent = agents[testCase.agentDir];

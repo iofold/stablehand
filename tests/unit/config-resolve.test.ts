@@ -25,11 +25,6 @@ describe('Config Resolution', () => {
       expect(config.execution.type).toBe('docker');
     });
 
-    it('should resolve knowledge providers to memory', () => {
-      const config = resolveConfig({ preset: 'docker' });
-      expect(config.knowledge.providers).toEqual(['memory']);
-    });
-
     it('should resolve observability sink to postgres', () => {
       const config = resolveConfig({ preset: 'docker' });
       expect(config.observability.sink).toBe('postgres');

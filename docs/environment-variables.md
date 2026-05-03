@@ -25,7 +25,7 @@ This document provides a comprehensive reference for all environment variables u
 | `CTXMILL_PORT` | `3001` | No | Port the orchestrator API listens on. (Mapped to `3002` in default Docker stack). | `3001` |
 | `CTXMILL_UI_PORT` | `3200` | No | Port the React UI listens on. | `3200` |
 | `CTXMILL_PRESET` | `docker` | No | Configuration preset to use. | `docker` |
-| `CTXMILL_DATA_DIR` | `./.ctxmill` | No | Root directory for persisted agent data (workspaces, knowledge). | `/data/ctxmill` |
+| `CTXMILL_DATA_DIR` | `./.ctxmill` | No | Root directory for persisted agent workspace data. | `/data/ctxmill` |
 | `CTXMILL_UI_MODE` | `disabled` | No | UI mode for `ctxmill dev`. Options: `disabled`, `embedded`, `vite`. | `vite` |
 | `CTXMILL_API_URL` | `http://localhost:3002` | No | Base URL for the API (used by CLI chat). | `https://api.ctxmill.com` |
 | `CTXMILL_API_ORIGIN` | `http://localhost:3001` | No | Origin for the API (used by Vite proxy). | `http://orchestrator:3001` |
@@ -49,6 +49,12 @@ sandbox Jobs.
 | `PTC_PORT` | `8080` | No | Port for the Programmatic Tool Calling (PTC) API in sandboxes. | `8080` |
 | `SECRETS_PATH` | `/run/secrets/config.json` | No | Path to the secrets JSON file inside the sandbox. | `/tmp/secrets.json` |
 | `TOOL_PROXY_TIMEOUT_MS` | `300000` | No | Timeout for tool calls proxied from sandbox to orchestrator. | `600000` |
+| `CTXMILL_SANDBOX_OTEL_TRACES_EXPORTER` | `OTEL_TRACES_EXPORTER` or `none` | No | Trace exporter for sandbox run containers. Set to `otlp` with `docker-compose.signoz.yml`. | `otlp` |
+| `CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT` | `OTEL_EXPORTER_OTLP_ENDPOINT` or `http://host.docker.internal:4318` | No | OTLP HTTP endpoint passed to sandbox run containers. Use the dev2 tailnet collector endpoint for centralized SigNoz telemetry. | `https://otlp-signoz.staging.example.com` |
+| `CTXMILL_SANDBOX_OTEL_SERVICE_NAME_PREFIX` | `ctxmill-sandbox` | No | Prefix used for sandbox service names. The harness name is appended. | `ctxmill-sandbox` |
+| `CTXMILL_SANDBOX_OTEL_RESOURCE_ATTRIBUTES` | `OTEL_RESOURCE_ATTRIBUTES` or local ctxmill attrs | No | Base sandbox resource attributes. `ctxmill.component=sandbox` and `ctxmill.harness=<harness>` are appended automatically. Keep `deployment.environment` accurate for the source environment even when exporting to dev2 SigNoz. | `deployment.environment=local,service.namespace=ctxmill` |
+| `OTEL_NODE_ENABLED_INSTRUMENTATIONS` | `aws-sdk,dns,grpc,http,net,openai,pg,pino,runtime-node,undici` | No | Comma-separated auto-instrumentation list used by the ctxmill OTEL register when not explicitly overridden. | `http,undici,openai` |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `false` | No | Keep disabled unless intentionally exporting prompt/completion content to the configured OTEL backend. The ctxmill register also sets OpenAI auto-instrumentation content capture off by default. | `false` |
 
 ## AI / Model
 
@@ -63,9 +69,6 @@ sandbox Jobs.
 | `DEFAULT_HARNESS` | `langgraph` | No | Default harness for new agents. | `claude-agents` |
 | `DEFAULT_TEMPERATURE` | `0.7` | No | Default temperature for LLM calls. | `0.5` |
 | `DEFAULT_MAX_TOKENS` | `4096` | No | Default max tokens for LLM calls. | `8192` |
-| `MEM0_API_KEY` | - | No | API key for Mem0 cloud knowledge store. | `m0-...` |
-| `MEM0_HOST` | - | No | Host for Mem0 API. | `https://api.mem0.ai` |
-
 ## LangSmith / Tracing
 
 | Name | Default | Required? | Description | Example |

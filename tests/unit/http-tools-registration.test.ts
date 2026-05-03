@@ -19,9 +19,6 @@ const mockCtx: ToolContext = {
   conversationId: 'test-conv',
   instanceId: 'run-123',
   workspaceDir: '/tmp/test',
-  knowledge: {
-    query: async () => ({ items: [] }),
-  },
 };
 
 function createHttpTool(overrides: Record<string, unknown> = {}): Record<string, unknown> {

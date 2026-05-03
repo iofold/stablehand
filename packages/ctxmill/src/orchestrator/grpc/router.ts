@@ -41,7 +41,6 @@ export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRoute
     instanceId: grpcCtx.sessionId,
     requestId: grpcCtx.requestId,
     workspaceDir: '/workspace',
-    knowledge: { query: async () => ({ items: [] }) },
     eventBus,
   });
 

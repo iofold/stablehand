@@ -17,7 +17,7 @@ import type {
 } from './types.js';
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
-import { createStubKnowledgeContext, resolveSecretRef } from './shared.js';
+import { resolveSecretRef } from './shared.js';
 
 let _sdk: {
   createAgentSession: any;
@@ -209,7 +209,6 @@ export function convertTools(
           conversationId: config.conversationId,
           workspaceDir: config.workspaceDir || process.cwd(),
           eventBus: undefined,
-          knowledge: createStubKnowledgeContext(),
         });
 
         return {

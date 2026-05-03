@@ -148,7 +148,12 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       }
 
       if (response.error) {
-        logger.warn(`[artifact] metadata registration warning: ${response.error}`);
+        try {
+          await artifactStore.deleteObject(storageKey);
+        } catch (cleanupErr) {
+          logger.warn('[artifact] failed to delete artifact after metadata registration error response', cleanupErr);
+        }
+        return stringifyJsonWithBigInts({ error: `Upload failed: ${response.error}` });
       }
 
       return stringifyJsonWithBigInts({

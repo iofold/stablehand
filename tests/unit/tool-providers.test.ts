@@ -10,9 +10,6 @@ const mockCtx: ToolContext = {
   agentId: 'test-agent',
   conversationId: 'test-conv',
   workspaceDir: '/tmp/test',
-  knowledge: {
-    query: async () => ({ items: [] }),
-  },
 };
 
 function createTool(name: string, description = 'A test tool'): ToolDefinition {
