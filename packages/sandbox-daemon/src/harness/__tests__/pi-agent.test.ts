@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockCreateAgentSession = vi.fn();
+const mockSetRuntimeApiKey = vi.fn();
 
 vi.mock('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
@@ -14,7 +15,7 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
     };
   }),
   SettingsManager: { inMemory: vi.fn(() => ({ type: 'settings-manager' })) },
-  AuthStorage: { inMemory: vi.fn(() => ({ setRuntimeApiKey: vi.fn() })) },
+  AuthStorage: { inMemory: vi.fn(() => ({ setRuntimeApiKey: mockSetRuntimeApiKey })) },
   ModelRegistry: vi.fn(function MockModelRegistry() {
     return { type: 'model-registry' };
   }),
@@ -32,7 +33,11 @@ vi.mock('@mariozechner/pi-ai', async () => {
   const { Type } = await import('@sinclair/typebox');
   return {
     Type,
-    getModel: vi.fn((provider: string, model: string) => ({ provider, id: model })),
+    getModel: vi.fn((provider: string, model: string) => ({
+      provider,
+      id: model,
+      api: provider === 'google' ? 'google-generative-ai' : `${provider}-api`,
+    })),
   };
 });
 
@@ -80,6 +85,98 @@ async function collectEvents(stream: AsyncGenerator<AgentEvent>): Promise<AgentE
 describe('PIAgentHarness transcript syncing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it('registers Google runtime key under the model API auth bucket', async () => {
+    const dispose = vi.fn();
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: vi.fn(() => vi.fn()),
+        prompt: vi.fn(),
+        abort: vi.fn(async () => undefined),
+        dispose,
+        agent: {
+          replaceMessages: vi.fn(),
+        },
+      },
+    });
+
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig({
+      secrets: { GOOGLE_API_KEY: 'test-google-key' },
+      harnessConfigJson: JSON.stringify({
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+        apiKeyRef: '$secret:GOOGLE_API_KEY',
+      }),
+    }));
+
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'test-google-key');
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google-generative-ai', 'test-google-key');
+
+    await session.close();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('falls back to environment secrets for Google runtime auth', async () => {
+    process.env.GOOGLE_API_KEY = 'env-google-key';
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: vi.fn(() => vi.fn()),
+        prompt: vi.fn(),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+        },
+      },
+    });
+
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig({
+      secrets: {},
+      harnessConfigJson: JSON.stringify({
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+        apiKeyRef: '$secret:GOOGLE_API_KEY',
+      }),
+    }));
+
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'env-google-key');
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google-generative-ai', 'env-google-key');
+
+    await session.close();
+  });
+
+  it('uses provider-default Google secrets when apiKeyRef is omitted', async () => {
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: vi.fn(() => vi.fn()),
+        prompt: vi.fn(),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+        },
+      },
+    });
+
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig({
+      secrets: { GOOGLE_API_KEY: 'default-google-key' },
+      harnessConfigJson: JSON.stringify({
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+      }),
+    }));
+
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'default-google-key');
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google-generative-ai', 'default-google-key');
+
+    await session.close();
   });
 
   it('replaces native session history before prompting with the latest user message', async () => {

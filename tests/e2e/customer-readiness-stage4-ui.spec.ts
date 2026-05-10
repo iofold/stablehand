@@ -13,6 +13,7 @@
  * real agent via the orchestrator API.
  */
 import { test, expect } from '@playwright/test';
+import { createGzip } from 'node:zlib';
 import { createTestAgent, deleteTestAgent } from './support';
 
 test.describe('Customer Readiness Stage 4 — UI', () => {
@@ -94,14 +95,12 @@ test.describe('Customer Readiness Stage 4 — UI', () => {
 });
 
 /**
- * Minimal in-memory tar.gz builder using tar-stream + node:zlib. Returns a
- * Buffer containing a gzip-compressed tar archive with a single file.
+ * Minimal in-memory tar.gz builder using ctxmill's tar-stream dependency.
+ * Returns a Buffer containing a gzip-compressed tar archive with a single file.
  */
 async function buildSingleFileTarGz(name: string, content: string): Promise<Buffer> {
-  // Dynamic imports keep this spec import-graph friendly even when run in
-  // contexts that don't have these packages hoisted at the top level.
-  const tar = await import('tar-stream');
-  const { createGzip } = await import('node:zlib');
+  const tarModulePath = new URL('../../packages/ctxmill/node_modules/tar-stream/index.js', import.meta.url).href;
+  const tar = await import(tarModulePath) as TarStreamModule;
 
   return await new Promise<Buffer>((resolvePromise, reject) => {
     const pack = tar.pack();
@@ -123,3 +122,18 @@ async function buildSingleFileTarGz(name: string, content: string): Promise<Buff
     pack.pipe(gzip);
   });
 }
+
+type TarPack = {
+  entry(
+    header: { name: string; size: number },
+    content: string,
+    callback: (err?: Error | null) => void,
+  ): void;
+  finalize(): void;
+  on(event: 'error', listener: (err: Error) => void): void;
+  pipe(destination: NodeJS.WritableStream): void;
+};
+
+type TarStreamModule = {
+  pack(): TarPack;
+};

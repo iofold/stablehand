@@ -144,7 +144,6 @@ function normalizeSessionStatus(status: string): string {
     case 'ACTIVE':
     case 'RESTORING':
       return 'running';
-    case 'PAUSED':
     case 'CHECKPOINTED':
       return 'paused';
     case 'TERMINATED':
@@ -231,7 +230,16 @@ export async function importStressAgent(
   const spec = (raw.spec ?? {}) as Record<string, unknown>;
   const tools = (spec.tools as Array<{ ref?: string }> | undefined) ?? [];
   const model = spec.model as Record<string, unknown> | undefined;
-  const harnessConfig = (spec.harnessConfig ?? (model ? { provider: model.provider, model: model.id } : {})) as Record<string, unknown>;
+  const harnessConfig = (spec.harnessConfig ?? (model ? {
+    provider: model.provider,
+    model: model.id,
+    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
+    ...(model.apiKeyRef ? { apiKeyRef: model.apiKeyRef } : {}),
+    ...(model.temperature !== undefined ? { temperature: model.temperature } : {}),
+    ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+    ...(model.topP !== undefined ? { topP: model.topP } : {}),
+    ...(model.reasoning ? { reasoning: model.reasoning } : {}),
+  } : {})) as Record<string, unknown>;
 
   const existingAgentsResponse = await request.get(`${API_BASE}/api/agents`);
   expect(existingAgentsResponse.ok()).toBeTruthy();

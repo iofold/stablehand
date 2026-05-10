@@ -1,5 +1,8 @@
 import { create } from '@bufbuild/protobuf';
 import { ConnectError, Code } from '@connectrpc/connect';
+import { promises as fs } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MessageCommittedSchema,
@@ -211,7 +214,7 @@ function statusTransitions(db: DatabaseRepository): string[] {
     .map((call: unknown[]) => call[1] as string);
 }
 
-function createManager() {
+function createManager(options?: { dataDir?: string }) {
   const containerManager = createMockContainerManager();
   const db = createMockDb();
   const lifecyclePolicy = createMockLifecyclePolicy();
@@ -235,10 +238,11 @@ function createManager() {
     db,
     lifecyclePolicy,
     workspaceDiffService: new WorkspaceDiffService({ containerManager }),
-    buildSandboxSecrets: () => ({}),
+    buildSandboxSecrets: async () => ({}),
     resolveToolsForAgent,
     logger,
     config: { idleTimeoutMs: 60_000, maxQueuedMessages: 200 },
+    dataDir: options?.dataDir,
   });
 
   return { manager, containerManager, db, lifecyclePolicy, logger, grpcClient, resolveToolsForAgent };
@@ -264,6 +268,46 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     expect(session.sessionId).toBe('sess-1');
     expect(session.status).toBe('ACTIVE');
     expect(manager.findSessionById('sess-1')).toBe(session);
+  });
+
+  it('reuses the conversation workspace across fresh replacement sandbox sessions', async () => {
+    const tempDir = await fs.mkdtemp(join(tmpdir(), 'ctxmill-conversation-workspace-'));
+    try {
+      const dataDir = join(tempDir, '.ctxmill');
+      const baseWorkspaceDir = join(tempDir, 'base');
+      await fs.mkdir(baseWorkspaceDir, { recursive: true });
+      await fs.writeFile(join(baseWorkspaceDir, 'root.txt'), 'base');
+
+      const { manager, containerManager } = createManager({ dataDir });
+      const agentDef = {
+        ...createAgentDef(),
+        workspaceDir: baseWorkspaceDir,
+      } as AgentDefinition;
+
+      const first = await manager.createFreshSession('conv-1', agentDef, 'agent-1');
+      expect(first.sessionWorkspaceDir).toBeDefined();
+      await fs.writeFile(join(first.sessionWorkspaceDir!, 'root.txt'), 'runtime edit');
+      await fs.writeFile(join(first.sessionWorkspaceDir!, 'runtime-only.txt'), 'kept');
+      await fs.writeFile(join(baseWorkspaceDir, 'new-base.txt'), 'new base');
+
+      const second = await manager.createFreshSession('conv-1', agentDef, 'agent-1');
+
+      expect(second.sessionId).not.toBe(first.sessionId);
+      expect(second.sessionWorkspaceDir).toBe(first.sessionWorkspaceDir);
+      expect(containerManager.createContainer).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        conversationId: 'conv-1',
+        workspaceDir: first.sessionWorkspaceDir,
+      }));
+      expect(containerManager.createContainer).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        conversationId: 'conv-1',
+        workspaceDir: first.sessionWorkspaceDir,
+      }));
+      await expect(fs.readFile(join(second.sessionWorkspaceDir!, 'root.txt'), 'utf8')).resolves.toBe('runtime edit');
+      await expect(fs.readFile(join(second.sessionWorkspaceDir!, 'runtime-only.txt'), 'utf8')).resolves.toBe('kept');
+      await expect(fs.access(join(second.sessionWorkspaceDir!, 'new-base.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('checkpoints and restores an unreachable ACTIVE session when a checkpoint exists', async () => {
@@ -366,11 +410,11 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     restoreSpy.mockRestore();
   });
 
-  it('reuses the persisted session workspace during checkpoint restore', async () => {
+  it('reuses the persisted conversation workspace during checkpoint restore', async () => {
     vi.useFakeTimers();
     const restoreSpy = vi.spyOn(WorkspaceDiffService.prototype, 'restore');
     const { manager, containerManager, db, grpcClient } = createManager();
-    vi.spyOn(manager, 'getExistingSessionWorkspaceDir').mockResolvedValue('/tmp/data/sessions/sess-1/workspace');
+    vi.spyOn(manager, 'getExistingConversationWorkspaceDir').mockResolvedValue('/tmp/data/conversations/conv-1/workspace');
     const failingClient = createMockGrpcClient();
     failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
 
@@ -385,17 +429,18 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     const session = await sessionPromise;
 
     expect(containerManager.createContainer).toHaveBeenCalledWith(expect.objectContaining({
-      workspaceDir: expect.stringContaining('/sessions/sess-1/workspace'),
+      conversationId: 'conv-1',
+      workspaceDir: expect.stringContaining('/conversations/conv-1/workspace'),
     }));
     expect(restoreSpy).not.toHaveBeenCalled();
-    expect(session.sessionWorkspaceDir).toMatch(/\/sessions\/sess-1\/workspace$/);
+    expect(session.sessionWorkspaceDir).toMatch(/\/conversations\/conv-1\/workspace$/);
   });
 
-  it('fails checkpoint restore when a session workspace was expected but is missing', async () => {
+  it('fails checkpoint restore when a conversation workspace was expected but is missing', async () => {
     vi.useFakeTimers();
     const restoreSpy = vi.spyOn(WorkspaceDiffService.prototype, 'restore');
     const { manager, containerManager, db, grpcClient } = createManager();
-    vi.spyOn(manager, 'getExistingSessionWorkspaceDir').mockResolvedValue(undefined);
+    vi.spyOn(manager, 'getExistingConversationWorkspaceDir').mockResolvedValue(undefined);
     const failingClient = createMockGrpcClient();
     failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
 
@@ -406,7 +451,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
 
     const sessionPromise = manager.ensureSession('conv-1', createWorkspaceAgentDef(), 'agent-1');
-    const rejection = expect(sessionPromise).rejects.toThrow(/missing persisted session workspace/i);
+    const rejection = expect(sessionPromise).rejects.toThrow(/missing persisted conversation workspace/i);
     await vi.advanceTimersByTimeAsync(10_500);
     await rejection;
 

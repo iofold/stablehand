@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
+import { getConversationWorkspacePath } from '../../packages/ctxmill/src/workspace/session-workspace.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
 
 describe('File endpoint integration tests', () => {
@@ -174,6 +175,44 @@ describe('File endpoint integration tests', () => {
     expect(body.path).toBe('README.md');
     expect(body.content).toBe('# Test Agent\nThis is a test workspace.');
     expect(body.size).toBeGreaterThan(0);
+  });
+
+  it('reads exact hidden diagnostics files from the conversation workspace', async () => {
+    const conversation = await container.db.createConversation(agentId);
+    const sandboxSession = await container.db.createSandboxSession({
+      conversationId: conversation.id,
+      agentId,
+      harnessName: 'langgraph',
+    });
+    const turn = await container.db.createTurn({
+      agentId,
+      conversationId: conversation.id,
+      sessionId: sandboxSession.id,
+      mode: 'background',
+      taskDescription: 'diagnostics',
+    });
+
+    mkdirSync(join(workspaceDir, '.claude'), { recursive: true });
+    writeFileSync(join(workspaceDir, '.claude', 'settings.json'), '{"source":"base"}');
+
+    const conversationWorkspaceDir = getConversationWorkspacePath(dataDir, agentId, conversation.id);
+    mkdirSync(join(conversationWorkspaceDir, '.claude'), { recursive: true });
+    writeFileSync(join(conversationWorkspaceDir, '.claude', 'settings.json'), '{"source":"conversation"}');
+    writeFileSync(join(conversationWorkspaceDir, '.hook-trace.log'), 'hook trace from conversation');
+
+    const settingsRes = await app.inject({
+      method: 'GET',
+      url: `/api/agents/${agentId}/files/read?path=${encodeURIComponent('.claude/settings.json')}&sessionId=${turn.id}`,
+    });
+    expect(settingsRes.statusCode).toBe(200);
+    expect(settingsRes.json().content).toBe('{"source":"conversation"}');
+
+    const traceRes = await app.inject({
+      method: 'GET',
+      url: `/api/agents/${agentId}/files/read?path=${encodeURIComponent('.hook-trace.log')}&sessionId=${turn.id}`,
+    });
+    expect(traceRes.statusCode).toBe(200);
+    expect(traceRes.json().content).toBe('hook trace from conversation');
   });
 
   it('reads nested JSON file', async () => {

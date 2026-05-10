@@ -11,6 +11,8 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 
 # Copy all package.json and config files to resolve workspace dependencies
 COPY packages/shared/package.json packages/shared/tsconfig.json packages/shared/
+COPY packages/client/package.json packages/client/tsconfig.json packages/client/
+COPY packages/react/package.json packages/react/tsconfig.json packages/react/tsconfig.typecheck.json packages/react/
 COPY packages/ctxmill/package.json packages/ctxmill/tsconfig.json packages/ctxmill/
 COPY packages/sandbox-daemon/package.json packages/sandbox-daemon/tsconfig.json packages/sandbox-daemon/
 COPY packages/proto/package.json packages/proto/tsconfig.build.json packages/proto/
@@ -26,6 +28,8 @@ RUN pnpm install --frozen-lockfile
 
 # Copy source code
 COPY packages/shared/src/ packages/shared/src/
+COPY packages/client/src/ packages/client/src/
+COPY packages/react/src/ packages/react/src/
 COPY packages/ctxmill/src/ packages/ctxmill/src/
 COPY packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
 COPY packages/proto/gen/ packages/proto/gen/
@@ -55,6 +59,8 @@ WORKDIR /app
 
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY packages/shared/package.json packages/shared/
+COPY packages/client/package.json packages/client/
+COPY packages/react/package.json packages/react/
 COPY packages/ctxmill/package.json packages/ctxmill/
 COPY packages/sandbox-daemon/package.json packages/sandbox-daemon/
 COPY packages/proto/package.json packages/proto/

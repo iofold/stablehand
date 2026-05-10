@@ -2,14 +2,12 @@ import { cn } from '@/lib/utils';
 
 interface RunStatusBadgeProps {
   status: string;
-  pausedReason?: string | null;
   className?: string;
 }
 
 const config: Record<string, { color: string }> = {
   QUEUED: { color: 'bg-surface-500' },
   ACTIVE: { color: 'bg-status-success' },
-  PAUSED: { color: 'bg-status-warning' },
   CHECKPOINTED: { color: 'bg-status-warning' },
   RESTORING: { color: 'bg-sky-400' },
   TERMINATED: { color: 'bg-surface-500' },
@@ -19,14 +17,11 @@ const config: Record<string, { color: string }> = {
   IDLE: { color: 'bg-surface-500' },
 };
 
-export function RunStatusBadge({ status, pausedReason, className }: RunStatusBadgeProps) {
+export function RunStatusBadge({ status, className }: RunStatusBadgeProps) {
   const normalizedStatus = status.toUpperCase();
   const { color } = config[normalizedStatus] ?? config.QUEUED;
 
-  let displayStatus = normalizedStatus.replace(/_/g, ' ').toLowerCase();
-  if (normalizedStatus === 'PAUSED') {
-    displayStatus = pausedReason === 'idle' ? 'paused (idle)' : 'paused (HITL)';
-  }
+  const displayStatus = normalizedStatus.replace(/_/g, ' ').toLowerCase();
 
   return (
     <span

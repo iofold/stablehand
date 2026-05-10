@@ -168,6 +168,7 @@ The shipped UI includes:
 | Document | Description |
 |----------|-------------|
 | [AG-UI Compatibility](docs/ag-ui-compat.md) | Drop-in AG-UI renderer support (CopilotKit, agui-hooks, assistant-ui) |
+| [React Chat Integration](docs/integrate-chat-ui.md) | Embed the CTXMill streaming chat UI with A2UI and HITL support |
 | [Embedding in Foreign Stacks](docs/embedding-in-foreign-stacks.md) | Integrating CTXMill into your existing application |
 | [Writing Tool Providers](docs/writing-tool-providers.md) | Adding custom tools (Local, MCP, HTTP, Composio) |
 | [Writing Skills](docs/writing-skills.md) | Creating agent skills with SKILL.md format |
@@ -179,7 +180,7 @@ The shipped UI includes:
 | Document | Description |
 |----------|-------------|
 | [Checkpoint & Resume](docs/checkpoint-resume.md) | Session suspend, checkpoint, and resume lifecycle |
-| [Container Lifecycle](docs/container-lifecycle.md) | Idle timeout, freeze promotion, and reconciliation |
+| [Container Lifecycle](docs/container-lifecycle.md) | Idle checkpointing, restore, and reconciliation |
 | [Observability](docs/observability.md) | Monitoring, logging, and debugging your deployment |
 | [Debugging Harnesses](docs/debugging-harnesses.md) | Troubleshooting agent execution inside sandbox containers |
 | [Event Pipeline Mapping](docs/event-pipeline-mapping.md) | Proto → TypeScript → AG-UI event conversion reference |

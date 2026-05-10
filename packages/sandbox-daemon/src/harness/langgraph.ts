@@ -59,11 +59,7 @@ export type LangGraphConfig = z.infer<typeof LangGraphConfigSchema>;
 interface StreamableAgent {
   streamEvents(
     input: {
-      messages: Array<{
-        role: 'user' | 'assistant' | 'tool' | 'system';
-        content: string;
-        tool_call_id?: string;
-      }>;
+      messages: DeepAgentMessage[];
     },
     options: {
       version: 'v1' | 'v2';
@@ -75,6 +71,22 @@ interface StreamableAgent {
       };
     },
   ): AsyncIterable<StreamEvent>;
+}
+
+interface DeepAgentToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+interface DeepAgentMessage {
+  role: 'user' | 'assistant' | 'tool' | 'system';
+  content: string;
+  tool_call_id?: string;
+  tool_calls?: DeepAgentToolCall[];
 }
 
 /**
@@ -202,11 +214,7 @@ class LangGraphSession implements HarnessSession {
 
       // Step 6: Convert full transcript to deepagents message format
       const langchainMessages = this.transcript
-        .map((m) => ({
-          role: m.role as 'user' | 'assistant' | 'tool' | 'system',
-          content: m.content,
-          ...(m.role === 'tool' && m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
-        }));
+        .map((m) => this.toDeepAgentMessage(m));
 
       // Step 7: Stream events from the agent, accumulating assistant text for transcript
       const eventStream = agent.streamEvents(
@@ -406,6 +414,30 @@ class LangGraphSession implements HarnessSession {
 
   async close(): Promise<void> {
     // Stateless — deepagents creates a fresh agent per turn, nothing to tear down
+  }
+
+  private toDeepAgentMessage(message: Message): DeepAgentMessage {
+    const converted: DeepAgentMessage = {
+      role: message.role,
+      content: message.content,
+    };
+
+    if (message.role === 'tool' && message.toolCallId) {
+      converted.tool_call_id = message.toolCallId;
+    }
+
+    if (message.role === 'assistant' && message.toolCalls?.length) {
+      converted.tool_calls = message.toolCalls.map((toolCall) => ({
+        id: toolCall.id,
+        type: 'function',
+        function: {
+          name: toolCall.name,
+          arguments: JSON.stringify(toolCall.arguments ?? {}),
+        },
+      }));
+    }
+
+    return converted;
   }
 
   private createToolBlocklistMiddleware(blocklist: string[]): Record<string, unknown> {

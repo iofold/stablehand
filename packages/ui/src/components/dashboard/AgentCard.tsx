@@ -27,10 +27,31 @@ function formatRelativeTime(timestamp: number | undefined): string {
   return `${days}d ago`;
 }
 
+type DashboardStatus = 'running' | 'error' | 'idle';
+
+function getDashboardStatus(agent: Agent, activeSessionCount: number): DashboardStatus {
+  const status = agent.status.toLowerCase();
+  if (status === 'error') return 'error';
+  if (status === 'running' || status === 'booting' || activeSessionCount > 0) return 'running';
+  return 'idle';
+}
+
+function formatAgentStatusLabel(status: DashboardStatus): string {
+  const labels: Record<DashboardStatus, string> = {
+    error: 'Error',
+    idle: 'Idle',
+    running: 'Running',
+  };
+  return labels[status];
+}
+
 export function AgentCard({ agent, onEdit }: AgentCardProps) {
   const navigate = useNavigate();
 
-  const statusConfig = getAgentStatusConfig(agent.status);
+  const activeSessionCount = countActiveSessions(agent.sessionsByStatus);
+  const dashboardStatus = getDashboardStatus(agent, activeSessionCount);
+  const statusConfig = getAgentStatusConfig(dashboardStatus);
+  const statusLabel = formatAgentStatusLabel(dashboardStatus);
 
   const totalTools = agent.tools.length + (agent.nativeTools?.allowlist?.length ?? agent.nativeTools?.blocklist?.length ?? 0);
 
@@ -49,12 +70,6 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
           <span className="inline-flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
             {stats.ACTIVE}
-          </span>
-        )}
-        {stats.PAUSED > 0 && (
-          <span className="inline-flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>
-            {stats.PAUSED}
           </span>
         )}
         {stats.RESTORING > 0 && (
@@ -116,6 +131,13 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
             >
               {agent.name}
             </h3>
+            <span
+              data-testid="agent-status-label"
+              className="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-surface-600/50 bg-surface-700/40 px-2 py-0.5 text-[11px] font-medium text-surface-300"
+            >
+              <span className={cn('h-1.5 w-1.5 rounded-full', statusConfig.dotColor)} />
+              {statusLabel}
+            </span>
           </div>
           <div className="h-10">
             <p className="text-sm text-surface-400 line-clamp-2">
@@ -157,10 +179,10 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
                 Approval Needed
               </span>
             )}
-            {countActiveSessions(agent.sessionsByStatus) > 0 && (
+            {activeSessionCount > 0 && (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
                 <Activity className="h-3 w-3" />
-                {countActiveSessions(agent.sessionsByStatus)} Active
+                {activeSessionCount} Active
               </span>
             )}
             <span className="inline-flex items-center gap-1 text-[11px] text-surface-400">

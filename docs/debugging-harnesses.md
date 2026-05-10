@@ -96,9 +96,9 @@ The orchestrator waits for the sandbox daemon to become ready. If you see a heal
 -   The `SANDBOX_PORT` (default 50051) is blocked or misconfigured.
 
 ### Secret Injection Failures
-Secrets are injected into a `tmpfs` mount at `/run/secrets/config.json`.
+Secrets are injected into the sandbox container environment.
 -   If an agent fails with "Missing API key," check if the secret is defined in the orchestrator and allowlisted for the agent.
--   The daemon logs `loaded N secret(s) from env` on startup. If it says `no secrets found`, the injection failed.
+-   The daemon logs `resolved N secret env var(s)` when opening a session. If the count does not include expected secret keys, the injection failed.
 
 ### Workspace Not Found / Permission Denied
 Harnesses expect to work in `/workspace`.

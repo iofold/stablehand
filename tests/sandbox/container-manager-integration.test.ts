@@ -61,6 +61,7 @@ describe('ContainerManager Integration Tests', () => {
       expect(arg.Labels['ctxmill.harness']).toBe('claude-agents');
       expect(arg.Labels['ctxmill.timeout']).toBe('300');
       expect(arg.Labels['ctxmill.started-at']).toBeTruthy();
+      expect(arg.Labels['ctxmill.startup-grace-ms']).toBe('90000');
 
       // Verify started-at is a valid ISO date string
       const parsed = new Date(arg.Labels['ctxmill.started-at']);
@@ -132,14 +133,12 @@ describe('ContainerManager Integration Tests', () => {
     });
   });
 
-  describe('container creation — tmpfs mount', () => {
-    it('should mount tmpfs at /run/secrets with restricted permissions', async () => {
+  describe('container creation — secret transport', () => {
+    it('should not mount a /run/secrets tmpfs', async () => {
       await manager.createContainer(defaultCreateOpts());
 
       const arg = docker.createContainer.mock.calls[0][0];
-      expect(arg.HostConfig.Tmpfs).toEqual({
-        '/run/secrets': 'rw,noexec,nosuid,size=1m',
-      });
+      expect(arg.HostConfig.Tmpfs).toBeUndefined();
     });
   });
 
@@ -181,9 +180,9 @@ describe('ContainerManager Integration Tests', () => {
     });
   });
 
-  describe('container creation — secrets env', () => {
-    it('should pass secrets as env vars during container creation', async () => {
-      await manager.createContainer({
+  describe('container creation — secret env vars', () => {
+    it('should pass secrets as Docker env vars without archive injection', async () => {
+      const info = await manager.createContainer({
         ...defaultCreateOpts(),
         secrets: {
           OPENAI_API_KEY: 'sk-test-key',
@@ -194,6 +193,10 @@ describe('ContainerManager Integration Tests', () => {
       const arg = docker.createContainer.mock.calls[0][0];
       expect(arg.Env).toContain('OPENAI_API_KEY=sk-test-key');
       expect(arg.Env).toContain('ANTHROPIC_API_KEY=sk-ant-test');
+
+      await manager.startContainer(info.containerId);
+
+      expect(docker._mockContainer.putArchive).not.toHaveBeenCalled();
     });
 
     it('should handle empty secrets objects without adding env vars', async () => {

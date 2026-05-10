@@ -304,7 +304,7 @@ function phaseForEvent(event: AgentEvent): ExecutionPhase | null {
  * SessionStateCollector and ExecutionPhaseTracker for the session lifetime.
  *
  * @param req     - The proto OpenSessionRequest (fresh or restore bootstrap).
- * @param secrets - Secrets read from the tmpfs mount.
+ * @param secrets - Secrets read from the sandbox environment.
  * @param opts    - Optional abort signal and override orchestrator client.
  */
 export async function openSession(

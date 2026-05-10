@@ -441,7 +441,7 @@ describe('DefaultOrchestratorToolRegistry', () => {
 });
 
 describe('registerDefaultToolHandlers', () => {
-  it('registers the emit-event handler that calls eventBus.emitCustom', async () => {
+  it('registers the emit-event handler that awaits eventBus.emitCustomAsync', async () => {
     const eventBus = makeEventBus();
     const registry = new DefaultOrchestratorToolRegistry();
 
@@ -459,7 +459,7 @@ describe('registerDefaultToolHandlers', () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.eventType).toBe('my.custom.event');
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'my.custom.event',
       'agent-1',
       expect.objectContaining({ key: 'value', runId: 'run-1', agentId: 'agent-1' }),
@@ -477,7 +477,7 @@ describe('registerDefaultToolHandlers', () => {
       { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'custom',
       'agent-1',
       expect.objectContaining({ runId: 'run-1', agentId: 'agent-1' }),

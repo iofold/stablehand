@@ -158,7 +158,7 @@ docker compose build
 
 Today, sandbox containers receive secrets as **environment variables** assembled by the orchestrator at session startup / restore time.
 
-The container still mounts a tmpfs at `/run/secrets`, but the current orchestrator path does **not** write a `config.json` secret bundle there. The effective runtime contract is:
+The effective runtime contract is:
 
 1. read a hardcoded allowlist of host env vars from the orchestrator process
 2. read all per-agent secrets from the CTXMILL Secret Store
@@ -258,13 +258,13 @@ If you are hosting the ctxmill UI on a different domain than the API, you must c
 
 ## Using AG-UI Renderers
 
-If you want to use a third-party AG-UI renderer (CopilotKit, agui-hooks, @assistant-ui/react, etc.) instead of ctxmill's built-in React UI, the orchestrator exposes an AG-UI compatible endpoint:
+If you want to use a third-party AG-UI renderer (CopilotKit, agui-hooks, @assistant-ui/react, etc.) or the embeddable `@ctxmill/react` package instead of ctxmill's built-in dashboard, the orchestrator exposes an AG-UI compatible endpoint:
 
 ```
-POST http://<orchestrator>:3002/api/ag-ui/agents/:agentId/run
+POST http://<orchestrator>:3002/api/ag-ui/:agentId/run
 ```
 
-Point any `@ag-ui/client` HttpAgent at this URL and it works out of the box. See [AG-UI Compatibility](ag-ui-compat.md) for full details and quick start examples.
+The older `/api/ag-ui/agents/:agentId/run` path is retained as a compatibility alias. Point any AG-UI renderer at either URL, or use the CTXMill React wrapper documented in [React Chat Integration](integrate-chat-ui.md). See [AG-UI Compatibility](ag-ui-compat.md) for protocol details.
 
 ## Troubleshooting Checklist
 

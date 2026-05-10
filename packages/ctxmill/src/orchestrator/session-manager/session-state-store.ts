@@ -109,6 +109,38 @@ export class SessionStateStore implements SessionStatePort {
     this.activeTurns.delete(sessionId);
   }
 
+  rebindTurnRuntime(previousSessionId: string, nextSessionId: string, turnId: string): void {
+    if (previousSessionId === nextSessionId) {
+      return;
+    }
+
+    if (this.activeTurns.get(previousSessionId) === turnId) {
+      this.activeTurns.delete(previousSessionId);
+      this.activeTurns.set(nextSessionId, turnId);
+    }
+
+    const previousControllers = this.turnControllers.get(previousSessionId);
+    if (previousControllers && previousControllers.size > 0) {
+      let nextControllers = this.turnControllers.get(nextSessionId);
+      if (!nextControllers) {
+        nextControllers = new Map<string, AbortController>();
+        this.turnControllers.set(nextSessionId, nextControllers);
+      }
+      for (const [queuedTurnId, controller] of previousControllers) {
+        nextControllers.set(queuedTurnId, controller);
+      }
+      this.turnControllers.delete(previousSessionId);
+    }
+
+    const previousQueue = this.turnQueues.get(previousSessionId);
+    if (previousQueue) {
+      if (previousQueue.length > 0) {
+        this.getOrCreateQueue(nextSessionId).push(...previousQueue.splice(0));
+      }
+      this.turnQueues.delete(previousSessionId);
+    }
+  }
+
   registerTurnController(sessionId: string, turnId: string, controller: AbortController): void {
     let controllers = this.turnControllers.get(sessionId);
     if (!controllers) {

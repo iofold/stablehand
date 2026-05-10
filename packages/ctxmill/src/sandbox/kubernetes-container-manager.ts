@@ -8,6 +8,8 @@ import * as tar from 'tar-stream';
 import {
   buildSandboxOtelEnv,
   ContainerSemaphore,
+  resolveContainerStartupGraceMs,
+  STARTUP_GRACE_MS_LABEL,
   type ContainerInfo,
   type ContainerMetrics,
   type CreateContainerOptions,
@@ -15,12 +17,14 @@ import {
   type SandboxContainerManager,
   type WorkspaceDiffSnapshot,
 } from './container-manager.js';
+import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from './container-scope.js';
 
 const TAG = '[KubernetesContainerManager]';
 const WORKSPACE_ROOT = '/workspace';
 const SERVICE_ACCOUNT_ROOT = '/var/run/secrets/kubernetes.io/serviceaccount';
 const HARNESS_MEMORY_FLOOR: ReadonlyMap<string, number> = new Map([
   ['claude-agents', 2048],
+  ['pi-agent', 2048],
 ]);
 
 interface KubernetesContainerManagerOptions {
@@ -34,6 +38,7 @@ interface KubernetesContainerManagerOptions {
   queueTimeoutMs?: number;
   dataHostPathRoot?: string;
   podReadyTimeoutMs?: number;
+  startupGraceMs?: number;
 }
 
 interface KubeMetadata {
@@ -142,11 +147,13 @@ export class KubernetesContainerManager implements SandboxContainerManager {
   private readonly apiHost: string;
   private readonly apiPort: string;
   private readonly imagePrefix: string;
+  private readonly scopeId: string;
   private readonly defaultCpus: number;
   private readonly defaultMemoryMb: number;
   private readonly defaultTimeoutSec: number;
   private readonly dataHostPathRoot: string;
   private readonly podReadyTimeoutMs: number;
+  private readonly startupGraceMs: number;
   private readonly semaphore: ContainerSemaphore;
   private readonly maxGlobalContainers: number;
   private readonly records = new Map<string, ContainerRecord>();
@@ -163,11 +170,17 @@ export class KubernetesContainerManager implements SandboxContainerManager {
     this.apiHost = process.env.KUBERNETES_SERVICE_HOST ?? 'kubernetes.default.svc';
     this.apiPort = process.env.KUBERNETES_SERVICE_PORT ?? '443';
     this.imagePrefix = options.imagePrefix ?? process.env.CTXMILL_IMAGE_PREFIX ?? 'ctxmill/harness';
+    this.scopeId = resolveContainerScopeId();
     this.defaultCpus = options.defaultCpus ?? 1.0;
     this.defaultMemoryMb = options.defaultMemoryMb ?? 1024;
     this.defaultTimeoutSec = options.defaultTimeoutSec ?? 600;
     this.dataHostPathRoot = options.dataHostPathRoot ?? process.env.CTXMILL_K8S_DATA_HOST_PATH ?? process.env.CTXMILL_DATA_DIR ?? '/var/lib/ctxmill/data';
     this.podReadyTimeoutMs = options.podReadyTimeoutMs ?? envNumber('CTXMILL_K8S_POD_READY_TIMEOUT_MS') ?? 60_000;
+    this.startupGraceMs = resolveContainerStartupGraceMs(
+      options.startupGraceMs
+        ?? envNumber('CTXMILL_CONTAINER_STARTUP_GRACE_MS')
+        ?? this.podReadyTimeoutMs + 30_000,
+    );
     this.maxGlobalContainers = options.maxGlobalContainers
       ?? envNumber('CTXMILL_MAX_CONTAINERS')
       ?? 20;
@@ -189,13 +202,16 @@ export class KubernetesContainerManager implements SandboxContainerManager {
         'app.kubernetes.io/name': 'ctxmill-sandbox',
         'app.kubernetes.io/part-of': 'ctxmill',
         'ctxmill.managed': 'true',
+        [CONTAINER_SCOPE_LABEL]: this.scopeId,
         'ctxmill.session-id': opts.sessionId,
+        ...(opts.conversationId ? { 'ctxmill.conversation-id': opts.conversationId } : {}),
         'ctxmill.agent-id': opts.agentId,
         'ctxmill.harness': opts.harnessName,
       };
       const annotations = {
         'ctxmill.started-at': new Date().toISOString(),
         'ctxmill.timeout': String(timeoutSec),
+        [STARTUP_GRACE_MS_LABEL]: String(this.startupGraceMs),
       };
       const workspaceHostPath = opts.workspaceDir ?? join(this.dataHostPathRoot, 'sandbox-empty', opts.sessionId);
 
@@ -245,9 +261,7 @@ export class KubernetesContainerManager implements SandboxContainerManager {
                     { name: 'SANDBOX_PORT', value: '50051' },
                     { name: 'CTXMILL_HARNESS', value: opts.harnessName },
                     { name: 'ORCHESTRATOR_URL', value: process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001' },
-                    ...(opts.secrets
-                      ? Object.entries(opts.secrets).map(([name, value]) => ({ name, value }))
-                      : []),
+                    ...Object.entries(opts.secrets ?? {}).map(([name, value]) => ({ name, value })),
                   ],
                   volumeMounts: [
                     { name: 'workspace', mountPath: WORKSPACE_ROOT },
@@ -307,6 +321,7 @@ export class KubernetesContainerManager implements SandboxContainerManager {
 
   async stopContainer(containerId: string, _timeoutSec?: number): Promise<void> {
     await this.deleteJob(containerId);
+    this.releaseOwnedContainerSlot(containerId);
   }
 
   async removeContainer(containerId: string, _force?: boolean): Promise<void> {
@@ -360,17 +375,18 @@ export class KubernetesContainerManager implements SandboxContainerManager {
   }
 
   async getContainer(sessionId: string): Promise<ContainerInfo | null> {
-    const pod = await this.findPodBySelector(`ctxmill.session-id=${sessionId}`);
+    const pod = await this.findPodBySelector(`ctxmill.session-id=${sessionId},${CONTAINER_SCOPE_LABEL}=${this.scopeId}`)
+      ?? await this.findPodBySelector(`ctxmill.session-id=${sessionId}`);
     return pod ? this.podToContainerInfo(this.jobNameFromPod(pod) ?? `ctxmill-run-${sanitizeName(sessionId)}`, pod) : null;
   }
 
   async listManagedContainers(): Promise<ContainerInfo[]> {
-    const pods = await this.listPodsBySelector('ctxmill.managed=true');
+    const pods = await this.listPodsBySelector(this.managedSelector());
     return pods.map((pod) => this.podToContainerInfo(this.jobNameFromPod(pod) ?? pod.metadata?.name ?? '', pod));
   }
 
   async listManagedContainersWithLabels(): Promise<ManagedContainerWithLabels[]> {
-    const pods = await this.listPodsBySelector('ctxmill.managed=true');
+    const pods = await this.listPodsBySelector(this.managedSelector());
     return pods.map((pod) => ({
       ...this.podToContainerInfo(this.jobNameFromPod(pod) ?? pod.metadata?.name ?? '', pod),
       labels: {
@@ -387,7 +403,8 @@ export class KubernetesContainerManager implements SandboxContainerManager {
   }
 
   async getContainerByLabel(label: string, value: string): Promise<ContainerInfo | null> {
-    const pod = await this.findPodBySelector(`${label}=${value}`);
+    const pod = await this.findPodBySelector(`${label}=${value},${CONTAINER_SCOPE_LABEL}=${this.scopeId}`)
+      ?? await this.findPodBySelector(`${label}=${value}`);
     return pod ? this.podToContainerInfo(this.jobNameFromPod(pod) ?? pod.metadata?.name ?? '', pod) : null;
   }
 
@@ -486,8 +503,13 @@ export class KubernetesContainerManager implements SandboxContainerManager {
     return list.items ?? [];
   }
 
+  private managedSelector(): string {
+    return `ctxmill.managed=true,${CONTAINER_SCOPE_LABEL}=${this.scopeId}`;
+  }
+
   private async findPod(containerId: string): Promise<KubePod | null> {
-    return this.findPodBySelector(`job-name=${containerId}`);
+    return await this.findPodBySelector(`job-name=${containerId},${CONTAINER_SCOPE_LABEL}=${this.scopeId}`)
+      ?? await this.findPodBySelector(`job-name=${containerId}`);
   }
 
   private async findPodBySelector(selector: string): Promise<KubePod | null> {
@@ -516,6 +538,7 @@ export class KubernetesContainerManager implements SandboxContainerManager {
 
   private async deleteJob(jobName: string): Promise<void> {
     const namespace = await this.namespacePromise;
+    let jobDeleteError: unknown;
     try {
       await this.requestJson(
         'DELETE',
@@ -527,10 +550,13 @@ export class KubernetesContainerManager implements SandboxContainerManager {
         },
       );
     } catch (err) {
-      if (err instanceof KubernetesApiError && err.statusCode === 404) {
-        return;
+      if (!(err instanceof KubernetesApiError) || err.statusCode !== 404) {
+        jobDeleteError = err;
       }
-      throw err;
+    }
+
+    if (jobDeleteError) {
+      throw jobDeleteError;
     }
   }
 
@@ -560,8 +586,19 @@ export class KubernetesContainerManager implements SandboxContainerManager {
     const pod = await this.findPod(containerId);
     const labels = pod?.metadata?.labels;
     const sessionId = labels?.['ctxmill.session-id'];
+    const conversationId = labels?.['ctxmill.conversation-id'];
     const agentId = labels?.['ctxmill.agent-id'];
     if (!sessionId) return undefined;
+
+    if (agentId && conversationId) {
+      const conversationWorkspaceDir = join(this.dataHostPathRoot, 'agents', agentId, 'conversations', conversationId, 'workspace');
+      try {
+        await fs.access(conversationWorkspaceDir);
+        return conversationWorkspaceDir;
+      } catch {
+        // fall through to legacy session workspace
+      }
+    }
 
     if (agentId) {
       const sessionWorkspaceDir = join(this.dataHostPathRoot, 'agents', agentId, 'sessions', sessionId, 'workspace');

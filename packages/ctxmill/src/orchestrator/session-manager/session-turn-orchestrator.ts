@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import {
@@ -26,6 +27,16 @@ const TAG = '[SandboxSessionManager]';
 const MAX_DRAIN_ITERATIONS = 100;
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 
+function summarizeTurnDeliveryFailure(err: unknown): string {
+  if (err instanceof ConnectError) {
+    return `ConnectError code=${err.code} message=${err.message}`;
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
+
 export interface SessionTurnOrchestratorDeps {
   stateStore: SessionStateStore;
   statusCoordinator: SessionStatusCoordinator;
@@ -45,14 +56,28 @@ export interface SessionTurnOrchestratorDeps {
     agentDef: AgentDefinition,
     agentId?: string,
   ) => Promise<SessionRecord>;
+  onSessionRebound?: (event: {
+    turnId: string;
+    previousSessionId: string;
+    sessionId: string;
+  }) => Promise<void>;
   executeDeliverTurn: (
     sessionId: string,
     messages: Message[],
     turnId: string,
+    onSessionRebound?: (nextSessionId: string) => void,
   ) => AsyncGenerator<CustomSessionEvent>;
 }
 
+export interface ConcurrencyReservation {
+  agentId: string;
+  id: string;
+  release(): void;
+}
+
 export class SessionTurnOrchestrator {
+  private readonly startupReservationsByAgent = new Map<string, Set<string>>();
+
   constructor(private readonly deps: SessionTurnOrchestratorDeps) {}
 
   startTurn(
@@ -140,13 +165,55 @@ export class SessionTurnOrchestrator {
     return targetTurnId ? this.deps.stateStore.getTurnAbortSignal(sessionId, targetTurnId) : undefined;
   }
 
-  checkConcurrencyLimit(agentId: string): void {
+  checkConcurrencyLimit(agentId: string, options?: { excludeReservationId?: string }): void {
     const maxConcurrentSessionsPerAgent = this.deps.config.maxConcurrentSessionsPerAgent ?? 3;
     const activeForAgent = this.deps.stateStore.getAllSessions().filter((session) =>
       session.agentId === agentId && session.status === 'ACTIVE');
-    if (activeForAgent.length >= maxConcurrentSessionsPerAgent) {
+    const reservationCount = this.countStartupReservations(agentId, options?.excludeReservationId);
+    if (activeForAgent.length + reservationCount >= maxConcurrentSessionsPerAgent) {
       throw new ConcurrencyLimitError(agentId, maxConcurrentSessionsPerAgent, 5);
     }
+  }
+
+  reserveConcurrencySlot(agentId: string): ConcurrencyReservation {
+    this.checkConcurrencyLimit(agentId);
+
+    const id = randomUUID();
+    let reservations = this.startupReservationsByAgent.get(agentId);
+    if (!reservations) {
+      reservations = new Set<string>();
+      this.startupReservationsByAgent.set(agentId, reservations);
+    }
+    reservations.add(id);
+
+    return {
+      agentId,
+      id,
+      release: () => this.releaseConcurrencyReservation(agentId, id),
+    };
+  }
+
+  private releaseConcurrencyReservation(agentId: string, id: string): void {
+    const reservations = this.startupReservationsByAgent.get(agentId);
+    if (!reservations) {
+      return;
+    }
+
+    reservations.delete(id);
+    if (reservations.size === 0) {
+      this.startupReservationsByAgent.delete(agentId);
+    }
+  }
+
+  private countStartupReservations(agentId: string, excludeReservationId?: string): number {
+    const reservations = this.startupReservationsByAgent.get(agentId);
+    if (!reservations) {
+      return 0;
+    }
+
+    return excludeReservationId && reservations.has(excludeReservationId)
+      ? reservations.size - 1
+      : reservations.size;
   }
 
   async *deliverTurn(
@@ -184,12 +251,20 @@ export class SessionTurnOrchestrator {
       return;
     }
 
+    let currentSessionId = sessionId;
+    const onSessionRebound = (nextSessionId: string) => {
+      currentSessionId = nextSessionId;
+    };
+
     try {
-      yield* this.executeDeliverTurn(sessionId, messages, turnId);
+      yield* this.executeDeliverTurn(sessionId, messages, turnId, false, onSessionRebound);
     } finally {
       await this.deps.stateStore.withConversationLock(conversationId, async () => {
-        this.deps.stateStore.markTurnInactive(sessionId, turnId);
-        await this.drainCoalescedQueue(sessionId);
+        this.deps.stateStore.markTurnInactive(currentSessionId, turnId);
+        if (currentSessionId !== sessionId) {
+          this.deps.stateStore.markTurnInactive(sessionId, turnId);
+        }
+        await this.drainCoalescedQueue(currentSessionId);
       });
     }
   }
@@ -199,6 +274,7 @@ export class SessionTurnOrchestrator {
     messages: Message[],
     turnId: string,
     _retried = false,
+    onSessionRebound?: (nextSessionId: string) => void,
   ): AsyncGenerator<CustomSessionEvent> {
     const record = this.deps.stateStore.getSessionById(sessionId);
     if (!record) {
@@ -367,14 +443,16 @@ export class SessionTurnOrchestrator {
 
       const agentDef = this.deps.stateStore.getAgentDef(record.conversationId);
       if (SessionRecoveryCoordinator.isStaleContainerError(err) && agentDef && !_retried) {
+        const failureSummary = summarizeTurnDeliveryFailure(err);
         this.deps.logger.warn(
-          `${TAG} stale container for session ${sessionId}, recovering and retrying turn`,
+          `${TAG} stale container for session ${sessionId}, recovering and retrying turn: ${failureSummary}`,
         );
         this.deps.stateStore.deleteSession(record.conversationId);
         await this.deps.statusCoordinator.transition({
           sessionId,
           fromStatus: record.status,
           toStatus: 'TERMINATED',
+          extra: { lastRestoreError: failureSummary },
           clearRuntime: true,
         });
         const newRecord = await this.deps.onStaleContainer(
@@ -383,7 +461,14 @@ export class SessionTurnOrchestrator {
           agentDef,
           record.agentId,
         );
-        yield* this.executeDeliverTurn(newRecord.sessionId, messages, turnId, true);
+        this.deps.stateStore.rebindTurnRuntime(sessionId, newRecord.sessionId, turnId);
+        await this.deps.onSessionRebound?.({
+          turnId,
+          previousSessionId: sessionId,
+          sessionId: newRecord.sessionId,
+        });
+        onSessionRebound?.(newRecord.sessionId);
+        yield* this.executeDeliverTurn(newRecord.sessionId, messages, turnId, true, onSessionRebound);
         return;
       }
 
@@ -395,6 +480,23 @@ export class SessionTurnOrchestrator {
 
       this.deps.logger.error(`${TAG} turn ${turnId} failed on session ${sessionId}:`, err);
 
+      yield {
+        type: 'turn_failed' as const,
+        turnId,
+        errorMessage,
+      };
+      return;
+    }
+
+    if (eventCount === 0) {
+      const errorMessage = `Sandbox turn ${turnId} completed without emitting any events for session ${sessionId}`;
+      this.deps.logger.warn(`${TAG} ${errorMessage}`);
+      await this.deps.statusCoordinator.transition({
+        sessionId,
+        fromStatus: record.status,
+        toStatus: 'ACTIVE',
+      });
+      this.scheduleIdleTimeoutForActiveSession(sessionId, record);
       yield {
         type: 'turn_failed' as const,
         turnId,
@@ -430,6 +532,11 @@ export class SessionTurnOrchestrator {
       );
 
       this.deps.stateStore.markTurnActive(sessionId, nextEntry.turnId);
+      let currentSessionId = sessionId;
+      const onSessionRebound = (nextSessionId: string) => {
+        currentSessionId = nextSessionId;
+      };
+      let drainReboundQueue = false;
       try {
         const turnAbortSignal = this.deps.stateStore.getTurnAbortSignal(sessionId, nextEntry.turnId);
         if (turnAbortSignal?.aborted) {
@@ -439,6 +546,7 @@ export class SessionTurnOrchestrator {
           sessionId,
           nextEntry.messages,
           nextEntry.turnId,
+          onSessionRebound,
         )) {
           nextEntry.channel.push(event);
         }
@@ -447,8 +555,17 @@ export class SessionTurnOrchestrator {
         const error = err instanceof Error ? err : new Error(String(err));
         nextEntry.channel.fail(error);
       } finally {
-        this.deps.stateStore.clearTurnController(sessionId, nextEntry.turnId);
-        this.deps.stateStore.markTurnInactive(sessionId, nextEntry.turnId);
+        this.deps.stateStore.clearTurnController(currentSessionId, nextEntry.turnId);
+        this.deps.stateStore.markTurnInactive(currentSessionId, nextEntry.turnId);
+        if (currentSessionId !== sessionId) {
+          this.deps.stateStore.clearTurnController(sessionId, nextEntry.turnId);
+          this.deps.stateStore.markTurnInactive(sessionId, nextEntry.turnId);
+          drainReboundQueue = true;
+        }
+      }
+      if (drainReboundQueue) {
+        await this.drainCoalescedQueue(currentSessionId);
+        return;
       }
     }
 

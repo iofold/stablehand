@@ -433,17 +433,15 @@ describe('DatabaseRepository', () => {
         harnessName: 'pi-agent',
       });
 
-      await repo.updateSandboxSessionStatus(created.id, 'PAUSED', {
-        containerName: 'paused-container',
+      await repo.updateSandboxSessionStatus(created.id, 'CHECKPOINTED', {
+        containerName: 'checkpointed-container',
         checkpointRef: 'checkpoint-ref-1',
-        pausedReason: 'idle',
       });
 
       const fetched = await repo.getSandboxSession(created.id);
       expect(fetched).not.toBeNull();
-      expect(fetched!.status).toBe('PAUSED');
-      expect(fetched!.containerName).toBe('paused-container');
-      expect(fetched!.pausedReason).toBe('idle');
+      expect(fetched!.status).toBe('CHECKPOINTED');
+      expect(fetched!.containerName).toBe('checkpointed-container');
       expect(fetched!.checkpointRef).toBe('checkpoint-ref-1');
     });
 
@@ -453,18 +451,17 @@ describe('DatabaseRepository', () => {
       ).rejects.toThrow('Sandbox session missing-session-id not found for status update');
     });
 
-    it('should list active and paused sandbox sessions', async () => {
+    it('should list active sandbox sessions', async () => {
       const active = await repo.createSandboxSession({
         conversationId,
         agentId,
         harnessName: 'langgraph',
       });
-      const paused = await repo.createSandboxSession({
+      const restoring = await repo.createSandboxSession({
         conversationId,
         agentId,
         harnessName: 'langgraph',
-        status: 'PAUSED',
-        pausedReason: 'idle',
+        status: 'RESTORING',
       });
       await repo.createSandboxSession({
         conversationId,
@@ -477,7 +474,7 @@ describe('DatabaseRepository', () => {
       const sessionIds = new Set(sessions.map((session) => session.id));
 
       expect(sessionIds.has(active.id)).toBe(true);
-      expect(sessionIds.has(paused.id)).toBe(true);
+      expect(sessionIds.has(restoring.id)).toBe(false);
       expect(sessions.some((session) => session.status === 'TERMINATED')).toBe(false);
     });
 

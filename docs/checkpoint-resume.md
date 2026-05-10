@@ -1,22 +1,18 @@
 # Checkpoint and Resume Operational Guide
 
-CTXMill uses application-level checkpoint/restore for sandbox sessions. Session status values are uppercase (`ACTIVE`, `PAUSED`, `CHECKPOINTED`, `RESTORING`, `TERMINATED`), with `PAUSED` kept only as a legacy compatibility state. There is no persisted `FROZEN` state in the current runtime.
+CTXMill uses application-level checkpoint/restore for sandbox sessions. Session status values are uppercase (`ACTIVE`, `CHECKPOINTED`, `RESTORING`, `TERMINATED`). The current runtime has no separate persisted pause or frozen state.
 
 ## How Checkpoint and Resume Works
 
-The runtime has two distinct mechanisms:
+The runtime uses checkpoint / restore: the harness exports structured state, the orchestrator captures workspace changes, the container is removed, and a later restore provisions a fresh container and rehydrates the session.
 
-1. **Compatibility Pause / Resume**: A live container can still be paused in place for legacy/manual workflows, but the current runtime does not promote idle sessions through a persisted frozen state.
-2. **Checkpoint / Restore**: The harness exports structured state, the orchestrator captures workspace changes, the container is removed, and a later restore provisions a fresh container and rehydrates the session.
-
-Automatic idle handling uses the second path: idle sessions are checkpointed directly rather than promoted through a persisted frozen state.
+Automatic idle handling checkpoints sessions directly rather than promoting them through an intermediate container-idle state.
 
 ## Session State Machine
 
 Sessions move through these states:
 
 - **ACTIVE**: The agent is running or ready to run in a live container.
-- **PAUSED**: The container is paused for legacy compatibility only.
 - **CHECKPOINTED**: The container is removed. Harness state and workspace diff are stored for later restore.
 - **RESTORING**: A new container is being provisioned and restored from checkpoint data.
 - **TERMINATED**: The session is closed and resources are cleaned up.
@@ -58,22 +54,20 @@ The current runtime behavior is:
 - **Checkpoint JSON**: The sandbox-daemon validator warns at `1 MB` and rejects payloads over `5 MB` by default.
 - **Workspace Tar**: `100 MB` maximum.
 
-The settings surface also exposes `maxCheckpointBytes`, but the daemon-side checkpoint validator is still stricter unless a larger limit is explicitly wired through.
-
 ## Secret Handling
 
 Secrets are handled separately from checkpoints:
 
 1. **Resolve**: On restore, the orchestrator re-resolves required secrets from the secret provider.
-2. **Mount**: Secrets are injected into the new container via `tmpfs` at `/run/secrets/config.json`.
-3. **Destroy**: When the container is removed, those in-memory secrets disappear with it.
+2. **Inject**: Secrets are passed into the new sandbox container as environment variables.
+3. **Destroy**: When the container is removed, those runtime environment values disappear with it.
 
 ## HITL Flow
 
 When an agent requests human approval:
 
 1. The orchestrator persists a pending interrupt and emits `run.interrupted` / `HITL_PAUSE`.
-2. The session may remain live, be manually paused, or later be checkpointed through normal lifecycle rules.
+2. The session may remain live or later be checkpointed through normal lifecycle rules.
 3. When the user approves or rejects, the orchestrator resumes the session or restores it from checkpoint.
 4. A continuation turn delivers the resolution back to the harness.
 

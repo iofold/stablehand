@@ -4,7 +4,7 @@
  *
  * Verifies the complete path:
  *   sandbox emit-event call -> tool proxy -> RequestTool RPC ->
- *   orchestrator dispatch -> EventBus.emitCustom() -> success result
+ *   orchestrator dispatch -> EventBus.emitCustomAsync() -> success result
  *
  * Also verifies ToolMetadata marking, field name mapping, error propagation,
  * and payload data fidelity.
@@ -64,6 +64,7 @@ function makeMockClient(
 function makeEventBus() {
   const bus = new TypedEventBus();
   vi.spyOn(bus, 'emitCustom');
+  vi.spyOn(bus, 'emitCustomAsync');
   return bus;
 }
 
@@ -320,7 +321,7 @@ describe('orchestrator emit-event handler', () => {
     registry = new DefaultOrchestratorToolRegistry();
     registerDefaultToolHandlers(registry, eventBus);
     vi.restoreAllMocks();
-    vi.spyOn(eventBus, 'emitCustom');
+    vi.spyOn(eventBus, 'emitCustomAsync');
   });
 
   it('dispatches emit-event with "type" field (matching Zod schema)', async () => {
@@ -335,7 +336,7 @@ describe('orchestrator emit-event handler', () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.eventType).toBe('email.classified');
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'email.classified',
       'agent-1',
       expect.objectContaining({ category: 'support', runId: 'run-1', agentId: 'agent-1' }),
@@ -350,7 +351,7 @@ describe('orchestrator emit-event handler', () => {
       { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'custom',
       'agent-1',
       expect.objectContaining({ data: 'test', runId: 'run-1' }),
@@ -368,7 +369,7 @@ describe('orchestrator emit-event handler', () => {
     const parsed = JSON.parse(result);
     expect(parsed.ok).toBe(true);
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'empty.event',
       'agent-1',
       expect.objectContaining({ runId: 'run-1', agentId: 'agent-1' }),
@@ -383,7 +384,7 @@ describe('orchestrator emit-event handler', () => {
       { sessionId: 'run-99', agentId: 'agent-X', requestId: 'req-1' },
     );
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'inject.test',
       'agent-X',
       expect.objectContaining({
@@ -400,7 +401,7 @@ describe('orchestrator emit-event handler', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
-  it('complete flow: sandbox tool call -> RequestTool RPC -> handler -> EventBus.emitCustom()', async () => {
+  it('complete flow: sandbox tool call -> RequestTool RPC -> handler -> EventBus.emitCustomAsync()', async () => {
     // 1. Set up the orchestrator side
     const eventBus = makeEventBus();
     const registry = new DefaultOrchestratorToolRegistry();
@@ -429,8 +430,8 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     expect(parsed.eventType).toBe('email.classified');
 
     // 6. Verify the EventBus was called on the orchestrator side
-    expect(eventBus.emitCustom).toHaveBeenCalledTimes(1);
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledTimes(1);
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'email.classified',
       'agent-1',
       expect.objectContaining({
@@ -444,8 +445,8 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
 
   it('complete flow: error in EventBus handler propagates back through proxy', async () => {
     const eventBus = makeEventBus();
-    // Make emitCustom throw
-    vi.spyOn(eventBus, 'emitCustom').mockImplementation(() => {
+    // Make emitCustomAsync throw
+    vi.spyOn(eventBus, 'emitCustomAsync').mockImplementation(() => {
       throw new Error('EventBus internal error: queue full');
     });
 
@@ -499,8 +500,8 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
       payload: complexPayload,
     });
 
-    expect(eventBus.emitCustom).toHaveBeenCalledTimes(1);
-    const [eventType, agentId, payload] = (eventBus.emitCustom as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledTimes(1);
+    const [eventType, agentId, payload] = (eventBus.emitCustomAsync as ReturnType<typeof vi.fn>).mock.calls[0];
 
     expect(eventType).toBe('batch.processed');
     expect(agentId).toBe('data-agent');
@@ -547,7 +548,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.eventType).toBe('proto.test');
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'proto.test',
       'proto-agent',
       expect.objectContaining({
@@ -564,7 +565,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
 /* -------------------------------------------------------------------------- */
 
 describe('emit-event in-process mode (direct EventBus call)', () => {
-  it('calls eventBus.emitCustom directly when eventBus is in context', async () => {
+  it('awaits eventBus.emitCustomAsync when eventBus is in context', async () => {
     const eventBus = makeEventBus();
 
     const ctx = {
@@ -582,11 +583,48 @@ describe('emit-event in-process mode (direct EventBus call)', () => {
     expect(result).toContain('Event "local.event" emitted successfully');
     expect(result).toContain('1 payload field(s)');
 
-    expect(eventBus.emitCustom).toHaveBeenCalledWith(
+    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'local.event',
       'agent-local',
       { key: 'value' },
     );
+  });
+
+  it('does not report success before custom event persistence resolves', async () => {
+    const observedOrder: string[] = [];
+    let resolvePersist!: () => void;
+    const persistGate = new Promise<void>((resolve) => {
+      resolvePersist = resolve;
+    });
+    const eventBus = new TypedEventBus({
+      persistEvent: vi.fn(async () => {
+        observedOrder.push('persist:start');
+        await persistGate;
+        observedOrder.push('persist:done');
+      }),
+    });
+
+    const ctx = {
+      agentId: 'agent-local',
+      conversationId: 'conv-1',
+      workspaceDir: '/tmp',
+      eventBus,
+    };
+
+    const resultPromise = emitEventTool.handler(
+      { type: 'local.persisted', payload: { key: 'value' } },
+      ctx,
+    ).then((result) => {
+      observedOrder.push('handler:done');
+      return result;
+    });
+
+    await Promise.resolve();
+    expect(observedOrder).toEqual(['persist:start']);
+
+    resolvePersist();
+    await expect(resultPromise).resolves.toContain('Event "local.persisted" emitted successfully');
+    expect(observedOrder).toEqual(['persist:start', 'persist:done', 'handler:done']);
   });
 
   it('returns error message when eventBus is not available', async () => {

@@ -19,6 +19,8 @@ WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 
 COPY packages/shared/package.json packages/shared/tsconfig.json packages/shared/
+COPY packages/client/package.json packages/client/tsconfig.json packages/client/
+COPY packages/react/package.json packages/react/tsconfig.json packages/react/tsconfig.typecheck.json packages/react/
 COPY packages/ctxmill/package.json packages/ctxmill/tsconfig.json packages/ctxmill/
 COPY packages/proto/package.json packages/proto/tsconfig.build.json packages/proto/
 COPY packages/sandbox-daemon/package.json packages/sandbox-daemon/tsconfig.json packages/sandbox-daemon/
@@ -30,6 +32,8 @@ COPY packages/ui/package.json packages/ui/
 RUN pnpm install --frozen-lockfile
 
 COPY packages/shared/src/ packages/shared/src/
+COPY packages/client/src/ packages/client/src/
+COPY packages/react/src/ packages/react/src/
 COPY packages/ctxmill/src/ packages/ctxmill/src/
 COPY packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
 COPY packages/proto/ packages/proto/

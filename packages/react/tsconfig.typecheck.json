@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "noEmit": true,
+    "rootDir": "..",
+    "paths": {
+      "@ctxmill/client": ["../client/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "../client/src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "../client/src/**/*.test.ts"]
+}

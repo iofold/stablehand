@@ -57,13 +57,6 @@ export type EventMap = {
     action: 'approve' | 'reject' | 'suspend' | 'timeout';
     timestamp: number;
   };
-  'session.paused': {
-    sessionId: string;
-    agentId: string;
-    conversationId: string;
-    reason: string;
-    timestamp: number;
-  };
   'turn.completed': {
     turnId: string;
     sessionId: string;

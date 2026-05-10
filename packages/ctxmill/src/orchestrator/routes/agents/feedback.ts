@@ -49,14 +49,16 @@ export async function feedbackRoutes(
       const turnId = matchingTurn?.id ?? body.conversationId;
       const feedbackId = randomUUID();
 
-      eventBus?.emit('feedback.received', {
+      const eventPayload: EventMap['feedback.received'] = {
         feedbackId,
         turnId,
         agentId: id,
         type: body.type,
         messageId: body.messageId,
         timestamp: Date.now(),
-      } as EventMap['feedback.received']);
+      };
+
+      await eventBus?.emitAsync('feedback.received', eventPayload);
 
       return reply.status(201).send({
         feedbackId,

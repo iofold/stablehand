@@ -32,7 +32,7 @@ Bootstrap SSE frames such as `CONNECTED` and `state_snapshot` are written direct
 | TOOL_CALL_ARGS | turnId | SSEBroadcaster (synthetic, emitted after TOOL_CALL_START) |
 | TOOL_CALL_RESULT | turnId | SSEBroadcaster (from bus `run.tool_result`) |
 | MESSAGE_COMMITTED | turnId | SSEBroadcaster (from bus `message.committed`; source commit event is created by `AgentSessionService`) |
-| CUSTOM | varies (turnId, sessionId, or agentId) | Mixed: `session.paused`, `run.interrupt_resolved`, `run.ag_ui_event`, and direct stream-route bootstrap snapshots |
+| CUSTOM | varies (turnId, sessionId, or agentId) | Mixed: `run.interrupt_resolved`, `run.ag_ui_event`, and direct stream-route bootstrap snapshots |
 
 ### SSE Broadcast Resolution
 
@@ -43,7 +43,7 @@ payload.turnId ?? payload.sessionId ?? payload.runId
 
 ### Emission Paths
 
-1. **EventBus → SSEBroadcaster → SSE** — Most run-lifecycle, preview, and committed-message events. This includes `turn.pending`, `turn.started`, `run.text_chunk`, `run.tool_*`, `message.committed`, `session.paused`, and `turn.completed`.
+1. **EventBus → SSEBroadcaster → SSE** — Most run-lifecycle, preview, and committed-message events. This includes `turn.pending`, `turn.started`, `run.text_chunk`, `run.tool_*`, `message.committed`, and `turn.completed`.
 2. **SessionTurnService → AgentSessionService** — Sandbox `message_committed` events first become internal AG-UI `MESSAGE_COMMITTED` events in the turn service, then `AgentSessionService` persists them and re-emits a canonical `message.committed` bus event.
 3. **AgentSessionService → `run.ag_ui_event` → SSEBroadcaster** — AG-UI events that are not individually normalized onto first-class bus events are forwarded through `run.ag_ui_event`.
 4. **Stream route → direct SSE** — Bootstrap frames only (`CONNECTED`, `state_snapshot`).
@@ -60,10 +60,9 @@ Key runtime event types from `packages/ctxmill/src/events/bus.ts` that affect AG
 | user.message | agentId, conversationId, messageId, content | TEXT_MESSAGE_START / CONTENT / END | SSEBroadcaster synthesizes user-message echo events |
 | run.text_chunk | turnId, agentId, messageId, content | TEXT_MESSAGE_CONTENT | — |
 | run.tool_started | turnId, agentId, toolCallId, toolName, args | TOOL_CALL_START + TOOL_CALL_ARGS | — |
-| run.tool_result | turnId, agentId, toolCallId, toolName, result, durationMs | TOOL_CALL_RESULT | — |
-| run.interrupted | turnId, agentId, toolCallId, toolName, args, interruptId | HITL_PAUSE | Durable HITL pause signal |
-| run.interrupt_resolved | turnId, agentId, interruptId, action | CUSTOM | Interrupt resolution marker |
-| session.paused | sessionId, agentId, conversationId, reason | CUSTOM | Idle-only session pause event; uses sessionId rather than turnId |
+| run.tool_result | turnId, agentId, toolCallId, toolName, result, durationMs | TOOL_CALL_RESULT on native streams; TOOL_CALL_END on AG-UI compat streams | `a2ui-render` tool results additionally emit `CUSTOM name: ctxmill.a2ui.render` on AG-UI compat streams |
+| run.interrupted | turnId, agentId, toolCallId, toolName, args, interruptId | HITL_PAUSE on native streams; `CUSTOM name: ctxmill.hitl.requested` on AG-UI compat streams | Durable HITL pause signal |
+| run.interrupt_resolved | turnId, agentId, interruptId, action | `CUSTOM name: ctxmill.hitl.resolved` on AG-UI compat streams | Interrupt resolution marker |
 | message.committed | turnId, agentId, conversationId, messageSeq, role, content | MESSAGE_COMMITTED | Canonical assistant/tool commit emitted by `AgentSessionService` |
 | run.ag_ui_event | turnId, agentId, conversationId?, event | Passthrough | Forwards AG-UI events not otherwise normalized |
 | turn.completed | turnId, sessionId, agentId, conversationId, status, durationMs | RUN_FINISHED (+ RUN_ERROR on error/cancelled) | Terminal lifecycle event |

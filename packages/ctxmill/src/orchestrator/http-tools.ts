@@ -109,16 +109,16 @@ export function getAgentHttpToolProviderName(agentId: string): string {
   return `http-${agentId}`;
 }
 
-function resolveProviderSecrets(
+async function resolveProviderSecrets(
   agentId: string,
   secretProvider?: SecretProvider,
-): Record<string, string> {
+): Promise<Record<string, string>> {
   if (!secretProvider) return {};
 
   const secrets: Record<string, string> = {};
-  const keys = secretProvider.list(agentId);
+  const keys = await secretProvider.list(agentId);
   for (const key of keys) {
-    const value = secretProvider.get(agentId, key);
+    const value = await secretProvider.get(agentId, key);
     if (value !== null) {
       secrets[key] = value;
     }
@@ -152,7 +152,7 @@ export async function registerAgentHttpTools(
 
   toolRegistry.addProvider(new HTTPToolProvider(configs, {
     name: providerName,
-    secrets: resolveProviderSecrets(agent.id, secretProvider),
+    secrets: await resolveProviderSecrets(agent.id, secretProvider),
   }));
   await toolRegistry.refresh();
 }

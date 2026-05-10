@@ -3,8 +3,7 @@ import type { SessionStatus } from './types.js';
 /**
  * Sandbox-session transition matrix per ADR 005.
  *
- *   ACTIVE       → PAUSED, CHECKPOINTED, TERMINATED
- *   PAUSED       → ACTIVE, CHECKPOINTED, TERMINATED
+ *   ACTIVE       → CHECKPOINTED, TERMINATED
  *   CHECKPOINTED → RESTORING, TERMINATED
  *   RESTORING    → ACTIVE, CHECKPOINTED, TERMINATED
  *   TERMINATED   → (terminal)
@@ -14,8 +13,7 @@ import type { SessionStatus } from './types.js';
  * directly.
  */
 const VALID_TRANSITIONS: ReadonlyMap<SessionStatus, readonly SessionStatus[]> = new Map([
-  ['ACTIVE', ['PAUSED', 'CHECKPOINTED', 'TERMINATED']],
-  ['PAUSED', ['ACTIVE', 'CHECKPOINTED', 'TERMINATED']],
+  ['ACTIVE', ['CHECKPOINTED', 'TERMINATED']],
   ['CHECKPOINTED', ['RESTORING', 'TERMINATED']],
   ['RESTORING', ['ACTIVE', 'CHECKPOINTED', 'TERMINATED']],
   ['TERMINATED', []],
@@ -23,7 +21,6 @@ const VALID_TRANSITIONS: ReadonlyMap<SessionStatus, readonly SessionStatus[]> = 
 
 export const SESSION_STATUSES: readonly SessionStatus[] = [
   'ACTIVE',
-  'PAUSED',
   'CHECKPOINTED',
   'RESTORING',
   'TERMINATED',

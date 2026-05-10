@@ -382,6 +382,7 @@ describe('AGUIEventNormalizer', () => {
       const payload: EventMap['run.interrupted'] = {
         turnId: 'turn-1',
         agentId: 'agent-1',
+        conversationId: 'conv-1',
         toolCallId: 'tool-1',
         toolName: 'approve_action',
         args: { action: 'delete_file' },
@@ -394,9 +395,12 @@ describe('AGUIEventNormalizer', () => {
       expect(result).toHaveLength(1);
       expect(result[0]).toEqual({
         type: 'CUSTOM',
+        name: 'ctxmill.hitl.requested',
         runId,
         threadId,
         subtype: 'hitl_pause',
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
         toolCallId: 'tool-1',
         toolName: 'approve_action',
         args: { action: 'delete_file' },
@@ -409,6 +413,7 @@ describe('AGUIEventNormalizer', () => {
       const payload: EventMap['run.interrupt_resolved'] = {
         turnId: 'turn-1',
         agentId: 'agent-1',
+        conversationId: 'conv-1',
         interruptId: 'interrupt-1',
         action: 'approve',
         timestamp,
@@ -419,9 +424,12 @@ describe('AGUIEventNormalizer', () => {
       expect(result).toHaveLength(1);
       expect(result[0]).toEqual({
         type: 'CUSTOM',
+        name: 'ctxmill.hitl.resolved',
         runId,
         threadId,
         subtype: 'hitl_resolved',
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
         interruptId: 'interrupt-1',
         action: 'approve',
         timestamp,

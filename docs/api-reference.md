@@ -38,7 +38,7 @@
 | **SSE Streaming** |  |  |
 | GET | `/api/agents/:id/stream` | Subscribe to live agent events |
 | **AG-UI Compatibility** |  |  |
-| POST | `/api/ag-ui/agents/:id/run` | AG-UI protocol endpoint — accepts `RunAgentInput`, returns run-scoped SSE ([docs](ag-ui-compat.md)) |
+| POST | `/api/ag-ui/:id/run` | AG-UI protocol endpoint — accepts `RunAgentInput`, returns run-scoped SSE ([docs](ag-ui-compat.md)); `/api/ag-ui/agents/:id/run` remains a compatibility alias |
 | **Conversations & Messages** |  |  |
 | GET | `/api/agents/:id/conversations` | List conversations |
 | GET | `/api/agents/:id/conversations/summary` | List enriched conversation summaries |
@@ -265,8 +265,8 @@ Per-agent sandbox resource limits:
     "hasPendingInterrupt": false,
     "sessionsByStatus": {
       "ACTIVE": 1,
-      "PAUSED": 0,
       "CHECKPOINTED": 0,
+      "RESTORING": 0,
       "TERMINATED": 0
     },
     "sessions": [
@@ -367,8 +367,8 @@ Per-agent sandbox resource limits:
   "hasPendingInterrupt": false,
   "sessionsByStatus": {
     "ACTIVE": 1,
-    "PAUSED": 0,
     "CHECKPOINTED": 0,
+    "RESTORING": 0,
     "TERMINATED": 0
   },
   "sessions": []
@@ -545,12 +545,10 @@ Per-agent sandbox resource limits:
       "agentId": "agent_123",
       "conversationId": "conv_123",
       "sandboxSessionId": "sbx_123",
-      "status": "PAUSED",
+      "status": "CHECKPOINTED",
       "mode": "background",
       "startedAt": 1712140000000,
-      "taskDescription": "Index artifacts",
-      "pausedAt": 1712140050000,
-      "pausedReason": "hitl"
+      "taskDescription": "Index artifacts"
     }
   ]
 }
@@ -638,7 +636,7 @@ Per-agent sandbox resource limits:
     "id": "sbx_123",
     "conversationId": "conv_123",
     "agentId": "agent_123",
-    "status": "PAUSED",
+    "status": "ACTIVE",
     "harnessName": "langgraph",
     "containerName": "ctxmill-agent-123",
     "createdAt": 1712140000000,
@@ -667,7 +665,7 @@ Example initial frames:
 ```text
 data: {"type":"CONNECTED","agentId":"agent_123","timestamp":1712140000000}
 
-data: {"type":"CUSTOM","subtype":"state_snapshot","agentId":"agent_123","conversationId":"conv_123","sessionId":"sbx_123","status":"PAUSED","activeTurnId":null,"timestamp":1712140001000}
+data: {"type":"CUSTOM","subtype":"state_snapshot","agentId":"agent_123","conversationId":"conv_123","sessionId":"sbx_123","status":"ACTIVE","activeTurnId":null,"timestamp":1712140001000}
 
 id: agent_123-42
 data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","timestamp":1712140002000}
@@ -722,7 +720,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 }
 ```
 
-- **Notes:** Sandbox session statuses are uppercase (`ACTIVE`, `PAUSED`, `CHECKPOINTED`, `RESTORING`, `TERMINATED`) when a response includes sandbox state. Conversation lifecycle status fields remain lower-case (`running`, `paused`, `suspended`, `completed`, `error`, `idle`).
+- **Notes:** Sandbox session statuses are uppercase (`ACTIVE`, `CHECKPOINTED`, `RESTORING`, `TERMINATED`) when a response includes sandbox state. Conversation lifecycle status fields remain lower-case (`running`, `suspended`, `completed`, `error`, `idle`).
 
 #### `GET /api/agents/:id/conversations/:convId/messages`
 
@@ -1195,7 +1193,6 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 ```json
 {
   "maxWorkspaceTarBytes": 104857600,
-  "maxCheckpointBytes": 104857600,
   "maxTarUploadBytes": 104857600,
   "idleTimeoutMs": 300000,
   "turnTimeoutMs": 1800000,
@@ -1213,7 +1210,6 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 
 - **Notes:**
   - This endpoint only exists when the settings service is configured.
-  - The settings surface includes `maxCheckpointBytes`, but the sandbox-daemon checkpoint validator still defaults to a stricter 5 MiB limit unless a larger limit is explicitly wired through.
 
 #### `PUT /api/settings`
 
@@ -1236,7 +1232,6 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 | Field | Range |
 |---|---|
 | `maxWorkspaceTarBytes` | `1 MiB` to `1024 MiB` |
-| `maxCheckpointBytes` | `1 MiB` to `200 MiB` |
 | `maxTarUploadBytes` | `1 MiB` to `1024 MiB` |
 | `idleTimeoutMs` | `10000` to `3600000` |
 | `turnTimeoutMs` | `30000` to `7200000` |

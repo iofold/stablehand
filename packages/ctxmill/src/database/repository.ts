@@ -29,10 +29,8 @@ type WebhookInsert = typeof pgSchema.webhooks.$inferInsert;
 export type WebhookRow = typeof pgSchema.webhooks.$inferSelect;
 export type SandboxSessionRow = Omit<
   typeof pgSchema.sandboxSessions.$inferSelect,
-  'pausedAt' | 'pausedReason' | 'restoreAttempts' | 'lastRestoreError'
+  'restoreAttempts' | 'lastRestoreError'
 > & {
-  pausedAt?: number | null;
-  pausedReason?: string | null;
   restoreAttempts?: number | null;
   lastRestoreError?: string | null;
 };
@@ -203,11 +201,15 @@ export class DatabaseRepository {
 
   // ── Conversations ───────────────────────────────────────
 
-  async createConversation(agentId: string): Promise<ConversationSelect> {
+  async createConversation(agentId: string, id?: string): Promise<ConversationSelect> {
     const sanitizedAgentId = sanitizeDbText(agentId, 'conversations.agentId');
+    const sanitizedId = id ? sanitizeDbText(id, 'conversations.id') : undefined;
     const [conversation] = await this.db
       .insert(this.schema.conversations)
-      .values({ agentId: sanitizedAgentId })
+      .values({
+        ...(sanitizedId ? { id: sanitizedId } : {}),
+        agentId: sanitizedAgentId,
+      })
       .returning();
     if (!conversation) {
       throw new Error('Expected insert to return a row but got undefined');
@@ -305,7 +307,7 @@ export class DatabaseRepository {
   }
 
   async getActiveConversationSummaries(): Promise<ConversationSummaryRow[]> {
-    return this.queryConversationSummaries({ sandboxStatuses: ['ACTIVE', 'PAUSED', 'RESTORING'] });
+    return this.queryConversationSummaries({ sandboxStatuses: ['ACTIVE', 'RESTORING'] });
   }
 
   async createTurn(data: TurnInsert): Promise<TurnSelect> {
@@ -1271,7 +1273,6 @@ export class DatabaseRepository {
     status?: string;
     harnessName: string;
     checkpointRef?: string;
-    pausedReason?: string;
   }): Promise<SandboxSessionRow> {
     const sanitizedSession = sanitizeTypedDbValue(session, 'sandboxSessions.insert');
     const [row] = await this.db
@@ -1285,7 +1286,6 @@ export class DatabaseRepository {
         status: sanitizedSession.status ?? 'ACTIVE',
         harnessName: sanitizedSession.harnessName,
         checkpointRef: sanitizedSession.checkpointRef ?? null,
-        pausedReason: sanitizedSession.pausedReason ?? null,
       })
       .returning();
     if (!row) throw new Error('Expected insert to return a row but got undefined');
@@ -1318,20 +1318,12 @@ export class DatabaseRepository {
       containerName?: string | null;
       containerId?: string | null;
       checkpointRef?: string | null;
-      pausedAt?: number | null;
-      pausedReason?: string | null;
       restoreAttempts?: number | null;
       lastRestoreError?: string | null;
     },
   ): Promise<void> {
     const sanitizedStatus = sanitizeDbText(status, 'sandboxSessions.status');
     const sanitizedExtra = extra ? sanitizeTypedDbValue(extra, 'sandboxSessions.update') : undefined;
-    const pauseMetadata = status === 'ACTIVE'
-      ? { pausedAt: null, pausedReason: null }
-      : {
-          ...(sanitizedExtra?.pausedAt !== undefined ? { pausedAt: sanitizedExtra.pausedAt } : {}),
-          ...(sanitizedExtra?.pausedReason !== undefined ? { pausedReason: sanitizedExtra.pausedReason } : {}),
-        };
 
     const [updated] = await this.db
       .update(this.schema.sandboxSessions)
@@ -1348,7 +1340,6 @@ export class DatabaseRepository {
         ...(sanitizedExtra?.lastRestoreError !== undefined
           ? { lastRestoreError: sanitizedExtra.lastRestoreError }
           : {}),
-        ...pauseMetadata,
       })
       .where(eq(this.schema.sandboxSessions.id, id))
       .returning({ id: this.schema.sandboxSessions.id });
@@ -1368,7 +1359,7 @@ export class DatabaseRepository {
     return this.db
       .select()
       .from(this.schema.sandboxSessions)
-      .where(inArray(this.schema.sandboxSessions.status, ['ACTIVE', 'PAUSED']));
+      .where(eq(this.schema.sandboxSessions.status, 'ACTIVE'));
   }
 
   /**
@@ -1416,7 +1407,6 @@ export class DatabaseRepository {
 
     const emptyCounts = (): ApiSessionStatusCounts => ({
       ACTIVE: 0,
-      PAUSED: 0,
       CHECKPOINTED: 0,
       RESTORING: 0,
       TERMINATED: 0,

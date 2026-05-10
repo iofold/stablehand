@@ -6,7 +6,7 @@ import type { SessionEvent } from '../../packages/ctxmill/src/orchestrator/sessi
 
 export const MAX_CONCURRENT_SESSIONS_PER_AGENT = 3;
 
-export type TestSessionStatus = 'queued' | 'running' | 'paused' | 'suspended' | 'completed' | 'error' | 'cancelled';
+export type TestSessionStatus = 'queued' | 'running' | 'suspended' | 'completed' | 'error' | 'cancelled';
 
 export type TestSessionRecord = {
   id: string;
@@ -18,8 +18,8 @@ export type TestSessionRecord = {
   completedAt: number | null;
   error: string | null;
   taskDescription: string | null;
-  pausedAt?: number;
-  pausedReason?: string;
+  suspendedAt?: number;
+  suspendReason?: string;
   resumedAt?: number;
 };
 
@@ -33,7 +33,7 @@ type StartOptions = {
   maxConcurrent?: number;
 };
 
-const ACTIVE_STATUSES: readonly TestSessionStatus[] = ['queued', 'running', 'paused', 'suspended'];
+const ACTIVE_STATUSES: readonly TestSessionStatus[] = ['queued', 'running', 'suspended'];
 
 export class TestSessionRegistry {
   private readonly sessions = new Map<string, TestSessionRecord>();
@@ -143,7 +143,7 @@ export class TestSessionRegistry {
   async suspendSession(id: string, reason: string): Promise<TestSessionRecord | undefined> {
     const existing = this.sessions.get(id);
     if (!existing || existing.status !== 'running') return undefined;
-    return this.updateSession(id, { status: 'suspended', pausedAt: Date.now(), pausedReason: reason });
+    return this.updateSession(id, { status: 'suspended', suspendedAt: Date.now(), suspendReason: reason });
   }
 
   async completeSession(id: string, error?: string): Promise<TestSessionRecord | undefined> {

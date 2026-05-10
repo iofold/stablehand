@@ -64,8 +64,6 @@ function makeRow(overrides: Partial<SandboxSessionRow> = {}): SandboxSessionRow 
     createdAt: 1,
     updatedAt: 1,
     lastActivityAt: 1,
-    pausedAt: null,
-    pausedReason: null,
     restoreAttempts: 0,
     lastRestoreError: null,
     ...overrides,
@@ -142,7 +140,7 @@ function createHarness(): TestHarness {
     },
     statusCoordinator,
     stateStore,
-    buildSandboxSecrets: () => ({}),
+    buildSandboxSecrets: async () => ({}),
     resolveToolsForAgent: () => [],
     workspaceDiffService: { capture: vi.fn(), restore: vi.fn() } as unknown as Parameters<
       typeof SessionRecoveryCoordinator
@@ -157,7 +155,7 @@ function createHarness(): TestHarness {
       status: 'ACTIVE',
       harnessName: 'langgraph',
     }),
-    getExistingSessionWorkspaceDir: vi.fn().mockResolvedValue(undefined),
+    getExistingConversationWorkspaceDir: vi.fn().mockResolvedValue(undefined),
     sleep,
   });
 

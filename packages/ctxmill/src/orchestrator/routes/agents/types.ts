@@ -14,6 +14,7 @@ import type { InterruptManager } from '../../interrupt.js';
 import type { RunStartupService } from '../../run-startup-service.js';
 import type { SandboxSessionManager } from '../../sandbox-session-manager.js';
 import type { SSEManager } from '../../sse.js';
+import type { ContainerLifecyclePolicy } from '../../container-lifecycle-policy.js';
 
 export type AgentHttpToolDefinition = {
   name: string;
@@ -53,6 +54,8 @@ export interface AgentSubRouteOptions extends AgentRouteOptions {
 
 export interface SessionsRouteOptions {
   db: DatabaseRepository;
+  lifecyclePolicy?: Pick<ContainerLifecyclePolicy, 'getActiveSandboxSessionsForReadback'>;
+  sessionManager?: Pick<SandboxSessionManager, 'getActiveTurnId'>;
 }
 
 export type AgentRouteBody = {

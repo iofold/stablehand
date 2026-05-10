@@ -239,6 +239,7 @@ export async function startDev() {
     toolExecutor: container.toolExecutor,
     settingsService: container.settingsService,
     sessionManager: container.sessionManager,
+    lifecyclePolicy: container.lifecyclePolicy,
   });
   await server.listen({ port: apiPort, host: '0.0.0.0' });
   console.log(`  \x1b[32mAPI:\x1b[0m  http://localhost:${apiPort}`);

@@ -25,25 +25,146 @@ const TIME_RANGES = [
   { label: '7d', value: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
 ] as const;
 
-/** Extract a human-readable summary from a JSON payload string. */
-function extractSummary(payload: string | Record<string, unknown>): string {
+const SUMMARY_LIMIT = 180;
+
+function truncateSummary(value: string, limit = SUMMARY_LIMIT): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
+}
+
+function parsePayload(payload: unknown): Record<string, unknown> | string {
   try {
-    const obj = typeof payload === 'object' ? payload : JSON.parse(payload);
-    if (typeof obj === 'string') return obj;
-    // Look for common summary fields
-    for (const key of ['message', 'description', 'task', 'taskDescription', 'content', 'name', 'error']) {
-      if (typeof obj[key] === 'string' && obj[key].length > 0) {
-        const val = obj[key] as string;
-        return val.length > 120 ? val.slice(0, 117) + '...' : val;
-      }
+    if (typeof payload === 'string') {
+      const parsed = JSON.parse(payload) as unknown;
+      return typeof parsed === 'object' && parsed !== null
+        ? parsed as Record<string, unknown>
+        : String(parsed);
     }
-    // Fall back to stringified keys
-    const keys = Object.keys(obj);
-    if (keys.length === 0) return '{}';
-    return keys.slice(0, 4).join(', ') + (keys.length > 4 ? ` (+${keys.length - 4})` : '');
+    if (typeof payload === 'object' && payload !== null) return payload as Record<string, unknown>;
   } catch {
-    const str = typeof payload === 'string' ? payload : JSON.stringify(payload);
-    return str.length > 120 ? str.slice(0, 117) + '...' : str;
+    return String(payload);
+  }
+  return String(payload ?? '');
+}
+
+function stringField(obj: Record<string, unknown>, key: string): string | undefined {
+  const value = obj[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function numberField(obj: Record<string, unknown>, key: string): number | undefined {
+  const value = obj[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function recordField(obj: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = obj[key];
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function formatDuration(ms: number | undefined): string | undefined {
+  if (ms === undefined) return undefined;
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+}
+
+function compactValue(value: unknown): string {
+  if (typeof value === 'string') return truncateSummary(value, 48);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return `[${value.length} items]`;
+  if (typeof value === 'object' && value !== null) return '{...}';
+  if (value === null) return 'null';
+  return String(value);
+}
+
+function summarizeRecord(obj: Record<string, unknown>, preferredKeys: string[] = []): string {
+  for (const key of preferredKeys) {
+    const value = stringField(obj, key);
+    if (value) return truncateSummary(value);
+  }
+
+  const entries = Object.entries(obj).filter(([key]) => key !== 'timestamp');
+  if (entries.length === 0) return '{}';
+
+  return truncateSummary(
+    entries
+      .slice(0, 4)
+      .map(([key, value]) => `${key}: ${compactValue(value)}`)
+      .join(', ')
+      + (entries.length > 4 ? ` (+${entries.length - 4})` : ''),
+  );
+}
+
+function summarizeToolArgs(args: Record<string, unknown> | undefined): string {
+  if (!args || Object.keys(args).length === 0) return '';
+  return ` (${summarizeRecord(args)})`;
+}
+
+/** Extract a human-readable summary from a JSON payload string. */
+function extractSummary(type: string, payload: unknown): string {
+  const parsed = parsePayload(payload);
+  if (typeof parsed === 'string') return truncateSummary(parsed);
+
+  switch (type) {
+    case 'run.tool_started': {
+      const toolName = stringField(parsed, 'toolName') ?? 'tool';
+      const approval = parsed.requiresApproval === true ? ' approval required' : '';
+      return truncateSummary(`Tool started: ${toolName}${approval}${summarizeToolArgs(recordField(parsed, 'args'))}`);
+    }
+    case 'run.tool_result': {
+      const toolName = stringField(parsed, 'toolName') ?? 'tool';
+      const duration = formatDuration(numberField(parsed, 'durationMs'));
+      const error = stringField(parsed, 'error');
+      if (error) {
+        return truncateSummary(`Tool failed: ${toolName} - ${error}${duration ? ` (${duration})` : ''}`);
+      }
+      const result = stringField(parsed, 'result');
+      return truncateSummary(`Tool result: ${toolName}${duration ? ` (${duration})` : ''}${result ? ` - ${result}` : ''}`);
+    }
+    case 'turn.started':
+    case 'turn.pending': {
+      const mode = stringField(parsed, 'mode');
+      const task = stringField(parsed, 'taskDescription');
+      const state = type === 'turn.started' ? 'started' : 'queued';
+      return truncateSummary(`${mode === 'background' ? 'Background run' : 'Run'} ${state}${task ? `: ${task}` : ''}`);
+    }
+    case 'turn.completed': {
+      const status = stringField(parsed, 'status') ?? 'completed';
+      const duration = formatDuration(numberField(parsed, 'durationMs'));
+      const error = stringField(parsed, 'error');
+      return truncateSummary(`Run ${status}${duration ? ` in ${duration}` : ''}${error ? ` - ${error}` : ''}`);
+    }
+    case 'message.committed': {
+      const role = stringField(parsed, 'role') ?? 'message';
+      const content = stringField(parsed, 'content');
+      if (content) return truncateSummary(`${role[0]?.toUpperCase() ?? 'M'}${role.slice(1)} message: ${content}`);
+      const toolCalls = parsed.toolCalls;
+      if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+        const names = toolCalls
+          .map((call) => typeof call === 'object' && call !== null ? stringField(call as Record<string, unknown>, 'name') : undefined)
+          .filter((name): name is string => Boolean(name));
+        if (names.length > 0) return truncateSummary(`${role} message: tool calls ${names.join(', ')}`);
+      }
+      return summarizeRecord(parsed, ['messageId', 'toolCallId']);
+    }
+    case 'user.message': {
+      const content = stringField(parsed, 'content');
+      return truncateSummary(content ? `User message: ${content}` : summarizeRecord(parsed, ['messageId']));
+    }
+    case 'trigger.fired': {
+      const triggerId = stringField(parsed, 'triggerId') ?? 'trigger';
+      const eventType = stringField(parsed, 'eventType');
+      return truncateSummary(`Trigger fired: ${triggerId}${eventType ? ` from ${eventType}` : ''}`);
+    }
+    case 'custom': {
+      const customType = stringField(parsed, 'type') ?? 'custom';
+      const innerPayload = recordField(parsed, 'payload');
+      return truncateSummary(`Custom ${customType}: ${innerPayload ? summarizeRecord(innerPayload) : summarizeRecord(parsed)}`);
+    }
+    default:
+      return summarizeRecord(parsed, ['message', 'description', 'task', 'taskDescription', 'content', 'name', 'error', 'type']);
   }
 }
 
@@ -386,8 +507,14 @@ export function EventsPage() {
 
         {/* Event table */}
         {loading ? (
-          <div className="flex items-center justify-center py-20">
+          <div className="flex flex-col items-center justify-center gap-3 py-20 text-center">
             <Loader2 className="h-6 w-6 text-accent-400 animate-spin" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-surface-300">Loading event log</p>
+              <p className="text-xs text-surface-500">
+                Fetching recent events, stats, and filters for the selected range.
+              </p>
+            </div>
           </div>
         ) : loadError && !hasLoadedEventData ? (
           <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
@@ -617,8 +744,8 @@ function EventRow({
           </td>
         )}
         <td className="px-4 py-3 text-sm text-surface-400">
-          <div className="max-w-xs md:max-w-md truncate">
-            {extractSummary(event.payload)}
+          <div className="max-w-2xl whitespace-normal break-words leading-5 line-clamp-2">
+            {extractSummary(event.type, event.payload)}
           </div>
         </td>
         <td className="px-4 py-3 text-xs text-surface-400 tabular-nums text-right">

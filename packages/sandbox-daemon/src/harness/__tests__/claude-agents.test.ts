@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 
 const {
   mockQuery,
@@ -164,6 +165,158 @@ describe('ClaudeSession JSONL persistence', () => {
     const queryCall = mockQuery.mock.calls[0]?.[0];
     expect(queryCall?.options.resume).toBe('conversation-1');
     expect(queryCall?.options.sessionId).toBeUndefined();
+
+    await session.close();
+  });
+
+  it('fresh replay after sandbox replacement uses full prior context with a new SDK session id', async () => {
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+
+    const prompts: string[] = [];
+    mockQuery.mockImplementation(async function* (request: {
+      prompt: AsyncIterable<{ message: { content: string } }>;
+      options: { sessionId?: string; resume?: string };
+    }) {
+      for await (const promptMessage of request.prompt) {
+        prompts.push(promptMessage.message.content);
+      }
+      yield {
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 1, output_tokens: 2 },
+      };
+    });
+
+    const previousAssistant = makeMessage('assistant', 'Earlier answer');
+    const previousTool = makeMessage('tool', 'Earlier tool output');
+    const currentUser = makeMessage('user', 'Continue after replacement');
+    const session = await harness.openSession(makeConfig());
+
+    await collectEvents(
+      session.deliverTurn(
+        { messages: [previousAssistant, previousTool, currentUser], turnId: 'turn-replay' },
+        {},
+      ),
+    );
+
+    const queryCall = mockQuery.mock.calls[0]?.[0];
+    expect(queryCall?.options.sessionId).toBe('turn-replay');
+    expect(queryCall?.options.resume).toBeUndefined();
+    expect(prompts).toEqual([
+      '[Previous assistant response]\nEarlier answer',
+      '[Previous tool output]\nEarlier tool output',
+      'Continue after replacement',
+    ]);
+
+    await session.close();
+  });
+
+  it('restore writes session JSONL to both sanitized and hashed Claude project session paths', async () => {
+    process.env.CLAUDE_CONFIG_DIR = '/tmp/claude-config';
+    const workspaceDir = '/tmp/workspaces/pilot project';
+    const sanitizedWorkspaceDir = workspaceDir.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200);
+    const hashedWorkspaceDir = createHash('sha256').update(workspaceDir).digest('hex');
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+
+    mockQuery.mockImplementation(() => sdkStream([
+      {
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+    ]));
+    mockMkdir.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+
+    const session = await harness.openSession(makeConfig({ workspaceDir }), {
+      stateVersion: '2',
+      messages: [],
+      payload: {
+        transcript: [makeMessage('assistant', 'Restored reply')],
+        sessionJSONL: '{"type":"assistant"}\n',
+      },
+    });
+
+    expect(mockMkdir).toHaveBeenCalledWith(
+      `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions`,
+      { recursive: true },
+    );
+    expect(mockMkdir).toHaveBeenCalledWith(
+      `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions`,
+      { recursive: true },
+    );
+    expect(mockWriteFile).toHaveBeenCalledWith(
+      `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions/conversation-1.jsonl`,
+      '{"type":"assistant"}\n',
+      'utf-8',
+    );
+    expect(mockWriteFile).toHaveBeenCalledWith(
+      `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions/conversation-1.jsonl`,
+      '{"type":"assistant"}\n',
+      'utf-8',
+    );
+
+    await session.close();
+  });
+
+  it('exportState falls back to the hashed Claude project session path when the sanitized path is missing', async () => {
+    process.env.CLAUDE_CONFIG_DIR = '/tmp/claude-config';
+    const workspaceDir = '/tmp/workspaces/pilot project';
+    const sanitizedWorkspaceDir = workspaceDir.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200);
+    const hashedWorkspaceDir = createHash('sha256').update(workspaceDir).digest('hex');
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+
+    mockQuery.mockImplementation(() => sdkStream([
+      {
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+    ]));
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath === `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions/conversation-1.jsonl`) {
+        const error = new Error('missing') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      }
+      if (filePath === `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions/conversation-1.jsonl`) {
+        return '{"type":"assistant","ok":true}\n';
+      }
+      throw new Error(`unexpected read path: ${filePath}`);
+    });
+
+    const session = await harness.openSession(makeConfig({ workspaceDir }));
+    await collectEvents(session.deliverTurn({ messages: [makeMessage('user', 'Hello')], turnId: 'turn-1' }, {}));
+
+    await expect(session.exportState()).resolves.toMatchObject({
+      stateVersion: '2',
+      payload: {
+        sessionJSONL: '{"type":"assistant","ok":true}\n',
+      },
+    });
+    expect(mockReadFile).toHaveBeenCalledWith(
+      `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions/conversation-1.jsonl`,
+      'utf-8',
+    );
+    expect(mockReadFile).toHaveBeenCalledWith(
+      `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions/conversation-1.jsonl`,
+      'utf-8',
+    );
 
     await session.close();
   });

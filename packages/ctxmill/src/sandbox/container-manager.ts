@@ -1,6 +1,8 @@
 import { PassThrough, Readable } from 'node:stream';
+import { resolve } from 'node:path';
 import Dockerode from 'dockerode';
 import * as tar from 'tar-stream';
+import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from './container-scope.js';
 
 // ── Public interfaces ─────────────────────────────────────────
 
@@ -21,10 +23,13 @@ export interface ContainerManagerOptions {
   maxGlobalContainers?: number;
   /** Timeout in ms for queued container requests. Default: 60000 (60 seconds) */
   queueTimeoutMs?: number;
+  /** Grace window in ms before orphan cleanup may reap a container still bootstrapping. Default: 90000 */
+  startupGraceMs?: number;
 }
 
 export interface CreateContainerOptions {
   sessionId: string;
+  conversationId?: string;
   agentId: string;
   harnessName: string;
   workspaceDir?: string;
@@ -72,6 +77,9 @@ export interface WorkspaceDiffSnapshot {
   deletedPaths: string[];
 }
 
+export const STARTUP_GRACE_MS_LABEL = 'ctxmill.startup-grace-ms';
+export const DEFAULT_CONTAINER_STARTUP_GRACE_MS = 90_000;
+
 export interface SandboxContainerManager {
   createContainer(opts: CreateContainerOptions): Promise<ContainerInfo>;
   startContainer(containerId: string): Promise<ContainerInfo | undefined>;
@@ -95,6 +103,18 @@ export interface SandboxContainerManager {
 }
 
 // ── Helpers ──────────────────────────────────────────────────
+
+function parsePositiveMs(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+export function resolveContainerStartupGraceMs(explicitMs?: number): number {
+  return parsePositiveMs(explicitMs)
+    ?? parsePositiveMs(process.env.CTXMILL_CONTAINER_STARTUP_GRACE_MS)
+    ?? DEFAULT_CONTAINER_STARTUP_GRACE_MS;
+}
 
 /**
  * Map a Docker container state string to our simplified status enum.
@@ -324,16 +344,21 @@ function uniquePaths(paths: string[]): string[] {
  */
 const HARNESS_MEMORY_FLOOR: ReadonlyMap<string, number> = new Map([
   ['claude-agents', 2048],
+  ['pi-agent', 2048],
 ]);
 
 export class ContainerManager implements SandboxContainerManager {
   private readonly docker: Dockerode;
   private readonly networkName: string;
   private readonly imagePrefix: string;
+  private readonly scopeId: string;
+  private readonly dataVolume?: string;
+  private readonly dataDir?: string;
   private readonly defaultCpus: number;
   private readonly defaultMemoryMb: number;
   private readonly defaultPidsLimit: number;
   private readonly defaultTimeoutSec: number;
+  private readonly startupGraceMs: number;
   private readonly semaphore: ContainerSemaphore;
   private readonly maxGlobalContainers: number;
 
@@ -349,10 +374,14 @@ export class ContainerManager implements SandboxContainerManager {
     this.docker = dockerInstance ?? new Dockerode();
     this.networkName = options?.networkName ?? 'ctxmill-agents';
     this.imagePrefix = options?.imagePrefix ?? process.env.CTXMILL_IMAGE_PREFIX ?? 'ctxmill/harness';
+    this.scopeId = resolveContainerScopeId();
+    this.dataVolume = process.env.CTXMILL_DATA_VOLUME;
+    this.dataDir = process.env.CTXMILL_DATA_DIR ? resolve(process.env.CTXMILL_DATA_DIR) : undefined;
     this.defaultCpus = options?.defaultCpus ?? 1.0;
     this.defaultMemoryMb = options?.defaultMemoryMb ?? 1024;
     this.defaultPidsLimit = options?.defaultPidsLimit ?? 256;
     this.defaultTimeoutSec = options?.defaultTimeoutSec ?? 600;
+    this.startupGraceMs = resolveContainerStartupGraceMs(options?.startupGraceMs);
 
     this.maxGlobalContainers = options?.maxGlobalContainers
       ?? (process.env.CTXMILL_MAX_CONTAINERS ? parseInt(process.env.CTXMILL_MAX_CONTAINERS, 10) : 20);
@@ -402,11 +431,14 @@ export class ContainerManager implements SandboxContainerManager {
         name: containerName,
         Labels: {
           'ctxmill.managed': 'true',
+          [CONTAINER_SCOPE_LABEL]: this.scopeId,
           'ctxmill.session-id': opts.sessionId,
+          ...(opts.conversationId ? { 'ctxmill.conversation-id': opts.conversationId } : {}),
           'ctxmill.agent-id': opts.agentId,
           'ctxmill.harness': opts.harnessName,
           'ctxmill.started-at': new Date().toISOString(),
           'ctxmill.timeout': String(timeoutSec),
+          [STARTUP_GRACE_MS_LABEL]: String(this.startupGraceMs),
         },
         HostConfig: {
           CpuPeriod: 100_000,
@@ -414,7 +446,6 @@ export class ContainerManager implements SandboxContainerManager {
           Memory: memoryMb * 1024 * 1024,
           MemorySwap: memoryMb * 1024 * 1024, // No swap
           PidsLimit: pidsLimit,
-          Tmpfs: { '/run/secrets': 'rw,noexec,nosuid,size=1m' },
           NetworkMode: this.networkName,
           ExtraHosts: ['host.docker.internal:host-gateway'],
           SecurityOpt: ['no-new-privileges'],
@@ -435,9 +466,7 @@ export class ContainerManager implements SandboxContainerManager {
           'SANDBOX_PORT=50051',
           `CTXMILL_HARNESS=${opts.harnessName}`,
           `ORCHESTRATOR_URL=${process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001'}`,
-          ...(opts.secrets
-            ? Object.entries(opts.secrets).map(([k, v]) => `${k}=${v}`)
-            : []),
+          ...Object.entries(opts.secrets ?? {}).map(([k, v]) => `${k}=${v}`),
         ],
       });
 
@@ -481,10 +510,17 @@ export class ContainerManager implements SandboxContainerManager {
     try {
       await container.stop({ t: timeoutSec ?? 10 });
       console.debug(`${TAG} container ${containerId} stopped`);
+      this.releaseOwnedContainerSlot(containerId);
     } catch (err: unknown) {
       // Docker returns 304 if container is already stopped
       if (isDockerError(err) && err.statusCode === 304) {
         console.debug(`${TAG} container ${containerId} already stopped`);
+        this.releaseOwnedContainerSlot(containerId);
+        return;
+      }
+      if (isDockerError(err) && err.statusCode === 404) {
+        console.debug(`${TAG} container ${containerId} not found while stopping`);
+        this.releaseOwnedContainerSlot(containerId);
         return;
       }
       throw err;
@@ -778,7 +814,8 @@ export class ContainerManager implements SandboxContainerManager {
 
     if (containers.length === 0) return null;
 
-    const c = containers[0];
+    const c = this.pickScopedOrLegacyContainer(containers);
+    if (!c) return null;
     return this.containerListItemToInfo(c);
   }
 
@@ -788,7 +825,9 @@ export class ContainerManager implements SandboxContainerManager {
       filters: { label: ['ctxmill.managed=true'] },
     });
 
-    return containers.map((c) => this.containerListItemToInfo(c));
+    return containers
+      .filter((c) => this.isContainerInCurrentScope(c))
+      .map((c) => this.containerListItemToInfo(c));
   }
 
   async listManagedContainersWithLabels(): Promise<ManagedContainerWithLabels[]> {
@@ -797,10 +836,12 @@ export class ContainerManager implements SandboxContainerManager {
       filters: { label: ['ctxmill.managed=true'] },
     });
 
-    return containers.map((c) => ({
-      ...this.containerListItemToInfo(c),
-      labels: c.Labels ?? {},
-    }));
+    return containers
+      .filter((c) => this.isContainerInCurrentScope(c))
+      .map((c) => ({
+        ...this.containerListItemToInfo(c),
+        labels: c.Labels ?? {},
+      }));
   }
 
   async getContainerExitCode(containerId: string): Promise<number | null> {
@@ -828,7 +869,8 @@ export class ContainerManager implements SandboxContainerManager {
     });
 
     if (containers.length === 0) return null;
-    return this.containerListItemToInfo(containers[0]);
+    const container = this.pickScopedOrLegacyContainer(containers);
+    return container ? this.containerListItemToInfo(container) : null;
   }
 
   async isContainerAlive(containerId: string): Promise<boolean> {
@@ -918,6 +960,52 @@ export class ContainerManager implements SandboxContainerManager {
 
     this.semaphore.release();
     this.recordContainerCompletion(containerId);
+  }
+
+  private pickScopedOrLegacyContainer(
+    containers: Dockerode.ContainerInfo[],
+  ): Dockerode.ContainerInfo | undefined {
+    return containers.find((container) => this.isContainerInCurrentScope(container))
+      ?? containers.find((container) => this.isLegacyContainerCompatibleWithCurrentScope(container));
+  }
+
+  private isContainerInCurrentScope(container: Dockerode.ContainerInfo): boolean {
+    const labels = container.Labels ?? {};
+    const containerScope = labels[CONTAINER_SCOPE_LABEL];
+    if (containerScope) {
+      return containerScope === this.scopeId;
+    }
+
+    return this.isLegacyContainerCompatibleWithCurrentScope(container);
+  }
+
+  private isLegacyContainerCompatibleWithCurrentScope(container: Dockerode.ContainerInfo): boolean {
+    const labels = container.Labels ?? {};
+    if (labels[CONTAINER_SCOPE_LABEL]) {
+      return false;
+    }
+
+    const mounts = (container as {
+      Mounts?: Array<{ Name?: string; Source?: string; Destination?: string }>;
+    }).Mounts ?? [];
+
+    if (this.dataVolume) {
+      return mounts.some((mount) => (
+        mount.Name === this.dataVolume
+        || Boolean(mount.Source?.includes(`/volumes/${this.dataVolume}/`))
+      ));
+    }
+
+    if (this.dataDir) {
+      return mounts.some((mount) => (
+        mount.Source !== undefined && (
+          resolve(mount.Source) === this.dataDir
+          || resolve(mount.Source).startsWith(`${this.dataDir}/`)
+        )
+      ));
+    }
+
+    return true;
   }
 
   /**

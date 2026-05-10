@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import type { SystemSettingsService } from '../../settings/service.js';
+import type { SystemSettings, SystemSettingsService } from '../../settings/service.js';
 import { SETTINGS_KEYS } from '../../settings/service.js';
 
 export interface SettingsRouteOptions {
   settingsService: SystemSettingsService;
+  onSettingsUpdated?: (settings: SystemSettings) => void | Promise<void>;
 }
 
 const MB = 1024 * 1024;
@@ -16,7 +17,6 @@ interface FieldValidator {
 
 const FIELD_VALIDATORS: Record<string, FieldValidator> = {
   maxWorkspaceTarBytes:        { min: 1 * MB,    max: 1024 * MB },
-  maxCheckpointBytes:          { min: 1 * MB,    max: 200 * MB },
   maxTarUploadBytes:           { min: 1 * MB,    max: 1024 * MB },
   idleTimeoutMs:               { min: 10_000,    max: 3_600_000 },
   turnTimeoutMs:               { min: 30_000,    max: 7_200_000 },
@@ -41,7 +41,6 @@ export async function settingsRoutes(
     const s = await settingsService.getAll();
     return {
       maxWorkspaceTarBytes:        s.maxWorkspaceTarBytes,
-      maxCheckpointBytes:          s.maxCheckpointBytes,
       maxTarUploadBytes:           s.maxTarUploadBytes,
       idleTimeoutMs:               s.idleTimeoutMs,
       turnTimeoutMs:               s.turnTimeoutMs,
@@ -100,9 +99,9 @@ export async function settingsRoutes(
     }
 
     const updated = await settingsService.getAll();
+    await opts.onSettingsUpdated?.(updated);
     return {
       maxWorkspaceTarBytes:        updated.maxWorkspaceTarBytes,
-      maxCheckpointBytes:          updated.maxCheckpointBytes,
       maxTarUploadBytes:           updated.maxTarUploadBytes,
       idleTimeoutMs:               updated.idleTimeoutMs,
       turnTimeoutMs:               updated.turnTimeoutMs,

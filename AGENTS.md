@@ -50,7 +50,7 @@ docs/
 | Understand DI wiring | `packages/ctxmill/src/config/container.ts` | `createContainer()` builds all services |
 | Trace a run execution | `orchestrator/agent-session-service.ts` → `orchestrator/sandbox-session-manager.ts` → `packages/sandbox-daemon/src/sandbox/runner.ts` | All runs go through sandbox containers |
 | Modify sandbox daemon | `packages/sandbox-daemon/src/` | gRPC server, harness adapters, tool proxy. Runs inside containers, NOT orchestrator |
-| Understand session lifecycle | `orchestrator/sandbox-session-manager.ts` | Active ↔ paused compatibility path plus checkpoint/restore lifecycle |
+| Understand session lifecycle | `orchestrator/sandbox-session-manager.ts` | Active → checkpointed → restoring lifecycle plus reconciliation |
 | Configure runtime settings | `packages/ctxmill/src/settings/service.ts` | DB-persisted system settings, Settings UI |
 | Manage artifacts | `packages/ctxmill/src/artifact/artifact-store.ts` | S3/MinIO, signed URLs, daemon tools |
 
@@ -83,7 +83,7 @@ docs/
 
 ## ANTI-PATTERNS
 
-- **NEVER store secrets in checkpoints** — Secrets injected fresh on resume via tmpfs (`/run/secrets/config.json`), never persisted
+- **NEVER store secrets in checkpoints** — Secrets are injected fresh into sandbox env on resume, never persisted
 - **NEVER suppress types** — No `as any`, `@ts-ignore`, `@ts-expect-error` (existing `as any` in source are documented tech debt from Zod/EventEmitter/Drizzle library limitations)
 - **NEVER use empty catch blocks** — `catch(e) {}` forbidden
 - **NEVER delete failing tests** to make CI pass

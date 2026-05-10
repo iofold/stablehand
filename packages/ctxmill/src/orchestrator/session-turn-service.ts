@@ -42,7 +42,7 @@ export interface SandboxSessionManager {
   ensureSession(conversationId: string, agentDef: AgentDefinition, agentId: string): Promise<{ sessionId: string }>;
   deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<SessionEvent>;
   killSession(sessionId: string): Promise<void>;
-  suspendSession(sessionId: string, reason: string): Promise<unknown>;
+  suspendSession(sessionId: string, reason: string, options?: { allowActiveTurn?: boolean }): Promise<unknown>;
   resumeWithInterruptResolution?(sessionId: string, agentSessionId: string, agentId: string): Promise<void>;
 }
 

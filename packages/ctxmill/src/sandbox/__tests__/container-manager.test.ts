@@ -5,6 +5,7 @@ import type Dockerode from 'dockerode';
 import * as tar from 'tar-stream';
 import { ContainerManager } from '../container-manager.js';
 import type { CreateContainerOptions, ContainerManagerOptions } from '../container-manager.js';
+import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from '../container-scope.js';
 
 // ── Mock factories ──────────────────────────────────────────
 
@@ -133,7 +134,7 @@ describe('ContainerManager', () => {
   // ── createContainer ─────────────────────────────────────
 
   describe('createContainer', () => {
-    it('produces correct config with labels, resource limits, network, and tmpfs', async () => {
+    it('produces correct config with labels, resource limits, network, and env', async () => {
       const info = await manager.createContainer(defaultCreateOpts());
 
       expect(docker.createContainer).toHaveBeenCalledTimes(1);
@@ -144,11 +145,13 @@ describe('ContainerManager', () => {
 
       // Labels
       expect(arg.Labels['ctxmill.managed']).toBe('true');
+      expect(arg.Labels[CONTAINER_SCOPE_LABEL]).toBe(resolveContainerScopeId());
       expect(arg.Labels['ctxmill.session-id']).toBe('run-001');
       expect(arg.Labels['ctxmill.agent-id']).toBe('agent-abc');
       expect(arg.Labels['ctxmill.harness']).toBe('claude-agents');
       expect(arg.Labels['ctxmill.timeout']).toBe('600');
       expect(arg.Labels['ctxmill.started-at']).toBeTruthy();
+      expect(arg.Labels['ctxmill.startup-grace-ms']).toBe('90000');
 
       // Resource limits (defaults — claude-agents has 2048 MiB floor)
       expect(arg.HostConfig.CpuPeriod).toBe(100_000);
@@ -163,9 +166,6 @@ describe('ContainerManager', () => {
 
       // Security
       expect(arg.HostConfig.SecurityOpt).toEqual(['no-new-privileges']);
-
-      // tmpfs for secrets
-      expect(arg.HostConfig.Tmpfs).toEqual({ '/run/secrets': 'rw,noexec,nosuid,size=1m' });
 
       // Env
       expect(arg.Env).toContain('SANDBOX_PORT=50051');
@@ -196,6 +196,18 @@ describe('ContainerManager', () => {
       expect(arg.HostConfig.CpuQuota).toBe(100_000); // 1.0 CPU
       expect(arg.HostConfig.Memory).toBe(2048 * 1024 * 1024); // claude-agents floor
       expect(arg.HostConfig.PidsLimit).toBe(256);
+    });
+
+    it('applies the PI agent memory floor when memory is not specified', async () => {
+      await manager.createContainer({
+        ...defaultCreateOpts(),
+        harnessName: 'pi-agent',
+      });
+
+      const arg = docker.createContainer.mock.calls[0][0];
+      expect(arg.HostConfig.Memory).toBe(2048 * 1024 * 1024);
+      expect(arg.HostConfig.MemorySwap).toBe(2048 * 1024 * 1024);
+      expect(arg.Env).toContain(`NODE_OPTIONS=--max-old-space-size=${Math.floor(2048 * 0.9)}`);
     });
 
     it('applies custom resource limits when specified', async () => {
@@ -308,6 +320,24 @@ describe('ContainerManager', () => {
         networkIp: '172.18.0.5',
       });
     });
+
+    it('passes secrets to the sandbox as Docker env vars', async () => {
+      const containerInfo = await manager.createContainer({
+        ...defaultCreateOpts(),
+        secrets: {
+          OPENAI_API_KEY: 'sk-test-key',
+          ANTHROPIC_API_KEY: 'sk-ant-test',
+        },
+      });
+      const createArg = docker.createContainer.mock.calls[0][0];
+      expect(createArg.Env).toContain('OPENAI_API_KEY=sk-test-key');
+      expect(createArg.Env).toContain('ANTHROPIC_API_KEY=sk-ant-test');
+      expect(createArg.HostConfig.Tmpfs).toBeUndefined();
+
+      await manager.startContainer(containerInfo.containerId);
+
+      expect(docker._mockContainer.putArchive).not.toHaveBeenCalled();
+    });
   });
 
   // ── stopContainer ───────────────────────────────────────
@@ -332,13 +362,75 @@ describe('ContainerManager', () => {
       await expect(manager.stopContainer('sha256-abc123')).resolves.toBeUndefined();
     });
 
-    it('re-throws non-304 errors', async () => {
+    it('ignores 404 (not found) error', async () => {
+      docker._mockContainer.stop.mockRejectedValue({ statusCode: 404, message: 'not found' });
+
+      await expect(manager.stopContainer('sha256-abc123')).resolves.toBeUndefined();
+    });
+
+    it('re-throws non-304/404 errors', async () => {
       docker._mockContainer.stop.mockRejectedValue({ statusCode: 500, message: 'server error' });
 
       await expect(manager.stopContainer('sha256-abc123')).rejects.toEqual({
         statusCode: 500,
         message: 'server error',
       });
+    });
+
+    it('releases an owned slot when stop succeeds', async () => {
+      const info = await manager.createContainer(defaultCreateOpts());
+
+      expect(manager.getMetrics().active).toBe(1);
+
+      await manager.stopContainer(info.containerId);
+
+      expect(manager.getMetrics().active).toBe(0);
+      expect(manager.getMetrics().byHarness).toEqual({});
+    });
+
+    it('releases an owned slot when stop reports already stopped', async () => {
+      const info = await manager.createContainer(defaultCreateOpts());
+      docker._mockContainer.stop.mockRejectedValue({ statusCode: 304, message: 'already stopped' });
+
+      await manager.stopContainer(info.containerId);
+
+      expect(manager.getMetrics().active).toBe(0);
+      expect(manager.getMetrics().byHarness).toEqual({});
+    });
+
+    it('releases an owned slot when stop reports the container is gone', async () => {
+      const info = await manager.createContainer(defaultCreateOpts());
+      docker._mockContainer.stop.mockRejectedValue({ statusCode: 404, message: 'not found' });
+
+      await manager.stopContainer(info.containerId);
+
+      expect(manager.getMetrics().active).toBe(0);
+      expect(manager.getMetrics().byHarness).toEqual({});
+    });
+
+    it('does not double-release when remove follows stop', async () => {
+      const docker = createSequencedDocker(['sha256-owned-1', 'sha256-owned-2']);
+      const manager = new ContainerManager(
+        { maxGlobalContainers: 1 },
+        docker as unknown as Dockerode,
+      );
+      const first = await manager.createContainer(defaultCreateOpts());
+      const secondPromise = manager.createContainer({
+        ...defaultCreateOpts(),
+        sessionId: 'run-002',
+      });
+
+      await manager.stopContainer(first.containerId);
+      const second = await secondPromise;
+
+      expect(second.containerId).toBe('sha256-owned-2');
+      expect(manager.getMetrics().active).toBe(1);
+
+      await manager.removeContainer(first.containerId);
+      expect(manager.getMetrics().active).toBe(1);
+
+      await manager.removeContainer(second.containerId);
+      expect(manager.getMetrics().active).toBe(0);
     });
   });
 
@@ -629,6 +721,40 @@ describe('ContainerManager', () => {
         },
       });
     });
+
+    it('prefers the current scoped container when several instances share a session label', async () => {
+      vi.stubEnv('CTXMILL_CONTAINER_SCOPE', 'current-test-scope');
+      manager = new ContainerManager(undefined, docker as unknown as Dockerode);
+      const currentScopeId = resolveContainerScopeId();
+
+      docker.listContainers.mockResolvedValue([
+        {
+          Id: 'foreign',
+          Names: ['/ctxmill-run-run-001'],
+          State: 'running',
+          Labels: {
+            'ctxmill.managed': 'true',
+            [CONTAINER_SCOPE_LABEL]: 's-foreign',
+            'ctxmill.session-id': 'run-001',
+          },
+          NetworkSettings: { Networks: {} },
+        },
+        {
+          Id: 'current',
+          Names: ['/ctxmill-run-run-001'],
+          State: 'running',
+          Labels: {
+            'ctxmill.managed': 'true',
+            [CONTAINER_SCOPE_LABEL]: currentScopeId,
+            'ctxmill.session-id': 'run-001',
+          },
+          NetworkSettings: { Networks: {} },
+        },
+      ]);
+
+      const info = await manager.getContainer('run-001');
+      expect(info?.containerId).toBe('current');
+    });
   });
 
   // ── listManagedContainers ───────────────────────────────
@@ -680,6 +806,69 @@ describe('ContainerManager', () => {
        expect(result[1].sessionId).toBe('r2');
        expect(result[1].status).toBe('stopped');
      });
+
+    it('excludes foreign ctxmill containers from broad lifecycle cleanup lists', async () => {
+      vi.stubEnv('CTXMILL_DATA_VOLUME', 'ctxmill_ctxmill-data');
+      manager = new ContainerManager(undefined, docker as unknown as Dockerode);
+      const currentScopeId = resolveContainerScopeId();
+
+      docker.listContainers.mockResolvedValue([
+        {
+          Id: 'current-scoped',
+          Names: ['/ctxmill-run-r1'],
+          State: 'running',
+          Labels: {
+            'ctxmill.managed': 'true',
+            [CONTAINER_SCOPE_LABEL]: currentScopeId,
+            'ctxmill.session-id': 'r1',
+          },
+          NetworkSettings: { Networks: {} },
+        },
+        {
+          Id: 'foreign-scoped',
+          Names: ['/ctxmill-run-r2'],
+          State: 'running',
+          Labels: {
+            'ctxmill.managed': 'true',
+            [CONTAINER_SCOPE_LABEL]: 's-foreign',
+            'ctxmill.session-id': 'r2',
+          },
+          NetworkSettings: { Networks: {} },
+        },
+        {
+          Id: 'legacy-current-volume',
+          Names: ['/ctxmill-run-r3'],
+          State: 'running',
+          Labels: {
+            'ctxmill.managed': 'true',
+            'ctxmill.session-id': 'r3',
+          },
+          Mounts: [
+            { Name: 'ctxmill_ctxmill-data', Destination: '/workspace' },
+          ],
+          NetworkSettings: { Networks: {} },
+        },
+        {
+          Id: 'legacy-foreign-volume',
+          Names: ['/ctxmill-run-r4'],
+          State: 'running',
+          Labels: {
+            'ctxmill.managed': 'true',
+            'ctxmill.session-id': 'r4',
+          },
+          Mounts: [
+            { Name: 'pilot-app_ctxmill_data', Destination: '/workspace' },
+          ],
+          NetworkSettings: { Networks: {} },
+        },
+      ]);
+
+      const result = await manager.listManagedContainers();
+      expect(result.map((container) => container.containerId)).toEqual([
+        'current-scoped',
+        'legacy-current-volume',
+      ]);
+    });
   });
 
   // ── getContainerExitCode ────────────────────────────────

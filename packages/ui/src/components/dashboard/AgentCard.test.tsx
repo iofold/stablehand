@@ -45,6 +45,10 @@ describe('AgentCard', () => {
     });
   }
 
+  function statusLabel() {
+    return container.querySelector('[data-testid="agent-status-label"]')?.textContent;
+  }
+
   it('navigates to the agent detail page when the card is clicked', async () => {
     renderCard();
 
@@ -70,5 +74,46 @@ describe('AgentCard', () => {
 
     expect(navigateMock).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith('/agents/agent-1/sessions/new');
+  });
+
+  it('shows an explicit idle status even with no active sessions', () => {
+    renderCard();
+
+    expect(statusLabel()).toContain('Idle');
+    expect(container.textContent).toContain('Sessions');
+    expect(container.textContent).toContain('0');
+  });
+
+  it('maps created agents with no active sessions to an explicit idle status', () => {
+    act(() => {
+      root.render(<AgentCard agent={{ ...baseAgent, status: 'created' }} />);
+    });
+
+    expect(statusLabel()).toContain('Idle');
+  });
+
+  it('shows an explicit running status for active agents', () => {
+    act(() => {
+      root.render(<AgentCard agent={{ ...baseAgent, status: 'running' }} />);
+    });
+
+    expect(statusLabel()).toContain('Running');
+  });
+
+  it('maps active sandbox sessions to an explicit running status', () => {
+    act(() => {
+      root.render(<AgentCard agent={{
+        ...baseAgent,
+        status: 'created',
+        sessionsByStatus: {
+          ACTIVE: 1,
+          CHECKPOINTED: 0,
+          RESTORING: 0,
+          TERMINATED: 0,
+        },
+      }} />);
+    });
+
+    expect(statusLabel()).toContain('Running');
   });
 });

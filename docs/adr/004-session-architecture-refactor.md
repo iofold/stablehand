@@ -24,7 +24,7 @@ We rejected merging these tables because their lifecycles are different. A conve
 
 ### 2. Rename `sessions` table → `turns`
 
-The `sessions` table actually tracked individual user-message to agent-response cycles. We renamed it to `turns` to reflect its role as a lightweight audit log. We removed the `status`, `pausedAt`, `pausedReason`, and `resumedAt` columns, as these are session-level concerns that now live on `sandbox_sessions`. A turn is either in-flight (`completedAt` is null) or done.
+The `sessions` table actually tracked individual user-message to agent-response cycles. We renamed it to `turns` to reflect its role as a lightweight audit log. A turn is either in-flight (`completedAt` is null) or done.
 
 ### 3. Remove `SessionRegistry` entirely
 
@@ -33,18 +33,18 @@ The `sessions` table actually tracked individual user-message to agent-response 
 *   **Concurrency limiting:** Max active sessions per agent is now checked against `sandbox_sessions`.
 *   **Event emissions:** `turn.started` and `turn.completed` events are now emitted via the central `eventBus`.
 
-### 4. Use `PAUSED` for idle container pause; model HITL separately
+### 4. Use checkpoint/restore for idle lifecycle; model HITL separately
 
-The current runtime persists one pause-like sandbox session state: `PAUSED`.
+The current runtime does not persist a pause-like sandbox session state.
 
-*   **`PAUSED`:** The sandbox session is temporarily paused for idle preservation and can be resumed in place.
-*   There is **no separate persisted `FROZEN` state** in the current runtime.
+*   **`CHECKPOINTED`:** The sandbox session runtime has been removed after checkpoint capture and can be restored later.
+*   There is **no separate persisted pause-like or frozen state** in the current runtime.
 *   Human-in-the-loop (HITL) approval is modeled through durable interrupt records plus `run.interrupted` / `run.interrupt_resolved` events, not through a separate sandbox-session status.
 *   The `freeze` / `unfreeze` endpoints were removed in Phase 0 dead-code cleanup.
 
 ### 5. Soft-delete sandbox sessions (`TERMINATED` state)
 
-Instead of hard-deleting `sandbox_sessions` rows in `killSession()`, we now set their status to `TERMINATED`. This ensures that dashboard status dots sum correctly: `active + paused + checkpointed + terminated = total`.
+Instead of hard-deleting `sandbox_sessions` rows in `killSession()`, we now set their status to `TERMINATED`. This ensures that dashboard status dots sum correctly: `active + checkpointed + restoring + terminated = total`.
 
 ### 6. Rename events `session.started` → `turn.started` and `session.completed` → `turn.completed`
 
@@ -52,14 +52,13 @@ These events fire per turn (per user message), not per session. We renamed them 
 
 *   `turn.pending` is the pre-start UI/event-bus signal
 *   `turn.started` and `turn.completed` are the canonical per-turn lifecycle events
-*   `session.paused` is an idle session/container pause signal
 *   `run.interrupted` and `run.interrupt_resolved` cover HITL
 
 This remains a clean break for webhook subscribers; no backward compatibility layer was added.
 
 ### 7. Status is session-level, not turn-level
 
-A turn is an audit log entry and does not have its own state machine. The pause, checkpoint, restore, and termination lifecycle applies to the container (the sandbox session), not the individual message-response cycle. HITL interrupt state is stored separately from sandbox-session status.
+A turn is an audit log entry and does not have its own state machine. The checkpoint, restore, and termination lifecycle applies to the container (the sandbox session), not the individual message-response cycle. HITL interrupt state is stored separately from sandbox-session status.
 
 ## Data Model
 
@@ -71,9 +70,10 @@ A turn is an audit log entry and does not have its own state machine. The pause,
 ## State Machine
 
 ```text
-ACTIVE -> PAUSED -> CHECKPOINTED -> TERMINATED
-PAUSED -> ACTIVE
+ACTIVE -> CHECKPOINTED -> RESTORING -> ACTIVE
 CHECKPOINTED -> RESTORING -> ACTIVE
+ACTIVE -> TERMINATED
+CHECKPOINTED -> TERMINATED
 ```
 
 ## Event Mapping
@@ -83,7 +83,6 @@ CHECKPOINTED -> RESTORING -> ACTIVE
 | `n/a` | `turn.pending` | Turn (pre-start) |
 | `session.started` | `turn.started` | Turn |
 | `session.completed` | `turn.completed` | Turn |
-| `session.paused` | `session.paused` | Session (idle pause only) |
 | `n/a` | `run.interrupted` / `run.interrupt_resolved` | Turn / HITL |
 
 ## Consequences

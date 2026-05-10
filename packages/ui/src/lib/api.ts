@@ -388,7 +388,6 @@ export async function fetchConfig(): Promise<AppConfig> {
 
 export interface SystemSettings {
   maxWorkspaceTarBytes:        number;
-  maxCheckpointBytes:          number;
   maxTarUploadBytes:           number;
   idleTimeoutMs:               number;
   turnTimeoutMs:               number;

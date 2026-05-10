@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createTestAgent, deleteTestAgent } from './support';
+import { createTestAgent, deleteTestAgent, waitForRunStatus } from './support';
 
 /**
  * E2E tests for conversation continuity — verifies that the second message
@@ -57,6 +57,10 @@ test.describe('Conversation continuity @extended', () => {
     const firstBody = messageRequests[0].body;
     expect(firstBody.content).toBe('What is 1 + 1?');
     expect(typeof firstResponseBody.conversationId).toBe('string');
+    expect(typeof firstResponseBody.sessionId).toBe('string');
+    const firstRun = await waitForRunStatus(page.request, agentId, firstResponseBody.sessionId, ['completed', 'error'], 120_000);
+    expect(firstRun.status).toBe('completed');
+    await expect(chatInput).toBeEnabled({ timeout: 15_000 });
 
     const secondSendResponse = page.waitForResponse((response) =>
       response.request().method() === 'POST' &&

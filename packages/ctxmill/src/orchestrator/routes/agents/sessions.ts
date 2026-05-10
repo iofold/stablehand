@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { ConcurrencyLimitError } from '../../session-manager/concurrency-limit-error.js';
+import { ActiveTurnSuspendError } from '../../session-manager/session-lifecycle-service.js';
 import type { RuntimeSandboxSecrets } from '../../session-manager/runtime-sandbox-secrets.js';
+import { SESSION_CANCELLED_MESSAGE, isSessionCancelled } from '../../session-cancellation.js';
 import { getRequestAgent, safeError, toApiAgentSession } from './helpers.js';
 import type { AgentSubRouteOptions, StoredAgent } from './types.js';
 
@@ -86,12 +88,12 @@ export async function sessionRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Body: { content: string; conversationId?: string };
+        Body: { content: string; conversationId?: string; sandboxSecrets?: Record<string, string> };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const body = request.body as { content: string; conversationId?: string };
+      const body = request.body as { content: string; conversationId?: string; sandboxSecrets?: unknown };
 
       if (!body || typeof body.content !== 'string' || body.content.trim() === '') {
         return reply.status(400).send({ error: 'content is required and must be a non-empty string' });
@@ -100,9 +102,11 @@ export async function sessionRoutes(
       const agent = getRequestAgent(request);
 
       try {
+        const sandboxSecrets = parseSandboxSecrets(body.sandboxSecrets);
         const start = await prepareRunStart(agent, id, body.content, 'interactive', {
           conversationId: body.conversationId,
           emitUserMessageEvent: true,
+          sandboxSecrets,
         });
         launchPreparedRun(id, start);
         return reply.status(201).send({
@@ -125,6 +129,9 @@ export async function sessionRoutes(
         }
         if (err instanceof Error && err.message.startsWith('Conversation ')) {
           return reply.status(404).send({ error: err.message });
+        }
+        if (err instanceof Error && /sandbox secret|sandboxSecrets/i.test(err.message)) {
+          return reply.status(400).send({ error: err.message });
         }
         return reply.status(500).send(safeError('Failed to start session', err));
       }
@@ -197,22 +204,33 @@ export async function sessionRoutes(
         return reply.status(404).send({ error: 'Session not found', sessionId });
       }
 
+      if (session.completedAt != null) {
+        return reply.send({
+          cancelled: isSessionCancelled(session.error),
+          sessionId,
+          alreadyTerminal: true,
+        });
+      }
+
       const cancelled = session.sessionId ? sessionManager?.cancelCurrentTurn(session.sessionId, sessionId) : false;
       if (!cancelled) {
-        return reply.status(404).send({ error: 'Session not found', sessionId });
+        await db.updateTurn(sessionId, {
+          completedAt: Date.now(),
+          error: SESSION_CANCELLED_MESSAGE,
+        });
       }
 
       const inMemoryInterruptResolved = await interrupts.resolve(
         sessionId,
         'reject',
-        'Session cancelled',
+        SESSION_CANCELLED_MESSAGE,
         id,
         session.conversationId ?? undefined,
       );
       if (!inMemoryInterruptResolved) {
         const dbInterrupt = await db.getPendingInterrupt(sessionId);
         if (dbInterrupt?.agentId === id && dbInterrupt.status === 'pending') {
-          await db.resolveInterrupt(sessionId, 'reject', 'Session cancelled');
+          await db.resolveInterrupt(sessionId, 'reject', SESSION_CANCELLED_MESSAGE);
         }
       }
 
@@ -344,7 +362,15 @@ export async function sessionRoutes(
 
         try {
           await sessionManager.suspendSession(sessionId, 'api_request');
-        } catch {
+        } catch (err) {
+          if (err instanceof ActiveTurnSuspendError) {
+            return reply.status(409).send({
+              error: 'Session has active turn',
+              status: 'ACTIVE',
+              sessionId,
+              turnId: err.turnId,
+            });
+          }
           return reply.status(409).send({
             error: 'Session no longer active',
             status: 'UNKNOWN',

@@ -6,10 +6,12 @@ import type { DatabaseRepository } from '../database/repository.js';
 import type { EventMap, TypedEventBus } from '../events/bus.js';
 import type { SessionTurnService } from './session-turn-service.js';
 import type { SandboxSessionManager, SessionRecord } from './sandbox-session-manager.js';
+import type { ConcurrencyReservation } from './session-manager/session-turn-orchestrator.js';
 import type { LocalFunctionExecutor } from '../tool/executor.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
 import { sanitizeDbText } from '../util/sanitize.js';
 import { withRuntimeSandboxSecrets, type RuntimeSandboxSecrets } from './session-manager/runtime-sandbox-secrets.js';
+import { SESSION_CANCELLED_MESSAGE, isSessionCancelled } from './session-cancellation.js';
 
 const INDIVIDUALLY_HANDLED = new Set([
   'MESSAGE_COMMITTED',
@@ -72,6 +74,7 @@ export interface ExecuteSessionParams {
   mode: 'interactive' | 'background';
   taskDescription: string;
   sandboxSecrets?: RuntimeSandboxSecrets;
+  concurrencyReservation?: ConcurrencyReservation;
 }
 
 /**
@@ -113,6 +116,7 @@ export class AgentSessionService {
     let wasCancelled = false;
     let encounteredError = false;
     let lastErrorMessage = '';
+    let releaseConcurrencyReservation = params.concurrencyReservation?.release;
 
     const pendingToolCalls = new Map<string, { id: string; name: string; args: string; result?: string; error?: string; status: string }>();
     let streamingParts: StreamingPart[] = [];
@@ -165,6 +169,15 @@ export class AgentSessionService {
       return fallbackParts;
     };
 
+    const releaseReservedConcurrency = (): void => {
+      if (!releaseConcurrencyReservation) {
+        return;
+      }
+
+      releaseConcurrencyReservation();
+      releaseConcurrencyReservation = undefined;
+    };
+
     const persistMessage = async (
       role: MessageCommittedEvent['role'],
       content: string,
@@ -215,17 +228,43 @@ export class AgentSessionService {
       } as unknown as EventMap['message.committed']);
     };
 
+    const resolveCurrentSandboxSessionId = async (): Promise<string | undefined> => {
+      if (!sandboxSessionId) return undefined;
+      if (typeof this.db.getTurn !== 'function') return sandboxSessionId;
+      try {
+        const latestTurn = await this.db.getTurn(turnId);
+        if (latestTurn?.sessionId) {
+          sandboxSessionId = latestTurn.sessionId;
+        }
+      } catch (err) {
+        console.warn(`[AgentSessionService] Failed to refresh current sandbox session for turn ${turnId}:`, err);
+      }
+      return sandboxSessionId;
+    };
+
+    const isDurablyCancelled = async (): Promise<boolean> => {
+      if (typeof this.db.getTurn !== 'function') return false;
+      try {
+        const latestTurn = await this.db.getTurn(turnId);
+        return latestTurn?.completedAt != null && isSessionCancelled(latestTurn.error);
+      } catch (err) {
+        console.warn(`[AgentSessionService] Failed to check cancellation state for turn ${turnId}:`, err);
+        return false;
+      }
+    };
+
     const finalizeTurn = async (status: 'completed' | 'error' | 'cancelled', error?: string) => {
       const completedAt = Date.now();
+      const currentSandboxSessionId = await resolveCurrentSandboxSessionId();
       await this.db.updateTurn(turnId, {
-        ...(sandboxSessionId ? { sessionId: sandboxSessionId } : {}),
+        ...(currentSandboxSessionId ? { sessionId: currentSandboxSessionId } : {}),
         completedAt,
         error: error ?? null,
       });
 
-      if (sandboxSessionId) {
+      if (currentSandboxSessionId) {
         this.sessionManager.completeTurn(
-          sandboxSessionId,
+          currentSandboxSessionId,
           turnId,
           agentId,
           conversationId,
@@ -281,10 +320,31 @@ export class AgentSessionService {
     };
 
     try {
-      const sandboxSession: SessionRecord = await this.sessionManager.ensureSession(conversationId, runtimeAgentDef, agentId);
+      if (await isDurablyCancelled()) {
+        wasCancelled = true;
+        runError = new Error(SESSION_CANCELLED_MESSAGE);
+        return;
+      }
+
+      const sandboxSession: SessionRecord = await this.sessionManager.ensureSession(
+        conversationId,
+        runtimeAgentDef,
+        agentId,
+        params.concurrencyReservation
+          ? { concurrencyReservationId: params.concurrencyReservation.id }
+          : undefined,
+      );
       sandboxSessionId = sandboxSession.sessionId;
+      releaseReservedConcurrency();
 
       await this.db.updateTurn(turnId, { sessionId: sandboxSessionId });
+
+      if (await isDurablyCancelled()) {
+        wasCancelled = true;
+        runError = new Error(SESSION_CANCELLED_MESSAGE);
+        return;
+      }
+
       signal = this.sessionManager.startTurn(sandboxSessionId, turnId, agentId, conversationId, mode, taskDescription);
 
       const eventSource: AsyncGenerator<AGUIEvent> = this.sessionTurnService.executeSessionTurn(
@@ -477,13 +537,18 @@ export class AgentSessionService {
         }
         if (event.type === 'TOOL_CALL_RESULT' && 'result' in event) {
           const toolResult = event as unknown as ToolCallResultEvent;
+          const toolCallId = toolResult.toolCallId ?? '';
+          const knownToolName = toolCallId ? pendingToolCalls.get(toolCallId)?.name : undefined;
+          const toolName = toolResult.toolName && toolResult.toolName.length > 0
+            ? toolResult.toolName
+            : knownToolName ?? '';
           if (this.eventBus) {
             this.eventBus.emit('run.tool_result', {
               turnId,
               agentId,
               conversationId,
-              toolCallId: toolResult.toolCallId ?? '',
-              toolName: toolResult.toolName ?? '',
+              toolCallId,
+              toolName,
               result: String(toolResult.result).slice(0, 500),
               durationMs: toolResult.durationMs ?? 0,
               timestamp: Date.now(),
@@ -506,6 +571,7 @@ export class AgentSessionService {
       runError = err instanceof Error ? err : new Error(String(err));
       console.error(`[AgentSessionService] Session ${turnId} error:`, runError.stack ?? runError.message);
     } finally {
+      releaseReservedConcurrency();
       const status: 'completed' | 'error' | 'cancelled' =
         wasCancelled
           ? 'cancelled'
@@ -531,15 +597,16 @@ export class AgentSessionService {
       } catch (finalizeErr) {
         console.error(`[AgentSessionService] finalizeTurn failed for turn ${turnId}:`, finalizeErr);
         try {
+          const currentSandboxSessionId = await resolveCurrentSandboxSessionId();
           await this.db.updateTurn(turnId, {
-            ...(sandboxSessionId ? { sessionId: sandboxSessionId } : {}),
+            ...(currentSandboxSessionId ? { sessionId: currentSandboxSessionId } : {}),
             completedAt: Date.now(),
             error: finalError ?? String(finalizeErr),
           });
           if (this.eventBus) {
             this.eventBus.emit('turn.completed', {
               turnId,
-              sessionId: sandboxSessionId ?? '',
+              sessionId: currentSandboxSessionId ?? '',
               agentId,
               conversationId,
               status: finalError ? 'error' : 'completed',

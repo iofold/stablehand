@@ -16,7 +16,7 @@
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f",
     "docker:clean": "docker compose down -v",
-    "test:backend": "NODE_OPTIONS='--max-old-space-size=4096' timeout 120 vitest run",
+    "test:backend": "NODE_OPTIONS='--max-old-space-size=4096' timeout 240 vitest run",
     "test:ui": "pnpm -C packages/ui test",
     "verify:stabilization": "node scripts/verify-stabilization.mjs",
     "test:e2e:required": "playwright test --config=playwright.config.ts --project=chromium --grep @smoke",

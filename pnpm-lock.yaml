@@ -36,6 +36,15 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  packages/client:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.15)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.3)
+
   packages/create-ctxmill:
     dependencies:
       picocolors:
@@ -189,6 +198,34 @@ importers:
         specifier: ^2.7.0
         version: 2.8.2
 
+  packages/examples/react-embed-chat:
+    dependencies:
+      '@ctxmill/react':
+        specifier: workspace:*
+        version: link:../../react
+      '@vitejs/plugin-react':
+        specifier: ^4.3.0
+        version: 4.7.0(vite@6.4.1(@types/node@22.19.15)(jiti@1.21.7)(yaml@2.8.3))
+      react:
+        specifier: ^19.0.0
+        version: 19.2.4
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.4(react@19.2.4)
+      vite:
+        specifier: ^6.1.0
+        version: 6.4.1(@types/node@22.19.15)(jiti@1.21.7)(yaml@2.8.3)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.0.0
+        version: 19.2.3(@types/react@19.2.14)
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+
   packages/proto:
     dependencies:
       '@bufbuild/protobuf':
@@ -207,6 +244,25 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
+
+  packages/react:
+    dependencies:
+      '@ctxmill/client':
+        specifier: workspace:*
+        version: link:../client
+    devDependencies:
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.14
+      react:
+        specifier: ^19.0.0
+        version: 19.2.4
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.15)(jiti@1.21.7)(jsdom@25.0.1)(yaml@2.8.3)
 
   packages/sandbox-daemon:
     dependencies:

@@ -161,4 +161,32 @@ describe('SessionTurnOrchestrator concurrency limit', () => {
 
     expect(() => orchestrator.checkConcurrencyLimit('agent-1')).not.toThrow();
   });
+
+  it('counts startup reservations before sessions become ACTIVE', () => {
+    const stateStore = new SessionStateStore();
+    const deps = createDeps(stateStore);
+    deps.config.maxConcurrentSessionsPerAgent = 1;
+    const orchestrator = new SessionTurnOrchestrator(deps);
+
+    const reservation = orchestrator.reserveConcurrencySlot('agent-1');
+
+    expect(() => orchestrator.checkConcurrencyLimit('agent-1')).toThrow(ConcurrencyLimitError);
+
+    reservation.release();
+    expect(() => orchestrator.checkConcurrencyLimit('agent-1')).not.toThrow();
+  });
+
+  it('excludes the caller reservation during its own sandbox bootstrap check', () => {
+    const stateStore = new SessionStateStore();
+    const deps = createDeps(stateStore);
+    deps.config.maxConcurrentSessionsPerAgent = 1;
+    const orchestrator = new SessionTurnOrchestrator(deps);
+
+    const reservation = orchestrator.reserveConcurrencySlot('agent-1');
+
+    expect(() =>
+      orchestrator.checkConcurrencyLimit('agent-1', {
+        excludeReservationId: reservation.id,
+      })).not.toThrow();
+  });
 });

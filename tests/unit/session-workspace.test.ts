@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import {
   getSessionDir,
   getSessionWorkspacePath,
+  getConversationDir,
+  getConversationWorkspacePath,
   copyBaseToSession,
+  ensureConversationWorkspace,
   cleanupSession,
 } from '../../packages/ctxmill/src/workspace/session-workspace.js';
 
@@ -46,6 +49,18 @@ describe('session-workspace', () => {
     );
   });
 
+  it('getConversationDir() returns correct path', () => {
+    expect(getConversationDir(dataDir, 'agent-1', 'conversation-1')).toBe(
+      resolve(join(dataDir, 'agents', 'agent-1', 'conversations', 'conversation-1')),
+    );
+  });
+
+  it('getConversationWorkspacePath() returns correct path', () => {
+    expect(getConversationWorkspacePath(dataDir, 'agent-1', 'conversation-1')).toBe(
+      resolve(join(dataDir, 'agents', 'agent-1', 'conversations', 'conversation-1', 'workspace')),
+    );
+  });
+
   it('copyBaseToSession() copies all files recursively', async () => {
     await writeTestFile(join(baseWorkspaceDir, 'root.txt'), 'root');
     await writeTestFile(join(baseWorkspaceDir, 'nested', 'child.txt'), 'child');
@@ -80,6 +95,38 @@ describe('session-workspace', () => {
     await copyBaseToSession(baseWorkspaceDir, sessionDir);
 
     await expect(fs.readdir(join(sessionDir, 'workspace'))).resolves.toEqual([]);
+  });
+
+  it('ensureConversationWorkspace() initializes a new conversation workspace from base', async () => {
+    await writeTestFile(join(baseWorkspaceDir, 'root.txt'), 'root');
+    const conversationDir = getConversationDir(dataDir, 'agent-1', 'conversation-1');
+
+    const result = await ensureConversationWorkspace(baseWorkspaceDir, conversationDir);
+
+    expect(result).toEqual({
+      workspaceDir: join(conversationDir, 'workspace'),
+      created: true,
+    });
+    await expect(readText(join(result.workspaceDir, 'root.txt'))).resolves.toBe('root');
+  });
+
+  it('ensureConversationWorkspace() reuses existing conversation workspace without recopying base', async () => {
+    await writeTestFile(join(baseWorkspaceDir, 'root.txt'), 'base');
+    const conversationDir = getConversationDir(dataDir, 'agent-1', 'conversation-1');
+    const first = await ensureConversationWorkspace(baseWorkspaceDir, conversationDir);
+    await writeTestFile(join(first.workspaceDir, 'root.txt'), 'runtime edit');
+    await writeTestFile(join(first.workspaceDir, 'runtime-only.txt'), 'kept');
+    await writeTestFile(join(baseWorkspaceDir, 'new-base.txt'), 'new base file');
+
+    const second = await ensureConversationWorkspace(baseWorkspaceDir, conversationDir);
+
+    expect(second).toEqual({
+      workspaceDir: first.workspaceDir,
+      created: false,
+    });
+    await expect(readText(join(second.workspaceDir, 'root.txt'))).resolves.toBe('runtime edit');
+    await expect(readText(join(second.workspaceDir, 'runtime-only.txt'))).resolves.toBe('kept');
+    await expect(fs.access(join(second.workspaceDir, 'new-base.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('cleanupSession() removes session directory', async () => {

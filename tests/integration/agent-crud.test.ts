@@ -627,6 +627,52 @@ describe('Agent CRUD & related endpoints', () => {
         threadId: wrongConversation.id,
       }));
     });
+
+    it('keeps the documented /api/ag-ui/agents/:id/run alias', async () => {
+      const wrongConversation = await container.db.createConversation(agentId);
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/ag-ui/agents/${agentId}/run`,
+        payload: {
+          threadId: wrongConversation.id,
+          runId,
+          messages: [{ id: 'msg-1', role: 'user', content: 'hello' }],
+        },
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual(expect.objectContaining({
+        error: 'Run does not belong to the supplied threadId',
+        runId,
+        threadId: wrongConversation.id,
+      }));
+    });
+
+    it('accepts an omitted threadId before rejecting completed run reconnects', async () => {
+      const completedRunId = `ag-ui-completed-run-${Date.now()}`;
+      await container.db.createTurn({
+        id: completedRunId,
+        agentId,
+        conversationId,
+        mode: 'interactive',
+        completedAt: Date.now(),
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/ag-ui/${agentId}/run`,
+        payload: {
+          runId: completedRunId,
+          messages: [{ id: 'msg-1', role: 'user', content: 'hello' }],
+        },
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({
+        error: 'Run already completed',
+        runId: completedRunId,
+      });
+    });
   });
 
   // ── POST /api/agents/:id/sessions/:runId/cancel ────────────────
@@ -643,6 +689,36 @@ describe('Agent CRUD & related endpoints', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json().cancelled).toBe(true);
+    });
+
+    it('durably cancels a run before its sandbox session is registered', async () => {
+      const created = await createAgent({ name: 'cancel-before-sandbox-agent' });
+      const agentId = created.json().id;
+      const conversation = await container.db.createConversation(agentId);
+      const session = await container.db.createTurn({
+        agentId,
+        conversationId: conversation.id,
+        mode: 'background',
+        taskDescription: 'cancel before sandbox registration',
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/sessions/${session.id}/cancel`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().cancelled).toBe(true);
+
+      const cancelledTurn = await container.db.getTurn(session.id);
+      expect(cancelledTurn?.completedAt).toEqual(expect.any(Number));
+      expect(cancelledTurn?.error).toBe('Session cancelled');
+
+      const readback = await app.inject({
+        method: 'GET',
+        url: `/api/agents/${agentId}/sessions/${session.id}`,
+      });
+      expect(readback.statusCode).toBe(200);
+      expect(readback.json().session.status).toBe('CANCELLED');
     });
 
     it('resolves a pending HITL interrupt when cancelling a run', async () => {

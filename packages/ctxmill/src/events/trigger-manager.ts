@@ -296,6 +296,16 @@ export class EventTriggerManager {
    * The `_triggerDepth` field in the payload is propagated to prevent infinite chains.
    */
   emitCustomEvent(type: string, agentId: string | undefined, payload: Record<string, unknown>): void {
+    this.emitCustomEventAsync(type, agentId, payload).catch((err: unknown) => {
+      console.error(`[EventTriggerManager] failed to emit custom event "${type}":`, err);
+    });
+  }
+
+  /**
+   * Awaitable custom event emit for HTTP/RPC ACK boundaries that must not
+   * report success before durable persistence accepts the event.
+   */
+  async emitCustomEventAsync(type: string, agentId: string | undefined, payload: Record<string, unknown>): Promise<void> {
     // Ensure we're subscribed to this custom type
     this.ensureCustomSubscription(type);
 
@@ -316,7 +326,7 @@ export class EventTriggerManager {
     // routes this to handleEvent() exactly once. Do NOT also call handleEvent()
     // directly; that caused a double-fire bug where every custom event triggered
     // matching triggers twice (one from the bus handler, one from the direct call).
-    this.eventBus.emit(type as never, eventPayload as never);
+    await this.eventBus.emitCustomAsync(type, agentId ?? '', eventPayload);
   }
 
   /**

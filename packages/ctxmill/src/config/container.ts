@@ -20,7 +20,7 @@ import { AgentSessionService } from '../orchestrator/agent-session-service.js';
 import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
 import { ManifestService } from '../manifest/index.js';
 import { RunStartupService } from '../orchestrator/run-startup-service.js';
-import { CachedPostgresSecretProvider } from '../secrets/postgres-provider.js';
+import { PostgresSecretProvider } from '../secrets/postgres-provider.js';
 import { deriveKey } from '../secrets/crypto.js';
 import type { SecretProvider } from '../secrets/types.js';
 import { ContainerManager, type SandboxContainerManager } from '../sandbox/container-manager.js';
@@ -308,7 +308,7 @@ export async function createContainer(
   const secretMasterKey = deriveKey(
     process.env.SECRET_MASTER_KEY || 'ctxmill-dev-key-change-in-prod',
   );
-  const secretProvider: SecretProvider = await CachedPostgresSecretProvider.create(
+  const secretProvider: SecretProvider = new PostgresSecretProvider(
     dbConn.pgClient,
     secretMasterKey,
   );
@@ -370,7 +370,7 @@ export async function createContainer(
   const sseBroadcaster = new SSEBroadcaster(sseManager, eventBus);
   const interruptManager = new InterruptManager(eventBus, db, async (sessionId) => {
     if (sessionManagerRef) {
-      await sessionManagerRef.suspendSession(sessionId, 'hitl-timeout');
+      await sessionManagerRef.suspendSession(sessionId, 'hitl-timeout', { allowActiveTurn: true });
     }
   });
   await interruptManager.loadFromDb();
@@ -506,18 +506,19 @@ export async function createContainer(
     'LANGSMITH_WORKSPACE_ID',
   ] as const;
 
-  function buildSandboxSecrets(agentId: string): Readonly<Record<string, string>> {
+  async function buildSandboxSecrets(agentId: string): Promise<Readonly<Record<string, string>>> {
     const envSecrets = Object.fromEntries(
       SANDBOX_SECRET_ALLOWLIST
         .filter((key) => process.env[key])
         .map((key) => [key, process.env[key]!]),
     );
 
+    const keys = await secretProvider.list(agentId);
+    const entries = await Promise.all(
+      keys.map(async (key): Promise<[string, string | null]> => [key, await secretProvider.get(agentId, key)]),
+    );
     const agentSecrets = Object.fromEntries(
-      secretProvider
-        .list(agentId)
-        .map((key) => [key, secretProvider.get(agentId, key)])
-        .filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+      entries.filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
     );
 
     return {

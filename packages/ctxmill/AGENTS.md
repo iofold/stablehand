@@ -51,7 +51,7 @@ src/
 | `types.ts` | 22 | 82 | Core type definitions (AgentDefinition, HarnessRunConfig, etc.) |
 | `database/repository.ts` | 14 | 1262 | All data access — 16 tables, all query methods |
 | `orchestrator/routes/agents.ts` | — | 2213 | Agent CRUD, runs, conversations, skills, files, and workspace endpoints |
-| `orchestrator/sandbox-session-manager.ts` | — | 969 | Session state machine — pause/freeze/checkpoint promotion |
+| `orchestrator/sandbox-session-manager.ts` | — | 969 | Session state machine — checkpoint/restore lifecycle |
 | `sandbox/container-manager.ts` | 7 | 842 | Docker container lifecycle, concurrency semaphore (max 20) |
 | `events/bus.ts` | 12 | — | TypedEventBus with 18 event types |
 | `sandbox/proto-convert.ts` | — | 654 | Proto ↔ internal type conversions, AG-UI event mapping |
@@ -111,12 +111,12 @@ Harness code runs INSIDE sandbox containers, not in the orchestrator. This chang
 
 **Tool proxy** — `createToolProxy()` in `tool-proxy.ts`. Orchestrator-location tools serialized via gRPC `RequestTool` RPC. 3 retries, exponential backoff (100ms/500ms/2s), 5min timeout.
 
-**Session status machine** — `session-status-machine.ts`. States: `ACTIVE` → `CHECKPOINTED` → `RESTORING` → `ACTIVE`, with `PAUSED` kept only as a legacy compatibility state and `TERMINATED` as terminal.
+**Session status machine** — `session-status-machine.ts`. States: `ACTIVE` → `CHECKPOINTED` → `RESTORING` → `ACTIVE`, with `TERMINATED` as terminal.
 
 ## ANTI-PATTERNS (beyond root)
 
 - **NEVER call harness.run() directly** — All execution goes through `AgentSessionService` → `SandboxSessionManager` → Docker containers
-- **NEVER store secrets in checkpoint data** — Injected fresh on resume via tmpfs mount (`/run/secrets/config.json`)
+- **NEVER store secrets in checkpoint data** — Injected fresh into sandbox env on resume
 - **NEVER import from path aliases** — Relative `.js` imports only in source. Aliases only in `vitest.config.ts`
 - **NEVER exceed checkpoint limits** — 5 MB checkpoint, 100 MB workspace tar. Oversized checkpoints are rejected
 - **NEVER assume /workspace exists** — Pre-created in Dockerfile; may be overlaid at runtime. Harnesses that spawn subprocesses with `cwd` will get ENOENT if it's missing

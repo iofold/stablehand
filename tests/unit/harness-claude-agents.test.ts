@@ -67,6 +67,14 @@ async function collectEvents(stream: AsyncGenerator<AgentEvent>): Promise<AgentE
   return events;
 }
 
+async function collectPrompt(prompt: AsyncIterable<unknown>): Promise<unknown[]> {
+  const messages: unknown[] = [];
+  for await (const message of prompt) {
+    messages.push(message);
+  }
+  return messages;
+}
+
 async function* sdkStream(messages: Array<Record<string, unknown>>) {
   for (const message of messages) {
     yield message;
@@ -526,6 +534,90 @@ describe('ClaudeAgentsHarness', () => {
       ]);
     });
 
+    it('should map hook system messages to custom AG-UI telemetry events', () => {
+      const harness = new ClaudeAgentsHarness();
+
+      const events = mapSdkMessage(harness, {
+        type: 'system',
+        subtype: 'hook_response',
+        hook_event: 'Stop',
+        hook_name: 'gate-finalization',
+        hook_id: 'hook-1',
+        session_id: 'claude-session-1',
+        uuid: 'sdk-msg-1',
+        outcome: 'success',
+        exit_code: 0,
+        output: '{"decision":"block","reason":"run finalizer"}',
+      }, new Map());
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: 'custom_agui_event',
+        event: {
+          type: 'CUSTOM',
+          subtype: 'claude_hook',
+          source: 'claude-agents',
+          lifecycle: 'response',
+          hookEvent: 'Stop',
+          hookName: 'gate-finalization',
+          hookId: 'hook-1',
+          claudeSessionId: 'claude-session-1',
+          sdkMessageId: 'sdk-msg-1',
+          outcome: 'success',
+          exitCode: 0,
+          output: '{"decision":"block","reason":"run finalizer"}',
+        },
+      });
+    });
+
+    it('maps hook started, progress, and response lifecycle telemetry with truncation', () => {
+      const harness = new ClaudeAgentsHarness();
+      const longOutput = 'x'.repeat(2_100);
+
+      const events = [
+        ...mapSdkMessage(harness, {
+          type: 'system',
+          subtype: 'hook_started',
+          hook_event: 'PreToolUse',
+          hook_name: 'guard',
+          hook_id: 'hook-start',
+        }, new Map()),
+        ...mapSdkMessage(harness, {
+          type: 'system',
+          subtype: 'hook_progress',
+          hook_event: 'PreToolUse',
+          hook_name: 'guard',
+          hook_id: 'hook-progress',
+          stdout: longOutput,
+        }, new Map()),
+        ...mapSdkMessage(harness, {
+          type: 'system',
+          subtype: 'hook_response',
+          hook_event: 'PreToolUse',
+          hook_name: 'guard',
+          hook_id: 'hook-response',
+          outcome: 'success',
+          exit_code: 0,
+        }, new Map()),
+      ];
+
+      expect(events).toHaveLength(3);
+      expect(events.map((event) =>
+        event.type === 'custom_agui_event' ? event.event.lifecycle : undefined,
+      )).toEqual(['started', 'progress', 'response']);
+      expect(events[1]).toMatchObject({
+        type: 'custom_agui_event',
+        event: {
+          subtype: 'claude_hook',
+          hookName: 'guard',
+          hookId: 'hook-progress',
+          truncated: true,
+        },
+      });
+      const progress = events[1];
+      expect(progress.type === 'custom_agui_event' ? progress.event.stdout : '').toContain('[truncated]');
+    });
+
     it('should map result success messages to done with usage', () => {
       const harness = new ClaudeAgentsHarness();
 
@@ -610,9 +702,162 @@ describe('ClaudeAgentsHarness', () => {
           name: 'ctxmill',
         },
       });
+      expect(queryCall?.options.cwd).toBe('/tmp/workspace');
+      expect(queryCall?.options.settingSources).toEqual(['project']);
       expect(queryCall?.options.permissionMode).toBe('bypassPermissions');
+      expect(queryCall?.options.includeHookEvents).toBe(true);
       expect(queryCall?.options.includePartialMessages).toBe(false);
       expect(queryCall?.options.maxTurns).toBe(4);
+    });
+
+    it('allows the Claude Skill tool when project skills are configured', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 1, output_tokens: 2 },
+        },
+      ]));
+
+      const session = await harness.openSession(makeConfig({
+        harnessConfigJson: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          apiKeyRef: 'anthropic',
+          setup: {
+            symlinks: [{ src: 'skills', dest: '.claude/skills' }],
+          },
+        }),
+      }));
+
+      await collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Hello')], turnId: 'turn-1' },
+          {},
+        ),
+      );
+
+      await session.close();
+
+      const queryCall = mockQuery.mock.calls[0]?.[0];
+      expect(queryCall?.options.allowedTools).toEqual(['Skill', 'mcp__ctxmill__*']);
+    });
+
+    it('preserves subagent skills and allows Agent plus Skill tools', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 1, output_tokens: 2 },
+        },
+      ]));
+
+      const session = await harness.openSession(makeConfig({
+        harnessConfigJson: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          apiKeyRef: 'anthropic',
+          subagents: {
+            reviewer: {
+              description: 'Reviews code',
+              prompt: 'Review the code.',
+              skills: ['code-review'],
+            },
+          },
+        }),
+      }));
+
+      await collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Hello')], turnId: 'turn-1' },
+          {},
+        ),
+      );
+
+      await session.close();
+
+      const queryCall = mockQuery.mock.calls[0]?.[0];
+      expect(queryCall?.options.allowedTools).toEqual(['Agent', 'Skill', 'mcp__ctxmill__*']);
+      expect(queryCall?.options.agents).toEqual({
+        reviewer: {
+          description: 'Reviews code',
+          prompt: 'Review the code.',
+          skills: ['code-review'],
+        },
+      });
+    });
+
+    it('logs Claude hook lifecycle messages surfaced by the SDK', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'system',
+          subtype: 'hook_started',
+          hook_id: 'hook-1',
+          hook_name: 'lint-hook',
+          hook_event: 'PreToolUse',
+          uuid: 'uuid-1',
+          session_id: 'session-1',
+        },
+        {
+          type: 'system',
+          subtype: 'hook_response',
+          hook_id: 'hook-1',
+          hook_name: 'lint-hook',
+          hook_event: 'PreToolUse',
+          output: 'ok\n',
+          stdout: 'ok\n',
+          stderr: '',
+          exit_code: 0,
+          outcome: 'success',
+          uuid: 'uuid-2',
+          session_id: 'session-1',
+        },
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 1, output_tokens: 2 },
+        },
+      ]));
+
+      try {
+        const session = await harness.openSession(makeConfig());
+        await collectEvents(
+          session.deliverTurn(
+            { messages: [makeMessage('user', 'Hello')], turnId: 'turn-1' },
+            {},
+          ),
+        );
+
+        await session.close();
+        expect(logSpy).toHaveBeenCalledWith(
+          '[claude-agents] hook started event=PreToolUse name=lint-hook id=hook-1',
+        );
+        expect(logSpy).toHaveBeenCalledWith(
+          '[claude-agents] hook response event=PreToolUse name=lint-hook id=hook-1 outcome=success exitCode=0 output=ok',
+        );
+      } finally {
+        logSpy.mockRestore();
+      }
     });
 
     it('openSession with restore populates transcript from payload.transcript', async () => {
@@ -646,13 +891,151 @@ describe('ClaudeAgentsHarness', () => {
         ),
       );
 
-      await expect(session.exportState()).resolves.toEqual({
+      await expect(session.exportState()).resolves.toMatchObject({
         stateVersion: '2',
         payload: {
           transcript: [restoredMessage, userMessage],
           sessionId: 'conversation-1',
         },
       });
+
+      await session.close();
+    });
+
+    it('checkpoint restore without session JSONL replays readable tool-call context before continuing', async () => {
+      const harness = new ClaudeAgentsHarness();
+      let capturedPrompt: unknown[] = [];
+      let capturedQuery: Record<string, unknown> | undefined;
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation((queryArg: Record<string, unknown>) => {
+        capturedQuery = queryArg;
+        return (async function* () {
+          capturedPrompt = await collectPrompt(queryArg.prompt as AsyncIterable<unknown>);
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 1, output_tokens: 2 },
+          };
+        })();
+      });
+
+      const restoredUser = makeMessage('user', 'Check the weather');
+      const restoredAssistant: Message = {
+        ...makeMessage('assistant', 'I will use the weather tool.'),
+        toolCalls: [
+          {
+            id: 'toolu_weather',
+            name: 'get-weather',
+            arguments: { city: 'NYC' },
+          },
+        ],
+      };
+      const restoredTool: Message = {
+        ...makeMessage('tool', 'Sunny and 72F'),
+        toolCallId: 'toolu_weather',
+      };
+      const nextUser = makeMessage('user', 'Continue from there');
+      const session = await harness.openSession(makeConfig(), {
+        stateVersion: '2',
+        messages: [],
+        payload: { transcript: [restoredUser, restoredAssistant, restoredTool] },
+      });
+
+      await collectEvents(
+        session.deliverTurn(
+          { messages: [restoredUser, restoredAssistant, restoredTool, nextUser], turnId: 'turn-checkpoint-restore' },
+          {},
+        ),
+      );
+
+      expect(capturedQuery?.options).toMatchObject({ sessionId: 'conversation-1' });
+      expect((capturedQuery?.options as Record<string, unknown>).resume).toBeUndefined();
+      expect(capturedPrompt).toEqual([
+        {
+          type: 'user',
+          message: { role: 'user', content: 'Check the weather' },
+        },
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [
+              '[Previous assistant response]',
+              'I will use the weather tool.',
+              '[Previous assistant tool calls]',
+              '- toolu_weather: get-weather {"city":"NYC"}',
+            ].join('\n'),
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: '[Previous tool output (toolu_weather)]\nSunny and 72F',
+          },
+        },
+        {
+          type: 'user',
+          message: { role: 'user', content: 'Continue from there' },
+        },
+      ]);
+
+      await session.close();
+    });
+
+    it('session JSONL restore resumes the Claude SDK session and sends only the latest user prompt', async () => {
+      const harness = new ClaudeAgentsHarness();
+      let capturedPrompt: unknown[] = [];
+      let capturedQuery: Record<string, unknown> | undefined;
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation((queryArg: Record<string, unknown>) => {
+        capturedQuery = queryArg;
+        return (async function* () {
+          capturedPrompt = await collectPrompt(queryArg.prompt as AsyncIterable<unknown>);
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 1, output_tokens: 2 },
+          };
+        })();
+      });
+
+      const restoredMessage = makeMessage('assistant', 'Restored reply');
+      const userMessage = makeMessage('user', 'Resume with SDK state');
+      const session = await harness.openSession(makeConfig(), {
+        stateVersion: '2',
+        messages: [],
+        payload: {
+          transcript: [restoredMessage],
+          sessionJSONL: '{"type":"assistant"}\n',
+        },
+      });
+
+      await collectEvents(
+        session.deliverTurn(
+          { messages: [restoredMessage, userMessage], turnId: 'turn-jsonl-restore' },
+          {},
+        ),
+      );
+
+      expect(capturedQuery?.options).toMatchObject({ resume: 'conversation-1' });
+      expect((capturedQuery?.options as Record<string, unknown>).sessionId).toBeUndefined();
+      expect(capturedPrompt).toEqual([
+        {
+          type: 'user',
+          message: { role: 'user', content: 'Resume with SDK state' },
+        },
+      ]);
 
       await session.close();
     });
@@ -838,6 +1221,112 @@ describe('ClaudeAgentsHarness', () => {
         expect(withTools.toolCalls[0]).toMatchObject({ id: 'toolu_a', name: 'weather' });
         expect(withTools.toolCalls[1]).toMatchObject({ id: 'toolu_b', name: 'search' });
       }
+    });
+
+    it('commits a multi-step autonomous loop with hooks, text, tools, and final done in order', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'system',
+          subtype: 'hook_started',
+          hook_event: 'PreToolUse',
+          hook_name: 'loop-guard',
+          hook_id: 'hook-loop',
+        },
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'text', text: 'Step 1: write state. ' },
+              { type: 'tool_use', id: 'toolu_write', name: 'Write', input: { file_path: 'state.txt', content: 'alpha' } },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_write', content: 'wrote state.txt' }],
+          },
+        },
+        {
+          type: 'system',
+          subtype: 'hook_response',
+          hook_event: 'PostToolUse',
+          hook_name: 'loop-guard',
+          hook_id: 'hook-loop',
+          outcome: 'success',
+          exit_code: 0,
+        },
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'text', text: 'Step 2: read state. ' },
+              { type: 'tool_use', id: 'toolu_read', name: 'Read', input: { file_path: 'state.txt' } },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_read', content: 'alpha' }],
+          },
+        },
+        {
+          type: 'assistant',
+          message: {
+            content: [{ type: 'text', text: 'Loop complete.' }],
+          },
+        },
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: { input_tokens: 30, output_tokens: 40 },
+        },
+      ]));
+
+      const session = await harness.openSession(makeConfig());
+      const events = await collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Run a loop until state is checked')], turnId: 'turn-loop' },
+          {},
+        ),
+      );
+      await session.close();
+
+      const eventTypes = events.map((event) => event.type);
+      expect(eventTypes).toContain('custom_agui_event');
+      expect(eventTypes.indexOf('message_committed')).toBeLessThan(eventTypes.indexOf('done'));
+
+      const committed = events.find((event) => event.type === 'message_committed');
+      expect(committed).toMatchObject({
+        type: 'message_committed',
+        content: 'Step 1: write state. Step 2: read state. Loop complete.',
+      });
+      expect(committed && 'toolCalls' in committed ? committed.toolCalls : undefined).toEqual([
+        expect.objectContaining({
+          id: 'toolu_write',
+          name: 'Write',
+          arguments: { file_path: 'state.txt', content: 'alpha' },
+          status: 'complete',
+        }),
+        expect.objectContaining({
+          id: 'toolu_read',
+          name: 'Read',
+          arguments: { file_path: 'state.txt' },
+          status: 'complete',
+        }),
+      ]);
+      expect(events.at(-1)).toEqual({
+        type: 'done',
+        usage: { inputTokens: 30, outputTokens: 40, totalTokens: 70 },
+      });
     });
 
     it('should mark tool call status as error when tool_call_end has error', async () => {

@@ -245,7 +245,7 @@ function resolveModel(
   secrets: ResolvedSecrets,
 ): any {
   const { provider, model, baseUrl, apiKeyRef } = harnessConfig;
-  const resolvedApiKey = resolveSecretRef(apiKeyRef, secrets);
+  const resolvedApiKey = resolvePIApiKey(provider, apiKeyRef, secrets);
 
   if (baseUrl) {
     return {
@@ -288,6 +288,39 @@ function resolveModel(
     contextWindow: 128000,
     maxTokens: 16384,
   };
+}
+
+const PROVIDER_API_KEY_ENV_NAMES: Record<string, readonly string[]> = {
+  openai: ['OPENAI_API_KEY'],
+  anthropic: ['ANTHROPIC_API_KEY'],
+  google: ['GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY'],
+};
+
+function resolveProviderApiKey(
+  provider: string,
+  secrets: ResolvedSecrets,
+): string | undefined {
+  const keys = PROVIDER_API_KEY_ENV_NAMES[provider] ?? [];
+  for (const key of keys) {
+    const value = secrets[key] ?? process.env[key];
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function resolvePIApiKey(
+  provider: string,
+  apiKeyRef: string | undefined,
+  secrets: ResolvedSecrets,
+): string | undefined {
+  const resolved = resolveSecretRef(apiKeyRef, secrets);
+  if (resolved) return resolved;
+  if (!apiKeyRef) return resolveProviderApiKey(provider, secrets);
+
+  const key = apiKeyRef.startsWith('$secret:')
+    ? apiKeyRef.slice('$secret:'.length)
+    : apiKeyRef;
+  return process.env[key] ?? process.env[apiKeyRef];
 }
 
 function _piUpdateUsage(
@@ -424,7 +457,7 @@ export class PIAgentHarness implements AgentHarness {
         console.error(`[pi-agent] Failed to load extension: ${extPath}`, err);
       }
     }
-    const resolvedApiKey = resolveSecretRef(harnessConfig.apiKeyRef, config.secrets);
+    const resolvedApiKey = resolvePIApiKey(harnessConfig.provider, harnessConfig.apiKeyRef, config.secrets);
     const model = resolveModel(sdk.getModel, harnessConfig, config.secrets);
 
     const nativeTools = this.buildNativeTools(config, {
@@ -450,6 +483,9 @@ export class PIAgentHarness implements AgentHarness {
     const authStorage = sdk.AuthStorage.inMemory();
     if (resolvedApiKey) {
       authStorage.setRuntimeApiKey(harnessConfig.provider, resolvedApiKey);
+      if (typeof model.api === 'string' && model.api !== harnessConfig.provider) {
+        authStorage.setRuntimeApiKey(model.api, resolvedApiKey);
+      }
     }
     const modelRegistry = new sdk.ModelRegistry(authStorage);
     const settingsManager = sdk.SettingsManager.inMemory();

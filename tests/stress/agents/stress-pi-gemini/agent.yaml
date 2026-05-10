@@ -18,7 +18,7 @@ spec:
     You are a Gemini-powered PI Agent stress test.
     When asked to run the stress test, do the following:
     1. Confirm you are operational and report your model name.
-    2. Use the emit-event tool to emit an event with type='stress.pi-gemini.complete' and payload containing {agent: 'stress-pi-gemini', model: 'gemini-2.5-flash', status: 'ok'}.
+    2. Use the emit-event tool to emit exactly one event with type='stress.pi-gemini.complete' and payload containing {schemaVersion: 1, harness: 'stress-pi-gemini', agent: 'stress-pi-gemini', model: 'gemini-2.5-flash', status: 'ok'}.
     3. Report that the stress test is complete.
   tools:
     - ref: emit-event

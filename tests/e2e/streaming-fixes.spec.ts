@@ -9,7 +9,7 @@ import {
 } from './support';
 
 // This suite locks the route/SSE identity contract in docs/contracts/session-identity.md.
-const SESSION_STATUSES = new Set(['ACTIVE', 'PAUSED', 'CHECKPOINTED', 'RESTORING', 'TERMINATED', 'COMPLETED', 'ERROR', 'CANCELLED', 'IDLE']);
+const SESSION_STATUSES = new Set(['ACTIVE', 'CHECKPOINTED', 'RESTORING', 'TERMINATED', 'COMPLETED', 'ERROR', 'CANCELLED', 'IDLE']);
 
 test.describe('Streaming fixes @extended', () => {
   let agentId = '';

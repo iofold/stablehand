@@ -56,8 +56,6 @@ describe('SessionStatusCoordinator', () => {
       'ACTIVE',
       expect.objectContaining({
         checkpointRef: null,
-        pausedAt: null,
-        pausedReason: null,
       }),
     );
     expect(record.status).toBe('ACTIVE');
@@ -83,8 +81,6 @@ describe('SessionStatusCoordinator', () => {
       expect.objectContaining({
         containerName: null,
         containerId: null,
-        pausedAt: null,
-        pausedReason: null,
       }),
     );
     expect(record.containerName).toBe('');

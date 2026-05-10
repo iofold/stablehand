@@ -325,6 +325,51 @@ describe('conversation store', () => {
     expect(state.toolCalls.size).toBe(0);
   });
 
+  it('late TOOL_CALL_RESULT updates committed tool calls after preview state is cleared', () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
+    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+      role: 'assistant',
+      content: '',
+      toolCalls: [
+        { id: 'tc1', name: 'search', args: '{"q":"ctxmill"}', status: 'running' },
+      ],
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+
+    expect(getStore().toolCalls.size).toBe(0);
+
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
+    handleSSEEvent(makeEvent('RUN_FINISHED'));
+
+    const committed = getStore().messages[0];
+    expect(committed.toolCalls).toEqual([
+      {
+        id: 'tc1',
+        name: 'search',
+        args: '{"q":"ctxmill"}',
+        result: 'done',
+        error: undefined,
+        status: 'complete',
+      },
+    ]);
+    expect(committed.parts).toEqual([
+      {
+        type: 'tool_call',
+        id: 'tc1',
+        name: 'search',
+        args: '{"q":"ctxmill"}',
+        result: 'done',
+        error: undefined,
+        status: 'complete',
+      },
+    ]);
+  });
+
   it('full tool-call flow produces one committed message with merged result', () => {
     const { handleSSEEvent } = getStore();
 

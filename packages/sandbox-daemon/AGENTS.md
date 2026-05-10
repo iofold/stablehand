@@ -61,7 +61,7 @@ Each adapter implements the session lifecycle:
 - **NEVER import orchestrator modules** — daemon has no access to orchestrator code at runtime
 - **ALWAYS `console.error` in harness catch blocks** — Container stderr is the ONLY place you'll see stack traces. Without it, only "1 events emitted" appears in orchestrator logs
 - **NEVER assume /workspace exists** — Pre-created in Dockerfile, may be overlaid at runtime. ENOENT from `spawn()` usually means `cwd` is missing, not the binary
-- **NEVER store secrets in checkpoint** — tmpfs mount at `/run/secrets/config.json`, 1 MB, `rw,noexec,nosuid`
+- **NEVER store secrets in checkpoint** — secrets arrive through sandbox env at session startup / restore and are not serialized
 
 ## KNOWN RELIABILITY CONCERNS
 

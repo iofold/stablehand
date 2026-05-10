@@ -2,9 +2,22 @@ import { resolve, normalize } from 'node:path';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { Message } from '../../types.js';
 import type { DatabaseRepository } from '../../database/repository.js';
+import { getConversationWorkspacePath, getSessionWorkspacePath } from '../../workspace/session-workspace.js';
 
 /** Patterns that should never be exposed via the file browsing API. */
 const BLOCKED_PATTERNS = ['.env', '.git', '.ctxmill', 'credentials', '.pem', '.key', '.secret'];
+
+interface RawTranscriptMessage {
+  id: string;
+  agentId?: string | null;
+  role: string;
+  content: string;
+  toolCallId?: string | null;
+  toolCalls?: unknown;
+  createdAt: string | number | Date;
+}
+
+type InternalToolCall = NonNullable<Message['toolCalls']>[number];
 
 /** Check if a filename or path segment matches any blocked pattern. */
 export function isBlockedPath(name: string): boolean {
@@ -15,14 +28,21 @@ export function isBlockedPath(name: string): boolean {
 /**
  * Resolve the base directory for file operations.
  *
- * When a `sessionId` is provided and a `dataDir` is configured, looks for a
- * session-merged workspace first and falls back to the agent's workspace dir
- * (or `process.cwd()` as a last resort).
+ * When a conversation id and `dataDir` are available, resolves the isolated
+ * conversation workspace. Otherwise falls back to the base agent workspace.
  */
 export function resolveBaseDir(
   agent: { id: string; workspaceDir?: string | null },
-  _opts?: { sessionId?: string; dataDir?: string },
+  opts?: { conversationId?: string | null; sandboxSessionId?: string; dataDir?: string },
 ): string | null {
+  if (opts?.conversationId && opts.dataDir) {
+    return getConversationWorkspacePath(opts.dataDir, agent.id, opts.conversationId);
+  }
+
+  if (opts?.sandboxSessionId && opts.dataDir) {
+    return getSessionWorkspacePath(opts.dataDir, agent.id, opts.sandboxSessionId);
+  }
+
   return agent.workspaceDir ? resolve(agent.workspaceDir) : null;
 }
 
@@ -54,6 +74,65 @@ export function validateSandboxPath(
   return null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function cloneRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value));
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? cloneRecord(parsed) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeToolCallArguments(toolCall: Record<string, unknown>): Record<string, unknown> {
+  for (const key of ['arguments', 'args', 'input', 'argumentsJson']) {
+    const value = toolCall[key];
+    if (isRecord(value)) return cloneRecord(value);
+    if (typeof value === 'string') {
+      const parsed = parseJsonRecord(value);
+      if (parsed) return parsed;
+    }
+  }
+
+  return {};
+}
+
+function normalizePersistedToolCalls(value: unknown): Message['toolCalls'] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const toolCalls: InternalToolCall[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+
+    const id = typeof entry.id === 'string' ? entry.id : undefined;
+    const name = typeof entry.name === 'string'
+      ? entry.name
+      : typeof entry.toolName === 'string'
+        ? entry.toolName
+        : undefined;
+    if (!id || !name) continue;
+
+    const toolCall: InternalToolCall = {
+      id,
+      name,
+      arguments: normalizeToolCallArguments(entry),
+    };
+    if (typeof entry.idempotencyKey === 'string') {
+      toolCall.idempotencyKey = entry.idempotencyKey;
+    }
+    toolCalls.push(toolCall);
+  }
+
+  return toolCalls.length > 0 ? toolCalls : undefined;
+}
+
 /**
  * Map raw DB message rows to the internal `Message[]` format.
  *
@@ -62,24 +141,10 @@ export function validateSandboxPath(
  * the same persisted rows always yields the same transcript in the same order.
  */
 export function mapMessagesToInternal(
-  allMessages: Array<{
-    id: string;
-    agentId?: string | null;
-    role: string;
-    content: string;
-    toolCallId?: string | null;
-    createdAt: string | number | Date;
-  }>,
+  allMessages: RawTranscriptMessage[],
   fallbackAgentId: string,
 ): Message[] {
-  const byId = new Map<string, {
-    id: string;
-    agentId?: string | null;
-    role: string;
-    content: string;
-    toolCallId?: string | null;
-    createdAt: string | number | Date;
-  }>();
+  const byId = new Map<string, RawTranscriptMessage>();
 
   for (const message of allMessages) {
     if (!byId.has(message.id)) {
@@ -99,6 +164,7 @@ export function mapMessagesToInternal(
       role: m.role as Message['role'],
       content: m.content,
       toolCallId: m.toolCallId ?? undefined,
+      toolCalls: normalizePersistedToolCalls(m.toolCalls),
       createdAt: new Date(m.createdAt),
     }));
 }

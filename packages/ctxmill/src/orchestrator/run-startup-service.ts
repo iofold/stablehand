@@ -5,6 +5,7 @@ import type { DatabaseRepository } from '../database/repository.js';
 import type { AgentDefinition, AgentResourceLimits } from '../types.js';
 import type { AgentSessionService } from './agent-session-service.js';
 import { mapMessagesToInternal } from './routes/agent-helpers.js';
+import type { ConcurrencyReservation } from './session-manager/session-turn-orchestrator.js';
 import { withRuntimeSandboxSecrets, type RuntimeSandboxSecrets } from './session-manager/runtime-sandbox-secrets.js';
 
 interface Logger {
@@ -30,7 +31,10 @@ type ExecutionDeps = {
     'addMessage' | 'createConversation' | 'createTurn' | 'deleteMessage' | 'getConversation' | 'getMessages' | 'getTurn' | 'updateTurn'
   >;
   eventBus?: Pick<TypedEventBus, 'emit'> & Partial<Pick<TypedEventBus, 'emitAsync'>>;
-  sessionManager?: { checkConcurrencyLimit(agentId: string): void } | null;
+  sessionManager?: {
+    checkConcurrencyLimit(agentId: string): void;
+    reserveConcurrencySlot?(agentId: string): ConcurrencyReservation;
+  } | null;
   agentSessionService: Pick<AgentSessionService, 'executeSession'>;
 };
 
@@ -42,6 +46,7 @@ export interface PrepareRunStartParams {
   conversationId?: string;
   requestedTurnId?: string;
   requireExistingConversation?: boolean;
+  createMissingConversationWithRequestedId?: boolean;
   emitUserMessageEvent?: boolean;
   sandboxSecrets?: RuntimeSandboxSecrets;
 }
@@ -55,6 +60,7 @@ export interface PreparedRunStart {
   mode: RunMode;
   taskDescription: string;
   sandboxSecrets?: RuntimeSandboxSecrets;
+  concurrencyReservation?: ConcurrencyReservation;
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -119,6 +125,7 @@ export class RunStartupService {
       conversationId,
       requestedTurnId,
       requireExistingConversation = false,
+      createMissingConversationWithRequestedId = false,
       emitUserMessageEvent = mode === 'interactive',
       sandboxSecrets,
     } = params;
@@ -132,6 +139,7 @@ export class RunStartupService {
       agentId,
       conversationId,
       requireExistingConversation,
+      createMissingConversationWithRequestedId,
     );
 
     if (requestedTurnId) {
@@ -149,8 +157,14 @@ export class RunStartupService {
     });
 
     let turn: Awaited<ReturnType<ExecutionDeps['db']['createTurn']>>;
+    let concurrencyReservation: ConcurrencyReservation | undefined;
     try {
-      executionDeps.sessionManager?.checkConcurrencyLimit(agentId);
+      concurrencyReservation = executionDeps.sessionManager?.reserveConcurrencySlot
+        ? executionDeps.sessionManager.reserveConcurrencySlot(agentId)
+        : undefined;
+      if (!concurrencyReservation) {
+        executionDeps.sessionManager?.checkConcurrencyLimit(agentId);
+      }
       turn = await executionDeps.db.createTurn({
         ...(requestedTurnId ? { id: requestedTurnId } : {}),
         agentId,
@@ -159,6 +173,7 @@ export class RunStartupService {
         ...(mode === 'background' ? { taskDescription: content } : {}),
       });
     } catch (err) {
+      concurrencyReservation?.release();
       await executionDeps.db.deleteMessage(message.id).catch((deleteErr) => {
         this.deps.logger.error('[RunStartupService] failed to rollback user message %s:', message.id, deleteErr);
       });
@@ -197,8 +212,10 @@ export class RunStartupService {
         mode,
         taskDescription: content,
         sandboxSecrets,
+        concurrencyReservation,
       };
     } catch (err) {
+      concurrencyReservation?.release();
       const errorMessage = err instanceof Error ? err.message : String(err);
       await executionDeps.db.updateTurn(turn.id, {
         completedAt: Date.now(),
@@ -219,8 +236,7 @@ export class RunStartupService {
     options?: { rethrowOnError?: boolean },
   ): Promise<void> {
     const executionDeps = this.getExecutionDeps();
-
-    return executionDeps.agentSessionService.executeSession({
+    const executeParams: Parameters<AgentSessionService['executeSession']>[0] = {
       agentDef: start.agentDef,
       messages: start.messages,
       agentId,
@@ -228,8 +244,11 @@ export class RunStartupService {
       sessionId: start.turnId,
       mode: start.mode,
       taskDescription: start.taskDescription,
-      sandboxSecrets: start.sandboxSecrets,
-    }).catch(async (err) => {
+      ...(start.sandboxSecrets ? { sandboxSecrets: start.sandboxSecrets } : {}),
+      ...(start.concurrencyReservation ? { concurrencyReservation: start.concurrencyReservation } : {}),
+    };
+
+    return executionDeps.agentSessionService.executeSession(executeParams).catch(async (err) => {
       this.deps.logger.error(`[RunStartupService] executeSession failed for agent ${agentId}, turn ${start.turnId}:`, err);
       await executionDeps.db.updateTurn(start.turnId, {
         completedAt: Date.now(),
@@ -298,6 +317,7 @@ export class RunStartupService {
     agentId: string,
     conversationId: string | undefined,
     requireExistingConversation: boolean,
+    createMissingConversationWithRequestedId: boolean,
   ): Promise<string> {
     if (!conversationId) {
       if (requireExistingConversation) {
@@ -309,11 +329,20 @@ export class RunStartupService {
     }
 
     const conversation = await db.getConversation(conversationId);
-    if (!conversation || conversation.agentId !== agentId) {
+    if (conversation && conversation.agentId === agentId) {
+      return conversation.id;
+    }
+
+    if (conversation && conversation.agentId !== agentId) {
       throw new Error(`Conversation ${conversationId} not found for agent ${agentId}`);
     }
 
-    return conversation.id;
+    if (createMissingConversationWithRequestedId && !requireExistingConversation) {
+      const created = await db.createConversation(agentId, conversationId);
+      return created.id;
+    }
+
+    throw new Error(`Conversation ${conversationId} not found for agent ${agentId}`);
   }
 }
 

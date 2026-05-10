@@ -1,5 +1,4 @@
 export const DEFAULT_MAX_WORKSPACE_TAR_BYTES = 100 * 1024 * 1024;
-export const DEFAULT_MAX_CHECKPOINT_BYTES    = 100 * 1024 * 1024;
 export const DEFAULT_MAX_TAR_UPLOAD_BYTES    = 100 * 1024 * 1024;
 
 export const DEFAULT_IDLE_TIMEOUT_MS              = 300_000;
@@ -16,7 +15,6 @@ export const DEFAULT_DEFAULT_TIMEOUT_SEC          = 43_200;
 
 export const SETTINGS_KEYS = {
   maxWorkspaceTarBytes:        'maxWorkspaceTarBytes',
-  maxCheckpointBytes:          'maxCheckpointBytes',
   maxTarUploadBytes:           'maxTarUploadBytes',
   idleTimeoutMs:               'idleTimeoutMs',
   turnTimeoutMs:               'turnTimeoutMs',
@@ -35,7 +33,6 @@ export type SettingsKey = (typeof SETTINGS_KEYS)[keyof typeof SETTINGS_KEYS];
 
 export const ENV_KEYS: Record<SettingsKey, string> = {
   maxWorkspaceTarBytes:      'CTXMILL_MAX_WORKSPACE_TAR_BYTES',
-  maxCheckpointBytes:        'CTXMILL_MAX_CHECKPOINT_BYTES',
   maxTarUploadBytes:         'CTXMILL_MAX_TAR_UPLOAD_BYTES',
   idleTimeoutMs:             'CTXMILL_IDLE_TIMEOUT_MS',
   turnTimeoutMs:             'CTXMILL_TURN_TIMEOUT_MS',
@@ -52,7 +49,6 @@ export const ENV_KEYS: Record<SettingsKey, string> = {
 
 export interface SystemSettings {
   maxWorkspaceTarBytes:        number;
-  maxCheckpointBytes:          number;
   maxTarUploadBytes:           number;
   idleTimeoutMs:               number;
   turnTimeoutMs:               number;
@@ -105,7 +101,6 @@ export class SystemSettingsService {
     const raw = await this.db.getAllSystemSettings();
     const settings: SystemSettings = {
       maxWorkspaceTarBytes:      parseIntSetting(raw[SETTINGS_KEYS.maxWorkspaceTarBytes],      envInt('maxWorkspaceTarBytes', DEFAULT_MAX_WORKSPACE_TAR_BYTES)),
-      maxCheckpointBytes:        parseIntSetting(raw[SETTINGS_KEYS.maxCheckpointBytes],        envInt('maxCheckpointBytes', DEFAULT_MAX_CHECKPOINT_BYTES)),
       maxTarUploadBytes:         parseIntSetting(raw[SETTINGS_KEYS.maxTarUploadBytes],         envInt('maxTarUploadBytes', DEFAULT_MAX_TAR_UPLOAD_BYTES)),
       idleTimeoutMs:             parseIntSetting(raw[SETTINGS_KEYS.idleTimeoutMs],             envInt('idleTimeoutMs', DEFAULT_IDLE_TIMEOUT_MS)),
       turnTimeoutMs:             parseIntSetting(raw[SETTINGS_KEYS.turnTimeoutMs],             envInt('turnTimeoutMs', DEFAULT_TURN_TIMEOUT_MS)),

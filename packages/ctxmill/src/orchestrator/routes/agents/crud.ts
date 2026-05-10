@@ -17,7 +17,7 @@ import {
 } from './helpers.js';
 import type { AgentHttpToolDefinition, AgentSubRouteOptions } from './types.js';
 
-const defaultSessionCounts = () => ({ ACTIVE: 0, PAUSED: 0, CHECKPOINTED: 0, RESTORING: 0, TERMINATED: 0 });
+const defaultSessionCounts = () => ({ ACTIVE: 0, CHECKPOINTED: 0, RESTORING: 0, TERMINATED: 0 });
 
 export async function crudRoutes(
   app: FastifyInstance,
@@ -182,16 +182,16 @@ export async function crudRoutes(
         }
       }
 
+      if (toolRegistry) {
+        await registerAgentHttpTools(toolRegistry, agent, secretProvider);
+      }
+
       if (eventBus) {
         eventBus.emit('agent.created', {
           agentId: agent.id,
           name: agent.name,
           timestamp: Date.now(),
         });
-      }
-
-      if (toolRegistry) {
-        await registerAgentHttpTools(toolRegistry, agent, secretProvider);
       }
 
       return reply.status(201).send(toAgentResponse(agent));

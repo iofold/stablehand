@@ -17,7 +17,7 @@ export async function secretRoutes(
         return reply.status(501).send({ error: 'Secret storage not configured' });
       }
       try {
-        const keys = secretProvider.list(request.params.id);
+        const keys = await secretProvider.list(request.params.id);
         return reply.send({ keys });
       } catch (err) {
         return reply.status(500).send(safeError('Failed to list secrets', err));

@@ -62,8 +62,6 @@ function makeDbSession(overrides?: Partial<SandboxSessionRow>): SandboxSessionRo
     createdAt: Date.now(),
     updatedAt: Date.now(),
     lastActivityAt: Date.now(),
-    pausedAt: null,
-    pausedReason: null,
     ...overrides,
   };
 }

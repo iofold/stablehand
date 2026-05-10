@@ -1,5 +1,5 @@
 export interface AGUIRunAgentInput {
-  threadId: string;
+  threadId?: string;
   runId: string;
   state?: unknown;
   messages: AGUIMessage[];

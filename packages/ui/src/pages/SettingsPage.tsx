@@ -102,7 +102,6 @@ export function SettingsPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   // Draft values in MB (what the user types)
   const [draftTarMb, setDraftTarMb] = useState('');
-  const [draftCheckpointMb, setDraftCheckpointMb] = useState('');
   const [draftUploadMb, setDraftUploadMb] = useState('');
   // Session Lifecycle (stored as ms, displayed as seconds)
   const [draftIdleSec, setDraftIdleSec] = useState('');
@@ -145,7 +144,6 @@ export function SettingsPage() {
         if (!mounted) return;
         setSettings(s);
         setDraftTarMb(String(Math.round(s.maxWorkspaceTarBytes / (1024 * 1024))));
-        setDraftCheckpointMb(String(Math.round(s.maxCheckpointBytes / (1024 * 1024))));
         setDraftUploadMb(String(Math.round(s.maxTarUploadBytes / (1024 * 1024))));
         setDraftIdleSec(String(Math.round(s.idleTimeoutMs / 1000)));
         setDraftTurnSec(String(Math.round(s.turnTimeoutMs / 1000)));
@@ -174,7 +172,6 @@ export function SettingsPage() {
       const S = 1000;
       const updated = await updateSettings({
         maxWorkspaceTarBytes:      Math.round(Number(draftTarMb) * MB),
-        maxCheckpointBytes:        Math.round(Number(draftCheckpointMb) * MB),
         maxTarUploadBytes:         Math.round(Number(draftUploadMb) * MB),
         idleTimeoutMs:             Math.round(Number(draftIdleSec) * S),
         turnTimeoutMs:             Math.round(Number(draftTurnSec) * S),
@@ -197,7 +194,7 @@ export function SettingsPage() {
       setSaving(false);
     }
   }, [
-    draftTarMb, draftCheckpointMb, draftUploadMb,
+    draftTarMb, draftUploadMb,
     draftIdleSec, draftTurnSec, draftReconcileSec,
     draftMaxContainers, draftQueueSec, draftMaxRunsPerAgent, draftTriggerDepth,
     draftCpus, draftMemoryMb, draftPidsLimit, draftTimeoutSec,
@@ -286,7 +283,6 @@ export function SettingsPage() {
               settings={settings}
             >
               <LimitRow label="Max Workspace Snapshot" description="Maximum size of the workspace tar snapshot captured on suspend" value={draftTarMb} onChange={setDraftTarMb} min={1} max={1024} />
-              <LimitRow label="Max Checkpoint State" description="Maximum size of the harness state checkpoint JSON" value={draftCheckpointMb} onChange={setDraftCheckpointMb} min={1} max={100} />
               <LimitRow label="Max Workspace Upload" description="Maximum total size of a workspace tarball uploaded via the Files tab (ADR 010)" value={draftUploadMb} onChange={setDraftUploadMb} min={1} max={1024} />
               <ReadonlyLimitRow
                 label="Max Per-File (Workspace)"

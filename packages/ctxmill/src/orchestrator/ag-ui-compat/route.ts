@@ -45,18 +45,18 @@ function parseRunInput(body: unknown): AGUIRunAgentInput | null {
     return null;
   }
 
-  if (typeof body.threadId !== 'string' || body.threadId.trim() === '') {
-    return null;
-  }
   if (typeof body.runId !== 'string' || body.runId.trim() === '') {
     return null;
   }
   if (!Array.isArray(body.messages) || !body.messages.every(isAGUIMessage)) {
     return null;
   }
+  const threadId = typeof body.threadId === 'string' && body.threadId.trim() !== ''
+    ? body.threadId
+    : undefined;
 
   return {
-    threadId: body.threadId,
+    ...(threadId ? { threadId } : {}),
     runId: body.runId,
     state: body.state,
     messages: body.messages,
@@ -97,179 +97,187 @@ export async function agUiCompatRoutes(
 ): Promise<void> {
   const { db, eventBus, runStartupService } = opts;
 
-  app.post(
-    '/:id/run',
-    async (request: AGUIRunRequest, reply: FastifyReply) => {
-      const { id } = request.params;
-      const body = parseRunInput(request.body);
+  const runHandler = async (
+    request: AGUIRunRequest,
+    reply: FastifyReply,
+  ) => {
+    const { id } = request.params;
+    const body = parseRunInput(request.body);
 
-      if (!body) {
-        return reply.status(400).send({ error: 'Invalid AG-UI RunAgentInput body' });
+    if (!body) {
+      return reply.status(400).send({ error: 'Invalid AG-UI RunAgentInput body' });
+    }
+
+    const agent = await db.getAgent(id);
+    if (!agent) {
+      return reply.status(404).send({ error: 'Agent not found', agentId: id });
+    }
+
+    let turn = await db.getTurn(body.runId);
+    if (turn && turn.agentId !== id) {
+      return reply.status(404).send({ error: 'Run not found for agent', runId: body.runId });
+    }
+
+    if (turn && body.threadId && turn.conversationId !== body.threadId) {
+      return reply.status(409).send({
+        error: 'Run does not belong to the supplied threadId',
+        runId: body.runId,
+        threadId: body.threadId,
+      });
+    }
+
+    if (turn?.completedAt) {
+      return reply.status(409).send({ error: 'Run already completed', runId: body.runId });
+    }
+
+    const isReconnect = Boolean(turn && !turn.completedAt);
+    let conversationId = turn?.conversationId ?? body.threadId;
+    let executionParams: PreparedRunStart | null = null;
+
+    if (!isReconnect) {
+      const lastUserMessage = [...body.messages].reverse().find((message) => message.role === 'user');
+      const userContent = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content.trim() : '';
+
+      if (!userContent) {
+        return reply.status(400).send({ error: 'A non-empty user message is required' });
       }
 
-      const agent = await db.getAgent(id);
-      if (!agent) {
-        return reply.status(404).send({ error: 'Agent not found', agentId: id });
-      }
-
-      let turn = await db.getTurn(body.runId);
-      if (turn && turn.agentId !== id) {
-        return reply.status(404).send({ error: 'Run not found for agent', runId: body.runId });
-      }
-
-      if (turn && turn.conversationId !== body.threadId) {
-        return reply.status(409).send({
-          error: 'Run does not belong to the supplied threadId',
-          runId: body.runId,
-          threadId: body.threadId,
+      try {
+        const start = await runStartupService.prepareRunStart({
+          agent,
+          agentId: id,
+          content: userContent,
+          mode: 'interactive',
+          conversationId: body.threadId,
+          requestedTurnId: body.runId,
+          requireExistingConversation: false,
+          createMissingConversationWithRequestedId: Boolean(body.threadId),
+          emitUserMessageEvent: true,
         });
-      }
-
-      if (turn?.completedAt) {
-        return reply.status(409).send({ error: 'Run already completed', runId: body.runId });
-      }
-
-      const isReconnect = Boolean(turn && !turn.completedAt);
-      let conversationId = turn?.conversationId;
-      let executionParams: PreparedRunStart | null = null;
-
-      if (!isReconnect) {
-        const lastUserMessage = [...body.messages].reverse().find((message) => message.role === 'user');
-        const userContent = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content.trim() : '';
-
-        if (!userContent) {
-          return reply.status(400).send({ error: 'A non-empty user message is required' });
+        conversationId = start.conversationId;
+        turn = await db.getTurn(start.turnId);
+        executionParams = start;
+      } catch (err) {
+        if (err instanceof ConcurrencyLimitError) {
+          return reply
+            .status(err.statusCode)
+            .header('Retry-After', String(err.retryAfterSec))
+            .send({
+              error: err.message,
+              code: 'concurrency_limit_reached',
+              agentId: err.agentId,
+              maxConcurrent: err.maxConcurrent,
+              retryAfterSec: err.retryAfterSec,
+            });
         }
-
-        try {
-          const start = await runStartupService.prepareRunStart({
-            agent,
-            agentId: id,
-            content: userContent,
-            mode: 'interactive',
-            conversationId: body.threadId,
-            requestedTurnId: body.runId,
-            requireExistingConversation: true,
-            emitUserMessageEvent: true,
-          });
-          conversationId = start.conversationId;
-          turn = await db.getTurn(start.turnId);
-          executionParams = start;
-        } catch (err) {
-          if (err instanceof ConcurrencyLimitError) {
-            return reply
-              .status(err.statusCode)
-              .header('Retry-After', String(err.retryAfterSec))
-              .send({
-                error: err.message,
-                code: 'concurrency_limit_reached',
-                agentId: err.agentId,
-                maxConcurrent: err.maxConcurrent,
-                retryAfterSec: err.retryAfterSec,
-              });
-          }
-          const message = err instanceof Error ? err.message : 'Failed to start session';
-          if (message.startsWith('Conversation ')) {
-            return reply.status(404).send({ error: message, threadId: body.threadId });
-          }
-          if (message.startsWith('Turn already exists')) {
-            return reply.status(409).send({ error: message, runId: body.runId });
-          }
-          return reply.status(500).send({ error: message });
+        const message = err instanceof Error ? err.message : 'Failed to start session';
+        if (message.startsWith('Conversation ')) {
+          return reply.status(404).send({ error: message, threadId: body.threadId });
         }
+        if (message.startsWith('Turn already exists')) {
+          return reply.status(409).send({ error: message, runId: body.runId });
+        }
+        return reply.status(500).send({ error: message });
       }
+    }
 
-      if (!turn || !conversationId) {
-        return reply.status(500).send({ error: 'Failed to resolve run state' });
+    if (!turn || !conversationId) {
+      return reply.status(500).send({ error: 'Failed to resolve run state' });
+    }
+    const activeTurn = turn;
+
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const writeEvent = (event: Record<string, unknown>): void => {
+      if (reply.raw.writableEnded || reply.raw.destroyed) {
+        return;
       }
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
 
-      reply.raw.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
+    const allMessages = await db.getMessages(conversationId);
+    writeEvent({
+      type: 'MESSAGES_SNAPSHOT',
+      runId: activeTurn.id,
+      threadId: conversationId,
+      messages: allMessages.map(toAGUIMessage),
+    });
 
-      const writeEvent = (event: Record<string, unknown>): void => {
-        if (reply.raw.writableEnded || reply.raw.destroyed) {
-          return;
-        }
-        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-      };
+    const normalizer = new AGUIEventNormalizer(activeTurn.id, conversationId);
+    const unsubscribers: Array<() => void> = [];
+    let cleanedUp = false;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
 
-      const allMessages = await db.getMessages(conversationId);
-      writeEvent({
-        type: 'MESSAGES_SNAPSHOT',
-        runId: turn.id,
-        threadId: conversationId,
-        messages: allMessages.map(toAGUIMessage),
-      });
-
-      const normalizer = new AGUIEventNormalizer(turn.id, conversationId);
-      const unsubscribers: Array<() => void> = [];
-      let cleanedUp = false;
-
-      const cleanup = (): void => {
-        if (cleanedUp) {
-          return;
-        }
-        cleanedUp = true;
+    const cleanup = (): void => {
+      if (cleanedUp) {
+        return;
+      }
+      cleanedUp = true;
+      if (heartbeat) {
         clearInterval(heartbeat);
-        for (const unsubscribe of unsubscribers) {
-          unsubscribe();
-        }
-      };
+      }
+      for (const unsubscribe of unsubscribers) {
+        unsubscribe();
+      }
+    };
 
-      const subscribe = <K extends EventName>(eventName: K): void => {
-        const handler = (payload: EventMap[K]): void => {
-          if (!matchesRun(id, turn.id, payload)) {
-            return;
-          }
-
-          for (const event of normalizer.normalize(eventName, payload)) {
-            writeEvent(event);
-          }
-
-          if (eventName === 'turn.completed') {
-            cleanup();
-            if (!reply.raw.writableEnded && !reply.raw.destroyed) {
-              reply.raw.end();
-            }
-          }
-        };
-
-        eventBus.on(eventName, handler);
-        unsubscribers.push(() => eventBus.off(eventName, handler));
-      };
-
-      subscribe('turn.started');
-      subscribe('run.text_chunk');
-      subscribe('run.tool_started');
-      subscribe('run.tool_result');
-      subscribe('run.interrupted');
-      subscribe('run.interrupt_resolved');
-      subscribe('run.ag_ui_event');
-      subscribe('turn.completed');
-
-      const heartbeat = setInterval(() => {
-        if (reply.raw.writableEnded || reply.raw.destroyed) {
-          cleanup();
+    const subscribe = <K extends EventName>(eventName: K): void => {
+      const handler = (payload: EventMap[K]): void => {
+        if (!matchesRun(id, activeTurn.id, payload)) {
           return;
         }
-        reply.raw.write(': heartbeat\n\n');
-      }, 15000);
 
-      request.raw.on('close', () => {
+        for (const event of normalizer.normalize(eventName, payload)) {
+          writeEvent(event);
+        }
+
+        if (eventName === 'turn.completed') {
+          cleanup();
+          if (!reply.raw.writableEnded && !reply.raw.destroyed) {
+            reply.raw.end();
+          }
+        }
+      };
+
+      eventBus.on(eventName, handler);
+      unsubscribers.push(() => eventBus.off(eventName, handler));
+    };
+
+    subscribe('turn.started');
+    subscribe('run.text_chunk');
+    subscribe('run.tool_started');
+    subscribe('run.tool_result');
+    subscribe('run.interrupted');
+    subscribe('run.interrupt_resolved');
+    subscribe('run.ag_ui_event');
+    subscribe('turn.completed');
+
+    heartbeat = setInterval(() => {
+      if (reply.raw.writableEnded || reply.raw.destroyed) {
         cleanup();
-      });
-
-      if (executionParams) {
-        void runStartupService.launchPreparedRun(executionParams, id).catch((err) => {
-          console.error(`[ag-ui] executeSession failed for agent ${id}, turn ${executionParams?.turnId}:`, err);
-        });
+        return;
       }
+      reply.raw.write(': heartbeat\n\n');
+    }, 15000);
 
-      return reply;
-    },
-  );
+    request.raw.on('close', () => {
+      cleanup();
+    });
+
+    if (executionParams) {
+      void runStartupService.launchPreparedRun(executionParams, id).catch((err) => {
+        console.error(`[ag-ui] executeSession failed for agent ${id}, turn ${executionParams?.turnId}:`, err);
+      });
+    }
+
+    return reply;
+  };
+
+  app.post('/:id/run', runHandler);
+  app.post('/agents/:id/run', runHandler);
 }

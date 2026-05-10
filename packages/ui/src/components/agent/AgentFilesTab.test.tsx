@@ -44,7 +44,6 @@ describe('AgentFilesTab workspace upload', () => {
     uploadWorkspaceTarballMock.mockResolvedValue({ files: 1, totalBytes: 12 });
     fetchSettingsMock.mockResolvedValue({
       maxWorkspaceTarBytes: 100 * 1024 * 1024,
-      maxCheckpointBytes: 10 * 1024 * 1024,
       maxTarUploadBytes: 100 * 1024 * 1024,
       idleTimeoutMs: 60_000,
       turnTimeoutMs: 120_000,
@@ -116,7 +115,6 @@ describe('AgentFilesTab workspace upload', () => {
   it('rejects archives larger than the configured limit before uploading', async () => {
     fetchSettingsMock.mockResolvedValue({
       maxWorkspaceTarBytes: 100 * 1024 * 1024,
-      maxCheckpointBytes: 10 * 1024 * 1024,
       maxTarUploadBytes: 1024, // 1KB, very small to trigger rejection
       idleTimeoutMs: 60_000,
       turnTimeoutMs: 120_000,

@@ -42,6 +42,7 @@ import type { ToolContext, ToolDefinition } from '../tool/types.js';
 /* -------------------------------------------------------------------------- */
 
 let secrets: ResolvedSecrets = {};
+let secretsLoaded = false;
 let server: Server | null = null;
 let toolApi: { stop: () => void } | null = null;
 let _sessionTools: ToolDefinition[] = [];
@@ -332,19 +333,22 @@ function registerRoutes(router: ConnectRouter) {
 /*  Server lifecycle                                                           */
 /* -------------------------------------------------------------------------- */
 
-function buildSecretsFromEnv(): ResolvedSecrets {
-  const result: ResolvedSecrets = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) result[key] = value;
+export function buildSecretsFromEnv(env: NodeJS.ProcessEnv = process.env): ResolvedSecrets {
+  const next: ResolvedSecrets = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      next[key] = value;
+    }
   }
-  return result;
+  return next;
 }
 
 function ensureSecrets(): ResolvedSecrets {
-  if (Object.keys(secrets).length > 0) return secrets;
+  if (secretsLoaded) return secrets;
   secrets = buildSecretsFromEnv();
+  secretsLoaded = true;
   const count = Object.keys(secrets).length;
-  console.error(`[sandbox] resolved ${count} env var(s) as potential secrets`);
+  console.error(`[sandbox] resolved ${count} secret env var(s)`);
   return secrets;
 }
 
@@ -404,6 +408,9 @@ export async function stopDaemon(): Promise<void> {
     toolApi.stop();
     toolApi = null;
   }
+
+  secrets = {};
+  secretsLoaded = false;
 }
 
 /* -------------------------------------------------------------------------- */

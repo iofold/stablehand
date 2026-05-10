@@ -1,6 +1,39 @@
 import type { EventMap, EventName } from '../../events/bus.js';
 import type { AGUIProtocolEvent } from './types.js';
 
+interface A2UIRenderBlock {
+  id: string;
+  component: string;
+  props: Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isA2UIRenderTool(toolName: string): boolean {
+  return toolName === 'a2ui-render' || toolName.endsWith('__a2ui-render');
+}
+
+function parseA2UIRenderBlock(toolCallId: string, result: string): A2UIRenderBlock | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result);
+  } catch {
+    return null;
+  }
+
+  if (!isRecord(parsed) || typeof parsed.component !== 'string') {
+    return null;
+  }
+
+  return {
+    id: toolCallId,
+    component: parsed.component,
+    props: isRecord(parsed.props) ? parsed.props : {},
+  };
+}
+
 export class AGUIEventNormalizer {
   private textMessageInProgress = false;
   private currentMessageId = '';
@@ -81,7 +114,7 @@ export class AGUIEventNormalizer {
 
       case 'run.tool_result': {
         const toolResult = payload as EventMap['run.tool_result'];
-        return [{
+        const events: AGUIProtocolEvent[] = [{
           type: 'TOOL_CALL_END',
           runId: this.runId,
           threadId: this.threadId,
@@ -90,6 +123,25 @@ export class AGUIEventNormalizer {
           result: toolResult.error ?? toolResult.result,
           timestamp: toolResult.timestamp,
         }];
+        const a2uiBlock = !toolResult.error && isA2UIRenderTool(toolResult.toolName)
+          ? parseA2UIRenderBlock(toolResult.toolCallId, toolResult.result)
+          : null;
+        if (a2uiBlock) {
+          events.push({
+            type: 'CUSTOM',
+            name: 'ctxmill.a2ui.render',
+            subtype: 'a2ui_render',
+            runId: this.runId,
+            threadId: this.threadId,
+            agentId: toolResult.agentId,
+            conversationId: toolResult.conversationId,
+            toolCallId: toolResult.toolCallId,
+            toolCallName: toolResult.toolName,
+            block: a2uiBlock,
+            timestamp: toolResult.timestamp,
+          });
+        }
+        return events;
       }
 
       case 'turn.completed': {
@@ -128,9 +180,12 @@ export class AGUIEventNormalizer {
         const interrupted = payload as EventMap['run.interrupted'];
         return [{
           type: 'CUSTOM',
+          name: 'ctxmill.hitl.requested',
           runId: this.runId,
           threadId: this.threadId,
           subtype: 'hitl_pause',
+          agentId: interrupted.agentId,
+          conversationId: interrupted.conversationId,
           toolCallId: interrupted.toolCallId,
           toolName: interrupted.toolName,
           args: interrupted.args,
@@ -143,9 +198,12 @@ export class AGUIEventNormalizer {
         const interruptResolved = payload as EventMap['run.interrupt_resolved'];
         return [{
           type: 'CUSTOM',
+          name: 'ctxmill.hitl.resolved',
           runId: this.runId,
           threadId: this.threadId,
           subtype: 'hitl_resolved',
+          agentId: interruptResolved.agentId,
+          conversationId: interruptResolved.conversationId,
           interruptId: interruptResolved.interruptId,
           action: interruptResolved.action,
           timestamp: interruptResolved.timestamp,

@@ -198,7 +198,13 @@ message AgentEvent {
     ApprovalResolved approval_resolved = 5;
     ErrorEvent error = 6;
     DoneEvent done = 7;
+    CustomAgentEvent custom = 8;
   }
+}
+
+message CustomAgentEvent {
+  string subtype = 1;
+  string payload_json = 2;
 }
 
 message TextDelta {

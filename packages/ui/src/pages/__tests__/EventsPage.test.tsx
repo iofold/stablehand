@@ -117,4 +117,89 @@ describe('EventsPage', () => {
     expect(container.textContent).not.toContain('Event type filters are unavailable.');
     expect(fetchEventTypesMock).toHaveBeenCalledTimes(2);
   });
+
+  it('shows contextual loading text during the initial load', () => {
+    fetchEventsMock.mockReturnValueOnce(new Promise(() => undefined));
+    fetchEventStatsMock.mockReturnValueOnce(new Promise(() => undefined));
+    fetchEventTypesMock.mockReturnValueOnce(new Promise(() => undefined));
+
+    act(() => {
+      root.render(<EventsPage />);
+    });
+
+    expect(container.textContent).toContain('Loading event log');
+    expect(container.textContent).toContain('Fetching recent events, stats, and filters');
+  });
+
+  it('renders concise useful summaries for run and tool events', async () => {
+    fetchEventsMock.mockResolvedValueOnce({
+      events: [
+        {
+          seq: 1,
+          type: 'run.tool_started',
+          agentId: 'agent-1',
+          createdAt: Date.now(),
+          payload: JSON.stringify({
+            toolName: 'search_docs',
+            args: { query: 'checkpoint restore failures', limit: 5 },
+            requiresApproval: true,
+          }),
+        },
+        {
+          seq: 2,
+          type: 'run.tool_result',
+          agentId: 'agent-1',
+          createdAt: Date.now(),
+          payload: JSON.stringify({
+            toolName: 'search_docs',
+            result: 'Found checkpoint lifecycle notes and restore retry guidance.',
+            durationMs: 1240,
+          }),
+        },
+        {
+          seq: 3,
+          type: 'turn.started',
+          agentId: 'agent-1',
+          createdAt: Date.now(),
+          payload: JSON.stringify({
+            mode: 'background',
+            taskDescription: 'Summarize recent restore failures for the operator.',
+          }),
+        },
+        {
+          seq: 4,
+          type: 'message.committed',
+          agentId: 'agent-1',
+          createdAt: Date.now(),
+          payload: JSON.stringify({
+            role: 'assistant',
+            content: 'Restore failed because the checkpoint exceeded the configured limit.',
+          }),
+        },
+        {
+          seq: 5,
+          type: 'custom',
+          agentId: 'agent-1',
+          createdAt: Date.now(),
+          payload: JSON.stringify({
+            type: 'artifact.uploaded',
+            payload: { name: 'report.md', path: '/workspace/report.md' },
+          }),
+        },
+      ],
+      nextCursor: undefined,
+    });
+
+    act(() => {
+      root.render(<EventsPage />);
+    });
+    await flushEffects();
+
+    expect(container.textContent).toContain('Tool started: search_docs approval required');
+    expect(container.textContent).toContain('query: checkpoint restore failures');
+    expect(container.textContent).toContain('Tool result: search_docs (1.2s) - Found checkpoint lifecycle notes');
+    expect(container.textContent).toContain('Background run started: Summarize recent restore failures');
+    expect(container.textContent).toContain('Assistant message: Restore failed because');
+    expect(container.textContent).toContain('Custom artifact.uploaded: name: report.md');
+  });
 });

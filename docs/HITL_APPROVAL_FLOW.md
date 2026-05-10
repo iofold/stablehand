@@ -45,7 +45,7 @@ AG-UI stream behavior:
 - `run.interrupted` becomes `HITL_PAUSE`
 - `run.interrupt_resolved` is emitted as `CUSTOM`
 
-The dedicated session pause APIs are not the primary HITL signal. `session.paused` is used for idle/manual compatibility handling, while HITL state is driven by durable interrupt records.
+HITL state is driven by durable interrupt records. Dedicated session pause APIs and the old session-paused event are no longer supported runtime surfaces.
 
 ## Resolution Outcomes
 

@@ -152,6 +152,28 @@ describe('SessionStateStore', () => {
     expect(store.getQueue('sess-1')).toBeUndefined();
   });
 
+  it('rebinds active turn runtime state to a replacement session', () => {
+    const store = new SessionStateStore();
+    const activeController = new AbortController();
+    const queuedController = new AbortController();
+    const queued = createQueueEntry('turn-queued');
+
+    store.markTurnActive('sess-old', 'turn-active');
+    store.registerTurnController('sess-old', 'turn-active', activeController);
+    store.registerTurnController('sess-old', 'turn-queued', queuedController);
+    store.getOrCreateQueue('sess-old').push(queued);
+
+    store.rebindTurnRuntime('sess-old', 'sess-new', 'turn-active');
+
+    expect(store.getActiveTurnId('sess-old')).toBeUndefined();
+    expect(store.getActiveTurnId('sess-new')).toBe('turn-active');
+    expect(store.getTurnAbortSignal('sess-old', 'turn-active')).toBeUndefined();
+    expect(store.getTurnAbortSignal('sess-new', 'turn-active')).toBe(activeController.signal);
+    expect(store.getTurnAbortSignal('sess-new', 'turn-queued')).toBe(queuedController.signal);
+    expect(store.getQueue('sess-old')).toBeUndefined();
+    expect(store.getQueue('sess-new')).toEqual([queued]);
+  });
+
   it('serializes locks for the same conversation', async () => {
     const store = new SessionStateStore();
     const gate = deferred();

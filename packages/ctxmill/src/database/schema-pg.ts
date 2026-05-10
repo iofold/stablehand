@@ -175,8 +175,6 @@ export const sandboxSessions = pgTable('sandbox_sessions', {
   checkpointRef: text('checkpoint_ref'),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
-  pausedAt: bigint('paused_at', { mode: 'number' }),
-  pausedReason: text('paused_reason'),
   lastActivityAt: bigint('last_activity_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   restoreAttempts: integer('restore_attempts').notNull().default(0),
   lastRestoreError: text('last_restore_error'),
@@ -279,10 +277,7 @@ export const toolRequestDedup = pgTable('tool_request_dedup', {
   statusIdx: index('idx_tool_dedup_status').on(table.status),
 }));
 
-export type SandboxSessionRow = Omit<typeof sandboxSessions.$inferSelect, 'pausedAt' | 'pausedReason'> & {
-  pausedAt?: number | null;
-  pausedReason?: string | null;
-};
+export type SandboxSessionRow = typeof sandboxSessions.$inferSelect;
 export type SandboxSessionInsert = typeof sandboxSessions.$inferInsert;
 export type AgentCheckpointRow = typeof agentCheckpoints.$inferSelect;
 export type AgentCheckpointInsert = typeof agentCheckpoints.$inferInsert;

@@ -244,6 +244,42 @@ function mergeCommittedToolCall(
   };
 }
 
+function mergeToolResultIntoCommittedMessages(
+  messages: Message[],
+  toolCallId: string,
+  result: string,
+  error: string | undefined,
+): Message[] | undefined {
+  const status: ToolCallState['status'] = error ? 'error' : 'complete';
+  let changed = false;
+
+  const nextMessages = messages.map((message) => {
+    let messageChanged = false;
+
+    const toolCalls = message.toolCalls?.map((toolCall) => {
+      if (toolCall.id !== toolCallId) return toolCall;
+      messageChanged = true;
+      return { ...toolCall, result, error, status };
+    });
+
+    const parts = message.parts?.map((part) => {
+      if (part.type !== 'tool_call' || part.id !== toolCallId) return part;
+      messageChanged = true;
+      return { ...part, result, error, status };
+    });
+
+    if (!messageChanged) return message;
+    changed = true;
+    return {
+      ...message,
+      ...(toolCalls ? { toolCalls } : {}),
+      ...(parts ? { parts } : {}),
+    };
+  });
+
+  return changed ? nextMessages : undefined;
+}
+
 export const useConversationStore = create<ConversationStore>((set, get) => {
   const previewController = createPreviewController();
 
@@ -495,7 +531,11 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
 
         const state = get();
         const completedTc = state.toolCalls.get(tcId);
-        if (!completedTc) break;
+        if (!completedTc) {
+          const messages = mergeToolResultIntoCommittedMessages(state.messages, tcId, result, error);
+          if (messages) set({ messages });
+          break;
+        }
 
         const finalTc: ToolCallState = {
           ...completedTc,

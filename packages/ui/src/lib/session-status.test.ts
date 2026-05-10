@@ -8,11 +8,11 @@ import {
 
 describe('session status normalization', () => {
   it('normalizes backend sandbox status casing before counting', () => {
-    const counts = normalizeSessionStatusCounts({ active: 2, PAUSED: 1, restoring: 3, terminated: 4 } as never);
+    const counts = normalizeSessionStatusCounts({ active: 2, restoring: 3, terminated: 4 } as never);
 
-    expect(counts).toEqual({ ACTIVE: 2, PAUSED: 1, CHECKPOINTED: 0, RESTORING: 3, TERMINATED: 4 });
-    expect(countActiveSessions(counts)).toBe(6);
-    expect(countAllSessions(counts)).toBe(10);
+    expect(counts).toEqual({ ACTIVE: 2, CHECKPOINTED: 0, RESTORING: 3, TERMINATED: 4 });
+    expect(countActiveSessions(counts)).toBe(5);
+    expect(countAllSessions(counts)).toBe(9);
   });
 
   it('maps sandbox statuses to run-filter statuses', () => {

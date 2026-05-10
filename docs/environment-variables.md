@@ -45,9 +45,9 @@ sandbox Jobs.
 | `CTXMILL_K8S_NAMESPACE` | service account namespace or `default` | No | Kubernetes namespace where sandbox Jobs are created. Used only by the Kubernetes sandbox runtime. | `ctxmill` |
 | `CTXMILL_K8S_DATA_HOST_PATH` | `CTXMILL_DATA_DIR` or `/var/lib/ctxmill/data` | No | Host path mounted into Kubernetes sandbox Jobs for workspace data. Use only on single-node/dev clusters unless the path is backed by cluster storage. | `/var/lib/ctxmill/dev2/data` |
 | `CTXMILL_K8S_POD_READY_TIMEOUT_MS` | `60000` | No | How long the Kubernetes runtime waits for a sandbox Job Pod to become `Running` and get a Pod IP. | `120000` |
+| `CTXMILL_CONTAINER_STARTUP_GRACE_MS` | Docker: `90000`; Kubernetes: pod-ready timeout + `30000` | No | Grace window before lifecycle reconciliation may treat a newly-created managed sandbox with no DB session row as an orphan. | `390000` |
 | `SANDBOX_PORT` | `50051` | No | Port the sandbox gRPC daemon listens on. | `50051` |
 | `PTC_PORT` | `8080` | No | Port for the Programmatic Tool Calling (PTC) API in sandboxes. | `8080` |
-| `SECRETS_PATH` | `/run/secrets/config.json` | No | Path to the secrets JSON file inside the sandbox. | `/tmp/secrets.json` |
 | `TOOL_PROXY_TIMEOUT_MS` | `300000` | No | Timeout for tool calls proxied from sandbox to orchestrator. | `600000` |
 | `CTXMILL_SANDBOX_OTEL_TRACES_EXPORTER` | `OTEL_TRACES_EXPORTER` or `none` | No | Trace exporter for sandbox run containers. Set to `otlp` with `docker-compose.signoz.yml`. | `otlp` |
 | `CTXMILL_SANDBOX_OTEL_EXPORTER_OTLP_ENDPOINT` | `OTEL_EXPORTER_OTLP_ENDPOINT` or `http://host.docker.internal:4318` | No | OTLP HTTP endpoint passed to sandbox run containers. Use the dev2 tailnet collector endpoint for centralized SigNoz telemetry. | `https://otlp-signoz.staging.example.com` |
@@ -130,7 +130,6 @@ Each setting also supports an **environment variable override** that sets the de
 | `defaultPidsLimit` | `CTXMILL_DEFAULT_PIDS_LIMIT` | `256` | Default PID limit for sandboxes. |
 | `defaultTimeoutSec` | `CTXMILL_DEFAULT_TIMEOUT_SEC` | `43,200` (12h) | Default hard timeout for sandbox containers. |
 | `maxWorkspaceTarBytes` | `CTXMILL_MAX_WORKSPACE_TAR_BYTES` | `100MB` | Maximum size for workspace snapshots. |
-| `maxCheckpointBytes` | `CTXMILL_MAX_CHECKPOINT_BYTES` | `100MB` | Stored settings/API cap for checkpoint payloads. Note: the sandbox-daemon validator still defaults to `5MB` today. |
 | `maxTarUploadBytes` | `CTXMILL_MAX_TAR_UPLOAD_BYTES` | `100MB` | Maximum size for tar uploads. |
 | `queueTimeoutMs` | `CTXMILL_QUEUE_TIMEOUT_MS` | `600,000` (10m) | Timeout for container queue wait. |
 | `reconciliationIntervalMs` | `CTXMILL_RECONCILIATION_INTERVAL_MS` | `300,000` (5m) | Interval for session reconciliation checks. |

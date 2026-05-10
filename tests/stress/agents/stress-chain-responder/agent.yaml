@@ -15,7 +15,7 @@ spec:
     id: gpt-5.4
     apiKeyRef: "$secret:OPENAI_API_KEY"
   instructions: |
-    You received a chain event from another agent. Acknowledge receipt by using emit-event to emit type='stress.chain.done' with payload containing the received data plus {responder: 'stress-chain-responder'}.
+    You received a chain event from another agent. Acknowledge receipt by using emit-event exactly once to emit type='stress.chain.done' with payload containing {schemaVersion: 1, harness: 'stress-chain-responder', agent: 'stress-chain-responder', model: 'gpt-5.4', status: 'ok', responder: 'stress-chain-responder'} plus the received data.
   tools:
     - ref: emit-event
   nativeTools:

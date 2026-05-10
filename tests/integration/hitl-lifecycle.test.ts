@@ -152,7 +152,7 @@ describe('HITL lifecycle boundary conditions', () => {
       await expect(approval).resolves.toMatchObject({ action: 'suspend' });
       expect(onTimeout).toHaveBeenCalledWith(run.id);
       expect(registry.getRun(run.id)?.status).toBe('suspended');
-      expect(registry.getRun(run.id)?.pausedReason).toBe('hitl_timeout');
+      expect(registry.getRun(run.id)?.suspendReason).toBe('hitl_timeout');
 
       manager.shutdown();
     });

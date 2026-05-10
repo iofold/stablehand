@@ -13,9 +13,9 @@ import { WorkspacePreparationService } from '../../sandbox/workspace-preparation
 import type { AgentDefinition } from '../../types.js';
 import {
   cleanupSession,
-  copyBaseToSession,
-  getSessionDir,
-  getSessionWorkspacePath,
+  ensureConversationWorkspace,
+  getConversationDir,
+  getConversationWorkspacePath,
 } from '../../workspace/session-workspace.js';
 import {
   retryGrpcCall,
@@ -40,9 +40,9 @@ function asStringArray(value: unknown): string[] | undefined {
 export interface SessionRuntimeFactoryDeps {
   containerManager: Pick<SandboxContainerManager, 'createContainer' | 'startContainer' | 'stopContainer' | 'removeContainer'>;
   db: Pick<DatabaseRepository, 'createSandboxSession'>;
-  buildSandboxSecrets: (agentId: string) => Readonly<Record<string, string>>;
+  buildSandboxSecrets: (agentId: string) => Promise<Readonly<Record<string, string>>>;
   resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[], agentId?: string) => ToolMetadata[];
-  checkConcurrencyLimit: (agentId: string) => void;
+  checkConcurrencyLimit: (agentId: string, options?: { excludeReservationId?: string }) => void;
   logger: Logger;
   dataDir?: string;
 }
@@ -54,12 +54,15 @@ export class SessionRuntimeFactory {
     conversationId: string,
     agentDef: AgentDefinition,
     agentId?: string,
+    options?: { concurrencyReservationId?: string },
   ): Promise<SessionRecord> {
     const harnessName = agentDef.harness ?? 'langgraph';
     const sessionId = randomUUID();
     const effectiveAgentId = agentId ?? agentDef.name;
 
-    this.deps.checkConcurrencyLimit(effectiveAgentId);
+    this.deps.checkConcurrencyLimit(effectiveAgentId, {
+      excludeReservationId: options?.concurrencyReservationId,
+    });
 
     this.deps.logger.info(
       `${TAG} creating fresh session ${sessionId} for conversation ${conversationId} (harness=${harnessName})`,
@@ -67,20 +70,22 @@ export class SessionRuntimeFactory {
 
     let workspaceDir = agentDef.workspaceDir;
     let sessionWorkspaceDir: string | undefined;
-    let sessionDir: string | undefined;
+    let conversationDir: string | undefined;
+    let createdConversationWorkspace = false;
     let createdContainerId: string | undefined;
 
     try {
       if (this.deps.dataDir && agentDef.workspaceDir) {
-        sessionDir = getSessionDir(this.deps.dataDir, effectiveAgentId, sessionId);
-        await copyBaseToSession(agentDef.workspaceDir, sessionDir);
-        sessionWorkspaceDir = getSessionWorkspacePath(this.deps.dataDir, effectiveAgentId, sessionId);
-        workspaceDir = sessionWorkspaceDir;
+        conversationDir = getConversationDir(this.deps.dataDir, effectiveAgentId, conversationId);
+        const preparedWorkspace = await ensureConversationWorkspace(agentDef.workspaceDir, conversationDir);
+        createdConversationWorkspace = preparedWorkspace.created;
+        sessionWorkspaceDir = preparedWorkspace.workspaceDir;
+        workspaceDir = preparedWorkspace.workspaceDir;
 
-        this.deps.logger.debug(`${TAG} created session workspace at ${sessionWorkspaceDir}`);
+        this.deps.logger.debug(`${TAG} using conversation workspace at ${sessionWorkspaceDir}`);
       }
 
-      if (workspaceDir && agentDef.workspaceContent) {
+      if (workspaceDir && agentDef.workspaceContent && (!this.deps.dataDir || createdConversationWorkspace)) {
         const workspacePreparation = new WorkspacePreparationService({ logger: this.deps.logger });
         await workspacePreparation.prepare({
           workspaceDir,
@@ -112,7 +117,7 @@ export class SessionRuntimeFactory {
       }
 
       const sandboxSecrets = {
-        ...this.deps.buildSandboxSecrets(effectiveAgentId),
+        ...(await this.deps.buildSandboxSecrets(effectiveAgentId)),
         ...getRuntimeSandboxSecrets(agentDef),
       };
       const secretKeys = Object.keys(sandboxSecrets);
@@ -120,6 +125,7 @@ export class SessionRuntimeFactory {
 
       const containerInfo = await this.deps.containerManager.createContainer({
         sessionId,
+        conversationId,
         agentId: effectiveAgentId,
         harnessName,
         workspaceDir,
@@ -190,7 +196,7 @@ export class SessionRuntimeFactory {
         sessionWorkspaceDir,
       };
     } catch (err) {
-      await this.cleanupFreshSessionFailure(sessionId, createdContainerId, sessionDir);
+      await this.cleanupFreshSessionFailure(sessionId, createdContainerId, conversationDir, createdConversationWorkspace);
       throw err;
     }
   }
@@ -198,7 +204,8 @@ export class SessionRuntimeFactory {
   private async cleanupFreshSessionFailure(
     sessionId: string,
     containerId: string | undefined,
-    sessionDir: string | undefined,
+    conversationDir: string | undefined,
+    cleanupWorkspace: boolean,
   ): Promise<void> {
     if (containerId) {
       try {
@@ -214,23 +221,23 @@ export class SessionRuntimeFactory {
       }
     }
 
-    if (!sessionDir) {
+    if (!conversationDir || !cleanupWorkspace) {
       return;
     }
 
     try {
-      await cleanupSession(sessionDir);
+      await cleanupSession(conversationDir);
     } catch (err) {
       this.deps.logger.warn(`${TAG} workspace cleanup failed during startup rollback for session ${sessionId}:`, err);
     }
   }
 
-  async getExistingSessionWorkspaceDir(agentId: string, sessionId: string): Promise<string | undefined> {
+  async getExistingConversationWorkspaceDir(agentId: string, conversationId: string): Promise<string | undefined> {
     if (!this.deps.dataDir) {
       return undefined;
     }
 
-    const candidatePath = getSessionWorkspacePath(this.deps.dataDir, agentId, sessionId);
+    const candidatePath = getConversationWorkspacePath(this.deps.dataDir, agentId, conversationId);
     try {
       await fs.access(candidatePath);
       return candidatePath;

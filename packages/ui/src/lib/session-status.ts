@@ -3,7 +3,6 @@ import type { ApiSessionStatusCounts } from '@ctxmill/shared';
 const SESSION_STATUS_ALIASES: Record<string, string> = {
   active: 'ACTIVE',
   running: 'ACTIVE',
-  paused: 'PAUSED',
   checkpointed: 'CHECKPOINTED',
   restoring: 'RESTORING',
   terminated: 'TERMINATED',
@@ -22,7 +21,7 @@ export function normalizeSessionStatus(status: string | null | undefined): strin
 
 export function normalizeRunStatus(status: string | null | undefined): string {
   const normalized = normalizeSessionStatus(status);
-  if (normalized === 'ACTIVE' || normalized === 'PAUSED' || normalized === 'RESTORING') return 'running';
+  if (normalized === 'ACTIVE' || normalized === 'RESTORING') return 'running';
   if (normalized === 'CHECKPOINTED') return 'completed';
   if (normalized === 'TERMINATED') return 'cancelled';
   return normalized.toLowerCase();
@@ -35,7 +34,6 @@ export function normalizeSessionStatusCounts(
 
   const normalized: ApiSessionStatusCounts = {
     ACTIVE: 0,
-    PAUSED: 0,
     CHECKPOINTED: 0,
     RESTORING: 0,
     TERMINATED: 0,
@@ -53,14 +51,13 @@ export function normalizeSessionStatusCounts(
 
 export function countActiveSessions(stats?: Partial<ApiSessionStatusCounts> | null): number {
   const normalized = normalizeSessionStatusCounts(stats);
-  return (normalized?.ACTIVE ?? 0) + (normalized?.PAUSED ?? 0) + (normalized?.RESTORING ?? 0);
+  return (normalized?.ACTIVE ?? 0) + (normalized?.RESTORING ?? 0);
 }
 
 export function countAllSessions(stats?: Partial<ApiSessionStatusCounts> | null): number {
   const normalized = normalizeSessionStatusCounts(stats);
   return (
     (normalized?.ACTIVE ?? 0)
-    + (normalized?.PAUSED ?? 0)
     + (normalized?.CHECKPOINTED ?? 0)
     + (normalized?.RESTORING ?? 0)
     + (normalized?.TERMINATED ?? 0)
@@ -73,7 +70,6 @@ export function describeSessionCounts(stats?: Partial<ApiSessionStatusCounts> | 
 
   const parts = [];
   if ((normalized.ACTIVE ?? 0) > 0) parts.push(`${normalized.ACTIVE} active`);
-  if ((normalized.PAUSED ?? 0) > 0) parts.push(`${normalized.PAUSED} paused`);
   if ((normalized.RESTORING ?? 0) > 0) parts.push(`${normalized.RESTORING} restoring`);
   if ((normalized.CHECKPOINTED ?? 0) > 0) parts.push(`${normalized.CHECKPOINTED} checkpointed`);
   if ((normalized.TERMINATED ?? 0) > 0) parts.push(`${normalized.TERMINATED} terminated`);

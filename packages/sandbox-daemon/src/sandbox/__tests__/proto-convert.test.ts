@@ -430,6 +430,33 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
         },
       },
       {
+        event: {
+          type: 'custom_agui_event',
+          event: {
+            type: 'CUSTOM',
+            timestamp: 1,
+            runId: '',
+            subtype: 'claude_hook',
+            lifecycle: 'response',
+            hookEvent: 'Stop',
+            output: '{"decision":"block"}',
+          },
+        },
+        expectedCase: 'custom',
+        assert: (payload) => {
+          if (payload.event.case !== 'custom') {
+            throw new Error('Expected custom payload');
+          }
+          expect(payload.event.value.subtype).toBe('claude_hook');
+          expect(JSON.parse(payload.event.value.payloadJson)).toMatchObject({
+            subtype: 'claude_hook',
+            lifecycle: 'response',
+            hookEvent: 'Stop',
+            output: '{"decision":"block"}',
+          });
+        },
+      },
+      {
         event: { type: 'error', error: 'runtime exploded' },
         expectedCase: 'error',
         assert: (payload) => {

@@ -26,18 +26,23 @@ export async function fileRoutes(
       const { id } = request.params;
       const query = request.query as { path?: string; sessionId?: string };
       const agent = getRequestAgent(request);
+      let conversationId: string | null | undefined;
+      let sandboxSessionId: string | undefined;
 
       if (query.sessionId) {
         const run = await db.getTurn(query.sessionId);
         if (!run || run.agentId !== id) {
           return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
+        conversationId = run.conversationId;
+        sandboxSessionId = run.sessionId ?? undefined;
       }
 
       const baseDir = resolveBaseDir(agent, {
-        sessionId: query.sessionId,
+        conversationId,
+        sandboxSessionId,
         dataDir,
-      } as Parameters<typeof resolveBaseDir>[1]);
+      });
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -92,6 +97,8 @@ export async function fileRoutes(
       const { id } = request.params;
       const query = request.query as { path?: string; sessionId?: string };
       const agent = getRequestAgent(request);
+      let conversationId: string | null | undefined;
+      let sandboxSessionId: string | undefined;
 
       if (!query.path) {
         return reply.status(400).send({ error: 'path query parameter is required' });
@@ -102,12 +109,15 @@ export async function fileRoutes(
         if (!run || run.agentId !== id) {
           return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
+        conversationId = run.conversationId;
+        sandboxSessionId = run.sessionId ?? undefined;
       }
 
       const baseDir = resolveBaseDir(agent, {
-        sessionId: query.sessionId,
+        conversationId,
+        sandboxSessionId,
         dataDir,
-      } as Parameters<typeof resolveBaseDir>[1]);
+      });
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -163,6 +173,8 @@ export async function fileRoutes(
       const query = request.query as { sessionId?: string };
       const body = request.body as { path?: string; content?: string };
       const agent = getRequestAgent(request);
+      let conversationId: string | null | undefined;
+      let sandboxSessionId: string | undefined;
 
       if (!body.path || typeof body.content !== 'string') {
         return reply.status(400).send({ error: 'path and content are required' });
@@ -173,12 +185,15 @@ export async function fileRoutes(
         if (!run || run.agentId !== id) {
           return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
+        conversationId = run.conversationId;
+        sandboxSessionId = run.sessionId ?? undefined;
       }
 
       const baseDir = resolveBaseDir(agent, {
-        sessionId: query.sessionId,
+        conversationId,
+        sandboxSessionId,
         dataDir,
-      } as Parameters<typeof resolveBaseDir>[1]);
+      });
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -215,6 +230,8 @@ export async function fileRoutes(
       const query = request.query as { sessionId?: string };
       const body = request.body as { path?: string; content?: string };
       const agent = getRequestAgent(request);
+      let conversationId: string | null | undefined;
+      let sandboxSessionId: string | undefined;
 
       if (!body.path || typeof body.content !== 'string') {
         return reply.status(400).send({ error: 'path and content are required' });
@@ -225,12 +242,15 @@ export async function fileRoutes(
         if (!run || run.agentId !== id) {
           return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
+        conversationId = run.conversationId;
+        sandboxSessionId = run.sessionId ?? undefined;
       }
 
       const baseDir = resolveBaseDir(agent, {
-        sessionId: query.sessionId,
+        conversationId,
+        sandboxSessionId,
         dataDir,
-      } as Parameters<typeof resolveBaseDir>[1]);
+      });
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }
@@ -272,6 +292,8 @@ export async function fileRoutes(
       const { id } = request.params;
       const query = request.query as { path?: string; sessionId?: string };
       const agent = getRequestAgent(request);
+      let conversationId: string | null | undefined;
+      let sandboxSessionId: string | undefined;
 
       if (!query.path) {
         return reply.status(400).send({ error: 'path query parameter is required' });
@@ -282,12 +304,15 @@ export async function fileRoutes(
         if (!run || run.agentId !== id) {
           return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
         }
+        conversationId = run.conversationId;
+        sandboxSessionId = run.sessionId ?? undefined;
       }
 
       const baseDir = resolveBaseDir(agent, {
-        sessionId: query.sessionId,
+        conversationId,
+        sandboxSessionId,
         dataDir,
-      } as Parameters<typeof resolveBaseDir>[1]);
+      });
       if (!baseDir) {
         return reply.status(500).send({ error: 'Agent has no workspace configured' });
       }

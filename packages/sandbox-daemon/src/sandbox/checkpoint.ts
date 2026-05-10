@@ -4,7 +4,7 @@
  * v2 format: structured envelope + opaque harness state blob.
  *
  * Security: Checkpoints MUST NOT contain resolved secret values (API keys,
- * tokens). Secrets are injected fresh on resume via tmpfs mount.
+ * tokens). Secrets are injected fresh on resume via sandbox environment.
  */
 
 import type { AgentEvent, HarnessExportedState } from '../harness/types.js';

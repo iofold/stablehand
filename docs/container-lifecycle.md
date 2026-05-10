@@ -39,17 +39,14 @@ Any live container can also be terminated and removed.
 Key points:
 - There is no persisted `FROZEN` state in the current runtime.
 - Automatic idle handling checkpoints sessions directly.
-- `PAUSED` is a compatibility/manual pause state reached via `pauseSession()` or the `/freeze` API alias.
 - HITL is modeled through durable interrupt records plus `run.interrupted` / `run.interrupt_resolved`, not through a distinct sandbox-session status.
 
 ### Transitions
 1. **Start**: Container created and started via `ContainerManager`.
 2. **Activate**: The orchestrator opens the sandbox session and begins delivering turns.
-3. **Manual Pause**: A live container is paused via `docker pause` through `pauseSession()` / `/freeze`.
-4. **Resume**: A paused container is unpaused via `resumeSession()` / `/unfreeze`.
-5. **Checkpoint**: The harness exports checkpoint state, workspace diff is captured, and the container is removed.
-6. **Restore**: A checkpointed session provisions a fresh container and restores harness/workspace state.
-7. **Cleanup**: Explicit kill, reconciliation, or timeout removes the container and marks the session terminal.
+3. **Checkpoint**: The harness exports checkpoint state, workspace diff is captured, and the container is removed.
+4. **Restore**: A checkpointed session provisions a fresh container and restores harness/workspace state.
+5. **Cleanup**: Explicit kill, reconciliation, or timeout removes the container and marks the session terminal.
 
 ## Lifecycle Phases
 
@@ -63,7 +60,7 @@ Containers are created using the `ctxmill/harness-{harness}:latest` images.
   - `ctxmill.harness`: Harness type (for example `langgraph`)
   - `ctxmill.started-at`: ISO timestamp
   - `ctxmill.timeout`: Maximum run duration in seconds
-- **Secrets**: Injected via a `tmpfs` mount at `/run/secrets/config.json`.
+- **Secrets**: Injected into the sandbox container environment at session startup / restore.
 
 ### 2. Startup
 - **Health Check**: The orchestrator polls the container gRPC endpoint on port `50051` until it responds.
@@ -74,12 +71,7 @@ Containers are created using the `ctxmill/harness-{harness}:latest` images.
 - **Tool Execution**: Tools run either inside the sandbox or proxied back to the orchestrator.
 - **Event Streaming**: Turn, tool, and message events are rebroadcast to SSE clients through `SSEBroadcaster`.
 
-### 4. Paused
-- **Trigger**: Manual compatibility pause via `pauseSession()` / `/freeze`.
-- **Action**: `docker pause` freezes processes while keeping container memory intact.
-- **Note**: Automatic idle lifecycle does not pass through `PAUSED`; it checkpoints directly.
-
-### 5. Checkpointed
+### 4. Checkpointed
 - **Trigger**: Idle timeout, explicit suspend, or recovery flow.
 - **Action**:
   1. Harness state is exported to checkpoint payloads.
@@ -87,11 +79,11 @@ Containers are created using the `ctxmill/harness-{harness}:latest` images.
   3. Container is stopped and removed.
   4. Session status in DB becomes `CHECKPOINTED`.
 
-### 6. Restoring
+### 5. Restoring
 - **Trigger**: A new turn or interrupt resolution targets a checkpointed session.
 - **Action**: A new container is provisioned, secrets are re-injected, checkpoint state is restored, and the session returns to `ACTIVE`.
 
-### 7. Cleanup
+### 6. Cleanup
 Containers are removed when:
 - The session is explicitly killed.
 - Reconciliation determines the container is orphaned or expired.
@@ -178,7 +170,7 @@ The orchestrator will reconcile the missing container on the next lifecycle pass
 Human-in-the-loop approvals are durable, but they are not modeled as a separate lifecycle state.
 
 1. An approval request persists a pending interrupt and emits `run.interrupted`.
-2. The session may stay live, be manually paused, or later be checkpointed through normal lifecycle rules.
+2. The session may stay live or later be checkpointed through normal lifecycle rules.
 3. When the user resolves the interrupt, the orchestrator resumes the matching session or restores it from checkpoint and delivers a continuation turn.
 
 ## Troubleshooting

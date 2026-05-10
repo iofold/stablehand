@@ -13,7 +13,6 @@ export interface ApiAgentResourceLimits {
 export const API_SESSION_STATUSES = [
   'QUEUED',
   'ACTIVE',
-  'PAUSED',
   'CHECKPOINTED',
   'RESTORING',
   'TERMINATED',
@@ -24,7 +23,7 @@ export const API_SESSION_STATUSES = [
 ] as const;
 
 export type ApiSessionStatus = typeof API_SESSION_STATUSES[number];
-export type SandboxSessionStatus = Extract<ApiSessionStatus, 'ACTIVE' | 'PAUSED' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED'>;
+export type SandboxSessionStatus = Extract<ApiSessionStatus, 'ACTIVE' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED'>;
 
 /** Agent as returned by GET /api/agents and GET /api/agents/:id */
 export interface ApiAgent {
@@ -68,8 +67,6 @@ export interface ApiAgentSession {
   error?: string;
   taskDescription?: string;
   messageCount?: number;
-  pausedAt?: number | null;
-  pausedReason?: string | null;
 }
 
 /** Message as returned by GET /api/agents/:id/conversations/:cid/messages */

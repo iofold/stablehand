@@ -56,6 +56,7 @@ export interface SessionStatePort {
   getActiveTurnId(sessionId: string): string | undefined;
   markTurnActive(sessionId: string, turnId: string): void;
   markTurnInactive(sessionId: string, turnId?: string): void;
+  rebindTurnRuntime(previousSessionId: string, nextSessionId: string, turnId: string): void;
   registerTurnController(sessionId: string, turnId: string, controller: AbortController): void;
   getTurnAbortSignal(sessionId: string, turnId: string): AbortSignal | undefined;
   abortTurn(sessionId: string, turnId: string): boolean;

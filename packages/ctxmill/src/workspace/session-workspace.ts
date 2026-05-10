@@ -35,8 +35,15 @@ export function getSessionWorkspacePath(dataDir: string, agentId: string, sessio
   return resolve(join(dataDir, 'agents', agentId, 'sessions', sessionId, 'workspace'));
 }
 
-export async function copyBaseToSession(baseWorkspaceDir: string, sessionDir: string): Promise<void> {
-  const workspaceDir = join(sessionDir, 'workspace');
+export function getConversationDir(dataDir: string, agentId: string, conversationId: string): string {
+  return resolve(join(dataDir, 'agents', agentId, 'conversations', conversationId));
+}
+
+export function getConversationWorkspacePath(dataDir: string, agentId: string, conversationId: string): string {
+  return resolve(join(dataDir, 'agents', agentId, 'conversations', conversationId, 'workspace'));
+}
+
+async function copyBaseIntoWorkspace(baseWorkspaceDir: string, workspaceDir: string): Promise<void> {
   await fs.mkdir(workspaceDir, { recursive: true });
 
   try {
@@ -52,6 +59,32 @@ export async function copyBaseToSession(baseWorkspaceDir: string, sessionDir: st
   }
 
   await chownRecursive(workspaceDir);
+}
+
+export async function copyBaseToSession(baseWorkspaceDir: string, sessionDir: string): Promise<void> {
+  await copyBaseIntoWorkspace(baseWorkspaceDir, join(sessionDir, 'workspace'));
+}
+
+export async function ensureConversationWorkspace(
+  baseWorkspaceDir: string,
+  conversationDir: string,
+): Promise<{ workspaceDir: string; created: boolean }> {
+  const workspaceDir = join(conversationDir, 'workspace');
+
+  try {
+    const existing = await fs.stat(workspaceDir);
+    if (!existing.isDirectory()) {
+      throw new Error(`Conversation workspace exists but is not a directory: ${workspaceDir}`);
+    }
+    return { workspaceDir, created: false };
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  await copyBaseIntoWorkspace(baseWorkspaceDir, workspaceDir);
+  return { workspaceDir, created: true };
 }
 
 export async function cleanupSession(sessionDir: string): Promise<void> {

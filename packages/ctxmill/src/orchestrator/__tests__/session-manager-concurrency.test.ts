@@ -149,7 +149,7 @@ function createManager(options?: { turnTimeoutMs?: number }) {
     db,
     lifecyclePolicy,
     workspaceDiffService: new WorkspaceDiffService({ containerManager }),
-    buildSandboxSecrets: () => ({}),
+    buildSandboxSecrets: async () => ({}),
     logger,
     config: {
       idleTimeoutMs: 60_000,

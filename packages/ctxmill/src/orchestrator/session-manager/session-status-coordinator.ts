@@ -7,8 +7,6 @@ interface StatusExtra {
   containerName?: string | null;
   containerId?: string | null;
   checkpointRef?: string | null;
-  pausedAt?: number | null;
-  pausedReason?: string | null;
   restoreAttempts?: number | null;
   lastRestoreError?: string | null;
 }
@@ -85,15 +83,6 @@ function normalizeStatusExtra(
   clearRuntime: boolean,
 ): StatusExtra | undefined {
   const normalized: StatusExtra = extra ? { ...extra } : {};
-
-  if (toStatus !== 'PAUSED') {
-    if (normalized.pausedAt === undefined) {
-      normalized.pausedAt = null;
-    }
-    if (normalized.pausedReason === undefined) {
-      normalized.pausedReason = null;
-    }
-  }
 
   if (clearRuntime) {
     if (normalized.containerName === undefined) {

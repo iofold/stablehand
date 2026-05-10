@@ -181,8 +181,6 @@ function createDbSession(
     createdAt: overrides?.createdAt ?? Date.now(),
     updatedAt: overrides?.updatedAt ?? Date.now(),
     lastActivityAt: overrides?.lastActivityAt ?? Date.now(),
-    pausedAt: status === 'PAUSED' ? Date.now() : undefined,
-    pausedReason: status === 'PAUSED' ? 'idle' : undefined,
   };
 }
 
@@ -258,7 +256,7 @@ function createManager(options?: { turnTimeoutMs?: number }) {
   const grpcClient = createMockGrpcClient();
   const resolveToolsForAgent = vi.fn().mockReturnValue([]);
   const logger = createLogger();
-  const buildSandboxSecrets = vi.fn().mockReturnValue({});
+  const buildSandboxSecrets = vi.fn().mockResolvedValue({});
 
   connectMocks.createConnectTransportMock.mockReturnValue({});
   connectMocks.createClientMock.mockReturnValue(grpcClient);
@@ -322,7 +320,7 @@ describe('SandboxSessionManager contract', () => {
 
     it('merges runtime sandbox secrets into fresh session containers', async () => {
       const { manager, containerManager, buildSandboxSecrets } = createManager();
-      buildSandboxSecrets.mockReturnValue({
+      buildSandboxSecrets.mockResolvedValue({
         OPENAI_API_KEY: 'base-key',
         PILOT_SERVICE_TOKEN: 'stored-token',
       });
@@ -422,10 +420,6 @@ describe('SandboxSessionManager contract', () => {
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         'sess-1',
         'RESTORING',
-        expect.objectContaining({
-          pausedAt: null,
-          pausedReason: null,
-        }),
       );
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         'sess-1',
@@ -461,17 +455,11 @@ describe('SandboxSessionManager contract', () => {
         expect.objectContaining({
           containerId: null,
           containerName: null,
-          pausedAt: null,
-          pausedReason: null,
         }),
       );
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         'sess-1',
         'RESTORING',
-        expect.objectContaining({
-          pausedAt: null,
-          pausedReason: null,
-        }),
       );
       expect(session).toMatchObject({ sessionId: 'sess-1', status: 'ACTIVE' });
     });
@@ -652,8 +640,6 @@ describe('SandboxSessionManager contract', () => {
           checkpointRef: 'ckpt-1',
           containerId: null,
           containerName: null,
-          pausedAt: null,
-          pausedReason: null,
         }),
       );
       expect(lifecyclePolicy.cancelIdleTimeout).toHaveBeenCalledWith(session.sessionId);
@@ -663,6 +649,46 @@ describe('SandboxSessionManager contract', () => {
       expect(internals.stateStore.agentDefs.has('conv-1')).toBe(false);
       expect(internals.stateStore.turnQueues.has(session.sessionId)).toBe(false);
       expect(internals.stateStore.activeTurns.has(session.sessionId)).toBe(false);
+    });
+
+    it('rejects API-style suspend while a turn is active without calling the sandbox', async () => {
+      const { manager, db, containerManager, lifecyclePolicy, grpcClient, internals } = createManager();
+      const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+      internals.stateStore.markTurnActive(session.sessionId, 'turn-active');
+
+      await expect(manager.suspendSession(session.sessionId, 'api_request')).rejects.toMatchObject({
+        sessionId: session.sessionId,
+        turnId: 'turn-active',
+      });
+
+      expect(grpcClient.suspendSession).not.toHaveBeenCalled();
+      expect(db.createCheckpointV2).not.toHaveBeenCalled();
+      expect(lifecyclePolicy.cancelIdleTimeout).not.toHaveBeenCalled();
+      expect(containerManager.stopContainer).not.toHaveBeenCalled();
+      expect(containerManager.removeContainer).not.toHaveBeenCalled();
+      expect(internals.stateStore.activeTurns.get(session.sessionId)).toBe('turn-active');
+    });
+
+    it('allows internal safe-phase suspend while a turn is active', async () => {
+      const { manager, grpcClient, internals } = createManager();
+      const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+      internals.stateStore.markTurnActive(session.sessionId, 'turn-active');
+
+      grpcClient.suspendSession.mockResolvedValueOnce({
+        sessionCheckpoint: {
+          checkpointVersion: 2,
+          sessionId: session.sessionId,
+          conversationId: session.conversationId,
+          harnessName: session.harnessName,
+          harnessState: {},
+        } as unknown as SessionCheckpoint,
+      });
+
+      await manager.suspendSession(session.sessionId, 'hitl-timeout', { allowActiveTurn: true });
+
+      expect(grpcClient.suspendSession).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: session.sessionId, reason: 'hitl-timeout' }),
+      );
     });
 
     it('throws when suspend is requested after the session has already been checkpointed and evicted', async () => {
@@ -712,10 +738,6 @@ describe('SandboxSessionManager contract', () => {
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         session.sessionId,
         'RESTORING',
-        expect.objectContaining({
-          pausedAt: null,
-          pausedReason: null,
-        }),
       );
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         session.sessionId,
@@ -745,8 +767,6 @@ describe('SandboxSessionManager contract', () => {
         expect.objectContaining({
           containerId: null,
           containerName: null,
-          pausedAt: null,
-          pausedReason: null,
         }),
       );
       expect(internals.stateStore.sessions.has('conv-1')).toBe(false);
@@ -770,8 +790,6 @@ describe('SandboxSessionManager contract', () => {
         expect.objectContaining({
           containerId: null,
           containerName: null,
-          pausedAt: null,
-          pausedReason: null,
         }),
       );
       expect(db.updateSandboxSessionStatus).toHaveBeenNthCalledWith(
@@ -781,8 +799,6 @@ describe('SandboxSessionManager contract', () => {
         expect.objectContaining({
           containerId: null,
           containerName: null,
-          pausedAt: null,
-          pausedReason: null,
         }),
       );
     });

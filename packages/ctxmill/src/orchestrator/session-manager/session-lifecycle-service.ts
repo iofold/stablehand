@@ -23,6 +23,22 @@ import type {
 
 const TAG = '[SandboxSessionManager]';
 
+export interface SuspendSessionOptions {
+  allowActiveTurn?: boolean;
+}
+
+export class ActiveTurnSuspendError extends Error {
+  readonly sessionId: string;
+  readonly turnId: string;
+
+  constructor(sessionId: string, turnId: string) {
+    super(`Cannot suspend session ${sessionId} while turn ${turnId} is active`);
+    this.name = 'ActiveTurnSuspendError';
+    this.sessionId = sessionId;
+    this.turnId = turnId;
+  }
+}
+
 export interface SessionLifecycleServiceDeps {
   stateStore: SessionStateStore;
   recoveryCoordinator: SessionRecoveryCoordinator;
@@ -30,6 +46,7 @@ export interface SessionLifecycleServiceDeps {
     conversationId: string,
     agentDef: AgentDefinition,
     agentId?: string,
+    options?: { concurrencyReservationId?: string },
   ) => Promise<SessionRecord>;
   db: Pick<
     DatabaseRepository,
@@ -54,6 +71,7 @@ export class SessionLifecycleService {
     conversationId: string,
     agentDef: AgentDefinition,
     agentId?: string,
+    options?: { concurrencyReservationId?: string },
   ): Promise<SessionRecord> {
     return this.deps.stateStore.withConversationLock(conversationId, async () => {
       this.deps.stateStore.setAgentDef(conversationId, agentDef);
@@ -65,7 +83,7 @@ export class SessionLifecycleService {
 
       const dbSession = await this.deps.db.getSandboxSessionByConversation(conversationId);
       if (!dbSession) {
-        const fresh = await this.deps.createFreshSession(conversationId, agentDef, agentId);
+        const fresh = await this.deps.createFreshSession(conversationId, agentDef, agentId, options);
         this.deps.stateStore.setSession(conversationId, fresh);
         return fresh;
       }
@@ -90,10 +108,23 @@ export class SessionLifecycleService {
     return this.deps.stateStore.getSessionById(sessionId);
   }
 
-  async suspendSession(sessionId: string, reason: string): Promise<SessionCheckpoint> {
+  getActiveTurnId(sessionId: string): string | undefined {
+    return this.deps.stateStore.getActiveTurnId(sessionId);
+  }
+
+  async suspendSession(
+    sessionId: string,
+    reason: string,
+    options: SuspendSessionOptions = {},
+  ): Promise<SessionCheckpoint> {
     const record = this.findSessionById(sessionId);
     if (!record) {
       throw new Error(`Session ${sessionId} not found in active sessions`);
+    }
+
+    const activeTurnId = this.deps.stateStore.getActiveTurnId(sessionId);
+    if (activeTurnId && !options.allowActiveTurn) {
+      throw new ActiveTurnSuspendError(sessionId, activeTurnId);
     }
 
     this.deps.logger.info(`${TAG} suspending session ${sessionId} (reason=${reason})`);

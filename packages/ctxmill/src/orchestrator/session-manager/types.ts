@@ -17,7 +17,7 @@ export interface Logger {
   debug(msg: string, ...args: unknown[]): void;
 }
 
-export type SessionStatus = 'ACTIVE' | 'PAUSED' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED';
+export type SessionStatus = 'ACTIVE' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED';
 
 export type HarnessGrpcClient = ReturnType<typeof createClient<typeof HarnessService>>;
 
@@ -112,7 +112,7 @@ export interface SandboxSessionManagerDeps {
   eventBus?: TypedEventBus;
   maxConcurrentSessionsPerAgent?: number;
   interruptManager?: InterruptManager;
-  buildSandboxSecrets: (agentId: string) => Readonly<Record<string, string>>;
+  buildSandboxSecrets: (agentId: string) => Promise<Readonly<Record<string, string>>>;
   resolveToolsForAgent?: (toolNames: string[], excludeBuiltins?: string[], agentId?: string) => ToolMetadata[];
   logger: Logger;
   config: {

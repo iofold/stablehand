@@ -32,9 +32,13 @@ const ClaudeAgentDefinitionSchema = z.object({
   prompt: z.string(),
   tools: z.array(z.string()).optional(),
   disallowedTools: z.array(z.string()).optional(),
+  skills: z.array(z.string()).optional(),
   model: z.string().optional(),
   maxTurns: z.number().int().positive().optional(),
 });
+
+const CLAUDE_SKILL_TOOL_NAME = 'Skill';
+const CLAUDE_PROJECT_SKILLS_DIR = '.claude/skills';
 
 export const ClaudeAgentsConfigSchema = z.object({
   provider: z.string().optional(),
@@ -49,6 +53,13 @@ export const ClaudeAgentsConfigSchema = z.object({
     })).optional(),
   }).optional(),
   subagents: z.record(z.string(), ClaudeAgentDefinitionSchema).optional(),
+  // nativeTools in harnessConfig is the only path that survives proto serialization.
+  // HarnessSessionConfig.nativeTools[] is never populated from the FreshBootstrap proto,
+  // so buildAllowedTools() checks here too.
+  nativeTools: z.object({
+    allowlist: z.array(z.string()).optional(),
+    blocklist: z.array(z.string()).optional(),
+  }).optional(),
 });
 
 export type ClaudeAgentsConfig = z.infer<typeof ClaudeAgentsConfigSchema>;
@@ -140,6 +151,7 @@ class ClaudeSession implements HarnessSession {
   private activeApprovalHandler: ApprovalCallback | undefined;
   private readonly mcpServer: ReturnType<typeof createSdkMcpServer>;
   private restoredFromCheckpoint = false;
+  private sdkSessionId: string;
 
   constructor(
     private readonly config: HarnessSessionConfig,
@@ -158,6 +170,11 @@ class ClaudeSession implements HarnessSession {
       this.queuedEvents,
     );
     this.mcpServer = sdk.createSdkMcpServer({ name: 'ctxmill', tools: mcpTools });
+    this.sdkSessionId = config.conversationId;
+  }
+
+  setSdkSessionId(sessionId: string): void {
+    this.sdkSessionId = sessionId;
   }
 
   restoreTranscript(messages: Message[], options?: { markRestoredFromCheckpoint?: boolean }): void {
@@ -176,7 +193,7 @@ class ClaudeSession implements HarnessSession {
     const configDir = process.env.CLAUDE_CONFIG_DIR
       ?? path.join(process.env.HOME ?? '/home/ctxmill', '.claude');
     const workspaceDir = this.config.workspaceDir || '/workspace';
-    const sessionId = this.config.conversationId;
+    const sessionId = this.sdkSessionId;
     const sanitizedWorkspaceDir = workspaceDir.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200);
     const hashedWorkspaceDir = createHash('sha256').update(workspaceDir).digest('hex');
     const projectDirs = [...new Set([sanitizedWorkspaceDir, hashedWorkspaceDir])];
@@ -187,7 +204,12 @@ class ClaudeSession implements HarnessSession {
   }
 
   async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<AgentEvent> {
-    const isFirstTurn = this.restoredFromCheckpoint || this.transcript.length === 0;
+    const hasLocalTranscript = this.transcript.length > 0;
+    const shouldReplayFullPrompt = !this.restoredFromCheckpoint && !hasLocalTranscript && input.messages.length > 1;
+    if (shouldReplayFullPrompt) {
+      this.sdkSessionId = input.turnId;
+    }
+    const isFirstTurn = this.restoredFromCheckpoint || !hasLocalTranscript;
     this.transcript = [...input.messages];
     this.activeApprovalHandler = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
 
@@ -206,10 +228,10 @@ class ClaudeSession implements HarnessSession {
 
     try {
       const maxTurns = this.harnessConfig.maxTurns;
-      const sdkSessionId = this.config.conversationId;
+      const sdkSessionId = this.sdkSessionId;
 
       const q = this.sdk.query({
-        prompt: this.generateInput(input.messages),
+        prompt: this.generateInput(input.messages, { replayAllMessages: shouldReplayFullPrompt }),
         options: {
           model: this.harnessConfig.model,
           systemPrompt: this.config.systemPrompt,
@@ -220,6 +242,7 @@ class ClaudeSession implements HarnessSession {
           mcpServers: { ctxmill: this.mcpServer },
           permissionMode: 'bypassPermissions',
           allowDangerouslySkipPermissions: true,
+          includeHookEvents: true,
           includePartialMessages: false,
           persistSession: true,
           ...(this.buildAgents() ? { agents: this.buildAgents() } : {}),
@@ -318,7 +341,7 @@ class ClaudeSession implements HarnessSession {
       stateVersion: '2',
       payload: {
         transcript: this.transcript,
-        sessionId: this.config.conversationId,
+        sessionId: this.sdkSessionId,
         ...(sessionJSONL != null ? { sessionJSONL } : {}),
       },
     };
@@ -345,8 +368,11 @@ class ClaudeSession implements HarnessSession {
     }
   }
 
-  private async *generateInput(messages: Message[]): AsyncGenerator<SdkPromptMessage> {
-    if (this.restoredFromCheckpoint && messages.length > 1) {
+  private async *generateInput(
+    messages: Message[],
+    options: { replayAllMessages?: boolean } = {},
+  ): AsyncGenerator<SdkPromptMessage> {
+    if ((this.restoredFromCheckpoint || options.replayAllMessages) && messages.length > 1) {
       for (const message of messages) {
         yield {
           type: 'user',
@@ -376,40 +402,104 @@ class ClaudeSession implements HarnessSession {
   private formatRestoredPromptMessage(message: Message): string {
     switch (message.role) {
       case 'assistant':
-        return `[Previous assistant response]\n${message.content}`;
+        return this.formatRestoredAssistantMessage(message);
       case 'system':
         return `[Previous system message]\n${message.content}`;
       case 'tool':
-        return `[Previous tool output]\n${message.content}`;
+        return message.toolCallId
+          ? `[Previous tool output (${message.toolCallId})]\n${message.content}`
+          : `[Previous tool output]\n${message.content}`;
       case 'user':
       default:
         return message.content;
     }
   }
 
+  private formatRestoredAssistantMessage(message: Message): string {
+    const parts = [`[Previous assistant response]\n${message.content}`];
+    if (message.toolCalls?.length) {
+      const calls = message.toolCalls.map((toolCall) => {
+        const args = this.stringifyRestoredToolArgs(toolCall.arguments ?? {});
+        return `- ${toolCall.id}: ${toolCall.name} ${args}`;
+      });
+      parts.push(`[Previous assistant tool calls]\n${calls.join('\n')}`);
+    }
+    return parts.join('\n');
+  }
+
+  private stringifyRestoredToolArgs(args: unknown): string {
+    if (typeof args === 'string') {
+      return args;
+    }
+
+    try {
+      return JSON.stringify(args);
+    } catch {
+      return String(args);
+    }
+  }
+
   private buildAllowedTools(): string[] | undefined {
+    // HarnessSessionConfig.nativeTools[] is the canonical source, but it is
+    // never populated from the FreshBootstrap proto. Fall back to
+    // harnessConfig.nativeTools (single object) which survives proto
+    // serialization through harnessConfigJson.
     const nativeTools = this.config.nativeTools;
     const merged: string[] = [];
 
-    for (const nt of nativeTools ?? []) {
-      if (nt.allowlist) {
-        merged.push(...nt.allowlist);
+    if (nativeTools?.length) {
+      for (const nt of nativeTools) {
+        if (nt.allowlist) {
+          merged.push(...nt.allowlist);
+        }
       }
+    } else if (this.harnessConfig.nativeTools?.allowlist?.length) {
+      merged.push(...this.harnessConfig.nativeTools.allowlist);
     }
 
     if (this.harnessConfig.subagents) {
       merged.push('Agent');
     }
 
+    if (this.hasConfiguredSkills()) {
+      merged.push(CLAUDE_SKILL_TOOL_NAME);
+    }
+
     return merged.length ? [...new Set([...merged, 'mcp__ctxmill__*'])] : undefined;
+  }
+
+  private hasConfiguredSkills(): boolean {
+    if (this.hasProjectSkillsSetup()) {
+      return true;
+    }
+
+    const subagents = this.harnessConfig.subagents;
+    return Object.values(subagents ?? {}).some((definition) =>
+      definition.skills !== undefined && definition.skills.length > 0,
+    );
+  }
+
+  private hasProjectSkillsSetup(): boolean {
+    return this.harnessConfig.setup?.symlinks?.some((link) =>
+      this.isProjectSkillsPath(link.dest),
+    ) ?? false;
+  }
+
+  private isProjectSkillsPath(value: string): boolean {
+    const normalized = path.posix.normalize(value.replace(/\\/g, '/'));
+    return normalized === CLAUDE_PROJECT_SKILLS_DIR
+      || normalized.startsWith(`${CLAUDE_PROJECT_SKILLS_DIR}/`);
   }
 
   private buildDisallowedTools(): string[] | undefined {
     const nativeTools = this.config.nativeTools;
-    if (!nativeTools?.length) return undefined;
     const merged: string[] = [];
-    for (const nt of nativeTools) {
-      if (nt.blocklist) merged.push(...nt.blocklist);
+    if (nativeTools?.length) {
+      for (const nt of nativeTools) {
+        if (nt.blocklist) merged.push(...nt.blocklist);
+      }
+    } else if (this.harnessConfig.nativeTools?.blocklist?.length) {
+      merged.push(...this.harnessConfig.nativeTools.blocklist);
     }
     return merged.length ? merged : undefined;
   }
@@ -579,6 +669,11 @@ export class ClaudeAgentsHarness implements AgentHarness {
 
     const session = new ClaudeSession(config, harnessConfig, apiKey, this, sdk);
     if (restore) {
+      const sdkSessionId = restore.payload['sessionId'];
+      if (typeof sdkSessionId === 'string' && sdkSessionId.length > 0) {
+        session.setSdkSessionId(sdkSessionId);
+      }
+
       const sessionJSONL = restore.payload['sessionJSONL'];
       const hasRestoredSessionJSONL = typeof sessionJSONL === 'string';
       if (hasRestoredSessionJSONL) {
@@ -733,6 +828,13 @@ export class ClaudeAgentsHarness implements AgentHarness {
   ): Generator<AgentEvent> {
     switch (message.type) {
       case 'system': {
+        const hookEvent = this.toHookTelemetryEvent(message);
+        if (hookEvent) {
+          this.logHookSystemMessage(message);
+          yield hookEvent;
+          break;
+        }
+
         if (this.isSystemInitMessage(message)) {
           break;
         }
@@ -1081,6 +1183,117 @@ export class ClaudeAgentsHarness implements AgentHarness {
 
   private isSystemInitMessage(value: SDKSystemMessage): boolean {
     return value.subtype === 'init';
+  }
+
+  private toHookTelemetryEvent(value: unknown): AgentEvent | null {
+    if (!this.isRecord(value)) {
+      return null;
+    }
+
+    const subtype = value.subtype;
+    if (
+      subtype !== 'hook_started'
+      && subtype !== 'hook_progress'
+      && subtype !== 'hook_response'
+    ) {
+      return null;
+    }
+
+    const outputFields = {
+      stdout: this.truncateHookTelemetryField(value.stdout),
+      stderr: this.truncateHookTelemetryField(value.stderr),
+      output: this.truncateHookTelemetryField(value.output),
+    };
+    const truncated = Object.values(outputFields).some((field) => field.truncated);
+
+    const event = {
+      type: 'CUSTOM' as const,
+      timestamp: Date.now(),
+      runId: '',
+      subtype: 'claude_hook',
+      source: 'claude-agents',
+      lifecycle: String(subtype).replace('hook_', ''),
+      hookEvent: this.hookTelemetryString(value.hook_event),
+      hookName: this.hookTelemetryString(value.hook_name),
+      hookId: this.hookTelemetryString(value.hook_id),
+      claudeSessionId: this.hookTelemetryString(value.session_id),
+      sdkMessageId: this.hookTelemetryString(value.uuid),
+      ...(typeof value.outcome === 'string' ? { outcome: value.outcome } : {}),
+      ...(typeof value.exit_code === 'number' ? { exitCode: value.exit_code } : {}),
+      ...(outputFields.stdout.text ? { stdout: outputFields.stdout.text } : {}),
+      ...(outputFields.stderr.text ? { stderr: outputFields.stderr.text } : {}),
+      ...(outputFields.output.text ? { output: outputFields.output.text } : {}),
+      ...(truncated ? { truncated: true } : {}),
+    };
+
+    return { type: 'custom_agui_event', event };
+  }
+
+  private logHookSystemMessage(value: unknown): boolean {
+    if (!this.isRecord(value)) {
+      return false;
+    }
+
+    const subtype = value.subtype;
+    if (
+      subtype !== 'hook_started'
+      && subtype !== 'hook_progress'
+      && subtype !== 'hook_response'
+    ) {
+      return false;
+    }
+
+    const parts = [
+      `[claude-agents] hook ${subtype.replace('hook_', '')}`,
+      `event=${this.formatHookLogField(value.hook_event)}`,
+      `name=${this.formatHookLogField(value.hook_name)}`,
+      `id=${this.formatHookLogField(value.hook_id)}`,
+    ];
+
+    if (typeof value.outcome === 'string') {
+      parts.push(`outcome=${value.outcome}`);
+    }
+    if (typeof value.exit_code === 'number') {
+      parts.push(`exitCode=${value.exit_code}`);
+    }
+
+    const output = this.formatHookLogOutput(value.output);
+    if (output) {
+      parts.push(`output=${output}`);
+    }
+
+    console.log(parts.join(' '));
+    return true;
+  }
+
+  private formatHookLogField(value: unknown): string {
+    return typeof value === 'string' && value.length > 0 ? value : 'unknown';
+  }
+
+  private hookTelemetryString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  }
+
+  private truncateHookTelemetryField(value: unknown): { text?: string; truncated: boolean } {
+    if (value === undefined || value === null) {
+      return { truncated: false };
+    }
+
+    const raw = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+    const max = 2_000;
+    if (raw.length <= max) {
+      return { text: raw, truncated: false };
+    }
+    return { text: `${raw.slice(0, max)}...[truncated]`, truncated: true };
+  }
+
+  private formatHookLogOutput(value: unknown): string | undefined {
+    if (typeof value !== 'string' || value.length === 0) {
+      return undefined;
+    }
+
+    const compact = value.replace(/\s+/g, ' ').trim();
+    return compact.length > 160 ? `${compact.slice(0, 157)}...` : compact;
   }
 
   private isZodSchemaLike(value: unknown): value is ZodSchemaLike {

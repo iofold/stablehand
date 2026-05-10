@@ -95,7 +95,6 @@ The TypedEventBus emits the following events:
 - `run.tool_result` — Tool call completed
 - `run.interrupted` — HITL approval needed
 - `run.interrupt_resolved` — HITL approval/rejection received
-- `session.paused` — Manual/compatibility session pause event
 - `run.resumed` — Suspended run resumed after event match
 - `feedback.received` — User thumbs up/down signal for external consumers
 - `agent.created` — New agent registered
@@ -113,7 +112,7 @@ Relevant code:
 
 ### 5. HITL and Suspend/Resume
 
-HITL is implemented through durable interrupt records and UI responses. Sandbox sessions can be checkpointed, restored, and resumed through the session manager; `PAUSED` remains only as a legacy compatibility state for recovery. Separately, `SuspendedSessionMatcher` can emit `run.resumed` for event-driven resumptions. This is application-level checkpoint/restore of harness and workspace state, not raw Docker memory snapshotting.
+HITL is implemented through durable interrupt records and UI responses. Sandbox sessions can be checkpointed, restored, and resumed through the session manager. Separately, `SuspendedSessionMatcher` can emit `run.resumed` for event-driven resumptions. This is application-level checkpoint/restore of harness and workspace state, not raw Docker memory snapshotting.
 
 Relevant code:
 
@@ -145,7 +144,7 @@ Relevant code:
 
 ### 8. Sandbox Infrastructure
 
-All harness execution routes through the sandbox subsystem. The orchestrator creates a Docker container per sandbox session, injects secrets via tmpfs, waits for gRPC health, opens the session, delivers turns, and streams events back. The subsystem also handles tool call proxying, checkpoint/restore, lifecycle reconciliation, workspace-diff capture, and direct artifact upload/download through daemon tools rather than orchestrator-side byte proxying.
+All harness execution routes through the sandbox subsystem. The orchestrator creates a Docker container per sandbox session, injects secrets into the sandbox environment, waits for gRPC health, opens the session, delivers turns, and streams events back. The subsystem also handles tool call proxying, checkpoint/restore, lifecycle reconciliation, workspace-diff capture, and direct artifact upload/download through daemon tools rather than orchestrator-side byte proxying.
 
 Relevant code:
 

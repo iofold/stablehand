@@ -3,12 +3,13 @@ import type { SessionEvent as CustomSessionEvent } from './session-turn-service.
 import { InterruptResumeService } from './session-manager/interrupt-resume-service.js';
 import { toAgentDefinition } from './session-manager/session-agent-definition.js';
 import { SessionLifecycleService } from './session-manager/session-lifecycle-service.js';
+import type { SuspendSessionOptions } from './session-manager/session-lifecycle-service.js';
 import type { SessionReconciler } from './session-manager/ports.js';
 import { SessionRecoveryCoordinator } from './session-manager/session-recovery-coordinator.js';
 import { SessionRuntimeFactory } from './session-manager/session-runtime-factory.js';
 import { SessionStatusCoordinator } from './session-manager/session-status-coordinator.js';
 import { SessionStateStore } from './session-manager/session-state-store.js';
-import { SessionTurnOrchestrator } from './session-manager/session-turn-orchestrator.js';
+import { SessionTurnOrchestrator, type ConcurrencyReservation } from './session-manager/session-turn-orchestrator.js';
 import type { SandboxSessionManagerDeps, SessionRecord } from './session-manager/types.js';
 
 export type { Logger, SessionRecord } from './session-manager/types.js';
@@ -37,7 +38,7 @@ export class SandboxSessionManager {
       db: deps.db,
       buildSandboxSecrets: deps.buildSandboxSecrets,
       resolveToolsForAgent: deps.resolveToolsForAgent ?? (() => []),
-      checkConcurrencyLimit: (agentId) => this.turnOrchestrator.checkConcurrencyLimit(agentId),
+      checkConcurrencyLimit: (agentId, options) => this.turnOrchestrator.checkConcurrencyLimit(agentId, options),
       logger: deps.logger,
       dataDir: deps.dataDir,
     });
@@ -50,8 +51,10 @@ export class SandboxSessionManager {
       resolveToolsForAgent: deps.resolveToolsForAgent ?? (() => []),
       workspaceDiffService: deps.workspaceDiffService,
       logger: deps.logger,
-      createFreshSession: (conversationId, agentDef, agentId) => this.createFreshSession(conversationId, agentDef, agentId),
-      getExistingSessionWorkspaceDir: (agentId, sessionId) => this.getExistingSessionWorkspaceDir(agentId, sessionId),
+      createFreshSession: (conversationId, agentDef, agentId, options) =>
+        this.createFreshSession(conversationId, agentDef, agentId, options),
+      getExistingConversationWorkspaceDir: (agentId, conversationId) =>
+        this.getExistingConversationWorkspaceDir(agentId, conversationId),
     });
     this.turnOrchestrator = new SessionTurnOrchestrator({
       stateStore: this.stateStore,
@@ -70,7 +73,11 @@ export class SandboxSessionManager {
       },
       onStaleContainer: (_sessionId, conversationId, agentDef, agentId) =>
         this.ensureSession(conversationId, agentDef, agentId),
-      executeDeliverTurn: (sessionId, messages, turnId) => this.executeDeliverTurn(sessionId, messages, turnId),
+      onSessionRebound: async ({ turnId, sessionId }) => {
+        await deps.db.updateTurn(turnId, { sessionId });
+      },
+      executeDeliverTurn: (sessionId, messages, turnId, onSessionRebound) =>
+        this.executeDeliverTurn(sessionId, messages, turnId, false, onSessionRebound),
     });
     this.interruptResumeService = new InterruptResumeService({
       db: deps.db,
@@ -97,7 +104,7 @@ export class SandboxSessionManager {
     });
   }
 
-  ensureSession(conversationId: string, agentDef: AgentDefinition, agentId?: string) { return this.lifecycleService.ensureSession(conversationId, agentDef, agentId); }
+  ensureSession(conversationId: string, agentDef: AgentDefinition, agentId?: string, options?: { concurrencyReservationId?: string }) { return this.lifecycleService.ensureSession(conversationId, agentDef, agentId, options); }
   getSessionReconciler(): SessionReconciler { return this.lifecycleService.getSessionReconciler(); }
   onSessionReconnected(conversationId: string, record: SessionRecord): void { this.lifecycleService.onSessionReconnected(conversationId, record); }
   async onSessionEvicted(sessionId: string, conversationId: string): Promise<void> { await this.lifecycleService.onSessionEvicted(sessionId, conversationId); }
@@ -106,8 +113,9 @@ export class SandboxSessionManager {
   cancelCurrentTurn(sessionId: string, turnId?: string): boolean { return this.turnOrchestrator.cancelCurrentTurn(sessionId, turnId); }
   getAbortSignal(sessionId: string, turnId?: string): AbortSignal | undefined { return this.turnOrchestrator.getAbortSignal(sessionId, turnId); }
   checkConcurrencyLimit(agentId: string): void { this.turnOrchestrator.checkConcurrencyLimit(agentId); }
+  reserveConcurrencySlot(agentId: string): ConcurrencyReservation { return this.turnOrchestrator.reserveConcurrencySlot(agentId); }
   async *deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<CustomSessionEvent> { yield* this.turnOrchestrator.deliverTurn(sessionId, messages, turnId); }
-  suspendSession(sessionId: string, reason: string) { return this.lifecycleService.suspendSession(sessionId, reason); }
+  suspendSession(sessionId: string, reason: string, options?: SuspendSessionOptions) { return this.lifecycleService.suspendSession(sessionId, reason, options); }
   killSession(sessionId: string) { return this.lifecycleService.killSession(sessionId); }
   resumeWithInterruptResolution(sessionId: string, turnId: string, agentId: string): Promise<void> { return this.interruptResumeService.resumeWithInterruptResolution(sessionId, turnId, agentId); }
   getSession(conversationId: string) { return this.lifecycleService.getSession(conversationId); }
@@ -116,11 +124,20 @@ export class SandboxSessionManager {
   reconcileStrandedRestoringSessions(updatedBeforeMs?: number) {
     return this.lifecycleService.reconcileStrandedRestoringSessions(updatedBeforeMs);
   }
-  createFreshSession(conversationId: string, agentDef: AgentDefinition, agentId?: string) { return this.runtimeFactory.createFreshSession(conversationId, agentDef, agentId); }
-  getExistingSessionWorkspaceDir(agentId: string, sessionId: string) { return this.runtimeFactory.getExistingSessionWorkspaceDir(agentId, sessionId); }
+  createFreshSession(conversationId: string, agentDef: AgentDefinition, agentId?: string, options?: { concurrencyReservationId?: string }) { return this.runtimeFactory.createFreshSession(conversationId, agentDef, agentId, options); }
+  getExistingConversationWorkspaceDir(agentId: string, conversationId: string) { return this.runtimeFactory.getExistingConversationWorkspaceDir(agentId, conversationId); }
   parsePendingRequestPayload(payloadJson: string) { return this.interruptResumeService.parsePendingRequestPayload(payloadJson); }
-  async *executeDeliverTurn(sessionId: string, messages: Message[], turnId: string, retried = false): AsyncGenerator<CustomSessionEvent> { yield* this.turnOrchestrator.executeDeliverTurn(sessionId, messages, turnId, retried); }
+  async *executeDeliverTurn(
+    sessionId: string,
+    messages: Message[],
+    turnId: string,
+    retried = false,
+    onSessionRebound?: (nextSessionId: string) => void,
+  ): AsyncGenerator<CustomSessionEvent> {
+    yield* this.turnOrchestrator.executeDeliverTurn(sessionId, messages, turnId, retried, onSessionRebound);
+  }
   drainCoalescedQueue(sessionId: string): Promise<void> { return this.turnOrchestrator.drainCoalescedQueue(sessionId); }
   findSessionById(sessionId: string): SessionRecord | undefined { return this.lifecycleService.findSessionById(sessionId); }
+  getActiveTurnId(sessionId: string): string | undefined { return this.lifecycleService.getActiveTurnId(sessionId); }
   isStaleContainerError(err: unknown): boolean { return SessionRecoveryCoordinator.isStaleContainerError(err); }
 }

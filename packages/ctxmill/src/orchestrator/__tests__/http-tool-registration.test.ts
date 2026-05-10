@@ -79,7 +79,11 @@ function createRouteDbMock(): {
   };
 }
 
-async function buildAgentsApp(db: DatabaseRepository, toolRegistry?: DefaultToolRegistry) {
+async function buildAgentsApp(
+  db: DatabaseRepository,
+  toolRegistry?: DefaultToolRegistry,
+  eventBus?: TypedEventBus,
+) {
   const app = Fastify();
   const sse = {
     getActiveAgentIds: vi.fn(() => []),
@@ -112,6 +116,7 @@ async function buildAgentsApp(db: DatabaseRepository, toolRegistry?: DefaultTool
     agentSessionService,
     runStartupService: createRunStartupServiceStub(),
     toolRegistry,
+    eventBus,
   });
   await app.ready();
   return app;
@@ -219,6 +224,52 @@ describe('HTTP tool registration', () => {
         }],
       },
     }));
+
+    await app.close();
+  });
+
+  it('registers POST httpTools before emitting agent.created', async () => {
+    const { db, createAgent } = createRouteDbMock();
+    createAgent.mockImplementation(async (input: Record<string, unknown>) => ({
+      id: 'agent-1',
+      name: input.name,
+      systemPrompt: input.systemPrompt,
+      tools: input.tools,
+      description: input.description,
+      metadata: input.metadata,
+      harness: input.harness,
+      harnessConfig: input.harnessConfig,
+      workspaceDir: null,
+    }));
+
+    const toolRegistry = new DefaultToolRegistry();
+    const eventBus = createTestBus();
+    const toolRegisteredAtCreated: boolean[] = [];
+    eventBus.on('agent.created', () => {
+      toolRegisteredAtCreated.push(toolRegistry.getTool('remote-search') !== undefined);
+    });
+
+    const app = await buildAgentsApp(db, toolRegistry, eventBus);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/',
+      payload: {
+        name: 'Agent',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-4o' },
+        systemPrompt: 'test',
+        tools: ['read_file'],
+        httpTools: [{
+          name: 'remote-search',
+          description: 'Search remote API',
+          endpoint: 'https://api.example.com/search',
+        }],
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(toolRegisteredAtCreated).toEqual([true]);
 
     await app.close();
   });

@@ -15,12 +15,8 @@ Sandbox session lifecycle transitions are owned by a single service boundary cen
 
 | From | Event / operation | To | Notes |
 | --- | --- | --- | --- |
-| `ACTIVE` | safe idle pause | `PAUSED` | Idle container pause only. |
 | `ACTIVE` | checkpoint/suspend accepted at safe point | `CHECKPOINTED` | Checkpoint must be valid before status changes. |
 | `ACTIVE` | terminate | `TERMINATED` | Terminal. |
-| `PAUSED` | resume | `ACTIVE` | Compatibility path for legacy paused sessions. |
-| `PAUSED` | checkpoint current paused state | `CHECKPOINTED` | Valid checkpoint required. |
-| `PAUSED` | terminate | `TERMINATED` | Terminal. |
 | `CHECKPOINTED` | start restore | `RESTORING` | Restore lease/failure metadata should be persisted where available. |
 | `CHECKPOINTED` | terminate | `TERMINATED` | Terminal. |
 | `RESTORING` | restore succeeds | `ACTIVE` | New/reattached runtime is usable. |

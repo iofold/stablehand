@@ -32,6 +32,7 @@ import type {
 } from './types.js';
 
 const TAG = '[SandboxSessionManager]';
+const TRANSPORT_ERROR_RE = /ENOTFOUND|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ETIMEDOUT|UND_ERR_SOCKET|socket hang up/i;
 
 function shortHash(input: string): string {
   return createHash('sha256').update(input).digest('hex').slice(0, 12);
@@ -76,7 +77,7 @@ export interface SessionRecoveryCoordinatorDeps {
   db: Pick<DatabaseRepository, 'getCheckpointV2' | 'getSandboxSession'>;
   statusCoordinator: SessionStatusCoordinator;
   stateStore: SessionStatePort;
-  buildSandboxSecrets: (agentId: string) => Readonly<Record<string, string>>;
+  buildSandboxSecrets: (agentId: string) => Promise<Readonly<Record<string, string>>>;
   resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[], agentId?: string) => ToolMetadata[];
   workspaceDiffService: WorkspaceDiffService;
   logger: Logger;
@@ -84,8 +85,9 @@ export interface SessionRecoveryCoordinatorDeps {
     conversationId: string,
     agentDef: AgentDefinition,
     agentId?: string,
+    options?: { concurrencyReservationId?: string },
   ) => Promise<SessionRecord>;
-  getExistingSessionWorkspaceDir: (agentId: string, sessionId: string) => Promise<string | undefined>;
+  getExistingConversationWorkspaceDir: (agentId: string, conversationId: string) => Promise<string | undefined>;
   /**
    * Optional sleep injection for tests. Defaults to a real timer that supports
    * AbortSignal cancellation.
@@ -168,7 +170,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     );
 
     const { grpcClient } = await waitForContainerReady(baseUrl);
-    const sessionWorkspaceDir = await this.deps.getExistingSessionWorkspaceDir(dbSession.agentId, dbSession.id);
+    const sessionWorkspaceDir = await this.deps.getExistingConversationWorkspaceDir(dbSession.agentId, dbSession.conversationId);
 
     return {
       sessionId: dbSession.id,
@@ -220,17 +222,17 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       }
 
       const sessionWorkspaceDir = agentDef.workspaceDir
-        ? await this.deps.getExistingSessionWorkspaceDir(dbSession.agentId, sessionId)
+        ? await this.deps.getExistingConversationWorkspaceDir(dbSession.agentId, dbSession.conversationId)
         : undefined;
       if (agentDef.workspaceDir && !sessionWorkspaceDir) {
         throw new InvalidCheckpointError(
-          `Missing persisted session workspace for checkpointed session ${sessionId}`,
+          `Missing persisted conversation workspace for checkpointed session ${sessionId}`,
         );
       }
 
       const workspaceDir = sessionWorkspaceDir ?? agentDef.workspaceDir;
       const sandboxSecrets = {
-        ...this.deps.buildSandboxSecrets(dbSession.agentId),
+        ...(await this.deps.buildSandboxSecrets(dbSession.agentId)),
         ...getRuntimeSandboxSecrets(agentDef),
       };
       const secretKeys = Object.keys(sandboxSecrets);
@@ -238,6 +240,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
 
       const containerInfo = await this.deps.containerManager.createContainer({
         sessionId,
+        conversationId: dbSession.conversationId,
         agentId: agentDef.name,
         harnessName,
         workspaceDir,
@@ -257,7 +260,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         this.deps.logger.info(`${TAG} workspace restored for session ${sessionId}`);
       } else {
         this.deps.logger.info(
-          `${TAG} reusing persisted session workspace for session ${sessionId}: ${sessionWorkspaceDir}`,
+          `${TAG} reusing persisted conversation workspace for session ${sessionId}: ${sessionWorkspaceDir}`,
         );
       }
 
@@ -502,10 +505,10 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
   }
 
   static isStaleContainerError(err: unknown): boolean {
-    if (err instanceof ConnectError && (err.code === Code.Unavailable || err.code === Code.Internal)) {
+    if (err instanceof ConnectError && err.code === Code.Unavailable) {
       return true;
     }
-    if (err instanceof Error && /ENOTFOUND|ECONNREFUSED|ECONNRESET/.test(err.message)) {
+    if (err instanceof Error && TRANSPORT_ERROR_RE.test(err.message)) {
       return true;
     }
     return false;
@@ -638,20 +641,6 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         } catch (err) {
           return this.recoverDeadSession(dbSession, conversationId, agentDef, agentId, 'reconnect', err);
         }
-      }
-      case 'PAUSED': {
-        this.deps.logger.warn('Found legacy PAUSED session, recovering via checkpoint', {
-          sessionId: dbSession.id,
-          conversationId,
-        });
-        return this.recoverDeadSession(
-          dbSession,
-          conversationId,
-          agentDef,
-          agentId,
-          'legacy-paused',
-          new Error('Legacy PAUSED session requires checkpoint recovery'),
-        );
       }
       case 'CHECKPOINTED':
         return this.restoreFromCheckpoint(dbSession, agentDef);

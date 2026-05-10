@@ -32,6 +32,7 @@ import { PIAgentHarness } from '../harness/pi-agent.js';
 import type { HarnessRegistry } from '../harness/types.js';
 import type { SystemSettingsService } from '../settings/service.js';
 import type { SandboxSessionManager } from './sandbox-session-manager.js';
+import type { ContainerLifecyclePolicy } from './container-lifecycle-policy.js';
 
 export interface ServerOptions {
   port?: number;
@@ -64,6 +65,7 @@ export interface ServerOptions {
   runStartupService: RunStartupService;
   sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
+  lifecyclePolicy?: ContainerLifecyclePolicy;
 }
 
 function createDefaultHarnessRegistry(): HarnessRegistry {
@@ -199,7 +201,12 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
   // ── Route plugins ──────────────────────────────────────
   await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService });
-  await app.register(sessionsRoutes, { prefix: '/api/sessions', db });
+  await app.register(sessionsRoutes, {
+    prefix: '/api/sessions',
+    db,
+    lifecyclePolicy: opts.lifecyclePolicy,
+    sessionManager: opts.sessionManager,
+  });
   if (eventBus) {
     await app.register(agUiCompatRoutes, {
       prefix: '/api/ag-ui',
@@ -217,6 +224,12 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     await app.register(settingsRoutes, {
       prefix: '/api/settings',
       settingsService: opts.settingsService,
+      onSettingsUpdated: (settings) => {
+        opts.lifecyclePolicy?.updateConfig({
+          idleTimeoutMs: settings.idleTimeoutMs,
+          reconciliationIntervalMs: settings.reconciliationIntervalMs,
+        });
+      },
     });
   }
   if (opts.artifactStore && opts.artifactBucket) {

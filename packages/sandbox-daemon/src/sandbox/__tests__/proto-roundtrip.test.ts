@@ -369,6 +369,37 @@ describe('session event converters', () => {
         },
       },
       {
+        event: {
+          type: 'custom_agui_event',
+          event: {
+            type: 'CUSTOM',
+            timestamp: 1,
+            runId: '',
+            subtype: 'claude_hook',
+            lifecycle: 'response',
+            hookEvent: 'Stop',
+            outcome: 'success',
+            output: '{"decision":"block"}',
+          },
+        },
+        expectedCase: 'custom',
+        assert: (sessionEvent) => {
+          if (sessionEvent.payload.case !== 'agUiEvent') {
+            throw new Error('Expected agUiEvent payload');
+          }
+          if (sessionEvent.payload.value.event.case !== 'custom') {
+            throw new Error('Expected custom payload');
+          }
+          expect(sessionEvent.payload.value.event.value.subtype).toBe('claude_hook');
+          expect(JSON.parse(sessionEvent.payload.value.event.value.payloadJson)).toMatchObject({
+            subtype: 'claude_hook',
+            lifecycle: 'response',
+            hookEvent: 'Stop',
+            outcome: 'success',
+          });
+        },
+      },
+      {
         event: { type: 'error', error: 'boom' },
         expectedCase: 'error',
         assert: (sessionEvent) => {

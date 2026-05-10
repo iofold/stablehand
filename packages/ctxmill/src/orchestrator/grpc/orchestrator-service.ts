@@ -432,7 +432,7 @@ export function registerDefaultToolHandlers(
     payload.runId = ctx.sessionId;
     payload.agentId = ctx.agentId;
 
-    eventBus.emitCustom(eventType, ctx.agentId, payload);
+    await eventBus.emitCustomAsync(eventType, ctx.agentId, payload);
 
     return JSON.stringify({ ok: true, eventType });
   });

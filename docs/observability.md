@@ -116,7 +116,7 @@ The current `EventMap` includes turn lifecycle, message-commit, tool, HITL, sess
 - `run.tool_started` / `run.tool_result`
 - `run.text_chunk`
 - `run.interrupted` / `run.interrupt_resolved`
-- `session.paused` / `run.resumed`
+- `run.interrupted` / `run.interrupt_resolved` / `run.resumed`
 - `run.ag_ui_event`
 - `feedback.received`
 - `trigger.fired`

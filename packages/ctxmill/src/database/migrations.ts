@@ -134,8 +134,6 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
       last_activity_at BIGINT NOT NULL,
-      paused_at BIGINT,
-      paused_reason TEXT,
       restore_attempts INTEGER NOT NULL DEFAULT 0,
       last_restore_error TEXT
     )
@@ -281,6 +279,25 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
+  // PAUSED sandbox-session status was removed. Normalize any old rows forward
+  // before dropping the old pause metadata columns.
+  await sql`
+    UPDATE sandbox_sessions AS s
+    SET
+      status = CASE
+        WHEN EXISTS (
+          SELECT 1 FROM agent_checkpoints AS c WHERE c.session_id = s.id
+        ) THEN 'CHECKPOINTED'
+        ELSE 'TERMINATED'
+      END,
+      container_name = NULL,
+      container_id = NULL,
+      updated_at = (EXTRACT(EPOCH FROM now()) * 1000)::bigint
+    WHERE s.status = 'PAUSED'
+  `;
+  await sql`ALTER TABLE sandbox_sessions DROP COLUMN IF EXISTS paused_at`;
+  await sql`ALTER TABLE sandbox_sessions DROP COLUMN IF EXISTS paused_reason`;
+
   // ── 16. callback_outbox (→ agents, turns) ──────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS callback_outbox (
@@ -325,6 +342,8 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       updated_at TEXT NOT NULL
     )
   `;
+  // Drop retired keys (idempotent).
+  await sql`DELETE FROM system_settings WHERE key = 'maxCheckpointBytes'`;
 
   // ── 19. artifacts (→ agents, turns, conversations) ─────────────────
   await sql`

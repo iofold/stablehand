@@ -6,7 +6,6 @@ import type { AGUIEventType } from '@ctxmill/shared';
 const EVENT_TYPE_MAP: Partial<Record<EventName, AGUIEventType>> = {
   'turn.started': 'RUN_STARTED',
   'turn.pending': 'TURN_PENDING',
-  'session.paused': 'CUSTOM',
   'run.text_chunk': 'TEXT_MESSAGE_CONTENT',
   'run.tool_started': 'TOOL_CALL_START',
   'run.tool_result': 'TOOL_CALL_RESULT',
@@ -19,7 +18,6 @@ const EVENT_TYPE_MAP: Partial<Record<EventName, AGUIEventType>> = {
 const RUN_EVENTS: EventName[] = [
   'turn.started',
   'turn.pending',
-  'session.paused',
   'run.text_chunk',
   'run.tool_started',
   'run.tool_result',

@@ -244,6 +244,69 @@ describe('LangGraphHarness', () => {
     });
   });
 
+  it('replays assistant tool_calls before matching tool result messages', async () => {
+    const observedMessages: unknown[] = [];
+    mockStreamEvents.mockImplementation((input) => {
+      observedMessages.push(input.messages);
+      return langGraphStream([
+        {
+          event: 'on_chat_model_stream',
+          data: { chunk: { content: 'Continued.' } },
+        },
+      ]);
+    });
+
+    const userMessage = makeMessage('user', 'Emit an event');
+    const assistantMessage: Message = {
+      ...makeMessage('assistant', ''),
+      id: 'assistant-with-tool-call',
+      toolCalls: [
+        {
+          id: 'call_1',
+          name: 'emit-event',
+          arguments: { type: 'audit', payload: { ok: true } },
+        },
+      ],
+    };
+    const toolMessage: Message = {
+      ...makeMessage('tool', 'emitted'),
+      id: 'tool-result',
+      toolCallId: 'call_1',
+    };
+    const nextUserMessage = makeMessage('user', 'Continue');
+
+    const { session } = await openRestoredTestSession({
+      stateVersion: '1',
+      messages: [userMessage, assistantMessage, toolMessage],
+      payload: {},
+    });
+
+    await collectEvents(session.deliverTurn({
+      messages: [userMessage, assistantMessage, toolMessage, nextUserMessage],
+      turnId: 'turn-replay-tools',
+    }, {}));
+
+    expect(observedMessages[0]).toEqual([
+      { role: 'user', content: 'Emit an event' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: {
+              name: 'emit-event',
+              arguments: '{"type":"audit","payload":{"ok":true}}',
+            },
+          },
+        ],
+      },
+      { role: 'tool', content: 'emitted', tool_call_id: 'call_1' },
+      { role: 'user', content: 'Continue' },
+    ]);
+  });
+
   it('includes a single tool call in message_committed events', async () => {
     mockStreamEvents.mockImplementation(() => langGraphStream([
       {

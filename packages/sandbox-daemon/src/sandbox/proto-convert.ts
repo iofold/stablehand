@@ -15,6 +15,7 @@ import {
   ToolCallEndSchema,
   ApprovalNeededSchema,
   ApprovalResolvedSchema,
+  CustomAgentEventSchema,
   ErrorEventSchema as ProtoErrorEventSchema,
   DoneEventSchema as ProtoDoneEventSchema,
   TokenUsageSchema as ProtoTokenUsageSchema,
@@ -429,6 +430,17 @@ function convertAgentEvent(event: AgentEvent): ProtoAgentEvent {
         },
       });
 
+    case 'custom_agui_event':
+      return create(AgentEventSchema, {
+        event: {
+          case: 'custom',
+          value: create(CustomAgentEventSchema, {
+            subtype: typeof event.event.subtype === 'string' ? event.event.subtype : 'custom',
+            payloadJson: stringifyJsonWithBigInts(event.event),
+          }),
+        },
+      });
+
     case 'error':
       return create(AgentEventSchema, {
         event: {
@@ -580,6 +592,18 @@ export function protoAgentEventToAGUI(
         subtype: 'approval_resolved',
         id: v.id,
         action: v.action,
+      };
+    }
+
+    case 'custom': {
+      const v = proto.event.value;
+      const payload = parseJsonOrThrow(v.payloadJson, `custom agent event ${v.subtype}`);
+      return {
+        ...payload,
+        type: 'CUSTOM',
+        timestamp: ts,
+        runId,
+        subtype: v.subtype || (typeof payload.subtype === 'string' ? payload.subtype : 'custom'),
       };
     }
 

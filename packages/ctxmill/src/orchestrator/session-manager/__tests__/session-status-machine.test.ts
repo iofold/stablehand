@@ -12,23 +12,18 @@ import type { SessionStatus } from '../types.js';
 /**
  * Per ADR 005 the full sandbox-session transition matrix is:
  *
- *   ACTIVE       → PAUSED, CHECKPOINTED, TERMINATED
- *   PAUSED       → ACTIVE, CHECKPOINTED, TERMINATED
+ *   ACTIVE       → CHECKPOINTED, TERMINATED
  *   CHECKPOINTED → RESTORING, TERMINATED
  *   RESTORING    → ACTIVE, CHECKPOINTED, TERMINATED
  *   TERMINATED   → (terminal)
  *
- * The `allowedRows` and `rejectedRows` lists are exhaustive over the 5x5 grid.
+ * The `allowedRows` and `rejectedRows` lists are exhaustive over the 4x4 grid.
  * Adding/removing a status without updating both lists must fail the test.
  */
 
 const allowedRows: ReadonlyArray<readonly [SessionStatus, SessionStatus]> = [
-  ['ACTIVE', 'PAUSED'],
   ['ACTIVE', 'CHECKPOINTED'],
   ['ACTIVE', 'TERMINATED'],
-  ['PAUSED', 'ACTIVE'],
-  ['PAUSED', 'CHECKPOINTED'],
-  ['PAUSED', 'TERMINATED'],
   ['CHECKPOINTED', 'RESTORING'],
   ['CHECKPOINTED', 'TERMINATED'],
   ['RESTORING', 'ACTIVE'],
@@ -41,22 +36,15 @@ const rejectedRows: ReadonlyArray<readonly [SessionStatus, SessionStatus]> = [
   ['ACTIVE', 'ACTIVE'],
   ['ACTIVE', 'RESTORING'],
 
-  // PAUSED rejects RESTORING and itself.
-  ['PAUSED', 'PAUSED'],
-  ['PAUSED', 'RESTORING'],
-
-  // CHECKPOINTED rejects ACTIVE and PAUSED (must go through RESTORING) and itself.
+  // CHECKPOINTED rejects ACTIVE (must go through RESTORING) and itself.
   ['CHECKPOINTED', 'ACTIVE'],
-  ['CHECKPOINTED', 'PAUSED'],
   ['CHECKPOINTED', 'CHECKPOINTED'],
 
-  // RESTORING rejects PAUSED and itself.
-  ['RESTORING', 'PAUSED'],
+  // RESTORING rejects itself.
   ['RESTORING', 'RESTORING'],
 
   // TERMINATED is terminal — every outgoing transition is rejected.
   ['TERMINATED', 'ACTIVE'],
-  ['TERMINATED', 'PAUSED'],
   ['TERMINATED', 'CHECKPOINTED'],
   ['TERMINATED', 'RESTORING'],
   ['TERMINATED', 'TERMINATED'],
@@ -75,13 +63,12 @@ describe('session-status-machine — ADR 005 transition matrix', () => {
     );
   });
 
-  it('covers the full 5x5 grid (allowed + rejected = 25 rows)', () => {
+  it('covers the full 4x4 grid (allowed + rejected = 16 rows)', () => {
     expect(allowedRows.length + rejectedRows.length).toBe(SESSION_STATUSES.length ** 2);
   });
 
   it('matches ADR 005 outgoing-target sets exactly', () => {
-    expect(new Set(allowedTargets('ACTIVE'))).toEqual(new Set(['PAUSED', 'CHECKPOINTED', 'TERMINATED']));
-    expect(new Set(allowedTargets('PAUSED'))).toEqual(new Set(['ACTIVE', 'CHECKPOINTED', 'TERMINATED']));
+    expect(new Set(allowedTargets('ACTIVE'))).toEqual(new Set(['CHECKPOINTED', 'TERMINATED']));
     expect(new Set(allowedTargets('CHECKPOINTED'))).toEqual(new Set(['RESTORING', 'TERMINATED']));
     expect(new Set(allowedTargets('RESTORING'))).toEqual(new Set(['ACTIVE', 'CHECKPOINTED', 'TERMINATED']));
     expect(allowedTargets('TERMINATED')).toEqual([]);
@@ -90,7 +77,6 @@ describe('session-status-machine — ADR 005 transition matrix', () => {
   it('detects terminal states', () => {
     expect(isTerminal('TERMINATED')).toBe(true);
     expect(isTerminal('ACTIVE')).toBe(false);
-    expect(isTerminal('PAUSED')).toBe(false);
     expect(isTerminal('CHECKPOINTED')).toBe(false);
     expect(isTerminal('RESTORING')).toBe(false);
   });

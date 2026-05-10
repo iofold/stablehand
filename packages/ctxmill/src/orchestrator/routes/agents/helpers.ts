@@ -7,6 +7,7 @@ import type { HarnessRegistry } from '../../../harness/types.js';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared } from '../../../workspace/ensure.js';
 import { parseStoredHarnessConfig } from '../../session-manager/session-agent-definition.js';
 import { validateAgentHttpToolsConfig } from '../../http-tools.js';
+import { isSessionCancelled } from '../../session-cancellation.js';
 import type { AgentHttpToolDefinition, AgentRouteOptions, StoredAgent } from './types.js';
 
 export function safeError(message: string, err: unknown): { error: string; detail?: string } {
@@ -124,15 +125,17 @@ export function toAgentResponse(agent: StoredAgent): Record<string, unknown> {
 
 export function toApiAgentSession(
   turn: { id: string; agentId: string; conversationId: string | null; sessionId: string | null; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null },
-  sandboxSession?: { status: string; pausedAt?: number | null; pausedReason?: string | null } | null,
+  sandboxSession?: { status: string } | null,
   messageCount?: number,
 ) {
   let status: ApiSessionStatus;
-  if (turn.error) {
+  if (isSessionCancelled(turn.error)) {
+    status = 'CANCELLED';
+  } else if (turn.error) {
     status = 'ERROR';
   } else if (turn.completedAt != null) {
     status = 'COMPLETED';
-  } else if (sandboxSession?.status) {
+  } else if (sandboxSession?.status && sandboxSession.status !== 'TERMINATED') {
     status = sandboxSession.status as SandboxSessionStatus;
   } else {
     status = 'ACTIVE';
@@ -150,8 +153,6 @@ export function toApiAgentSession(
     ...(turn.error ? { error: turn.error } : {}),
     ...(turn.taskDescription ? { taskDescription: turn.taskDescription } : {}),
     ...(messageCount !== undefined ? { messageCount } : {}),
-    ...(sandboxSession?.pausedAt != null ? { pausedAt: sandboxSession.pausedAt } : {}),
-    ...(sandboxSession?.pausedReason ? { pausedReason: sandboxSession.pausedReason } : {}),
   };
 }
 

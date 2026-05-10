@@ -190,7 +190,6 @@ export function AgentSessionsTab({
                       <td className="px-4 py-3">
                         <SessionStatusBadge
                           status={latestEntry.status}
-                          pausedReason={latestEntry.pausedReason}
                           lastRestoreError={latestEntry.lastRestoreError}
                         />
                       </td>
@@ -243,7 +242,6 @@ export function AgentSessionsTab({
                                         <span className="text-xs font-mono text-surface-400">Turn {idx + 1}</span>
                                         <SessionStatusBadge
                                           status={entry.status}
-                                          pausedReason={entry.pausedReason}
                                           lastRestoreError={entry.lastRestoreError}
                                         />
                                         <span className="text-xs text-surface-400 tabular-nums">

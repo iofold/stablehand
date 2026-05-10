@@ -18,7 +18,7 @@ description: Full stress-test suite for ctxmill — exercises tools, chaining, H
 | `/api/agents/:id/conversations/:id/messages` | GET | `[ { id, role, content, ... } ]` |
 | `/api/agents/:id/interrupts` | GET | `{ interrupts: [{ sessionId, toolName, ... }] }` |
 | `/api/agents/:id/interrupt` | POST `{ action, sessionId }` | `{ resolved: true, ... }` |
-| `/api/settings` | GET | `{ maxGlobalContainers, ... }` (14 keys, no wrapper) |
+| `/api/settings` | GET | `{ maxGlobalContainers, ... }` (13 keys, no wrapper) |
 | `/api/settings` | PUT `{ key: value }` | Updated settings object |
 | `/api/events` | GET `?type=...&limit=...` | `{ events: [...] }` |
 | `/api/triggers/emit` | POST `{ type, payload }` | `{ ok: true }` |
@@ -386,13 +386,13 @@ curl -s -X PUT "$API_BASE/api/settings" \
 ```
 
 Expected:
-- `GET /api/settings` returns all 14 settings
+- `GET /api/settings` returns all 13 settings
 - `PUT /api/settings` persists a valid update to `maxConcurrentSessionsPerAgent`
 - invalid update returns 400 and does not overwrite the valid value
 - final restore returns the original value
 
 Pass/fail:
-- Pass if `SETTINGS_COUNT=14`, `INVALID_SETTINGS_STATUS=400`, and `CURRENT_MAX_CONCURRENT=4` before restore
+- Pass if `SETTINGS_COUNT=13`, `INVALID_SETTINGS_STATUS=400`, and `CURRENT_MAX_CONCURRENT=4` before restore
 - Fail if any settings key is missing, validation accepts the negative value, or the round-trip update does not persist
 
 ---

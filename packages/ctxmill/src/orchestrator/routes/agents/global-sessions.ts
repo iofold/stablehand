@@ -6,7 +6,7 @@ export async function globalSessionsRoutes(
   app: FastifyInstance,
   opts: SessionsRouteOptions,
 ): Promise<void> {
-  const { db } = opts;
+  const { db, lifecyclePolicy, sessionManager } = opts;
 
   app.get('/', async (
     request: FastifyRequest<{ Querystring: { format?: string } }>,
@@ -14,7 +14,11 @@ export async function globalSessionsRoutes(
   ) => {
     const { format } = request.query;
     if (format === 'sandbox') {
-      const activeSessions = await db.getActiveSandboxSessions();
+      const activeSessions = lifecyclePolicy
+        ? await lifecyclePolicy.getActiveSandboxSessionsForReadback({
+          shouldDefer: (session) => Boolean(sessionManager?.getActiveTurnId(session.id)),
+        })
+        : await db.getActiveSandboxSessions();
       return reply.send(activeSessions);
     }
 

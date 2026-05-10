@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AGUIEvent } from '@ctxmill/shared';
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message, NativeToolConfig } from '../types.js';
 
@@ -34,6 +35,7 @@ export type AgentEvent =
   | { type: 'tool_call_end'; id: string; result: string; error?: string; durationMs: number }
   | { type: 'approval_needed'; id: string; tool: string; args: unknown }
   | { type: 'approval_resolved'; id: string; action: 'approve' | 'reject' }
+  | { type: 'custom_agui_event'; event: AGUIEvent }
   | MessageCommittedAgentEvent
   | { type: 'error'; error: string }
   | { type: 'done'; result?: string; usage?: TokenUsage };

@@ -181,7 +181,7 @@ export async function triggerRoutes(
         });
       }
 
-      triggerManager.emitCustomEvent(body.type, body.agentId, body.payload);
+      await triggerManager.emitCustomEventAsync(body.type, body.agentId, body.payload);
 
       return { ok: true, type: body.type };
     },

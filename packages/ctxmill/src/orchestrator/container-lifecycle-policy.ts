@@ -1,4 +1,9 @@
-import type { ContainerInfo, SandboxContainerManager } from '../sandbox/container-manager.js';
+import {
+  DEFAULT_CONTAINER_STARTUP_GRACE_MS,
+  STARTUP_GRACE_MS_LABEL,
+  type ContainerInfo,
+  type SandboxContainerManager,
+} from '../sandbox/container-manager.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../database/repository.js';
 import { retryWithBackoff } from '../util/retry.js';
 import {
@@ -54,6 +59,15 @@ export interface ContainerLifecyclePolicyDeps {
   reconciliationCallbacks: ReconciliationCallbacks;
 }
 
+export interface LifecycleRuntimeConfigUpdate {
+  reconciliationIntervalMs?: number;
+  idleTimeoutMs?: number;
+}
+
+export interface ActiveSandboxReadbackOptions {
+  shouldDefer?: (session: SandboxSessionRow) => boolean;
+}
+
 type ContainerCleanupDecision = 'kill' | 'kill-after-checkpoint' | 'skip';
 
 function unrefTimer(timer: ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>): void {
@@ -80,14 +94,31 @@ function isAliveStatus(status: ContainerInfo['status']): boolean {
   return status === 'running' || status === 'paused' || status === 'created';
 }
 
+function parsePositiveMs(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function getStartupGraceMs(labels: Record<string, string>): number {
+  return parsePositiveMs(labels[STARTUP_GRACE_MS_LABEL]) ?? DEFAULT_CONTAINER_STARTUP_GRACE_MS;
+}
+
+function getStartedAtMs(labels: Record<string, string>): number | undefined {
+  const rawStartedAt = labels['ctxmill.started-at'];
+  if (!rawStartedAt) return undefined;
+  const parsed = new Date(rawStartedAt).getTime();
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 export class ContainerLifecyclePolicy {
   private readonly containerManager: SandboxContainerManager;
   private readonly db: DatabaseRepository;
   private readonly logger: Logger;
   private readonly reconciliationCallbacks: ReconciliationCallbacks;
   private readonly statusCoordinator: SessionStatusCoordinator;
-  private readonly reconciliationIntervalMs: number;
-  private readonly idleTimeoutMs: number;
+  private reconciliationIntervalMs: number;
+  private idleTimeoutMs: number;
   private readonly entries = new Map<string, PauseEntry>();
   private readonly sessionConversationIds = new Map<string, string>();
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
@@ -115,12 +146,7 @@ export class ContainerLifecyclePolicy {
       return;
     }
 
-    this.reconciliationTimer = setInterval(() => {
-      void this.runReconciliation().catch((err) => {
-        this.logger.error(`${TAG} periodic reconciliation error:`, err);
-      });
-    }, this.reconciliationIntervalMs);
-    unrefTimer(this.reconciliationTimer);
+    this.startReconciliationTimer();
 
     this.logger.info(
       `${TAG} started periodic reconciliation every ${this.reconciliationIntervalMs / 1000}s`,
@@ -136,13 +162,99 @@ export class ContainerLifecyclePolicy {
     this.logger.info(`${TAG} stopped`);
   }
 
+  updateConfig(update: LifecycleRuntimeConfigUpdate): void {
+    const nextIdleTimeoutMs = update.idleTimeoutMs;
+    const nextReconciliationIntervalMs = update.reconciliationIntervalMs;
+
+    if (
+      nextIdleTimeoutMs !== undefined
+      && Number.isFinite(nextIdleTimeoutMs)
+      && nextIdleTimeoutMs > 0
+      && nextIdleTimeoutMs !== this.idleTimeoutMs
+    ) {
+      this.idleTimeoutMs = nextIdleTimeoutMs;
+      this.rearmIdleTimers();
+      this.logger.info(`${TAG} updated idle timeout to ${this.idleTimeoutMs}ms`);
+    }
+
+    if (
+      nextReconciliationIntervalMs !== undefined
+      && Number.isFinite(nextReconciliationIntervalMs)
+      && nextReconciliationIntervalMs > 0
+      && nextReconciliationIntervalMs !== this.reconciliationIntervalMs
+    ) {
+      this.reconciliationIntervalMs = nextReconciliationIntervalMs;
+      if (this.reconciliationTimer) {
+        clearInterval(this.reconciliationTimer);
+        this.reconciliationTimer = null;
+        this.startReconciliationTimer();
+      }
+      this.logger.info(`${TAG} updated reconciliation interval to ${this.reconciliationIntervalMs}ms`);
+    }
+  }
+
+  private startReconciliationTimer(): void {
+    this.reconciliationTimer = setInterval(() => {
+      void this.runReconciliation().catch((err) => {
+        this.logger.error(`${TAG} periodic reconciliation error:`, err);
+      });
+    }, this.reconciliationIntervalMs);
+    unrefTimer(this.reconciliationTimer);
+  }
+
   private clearEntryTimers(entry: PauseEntry): void {
     clearTimeoutSafe(entry.idleTimer);
     entry.idleTimer = undefined;
   }
 
+  private shouldDeferUnownedStartupContainer(
+    container: ManagedContainerWithLabels,
+    sessionId: string | undefined,
+  ): boolean {
+    if (!sessionId || !isAliveStatus(container.status)) {
+      return false;
+    }
+
+    const startedAtMs = getStartedAtMs(container.labels);
+    if (startedAtMs === undefined) {
+      return false;
+    }
+
+    const startupGraceMs = getStartupGraceMs(container.labels);
+    const ageMs = Date.now() - startedAtMs;
+    if (ageMs > startupGraceMs) {
+      return false;
+    }
+
+    this.logger.debug(
+      `${TAG} skipping orphan cleanup for recent startup container ${container.containerName} (${container.containerId}); session=${sessionId}, ageMs=${ageMs}, graceMs=${startupGraceMs}`,
+    );
+    return true;
+  }
+
   getState(sessionId: string): PauseState {
     return this.entries.get(sessionId)?.state ?? 'none';
+  }
+
+  private armIdleTimer(sessionId: string, entry: PauseEntry): void {
+    clearTimeoutSafe(entry.idleTimer);
+    entry.idleTimer = setTimeout(() => {
+      void this.executeIdleCheckpoint(sessionId).catch((err) => {
+        this.logger.warn(`${TAG} idle checkpoint failed for session ${sessionId}:`, err);
+      });
+    }, this.idleTimeoutMs);
+    unrefTimer(entry.idleTimer);
+  }
+
+  private rearmIdleTimers(): void {
+    for (const [sessionId, entry] of this.entries) {
+      if (!entry.idleTimer || !entry.idleCallbacks || entry.state !== 'none') {
+        continue;
+      }
+      this.armIdleTimer(sessionId, entry);
+      this.entries.set(sessionId, entry);
+      this.logger.debug(`${TAG} re-armed idle timeout for session ${sessionId} in ${this.idleTimeoutMs}ms`);
+    }
   }
 
   scheduleIdleTimeout(sessionId: string, containerId: string, callbacks: IdleCallbacks): void {
@@ -160,12 +272,7 @@ export class ContainerLifecyclePolicy {
     entry.state = 'none';
     entry.idleCallbacks = callbacks;
     entry.idleFailureCount = 0;
-    entry.idleTimer = setTimeout(() => {
-      void this.executeIdleCheckpoint(sessionId).catch((err) => {
-        this.logger.warn(`${TAG} idle checkpoint failed for session ${sessionId}:`, err);
-      });
-    }, this.idleTimeoutMs);
-    unrefTimer(entry.idleTimer);
+    this.armIdleTimer(sessionId, entry);
 
     this.entries.set(sessionId, entry);
     this.logger.debug(`${TAG} scheduled idle timeout for session ${sessionId} in ${this.idleTimeoutMs}ms`);
@@ -230,13 +337,7 @@ export class ContainerLifecyclePolicy {
       return;
     }
 
-    this.clearEntryTimers(entry);
-    entry.idleTimer = setTimeout(() => {
-      void this.executeIdleCheckpoint(sessionId).catch((err) => {
-        this.logger.warn(`${TAG} idle checkpoint retry failed for session ${sessionId}:`, err);
-      });
-    }, this.idleTimeoutMs);
-    unrefTimer(entry.idleTimer);
+    this.armIdleTimer(sessionId, entry);
     this.entries.set(sessionId, entry);
     this.logger.warn(
       `${TAG} re-armed idle checkpoint for session ${sessionId} after transient failure ` +
@@ -312,7 +413,7 @@ export class ContainerLifecyclePolicy {
 
     // ctx-7fz: roll any session stranded in RESTORING back to a recoverable
     // state. This must run before container reconciliation so the rest of the
-    // pass sees a consistent ACTIVE/PAUSED/CHECKPOINTED set.
+    // pass sees a consistent ACTIVE/CHECKPOINTED set.
     let restoringReconciled = 0;
     let restoringTerminated = 0;
     for (const stranded of strandedRestoring) {
@@ -374,33 +475,6 @@ export class ContainerLifecyclePolicy {
         knownContainerIds.add(container.containerId);
       }
       const alive = container !== undefined && isAliveStatus(container.status);
-
-      if (session.status === 'PAUSED') {
-        const checkpoint = await this.db.getCheckpointV2(session.id);
-        if (checkpoint) {
-          this.logger.info(`${TAG} session ${session.id}: legacy PAUSED state -> CHECKPOINTED`);
-          await this.statusCoordinator.transition({
-            sessionId: session.id,
-            fromStatus: 'PAUSED',
-            toStatus: 'CHECKPOINTED',
-            clearRuntime: true,
-          });
-          await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
-          markedCheckpointed++;
-        } else {
-          this.logger.info(`${TAG} session ${session.id}: legacy PAUSED state with no checkpoint -> TERMINATED`);
-          await this.statusCoordinator.transition({
-            sessionId: session.id,
-            fromStatus: 'PAUSED',
-            toStatus: 'TERMINATED',
-            clearRuntime: true,
-          });
-          await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
-          deleted++;
-        }
-        this.cleanup(session.id);
-        continue;
-      }
 
       if (!alive) {
         const checkpoint = await this.db.getCheckpointV2(session.id);
@@ -471,17 +545,32 @@ export class ContainerLifecyclePolicy {
 
       if (this.removingContainers.has(container.containerId)) continue;
 
+      if (this.shouldDeferUnownedStartupContainer(container, container.labels['ctxmill.session-id'])) {
+        continue;
+      }
+
       this.logger.info(`${TAG} removing orphan container ${container.containerName} (${container.containerId})`);
       this.removingContainers.add(container.containerId);
+      let stopError: unknown;
       try {
         await this.containerManager.stopContainer(container.containerId, 5);
+      } catch (err) {
+        stopError = err;
+        this.logger.warn(`${TAG} failed stopping orphan container ${container.containerName}; attempting force removal:`, err);
+      }
+
+      try {
         await this.containerManager.removeContainer(container.containerId, true);
         orphansCleaned++;
       } catch (err) {
         if (hasStatusCode(err, 404)) {
           orphansCleaned++;
         } else {
-          this.logger.warn(`${TAG} failed cleaning orphan container ${container.containerName}:`, err);
+          this.logger.warn(
+            `${TAG} failed cleaning orphan container ${container.containerName}:`,
+            err,
+            stopError ? { stopError } : undefined,
+          );
         }
       } finally {
         this.removingContainers.delete(container.containerId);
@@ -524,6 +613,69 @@ export class ContainerLifecyclePolicy {
     });
   }
 
+  async getActiveSandboxSessionsForReadback(
+    options: ActiveSandboxReadbackOptions = {},
+  ): Promise<SandboxSessionRow[]> {
+    const [dbSessions, liveContainers] = await Promise.all([
+      this.db.getActiveSandboxSessions(),
+      this.containerManager.listManagedContainersWithLabels() as Promise<ManagedContainerWithLabels[]>,
+    ]);
+    const containerByName = new Map(liveContainers.map((container) => [container.containerName, container]));
+    const containerById = new Map(liveContainers.map((container) => [container.containerId, container]));
+    const activeRows: SandboxSessionRow[] = [];
+
+    for (const session of dbSessions) {
+      this.sessionConversationIds.set(session.id, session.conversationId);
+      const container = this.findLiveContainerForSession(session, liveContainers, containerById, containerByName);
+      const alive = container !== undefined && isAliveStatus(container.status);
+
+      if (alive) {
+        if (session.containerName !== container.containerName || session.containerId !== container.containerId) {
+          await this.statusCoordinator.transition({
+            sessionId: session.id,
+            fromStatus: session.status as SessionStatus,
+            toStatus: session.status as SessionStatus,
+            extra: {
+              containerName: container.containerName,
+              containerId: container.containerId,
+            },
+          });
+          activeRows.push({
+            ...session,
+            containerName: container.containerName,
+            containerId: container.containerId,
+          });
+        } else {
+          activeRows.push(session);
+        }
+        continue;
+      }
+
+      if (options.shouldDefer?.(session)) {
+        activeRows.push(session);
+        continue;
+      }
+
+      const checkpoint = await this.db.getCheckpointV2(session.id);
+      await this.statusCoordinator.transition({
+        sessionId: session.id,
+        fromStatus: session.status as SessionStatus,
+        toStatus: checkpoint ? 'CHECKPOINTED' : 'TERMINATED',
+        clearRuntime: true,
+      });
+      await this.releaseMissingContainerSlot(session);
+      await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
+      this.cleanup(session.id);
+      this.logger.info(
+        checkpoint
+          ? `${TAG} readback: session ${session.id} container gone, checkpoint exists -> CHECKPOINTED`
+          : `${TAG} readback: session ${session.id} container gone, no checkpoint -> TERMINATED`,
+      );
+    }
+
+    return activeRows;
+  }
+
   private async runReconciliation(): Promise<void> {
     if (this.reconciliationRunning) {
       this.logger.debug(`${TAG} reconciliation already in progress; skipping overlapping run`);
@@ -544,6 +696,7 @@ export class ContainerLifecyclePolicy {
 
       const activeSessionIds = new Set(dbSessions.map((session) => session.id));
       const cleanupReasons = new Map<string, string>();
+      const managedContainerIds = new Set(managedContainers.map((container) => container.containerId));
       let terminated = 0;
       let checkpointed = 0;
       let cleaned = 0;
@@ -561,10 +714,18 @@ export class ContainerLifecyclePolicy {
 
         const decision = await this.shouldKillContainer(containerId, session.id);
         if (decision === 'kill') {
-          cleanupReasons.set(containerId, 'session container dead with no checkpoint');
+          if (managedContainerIds.has(containerId)) {
+            cleanupReasons.set(containerId, 'session container dead with no checkpoint');
+          } else {
+            await this.releaseMissingContainerSlot(session);
+          }
           terminated++;
         } else if (decision === 'kill-after-checkpoint') {
-          cleanupReasons.set(containerId, 'session container dead after checkpoint promotion');
+          if (managedContainerIds.has(containerId)) {
+            cleanupReasons.set(containerId, 'session container dead after checkpoint promotion');
+          } else {
+            await this.releaseMissingContainerSlot(session);
+          }
           checkpointed++;
         }
       }
@@ -578,6 +739,13 @@ export class ContainerLifecyclePolicy {
           && timeoutSec > 0
           && (Date.now() - startedAtMs) / 1000 > timeoutSec;
         const hasActiveSession = sessionId !== undefined && activeSessionIds.has(sessionId);
+        if (
+          !cleanupReasons.has(container.containerId)
+          && !hasActiveSession
+          && this.shouldDeferUnownedStartupContainer(container, sessionId)
+        ) {
+          continue;
+        }
         const shouldReview = cleanupReasons.has(container.containerId) || !hasActiveSession || isExpired;
 
         if (!shouldReview) {
@@ -668,6 +836,21 @@ export class ContainerLifecyclePolicy {
     return 'kill';
   }
 
+  private async releaseMissingContainerSlot(session: SandboxSessionRow): Promise<void> {
+    if (!session.containerId) {
+      return;
+    }
+
+    try {
+      await this.containerManager.removeContainer(session.containerId, true);
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} failed releasing missing container slot for session ${session.id} (${session.containerId}):`,
+        err,
+      );
+    }
+  }
+
   private async cleanupManagedContainer(container: ContainerInfo, reason: string): Promise<boolean> {
     if (this.removingContainers.has(container.containerId)) {
       return false;
@@ -678,15 +861,26 @@ export class ContainerLifecyclePolicy {
     );
 
     this.removingContainers.add(container.containerId);
+    let stopError: unknown;
     try {
       await this.containerManager.stopContainer(container.containerId, 10);
+    } catch (err) {
+      stopError = err;
+      this.logger.warn(`${TAG} failed stopping container ${container.containerId}; attempting force removal:`, err);
+    }
+
+    try {
       await this.containerManager.removeContainer(container.containerId, true);
       return true;
     } catch (err) {
       if (hasStatusCode(err, 404)) {
         return true;
       }
-      this.logger.warn(`${TAG} failed cleaning container ${container.containerId}:`, err);
+      this.logger.warn(
+        `${TAG} failed cleaning container ${container.containerId}:`,
+        err,
+        stopError ? { stopError } : undefined,
+      );
       return false;
     } finally {
       this.removingContainers.delete(container.containerId);

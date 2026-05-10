@@ -55,7 +55,7 @@ async function ensureStressTrigger(
     data: {
       agentId: chainResponderId,
       eventType: 'stress.tools.complete',
-      taskTemplate: 'Chain event received: {{payload}}',
+      taskTemplate: 'Chain event received: {{payload}}. Acknowledge it by emitting exactly one stress.chain.done event with payload {"schemaVersion":1,"harness":"stress-chain-responder","agent":"stress-chain-responder","model":"gpt-5.4","status":"ok"}.',
       enabled: true,
     },
   });
@@ -176,7 +176,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
-      'Run the stress test now. Confirm you are operational and emit stress.pi.complete.',
+      'Run the stress test now. Confirm you are operational and emit exactly one stress.pi.complete event with payload {"schemaVersion":1,"harness":"stress-pi-openai","agent":"stress-pi-openai","model":"gpt-5.4","status":"ok"}.',
     );
     trackRun('stress-pi-openai', sessionId);
 
@@ -214,7 +214,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
-      'Run the stress test now. Confirm you are operational and emit stress.pi-gemini.complete.',
+      'Run the stress test now. Confirm you are operational and emit exactly one stress.pi-gemini.complete event with payload {"schemaVersion":1,"harness":"stress-pi-gemini","agent":"stress-pi-gemini","model":"gemini-2.5-flash","status":"ok"}.',
     );
     trackRun('stress-pi-gemini', sessionId);
 
@@ -252,7 +252,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
-      'Write a Python file at stress_test.py that computes the first 10 Fibonacci numbers and prints them as a JSON array. Then execute it with Bash and verify the output is correct. Finally, read the file back to confirm it exists.',
+      'Write a Python file at /workspace/stress_test.py that computes the first 10 Fibonacci numbers and prints them as a JSON array. Then execute it with Bash, verify the output is correct, and read the file back to confirm it exists. Finally emit exactly one stress.claude.complete event with payload {"schemaVersion":1,"harness":"stress-claude-sonnet","agent":"stress-claude-sonnet","model":"claude-sonnet-4-6","status":"ok"}.',
     );
     trackRun('stress-claude-sonnet', sessionId);
 

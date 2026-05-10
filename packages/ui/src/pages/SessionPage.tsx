@@ -144,7 +144,7 @@ export function SessionPage() {
             const turns = Array.isArray(turnsRaw) ? turnsRaw : [] as Record<string, unknown>[];
 
             const isRuntimeActiveStatus = (status: unknown) =>
-              status === 'ACTIVE' || status === 'PAUSED' || status === 'RESTORING';
+              status === 'ACTIVE' || status === 'RESTORING';
             const matchingSessions = resolvedConversationId
               ? sessions.filter((s: Record<string, unknown>) => s.conversationId === resolvedConversationId)
               : sessions;
@@ -181,7 +181,7 @@ export function SessionPage() {
               }
 
               // Only lock read-only when the unified session status is TERMINATED
-              // (no checkpoint to restore). ACTIVE/CHECKPOINTED/PAUSED/RESTORING sessions can resume.
+              // (no checkpoint to restore). ACTIVE/CHECKPOINTED/RESTORING sessions can resume.
               const isTerminated = matchingSessions.length > 0 &&
                 matchingSessions.every((s: Record<string, unknown>) => s.status === 'TERMINATED');
               if (isTerminated && !hasActiveTurn && convTurns.length > 0) {

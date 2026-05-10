@@ -83,8 +83,6 @@ function createDbSession(overrides?: Partial<SandboxSessionRow>): SandboxSession
     createdAt: Date.now(),
     updatedAt: Date.now(),
     lastActivityAt: Date.now(),
-    pausedAt: null,
-    pausedReason: null,
     ...overrides,
   };
 }
@@ -187,7 +185,7 @@ describe('SandboxSessionManager interrupt resume characterization', () => {
       db,
       lifecyclePolicy,
       workspaceDiffService: new WorkspaceDiffService({ containerManager }),
-      buildSandboxSecrets: () => ({}),
+      buildSandboxSecrets: async () => ({}),
       logger,
       config: {
         idleTimeoutMs: 60_000,

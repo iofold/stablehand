@@ -181,7 +181,7 @@ Artifact upload/download are daemon tools, not provider-managed HTTP uploads: `a
 turn.pending, turn.started, turn.completed,
 user.message, message.committed, run.ag_ui_event,
 run.text_chunk, run.tool_started, run.tool_result,
-run.interrupted, run.interrupt_resolved, session.paused,
+run.interrupted, run.interrupt_resolved,
 feedback.received,
 agent.created, agent.deleted,
 client.connected, client.disconnected,
@@ -290,7 +290,7 @@ interface SecretProvider {
 2. **Provider Lookup**: CachedPostgresSecretProvider queries `secrets` table
 3. **Encryption**: AES-256-GCM (same as former SQLite provider)
 4. **Injection**: Secrets passed to harness via `HarnessSessionConfig.secrets`
-5. **Tmpfs Mount**: On resume, secrets injected fresh via `/run/secrets/config.json`
+5. **Runtime Env**: On resume, secrets injected fresh into the sandbox environment
 
 ### Secret Scoping
 - **Agent-scoped**: Per-agent secrets (default)
@@ -369,8 +369,8 @@ hitl:
 - Concurrent approval requests
 - Approval filter matching (complex predicates)
 - Fallback action (approve vs reject)
-- Container pause/resume correctness
-- Checkpoint creation during freeze
+- Checkpoint/restore correctness
+- Checkpoint creation during suspend
 - Session suspension/resumption
 - Approval race conditions (multiple decisions)
 - Container crash during approval wait
@@ -502,8 +502,8 @@ nativeTools:
 - [ ] Concurrent approval requests
 - [ ] Approval filter matching
 - [ ] Fallback action enforcement
-- [ ] Container pause/resume correctness
-- [ ] Checkpoint creation during freeze
+- [ ] Checkpoint/restore correctness
+- [ ] Checkpoint creation during suspend
 - [ ] Session suspension/resumption
 
 ---

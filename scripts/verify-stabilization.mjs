@@ -6,7 +6,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 const apiUrl = process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://localhost:3002';
 const uiUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3200';
 const outDir = process.env.CTXMILL_VERIFY_STABILIZATION_OUT ?? `.tmp/verify-stabilization-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-const statusSet = new Set(['QUEUED', 'ACTIVE', 'PAUSED', 'CHECKPOINTED', 'RESTORING', 'TERMINATED', 'COMPLETED', 'ERROR', 'CANCELLED', 'IDLE']);
+const statusSet = new Set(['QUEUED', 'ACTIVE', 'CHECKPOINTED', 'RESTORING', 'TERMINATED', 'COMPLETED', 'ERROR', 'CANCELLED', 'IDLE']);
 const evidence = [];
 const createdAgents = [];
 

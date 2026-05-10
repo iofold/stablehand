@@ -72,16 +72,15 @@ describe('useAgentSessions filter normalization (ctx-u4p)', () => {
     expect(captureFiltered(sessions, 'all')).toHaveLength(3);
   });
 
-  it('matches uppercase ACTIVE/PAUSED/RESTORING to the lowercase "running" filter', () => {
+  it('matches uppercase ACTIVE/RESTORING to the lowercase "running" filter', () => {
     const sessions = [
       makeSession({ status: 'ACTIVE' as never, conversationId: 'a' }),
-      makeSession({ status: 'PAUSED', conversationId: 'b' }),
       makeSession({ status: 'RESTORING', conversationId: 'c' }),
       makeSession({ status: 'COMPLETED', conversationId: 'd' }),
     ];
 
     const ids = captureFiltered(sessions, 'running').map((s) => s.conversationId).sort();
-    expect(ids).toEqual(['a', 'b', 'c']);
+    expect(ids).toEqual(['a', 'c']);
   });
 
   it('matches uppercase COMPLETED/CHECKPOINTED to the lowercase "completed" filter', () => {

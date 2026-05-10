@@ -138,7 +138,7 @@ describe('HITL timeout → container orphan cleanup (ctx-i9k)', () => {
 
     // Session must be suspended — not left as 'running'.
     expect(registry.getRun(run.id)?.status).toBe('suspended');
-    expect(registry.getRun(run.id)?.pausedReason).toBe('hitl_timeout');
+    expect(registry.getRun(run.id)?.suspendReason).toBe('hitl_timeout');
 
     // Container eviction must have been invoked — no orphaned container.
     expect(containerManager.stopContainer).toHaveBeenCalledOnce();

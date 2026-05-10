@@ -62,7 +62,10 @@ function createExecutionMocks() {
     emit: vi.fn(),
   };
 
-  const sessionManager = {
+  const sessionManager: {
+    checkConcurrencyLimit: ReturnType<typeof vi.fn>;
+    reserveConcurrencySlot?: ReturnType<typeof vi.fn>;
+  } = {
     checkConcurrencyLimit: vi.fn(),
   };
 
@@ -343,6 +346,32 @@ describe('RunStartupService', () => {
       });
     });
 
+    test('reserves a startup concurrency slot when supported and passes it to execution', async () => {
+      const service = createService();
+      const mocks = createExecutionMocks();
+      const reservation = {
+        agentId: 'agent-1',
+        id: 'reservation-1',
+        release: vi.fn(),
+      };
+      mocks.sessionManager.reserveConcurrencySlot = vi.fn().mockReturnValue(reservation);
+      service.configureExecution(mocks);
+
+      const start = await service.prepareRunStart({
+        agent: createAgent(),
+        agentId: 'agent-1',
+        content: 'hello there',
+        mode: 'interactive',
+      });
+      await service.launchPreparedRun(start, 'agent-1');
+
+      expect(mocks.sessionManager.reserveConcurrencySlot).toHaveBeenCalledWith('agent-1');
+      expect(mocks.sessionManager.checkConcurrencyLimit).not.toHaveBeenCalled();
+      expect(mocks.agentSessionService.executeSession).toHaveBeenCalledWith(expect.objectContaining({
+        concurrencyReservation: reservation,
+      }));
+    });
+
     test('reuses an existing conversation and suppresses user.message when requested', async () => {
       const service = createService();
       const mocks = createExecutionMocks();
@@ -384,6 +413,43 @@ describe('RunStartupService', () => {
         taskDescription: 'background task',
       }));
       expect(start.turnId).toBe('turn-custom');
+    });
+
+    test('creates a missing requested conversation id only when explicitly allowed', async () => {
+      const service = createService();
+      const mocks = createExecutionMocks();
+      mocks.db.getConversation.mockResolvedValue(undefined);
+      mocks.db.createConversation.mockResolvedValue({ id: 'client-thread-1', agentId: 'agent-1' });
+      service.configureExecution(mocks);
+
+      const start = await service.prepareRunStart({
+        agent: createAgent(),
+        agentId: 'agent-1',
+        content: 'hello there',
+        mode: 'interactive',
+        conversationId: 'client-thread-1',
+        createMissingConversationWithRequestedId: true,
+      });
+
+      expect(mocks.db.createConversation).toHaveBeenCalledWith('agent-1', 'client-thread-1');
+      expect(start.conversationId).toBe('client-thread-1');
+    });
+
+    test('rejects missing requested conversation ids unless creation is enabled', async () => {
+      const service = createService();
+      const mocks = createExecutionMocks();
+      mocks.db.getConversation.mockResolvedValue(undefined);
+      service.configureExecution(mocks);
+
+      await expect(service.prepareRunStart({
+        agent: createAgent(),
+        agentId: 'agent-1',
+        content: 'hello there',
+        mode: 'interactive',
+        conversationId: 'client-thread-1',
+      })).rejects.toThrow('Conversation client-thread-1 not found for agent agent-1');
+
+      expect(mocks.db.createConversation).not.toHaveBeenCalled();
     });
 
     test('rejects missing required existing conversation ids', async () => {

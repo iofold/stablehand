@@ -11,6 +11,7 @@ import type { SSEManager } from '../../packages/ctxmill/src/orchestrator/sse.js'
 import type { SessionTurnService } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
 import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
 import type { AGUIEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
+import { SESSION_CANCELLED_MESSAGE } from '../../packages/ctxmill/src/orchestrator/session-cancellation.js';
 import { TestSessionRegistry, createTestSessionManager } from '../utils/test-session-registry.js';
 
 type StreamEvent = AGUIEvent | MessageCommittedEvent;
@@ -101,6 +102,7 @@ function createDeps(overrides: {
   db?: {
     addMessage: ReturnType<typeof vi.fn>;
     updateTurn: ReturnType<typeof vi.fn>;
+    getTurn?: ReturnType<typeof vi.fn>;
     updateMessageToolCalls?: ReturnType<typeof vi.fn>;
   };
   sessionManager?: MockSessionManager;
@@ -115,6 +117,7 @@ function createDeps(overrides: {
   const db = {
     addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
     updateTurn: vi.fn().mockResolvedValue(undefined),
+    getTurn: vi.fn().mockResolvedValue({ id: 'run-1', sessionId: 'sandbox-1' }),
     updateMessageToolCalls: vi.fn().mockResolvedValue(undefined),
     ...overrides.db,
   };
@@ -179,6 +182,66 @@ describe('AgentSessionService', () => {
       params.agentId,
       'sandbox-1',
     );
+  });
+
+  it('completes the current rebound sandbox session when the turn row was rebound during delivery', async () => {
+    const { db, sessionManager } = await executeEvents([], {
+      deps: {
+        db: {
+          addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
+          updateTurn: vi.fn().mockResolvedValue(undefined),
+          getTurn: vi.fn().mockResolvedValue({ id: 'run-1', sessionId: 'sandbox-2' }),
+        },
+      },
+    });
+
+    expect(db.getTurn).toHaveBeenCalledWith('run-1');
+    expect(db.updateTurn).toHaveBeenLastCalledWith('run-1', {
+      sessionId: 'sandbox-2',
+      completedAt: expect.any(Number),
+      error: null,
+    });
+    expect(sessionManager.completeTurn).toHaveBeenCalledWith(
+      'sandbox-2',
+      'run-1',
+      'agent-1',
+      'conv-1',
+      'completed',
+      expect.any(Number),
+      undefined,
+    );
+  });
+
+  it('does not start sandbox work when the turn was durably cancelled before delivery', async () => {
+    const eventBus = createEventBusMock();
+    const { db, sessionManager, sessionTurnService } = await executeEvents([], {
+      deps: {
+        eventBus,
+        db: {
+          addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
+          updateTurn: vi.fn().mockResolvedValue(undefined),
+          getTurn: vi.fn().mockResolvedValue({
+            id: 'run-1',
+            sessionId: null,
+            completedAt: 1,
+            error: SESSION_CANCELLED_MESSAGE,
+          }),
+        },
+      },
+    });
+
+    expect(sessionManager.ensureSession).not.toHaveBeenCalled();
+    expect(sessionManager.startTurn).not.toHaveBeenCalled();
+    expect(sessionTurnService.executeSessionTurn).not.toHaveBeenCalled();
+    expect(db.updateTurn).toHaveBeenCalledWith('run-1', {
+      completedAt: expect.any(Number),
+      error: SESSION_CANCELLED_MESSAGE,
+    });
+    expect(eventBus.emit).toHaveBeenCalledWith('turn.completed', expect.objectContaining({
+      turnId: 'run-1',
+      status: 'cancelled',
+      error: SESSION_CANCELLED_MESSAGE,
+    }));
   });
 
   it('emits run.ag_ui_event for streamed events not handled individually', async () => {
@@ -589,7 +652,34 @@ describe('AgentSessionService', () => {
       expect(toolResults[0].result).toBe('x'.repeat(500));
     });
 
-    it('uses an empty string for run.tool_result toolName when absent', async () => {
+    it('backfills run.tool_result toolName from the matching TOOL_CALL_START event', async () => {
+      const eventBus = new TypedEventBus();
+      const toolResults = collectEvents(eventBus, 'run.tool_result');
+
+      await executeEvents([
+        {
+          type: 'TOOL_CALL_START',
+          timestamp: 1,
+          runId: 'run-1',
+          toolCallId: 'tc-1',
+          toolName: 'search',
+          args: { query: 'alpha' },
+        },
+        {
+          type: 'TOOL_CALL_RESULT',
+          timestamp: 2,
+          runId: 'run-1',
+          toolCallId: 'tc-1',
+          result: 'ok',
+          durationMs: 12,
+        },
+      ], { deps: { eventBus } });
+
+      expect(toolResults).toHaveLength(1);
+      expect(toolResults[0].toolName).toBe('search');
+    });
+
+    it('uses an empty string for run.tool_result toolName when no start event is available', async () => {
       const eventBus = new TypedEventBus();
       const toolResults = collectEvents(eventBus, 'run.tool_result');
 
@@ -598,7 +688,7 @@ describe('AgentSessionService', () => {
           type: 'TOOL_CALL_RESULT',
           timestamp: 1,
           runId: 'run-1',
-          toolCallId: 'tc-1',
+          toolCallId: 'tc-missing',
           result: 'ok',
           durationMs: 12,
         },

@@ -11,6 +11,7 @@ import { mapMessagesToInternal } from '../agent-helpers.js';
  */
 
 type RawRow = Parameters<typeof mapMessagesToInternal>[0][number];
+type RawRowWithToolCalls = RawRow & { toolCalls?: unknown[] | null };
 
 function row(overrides: Partial<RawRow> & Pick<RawRow, 'id' | 'role' | 'createdAt'>): RawRow {
   return {
@@ -106,6 +107,40 @@ describe('mapMessagesToInternal — deterministic transcript assembly', () => {
 
     expect(result[0]).toMatchObject({ id: 'a', agentId: 'agent-x' });
     expect(result[1]).toMatchObject({ id: 'b', agentId: 'agent-fallback', toolCallId: 'tc-1' });
+  });
+
+  it('preserves persisted assistant tool calls before replayed tool result messages', () => {
+    const rows: RawRowWithToolCalls[] = [
+      row({ id: 'a', role: 'user', content: 'emit an event', createdAt: 1 }),
+      {
+        ...row({ id: 'b', role: 'assistant', content: '', createdAt: 2 }),
+        toolCalls: [
+          {
+            id: 'tc-1',
+            name: 'emit-event',
+            args: '{"type":"audit","payload":{"ok":true}}',
+            status: 'complete',
+          },
+        ],
+      },
+      row({ id: 'c', role: 'tool', content: 'emitted', toolCallId: 'tc-1', createdAt: 3 }),
+      row({ id: 'd', role: 'user', content: 'continue', createdAt: 4 }),
+    ];
+
+    const result = mapMessagesToInternal(rows, 'agent-1');
+
+    expect(result[1]).toMatchObject({
+      id: 'b',
+      role: 'assistant',
+      toolCalls: [
+        {
+          id: 'tc-1',
+          name: 'emit-event',
+          arguments: { type: 'audit', payload: { ok: true } },
+        },
+      ],
+    });
+    expect(result[2]).toMatchObject({ role: 'tool', toolCallId: 'tc-1' });
   });
 
   it('handles mixed Date/number/string createdAt values without losing ordering', () => {
