@@ -105,7 +105,7 @@ ENTRYPOINT ["bun", "run", "--preload", "./packages/sandbox-daemon/src/observabil
 FROM harness-base AS harness-claude-agents
 
 USER root
-RUN npm install -g @anthropic-ai/claude-code \
+RUN npm install -g @anthropic-ai/claude-code@2.1.195 \
     && printf '#!/bin/sh\nexec /usr/local/bin/node "$@"\n' > /usr/local/bin/claude-wrapper && chmod +x /usr/local/bin/claude-wrapper
 ENV CLAUDE_CODE_PATH=/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js
 USER ctxmill

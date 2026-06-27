@@ -94,6 +94,7 @@ type SDKUserMessage = Extract<SDKMessage, { type: 'user' }>;
 type SDKResultMessage = Extract<SDKMessage, { type: 'result' }>;
 type SDKErrorResultMessage = Exclude<SDKResultMessage, { subtype: 'success' }>;
 type SDKSystemMessage = Extract<SDKMessage, { type: 'system' }>;
+type SDKInitMessage = Extract<SDKSystemMessage, { subtype: 'init' }>;
 
 type SdkToolFactory = (...args: unknown[]) => unknown;
 
@@ -292,12 +293,18 @@ class ClaudeSession implements HarnessSession {
       yield* this.flushQueuedEvents();
       const committedToolCalls: Message['toolCalls'] | undefined =
         accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined;
-      if (assistantText.length > 0 || accumulatedToolCalls.length > 0) {
+      const committedAssistantText =
+        assistantText.length > 0 || accumulatedToolCalls.length > 0
+          ? assistantText
+          : typeof doneEvent?.result === 'string'
+            ? doneEvent.result
+            : '';
+      if (committedAssistantText.length > 0 || accumulatedToolCalls.length > 0) {
         this.transcript.push({
           id: randomUUID(),
           agentId: this.config.agentId ?? this.config.conversationId,
           role: 'assistant',
-          content: assistantText,
+          content: committedAssistantText,
           ...(committedToolCalls ? { toolCalls: committedToolCalls } : {}),
           createdAt: new Date(),
         });
@@ -305,7 +312,7 @@ class ClaudeSession implements HarnessSession {
         yield {
           type: 'message_committed',
           role: 'assistant',
-          content: assistantText,
+          content: committedAssistantText,
           ...(committedToolCalls ? { toolCalls: committedToolCalls } : {}),
           turnId: input.turnId,
           messageSeq: this.transcript.length - 1,
@@ -836,6 +843,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
         }
 
         if (this.isSystemInitMessage(message)) {
+          yield this.toRuntimeCapabilitiesEvent(message);
           break;
         }
         break;
@@ -1181,8 +1189,37 @@ export class ClaudeAgentsHarness implements AgentHarness {
     throw new Error(`Tool ${toolName} must provide a Zod schema input for claude-agents.`);
   }
 
-  private isSystemInitMessage(value: SDKSystemMessage): boolean {
+  private isSystemInitMessage(value: SDKSystemMessage): value is SDKInitMessage {
     return value.subtype === 'init';
+  }
+
+  private toRuntimeCapabilitiesEvent(value: SDKInitMessage): AgentEvent {
+    return {
+      type: 'custom_agui_event',
+      event: {
+        type: 'CUSTOM',
+        timestamp: Date.now(),
+        runId: '',
+        name: 'ctxmill.claude.runtime_capabilities',
+        subtype: 'claude_runtime_capabilities',
+        source: 'claude-agents',
+        claudeSessionId: this.hookTelemetryString(value.session_id),
+        sdkMessageId: this.hookTelemetryString(value.uuid),
+        claudeCodeVersion: value.claude_code_version,
+        model: value.model,
+        cwd: value.cwd,
+        permissionMode: value.permissionMode,
+        slashCommands: value.slash_commands,
+        supportsGoal: value.slash_commands.includes('goal'),
+        tools: value.tools,
+        mcpServers: value.mcp_servers,
+        agents: value.agents,
+        skills: value.skills,
+        plugins: value.plugins,
+        apiKeySource: value.apiKeySource,
+        outputStyle: value.output_style,
+      },
+    };
   }
 
   private toHookTelemetryEvent(value: unknown): AgentEvent | null {

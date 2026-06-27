@@ -618,6 +618,47 @@ describe('ClaudeAgentsHarness', () => {
       expect(progress.type === 'custom_agui_event' ? progress.event.stdout : '').toContain('[truncated]');
     });
 
+    it('maps Claude init messages to runtime capability telemetry including /goal support', () => {
+      const harness = new ClaudeAgentsHarness();
+
+      const events = mapSdkMessage(harness, {
+        type: 'system',
+        subtype: 'init',
+        apiKeySource: 'environment',
+        claude_code_version: '2.1.195',
+        cwd: '/workspace',
+        tools: ['Read', 'Write'],
+        mcp_servers: [{ name: 'ctxmill', status: 'connected' }],
+        model: 'claude-sonnet-4-6',
+        permissionMode: 'bypassPermissions',
+        slash_commands: ['clear', 'goal'],
+        output_style: 'default',
+        skills: ['code-review'],
+        plugins: [],
+        uuid: 'sdk-init-1',
+        session_id: 'claude-session-1',
+      }, new Map());
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: 'custom_agui_event',
+        event: {
+          type: 'CUSTOM',
+          name: 'ctxmill.claude.runtime_capabilities',
+          subtype: 'claude_runtime_capabilities',
+          source: 'claude-agents',
+          claudeCodeVersion: '2.1.195',
+          claudeSessionId: 'claude-session-1',
+          model: 'claude-sonnet-4-6',
+          permissionMode: 'bypassPermissions',
+          slashCommands: ['clear', 'goal'],
+          supportsGoal: true,
+          tools: ['Read', 'Write'],
+          mcpServers: [{ name: 'ctxmill', status: 'connected' }],
+        },
+      });
+    });
+
     it('should map result success messages to done with usage', () => {
       const harness = new ClaudeAgentsHarness();
 
@@ -708,6 +749,81 @@ describe('ClaudeAgentsHarness', () => {
       expect(queryCall?.options.includeHookEvents).toBe(true);
       expect(queryCall?.options.includePartialMessages).toBe(false);
       expect(queryCall?.options.maxTurns).toBe(4);
+    });
+
+    it('commits a native /goal result even when Claude only returns terminal result text', async () => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+
+      mockQuery.mockImplementation(() => sdkStream([
+        {
+          type: 'system',
+          subtype: 'init',
+          apiKeySource: 'environment',
+          claude_code_version: '2.1.195',
+          cwd: '/tmp/workspace',
+          tools: ['Read'],
+          mcp_servers: [{ name: 'ctxmill', status: 'connected' }],
+          model: 'claude-sonnet-4-6',
+          permissionMode: 'bypassPermissions',
+          slash_commands: ['goal'],
+          output_style: 'default',
+          skills: [],
+          plugins: [],
+          uuid: 'sdk-init-goal',
+          session_id: 'claude-session-goal',
+        },
+        {
+          type: 'result',
+          subtype: 'success',
+          result: 'GOAL_OK',
+          usage: { input_tokens: 5, output_tokens: 2 },
+        },
+      ]));
+
+      const session = await harness.openSession(makeConfig());
+      const events = await collectEvents(
+        session.deliverTurn(
+          {
+            messages: [
+              makeMessage(
+                'user',
+                '/goal The assistant has replied with exactly the token GOAL_OK in its final answer. Reply with exactly GOAL_OK.',
+              ),
+            ],
+            turnId: 'turn-goal',
+          },
+          {},
+        ),
+      );
+      await session.close();
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: 'custom_agui_event',
+          event: expect.objectContaining({
+            subtype: 'claude_runtime_capabilities',
+            supportsGoal: true,
+            claudeCodeVersion: '2.1.195',
+          }),
+        }),
+        {
+          type: 'message_committed',
+          role: 'assistant',
+          content: 'GOAL_OK',
+          turnId: 'turn-goal',
+          messageSeq: 1,
+        },
+        {
+          type: 'done',
+          result: 'GOAL_OK',
+          usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 },
+        },
+      ]);
     });
 
     it('allows the Claude Skill tool when project skills are configured', async () => {
