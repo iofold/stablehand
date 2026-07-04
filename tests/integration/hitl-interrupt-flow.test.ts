@@ -1,36 +1,35 @@
 /**
  * HITL Interrupt Lifecycle Integration Tests
  *
- * Wires REAL InterruptManager + REAL TypedEventBus + REAL SSEBroadcaster
+ * Wires REAL InterruptManager + REAL TypedEventBus + the canonical wire (ADR-015)
  * with a mock SSEManager to test the full human-in-the-loop interrupt flow.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
-import { SSEBroadcaster } from '../../packages/ctxmill/src/orchestrator/sse-broadcaster.js';
+
 import {
   createTestBus,
   collectEvents,
-  createMockSSEManager,
+  createCanonicalWireHarness,
+  flushWire,
 } from '../../tests/utils/event-bus-test-helpers.js';
 
 describe('HITL Interrupt Lifecycle', () => {
   let bus: TypedEventBus;
-  let mockSSE: ReturnType<typeof createMockSSEManager>;
-  let broadcaster: SSEBroadcaster;
+  let harness: ReturnType<typeof createCanonicalWireHarness>;
   let interrupts: InterruptManager;
 
   beforeEach(() => {
-    bus = createTestBus();
-    mockSSE = createMockSSEManager();
-    broadcaster = new SSEBroadcaster(mockSSE as any, bus);
+    harness = createCanonicalWireHarness();
+    bus = harness.bus;
+
     interrupts = new InterruptManager(bus);
   });
 
   afterEach(() => {
     interrupts.shutdown();
-    broadcaster.shutdown();
   });
 
   // ── Full approval flow ─────────────────────────────────────────
@@ -45,7 +44,8 @@ describe('HITL Interrupt Lifecycle', () => {
         { to: 'user@example.com', body: 'Hello' },
       );
 
-       // Verify run.interrupted was emitted
+       // Verify run.interrupted was emitted (persist hook defers dispatch by a tick)
+       await flushWire();
        expect(interruptedEvents.events).toHaveLength(1);
        expect(interruptedEvents.events[0]).toEqual(
          expect.objectContaining({
@@ -58,12 +58,13 @@ describe('HITL Interrupt Lifecycle', () => {
          }),
        );
 
-      // Verify SSEBroadcaster forwarded it as CUSTOM
-      expect(mockSSE.broadcast).toHaveBeenCalledTimes(1);
-      expect(mockSSE.broadcast).toHaveBeenCalledWith(
-        'agent-1',
-        expect.objectContaining({ type: 'HITL_PAUSE', internalType: 'run.interrupted' }),
-      );
+      // Verify the canonical wire carried it as CUSTOM{name:'ctxmill.hitl.requested'}
+      await flushWire();
+      expect(harness.wire).toHaveLength(1);
+      expect(harness.wire[0]).toEqual({
+        agentId: 'agent-1',
+        event: expect.objectContaining({ type: 'CUSTOM', name: 'ctxmill.hitl.requested', toolCallId: 'tc-1' }),
+      });
 
       // Resolve with approve
       const resolved = await interrupts.resolve('run-1', 'approve', { reason: 'ok' }, 'agent-1');
@@ -84,11 +85,12 @@ describe('HITL Interrupt Lifecycle', () => {
          }),
        );
 
-      // SSEBroadcaster should have broadcast the resolved event too
-      expect(mockSSE.broadcast).toHaveBeenCalledWith(
-        'agent-1',
-        expect.objectContaining({ type: 'CUSTOM', internalType: 'run.interrupt_resolved' }),
-      );
+      // The canonical wire should carry the resolution too
+      await flushWire();
+      expect(harness.wire.some((entry) =>
+        entry.event.type === 'CUSTOM'
+        && entry.event.name === 'ctxmill.hitl.resolved'
+        && entry.event.action === 'approve')).toBe(true);
 
       interruptedEvents.unsubscribe();
       resolvedEvents.unsubscribe();
@@ -178,7 +180,8 @@ describe('HITL Interrupt Lifecycle', () => {
         'run-c2', 'agent-shared', 'tc-c2', 'tool_b', { y: 2 },
       );
 
-       // Both should have emitted interrupted events
+       // Both should have emitted interrupted events (persist hook defers dispatch)
+       await flushWire();
        expect(interruptedEvents.events).toHaveLength(2);
        expect(interruptedEvents.events[0].turnId).toBe('run-c1');
        expect(interruptedEvents.events[1].turnId).toBe('run-c2');
@@ -223,6 +226,7 @@ describe('HITL Interrupt Lifecycle', () => {
       expect(result1).toEqual({ action: 'reject', data: 'Superseded by new interrupt' });
 
       // Two interrupted events should have been emitted (one per waitForApproval call)
+      await flushWire();
       expect(interruptedEvents.events).toHaveLength(2);
       expect(interruptedEvents.events[0].toolCallId).toBe('tc-sup-1');
       expect(interruptedEvents.events[1].toolCallId).toBe('tc-sup-2');

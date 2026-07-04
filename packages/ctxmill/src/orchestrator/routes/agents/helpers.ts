@@ -1,13 +1,12 @@
 import { join } from 'node:path';
 import { chown, readdir, stat } from 'node:fs/promises';
 import type { FastifyRequest } from 'fastify';
-import type { ApiSessionStatus, SandboxSessionStatus } from '@ctxmill/shared';
+import { projectSessionStatus } from '@ctxmill/shared';
 
 import type { HarnessRegistry } from '../../../harness/types.js';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared } from '../../../workspace/ensure.js';
-import { parseStoredHarnessConfig } from '../../session-manager/session-agent-definition.js';
+import { parseStoredHarnessConfig, resolveResourceLimits } from '../../agent-definition.js';
 import { validateAgentHttpToolsConfig } from '../../http-tools.js';
-import { isSessionCancelled } from '../../session-cancellation.js';
 import type { AgentHttpToolDefinition, AgentRouteOptions, StoredAgent } from './types.js';
 
 export function safeError(message: string, err: unknown): { error: string; detail?: string } {
@@ -114,38 +113,35 @@ export function extractManifestFields(agent: { manifest?: Record<string, unknown
 }
 
 export function toAgentResponse(agent: StoredAgent): Record<string, unknown> {
-  const agentMeta = (agent.metadata ?? {}) as Record<string, unknown>;
   return {
     ...agent,
     harnessConfig: parseStoredHarnessConfig(agent.harnessConfig),
     ...extractManifestFields(agent),
-    resourceLimits: agentMeta.resourceLimits ?? null,
+    // Canonical resolution (manifest ?? spec.resources ?? metadata) so the API
+    // reports the limits the runtime actually enforces (ctx-8l4; ctx-92us tracks
+    // the PUT-precedence gap this surfaces for manifest agents).
+    resourceLimits: resolveResourceLimits(agent) ?? null,
   };
 }
 
 export function toApiAgentSession(
   turn: { id: string; agentId: string; conversationId: string | null; sessionId: string | null; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null },
-  sandboxSession?: { status: string } | null,
+  sandboxSession?: {
+    status: string;
+    restoreAttempts?: number | null;
+    lastRestoreError?: string | null;
+    updatedAt?: number;
+  } | null,
   messageCount?: number,
 ) {
-  let status: ApiSessionStatus;
-  if (isSessionCancelled(turn.error)) {
-    status = 'CANCELLED';
-  } else if (turn.error) {
-    status = 'ERROR';
-  } else if (turn.completedAt != null) {
-    status = 'COMPLETED';
-  } else if (sandboxSession?.status && sandboxSession.status !== 'TERMINATED') {
-    status = sandboxSession.status as SandboxSessionStatus;
-  } else {
-    status = 'ACTIVE';
-  }
+  const status = projectSessionStatus(turn, sandboxSession?.status, 'ACTIVE');
 
   return {
     id: turn.id,
     agentId: turn.agentId,
     conversationId: turn.conversationId ?? '',
     ...(turn.sessionId ? { sandboxSessionId: turn.sessionId } : {}),
+    ...(sandboxSession?.status ? { sandboxStatus: sandboxSession.status } : {}),
     status,
     mode: turn.mode || 'interactive',
     startedAt: turn.startedAt,
@@ -153,6 +149,11 @@ export function toApiAgentSession(
     ...(turn.error ? { error: turn.error } : {}),
     ...(turn.taskDescription ? { taskDescription: turn.taskDescription } : {}),
     ...(messageCount !== undefined ? { messageCount } : {}),
+    ...(sandboxSession?.restoreAttempts !== undefined ? { restoreAttempts: sandboxSession.restoreAttempts } : {}),
+    ...(sandboxSession?.lastRestoreError ? { lastRestoreError: sandboxSession.lastRestoreError } : {}),
+    ...(sandboxSession?.status === 'CHECKPOINTED' && typeof sandboxSession.updatedAt === 'number'
+      ? { checkpointAt: sandboxSession.updatedAt }
+      : {}),
   };
 }
 

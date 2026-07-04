@@ -182,9 +182,32 @@ function formatTime(ts: number): string {
   });
 }
 
+function formatEventPayload(payload: unknown): string {
+  const rawPayload = typeof payload === 'object'
+    ? JSON.stringify(payload)
+    : String(payload ?? '');
+
+  try {
+    return JSON.stringify(JSON.parse(rawPayload), null, 2);
+  } catch {
+    return rawPayload;
+  }
+}
+
+/** Canonical run-channel frame types (ADR-015) group with run.* events. */
+function isRunFrameType(type: string): boolean {
+  return type.startsWith('RUN_')
+    || type.startsWith('TEXT_MESSAGE_')
+    || type.startsWith('TOOL_CALL_')
+    || type === 'CUSTOM'
+    || type === 'STATE_DELTA'
+    || type === 'MESSAGES_SNAPSHOT'
+    || type.startsWith('turn.');
+}
+
 /** Category color mapping based on event type prefix. */
 function typeColor(type: string): string {
-  if (type.startsWith('run.')) return 'text-blue-400';
+  if (type.startsWith('run.') || isRunFrameType(type)) return 'text-blue-400';
   if (type.startsWith('agent.')) return 'text-green-400';
   if (type.startsWith('feedback.')) return 'text-purple-400';
   if (type.startsWith('client.')) return 'text-cyan-400';
@@ -192,7 +215,7 @@ function typeColor(type: string): string {
 }
 
 function typeBadgeBg(type: string): string {
-  if (type.startsWith('run.')) return 'bg-blue-500/10 border-blue-500/20';
+  if (type.startsWith('run.') || isRunFrameType(type)) return 'bg-blue-500/10 border-blue-500/20';
   if (type.startsWith('agent.')) return 'bg-green-500/10 border-green-500/20';
   if (type.startsWith('feedback.')) return 'bg-purple-500/10 border-purple-500/20';
   if (type.startsWith('client.')) return 'bg-cyan-500/10 border-cyan-500/20';
@@ -334,10 +357,10 @@ export function EventsPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-surface-950">
-      <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-5 space-y-6">
+      <main className="mx-auto w-full max-w-7xl flex-1 space-y-6 px-4 py-5 sm:px-6">
         {/* Header */}
         <div>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-2xl font-semibold tracking-tight text-surface-200">
                 Event Log
@@ -350,7 +373,7 @@ export function EventsPage() {
               type="button"
               onClick={() => setAutoRefresh(!autoRefresh)}
               className={cn(
-                'flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
+                'inline-flex w-fit shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors sm:self-start',
                 autoRefresh
                   ? 'bg-accent-600/20 text-accent-300 ring-1 ring-accent-500/30'
                   : 'bg-surface-800 text-surface-400 hover:text-surface-200',
@@ -359,7 +382,12 @@ export function EventsPage() {
               <RefreshCw
                 className={cn('h-3.5 w-3.5', autoRefresh && 'animate-spin')}
               />
-              {autoRefresh ? 'Auto-refresh on' : 'Auto-refresh'}
+              <span className="hidden sm:inline">
+                {autoRefresh ? 'Auto-refresh on' : 'Auto-refresh'}
+              </span>
+              <span className="sm:hidden">
+                {autoRefresh ? 'Auto on' : 'Auto'}
+              </span>
             </button>
           </div>
 
@@ -429,7 +457,7 @@ export function EventsPage() {
         )}
 
         {/* Filter bar */}
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex items-center gap-1.5 text-xs text-surface-400">
             <Filter className="h-3.5 w-3.5" />
             <span>Filters</span>
@@ -439,7 +467,7 @@ export function EventsPage() {
           <select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
-            className="rounded-lg border border-surface-700 bg-surface-800 px-3 py-1.5 text-xs text-surface-200 focus:outline-none focus:ring-1 focus:ring-accent-500/50"
+            className="w-full rounded-lg border border-surface-700 bg-surface-800 px-3 py-1.5 text-xs text-surface-200 focus:outline-none focus:ring-1 focus:ring-accent-500/50 sm:w-auto"
           >
             <option value="">All types</option>
             {eventTypes.map((t) => (
@@ -453,7 +481,7 @@ export function EventsPage() {
           <select
             value={agentFilter}
             onChange={(e) => setAgentFilter(e.target.value)}
-            className="rounded-lg border border-surface-700 bg-surface-800 px-3 py-1.5 text-xs text-surface-200 focus:outline-none focus:ring-1 focus:ring-accent-500/50"
+            className="w-full rounded-lg border border-surface-700 bg-surface-800 px-3 py-1.5 text-xs text-surface-200 focus:outline-none focus:ring-1 focus:ring-accent-500/50 sm:w-auto"
           >
             <option value="">All agents</option>
             {agents.map((a) => (
@@ -486,7 +514,7 @@ export function EventsPage() {
           <select
             value={groupBy}
             onChange={(e) => setGroupBy(e.target.value as 'none' | 'type' | 'agent')}
-            className="rounded-lg border border-surface-700 bg-surface-800 px-3 py-1.5 text-xs text-surface-200 focus:outline-none focus:ring-1 focus:ring-accent-500/50"
+            className="w-full rounded-lg border border-surface-700 bg-surface-800 px-3 py-1.5 text-xs text-surface-200 focus:outline-none focus:ring-1 focus:ring-accent-500/50 sm:w-auto"
           >
             <option value="none">No grouping</option>
             <option value="type">Group by type</option>
@@ -550,11 +578,11 @@ export function EventsPage() {
                 key={group}
                 className="border border-surface-700 rounded-lg overflow-hidden bg-surface-800/30"
               >
-                <div className="flex items-center justify-between px-4 py-3 bg-surface-800/50 border-b border-surface-700">
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-3 px-4 py-3 bg-surface-800/50 border-b border-surface-700">
+                  <div className="flex min-w-0 items-center gap-2">
                     <span
                       className={cn(
-                        'text-sm font-medium',
+                        'break-all text-sm font-medium',
                         groupBy === 'type' ? typeColor(group) : 'text-surface-200',
                       )}
                     >
@@ -630,36 +658,12 @@ function EventTable({
   showAgent: boolean;
 }) {
   return (
-    <table className="w-full text-left border-collapse">
-      <thead>
-        <tr className="bg-surface-800/50">
-          <th className="w-8 px-3 py-3 border-b border-surface-700" />
-          <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">
-            Time
-          </th>
-          {showType && (
-            <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">
-              Type
-            </th>
-          )}
-          {showAgent && (
-            <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">
-              Agent
-            </th>
-          )}
-          <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">
-            Summary
-          </th>
-          <th className="px-4 py-3 text-label border-b border-surface-700 font-medium text-right tabular-nums">
-            Seq
-          </th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-surface-700/50">
+    <>
+      <div data-testid="events-mobile-list" className="divide-y divide-surface-700/50 md:hidden">
         {events.map((ev) => {
           const isExpanded = expandedRow === ev.seq;
           return (
-            <EventRow
+            <EventMobileRow
               key={ev.seq}
               event={ev}
               isExpanded={isExpanded}
@@ -670,11 +674,154 @@ function EventTable({
             />
           );
         })}
-      </tbody>
-    </table>
+      </div>
+
+      <div data-testid="events-desktop-table" className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[760px] text-left border-collapse">
+          <thead>
+            <tr className="bg-surface-800/50">
+              <th className="w-8 px-3 py-3 border-b border-surface-700" />
+              <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">
+                Time
+              </th>
+              {showType && (
+                <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">
+                  Type
+                </th>
+              )}
+              {showAgent && (
+                <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">
+                  Agent
+                </th>
+              )}
+              <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">
+                Summary
+              </th>
+              <th className="px-4 py-3 text-label border-b border-surface-700 font-medium text-right tabular-nums">
+                Seq
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-surface-700/50">
+            {events.map((ev) => {
+              const isExpanded = expandedRow === ev.seq;
+              return (
+                <EventRow
+                  key={ev.seq}
+                  event={ev}
+                  isExpanded={isExpanded}
+                  onToggle={() => onToggleRow(isExpanded ? null : ev.seq)}
+                  agentName={agentNameMap[ev.agentId]}
+                  showType={showType}
+                  showAgent={showAgent}
+                />
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
+/** Mobile event row with the same expandable payload details as the desktop table. */
+function EventMobileRow({
+  event,
+  isExpanded,
+  onToggle,
+  agentName,
+  showType,
+  showAgent,
+}: {
+  event: EventRecord;
+  isExpanded: boolean;
+  onToggle: () => void;
+  agentName?: string;
+  showType: boolean;
+  showAgent: boolean;
+}) {
+  const formattedPayload = formatEventPayload(event.payload);
+  const summary = extractSummary(event.type, event.payload);
+  const displayAgent = agentName || event.agentId.slice(0, 8);
+
+  return (
+    <div className="bg-surface-900/10">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full px-3 py-3 text-left transition-colors hover:bg-surface-800/50 focus-visible:outline-none focus-visible:bg-surface-800/50"
+      >
+        <div className="space-y-2.5">
+          <div className="flex items-start justify-between gap-3">
+            {showType && (
+              <span
+                className={cn(
+                  'inline-flex min-w-0 max-w-full break-all rounded-md border px-2 py-0.5 text-[11px] font-medium',
+                  typeBadgeBg(event.type),
+                  typeColor(event.type),
+                )}
+              >
+                {event.type}
+              </span>
+            )}
+
+            <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-surface-500 tabular-nums">
+              <span>{formatTime(event.createdAt)}</span>
+              <span>#{event.seq}</span>
+              {isExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5 text-surface-400" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 text-surface-400" />
+              )}
+            </div>
+          </div>
+
+          <div className="break-words text-sm leading-5 text-surface-200">
+            {summary || 'No event summary'}
+          </div>
+
+          {showAgent && (
+            <div className="flex min-w-0 items-center gap-2 text-[11px] text-surface-400">
+              <span className="shrink-0 uppercase tracking-wider text-surface-500">Agent</span>
+              <span className="min-w-0 truncate text-surface-300" title={displayAgent}>
+                {displayAgent}
+              </span>
+            </div>
+          )}
+
+          {!showType && (
+            <div className="flex min-w-0 items-center gap-2 text-[11px] text-surface-400">
+              <span className="shrink-0 uppercase tracking-wider text-surface-500">Type</span>
+              <span className={cn('min-w-0 break-all', typeColor(event.type))}>
+                {event.type}
+              </span>
+            </div>
+          )}
+        </div>
+      </button>
+
+      {isExpanded && (
+        <div className="border-t border-surface-700/50 bg-surface-900/50 px-4 py-3">
+          <div className="mb-3 flex flex-col gap-1 text-xs text-surface-400">
+            <span>
+              <span className="text-surface-400">Agent ID:</span>{' '}
+              <span className="break-all font-mono">{event.agentId}</span>
+            </span>
+            <span>
+              <span className="text-surface-400">Timestamp:</span>{' '}
+              <span className="tabular-nums">
+                {new Date(event.createdAt).toISOString()}
+              </span>
+            </span>
+          </div>
+          <pre className="max-h-80 overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-surface-700 bg-surface-950 p-3 font-mono text-xs leading-relaxed text-surface-300">
+            {formattedPayload}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
 /** Single event row with expandable payload viewer. */
 function EventRow({
   event,
@@ -692,14 +839,7 @@ function EventRow({
   showAgent: boolean;
 }) {
   const colSpan = 3 + (showType ? 1 : 0) + (showAgent ? 1 : 0);
-
-  const rawPayload = typeof event.payload === 'object' ? JSON.stringify(event.payload) : event.payload;
-  let formattedPayload: string;
-  try {
-    formattedPayload = JSON.stringify(JSON.parse(rawPayload), null, 2);
-  } catch {
-    formattedPayload = rawPayload;
-  }
+  const formattedPayload = formatEventPayload(event.payload);
 
   return (
     <>
@@ -729,7 +869,7 @@ function EventRow({
           <td className="px-4 py-3">
             <span
               className={cn(
-                'inline-flex rounded-md border px-2 py-0.5 text-[11px] font-medium',
+                'inline-flex max-w-[18rem] break-all rounded-md border px-2 py-0.5 text-[11px] font-medium',
                 typeBadgeBg(event.type),
                 typeColor(event.type),
               )}
@@ -739,7 +879,7 @@ function EventRow({
           </td>
         )}
         {showAgent && (
-          <td className="px-4 py-3 text-sm text-surface-300">
+          <td className="px-4 py-3 text-sm text-surface-300 break-words">
             {agentName || event.agentId.slice(0, 8)}
           </td>
         )}

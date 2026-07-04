@@ -15,6 +15,7 @@ import {
   type EventName,
   type PersistEventFn,
 } from '../../packages/ctxmill/src/events/bus.js';
+import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
 
 // ── Test Bus Factory ────────────────────────────────────────────
 
@@ -78,6 +79,41 @@ export function waitForEmit<K extends EventName>(
 }
 
 // ── Mock Factories ──────────────────────────────────────────────
+
+/**
+ * Canonical wire harness (ADR-015): a bus whose persist hook feeds a
+ * CanonicalLog over an in-memory frame store; run-channel frame bodies are
+ * captured as the wire. Persist is async — call flushWire() after emits
+ * before asserting.
+ */
+export function createCanonicalWireHarness() {
+  let seq = 0;
+  const log = new CanonicalLog({
+    db: {
+      saveEventBatch: async (frames: unknown[]) => frames.map(() => ++seq),
+      getFramesSince: async () => [],
+      getTurnFrames: async () => [],
+    } as never,
+    logger: { info: () => {}, warn: () => {}, error: console.error },
+  });
+  const wire: Array<{ agentId: string; event: Record<string, unknown> }> = [];
+  log.subscribe((frames) => {
+    for (const frame of frames) {
+      if (frame.channel !== 'run') continue;
+      wire.push({ agentId: frame.agentId, event: frame.body });
+    }
+  });
+  const bus = createTestBus({
+    persistEvent: async (type, _agentId, _payload, parsed) => {
+      await log.ingest(type, parsed ?? {});
+    },
+  });
+  return { bus, log, wire };
+}
+
+export async function flushWire(): Promise<void> {
+  await new Promise((resolveFlush) => setTimeout(resolveFlush, 0));
+}
 
 export function createMockSSEManager() {
   return {

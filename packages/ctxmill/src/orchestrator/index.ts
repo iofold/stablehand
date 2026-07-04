@@ -9,5 +9,7 @@ export type { AgentRouteOptions, SessionsRouteOptions } from './routes/agents.js
 export { catalogRoutes } from './routes/catalogs.js';
 export { eventRoutes } from './routes/events.js';
 export type { EventRouteOptions } from './routes/events.js';
-export { SSEBroadcaster } from './sse-broadcaster.js';
+export { CanonicalLog } from './canonical/canonical-log.js';
+export { CanonicalProjector } from './canonical/projector.js';
+export { formatNativeLegacy } from './canonical/format-native-legacy.js';
 export { CallbackDispatcher } from './callback-dispatcher.js';

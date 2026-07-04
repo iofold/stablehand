@@ -96,6 +96,7 @@ describe('Run Cancellation with AbortSignal', () => {
       const mockDB = createMockDatabase();
       mockDB.addMessage = vi.fn().mockResolvedValue({ id: 'msg-1' });
       (mockDB as Record<string, unknown>).updateTurn = vi.fn().mockResolvedValue(undefined);
+      (mockDB as Record<string, unknown>).finalizeTurnIfOpen = vi.fn().mockResolvedValue(true);
 
       // Track how many events the executor actually yielded before abort
       const yieldedEvents: string[] = [];

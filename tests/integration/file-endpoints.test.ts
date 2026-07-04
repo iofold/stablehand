@@ -9,6 +9,7 @@ import { createContainer } from '../../packages/ctxmill/src/config/container.js'
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import { getConversationWorkspacePath } from '../../packages/ctxmill/src/workspace/session-workspace.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
+import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
 describe('File endpoint integration tests', () => {
   let app: FastifyInstance;
@@ -26,7 +27,7 @@ describe('File endpoint integration tests', () => {
       {
         preset: 'local',
         database: {
-          url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
+          url: resolveTestDatabaseUrl(),
         },
       },
       dataDir,

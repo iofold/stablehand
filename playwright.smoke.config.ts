@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const apiAuthHeaders = process.env.CTXMILL_API_TOKEN
+  ? { Authorization: `Bearer ${process.env.CTXMILL_API_TOKEN}` }
+  : undefined;
+
 export default defineConfig({
   testDir: 'tests/e2e',
   // Required release smoke runs through the same narrow Playwright discovery as
@@ -18,6 +22,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
+    // Covers Playwright request fixture and page requests to the UI proxy.
+    ...(apiAuthHeaders ? { extraHTTPHeaders: apiAuthHeaders } : {}),
   },
   projects: [
     {

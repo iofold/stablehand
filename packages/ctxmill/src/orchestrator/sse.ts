@@ -3,10 +3,33 @@ import { randomUUID } from 'node:crypto';
 import type { TypedEventBus } from '../events/bus.js';
 
 const MAX_QUEUE_SIZE = 100;
-const MAX_EVENTS_PER_CONVERSATION = 500;
-const RETENTION_AFTER_COMPLETION = 50;
+const RECENT_FRAMES_CAP = 256;
+
+/**
+ * Serve-mode SSE ids are zero-padded global seqs so lexicographic order equals
+ * numeric order — pilot's proxy replay fallback compares ids as strings.
+ */
+export function formatSeqId(seq: number): string {
+  return String(seq).padStart(12, '0');
+}
+
+/** Parse a durable seq id; null for legacy/unknown formats (treat as fresh connect). */
+export function parseSeqId(id: string | undefined): number | null {
+  if (!id || !/^\d{1,15}$/.test(id)) {
+    return null;
+  }
+  const parsed = Number(id);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
 const MAX_HEARTBEAT_FAILURES = 3;
-const CONVERSATION_EXPIRY_MS = 30 * 60 * 1000;
+
+export type WireMode = 'legacy' | 'canonical';
+
+/** Both renderings of a canonical frame; legacy is null for canonical-only frames. */
+export interface WireRenderings {
+  legacy: Record<string, unknown> | null;
+  canonical: Record<string, unknown>;
+}
 
 interface ConnectionState {
   queue: string[];
@@ -15,13 +38,8 @@ interface ConnectionState {
   consecutiveHeartbeatFailures: number;
   agentId: string;
   clientId: string;
-  /** Last event ID this client has acknowledged (via Last-Event-ID on reconnect). */
-  lastEventId?: string;
-}
-
-interface HistoryEntry {
-  id: string;
-  event: Record<string, unknown>;
+  /** Wire negotiation (ADR-015): which vocabulary this client receives. */
+  wireMode?: WireMode;
 }
 
 /**
@@ -33,23 +51,19 @@ export class SSEManager {
   private heartbeatIntervals = new Map<FastifyReply, NodeJS.Timeout>();
   private lastActivityMap = new Map<string, number>();
   private connectionState = new Map<FastifyReply, ConnectionState>();
-  // agentId → Map<conversationId, HistoryEntry[]>
-  // Events without conversationId go into '__global__' bucket
-  private eventHistory = new Map<string, Map<string, HistoryEntry[]>>();
-  private cleanupTimer?: ReturnType<typeof setInterval>;
-  private eventSeq = 0;
+  /** Attach buffer: recent frames per agent for the replay→live-tail handoff. */
+  private recentFrames = new Map<string, Array<{ seq: number; renderings: WireRenderings }>>();
   private eventBus?: TypedEventBus;
 
   constructor(eventBus?: TypedEventBus) {
     this.eventBus = eventBus;
-    this.cleanupTimer = setInterval(() => this.cleanupExpiredConversations(), 5 * 60 * 1000);
   }
 
   /**
    * Subscribe a client connection to an agent's event stream.
    * Sets up heartbeat and cleanup on disconnect.
    */
-  subscribe(agentId: string, reply: FastifyReply, lastEventId?: string): void {
+  subscribe(agentId: string, reply: FastifyReply): void {
     const clientId = randomUUID();
     const state: ConnectionState = {
       queue: [],
@@ -58,22 +72,8 @@ export class SSEManager {
       consecutiveHeartbeatFailures: 0,
       agentId,
       clientId,
-      lastEventId,
     };
     this.connectionState.set(reply, state);
-
-    if (lastEventId) {
-      try {
-        const replayEntries = this.getReplayEntries(agentId, lastEventId);
-        for (const entry of replayEntries) {
-          reply.raw.write(`id: ${entry.id}\ndata: ${JSON.stringify(entry.event)}\n\n`);
-        }
-      } catch (writeErr) {
-        console.debug('[SSE] Failed to replay history for agent', agentId, writeErr);
-        this.connectionState.delete(reply);
-        return;
-      }
-    }
 
     if (!this.connections.has(agentId)) {
       this.connections.set(agentId, new Set());
@@ -167,73 +167,107 @@ export class SSEManager {
   }
 
   /**
-   * Broadcast an AG-UI event to all clients subscribed to an agent.
+   * Serve-mode broadcast (ADR-015): the event id is the durable global seq.
+   * Each client receives its negotiated vocabulary (Phase B: legacy default,
+   * ?wire=canonical opt-in). Frames also land in a small per-agent ring buffer
+   * so subscribeDurable can close the SERIAL-vs-commit-order race between a
+   * reconnect's DB replay and the live tail.
    */
-  broadcast(agentId: string, event: Record<string, unknown>): void {
+  broadcastFrame(agentId: string, renderings: WireRenderings, seq: number): void {
     this.lastActivityMap.set(agentId, Date.now());
 
-    this.eventSeq++;
-    const eventId = `${agentId}-${this.eventSeq}`;
-
-    const conversationId = (event.conversationId as string) || '__global__';
-    let agentMap = this.eventHistory.get(agentId);
-    if (!agentMap) {
-      agentMap = new Map();
-      this.eventHistory.set(agentId, agentMap);
+    let ring = this.recentFrames.get(agentId);
+    if (!ring) {
+      ring = [];
+      this.recentFrames.set(agentId, ring);
     }
-    let history = agentMap.get(conversationId);
-    if (!history) {
-      history = [];
-      agentMap.set(conversationId, history);
-    }
-    history.push({ id: eventId, event });
-
-    if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
-      if (history.length > RETENTION_AFTER_COMPLETION) {
-        history.splice(0, history.length - RETENTION_AFTER_COMPLETION);
-      }
-    } else if (history.length > MAX_EVENTS_PER_CONVERSATION) {
-      history.splice(0, history.length - MAX_EVENTS_PER_CONVERSATION);
+    ring.push({ seq, renderings });
+    if (ring.length > RECENT_FRAMES_CAP) {
+      ring.splice(0, ring.length - RECENT_FRAMES_CAP);
     }
 
+    const rendered: Partial<Record<WireMode, string | null>> = {};
     const clients = this.connections.get(agentId);
     if (!clients || clients.size === 0) return;
-    const data = `id: ${eventId}\ndata: ${JSON.stringify(event)}\n\n`;
     for (const reply of clients) {
       const state = this.connectionState.get(reply);
-      if (state) {
-        state.lastEventTime = Date.now();
+      const mode: WireMode = state?.wireMode ?? 'legacy';
+      if (!(mode in rendered)) {
+        const event = mode === 'canonical' ? renderings.canonical : renderings.legacy;
+        rendered[mode] = event ? `id: ${formatSeqId(seq)}\ndata: ${JSON.stringify(event)}\n\n` : null;
       }
-
-      // If there's already a backlog or we're back-pressured, queue directly
-      if (state && (state.queue.length > 0 || state.draining)) {
-        if (state.queue.length >= MAX_QUEUE_SIZE) {
-          console.warn('[SSE] Disconnecting slow client');
-          this.unsubscribe(agentId, reply);
-          try {
-            reply.raw.end();
-          } catch (endErr) {
-            console.debug('[SSE] Failed to end slow client connection', endErr);
-          }
-        } else {
-          state.queue.push(data);
-        }
-        continue;
+      const data = rendered[mode];
+      if (data) {
+        this.writeToClient(agentId, reply, data);
       }
+    }
+  }
 
-      try {
-        const ok = reply.raw.write(data);
-        if (ok === false && state) {
-          // Kernel buffer full. The data was accepted by Node's internal buffer
-          // but we should queue future writes until 'drain' fires.
-          // Push a sentinel so queue.length > 0 triggers queueing for next events.
-          // The drain handler will clear it.
-          state.draining = true;
+  /**
+   * Serve-mode subscribe: the caller replayed durable frames after the
+   * client's acked seq and passes exactly what it wrote (`replayedSeqs`).
+   * Buffered frames the DB query could not see yet — a batch with lower seqs
+   * that committed after the query (SERIAL-vs-commit-order race) — are
+   * flushed from the ring before attaching to the live tail.
+   */
+  subscribeDurable(
+    agentId: string,
+    reply: FastifyReply,
+    afterSeq: number,
+    replayedSeqs: ReadonlySet<number>,
+    wireMode: WireMode = 'legacy',
+  ): void {
+    const ring = this.recentFrames.get(agentId) ?? [];
+    const gap = ring
+      .filter((entry) => entry.seq > afterSeq && !replayedSeqs.has(entry.seq))
+      .sort((a, b) => a.seq - b.seq);
+    try {
+      for (const entry of gap) {
+        const event = wireMode === 'canonical' ? entry.renderings.canonical : entry.renderings.legacy;
+        if (event) {
+          reply.raw.write(`id: ${formatSeqId(entry.seq)}\ndata: ${JSON.stringify(event)}\n\n`);
         }
-      } catch (writeErr) {
-        console.debug('[SSE] Write failed for agent', agentId, '— client likely disconnected', writeErr);
+      }
+    } catch (writeErr) {
+      console.debug('[SSE] Failed to flush attach buffer for agent', agentId, writeErr);
+      return;
+    }
+    this.subscribe(agentId, reply);
+    const state = this.connectionState.get(reply);
+    if (state) {
+      state.wireMode = wireMode;
+    }
+  }
+
+  private writeToClient(agentId: string, reply: FastifyReply, data: string): void {
+    const state = this.connectionState.get(reply);
+    if (state) {
+      state.lastEventTime = Date.now();
+    }
+
+    if (state && (state.queue.length > 0 || state.draining)) {
+      if (state.queue.length >= MAX_QUEUE_SIZE) {
+        console.warn('[SSE] Disconnecting slow client');
         this.unsubscribe(agentId, reply);
+        try {
+          reply.raw.end();
+        } catch (endErr) {
+          console.debug('[SSE] Failed to end slow client connection', endErr);
+        }
+      } else {
+        state.queue.push(data);
       }
+      return;
+    }
+
+    try {
+      const ok = reply.raw.write(data);
+      if (ok === false && state) {
+        state.draining = true;
+      }
+    } catch (writeErr) {
+      console.debug('[SSE] Write failed for agent', agentId, '— client likely disconnected', writeErr);
+      this.unsubscribe(agentId, reply);
     }
   }
 
@@ -265,59 +299,10 @@ export class SSEManager {
     return this.lastActivityMap.get(agentId);
   }
 
-  getConversationHistory(agentId: string, conversationId: string): HistoryEntry[] {
-    const agentMap = this.eventHistory.get(agentId);
-    if (!agentMap) return [];
-    return agentMap.get(conversationId) ?? [];
-  }
-
-  private getReplayEntries(agentId: string, lastEventId: string): HistoryEntry[] {
-    const agentMap = this.eventHistory.get(agentId);
-    if (!agentMap) {
-      return [];
-    }
-
-    // Reconnect replay stays within the conversation bucket that produced
-    // the acknowledged event id so agent streams do not splice together
-    // unrelated conversation histories.
-    for (const entries of agentMap.values()) {
-      const replayStart = entries.findIndex((entry) => entry.id === lastEventId);
-      if (replayStart >= 0) {
-        return entries.slice(replayStart + 1);
-      }
-    }
-
-    return [];
-  }
-
-  private cleanupExpiredConversations(): void {
-    const now = Date.now();
-    for (const [agentId, agentMap] of this.eventHistory) {
-      for (const [convId, entries] of agentMap) {
-        if (entries.length === 0) {
-          agentMap.delete(convId);
-          continue;
-        }
-        const lastEvent = entries[entries.length - 1];
-        const lastTimestamp = (lastEvent.event.timestamp as number) || 0;
-        if (now - lastTimestamp > CONVERSATION_EXPIRY_MS) {
-          agentMap.delete(convId);
-        }
-      }
-      if (agentMap.size === 0) {
-        this.eventHistory.delete(agentId);
-      }
-    }
-  }
-
   /**
    * Tear down all connections and intervals. Call on server shutdown.
    */
   shutdown(): void {
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer);
-      this.cleanupTimer = undefined;
-    }
     for (const [agentId, clients] of this.connections) {
       for (const reply of clients) {
         this.unsubscribe(agentId, reply);
@@ -331,6 +316,6 @@ export class SSEManager {
     this.connections.clear();
     this.heartbeatIntervals.clear();
     this.connectionState.clear();
-    this.eventHistory.clear();
+    this.recentFrames.clear();
   }
 }

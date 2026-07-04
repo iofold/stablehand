@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MessageCommittedSchema,
   SessionEventSchema,
+  TurnCompletedSchema,
   type SessionCheckpoint,
   type SessionEvent as ProtoSessionEvent,
 } from '@ctxmill/proto/sandbox/v1';
@@ -15,6 +16,12 @@ import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js'
 import type { ContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { AgentDefinition, Message } from '../../types.js';
+import {
+  CALLBACK_AGENT_ENV,
+  CALLBACK_SESSION_ENV,
+  CALLBACK_TOKEN_ENV,
+  mintGrpcCallbackToken,
+} from '../grpc/callback-auth.js';
 
 const connectMocks = vi.hoisted(() => ({
   createClientMock: vi.fn(),
@@ -79,6 +86,7 @@ function createMockDb(): DatabaseRepository {
     getSandboxSessionByConversation: vi.fn().mockResolvedValue(null),
     getCheckpointV2: vi.fn().mockResolvedValue(null),
     updateSandboxSessionStatus: vi.fn().mockResolvedValue(undefined),
+    updateTurn: vi.fn().mockResolvedValue(undefined),
     createSandboxSession: vi.fn().mockImplementation(async (session: {
       id?: string;
       conversationId: string;
@@ -121,7 +129,9 @@ function createMockLifecyclePolicy(): ContainerLifecyclePolicy {
 
 function createMockGrpcClient() {
   return {
-    deliverTurn: vi.fn().mockImplementation(() => streamProtoEvents(protoCommittedEvent())),
+    deliverTurn: vi.fn().mockImplementation(() =>
+      streamProtoEvents(protoCommittedEvent(), protoTurnCompletedEvent()),
+    ),
     openSession: vi.fn().mockResolvedValue({}),
     suspendSession: vi.fn().mockResolvedValue({
       sessionCheckpoint: {
@@ -217,6 +227,15 @@ function protoCommittedEvent(content = 'assistant reply', turnId = 'turn-1'): Pr
   });
 }
 
+function protoTurnCompletedEvent(turnId = 'turn-1'): ProtoSessionEvent {
+  return create(SessionEventSchema, {
+    payload: {
+      case: 'turnCompleted',
+      value: create(TurnCompletedSchema, { turnId }),
+    },
+  });
+}
+
 async function* streamProtoEvents(...events: ProtoSessionEvent[]): AsyncGenerator<ProtoSessionEvent> {
   for (const event of events) {
     yield event;
@@ -297,6 +316,7 @@ describe('SandboxSessionManager contract', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   describe('ensure/create', () => {
@@ -340,6 +360,25 @@ describe('SandboxSessionManager contract', () => {
           PILOT_API_BASE: 'http://api:3000',
         },
       }));
+    });
+
+    it('injects session-scoped callback auth secrets into fresh session containers', async () => {
+      vi.stubEnv('CTXMILL_API_TOKEN', 'api-token');
+      const { manager, containerManager } = createManager();
+
+      await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+
+      const createContainer = vi.mocked(containerManager.createContainer);
+      const createOpts = createContainer.mock.calls[0]?.[0];
+      if (!createOpts) {
+        throw new Error('expected createContainer to be called');
+      }
+
+      expect(createOpts.secrets).toMatchObject({
+        [CALLBACK_SESSION_ENV]: createOpts.sessionId,
+        [CALLBACK_AGENT_ENV]: 'agent-1',
+        [CALLBACK_TOKEN_ENV]: mintGrpcCallbackToken(createOpts.sessionId, 'agent-1', 'api-token'),
+      });
     });
 
     it('rolls back a fresh container when readiness fails before DB session creation', async () => {
@@ -537,9 +576,13 @@ describe('SandboxSessionManager contract', () => {
             firstStarted.resolve();
             await firstRelease.promise;
             yield protoCommittedEvent('first-response', request.turnId);
+            yield protoTurnCompletedEvent(request.turnId);
           })();
         }
-        return streamProtoEvents(protoCommittedEvent('second-response', request.turnId));
+        return streamProtoEvents(
+          protoCommittedEvent('second-response', request.turnId),
+          protoTurnCompletedEvent(request.turnId),
+        );
       });
 
       const firstTurnPromise = collectEvents(

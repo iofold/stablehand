@@ -246,7 +246,7 @@ describe('runner openSession PTC bootstrap', () => {
     );
   });
 
-  it('deliverTurn exits cleanly when killSession fires mid-stream', async () => {
+  it('fails deliverTurn when killSession fires mid-stream', async () => {
     const { deliverTurn, killSession, openSession } = await importRunner();
     const stream = createControllableGenerator();
     const reachedSecondEvent = createDeferred<void>();
@@ -276,8 +276,43 @@ describe('runner openSession PTC bootstrap', () => {
     await killSession();
     stream.emitEvent({ type: 'done', result: 'ignored-after-kill' });
 
-    await expect(eventsPromise).resolves.toEqual(['agUiEvent', 'agUiEvent', 'turnCompleted']);
+    await expect(eventsPromise).resolves.toEqual(['agUiEvent', 'agUiEvent', 'turnFailed']);
     expect(mocks.harnessClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a turn when the harness stream ends with a pending tool call and no done event', async () => {
+    const { deliverTurn, openSession } = await importRunner();
+    const stream = createControllableGenerator();
+
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: stream.generator,
+      exportState: async () => ({ stateVersion: '2', payload: {} }),
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/pending-tool-no-done'), {});
+    const eventsPromise = (async () => {
+      const events = [];
+      for await (const event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-pending-tool'))) {
+        events.push(event);
+      }
+      return events;
+    })();
+
+    stream.emitEvent({
+      type: 'tool_call_start',
+      id: 'call-pending',
+      name: 'long-op',
+      args: {},
+    });
+    stream.finish();
+
+    const events = await eventsPromise;
+    expect(events.map((event) => event.payload.case)).toEqual(['agUiEvent', 'turnFailed']);
+    expect(events[1].payload.value).toMatchObject({
+      turnId: 'turn-pending-tool',
+      errorMessage: expect.stringContaining('call-pending'),
+    });
   });
 
   it('rejects deliverTurn when request session id does not match active session', async () => {
@@ -335,7 +370,8 @@ describe('runner openSession PTC bootstrap', () => {
     // tool_call_start event and consuming it on the deliverTurn stream.
     const reachedToolStart = createDeferred<void>();
     const turnPromise = (async () => {
-      for await (const _event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-unsafe-suspend'))) {
+      for await (const event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-unsafe-suspend'))) {
+        void event;
         reachedToolStart.resolve();
       }
     })();
@@ -378,11 +414,14 @@ describe('runner openSession PTC bootstrap', () => {
     const reachedToolEnd = createDeferred<void>();
     const turnPromise = (async () => {
       let count = 0;
+      const payloadCases: string[] = [];
       for await (const _event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-wait-safe'))) {
+        payloadCases.push(_event.payload.case ?? 'missing');
         count++;
         if (count === 1) reachedToolStart.resolve();
         if (count === 2) reachedToolEnd.resolve();
       }
+      return payloadCases;
     })();
 
     stream.emitEvent({ type: 'tool_call_start', id: 'call-1', name: 'op', args: {} });
@@ -404,10 +443,10 @@ describe('runner openSession PTC bootstrap', () => {
     const response = await suspendPromise;
     expect(exportState).toHaveBeenCalledTimes(1);
     expect(response.sessionCheckpoint).toBeDefined();
+    await expect(turnPromise).resolves.toEqual(['agUiEvent', 'agUiEvent']);
 
     stream.finish();
     await killSession().catch(() => undefined);
-    await turnPromise.catch(() => undefined);
   });
 
   it('rejects suspendSession when request session id does not match active session', async () => {

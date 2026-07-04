@@ -11,6 +11,7 @@ import { InterruptManager } from '../interrupt.js';
 import type { AgentSessionService } from '../agent-session-service.js';
 import type { RunStartupService } from '../run-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
+import { createTestRunStartupService } from './run-startup-test-helper.js';
 
 function createMockDb() {
   const agent = {
@@ -82,10 +83,7 @@ function createMockDb() {
 }
 
 function createRunStartupServiceStub(): RunStartupService {
-  return {
-    prepareRunStart: vi.fn(),
-    launchPreparedRun: vi.fn(),
-  } as unknown as RunStartupService;
+  return createTestRunStartupService();
 }
 
 async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {

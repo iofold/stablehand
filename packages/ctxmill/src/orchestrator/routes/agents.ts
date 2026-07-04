@@ -17,36 +17,13 @@ export type { AgentRouteOptions, SessionsRouteOptions } from './agents/types.js'
 export { globalSessionsRoutes as sessionsRoutes } from './agents/global-sessions.js';
 
 export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions): Promise<void> {
-  const {
-    db,
-    sse,
-    interrupts,
-    harnessRegistry,
-    agentSessionService,
-    eventBus,
-    dataDir,
-    secretProvider,
-    toolRegistry,
-    containerManager,
-    sessionManager,
-    settingsService,
-    runStartupService,
-  } = opts;
-  const loadAgent = requireAgent(db);
+  const loadAgent = requireAgent(opts.db);
+  // Spread, don't enumerate: new AgentRouteOptions fields must reach the
+  // subroutes. Fastify's own `prefix` must NOT ride along or every subroute
+  // would be double-prefixed.
+  const { prefix: _prefix, ...routeOpts } = opts as AgentRouteOptions & { prefix?: string };
   const subOpts: AgentSubRouteOptions = {
-    db,
-    sse,
-    interrupts,
-    harnessRegistry,
-    agentSessionService,
-    eventBus,
-    dataDir,
-    secretProvider,
-    toolRegistry,
-    containerManager,
-    sessionManager,
-    settingsService,
-    runStartupService,
+    ...routeOpts,
     loadAgent,
   };
 

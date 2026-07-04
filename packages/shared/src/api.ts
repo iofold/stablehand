@@ -60,6 +60,8 @@ export interface ApiAgentSession {
   id: string;
   agentId: string;
   conversationId: string;
+  sandboxSessionId?: string;
+  sandboxStatus?: SandboxSessionStatus;
   status: ApiSessionStatus;
   mode: 'interactive' | 'background';
   startedAt: number;
@@ -67,6 +69,9 @@ export interface ApiAgentSession {
   error?: string;
   taskDescription?: string;
   messageCount?: number;
+  restoreAttempts?: number | null;
+  lastRestoreError?: string | null;
+  checkpointAt?: number;
 }
 
 /** Message as returned by GET /api/agents/:id/conversations/:cid/messages */
@@ -147,6 +152,24 @@ export interface ApiSandboxSession {
   harnessName: string;
   createdAt: string;
   lastActivityAt: string;
+  restoreAttempts?: number | null;
+  lastRestoreError?: string | null;
+}
+
+export interface ApiSandboxRestoreSuccess {
+  sessionId: string;
+  status: SandboxSessionStatus;
+  restoreAttempts: 0;
+}
+
+export interface ApiSandboxRestoreError {
+  error: 'Restore failed';
+  code: 'restore_failed';
+  category: 'retryable' | 'non_retryable';
+  detail: string;
+  status: SandboxSessionStatus | 'TERMINATED';
+  restoreAttempts: number | null;
+  sessionId: string;
 }
 
 /** Session turn as returned by sandbox session turn APIs. */

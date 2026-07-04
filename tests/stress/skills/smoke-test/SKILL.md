@@ -12,6 +12,10 @@ Run from the repo root with Docker/API already up.
 ```bash
 set -euo pipefail
 API_BASE="http://localhost:3002"
+AUTH_HEADER=()
+if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
+  AUTH_HEADER=(-H "Authorization: Bearer $CTXMILL_API_TOKEN")
+fi
 
 curl -s "$API_BASE/health" | jq .
 ```
@@ -27,7 +31,7 @@ npx tsx tests/stress/seed.ts
 Capture agent ids for later calls:
 
 ```bash
-AGENTS_JSON="$(curl -s "$API_BASE/api/agents")"
+AGENTS_JSON="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents")"
 
 agent_id() {
   local name="$1"
@@ -63,6 +67,7 @@ post_message() {
   local agent_id="$1"
   local content="$2"
   curl -s -X POST "$API_BASE/api/agents/$agent_id/message" \
+    "${AUTH_HEADER[@]}" \
     -H 'Content-Type: application/json' \
     -d "$(jq -nc --arg content "$content" '{content: $content}')" \
     | jq -r '.runId // .sessionId // .id'
@@ -74,7 +79,7 @@ wait_for_status() {
   local wanted="$3"
 
   while true; do
-    status="$(curl -s "$API_BASE/api/agents/$agent_id/sessions" \
+    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/sessions" \
       | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
       | tr '[:upper:]' '[:lower:]')"
     echo "session=$session_id status=${status:-missing}"
@@ -93,11 +98,11 @@ wait_for_interrupt() {
   local session_id="$2"
 
   while true; do
-    interrupt_session_id="$(curl -s "$API_BASE/api/agents/$agent_id/interrupts" \
+    interrupt_session_id="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/interrupts" \
       | jq -r --arg session_id "$session_id" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId) // empty')"
     [[ -n "$interrupt_session_id" ]] && return 0
 
-    status="$(curl -s "$API_BASE/api/agents/$agent_id/sessions" \
+    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/sessions" \
       | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
       | tr '[:upper:]' '[:lower:]')"
     echo "session=$session_id status=${status:-missing} waiting_for_interrupt"
@@ -166,10 +171,11 @@ wait_for_interrupt "$HITL_ID" "$HITL_RUN"
 ## 4) Approve HITL interrupt
 
 ```bash
-INTERRUPT_SESSION_ID="$(curl -s "$API_BASE/api/agents/$HITL_ID/interrupts" \
+INTERRUPT_SESSION_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$HITL_ID/interrupts" \
   | jq -r --arg session_id "$HITL_RUN" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId)')"
 
 curl -s -X POST "$API_BASE/api/agents/$HITL_ID/interrupt" \
+  "${AUTH_HEADER[@]}" \
   -H 'Content-Type: application/json' \
   -d "$(jq -nc --arg action approve --arg sessionId "$INTERRUPT_SESSION_ID" '{action: $action, sessionId: $sessionId}')" \
   | jq .
@@ -182,7 +188,7 @@ Pass if the interrupt resolves successfully and the HITL session ends in `comple
 ## 5) Check completion events
 
 ```bash
-curl -s "$API_BASE/api/events?type=stress.tools.complete&limit=20" | jq '.events'
+curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/events?type=stress.tools.complete&limit=20" | jq '.events'
 ```
 
 Pass if at least one `stress.tools.complete` event exists from this run.

@@ -21,6 +21,13 @@ interface InterruptResumeServiceDeps {
   ensureSession: (conversationId: string, agentDef: AgentDefinition, agentId: string) => Promise<{ sessionId: string }>;
   deliverTurn: (sessionId: string, messages: Message[], turnId: string) => AsyncGenerator<SessionEvent>;
   resolveAgentDefinition: (agentId: string) => Promise<AgentDefinition | null>;
+  /**
+   * Terminalize the original (interrupted) turn after a successful durable
+   * continuation — the in-process generator that would have completed it is
+   * gone after a restart, so the continuation is what actually finishes the
+   * turn's lifecycle (ctx-8nnu).
+   */
+  finalizeOriginalTurn?: (turnId: string, agentId: string, conversationId: string) => Promise<void>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,6 +80,18 @@ function readAgentDefinitionCandidate(candidate: unknown): AgentDefinition | nul
     || candidate.mode === 'both'
   ) {
     definition.mode = candidate.mode;
+  }
+  // Runtime-enforced fields must survive the checkpoint fallback (ctx-8l4):
+  // dropping them silently loses workspace seeding and resource caps on resume
+  // (session-runtime-factory reads them when recreating the sandbox).
+  if (isRecord(candidate.resourceLimits)) {
+    definition.resourceLimits = candidate.resourceLimits as AgentDefinition['resourceLimits'];
+  }
+  if (isRecord(candidate.nativeTools)) {
+    definition.nativeTools = candidate.nativeTools as AgentDefinition['nativeTools'];
+  }
+  if (isRecord(candidate.workspaceContent)) {
+    definition.workspaceContent = candidate.workspaceContent as AgentDefinition['workspaceContent'];
   }
 
   return definition;
@@ -218,6 +237,8 @@ export class InterruptResumeService implements InterruptResumePort {
     this.deps.logger.info(
       `${TAG} continuation turn ${continuationTurnId} completed for session ${record.sessionId}`,
     );
+
+    await this.deps.finalizeOriginalTurn?.(turnId, agentId, conversationId);
   }
 
   getPendingApprovalRequests(checkpointData: Record<string, unknown> | undefined): PendingRequest[] {

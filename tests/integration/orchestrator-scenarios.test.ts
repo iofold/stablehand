@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { liveApiHeaders } from './live-api-auth.js';
 
 const API = 'http://localhost:3002';
 const RUN_TIMEOUT_MS = 180_000;
@@ -22,7 +23,7 @@ function sleep(ms: number) {
 async function api(method: string, path: string, body?: unknown): Promise<{ status: number; data: any; res: Response }> {
   const res = await fetch(`${API}${path}`, {
     method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+    headers: liveApiHeaders(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -165,7 +166,7 @@ async function openSseStream(agentId: string) {
 
   const done = (async () => {
     const res = await fetch(`${API}/api/agents/${agentId}/stream`, {
-      headers: { Accept: 'text/event-stream' },
+      headers: liveApiHeaders({ Accept: 'text/event-stream' }),
       signal: controller.signal,
     });
 

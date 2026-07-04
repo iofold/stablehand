@@ -83,6 +83,25 @@ describe('DatabaseRepository', () => {
       expect(Number(baseline.version)).toBe(1);
       expect(baseline.baseline).toBe('pre-release');
     });
+
+    it('creates durable turn queue columns and open-status index', async () => {
+      const columns = await testDb.conn.pgClient`
+        SELECT column_name, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_name = 'turns'
+        ORDER BY column_name
+      `;
+      const byName = new Map(columns.map((column) => [String(column.column_name), column]));
+      expect(byName.get('status')?.is_nullable).toBe('NO');
+      expect(String(byName.get('status')?.column_default)).toContain("'queued'");
+      expect(byName.has('user_message_id')).toBe(true);
+
+      const indexes = await testDb.conn.pgClient`
+        SELECT indexdef FROM pg_indexes
+        WHERE schemaname = 'public' AND tablename = 'turns' AND indexname = 'idx_turns_status_open'
+      `;
+      expect(String(indexes[0]?.indexdef)).toContain('WHERE (completed_at IS NULL)');
+    });
   });
 
   // --- Agents CRUD (CFG-05) ---
@@ -148,11 +167,9 @@ describe('DatabaseRepository', () => {
       expect(JSON.parse(updated!.harnessConfig)).toEqual({ model: 'claude-opus-4-6', maxTurns: 4 });
     });
 
-    it('should update agent status', async () => {
+    it('leaves the vestigial status column at its default (derived at read, ctx-1xb)', async () => {
       const created = await repo.createAgent(agentData);
       expect(created.status).toBe('created');
-      const updated = await repo.updateAgentStatus(created.id, 'running');
-      expect(updated!.status).toBe('running');
     });
 
     it('should delete an agent', async () => {
@@ -877,6 +894,149 @@ describe('DatabaseRepository', () => {
       const completed = await repo.markInterruptResumeAttemptCompleted(attempt.id);
       expect(completed?.status).toBe('completed');
       expect(completed?.completedAt).toBeTypeOf('number');
+    });
+  });
+
+  describe('Turn finalization primitives (ADR-014)', () => {
+    let agentId: string;
+
+    beforeAll(async () => {
+      const agent = await repo.createAgent({
+        name: 'finalize-agent',
+        harness: 'langgraph',
+        harnessConfig: JSON.stringify({ model: 'gpt-test' }),
+        systemPrompt: 'test',
+        tools: [],
+        status: 'created',
+      });
+      agentId = agent.id;
+    });
+
+    it('finalizeTurnIfOpen writes terminal state exactly once', async () => {
+      const conversation = await repo.createConversation(agentId);
+      const turn = await repo.createTurn({ agentId, conversationId: conversation.id, mode: 'interactive' });
+
+      const first = await repo.finalizeTurnIfOpen(turn.id, {
+        completedAt: Date.now(),
+        error: 'first writer wins',
+        status: 'error',
+      });
+      const second = await repo.finalizeTurnIfOpen(turn.id, {
+        completedAt: Date.now(),
+        error: 'second writer must lose',
+        status: 'error',
+      });
+
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+      const readback = await repo.getTurn(turn.id);
+      expect(readback?.error).toBe('first writer wins');
+      expect(readback?.status).toBe('error');
+    });
+
+    it('getOpenTurnsStartedBefore returns only open turns older than the cutoff', async () => {
+      const conversation = await repo.createConversation(agentId);
+      const oldOpen = await repo.createTurn({ agentId, conversationId: conversation.id, mode: 'interactive' });
+      const oldClosed = await repo.createTurn({ agentId, conversationId: conversation.id, mode: 'interactive' });
+      await repo.finalizeTurnIfOpen(oldClosed.id, { completedAt: Date.now(), error: null, status: 'completed' });
+
+      const cutoff = Date.now() + 1_000;
+      const stranded = await repo.getOpenTurnsStartedBefore(cutoff);
+      const ids = stranded.map((turn) => turn.id);
+      expect(ids).toContain(oldOpen.id);
+      expect(ids).not.toContain(oldClosed.id);
+
+      const noneBeforeEpoch = await repo.getOpenTurnsStartedBefore(oldOpen.startedAt);
+      expect(noneBeforeEpoch.map((turn) => turn.id)).not.toContain(oldOpen.id);
+    });
+
+    it('updateMessageToolCallsAndParts repairs both projections', async () => {
+      const conversation = await repo.createConversation(agentId);
+      const message = await repo.addMessage({
+        agentId,
+        conversationId: conversation.id,
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'tc-1', name: 'bash', args: '{}', status: 'running' }],
+        parts: [{ type: 'tool_call', id: 'tc-1', name: 'bash', args: '{}', status: 'running' }],
+      });
+
+      await repo.updateMessageToolCallsAndParts(
+        message.id,
+        [{ id: 'tc-1', name: 'bash', args: '{}', status: 'error', error: 'interrupted' }],
+        [{ type: 'tool_call', id: 'tc-1', name: 'bash', args: '{}', status: 'error', error: 'interrupted' }],
+      );
+
+      const rows = await repo.getMessages(conversation.id);
+      const repaired = rows.find((row) => row.id === message.id);
+      expect(repaired?.toolCalls).toEqual([
+        { id: 'tc-1', name: 'bash', args: '{}', status: 'error', error: 'interrupted' },
+      ]);
+      expect(repaired?.parts).toEqual([
+        { type: 'tool_call', id: 'tc-1', name: 'bash', args: '{}', status: 'error', error: 'interrupted' },
+      ]);
+    });
+  });
+
+  describe('Canonical event frame primitives (ADR-015, Stage 4 A0)', () => {
+    let agentId: string;
+
+    beforeAll(async () => {
+      const agent = await repo.createAgent({
+        name: 'frames-agent',
+        harness: 'langgraph',
+        harnessConfig: JSON.stringify({ model: 'gpt-test' }),
+        systemPrompt: 'test',
+        tools: [],
+        status: 'created',
+      });
+      agentId = agent.id;
+    });
+
+    it('saveEventBatch persists frames in one round trip and returns seqs in order', async () => {
+      const seqs = await repo.saveEventBatch([
+        { type: 'RUN_STARTED', agentId, payload: '{"a":1}', turnId: 'turn-f1', conversationId: 'conv-f1', channel: 'run' },
+        { type: 'TEXT_MESSAGE_CONTENT', agentId, payload: '{"a":2}', turnId: 'turn-f1', conversationId: 'conv-f1', channel: 'run' },
+        { type: 'stress.langgraph.complete', agentId, payload: '{"schemaVersion":1}', channel: 'custom' },
+      ]);
+
+      expect(seqs).toHaveLength(3);
+      expect(seqs[0]).toBeLessThan(seqs[1]!);
+      expect(seqs[1]).toBeLessThan(seqs[2]!);
+      expect(await repo.saveEventBatch([])).toEqual([]);
+    });
+
+    it('getFramesSince replays per agent, seq-ordered, with channel filtering', async () => {
+      const all = await repo.getFramesSince(agentId, 0);
+      expect(all.length).toBeGreaterThanOrEqual(3);
+      expect(all.map((row) => row.seq)).toEqual([...all.map((row) => row.seq)].sort((a, b) => a - b));
+
+      const runOnly = await repo.getFramesSince(agentId, 0, { channels: ['run'] });
+      expect(runOnly.every((row) => row.channel === 'run')).toBe(true);
+      expect(runOnly.map((row) => row.type)).toEqual(['RUN_STARTED', 'TEXT_MESSAGE_CONTENT']);
+
+      const afterFirst = await repo.getFramesSince(agentId, runOnly[0]!.seq, { channels: ['run'] });
+      expect(afterFirst.map((row) => row.type)).toEqual(['TEXT_MESSAGE_CONTENT']);
+    });
+
+    it('getTurnFrames returns a turn tail in seq order', async () => {
+      const frames = await repo.getTurnFrames('turn-f1');
+      expect(frames.map((row) => row.type)).toEqual(['RUN_STARTED', 'TEXT_MESSAGE_CONTENT']);
+      expect(frames.every((row) => row.conversationId === 'conv-f1')).toBe(true);
+
+      const tail = await repo.getTurnFrames('turn-f1', frames[0]!.seq);
+      expect(tail.map((row) => row.type)).toEqual(['TEXT_MESSAGE_CONTENT']);
+    });
+
+    it('saveEvent (legacy single-row path) defaults new columns', async () => {
+      const seq = await repo.saveEvent('turn.completed', agentId, '{}');
+      const [row] = await repo.getFramesSince(agentId, seq - 1, { limit: 1 });
+      expect(row).toEqual(expect.objectContaining({
+        type: 'turn.completed',
+        channel: 'system',
+        turnId: null,
+        conversationId: null,
+      }));
     });
   });
 });

@@ -1,12 +1,13 @@
-import { dirname } from 'node:path';
-
 import type { TypedEventBus } from '../events/bus.js';
 import type { DatabaseRepository } from '../database/repository.js';
-import type { AgentDefinition, AgentResourceLimits } from '../types.js';
+import type { AgentDefinition } from '../types.js';
+import { buildAgentDefinition, type StoredAgent } from './agent-definition.js';
 import type { AgentSessionService } from './agent-session-service.js';
 import { mapMessagesToInternal } from './routes/agent-helpers.js';
+import { ConcurrencyLimitError } from './session-manager/concurrency-limit-error.js';
 import type { ConcurrencyReservation } from './session-manager/session-turn-orchestrator.js';
 import { withRuntimeSandboxSecrets, type RuntimeSandboxSecrets } from './session-manager/runtime-sandbox-secrets.js';
+import { TurnFinalizer } from './turn-finalizer.js';
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -19,16 +20,12 @@ export interface RunStartupServiceDeps {
   logger: Logger;
 }
 
-type StoredAgent = NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
-
-type NativeTools = { allowlist?: string[]; blocklist?: string[] };
-type WorkspaceContent = { files?: Array<{ src: string; dest: string }> };
 type RunMode = 'interactive' | 'background';
 
 type ExecutionDeps = {
   db: Pick<
     DatabaseRepository,
-    'addMessage' | 'createConversation' | 'createTurn' | 'deleteMessage' | 'getConversation' | 'getMessages' | 'getTurn' | 'updateTurn'
+    'addMessage' | 'createConversation' | 'createTurn' | 'deleteMessage' | 'finalizeTurnIfOpen' | 'getAgent' | 'getConversation' | 'getMessages' | 'getTurn' | 'updateTurn'
   >;
   eventBus?: Pick<TypedEventBus, 'emit'> & Partial<Pick<TypedEventBus, 'emitAsync'>>;
   sessionManager?: {
@@ -61,11 +58,21 @@ export interface PreparedRunStart {
   taskDescription: string;
   sandboxSecrets?: RuntimeSandboxSecrets;
   concurrencyReservation?: ConcurrencyReservation;
+  suppressTurnStartedEvent?: boolean;
 }
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+export interface RedispatchQueuedRunParams {
+  turnId: string;
+  agentId: string;
+  conversationId: string;
+  mode: RunMode;
+  taskDescription: string;
+  userMessageId?: string | null;
+  messages: ReturnType<typeof mapMessagesToInternal>;
+  emitTurnStarted: boolean;
 }
+
+const REDISPATCH_CONCURRENCY_ATTEMPTS = 3;
 
 async function emitStartupEvent<K extends Parameters<TypedEventBus['emit']>[0]>(
   eventBus: ExecutionDeps['eventBus'],
@@ -84,35 +91,17 @@ async function emitStartupEvent<K extends Parameters<TypedEventBus['emit']>[0]>(
 
 export class RunStartupService {
   private executionDeps: ExecutionDeps | null = null;
+  private turnFinalizer: TurnFinalizer | null = null;
 
   constructor(private readonly deps: RunStartupServiceDeps) {}
 
   configureExecution(deps: ExecutionDeps): void {
     this.executionDeps = deps;
-  }
-
-  buildAgentDefinition(agent: StoredAgent): AgentDefinition {
-    this.deps.logger.debug('Building startup agent definition for %s', agent.name);
-
-    const harnessConfig = this.parseHarnessConfig(agent.harnessConfig);
-    const resourceLimits = this.resolveResourceLimits(agent);
-    const { nativeTools, workspaceContent } = this.extractManifestFields(agent);
-    const workspaceDir = agent.workspaceDir ?? undefined;
-
-    return {
-      name: agent.name,
-      harness: agent.harness,
-      harnessConfig,
-      tools: agent.tools,
-      systemPrompt: agent.systemPrompt,
-      description: agent.description ?? undefined,
-      metadata: agent.metadata ?? undefined,
-      workspaceDir,
-      projectDir: workspaceDir ? dirname(workspaceDir) : undefined,
-      resourceLimits,
-      ...(nativeTools ? { nativeTools } : {}),
-      ...(workspaceContent ? { workspaceContent } : {}),
-    };
+    this.turnFinalizer = new TurnFinalizer({
+      db: deps.db,
+      eventBus: deps.eventBus,
+      logger: this.deps.logger,
+    });
   }
 
   async prepareRunStart(params: PrepareRunStartParams): Promise<PreparedRunStart> {
@@ -170,6 +159,8 @@ export class RunStartupService {
         agentId,
         conversationId: resolvedConversationId,
         mode,
+        status: 'queued',
+        userMessageId: message.id,
         ...(mode === 'background' ? { taskDescription: content } : {}),
       });
     } catch (err) {
@@ -200,7 +191,7 @@ export class RunStartupService {
         timestamp: Date.now(),
       });
 
-      const agentDef = withRuntimeSandboxSecrets(this.buildAgentDefinition(agent), sandboxSecrets);
+      const agentDef = withRuntimeSandboxSecrets(buildAgentDefinition(agent), sandboxSecrets);
       const allMessages = await executionDeps.db.getMessages(resolvedConversationId);
 
       return {
@@ -217,8 +208,11 @@ export class RunStartupService {
     } catch (err) {
       concurrencyReservation?.release();
       const errorMessage = err instanceof Error ? err.message : String(err);
-      await executionDeps.db.updateTurn(turn.id, {
-        completedAt: Date.now(),
+      await this.getTurnFinalizer().finalize({
+        turnId: turn.id,
+        agentId,
+        conversationId: resolvedConversationId,
+        status: 'error',
         error: errorMessage,
       }).catch((updateErr) => {
         this.deps.logger.error('[RunStartupService] failed to mark startup turn %s failed:', turn.id, updateErr);
@@ -230,10 +224,16 @@ export class RunStartupService {
     }
   }
 
+  /**
+   * Launch a prepared run. The single launch contract for every entry point
+   * (ctx-smm): the returned promise never rejects — failures are logged and
+   * the turn is marked failed; `onSuccess` fires only after the session
+   * completed without error.
+   */
   launchPreparedRun(
     start: PreparedRunStart,
     agentId: string,
-    options?: { rethrowOnError?: boolean },
+    options?: { onSuccess?: () => void },
   ): Promise<void> {
     const executionDeps = this.getExecutionDeps();
     const executeParams: Parameters<AgentSessionService['executeSession']>[0] = {
@@ -246,62 +246,75 @@ export class RunStartupService {
       taskDescription: start.taskDescription,
       ...(start.sandboxSecrets ? { sandboxSecrets: start.sandboxSecrets } : {}),
       ...(start.concurrencyReservation ? { concurrencyReservation: start.concurrencyReservation } : {}),
+      ...(start.suppressTurnStartedEvent ? { suppressTurnStartedEvent: true } : {}),
     };
 
-    return executionDeps.agentSessionService.executeSession(executeParams).catch(async (err) => {
+    return executionDeps.agentSessionService.executeSession(executeParams).then(() => {
+      try {
+        options?.onSuccess?.();
+      } catch (hookErr) {
+        this.deps.logger.error(`[RunStartupService] onSuccess hook failed for agent ${agentId}, turn ${start.turnId}:`, hookErr);
+      }
+    }).catch(async (err) => {
       this.deps.logger.error(`[RunStartupService] executeSession failed for agent ${agentId}, turn ${start.turnId}:`, err);
-      await executionDeps.db.updateTurn(start.turnId, {
-        completedAt: Date.now(),
+      await this.getTurnFinalizer().finalize({
+        turnId: start.turnId,
+        agentId,
+        conversationId: start.conversationId,
+        status: 'error',
         error: err instanceof Error ? err.message : String(err),
       }).catch((dbErr) => {
-        this.deps.logger.error(`[RunStartupService] failed to update turn ${start.turnId} after session error:`, dbErr);
+        this.deps.logger.error(`[RunStartupService] failed to finalize turn ${start.turnId} after session error:`, dbErr);
       });
-      if (options?.rethrowOnError) {
-        throw err;
-      }
     });
   }
 
-  parseHarnessConfig(configJson: string | null | undefined): Record<string, unknown> {
-    if (!configJson) {
-      return {};
-    }
+  async redispatchQueuedRun(params: RedispatchQueuedRunParams): Promise<void> {
+    const executionDeps = this.getExecutionDeps();
+    let concurrencyReservation: ConcurrencyReservation | undefined;
 
-    const parsed = JSON.parse(configJson) as unknown;
-    if (!isObjectRecord(parsed)) {
-      throw new Error('Stored harnessConfig must be a JSON object');
+    try {
+      const agent = await executionDeps.db.getAgent(params.agentId);
+      if (!agent) {
+        throw new Error(`Agent ${params.agentId} not found for queued turn ${params.turnId}`);
+      }
+      if (!agent.harness) {
+        throw new Error(`Agent ${params.agentId} harness is not set`);
+      }
+
+      concurrencyReservation = await this.reserveRedispatchConcurrency(params.agentId);
+      await this.launchPreparedRun({
+        agentDef: buildAgentDefinition(agent),
+        conversationId: params.conversationId,
+        turnId: params.turnId,
+        messageId: params.userMessageId ?? '',
+        messages: params.messages,
+        mode: params.mode,
+        taskDescription: params.taskDescription,
+        ...(concurrencyReservation ? { concurrencyReservation } : {}),
+        suppressTurnStartedEvent: !params.emitTurnStarted,
+      }, params.agentId);
+    } catch (err) {
+      concurrencyReservation?.release();
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      this.deps.logger.error(`[RunStartupService] failed to redispatch queued turn ${params.turnId}:`, err);
+      await this.getTurnFinalizer().finalize({
+        turnId: params.turnId,
+        agentId: params.agentId,
+        conversationId: params.conversationId,
+        status: 'error',
+        error: errorMessage,
+      }).catch((dbErr) => {
+        this.deps.logger.error(`[RunStartupService] failed to finalize queued turn ${params.turnId} after redispatch error:`, dbErr);
+      });
     }
-    return parsed;
   }
 
-  resolveResourceLimits(agent: StoredAgent): AgentResourceLimits | undefined {
-    const manifest = isObjectRecord(agent.manifest) ? agent.manifest : undefined;
-    const manifestSpec = isObjectRecord(manifest?.spec) ? manifest.spec : undefined;
-    const metadata = isObjectRecord(agent.metadata) ? agent.metadata : undefined;
-
-    return (manifest?.resourceLimits ??
-      manifestSpec?.resources ??
-      metadata?.resourceLimits) as AgentResourceLimits | undefined;
-  }
-
-  extractManifestFields(agent: StoredAgent): {
-    nativeTools?: NativeTools;
-    workspaceContent?: WorkspaceContent;
-  } {
-    const manifest = isObjectRecord(agent.manifest) ? agent.manifest : undefined;
-    const manifestSpec = isObjectRecord(manifest?.spec) ? manifest.spec : undefined;
-    const metadata = isObjectRecord(agent.metadata) ? agent.metadata : {};
-    const workspace = isObjectRecord(manifestSpec?.workspace) ? manifestSpec.workspace : undefined;
-
-    const nativeTools = ('nativeTools' in metadata
-      ? metadata.nativeTools
-      : manifestSpec?.nativeTools) as NativeTools | undefined;
-    const workspaceContent = workspace?.content as WorkspaceContent | undefined;
-
-    return {
-      ...(nativeTools ? { nativeTools } : {}),
-      ...(workspaceContent ? { workspaceContent } : {}),
-    };
+  private getTurnFinalizer(): TurnFinalizer {
+    if (!this.turnFinalizer) {
+      throw new Error('RunStartupService execution dependencies are not configured');
+    }
+    return this.turnFinalizer;
   }
 
   private getExecutionDeps(): ExecutionDeps {
@@ -310,6 +323,39 @@ export class RunStartupService {
     }
 
     return this.executionDeps;
+  }
+
+  private async reserveRedispatchConcurrency(agentId: string): Promise<ConcurrencyReservation | undefined> {
+    const executionDeps = this.getExecutionDeps();
+    if (!executionDeps.sessionManager?.reserveConcurrencySlot) {
+      executionDeps.sessionManager?.checkConcurrencyLimit(agentId);
+      return undefined;
+    }
+
+    let lastConcurrencyError: ConcurrencyLimitError | undefined;
+    for (let attempt = 1; attempt <= REDISPATCH_CONCURRENCY_ATTEMPTS; attempt++) {
+      try {
+        return executionDeps.sessionManager.reserveConcurrencySlot(agentId);
+      } catch (err) {
+        if (!(err instanceof ConcurrencyLimitError)) {
+          throw err;
+        }
+        lastConcurrencyError = err;
+        if (attempt === REDISPATCH_CONCURRENCY_ATTEMPTS) {
+          break;
+        }
+        await this.sleep(err.retryAfterSec * 1_000);
+      }
+    }
+
+    throw lastConcurrencyError ?? new Error(`Concurrency limit reached for agent ${agentId}`);
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, ms);
+      timeout.unref?.();
+    });
   }
 
   private async resolveConversationId(

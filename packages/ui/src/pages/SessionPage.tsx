@@ -373,7 +373,7 @@ export function SessionPage() {
               {agent?.name ?? 'Agent'}
             </h1>
             {agent && (
-              <span className="truncate font-mono text-sm text-surface-500">
+              <span className="hidden truncate font-mono text-sm text-surface-500 sm:inline">
                 {(agent.harnessConfig as Record<string, unknown>)?.model as string}
               </span>
             )}

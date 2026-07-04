@@ -202,4 +202,33 @@ describe('EventsPage', () => {
     expect(container.textContent).toContain('Assistant message: Restore failed because');
     expect(container.textContent).toContain('Custom artifact.uploaded: name: report.md');
   });
+
+  it('keeps the event log responsive by separating mobile rows from the desktop table', async () => {
+    fetchEventsMock.mockResolvedValueOnce({
+      events: [{
+        seq: 12,
+        type: 'dev1.callback_auth.live.with.a.long.type.name',
+        agentId: 'agent-1',
+        createdAt: Date.now(),
+        payload: JSON.stringify({ message: 'callback auth event received' }),
+      }],
+      nextCursor: undefined,
+    });
+
+    act(() => {
+      root.render(<EventsPage />);
+    });
+    await flushEffects();
+
+    const mobileList = container.querySelector('[data-testid="events-mobile-list"]');
+    const desktopTable = container.querySelector('[data-testid="events-desktop-table"]');
+    const table = container.querySelector('table');
+
+    expect(mobileList).not.toBeNull();
+    expect(mobileList?.className).toContain('md:hidden');
+    expect(desktopTable).not.toBeNull();
+    expect(desktopTable?.className).toContain('md:block');
+    expect(table?.className).toContain('min-w-[760px]');
+    expect(container.textContent).toContain('dev1.callback_auth.live.with.a.long.type.name');
+  });
 });

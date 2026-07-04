@@ -20,6 +20,10 @@ vi.mock('./components/ui/ErrorBoundary', () => ({
   ErrorBoundary: ({ children }: { children: ReactNode }) => children,
 }));
 
+vi.mock('./components/ui/TokenGate', () => ({
+  TokenGate: () => null,
+}));
+
 vi.mock('./pages/DashboardPage', () => ({
   DashboardPage: () => <div data-testid="dashboard-page">dashboard</div>,
 }));

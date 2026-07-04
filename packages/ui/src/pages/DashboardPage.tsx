@@ -5,6 +5,7 @@ import { useAgentsStore } from '@/stores/agents';
 import { Dashboard } from '@/components/dashboard/Dashboard';
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { fetchActiveConversations, fetchConversationSummaries } from '@/lib/api';
+import { useApiAuthStore } from '@/lib/auth';
 import { countActiveSessions } from '@/lib/session-status';
 import type { ApiConversationSummary } from '@ctxmill/shared';
 
@@ -14,6 +15,8 @@ export function DashboardPage() {
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
   const cancelRun = useAgentsStore((s) => s.cancelRun);
   const agentLoadError = useAgentsStore((s) => s.error);
+  const authRequired = useApiAuthStore((s) => s.authRequired);
+  const displayLoading = authRequired || loading;
 
   const navigate = useNavigate();
   const [activeConversations, setActiveConversations] = useState<ApiConversationSummary[]>([]);
@@ -23,11 +26,15 @@ export function DashboardPage() {
     let mounted = true;
 
     async function poll() {
+      if (useApiAuthStore.getState().authRequired) return;
+
       try {
         await fetchAgents();
       } catch (err) {
         console.debug('[Dashboard] Agent fetch failed:', err);
       }
+      if (useApiAuthStore.getState().authRequired) return;
+
       try {
         const activeConvs = await fetchActiveConversations();
         const activeArray = Array.isArray(activeConvs) ? activeConvs : [];
@@ -59,7 +66,7 @@ export function DashboardPage() {
       mounted = false;
       clearInterval(id);
     };
-  }, [fetchAgents]);
+  }, [fetchAgents, authRequired]);
 
   const stats = useMemo(() => {
     const totalTools = agents.reduce((sum, a) => sum + a.tools.length, 0);
@@ -102,19 +109,19 @@ export function DashboardPage() {
             <div className="flex-1 p-4 first:pl-0">
               <p className="text-label">Total Agents</p>
               <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
-                {loading ? '--' : agents.length}
+                {displayLoading ? '--' : agents.length}
               </p>
             </div>
             <div className="flex-1 p-4">
               <p className="text-label">Active</p>
               <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
-                {loading ? '--' : stats.activeAgents}
+                {displayLoading ? '--' : stats.activeAgents}
               </p>
             </div>
             <div className="flex-1 p-4">
               <p className="text-label">Tools Loaded</p>
               <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
-                {loading ? '--' : stats.totalTools}
+                {displayLoading ? '--' : stats.totalTools}
               </p>
             </div>
 
@@ -124,14 +131,14 @@ export function DashboardPage() {
         <div>
           <div className="mb-4 flex items-center gap-2">
             <h3 className="text-label">
-              Agents {!loading && (filteredCount !== null && filteredCount !== agents.length ? `(${filteredCount} of ${agents.length})` : `(${agents.length})`)}
+              Agents {!displayLoading && (filteredCount !== null && filteredCount !== agents.length ? `(${filteredCount} of ${agents.length})` : `(${agents.length})`)}
             </h3>
           </div>
 
           <Dashboard
             agents={agents}
-            loading={loading}
-            error={agentLoadError}
+            loading={displayLoading}
+            error={authRequired ? null : agentLoadError}
             onFilteredCountChange={setFilteredCount}
             onRetry={() => { void fetchAgents(); }}
           />

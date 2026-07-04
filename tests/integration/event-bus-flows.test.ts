@@ -1,72 +1,63 @@
 /**
- * Event Bus Integration Flow Tests (Phase 3, Task 5)
+ * Event Bus Integration Flow Tests
  *
- * Wires real TypedEventBus + real SSEBroadcaster with mock SSE externals.
+ * Wires a real TypedEventBus into the canonical event spine (ADR-015) and
+ * asserts the run-channel wire it produces.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import { SSEBroadcaster } from '../../packages/ctxmill/src/orchestrator/sse-broadcaster.js';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TestSessionRegistry } from '../utils/test-session-registry.js';
 import {
   createTestBus,
+  createCanonicalWireHarness,
   collectEvents,
-  createMockSSEManager,
+  flushWire,
   makeRunStartedEvent,
   makeRunCompletedEvent,
   makeTextChunkEvent,
 } from '../../tests/utils/event-bus-test-helpers.js';
 
 describe('Event Bus Integration Flows', () => {
-  let bus: TypedEventBus;
-  let mockSSE: ReturnType<typeof createMockSSEManager>;
-  let broadcaster: SSEBroadcaster;
+  let harness: ReturnType<typeof createCanonicalWireHarness>;
 
   beforeEach(() => {
-    bus = createTestBus();
-    mockSSE = createMockSSEManager();
-    broadcaster = new SSEBroadcaster(mockSSE as any, bus);
+    harness = createCanonicalWireHarness();
   });
 
-  afterEach(() => {
-    broadcaster.shutdown();
-  });
+  // ── Run lifecycle → canonical wire ─────────────────────────────
 
-  // ── Run lifecycle → SSE broadcast ──────────────────────────────
-
-  describe('Run lifecycle → SSE broadcast', () => {
-    it('emit run.started → SSEManager.broadcast called with RUN_STARTED', () => {
+  describe('Run lifecycle → canonical wire', () => {
+    it('emit turn.started → RUN_STARTED frame on the wire', async () => {
       const event = makeRunStartedEvent();
-      bus.emit('turn.started', event);
+      harness.bus.emit('turn.started', event);
+      await flushWire();
 
-      expect(mockSSE.broadcast).toHaveBeenCalledTimes(1);
-      expect(mockSSE.broadcast).toHaveBeenCalledWith(
-        event.agentId,
-        expect.objectContaining({ type: 'RUN_STARTED', internalType: 'turn.started' }),
-      );
+      expect(harness.wire).toHaveLength(1);
+      expect(harness.wire[0]).toEqual({
+        agentId: event.agentId,
+        event: expect.objectContaining({ type: 'RUN_STARTED', runId: event.turnId }),
+      });
     });
 
-    it('emit run.text_chunk x3 → 3 broadcasts with TEXT_MESSAGE_CONTENT', () => {
+    it('emit run.text_chunk x3 → one TEXT_MESSAGE_START boundary + 3 CONTENT frames with a stable messageId', async () => {
       for (let i = 0; i < 3; i++) {
-        bus.emit('run.text_chunk', makeTextChunkEvent({ content: `chunk-${i}` }));
+        harness.bus.emit('run.text_chunk', makeTextChunkEvent({ content: `chunk-${i}` }));
       }
+      await flushWire();
 
-      expect(mockSSE.broadcast).toHaveBeenCalledTimes(3);
-      for (let i = 0; i < 3; i++) {
-        expect(mockSSE.broadcast.mock.calls[i][1]).toEqual(
-          expect.objectContaining({ type: 'TEXT_MESSAGE_CONTENT' }),
-        );
-      }
+      const types = harness.wire.map((entry) => entry.event.type);
+      expect(types).toEqual(['TEXT_MESSAGE_START', 'TEXT_MESSAGE_CONTENT', 'TEXT_MESSAGE_CONTENT', 'TEXT_MESSAGE_CONTENT']);
+      const messageIds = new Set(harness.wire.map((entry) => entry.event.messageId));
+      expect(messageIds.size).toBe(1);
     });
 
-    it('emit run.completed → broadcast with RUN_FINISHED', () => {
+    it('emit turn.completed → RUN_FINISHED frame with status', async () => {
       const event = makeRunCompletedEvent();
-      bus.emit('turn.completed', event);
+      harness.bus.emit('turn.completed', event);
+      await flushWire();
 
-      expect(mockSSE.broadcast).toHaveBeenCalledWith(
-        event.agentId,
-        expect.objectContaining({ type: 'RUN_FINISHED', internalType: 'turn.completed' }),
-      );
+      expect(harness.wire.map((entry) => entry.event.type)).toEqual(['RUN_FINISHED']);
+      expect(harness.wire[0]!.event.status).toBe(event.status);
     });
   });
 
@@ -74,6 +65,7 @@ describe('Event Bus Integration Flows', () => {
 
   describe('RunRegistry event emission', () => {
     it('startRun() → run.started received by collector', async () => {
+      const bus = createTestBus();
       const collector = collectEvents(bus, 'turn.started');
       const registry = new TestSessionRegistry(undefined, bus);
 
@@ -93,6 +85,7 @@ describe('Event Bus Integration Flows', () => {
     });
 
     it('completeRun() → run.completed received with correct status', async () => {
+      const bus = createTestBus();
       const registry = new TestSessionRegistry(undefined, bus);
       const run = await registry.startRun('agent-reg-2', 'conv-reg-2', 'background');
 
@@ -113,6 +106,7 @@ describe('Event Bus Integration Flows', () => {
     });
 
     it('cancelRun() → run.completed received with status cancelled', async () => {
+      const bus = createTestBus();
       const registry = new TestSessionRegistry(undefined, bus);
       const run = await registry.startRun('agent-reg-3', 'conv-reg-3', 'interactive');
 
@@ -140,9 +134,6 @@ describe('Event Bus Integration Flows', () => {
       const persistFn = vi.fn();
       const persistBus = createTestBus({ persistEvent: persistFn });
 
-      // Re-wire broadcaster/subscriber on this bus
-      const localBroadcaster = new SSEBroadcaster(mockSSE as any, persistBus);
-
       const event = makeRunStartedEvent({ turnId: 'run-persist-1', sessionId: 'run-persist-1', agentId: 'agent-persist-1' });
       persistBus.emit('turn.started', event);
 
@@ -151,14 +142,14 @@ describe('Event Bus Integration Flows', () => {
         'turn.started',
         'agent-persist-1',
         expect.any(String),
+        // Parsed payload rides along so persistence layers avoid a re-parse (ADR-015).
+        expect.objectContaining({ turnId: 'run-persist-1' }),
       );
 
       // Verify the JSON payload is valid
       const payloadJson = persistFn.mock.calls[0][2];
       const parsed = JSON.parse(payloadJson);
       expect(parsed.sessionId).toBe('run-persist-1');
-
-      localBroadcaster.shutdown();
     });
 
     it('persistence failure prevents listener dispatch', () => {

@@ -44,6 +44,7 @@ function buildAgentRunService(sessionTurnService: SessionTurnService) {
     db: {
       addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
       updateTurn: vi.fn().mockResolvedValue(undefined),
+      finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
     } as unknown as AgentSessionServiceDeps['db'],
     sessionManager: sessionManager as unknown as AgentSessionServiceDeps['sessionManager'],
     sessionTurnService,

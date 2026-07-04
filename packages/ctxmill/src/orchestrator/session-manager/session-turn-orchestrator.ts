@@ -12,6 +12,7 @@ import type { AgentDefinition, Message } from '../../types.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { InterruptManager } from '../interrupt.js';
 import type { SessionEvent as CustomSessionEvent } from '../session-turn-service.js';
+import { SESSION_CANCELLED_MESSAGE } from '../session-cancellation.js';
 import { SessionRecoveryCoordinator } from './session-recovery-coordinator.js';
 import type { SessionStateStore } from './session-state-store.js';
 import {
@@ -22,6 +23,10 @@ import {
 import { ConcurrencyLimitError } from './concurrency-limit-error.js';
 import { unrefTimer } from './grpc-session-client.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
+import {
+  turnErrorSandboxConnectionLost,
+  turnErrorSandboxStreamEndedWithoutCompletion,
+} from '../turn-finalizer.js';
 
 const TAG = '[SandboxSessionManager]';
 const MAX_DRAIN_ITERATIONS = 100;
@@ -61,6 +66,7 @@ export interface SessionTurnOrchestratorDeps {
     previousSessionId: string;
     sessionId: string;
   }) => Promise<void>;
+  onTurnActive?: (turnId: string) => void | Promise<void>;
   executeDeliverTurn: (
     sessionId: string,
     messages: Message[],
@@ -75,6 +81,10 @@ export interface ConcurrencyReservation {
   release(): void;
 }
 
+export interface SessionTurnStartOptions {
+  suppressEvent?: boolean;
+}
+
 export class SessionTurnOrchestrator {
   private readonly startupReservationsByAgent = new Map<string, Set<string>>();
 
@@ -87,6 +97,7 @@ export class SessionTurnOrchestrator {
     conversationId: string,
     mode: 'interactive' | 'background',
     taskDescription?: string,
+    options?: SessionTurnStartOptions,
   ): AbortSignal {
     const record = this.deps.stateStore.getSessionById(sessionId);
     if (!record) {
@@ -95,15 +106,17 @@ export class SessionTurnOrchestrator {
 
     const controller = new AbortController();
     this.deps.stateStore.registerTurnController(sessionId, turnId, controller);
-    this.deps.eventBus?.emit('turn.started', {
-      turnId,
-      sessionId,
-      agentId,
-      conversationId,
-      mode,
-      taskDescription: taskDescription ?? '',
-      timestamp: Date.now(),
-    });
+    if (!options?.suppressEvent) {
+      this.deps.eventBus?.emit('turn.started', {
+        turnId,
+        sessionId,
+        agentId,
+        conversationId,
+        mode,
+        taskDescription: taskDescription ?? '',
+        timestamp: Date.now(),
+      });
+    }
     return controller.signal;
   }
 
@@ -147,7 +160,7 @@ export class SessionTurnOrchestrator {
     const queuedIndex = queue?.findIndex((entry) => entry.turnId === targetTurnId) ?? -1;
     if (queue && queuedIndex >= 0) {
       const [entry] = queue.splice(queuedIndex, 1);
-      entry?.channel.fail(new Error(`Turn ${targetTurnId} cancelled for session ${sessionId}`));
+      entry?.channel.fail(new Error(SESSION_CANCELLED_MESSAGE));
       this.deps.stateStore.clearTurnController(sessionId, targetTurnId);
       return true;
     }
@@ -231,7 +244,7 @@ export class SessionTurnOrchestrator {
       if (this.deps.stateStore.isActiveTurn(sessionId)) {
         return true;
       }
-      this.deps.stateStore.markTurnActive(sessionId, turnId);
+      await this.markTurnActive(sessionId, turnId);
       return false;
     });
 
@@ -293,6 +306,7 @@ export class SessionTurnOrchestrator {
       messages: toProtoMessages(messages),
     });
     let eventCount = 0;
+    let sawTerminalFrame = false;
 
     try {
       const stream: AsyncIterable<ProtoSessionEvent> = record.grpcClient!.deliverTurn(request);
@@ -372,6 +386,9 @@ export class SessionTurnOrchestrator {
           }
 
           const event = next.value;
+          if (event.payload.case === 'turnCompleted' || event.payload.case === 'turnFailed') {
+            sawTerminalFrame = true;
+          }
           const converted = protoSessionEventToCustom(event, turnId);
           if (converted) {
             if (converted.type === 'ag_ui_event' && converted.event.type === 'HITL_PAUSE') {
@@ -473,7 +490,7 @@ export class SessionTurnOrchestrator {
       }
 
       const errorMessage = isAbort && eventCount > 0
-        ? `Connection to sandbox lost during tool execution (${eventCount} events received before drop). This typically means an external tool call exceeded the idle connection timeout. Please retry.`
+        ? turnErrorSandboxConnectionLost(eventCount)
         : err instanceof ConnectError
           ? err.message
           : err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
@@ -497,6 +514,26 @@ export class SessionTurnOrchestrator {
         toStatus: 'ACTIVE',
       });
       this.scheduleIdleTimeoutForActiveSession(sessionId, record);
+      yield {
+        type: 'turn_failed' as const,
+        turnId,
+        errorMessage,
+      };
+      return;
+    }
+
+    if (!sawTerminalFrame) {
+      const errorMessage = turnErrorSandboxStreamEndedWithoutCompletion(eventCount);
+      this.deps.logger.warn(`${TAG} turn ${turnId} on session ${sessionId} ${errorMessage}`);
+      const liveRecord = this.deps.stateStore.getSessionById(sessionId);
+      if (liveRecord) {
+        await this.deps.statusCoordinator.transition({
+          sessionId,
+          fromStatus: liveRecord.status,
+          toStatus: 'ACTIVE',
+        });
+        this.scheduleIdleTimeoutForActiveSession(sessionId, liveRecord);
+      }
       yield {
         type: 'turn_failed' as const,
         turnId,
@@ -531,7 +568,7 @@ export class SessionTurnOrchestrator {
         `${TAG} draining queued turn ${nextEntry.turnId} (remaining depth: ${queue.length}) for session ${sessionId}`,
       );
 
-      this.deps.stateStore.markTurnActive(sessionId, nextEntry.turnId);
+      await this.markTurnActive(sessionId, nextEntry.turnId);
       let currentSessionId = sessionId;
       const onSessionRebound = (nextSessionId: string) => {
         currentSessionId = nextSessionId;
@@ -609,6 +646,15 @@ export class SessionTurnOrchestrator {
     }
     this.deps.stateStore.deleteQueue(sessionId);
     this.deps.stateStore.markTurnInactive(sessionId);
+  }
+
+  private async markTurnActive(sessionId: string, turnId: string): Promise<void> {
+    this.deps.stateStore.markTurnActive(sessionId, turnId);
+    try {
+      await this.deps.onTurnActive?.(turnId);
+    } catch (err) {
+      this.deps.logger.error(`${TAG} failed to mark turn ${turnId} active durably:`, err);
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 # ctxmill API Map
 
-Default local API base: `http://localhost:3002`. Deployment URLs may already end in `/api`; the bundled scripts handle either form.
+Default local API base: `http://localhost:3002`. Deployment URLs may already end in `/api`; the bundled scripts handle either form. Authenticated deployments accept `--api-token <token>` or `CTXMILL_API_TOKEN`; GET SSE streams use the route-scoped `?access_token=` fallback.
 
 ## Service
 

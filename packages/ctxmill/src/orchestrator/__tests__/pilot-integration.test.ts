@@ -116,13 +116,6 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
       agents.set(id, updated);
       return { ...updated };
     }),
-    updateAgentStatus: vi.fn(async (id: string, status: string) => {
-      const existing = agents.get(id);
-      if (!existing) return undefined;
-      const updated = { ...existing, status, updatedAt: Date.now() };
-      agents.set(id, updated);
-      return { ...updated };
-    }),
     createConversation: vi.fn(async (agentId: string) => {
       conversationCounter += 1;
       const now = Date.now();
@@ -268,6 +261,7 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
       return row;
     }),
     updateTurn: vi.fn(async () => undefined),
+    finalizeTurnIfOpen: vi.fn(async () => true),
     getTurn: vi.fn(async (id: string) => {
       const row = runs.get(id);
       return row ? { ...row } : undefined;

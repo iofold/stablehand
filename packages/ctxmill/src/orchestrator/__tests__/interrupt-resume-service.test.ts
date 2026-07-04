@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { buildAgentDefinition } from '../agent-definition.js';
 import {
   SandboxSessionManager,
   type SessionRecord,
@@ -35,6 +36,7 @@ function createMockDb(): DatabaseRepository {
     getSandboxSession: vi.fn().mockResolvedValue(null),
     getResolvedInterruptsForSession: vi.fn().mockResolvedValue([]),
     getCheckpointV2: vi.fn().mockResolvedValue(null),
+    finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
     addMessage: vi.fn().mockImplementation(async (data: Record<string, unknown>) => ({
       id: crypto.randomUUID(),
       createdAt: Date.now(),
@@ -547,5 +549,106 @@ describe('SandboxSessionManager interrupt resume characterization', () => {
         toolCallId: 'approval-1',
       }),
     ]);
+  });
+
+  it('resume parity: DB-resolved definition deep-equals the canonical shaper output (ctx-8l4)', async () => {
+    const storedAgent = {
+      id: 'agent-1',
+      name: 'test-agent',
+      harness: 'langgraph',
+      harnessConfig: '{"model":"gpt-5.4-mini"}',
+      systemPrompt: 'follow the system prompt',
+      tools: ['search-docs'],
+      description: 'desc',
+      workspaceDir: '/data/agents/agent-1',
+      status: 'created',
+      manifest: {
+        resourceLimits: { cpus: 2, memoryMb: 1024 },
+        spec: {
+          nativeTools: { allowlist: ['bash'] },
+          workspace: { content: { files: [{ src: 'seed.md', dest: 'seed.md' }] } },
+        },
+      },
+      version: 1,
+      metadata: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    (db.getAgent as ReturnType<typeof vi.fn>).mockResolvedValue(storedAgent);
+    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
+    (db.getResolvedInterruptsForSession as ReturnType<typeof vi.fn>).mockResolvedValue([
+      createResolvedInterrupt(),
+    ]);
+    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
+      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
+    );
+
+    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
+    vi.spyOn(manager, 'deliverTurn').mockImplementation(() => streamSessionEvents());
+
+    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1');
+
+    // Continuation ≡ fresh start: the resume path must produce exactly what the
+    // startup path would build for the same stored row.
+    expect(ensureSessionSpy.mock.calls[0]?.[1]).toEqual(
+      buildAgentDefinition(storedAgent as Parameters<typeof buildAgentDefinition>[0]),
+    );
+  });
+
+  it('checkpoint fallback preserves resourceLimits, nativeTools, and workspaceContent', async () => {
+    (db.getAgent as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
+    (db.getResolvedInterruptsForSession as ReturnType<typeof vi.fn>).mockResolvedValue([
+      createResolvedInterrupt(),
+    ]);
+    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint({
+      agentDefinition: {
+        name: 'test-agent',
+        harness: 'langgraph',
+        harnessConfig: { model: 'gpt-5.4-mini' },
+        tools: ['search-docs'],
+        systemPrompt: 'follow the system prompt',
+        resourceLimits: { cpus: 1.5, memoryMb: 512 },
+        nativeTools: { blocklist: ['bash'] },
+        workspaceContent: { files: [{ src: 'a.txt', dest: 'b.txt' }] },
+      },
+      runnerState: { pendingRequests: [createPendingApproval('approval-1')] },
+    }));
+
+    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
+    vi.spyOn(manager, 'deliverTurn').mockImplementation(() => streamSessionEvents());
+
+    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1');
+
+    expect(ensureSessionSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      resourceLimits: { cpus: 1.5, memoryMb: 512 },
+      nativeTools: { blocklist: ['bash'] },
+      workspaceContent: { files: [{ src: 'a.txt', dest: 'b.txt' }] },
+    }));
+  });
+
+  it('terminalizes the original turn after a successful durable continuation (ctx-8nnu)', async () => {
+    const internals = manager as unknown as SandboxSessionManagerInternals;
+    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
+
+    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
+    (db.getResolvedInterruptsForSession as ReturnType<typeof vi.fn>).mockResolvedValue([
+      createResolvedInterrupt(),
+    ]);
+    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
+      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
+    );
+    const finalizeTurnIfOpen = vi.fn().mockResolvedValue(true);
+    (db as unknown as Record<string, unknown>).finalizeTurnIfOpen = finalizeTurnIfOpen;
+
+    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
+    vi.spyOn(manager, 'deliverTurn').mockImplementation(() => streamSessionEvents());
+
+    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1');
+
+    expect(finalizeTurnIfOpen).toHaveBeenCalledWith('turn-1', expect.objectContaining({
+      completedAt: expect.any(Number),
+      error: null,
+    }));
   });
 });

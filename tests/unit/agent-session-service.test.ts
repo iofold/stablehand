@@ -102,8 +102,11 @@ function createDeps(overrides: {
   db?: {
     addMessage: ReturnType<typeof vi.fn>;
     updateTurn: ReturnType<typeof vi.fn>;
+    finalizeTurnIfOpen?: ReturnType<typeof vi.fn>;
     getTurn?: ReturnType<typeof vi.fn>;
     updateMessageToolCalls?: ReturnType<typeof vi.fn>;
+    getMessages?: ReturnType<typeof vi.fn>;
+    updateMessageToolCallsAndParts?: ReturnType<typeof vi.fn>;
   };
   sessionManager?: MockSessionManager;
   eventBus?: TypedEventBus;
@@ -117,8 +120,11 @@ function createDeps(overrides: {
   const db = {
     addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
     updateTurn: vi.fn().mockResolvedValue(undefined),
+    finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
     getTurn: vi.fn().mockResolvedValue({ id: 'run-1', sessionId: 'sandbox-1' }),
     updateMessageToolCalls: vi.fn().mockResolvedValue(undefined),
+    getMessages: vi.fn().mockResolvedValue([]),
+    updateMessageToolCallsAndParts: vi.fn().mockResolvedValue(undefined),
     ...overrides.db,
   };
   const sessionManager = overrides.sessionManager ?? {
@@ -184,22 +190,44 @@ describe('AgentSessionService', () => {
     );
   });
 
+  it('passes replay suppression to startTurn when requested', async () => {
+    const abortController = new AbortController();
+    const { sessionManager } = await executeEvents([], {
+      params: { suppressTurnStartedEvent: true },
+      configure: ({ sessionManager }) => {
+        sessionManager.startTurn.mockReturnValue(abortController.signal);
+      },
+    });
+
+    expect(sessionManager.startTurn).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
+      'agent-1',
+      'conv-1',
+      'interactive',
+      'test task',
+      { suppressEvent: true },
+    );
+  });
+
   it('completes the current rebound sandbox session when the turn row was rebound during delivery', async () => {
     const { db, sessionManager } = await executeEvents([], {
       deps: {
         db: {
           addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
           updateTurn: vi.fn().mockResolvedValue(undefined),
+          finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
           getTurn: vi.fn().mockResolvedValue({ id: 'run-1', sessionId: 'sandbox-2' }),
         },
       },
     });
 
     expect(db.getTurn).toHaveBeenCalledWith('run-1');
-    expect(db.updateTurn).toHaveBeenLastCalledWith('run-1', {
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith('run-1', {
       sessionId: 'sandbox-2',
       completedAt: expect.any(Number),
       error: null,
+      status: 'completed',
     });
     expect(sessionManager.completeTurn).toHaveBeenCalledWith(
       'sandbox-2',
@@ -220,6 +248,7 @@ describe('AgentSessionService', () => {
         db: {
           addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
           updateTurn: vi.fn().mockResolvedValue(undefined),
+          finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
           getTurn: vi.fn().mockResolvedValue({
             id: 'run-1',
             sessionId: null,
@@ -233,9 +262,10 @@ describe('AgentSessionService', () => {
     expect(sessionManager.ensureSession).not.toHaveBeenCalled();
     expect(sessionManager.startTurn).not.toHaveBeenCalled();
     expect(sessionTurnService.executeSessionTurn).not.toHaveBeenCalled();
-    expect(db.updateTurn).toHaveBeenCalledWith('run-1', {
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith('run-1', {
       completedAt: expect.any(Number),
       error: SESSION_CANCELLED_MESSAGE,
+      status: 'cancelled',
     });
     expect(eventBus.emit).toHaveBeenCalledWith('turn.completed', expect.objectContaining({
       turnId: 'run-1',
@@ -469,6 +499,101 @@ describe('AgentSessionService', () => {
     const { sessionManager } = await executeEvents([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]);
 
     expect(sessionManager.completeTurn).toHaveBeenCalled();
+  });
+
+  it('does not complete a turn when the stream ends with a running tool call', async () => {
+    const { db, sessionManager } = await executeEvents([
+      {
+        type: 'TOOL_CALL_START',
+        timestamp: 1,
+        runId: 'run-1',
+        toolCallId: 'tc-running',
+        toolName: 'bash',
+        args: { command: 'sleep 300' },
+      },
+    ]);
+
+    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'assistant',
+      toolCalls: [
+        expect.objectContaining({
+          id: 'tc-running',
+          status: 'error',
+          error: expect.stringContaining('still running'),
+        }),
+      ],
+      parts: [
+        expect.objectContaining({
+          type: 'tool_call',
+          id: 'tc-running',
+          status: 'error',
+          error: expect.stringContaining('still running'),
+        }),
+      ],
+    }));
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith('run-1', expect.objectContaining({
+      error: expect.stringContaining('running tool call'),
+    }));
+    expect(sessionManager.completeTurn).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
+      'agent-1',
+      'conv-1',
+      'error',
+      expect.any(Number),
+      expect.stringContaining('running tool call'),
+    );
+  });
+
+  it('repairs already-persisted running tool calls when a later error ends the turn', async () => {
+    const runningToolCalls = [
+      { id: 'tc-persisted', name: 'bash', args: '{}', status: 'running' },
+    ];
+    const runningParts = [
+      { type: 'tool_call', id: 'tc-persisted', name: 'bash', args: '{}', status: 'running' },
+    ];
+    const db = {
+      addMessage: vi.fn().mockResolvedValue({ id: 'msg-persisted' }),
+      updateTurn: vi.fn().mockResolvedValue(undefined),
+      finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
+      getTurn: vi.fn().mockResolvedValue({ id: 'run-1', sessionId: 'sandbox-1' }),
+      updateMessageToolCalls: vi.fn().mockResolvedValue(undefined),
+      getMessages: vi.fn().mockResolvedValue([
+        {
+          id: 'msg-persisted',
+          toolCalls: runningToolCalls,
+          parts: runningParts,
+        },
+      ]),
+      updateMessageToolCallsAndParts: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await executeEvents([
+      makeCommittedEvent({
+        toolCalls: runningToolCalls,
+        parts: runningParts,
+      }),
+      { type: 'RUN_ERROR', timestamp: 2, runId: 'run-1', error: 'stream ended without terminal frame' },
+    ], { deps: { db } });
+
+    expect(db.updateMessageToolCallsAndParts).toHaveBeenCalledWith(
+      'msg-persisted',
+      [
+        expect.objectContaining({
+          id: 'tc-persisted',
+          status: 'error',
+          error: expect.stringContaining('still running'),
+        }),
+      ],
+      [
+        expect.objectContaining({
+          type: 'tool_call',
+          id: 'tc-persisted',
+          status: 'error',
+          error: expect.stringContaining('still running'),
+        }),
+      ],
+    );
   });
 
   it('completes the run with error status when sandbox streaming throws', async () => {
@@ -775,6 +900,7 @@ describe('AgentSessionService', () => {
        const db = {
          addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
          updateTurn: vi.fn().mockResolvedValue(undefined),
+         finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
        };
 
       let gateResolve: (() => void) | undefined;

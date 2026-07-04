@@ -1,16 +1,23 @@
 import Fastify, { type FastifyRequest } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ActiveTurnSuspendError } from '../../session-manager/session-lifecycle-service.js';
+import {
+  ActiveTurnSuspendError,
+  RestoreConflictError,
+} from '../../session-manager/session-lifecycle-service.js';
+import { InvalidCheckpointError } from '../../session-manager/restore-retry-policy.js';
 import { globalSessionsRoutes } from '../agents/global-sessions.js';
 import { sessionRoutes } from '../agents/sessions.js';
 import type { AgentSubRouteOptions, SessionsRouteOptions, StoredAgent } from '../agents/types.js';
+import { createTestRunStartupService } from '../../__tests__/run-startup-test-helper.js';
 
 const agent = {
   id: 'agent-1',
   name: 'agent',
   harness: 'claude-agents',
-  harnessConfig: {},
+  harnessConfig: '{}',
+  systemPrompt: 'system',
+  tools: [],
   metadata: {},
   manifest: null,
 } as unknown as StoredAgent;
@@ -28,7 +35,7 @@ function createAgentRoutesApp(overrides: Partial<AgentSubRouteOptions>) {
     interrupts: {},
     harnessRegistry: {},
     agentSessionService: {},
-    runStartupService: {},
+    runStartupService: createTestRunStartupService(),
     loadAgent,
     ...overrides,
   } as unknown as AgentSubRouteOptions);
@@ -55,12 +62,12 @@ describe('session lifecycle routes', () => {
   it('returns the active-turn suspend conflict body from the public sandbox suspend endpoint', async () => {
     const db = {
       getSandboxSessionsByAgent: vi.fn().mockResolvedValue([
-        { id: 'sandbox-1', conversationId: 'conversation-1' },
+        { id: 'sandbox-1', conversationId: 'conversation-1', status: 'ACTIVE' },
       ]),
-      getLatestTurnForConversation: vi.fn().mockResolvedValue({
-        id: 'turn-1',
-        completedAt: null,
-        error: null,
+      getSandboxSession: vi.fn().mockResolvedValue({
+        id: 'sandbox-1',
+        conversationId: 'conversation-1',
+        status: 'ACTIVE',
       }),
     };
     const sessionManager = {
@@ -82,6 +89,304 @@ describe('session lifecycle routes', () => {
       turnId: 'turn-1',
     });
     expect(sessionManager.suspendSession).toHaveBeenCalledWith('sandbox-1', 'api_request');
+  });
+
+  it('suspends an idle ACTIVE sandbox even when the latest turn already completed (ctx-jgb5)', async () => {
+    const db = {
+      getSandboxSessionsByAgent: vi.fn().mockResolvedValue([
+        { id: 'sandbox-1', conversationId: 'conversation-1', status: 'ACTIVE' },
+      ]),
+    };
+    const sessionManager = {
+      suspendSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/suspend',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ sessionId: 'sandbox-1', status: 'CHECKPOINTED' });
+  });
+
+  it('rejects suspend with the real sandbox status when the row is not ACTIVE', async () => {
+    const db = {
+      getSandboxSessionsByAgent: vi.fn().mockResolvedValue([
+        { id: 'sandbox-1', conversationId: 'conversation-1', status: 'CHECKPOINTED' },
+      ]),
+    };
+    const sessionManager = {
+      suspendSession: vi.fn(),
+    };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/suspend',
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'Session not active',
+      status: 'CHECKPOINTED',
+      sessionId: 'sandbox-1',
+    });
+    expect(sessionManager.suspendSession).not.toHaveBeenCalled();
+  });
+
+  it('restores a checkpointed sandbox session through the public restore endpoint', async () => {
+    const db = {
+      getSandboxSession: vi.fn().mockResolvedValue({
+        id: 'sandbox-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+        status: 'CHECKPOINTED',
+      }),
+    };
+    const sessionManager = {
+      restoreSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1', status: 'ACTIVE' }),
+    };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/restore',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      sessionId: 'sandbox-1',
+      status: 'ACTIVE',
+      restoreAttempts: 0,
+    });
+    expect(sessionManager.restoreSession).toHaveBeenCalledWith(
+      'sandbox-1',
+      expect.objectContaining({ name: agent.name }),
+      'agent-1',
+    );
+  });
+
+  it('starts async restore through the public restore endpoint when requested', async () => {
+    const db = {
+      getSandboxSession: vi.fn().mockResolvedValue({
+        id: 'sandbox-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+        status: 'CHECKPOINTED',
+      }),
+    };
+    const sessionManager = {
+      restoreSession: vi.fn(),
+      startRestoreSession: vi.fn().mockResolvedValue({
+        sessionId: 'sandbox-1',
+        status: 'RESTORING',
+        restoreAttempts: 0,
+      }),
+    };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/restore?async=true',
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({
+      sessionId: 'sandbox-1',
+      status: 'RESTORING',
+      restoreAttempts: 0,
+    });
+    expect(sessionManager.startRestoreSession).toHaveBeenCalledWith(
+      'sandbox-1',
+      expect.objectContaining({ name: agent.name }),
+      'agent-1',
+    );
+    expect(sessionManager.restoreSession).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for restore when the sandbox session does not belong to the agent', async () => {
+    const db = {
+      getSandboxSession: vi.fn().mockResolvedValue({
+        id: 'sandbox-1',
+        conversationId: 'conversation-1',
+        agentId: 'other-agent',
+        status: 'CHECKPOINTED',
+      }),
+    };
+    const sessionManager = { restoreSession: vi.fn() };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/restore',
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Session not found', sessionId: 'sandbox-1' });
+    expect(sessionManager.restoreSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['ACTIVE', 'RESTORING', 'TERMINATED'])(
+    'returns 409 for restore when sandbox status is %s before invoking lifecycle service',
+    async (status) => {
+      const db = {
+        getSandboxSession: vi.fn().mockResolvedValue({
+          id: 'sandbox-1',
+          conversationId: 'conversation-1',
+          agentId: 'agent-1',
+          status,
+        }),
+      };
+      const sessionManager = { restoreSession: vi.fn() };
+      const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+      apps.push(app);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/restore',
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({
+        error: 'Session not checkpointed',
+        status,
+        sessionId: 'sandbox-1',
+      });
+      expect(sessionManager.restoreSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it('returns 409 when restore loses the checkpointed race inside the lifecycle lock', async () => {
+    const db = {
+      getSandboxSession: vi.fn().mockResolvedValue({
+        id: 'sandbox-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+        status: 'CHECKPOINTED',
+      }),
+    };
+    const sessionManager = {
+      restoreSession: vi.fn().mockRejectedValue(new RestoreConflictError('sandbox-1', 'ACTIVE')),
+    };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/restore',
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'Session not checkpointed',
+      status: 'ACTIVE',
+      sessionId: 'sandbox-1',
+    });
+  });
+
+  it('returns retryable 502 restore failure details', async () => {
+    const db = {
+      getSandboxSession: vi.fn()
+        .mockResolvedValueOnce({
+          id: 'sandbox-1',
+          conversationId: 'conversation-1',
+          agentId: 'agent-1',
+          status: 'CHECKPOINTED',
+        })
+        .mockResolvedValueOnce({
+          id: 'sandbox-1',
+          conversationId: 'conversation-1',
+          agentId: 'agent-1',
+          status: 'CHECKPOINTED',
+          restoreAttempts: 1,
+          lastRestoreError: 'connect ECONNREFUSED',
+        }),
+    };
+    const sessionManager = {
+      restoreSession: vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED')),
+    };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/restore',
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual(expect.objectContaining({
+      error: 'Restore failed',
+      code: 'restore_failed',
+      category: 'retryable',
+      detail: 'connect ECONNREFUSED',
+      status: 'CHECKPOINTED',
+      restoreAttempts: 1,
+      sessionId: 'sandbox-1',
+    }));
+  });
+
+  it('returns non-retryable 502 restore failure details for invalid checkpoints', async () => {
+    const db = {
+      getSandboxSession: vi.fn()
+        .mockResolvedValueOnce({
+          id: 'sandbox-1',
+          conversationId: 'conversation-1',
+          agentId: 'agent-1',
+          status: 'CHECKPOINTED',
+        })
+        .mockResolvedValueOnce({
+          id: 'sandbox-1',
+          conversationId: 'conversation-1',
+          agentId: 'agent-1',
+          status: 'TERMINATED',
+          restoreAttempts: 1,
+          lastRestoreError: 'No checkpoint found',
+        }),
+    };
+    const sessionManager = {
+      restoreSession: vi.fn().mockRejectedValue(new InvalidCheckpointError('No checkpoint found')),
+    };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/restore',
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual(expect.objectContaining({
+      error: 'Restore failed',
+      code: 'restore_failed',
+      category: 'non_retryable',
+      detail: 'No checkpoint found',
+      status: 'TERMINATED',
+      restoreAttempts: 1,
+      sessionId: 'sandbox-1',
+    }));
+  });
+
+  it('returns 410 for the legacy turn-id restore route', async () => {
+    const app = createAgentRoutesApp({} as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sessions/turn-1/restore',
+    });
+
+    expect(response.statusCode).toBe(410);
+    expect(response.json()).toEqual({
+      error: 'Legacy session admin route removed. Use /api/agents/:id/sandbox-sessions/:sessionId/restore.',
+      sessionId: 'turn-1',
+    });
   });
 });
 

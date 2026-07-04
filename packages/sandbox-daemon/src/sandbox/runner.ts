@@ -58,6 +58,7 @@ import {
   type SessionCheckpoint as ProtoConvertSessionCheckpoint,
 } from './proto-convert.js';
 import { createArtifactHandlers } from './artifact-handler.js';
+import { createSandboxCallbackAuthInterceptor } from './callback-auth.js';
 import type { OrchestratorServiceClient } from './tool-proxy.js';
 import { getToolApiToken, setSessionTools } from './daemon.js';
 import { stringifyJsonWithBigInts } from './json-serialization.js';
@@ -181,10 +182,12 @@ function getOrchestratorClient(): OrchestratorServiceClient | undefined {
     return undefined;
   }
 
+  const callbackAuthInterceptor = createSandboxCallbackAuthInterceptor();
   const transport = createConnectTransport({
     baseUrl: url,
     httpVersion: '1.1',
     nodeOptions: { timeout: 0 },
+    interceptors: callbackAuthInterceptor ? [callbackAuthInterceptor] : [],
   });
 
   const client = createClient(OrchestratorService, transport);
@@ -291,6 +294,35 @@ function phaseForEvent(event: AgentEvent): ExecutionPhase | null {
     default:
       return null;
   }
+}
+
+function updatePendingTurnRequests(
+  pendingRequests: Map<string, string>,
+  event: AgentEvent,
+): void {
+  switch (event.type) {
+    case 'tool_call_start':
+      pendingRequests.set(event.id, `tool call "${event.name}"`);
+      return;
+    case 'tool_call_end':
+      pendingRequests.delete(event.id);
+      return;
+    case 'approval_needed':
+      pendingRequests.set(event.id, `approval for "${event.tool}"`);
+      return;
+    case 'approval_resolved':
+      pendingRequests.delete(event.id);
+      return;
+    default:
+      return;
+  }
+}
+
+function pendingTurnRequestSummary(pendingRequests: Map<string, string>): string {
+  if (pendingRequests.size === 0) return 'none';
+  return Array.from(pendingRequests.entries())
+    .map(([id, label]) => `${id} (${label})`)
+    .join(', ');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -499,6 +531,10 @@ export async function* deliverTurn(
 
   const turnId = req.turnId;
   let seq = 0;
+  let sawSemanticEnd = false;
+  let suspendBreak = false;
+  let abortBreak = false;
+  const pendingTurnRequests = new Map<string, string>();
 
   ctx.currentTurnId = turnId;
   activeRunId.current = turnId;
@@ -517,6 +553,7 @@ export async function* deliverTurn(
 
       if (ctx.abortController.signal.aborted) {
         console.error(`[sandbox] turn ${turnId} aborted — session killed mid-stream after ${seq} events`);
+        abortBreak = true;
         break;
       }
 
@@ -528,6 +565,10 @@ export async function* deliverTurn(
       }
 
       ctx.stateCollector.processTurnEvent(event);
+      updatePendingTurnRequests(pendingTurnRequests, event);
+      if (event.type === 'done' || event.type === 'error') {
+        sawSemanticEnd = true;
+      }
 
       if (event.type === 'message_committed') {
         yield messageToCommittedEvent(event, turnId, seq);
@@ -539,18 +580,43 @@ export async function* deliverTurn(
         console.error(
           `[sandbox] turn ${turnId} suspending at phase="${ctx.phaseTracker.getPhase()}" after event #${seq}`,
         );
+        suspendBreak = true;
         break;
       }
     }
 
-    yield create(SessionEventSchema, {
-      payload: {
-        case: 'turnCompleted',
-        value: create(TurnCompletedSchema, { turnId }),
-      },
-    });
+    if (sawSemanticEnd && pendingTurnRequests.size === 0 && !abortBreak) {
+      yield create(SessionEventSchema, {
+        payload: {
+          case: 'turnCompleted',
+          value: create(TurnCompletedSchema, { turnId }),
+        },
+      });
 
-    console.error(`[sandbox] turn ${turnId} completed — ${seq} events emitted`);
+      console.error(`[sandbox] turn ${turnId} completed — ${seq} events emitted`);
+    } else if (suspendBreak && !abortBreak) {
+      console.error(
+        `[sandbox] turn ${turnId} suspended after ${seq} events — no terminal frame emitted`,
+      );
+    } else {
+      const cause = abortBreak
+        ? 'session killed mid-turn'
+        : 'harness stream ended without done event';
+      const pendingSummary = pendingTurnRequestSummary(pendingTurnRequests);
+      yield create(SessionEventSchema, {
+        payload: {
+          case: 'turnFailed',
+          value: create(TurnFailedSchema, {
+            turnId,
+            errorMessage: `${cause}; pending requests: ${pendingSummary}`,
+          }),
+        },
+      });
+
+      console.error(
+        `[sandbox] turn ${turnId} failed — ${cause}; pending requests: ${pendingSummary}; ${seq} events emitted`,
+      );
+    }
   } catch (err: unknown) {
     yield create(SessionEventSchema, {
       payload: {

@@ -617,7 +617,7 @@ async function streamCommand(agentId: string | undefined, flags: Flags): Promise
   requireArg(id, 'agentId');
   const endpoint = `/api/agents/${encodeURIComponent(id)}/stream`;
   const baseUrl = getBaseUrl(flags);
-  const url = buildUrl(baseUrl, endpoint);
+  const url = buildSseGetUrl(baseUrl, endpoint, flags);
   const meta: RequestMeta = { method: 'GET', endpoint, url };
   const limit = Number(flagString(flags, 'limit') ?? '0');
   const timeoutMs = Number(flagString(flags, 'timeout') ?? '0');
@@ -779,6 +779,7 @@ function basename(path: string): string {
 async function* sseStream(url: string, init: RequestInit, meta: RequestMeta): AsyncGenerator<{ event?: string; data: string }> {
   const headers = new Headers(init.headers ?? {});
   headers.set('Accept', 'text/event-stream');
+  if (!urlHasAccessToken(url)) applyApiAuth(headers, parsed.flags);
   const response = await fetch(url, { ...init, headers });
   if (!response.ok) {
     const text = await response.text();
@@ -825,7 +826,9 @@ async function requestRaw(endpoint: string, init: RequestInit, flags: Flags): Pr
   const baseUrl = getBaseUrl(flags);
   const url = buildUrl(baseUrl, endpoint);
   const meta: RequestMeta = { method: init.method ?? 'GET', endpoint, url };
-  const response = await fetch(url, init);
+  const headers = new Headers(init.headers ?? {});
+  applyApiAuth(headers, flags);
+  const response = await fetch(url, { ...init, headers });
   const text = await response.text();
   const data = parseMaybeJson(text);
   if (!response.ok) {
@@ -857,6 +860,7 @@ async function requestJson(endpoint: string, init: { method: string; body?: unkn
   const baseUrl = getBaseUrl(flags);
   const url = buildUrl(baseUrl, endpoint);
   const headers: Record<string, string> = { Accept: 'application/json' };
+  applyApiAuth(headers, flags);
   const requestInit: RequestInit = { method: init.method, headers };
 
   if (init.body !== undefined) {
@@ -881,6 +885,22 @@ function getBaseUrl(flags: Flags): string {
   return raw.replace(/\/+$/, '');
 }
 
+function getApiToken(flags: Flags): string | undefined {
+  const raw = flagString(flags, 'api-token', 'token') ?? process.env.CTXMILL_API_TOKEN;
+  const token = raw?.trim();
+  return token ? token : undefined;
+}
+
+function applyApiAuth(headers: Headers | Record<string, string>, flags: Flags): void {
+  const token = getApiToken(flags);
+  if (!token) return;
+  if (headers instanceof Headers) {
+    if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+    return;
+  }
+  if (!headers.Authorization && !headers.authorization) headers.Authorization = `Bearer ${token}`;
+}
+
 function buildUrl(baseUrl: string, endpoint: string): string {
   const url = new URL(baseUrl);
   const [endpointPathRaw, endpointQuery = ''] = endpoint.split('?');
@@ -894,6 +914,21 @@ function buildUrl(baseUrl: string, endpoint: string): string {
   url.pathname = `${basePath}${endpointPath}`.replace(/\/+/g, '/');
   url.search = endpointQuery ? `?${endpointQuery}` : '';
   return url.toString();
+}
+
+function buildSseGetUrl(baseUrl: string, endpoint: string, flags: Flags): string {
+  const url = new URL(buildUrl(baseUrl, endpoint));
+  const token = getApiToken(flags);
+  if (token && !url.searchParams.has('access_token')) url.searchParams.set('access_token', token);
+  return url.toString();
+}
+
+function urlHasAccessToken(url: string): boolean {
+  try {
+    return new URL(url).searchParams.has('access_token');
+  } catch {
+    return false;
+  }
 }
 
 async function emitResult(result: CommandResult, flags: Flags): Promise<void> {
@@ -1336,6 +1371,7 @@ Usage:
 
 Global flags:
   --base-url <url>       ctxmill API root (default: CTXMILL_API_URL, API_BASE, or http://localhost:3002)
+  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)
   --json                 Emit stable JSON envelope
   --raw                  Emit raw API payload
   --out <dir>            Save full JSON envelope to a directory

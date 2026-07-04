@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MessageCommittedSchema,
   SessionEventSchema,
+  TurnCompletedSchema,
   type SessionEvent as ProtoSessionEvent,
 } from '@ctxmill/proto/sandbox/v1';
 
@@ -52,6 +53,7 @@ function createMockContainerManager(): ContainerManager {
 function createMockDb(): DatabaseRepository {
   return {
     updateSandboxSessionStatus: vi.fn().mockResolvedValue(undefined),
+    updateTurn: vi.fn().mockResolvedValue(undefined),
   } as unknown as DatabaseRepository;
 }
 
@@ -102,6 +104,15 @@ function protoCommittedEvent(content: string, turnId: string): ProtoSessionEvent
         turnId,
         messageSeq: 1n,
       }),
+    },
+  });
+}
+
+function protoTurnCompletedEvent(turnId: string): ProtoSessionEvent {
+  return create(SessionEventSchema, {
+    payload: {
+      case: 'turnCompleted',
+      value: create(TurnCompletedSchema, { turnId }),
     },
   });
 }
@@ -215,6 +226,7 @@ describe('SandboxSessionManager concurrency', () => {
           return (async function* () {
             await firstRelease.promise;
             yield protoCommittedEvent('direct-response', request.turnId);
+            yield protoTurnCompletedEvent(request.turnId);
           })();
         }
 
@@ -223,10 +235,14 @@ describe('SandboxSessionManager concurrency', () => {
             secondStarted.resolve();
             await secondRelease.promise;
             yield protoCommittedEvent('queued-response-1', request.turnId);
+            yield protoTurnCompletedEvent(request.turnId);
           })();
         }
 
-        return streamProtoEvents(protoCommittedEvent(`queued-response-${grpcCallCount - 1}`, request.turnId));
+        return streamProtoEvents(
+          protoCommittedEvent(`queued-response-${grpcCallCount - 1}`, request.turnId),
+          protoTurnCompletedEvent(request.turnId),
+        );
       }),
     };
 
@@ -392,6 +408,7 @@ describe('SandboxSessionManager concurrency', () => {
           protoCommittedEvent('chunk-1', request.turnId),
           protoCommittedEvent('chunk-2', request.turnId),
           protoCommittedEvent('chunk-3', request.turnId),
+          protoTurnCompletedEvent(request.turnId),
         ),
       ),
     };

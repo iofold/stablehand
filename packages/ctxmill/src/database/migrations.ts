@@ -152,11 +152,29 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       conversation_id TEXT REFERENCES conversations(id),
       mode TEXT NOT NULL DEFAULT 'interactive',
       task_description TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      user_message_id TEXT,
       started_at BIGINT NOT NULL,
       completed_at BIGINT,
       error TEXT
     )
   `;
+
+  // Additive durable turn queue columns for pre-existing schemas (ctx-7e3x).
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS status TEXT`;
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS user_message_id TEXT`;
+  await sql`
+    UPDATE turns
+    SET status = CASE
+      WHEN completed_at IS NULL THEN 'running'
+      WHEN error = 'Session cancelled' THEN 'cancelled'
+      WHEN error IS NOT NULL THEN 'error'
+      ELSE 'completed'
+    END
+    WHERE status IS NULL
+  `;
+  await sql`ALTER TABLE turns ALTER COLUMN status SET DEFAULT 'queued'`;
+  await sql`ALTER TABLE turns ALTER COLUMN status SET NOT NULL`;
 
   // ── 8. event_store ─────────────────────────────────────────────────
   await sql`
@@ -165,9 +183,16 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       type TEXT NOT NULL,
       agent_id TEXT NOT NULL,
       payload TEXT NOT NULL,
-      created_at BIGINT NOT NULL
+      created_at BIGINT NOT NULL,
+      turn_id TEXT,
+      conversation_id TEXT,
+      channel TEXT NOT NULL DEFAULT 'system'
     )
   `;
+  // Additive canonical-spine columns for pre-existing databases (ADR-015).
+  await sql`ALTER TABLE event_store ADD COLUMN IF NOT EXISTS turn_id TEXT`;
+  await sql`ALTER TABLE event_store ADD COLUMN IF NOT EXISTS conversation_id TEXT`;
+  await sql`ALTER TABLE event_store ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'system'`;
 
   // ── 9. suspended_sessions ──────────────────────────────────────────
   await sql`
@@ -413,9 +438,12 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // turns
   await sql`CREATE INDEX IF NOT EXISTS idx_turns_agent_started ON turns(agent_id, started_at)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_turns_status_open ON turns(status) WHERE completed_at IS NULL`;
 
   // event_store
   await sql`CREATE INDEX IF NOT EXISTS idx_event_store_agent_seq ON event_store(agent_id, seq)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_event_store_turn_seq ON event_store(turn_id, seq) WHERE turn_id IS NOT NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_event_store_agent_channel_seq ON event_store(agent_id, channel, seq)`;
 
   // suspended_sessions
   await sql`CREATE INDEX IF NOT EXISTS idx_suspended_sessions_event_type ON suspended_sessions(wait_event_type)`;

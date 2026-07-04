@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
+import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
 /**
  * Integration tests for POST /api/agents/:id/interrupt
@@ -25,7 +26,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     container = await createContainer(
       {
         preset: 'docker',
-        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
+        database: { url: resolveTestDatabaseUrl() },
       },
       dataDir,
     );

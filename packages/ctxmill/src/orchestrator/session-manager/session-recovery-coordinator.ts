@@ -16,6 +16,7 @@ import {
   retryGrpcCall,
   waitForContainerReady,
 } from './grpc-session-client.js';
+import { getGrpcCallbackSandboxSecrets } from '../grpc/callback-auth.js';
 import {
   decideRestoreOutcome,
   InvalidCheckpointError,
@@ -234,6 +235,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       const sandboxSecrets = {
         ...(await this.deps.buildSandboxSecrets(dbSession.agentId)),
         ...getRuntimeSandboxSecrets(agentDef),
+        ...getGrpcCallbackSandboxSecrets(sessionId, dbSession.agentId),
       };
       const secretKeys = Object.keys(sandboxSecrets);
       this.deps.logger.info(`${TAG} injecting ${secretKeys.length} secrets: [${secretKeys.join(', ')}]`);
@@ -241,7 +243,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       const containerInfo = await this.deps.containerManager.createContainer({
         sessionId,
         conversationId: dbSession.conversationId,
-        agentId: agentDef.name,
+        agentId: dbSession.agentId,
         harnessName,
         workspaceDir,
         cpus: agentDef.resourceLimits?.cpus,
@@ -283,7 +285,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
               harnessName,
               harnessState: (checkpoint.harnessState ?? {}) as JsonObject,
             },
-            agentId: agentDef.name,
+            agentId: dbSession.agentId,
             harnessConfigJson: JSON.stringify(agentDef.harnessConfig),
             systemPrompt: agentDef.systemPrompt,
             tools: restoreTools.map((tool) => create(ToolMetadataSchema, {

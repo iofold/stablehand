@@ -101,7 +101,10 @@ Used for persistent artifact storage (file uploads/downloads).
 
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
-| `SECRET_MASTER_KEY` | `ctxmill-dev-key-change-in-prod` | No | Master key for per-agent secret encryption (AES-256-GCM). | `32-char-random-string` |
+| `SECRET_MASTER_KEY` | Development fallback outside production | **Yes in production** | Master key for per-agent secret encryption (AES-256-GCM). Production startup fails if this is unset, the development fallback, or shorter than 16 characters. | `openssl rand -hex 32` |
+| `CTXMILL_API_TOKEN` | - | **Yes in production** | Static bearer token required for HTTP control-plane API routes. Production startup fails if this is unset unless `CTXMILL_AUTH_DISABLED=true`. | `openssl rand -hex 32` |
+| `CTXMILL_CALLBACK_TOKEN_SECRET` | `CTXMILL_API_TOKEN` | No | Optional separate HMAC secret for session-scoped sandbox ConnectRPC callback tokens. Set this when you want callback auth independent from the HTTP API token. | `openssl rand -hex 32` |
+| `CTXMILL_AUTH_DISABLED` | `false` | No | Explicitly disables HTTP API bearer-token enforcement. Use only for isolated local development or trusted private test stacks. | `true` |
 
 ## Debug / Development
 
@@ -177,6 +180,14 @@ S3_REGION=us-east-1
 CORS_ORIGINS=http://localhost:3200,http://127.0.0.1:3200
 
 # ── Security ─────────────────────────────────────────────
-# Master key for per-agent secret encryption. CHANGE IN PROD!
-SECRET_MASTER_KEY=ctxmill-dev-key-change-in-prod
+# Master key for per-agent secret encryption. Required in production.
+# Generate with: openssl rand -hex 32
+SECRET_MASTER_KEY=
+# Static bearer token for HTTP control-plane API routes. Required in production.
+# Generate with: openssl rand -hex 32
+CTXMILL_API_TOKEN=
+# Optional separate HMAC secret for sandbox callback tokens.
+CTXMILL_CALLBACK_TOKEN_SECRET=
+# Set only for isolated local development or trusted private test stacks.
+CTXMILL_AUTH_DISABLED=
 ```

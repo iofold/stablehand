@@ -2,6 +2,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { resolve } from 'node:path';
 import Dockerode from 'dockerode';
 import * as tar from 'tar-stream';
+import { ContainerAccounting } from './container-accounting.js';
 import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from './container-scope.js';
 
 // ── Public interfaces ─────────────────────────────────────────
@@ -96,6 +97,8 @@ export interface SandboxContainerManager {
   getContainerByLabel(label: string, value: string): Promise<ContainerInfo | null>;
   isContainerAlive(containerId: string): Promise<boolean>;
   ensureNetwork(): Promise<void>;
+  /** Seed slot accounting from live containers at boot (ctx-wbt). */
+  rehydrateAccounting?(): Promise<number>;
   getActiveCount(): number;
   getQueuedCount(): number;
   getPeakCount(): number;
@@ -185,95 +188,9 @@ export function buildSandboxOtelEnv(harnessName: string): string[] {
   ];
 }
 
-// ── Container limit error ────────────────────────────────────
-
-export class ContainerLimitError extends Error {
-  public readonly statusCode = 503;
-  public readonly maxContainers: number;
-
-  constructor(maxContainers: number) {
-    super(`Maximum container limit (${maxContainers}) reached. Try again later.`);
-    this.name = 'ContainerLimitError';
-    this.maxContainers = maxContainers;
-  }
-}
-
-// ── ContainerSemaphore ───────────────────────────────────────
-
-interface QueueEntry {
-  resolve: () => void;
-  reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-/**
- * Promise-based semaphore that limits concurrent container allocations.
- * When the limit is reached, acquire() queues the caller and resolves
- * when a slot opens (or rejects after a timeout).
- */
-export class ContainerSemaphore {
-  private active = 0;
-  private peak = 0;
-  private readonly queue: QueueEntry[] = [];
-
-  constructor(
-    private readonly maxConcurrent: number,
-    private readonly queueTimeoutMs: number,
-  ) {}
-
-  /**
-   * Acquire a slot. Resolves immediately if under the limit,
-   * otherwise queues until a slot opens or the timeout expires.
-   */
-  async acquire(): Promise<void> {
-    if (this.active < this.maxConcurrent) {
-      this.active++;
-      this.peak = Math.max(this.peak, this.active);
-      return;
-    }
-
-    return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const idx = this.queue.findIndex((e) => e.resolve === resolve);
-        if (idx >= 0) this.queue.splice(idx, 1);
-        reject(new ContainerLimitError(this.maxConcurrent));
-      }, this.queueTimeoutMs);
-      // Don't let the timer keep the process alive
-      if (timer && typeof timer === 'object' && 'unref' in timer) {
-        (timer as NodeJS.Timeout).unref();
-      }
-      this.queue.push({ resolve, reject, timer });
-    });
-  }
-
-  /**
-   * Release a slot. Wakes the next queued request (FIFO) or decrements
-   * the active count if the queue is empty.
-   * Gracefully handles over-release (active count never goes below 0).
-   */
-  release(): void {
-    if (this.queue.length > 0) {
-      const next = this.queue.shift()!;
-      clearTimeout(next.timer);
-      // Active count stays the same — the slot transfers to the next waiter
-      next.resolve();
-    } else {
-      this.active = Math.max(0, this.active - 1);
-    }
-  }
-
-  getActive(): number {
-    return this.active;
-  }
-
-  getQueued(): number {
-    return this.queue.length;
-  }
-
-  getPeak(): number {
-    return this.peak;
-  }
-}
+// ContainerLimitError and ContainerSemaphore moved to container-semaphore.ts;
+// re-exported here for existing importers.
+export { ContainerLimitError, ContainerSemaphore } from './container-semaphore.js';
 
 // ── ContainerManager ─────────────────────────────────────────
 
@@ -359,16 +276,10 @@ export class ContainerManager implements SandboxContainerManager {
   private readonly defaultPidsLimit: number;
   private readonly defaultTimeoutSec: number;
   private readonly startupGraceMs: number;
-  private readonly semaphore: ContainerSemaphore;
   private readonly maxGlobalContainers: number;
 
-  // ── Metrics tracking (in-memory, not persisted) ──────────
-  private totalCreated = 0;
-  private readonly activeByHarness = new Map<string, number>();
-  private readonly containerStartTimes = new Map<string, number>(); // containerId → start timestamp
-  private readonly containerHarness = new Map<string, string>(); // containerId → harnessName
-  private completedCount = 0;
-  private lifetimeSumMs = 0;
+  /** Slot + metrics accounting, membership-keyed by containerId (ctx-wbt). */
+  private readonly accounting: ContainerAccounting;
 
   constructor(options?: ContainerManagerOptions, dockerInstance?: Dockerode) {
     this.docker = dockerInstance ?? new Dockerode();
@@ -386,14 +297,37 @@ export class ContainerManager implements SandboxContainerManager {
     this.maxGlobalContainers = options?.maxGlobalContainers
       ?? (process.env.CTXMILL_MAX_CONTAINERS ? parseInt(process.env.CTXMILL_MAX_CONTAINERS, 10) : 20);
     const queueTimeoutMs = options?.queueTimeoutMs ?? 60_000;
-    this.semaphore = new ContainerSemaphore(this.maxGlobalContainers, queueTimeoutMs);
+    this.accounting = new ContainerAccounting(this.maxGlobalContainers, queueTimeoutMs);
+  }
+
+  /**
+   * Seed slot accounting from live managed containers (ctx-wbt). Run at boot
+   * BEFORE lifecycle reconciliation so reconciliation-driven removals free
+   * real slots. Live containers beyond maxGlobalContainers push active over
+   * the limit until reaped; new creations queue meanwhile.
+   */
+  async rehydrateAccounting(): Promise<number> {
+    const containers = await this.listManagedContainersWithLabels();
+    const seeded = this.accounting.rehydrate(
+      containers
+        .filter((c) => c.status === 'running' || c.status === 'created' || c.status === 'paused')
+        .map((c) => ({
+          containerId: c.containerId,
+          harnessName: c.harnessName || c.labels['ctxmill.harness'] || 'unknown',
+          startedAtMs: c.startedAt?.getTime(),
+        })),
+    );
+    if (seeded > 0) {
+      console.info(`${TAG} rehydrated slot accounting for ${seeded} live container(s)`);
+    }
+    return seeded;
   }
 
   // ── Lifecycle ────────────────────────────────────────────
 
   async createContainer(opts: CreateContainerOptions): Promise<ContainerInfo> {
     // Acquire a concurrency slot (queues if at capacity, throws on timeout)
-    await this.semaphore.acquire();
+    await this.accounting.acquireSlot();
     let containerCreated = false;
 
     try {
@@ -405,7 +339,7 @@ export class ContainerManager implements SandboxContainerManager {
       const containerName = `ctxmill-run-${opts.sessionId}`;
 
       console.debug(
-        `${TAG} creating container ${containerName} (harness=${opts.harnessName}, cpus=${cpus}, mem=${memoryMb}MiB, active=${this.semaphore.getActive()}/${this.semaphore.getActive() + this.semaphore.getQueued()})`,
+        `${TAG} creating container ${containerName} (harness=${opts.harnessName}, cpus=${cpus}, mem=${memoryMb}MiB, active=${this.accounting.getActive()}/${this.accounting.getActive() + this.accounting.getQueued()})`,
       );
 
       const dataVolume = process.env.CTXMILL_DATA_VOLUME;
@@ -472,12 +406,7 @@ export class ContainerManager implements SandboxContainerManager {
 
       console.debug(`${TAG} container ${containerName} created (id=${container.id})`);
 
-      // ── Update metrics ─────────────────────────────────────
-      this.totalCreated++;
-      const currentHarnessCount = this.activeByHarness.get(opts.harnessName) ?? 0;
-      this.activeByHarness.set(opts.harnessName, currentHarnessCount + 1);
-      this.containerStartTimes.set(container.id, Date.now());
-      this.containerHarness.set(container.id, opts.harnessName);
+      this.accounting.registerCreated(container.id, opts.harnessName);
 
       containerCreated = true;
       return {
@@ -490,7 +419,7 @@ export class ContainerManager implements SandboxContainerManager {
       };
     } finally {
       if (!containerCreated) {
-        this.semaphore.release();
+        this.accounting.releaseUnregisteredSlot();
       }
     }
   }
@@ -911,17 +840,17 @@ export class ContainerManager implements SandboxContainerManager {
 
   /** Number of currently active (acquired) container slots. */
   getActiveCount(): number {
-    return this.semaphore.getActive();
+    return this.accounting.getActive();
   }
 
   /** Number of requests currently queued waiting for a slot. */
   getQueuedCount(): number {
-    return this.semaphore.getQueued();
+    return this.accounting.getQueued();
   }
 
   /** Peak number of concurrently active container slots observed. */
   getPeakCount(): number {
-    return this.semaphore.getPeak();
+    return this.accounting.getPeak();
   }
 
   /**
@@ -930,36 +859,18 @@ export class ContainerManager implements SandboxContainerManager {
    * for high-frequency polling from dashboards.
    */
   getMetrics(): ContainerMetrics {
-    const byHarness: Record<string, number> = {};
-    for (const [harness, count] of this.activeByHarness) {
-      byHarness[harness] = count;
-    }
-    return {
-      active: this.semaphore.getActive(),
-      queued: this.semaphore.getQueued(),
-      peak: this.semaphore.getPeak(),
-      totalCreated: this.totalCreated,
-      byHarness,
-      averageLifetimeMs: this.completedCount > 0
-        ? Math.round(this.lifetimeSumMs / this.completedCount)
-        : 0,
-      maxGlobalContainers: this.maxGlobalContainers,
-    };
+    return this.accounting.getMetrics();
   }
 
 
 
   // ── Private helpers ─────────────────────────────────────
 
-  /** Release the semaphore slot only for containers created by this manager. */
+  /** Free the slot for any tracked container (created here or rehydrated at boot). */
   private releaseOwnedContainerSlot(containerId: string): void {
-    if (!this.containerHarness.has(containerId)) {
-      console.debug(`${TAG} container ${containerId} is not owned by this manager; slot not released`);
-      return;
+    if (!this.accounting.releaseFor(containerId)) {
+      console.debug(`${TAG} container ${containerId} is not tracked by accounting; slot not released`);
     }
-
-    this.semaphore.release();
-    this.recordContainerCompletion(containerId);
   }
 
   private pickScopedOrLegacyContainer(
@@ -1006,33 +917,6 @@ export class ContainerManager implements SandboxContainerManager {
     }
 
     return true;
-  }
-
-  /**
-   * Record completion of a container: update average lifetime and
-   * decrement per-harness active count. Called internally after removal.
-   */
-  private recordContainerCompletion(containerId: string): void {
-    // Update average lifetime (running sum, not storing all durations)
-    const startTime = this.containerStartTimes.get(containerId);
-    if (startTime !== undefined) {
-      const lifetimeMs = Date.now() - startTime;
-      this.completedCount++;
-      this.lifetimeSumMs += lifetimeMs;
-      this.containerStartTimes.delete(containerId);
-    }
-
-    // Decrement per-harness count
-    const harnessName = this.containerHarness.get(containerId);
-    if (harnessName) {
-      const current = this.activeByHarness.get(harnessName) ?? 0;
-      if (current <= 1) {
-        this.activeByHarness.delete(harnessName);
-      } else {
-        this.activeByHarness.set(harnessName, current - 1);
-      }
-      this.containerHarness.delete(containerId);
-    }
   }
 
   private containerListItemToInfo(c: Dockerode.ContainerInfo): ContainerInfo {

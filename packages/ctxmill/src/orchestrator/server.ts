@@ -19,6 +19,10 @@ import type { RunStartupService } from './run-startup-service.js';
 import type { TypedEventBus } from '../events/bus.js';
 import type { SecretProvider } from '../secrets/types.js';
 import { createGrpcRoutes } from './grpc/router.js';
+import {
+  createGrpcCallbackAuthInterceptor,
+  resolveGrpcCallbackAuthConfig,
+} from './grpc/callback-auth.js';
 import type { OrchestratorToolRegistry } from './grpc/orchestrator-service.js';
 import type { SandboxContainerManager } from '../sandbox/container-manager.js';
 import type { LocalFunctionExecutor } from '../tool/executor.js';
@@ -33,6 +37,14 @@ import type { HarnessRegistry } from '../harness/types.js';
 import type { SystemSettingsService } from '../settings/service.js';
 import type { SandboxSessionManager } from './sandbox-session-manager.js';
 import type { ContainerLifecyclePolicy } from './container-lifecycle-policy.js';
+import type { CanonicalLog } from './canonical/canonical-log.js';
+import {
+  registerApiAuth,
+  resolveApiAuthConfig,
+  serializeRequestForLog,
+  type ApiAuthConfig,
+  type ApiRouteRecord,
+} from './auth.js';
 
 export interface ServerOptions {
   port?: number;
@@ -66,6 +78,8 @@ export interface ServerOptions {
   sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
   lifecyclePolicy?: ContainerLifecyclePolicy;
+  /** Durable canonical event spine (ADR-015). */
+  canonicalLog?: CanonicalLog;
 }
 
 function createDefaultHarnessRegistry(): HarnessRegistry {
@@ -87,7 +101,13 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   const harnessRegistry = optHarnessRegistry ?? createDefaultHarnessRegistry();
   const toolDefinitionRegistry = opts.toolDefinitionRegistry ?? new DefaultToolRegistry();
 
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: {
+      serializers: {
+        req: serializeRequestForLog,
+      },
+    },
+  });
 
   // Allow binary uploads (application/gzip, application/x-gzip) for workspace tarball endpoint.
   // The route handler reads from request.raw directly, so we skip body parsing.
@@ -109,6 +129,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     },
   });
 
+  registerApiAuth(app, resolveApiAuthConfig());
+
   // Shared infrastructure — prefer injected instances from the DI container
   const sse = opts.sse ?? new SSEManager();
   const interrupts = opts.interrupts ?? new InterruptManager();
@@ -127,6 +149,9 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   // REST routes coexist on the same port — ConnectRPC only handles
   // its own paths (e.g. /ctxmill.sandbox.v1.OrchestratorService/*).
   if (eventBus) {
+    const callbackAuthInterceptor = createGrpcCallbackAuthInterceptor(
+      resolveGrpcCallbackAuthConfig(),
+    );
     await app.register(fastifyConnectPlugin, {
       routes: createGrpcRoutes({
         eventBus,
@@ -137,6 +162,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         repository: db,
         artifactStore: opts.artifactStore,
       }),
+      interceptors: callbackAuthInterceptor ? [callbackAuthInterceptor] : [],
     });
   }
 
@@ -168,8 +194,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   };
   // Register at both paths: /health for direct orchestrator access,
   // /api/health for nginx-proxied or prefix-based access
-  app.get('/health', healthHandler);
-  app.get('/api/health', healthHandler);
+  app.get('/health', { config: { public: true } }, healthHandler);
+  app.get('/api/health', { config: { public: true } }, healthHandler);
 
   // ── Sandbox metrics route ──────────────────────────────
   if (opts.containerManager) {
@@ -200,7 +226,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService, canonicalLog: opts.canonicalLog });
   await app.register(sessionsRoutes, {
     prefix: '/api/sessions',
     db,
@@ -213,6 +239,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
       db,
       eventBus,
       runStartupService: opts.runStartupService,
+      canonicalLog: opts.canonicalLog,
     });
   }
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
@@ -258,5 +285,12 @@ declare module 'fastify' {
     interrupts: InterruptManager;
     db: DatabaseRepository;
     toolDefinitionRegistry: DefaultToolRegistry;
+    apiAuth: ApiAuthConfig;
+    apiRouteTable: ApiRouteRecord[];
+  }
+
+  interface FastifyContextConfig {
+    public?: boolean;
+    allowTokenQuery?: boolean;
   }
 }

@@ -24,7 +24,20 @@ function getRaw(reply: import('fastify').FastifyReply): MockRaw {
 
 // ── Tests ────────────────────────────────────────────────────────
 
+
+let frameSeq = 0;
+function broadcastEvent(mgr: SSEManager, agentId: string, event: Record<string, unknown>): number {
+  frameSeq += 1;
+  mgr.broadcastFrame(agentId, { legacy: event, canonical: event }, frameSeq);
+  return frameSeq;
+}
+
+function seqId(seq: number): string {
+  return String(seq).padStart(12, '0');
+}
+
 describe('SSEManager', () => {
+  beforeEach(() => { frameSeq = 0; });
   let manager: SSEManager;
 
   beforeEach(() => {
@@ -101,9 +114,9 @@ describe('SSEManager', () => {
       expect(manager.getClientCount('agent-1')).toBe(3);
 
       const event = { type: 'TEXT_MESSAGE_START', messageId: 'msg-1' };
-      manager.broadcast('agent-1', event);
+      broadcastEvent(manager, 'agent-1', event);
 
-      const expectedData = `id: agent-1-1\ndata: ${JSON.stringify(event)}\n\n`;
+      const expectedData = `id: ${seqId(1)}\ndata: ${JSON.stringify(event)}\n\n`;
       expect(getRaw(reply1).write).toHaveBeenCalledWith(expectedData);
       expect(getRaw(reply2).write).toHaveBeenCalledWith(expectedData);
       expect(getRaw(reply3).write).toHaveBeenCalledWith(expectedData);
@@ -116,7 +129,7 @@ describe('SSEManager', () => {
       manager.subscribe('agent-1', reply1);
       manager.subscribe('agent-2', reply2);
 
-      manager.broadcast('agent-1', { type: 'test' });
+      broadcastEvent(manager, 'agent-1', { type: 'test' });
 
       expect(getRaw(reply1).write).toHaveBeenCalledTimes(1);
       expect(getRaw(reply2).write).not.toHaveBeenCalled();
@@ -124,7 +137,7 @@ describe('SSEManager', () => {
 
     it('should do nothing when broadcasting to agent with no clients', () => {
       // Should not throw
-      expect(() => manager.broadcast('no-agent', { type: 'test' })).not.toThrow();
+      expect(() => broadcastEvent(manager, 'no-agent', { type: 'test' })).not.toThrow();
     });
   });
 
@@ -166,13 +179,13 @@ describe('SSEManager', () => {
         throw new Error('Connection reset');
       });
 
-      manager.broadcast('agent-1', { type: 'test' });
+      broadcastEvent(manager, 'agent-1', { type: 'test' });
 
       // reply1 should have been cleaned up
       expect(manager.getClientCount('agent-1')).toBe(1);
 
       // reply2 should still receive broadcasts
-      manager.broadcast('agent-1', { type: 'test2' });
+      broadcastEvent(manager, 'agent-1', { type: 'test2' });
       expect(getRaw(reply2).write).toHaveBeenCalledTimes(2);
     });
 
@@ -222,10 +235,10 @@ describe('SSEManager', () => {
 
       // First write returns false (buffer full)
       getRaw(reply).write.mockReturnValueOnce(false);
-      manager.broadcast('agent-1', { type: 'event-1' });
+      broadcastEvent(manager, 'agent-1', { type: 'event-1' });
 
       // Second event should be queued, not written directly
-      manager.broadcast('agent-1', { type: 'event-2' });
+      broadcastEvent(manager, 'agent-1', { type: 'event-2' });
       // write was called once for event-1, event-2 was queued
       expect(getRaw(reply).write).toHaveBeenCalledTimes(1);
     });
@@ -236,10 +249,10 @@ describe('SSEManager', () => {
 
       // First write returns false (backpressure)
       getRaw(reply).write.mockReturnValueOnce(false);
-      manager.broadcast('agent-1', { type: 'event-1' });
+      broadcastEvent(manager, 'agent-1', { type: 'event-1' });
 
       // Queue a second event
-      manager.broadcast('agent-1', { type: 'event-2' });
+      broadcastEvent(manager, 'agent-1', { type: 'event-2' });
       expect(getRaw(reply).write).toHaveBeenCalledTimes(1);
 
       // Restore normal write behavior and emit drain
@@ -249,11 +262,11 @@ describe('SSEManager', () => {
       expect(getRaw(reply).write).toHaveBeenCalledTimes(2);
       expect(getRaw(reply).write).toHaveBeenNthCalledWith(
         1,
-        `id: agent-1-1\ndata: ${JSON.stringify({ type: 'event-1' })}\n\n`,
+        `id: ${seqId(1)}\ndata: ${JSON.stringify({ type: 'event-1' })}\n\n`,
       );
       expect(getRaw(reply).write).toHaveBeenNthCalledWith(
         2,
-        `id: agent-1-2\ndata: ${JSON.stringify({ type: 'event-2' })}\n\n`,
+        `id: ${seqId(2)}\ndata: ${JSON.stringify({ type: 'event-2' })}\n\n`,
       );
     });
 
@@ -264,15 +277,15 @@ describe('SSEManager', () => {
 
       // First write returns false to trigger backpressure
       getRaw(reply).write.mockReturnValueOnce(false);
-      manager.broadcast('agent-1', { type: 'trigger-backpressure' });
+      broadcastEvent(manager, 'agent-1', { type: 'trigger-backpressure' });
 
       // Queue 100 events (filling the queue)
       for (let i = 0; i < 100; i++) {
-        manager.broadcast('agent-1', { type: `event-${i}` });
+        broadcastEvent(manager, 'agent-1', { type: `event-${i}` });
       }
 
       // The 101st event should trigger disconnection
-      manager.broadcast('agent-1', { type: 'overflow' });
+      broadcastEvent(manager, 'agent-1', { type: 'overflow' });
       expect(manager.getClientCount('agent-1')).toBe(0);
       expect(warnSpy).toHaveBeenCalledWith('[SSE] Disconnecting slow client');
 

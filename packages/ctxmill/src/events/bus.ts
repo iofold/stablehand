@@ -174,6 +174,8 @@ export type PersistEventFn = (
   type: string,
   agentId: string,
   payload: string,
+  /** The payload object that produced `payload` — lets persistence layers avoid a hot-path re-parse (ADR-015). */
+  parsedPayload?: Record<string, unknown>,
 ) => void | Promise<void>;
 
 export class TypedEventBus {
@@ -199,7 +201,7 @@ export class TypedEventBus {
 
     const agentId = 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
     try {
-      const persisted = this.persistEvent(event, agentId, JSON.stringify(payload));
+      const persisted = this.persistEvent(event, agentId, JSON.stringify(payload), payload as Record<string, unknown>);
       if (persisted && typeof persisted.then === 'function') {
         persisted
           .then(() => this.dispatchListeners(event, payload))
@@ -249,7 +251,7 @@ export class TypedEventBus {
     if (this.persistEvent) {
       const agentId = 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
       try {
-        await this.persistEvent(event, agentId, JSON.stringify(payload));
+        await this.persistEvent(event, agentId, JSON.stringify(payload), payload as Record<string, unknown>);
       } catch (err) {
         this.reportBusError('persist', event, err, `[EventBus] persist error for ${event}:`);
         if (options.rejectOnPersistFailure) {
@@ -306,7 +308,7 @@ export class TypedEventBus {
     }
 
     try {
-      const persisted = this.persistEvent(eventType, agentId, JSON.stringify(fullPayload));
+      const persisted = this.persistEvent(eventType, agentId, JSON.stringify(fullPayload), fullPayload);
       if (persisted && typeof persisted.then === 'function') {
         persisted
           .then(() => this.dispatchListeners(eventType, fullPayload))
@@ -342,7 +344,7 @@ export class TypedEventBus {
 
     if (this.persistEvent) {
       try {
-        await this.persistEvent(eventType, agentId, JSON.stringify(fullPayload));
+        await this.persistEvent(eventType, agentId, JSON.stringify(fullPayload), fullPayload);
       } catch (err) {
         this.reportBusError('persist', eventType, err, `[EventBus] persist error for custom ${eventType}:`);
         if (options.rejectOnPersistFailure) {

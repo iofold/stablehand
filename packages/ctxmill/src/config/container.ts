@@ -11,7 +11,6 @@ import { PIAgentHarness } from '../harness/pi-agent.js';
 import type { HarnessRegistry } from '../harness/types.js';
 import { TypedEventBus } from '../events/bus.js';
 import { SSEManager } from '../orchestrator/sse.js';
-import { SSEBroadcaster } from '../orchestrator/sse-broadcaster.js';
 import { InterruptManager } from '../orchestrator/interrupt.js';
 import { SuspendedSessionMatcher } from '../orchestrator/suspended-session-matcher.js';
 import type { ResumeMatchResult } from '../orchestrator/suspended-session-matcher.js';
@@ -20,8 +19,13 @@ import { AgentSessionService } from '../orchestrator/agent-session-service.js';
 import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
 import { ManifestService } from '../manifest/index.js';
 import { RunStartupService } from '../orchestrator/run-startup-service.js';
+import { TurnFinalizer } from '../orchestrator/turn-finalizer.js';
+import { reconcileStrandedTurnsOnStartup } from '../orchestrator/turn-reconciler.js';
+import { CanonicalLog } from '../orchestrator/canonical/canonical-log.js';
+import { formatNativeLegacy } from '../orchestrator/canonical/format-native-legacy.js';
 import { PostgresSecretProvider } from '../secrets/postgres-provider.js';
 import { deriveKey } from '../secrets/crypto.js';
+import { resolveSecretMasterKeyPassphrase } from '../secrets/master-key.js';
 import type { SecretProvider } from '../secrets/types.js';
 import { ContainerManager, type SandboxContainerManager } from '../sandbox/container-manager.js';
 import { KubernetesContainerManager } from '../sandbox/kubernetes-container-manager.js';
@@ -48,7 +52,6 @@ export interface AppContainer {
   toolRegistry: DefaultToolRegistry;
   eventBus: TypedEventBus;
   sseManager: SSEManager;
-  sseBroadcaster: SSEBroadcaster;
   interruptManager: InterruptManager;
   suspendedSessionMatcher: SuspendedSessionMatcher;
   triggerManager: EventTriggerManager;
@@ -63,6 +66,15 @@ export interface AppContainer {
   workspaceDiffService: WorkspaceDiffService;
   settingsService: SystemSettingsService;
   lifecyclePolicy: ContainerLifecyclePolicy;
+  /** Durable canonical event spine (ADR-015); serves replay when CTXMILL_CANONICAL_EVENTS=1. */
+  canonicalLog: CanonicalLog;
+  /** Startup turn reconciliation (ADR-014/ctx-7e3x): fail stranded turns and replay durable queued turns. */
+  reconcileStrandedTurns: (bootTimeMs: number) => Promise<{
+    failed: number;
+    skippedHitlParked: number;
+    redispatched: number;
+    redispatchComplete: Promise<void>;
+  }>;
   artifactStore?: ArtifactStore;
   /** Sandbox session manager (typed as implementation for reconciliation). */
   sessionManager: SandboxSessionManagerImpl;
@@ -263,20 +275,19 @@ export function createTriggerRunCallback({
     });
 
     // Fire-and-forget — AgentSessionService handles SSE broadcasting, run.text_chunk events,
-    // message persistence, and session completion.
-    void runStartupService.launchPreparedRun(start, agentId, { rethrowOnError: true }).then(() => {
-      // Emit trigger.fired event after successful run while preserving the cascade depth
-      // that EventTriggerManager already computed for this triggered run.
-      eventBus.emit('trigger.fired', {
-        triggerId,
-        agentId,
-        eventType: 'trigger.fired',
-        turnId: start.turnId,
-        ...(triggerDepth === undefined ? {} : { _triggerDepth: triggerDepth }),
-        timestamp: Date.now(),
-      });
-    }).catch((err) => {
-      console.error(`[event-trigger] executeSession failed for agent ${agentId}:`, err);
+    // message persistence, and session completion. trigger.fired preserves the cascade
+    // depth that EventTriggerManager already computed for this triggered run.
+    void runStartupService.launchPreparedRun(start, agentId, {
+      onSuccess: () => {
+        eventBus.emit('trigger.fired', {
+          triggerId,
+          agentId,
+          eventType: 'trigger.fired',
+          turnId: start.turnId,
+          ...(triggerDepth === undefined ? {} : { _triggerDepth: triggerDepth }),
+          timestamp: Date.now(),
+        });
+      },
     });
   };
 }
@@ -293,6 +304,7 @@ export async function createContainer(
   dataDir: string,
 ): Promise<AppContainer> {
   const config = resolveConfig(userConfig);
+  const secretMasterPassphrase = resolveSecretMasterKeyPassphrase();
 
   // ── Database ────────────────────────────────────────────
   const dbConn: DatabaseConnection = await createDatabase(config.database.url);
@@ -305,9 +317,7 @@ export async function createContainer(
   const startupSettings = await settingsService.getAll();
 
   // ── Secrets ─────────────────────────────────────────────
-  const secretMasterKey = deriveKey(
-    process.env.SECRET_MASTER_KEY || 'ctxmill-dev-key-change-in-prod',
-  );
+  const secretMasterKey = deriveKey(secretMasterPassphrase);
   const secretProvider: SecretProvider = new PostgresSecretProvider(
     dbConn.pgClient,
     secretMasterKey,
@@ -359,15 +369,29 @@ export async function createContainer(
   await toolRegistry.refresh();
 
   // ── Events ──────────────────────────────────────────────
+  // The canonical event spine (ADR-015) is the only persistence and the only
+  // wire source. The bus defers listener dispatch until ingest resolves, so
+  // ADR-006 persist-then-dispatch holds.
+  const canonicalLog = new CanonicalLog({ db, logger: console });
   const eventBus = new TypedEventBus({
-    persistEvent: async (type, agentId, payload) => {
-      await db.saveEvent(type, agentId, payload);
+    persistEvent: async (type, _agentId, payload, parsedPayload) => {
+      await canonicalLog.ingest(type, parsedPayload ?? JSON.parse(payload) as Record<string, unknown>);
     },
   });
 
   // ── SSE + Interrupts ───────────────────────────────────
   const sseManager = new SSEManager(eventBus);
-  const sseBroadcaster = new SSEBroadcaster(sseManager, eventBus);
+  // Run-channel frames feed the native wire with durable seq ids; each client
+  // receives its negotiated vocabulary (canonical default, ?wire=legacy).
+  canonicalLog.subscribe((frames) => {
+    for (const frame of frames) {
+      if (frame.channel !== 'run') continue;
+      sseManager.broadcastFrame(frame.agentId, {
+        legacy: formatNativeLegacy(frame),
+        canonical: frame.body,
+      }, frame.seq);
+    }
+  });
   const interruptManager = new InterruptManager(eventBus, db, async (sessionId) => {
     if (sessionManagerRef) {
       await sessionManagerRef.suspendSession(sessionId, 'hitl-timeout', { allowActiveTurn: true });
@@ -638,7 +662,6 @@ export async function createContainer(
     toolRegistry,
     eventBus,
     sseManager,
-    sseBroadcaster,
     interruptManager,
     suspendedSessionMatcher,
     triggerManager,
@@ -652,6 +675,17 @@ export async function createContainer(
     workspaceDiffService,
     settingsService,
     lifecyclePolicy,
+    canonicalLog,
+    reconcileStrandedTurns: (bootTimeMs: number) => reconcileStrandedTurnsOnStartup(
+      {
+        db,
+        finalizer: new TurnFinalizer({ db, eventBus, logger: console }),
+        logger: console,
+        redispatchQueuedTurn: (params) => runStartupService.redispatchQueuedRun(params),
+        resetStrandedSession: (sessionId) => realSessionManager.killSession(sessionId),
+      },
+      bootTimeMs,
+    ),
     artifactStore,
     sessionManager: realSessionManager,
     close: async () => {

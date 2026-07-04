@@ -21,6 +21,7 @@ import {
   retryGrpcCall,
   waitForContainerReady,
 } from './grpc-session-client.js';
+import { getGrpcCallbackSandboxSecrets } from '../grpc/callback-auth.js';
 import { getRuntimeSandboxSecrets } from './runtime-sandbox-secrets.js';
 import { sandboxGrpcBaseUrl } from './sandbox-endpoint.js';
 import type {
@@ -119,6 +120,7 @@ export class SessionRuntimeFactory {
       const sandboxSecrets = {
         ...(await this.deps.buildSandboxSecrets(effectiveAgentId)),
         ...getRuntimeSandboxSecrets(agentDef),
+        ...getGrpcCallbackSandboxSecrets(sessionId, effectiveAgentId),
       };
       const secretKeys = Object.keys(sandboxSecrets);
       this.deps.logger.info(`${TAG} injecting ${secretKeys.length} secrets: [${secretKeys.join(', ')}]`);

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
+import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
 describe('Session API lifecycle', () => {
   let app: Awaited<ReturnType<typeof createServer>>;
@@ -23,7 +24,7 @@ describe('Session API lifecycle', () => {
       {
         preset: 'docker',
         database: {
-          url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
+          url: resolveTestDatabaseUrl(),
         },
       },
       dataDir,

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
+import { liveApiFetch } from './live-api-auth.js';
 
 const API_BASE = process.env.API_URL ?? 'http://localhost:3002';
 const AGENTS_BASE = `${API_BASE}/api/agents`;
@@ -51,7 +52,7 @@ function uniqueName(prefix: string) {
 }
 
 async function createTestAgent(prefix: string): Promise<CreatedAgent> {
-  const response = await fetch(AGENTS_BASE, {
+  const response = await liveApiFetch(AGENTS_BASE, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -72,12 +73,12 @@ async function createTestAgent(prefix: string): Promise<CreatedAgent> {
 }
 
 async function deleteAgent(agentId: string) {
-  const response = await fetch(`${AGENTS_BASE}/${agentId}`, { method: 'DELETE' });
+  const response = await liveApiFetch(`${AGENTS_BASE}/${agentId}`, { method: 'DELETE' });
   expect([200, 204, 404]).toContain(response.status);
 }
 
 async function deleteArtifact(artifactId: string) {
-  const response = await fetch(`${ARTIFACTS_BASE}/${artifactId}`, { method: 'DELETE' });
+  const response = await liveApiFetch(`${ARTIFACTS_BASE}/${artifactId}`, { method: 'DELETE' });
   expect([200, 404]).toContain(response.status);
   if (response.status === 200) {
     deletedArtifactIds.add(artifactId);
@@ -115,7 +116,7 @@ describe('Artifact REST API Integration', () => {
   });
 
   it('returns a signed upload URL and creates artifact metadata', async () => {
-    const response = await fetch(`${ARTIFACTS_BASE}/upload-url`, {
+    const response = await liveApiFetch(`${ARTIFACTS_BASE}/upload-url`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -138,7 +139,7 @@ describe('Artifact REST API Integration', () => {
     expect(uploadUrl.host).toBe('localhost:9000');
     expect(uploadUrl.searchParams.has('X-Amz-Signature')).toBe(true);
 
-    const metadataResponse = await fetch(`${ARTIFACTS_BASE}/${data.artifactId}`);
+    const metadataResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${data.artifactId}`);
     expect(metadataResponse.status).toBe(200);
 
     const metadata: ArtifactRecord = await metadataResponse.json();
@@ -149,17 +150,17 @@ describe('Artifact REST API Integration', () => {
     expect(metadata.sizeBytes).toBe(100);
     expect(metadata.status).toBe('pending_upload');
 
-    const downloadBeforeUpload = await fetch(`${ARTIFACTS_BASE}/${data.artifactId}/download-url`);
+    const downloadBeforeUpload = await liveApiFetch(`${ARTIFACTS_BASE}/${data.artifactId}/download-url`);
     expect(downloadBeforeUpload.status).toBe(409);
 
-    const listResponse = await fetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(testAgentId)}&limit=100&offset=0`);
+    const listResponse = await liveApiFetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(testAgentId)}&limit=100&offset=0`);
     expect(listResponse.status).toBe(200);
     const listed: ArtifactListEnvelope = await listResponse.json();
     expect(listed.artifacts.some((artifact) => artifact.id === data.artifactId)).toBe(false);
   });
 
   it('rejects invalid upload-url requests', async () => {
-    const missingAgentId = await fetch(`${ARTIFACTS_BASE}/upload-url`, {
+    const missingAgentId = await liveApiFetch(`${ARTIFACTS_BASE}/upload-url`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -171,7 +172,7 @@ describe('Artifact REST API Integration', () => {
 
     expect(missingAgentId.status).toBe(400);
 
-    const missingName = await fetch(`${ARTIFACTS_BASE}/upload-url`, {
+    const missingName = await liveApiFetch(`${ARTIFACTS_BASE}/upload-url`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -186,7 +187,7 @@ describe('Artifact REST API Integration', () => {
 
   it('round-trips an artifact through upload URL, metadata, download URL, list, and delete', async () => {
     const fileContent = `artifact-rest-round-trip-${Date.now()}`;
-    const uploadUrlResponse = await fetch(`${ARTIFACTS_BASE}/upload-url`, {
+    const uploadUrlResponse = await liveApiFetch(`${ARTIFACTS_BASE}/upload-url`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -209,15 +210,15 @@ describe('Artifact REST API Integration', () => {
 
     expect(uploadObjectResponse.status).toBe(200);
 
-    const pendingMetadataResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
+    const pendingMetadataResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
     expect(pendingMetadataResponse.status).toBe(200);
     const pendingMetadata: ArtifactRecord = await pendingMetadataResponse.json();
     expect(pendingMetadata.status).toBe('pending_upload');
 
-    const downloadResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}/download-url?expiresIn=120`);
+    const downloadResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}/download-url?expiresIn=120`);
     expect(downloadResponse.status).toBe(200);
 
-    const metadataResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
+    const metadataResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
     expect(metadataResponse.status).toBe(200);
 
     const metadata: ArtifactRecord = await metadataResponse.json();
@@ -243,7 +244,7 @@ describe('Artifact REST API Integration', () => {
     expect(objectResponse.status).toBe(200);
     expect(await objectResponse.text()).toBe(fileContent);
 
-    const listResponse = await fetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(testAgentId)}&limit=100&offset=0`);
+    const listResponse = await liveApiFetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(testAgentId)}&limit=100&offset=0`);
     expect(listResponse.status).toBe(200);
 
     const listed: ArtifactListEnvelope = await listResponse.json();
@@ -252,7 +253,7 @@ describe('Artifact REST API Integration', () => {
     expect(listedArtifact?.name).toBe('round-trip.txt');
     expect(listedArtifact?.status).toBe('active');
 
-    const deleteResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`, {
+    const deleteResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`, {
       method: 'DELETE',
     });
 
@@ -260,7 +261,7 @@ describe('Artifact REST API Integration', () => {
     deletedArtifactIds.add(uploadData.artifactId);
     expect(await deleteResponse.json()).toEqual({ deleted: true, id: uploadData.artifactId });
 
-    const deletedMetadataResponse = await fetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
+    const deletedMetadataResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
     expect(deletedMetadataResponse.status).toBe(200);
 
     const deletedMetadata: ArtifactRecord = await deletedMetadataResponse.json();
@@ -269,7 +270,7 @@ describe('Artifact REST API Integration', () => {
   });
 
   it('returns 404 for a missing artifact', async () => {
-    const response = await fetch(`${ARTIFACTS_BASE}/00000000-0000-0000-0000-000000000000`);
+    const response = await liveApiFetch(`${ARTIFACTS_BASE}/00000000-0000-0000-0000-000000000000`);
     expect(response.status).toBe(404);
   });
 
@@ -281,7 +282,7 @@ describe('Artifact REST API Integration', () => {
     formData.append('agentId', testAgentId);
     formData.append('name', fileName);
 
-    const uploadResponse = await fetch(`${ARTIFACTS_BASE}/upload`, {
+    const uploadResponse = await liveApiFetch(`${ARTIFACTS_BASE}/upload`, {
       method: 'POST',
       body: formData,
     });
@@ -289,7 +290,7 @@ describe('Artifact REST API Integration', () => {
     const artifact: ArtifactRecord = await uploadResponse.json();
     createdArtifactIds.add(artifact.id);
 
-    const globalListResponse = await fetch(`${ARTIFACTS_BASE}?limit=20&offset=0&search=${encodeURIComponent(fileName)}`);
+    const globalListResponse = await liveApiFetch(`${ARTIFACTS_BASE}?limit=20&offset=0&search=${encodeURIComponent(fileName)}`);
     expect(globalListResponse.status).toBe(200);
 
     const globalList: ArtifactListEnvelope = await globalListResponse.json();
@@ -298,7 +299,7 @@ describe('Artifact REST API Integration', () => {
   });
 
   it('returns an empty list for a fresh agent', async () => {
-    const emptyListResponse = await fetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(emptyAgentId)}`);
+    const emptyListResponse = await liveApiFetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(emptyAgentId)}`);
     expect(emptyListResponse.status).toBe(200);
 
     const emptyList: ArtifactListEnvelope = await emptyListResponse.json();
@@ -314,7 +315,7 @@ describe('Artifact REST API Integration', () => {
     formData.append('agentId', testAgentId);
     formData.append('name', fileName);
 
-    const uploadResponse = await fetch(`${ARTIFACTS_BASE}/upload`, {
+    const uploadResponse = await liveApiFetch(`${ARTIFACTS_BASE}/upload`, {
       method: 'POST',
       body: formData,
     });
@@ -332,12 +333,12 @@ describe('Artifact REST API Integration', () => {
     expect(artifact.status).toBe('active');
 
     // Verify download via proxy
-    const downloadResponse = await fetch(`${ARTIFACTS_BASE}/${artifact.id}/download`);
+    const downloadResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${artifact.id}/download`);
     expect(downloadResponse.status).toBe(200);
     expect(await downloadResponse.text()).toBe(fileContent);
 
     // Verify it appears in list
-    const listResponse = await fetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(testAgentId)}&limit=100&offset=0`);
+    const listResponse = await liveApiFetch(`${ARTIFACTS_BASE}?agentId=${encodeURIComponent(testAgentId)}&limit=100&offset=0`);
     expect(listResponse.status).toBe(200);
     const listed: ArtifactListEnvelope = await listResponse.json();
     const found = listed.artifacts.find((a) => a.id === artifact.id);
@@ -351,7 +352,7 @@ describe('Artifact REST API Integration', () => {
     formData.append('name', 'renamed-artifact.bin');
     formData.append('file', new Blob(['custom-name-test'], { type: 'application/octet-stream' }), 'original.bin');
 
-    const response = await fetch(`${ARTIFACTS_BASE}/upload`, {
+    const response = await liveApiFetch(`${ARTIFACTS_BASE}/upload`, {
       method: 'POST',
       body: formData,
     });
@@ -367,7 +368,7 @@ describe('Artifact REST API Integration', () => {
     const formData = new FormData();
     formData.append('file', new Blob(['no-agent'], { type: 'text/plain' }), 'orphan.txt');
 
-    const response = await fetch(`${ARTIFACTS_BASE}/upload`, {
+    const response = await liveApiFetch(`${ARTIFACTS_BASE}/upload`, {
       method: 'POST',
       body: formData,
     });
@@ -381,7 +382,7 @@ describe('Artifact REST API Integration', () => {
     const formData = new FormData();
     formData.append('agentId', testAgentId);
 
-    const response = await fetch(`${ARTIFACTS_BASE}/upload`, {
+    const response = await liveApiFetch(`${ARTIFACTS_BASE}/upload`, {
       method: 'POST',
       body: formData,
     });

@@ -13,6 +13,7 @@ import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js
 import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
 import { LocalToolProvider } from '../../packages/ctxmill/src/tool/providers/local.js';
 import { emitEventTool } from '../../packages/ctxmill/src/tool/builtin/emit-event.js';
+import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
 interface ToolTestSuccessResponse {
   success: true;
@@ -39,7 +40,7 @@ describe('POST /api/catalogs/tools/test', () => {
     container = await createContainer(
       {
         preset: 'local',
-        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
+        database: { url: resolveTestDatabaseUrl() },
       },
       dataDir,
     );

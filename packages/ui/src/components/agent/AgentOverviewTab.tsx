@@ -78,7 +78,7 @@ export function AgentOverviewTab({
       {/* Stats grid */}
       <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-surface-700">
         <div className="flex-1 min-w-0"><StatCard label="Total Sessions" value={totalSessions} /></div>
-        <div className="flex-1 min-w-0"><StatCard label="Active" value={activeSessions} /></div>
+        <div className="flex-1 min-w-0"><StatCard label="Active Sandboxes" value={activeSessions} /></div>
         <div className="flex-1 min-w-0"><StatCard label="Tools Count" value={toolsCount} /></div>
       </div>
 

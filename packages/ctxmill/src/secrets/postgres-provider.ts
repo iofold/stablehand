@@ -6,7 +6,7 @@ import { encrypt, decrypt } from './crypto.js';
 /**
  * PostgreSQL-backed SecretProvider — every read goes to the database; every
  * write is single-pass. No in-process cache, no boot-time hydration. Master
- * key rotation is handled by an offline migration script, not at runtime.
+ * key rotation must be handled by an external migration, not at runtime.
  */
 export class PostgresSecretProvider implements SecretProvider {
   private readonly sql: postgres.Sql;

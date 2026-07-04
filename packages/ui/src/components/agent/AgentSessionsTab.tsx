@@ -48,7 +48,7 @@ export function AgentSessionsTab({
   const [restoreToast, setRestoreToast] = useState<string | null>(null);
 
   const handleRetryRestore = useCallback(async (entry: AgentSession) => {
-    const sandboxSessionId = entry.sandboxSessionId ?? entry.id;
+    const sandboxSessionId = entry.sandboxSessionId;
     if (!sandboxSessionId) return;
     setRestoreState((prev) => ({ ...prev, [entry.id]: 'pending' }));
     try {
@@ -58,12 +58,13 @@ export function AgentSessionsTab({
         delete next[entry.id];
         return next;
       });
+      onRetry?.();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setRestoreState((prev) => ({ ...prev, [entry.id]: { error: message } }));
       setRestoreToast(`Restore failed: ${message}`);
     }
-  }, [agentId]);
+  }, [agentId, onRetry]);
 
   const groupedSessions = useMemo(() => {
     const grouped = new Map<string, AgentSession[]>();
@@ -233,7 +234,10 @@ export function AgentSessionsTab({
                             <div className="space-y-3">
                               <p className="text-[11px] text-surface-400 uppercase tracking-wider">Turns</p>
                               {session.entries.map((entry, idx) => {
-                                const showRetryRestore = entry.status.toUpperCase() === 'CHECKPOINTED' && Boolean(entry.lastRestoreError);
+                                const showRetryRestore =
+                                  entry.sandboxStatus === 'CHECKPOINTED'
+                                  && Boolean(entry.lastRestoreError)
+                                  && Boolean(entry.sandboxSessionId);
                                 const restore = restoreState[entry.id];
                                 return (
                                   <div key={entry.id} className="border border-surface-700/50 rounded-lg bg-surface-800/40 p-3 space-y-3">

@@ -7,7 +7,6 @@ import * as tar from 'tar-stream';
 
 import {
   buildSandboxOtelEnv,
-  ContainerSemaphore,
   resolveContainerStartupGraceMs,
   STARTUP_GRACE_MS_LABEL,
   type ContainerInfo,
@@ -17,6 +16,7 @@ import {
   type SandboxContainerManager,
   type WorkspaceDiffSnapshot,
 } from './container-manager.js';
+import { ContainerAccounting } from './container-accounting.js';
 import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from './container-scope.js';
 
 const TAG = '[KubernetesContainerManager]';
@@ -154,14 +154,11 @@ export class KubernetesContainerManager implements SandboxContainerManager {
   private readonly dataHostPathRoot: string;
   private readonly podReadyTimeoutMs: number;
   private readonly startupGraceMs: number;
-  private readonly semaphore: ContainerSemaphore;
   private readonly maxGlobalContainers: number;
+  /** Slot + metrics accounting, membership-keyed by containerId (ctx-wbt). */
+  private readonly accounting: ContainerAccounting;
+  /** Kept for workspaceDirFor and record metadata only; not slot accounting. */
   private readonly records = new Map<string, ContainerRecord>();
-  private readonly containerStartTimes = new Map<string, number>();
-  private readonly activeByHarness = new Map<string, number>();
-  private totalCreated = 0;
-  private completedCount = 0;
-  private lifetimeSumMs = 0;
   private tokenPromise: Promise<string>;
   private caPromise: Promise<Buffer>;
 
@@ -184,13 +181,13 @@ export class KubernetesContainerManager implements SandboxContainerManager {
     this.maxGlobalContainers = options.maxGlobalContainers
       ?? envNumber('CTXMILL_MAX_CONTAINERS')
       ?? 20;
-    this.semaphore = new ContainerSemaphore(this.maxGlobalContainers, options.queueTimeoutMs ?? 60_000);
+    this.accounting = new ContainerAccounting(this.maxGlobalContainers, options.queueTimeoutMs ?? 60_000);
     this.tokenPromise = fs.readFile(`${SERVICE_ACCOUNT_ROOT}/token`, 'utf8');
     this.caPromise = fs.readFile(`${SERVICE_ACCOUNT_ROOT}/ca.crt`);
   }
 
   async createContainer(opts: CreateContainerOptions): Promise<ContainerInfo> {
-    await this.semaphore.acquire();
+    await this.accounting.acquireSlot();
     let jobCreated = false;
 
     try {
@@ -289,9 +286,7 @@ export class KubernetesContainerManager implements SandboxContainerManager {
         workspaceDir: workspaceHostPath,
         startedAt: Date.now(),
       });
-      this.containerStartTimes.set(jobName, Date.now());
-      this.incrementHarness(opts.harnessName);
-      this.totalCreated++;
+      this.accounting.registerCreated(jobName, opts.harnessName);
       jobCreated = true;
 
       return {
@@ -305,9 +300,30 @@ export class KubernetesContainerManager implements SandboxContainerManager {
       };
     } finally {
       if (!jobCreated) {
-        this.semaphore.release();
+        this.accounting.releaseUnregisteredSlot();
       }
     }
+  }
+
+  /**
+   * Seed slot accounting from live managed pods (ctx-wbt). Run at boot BEFORE
+   * lifecycle reconciliation so reconciliation-driven removals free real slots.
+   */
+  async rehydrateAccounting(): Promise<number> {
+    const containers = await this.listManagedContainersWithLabels();
+    const seeded = this.accounting.rehydrate(
+      containers
+        .filter((c) => c.status === 'running' || c.status === 'created' || c.status === 'paused')
+        .map((c) => ({
+          containerId: c.containerId,
+          harnessName: c.harnessName || c.labels['ctxmill.harness'] || 'unknown',
+          startedAtMs: c.startedAt?.getTime(),
+        })),
+    );
+    if (seeded > 0) {
+      console.info(`[KubernetesContainerManager] rehydrated slot accounting for ${seeded} live pod(s)`);
+    }
+    return seeded;
   }
 
   async startContainer(containerId: string): Promise<ContainerInfo> {
@@ -419,31 +435,19 @@ export class KubernetesContainerManager implements SandboxContainerManager {
   }
 
   getActiveCount(): number {
-    return this.semaphore.getActive();
+    return this.accounting.getActive();
   }
 
   getQueuedCount(): number {
-    return this.semaphore.getQueued();
+    return this.accounting.getQueued();
   }
 
   getPeakCount(): number {
-    return this.semaphore.getPeak();
+    return this.accounting.getPeak();
   }
 
   getMetrics(): ContainerMetrics {
-    const byHarness: Record<string, number> = {};
-    for (const [harness, count] of this.activeByHarness) {
-      byHarness[harness] = count;
-    }
-    return {
-      active: this.semaphore.getActive(),
-      queued: this.semaphore.getQueued(),
-      peak: this.semaphore.getPeak(),
-      totalCreated: this.totalCreated,
-      byHarness,
-      averageLifetimeMs: this.completedCount > 0 ? Math.round(this.lifetimeSumMs / this.completedCount) : 0,
-      maxGlobalContainers: this.maxGlobalContainers,
-    };
+    return this.accounting.getMetrics();
   }
 
   private async requestJson<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
@@ -619,29 +623,9 @@ export class KubernetesContainerManager implements SandboxContainerManager {
     }
   }
 
-  private incrementHarness(harnessName: string): void {
-    this.activeByHarness.set(harnessName, (this.activeByHarness.get(harnessName) ?? 0) + 1);
-  }
-
+  /** Free the slot for any tracked container (created here or rehydrated at boot). */
   private releaseOwnedContainerSlot(containerId: string): void {
-    const record = this.records.get(containerId);
-    if (!record) {
-      return;
-    }
-
-    this.semaphore.release();
-    const startTime = this.containerStartTimes.get(containerId);
-    if (startTime !== undefined) {
-      this.completedCount++;
-      this.lifetimeSumMs += Date.now() - startTime;
-      this.containerStartTimes.delete(containerId);
-    }
-    const current = this.activeByHarness.get(record.harnessName) ?? 0;
-    if (current <= 1) {
-      this.activeByHarness.delete(record.harnessName);
-    } else {
-      this.activeByHarness.set(record.harnessName, current - 1);
-    }
+    this.accounting.releaseFor(containerId);
     this.records.delete(containerId);
   }
 

@@ -1,3 +1,6 @@
+import { getApiToken, markAuthRequired, withApiAuth } from './auth';
+import type { ApiSandboxRestoreSuccess } from '@ctxmill/shared';
+
 const API_BASE = '/api';
 
 // ── Session types ────────────────────────────────────────────────────
@@ -54,7 +57,10 @@ async function readErrorDetail(res: Response): Promise<string> {
 }
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(url, withApiAuth(init));
+  if (res.status === 401) {
+    markAuthRequired();
+  }
   if (!res.ok) {
     const method = init?.method ?? 'GET';
     const baseMessage = `API ${method} ${url} failed: ${res.status}`;
@@ -172,7 +178,13 @@ export async function fetchInterrupts(agentId: string): Promise<PendingInterrupt
 }
 
 export function createSSEConnection(agentId: string): EventSource {
-  return new EventSource(`${API_BASE}/agents/${agentId}/stream`);
+  const token = getApiToken();
+  const url = `${API_BASE}/agents/${agentId}/stream`;
+  if (!token) {
+    return new EventSource(url);
+  }
+  const params = new URLSearchParams({ access_token: token });
+  return new EventSource(`${url}?${params}`);
 }
 
 export async function startBackgroundRun(agentId: string, task: string) {
@@ -188,8 +200,11 @@ export async function cancelRun(agentId: string, sessionId: string) {
  * The endpoint is owned by Track 2; this caller is the UI's "Retry restore"
  * action surfaced when an automatic restore failed.
  */
-export async function restoreSandboxSession(agentId: string, sandboxSessionId: string): Promise<void> {
-  await apiMutate(`${API_BASE}/agents/${agentId}/sandbox-sessions/${sandboxSessionId}/restore`, 'POST');
+export async function restoreSandboxSession(agentId: string, sandboxSessionId: string): Promise<ApiSandboxRestoreSuccess> {
+  return apiMutate<ApiSandboxRestoreSuccess>(
+    `${API_BASE}/agents/${agentId}/sandbox-sessions/${sandboxSessionId}/restore?async=true`,
+    'POST',
+  );
 }
 
 export interface ListFilesResponse {
@@ -497,11 +512,14 @@ export async function deleteArtifact(id: string): Promise<void> {
 }
 
 export async function requestArtifactUploadUrl(agentId: string, name: string, mimeType: string, sizeBytes: number): Promise<{ artifactId: string; uploadUrl: string; storageKey: string; expiresIn: number }> {
-  const res = await fetch(`${API_BASE}/artifacts/upload-url`, {
+  const res = await fetch(`${API_BASE}/artifacts/upload-url`, withApiAuth({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ agentId, name, mimeType, sizeBytes }),
-  });
+  }));
+  if (res.status === 401) {
+    markAuthRequired();
+  }
   if (!res.ok) throw new Error(`Upload URL request failed: ${res.status}`);
   return res.json();
 }
@@ -527,12 +545,15 @@ export async function uploadArtifactDirect(
     formData.append('name', name);
   }
 
-  const response = await fetch(`${API_BASE}/artifacts/upload`, {
+  const response = await fetch(`${API_BASE}/artifacts/upload`, withApiAuth({
     method: 'POST',
     body: formData,
     // Do NOT set Content-Type header — browser sets it with boundary automatically
-  });
+  }));
 
+  if (response.status === 401) {
+    markAuthRequired();
+  }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Upload failed' }));
     throw new Error(error.error || `Upload failed: ${response.status}`);

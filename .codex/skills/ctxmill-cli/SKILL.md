@@ -26,6 +26,13 @@ Base URL resolution:
 
 Both orchestrator roots (`http://localhost:3002`) and API-prefixed roots (`https://host/api`) are supported.
 
+Authentication resolution:
+
+1. `--api-token <token>`
+2. `CTXMILL_API_TOKEN`
+
+The scripts attach `Authorization: Bearer ...` to ctxmill API calls. GET SSE helpers also add `?access_token=...`, matching the browser EventSource fallback.
+
 ## Operate loop
 
 1. Check service: `ctxmill.ts health`, `config`, `sandbox metrics`, `settings get`.

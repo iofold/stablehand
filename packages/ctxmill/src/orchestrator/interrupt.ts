@@ -19,6 +19,13 @@ interface PendingEntry {
   info: PendingInterrupt;
   agentId?: string;
   timeoutId?: ReturnType<typeof setTimeout>;
+  /**
+   * True when an in-process generator is awaiting this entry's promise.
+   * Entries rehydrated from the database after a restart have no live
+   * waiter — resolving them must fall through to the durable resume path
+   * (ctx-8nnu) instead of resolving an orphan promise into the void.
+   */
+  hasLiveWaiter: boolean;
 }
 
 export interface PendingInterrupt {
@@ -76,8 +83,9 @@ export class InterruptManager {
     createdAt: number,
     timeoutMs: number,
     emitInterruptedEvent: boolean,
-    sessionId?: string,
-    conversationId?: string,
+    sessionId: string | undefined,
+    conversationId: string | undefined,
+    hasLiveWaiter: boolean,
   ): Promise<InterruptResolution> {
     return new Promise<InterruptResolution>((resolve) => {
       const wrappedResolve = (value: InterruptResolution) => {
@@ -105,6 +113,7 @@ export class InterruptManager {
         info: { toolCallId, toolName, args, createdAt, sessionId, conversationId },
         agentId,
         timeoutId,
+        hasLiveWaiter,
       });
 
       if (emitInterruptedEvent && this.eventBus) {
@@ -157,6 +166,7 @@ export class InterruptManager {
           false,
           record.sessionId ?? undefined,
           undefined,
+          false,
         );
         reloadedCount += 1;
       }
@@ -223,6 +233,7 @@ export class InterruptManager {
       true,
       sessionId,
       conversationId,
+      true,
     );
   }
 
@@ -274,6 +285,17 @@ export class InterruptManager {
    */
   hasPending(turnId: string): boolean {
     return this.pending.has(turnId);
+  }
+
+  /** Whether an in-process generator is awaiting this interrupt (false for rehydrated entries). */
+  hasLiveWaiter(turnId: string): boolean {
+    return this.pending.get(turnId)?.hasLiveWaiter ?? false;
+  }
+
+  /** Whether the pending in-memory interrupt belongs to the given agent (ctx-aac). */
+  ownsPending(turnId: string, agentId: string): boolean {
+    const entry = this.pending.get(turnId);
+    return entry ? entry.agentId === agentId : false;
   }
 
   /**

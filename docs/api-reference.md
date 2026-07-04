@@ -7,8 +7,23 @@
 - **Exceptions:**
   - `GET /api/agents/:id/stream` uses `text/event-stream`
   - `POST /api/agents/:id/workspace` expects `application/gzip` or `application/x-gzip`
-- **Authentication:** CTXMill ships with **no built-in auth**. Put auth, rate limits, and network controls at your reverse proxy or API gateway.
+- **Authentication:** HTTP API routes are protected by a static bearer token when `CTXMILL_API_TOKEN` is set. Production startup fails without that token unless `CTXMILL_AUTH_DISABLED=true` is explicitly set.
 - **Shared TypeScript types:** CTXMill exports API and streaming types from `@ctxmill/shared` (for example `ApiAgent`, `ApiAgentSession`, `ApiMessage`, `AGUIEvent`, `MessageCommittedEvent`).
+
+### Authentication
+
+Set `CTXMILL_API_TOKEN` to a high-entropy value and pass it on control-plane API requests:
+
+```bash
+curl -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+  http://localhost:3002/api/agents
+```
+
+`GET /health` and `GET /api/health` are public for load balancers and container health checks. Other `/api/*` routes return `401 Unauthorized` when the token is missing or invalid.
+
+Browser `EventSource` cannot set custom headers, so `GET /api/agents/:id/stream` also accepts `?access_token=...` for SSE clients. Query-token authentication is intentionally limited to that route.
+
+This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy auth, network allowlists, TLS, and rate limits in front of any shared deployment. Internal ConnectRPC and sandbox callback surfaces should remain on private networks.
 
 ## 2. Quick Reference Table
 
@@ -33,7 +48,8 @@
 | GET | `/api/agents/:id/sessions` | List agent sessions |
 | GET | `/api/agents/:id/turns` | List raw turn history |
 | POST | `/api/agents/:id/sandbox-sessions/:sessionId/suspend` | Checkpoint a sandbox session |
-| POST | `/api/agents/:id/sessions/:sessionId/kill` | Terminate a sandbox session |
+| POST | `/api/agents/:id/sandbox-sessions/:sessionId/restore` | Manually restore a checkpointed sandbox session |
+| POST | `/api/agents/:id/sandbox-sessions/:sessionId/kill` | Terminate a sandbox session |
 | GET | `/api/sessions` | List active conversation summaries or sandbox sessions |
 | **SSE Streaming** |  |  |
 | GET | `/api/agents/:id/stream` | Subscribe to live agent events |
@@ -138,6 +154,7 @@ Common codes used across the API:
 - `201 Created`
 - `202 Accepted`
 - `204 No Content`
+- `401 Unauthorized`
 - `400 Bad Request`
 - `404 Not Found`
 - `500 Internal Server Error`
@@ -545,9 +562,15 @@ Per-agent sandbox resource limits:
       "agentId": "agent_123",
       "conversationId": "conv_123",
       "sandboxSessionId": "sbx_123",
-      "status": "CHECKPOINTED",
+      "sandboxStatus": "CHECKPOINTED",
+      "status": "ERROR",
       "mode": "background",
       "startedAt": 1712140000000,
+      "completedAt": 1712140005000,
+      "error": "Restore retry budget exhausted for session sbx_123",
+      "restoreAttempts": 3,
+      "lastRestoreError": "connect ECONNREFUSED",
+      "checkpointAt": 1712140005000,
       "taskDescription": "Index artifacts"
     }
   ]
@@ -587,14 +610,51 @@ Per-agent sandbox resource limits:
 - **Response:**
 
 ```json
-{ "sessionId": "sbx_123", "status": "checkpointed" }
+{ "sessionId": "sbx_123", "status": "CHECKPOINTED" }
 ```
 
 - **Notes:**
   - Requires sandbox session management to be enabled.
   - Returns `501` if session management is unavailable.
 
-#### `POST /api/agents/:id/sessions/:sessionId/kill`
+#### `POST /api/agents/:id/sandbox-sessions/:sessionId/restore`
+
+- **Description:** Resets the manual restore retry budget and attempts to restore a `CHECKPOINTED` sandbox session.
+- **Request body:** None.
+- **Query params:**
+  - `async=true` starts restore and returns after the retry budget reset is accepted. Use this from browser flows that should not wait for container boot.
+- **Success response:**
+
+```json
+{ "sessionId": "sbx_123", "status": "ACTIVE", "restoreAttempts": 0 }
+```
+
+- **Async success response (`202`):**
+
+```json
+{ "sessionId": "sbx_123", "status": "RESTORING", "restoreAttempts": 0 }
+```
+
+- **Error responses:**
+  - `404` when the sandbox session does not exist or belongs to another agent.
+  - `409` when the sandbox session is not `CHECKPOINTED`; response includes `{ "status": "ACTIVE" | "RESTORING" | "TERMINATED" }`.
+  - `502` when restore was attempted but failed:
+
+```json
+{
+  "error": "Restore failed",
+  "code": "restore_failed",
+  "category": "retryable",
+  "detail": "connect ECONNREFUSED",
+  "status": "CHECKPOINTED",
+  "restoreAttempts": 1,
+  "sessionId": "sbx_123"
+}
+```
+
+- **Notes:** Manual restore is synchronous by default and may take long enough to create and bootstrap a sandbox container. Automatic restore budget exhaustion does not prevent this route from retrying; it resets `restoreAttempts` to `0` and clears `lastRestoreError` before recovery. When `async=true`, subsequent restore failure details are visible from session readback (`restoreAttempts`, `lastRestoreError`, `sandboxStatus`).
+
+#### `POST /api/agents/:id/sandbox-sessions/:sessionId/kill`
 
 - **Description:** Terminates a sandbox session.
 - **Request body:** None.
@@ -656,9 +716,21 @@ Per-agent sandbox resource limits:
 - **Query params:** None.
 - **Response:** `text/event-stream`.
 - **Notes:**
-  - Sends an initial `CONNECTED` event immediately.
-  - Accepts the `Last-Event-ID` header for replay.
+  - Sends an initial `CONNECTED` event immediately, carrying `latestSeq`.
+  - Streams the canonical AG-UI vocabulary (ADR-015): spec frame types plus
+    `CUSTOM{name:'ctxmill.*'}` for orchestrator signals, with stable
+    `${turnId}-m${n}` message ids. `?wire=legacy` keeps the pre-canonical
+    vocabulary (`TURN_PENDING`, `HITL_PAUSE`, `MESSAGE_COMMITTED`,
+    `internalType` fields) for one release.
+  - Accepts the `Last-Event-ID` header for replay. The event id is a
+    zero-padded durable global seq (e.g. `000000000042`); replay is served
+    from the persisted event log (works past any in-memory cap and across
+    orchestrator restarts). A legacy-format `Last-Event-ID` is treated as a
+    fresh connect (snapshot only).
   - Also emits `CUSTOM` `state_snapshot` events for active sandbox sessions when the connection opens.
+  - `/api/events` rows for the run stream carry the canonical frame
+    vocabulary; user-emitted custom events and system events are persisted
+    verbatim.
 
 Example initial frames:
 

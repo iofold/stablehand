@@ -47,7 +47,8 @@ async function run(): Promise<void> {
 }
 
 async function tailStream(agentId: string): Promise<void> {
-  const response = await fetch(buildUrl(getBaseUrl(args.flags), `/api/agents/${encodeURIComponent(agentId)}/stream`), {
+  const endpoint = `/api/agents/${encodeURIComponent(agentId)}/stream`;
+  const response = await fetch(buildSseGetUrl(getBaseUrl(args.flags), endpoint), {
     headers: { Accept: 'text/event-stream' },
   });
   if (!response.ok || !response.body) {
@@ -174,7 +175,7 @@ function emitLine(value: unknown): void {
 }
 
 async function requestJson(endpoint: string): Promise<unknown> {
-  const response = await fetch(buildUrl(getBaseUrl(args.flags), endpoint), { headers: { Accept: 'application/json' } });
+  const response = await fetch(buildUrl(getBaseUrl(args.flags), endpoint), { headers: authHeaders({ Accept: 'application/json' }) });
   const text = await response.text();
   const data = parseMaybeJson(text);
   if (!response.ok) throw new ApiError(`GET ${endpoint} failed with HTTP ${response.status}`, response.status, data);
@@ -193,7 +194,10 @@ function emitError(error: unknown, flags: Flags): never {
 
 function parseArgs(argv: string[]): ParsedArgs { const flags: Flags = {}; const positionals: string[] = []; for (let i = 0; i < argv.length; i += 1) { const arg = argv[i]!; if (!arg.startsWith('--')) { positionals.push(arg); continue; } const name = arg.slice(2); const eq = name.indexOf('='); if (eq !== -1) { flags[name.slice(0, eq)] = name.slice(eq + 1); continue; } const next = argv[i + 1]; if (next && !next.startsWith('--')) { flags[name] = next; i += 1; } else flags[name] = true; } return { positionals, flags }; }
 function getBaseUrl(flags: Flags): string { return (flagString(flags, 'base-url') ?? process.env.CTXMILL_API_URL ?? process.env.API_BASE ?? 'http://localhost:3002').replace(/\/+$/, ''); }
+function getApiToken(flags: Flags): string | undefined { const raw = flagString(flags, 'api-token', 'token') ?? process.env.CTXMILL_API_TOKEN; const token = raw?.trim(); return token ? token : undefined; }
+function authHeaders(headers: Record<string, string>): Record<string, string> { const token = getApiToken(args.flags); return token ? { ...headers, Authorization: `Bearer ${token}` } : headers; }
 function buildUrl(baseUrl: string, endpoint: string): string { const url = new URL(baseUrl); const [rawPath, query = ''] = endpoint.split('?'); let path = rawPath!.startsWith('/') ? rawPath! : `/${rawPath}`; const basePath = url.pathname.replace(/\/+$/, ''); if (basePath.endsWith('/api') && path.startsWith('/api/')) path = path.slice(4); url.pathname = `${basePath}${path}`.replace(/\/+/g, '/'); url.search = query ? `?${query}` : ''; return url.toString(); }
+function buildSseGetUrl(baseUrl: string, endpoint: string): string { const url = new URL(buildUrl(baseUrl, endpoint)); const token = getApiToken(args.flags); if (token && !url.searchParams.has('access_token')) url.searchParams.set('access_token', token); return url.toString(); }
 function flagString(flags: Flags, ...names: string[]): string | undefined { for (const name of names) { const value = flags[name]; if (typeof value === 'string') return value; if (value === true) return 'true'; } return undefined; }
 function hasFlag(flags: Flags, ...names: string[]): boolean { return names.some((name) => flags[name] === true || flags[name] === 'true'); }
 function numberFlag(name: string, fallback: number): number { const raw = flagString(args.flags, name); if (!raw) return fallback; const parsed = Number(raw); if (!Number.isFinite(parsed)) throw new UsageError(`--${name} must be a number`); return parsed; }
@@ -206,4 +210,4 @@ function eventArray(value: unknown): JsonRecord[] { return isRecord(value) && Ar
 function matchesPayload(event: JsonRecord, contains: string | undefined): boolean { return contains ? JSON.stringify(event).includes(contains) : true; }
 function redact(value: unknown, seen = new WeakSet<object>()): unknown { if (Array.isArray(value)) return value.map((item) => redact(item, seen)); if (!isRecord(value)) return value; if (seen.has(value)) return '[Circular]'; seen.add(value); const out: JsonRecord = {}; for (const [key, child] of Object.entries(value)) out[key] = SECRET_KEY_RE.test(key) ? '[REDACTED]' : redact(child, seen); return out; }
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
-function helpText(): string { return `ctxmill-tail.ts — follow ctxmill live streams and wait for events/sessions\n\nUsage:\n  bun scripts/ctxmill-tail.ts stream <agentId> [--jsonl]\n  bun scripts/ctxmill-tail.ts events [--agent <agentId>] [--type <type>] [--cursor n]\n  bun scripts/ctxmill-tail.ts wait-event (--type <type> | --agent <agentId>) [--contains text] [--timeout-ms 120000]\n  bun scripts/ctxmill-tail.ts wait-session <agentId> <sessionId> [--timeout-ms 120000]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --json / --jsonl       Emit one JSON object per line\n  --interval-ms <n>      Poll interval for events/session waits (default 2000)\n  --limit <n>            Event page size (default 50)\n  --no-redact            Disable secret redaction\n`; }
+function helpText(): string { return `ctxmill-tail.ts — follow ctxmill live streams and wait for events/sessions\n\nUsage:\n  bun scripts/ctxmill-tail.ts stream <agentId> [--jsonl]\n  bun scripts/ctxmill-tail.ts events [--agent <agentId>] [--type <type>] [--cursor n]\n  bun scripts/ctxmill-tail.ts wait-event (--type <type> | --agent <agentId>) [--contains text] [--timeout-ms 120000]\n  bun scripts/ctxmill-tail.ts wait-session <agentId> <sessionId> [--timeout-ms 120000]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --json / --jsonl       Emit one JSON object per line\n  --interval-ms <n>      Poll interval for events/session waits (default 2000)\n  --limit <n>            Event page size (default 50)\n  --no-redact            Disable secret redaction\n`; }

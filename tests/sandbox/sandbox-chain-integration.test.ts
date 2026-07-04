@@ -21,7 +21,7 @@ import {
   EventTriggerManager,
   MAX_TRIGGER_DEPTH,
 } from '../../packages/ctxmill/src/events/trigger-manager.js';
-import { SSEBroadcaster } from '../../packages/ctxmill/src/orchestrator/sse-broadcaster.js';
+import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
 import type { ContainerManager, ContainerInfo, ContainerMetrics } from '../../packages/ctxmill/src/sandbox/container-manager.js';
 import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
@@ -331,7 +331,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
   let sandboxRunService: SandboxRunService;
   let agentRunService: AgentRunService;
   let triggerManager: EventTriggerManager;
-  let sseBroadcaster: SSEBroadcaster | null;
+  let unsubscribeWire: (() => void) | null;
   let testCounters: { containerCounter: number; runCounter: number };
 
   function agentRowToDefinition(agent: Record<string, any>): AgentDefinition {
@@ -400,13 +400,13 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
   }
 
   beforeEach(() => {
-    sseBroadcaster = null;
+    unsubscribeWire = null;
     testCounters = { containerCounter: 0, runCounter: 0 };
     vi.restoreAllMocks();
   });
 
   afterEach(() => {
-    sseBroadcaster?.shutdown();
+    unsubscribeWire?.();
     if (triggerManager) triggerManager.shutdown();
   });
 
@@ -418,11 +418,30 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     agentRows: Record<string, any>;
     sandboxExecuteSessionTurn?: (...args: any[]) => AsyncGenerator<AGUIEvent>;
   }) {
-    eventBus = new TypedEventBus();
+    // Canonical wire (ADR-015): bus persist → CanonicalLog → run-channel frames to SSE.
+    let frameSeq = 0;
+    const canonicalLog = new CanonicalLog({
+      db: {
+        saveEventBatch: async (frames: unknown[]) => frames.map(() => ++frameSeq),
+        getFramesSince: async () => [],
+        getTurnFrames: async () => [],
+      } as never,
+      logger: { info: () => {}, warn: () => {}, error: console.error },
+    });
+    eventBus = new TypedEventBus({
+      persistEvent: async (type, _agentId, _payload, parsed) => {
+        await canonicalLog.ingest(type, parsed ?? {});
+      },
+    });
     db = makeMockDb(opts.agentRows, testCounters);
     sessionRegistry = makeMockRunRegistry(testCounters);
     sse = makeMockSse();
-    sseBroadcaster = new SSEBroadcaster(sse as any, eventBus);
+    unsubscribeWire = canonicalLog.subscribe((frames) => {
+      for (const frame of frames) {
+        if (frame.channel !== 'run') continue;
+        sse.broadcast(frame.agentId, frame.body);
+      }
+    });
     containerManager = makeMockContainerManager(testCounters);
 
     // Mock SandboxRunService that tracks which agents it ran

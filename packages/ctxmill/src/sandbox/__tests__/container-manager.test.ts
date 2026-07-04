@@ -1029,15 +1029,15 @@ describe('semaphore slot release (FIX-4)', () => {
   it('releases semaphore when post-Docker metrics code throws', async () => {
     const docker = createMockDocker();
     const manager = new ContainerManager({ maxGlobalContainers: 1 }, docker as unknown as Dockerode);
-    const activeByHarness = Reflect.get(manager, 'activeByHarness') as Map<string, number>;
-    const setSpy = vi.spyOn(activeByHarness, 'set').mockImplementation(() => {
+    const accounting = Reflect.get(manager, 'accounting') as { registerCreated: (id: string, harness: string) => void };
+    const registerSpy = vi.spyOn(accounting, 'registerCreated').mockImplementation(() => {
       throw new Error('metrics failed');
     });
 
     await expect(manager.createContainer(defaultCreateOpts())).rejects.toThrow('metrics failed');
     expect(manager.getMetrics().active).toBe(0);
 
-    setSpy.mockRestore();
+    registerSpy.mockRestore();
   });
 
   it('releases a slot only once when removeContainer is called repeatedly for the same container', async () => {

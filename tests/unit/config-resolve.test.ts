@@ -7,7 +7,8 @@ describe('Config Resolution', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
-    process.env.DATABASE_URL = 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill';
+    // Inert placeholder — config resolution never connects; must not be the dev1 runtime URL.
+    process.env.DATABASE_URL = 'postgres://config-test:config-test@config-test-host:5432/ctxmill_config_test';
   });
 
   afterEach(() => {

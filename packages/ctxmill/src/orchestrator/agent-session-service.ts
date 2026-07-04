@@ -12,6 +12,12 @@ import { DefaultToolRegistry } from '../tool/registry.js';
 import { sanitizeDbText } from '../util/sanitize.js';
 import { withRuntimeSandboxSecrets, type RuntimeSandboxSecrets } from './session-manager/runtime-sandbox-secrets.js';
 import { SESSION_CANCELLED_MESSAGE, isSessionCancelled } from './session-cancellation.js';
+import {
+  TOOL_CALL_INTERRUPTED_ERROR,
+  TURN_ERROR_RUNNING_TOOL_CALLS_AT_END,
+  TurnFinalizer,
+} from './turn-finalizer.js';
+import { repairConversationRunningToolCalls } from './turn-reconciler.js';
 
 const INDIVIDUALLY_HANDLED = new Set([
   'MESSAGE_COMMITTED',
@@ -75,6 +81,7 @@ export interface ExecuteSessionParams {
   taskDescription: string;
   sandboxSecrets?: RuntimeSandboxSecrets;
   concurrencyReservation?: ConcurrencyReservation;
+  suppressTurnStartedEvent?: boolean;
 }
 
 /**
@@ -89,12 +96,14 @@ export class AgentSessionService {
   private sessionManager: SandboxSessionManager;
   private eventBus?: TypedEventBus;
   private sessionTurnService: SessionTurnService;
+  private turnFinalizer: TurnFinalizer;
 
   constructor(deps: AgentSessionServiceDeps) {
     this.db = deps.db;
     this.sessionManager = deps.sessionManager;
     this.eventBus = deps.eventBus;
     this.sessionTurnService = deps.sessionTurnService;
+    this.turnFinalizer = new TurnFinalizer({ db: deps.db, eventBus: deps.eventBus, logger: console });
   }
 
   /**
@@ -141,6 +150,7 @@ export class AgentSessionService {
       name: tc.name,
       args: tc.args,
       status: tc.status,
+      ...(tc.error ? { error: tc.error } : {}),
     }));
 
     const buildCommittedParts = (committed: MessageCommittedEvent): StreamingPart[] => {
@@ -254,39 +264,31 @@ export class AgentSessionService {
     };
 
     const finalizeTurn = async (status: 'completed' | 'error' | 'cancelled', error?: string) => {
-      const completedAt = Date.now();
       const currentSandboxSessionId = await resolveCurrentSandboxSessionId();
-      await this.db.updateTurn(turnId, {
+      await this.turnFinalizer.finalize({
+        turnId,
+        agentId,
+        conversationId,
+        status,
+        error,
         ...(currentSandboxSessionId ? { sessionId: currentSandboxSessionId } : {}),
-        completedAt,
-        error: error ?? null,
+        durationMs: Date.now() - startedAt,
+        ...(currentSandboxSessionId
+          ? {
+            emitCompletion: (completedAt: number) => {
+              this.sessionManager.completeTurn(
+                currentSandboxSessionId,
+                turnId,
+                agentId,
+                conversationId,
+                status,
+                completedAt - startedAt,
+                error,
+              );
+            },
+          }
+          : {}),
       });
-
-      if (currentSandboxSessionId) {
-        this.sessionManager.completeTurn(
-          currentSandboxSessionId,
-          turnId,
-          agentId,
-          conversationId,
-          status,
-          completedAt - startedAt,
-          error,
-        );
-        return;
-      }
-
-      if (this.eventBus) {
-        this.eventBus.emit('turn.completed', {
-          turnId,
-          sessionId: '',
-          agentId,
-          conversationId,
-          status,
-          error,
-          durationMs: completedAt - startedAt,
-          timestamp: Date.now(),
-        });
-      }
     };
 
     const flushUncommittedMessages = async () => {
@@ -319,6 +321,14 @@ export class AgentSessionService {
       }
     };
 
+    const hasRunningToolCalls = () =>
+      Array.from(pendingToolCalls.values()).some((toolCall) =>
+        toolCall.status === 'running' || toolCall.status === 'pending',
+      )
+      || streamingParts.some((part) =>
+        part.type === 'tool_call' && (part.status === 'running' || part.status === 'pending'),
+      );
+
     try {
       if (await isDurablyCancelled()) {
         wasCancelled = true;
@@ -345,7 +355,15 @@ export class AgentSessionService {
         return;
       }
 
-      signal = this.sessionManager.startTurn(sandboxSessionId, turnId, agentId, conversationId, mode, taskDescription);
+      signal = this.sessionManager.startTurn(
+        sandboxSessionId,
+        turnId,
+        agentId,
+        conversationId,
+        mode,
+        taskDescription,
+        params.suppressTurnStartedEvent ? { suppressEvent: true } : undefined,
+      );
 
       const eventSource: AsyncGenerator<AGUIEvent> = this.sessionTurnService.executeSessionTurn(
         runtimeAgentDef,
@@ -569,15 +587,41 @@ export class AgentSessionService {
       }
     } catch (err) {
       runError = err instanceof Error ? err : new Error(String(err));
-      console.error(`[AgentSessionService] Session ${turnId} error:`, runError.stack ?? runError.message);
+      if (isSessionCancelled(runError.message)) {
+        wasCancelled = true;
+      }
+      if (!wasCancelled) {
+        console.error(`[AgentSessionService] Session ${turnId} error:`, runError.stack ?? runError.message);
+      }
     } finally {
       releaseReservedConcurrency();
+      if (!wasCancelled && !runError && hasRunningToolCalls()) {
+        runError = new Error(TURN_ERROR_RUNNING_TOOL_CALLS_AT_END);
+      }
+
       const status: 'completed' | 'error' | 'cancelled' =
         wasCancelled
           ? 'cancelled'
           : runError
             ? 'error'
             : 'completed';
+
+      // A non-completed turn must not persist 'running' tool calls (ctx-nm3o):
+      // close them out in both projections before the flush below writes them.
+      if (status !== 'completed') {
+        for (const toolCall of pendingToolCalls.values()) {
+          if (toolCall.status === 'running') {
+            toolCall.status = 'error';
+            toolCall.error = TOOL_CALL_INTERRUPTED_ERROR;
+          }
+        }
+        for (const part of streamingParts) {
+          if (part.type === 'tool_call' && part.status === 'running') {
+            part.status = 'error';
+            part.error = TOOL_CALL_INTERRUPTED_ERROR;
+          }
+        }
+      }
 
       let flushError: Error | undefined;
       try {
@@ -592,32 +636,24 @@ export class AgentSessionService {
         : runError?.message ?? flushError?.message;
       const finalStatus = finalError ? (status === 'completed' ? 'error' : status) : status;
 
+      if (finalStatus !== 'completed') {
+        try {
+          await repairConversationRunningToolCalls({
+            db: this.db,
+            logger: console,
+          }, conversationId);
+        } catch (repairErr) {
+          console.error(`[AgentSessionService] Failed to repair running tool calls for conversation ${conversationId}:`, repairErr);
+        }
+      }
+
       try {
         await finalizeTurn(finalStatus, finalError);
       } catch (finalizeErr) {
+        // TurnFinalizer is the single terminal writer (ADR-014) — no direct
+        // fallback write here; the startup reconciler closes any turn this
+        // leaves open after the next boot.
         console.error(`[AgentSessionService] finalizeTurn failed for turn ${turnId}:`, finalizeErr);
-        try {
-          const currentSandboxSessionId = await resolveCurrentSandboxSessionId();
-          await this.db.updateTurn(turnId, {
-            ...(currentSandboxSessionId ? { sessionId: currentSandboxSessionId } : {}),
-            completedAt: Date.now(),
-            error: finalError ?? String(finalizeErr),
-          });
-          if (this.eventBus) {
-            this.eventBus.emit('turn.completed', {
-              turnId,
-              sessionId: currentSandboxSessionId ?? '',
-              agentId,
-              conversationId,
-              status: finalError ? 'error' : 'completed',
-              error: finalError ?? String(finalizeErr),
-              durationMs: Date.now() - startedAt,
-              timestamp: Date.now(),
-            });
-          }
-        } catch (dbErr) {
-          console.error(`[AgentSessionService] Failed to update turn ${turnId} even directly:`, dbErr);
-        }
       }
     }
   }

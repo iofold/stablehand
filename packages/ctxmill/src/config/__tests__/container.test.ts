@@ -14,7 +14,9 @@ describe('createTriggerRunCallback', () => {
     };
     const runStartupService: Pick<RunStartupService, 'prepareRunStart' | 'launchPreparedRun'> = {
       prepareRunStart: vi.fn().mockResolvedValue(preparedRun),
-      launchPreparedRun: vi.fn().mockResolvedValue(undefined),
+      launchPreparedRun: vi.fn(async (_start: unknown, _agentId: string, options?: { onSuccess?: () => void }) => {
+        options?.onSuccess?.();
+      }),
     };
     const eventBus: Pick<TypedEventBus, 'emit'> = {
       emit: vi.fn(),
@@ -34,7 +36,7 @@ describe('createTriggerRunCallback', () => {
     expect(runStartupService.launchPreparedRun).toHaveBeenCalledWith(
       preparedRun,
       'agent-1',
-      { rethrowOnError: true },
+      { onSuccess: expect.any(Function) },
     );
     expect(eventBus.emit).toHaveBeenCalledWith('trigger.fired', expect.objectContaining({
       triggerId: 'trigger-1',
@@ -52,7 +54,9 @@ describe('createTriggerRunCallback', () => {
     };
     const runStartupService: Pick<RunStartupService, 'prepareRunStart' | 'launchPreparedRun'> = {
       prepareRunStart: vi.fn().mockResolvedValue(preparedRun),
-      launchPreparedRun: vi.fn().mockResolvedValue(undefined),
+      launchPreparedRun: vi.fn(async (_start: unknown, _agentId: string, options?: { onSuccess?: () => void }) => {
+        options?.onSuccess?.();
+      }),
     };
     const eventBus: Pick<TypedEventBus, 'emit'> = {
       emit: vi.fn(),

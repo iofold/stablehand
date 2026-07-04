@@ -1,9 +1,16 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { ConcurrencyLimitError } from '../../session-manager/concurrency-limit-error.js';
-import { ActiveTurnSuspendError } from '../../session-manager/session-lifecycle-service.js';
+import {
+  ActiveTurnSuspendError,
+  RestoreConflictError,
+  SandboxSessionNotFoundError,
+} from '../../session-manager/session-lifecycle-service.js';
+import { classifyRestoreFailure } from '../../session-manager/restore-retry-policy.js';
 import type { RuntimeSandboxSecrets } from '../../session-manager/runtime-sandbox-secrets.js';
 import { SESSION_CANCELLED_MESSAGE, isSessionCancelled } from '../../session-cancellation.js';
+import { TurnFinalizer } from '../../turn-finalizer.js';
+import { buildAgentDefinition } from '../../agent-definition.js';
 import { getRequestAgent, safeError, toApiAgentSession } from './helpers.js';
 import type { AgentSubRouteOptions, StoredAgent } from './types.js';
 
@@ -13,7 +20,7 @@ import type { AgentSubRouteOptions, StoredAgent } from './types.js';
 // sandbox session id.
 function sendLegacySandboxAdminGone(
   reply: FastifyReply,
-  action: 'suspend' | 'kill',
+  action: 'suspend' | 'restore' | 'kill',
   sessionId: string,
 ) {
   return reply.status(410).send({
@@ -27,6 +34,7 @@ export async function sessionRoutes(
   opts: AgentSubRouteOptions,
 ): Promise<void> {
   const { db, interrupts, sessionManager, eventBus, runStartupService, loadAgent } = opts;
+  const turnFinalizer = new TurnFinalizer({ db, eventBus, logger: console });
 
   const parseSandboxSecrets = (value: unknown): RuntimeSandboxSecrets | undefined => {
     if (value === undefined) return undefined;
@@ -73,15 +81,6 @@ export async function sessionRoutes(
     });
   };
 
-  const launchPreparedRun = (
-    agentId: string,
-    start: Awaited<ReturnType<typeof prepareRunStart>>,
-  ) => {
-    void runStartupService.launchPreparedRun(start, agentId).catch((err) => {
-      console.error(`[agents] executeSession failed for agent ${agentId}, session ${start.turnId}:`, err);
-    });
-  };
-
   app.post(
     '/:id/message',
     { preHandler: [loadAgent] },
@@ -108,7 +107,7 @@ export async function sessionRoutes(
           emitUserMessageEvent: true,
           sandboxSecrets,
         });
-        launchPreparedRun(id, start);
+        void runStartupService.launchPreparedRun(start, id);
         return reply.status(201).send({
           messageId: start.messageId,
           conversationId: start.conversationId,
@@ -162,8 +161,7 @@ export async function sessionRoutes(
           emitUserMessageEvent: false,
           sandboxSecrets,
         });
-        await db.updateAgentStatus(id, 'running');
-        launchPreparedRun(id, start);
+        void runStartupService.launchPreparedRun(start, id);
         return reply.status(201).send({
           sessionId: start.turnId,
           conversationId: start.conversationId,
@@ -214,9 +212,14 @@ export async function sessionRoutes(
 
       const cancelled = session.sessionId ? sessionManager?.cancelCurrentTurn(session.sessionId, sessionId) : false;
       if (!cancelled) {
-        await db.updateTurn(sessionId, {
-          completedAt: Date.now(),
+        await turnFinalizer.finalize({
+          turnId: sessionId,
+          agentId: id,
+          conversationId: session.conversationId ?? '',
+          ...(session.sessionId ? { sessionId: session.sessionId } : {}),
+          status: 'cancelled',
           error: SESSION_CANCELLED_MESSAGE,
+          durationMs: Date.now() - session.startedAt,
         });
       }
 
@@ -349,13 +352,13 @@ export async function sessionRoutes(
           return reply.status(404).send({ error: 'Session not found', sessionId });
         }
 
-        // Gate: reject suspend if the owning turn is already completed
-        const turn = await db.getLatestTurnForConversation(session.conversationId);
-        if (turn && (turn.completedAt != null || turn.error)) {
-          const status = turn.error ? 'ERROR' : 'COMPLETED';
+        // Gate on the sandbox row, not the latest turn (ctx-jgb5): an idle
+        // ACTIVE sandbox after a completed turn is suspendable. A mid-turn
+        // suspend is rejected below via ActiveTurnSuspendError.
+        if (session.status !== 'ACTIVE') {
           return reply.status(409).send({
             error: 'Session not active',
-            status,
+            status: session.status,
             sessionId,
           });
         }
@@ -371,15 +374,95 @@ export async function sessionRoutes(
               turnId: err.turnId,
             });
           }
+          const current = await db.getSandboxSession(sessionId);
           return reply.status(409).send({
             error: 'Session no longer active',
-            status: 'UNKNOWN',
+            status: current?.status ?? 'TERMINATED',
             sessionId,
           });
         }
-        return reply.status(200).send({ sessionId, status: 'checkpointed' });
+        return reply.status(200).send({ sessionId, status: 'CHECKPOINTED' });
       } catch (err) {
         return reply.status(500).send(safeError('Failed to suspend session', err));
+      }
+    },
+  );
+
+  app.post(
+    '/:id/sessions/:sessionId/restore',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string; sessionId: string } }>,
+      reply: FastifyReply,
+    ) => sendLegacySandboxAdminGone(reply, 'restore', request.params.sessionId),
+  );
+
+  app.post(
+    '/:id/sandbox-sessions/:sessionId/restore',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{
+        Params: { id: string; sessionId: string };
+        Querystring: { async?: string };
+      }>,
+      reply: FastifyReply,
+    ) => {
+      const agent = getRequestAgent(request);
+      const { sessionId } = request.params;
+      const startAsync = request.query.async === 'true' || request.query.async === '1';
+
+      if (!sessionManager) {
+        return reply.status(501).send({ error: 'Sandbox session manager not configured' });
+      }
+
+      const session = await db.getSandboxSession(sessionId);
+      if (!session || session.agentId !== agent.id) {
+        return reply.status(404).send({ error: 'Session not found', sessionId });
+      }
+
+      if (session.status !== 'CHECKPOINTED') {
+        return reply.status(409).send({
+          error: 'Session not checkpointed',
+          status: session.status,
+          sessionId,
+        });
+      }
+
+      try {
+        if (startAsync) {
+          const restore = await sessionManager.startRestoreSession(sessionId, buildAgentDefinition(agent), agent.id);
+          return reply.status(202).send(restore);
+        }
+
+        const restored = await sessionManager.restoreSession(sessionId, buildAgentDefinition(agent), agent.id);
+        return reply.status(200).send({
+          sessionId: restored.sessionId,
+          status: restored.status,
+          restoreAttempts: 0,
+        });
+      } catch (err) {
+        if (err instanceof SandboxSessionNotFoundError) {
+          return reply.status(404).send({ error: 'Session not found', sessionId });
+        }
+        if (err instanceof RestoreConflictError) {
+          return reply.status(409).send({
+            error: 'Session not checkpointed',
+            status: err.status,
+            sessionId,
+          });
+        }
+
+        const classification = classifyRestoreFailure(err);
+        const current = await db.getSandboxSession(sessionId);
+        return reply.status(502).send({
+          error: 'Restore failed',
+          code: 'restore_failed',
+          category: classification.category,
+          detail: classification.message,
+          status: current?.status ?? 'TERMINATED',
+          restoreAttempts: current?.restoreAttempts ?? null,
+          sessionId,
+        });
       }
     },
   );

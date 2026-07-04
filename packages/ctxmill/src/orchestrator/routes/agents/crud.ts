@@ -56,6 +56,8 @@ export async function crudRoutes(
 
       return {
         ...toAgentResponse(agent),
+        // Derived at read from open turns (ctx-1xb); the stored column is vestigial.
+        status: activeRuns.length > 0 ? 'running' : 'idle',
         sseClients: sse.getClientCount(agent.id),
         lastActivity: sse.getLastActivity(agent.id) ?? null,
         activeSessions: activeRuns.length,
@@ -425,6 +427,8 @@ export async function crudRoutes(
 
       return reply.send({
         ...toAgentResponse(agent),
+        // Derived at read from open turns (ctx-1xb); the stored column is vestigial.
+        status: activeRuns.length > 0 ? 'running' : 'idle',
         conversationCount: conversations.length,
         sseClients: sse.getClientCount(id),
         hasPendingInterrupt: interrupts.hasPendingForAgent(id),

@@ -98,6 +98,12 @@ export async function interruptRoutes(
 
       const resolveAction: 'approve' | 'reject' = body.action === 'submit' ? 'approve' : body.action as 'approve' | 'reject';
 
+      // Ownership (ctx-aac): a live in-memory interrupt for another agent must
+      // not be resolvable through this agent's route.
+      if (interrupts.hasPending(body.sessionId) && !interrupts.ownsPending(body.sessionId, id)) {
+        return reply.status(404).send({ error: 'No pending interrupt for agent', agentId: id });
+      }
+
       const dbInterrupt = await db.getPendingInterrupt(body.sessionId);
       const existingResumeAttempt = dbInterrupt
         ? await db.getInterruptResumeAttemptForInterrupt(dbInterrupt.id)
@@ -109,18 +115,27 @@ export async function interruptRoutes(
 
       if (dbInterrupt && dbInterrupt.agentId === id) {
         if (dbInterrupt.status === 'resolved') {
-          if (resolveAction !== 'approve' || existingResumeAttempt?.status !== 'failed') {
+          // Failed durable resumes are retriable via re-POST for both actions (ctx-qjnz).
+          if (existingResumeAttempt?.status !== 'failed') {
             return reply.send({ alreadyResolved: true, action: dbInterrupt.resolvedAction });
           }
         }
       }
 
+      // A rehydrated entry (post-restart) resolves in memory too, but its
+      // promise has no live waiter — that resolution must fall through to the
+      // durable continuation below instead of returning early (ctx-8nnu).
+      const hadLiveWaiter = interrupts.hasLiveWaiter(body.sessionId);
       const inMemoryResolved = dbInterrupt?.status === 'pending' || !dbInterrupt
         ? await interrupts.resolve(body.sessionId, resolveAction, body.data, id)
         : false;
+      // interrupts.resolve() already persisted the resolution; calling
+      // db.resolveInterrupt again here would 409 on the resolved row.
       const dbResolved = dbInterrupt?.status === 'resolved' && existingResumeAttempt?.status === 'failed'
         ? dbInterrupt
-        : !inMemoryResolved && dbInterrupt
+        : inMemoryResolved
+        ? dbInterrupt
+        : dbInterrupt
         ? await db.resolveInterrupt(body.sessionId, resolveAction, body.data)
         : undefined;
 
@@ -128,7 +143,7 @@ export async function interruptRoutes(
         return reply.status(404).send({ error: 'No pending interrupt for agent', agentId: id });
       }
 
-      if (inMemoryResolved) {
+      if (inMemoryResolved && hadLiveWaiter) {
         return reply.send({ resolved: true, action: resolveAction });
       }
 
@@ -137,7 +152,10 @@ export async function interruptRoutes(
         return reply.status(409).send({ error: 'Interrupt is not actionable', status: dbInterrupt.status });
       }
 
-      if (resolveAction === 'approve' && sessionId && dbInterrupt) {
+      // Durable continuation for approve AND reject (ctx-qjnz): with no live
+      // waiter, the foreground turn can only make progress via a durable
+      // resume that delivers the APPROVED/REJECTED continuation.
+      if (sessionId && dbInterrupt) {
         const attempt = await db.upsertInterruptResumeAttempt({
           interruptId: dbInterrupt.id,
           agentSessionId: dbInterrupt.agentSessionId,

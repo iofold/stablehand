@@ -27,6 +27,12 @@ export interface SuspendSessionOptions {
   allowActiveTurn?: boolean;
 }
 
+export interface RestoreSessionStart {
+  sessionId: string;
+  status: 'RESTORING';
+  restoreAttempts: 0;
+}
+
 export class ActiveTurnSuspendError extends Error {
   readonly sessionId: string;
   readonly turnId: string;
@@ -36,6 +42,28 @@ export class ActiveTurnSuspendError extends Error {
     this.name = 'ActiveTurnSuspendError';
     this.sessionId = sessionId;
     this.turnId = turnId;
+  }
+}
+
+export class SandboxSessionNotFoundError extends Error {
+  readonly sessionId: string;
+
+  constructor(sessionId: string) {
+    super(`Sandbox session ${sessionId} not found`);
+    this.name = 'SandboxSessionNotFoundError';
+    this.sessionId = sessionId;
+  }
+}
+
+export class RestoreConflictError extends Error {
+  readonly sessionId: string;
+  readonly status: string;
+
+  constructor(sessionId: string, status: string) {
+    super(`Sandbox session ${sessionId} is ${status}, not CHECKPOINTED`);
+    this.name = 'RestoreConflictError';
+    this.sessionId = sessionId;
+    this.status = status;
   }
 }
 
@@ -52,6 +80,7 @@ export interface SessionLifecycleServiceDeps {
     DatabaseRepository,
     | 'createCheckpointV2'
     | 'getActiveSandboxSessions'
+    | 'getSandboxSession'
     | 'getSandboxSessionByConversation'
     | 'getSandboxSessionsByAgent'
     | 'getStrandedRestoringSessions'
@@ -98,6 +127,89 @@ export class SessionLifecycleService {
 
   onSessionReconnected(conversationId: string, record: SessionRecord): void {
     this.deps.recoveryCoordinator.onSessionReconnected(conversationId, record);
+  }
+
+  async restoreSession(
+    sessionId: string,
+    agentDef: AgentDefinition,
+    agentId?: string,
+  ): Promise<SessionRecord> {
+    const initial = await this.deps.db.getSandboxSession(sessionId);
+    if (!initial) {
+      throw new SandboxSessionNotFoundError(sessionId);
+    }
+
+    return this.deps.stateStore.withConversationLock(initial.conversationId, async () => {
+      this.deps.stateStore.setAgentDef(initial.conversationId, agentDef);
+
+      const current = await this.deps.db.getSandboxSession(sessionId);
+      if (!current) {
+        throw new SandboxSessionNotFoundError(sessionId);
+      }
+
+      if (current.status !== 'CHECKPOINTED') {
+        throw new RestoreConflictError(sessionId, current.status);
+      }
+
+      await this.deps.statusCoordinator.transition({
+        sessionId,
+        fromStatus: 'CHECKPOINTED',
+        toStatus: 'CHECKPOINTED',
+        extra: { restoreAttempts: 0, lastRestoreError: null },
+      });
+
+      return this.deps.recoveryCoordinator.recoverOrReconnect(
+        current.conversationId,
+        agentDef,
+        agentId ?? current.agentId,
+        { ...current, restoreAttempts: 0, lastRestoreError: null },
+      );
+    });
+  }
+
+  async startRestoreSession(
+    sessionId: string,
+    agentDef: AgentDefinition,
+    agentId?: string,
+  ): Promise<RestoreSessionStart> {
+    const initial = await this.deps.db.getSandboxSession(sessionId);
+    if (!initial) {
+      throw new SandboxSessionNotFoundError(sessionId);
+    }
+
+    return this.deps.stateStore.withConversationLock(initial.conversationId, async () => {
+      this.deps.stateStore.setAgentDef(initial.conversationId, agentDef);
+
+      const current = await this.deps.db.getSandboxSession(sessionId);
+      if (!current) {
+        throw new SandboxSessionNotFoundError(sessionId);
+      }
+
+      if (current.status !== 'CHECKPOINTED') {
+        throw new RestoreConflictError(sessionId, current.status);
+      }
+
+      await this.deps.statusCoordinator.transition({
+        sessionId,
+        fromStatus: 'CHECKPOINTED',
+        toStatus: 'CHECKPOINTED',
+        extra: { restoreAttempts: 0, lastRestoreError: null },
+      });
+
+      void this.deps.recoveryCoordinator.recoverOrReconnect(
+        current.conversationId,
+        agentDef,
+        agentId ?? current.agentId,
+        { ...current, restoreAttempts: 0, lastRestoreError: null },
+      ).catch((err: unknown) => {
+        this.deps.logger.warn(
+          `${TAG} background restore failed for session ${sessionId}:`,
+          err,
+        );
+      });
+
+      return { sessionId, status: 'RESTORING', restoreAttempts: 0 };
+    });
   }
 
   async onSessionEvicted(sessionId: string, conversationId: string): Promise<void> {

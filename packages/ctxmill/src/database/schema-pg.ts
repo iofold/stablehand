@@ -1,5 +1,8 @@
+import { sql } from 'drizzle-orm';
 import { pgTable, text, bigint, boolean, serial, integer, index, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
+
+export type TurnStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled';
 
 export const agents = pgTable('agents', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
@@ -48,12 +51,15 @@ export const turns = pgTable('turns', {
   conversationId: text('conversation_id').references(() => conversations.id),
   mode: text('mode').notNull().default('interactive'),
   taskDescription: text('task_description'),
+  status: text('status').$type<TurnStatus>().notNull().default('queued'),
+  userMessageId: text('user_message_id'),
   startedAt: bigint('started_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   completedAt: bigint('completed_at', { mode: 'number' }),
   error: text('error'),
 }, (table) => ({
   agentStartedIdx: index('idx_turns_agent_started').on(table.agentId, table.startedAt),
   sessionIdx: index('idx_turns_session').on(table.sessionId),
+  statusOpenIdx: index('idx_turns_status_open').on(table.status).where(sql`${table.completedAt} IS NULL`),
 }));
 
 export const eventStore = pgTable('event_store', {
@@ -62,8 +68,13 @@ export const eventStore = pgTable('event_store', {
   agentId: text('agent_id').notNull(),
   payload: text('payload').notNull(),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  // Canonical event spine columns (ADR-015): frame provenance + replay keys.
+  turnId: text('turn_id'),
+  conversationId: text('conversation_id'),
+  channel: text('channel').notNull().default('system'),
 }, (table) => ({
   agentSeqIdx: index('idx_event_store_agent_seq').on(table.agentId, table.seq),
+  agentChannelSeqIdx: index('idx_event_store_agent_channel_seq').on(table.agentId, table.channel, table.seq),
 }));
 
 export const suspendedSessions = pgTable('suspended_sessions', {

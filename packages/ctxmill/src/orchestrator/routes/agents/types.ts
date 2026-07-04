@@ -15,6 +15,7 @@ import type { RunStartupService } from '../../run-startup-service.js';
 import type { SandboxSessionManager } from '../../sandbox-session-manager.js';
 import type { SSEManager } from '../../sse.js';
 import type { ContainerLifecyclePolicy } from '../../container-lifecycle-policy.js';
+import type { CanonicalLog } from '../../canonical/canonical-log.js';
 
 export type AgentHttpToolDefinition = {
   name: string;
@@ -43,6 +44,8 @@ export interface AgentRouteOptions {
   sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
   runStartupService: RunStartupService;
+  /** Durable canonical event spine; present when the container wired one (ADR-015). */
+  canonicalLog?: CanonicalLog;
 }
 
 export interface AgentSubRouteOptions extends AgentRouteOptions {

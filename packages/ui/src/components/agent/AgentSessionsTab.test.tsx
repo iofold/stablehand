@@ -174,7 +174,11 @@ describe('AgentSessionsTab restore retry (ADR 013)', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     restoreSandboxSessionMock.mockReset();
-    restoreSandboxSessionMock.mockResolvedValue(undefined);
+    restoreSandboxSessionMock.mockResolvedValue({
+      sessionId: 'sbx-1',
+      status: 'ACTIVE',
+      restoreAttempts: 0,
+    });
   });
 
   afterEach(() => {
@@ -205,20 +209,26 @@ describe('AgentSessionsTab restore retry (ADR 013)', () => {
     });
   }
 
-  it('does not show retry-restore button when status is CHECKPOINTED but lastRestoreError is null', () => {
-    renderWith([makeSession({ status: 'CHECKPOINTED', lastRestoreError: null })]);
+  it('does not show retry-restore button when sandboxStatus is CHECKPOINTED but lastRestoreError is null', () => {
+    renderWith([makeSession({ status: 'ERROR', sandboxStatus: 'CHECKPOINTED', lastRestoreError: null })]);
     expandFirstConversation();
     expect(container.querySelector('[data-testid="retry-restore-button"]')).toBeNull();
   });
 
-  it('does not show retry-restore button when status is ACTIVE even with a stale lastRestoreError', () => {
-    renderWith([makeSession({ status: 'ACTIVE' as never, lastRestoreError: 'previously failed' })]);
+  it('does not show retry-restore button when sandboxStatus is ACTIVE even with a stale lastRestoreError', () => {
+    renderWith([makeSession({ status: 'ERROR', sandboxStatus: 'ACTIVE', lastRestoreError: 'previously failed' })]);
     expandFirstConversation();
     expect(container.querySelector('[data-testid="retry-restore-button"]')).toBeNull();
   });
 
-  it('shows retry-restore button when CHECKPOINTED with non-null lastRestoreError', () => {
-    renderWith([makeSession({ status: 'CHECKPOINTED', lastRestoreError: 'snapshot corrupted', sandboxSessionId: 'sbx-1' })]);
+  it('does not show retry-restore button without a sandboxSessionId', () => {
+    renderWith([makeSession({ status: 'ERROR', sandboxStatus: 'CHECKPOINTED', lastRestoreError: 'snapshot corrupted' })]);
+    expandFirstConversation();
+    expect(container.querySelector('[data-testid="retry-restore-button"]')).toBeNull();
+  });
+
+  it('shows retry-restore button when projected ERROR has CHECKPOINTED sandbox with non-null lastRestoreError', () => {
+    renderWith([makeSession({ status: 'ERROR', sandboxStatus: 'CHECKPOINTED', lastRestoreError: 'snapshot corrupted', sandboxSessionId: 'sbx-1' })]);
     expandFirstConversation();
     const button = container.querySelector('[data-testid="retry-restore-button"]') as HTMLButtonElement | null;
     expect(button).not.toBeNull();
@@ -227,7 +237,7 @@ describe('AgentSessionsTab restore retry (ADR 013)', () => {
   });
 
   it('POSTs to the restore endpoint when retry-restore is clicked', async () => {
-    renderWith([makeSession({ status: 'CHECKPOINTED', lastRestoreError: 'gone', sandboxSessionId: 'sbx-1' })]);
+    renderWith([makeSession({ status: 'ERROR', sandboxStatus: 'CHECKPOINTED', lastRestoreError: 'gone', sandboxSessionId: 'sbx-1' })]);
     expandFirstConversation();
     const button = container.querySelector('[data-testid="retry-restore-button"]') as HTMLButtonElement;
 
@@ -239,9 +249,34 @@ describe('AgentSessionsTab restore retry (ADR 013)', () => {
     expect(restoreSandboxSessionMock).toHaveBeenCalledWith('agent-1', 'sbx-1');
   });
 
+  it('refetches sessions after a restore retry succeeds', async () => {
+    const onRetry = vi.fn();
+    act(() => {
+      root.render(
+        <AgentSessionsTab
+          sessions={[makeSession({ status: 'ERROR', sandboxStatus: 'CHECKPOINTED', lastRestoreError: 'gone', sandboxSessionId: 'sbx-1' })]}
+          loading={false}
+          filter="all"
+          onFilterChange={() => undefined}
+          agentId="agent-1"
+          onRetry={onRetry}
+        />,
+      );
+    });
+    expandFirstConversation();
+    const button = container.querySelector('[data-testid="retry-restore-button"]') as HTMLButtonElement;
+
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushEffects();
+
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces a final-failure toast when retry-restore POST fails', async () => {
     restoreSandboxSessionMock.mockRejectedValueOnce(new Error('still corrupted'));
-    renderWith([makeSession({ status: 'CHECKPOINTED', lastRestoreError: 'gone', sandboxSessionId: 'sbx-1' })]);
+    renderWith([makeSession({ status: 'ERROR', sandboxStatus: 'CHECKPOINTED', lastRestoreError: 'gone', sandboxSessionId: 'sbx-1' })]);
     expandFirstConversation();
 
     const button = container.querySelector('[data-testid="retry-restore-button"]') as HTMLButtonElement;

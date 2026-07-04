@@ -4,6 +4,16 @@ const ALLOWED_CONSOLE_ERROR_PATTERNS = [
   // Keep this list intentionally empty unless a release gate ADR accepts a known benign browser error.
 ] as const;
 
+function shouldStripAuthHeader(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const base = new URL(process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3200');
+    return parsed.origin !== base.origin && (parsed.protocol === 'http:' || parsed.protocol === 'https:');
+  } catch {
+    return false;
+  }
+}
+
 function isAllowedConsoleError(text: string): boolean {
   return ALLOWED_CONSOLE_ERROR_PATTERNS.some((pattern) => pattern.test(text));
 }
@@ -47,6 +57,18 @@ export async function assertNoUnexpectedTerminalErrorStates(
 }
 
 async function installStrictConsoleGate(page: Page, errors: string[]): Promise<void> {
+  await page.route('**/*', async (route) => {
+    const headers = route.request().headers();
+    if (!headers.authorization || !shouldStripAuthHeader(route.request().url())) {
+      await route.continue();
+      return;
+    }
+
+    const nextHeaders = { ...headers };
+    delete nextHeaders.authorization;
+    await route.continue({ headers: nextHeaders });
+  });
+
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
     const text = message.text();

@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
+import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -30,7 +31,7 @@ describe('Agent tool management integration', () => {
     container = await createContainer(
       {
         preset: 'local',
-        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
+        database: { url: resolveTestDatabaseUrl() },
       },
       dataDir,
     );

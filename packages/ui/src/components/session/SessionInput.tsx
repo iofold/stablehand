@@ -87,7 +87,7 @@ export function SessionInput({ onSend, disabled }: SessionInputProps) {
               onClick={handleSend}
               disabled={!canSend}
               className={cn(
-                'flex items-center justify-center rounded-md px-3 py-2 transition-all duration-200',
+                'flex h-10 w-10 items-center justify-center rounded-md transition-all duration-200',
                 canSend
                   ? 'bg-accent-600 text-white hover:bg-accent-500'
                   : 'bg-surface-700/50 text-surface-400',

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { createContainer } from '../../packages/ctxmill/src/config/container.js';
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
+import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
 describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
   let app: Awaited<ReturnType<typeof createServer>>;
@@ -22,7 +23,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
       {
         preset: 'docker',
         database: {
-          url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill',
+          url: resolveTestDatabaseUrl(),
         },
       },
       dataDir,
@@ -35,6 +36,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
       harnessRegistry: container.harnessRegistry,
       sessionManager: container.sessionManager,
       runStartupService: container.runStartupService,
+      canonicalLog: container.canonicalLog,
       dataDir,
     });
 
@@ -180,6 +182,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
           harnessRegistry: container.harnessRegistry,
           sessionManager: container.sessionManager,
           runStartupService: container.runStartupService,
+          canonicalLog: container.canonicalLog,
           dataDir,
         });
         await app.ready();
@@ -252,6 +255,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
         harnessRegistry: container.harnessRegistry,
         sessionManager: container.sessionManager,
         runStartupService: container.runStartupService,
+        canonicalLog: container.canonicalLog,
         dataDir,
       });
       await app.ready();

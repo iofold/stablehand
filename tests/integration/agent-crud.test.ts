@@ -8,6 +8,7 @@ import { createContainer } from '../../packages/ctxmill/src/config/container.js'
 import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
 import { vi } from 'vitest';
+import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -30,7 +31,7 @@ describe('Agent CRUD & related endpoints', () => {
     container = await createContainer(
       {
         preset: 'docker',
-        database: { url: 'postgres://ctxmill:ctxmill@localhost:5433/ctxmill' },
+        database: { url: resolveTestDatabaseUrl() },
       },
       dataDir,
     );
@@ -322,6 +323,26 @@ describe('Agent CRUD & related endpoints', () => {
       expect(body.harnessConfig).toEqual(VALID_AGENT.harnessConfig);
       expect(body).not.toHaveProperty('model');
       expect(body).not.toHaveProperty('modelConfig');
+    });
+
+    it('derives status from open turns instead of the stored column (ctx-1xb)', async () => {
+      const created = await createAgent({ name: 'status-derivation-agent' });
+      const agentId = created.json().id;
+
+      let res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
+      expect(res.json().status).toBe('idle');
+
+      const { session } = await createActiveSession(agentId, 'status derivation task');
+      res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
+      expect(res.json().status).toBe('running');
+
+      const listRes = await app.inject({ method: 'GET', url: '/api/agents' });
+      const listed = listRes.json().find((entry: Record<string, unknown>) => entry.id === agentId);
+      expect(listed.status).toBe('running');
+
+      await container.db.updateTurn(session.id, { completedAt: Date.now() });
+      res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
+      expect(res.json().status).toBe('idle');
     });
   });
 

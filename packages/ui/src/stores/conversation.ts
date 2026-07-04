@@ -390,7 +390,17 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
   },
 
   handleSSEEvent: (event: Record<string, unknown>) => {
-    const type = event.type as string;
+    let type = event.type as string;
+    // Canonical wire (ADR-015): orchestrator signals arrive as
+    // CUSTOM{name:'ctxmill.*'}; route them onto the existing handlers.
+    if (type === 'CUSTOM' && typeof event.name === 'string') {
+      switch (event.name) {
+        case 'ctxmill.turn.pending': type = 'TURN_PENDING'; break;
+        case 'ctxmill.hitl.requested': type = 'HITL_PAUSE'; break;
+        case 'ctxmill.message.committed': type = 'MESSAGE_COMMITTED'; break;
+        default: break; // ctxmill.hitl.resolved handled in the CUSTOM case
+      }
+    }
     const eventId = event._eventId as string | undefined;
     if (eventId) {
       const { seenEventIds } = get();
@@ -566,7 +576,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           }
           break;
         }
-        if (subtype === 'interrupt_resolved') {
+        if (subtype === 'interrupt_resolved' || subtype === 'hitl_resolved' || event.name === 'ctxmill.hitl.resolved') {
           const action = (event.action as string) || 'resolved';
           const toolName = (event.toolName as string) || '';
           const isApproved = action === 'approve';

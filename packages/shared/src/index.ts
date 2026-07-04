@@ -1,5 +1,6 @@
 // Shared types between @ctxmill/ui and ctxmill packages
 export { API_SESSION_STATUSES } from './api.js';
+export { SESSION_CANCELLED_MESSAGE, isSessionCancelled, projectSessionStatus } from './status.js';
 export type { ServiceModule } from './service.js';
 export type { AGUIEventType, AGUIEvent, MessageCommittedEvent } from './events.js';
 export type {
@@ -14,6 +15,8 @@ export type {
   ApiInterruptPayload,
   ApiFeedbackRequest,
   ApiSandboxSession,
+  ApiSandboxRestoreError,
+  ApiSandboxRestoreSuccess,
   ApiSessionTurn,
   SandboxSessionStatus,
   ApiSessionStatusCounts,

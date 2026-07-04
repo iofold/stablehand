@@ -3,6 +3,7 @@
 ## Shared flags
 
 - `--base-url <url>`: ctxmill API root. May be root or `/api`-prefixed.
+- `--api-token <token>`: bearer token for authenticated deployments. Defaults to `CTXMILL_API_TOKEN`.
 - `--json`: emit stable JSON.
 - `--pretty`: emit concise human-readable output. Default for most commands.
 - `--raw`: print raw API JSON without summarization.

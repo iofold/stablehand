@@ -17,13 +17,21 @@ import {
   readFile,
   fetchInterrupts,
   uploadWorkspaceTarball,
+  requestArtifactUploadUrl,
+  uploadArtifactDirect,
+  uploadArtifactToSignedUrl,
 } from '../api';
+import { useApiAuthStore } from '../auth';
 
 const mockJson = vi.fn();
-const mockFetch = vi.fn<() => Promise<{ ok: boolean; status?: number; json: () => Promise<unknown> }>>();
+type MockFetchResult = { ok: boolean; status?: number; json: () => Promise<unknown> };
+type MockFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<MockFetchResult>;
+const mockFetch = vi.fn<MockFetch>();
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  window.localStorage.clear();
+  useApiAuthStore.setState({ token: '', authRequired: false });
   mockJson.mockResolvedValue({});
   mockFetch.mockResolvedValue({ ok: true, json: mockJson });
   globalThis.fetch = mockFetch as unknown as typeof fetch;
@@ -40,6 +48,27 @@ describe('fetchAgents', () => {
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agents', undefined);
     expect(result).toEqual(agents);
+  });
+
+  it('attaches the stored bearer token when present', async () => {
+    useApiAuthStore.getState().setToken('secret-token');
+
+    await fetchAgents();
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents', {
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+  });
+
+  it('marks auth required on 401 responses', async () => {
+    useApiAuthStore.getState().setToken('stale-token');
+    mockJson.mockResolvedValue({ error: 'Unauthorized: missing or invalid API token' });
+    mockFetch.mockResolvedValue({ ok: false, status: 401, json: mockJson });
+
+    await expect(fetchAgents()).rejects.toThrow('Unauthorized');
+    expect(useApiAuthStore.getState().authRequired).toBe(true);
+    expect(useApiAuthStore.getState().token).toBe('');
+    expect(window.localStorage.getItem('ctxmill.apiToken')).toBeNull();
   });
 });
 
@@ -280,6 +309,16 @@ describe('createSSEConnection', () => {
 
     expect(MockEventSource).toHaveBeenCalledWith('/api/agents/a1/stream');
   });
+
+  it('uses query-token auth for EventSource when a token is stored', () => {
+    const MockEventSource = vi.fn();
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    useApiAuthStore.getState().setToken('secret token');
+
+    createSSEConnection('a1');
+
+    expect(MockEventSource).toHaveBeenCalledWith('/api/agents/a1/stream?access_token=secret+token');
+  });
 });
 
 
@@ -307,5 +346,52 @@ describe('uploadWorkspaceTarball', () => {
       method: 'POST',
       body: file,
     }));
+  });
+});
+
+describe('artifact uploads', () => {
+  it('authenticates orchestrator upload URL requests', async () => {
+    useApiAuthStore.getState().setToken('secret-token');
+    mockJson.mockResolvedValue({ artifactId: 'art-1', uploadUrl: 'https://s3/upload', storageKey: 'k', expiresIn: 60 });
+
+    await requestArtifactUploadUrl('a1', 'report.txt', 'text/plain', 10);
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/artifacts/upload-url', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer secret-token',
+      },
+      body: JSON.stringify({ agentId: 'a1', name: 'report.txt', mimeType: 'text/plain', sizeBytes: 10 }),
+    });
+  });
+
+  it('authenticates direct multipart uploads to the orchestrator', async () => {
+    useApiAuthStore.getState().setToken('secret-token');
+    mockJson.mockResolvedValue({ id: 'art-1' });
+    const file = new File(['bytes'], 'report.txt', { type: 'text/plain' });
+
+    await uploadArtifactDirect(file, 'a1', 'report.txt');
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe('/api/artifacts/upload');
+    expect(init).toBeDefined();
+    if (!init) throw new Error('Expected upload init');
+    expect(init.method).toBe('POST');
+    expect(init.headers).toEqual({ Authorization: 'Bearer secret-token' });
+    expect(init.body).toBeInstanceOf(FormData);
+  });
+
+  it('does not add CTXMill auth headers to presigned S3 uploads', async () => {
+    useApiAuthStore.getState().setToken('secret-token');
+    const file = new File(['bytes'], 'report.txt', { type: 'text/plain' });
+
+    await uploadArtifactToSignedUrl('https://s3/upload', file);
+
+    expect(mockFetch).toHaveBeenCalledWith('https://s3/upload', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: file,
+    });
   });
 });

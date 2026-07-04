@@ -3,40 +3,55 @@ import { createHash } from 'node:crypto';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
-import type { ApiSessionStatus, ApiSessionStatusCounts, SandboxSessionStatus } from '@ctxmill/shared';
+import { projectSessionStatus, type ApiSessionStatusCounts, type SandboxSessionStatus } from '@ctxmill/shared';
 
-type AgentInsert = typeof pgSchema.agents.$inferInsert;
-type AgentSelect = typeof pgSchema.agents.$inferSelect;
-type ConversationSelect = typeof pgSchema.conversations.$inferSelect;
-type MessageInsert = typeof pgSchema.messages.$inferInsert;
-type MessageSelect = typeof pgSchema.messages.$inferSelect;
-type TurnInsert = typeof pgSchema.turns.$inferInsert;
-type TurnSelect = typeof pgSchema.turns.$inferSelect;
-type SuspendedSessionInsert = typeof pgSchema.suspendedSessions.$inferInsert;
-export type SuspendedSessionRow = typeof pgSchema.suspendedSessions.$inferSelect;
-export type ScheduledEventRow = typeof pgSchema.scheduledEvents.$inferSelect;
-type TriggerInsertBase = typeof pgSchema.eventTriggers.$inferInsert;
-type TriggerInsert = Omit<TriggerInsertBase, 'selectorHash'> & { selectorHash?: string };
-type TriggerSelect = typeof pgSchema.eventTriggers.$inferSelect;
-type VersionSelect = typeof pgSchema.agentVersions.$inferSelect;
-type InterruptInsert = typeof pgSchema.pendingInterrupts.$inferInsert;
-export type InterruptRow = typeof pgSchema.pendingInterrupts.$inferSelect;
-type InterruptResumeAttemptInsert = typeof pgSchema.interruptResumeAttempts.$inferInsert;
-export type InterruptResumeAttemptRow = typeof pgSchema.interruptResumeAttempts.$inferSelect;
-type CallbackOutboxInsert = typeof pgSchema.callbackOutbox.$inferInsert;
-export type CallbackOutboxRow = typeof pgSchema.callbackOutbox.$inferSelect;
-type WebhookInsert = typeof pgSchema.webhooks.$inferInsert;
-export type WebhookRow = typeof pgSchema.webhooks.$inferSelect;
-export type SandboxSessionRow = Omit<
-  typeof pgSchema.sandboxSessions.$inferSelect,
-  'restoreAttempts' | 'lastRestoreError'
-> & {
-  restoreAttempts?: number | null;
-  lastRestoreError?: string | null;
-};
-export type SystemSettingRow = typeof pgSchema.systemSettings.$inferSelect;
-type ArtifactInsert = typeof pgSchema.artifacts.$inferInsert;
-type ArtifactRow = typeof pgSchema.artifacts.$inferSelect;
+import type {
+  AgentInsert,
+  AgentSelect,
+  ArtifactInsert,
+  ArtifactRow,
+  CallbackOutboxInsert,
+  CallbackOutboxRow,
+  CheckpointV2,
+  ConversationSelect,
+  ConversationSummaryRow,
+  EventFrameInsert,
+  EventFrameRow,
+  InterruptInsert,
+  InterruptResumeAttemptInsert,
+  InterruptResumeAttemptRow,
+  InterruptRow,
+  MessageInsert,
+  MessageSelect,
+  SandboxSessionRow,
+  ScheduledEventRow,
+  SuspendedSessionInsert,
+  SuspendedSessionRow,
+  SystemSettingRow,
+  TriggerInsert,
+  TriggerSelect,
+  TurnInsert,
+  TurnSelect,
+  TurnStatus,
+  VersionSelect,
+  WebhookInsert,
+  WebhookRow,
+} from './types.js';
+
+export type {
+  CallbackOutboxRow,
+  CheckpointV2,
+  ConversationSummaryRow,
+  EventFrameInsert,
+  EventFrameRow,
+  InterruptResumeAttemptRow,
+  InterruptRow,
+  SandboxSessionRow,
+  ScheduledEventRow,
+  SuspendedSessionRow,
+  SystemSettingRow,
+  WebhookRow,
+} from './types.js';
 
 const sanitizeTypedDbValue = <T>(value: T, context: string): T => sanitizeDbValue(value, context) as T;
 const DEFAULT_CLAIM_LEASE_MS = 60_000;
@@ -72,34 +87,8 @@ function triggerSelectorHash(selector: Record<string, unknown> | null | undefine
     .digest('hex');
 }
 
-export interface CheckpointV2 {
-  id: string;
-  sessionId: string;
-  agentId: string;
-  checkpointVersion: number;
-  checkpointData: Record<string, unknown>;
-  harnessState: Record<string, unknown> | null;
-  workspaceRef: string | null;
-  suspendReason: string | null;
-  createdAt: number;
-}
-
-export interface ConversationSummaryRow {
-  id: string;
-  agentId: string;
-  status: ApiSessionStatus;
-  mode: string;
-  turnCount: number;
-  messageCount: number;
-  taskDescription: string | null;
-  startedAt: number;
-  updatedAt: number;
-  latestTurnId: string | null;
-  sandboxSessionId: string | null;
-}
-
 export class DatabaseRepository {
-  private db: any;
+  private db: DrizzleDb;
   private schema = pgSchema;
 
   constructor(db: DrizzleDb) {
@@ -107,14 +96,13 @@ export class DatabaseRepository {
   }
 
   private getTurnStatusWhere(status: string, agentId?: string) {
-    const activeStatuses = new Set(['queued', 'running', 'paused', 'suspended', 'active']);
-    const condition = activeStatuses.has(status)
-      ? isNull(this.schema.turns.completedAt)
-      : status === 'completed'
-        ? and(isNotNull(this.schema.turns.completedAt), isNull(this.schema.turns.error))
-        : status === 'error' || status === 'failed'
-          ? isNotNull(this.schema.turns.error)
-          : sql`1 = 0`;
+    const normalized = status === 'failed' ? 'error' : status;
+    const concreteStatuses = new Set(['queued', 'running', 'completed', 'error', 'cancelled']);
+    const condition = concreteStatuses.has(normalized)
+      ? eq(this.schema.turns.status, normalized as TurnStatus)
+      : normalized === 'active' || normalized === 'paused' || normalized === 'suspended'
+        ? isNull(this.schema.turns.completedAt)
+        : sql`1 = 0`;
 
     if (!agentId) {
       return condition;
@@ -163,17 +151,17 @@ export class DatabaseRepository {
    * Order: messages -> conversations -> runs -> events -> agent
    */
   async deleteAgentCascade(agentId: string): Promise<void> {
-    await this.db.transaction(async (tx: any) => {
+    await this.db.transaction(async (tx) => {
       const conversations = await tx
         .select({ id: this.schema.conversations.id })
         .from(this.schema.conversations)
         .where(eq(this.schema.conversations.agentId, agentId));
-      const conversationIds = conversations.map((c: any) => c.id);
+      const conversationIds = conversations.map((c) => c.id);
       const sandboxSessions = await tx
         .select({ id: this.schema.sandboxSessions.id })
         .from(this.schema.sandboxSessions)
         .where(eq(this.schema.sandboxSessions.agentId, agentId));
-      const sandboxSessionIds = sandboxSessions.map((session: any) => session.id);
+      const sandboxSessionIds = sandboxSessions.map((session) => session.id);
       if (conversationIds.length > 0) {
         await tx.delete(this.schema.messages).where(inArray(this.schema.messages.conversationId, conversationIds));
       }
@@ -193,10 +181,6 @@ export class DatabaseRepository {
       await tx.delete(this.schema.eventTriggers).where(eq(this.schema.eventTriggers.agentId, agentId));
       await tx.delete(this.schema.agents).where(eq(this.schema.agents.id, agentId));
     });
-  }
-
-  async updateAgentStatus(id: string, status: string): Promise<AgentSelect | undefined> {
-    return this.updateAgent(id, { status });
   }
 
   // ── Conversations ───────────────────────────────────────
@@ -226,7 +210,7 @@ export class DatabaseRepository {
   async getConversationsForAgent(agentId: string): Promise<ConversationSelect[]> {
     return this.db.query.conversations.findMany({
       where: eq(this.schema.conversations.agentId, agentId),
-      orderBy: (conversations: any) => [desc(conversations.updatedAt)],
+      orderBy: (conversations) => [desc(conversations.updatedAt)],
     });
   }
 
@@ -239,7 +223,7 @@ export class DatabaseRepository {
       toolCallId: sanitizeOptionalDbText(data.toolCallId, 'messages.toolCallId'),
     };
 
-    return this.db.transaction(async (tx: any) => {
+    return this.db.transaction(async (tx) => {
       const rows = await tx.insert(this.schema.messages).values(sanitizedData).returning();
       const message = rows[0];
       if (!message) throw new Error('Expected insert to return a row but got undefined');
@@ -259,6 +243,20 @@ export class DatabaseRepository {
       .where(eq(this.schema.messages.id, id));
   }
 
+  /** Repair both persisted tool-call projections of a message in one write (ctx-nm3o). */
+  async updateMessageToolCallsAndParts(
+    id: string,
+    toolCalls: unknown[] | null,
+    parts: unknown[] | null,
+  ): Promise<void> {
+    await this.db.update(this.schema.messages)
+      .set({
+        ...(toolCalls ? { toolCalls: sanitizeTypedDbValue(toolCalls, 'messages.toolCalls') } : {}),
+        ...(parts ? { parts: sanitizeTypedDbValue(parts, 'messages.parts') } : {}),
+      })
+      .where(eq(this.schema.messages.id, id));
+  }
+
   async deleteMessage(id: string): Promise<void> {
     await this.db.delete(this.schema.messages).where(eq(this.schema.messages.id, id));
   }
@@ -266,7 +264,7 @@ export class DatabaseRepository {
   async getMessages(conversationId: string): Promise<MessageSelect[]> {
     return this.db.query.messages.findMany({
       where: eq(this.schema.messages.conversationId, conversationId),
-      orderBy: (messages: any) => [asc(messages.createdAt), asc(messages.id)],
+      orderBy: (messages) => [asc(messages.createdAt), asc(messages.id)],
     });
   }
 
@@ -344,6 +342,31 @@ export class DatabaseRepository {
     });
   }
 
+  /** Open turns started before the cutoff — stranded by construction after a restart (ADR-014). */
+  async getOpenTurnsStartedBefore(cutoffMs: number): Promise<TurnSelect[]> {
+    return this.db.query.turns.findMany({
+      where: and(isNull(this.schema.turns.completedAt), lt(this.schema.turns.startedAt, cutoffMs)),
+    });
+  }
+
+  /**
+   * Terminal-state write guarded at the database: only an open turn is
+   * updated. Returns false when the turn was already terminal or missing —
+   * the primitive TurnFinalizer builds on (ADR-014).
+   */
+  async finalizeTurnIfOpen(
+    id: string,
+    updates: { sessionId?: string; completedAt: number; error: string | null; status: Exclude<TurnStatus, 'queued' | 'running'> },
+  ): Promise<boolean> {
+    const sanitizedUpdates = sanitizeTypedDbValue(updates, 'turns.finalize');
+    const updated = await this.db
+      .update(this.schema.turns)
+      .set(sanitizedUpdates)
+      .where(and(eq(this.schema.turns.id, id), isNull(this.schema.turns.completedAt)))
+      .returning({ id: this.schema.turns.id });
+    return updated.length > 0;
+  }
+
   async getAllTurns(): Promise<TurnSelect[]> {
     return this.db.query.turns.findMany();
   }
@@ -357,7 +380,7 @@ export class DatabaseRepository {
   async getLatestTurnForConversation(conversationId: string): Promise<TurnSelect | undefined> {
     return this.db.query.turns.findFirst({
       where: eq(this.schema.turns.conversationId, conversationId),
-      orderBy: (turns: typeof this.schema.turns) => [desc(turns.startedAt), desc(turns.id)],
+      orderBy: [desc(this.schema.turns.startedAt), desc(this.schema.turns.id)],
     });
   }
 
@@ -449,6 +472,70 @@ export class DatabaseRepository {
       throw new Error('Expected insert to return a row but got undefined');
     }
     return row.seq;
+  }
+
+  /**
+   * Batch-persist canonical frames in one round trip (ADR-015). Returns the
+   * assigned global seqs in input order.
+   */
+  async saveEventBatch(frames: EventFrameInsert[]): Promise<number[]> {
+    if (frames.length === 0) {
+      return [];
+    }
+    const now = Date.now();
+    const rows = await this.db
+      .insert(this.schema.eventStore)
+      .values(frames.map((frame) => ({
+        type: sanitizeDbText(frame.type, 'eventStore.type'),
+        agentId: frame.agentId,
+        payload: sanitizeDbText(frame.payload, 'eventStore.payload'),
+        createdAt: now,
+        turnId: frame.turnId ?? null,
+        conversationId: frame.conversationId ?? null,
+        channel: frame.channel ?? 'system',
+      })))
+      .returning({ seq: this.schema.eventStore.seq });
+    return rows.map((row) => row.seq);
+  }
+
+  /** Latest assigned frame seq for an agent (0 when none) — CONNECTED.latestSeq. */
+  async getLatestEventSeq(agentId: string): Promise<number> {
+    const [row] = await this.db
+      .select({ seq: sql<number>`coalesce(max(${this.schema.eventStore.seq}), 0)` })
+      .from(this.schema.eventStore)
+      .where(eq(this.schema.eventStore.agentId, agentId));
+    return row?.seq ?? 0;
+  }
+
+  /** Durable replay: frames for an agent after a seq, optionally per channel (ADR-015). */
+  async getFramesSince(
+    agentId: string,
+    afterSeq: number,
+    options: { channels?: string[]; limit?: number } = {},
+  ): Promise<EventFrameRow[]> {
+    const conditions = [
+      eq(this.schema.eventStore.agentId, agentId),
+      gt(this.schema.eventStore.seq, afterSeq),
+    ];
+    if (options.channels && options.channels.length > 0) {
+      conditions.push(inArray(this.schema.eventStore.channel, options.channels));
+    }
+    return this.db.query.eventStore.findMany({
+      where: and(...conditions),
+      orderBy: [asc(this.schema.eventStore.seq)],
+      limit: options.limit ?? 1_000,
+    });
+  }
+
+  /** All frames of a turn in seq order — reconnect tail replay for in-flight turns. */
+  async getTurnFrames(turnId: string, afterSeq = 0): Promise<EventFrameRow[]> {
+    return this.db.query.eventStore.findMany({
+      where: and(
+        eq(this.schema.eventStore.turnId, turnId),
+        gt(this.schema.eventStore.seq, afterSeq),
+      ),
+      orderBy: [asc(this.schema.eventStore.seq)],
+    });
   }
 
   async createSuspendedSession(data: SuspendedSessionInsert): Promise<void> {
@@ -544,7 +631,7 @@ export class DatabaseRepository {
   async getEventStats(since?: number): Promise<{
     total: number;
     byType: Record<string, number>;
-    topAgents: Array<{ agentId: string; count: number }>;
+    topAgents: Array<{ agentId: string | null; count: number }>;
     recentRate: number;
   }> {
     const sinceTime = since ?? Date.now() - 24 * 60 * 60 * 1000;
@@ -591,7 +678,7 @@ export class DatabaseRepository {
     return {
       total,
       byType,
-      topAgents: agentRows.map((r: { agentId: string | null; count: number }) => ({ agentId: r.agentId, count: Number(r.count) })),
+      topAgents: agentRows.map((r) => ({ agentId: r.agentId, count: Number(r.count) })),
       recentRate,
     };
   }
@@ -603,7 +690,7 @@ export class DatabaseRepository {
     const rows = await this.db
       .selectDistinct({ type: this.schema.eventStore.type })
       .from(this.schema.eventStore);
-    return rows.map((r: any) => r.type);
+    return rows.map((r) => r.type);
   }
 
   // ── Scheduled Events ──────────────────────────────────────
@@ -783,7 +870,7 @@ export class DatabaseRepository {
     changeNote?: string,
   ): Promise<void> {
     const sanitizedManifest = sanitizeTypedDbValue(manifest, 'agents.manifest');
-    await this.db.transaction(async (tx: any) => {
+    await this.db.transaction(async (tx) => {
       const lockedAgents = await tx.execute(sql`
         SELECT version
         FROM agents
@@ -817,7 +904,7 @@ export class DatabaseRepository {
   async getAgentVersions(agentId: string): Promise<VersionSelect[]> {
     return this.db.query.agentVersions.findMany({
       where: eq(this.schema.agentVersions.agentId, agentId),
-      orderBy: (v: any, { desc }: any) => [desc(v.version)],
+      orderBy: (v, { desc }) => [desc(v.version)],
     });
   }
 
@@ -874,7 +961,7 @@ export class DatabaseRepository {
         eq(this.schema.pendingInterrupts.agentId, agentId),
         eq(this.schema.pendingInterrupts.status, 'pending'),
       ),
-      orderBy: (row: any, { asc }: any) => [asc(row.createdAt)],
+      orderBy: (row, { asc }) => [asc(row.createdAt)],
     });
   }
 
@@ -886,7 +973,7 @@ export class DatabaseRepository {
         eq(this.schema.pendingInterrupts.agentId, agentId),
         inArray(this.schema.pendingInterrupts.status, ['pending', 'timed_out']),
       ),
-      orderBy: (row: any, { asc }: any) => [asc(row.createdAt)],
+      orderBy: (row, { asc }) => [asc(row.createdAt)],
     });
 
     const failedAttempts = await this.db.query.interruptResumeAttempts.findMany({
@@ -894,7 +981,7 @@ export class DatabaseRepository {
         eq(this.schema.interruptResumeAttempts.agentId, agentId),
         eq(this.schema.interruptResumeAttempts.status, 'failed'),
       ),
-      orderBy: (row: any, { asc }: any) => [asc(row.updatedAt)],
+      orderBy: (row, { asc }) => [asc(row.updatedAt)],
     });
 
     const missingInterruptIds = failedAttempts
@@ -1547,14 +1634,11 @@ export class DatabaseRepository {
       .orderBy(desc(this.schema.conversations.updatedAt));
 
     return rows.map((row): ConversationSummaryRow => {
-      let status: ApiSessionStatus = 'IDLE';
-      if (row.error) {
-        status = 'ERROR';
-      } else if (row.completedAt != null) {
-        status = 'COMPLETED';
-      } else if (row.sandboxStatus) {
-        status = row.sandboxStatus as SandboxSessionStatus;
-      }
+      const status = projectSessionStatus(
+        { completedAt: row.completedAt, error: row.error },
+        row.sandboxStatus,
+        'IDLE',
+      );
 
       return {
         id: row.id,

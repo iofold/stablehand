@@ -4,13 +4,16 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import type { EventMap, EventName, TypedEventBus } from '../../events/bus.js';
 import type { PreparedRunStart, RunStartupService } from '../run-startup-service.js';
 import { ConcurrencyLimitError } from '../session-manager/concurrency-limit-error.js';
-import { AGUIEventNormalizer } from './event-normalizer.js';
 import type { AGUIMessage, AGUIMessageRole, AGUIRunAgentInput } from './types.js';
+import type { CanonicalLog } from '../canonical/canonical-log.js';
+import type { PersistedFrame } from '../canonical/frames.js';
 
 export interface AGUICompatRouteOptions {
   db: DatabaseRepository;
   eventBus: TypedEventBus;
   runStartupService: RunStartupService;
+  /** Durable canonical event spine (ADR-015). */
+  canonicalLog?: CanonicalLog;
 }
 
 type AGUIRunRequest = FastifyRequest<{
@@ -71,6 +74,8 @@ function toAGUIMessage(message: {
   role: string;
   content: string;
   toolCallId?: string | null;
+  toolCalls?: unknown[] | null;
+  parts?: unknown[] | null;
 }): AGUIMessage {
   const role = isAGUIMessageRole(message.role) ? message.role : 'assistant';
   return {
@@ -78,7 +83,11 @@ function toAGUIMessage(message: {
     role,
     content: message.content,
     ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
-  };
+    // Structured transcript fidelity in the snapshot (ctx-4fs): reconnecting
+    // clients get tool-call state and message parts, not just flattened text.
+    ...(Array.isArray(message.toolCalls) && message.toolCalls.length > 0 ? { toolCalls: message.toolCalls } : {}),
+    ...(Array.isArray(message.parts) && message.parts.length > 0 ? { parts: message.parts } : {}),
+  } as AGUIMessage;
 }
 
 function matchesRun<K extends EventName>(agentId: string, turnId: string, payload: EventMap[K]): boolean {
@@ -95,7 +104,7 @@ export async function agUiCompatRoutes(
   app: FastifyInstance,
   opts: AGUICompatRouteOptions,
 ): Promise<void> {
-  const { db, eventBus, runStartupService } = opts;
+  const { db, runStartupService, canonicalLog } = opts;
 
   const runHandler = async (
     request: AGUIRunRequest,
@@ -208,7 +217,6 @@ export async function agUiCompatRoutes(
       messages: allMessages.map(toAGUIMessage),
     });
 
-    const normalizer = new AGUIEventNormalizer(activeTurn.id, conversationId);
     const unsubscribers: Array<() => void> = [];
     let cleanedUp = false;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -226,36 +234,51 @@ export async function agUiCompatRoutes(
       }
     };
 
-    const subscribe = <K extends EventName>(eventName: K): void => {
-      const handler = (payload: EventMap[K]): void => {
-        if (!matchesRun(id, activeTurn.id, payload)) {
-          return;
-        }
+    if (!canonicalLog) {
+      writeEvent({ type: 'RUN_ERROR', message: 'canonical event log not configured', timestamp: Date.now() });
+      reply.raw.end();
+      cleanup();
+      return reply;
+    }
 
-        for (const event of normalizer.normalize(eventName, payload)) {
-          writeEvent(event);
-        }
+    {
+      // A2 (ADR-015): one canonical-log subscription serves this run's wire.
+      // Frames already carry stable messageIds and the ctxmill.* CUSTOM
+      // vocabulary; RUN_ERROR keeps a legacy `error` alias for one release.
+      const frameMatchesRun = (frame: PersistedFrame): boolean =>
+        frame.turnId === activeTurn.id || (!frame.turnId && frame.agentId === id && frame.conversationId === conversationId);
 
-        if (eventName === 'turn.completed') {
-          cleanup();
-          if (!reply.raw.writableEnded && !reply.raw.destroyed) {
-            reply.raw.end();
-          }
-        }
+      const writeFrame = (frame: PersistedFrame): void => {
+        const event = frame.type === 'RUN_ERROR'
+          ? { ...frame.body, error: frame.body.message }
+          : frame.body;
+        writeEvent(event as Record<string, unknown>);
       };
 
-      eventBus.on(eventName, handler);
-      unsubscribers.push(() => eventBus.off(eventName, handler));
-    };
+      if (isReconnect) {
+        // Durable tail replay: reproduce in-flight partials with stable ids (ctx-4fs).
+        for (const frame of await canonicalLog.replayTurnTail(activeTurn.id)) {
+          if (frame.channel === 'run') {
+            writeFrame(frame);
+          }
+        }
+      }
 
-    subscribe('turn.started');
-    subscribe('run.text_chunk');
-    subscribe('run.tool_started');
-    subscribe('run.tool_result');
-    subscribe('run.interrupted');
-    subscribe('run.interrupt_resolved');
-    subscribe('run.ag_ui_event');
-    subscribe('turn.completed');
+      unsubscribers.push(canonicalLog.subscribe((frames) => {
+        for (const frame of frames) {
+          if (frame.channel !== 'run' || !frameMatchesRun(frame)) {
+            continue;
+          }
+          writeFrame(frame);
+          if (frame.type === 'RUN_FINISHED') {
+            cleanup();
+            if (!reply.raw.writableEnded && !reply.raw.destroyed) {
+              reply.raw.end();
+            }
+          }
+        }
+      }));
+    }
 
     heartbeat = setInterval(() => {
       if (reply.raw.writableEnded || reply.raw.destroyed) {
@@ -270,9 +293,7 @@ export async function agUiCompatRoutes(
     });
 
     if (executionParams) {
-      void runStartupService.launchPreparedRun(executionParams, id).catch((err) => {
-        console.error(`[ag-ui] executeSession failed for agent ${id}, turn ${executionParams?.turnId}:`, err);
-      });
+      void runStartupService.launchPreparedRun(executionParams, id);
     }
 
     return reply;

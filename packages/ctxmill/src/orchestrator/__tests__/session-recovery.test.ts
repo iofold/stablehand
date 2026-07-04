@@ -1,6 +1,6 @@
 import { create } from '@bufbuild/protobuf';
 import { ConnectError, Code } from '@connectrpc/connect';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MessageCommittedSchema,
   SessionEventSchema,
@@ -18,6 +18,12 @@ import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js'
 import type { ContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { AgentDefinition, Message } from '../../types.js';
+import {
+  CALLBACK_AGENT_ENV,
+  CALLBACK_SESSION_ENV,
+  CALLBACK_TOKEN_ENV,
+  mintGrpcCallbackToken,
+} from '../grpc/callback-auth.js';
 
 const connectMocks = vi.hoisted(() => ({
   createClientMock: vi.fn(),
@@ -121,13 +127,14 @@ function createLogger() {
   };
 }
 
-function createAgentDef(): AgentDefinition {
+function createAgentDef(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
   return {
     name: 'agent-1',
     harness: 'langgraph',
     systemPrompt: 'test system prompt',
     tools: [],
     harnessConfig: {},
+    ...overrides,
   } as unknown as AgentDefinition;
 }
 
@@ -257,6 +264,10 @@ describe('SandboxSessionManager session recovery', () => {
     });
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   describe('ensureSession — dead container recovery', () => {
     it('ACTIVE + reconnect fails + checkpoint exists → restores from checkpoint', async () => {
       vi.useFakeTimers();
@@ -321,6 +332,54 @@ describe('SandboxSessionManager session recovery', () => {
       expect(session.status).toBe('ACTIVE');
     });
 
+    it('CHECKPOINTED restore uses stored agent id instead of display name for runtime identity', async () => {
+      (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('CHECKPOINTED'));
+      (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
+
+      const session = await manager.ensureSession(
+        'conv-1',
+        createAgentDef({ name: 'Claude Suspend Restore Probe dev2' }),
+        'agent-1',
+      );
+
+      expect(session.sessionId).toBe('sess-1');
+      expect(containerManager.createContainer).toHaveBeenCalledWith(expect.objectContaining({
+        agentId: 'agent-1',
+      }));
+      expect(grpcClient.openSession).toHaveBeenCalledWith(expect.objectContaining({
+        bootstrap: {
+          case: 'restore',
+          value: expect.objectContaining({
+            agentId: 'agent-1',
+          }),
+        },
+      }));
+    });
+
+    it('injects session-scoped callback auth secrets into restored session containers', async () => {
+      vi.stubEnv('CTXMILL_API_TOKEN', 'api-token');
+      (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('CHECKPOINTED'));
+      (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
+
+      await manager.ensureSession('conv-1', createAgentDef({ name: 'Display Name' }), 'agent-1');
+
+      const createContainer = vi.mocked(containerManager.createContainer);
+      const createOpts = createContainer.mock.calls[0]?.[0];
+      if (!createOpts) {
+        throw new Error('expected createContainer to be called');
+      }
+
+      expect(createOpts).toMatchObject({
+        sessionId: 'sess-1',
+        agentId: 'agent-1',
+      });
+      expect(createOpts.secrets).toMatchObject({
+        [CALLBACK_SESSION_ENV]: 'sess-1',
+        [CALLBACK_AGENT_ENV]: 'agent-1',
+        [CALLBACK_TOKEN_ENV]: mintGrpcCallbackToken('sess-1', 'agent-1', 'api-token'),
+      });
+    });
+
     it('ACTIVE + reconnect fails + no checkpoint → creates fresh session', async () => {
       vi.useFakeTimers();
       const failingClient = createMockGrpcClient();
@@ -361,7 +420,9 @@ describe('SandboxSessionManager session recovery', () => {
         .mockImplementationOnce(() => {
           throw new ConnectError('unavailable', Code.Unavailable);
         })
-        .mockImplementationOnce(() => streamProtoEvents(protoCommittedEvent('recovered')));
+        .mockImplementationOnce(() =>
+          streamProtoEvents(protoCommittedEvent('recovered'), protoTurnCompletedEvent('turn-1')),
+        );
 
       const events = await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1'));
 
@@ -378,7 +439,9 @@ describe('SandboxSessionManager session recovery', () => {
         .mockImplementationOnce(() => {
           throw new ConnectError('unavailable', Code.Unavailable);
         })
-        .mockImplementationOnce(() => streamProtoEvents(protoCommittedEvent('recovered')));
+        .mockImplementationOnce(() =>
+          streamProtoEvents(protoCommittedEvent('recovered'), protoTurnCompletedEvent('turn-1')),
+        );
 
       await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1'));
 
@@ -425,7 +488,9 @@ describe('SandboxSessionManager session recovery', () => {
         .mockImplementationOnce(() => {
           throw new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1');
         })
-        .mockImplementationOnce(() => streamProtoEvents(protoCommittedEvent('retried after dns failure')));
+        .mockImplementationOnce(() =>
+          streamProtoEvents(protoCommittedEvent('retried after dns failure'), protoTurnCompletedEvent('turn-1')),
+        );
 
       const events = await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1'));
 

@@ -4,13 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DashboardPage } from '../DashboardPage';
 import { useAgentsStore } from '@/stores/agents';
+import { useApiAuthStore } from '@/lib/auth';
 import {
   fetchActiveConversations,
   fetchConversationSummaries,
 } from '@/lib/api';
 
 vi.mock('@/components/dashboard/Dashboard', () => ({
-  Dashboard: () => null,
+  Dashboard: ({ error }: { error?: string | null }) => (
+    <div data-testid="dashboard-error-prop">{error ?? ''}</div>
+  ),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -55,6 +58,7 @@ describe('DashboardPage', () => {
       fetchAgents: vi.fn().mockResolvedValue(undefined),
       cancelRun: cancelRunMock,
     }));
+    useApiAuthStore.setState({ token: '', authRequired: false });
 
     fetchActiveConversationsMock.mockResolvedValue([
       {
@@ -97,5 +101,26 @@ describe('DashboardPage', () => {
 
     expect(cancelRunMock).toHaveBeenCalledWith('agent-1', 'turn-1');
     expect(cancelRunMock).not.toHaveBeenCalledWith('agent-1', 'sandbox-1');
+  });
+
+  it('suppresses dashboard load errors and protected follow-up polls while auth is required', async () => {
+    const fetchAgents = vi.fn().mockRejectedValue(new Error('API GET /api/agents failed: 401'));
+    useAgentsStore.setState((state) => ({
+      ...state,
+      agents: [],
+      loading: false,
+      error: 'API GET /api/agents failed: 401',
+      fetchAgents,
+    }));
+    useApiAuthStore.setState({ token: '', authRequired: true });
+
+    act(() => {
+      root.render(<DashboardPage />);
+    });
+    await flushEffects();
+
+    expect(container.querySelector('[data-testid="dashboard-error-prop"]')?.textContent).toBe('');
+    expect(fetchAgents).not.toHaveBeenCalled();
+    expect(fetchActiveConversationsMock).not.toHaveBeenCalled();
   });
 });

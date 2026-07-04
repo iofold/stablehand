@@ -1,7 +1,8 @@
 import type { AgentDefinition, Message } from '../types.js';
 import type { SessionEvent as CustomSessionEvent } from './session-turn-service.js';
+import { buildAgentDefinition } from './agent-definition.js';
+import { TurnFinalizer } from './turn-finalizer.js';
 import { InterruptResumeService } from './session-manager/interrupt-resume-service.js';
-import { toAgentDefinition } from './session-manager/session-agent-definition.js';
 import { SessionLifecycleService } from './session-manager/session-lifecycle-service.js';
 import type { SuspendSessionOptions } from './session-manager/session-lifecycle-service.js';
 import type { SessionReconciler } from './session-manager/ports.js';
@@ -9,7 +10,11 @@ import { SessionRecoveryCoordinator } from './session-manager/session-recovery-c
 import { SessionRuntimeFactory } from './session-manager/session-runtime-factory.js';
 import { SessionStatusCoordinator } from './session-manager/session-status-coordinator.js';
 import { SessionStateStore } from './session-manager/session-state-store.js';
-import { SessionTurnOrchestrator, type ConcurrencyReservation } from './session-manager/session-turn-orchestrator.js';
+import {
+  SessionTurnOrchestrator,
+  type ConcurrencyReservation,
+  type SessionTurnStartOptions,
+} from './session-manager/session-turn-orchestrator.js';
 import type { SandboxSessionManagerDeps, SessionRecord } from './session-manager/types.js';
 
 export type { Logger, SessionRecord } from './session-manager/types.js';
@@ -76,9 +81,13 @@ export class SandboxSessionManager {
       onSessionRebound: async ({ turnId, sessionId }) => {
         await deps.db.updateTurn(turnId, { sessionId });
       },
+      onTurnActive: async (turnId) => {
+        await deps.db.updateTurn(turnId, { status: 'running' });
+      },
       executeDeliverTurn: (sessionId, messages, turnId, onSessionRebound) =>
         this.executeDeliverTurn(sessionId, messages, turnId, false, onSessionRebound),
     });
+    const turnFinalizer = new TurnFinalizer({ db: deps.db, eventBus: deps.eventBus, logger: deps.logger });
     this.interruptResumeService = new InterruptResumeService({
       db: deps.db,
       stateStore: this.stateStore,
@@ -87,7 +96,10 @@ export class SandboxSessionManager {
       deliverTurn: (sessionId, messages, turnId) => this.deliverTurn(sessionId, messages, turnId),
       resolveAgentDefinition: async (agentId) => {
         const agent = await deps.db.getAgent(agentId);
-        return agent ? toAgentDefinition(agent) : null;
+        return agent ? buildAgentDefinition(agent) : null;
+      },
+      finalizeOriginalTurn: async (turnId, agentId, conversationId) => {
+        await turnFinalizer.finalize({ turnId, agentId, conversationId, status: 'completed' });
       },
     });
     this.lifecycleService = new SessionLifecycleService({
@@ -108,7 +120,7 @@ export class SandboxSessionManager {
   getSessionReconciler(): SessionReconciler { return this.lifecycleService.getSessionReconciler(); }
   onSessionReconnected(conversationId: string, record: SessionRecord): void { this.lifecycleService.onSessionReconnected(conversationId, record); }
   async onSessionEvicted(sessionId: string, conversationId: string): Promise<void> { await this.lifecycleService.onSessionEvicted(sessionId, conversationId); }
-  startTurn(sessionId: string, turnId: string, agentId: string, conversationId: string, mode: 'interactive' | 'background', taskDescription?: string): AbortSignal { return this.turnOrchestrator.startTurn(sessionId, turnId, agentId, conversationId, mode, taskDescription); }
+  startTurn(sessionId: string, turnId: string, agentId: string, conversationId: string, mode: 'interactive' | 'background', taskDescription?: string, options?: SessionTurnStartOptions): AbortSignal { return this.turnOrchestrator.startTurn(sessionId, turnId, agentId, conversationId, mode, taskDescription, options); }
   completeTurn(sessionId: string, turnId: string, agentId: string, conversationId: string, status: 'completed' | 'error' | 'cancelled', durationMs: number, error?: string): void { this.turnOrchestrator.completeTurn(sessionId, turnId, agentId, conversationId, status, durationMs, error); }
   cancelCurrentTurn(sessionId: string, turnId?: string): boolean { return this.turnOrchestrator.cancelCurrentTurn(sessionId, turnId); }
   getAbortSignal(sessionId: string, turnId?: string): AbortSignal | undefined { return this.turnOrchestrator.getAbortSignal(sessionId, turnId); }
@@ -116,6 +128,8 @@ export class SandboxSessionManager {
   reserveConcurrencySlot(agentId: string): ConcurrencyReservation { return this.turnOrchestrator.reserveConcurrencySlot(agentId); }
   async *deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<CustomSessionEvent> { yield* this.turnOrchestrator.deliverTurn(sessionId, messages, turnId); }
   suspendSession(sessionId: string, reason: string, options?: SuspendSessionOptions) { return this.lifecycleService.suspendSession(sessionId, reason, options); }
+  restoreSession(sessionId: string, agentDef: AgentDefinition, agentId?: string) { return this.lifecycleService.restoreSession(sessionId, agentDef, agentId); }
+  startRestoreSession(sessionId: string, agentDef: AgentDefinition, agentId?: string) { return this.lifecycleService.startRestoreSession(sessionId, agentDef, agentId); }
   killSession(sessionId: string) { return this.lifecycleService.killSession(sessionId); }
   resumeWithInterruptResolution(sessionId: string, turnId: string, agentId: string): Promise<void> { return this.interruptResumeService.resumeWithInterruptResolution(sessionId, turnId, agentId); }
   getSession(conversationId: string) { return this.lifecycleService.getSession(conversationId); }

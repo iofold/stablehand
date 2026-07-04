@@ -16,8 +16,13 @@ docker compose up --build -d
 Verify readiness:
 
 ```bash
+AUTH_HEADER=()
+if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
+  AUTH_HEADER=(-H "Authorization: Bearer $CTXMILL_API_TOKEN")
+fi
+
 # API responds
-curl -sf http://localhost:3002/api/agents > /dev/null && echo "API: OK" || echo "API: DOWN"
+curl -sf "${AUTH_HEADER[@]}" http://localhost:3002/api/agents > /dev/null && echo "API: OK" || echo "API: DOWN"
 
 # Sandbox harness images exist
 for img in langgraph claude-agents pi-agent; do
@@ -32,16 +37,21 @@ All checks must pass before proceeding. Sandbox egress is controlled by the host
 ```bash
 set -euo pipefail
 API_BASE="http://localhost:3002"
+AUTH_HEADER=()
+if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
+  AUTH_HEADER=(-H "Authorization: Bearer $CTXMILL_API_TOKEN")
+fi
 
 agent_id() {
   local name="$1"
-  curl -s "$API_BASE/api/agents" | jq -r --arg name "$name" 'first(.[] | select(.name == $name) | .id)'
+  curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents" | jq -r --arg name "$name" 'first(.[] | select(.name == $name) | .id)'
 }
 
 post_message() {
   local agent_id="$1"
   local content="$2"
   curl -s -X POST "$API_BASE/api/agents/$agent_id/message" \
+    "${AUTH_HEADER[@]}" \
     -H 'Content-Type: application/json' \
     -d "$(jq -nc --arg content "$content" '{content: $content}')" \
     | jq -r '.runId // .sessionId // .id'
@@ -53,7 +63,7 @@ wait_for_status() {
   local ok_statuses="$3"
 
   while true; do
-    status="$(curl -s "$API_BASE/api/agents/$agent_id/sessions" \
+    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/sessions" \
       | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
       | tr '[:upper:]' '[:lower:]')"
     echo "session=$session_id status=${status:-missing}"
@@ -68,11 +78,11 @@ wait_for_interrupt() {
   local session_id="$2"
 
   while true; do
-    interrupt_session_id="$(curl -s "$API_BASE/api/agents/$agent_id/interrupts" \
+    interrupt_session_id="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/interrupts" \
       | jq -r --arg session_id "$session_id" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId) // empty')"
     [[ -n "$interrupt_session_id" ]] && return 0
 
-    status="$(curl -s "$API_BASE/api/agents/$agent_id/sessions" \
+    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/sessions" \
       | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
       | tr '[:upper:]' '[:lower:]')"
     echo "session=$session_id status=${status:-missing} waiting_for_interrupt"
@@ -84,7 +94,7 @@ wait_for_interrupt() {
 event_count() {
   local type="$1"
   local agent_id="$2"
-  curl -s "$API_BASE/api/events?type=$type&agentId=$agent_id&limit=50" | jq '.events | length'
+  curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/events?type=$type&agentId=$agent_id&limit=50" | jq '.events | length'
 }
 
 expect_event_after() {
@@ -194,15 +204,16 @@ Pass/fail:
 Emit the trigger event externally, then verify the responder runs.
 
 ```bash
-CHAIN_BEFORE="$(curl -s "$API_BASE/api/agents/$CHAIN_ID/sessions" | jq '.sessions | length')"
+CHAIN_BEFORE="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$CHAIN_ID/sessions" | jq '.sessions | length')"
 
 curl -s -X POST "$API_BASE/api/triggers/emit" \
+  "${AUTH_HEADER[@]}" \
   -H 'Content-Type: application/json' \
   -d '{"type":"stress.tools.complete","payload":{"source":"stress-test-skill","ts":0}}' \
   | jq .
 
 while true; do
-  CHAIN_RUN_ID="$(curl -s "$API_BASE/api/agents/$CHAIN_ID/sessions" \
+  CHAIN_RUN_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$CHAIN_ID/sessions" \
     | jq -r --argjson before "$CHAIN_BEFORE" 'if (.sessions | length) > $before then first(.sessions[] | .id) else empty end')"
   [[ -n "$CHAIN_RUN_ID" ]] && break
   sleep 2
@@ -252,10 +263,11 @@ HITL_APPROVE_RUN="$(post_message "$HITL_ID" "Request approval for writing stress
 
 wait_for_interrupt "$HITL_ID" "$HITL_APPROVE_RUN"
 
-APPROVE_SESSION_ID="$(curl -s "$API_BASE/api/agents/$HITL_ID/interrupts" \
+APPROVE_SESSION_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$HITL_ID/interrupts" \
   | jq -r --arg session_id "$HITL_APPROVE_RUN" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId)')"
 
 curl -s -X POST "$API_BASE/api/agents/$HITL_ID/interrupt" \
+  "${AUTH_HEADER[@]}" \
   -H 'Content-Type: application/json' \
   -d "$(jq -nc --arg action approve --arg sessionId "$APPROVE_SESSION_ID" '{action: $action, sessionId: $sessionId}')" \
   | jq .
@@ -271,10 +283,11 @@ HITL_REJECT_RUN="$(post_message "$HITL_ID" "Request approval again — this one 
 
 wait_for_interrupt "$HITL_ID" "$HITL_REJECT_RUN"
 
-REJECT_SESSION_ID="$(curl -s "$API_BASE/api/agents/$HITL_ID/interrupts" \
+REJECT_SESSION_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$HITL_ID/interrupts" \
   | jq -r --arg session_id "$HITL_REJECT_RUN" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId)')"
 
 curl -s -X POST "$API_BASE/api/agents/$HITL_ID/interrupt" \
+  "${AUTH_HEADER[@]}" \
   -H 'Content-Type: application/json' \
   -d "$(jq -nc --arg action reject --arg sessionId "$REJECT_SESSION_ID" '{action: $action, sessionId: $sessionId}')" \
   | jq .
@@ -295,7 +308,7 @@ Pass/fail:
 ## Phase 7: Verify events persisted in `/api/events`
 
 ```bash
-curl -s "$API_BASE/api/events?limit=100" | jq '.events | map(.type)'
+curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/events?limit=100" | jq '.events | map(.type)'
 ```
 
 Confirm these event types exist:

@@ -9,7 +9,7 @@ interface ToolCallCardProps {
 }
 
 export function ToolCallCard({ toolCall }: ToolCallCardProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
 
   let parsedArgsStr = '';
   let formattedArgs = '';
@@ -35,8 +35,8 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
     formattedArgs = toolCall.args || '';
   }
 
-  const truncatedArgs = parsedArgsStr.length > 50 
-    ? parsedArgsStr.substring(0, 50) + '...' 
+  const truncatedArgs = parsedArgsStr.length > 96
+    ? parsedArgsStr.substring(0, 96) + '...'
     : parsedArgsStr;
 
   const isRunning = toolCall.status === 'running' || toolCall.status === 'pending';
@@ -79,17 +79,27 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-left group hover:opacity-80 transition-opacity w-full"
+        className="group flex w-full items-start gap-2 text-left transition-opacity hover:opacity-80"
       >
-        <div className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', dotColor, dotAnimation)} />
-        <span className="truncate text-surface-400">
-          {expanded ? '▾' : '▸'} <span data-testid="tool-call-name">{toolCall.name}</span>({truncatedArgs})
+        <div className={cn('mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full', dotColor, dotAnimation)} />
+        <span className="min-w-0 flex-1 text-surface-400">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+            <span aria-hidden>{expanded ? '▾' : '▸'}</span>
+            <span data-testid="tool-call-name" className="break-all text-surface-300">
+              {toolCall.name}
+            </span>
+          </span>
+          {!expanded && truncatedArgs && (
+            <span className="mt-1 block line-clamp-2 break-all text-[11px] leading-4 text-surface-500">
+              {truncatedArgs}
+            </span>
+          )}
         </span>
         {!expanded && toolCall.result && (
-          <span className="ml-auto flex-shrink-0 text-[10px] text-surface-500">result ↵</span>
+          <span className="ml-auto hidden flex-shrink-0 text-[10px] text-surface-500 sm:inline">result ↵</span>
         )}
         {!expanded && toolCall.error && (
-          <span className="ml-auto flex-shrink-0 text-[10px] text-red-500/70">error ↵</span>
+          <span className="ml-auto hidden flex-shrink-0 text-[10px] text-red-500/70 sm:inline">error ↵</span>
         )}
         {toolCall.status === 'complete' && (
           <span data-testid="tool-call-complete" className="sr-only">complete</span>
@@ -101,7 +111,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
           {formattedArgs && (
             <div>
               <div className="text-[10px] text-surface-400 mb-1 uppercase tracking-wider">Arguments</div>
-              <pre className="bg-surface-950 border border-surface-700 rounded-md p-2 text-xs font-mono text-surface-400 overflow-x-auto">
+              <pre className="overflow-x-hidden whitespace-pre-wrap break-all rounded-md border border-surface-700 bg-surface-950 p-2 font-mono text-xs text-surface-400">
                 {formattedArgs}
               </pre>
             </div>
@@ -110,7 +120,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
           {toolCall.result && (
             <div>
               <div className="text-[10px] text-surface-400 mb-1 uppercase tracking-wider">Result</div>
-              <pre className="bg-surface-950 border border-surface-700 rounded-md p-2 text-xs font-mono text-surface-400 overflow-x-auto max-h-48">
+              <pre className="max-h-48 overflow-x-hidden whitespace-pre-wrap break-all rounded-md border border-surface-700 bg-surface-950 p-2 font-mono text-xs text-surface-400">
                 {toolCall.result}
               </pre>
             </div>
@@ -119,7 +129,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
           {toolCall.error && (
             <div>
               <div className="text-[10px] text-red-500/80 mb-1 uppercase tracking-wider">Error</div>
-              <pre className="bg-surface-950 border border-red-900/50 rounded-md p-2 text-xs font-mono text-red-400 overflow-x-auto">
+              <pre className="overflow-x-hidden whitespace-pre-wrap break-all rounded-md border border-red-900/50 bg-surface-950 p-2 font-mono text-xs text-red-400">
                 {toolCall.error}
               </pre>
             </div>

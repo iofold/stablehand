@@ -1,6 +1,12 @@
+import { create } from '@bufbuild/protobuf';
+import {
+  MessageCommittedSchema,
+  SessionEventSchema,
+} from '@ctxmill/proto/sandbox/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Message } from '../../../types.js';
+import { SESSION_CANCELLED_MESSAGE } from '../../session-cancellation.js';
 import { ConcurrencyLimitError } from '../concurrency-limit-error.js';
 import { AsyncChannel, type SessionRecord } from '../types.js';
 import { SessionStateStore } from '../session-state-store.js';
@@ -96,7 +102,23 @@ describe('SessionTurnOrchestrator turn-owned cancellation', () => {
     expect(queuedSignal.aborted).toBe(false);
     expect(stateStore.getQueue(record.sessionId)).toEqual([]);
     expect(stateStore.getTurnAbortSignal(record.sessionId, 'turn-b')).toBeUndefined();
-    await expect(channel.generator().next()).rejects.toThrow('Turn turn-b cancelled for session sess-1');
+    await expect(channel.generator().next()).rejects.toThrow(SESSION_CANCELLED_MESSAGE);
+  });
+
+  it('notifies when a turn becomes active at delivery time', async () => {
+    const stateStore = new SessionStateStore();
+    const record = createSessionRecord();
+    stateStore.setSession(record.conversationId, record);
+    const deps = createDeps(stateStore);
+    deps.executeDeliverTurn = vi.fn(async function* () {});
+    deps.onTurnActive = vi.fn(async () => undefined);
+    const orchestrator = new SessionTurnOrchestrator(deps);
+
+    for await (const event of orchestrator.deliverTurn(record.sessionId, [createMessage('direct')], 'turn-a')) {
+      expect(event).toBeDefined();
+    }
+
+    expect(deps.onTurnActive).toHaveBeenCalledWith('turn-a');
   });
 });
 
@@ -188,5 +210,46 @@ describe('SessionTurnOrchestrator concurrency limit', () => {
       orchestrator.checkConcurrencyLimit('agent-1', {
         excludeReservationId: reservation.id,
       })).not.toThrow();
+  });
+});
+
+describe('SessionTurnOrchestrator terminal-frame discipline', () => {
+  it('fails the turn when a sandbox stream ends without a raw terminal frame after events', async () => {
+    const stateStore = new SessionStateStore();
+    const record = createSessionRecord({
+      grpcClient: {
+        deliverTurn: vi.fn(async function* () {
+          yield create(SessionEventSchema, {
+            payload: {
+              case: 'messageCommitted',
+              value: create(MessageCommittedSchema, {
+                role: 'assistant',
+                content: 'partial',
+                turnId: 'turn-1',
+                messageSeq: 0,
+              }),
+            },
+          });
+        }),
+      } as never,
+    });
+    stateStore.setSession(record.conversationId, record);
+    const deps = createDeps(stateStore);
+    const orchestrator = new SessionTurnOrchestrator(deps);
+
+    const events = [];
+    for await (const event of orchestrator.executeDeliverTurn(record.sessionId, [createMessage('go')], 'turn-1')) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'message_committed', content: 'partial' }),
+      expect.objectContaining({
+        type: 'turn_failed',
+        turnId: 'turn-1',
+        errorMessage: expect.stringContaining('ended without a terminal frame'),
+      }),
+    ]);
+    expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining('ended without a terminal frame'));
   });
 });

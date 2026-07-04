@@ -10,6 +10,8 @@ import { SettingsPage } from './pages/SettingsPage';
 import { ArtifactsPage } from './pages/ArtifactsPage';
 import { Sidebar } from './components/ui/Sidebar';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
+import { TokenGate } from './components/ui/TokenGate';
+import { useApiAuthStore } from './lib/auth';
 import {
   CONVERSATION_ROUTE,
   LEGACY_CHAT_ROUTE,
@@ -20,11 +22,14 @@ import {
 
 export function App() {
   const location = useLocation();
+  const apiToken = useApiAuthStore((s) => s.token);
+
   return (
     <div className="min-h-screen overflow-x-hidden bg-surface-950 text-surface-100">
       <Sidebar />
+      <TokenGate />
       <div className="min-h-screen ml-0 pt-12 md:ml-12 md:pt-0">
-        <ErrorBoundary key={location.pathname}>
+        <ErrorBoundary key={`${location.pathname}:${apiToken ? 'authenticated' : 'anonymous'}`}>
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/events" element={<EventsPage />} />

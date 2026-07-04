@@ -58,6 +58,10 @@ jobs:
         run: |
           docker compose down -v || true
           cp .env.example .env
+          echo "SECRET_MASTER_KEY=$(openssl rand -hex 32)" >> .env
+          CTXMILL_API_TOKEN="$(openssl rand -hex 32)"
+          echo "CTXMILL_API_TOKEN=$CTXMILL_API_TOKEN" >> .env
+          echo "CTXMILL_API_TOKEN=$CTXMILL_API_TOKEN" >> "$GITHUB_ENV"
           docker compose up --build -d
       - name: Wait for Docker services
         run: |

@@ -43,4 +43,24 @@ describe('toApiAgentSession', () => {
     expect(session.status).toBe('CANCELLED');
     expect(session.error).toBe('Session cancelled');
   });
+
+  it('includes raw sandbox restore fields even when the turn projects ERROR', () => {
+    const session = toApiAgentSession(
+      { ...baseTurn, completedAt: 10, error: 'Restore retry budget exhausted' },
+      {
+        status: 'CHECKPOINTED',
+        restoreAttempts: 3,
+        lastRestoreError: 'simulated restore failure',
+        updatedAt: 42,
+      },
+      2,
+    );
+
+    expect(session.status).toBe('ERROR');
+    expect(session.sandboxSessionId).toBe('sandbox-1');
+    expect(session.sandboxStatus).toBe('CHECKPOINTED');
+    expect(session.restoreAttempts).toBe(3);
+    expect(session.lastRestoreError).toBe('simulated restore failure');
+    expect(session.checkpointAt).toBe(42);
+  });
 });

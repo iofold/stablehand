@@ -240,13 +240,29 @@ export async function startDev() {
     settingsService: container.settingsService,
     sessionManager: container.sessionManager,
     lifecyclePolicy: container.lifecyclePolicy,
+    canonicalLog: container.canonicalLog,
   });
   await server.listen({ port: apiPort, host: '0.0.0.0' });
   console.log(`  \x1b[32mAPI:\x1b[0m  http://localhost:${apiPort}`);
 
-  void container.lifecyclePolicy.start().catch((err: unknown) => {
-    console.error('  \x1b[33mLifecycle startup failed (non-fatal):\x1b[0m', err);
-  });
+  // Boot order matters (ctx-wbt, ADR-014): seed slot accounting from live
+  // containers BEFORE lifecycle reconciliation so reconciliation-driven
+  // removals free real slots; reconcile stranded turns AFTER it so sandbox
+  // rows are repaired first.
+  const bootTimeMs = Date.now();
+  void (async () => {
+    try {
+      await container.containerManager.rehydrateAccounting?.();
+    } catch (err: unknown) {
+      console.error('  \x1b[33mSlot-accounting rehydration failed (non-fatal):\x1b[0m', err);
+    }
+    await container.lifecyclePolicy.start().catch((err: unknown) => {
+      console.error('  \x1b[33mLifecycle startup failed (non-fatal):\x1b[0m', err);
+    });
+    await container.reconcileStrandedTurns(bootTimeMs).catch((err: unknown) => {
+      console.error('  \x1b[33mTurn reconciliation failed (non-fatal):\x1b[0m', err);
+    });
+  })();
 
   // ── Start UI server ─────────────────────────────────
   // Docker-first workflow: disable UI auto-probing unless explicitly enabled.
@@ -307,7 +323,6 @@ export async function startDev() {
     if (viteProcess) {
       viteProcess.kill('SIGTERM');
     }
-    container.sseBroadcaster.shutdown();
     await server.close();
     await container.close();
     process.exit(0);
@@ -322,4 +337,7 @@ export async function startDev() {
   await new Promise(() => {});
 }
 
-startDev().catch(console.error);
+startDev().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+});

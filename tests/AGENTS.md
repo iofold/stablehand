@@ -64,7 +64,7 @@ setup-strict.ts       Strict mode — console.error/warn interception
 - Drops/recreates 16 tables in dependency order
 - Advisory lock (ID: 424242) prevents concurrent schema resets
 - Returns `DatabaseRepository` instance ready for queries
-- Connection URL: `postgres://ctxmill:ctxmill@localhost:5433/ctxmill` (configurable via `TEST_DATABASE_URL`)
+- Connection URL: **must** be set via `TEST_DATABASE_URL` (no default — tests drop every table, ctx-j9yl). Recommended: `postgres://ctxmill:ctxmill@localhost:5433/ctxmill_test` (create once: `docker compose exec postgres createdb -U ctxmill ctxmill_test`). The dev1 runtime DB (`.../ctxmill` on `localhost:5433`) is refused unless `CTXMILL_TEST_ALLOW_RUNTIME_DB=1`.
 
 **`event-bus-test-helpers.ts`** (330 lines) — Event bus testing toolkit
 - `createTestBus()` — Fresh TypedEventBus instance

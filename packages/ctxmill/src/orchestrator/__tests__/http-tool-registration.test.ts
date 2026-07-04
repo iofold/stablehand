@@ -15,6 +15,7 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import { TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition, Message } from '../../types.js';
 import { DefaultToolRegistry } from '../../tool/registry.js';
+import { createTestRunStartupService } from './run-startup-test-helper.js';
 
 function createTestBus(options?: ConstructorParameters<typeof TypedEventBus>[0]): TypedEventBus {
   return new TypedEventBus(options);
@@ -36,22 +37,23 @@ function createHarnessRegistry() {
 }
 
 function createRunStartupServiceStub(): RunStartupService {
-  return {
-    prepareRunStart: vi.fn(),
-    launchPreparedRun: vi.fn(),
-  } as unknown as RunStartupService;
+  return createTestRunStartupService();
 }
 
 let mockStartRunIterator: AsyncGenerator<unknown>;
 
-vi.mock('@connectrpc/connect', () => ({
-  createClient: vi.fn(() => ({
-    kill: vi.fn(async () => ({ success: true })),
-    startRun: vi.fn((_req: Record<string, unknown>) => {
-      return mockStartRunIterator;
-    }),
-  })),
-}));
+vi.mock('@connectrpc/connect', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@connectrpc/connect')>();
+  return {
+    ...actual,
+    createClient: vi.fn(() => ({
+      kill: vi.fn(async () => ({ success: true })),
+      startRun: vi.fn((_req: Record<string, unknown>) => {
+        return mockStartRunIterator;
+      }),
+    })),
+  };
+});
 
 vi.mock('@connectrpc/connect-node', () => ({
   createConnectTransport: vi.fn(() => ({})),
