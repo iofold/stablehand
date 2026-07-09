@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 
 const {
   mockQuery,
@@ -8,6 +9,8 @@ const {
   mockReadFile,
   mockMkdir,
   mockWriteFile,
+  mockWrapClaudeAgentSDK,
+  mockLangSmith,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockCreateSdkMcpServer: vi.fn((_opts: { name: string }) => ({
@@ -18,6 +21,33 @@ const {
   mockReadFile: vi.fn(),
   mockMkdir: vi.fn(),
   mockWriteFile: vi.fn(),
+  mockWrapClaudeAgentSDK: vi.fn((sdk: unknown) => sdk),
+  mockLangSmith: (() => {
+    class FakeClient {
+      awaitPendingTraceBatches = vi.fn(async () => undefined);
+    }
+
+    class FakeRunTree {
+      static runs: FakeRunTree[] = [];
+
+      readonly children: FakeRunTree[] = [];
+      readonly postRun = vi.fn(async () => undefined);
+      readonly end = vi.fn(async (_outputs?: Record<string, unknown>) => undefined);
+      readonly patchRun = vi.fn(async () => undefined);
+
+      constructor(readonly config: Record<string, unknown>) {
+        FakeRunTree.runs.push(this);
+      }
+
+      createChild(config: Record<string, unknown>): FakeRunTree {
+        const child = new FakeRunTree(config);
+        this.children.push(child);
+        return child;
+      }
+    }
+
+    return { FakeClient, FakeRunTree };
+  })(),
 }));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -32,9 +62,27 @@ vi.mock('node:fs/promises', () => ({
   writeFile: mockWriteFile,
 }));
 
+vi.mock('langsmith', () => ({
+  Client: mockLangSmith.FakeClient,
+  RunTree: mockLangSmith.FakeRunTree,
+}));
+
+vi.mock('langsmith/experimental/anthropic', () => ({
+  wrapClaudeAgentSDK: mockWrapClaudeAgentSDK,
+}));
+
 import { ClaudeAgentsHarness } from '../claude-agents.js';
 import type { AgentEvent, HarnessSessionConfig } from '../types.js';
 import type { Message } from '../../types.js';
+import type { ToolDefinition } from '../../tool/types.js';
+import {
+  assertAbortContract,
+  assertApprovalFlowContract,
+  assertPlainTextTurnContract,
+  assertRestorePromptShape,
+  assertToolErrorContract,
+  assertToolRoundTripContract,
+} from './contract/assert-agent-event-contract.js';
 
 function makeMessage(role: Message['role'], content: string): Message {
   return {
@@ -390,6 +438,415 @@ describe('ClaudeAgentsHarness stream mapping fallbacks', () => {
   });
 });
 
+describe('ClaudeAgentsHarness AgentEvent contract baseline', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.HOME = '/home/test';
+    delete process.env.CLAUDE_CONFIG_DIR;
+    const enoent = Object.assign(new Error('missing session jsonl'), { code: 'ENOENT' });
+    mockReadFile.mockRejectedValue(enoent);
+  });
+
+  it('satisfies the shared plain-text turn contract', async () => {
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+
+    mockQuery.mockImplementation(() => sdkStream([
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'Claude contract reply' }],
+        },
+      },
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'Claude contract reply',
+        usage: { input_tokens: 3, output_tokens: 4 },
+      },
+    ]));
+
+    const turnId = 'turn-claude-contract';
+    const session = await harness.openSession(makeConfig());
+    try {
+      const events = await collectEvents(
+        session.deliverTurn({ messages: [makeMessage('user', 'Hello')], turnId }, {}),
+      );
+      const exportedState = await session.exportState();
+
+      assertPlainTextTurnContract({
+        events,
+        turnId,
+        exportedState,
+        expectedContent: 'Claude contract reply',
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('satisfies the shared tool round-trip contract', async () => {
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+
+    mockQuery.mockImplementation(() => sdkStream([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'Using search.' },
+            {
+              type: 'tool_use',
+              id: 'tool-claude-search',
+              name: 'search',
+              input: { query: 'ctxmill' },
+            },
+          ],
+        },
+      },
+      {
+        type: 'user',
+        message: {
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'tool-claude-search',
+            content: 'search result',
+          }],
+        },
+      },
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'Done',
+        usage: { input_tokens: 5, output_tokens: 6 },
+      },
+    ]));
+
+    const turnId = 'turn-claude-tool-contract';
+    const session = await harness.openSession(makeConfig());
+    try {
+      const events = await collectEvents(
+        session.deliverTurn({ messages: [makeMessage('user', 'Search')], turnId }, {}),
+      );
+      const exportedState = await session.exportState();
+
+      assertToolRoundTripContract({
+        events,
+        turnId,
+        exportedState,
+        expectedContent: 'Using search.',
+        expectedTool: {
+          id: 'tool-claude-search',
+          name: 'search',
+          args: { query: 'ctxmill' },
+          result: 'search result',
+        },
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('traces Claude normalized AgentEvents through the shared decorator without the SDK wrapper', async () => {
+    process.env.LANGSMITH_TRACING = 'true';
+    process.env.LANGSMITH_PROJECT = 'ctxmill-test';
+    mockLangSmith.FakeRunTree.runs = [];
+    mockQuery.mockImplementation(() => sdkStream([
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'Using search.' },
+            {
+              type: 'tool_use',
+              id: 'tool-claude-search',
+              name: 'search',
+              input: { query: 'ctxmill' },
+            },
+          ],
+        },
+      },
+      {
+        type: 'user',
+        message: {
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'tool-claude-search',
+            content: 'search result',
+          }],
+        },
+      },
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'Done',
+        usage: { input_tokens: 5, output_tokens: 6 },
+      },
+    ]));
+
+    const turnId = 'turn-claude-traced';
+    let session: Awaited<ReturnType<ClaudeAgentsHarness['openSession']>> | undefined;
+    try {
+      session = await new ClaudeAgentsHarness().openSession(makeConfig());
+      await collectEvents(
+        session.deliverTurn({ messages: [makeMessage('user', 'Search')], turnId }, {}),
+      );
+    } finally {
+      await session?.close();
+      delete process.env.LANGSMITH_TRACING;
+      delete process.env.LANGSMITH_PROJECT;
+    }
+
+    expect(mockWrapClaudeAgentSDK).not.toHaveBeenCalled();
+    const root = mockLangSmith.FakeRunTree.runs[0];
+    expect(root.config).toEqual(expect.objectContaining({
+      name: 'claude-agents-agent-agent-1',
+      run_type: 'chain',
+      project_name: 'ctxmill-test',
+    }));
+    const turn = root.children[0];
+    expect(turn.config).toEqual(expect.objectContaining({
+      name: 'claude-agents-turn',
+      inputs: { turnId },
+    }));
+    const llm = turn.children.find((child) => child.config.run_type === 'llm');
+    expect(llm?.end).toHaveBeenCalledWith(expect.objectContaining({
+      generations: [{ text: 'Using search.' }],
+      toolCalls: [expect.objectContaining({ id: 'tool-claude-search', name: 'search' })],
+    }));
+    const tool = turn.children.find((child) => child.config.run_type === 'tool');
+    expect(tool?.config).toEqual(expect.objectContaining({
+      name: 'search',
+      inputs: { args: { query: 'ctxmill' }, toolCallId: 'tool-claude-search' },
+    }));
+    expect(tool?.end).toHaveBeenCalledWith(expect.objectContaining({
+      result: 'search result',
+    }));
+    expect(root.end).toHaveBeenCalledWith({ status: 'completed' });
+  });
+
+  it('satisfies the shared tool-error contract', async () => {
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+
+    mockQuery.mockImplementation(() => sdkStream([
+      {
+        type: 'assistant',
+        message: {
+          content: [{
+            type: 'tool_use',
+            id: 'tool-claude-error',
+            name: 'search',
+            input: { query: 'bad' },
+          }],
+        },
+      },
+      {
+        type: 'user',
+        message: {
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'tool-claude-error',
+            content: 'search failed',
+            is_error: true,
+          }],
+        },
+      },
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'Recovered',
+        usage: { input_tokens: 7, output_tokens: 8 },
+      },
+    ]));
+
+    const turnId = 'turn-claude-tool-error-contract';
+    const session = await harness.openSession(makeConfig());
+    try {
+      const events = await collectEvents(
+        session.deliverTurn({ messages: [makeMessage('user', 'Search badly')], turnId }, {}),
+      );
+      const exportedState = await session.exportState();
+
+      assertToolErrorContract({
+        events,
+        turnId,
+        exportedState,
+        expectedTool: {
+          id: 'tool-claude-error',
+          name: 'search',
+          args: { query: 'bad' },
+          error: 'search failed',
+        },
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('satisfies the shared approval approve and reject contracts', async () => {
+    const harness = new ClaudeAgentsHarness();
+    type ClaudeSdkForTools = Parameters<ClaudeAgentsHarness['convertToolsWithSDK']>[0];
+    const makeApprovalTool = (): ToolDefinition => ({
+      name: 'guarded_search',
+      description: 'Searches with approval',
+      input: z.object({ query: z.string() }),
+      requiresApproval: true,
+      handler: vi.fn(async () => 'approved result'),
+    });
+    const sdk = {
+      tool: vi.fn((
+        name: string,
+        _description: string,
+        _schema: unknown,
+        handler: (rawArgs: unknown) => Promise<unknown>,
+      ) => ({ name, handler })),
+    } as unknown as ClaudeSdkForTools;
+
+    const approvedEvents: AgentEvent[] = [];
+    const approvedTools = harness.convertToolsWithSDK(
+      sdk,
+      [makeApprovalTool()],
+      'turn-approval-approved',
+      makeConfig(),
+      vi.fn(async () => ({ action: 'approve' as const })),
+      approvedEvents,
+    );
+    const approvedTool = approvedTools[0] as unknown as {
+      handler: (rawArgs: unknown) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
+    };
+    const approvedResult = await approvedTool.handler({ query: 'allowed' });
+
+    assertApprovalFlowContract(approvedEvents, {
+      tool: 'guarded_search',
+      action: 'approve',
+      args: { query: 'allowed' },
+    });
+    expect(approvedResult).toEqual(expect.objectContaining({
+      content: [{ type: 'text', text: 'approved result' }],
+    }));
+
+    const rejectedEvents: AgentEvent[] = [];
+    const rejectedTools = harness.convertToolsWithSDK(
+      sdk,
+      [makeApprovalTool()],
+      'turn-approval-rejected',
+      makeConfig(),
+      vi.fn(async () => ({ action: 'reject' as const })),
+      rejectedEvents,
+    );
+    const rejectedTool = rejectedTools[0] as unknown as {
+      handler: (rawArgs: unknown) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
+    };
+    const rejectedResult = await rejectedTool.handler({ query: 'blocked' });
+
+    assertApprovalFlowContract(rejectedEvents, {
+      tool: 'guarded_search',
+      action: 'reject',
+      args: { query: 'blocked' },
+    });
+    expect(rejectedResult).toEqual(expect.objectContaining({
+      content: [{ type: 'text', text: 'Tool call was rejected by the user.' }],
+      isError: true,
+    }));
+  });
+
+  it('satisfies the shared abort contract by ending without done', async () => {
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+
+    mockQuery.mockImplementation(async function* (request: {
+      options: { abortController: AbortController };
+    }) {
+      if (!request.options.abortController.signal.aborted) {
+        await new Promise<void>((resolve) => {
+          request.options.abortController.signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      }
+      const unreachable: never[] = [];
+      for (const event of unreachable) {
+        yield event;
+      }
+    });
+
+    const abortController = new AbortController();
+    const session = await harness.openSession(makeConfig());
+    try {
+      const eventsPromise = collectEvents(
+        session.deliverTurn(
+          { messages: [makeMessage('user', 'Abort')], turnId: 'turn-claude-abort-contract' },
+          { signal: abortController.signal },
+        ),
+      );
+      abortController.abort();
+      const events = await eventsPromise;
+      assertAbortContract(events);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('satisfies the shared restore prompt-shape contract', async () => {
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+
+    const prompts: string[] = [];
+    mockQuery.mockImplementation(async function* (request: {
+      prompt: AsyncIterable<{ message: { content: string } }>;
+    }) {
+      for await (const promptMessage of request.prompt) {
+        prompts.push(promptMessage.message.content);
+      }
+      yield {
+        type: 'result',
+        subtype: 'success',
+        result: 'Restored',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    });
+
+    const messages = [
+      makeMessage('assistant', 'Earlier answer'),
+      makeMessage('tool', 'Earlier tool output'),
+      makeMessage('user', 'Continue after restore'),
+    ];
+    const session = await harness.openSession(makeConfig());
+    try {
+      await collectEvents(
+        session.deliverTurn({ messages, turnId: 'turn-claude-restore-contract' }, {}),
+      );
+
+      assertRestorePromptShape(prompts, [
+        '[Previous assistant response]\nEarlier answer',
+        '[Previous tool output]\nEarlier tool output',
+        'Continue after restore',
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
+});
+
 describe('buildClaudeEnv secret redaction (mr-9486.57)', () => {
   const SECRET_KEYS = [
     'OPENAI_API_KEY',
@@ -506,10 +963,12 @@ describe('buildClaudeEnv secret redaction (mr-9486.57)', () => {
       });
 
       const session = await harness.openSession(makeConfig());
-      for await (const _ of session.deliverTurn(
+      for await (const event of session.deliverTurn(
         { messages: [makeMessage('user', 'Hello')], turnId: 'turn-value-test' },
         {},
-      )) { /* drain */ }
+      )) {
+        void event;
+      }
 
       const queryCall = mockQuery.mock.calls[0]?.[0] as { options?: { env?: Record<string, string> } } | undefined;
       const capturedEnv = queryCall?.options?.env ?? {};

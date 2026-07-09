@@ -39,7 +39,6 @@ export type {
   EventName,
 } from './events/types.js';
 export type { PersistEventFn } from './events/bus.js';
-export { waitForEvent, EventTimeoutError } from './events/wait-for-event.js';
 
 // Event trigger system
 export type { EventTrigger } from './events/triggers.js';
@@ -68,7 +67,7 @@ export type {
   ManifestToolRef, ManifestTrigger, ManifestEmit, ManifestHITL,
   ManifestWorkspace, ManifestResources,
 } from './manifest/index.js';
-export { ManifestService, validateManifest, parseManifestString, serializeManifestYAML,
+export { validateManifest, parseManifestString, serializeManifestYAML,
   manifestToDefinition, definitionToManifest } from './manifest/index.js';
 
 // Error utilities

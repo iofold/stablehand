@@ -200,7 +200,7 @@ describe('LangGraphHarness', () => {
     }, {}));
 
     await expect(session.exportState()).resolves.toEqual({
-      stateVersion: '1',
+      stateVersion: '2',
       payload: {
         transcript: [
           restoredMessage,
@@ -233,7 +233,7 @@ describe('LangGraphHarness', () => {
     }, {}));
 
     await expect(session.exportState()).resolves.toEqual({
-      stateVersion: '1',
+      stateVersion: '2',
       payload: {
         transcript: [
           restoredMessage,

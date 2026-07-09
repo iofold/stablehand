@@ -32,12 +32,8 @@ export class SandboxSessionManager {
 
   constructor(deps: SandboxSessionManagerDeps) {
     this.logger = deps.logger;
-    this.stateStore = new SessionStateStore();
-    this.statusCoordinator = new SessionStatusCoordinator({
-      db: deps.db,
-      logger: deps.logger,
-      stateStore: this.stateStore,
-    });
+    this.stateStore = deps.stateStore;
+    this.statusCoordinator = deps.statusCoordinator;
     this.runtimeFactory = new SessionRuntimeFactory({
       containerManager: deps.containerManager,
       db: deps.db,

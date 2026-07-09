@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { ExecutionPhaseTracker } from '../../packages/ctxmill/src/sandbox/execution-phase.js';
 import {
+  ExecutionPhaseTracker,
   serializeCheckpoint,
   deserializeCheckpoint,
   validateCheckpointSize,
   SessionStateCollector,
   type SessionCheckpoint,
   type WorkspaceRef,
-} from '../../packages/ctxmill/src/sandbox/checkpoint.js';
+} from '@ctxmill/sandbox-daemon';
 import {
   sessionCheckpointToProto,
   protoSessionCheckpointToInternal,
@@ -208,7 +208,6 @@ function createMockContainerManager(): ContainerManager {
     startContainer: vi.fn(),
     stopContainer: vi.fn(),
     removeContainer: vi.fn(),
-    extractContainerDiff: vi.fn(),
     extractWorkspaceDiff: vi.fn(),
     extractLogs: vi.fn(),
     getContainer: vi.fn(),

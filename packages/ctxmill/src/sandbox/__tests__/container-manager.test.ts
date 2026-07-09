@@ -597,7 +597,7 @@ describe('ContainerManager', () => {
     });
   });
 
-  describe('extractContainerDiff', () => {
+  describe('extractWorkspaceDiff archive filtering', () => {
     it('filters diff paths and tars only meaningful added and modified paths', async () => {
       const writtenChunks: Buffer[] = [];
       docker._mockContainer._mockExecStream.on('data', (chunk: Buffer | string) => {
@@ -613,9 +613,9 @@ describe('ContainerManager', () => {
         { Path: '/home/ctxmill/.claude/settings.json', Kind: 1 },
       ]);
 
-      const result = await manager.extractContainerDiff('sha256-abc123');
+      const result = await manager.extractWorkspaceDiff('sha256-abc123');
 
-      expect(result?.toString()).toBe('fake-diff-tar-data');
+      expect(result?.archive?.toString()).toBe('fake-diff-tar-data');
       expect(docker.modem.demuxStream).toHaveBeenCalledTimes(1);
       expect(Buffer.concat(writtenChunks).toString('utf-8')).toBe([
         'file.txt',
@@ -630,7 +630,7 @@ describe('ContainerManager', () => {
         stderr.write(Buffer.from('tar failed'));
       });
 
-      await expect(manager.extractContainerDiff('sha256-abc123')).rejects.toThrow(
+      await expect(manager.extractWorkspaceDiff('sha256-abc123')).rejects.toThrow(
         'Failed to extract container diff: tar failed',
       );
     });

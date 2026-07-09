@@ -1,23 +1,4 @@
-import type { AgentSession } from '@/stores/agents';
-
 export type TabId = 'overview' | 'sessions' | 'tools' | 'files' | 'artifacts' | 'secrets';
-
-export interface Session {
-  conversationId: string;
-  startedAt: number;
-  messageCount: number;
-  lastMessageAt: number;
-  sessions: AgentSession[];
-}
-
-export const TABS: { id: TabId; label: string; icon: string; testId?: string }[] = [
-  { id: 'overview', label: 'Overview', icon: 'LayoutDashboard' },
-  { id: 'sessions', label: 'Sessions', icon: 'Clock', testId: 'sessions-tab' },
-  { id: 'tools', label: 'Tools', icon: 'Wrench', testId: 'tools-tab' },
-  { id: 'files', label: 'Files', icon: 'FolderOpen', testId: 'files-tab' },
-  { id: 'artifacts', label: 'Artifacts', icon: 'Archive', testId: 'artifacts-tab' },
-  { id: 'secrets', label: 'Secrets', icon: 'KeyRound', testId: 'secrets-tab' },
-];
 
 /** Format a timestamp for display */
 export function formatTime(ts: number): string {

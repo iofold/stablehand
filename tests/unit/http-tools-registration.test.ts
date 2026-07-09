@@ -21,6 +21,11 @@ const mockCtx: ToolContext = {
   workspaceDir: '/tmp/test',
 };
 
+// These tests isolate secret resolution from the SSRF egress guard (which has
+// dedicated coverage in http-tool-registration.test.ts), so they inject a
+// passthrough fetch that forwards straight to the stubbed global fetch.
+const passthroughFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
+
 function createHttpTool(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     name: 'search-api',
@@ -260,7 +265,7 @@ describe('http tools registration lifecycle', () => {
       get: vi.fn(() => 'provider-secret'),
     });
 
-    await registerAgentHttpTools(registry, createRegistrationAgent(), secretProvider);
+    await registerAgentHttpTools(registry, createRegistrationAgent(), secretProvider, passthroughFetch);
 
     const provider = registry.getProvider('search-api');
     expect(provider).toBeDefined();
@@ -311,7 +316,7 @@ describe('http tools registration lifecycle', () => {
           },
         })],
       },
-    }));
+    }), undefined, passthroughFetch);
 
     const provider = registry.getProvider('search-api');
     expect(provider).toBeDefined();

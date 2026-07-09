@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type HarnessType = 'langgraph' | 'claude-agents' | 'pi-agent' | 'openai-agents' | 'vercel-ai' | string;
+export type HarnessType = string;
 
 interface AgentAvatarProps extends React.SVGProps<SVGSVGElement> {
   harnessType?: HarnessType;
@@ -37,24 +37,6 @@ export const AgentAvatar: React.FC<AgentAvatarProps> = ({ harnessType = 'default
             <circle cx="20" cy="10" r="2" className="text-surface-300" fill="currentColor" />
             <circle cx="28.66" cy="25" r="2" className="text-surface-400" fill="currentColor" />
             <circle cx="11.34" cy="25" r="2" className="text-surface-400" fill="currentColor" />
-          </g>
-        );
-      case 'openai-agents':
-        return (
-          <g stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 8l8.5 5v10L20 28l-8.5-5V13z" className="text-surface-500" />
-            <path d="M20 8v10l8.5 5" className="text-surface-600" />
-            <path d="M20 18l-8.5 5" className="text-surface-600" />
-            <circle cx="20" cy="18" r="2.5" className="text-accent-400" fill="currentColor" />
-          </g>
-        );
-      case 'vercel-ai':
-        return (
-          <g stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 10l10 16H10z" className="text-surface-400" />
-            <path d="M20 10v16" className="text-surface-600" />
-            <path d="M15 18h10" className="text-surface-600" />
-            <circle cx="20" cy="10" r="2" className="text-accent-400" fill="currentColor" />
           </g>
         );
       default:

@@ -5,7 +5,6 @@ import type {
   AgentHarness,
   AgentEvent as CtxMillAgentEvent,
   ApprovalCallback,
-  ApprovalRequest,
   HarnessSession,
   HarnessSessionConfig,
   HarnessTurnInput,
@@ -17,7 +16,15 @@ import type {
 } from './types.js';
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
-import { resolveSecretRef } from './shared.js';
+import { CanonicalProviderSchema, resolveSecretRef } from './shared.js';
+import {
+  TurnAccumulator,
+  createAgentEventLangSmithTracer,
+  linkAbortSignal,
+  normalizeTokenUsage,
+  requestToolApproval,
+  traceAgentEvents,
+} from './kit/index.js';
 
 let _sdk: {
   createAgentSession: any;
@@ -168,6 +175,7 @@ interface ConvertToolsContext {
   workspaceDir?: string;
   onApprovalNeeded?: ApprovalCallback;
   runId?: string;
+  queuedEvents?: CtxMillAgentEvent[];
 }
 
 export function convertTools(
@@ -188,16 +196,17 @@ export function convertTools(
       _onUpdate?: unknown,
     ) => {
       if (def.requiresApproval && config.onApprovalNeeded) {
-        const req: ApprovalRequest = {
+        const approval = await requestToolApproval({
           id: toolCallId,
           runId: config.runId ?? config.conversationId,
           toolName: def.name,
           args: params,
-        };
-        const res = await config.onApprovalNeeded(req);
-        if (res.action !== 'approve') {
+          onApprovalNeeded: config.onApprovalNeeded,
+          emit: (event) => config.queuedEvents?.push(event),
+        });
+        if (!approval.approved) {
           return {
-            content: [{ type: 'text' as const, text: 'Tool call was rejected by the user.' }],
+            content: [{ type: 'text' as const, text: approval.rejectionMessage }],
             details: {},
           };
         }
@@ -336,25 +345,28 @@ function _piUpdateUsage(
     return totalUsage;
   }
 
+  const normalized = normalizeTokenUsage(usage);
+  if (!normalized) {
+    return totalUsage;
+  }
+
   const nextUsage: TokenUsage = totalUsage ?? {
     inputTokens: 0,
     outputTokens: 0,
     totalTokens: 0,
   };
 
-  nextUsage.inputTokens += typeof usage.input === 'number' ? usage.input : 0;
-  nextUsage.outputTokens += typeof usage.output === 'number' ? usage.output : 0;
-  nextUsage.totalTokens += typeof usage.totalTokens === 'number' ? usage.totalTokens : 0;
-
-  const totalCost = (usage.cost as { total?: unknown } | undefined)?.total;
-  if (typeof totalCost === 'number') {
-    nextUsage.cost = (nextUsage.cost ?? 0) + totalCost;
+  nextUsage.inputTokens += normalized.inputTokens;
+  nextUsage.outputTokens += normalized.outputTokens;
+  nextUsage.totalTokens += normalized.totalTokens;
+  if (normalized.cost !== undefined) {
+    nextUsage.cost = (nextUsage.cost ?? 0) + normalized.cost;
   }
 
   return nextUsage;
 }
 
-function _piMapAgentEvent(
+export function _piMapAgentEvent(
   piEvent: Record<string, unknown>,
   usage: TokenUsage | undefined,
 ): CtxMillAgentEvent | null {
@@ -420,7 +432,7 @@ type NativePiSession = {
 };
 
 export const PIAgentConfigSchema = z.object({
-  provider: z.enum(['openai', 'anthropic', 'google']).default('openai'),
+  provider: CanonicalProviderSchema.default('openai'),
   model: z.string().min(1),
   apiKeyRef: z.string().optional(),
   baseUrl: z.string().refine((value) => URL.canParse(value)).optional(),
@@ -531,7 +543,14 @@ export class PIAgentHarness implements AgentHarness {
       }
     }
 
-    return session;
+    return traceAgentEvents(session, {
+      createTracer: (input) => createAgentEventLangSmithTracer({
+        agentId: config.agentId,
+        conversationId: config.conversationId,
+        harnessName: this.name,
+        turnId: input.turnId,
+      }),
+    });
   }
 
   private buildNativeTools(
@@ -569,20 +588,6 @@ export class PIAgentHarness implements AgentHarness {
       names = names.filter((n) => !blocked.has(n));
     }
     return names.filter((n) => n in allFactories).map((n) => allFactories[n]());
-  }
-
-  updateUsage(
-    totalUsage: TokenUsage | undefined,
-    piEvent: Record<string, unknown>,
-  ): TokenUsage | undefined {
-    return _piUpdateUsage(totalUsage, piEvent);
-  }
-
-  mapPiAgentEvent(
-    piEvent: Record<string, unknown>,
-    usage: TokenUsage | undefined,
-  ): CtxMillAgentEvent | null {
-    return _piMapAgentEvent(piEvent, usage);
   }
 
 }
@@ -633,12 +638,6 @@ class PiAgentSession implements HarnessSession {
     this.turnRef.onApprovalNeeded = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
     this.turnRef.runId = input.turnId;
 
-    const { createPiLangSmithTracer } = await import('./pi-langsmith-tracer.js');
-    const tracer = await createPiLangSmithTracer(
-      this.config.agentId,
-      this.config.conversationId,
-    );
-
     const latestMessage = input.messages[input.messages.length - 1];
     const lastUserMsg = latestMessage?.role === 'user' ? latestMessage : undefined;
     const nativeHistory = lastUserMsg
@@ -649,13 +648,13 @@ class PiAgentSession implements HarnessSession {
     let done = false;
     let totalUsage: TokenUsage | undefined;
     let unsubscribe: (() => void) | undefined;
-    let assistantText = '';
-    let doneEvent: Extract<CtxMillAgentEvent, { type: 'done' }> | undefined;
-    const accumulatedToolCalls: Array<
-      NonNullable<Message['toolCalls']>[number] & { args: string; status: 'complete' | 'error' }
-    > = [];
+    let aborted = false;
+    let unlinkConfigAbort: () => void = () => {};
+    let unlinkContextAbort: () => void = () => {};
+    const accumulator = new TurnAccumulator({ turnId: input.turnId });
 
     try {
+      this.turnRef.queuedEvents = eventQueue;
       unsubscribe = this.nativeSession.subscribe((piEvent: Record<string, unknown>) => {
         const eventType = typeof piEvent.type === 'string' ? piEvent.type : 'unknown';
         const eventKeys = Object.keys(piEvent).filter((k) => k !== 'type').join(',');
@@ -663,7 +662,6 @@ class PiAgentSession implements HarnessSession {
         if (eventType === 'message_end' || eventType === 'turn_end' || eventType === 'message_start') {
           console.log(`[pi-agent] SDK event payload: ${JSON.stringify(piEvent).slice(0, 500)}`);
         }
-        tracer?.onEvent(piEvent);
         for (const ext of this.extensions) {
           try {
             ext.onEvent?.(piEvent);
@@ -681,26 +679,25 @@ class PiAgentSession implements HarnessSession {
         const mapped = _piMapAgentEvent(piEvent, totalUsage);
         if (mapped) {
           if (mapped.type === 'text_delta') {
-            assistantText += mapped.content;
-            eventQueue.push(mapped);
+            eventQueue.push(accumulator.appendText(mapped.content));
           } else if (mapped.type === 'done') {
-            doneEvent = mapped;
+            if (!aborted) {
+              accumulator.recordDone({
+                ...mapped,
+                usage: mapped.usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              });
+            }
           } else {
             if (mapped.type === 'tool_call_start') {
-              accumulatedToolCalls.push({
+              accumulator.recordToolStart({
                 id: mapped.id,
                 name: mapped.name,
-                arguments: typeof mapped.args === 'object' && mapped.args !== null && !Array.isArray(mapped.args)
-                  ? Object.fromEntries(Object.entries(mapped.args))
-                  : {},
-                args: typeof mapped.args === 'string' ? mapped.args : JSON.stringify(mapped.args ?? {}),
-                status: 'complete',
+                args: mapped.args,
               });
             } else if (mapped.type === 'tool_call_end' && mapped.error) {
-              const existing = accumulatedToolCalls.find((tc) => tc.id === mapped.id);
-              if (existing) {
-                existing.status = 'error';
-              }
+              accumulator.recordToolEnd({ id: mapped.id, result: mapped.result, error: mapped.error });
+            } else if (mapped.type === 'tool_call_end') {
+              accumulator.recordToolEnd({ id: mapped.id, result: mapped.result });
             }
             eventQueue.push(mapped);
           }
@@ -710,21 +707,21 @@ class PiAgentSession implements HarnessSession {
         }
       });
 
-      if (context.signal) {
-        context.signal.addEventListener(
-          'abort',
-          () => {
-            void Promise.resolve(this.nativeSession.abort()).catch((err) => {
-              console.error('[pi-agent] abort failed:', err);
-            });
-          },
-          { once: true },
-        );
-      }
+      const abortNativeSession = () => {
+        aborted = true;
+        void Promise.resolve(this.nativeSession.abort()).catch((err) => {
+          console.error('[pi-agent] abort failed:', err);
+        });
+      };
+      unlinkConfigAbort = linkAbortSignal(this.config.signal, abortNativeSession);
+      unlinkContextAbort = linkAbortSignal(context.signal, abortNativeSession);
 
       if (!lastUserMsg) {
         done = true;
-        eventQueue.push({ type: 'done', usage: totalUsage });
+        accumulator.recordDone({
+          type: 'done',
+          usage: totalUsage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        });
       }
 
       this.nativeSession.agent.replaceMessages(this.buildNativeHistoryMessages(nativeHistory));
@@ -746,30 +743,21 @@ class PiAgentSession implements HarnessSession {
         }
       }
 
-      const committedToolCalls: Message['toolCalls'] | undefined = accumulatedToolCalls.length > 0
-        ? accumulatedToolCalls
-        : undefined;
-
-      if (assistantText.length > 0 || accumulatedToolCalls.length > 0) {
+      const committed = accumulator.createMessageCommitted(this.transcript.length);
+      if (committed) {
         this.transcript.push({
           id: randomUUID(),
           agentId: this.config.agentId ?? this.config.conversationId,
           role: 'assistant',
-          content: assistantText,
-          ...(committedToolCalls ? { toolCalls: committedToolCalls } : {}),
+          content: committed.content,
+          ...(committed.toolCalls ? { toolCalls: committed.toolCalls } : {}),
           createdAt: new Date(),
         });
 
-        yield {
-          type: 'message_committed' as const,
-          role: 'assistant' as const,
-          content: assistantText,
-          ...(committedToolCalls ? { toolCalls: committedToolCalls } : {}),
-          turnId: input.turnId,
-          messageSeq: this.transcript.length - 1,
-        };
+        yield committed;
       }
 
+      const doneEvent = accumulator.doneEvent();
       if (doneEvent) {
         yield doneEvent;
       }
@@ -779,8 +767,10 @@ class PiAgentSession implements HarnessSession {
       console.error('[pi-agent] deliverTurn error:', err);
       yield { type: 'error', error: String(err) };
     } finally {
+      unlinkConfigAbort();
+      unlinkContextAbort();
+      this.turnRef.queuedEvents = undefined;
       unsubscribe?.();
-      await tracer?.flush();
     }
   }
 

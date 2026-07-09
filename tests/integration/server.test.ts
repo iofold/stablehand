@@ -9,7 +9,7 @@ import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js'
 import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
 import { resolveTestDatabaseUrl } from '../utils/test-db.js';
 
-describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
+describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
   let app: Awaited<ReturnType<typeof createServer>>;
   let container: AppContainer;
   let dataDir: string;
@@ -71,31 +71,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02, ORC-18)', () => {
     expect(Array.isArray(body)).toBe(true);
   });
 
-  // ── ORC-02: Catalog schema ──────────────────────────────
-
-  it('GET /api/catalogs returns the A2UI catalog schema', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/catalogs' });
-
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.catalogs).toBeDefined();
-    expect(Array.isArray(body.catalogs)).toBe(true);
-    expect(body.catalogs.length).toBeGreaterThan(0);
-
-    // Verify known catalog entries
-    const chartCatalog = body.catalogs.find(
-      (c: { name: string }) => c.name === 'ctxmill.charts',
-    );
-    expect(chartCatalog).toBeDefined();
-    expect(chartCatalog.components.TimeSeriesChart).toBeDefined();
-
-    const hitlCatalog = body.catalogs.find(
-      (c: { name: string }) => c.name === 'ctxmill.hitl',
-    );
-    expect(hitlCatalog).toBeUndefined();
-  });
-
-  // ── ORC-18: Agent CRUD via HTTP ─────────────────────────
+  // ── ORC-02: Agent CRUD via HTTP ─────────────────────────
 
   it('GET /api/agents/:id returns agent after creation via DB', async () => {
     const agent = await container.db.createAgent({

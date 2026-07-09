@@ -1,8 +1,14 @@
 # CTXMILL HARNESS AG-UI INVENTORY
-## Complete Analysis of 5 Harnesses & Event Support
+## Historical Snapshot of Harness/Event Support
 
 Generated: 2026-03-25  
 Scope: `packages/ctxmill/src/harness/` + `packages/proto/` + `packages/examples/kitchen-sink/`
+
+> Historical inventory. This file preserves the 2026-03-25 snapshot and uses
+> "current" to mean current at that time. Harness package boundaries and event
+> streaming changed after sandbox-daemon extraction and canonical event spine
+> work. See `docs/codebase-map.md` and `docs/event-pipeline-mapping.md` for
+> current behavior.
 
 ---
 
@@ -11,7 +17,7 @@ Scope: `packages/ctxmill/src/harness/` + `packages/proto/` + `packages/examples/
 **File**: `packages/ctxmill/src/harness/registry.ts`  
 **DI Container**: `packages/ctxmill/src/config/container.ts`
 
-### Currently Registered Harnesses (3/5)
+### Historically Registered Harnesses (3/5)
 ```
 harnessRegistry.register(new LangGraphHarness());
 harnessRegistry.register(new ClaudeAgentsHarness());
@@ -56,12 +62,12 @@ harnessRegistry.register(new PIAgentHarness());
 | **approval_needed** | ✅ | Via `requiresApproval` tool wrapper + callback |
 | **approval_resolved** | ✅ | After HITL callback response |
 
-### Key Features
+### Key Features Claimed In This Snapshot
 - **Backend**: `LocalShellBackend` (filesystem + shell execution)
 - **Tool Blocklist**: Middleware support via `nativeTools.blocklist`
 - **Knowledge Context**: Stub (no real knowledge lookup)
 - **Transcript**: Maintains full history, passes to SDK each turn
-- **Skills**: Discovers `.ctxmill/skills` directory if present
+- **Skills**: Historical claim; current CTXMill does not auto-seed `.ctxmill/skills`
 - **Stateless**: Creates fresh agent per turn (no session state)
 
 ### Tool Execution Flow
@@ -284,7 +290,7 @@ SSE event → React UI
 | **Stateful Session** | ❌ (stateless) | ❌ (stateless) | ⚠️ (limited) |
 | **Shell Backend** | ✅ (LocalShellBackend) | Via native Bash | Via native Bash |
 | **Knowledge Lookup** | Stub only | Stub only | Stub only |
-| **Skill Loading** | ✅ (.ctxmill/skills) | ❌ | ❌ |
+| **Skill Loading** | Historical claim only | ❌ | ❌ |
 | **Subagents** | ✅ (config) | ❌ | ❌ |
 
 ---

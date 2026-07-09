@@ -266,20 +266,6 @@ export class InterruptManager {
     return true;
   }
 
-  /** Resolve a pending interrupt by sessionId. Returns true if a match was found. */
-  async resolveForSession(
-    sessionId: string,
-    action: 'approve' | 'reject' | 'suspend' | 'timeout',
-    data?: unknown,
-  ): Promise<boolean> {
-    for (const [turnId, entry] of this.pending) {
-      if (entry.info.sessionId === sessionId) {
-        return this.resolve(turnId, action, data, entry.agentId, entry.info.conversationId);
-      }
-    }
-    return false;
-  }
-
   /**
    * Check whether a turn has a pending interrupt.
    */
@@ -306,13 +292,6 @@ export class InterruptManager {
       if (entry.agentId === agentId) return true;
     }
     return false;
-  }
-
-  /**
-   * Get info about the pending interrupt for a turn, if any.
-   */
-  getPending(turnId: string): PendingInterrupt | undefined {
-    return this.pending.get(turnId)?.info;
   }
 
   /**

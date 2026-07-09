@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
+import { SessionStateStore } from '../session-manager/session-state-store.js';
+import { SessionStatusCoordinator } from '../session-manager/session-status-coordinator.js';
 
 const grpcSessionClientMocks = vi.hoisted(() => ({
   waitForContainerReady: vi.fn(),
@@ -16,6 +18,7 @@ const mockContainerManager = {
   listManagedContainersWithLabels: vi.fn(),
   stopContainer: vi.fn(),
   removeContainer: vi.fn(),
+  releaseContainerSlot: vi.fn(),
   createContainer: vi.fn(),
   startContainer: vi.fn(),
 } as any;
@@ -71,6 +74,13 @@ function createContainer(overrides: Record<string, unknown> = {}) {
 }
 
 function createPolicy() {
+  const stateStore = new SessionStateStore();
+  const statusCoordinator = new SessionStatusCoordinator({
+    db: mockDb,
+    logger: mockLogger,
+    stateStore,
+  });
+
   return new ContainerLifecyclePolicy({
     containerManager: mockContainerManager,
     db: mockDb,
@@ -80,6 +90,7 @@ function createPolicy() {
       onSessionReconnected: mockOnSessionReconnected,
       onSessionEvicted: mockOnSessionEvicted,
     },
+    statusCoordinator,
   });
 }
 
@@ -114,6 +125,7 @@ describe('ContainerLifecyclePolicy', () => {
     mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([]);
     mockContainerManager.stopContainer.mockResolvedValue(undefined);
     mockContainerManager.removeContainer.mockResolvedValue(undefined);
+    mockContainerManager.releaseContainerSlot.mockReturnValue(false);
     grpcSessionClientMocks.waitForContainerReady.mockResolvedValue({
       grpcClient: { killSession: vi.fn() },
       transport: {},
@@ -318,10 +330,11 @@ describe('ContainerLifecyclePolicy', () => {
         session.id,
         'TERMINATED',
         expect.objectContaining({
-          containerId: null,
-          containerName: null,
-        }),
-      );
+        containerId: null,
+        containerName: null,
+      }),
+      { expectedFrom: 'ACTIVE' },
+    );
       expect(mockContainerManager.removeContainer).toHaveBeenCalledWith(session.containerId, true);
       expect(mockOnSessionEvicted).toHaveBeenCalledWith(session.id, session.conversationId);
     });
@@ -339,10 +352,11 @@ describe('ContainerLifecyclePolicy', () => {
         session.id,
         'CHECKPOINTED',
         expect.objectContaining({
-          containerId: null,
-          containerName: null,
-        }),
-      );
+        containerId: null,
+        containerName: null,
+      }),
+      { expectedFrom: 'ACTIVE' },
+    );
       expect(mockContainerManager.removeContainer).toHaveBeenCalledWith(session.containerId, true);
       expect(mockOnSessionEvicted).toHaveBeenCalledWith(session.id, session.conversationId);
     });
@@ -406,10 +420,11 @@ describe('ContainerLifecyclePolicy', () => {
         'session-1',
         'CHECKPOINTED',
         expect.objectContaining({
-          containerId: null,
-          containerName: null,
-        }),
-      );
+        containerId: null,
+        containerName: null,
+      }),
+      { expectedFrom: 'ACTIVE' },
+    );
       expect(mockOnSessionEvicted).toHaveBeenCalledWith('session-1', 'conversation-1');
     });
 
@@ -426,10 +441,11 @@ describe('ContainerLifecyclePolicy', () => {
         'session-1',
         'TERMINATED',
         expect.objectContaining({
-          containerId: null,
-          containerName: null,
-        }),
-      );
+        containerId: null,
+        containerName: null,
+      }),
+      { expectedFrom: 'ACTIVE' },
+    );
       expect(mockOnSessionEvicted).toHaveBeenCalledWith('session-1', 'conversation-1');
     });
   });
@@ -506,10 +522,11 @@ describe('ContainerLifecyclePolicy', () => {
         'session-1',
         'ACTIVE',
         expect.objectContaining({
-          containerId: 'container-live',
-          containerName: 'ctxmill-run-session-1',
-        }),
-      );
+        containerId: 'container-live',
+        containerName: 'ctxmill-run-session-1',
+      }),
+      { expectedFrom: 'ACTIVE' },
+    );
       expect(grpcSessionClientMocks.waitForContainerReady).toHaveBeenCalledWith(
         'http://ctxmill-run-session-1:50051',
       );
@@ -641,10 +658,11 @@ describe('ContainerLifecyclePolicy', () => {
         'session-1',
         'CHECKPOINTED',
         expect.objectContaining({
-          containerId: null,
-          containerName: null,
-        }),
-      );
+        containerId: null,
+        containerName: null,
+      }),
+      { expectedFrom: 'ACTIVE' },
+    );
       expect(mockContainerManager.stopContainer).toHaveBeenCalledWith('container-dead', 10);
       expect(mockContainerManager.removeContainer).toHaveBeenCalledWith('container-dead', true);
     });
@@ -666,10 +684,11 @@ describe('ContainerLifecyclePolicy', () => {
         'session-1',
         'TERMINATED',
         expect.objectContaining({
-          containerId: null,
-          containerName: null,
-        }),
-      );
+        containerId: null,
+        containerName: null,
+      }),
+      { expectedFrom: 'ACTIVE' },
+    );
       expect(mockContainerManager.removeContainer).toHaveBeenCalledWith('externally-removed', true);
     });
 
@@ -711,8 +730,9 @@ describe('ContainerLifecyclePolicy', () => {
       expect(mockContainerManager.removeContainer).toHaveBeenCalledWith('orphan-live', true);
     });
 
-    it('keeps live managed startup containers without an active DB session during startup grace', async () => {
+    it('keeps live managed startup containers without an active DB session during startup grace without holding capacity', async () => {
       mockDb.getActiveSandboxSessions.mockResolvedValue([]);
+      mockContainerManager.releaseContainerSlot.mockReturnValue(true);
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'startup-live',
@@ -730,6 +750,7 @@ describe('ContainerLifecyclePolicy', () => {
 
       expect(mockContainerManager.stopContainer).not.toHaveBeenCalled();
       expect(mockContainerManager.removeContainer).not.toHaveBeenCalled();
+      expect(mockContainerManager.releaseContainerSlot).toHaveBeenCalledWith('startup-live');
     });
 
     it('removes stale managed startup containers after startup grace expires', async () => {

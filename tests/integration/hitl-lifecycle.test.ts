@@ -173,13 +173,6 @@ describe('HITL lifecycle boundary conditions', () => {
       );
 
       expect(manager.hasPending('run-1')).toBe(true);
-      expect(manager.getPending('run-1')).toEqual(
-        expect.objectContaining({
-          toolCallId: 'tc-1',
-          toolName: 'send_email',
-          args: { to: 'user@example.com' },
-        }),
-      );
       expect(interruptedEvents.events).toHaveLength(1);
 
       await expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
@@ -227,39 +220,6 @@ describe('HITL lifecycle boundary conditions', () => {
       manager.shutdown();
     });
 
-    it('resolveForSession resolves pending interrupt by sessionId', async () => {
-      const manager = new InterruptManager(createTestBus());
-
-      const approval = manager.waitForApproval(
-        'run-1',
-        'agent-1',
-        'tc-1',
-        'bash',
-        {},
-        60_000,
-        'session-1',
-      );
-
-      await expect(
-        manager.resolveForSession('session-1', 'suspend', 'Session suspended for HITL approval — awaiting human decision'),
-      ).resolves.toBe(true);
-
-      await expect(approval).resolves.toEqual({
-        action: 'suspend',
-        data: 'Session suspended for HITL approval — awaiting human decision',
-      });
-      expect(manager.hasPending('run-1')).toBe(false);
-
-      manager.shutdown();
-    });
-
-    it('resolveForSession returns false for unknown sessionId', async () => {
-      const manager = new InterruptManager(createTestBus());
-
-      await expect(manager.resolveForSession('no-such-session', 'suspend')).resolves.toBe(false);
-
-      manager.shutdown();
-    });
   });
 
   describe('InterruptManager restart survival', () => {

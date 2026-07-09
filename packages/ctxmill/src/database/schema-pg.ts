@@ -72,10 +72,19 @@ export const eventStore = pgTable('event_store', {
   turnId: text('turn_id'),
   conversationId: text('conversation_id'),
   channel: text('channel').notNull().default('system'),
+  // Raw bus provenance (ADR-016): set on exactly one row per ingested bus event.
+  sourceType: text('source_type'),
+  sourcePayload: text('source_payload'),
 }, (table) => ({
   agentSeqIdx: index('idx_event_store_agent_seq').on(table.agentId, table.seq),
   agentChannelSeqIdx: index('idx_event_store_agent_channel_seq').on(table.agentId, table.channel, table.seq),
 }));
+
+export const spineCursors = pgTable('spine_cursors', {
+  consumer: text('consumer').primaryKey(),
+  lastSeq: bigint('last_seq', { mode: 'number' }).notNull().default(0),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+});
 
 export const suspendedSessions = pgTable('suspended_sessions', {
   id: text('id').primaryKey(),
@@ -92,23 +101,6 @@ export const suspendedSessions = pgTable('suspended_sessions', {
   expiresIdx: index('idx_suspended_sessions_expires').on(table.waitExpiresAt),
 }));
 
-export const scheduledEvents = pgTable('scheduled_events', {
-  id: text('id').primaryKey(),
-  agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
-  type: text('type').notNull(),
-  payload: text('payload').notNull(),
-  wakeAt: bigint('wake_at', { mode: 'number' }).notNull(),
-  status: text('status').notNull().default('pending'),
-  attempts: integer('attempts').notNull().default(0),
-  claimedAt: bigint('claimed_at', { mode: 'number' }),
-  claimExpiresAt: bigint('claim_expires_at', { mode: 'number' }),
-  lastError: text('last_error'),
-  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-}, (table) => ({
-  wakeIdx: index('idx_scheduled_events_wake').on(table.status, table.wakeAt),
-  claimExpiresIdx: index('idx_scheduled_events_claim_expires').on(table.status, table.claimExpiresAt),
-}));
-
 export const eventTriggers = pgTable('event_triggers', {
   id: text('id').primaryKey(),
   agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
@@ -122,6 +114,16 @@ export const eventTriggers = pgTable('event_triggers', {
   agentIdx: index('idx_event_triggers_agent').on(table.agentId),
   eventTypeIdx: index('idx_event_triggers_event_type').on(table.eventType),
   signatureIdx: uniqueIndex('idx_event_triggers_signature').on(table.agentId, table.eventType, table.selectorHash),
+}));
+
+export const triggerFirings = pgTable('trigger_firings', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  triggerId: text('trigger_id').notNull().references(() => eventTriggers.id, { onDelete: 'cascade' }),
+  eventSeq: bigint('event_seq', { mode: 'number' }).notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+}, (table) => ({
+  triggerEventSeqIdx: uniqueIndex('idx_trigger_firings_trigger_event_seq').on(table.triggerId, table.eventSeq),
+  eventSeqIdx: index('idx_trigger_firings_event_seq').on(table.eventSeq),
 }));
 
 export const agentVersions = pgTable('agent_versions', {
@@ -217,6 +219,7 @@ export const callbackOutbox = pgTable('callback_outbox', {
   sessionId: text('session_id').references(() => turns.id),
   callbackUrl: text('callback_url').notNull(),
   eventType: text('event_type').notNull(),
+  eventSeq: bigint('event_seq', { mode: 'number' }),
   payload: jsonb('payload').notNull().$type<Record<string, unknown>>().default({}),
   status: text('status').notNull().default('pending'),
   attempts: integer('attempts').notNull().default(0),
@@ -232,6 +235,9 @@ export const callbackOutbox = pgTable('callback_outbox', {
   statusIdx: index('idx_outbox_status').on(table.status, table.nextAttemptAt),
   claimExpiresIdx: index('idx_outbox_claim_expires').on(table.status, table.claimExpiresAt),
   agentIdx: index('idx_outbox_agent').on(table.agentId),
+  callbackEventSeqIdx: uniqueIndex('idx_outbox_callback_event_seq')
+    .on(table.callbackUrl, table.eventType, table.eventSeq)
+    .where(sql`${table.eventSeq} IS NOT NULL`),
 }));
 
 export const webhooks = pgTable('webhooks', {
@@ -289,9 +295,6 @@ export const toolRequestDedup = pgTable('tool_request_dedup', {
 }));
 
 export type SandboxSessionRow = typeof sandboxSessions.$inferSelect;
-export type SandboxSessionInsert = typeof sandboxSessions.$inferInsert;
-export type AgentCheckpointRow = typeof agentCheckpoints.$inferSelect;
-export type AgentCheckpointInsert = typeof agentCheckpoints.$inferInsert;
 export type SystemSettingRow = typeof systemSettings.$inferSelect;
 export type ArtifactRow = typeof artifacts.$inferSelect;
 export type ArtifactInsert = typeof artifacts.$inferInsert;

@@ -2,18 +2,19 @@
 
 **A self-hosted framework for building AI products with a multi-harness agent runtime, streaming UI, and human-in-the-loop controls.**
 
-CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persistence, a React UI, SSE streaming, event-triggered background runs, and workspace isolation for agent sessions.
+CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persistence, authenticated HTTP APIs, a React UI, durable SSE streaming, event-triggered background runs, and workspace isolation for agent sessions.
 
 ## What Ships Today
 
 - **Multi-harness agent runtime**: LangGraph, Claude Agents, and PI Agent
-- **Streaming UI**: SSE-based run and message streaming to the frontend
+- **Streaming UI**: durable SSE-based run and message streaming to the frontend
+- **Control-plane auth**: production bearer-token API auth plus a UI TokenGate
 - **A2UI chart rendering**: agent-driven charts and structured visual blocks
 - **Human-in-the-loop (HITL)**: approval cards, editable documents, and structured field requests
-- **Event bus and triggers**: persisted event flow plus background-run triggers
+- **Canonical event spine**: persisted `event_store` replay plus background-run triggers
 - **Workspace isolation**: session-scoped workspace diff capture/restore during suspend/resume
 - **Artifact storage**: S3/MinIO-backed persistent file upload/download with signed URLs
-- **System settings**: 14 runtime-configurable knobs with DB persistence and Settings UI
+- **System settings**: runtime-configurable knobs with DB persistence and Settings UI
 - **External learning hooks**: run lifecycle, message, tool, and feedback events for webhook-driven learners
 - **PostgreSQL persistence**: agents, runs, messages, events, triggers, and secrets
 - **React operations UI**: dashboard, chat, knowledge, files, triggers, tools, and run detail views
@@ -35,13 +36,17 @@ cd ctxmill
 
 # 2. Configure your environment
 cp .env.example .env
-# Add the API keys your agents need
+# Required for the production-labeled Docker stack:
+echo "SECRET_MASTER_KEY=$(openssl rand -hex 32)" >> .env
+echo "CTXMILL_API_TOKEN=$(openssl rand -hex 32)" >> .env
+# Add the API keys your agents need, such as OPENAI_API_KEY or ANTHROPIC_API_KEY.
 
 # 3. Build and start the stack
 docker compose up --build -d
 
 # 4. Open the UI
 # http://localhost:3200
+# Enter CTXMILL_API_TOKEN when the TokenGate prompts.
 ```
 
 > Sandbox harness images are included in the default compose stack. They build automatically with `docker compose up --build -d`.
@@ -88,13 +93,12 @@ packages/
       database/         PostgreSQL schema, repository, migrations
       events/           Typed event bus, triggers, wait primitives
       harness/          Harness adapters (3 shipped: LangGraph, Claude Agents, PI Agent)
-      knowledge/        Knowledge store abstractions and implementations
+      knowledge/        Reserved for future knowledge abstractions
       manifest/         YAML manifest parsing and conversion
       orchestrator/     Fastify server, SSE, HITL, routes
       sandbox/          Container lifecycle, gRPC daemon, checkpoint/resume
       secrets/          Encrypted secret storage
-      settings/         Runtime system configuration (17 knobs)
-      skills/           Skill loader (SKILL.md format)
+      settings/         Runtime system configuration backed by DB/env overrides
       tool/             Tool executors and providers
       util/             Shared runtime utilities
       workspace/        Session-scoped workspace environments
@@ -127,16 +131,14 @@ The scaffolded starter from `create-ctxmill` is intentionally generic. It create
 The shipped UI includes:
 
 - Dashboard
-- Agent chat
-- Agent detail
-- Run detail
 - Events
 - Tools
 - Agent flow
-- Knowledge
 - Triggers
+- Artifacts
 - Settings
-- Overview, knowledge, runs, tools, files, subagents, and secrets tabs inside agent detail
+- Agent conversation/session views
+- Agent detail with overview, sessions, tools, files, artifacts, and secrets tabs
 
 ## Tech Stack
 
@@ -158,6 +160,7 @@ The shipped UI includes:
 | Document | Description |
 |----------|-------------|
 | [Architecture](docs/architecture.md) | System architecture, component interactions, data flow |
+| [Codebase Map](docs/codebase-map.md) | Current package map, runtime flows, capabilities, and gotchas |
 | [One-Pager](docs/ctxmill-one-pager.md) | High-level overview of what CTXMill is and does |
 | [API Reference](docs/api-reference.md) | Complete REST API and SSE streaming protocol reference |
 | [Environment Variables](docs/environment-variables.md) | Complete env var reference — core, sandbox, AI, storage, and system settings |
@@ -171,7 +174,7 @@ The shipped UI includes:
 | [React Chat Integration](docs/integrate-chat-ui.md) | Embed the CTXMill streaming chat UI with A2UI and HITL support |
 | [Embedding in Foreign Stacks](docs/embedding-in-foreign-stacks.md) | Integrating CTXMill into your existing application |
 | [Writing Tool Providers](docs/writing-tool-providers.md) | Adding custom tools (Local, MCP, HTTP, Composio) |
-| [Writing Skills](docs/writing-skills.md) | Creating agent skills with SKILL.md format |
+| [Writing Skills](docs/writing-skills.md) | Current status of SDK-native workspace skills |
 | [Programmatic Tool Calling](docs/programmatic-tool-calling.md) | PTC API for structured tool invocations |
 | [HITL Approval Flow](docs/HITL_APPROVAL_FLOW.md) | Human-in-the-loop approval cards, editable docs, and field requests |
 | [LangSmith Tracing](docs/langsmith-tracing.md) | Setting up observability with LangSmith |

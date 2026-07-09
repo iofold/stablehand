@@ -288,57 +288,6 @@ describe('ClaudeAgentsHarness', () => {
     });
   });
 
-  describe('buildCanUseTool', () => {
-    it('should allow tools that do not require approval', async () => {
-      const harness = new ClaudeAgentsHarness();
-      const canUseTool = harness.buildCanUseTool([
-        {
-          name: 'safe-tool',
-          description: 'Safe',
-          input: z.object({}),
-          handler: async () => 'ok',
-        },
-      ], undefined, 'run-1');
-
-      const result = await canUseTool('safe-tool', {}, {
-        signal: new AbortController().signal,
-        toolUseID: 'tool-1',
-      });
-
-      expect(result).toEqual({ behavior: 'allow' });
-    });
-
-    it('should deny approval-required tools when callback rejects', async () => {
-      const harness = new ClaudeAgentsHarness();
-      const onApprovalNeeded = vi.fn().mockResolvedValue({ action: 'reject' as const });
-      const canUseTool = harness.buildCanUseTool([
-        {
-          name: 'danger-tool',
-          description: 'Dangerous',
-          input: z.object({}),
-          requiresApproval: true,
-          handler: async () => 'ok',
-        },
-      ], onApprovalNeeded, 'run-1');
-
-      const result = await canUseTool('danger-tool', { key: 'value' }, {
-        signal: new AbortController().signal,
-        toolUseID: 'tool-2',
-      });
-
-      expect(result).toEqual({
-        behavior: 'deny',
-        message: 'Tool call was rejected by the user.',
-      });
-      expect(onApprovalNeeded).toHaveBeenCalledWith({
-        id: 'tool-2',
-        runId: 'run-1',
-        toolName: 'danger-tool',
-        args: { key: 'value' },
-      });
-    });
-  });
-
   describe('mapSDKMessage', () => {
     it('should map assistant text content blocks to text_delta', () => {
       const harness = new ClaudeAgentsHarness();

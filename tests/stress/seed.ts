@@ -88,6 +88,7 @@ const { parse: parseYaml } = await loadYaml();
 const API_BASE = process.env.API_BASE ?? 'http://localhost:3002';
 const AGENTS_DIR = new URL('./agents/', import.meta.url);
 const CLEAN_FLAG = '--clean';
+const API_TOKEN = process.env.CTXMILL_API_TOKEN;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -195,6 +196,14 @@ async function parseJson(res: Response): Promise<unknown> {
   }
 }
 
+function authHeaders(): Record<string, string> {
+  return API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
+}
+
+function jsonHeaders(): Record<string, string> {
+  return { ...authHeaders(), 'Content-Type': 'application/json' };
+}
+
 async function listAgentDirs(): Promise<string[]> {
   const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
   return entries.filter((entry) => entry.isDirectory()).map((entry) => new URL(`${entry.name}/`, AGENTS_DIR).pathname).sort();
@@ -220,7 +229,7 @@ function normalizeAgent(body: unknown, fallbackName: string): AgentSummary {
 }
 
 async function fetchAgents(): Promise<AgentSummary[]> {
-  const res = await fetch(`${API_BASE}/api/agents`);
+  const res = await fetch(`${API_BASE}/api/agents`, { headers: authHeaders() });
   if (!res.ok) {
     return [];
   }
@@ -246,7 +255,7 @@ async function upsertAgent(dir: string, payload: AgentPayload, existingAgentId?:
   const method = existingAgentId ? 'PUT' : 'POST';
   const res = await fetch(endpoint, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders(),
     body: JSON.stringify(payload),
   });
 
@@ -269,7 +278,10 @@ async function deleteAgent(agent: AgentSummary): Promise<void> {
   ].filter((value): value is string => value !== null);
 
   for (const endpoint of candidatePaths) {
-    const res = await fetch(`${API_BASE}${endpoint}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
     if (res.ok || res.status === 404) {
       return;
     }
@@ -313,7 +325,7 @@ async function registerTrigger(results: SeedResult[]): Promise<void> {
 
   const res = await fetch(`${API_BASE}/api/triggers`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders(),
     body: JSON.stringify(payload),
   });
 

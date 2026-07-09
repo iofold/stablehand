@@ -80,6 +80,8 @@ export class CanonicalLog {
       turnId: frame.turnId ?? null,
       conversationId: frame.conversationId ?? null,
       channel: frame.channel,
+      sourceType: frame.sourceType ?? null,
+      sourcePayload: frame.sourcePayload ?? null,
     })));
     return frames.map((frame, index) => ({
       ...frame,
@@ -107,6 +109,8 @@ export class CanonicalLog {
     turnId: string | null;
     conversationId: string | null;
     channel: string;
+    sourceType?: string | null;
+    sourcePayload?: string | null;
   }): PersistedFrame {
     return {
       seq: row.seq,
@@ -117,6 +121,8 @@ export class CanonicalLog {
       conversationId: row.conversationId,
       channel: (row.channel === 'run' || row.channel === 'custom' ? row.channel : 'system'),
       body: parseBody(row.payload),
+      sourceType: row.sourceType ?? null,
+      sourcePayload: row.sourcePayload ?? null,
     };
   }
 }

@@ -186,13 +186,27 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       created_at BIGINT NOT NULL,
       turn_id TEXT,
       conversation_id TEXT,
-      channel TEXT NOT NULL DEFAULT 'system'
+      channel TEXT NOT NULL DEFAULT 'system',
+      source_type TEXT,
+      source_payload TEXT
     )
   `;
   // Additive canonical-spine columns for pre-existing databases (ADR-015).
   await sql`ALTER TABLE event_store ADD COLUMN IF NOT EXISTS turn_id TEXT`;
   await sql`ALTER TABLE event_store ADD COLUMN IF NOT EXISTS conversation_id TEXT`;
   await sql`ALTER TABLE event_store ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'system'`;
+  // Additive raw bus provenance columns for spine consumers (ADR-016).
+  await sql`ALTER TABLE event_store ADD COLUMN IF NOT EXISTS source_type TEXT`;
+  await sql`ALTER TABLE event_store ADD COLUMN IF NOT EXISTS source_payload TEXT`;
+
+  // ── 8b. spine_cursors ──────────────────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS spine_cursors (
+      consumer TEXT PRIMARY KEY NOT NULL,
+      last_seq BIGINT NOT NULL DEFAULT 0,
+      updated_at BIGINT NOT NULL
+    )
+  `;
 
   // ── 9. suspended_sessions ──────────────────────────────────────────
   await sql`
@@ -208,24 +222,11 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // ── 10. scheduled_events ───────────────────────────────────────────
-  await sql`
-    CREATE TABLE IF NOT EXISTS scheduled_events (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      type TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      wake_at BIGINT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      attempts INTEGER NOT NULL DEFAULT 0,
-      claimed_at BIGINT,
-      claim_expires_at BIGINT,
-      last_error TEXT,
-      created_at BIGINT NOT NULL
-    )
-  `;
+  // WS2.0: EventQueueImpl was never wired into runtime; remove its table from
+  // existing pre-release databases as well as fresh schemas.
+  await sql`DROP TABLE IF EXISTS scheduled_events`;
 
-  // ── 11. event_triggers (→ agents) ──────────────────────────────────
+  // ── 10. event_triggers (→ agents) ──────────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS event_triggers (
       id TEXT PRIMARY KEY NOT NULL,
@@ -239,7 +240,18 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // ── 12. agent_versions (→ agents) ──────────────────────────────────
+  // ── 10b. trigger_firings (→ event_triggers) ────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS trigger_firings (
+      id TEXT PRIMARY KEY NOT NULL,
+      trigger_id TEXT NOT NULL REFERENCES event_triggers(id) ON DELETE CASCADE,
+      event_seq BIGINT NOT NULL,
+      created_at BIGINT NOT NULL,
+      UNIQUE(trigger_id, event_seq)
+    )
+  `;
+
+  // ── 11. agent_versions (→ agents) ──────────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS agent_versions (
       id TEXT PRIMARY KEY NOT NULL,
@@ -252,7 +264,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // ── 13. pending_interrupts (→ turns, agents) ───────────────────────
+  // ── 12. pending_interrupts (→ turns, agents) ───────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS pending_interrupts (
       id TEXT PRIMARY KEY,
@@ -272,7 +284,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // ── 14. interrupt_resume_attempts (→ pending_interrupts, turns, agents) ──
+  // ── 13. interrupt_resume_attempts (→ pending_interrupts, turns, agents) ──
   await sql`
     CREATE TABLE IF NOT EXISTS interrupt_resume_attempts (
       id TEXT PRIMARY KEY NOT NULL,
@@ -331,6 +343,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       session_id TEXT REFERENCES turns(id),
       callback_url TEXT NOT NULL,
       event_type TEXT NOT NULL,
+      event_seq BIGINT,
       payload JSONB NOT NULL DEFAULT '{}',
       status TEXT NOT NULL DEFAULT 'pending',
       attempts INTEGER NOT NULL DEFAULT 0,
@@ -344,6 +357,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       delivered_at BIGINT
     )
   `;
+  await sql`ALTER TABLE callback_outbox ADD COLUMN IF NOT EXISTS event_seq BIGINT`;
 
   // ── 17. webhooks (→ agents) ────────────────────────────────────────
   await sql`
@@ -444,15 +458,12 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE INDEX IF NOT EXISTS idx_event_store_agent_seq ON event_store(agent_id, seq)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_store_turn_seq ON event_store(turn_id, seq) WHERE turn_id IS NOT NULL`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_store_agent_channel_seq ON event_store(agent_id, channel, seq)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_event_store_source_seq ON event_store(seq) WHERE source_type IS NOT NULL`;
 
   // suspended_sessions
   await sql`CREATE INDEX IF NOT EXISTS idx_suspended_sessions_event_type ON suspended_sessions(wait_event_type)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_suspended_sessions_agent ON suspended_sessions(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_suspended_sessions_expires ON suspended_sessions(wait_expires_at)`;
-
-  // scheduled_events
-  await sql`CREATE INDEX IF NOT EXISTS idx_scheduled_events_wake ON scheduled_events(status, wake_at)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_scheduled_events_claim_expires ON scheduled_events(status, claim_expires_at)`;
 
   // event_triggers
   await sql`ALTER TABLE event_triggers ADD COLUMN IF NOT EXISTS selector_hash TEXT`;
@@ -461,6 +472,10 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_agent ON event_triggers(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_triggers_event_type ON event_triggers(event_type)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_event_triggers_signature ON event_triggers(agent_id, event_type, selector_hash)`;
+
+  // trigger_firings
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_firings_trigger_event_seq ON trigger_firings(trigger_id, event_seq)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_trigger_firings_event_seq ON trigger_firings(event_seq)`;
 
   // agent_versions
   await sql`DROP INDEX IF EXISTS idx_agent_versions_agent_version`;
@@ -484,6 +499,11 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE INDEX IF NOT EXISTS idx_outbox_status ON callback_outbox(status, next_attempt_at)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_outbox_claim_expires ON callback_outbox(status, claim_expires_at)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_outbox_agent ON callback_outbox(agent_id)`;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_callback_event_seq
+    ON callback_outbox(callback_url, event_type, event_seq)
+    WHERE event_seq IS NOT NULL
+  `;
 
   // webhooks
   await sql`CREATE INDEX IF NOT EXISTS idx_webhooks_agent ON webhooks(agent_id)`;

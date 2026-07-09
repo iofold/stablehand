@@ -21,9 +21,8 @@ import {
 
 import {
   createToolProxy,
-  createOrchestratorToolProxies,
   type OrchestratorServiceClient,
-} from '../tool-proxy.js';
+} from '@ctxmill/sandbox-daemon';
 import { protoToToolDefs } from '../proto-convert.js';
 import { toToolMetadata, toToolMetadataList } from '../../tool/metadata.js';
 import { emitEventTool } from '../../tool/builtin/emit-event.js';
@@ -281,30 +280,6 @@ describe('protoToToolDefs wires emit-event proxy', () => {
       payload: { to: 'user@example.com' },
     });
     expect(valid.success).toBe(true);
-  });
-});
-
-/* -------------------------------------------------------------------------- */
-/*  createOrchestratorToolProxies: emit-event filtering                        */
-/* -------------------------------------------------------------------------- */
-
-describe('createOrchestratorToolProxies includes emit-event', () => {
-  it('includes emit-event from a mixed tool list', () => {
-    const tools = [
-      makeEmitEventProtoMetadata(),
-      create(ToolMetadataSchema, {
-        name: 'read-file',
-        description: 'Read a file',
-        inputSchemaJson: JSON.stringify({ type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }),
-        location: ToolLocation.SANDBOX,
-      }),
-    ];
-
-    const client = makeMockClient();
-    const defs = createOrchestratorToolProxies(tools, client, 'run-1', 'agent-1');
-
-    expect(defs).toHaveLength(1);
-    expect(defs[0].name).toBe('emit-event');
   });
 });
 

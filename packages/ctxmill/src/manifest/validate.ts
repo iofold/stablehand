@@ -1,5 +1,20 @@
 import { z } from 'zod';
+import {
+  CANONICAL_LLM_PROVIDERS,
+  normalizeLLMProvider,
+  supportedLLMProviderDescription,
+  type CanonicalLLMProvider,
+} from '@ctxmill/shared';
 import type { AgentManifest } from './types.js';
+
+const canonicalProviderValues = [...CANONICAL_LLM_PROVIDERS] as [CanonicalLLMProvider, ...CanonicalLLMProvider[]];
+
+const manifestProviderSchema = z.preprocess(
+  (value) => typeof value === 'string' ? normalizeLLMProvider(value) ?? value : value,
+  z.enum(canonicalProviderValues, {
+    error: `Unsupported LLM provider. Supported providers: ${supportedLLMProviderDescription()}`,
+  }),
+);
 
 const manifestMCPToolSchema = z.object({
   name: z.string().min(1),
@@ -83,7 +98,7 @@ const manifestResourcesSchema = z.object({
 });
 
 const manifestModelConfigSchema = z.object({
-  provider: z.string().min(1),
+  provider: manifestProviderSchema,
   id: z.string().min(1),
   apiKeyRef: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
@@ -93,8 +108,17 @@ const manifestModelConfigSchema = z.object({
   baseUrl: z.url().optional(),
 });
 
+const manifestSubagentConfigSchema = z.object({
+  provider: manifestProviderSchema.optional(),
+}).catchall(z.unknown());
+
+const manifestSubagentsSchema = z.union([
+  z.array(manifestSubagentConfigSchema),
+  z.record(z.string(), manifestSubagentConfigSchema),
+]);
+
 const manifestHarnessConfigSchema = z.object({
-  provider: z.string().min(1).optional(),
+  provider: manifestProviderSchema.optional(),
   model: z.string().min(1).optional(),
   apiKeyRef: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
@@ -102,6 +126,7 @@ const manifestHarnessConfigSchema = z.object({
   topP: z.number().min(0).max(1).optional(),
   reasoning: z.enum(['off', 'low', 'medium', 'high']).optional(),
   baseUrl: z.url().optional(),
+  subagents: manifestSubagentsSchema.optional(),
 }).catchall(z.unknown());
 
 const manifestSpecSchema = z.object({

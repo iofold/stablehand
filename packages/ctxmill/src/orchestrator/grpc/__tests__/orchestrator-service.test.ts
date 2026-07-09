@@ -5,7 +5,9 @@ import { create } from '@bufbuild/protobuf';
 import {
   RequestToolRequestSchema,
   EmitEventRequestSchema,
+  ResolveArtifactRequestSchema,
 } from '@ctxmill/proto/sandbox/v1';
+import type { ArtifactRow } from '../../../database/types.js';
 import {
   createOrchestratorServiceImpl,
   DefaultOrchestratorToolRegistry,
@@ -770,5 +772,106 @@ describe('createGrpcRoutes', () => {
 
     expect(JSON.parse(agentAResp.result)).toEqual({ owner: 'agent-a' });
     expect(JSON.parse(agentBResp.result)).toEqual({ owner: 'agent-b' });
+  });
+});
+
+describe('OrchestratorService — ResolveArtifact ownership', () => {
+  function makeArtifactRow(overrides: Partial<ArtifactRow> = {}): ArtifactRow {
+    return {
+      id: 'artifact-1',
+      agentId: 'agent-a',
+      sessionId: 'turn-1',
+      conversationId: null,
+      name: 'report.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 1024,
+      storageKey: 'agents/agent-a/report.pdf',
+      bucket: 'artifacts',
+      metadata: null,
+      createdAt: 1_700_000_000_000,
+      ...overrides,
+    } as ArtifactRow;
+  }
+
+  function makeArtifactRepository(row: ArtifactRow | undefined): {
+    repository: DatabaseRepository;
+    getArtifact: ReturnType<typeof vi.fn>;
+  } {
+    const getArtifact = vi.fn().mockResolvedValue(row);
+    return {
+      repository: { getArtifact } as unknown as DatabaseRepository,
+      getArtifact,
+    };
+  }
+
+  it('resolves an artifact owned by the authenticated agent', async () => {
+    const eventBus = makeEventBus();
+    const { repository } = makeArtifactRepository(makeArtifactRow({ agentId: 'agent-a' }));
+    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: makeRegistry(), repository });
+
+    const resp = await svc.resolveArtifact(create(ResolveArtifactRequestSchema, {
+      artifactId: 'artifact-1',
+      agentId: 'agent-a',
+    }));
+
+    expect(resp.error).toBeFalsy();
+    expect(resp.artifact?.id).toBe('artifact-1');
+    expect(resp.artifact?.storageKey).toBe('agents/agent-a/report.pdf');
+  });
+
+  it('denies cross-agent artifact resolution as not-found (IDOR guard)', async () => {
+    const eventBus = makeEventBus();
+    const { repository } = makeArtifactRepository(makeArtifactRow({ agentId: 'agent-a' }));
+    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: makeRegistry(), repository });
+
+    const resp = await svc.resolveArtifact(create(ResolveArtifactRequestSchema, {
+      artifactId: 'artifact-1',
+      agentId: 'agent-b',
+    }));
+
+    expect(resp.artifact).toBeUndefined();
+    expect(resp.error).toBe('Artifact not found: artifact-1');
+  });
+
+  it('resolves unowned (null-agent) artifacts for any authenticated agent', async () => {
+    const eventBus = makeEventBus();
+    const { repository } = makeArtifactRepository(makeArtifactRow({ agentId: null }));
+    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: makeRegistry(), repository });
+
+    const resp = await svc.resolveArtifact(create(ResolveArtifactRequestSchema, {
+      artifactId: 'artifact-1',
+      agentId: 'agent-b',
+    }));
+
+    expect(resp.error).toBeFalsy();
+    expect(resp.artifact?.id).toBe('artifact-1');
+  });
+
+  it('resolves without an ownership constraint in open/dev mode (empty caller agent)', async () => {
+    const eventBus = makeEventBus();
+    const { repository } = makeArtifactRepository(makeArtifactRow({ agentId: 'agent-a' }));
+    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: makeRegistry(), repository });
+
+    const resp = await svc.resolveArtifact(create(ResolveArtifactRequestSchema, {
+      artifactId: 'artifact-1',
+      agentId: '',
+    }));
+
+    expect(resp.error).toBeFalsy();
+    expect(resp.artifact?.id).toBe('artifact-1');
+  });
+
+  it('reports a genuinely missing artifact as not-found', async () => {
+    const eventBus = makeEventBus();
+    const { repository } = makeArtifactRepository(undefined);
+    const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: makeRegistry(), repository });
+
+    const resp = await svc.resolveArtifact(create(ResolveArtifactRequestSchema, {
+      artifactId: 'ghost',
+      agentId: 'agent-a',
+    }));
+
+    expect(resp.artifact).toBeUndefined();
+    expect(resp.error).toBe('Artifact not found: ghost');
   });
 });

@@ -1,5 +1,5 @@
 import { getApiToken, markAuthRequired, withApiAuth } from './auth';
-import type { ApiSandboxRestoreSuccess } from '@ctxmill/shared';
+import type { ApiFeedbackRequest, ApiSandboxRestoreSuccess } from '@ctxmill/shared';
 
 const API_BASE = '/api';
 
@@ -135,7 +135,7 @@ export async function fetchMessages(agentId: string, conversationId: string) {
 
 export async function submitFeedback(
   agentId: string,
-  data: { conversationId: string; messageId: string; type: 'thumbs_up' | 'thumbs_down' },
+  data: ApiFeedbackRequest,
 ): Promise<void> {
   await apiMutate(`${API_BASE}/agents/${agentId}/feedback`, 'POST', data);
 }

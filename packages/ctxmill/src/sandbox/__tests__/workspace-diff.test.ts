@@ -8,7 +8,6 @@ import { WorkspaceDiffService } from '../workspace-diff.js';
 
 function createMockContainerManager(overrides: Record<string, unknown> = {}) {
   return {
-    extractContainerDiff: vi.fn().mockResolvedValue(Buffer.from('fake-tar-data')),
     extractWorkspaceDiff: vi.fn().mockResolvedValue({ archive: Buffer.from('fake-tar-data'), deletedPaths: [] }),
     restoreArchive: vi.fn().mockResolvedValue(undefined),
     ...overrides,

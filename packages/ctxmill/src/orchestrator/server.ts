@@ -160,7 +160,6 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         toolExecutor: opts.toolExecutor,
         toolDefinitionRegistry: toolDefinitionRegistry,
         repository: db,
-        artifactStore: opts.artifactStore,
       }),
       interceptors: callbackAuthInterceptor ? [callbackAuthInterceptor] : [],
     });

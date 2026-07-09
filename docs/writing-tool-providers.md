@@ -56,6 +56,9 @@ export const myTool = defineTool({
   // Optional: Execution location hint
   location: 'orchestrator',
 
+  // Optional: Generate programmatic tool-call helper scripts inside the sandbox.
+  programmatic: true,
+
   // The actual logic
   handler: async (input, ctx) => {
     // input is automatically validated and typed based on the Zod schema
@@ -75,8 +78,8 @@ The `ToolContext` provides essential metadata and services to your tool handler:
 *   `agentId`: The unique identifier of the agent calling the tool.
 *   `conversationId`: The current conversation ID.
 *   `instanceId`: The specific run/instance ID.
+*   `requestId`: The tool request ID when available.
 *   `workspaceDir`: The absolute path to the session-scoped workspace directory.
-*   `knowledge`: A query interface for the agent's knowledge store.
 *   `eventBus`: An interface to emit events back to the orchestrator.
 
 ### Tool Locations
@@ -87,6 +90,14 @@ The `location` property tells `ctxmill` where the tool should run:
 *   `orchestrator`: Executes in the main `ctxmill` process. Use this for tools that need access to the database, event bus, or external APIs that require secrets not shared with the sandbox.
 *   `daemon`: Executes in the sandbox daemon process. Reserved for system-level tools like `artifact_upload`.
 
+### Programmatic Tool Calling
+
+Tools with `programmatic: true` are eligible for generated TypeScript helper
+scripts under `/workspace/.tools` inside the sandbox. Those scripts call the
+daemon-local API, which then routes execution to the correct location. Leave
+`programmatic` unset for tools that should only be called through normal harness
+tool-calling.
+
 ## Built-in Providers
 
 `ctxmill` ships with five standard providers:
@@ -95,7 +106,7 @@ The `location` property tells `ctxmill` where the tool should run:
 2.  **HTTP**: Dynamically creates tools from a list of HTTP endpoints (REST APIs).
 3.  **MCP**: Connects to any Model Context Protocol server (stdio or HTTP).
 4.  **Composio**: Integrates with the Composio tool ecosystem.
-5.  **Artifact**: Provides system tools for persistent file storage.
+5.  **Artifact**: Provides daemon-location metadata for persistent file storage tools; bytes upload/download at the daemon location rather than through orchestrator byte proxying.
 
 ## Step-by-Step: Creating a Custom Provider
 

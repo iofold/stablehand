@@ -82,39 +82,3 @@ export const HoverGlow: React.FC<HoverGlowProps> = ({
     </div>
   );
 };
-
-interface StaggeredRevealProps extends React.HTMLAttributes<HTMLDivElement> {
-  children: React.ReactNode;
-  staggerDelay?: number;
-  baseDelay?: number;
-}
-
-export const StaggeredReveal: React.FC<StaggeredRevealProps> = ({
-  children,
-  className = '',
-  staggerDelay = 75,
-  baseDelay = 0,
-  ...props
-}) => {
-  const childrenArray = React.Children.toArray(children);
-
-  return (
-    <div className={className} {...props}>
-      {childrenArray.map((child, index) => {
-        const key = React.isValidElement(child) && child.key ? child.key : `staggered-child-${index}`;
-        return (
-          <div
-            key={key}
-            className="opacity-0 motion-safe:animate-slide-up"
-            style={{
-              animationDelay: `${baseDelay + index * staggerDelay}ms`,
-              animationFillMode: 'forwards',
-            }}
-          >
-            {child}
-          </div>
-        );
-      })}
-    </div>
-  );
-};

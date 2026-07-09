@@ -20,12 +20,8 @@ import {
   type ResolveArtifactResponse,
   RequestToolRequestSchema,
   type RequestToolResponse,
-  ToolLocation,
-  type ToolMetadata as ProtoToolMetadata,
 } from '@ctxmill/proto/sandbox/v1';
 
-import type { ToolDefinition } from '../tool/types.js';
-import { jsonSchemaToZod } from '../tool/schema-convert.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { stringifyJsonWithBigInts } from './json-serialization.js';
 
@@ -154,47 +150,6 @@ export function createToolProxy(
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Batch proxy creation                                                       */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Creates tool definitions for all orchestrator-side tools,
- * with proxy handlers wired to the gRPC client.
- *
- * Non-orchestrator tools are filtered out — this function only creates
- * proxied definitions for tools with `location === ORCHESTRATOR`.
- */
-export function createOrchestratorToolProxies(
-  tools: ProtoToolMetadata[],
-  orchestratorClient: OrchestratorServiceClient,
-  sessionId: string,
-  agentId: string,
-  opts?: ToolProxyOptions,
-): ToolDefinition[] {
-  return tools
-    .filter((t) => t.location === ToolLocation.ORCHESTRATOR)
-    .map((t) => {
-      const inputJsonSchema = parseJsonOrThrow(t.inputSchemaJson, `tool ${t.name} input schema`);
-      const zodSchema = jsonSchemaToZod(inputJsonSchema);
-
-      const handler = createToolProxy(
-        t.name,
-        orchestratorClient,
-        sessionId,
-        agentId,
-        opts,
-      );
-
-      return {
-        name: t.name,
-        description: t.description,
-        input: zodSchema,
-        handler,
-      };
-    });
-}
-
-/* -------------------------------------------------------------------------- */
 /*  Internal helpers                                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -239,13 +194,4 @@ let requestCounter = 0;
 function generateRequestId(): string {
   requestCounter++;
   return `rpc-${Date.now()}-${requestCounter}-${randomUUID()}`;
-}
-
-function parseJsonOrThrow(s: string, context: string): Record<string, unknown> {
-  try {
-    return JSON.parse(s);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to parse ${context}: ${message}`, { cause: err });
-  }
 }

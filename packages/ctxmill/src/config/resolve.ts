@@ -28,20 +28,6 @@ export function resolveConfig(userConfig: CTXMillConfig): ResolvedConfig {
     base.database.url = process.env[base.database.url.slice(4)] || '';
   }
 
-  // ── Max global containers ─────────────────────────────────
-  // Environment variable takes precedence over config file
-  const envMaxContainers = process.env.CTXMILL_MAX_CONTAINERS;
-  if (envMaxContainers) {
-    const parsed = parseInt(envMaxContainers, 10);
-    if (isNaN(parsed) || parsed < 1) {
-      throw new Error(
-        `Configuration error: invalid CTXMILL_MAX_CONTAINERS "${envMaxContainers}". ` +
-        `Must be a positive integer.`,
-      );
-    }
-    base.execution.maxGlobalContainers = parsed;
-  }
-
   // ── Validate required config ────────────────────────────
   // Database URL is always required (PostgreSQL-only)
   if (!base.database.url || base.database.url.startsWith('env:')) {

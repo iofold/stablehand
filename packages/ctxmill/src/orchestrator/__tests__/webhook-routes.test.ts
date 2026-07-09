@@ -3,9 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { agentRoutes } from '../routes/agents.js';
 import { TypedEventBus } from '../../events/bus.js';
-import { registerCallbackSubscriptions } from '../../config/container.js';
 import type { DatabaseRepository, WebhookRow } from '../../database/repository.js';
-import type { CallbackDispatcher } from '../callback-dispatcher.js';
 import { SSEManager } from '../sse.js';
 import { InterruptManager } from '../interrupt.js';
 import type { AgentSessionService } from '../agent-session-service.js';
@@ -58,7 +56,6 @@ function createMockDb() {
         updatedAt: 10,
       },
     ] satisfies WebhookRow[]),
-    deleteWebhook: vi.fn(async (id: string) => id === 'hook-1'),
     deleteWebhookForAgent: vi.fn(async (id: string, agentId?: string) => id === 'hook-1' && (!agentId || agentId === 'agent-1')),
     updateWebhookForAgent: vi.fn(async (
       id: string,
@@ -76,7 +73,6 @@ function createMockDb() {
           updatedAt: 20,
         } satisfies WebhookRow
       : undefined)),
-    getWebhooksForAgent: vi.fn(async () => [] as WebhookRow[]),
   };
 
   return db as unknown as DatabaseRepository & typeof db;
@@ -126,10 +122,6 @@ async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
   });
   await app.ready();
   return app;
-}
-
-function flushEvents(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe('webhook routes', () => {
@@ -277,232 +269,5 @@ describe('webhook routes', () => {
 
     expect(response.statusCode).toBe(204);
     expect(db.deleteWebhookForAgent).toHaveBeenCalledWith('hook-1', 'agent-1');
-  });
-});
-
-describe('callback subscriptions', () => {
-  function createSubscriptionDb(overrides?: { webhooks?: WebhookRow[] }) {
-    const db = {
-      getWebhooksForAgent: vi.fn(async () => overrides?.webhooks ?? []),
-    };
-
-    return db as unknown as DatabaseRepository & typeof db;
-  }
-
-  function createDispatcher() {
-    const dispatcher = {
-      enqueue: vi.fn(async () => 'delivery-id'),
-    };
-    return dispatcher as unknown as CallbackDispatcher & typeof dispatcher;
-  }
-
-  it('enqueues every valid webhook event to subscribed webhooks', async () => {
-    const eventBus = new TypedEventBus();
-    const events = ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed'];
-    const db = createSubscriptionDb({ webhooks: events.map((event, index) => ({
-      id: `hook-${index}`,
-      agentId: 'agent-1',
-      url: `https://hooks.example/${event}`,
-      events: [event],
-      secret: null,
-      active: true,
-      createdAt: 1,
-      updatedAt: 1,
-    })) as WebhookRow[] });
-    const callbackDispatcher = createDispatcher();
-
-    registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
-    eventBus.emit('turn.started', {
-      turnId: 'run-1',
-      sessionId: 'run-1',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      mode: 'interactive',
-      taskDescription: 'Start task',
-      timestamp: 123,
-    });
-    eventBus.emit('turn.completed', {
-      turnId: 'run-1',
-      sessionId: 'run-1',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      status: 'completed',
-      durationMs: 400,
-      timestamp: 456,
-    });
-    eventBus.emit('run.tool_started', {
-      turnId: 'run-1',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      toolCallId: 'tool-1',
-      toolName: 'search',
-      args: { query: 'ctxmill' },
-      timestamp: 789,
-    });
-    eventBus.emit('run.tool_result', {
-      turnId: 'run-1',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      toolCallId: 'tool-1',
-      toolName: 'search',
-      result: '{"ok":true}',
-      durationMs: 12,
-      timestamp: 790,
-    });
-    eventBus.emit('run.interrupted', {
-      turnId: 'run-1',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      toolCallId: 'tool-2',
-      toolName: 'approve',
-      args: { amount: 5 },
-      interruptId: 'int-1',
-      timestamp: 791,
-    });
-    eventBus.emit('run.interrupt_resolved', {
-      turnId: 'run-1',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      interruptId: 'int-1',
-      action: 'approve',
-      timestamp: 792,
-    });
-    eventBus.emit('message.committed', {
-      turnId: 'run-1',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      messageId: 'msg-1',
-      messageSeq: 2,
-      role: 'assistant',
-      content: 'done',
-      timestamp: 793,
-    });
-    await flushEvents();
-
-    expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(events.length);
-    expect(callbackDispatcher.enqueue.mock.calls.map(([delivery]) => delivery.eventType)).toEqual(events);
-    expect(callbackDispatcher.enqueue).toHaveBeenNthCalledWith(1, {
-      agentId: 'agent-1',
-      sessionId: 'run-1',
-      callbackUrl: 'https://hooks.example/turn.started',
-      eventType: 'turn.started',
-      payload: {
-        turnId: 'run-1',
-        sessionId: 'run-1',
-        agentId: 'agent-1',
-        conversationId: 'conv-1',
-        mode: 'interactive',
-        taskDescription: 'Start task',
-        timestamp: 123,
-      },
-    });
-  });
-
-  it('enqueues run.completed to subscribed webhooks', async () => {
-    const eventBus = new TypedEventBus();
-    const db = createSubscriptionDb({
-      webhooks: [
-        {
-          id: 'hook-1',
-          agentId: 'agent-1',
-          url: 'https://hooks.example/run-completed',
-          events: ['turn.completed'],
-          secret: null,
-          active: true,
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
-    });
-    const callbackDispatcher = createDispatcher();
-
-    registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
-    eventBus.emit('turn.completed', {
-      turnId: 'run-1',
-      sessionId: 'run-1',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      status: 'completed',
-      durationMs: 400,
-      timestamp: 456,
-    });
-    await flushEvents();
-
-    expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
-    expect(callbackDispatcher.enqueue).toHaveBeenNthCalledWith(1, {
-      agentId: 'agent-1',
-      sessionId: 'run-1',
-      callbackUrl: 'https://hooks.example/run-completed',
-      eventType: 'turn.completed',
-      payload: {
-        turnId: 'run-1',
-        sessionId: 'run-1',
-        agentId: 'agent-1',
-        conversationId: 'conv-1',
-        status: 'completed',
-        error: undefined,
-        durationMs: 400,
-        timestamp: 456,
-      },
-    });
-  });
-
-  it('filters webhook deliveries by subscribed event type', async () => {
-    const eventBus = new TypedEventBus();
-    const db = createSubscriptionDb({
-      webhooks: [
-        {
-          id: 'hook-1',
-          agentId: 'agent-1',
-          url: 'https://hooks.example/run-completed',
-          events: ['turn.completed'],
-          secret: null,
-          active: true,
-          createdAt: 1,
-          updatedAt: 1,
-        },
-        {
-          id: 'hook-2',
-          agentId: 'agent-1',
-          url: 'https://hooks.example/run-tool-started',
-          events: ['run.tool_started'],
-          secret: null,
-          active: true,
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
-    });
-    const callbackDispatcher = createDispatcher();
-
-    registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
-    eventBus.emit('run.tool_started', {
-      turnId: 'run-1',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      toolCallId: 'tool-1',
-      toolName: 'search',
-      args: { query: 'ctxmill' },
-      timestamp: 789,
-    });
-    await flushEvents();
-
-    expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
-     expect(callbackDispatcher.enqueue).toHaveBeenNthCalledWith(1, {
-       agentId: 'agent-1',
-       sessionId: 'run-1',
-       callbackUrl: 'https://hooks.example/run-tool-started',
-       eventType: 'run.tool_started',
-       payload: {
-         turnId: 'run-1',
-         agentId: 'agent-1',
-         conversationId: 'conv-1',
-         toolCallId: 'tool-1',
-         toolName: 'search',
-         args: { query: 'ctxmill' },
-         requiresApproval: undefined,
-         timestamp: 789,
-       },
-     });
   });
 });

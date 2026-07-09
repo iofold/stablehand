@@ -140,20 +140,6 @@ describe('InterruptManager', () => {
       expect(manager.hasPending('run-1')).toBe(false);
     });
 
-    it('should return pending interrupt info via getPending', () => {
-      manager.waitForApproval('run-1', 'agent-1', 'tc-1', 'write_file', { path: '/tmp/test.txt' });
-
-      const pending = manager.getPending('run-1');
-      expect(pending).toBeDefined();
-      expect(pending!.toolCallId).toBe('tc-1');
-      expect(pending!.toolName).toBe('write_file');
-      expect(pending!.args).toEqual({ path: '/tmp/test.txt' });
-      expect(pending!.createdAt).toBeTypeOf('number');
-    });
-
-    it('should return undefined from getPending for unknown run', () => {
-      expect(manager.getPending('unknown')).toBeUndefined();
-    });
   });
 
   // Superseding behavior
@@ -168,8 +154,7 @@ describe('InterruptManager', () => {
       expect(result1.data).toBe('Superseded by new interrupt');
 
       // Second interrupt is the active one
-      const pending = manager.getPending('run-1');
-      expect(pending!.toolCallId).toBe('tc-2');
+      expect(manager.hasPending('run-1')).toBe(true);
 
       // Resolve the second one
       await manager.resolve('run-1', 'approve');
@@ -262,11 +247,7 @@ describe('InterruptManager', () => {
 
       // run-2 is completely unaffected
       expect(manager.hasPending('run-2')).toBe(true);
-      const pending2 = manager.getPending('run-2');
-      expect(pending2).toBeDefined();
-      expect(pending2!.toolCallId).toBe('tc-2');
-      expect(pending2!.toolName).toBe('deploy');
-      expect(pending2!.args).toEqual({ target: 'staging' });
+      expect(manager.hasPending('run-2')).toBe(true);
 
       // Resolve run-2
       await manager.resolve('run-2', 'approve');
@@ -391,13 +372,6 @@ describe('InterruptManager', () => {
       expect(db.cleanupExpiredInterrupts).toHaveBeenCalledWith(Date.now());
       expect(db.getAllPendingInterrupts).toHaveBeenCalledTimes(1);
       expect(restartedManager.hasPending('run-1')).toBe(true);
-      expect(restartedManager.getPending('run-1')).toEqual({
-        toolCallId: 'tc-1',
-        toolName: 'bash',
-        args: { cmd: 'ls' },
-        createdAt: Date.now(),
-        sessionId: 'session-1',
-      });
 
       await expect(restartedManager.resolve('run-1', 'approve', 'approved', 'agent-1')).resolves.toBe(true);
       expect(restartedManager.hasPending('run-1')).toBe(false);

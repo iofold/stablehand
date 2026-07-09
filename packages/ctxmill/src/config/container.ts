@@ -1,4 +1,5 @@
 import type { CTXMillConfig, ResolvedConfig } from './types.js';
+import { createHash } from 'node:crypto';
 import { resolveConfig } from './resolve.js';
 import { createDatabase, type DatabaseConnection } from '../database/connection.js';
 import { runMigrations } from '../database/migrations.js';
@@ -12,12 +13,12 @@ import type { HarnessRegistry } from '../harness/types.js';
 import { TypedEventBus } from '../events/bus.js';
 import { SSEManager } from '../orchestrator/sse.js';
 import { InterruptManager } from '../orchestrator/interrupt.js';
-import { SuspendedSessionMatcher } from '../orchestrator/suspended-session-matcher.js';
-import type { ResumeMatchResult } from '../orchestrator/suspended-session-matcher.js';
-import { EventTriggerManager, type TriggerRunCallback } from '../events/trigger-manager.js';
+import { createTriggerSpineConsumer, EventTriggerManager, type TriggerRunCallback } from '../events/trigger-manager.js';
+import { SpineConsumerRunner } from '../events/spine-consumer-runner.js';
 import { AgentSessionService } from '../orchestrator/agent-session-service.js';
 import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
-import { ManifestService } from '../manifest/index.js';
+import { createGuardedFetch } from '../util/egress.js';
+import { createWebhookRelaySpineConsumer } from '../orchestrator/webhook-relay.js';
 import { RunStartupService } from '../orchestrator/run-startup-service.js';
 import { TurnFinalizer } from '../orchestrator/turn-finalizer.js';
 import { reconcileStrandedTurnsOnStartup } from '../orchestrator/turn-reconciler.js';
@@ -35,6 +36,8 @@ import { ContainerLifecyclePolicy } from '../orchestrator/container-lifecycle-po
 import { SessionTurnService } from '../orchestrator/session-turn-service.js';
 import type { SandboxSessionManager } from '../orchestrator/session-turn-service.js';
 import { SandboxSessionManager as SandboxSessionManagerImpl } from '../orchestrator/sandbox-session-manager.js';
+import { SessionStateStore } from '../orchestrator/session-manager/session-state-store.js';
+import { SessionStatusCoordinator } from '../orchestrator/session-manager/session-status-coordinator.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
 import { LocalToolProvider } from '../tool/providers/local.js';
 import { ArtifactToolProvider } from '../tool/providers/artifact.js';
@@ -53,11 +56,10 @@ export interface AppContainer {
   eventBus: TypedEventBus;
   sseManager: SSEManager;
   interruptManager: InterruptManager;
-  suspendedSessionMatcher: SuspendedSessionMatcher;
   triggerManager: EventTriggerManager;
+  spineConsumerRunner: SpineConsumerRunner;
   agentSessionService: AgentSessionService;
   harnessRegistry: HarnessRegistry;
-  manifestService: ManifestService;
   secretProvider: SecretProvider;
   callbackDispatcher: CallbackDispatcher;
   runStartupService: RunStartupService;
@@ -84,171 +86,6 @@ export interface AppContainer {
 
 export { VALID_WEBHOOK_EVENTS };
 
-type EnqueueCallbackArgs = Parameters<CallbackDispatcher['enqueue']>[0];
-
-async function enqueueIfSubscribed(
-  db: DatabaseRepository,
-  callbackDispatcher: CallbackDispatcher,
-  agentId: string,
-  eventType: string,
-  payload: Record<string, unknown>,
-  sessionId?: string,
-): Promise<void> {
-  const deliveries: EnqueueCallbackArgs[] = [];
-
-  const hooks = await db.getWebhooksForAgent(agentId);
-  for (const hook of hooks) {
-    if ((hook.events as string[]).includes(eventType)) {
-      deliveries.push({ agentId, sessionId, callbackUrl: hook.url, eventType, payload });
-    }
-  }
-
-  for (const delivery of deliveries) {
-    await callbackDispatcher.enqueue(delivery);
-  }
-}
-
-export function registerCallbackSubscriptions(
-  eventBus: TypedEventBus,
-  db: DatabaseRepository,
-  callbackDispatcher: CallbackDispatcher,
-): void {
-  eventBus.on('turn.completed', async (payload) => {
-    try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'turn.completed', {
-        turnId: payload.turnId,
-        sessionId: payload.sessionId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        status: payload.status,
-        error: payload.error,
-        durationMs: payload.durationMs,
-        timestamp: payload.timestamp,
-      }, payload.turnId);
-    } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue turn.completed callback:', err);
-    }
-  });
-
-  eventBus.on('turn.started', async (payload) => {
-    try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'turn.started', {
-        turnId: payload.turnId,
-        sessionId: payload.sessionId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        mode: payload.mode,
-        taskDescription: payload.taskDescription,
-        timestamp: payload.timestamp,
-      }, payload.turnId);
-    } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue turn.started callback:', err);
-    }
-  });
-
-  eventBus.on('run.tool_started', async (payload) => {
-    try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.tool_started', {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        toolCallId: payload.toolCallId,
-        toolName: payload.toolName,
-        args: payload.args,
-        requiresApproval: payload.requiresApproval,
-        timestamp: payload.timestamp,
-      }, payload.turnId);
-    } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue run.tool_started callback:', err);
-    }
-  });
-
-  eventBus.on('run.interrupted', async (payload) => {
-    try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.interrupted', {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        toolCallId: payload.toolCallId,
-        toolName: payload.toolName,
-        args: payload.args,
-        interruptId: payload.interruptId,
-        timestamp: payload.timestamp,
-      }, payload.turnId);
-    } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue run.interrupted callback:', err);
-    }
-  });
-
-  eventBus.on('run.tool_result', async (payload) => {
-    try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.tool_result', {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        toolCallId: payload.toolCallId,
-        toolName: payload.toolName,
-        result: payload.result,
-        durationMs: payload.durationMs,
-        error: payload.error,
-        timestamp: payload.timestamp,
-      }, payload.turnId);
-    } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue run.tool_result callback:', err);
-    }
-  });
-
-  eventBus.on('run.interrupt_resolved', async (payload) => {
-    try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'run.interrupt_resolved', {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        interruptId: payload.interruptId,
-        action: payload.action,
-        timestamp: payload.timestamp,
-      }, payload.turnId);
-    } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue run.interrupt_resolved callback:', err);
-    }
-  });
-
-  eventBus.on('message.committed', async (payload) => {
-    try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'message.committed', {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        messageId: payload.messageId,
-        messageSeq: payload.messageSeq,
-        role: payload.role,
-        content: payload.content,
-        parts: payload.parts,
-        toolCalls: payload.toolCalls,
-        toolCallId: payload.toolCallId,
-        timestamp: payload.timestamp,
-      }, payload.turnId);
-    } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue message.committed callback:', err);
-    }
-  });
-
-  eventBus.on('feedback.received', async (payload) => {
-    try {
-      await enqueueIfSubscribed(db, callbackDispatcher, payload.agentId, 'feedback.received', {
-        feedbackId: payload.feedbackId,
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        type: payload.type,
-        messageId: payload.messageId,
-        timestamp: payload.timestamp,
-      }, payload.turnId);
-    } catch (err) {
-      console.error('[CallbackDispatcher] failed to enqueue feedback.received callback:', err);
-    }
-  });
-}
-
 interface TriggerRunCallbackDeps {
   db: Pick<DatabaseRepository, 'getAgent'>;
   runStartupService: Pick<RunStartupService, 'prepareRunStart' | 'launchPreparedRun'>;
@@ -260,19 +97,32 @@ export function createTriggerRunCallback({
   runStartupService,
   eventBus,
 }: TriggerRunCallbackDeps): TriggerRunCallback {
-  return async (agentId, task, triggerId, triggerDepth) => {
+  return async (agentId, task, triggerId, triggerDepth, eventSeq) => {
     const agent = await db.getAgent(agentId);
     if (!agent) {
       console.error(`[EventTriggerManager] agent ${agentId} not found for trigger ${triggerId}`);
       return;
     }
-    const start = await runStartupService.prepareRunStart({
-      agent,
-      agentId,
-      content: task,
-      mode: 'background',
-      emitUserMessageEvent: false,
-    });
+    const requestedTurnId = eventSeq === undefined
+      ? undefined
+      : `trigger-${createHash('sha256').update(`${triggerId}:${eventSeq}`).digest('hex').slice(0, 24)}`;
+    let start: Awaited<ReturnType<RunStartupService['prepareRunStart']>>;
+    try {
+      start = await runStartupService.prepareRunStart({
+        agent,
+        agentId,
+        content: task,
+        mode: 'background',
+        emitUserMessageEvent: false,
+        ...(requestedTurnId ? { requestedTurnId } : {}),
+      });
+    } catch (err) {
+      if (requestedTurnId && err instanceof Error && err.message.includes(`Turn already exists for id ${requestedTurnId}`)) {
+        console.warn(`[EventTriggerManager] trigger ${triggerId} event seq ${eventSeq} already prepared turn ${requestedTurnId}`);
+        return;
+      }
+      throw err;
+    }
 
     // Fire-and-forget — AgentSessionService handles SSE broadcasting, run.text_chunk events,
     // message persistence, and session completion. trigger.fired preserves the cascade
@@ -401,47 +251,6 @@ export async function createContainer(
 
   let sessionManagerRef: SandboxSessionManagerImpl | null = null;
 
-  // ── Suspend/Resume ──────────────────────────────────────
-  const suspendedSessionMatcher = new SuspendedSessionMatcher(eventBus, db, async (condition, triggerEvent): Promise<ResumeMatchResult> => {
-    console.log(`[SuspendedSessionMatcher] resuming session ${condition.sessionId} for agent ${condition.agentId} (event: ${condition.eventType})`);
-
-    if (!sessionManagerRef) {
-      return { outcome: 'retryable-failure', reason: 'session manager not initialized yet' };
-    }
-
-    if (condition.eventType !== 'run.interrupt_resolved') {
-      throw new Error(`No resume strategy registered for suspended-session event ${condition.eventType}`);
-    }
-
-    const resolvedEvent = triggerEvent && typeof triggerEvent === 'object'
-      ? triggerEvent as { action?: unknown }
-      : undefined;
-    if (resolvedEvent?.action !== 'approve' && resolvedEvent?.action !== 'reject') {
-      return {
-        outcome: 'retryable-failure',
-        reason: `interrupt resolution action ${String(resolvedEvent?.action)} does not resume the session`,
-      };
-    }
-
-    const metadata = condition.contextSnapshot.metadata;
-    const sandboxSessionId = typeof metadata?.sandboxSessionId === 'string'
-      ? metadata.sandboxSessionId
-      : typeof metadata?.sessionId === 'string'
-        ? metadata.sessionId
-        : undefined;
-    if (!sandboxSessionId) {
-      throw new Error(
-        `Cannot resume suspended turn ${condition.sessionId}: context snapshot metadata is missing sandboxSessionId`,
-      );
-    }
-
-    await sessionManagerRef.resumeWithInterruptResolution(
-      sandboxSessionId,
-      condition.sessionId,
-      condition.agentId,
-    );
-  });
-
   // ── Harness Registry ────────────────────────────────────
   // All harnesses are now stateless — they resolve dependencies from
   // HarnessRunConfig at runtime, so no orchestrator objects are needed.
@@ -451,12 +260,24 @@ export async function createContainer(
   harnessRegistry.register(new PIAgentHarness());
 
   // ── Event Triggers ─────────────────────────────────────
+  // Webhook/callback delivery targets agent-supplied URLs from the trusted
+  // orchestrator process; route them through the SSRF egress guard.
+  const callbackDispatcher = new CallbackDispatcher(db, undefined, createGuardedFetch());
   const triggerManager = new EventTriggerManager(
     eventBus,
     db,
     createTriggerRunCallback({ db, runStartupService, eventBus }),
     startupSettings.maxTriggerDepth,
   );
+  const spineConsumerRunner = new SpineConsumerRunner({
+    canonicalLog,
+    db,
+    consumers: [
+      createTriggerSpineConsumer(triggerManager),
+      createWebhookRelaySpineConsumer({ db, callbackDispatcher }),
+    ],
+    logger: console,
+  });
 
   // ── Sandbox Run Service ─────────────────────────────────
   const sandboxRuntime = (process.env.CTXMILL_SANDBOX_RUNTIME ?? 'docker').toLowerCase();
@@ -489,15 +310,29 @@ export async function createContainer(
     settingsService,
   });
 
+  const sessionManagerLogger = {
+    info: (msg: string, ...args: unknown[]) => console.log('[SessionManager]', msg, ...args),
+    warn: (msg: string, ...args: unknown[]) => console.warn('[SessionManager]', msg, ...args),
+    error: (msg: string, ...args: unknown[]) => console.error('[SessionManager]', msg, ...args),
+    debug: (msg: string, ...args: unknown[]) => console.debug('[SessionManager]', msg, ...args),
+  };
+  const lifecyclePolicyLogger = {
+    info: (msg: string, ...args: unknown[]) => console.log('[LifecyclePolicy]', msg, ...args),
+    warn: (msg: string, ...args: unknown[]) => console.warn('[LifecyclePolicy]', msg, ...args),
+    error: (msg: string, ...args: unknown[]) => console.error('[LifecyclePolicy]', msg, ...args),
+    debug: (msg: string, ...args: unknown[]) => console.debug('[LifecyclePolicy]', msg, ...args),
+  };
+  const sessionStateStore = new SessionStateStore();
+  const sessionStatusCoordinator = new SessionStatusCoordinator({
+    db,
+    logger: sessionManagerLogger,
+    stateStore: sessionStateStore,
+  });
+
   const lifecyclePolicy = new ContainerLifecyclePolicy({
     containerManager,
     db,
-    logger: {
-      info: (msg, ...args) => console.log('[LifecyclePolicy]', msg, ...args),
-      warn: (msg, ...args) => console.warn('[LifecyclePolicy]', msg, ...args),
-      error: (msg, ...args) => console.error('[LifecyclePolicy]', msg, ...args),
-      debug: (msg, ...args) => console.debug('[LifecyclePolicy]', msg, ...args),
-    },
+    logger: lifecyclePolicyLogger,
     config: {
       reconciliationIntervalMs: startupSettings.reconciliationIntervalMs,
       idleTimeoutMs: startupSettings.idleTimeoutMs,
@@ -510,6 +345,7 @@ export async function createContainer(
         return sessionManagerRef?.getSessionReconciler().onSessionEvicted(sessionId, conversationId);
       },
     },
+    statusCoordinator: sessionStatusCoordinator,
   });
 
   // ── Sandbox Secrets (allowlisted env vars for container injection) ──
@@ -596,6 +432,8 @@ export async function createContainer(
     containerManager,
     db,
     lifecyclePolicy,
+    stateStore: sessionStateStore,
+    statusCoordinator: sessionStatusCoordinator,
     eventBus,
     maxConcurrentSessionsPerAgent: startupSettings.maxConcurrentSessionsPerAgent,
     interruptManager,
@@ -603,12 +441,7 @@ export async function createContainer(
     resolveToolsForAgent,
     dataDir,
     workspaceDiffService,
-    logger: {
-      info: (msg: string, ...args: unknown[]) => console.log('[SessionManager]', msg, ...args),
-      warn: (msg: string, ...args: unknown[]) => console.warn('[SessionManager]', msg, ...args),
-      error: (msg: string, ...args: unknown[]) => console.error('[SessionManager]', msg, ...args),
-      debug: (msg: string, ...args: unknown[]) => console.debug('[SessionManager]', msg, ...args),
-    },
+    logger: sessionManagerLogger,
     config: {
       idleTimeoutMs: startupSettings.idleTimeoutMs,
       maxQueuedMessages: 100,
@@ -645,13 +478,7 @@ export async function createContainer(
     agentSessionService,
   });
   await triggerManager.start();
-
-  const manifestService = new ManifestService(db, dataDir);
-
-  // ── Callback Dispatcher ──────────────────────────────────
-  const callbackDispatcher = new CallbackDispatcher(db);
-
-  registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
+  await spineConsumerRunner.start();
 
   callbackDispatcher.start();
 
@@ -663,11 +490,10 @@ export async function createContainer(
     eventBus,
     sseManager,
     interruptManager,
-    suspendedSessionMatcher,
     triggerManager,
+    spineConsumerRunner,
     agentSessionService,
     harnessRegistry,
-    manifestService,
     secretProvider,
     callbackDispatcher,
     runStartupService,
@@ -690,6 +516,7 @@ export async function createContainer(
     sessionManager: realSessionManager,
     close: async () => {
       lifecyclePolicy.stop();
+      spineConsumerRunner.stop();
       callbackDispatcher.stop();
       await dbConn.close();
     },

@@ -8,6 +8,8 @@ The `baseUrl` field in agent manifests overrides the default API endpoint. The p
 
 The `provider` field controls which SDK class is used, not which company. Set `provider: openai` to use the OpenAI SDK pointed at any OpenAI-compatible endpoint.
 
+Canonical provider values are `openai`, `anthropic`, and `google`. Manifests and API requests also accept `gemini` as a compatibility alias, but CTXMill normalizes it to `google` before storage or execution. Unknown provider values are rejected during manifest/API validation.
+
 ## OpenRouter
 
 ### LangGraph Harness (OpenAI-compatible endpoint)
@@ -194,3 +196,5 @@ That means:
 | CF AI Gateway (native) | Any | Match provider | `https://gateway.ai.cloudflare.com/v1/{acct}/{gw}/{provider}` | Provider's native format | Actual provider key |
 | CF AI Gateway (unified) | LangGraph / PI Agent | `openai` | `https://gateway.ai.cloudflare.com/v1/{acct}/{gw}/compat` | `provider/model` | Actual provider key |
 | vLLM / Ollama / LiteLLM | LangGraph / PI Agent | `openai` | Your endpoint URL | Model name | Your auth token as `OPENAI_API_KEY` |
+
+Use only canonical provider values in persisted examples: `openai`, `anthropic`, or `google`. `gemini` remains accepted as an input alias for `google`.

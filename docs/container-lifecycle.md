@@ -60,7 +60,7 @@ Containers are created using the `ctxmill/harness-{harness}:latest` images.
   - `ctxmill.harness`: Harness type (for example `langgraph`)
   - `ctxmill.started-at`: ISO timestamp
   - `ctxmill.timeout`: Maximum run duration in seconds
-- **Secrets**: Injected into the sandbox container environment at session startup / restore.
+- **Secrets**: Injected into the sandbox container environment at session startup / restore. Checkpoints may contain secret references, never resolved secret values.
 
 ### 2. Startup
 - **Health Check**: The orchestrator polls the container gRPC endpoint on port `50051` until it responds.
@@ -69,7 +69,7 @@ Containers are created using the `ctxmill/harness-{harness}:latest` images.
 ### 3. Active
 - **DeliverTurn**: Messages are streamed to the harness via gRPC.
 - **Tool Execution**: Tools run either inside the sandbox or proxied back to the orchestrator.
-- **Event Streaming**: Turn, tool, and message events are rebroadcast to SSE clients through `SSEBroadcaster`.
+- **Event Streaming**: Turn, tool, and message events are projected into the durable canonical log and streamed to SSE clients through `SSEManager`.
 
 ### 4. Checkpointed
 - **Trigger**: Idle timeout, explicit suspend, or recovery flow.
@@ -80,8 +80,9 @@ Containers are created using the `ctxmill/harness-{harness}:latest` images.
   4. Session status in DB becomes `CHECKPOINTED`.
 
 ### 5. Restoring
-- **Trigger**: A new turn or interrupt resolution targets a checkpointed session.
-- **Action**: A new container is provisioned, secrets are re-injected, checkpoint state is restored, and the session returns to `ACTIVE`.
+- **Trigger**: A new turn, interrupt resolution, or explicit manual restore targets a checkpointed session.
+- **Action**: A new container is provisioned, secrets and callback credentials are re-injected, checkpoint state is restored, and the session returns to `ACTIVE`.
+- **Manual restore**: `POST /api/agents/:id/sandbox-sessions/:sessionId/restore` validates ownership/status, resets the restore retry budget, and can return immediately with `?async=true`.
 
 ### 6. Cleanup
 Containers are removed when:
@@ -104,24 +105,26 @@ These values are defined in `ContainerLifecyclePolicy`, `SandboxSessionManager`,
 
 ## Resource Limits
 
-Default limits are applied by `ContainerManager` unless overridden in the agent manifest.
+Default limits are applied by `ContainerManager` unless overridden by agent resource limits.
 
 - **CPU**: `1.0` fractional cores.
 - **Memory**: `1024 MiB` by default.
-  - `claude-agents` has a hard floor of `2048 MiB`.
+  - `claude-agents` and `pi-agent` have a hard floor of `2048 MiB`.
 - **PIDs**: `256`.
 - **Workspace Tar**: `100 MB` cap for checkpoint workspace snapshots.
 
 ### Configuration
-Limits can be set in the agent YAML under `resourceLimits`:
+Limits can be set in the agent YAML under `resourceLimits`; those values act as the manifest default.
 
 ```yaml
 resourceLimits:
   cpus: 2.0
   memoryMb: 4096
   pidsLimit: 512
-  timeoutSec: 3600
+timeoutSec: 3600
 ```
+
+API or UI updates to `resourceLimits` are stored in agent metadata and override the manifest defaults for future sandbox creates. Set `resourceLimits` to `null` through the agent update API to clear the metadata override and fall back to the manifest/default limits.
 
 ## Concurrency & Semaphore
 
@@ -130,6 +133,20 @@ To prevent resource exhaustion, the orchestrator uses a global `ContainerSemapho
 - **Max Concurrent Containers**: `20` by default (`CTXMILL_MAX_GLOBAL_CONTAINERS`).
 - **Queueing**: Requests wait in FIFO order when capacity is exhausted.
 - **Timeout**: If a request exceeds `queueTimeoutMs` (default `10 minutes`), it fails with `503 Service Unavailable` / `ContainerLimitError`.
+- **Boot accounting**: Live containers are rehydrated into `ContainerAccounting` before lifecycle reconciliation. This can temporarily exceed the configured maximum until stale containers are reconciled and slots are released.
+- **Metrics**: Health responses and `GET /api/sandbox/metrics` expose active, queued, peak, total-created, and max-container values.
+
+This semaphore queue is separate from durable per-session turn queueing. Turns are persisted with status and user-message linkage; startup reconciliation re-dispatches queued turns that never started and fails stranded running turns unless they are parked on durable HITL.
+
+## Manual Sandbox Session APIs
+
+| Operation | Route | Notes |
+|---|---|---|
+| Suspend | `POST /api/agents/:id/sandbox-sessions/:sessionId/suspend` | Exports harness state, captures workspace tar, removes the container, and marks the session `CHECKPOINTED`. |
+| Restore | `POST /api/agents/:id/sandbox-sessions/:sessionId/restore` | Requires an owned `CHECKPOINTED` session. Resets `restoreAttempts`/`lastRestoreError`; `?async=true` returns `202`. Sync failures return `502 restore_failed` with category/detail/status/attempts fields. |
+| Kill | `POST /api/agents/:id/sandbox-sessions/:sessionId/kill` | Terminates the sandbox session/container. |
+
+The old `/sessions/:sessionId/restore` shape is intentionally not the supported API.
 
 ## Manual Operations
 
@@ -172,6 +189,17 @@ Human-in-the-loop approvals are durable, but they are not modeled as a separate 
 1. An approval request persists a pending interrupt and emits `run.interrupted`.
 2. The session may stay live or later be checkpointed through normal lifecycle rules.
 3. When the user resolves the interrupt, the orchestrator resumes the matching session or restores it from checkpoint and delivers a continuation turn.
+
+The interrupt resolution path is DB-first. If the original in-memory owner is gone after an orchestrator restart, `interrupt_resume_attempts` records and retries the durable resume work.
+
+## Startup Reconciliation
+
+On orchestrator startup, reconciliation repairs state that may have been left behind by a crash:
+
+1. Stranded running turns are finalized as errors unless they are parked on a durable HITL interrupt.
+2. Queued turns with a persisted user-message link are re-dispatched.
+3. `turn.started` emission is idempotent for redispatched queued turns.
+4. `RESTORING` sandbox rows with checkpoint data roll back to `CHECKPOINTED` so manual restore can retry.
 
 ## Troubleshooting
 

@@ -1,146 +1,145 @@
-# CTXMill Protocol Mapping Spec
+# CTXMill Event Pipeline Mapping
 
-> Working reference for how AG-UI wire events and gRPC proto fields map to current ctxmill runtime behavior.
-> Updated: 2026-04-07 (post `turn.pending`, broadcaster centralization, and durable HITL refinements)
+> Current reference as of 2026-07-06. This document describes the shipped
+> canonical event spine. Historical plans and audits may still mention the
+> deleted `SSEBroadcaster`, `AGUIEventNormalizer`, or
+> `CTXMILL_CANONICAL_EVENTS` flag; those are no longer runtime surfaces.
 
-## Core Entities
+## Core Identifiers
 
-Table of the 4 key identifiers:
-- `conversationId` — Persistent conversation. 1:1 with a conversation DB row. Used across sessions.
-- `turnId` — Single request→response cycle within a session. Created per user message. This is what becomes `runId` on the AG-UI wire.
-- `sessionId` — Sandbox container session. Persists across turns for the same conversation. Maps to `sandbox_sessions` DB table.
-- `runId` (wire only) — AG-UI protocol field. NOT an internal entity. Exists only in SSE events sent to the browser. Populated from `turnId` (for run events) or `conversationId` (for user message events).
+| Identifier | Meaning |
+|---|---|
+| `conversationId` | Persistent conversation/thread row. |
+| `turnId` | One user request and agent response cycle. This becomes AG-UI `runId` for run-scoped frames. |
+| `sessionId` | Sandbox session/container lifecycle identity in `sandbox_sessions`. |
+| `seq` | Global durable `event_store.seq`; SSE ids are zero-padded with `formatSeqId(seq)`. |
+| `runId` | AG-UI wire field only. Internal code should prefer `turnId`, `conversationId`, or `sessionId`. |
 
-## Section 1: AG-UI Protocol Mapping
+## Runtime Pipeline
 
-### Wire Format
+```text
+TypedEventBus event
+  -> CanonicalProjector.project(...)
+  -> CanonicalLog.saveEventBatch(...)
+  -> event_store rows with seq/type/channel/payload/turnId/conversationId/source_type/source_payload
+  -> CanonicalLog fan-out
+  -> SSEManager.broadcastFrame(...)
+  -> GET /api/agents/:id/stream
+```
 
-The AG-UI protocol defines `runId` as a required field on all events. In ctxmill:
+The persistence-before-fan-out rule matters: live SSE clients should not observe
+a canonical run frame that cannot be replayed from `event_store`.
 
-Bootstrap SSE frames such as `CONNECTED` and `state_snapshot` are written directly by the stream route and are not part of the standard AG-UI run-lifecycle table below.
+Source code:
 
-| AG-UI Event Type | Wire `runId` value | Source location |
+- [bus.ts](/path/to/stablehand/packages/ctxmill/src/events/bus.ts)
+- [projector.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/canonical/projector.ts)
+- [canonical-log.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/canonical/canonical-log.ts)
+- [sse.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sse.ts)
+- [stream.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents/stream.ts)
+
+## Channels
+
+| Channel | Source | Persistence and consumers |
 |---|---|---|
-| TURN_PENDING | turnId | SSEBroadcaster (from bus `turn.pending`) |
-| RUN_STARTED | turnId | SSEBroadcaster (from bus `turn.started`) |
-| RUN_FINISHED | turnId | SSEBroadcaster (from bus `turn.completed`) |
-| RUN_ERROR | turnId | Usually SSEBroadcaster (from `turn.completed` with `status = error/cancelled`); low-level `RUN_ERROR` AG-UI events may also be forwarded via `run.ag_ui_event` |
-| TEXT_MESSAGE_START | conversationId (user msg) or turnId (assistant) | SSEBroadcaster (from `user.message` for user echoes or `run.ag_ui_event` for assistant events) |
-| TEXT_MESSAGE_CONTENT | turnId | SSEBroadcaster (from bus `run.text_chunk` or forwarded `run.ag_ui_event`) |
-| TEXT_MESSAGE_END | conversationId (user msg) or turnId (assistant) | SSEBroadcaster (from `user.message` for user echoes or `run.ag_ui_event` for assistant events) |
-| TOOL_CALL_START | turnId | SSEBroadcaster (from bus `run.tool_started`) |
-| TOOL_CALL_ARGS | turnId | SSEBroadcaster (synthetic, emitted after TOOL_CALL_START) |
-| TOOL_CALL_RESULT | turnId | SSEBroadcaster (from bus `run.tool_result`) |
-| MESSAGE_COMMITTED | turnId | SSEBroadcaster (from bus `message.committed`; source commit event is created by `AgentSessionService`) |
-| CUSTOM | varies (turnId, sessionId, or agentId) | Mixed: `run.interrupt_resolved`, `run.ag_ui_event`, and direct stream-route bootstrap snapshots |
+| `run` | Run lifecycle, text, tool, HITL, message commit, passthrough AG-UI events | Projected into AG-UI frames and used by SSE replay. |
+| `custom` | Agent/user custom events such as `emit-event` output | Persisted with type/payload unchanged; triggers and `/api/events` consume this vocabulary directly. |
+| `system` | Non-run operational events | Persisted for diagnostics and event APIs. |
 
-### SSE Broadcast Resolution
+## Raw Provenance
 
-SSEBroadcaster resolves the wire `runId` with a fallback chain:
-```
-payload.turnId ?? payload.sessionId ?? payload.runId
-```
+Every bus event ingested by `CanonicalLog` leaves exactly one source-bearing row
+in `event_store`: `source_type` is the original bus event name and
+`source_payload` is the JSON-serialized bus payload. When a bus event fans out to
+multiple canonical frames, the first frame carries the provenance; the remaining
+frames have null provenance. Verbatim system/custom events are single-row events
+and carry provenance on that row.
 
-### Emission Paths
+The raw durable stream for future trigger, matcher, and webhook consumers is:
 
-1. **EventBus → SSEBroadcaster → SSE** — Most run-lifecycle, preview, and committed-message events. This includes `turn.pending`, `turn.started`, `run.text_chunk`, `run.tool_*`, `message.committed`, and `turn.completed`.
-2. **SessionTurnService → AgentSessionService** — Sandbox `message_committed` events first become internal AG-UI `MESSAGE_COMMITTED` events in the turn service, then `AgentSessionService` persists them and re-emits a canonical `message.committed` bus event.
-3. **AgentSessionService → `run.ag_ui_event` → SSEBroadcaster** — AG-UI events that are not individually normalized onto first-class bus events are forwarded through `run.ag_ui_event`.
-4. **Stream route → direct SSE** — Bootstrap frames only (`CONNECTED`, `state_snapshot`).
-5. **gRPC `EmitEvent` / `emit-event` tool → raw event-bus subscribers** — Custom agent-emitted events are persisted and dispatched to matching subscribers (for example triggers). They are not part of the standard AG-UI run-lifecycle mapping unless another layer explicitly re-emits them.
-
-## Section 2: Internal Event Bus Mapping
-
-Key runtime event types from `packages/ctxmill/src/events/bus.ts` that affect AG-UI mapping:
-
-| Internal Event | Key Fields | AG-UI Mapping | Notes |
-|---|---|---|---|
-| turn.pending | turnId, agentId, conversationId, mode | TURN_PENDING | Pre-start indicator emitted before full session readiness |
-| turn.started | turnId, sessionId, agentId, conversationId, mode | RUN_STARTED | — |
-| user.message | agentId, conversationId, messageId, content | TEXT_MESSAGE_START / CONTENT / END | SSEBroadcaster synthesizes user-message echo events |
-| run.text_chunk | turnId, agentId, messageId, content | TEXT_MESSAGE_CONTENT | — |
-| run.tool_started | turnId, agentId, toolCallId, toolName, args | TOOL_CALL_START + TOOL_CALL_ARGS | — |
-| run.tool_result | turnId, agentId, toolCallId, toolName, result, durationMs | TOOL_CALL_RESULT on native streams; TOOL_CALL_END on AG-UI compat streams | `a2ui-render` tool results additionally emit `CUSTOM name: ctxmill.a2ui.render` on AG-UI compat streams |
-| run.interrupted | turnId, agentId, toolCallId, toolName, args, interruptId | HITL_PAUSE on native streams; `CUSTOM name: ctxmill.hitl.requested` on AG-UI compat streams | Durable HITL pause signal |
-| run.interrupt_resolved | turnId, agentId, interruptId, action | `CUSTOM name: ctxmill.hitl.resolved` on AG-UI compat streams | Interrupt resolution marker |
-| message.committed | turnId, agentId, conversationId, messageSeq, role, content | MESSAGE_COMMITTED | Canonical assistant/tool commit emitted by `AgentSessionService` |
-| run.ag_ui_event | turnId, agentId, conversationId?, event | Passthrough | Forwards AG-UI events not otherwise normalized |
-| turn.completed | turnId, sessionId, agentId, conversationId, status, durationMs | RUN_FINISHED (+ RUN_ERROR on error/cancelled) | Terminal lifecycle event |
-| run.resumed | turnId, agentId, triggeredBy, suspendedDurationMs | Not mapped to AG-UI | — |
-| feedback.received | feedbackId, turnId, agentId, type | Not mapped to AG-UI | External learning/analytics signal |
-| trigger.fired | triggerId, agentId, eventType, turnId | Not mapped to AG-UI | — |
-| agent.created/deleted | agentId | Not mapped to AG-UI | Internal only |
-| client.connected/disconnected | agentId, clientId | Not mapped to AG-UI | Internal only |
-| custom | type, agentId, payload | Not part of standard AG-UI run-lifecycle mapping | Persisted/dispatched to raw subscribers such as triggers |
-
-## Section 3: gRPC Proto Mapping
-
-### Services
-
-**HarnessService** (Orchestrator → Sandbox):
-
-| RPC | Proto Request | Proto Response | Key Field Mapping |
-|---|---|---|---|
-| OpenSession | session_id, agent_id, conversation_id, bootstrap (fresh or restore) | stream SessionEvent | session_id → sessionId |
-| DeliverTurn | session_id, messages[], turn_id, tools[] | stream SessionEvent | turn_id → turnId (becomes runId in harness) |
-| SuspendSession | session_id, reason | SessionCheckpoint | session_id → sessionId |
-| KillSession | session_id, reason | Empty | session_id → sessionId |
-
-**OrchestratorService** (Sandbox → Orchestrator):
-
-| RPC | Proto Request | Proto Response | Key Field Mapping |
-|---|---|---|---|
-| RequestTool | tool_name, arguments_json, request_id | ToolCallResult | orchestrator-side tool execution |
-| EmitEvent | event_type, payload (JSON) | Empty | payload.runId = sessionId (injected by orchestrator) |
-| RegisterArtifact | metadata, upload_url | ArtifactRecord | S3/MinIO registration |
-| ResolveArtifact | artifact_id | ArtifactRecord | S3/MinIO lookup |
-
-### Proto → Harness Internal Mapping
-
-The conversion functions in `packages/sandbox-daemon/src/sandbox/proto-convert.ts`:
-
-| Proto Field | Internal Type | Field Name | Notes |
-|---|---|---|---|
-| DeliverTurnRequest.turn_id | HarnessTurnInput.turnId | turnId | Becomes `runId` in harness tool context |
-| DeliverTurnRequest.session_id | (used for gRPC context) | sessionId | — |
-| FreshBootstrap.agent_id | HarnessSessionConfig.agentId | agentId | — |
-| FreshBootstrap.conversation_id | HarnessSessionConfig.conversationId | conversationId | — |
-| FreshBootstrap.instructions | HarnessSessionConfig.instructions | instructions | — |
-| ToolMetadata.location | ToolDefinition.location | SANDBOX / ORCHESTRATOR / DAEMON | Determines where tool executes |
-
-### Harness runId Usage
-
-Each harness receives `turnId` from proto and passes it as `runId` to tool handlers:
-- **Claude Agents**: `runId` parameter in `createToolContext()`, `runTurn()`, `handleToolResult()`
-- **PI Agent**: `this.turnRef.runId = input.turnId` — stores turnId as runId on session ref
-- **LangGraph**: `instanceId: input.turnId` — uses turnId as the LangGraph instance ID
-
-### Data Flow: Turn Execution
-
-```
-User sends message
-  → POST /api/agents/:id/message
-    → Creates conversation (if new) + turn row in DB
-    → SSE broadcast: TEXT_MESSAGE_* (runId = conversationId)
-    → AgentSessionService.executeSession(turnId)
-      → SandboxSessionManager.ensureSession(conversationId)
-        → gRPC DeliverTurn(session_id, turn_id, messages[])
-          → Sandbox converts: turnId → HarnessTurnInput.turnId
-            → Harness executes with runId = turnId
-              → Yields AgentEvent stream
-            → Sandbox converts: AgentEvent → proto SessionEvent
-          → Orchestrator receives SessionEvent stream
-        → SessionTurnService converts: SessionEvent → AGUIEvent (runId = turnId)
-      → AgentSessionService broadcasts AGUIEvent via SSE
-      → EventBus emits: run.text_chunk, run.tool_started, etc. (turnId in payload)
-        → SSEBroadcaster maps: turnId → AG-UI runId
+```sql
+SELECT seq, source_type, source_payload
+FROM event_store
+WHERE source_type IS NOT NULL
+ORDER BY seq;
 ```
 
-## Section 4: The `runId` Contract
+See [docs/event-spine-provenance-inventory.md](/path/to/stablehand/docs/event-spine-provenance-inventory.md)
+and [ADR 016](/path/to/stablehand/docs/adr/016-raw-event-provenance-on-event-spine.md).
 
-`runId` exists at 3 boundaries:
-1. **AG-UI wire format** (SSE events to browser) — MUST be `runId`, protocol-mandated
-2. **Proto/gRPC** (between orchestrator and sandbox) — Does NOT exist in proto. Injected by orchestrator into EmitEvent payloads.
-3. **Harness internal** (inside sandbox containers) — Used as the tool execution context identifier. Set from proto `turn_id`.
+## Run-Channel Projection
 
-**Rule**: Internal code NEVER uses `runId` as a variable name. Use `turnId`, `sessionId`, or `conversationId` as appropriate. The `runId` field name appears ONLY when constructing AG-UI wire events or reading them from SSE.
+| Internal event | Canonical frame(s) | Notes |
+|---|---|---|
+| `turn.pending` | `CUSTOM name: ctxmill.turn.pending` | Pre-start queued/accepted signal. |
+| `turn.started` | `RUN_STARTED` | `runId = turnId`, `threadId = conversationId`. |
+| `user.message` | `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END` | User echo uses `runId = conversationId` because it is conversation-scoped. |
+| `run.text_chunk` | `TEXT_MESSAGE_START` if needed, then `TEXT_MESSAGE_CONTENT` | Assistant message ids are stable server-side ids: `${turnId}-m${n}`. |
+| `run.tool_started` | `TOOL_CALL_START`, `TOOL_CALL_ARGS` | Closes an open assistant text message before the tool call. |
+| `run.tool_result` | `TOOL_CALL_END`, `TOOL_CALL_RESULT`, optional `CUSTOM name: ctxmill.a2ui.render` | A2UI blocks are detected from `a2ui-render` tool results and become replayable. |
+| `run.interrupted` | `CUSTOM name: ctxmill.hitl.requested` | Legacy rendering maps this to `HITL_PAUSE` for transition clients. |
+| `run.interrupt_resolved` | `CUSTOM name: ctxmill.hitl.resolved` | Resolution marker. |
+| `message.committed` | `CUSTOM name: ctxmill.message.committed` | Durable message commit signal. |
+| `turn.completed` | Optional `RUN_ERROR`, then `RUN_FINISHED` | Error/cancelled turns emit AG-UI `RUN_ERROR.message`, then terminal finish. |
+| `run.ag_ui_event` | Passthrough frame type | Used for harness frames not otherwise normalized. |
+
+## SSE Stream Behavior
+
+`GET /api/agents/:id/stream` writes:
+
+1. A `CONNECTED` bootstrap frame with `latestSeq`.
+2. `CUSTOM subtype: state_snapshot` frames for live/restoring sandbox sessions.
+3. Durable replay frames when `Last-Event-ID` parses as a seq id.
+4. Live frames through `SSEManager.subscribeDurable(...)`.
+
+Bootstrap frames are direct route writes, not persisted run frames.
+
+SSE ids use a zero-padded global seq:
+
+```text
+id: 000000000042
+data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123"}
+```
+
+Unknown or legacy-format `Last-Event-ID` values are treated as a fresh connect.
+Replay is served from `event_store`, not volatile in-memory history. The current
+single replay query uses the repository default frame limit; very large reconnect
+windows should be paged if they become a product requirement. A small per-agent
+ring buffer only closes the replay-to-live attach race.
+
+Wire negotiation:
+
+- Default: canonical AG-UI vocabulary.
+- `?wire=legacy`: transition rendering for one release.
+
+## gRPC Proto Mapping
+
+**HarnessService** (orchestrator to sandbox):
+
+| RPC | Purpose | Important fields |
+|---|---|---|
+| `OpenSession` | Initialize fresh or restored harness session. | `session_id`, `agent_id`, `conversation_id`, bootstrap payload. |
+| `DeliverTurn` | Deliver user/tool continuation messages to a session. | `session_id`, `turn_id`, `messages`, `tools`. |
+| `SuspendSession` | Export harness/runner checkpoint state. | `session_id`, `reason`. Workspace capture happens in the orchestrator after this RPC. |
+| `KillSession` | Stop a sandbox session. | `session_id`, `reason`. |
+
+**OrchestratorService** (sandbox to orchestrator):
+
+| RPC | Purpose | Notes |
+|---|---|---|
+| `RequestTool` | Execute orchestrator-location tools. | Sandbox callback auth is session-scoped HMAC. |
+| `EmitEvent` | Emit custom events from the sandbox. | Payload is persisted/triggered as custom event data. |
+| `RegisterArtifact` | Register uploaded artifact metadata. | Daemon tools upload bytes near the sandbox. |
+| `ResolveArtifact` | Resolve artifact metadata/download info. | Used by daemon-side artifact tools. |
+
+Proto definitions live in
+[sandbox.proto](/path/to/stablehand/packages/proto/ctxmill/sandbox/v1/sandbox.proto);
+conversion lives in
+[proto-convert.ts](/path/to/stablehand/packages/sandbox-daemon/src/sandbox/proto-convert.ts).
+
+## Gotchas
+
+- `runId` is a wire/API term. Do not introduce internal `runId` state when the value is actually a `turnId`.
+- `/api/events` is an operational event log over `event_store`; custom events retain their original type strings.
+- The deleted scheduled-event queue is not the active run dispatch path; durable event work should build on `event_store`.
+- The canonical stream is durable, but trigger dispatch cursoring is still tracked separately in beads.

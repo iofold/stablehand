@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { SessionStatusCoordinator } from '../session-status-coordinator.js';
+import { SandboxSessionStatusConflictError } from '../../../database/repository.js';
+import { SessionStatusCoordinator, StaleTransitionError } from '../session-status-coordinator.js';
 import { SessionStateStore } from '../session-state-store.js';
 import type { SessionRecord } from '../types.js';
 
@@ -57,6 +58,7 @@ describe('SessionStatusCoordinator', () => {
       expect.objectContaining({
         checkpointRef: null,
       }),
+      { expectedFrom: 'RESTORING' },
     );
     expect(record.status).toBe('ACTIVE');
   });
@@ -82,6 +84,7 @@ describe('SessionStatusCoordinator', () => {
         containerName: null,
         containerId: null,
       }),
+      { expectedFrom: 'ACTIVE' },
     );
     expect(record.containerName).toBe('');
     expect(record.containerId).toBe('');
@@ -111,5 +114,30 @@ describe('SessionStatusCoordinator', () => {
       sessionId: 'missing-session',
       toStatus: 'ACTIVE',
     })).rejects.toThrow('requires fromStatus');
+  });
+
+  it('surfaces stale DB transitions and leaves the memory mirror untouched', async () => {
+    const { coordinator, updateSandboxSessionStatus, stateStore } = createCoordinator();
+    const record = seedSession(stateStore, { status: 'ACTIVE' });
+    updateSandboxSessionStatus.mockRejectedValueOnce(
+      new SandboxSessionStatusConflictError(record.sessionId, 'ACTIVE', 'CHECKPOINTED'),
+    );
+
+    await expect(coordinator.transition({
+      sessionId: record.sessionId,
+      toStatus: 'CHECKPOINTED',
+      clearRuntime: true,
+    })).rejects.toBeInstanceOf(StaleTransitionError);
+
+    expect(record.status).toBe('ACTIVE');
+    expect(updateSandboxSessionStatus).toHaveBeenCalledWith(
+      record.sessionId,
+      'CHECKPOINTED',
+      expect.objectContaining({
+        containerName: null,
+        containerId: null,
+      }),
+      { expectedFrom: 'ACTIVE' },
+    );
   });
 });

@@ -70,7 +70,7 @@ metadata:
 spec:
   harness: harness-type
   harnessConfig:
-    provider: openai|anthropic
+    provider: openai|anthropic|google
     model: model-id
     apiKeyRef: "$secret:KEY_NAME"
   instructions: |

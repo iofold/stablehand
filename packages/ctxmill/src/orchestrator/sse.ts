@@ -167,9 +167,9 @@ export class SSEManager {
   }
 
   /**
-   * Serve-mode broadcast (ADR-015): the event id is the durable global seq.
-   * Each client receives its negotiated vocabulary (Phase B: legacy default,
-   * ?wire=canonical opt-in). Frames also land in a small per-agent ring buffer
+   * Serve-mode broadcast: the event id is the durable global seq.
+   * Each client receives its negotiated vocabulary (canonical default,
+   * ?wire=legacy transition escape hatch). Frames also land in a small per-agent ring buffer
    * so subscribeDurable can close the SERIAL-vs-commit-order race between a
    * reconnect's DB replay and the live tail.
    */
@@ -276,19 +276,6 @@ export class SSEManager {
    */
   getClientCount(agentId: string): number {
     return this.connections.get(agentId)?.size ?? 0;
-  }
-
-  /**
-   * Get agent IDs that have at least one connected SSE client.
-   */
-  getActiveAgentIds(): string[] {
-    const ids: string[] = [];
-    for (const [agentId, clients] of this.connections) {
-      if (clients.size > 0) {
-        ids.push(agentId);
-      }
-    }
-    return ids;
   }
 
   /**

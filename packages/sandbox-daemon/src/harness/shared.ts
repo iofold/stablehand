@@ -1,4 +1,21 @@
+import { z } from 'zod';
+import {
+  CANONICAL_LLM_PROVIDERS,
+  normalizeLLMProvider,
+  supportedLLMProviderDescription,
+  type CanonicalLLMProvider,
+} from '@ctxmill/shared';
 import type { ResolvedSecrets } from './types.js';
+
+const canonicalProviderValues = [...CANONICAL_LLM_PROVIDERS] as [CanonicalLLMProvider, ...CanonicalLLMProvider[]];
+
+export const CanonicalProviderSchema = z.preprocess(
+  (value) => typeof value === 'string' ? normalizeLLMProvider(value) ?? value : value,
+  z.enum(canonicalProviderValues, {
+    error: `Unsupported LLM provider. Supported providers: ${supportedLLMProviderDescription()}`,
+  }),
+);
+
 export function normalizeStreamTextDeltas(content: unknown): string[] {
   if (typeof content === 'string') {
     return content.length > 0 ? [content] : [];

@@ -279,11 +279,13 @@ function appendPtcDegradedNotice(systemPrompt: string, err: unknown): string {
 function phaseForEvent(event: AgentEvent): ExecutionPhase | null {
   switch (event.type) {
     case 'text_delta':
-      return 'after_llm';
+      return 'llm_call_in_flight';
     case 'tool_call_start':
       return 'tool_execution';
     case 'tool_call_end':
-      return 'after_tool';
+      return 'llm_call_in_flight';
+    case 'message_committed':
+      return 'after_llm';
     case 'approval_needed':
       return 'hitl_wait';
     case 'approval_resolved':

@@ -13,7 +13,6 @@ import type { LocalFunctionExecutor } from '../../tool/executor.js';
 import type { DefaultToolRegistry } from '../../tool/registry.js';
 import type { ToolContext } from '../../tool/types.js';
 import type { DatabaseRepository } from '../../database/repository.js';
-import type { ArtifactStore } from '../../artifact/index.js';
 import {
   createOrchestratorServiceImpl,
   DefaultOrchestratorToolRegistry,
@@ -29,7 +28,6 @@ export interface GrpcRouterOptions {
   toolExecutor?: LocalFunctionExecutor;
   toolDefinitionRegistry?: DefaultToolRegistry;
   repository?: DatabaseRepository;
-  artifactStore?: ArtifactStore;
 }
 
 export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRouter) => void {
@@ -62,7 +60,6 @@ export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRoute
     eventBus,
     toolRegistry,
     repository: opts.repository,
-    artifactStore: opts.artifactStore,
   });
 
   return (router: ConnectRouter) => {

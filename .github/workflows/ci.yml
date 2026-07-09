@@ -36,6 +36,22 @@ jobs:
       - name: UI tests
         run: pnpm test:ui
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install
+      - name: Audit production dependencies
+        run: pnpm audit:prod
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest

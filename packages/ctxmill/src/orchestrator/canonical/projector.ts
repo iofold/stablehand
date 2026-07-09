@@ -49,6 +49,15 @@ export class CanonicalProjector {
   private readonly textStates = new Map<string, TurnTextState>();
 
   project(eventName: string, payload: Record<string, unknown>): CanonicalFrame[] {
+    const sourcePayload = JSON.stringify(payload);
+    const frames = this.projectFrames(eventName, payload);
+    const durableFrames = frames.length > 0 ? frames : [this.provenanceOnlyFrame(eventName, payload)];
+    return durableFrames.map((frame, index) => index === 0
+      ? { ...frame, sourceType: eventName, sourcePayload }
+      : frame);
+  }
+
+  private projectFrames(eventName: string, payload: Record<string, unknown>): CanonicalFrame[] {
     const channel = classifyChannel(eventName);
     if (channel !== 'run') {
       // System and user-defined custom events persist verbatim: same type,
@@ -296,5 +305,20 @@ export class CanonicalProjector {
       value: payload,
       ...payload,
     });
+  }
+
+  private provenanceOnlyFrame(eventName: string, payload: Record<string, unknown>): CanonicalFrame {
+    return {
+      type: 'ctxmill.raw_event',
+      channel: 'system',
+      agentId: typeof payload.agentId === 'string' ? payload.agentId : '',
+      turnId: typeof payload.turnId === 'string' ? payload.turnId : null,
+      conversationId: typeof payload.conversationId === 'string' ? payload.conversationId : null,
+      body: {
+        type: 'ctxmill.raw_event',
+        sourceType: eventName,
+        timestamp: typeof payload.timestamp === 'number' ? payload.timestamp : Date.now(),
+      },
+    };
   }
 }

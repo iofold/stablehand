@@ -140,44 +140,8 @@ export interface ApiConversationSummary {
   sandboxSessionId?: string;
 }
 
-// ── Sandbox Session types ───────────────────────────────────────
-
-/** Persistent sandbox session as returned by sandbox session APIs. */
-export interface ApiSandboxSession {
-  id: string;
-  conversationId: string;
-  agentId: string;
-  status: SandboxSessionStatus;
-  containerName?: string;
-  harnessName: string;
-  createdAt: string;
-  lastActivityAt: string;
-  restoreAttempts?: number | null;
-  lastRestoreError?: string | null;
-}
-
 export interface ApiSandboxRestoreSuccess {
   sessionId: string;
   status: SandboxSessionStatus;
   restoreAttempts: 0;
-}
-
-export interface ApiSandboxRestoreError {
-  error: 'Restore failed';
-  code: 'restore_failed';
-  category: 'retryable' | 'non_retryable';
-  detail: string;
-  status: SandboxSessionStatus | 'TERMINATED';
-  restoreAttempts: number | null;
-  sessionId: string;
-}
-
-/** Session turn as returned by sandbox session turn APIs. */
-export interface ApiSessionTurn {
-  turnId: string;
-  sessionId: string;
-  status: 'pending' | 'in_flight' | 'completed' | 'error';
-  messageCount: number;
-  startedAt?: string;
-  completedAt?: string;
 }

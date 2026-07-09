@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { TypedEventBus, EventName } from './bus.js';
+import type { TypedEventBus } from './bus.js';
 import type { DatabaseRepository } from '../database/repository.js';
+import type { TriggerSelect } from '../database/types.js';
+import { isUniqueConstraintViolation } from '../database/errors.js';
 import type { EventTrigger } from './triggers.js';
 import { interpolateTemplate } from './triggers.js';
 import { matchesSelector } from './wait-condition.js';
+import type { SpineConsumer, SpineRawEvent } from './spine-consumer-runner.js';
 
 /** Maximum trigger depth to prevent infinite trigger chains. */
 export const MAX_TRIGGER_DEPTH = 5;
@@ -42,7 +45,7 @@ function selectorsEqual(
   return JSON.stringify(normalizeSelector(a)) === JSON.stringify(normalizeSelector(b));
 }
 
-function hydrateTrigger(row: Awaited<ReturnType<DatabaseRepository['getTrigger']>>): EventTrigger | undefined {
+function hydrateTrigger(row: TriggerSelect | undefined): EventTrigger | undefined {
   if (!row) return undefined;
   return {
     id: row.id,
@@ -55,32 +58,22 @@ function hydrateTrigger(row: Awaited<ReturnType<DatabaseRepository['getTrigger']
   };
 }
 
-function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object'
-    && err !== null
-    && 'code' in err
-    && (err as { code?: unknown }).code === '23505';
-}
-
 /** Callback invoked when a trigger fires to start a background run. */
-export type TriggerRunCallback = (agentId: string, task: string, triggerId: string, triggerDepth?: number) => Promise<void>;
+export type TriggerRunCallback = (
+  agentId: string,
+  task: string,
+  triggerId: string,
+  triggerDepth?: number,
+  eventSeq?: number,
+) => Promise<void>;
 
-/** All known event types the trigger manager subscribes to. */
-const KNOWN_EVENT_TYPES: EventName[] = [
-  'turn.started',
-  'run.text_chunk',
-  'run.tool_started',
-  'run.tool_result',
-  'run.interrupted',
-  'run.interrupt_resolved',
-  'turn.completed',
-  'run.resumed',
-  'feedback.received',
-  'agent.created',
-  'agent.deleted',
-  'client.connected',
-  'client.disconnected',
-];
+export function createTriggerSpineConsumer(manager: EventTriggerManager): SpineConsumer {
+  return {
+    name: 'event-triggers',
+    wants: (sourceType) => manager.hasEnabledTriggerForEvent(sourceType),
+    handle: (event) => manager.handleRawEvent(event),
+  };
+}
 
 /**
  * EventTriggerManager stores event triggers and fires background runs
@@ -95,10 +88,6 @@ export class EventTriggerManager {
   private eventBus: TypedEventBus;
   private db: DatabaseRepository;
   private onFire: TriggerRunCallback;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- EventEmitter handler types are wider than EventMap
-  private handlers: Map<string, (...args: any[]) => void> = new Map();
-  /** Tracks custom event types we're subscribed to (beyond KNOWN_EVENT_TYPES). */
-  private subscribedCustomTypes = new Set<string>();
   private readonly maxDepth: number;
 
   constructor(
@@ -114,7 +103,7 @@ export class EventTriggerManager {
   }
 
   /**
-   * Load persisted triggers from the database and subscribe to the event bus.
+   * Load persisted triggers from the database.
    * Call this once during server startup.
    */
   async start(): Promise<void> {
@@ -124,18 +113,6 @@ export class EventTriggerManager {
       const trigger = hydrateTrigger(row);
       if (!trigger) continue;
       this.triggers.set(trigger.id, trigger);
-    }
-
-    // Subscribe to all known event types
-    for (const eventType of KNOWN_EVENT_TYPES) {
-      this.subscribeToEvent(eventType);
-    }
-
-    // Subscribe to custom event types used by existing triggers
-    for (const trigger of this.triggers.values()) {
-      if (!KNOWN_EVENT_TYPES.includes(trigger.eventType as EventName)) {
-        this.ensureCustomSubscription(trigger.eventType);
-      }
     }
 
     console.log(`[EventTriggerManager] started with ${this.triggers.size} triggers`);
@@ -175,7 +152,7 @@ export class EventTriggerManager {
       });
       savedTrigger = hydrateTrigger(saved) ?? trigger;
     } catch (err) {
-      if (!isUniqueViolation(err)) {
+      if (!isUniqueConstraintViolation(err)) {
         throw err;
       }
       const saved = await this.db.getTriggerBySignature(input.agentId, input.eventType, input.selector);
@@ -189,11 +166,6 @@ export class EventTriggerManager {
     }
 
     this.triggers.set(savedTrigger.id, savedTrigger);
-
-    // Subscribe to custom event type if needed
-    if (!KNOWN_EVENT_TYPES.includes(savedTrigger.eventType as EventName)) {
-      this.ensureCustomSubscription(savedTrigger.eventType);
-    }
 
     return savedTrigger;
   }
@@ -241,7 +213,7 @@ export class EventTriggerManager {
       });
       savedTrigger = hydrateTrigger(saved) ?? updated;
     } catch (err) {
-      if (isUniqueViolation(err)) {
+      if (isUniqueConstraintViolation(err)) {
         throw new TriggerConflictError(
           `Trigger already exists for ${updated.agentId}/${updated.eventType} with the same selector`,
         );
@@ -250,11 +222,6 @@ export class EventTriggerManager {
     }
 
     this.triggers.set(triggerId, savedTrigger);
-
-    // Subscribe to new custom event type if changed
-    if (updates.eventType && !KNOWN_EVENT_TYPES.includes(savedTrigger.eventType as EventName)) {
-      this.ensureCustomSubscription(savedTrigger.eventType);
-    }
 
     return savedTrigger;
   }
@@ -306,9 +273,6 @@ export class EventTriggerManager {
    * report success before durable persistence accepts the event.
    */
   async emitCustomEventAsync(type: string, agentId: string | undefined, payload: Record<string, unknown>): Promise<void> {
-    // Ensure we're subscribed to this custom type
-    this.ensureCustomSubscription(type);
-
     // Propagate _triggerDepth from the incoming payload if present
     const eventPayload: Record<string, unknown> = {
       type,
@@ -322,44 +286,39 @@ export class EventTriggerManager {
       eventPayload._triggerDepth = payload._triggerDepth;
     }
 
-    // Emit to the bus — the subscription registered by ensureCustomSubscription()
-    // routes this to handleEvent() exactly once. Do NOT also call handleEvent()
-    // directly; that caused a double-fire bug where every custom event triggered
-    // matching triggers twice (one from the bus handler, one from the direct call).
+    // Emit to the bus. CanonicalLog persists the source event; SpineConsumerRunner
+    // routes the durable source row back to handleRawEvent().
     await this.eventBus.emitCustomAsync(type, agentId ?? '', eventPayload);
+    if (!this.hasDurablePersistence()) {
+      // Non-durable tests and embedded in-memory harnesses do not construct a
+      // CanonicalLog/SpineConsumerRunner. Keep those harnesses functional while
+      // production buses with persistEvent remain spine-only.
+      await this.handleEvent(type, eventPayload);
+    }
   }
 
-  /**
-   * Subscribe to a specific event type on the bus.
-   */
-  private subscribeToEvent(eventType: string): void {
-    if (this.handlers.has(eventType)) return;
-
-    const handler = (payload: unknown) => {
-      this.handleEvent(eventType, payload).catch((err) =>
-        console.error(`[EventTriggerManager] error handling ${eventType}:`, err),
-      );
-    };
-
-    this.handlers.set(eventType, handler);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- custom event types aren't in EventMap
-    this.eventBus.on(eventType as any, handler);
+  hasEnabledTriggerForEvent(eventType: string): boolean {
+    for (const trigger of this.triggers.values()) {
+      if (trigger.enabled && trigger.eventType === eventType) {
+        return true;
+      }
+    }
+    return false;
   }
 
-  /**
-   * Ensure a custom event type has a subscription.
-   */
-  private ensureCustomSubscription(eventType: string): void {
-    if (this.subscribedCustomTypes.has(eventType)) return;
-    this.subscribedCustomTypes.add(eventType);
-    this.subscribeToEvent(eventType);
+  async handleRawEvent(event: SpineRawEvent): Promise<void> {
+    await this.handleEvent(event.sourceType, event.payload, event.seq);
+  }
+
+  private hasDurablePersistence(): boolean {
+    return typeof (this.eventBus as unknown as { persistEvent?: unknown }).persistEvent === 'function';
   }
 
   /**
    * Handle an incoming event: check all triggers for matches and fire runs.
    * Respects `_triggerDepth` in the payload to prevent infinite trigger chains.
    */
-  private async handleEvent(eventType: string, payload: unknown): Promise<void> {
+  private async handleEvent(eventType: string, payload: unknown, eventSeq?: number): Promise<void> {
     const payloadObj = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
 
     // --- Cascade protection: check trigger depth ---
@@ -388,6 +347,10 @@ export class EventTriggerManager {
       }
 
       if (firedAgents.has(trigger.agentId)) continue;
+      if (eventSeq !== undefined && await this.db.hasTriggerFiring(trigger.id, eventSeq)) {
+        firedAgents.add(trigger.agentId);
+        continue;
+      }
 
       // Interpolate the task template
       const flatPayload = 'payload' in payloadObj && typeof payloadObj.payload === 'object'
@@ -397,7 +360,10 @@ export class EventTriggerManager {
 
       // Fire the run — errors are isolated per trigger
       try {
-        await this.onFire(trigger.agentId, task, trigger.id, currentDepth + 1);
+        await this.onFire(trigger.agentId, task, trigger.id, currentDepth + 1, eventSeq);
+        if (eventSeq !== undefined) {
+          await this.db.recordTriggerFiring(trigger.id, eventSeq);
+        }
         firedAgents.add(trigger.agentId);
 
         // Emit trigger.fired event (as a custom event to avoid circular typed emit)
@@ -412,14 +378,10 @@ export class EventTriggerManager {
   }
 
   /**
-   * Clean up event bus subscriptions.
+   * Clean up trigger manager resources.
    */
   shutdown(): void {
-    for (const [eventType, handler] of this.handlers) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- custom event types aren't in EventMap
-      this.eventBus.off(eventType as any, handler);
-    }
-    this.handlers.clear();
-    this.subscribedCustomTypes.clear();
+    // Trigger delivery is owned by SpineConsumerRunner; no direct bus listeners
+    // are registered here.
   }
 }

@@ -2,4 +2,4 @@ packages:
   - packages/*
   - packages/examples/*
 
-onlyBuiltDependencies: '@bufbuild/buf esbuild better-sqlite3'
+onlyBuiltDependencies: '@bufbuild/buf esbuild'

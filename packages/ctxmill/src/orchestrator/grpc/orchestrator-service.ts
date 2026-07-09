@@ -27,7 +27,6 @@ import {
 import type { TypedEventBus } from '../../events/bus.js';
 import type { InterruptManager } from '../interrupt.js';
 import type { DatabaseRepository } from '../../database/repository.js';
-import type { ArtifactStore } from '../../artifact/index.js';
 
 /**
  * Context passed to each orchestrator-side tool handler when dispatching
@@ -133,7 +132,6 @@ export interface OrchestratorServiceDeps {
   eventBus: TypedEventBus;
   toolRegistry: OrchestratorToolRegistry;
   repository?: DatabaseRepository;
-  artifactStore?: ArtifactStore;
 }
 
 /**
@@ -356,7 +354,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
     },
 
     async resolveArtifact(req: ResolveArtifactRequest): Promise<ResolveArtifactResponse> {
-      const { artifactId } = req;
+      const { artifactId, agentId: callerAgentId } = req;
       if (!artifactId) {
         throw new ConnectError('artifact_id is required', Code.InvalidArgument);
       }
@@ -369,7 +367,13 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
         }
 
         const row = await deps.repository.getArtifact(artifactId);
-        if (!row) {
+        // Ownership boundary: the callback-auth interceptor has already verified
+        // that req.agentId is the true authenticated sandbox agent, so an
+        // owned artifact belonging to a different agent must not be resolvable
+        // across sandboxes. Unowned rows (agentId null — orphaned or operator
+        // uploads) and open/dev mode (callerAgentId empty) stay resolvable, and
+        // a cross-agent hit is reported as not-found to avoid an existence oracle.
+        if (!row || (callerAgentId && row.agentId && row.agentId !== callerAgentId)) {
           return create(ResolveArtifactResponseSchema, {
             error: `Artifact not found: ${artifactId}`,
           });

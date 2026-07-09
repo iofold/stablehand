@@ -9,12 +9,11 @@ export type MessageSelect = typeof pgSchema.messages.$inferSelect;
 export type TurnStatus = pgSchema.TurnStatus;
 export type TurnInsert = typeof pgSchema.turns.$inferInsert;
 export type TurnSelect = typeof pgSchema.turns.$inferSelect;
-export type SuspendedSessionInsert = typeof pgSchema.suspendedSessions.$inferInsert;
-export type SuspendedSessionRow = typeof pgSchema.suspendedSessions.$inferSelect;
-export type ScheduledEventRow = typeof pgSchema.scheduledEvents.$inferSelect;
 type TriggerInsertBase = typeof pgSchema.eventTriggers.$inferInsert;
 export type TriggerInsert = Omit<TriggerInsertBase, 'selectorHash'> & { selectorHash?: string };
 export type TriggerSelect = typeof pgSchema.eventTriggers.$inferSelect;
+export type SpineCursorRow = typeof pgSchema.spineCursors.$inferSelect;
+export type TriggerFiringRow = typeof pgSchema.triggerFirings.$inferSelect;
 export type VersionSelect = typeof pgSchema.agentVersions.$inferSelect;
 export type InterruptInsert = typeof pgSchema.pendingInterrupts.$inferInsert;
 export type InterruptRow = typeof pgSchema.pendingInterrupts.$inferSelect;
@@ -41,6 +40,8 @@ export interface EventFrameInsert {
   turnId?: string | null;
   conversationId?: string | null;
   channel?: 'run' | 'custom' | 'system';
+  sourceType?: string | null;
+  sourcePayload?: string | null;
 }
 export type ArtifactInsert = typeof pgSchema.artifacts.$inferInsert;
 export type ArtifactRow = typeof pgSchema.artifacts.$inferSelect;

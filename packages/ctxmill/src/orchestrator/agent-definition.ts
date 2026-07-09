@@ -36,15 +36,15 @@ export function parseStoredHarnessConfig(configJson: string | null | undefined):
   return parsed;
 }
 
-/** Precedence: manifest.resourceLimits ?? manifest.spec.resources ?? metadata.resourceLimits. */
+/** Precedence: metadata.resourceLimits ?? manifest.resourceLimits ?? manifest.spec.resources. */
 export function resolveResourceLimits(agent: StoredAgent): AgentResourceLimits | undefined {
   const manifest = isObjectRecord(agent.manifest) ? agent.manifest : undefined;
   const manifestSpec = isObjectRecord(manifest?.spec) ? manifest.spec : undefined;
   const metadata = isObjectRecord(agent.metadata) ? agent.metadata : undefined;
 
-  return (manifest?.resourceLimits ??
-    manifestSpec?.resources ??
-    metadata?.resourceLimits) as AgentResourceLimits | undefined;
+  return (metadata?.resourceLimits ??
+    manifest?.resourceLimits ??
+    manifestSpec?.resources) as AgentResourceLimits | undefined;
 }
 
 /** Manifest/metadata-derived runtime fields; a metadata.nativeTools key overrides the manifest. */

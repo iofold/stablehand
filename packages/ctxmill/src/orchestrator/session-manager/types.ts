@@ -8,6 +8,8 @@ import type { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { Message } from '../../types.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { InterruptManager } from '../interrupt.js';
+import type { SessionStateStore } from './session-state-store.js';
+import type { SessionStatusCoordinator } from './session-status-coordinator.js';
 import type { SessionEvent } from '../session-turn-service.js';
 
 export interface Logger {
@@ -109,6 +111,8 @@ export interface SandboxSessionManagerDeps {
   containerManager: SandboxContainerManager;
   db: DatabaseRepository;
   lifecyclePolicy: ContainerLifecyclePolicy;
+  stateStore: SessionStateStore;
+  statusCoordinator: SessionStatusCoordinator;
   eventBus?: TypedEventBus;
   maxConcurrentSessionsPerAgent?: number;
   interruptManager?: InterruptManager;

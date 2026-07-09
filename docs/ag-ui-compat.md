@@ -11,8 +11,6 @@ Content-Type: application/json
 
 **Response:** `text/event-stream` (SSE) scoped to the requested run.
 
-`/api/ag-ui/agents/:agentId/run` remains available as a compatibility alias for older integrations.
-
 ## Quick Start
 
 ### With `@ag-ui/client` (HttpAgent)
@@ -201,10 +199,10 @@ The companion resolution marker is `name: 'ctxmill.hitl.resolved'`.
 |--------|-----------------------------------|-------------------------------------|
 | Method | GET (persistent EventSource) | POST (per-run) |
 | Scope | All runs for an agent, multiplexed | Single run, closes on completion |
-| Events | ctxmill-specific (TURN_PENDING, MESSAGE_COMMITTED, HITL_PAUSE) | Strict AG-UI protocol |
-| Reconnect | Last-Event-ID replay | Re-POST with same runId → snapshot |
-| Tool results | `TOOL_CALL_RESULT` | `TOOL_CALL_END` (AG-UI standard) |
-| Text lifecycle | No explicit START/END | `TEXT_MESSAGE_START` → content → `TEXT_MESSAGE_END` |
+| Events | Canonical AG-UI frames plus `CUSTOM name: ctxmill.*` signals | Strict AG-UI protocol |
+| Reconnect | Durable `Last-Event-ID` seq replay | Re-POST with same runId -> snapshot |
+| Tool results | `TOOL_CALL_END` plus `TOOL_CALL_RESULT` compatibility data | `TOOL_CALL_END` (AG-UI standard) |
+| Text lifecycle | `TEXT_MESSAGE_START` -> content -> `TEXT_MESSAGE_END` | `TEXT_MESSAGE_START` -> content -> `TEXT_MESSAGE_END` |
 
 ## Not Yet Implemented
 
@@ -221,9 +219,8 @@ POST /api/ag-ui/:id/run
   ↓
 SSE response (text/event-stream)
   ├─ MESSAGES_SNAPSHOT (from DB)
-  ├─ subscribe to TypedEventBus (filtered by turnId)
-  │   ↓ AGUIEventNormalizer transforms each event
-  │   ↓ write to response as SSE data lines
+  ├─ subscribe to canonical/event-bus flow (filtered by turnId)
+  │   ↓ canonical AG-UI frames are written as SSE data lines
   └─ RUN_FINISHED/RUN_ERROR → close connection
 ```
 

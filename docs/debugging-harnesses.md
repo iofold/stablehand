@@ -12,7 +12,7 @@ Errors in CTXMill travel through several layers. Understanding this chain helps 
 4.  **Sandbox Daemon**: The Bun-based daemon converts this to a `SessionEvent` proto message.
 5.  **gRPC**: The event is streamed over gRPC (ConnectRPC) to the orchestrator.
 6.  **Orchestrator**: `SandboxSessionManager` streams session events to `AgentSessionService`, which emits the normalized lifecycle and message events on the `TypedEventBus`.
-7.  **SSE**: `SSEBroadcaster` subscribes to those bus events and streams AG-UI frames to the dashboard over Server-Sent Events.
+7.  **Canonical log + SSE**: `CanonicalLog` projects and persists bus events into `event_store`, then `SSEManager` streams AG-UI frames to the dashboard over Server-Sent Events.
 8.  **UI**: The React dashboard displays the error message in the run log.
 
 **Crucial Note**: By default, only the error *string* survives this chain. Stack traces are lost unless they are explicitly logged to the container's `stderr`.
@@ -59,7 +59,7 @@ The LangGraph harness uses the `deepagents` SDK, which is a pure TypeScript wrap
 -   **Common Errors**:
     -   **Model Not Found**: Check `provider` and `model` in the agent YAML. Ensure the corresponding API key is provided.
     -   **Tool Schema Invalid**: LangChain requires valid Zod schemas for tools. If a tool definition has an invalid `input` schema, the agent will fail to initialize.
-    -   **Skill Load Failure**: If the `.ctxmill/skills` directory exists but contains invalid files, the harness might fail during setup.
+    -   **Workspace asset failure**: If copied workspace files, symlinks, or SDK-native skill directories are invalid, harness setup can fail before the first model call.
 -   **Debug Output**: The harness logs `[langgraph] deliverTurn error:` to `stderr` on failure.
 -   **Middleware Errors**: If `nativeTools` blocklisting is used, check for `ctxmill-tool-blocklist` logs if tools are unexpectedly denied.
 
@@ -84,6 +84,9 @@ The PI Agent harness relies on a complex event-based SDK.
 This is the most common signal for a harness-level crash. A healthy turn typically emits dozens of events (text deltas, tool starts, etc.). If the orchestrator reports that a run finished with exactly **1 event**, that event is almost certainly an `error` event emitted immediately upon startup.
 **Action**: Check `docker logs <container-id>` immediately. The harness likely crashed before it could even start the LLM loop.
 
+### Missing Terminal Frame
+The daemon should emit `TurnCompleted` only after a semantic end and no pending requests. Suspend paths do not emit terminal frames. If a gRPC stream ends with zero events or without a terminal frame, the orchestrator treats the turn as failed. `TurnFinalizer` is the single DB terminal writer, and running tool calls are repaired to error before finalization.
+
 ### Container Fails to Start
 -   **Image Not Found**: Ensure you have built the harness images: `docker build --target harness-<name> -t ctxmill/harness-<name> -f Dockerfile.sandbox .`.
 -   **Resource Limits**: If the container is killed immediately (OOMKilled), check the `memoryMb` setting. Claude agents, in particular, require at least 2GiB of RAM.
@@ -99,6 +102,8 @@ The orchestrator waits for the sandbox daemon to become ready. If you see a heal
 Secrets are injected into the sandbox container environment.
 -   If an agent fails with "Missing API key," check if the secret is defined in the orchestrator and allowlisted for the agent.
 -   The daemon logs `resolved N secret env var(s)` when opening a session. If the count does not include expected secret keys, the injection failed.
+-   Secrets are injected again on restore; resolved values are intentionally not serialized into checkpoints.
+-   Sandbox callbacks require session-scoped auth derived from `CTXMILL_CALLBACK_TOKEN_SECRET` or `CTXMILL_API_TOKEN`. Callback auth failures appear on the orchestrator ConnectRPC surface.
 
 ### Workspace Not Found / Permission Denied
 Harnesses expect to work in `/workspace`.

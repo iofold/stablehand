@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TypedEventBus } from '../bus.js';
 import { EventTriggerManager, TriggerConflictError } from '../trigger-manager.js';
 import type { DatabaseRepository } from '../../database/repository.js';
+import type { SpineRawEvent } from '../spine-consumer-runner.js';
 
 function createDbMock() {
   return {
@@ -9,11 +10,15 @@ function createDbMock() {
     saveTrigger: vi.fn().mockImplementation(async (data) => data),
     deleteTrigger: vi.fn().mockResolvedValue(undefined),
     getTriggerBySignature: vi.fn().mockResolvedValue(undefined),
+    hasTriggerFiring: vi.fn().mockResolvedValue(false),
+    recordTriggerFiring: vi.fn().mockResolvedValue({ id: 'firing-1' }),
   } as unknown as DatabaseRepository & {
     getTriggers: ReturnType<typeof vi.fn>;
     saveTrigger: ReturnType<typeof vi.fn>;
     deleteTrigger: ReturnType<typeof vi.fn>;
     getTriggerBySignature: ReturnType<typeof vi.fn>;
+    hasTriggerFiring: ReturnType<typeof vi.fn>;
+    recordTriggerFiring: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -22,7 +27,22 @@ function createManager(db = createDbMock()) {
   const onFire = vi.fn().mockResolvedValue(undefined);
   return {
     db,
+    onFire,
     manager: new EventTriggerManager(bus, db, onFire),
+  };
+}
+
+function rawEvent(overrides: Partial<SpineRawEvent> = {}): SpineRawEvent {
+  return {
+    seq: 42,
+    sourceType: 'custom.ready',
+    sourcePayload: JSON.stringify({ type: 'custom.ready', agentId: 'agent-0', payload: { ok: true }, timestamp: 1_000 }),
+    payload: { type: 'custom.ready', agentId: 'agent-0', payload: { ok: true }, ok: true, value: 'abc', timestamp: 1_000 },
+    agentId: 'agent-0',
+    turnId: null,
+    conversationId: null,
+    createdAt: 1_000,
+    ...overrides,
   };
 }
 
@@ -94,5 +114,37 @@ describe('EventTriggerManager durable mutations', () => {
 
     expect(manager.get(first.id)?.eventType).toBe('custom.ready');
     expect(manager.get(second.id)?.eventType).toBe('custom.other');
+  });
+
+  it('fires matching raw spine events and records the event seq after the run starts', async () => {
+    const { manager, db, onFire } = createManager();
+    const trigger = await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      selector: { ok: true },
+      taskTemplate: 'process {{payload.value}}',
+      enabled: true,
+    });
+
+    await manager.handleRawEvent(rawEvent());
+
+    expect(onFire).toHaveBeenCalledWith('agent-1', 'process abc', trigger.id, 1, 42);
+    expect(db.recordTriggerFiring).toHaveBeenCalledWith(trigger.id, 42);
+  });
+
+  it('skips raw spine events that already have a trigger firing row', async () => {
+    const { manager, db, onFire } = createManager();
+    db.hasTriggerFiring.mockResolvedValue(true);
+    await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'process',
+      enabled: true,
+    });
+
+    await manager.handleRawEvent(rawEvent());
+
+    expect(onFire).not.toHaveBeenCalled();
+    expect(db.recordTriggerFiring).not.toHaveBeenCalled();
   });
 });

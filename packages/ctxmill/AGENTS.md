@@ -1,123 +1,80 @@
-# packages/ctxmill — Core Runtime
+# packages/ctxmill - Core Runtime
 
-## OVERVIEW
+## Overview
 
-Orchestrator, sandbox container management, tool execution, event bus, PostgreSQL persistence. All execution routes through Docker sandbox containers via gRPC. Harness adapters live in `@ctxmill/sandbox-daemon`, not here. 102 source files, ~75k TS lines.
+Core orchestrator package: Fastify API, API auth, PostgreSQL repository, canonical event spine, sandbox session management, tool registries, artifact metadata, settings, manifests, and workspace helpers. Harness adapters are registered here for type/API compatibility, but live execution happens inside sandbox containers via `@ctxmill/sandbox-daemon`.
 
-## STRUCTURE
+## Structure
 
-```
+```text
 src/
-  a2ui/           Structured visual block extraction from agent output (2 files)
-  agent/          Agent discovery from filesystem + defineAgent() builder (2 files)
-  cli/            `ctxmill dev` and `ctxmill chat` entry points (3 files, dynamic imports)
-  config/         DI container, docker preset, config resolution (5 files + 1 test)
-  database/       Drizzle ORM schema, repository, migrations (6 files)
-  events/         TypedEventBus, triggers, wait primitives, queue (8 files + 1 test)
-  harness/        Harness registry + types. Adapters live in sandbox-daemon package (7 files)
-  manifest/       YAML agent manifest parsing, validation, conversion (6 files + 1 test)
-  orchestrator/   Fastify server, SSE, HITL, routes, session manager (12 files + 7 routes + 8 tests)
-  sandbox/        Container lifecycle, gRPC daemon, checkpoint/restore, timeout (15 files + 13 tests)
-  secrets/        Encrypted per-agent secret storage via PostgreSQL (4 files)
-  skills/         SKILL.md loader (frontmatter + markdown body) (1 file)
-  tool/           Tool executor, 4 providers (Local, MCP, HTTP, Composio), registry (7 files + 3 tests)
-  util/           Shared error utilities (2 files + 1 test)
-  workspace/      Session workspace + tar upload helpers (4 files)
+  a2ui/           A2UI extraction helpers and tests
+  agent/          Agent discovery and defineAgent() builder
+  artifact/       S3/MinIO artifact store and metadata integration
+  cli/            `ctxmill dev` and `ctxmill chat`
+  config/         Config resolver, docker preset, DI container
+  database/       Drizzle PostgreSQL schema, migrations, repository, row types
+  events/         TypedEventBus, triggers, waits
+  harness/        Harness registry/types and compatibility adapter classes
+  manifest/       YAML manifest parsing, validation, conversion, service
+  orchestrator/   Fastify server, auth, routes, canonical log, SSE, HITL, session services
+  sandbox/        Container managers, accounting, workspace diff, proto conversion helpers
+  secrets/        Encrypted per-agent secrets and production master-key guard
+  settings/       DB/env-backed runtime settings
+  tool/           Built-ins, executors, providers, registry, schema conversion
+  util/           Error/retry/sanitize helpers
+  workspace/      Session workspace and tar upload helpers
 ```
 
-## WHERE TO LOOK
+`knowledge/` and `learning/` are currently empty/reserved; do not document them as active runtime systems.
+
+## Where To Look
 
 | Task | File(s) | Notes |
-|------|---------|-------|
-| Understand the public API | `src/index.ts` | 60+ exports, 3 factory functions |
-| Trace a run execution | `orchestrator/agent-session-service.ts` → `orchestrator/sandbox-session-manager.ts` → `packages/sandbox-daemon/src/sandbox/runner.ts` | All runs go through sandbox containers |
-| Add an API endpoint | `orchestrator/routes/*.ts` → register in `orchestrator/server.ts` | Fastify plugin pattern |
-| Add a harness | `harness/*.ts` → register in `harness/registry.ts` | Implement `AgentHarness` interface |
-| Add a tool provider | `tool/providers/*.ts` → register in `tool/registry.ts` | Implement `ToolProvider` interface |
-| Understand DI wiring | `config/container.ts` | `createContainer()` builds all services |
-| Add a DB table | `database/schema-pg.ts` + `database/repository.ts` | Drizzle ORM, add query methods |
-| Add an event type | `events/bus.ts` EventMap type | Add payload interface, emit via bus |
-| Understand proto conversion | `sandbox/proto-convert.ts` | AgentEvent ↔ proto ↔ AG-UI mapping |
-| Modify checkpoint format | `sandbox/checkpoint.ts` | Full run state serialization (v2, 5 MB limit) |
-| Understand session lifecycle | `orchestrator/sandbox-session-manager.ts` | Session state machine, checkpoint promotion, restoration, and terminal cleanup |
-| Track active runs | `orchestrator/run-registry.ts` | In-memory run state, SSE broadcasting, event routing |
-| Understand event chaining | `events/trigger-manager.ts` | EventTriggerManager, cascade protection (depth 5) |
-| Understand tool proxying | `sandbox/tool-proxy.ts` | gRPC RequestTool RPC, 3 retries, exponential backoff |
+|---|---|---|
+| Trace an interactive turn | `orchestrator/routes/agents/sessions.ts` -> `run-startup-service.ts` -> `agent-session-service.ts` -> `sandbox-session-manager.ts` | Turn rows are durable and move queued -> running -> terminal. |
+| Trace sandbox lifecycle | `orchestrator/sandbox-session-manager.ts`, `orchestrator/session-manager/*`, `sandbox/container-manager.ts` | Checkpoint/restore, manual restore, retry budgets, accounting. |
+| Trace event streaming | `events/bus.ts`, `orchestrator/canonical/*`, `orchestrator/sse.ts`, `orchestrator/routes/agents/stream.ts` | EventBus -> CanonicalLog -> event_store -> SSEManager. No `SSEBroadcaster`. |
+| Add an API route | `orchestrator/routes/` and `orchestrator/server.ts` | `/api/*` is bearer-token protected unless route config is public. |
+| Add DB shape | `database/schema-pg.ts`, `database/migrations.ts`, `database/repository.ts`, `database/types.ts` | Keep Drizzle row types exported from `database/types.ts`. |
+| Add an event type | `events/bus.ts` plus canonical projector behavior if it affects SSE | Custom events can remain verbatim. Run-channel events usually need projection. |
+| Add a tool/provider | `tool/types.ts`, `tool/provider.ts`, `tool/providers/*`, `tool/registry.ts` | Use Zod input schemas. Artifact tools are daemon-location metadata. |
+| Add/modify HITL | `tool/builtin/request-approval.ts`, `orchestrator/interrupt.ts`, `routes/agents/interrupts.ts`, `session-manager/interrupt-resume-service.ts` | Approval/reject can resume through durable attempts. |
+| Modify auth/secrets | `orchestrator/auth.ts`, `orchestrator/grpc/callback-auth.ts`, `secrets/master-key.ts` | Production fails closed without required secrets/tokens. |
 
-## HOT FILES (most imported / most complex)
+## Key Flows
 
-| File | Imports | Lines | Role |
-|------|---------|-------|------|
-| `types.ts` | 22 | 82 | Core type definitions (AgentDefinition, HarnessRunConfig, etc.) |
-| `database/repository.ts` | 14 | 1262 | All data access — 16 tables, all query methods |
-| `orchestrator/routes/agents.ts` | — | 2213 | Agent CRUD, runs, conversations, skills, files, and workspace endpoints |
-| `orchestrator/sandbox-session-manager.ts` | — | 969 | Session state machine — checkpoint/restore lifecycle |
-| `sandbox/container-manager.ts` | 7 | 842 | Docker container lifecycle, concurrency semaphore (max 20) |
-| `events/bus.ts` | 12 | — | TypedEventBus with 18 event types |
-| `sandbox/proto-convert.ts` | — | 654 | Proto ↔ internal type conversions, AG-UI event mapping |
-| `orchestrator/run-registry.ts` | — | 545 | In-memory run state, SSE broadcasting, event routing |
-| `tool/types.ts` | 11 | — | Tool definitions, ToolProvider interface |
-
-## CONVENTIONS (beyond root)
-
-- **`private readonly` everywhere** — 209 instances; all injected deps stored this way
-- **Local Logger interface** — Each service defines its own; injected via constructor, not imported globally
-- **Only 2 custom Error classes** — `EventTimeoutError`, `ContainerLimitError`. All else uses generic `Error`
-- **Zod for tool input** — `z.object(...)` schema validation in tool definitions
-- **gRPC error codes** — Use `ConnectError` with `Code.*` (InvalidArgument, etc.)
-- **No global error handler** — Fastify catches unhandled via `logger: true`
-
-## EXECUTION FLOW
-
-```
-User message → orchestrator/agent-session-service.ts
-  → orchestrator/sandbox-session-manager.ts (creates container)
-    → container-manager.ts (Docker create/start, semaphore acquire)
-      → daemon.ts (gRPC server in container, port 50051)
-        → runner.ts (harness resolution, session lifecycle)
-          → harness/*.ts (LangGraph/Claude/PI agent execution)
-            → tool-proxy.ts (orchestrator-location tools via gRPC)
-          ← AgentEvent stream back through proto-convert.ts
-        ← SSE → React UI
+```text
+HTTP/API request
+  -> registerApiAuth on /api/*
+  -> route creates turn/message rows
+  -> RunStartupService builds launch contract
+  -> AgentSessionService/SandboxSessionManager opens or reuses sandbox session
+  -> sandbox daemon HarnessService streams SessionEvent values
+  -> TurnFinalizer writes terminal state
+  -> TypedEventBus emits internal events
+  -> CanonicalLog persists projected frames before SSE fan-out
 ```
 
-## HARNESS DEBUGGING
+Startup reconciliation:
 
-Harness code runs INSIDE sandbox containers, not in the orchestrator. This changes everything about how you debug.
+- Stranded running turns are failed unless parked on durable HITL.
+- Queued turns with persisted user-message ids are re-dispatched.
+- Live containers are rehydrated into accounting before reconciliation.
+- `RESTORING` sessions with checkpoints roll back to `CHECKPOINTED` for retry.
 
-**Error visibility chain** — Errors travel: harness catch → `{ type: 'error', error: string }` → proto SessionEvent → gRPC → orchestrator. By default, the error string is the ONLY thing that survives. Always `console.error` in harness catch blocks — container stderr is the only place you'll see stack traces.
+## Gotchas
 
-**"1 events emitted" means the harness errored immediately.** A healthy turn emits 5-100+ events. If you see 1, the single event is the error event. Check container logs with `docker logs <container-id>`.
+- `runId` is a wire field. Internally use `turnId`, `conversationId`, or `sessionId`.
+- `CTXMILL_API_TOKEN` protects `/api/*`; browser SSE uses `?access_token=` only on the stream route.
+- ConnectRPC sandbox callbacks use session-scoped HMAC credentials derived from `CTXMILL_CALLBACK_TOKEN_SECRET` or `CTXMILL_API_TOKEN`.
+- Secrets are injected at fresh start/restore and must never be serialized into checkpoints.
+- `EventQueueImpl`/`scheduled_events` was deleted; durable event work should build on `event_store`.
+- `ctxmill chat` is not the same as the repo-local `.codex/skills/ctxmill-cli` tooling; verify auth support before recommending it against protected stacks.
+- Backend tests require explicit `TEST_DATABASE_URL`; the dev1 runtime DB is refused unless `CTXMILL_TEST_ALLOW_RUNTIME_DB=1`.
 
-**ENOENT ≠ missing executable.** Node's `spawn` reports ENOENT when `cwd` doesn't exist, but the error message says "executable not found." If a harness reports "not found at /path/to/binary" and the binary exists, check that `config.workspaceDir` exists inside the container.
+## Verification
 
-**Secrets must be explicitly injected.** `SandboxSessionManager` passes `sandboxSecrets` (allowlisted env vars from orchestrator) to `createContainer()`. Container logs `loaded N secret(s) from env` on success, `no secrets found` on failure. If agents fail silently with 1 event, check secrets first.
-
-**Every harness MUST yield `message_committed`.** The persistence chain is: harness yields `message_committed` → runner converts to proto `messageCommitted` → orchestrator converts to `MESSAGE_COMMITTED` → `db.addMessage()`. If a harness only yields `text_delta` + `done`, text streams to SSE but nothing persists. The harness must accumulate text from deltas and yield `message_committed` with the full content before `done`.
-
-**Mock tests won't catch harness integration bugs.** Unit tests mock `executeSessionTurn` to return fake `MESSAGE_COMMITTED` events — they pass even when no harness emits that event. Real validation requires ctxmill CLI live runs plus agent-browser verification against the Docker stack.
-
-**Harness images must be rebuilt separately.** `docker compose up --build` only rebuilds the orchestrator. Harness code changes require: `docker build --target harness-{name} -t ctxmill/harness-{name} -f Dockerfile.sandbox .`
-
-**Claude Agent SDK spawns a subprocess.** The `query()` API looks like a simple function call but spawns `node cli.js` under the hood. It resolves cli.js relative to its own package directory. The container needs: the SDK package installed, `node` on PATH, and a writable `cwd` directory.
-
-**PI Agent SDK has no `getMessages()`.** The native session's agent object exposes `replaceMessages()` but NOT `getMessages()`. Use the harness's own `transcript` array for message tracking and `exportState()`.
-
-## SANDBOX INTERNALS
-
-**Container concurrency** — `ContainerSemaphore` in `container-manager.ts`. FIFO queue, 20 concurrent default (`CTXMILL_MAX_CONTAINERS`), 60s queue timeout → `ContainerLimitError` (503).
-
-**Safe suspend phases** — `ExecutionPhaseTracker` in `execution-phase.ts`. Cooperative suspend only at: `idle`, `before_llm`, `after_llm`, `after_tool`, `hitl_wait`. Unsafe phases (`llm_call_in_flight`, `tool_execution`) wait for next safe point.
-
-**Tool proxy** — `createToolProxy()` in `tool-proxy.ts`. Orchestrator-location tools serialized via gRPC `RequestTool` RPC. 3 retries, exponential backoff (100ms/500ms/2s), 5min timeout.
-
-**Session status machine** — `session-status-machine.ts`. States: `ACTIVE` → `CHECKPOINTED` → `RESTORING` → `ACTIVE`, with `TERMINATED` as terminal.
-
-## ANTI-PATTERNS (beyond root)
-
-- **NEVER call harness.run() directly** — All execution goes through `AgentSessionService` → `SandboxSessionManager` → Docker containers
-- **NEVER store secrets in checkpoint data** — Injected fresh into sandbox env on resume
-- **NEVER import from path aliases** — Relative `.js` imports only in source. Aliases only in `vitest.config.ts`
-- **NEVER exceed checkpoint limits** — 5 MB checkpoint, 100 MB workspace tar. Oversized checkpoints are rejected
-- **NEVER assume /workspace exists** — Pre-created in Dockerfile; may be overlaid at runtime. Harnesses that spawn subprocesses with `cwd` will get ENOENT if it's missing
-- **NEVER omit console.error in harness catch blocks** — Without it, errors are invisible; only "1 events emitted" appears in logs
+- Scoped backend change: run targeted Vitest plus `pnpm -r typecheck`.
+- Repository gate: `TEST_DATABASE_URL=postgres://ctxmill:ctxmill@localhost:5433/ctxmill_test pnpm test:backend`, `pnpm lint`, `pnpm -r typecheck`.
+- UI/API-shape changes require Docker rebuild and browser verification under `.tmp/`.

@@ -1,73 +1,47 @@
-# packages/sandbox-daemon — Sandbox Daemon Process
+# packages/sandbox-daemon - Sandbox Daemon Process
 
-**Generated:** 2026-04-06 · **Commit:** c2561f2
+## Overview
 
-## OVERVIEW
+Daemon process deployed inside harness containers. It exposes `HarnessService` to the orchestrator, runs one of the harness adapters, proxies orchestrator-location tools back over ConnectRPC, handles daemon-location tools such as artifacts, exports/restores harness checkpoint state, and emits session events back to the orchestrator.
 
-gRPC daemon process deployed **inside** sandbox containers (NOT the orchestrator). Implements HarnessService + OrchestratorService RPCs, 3 harness adapters (LangGraph, Claude Agents, PI Agent), tool proxying to orchestrator, proto ↔ internal event conversion, checkpoint serialization. Runs via Bun, not Node.
+## Structure
 
-## STRUCTURE
-
-```
+```text
 src/
-  sandbox/              gRPC server, runner, proto-convert, checkpoint, tool-proxy, PTC codegen (9 files + 8 tests)
-  harness/              3 harness adapters + shared utilities + types (7 files + tests)
-  artifact/             S3/MinIO artifact upload/download handlers
-  tool/                 Tool execution for daemon-location tools
-  util/                 Shared utilities
-  index.ts              Package entry point
-  session-event.ts      Session event types
-  types.ts              Shared type definitions
+  artifact/      S3/MinIO artifact access from daemon-side tools
+  harness/       LangGraph, Claude Agents, PI Agent adapters and shared helpers
+  observability/ Optional tracing auto-registration
+  sandbox/       gRPC daemon, runner, callback auth, checkpoint, proto conversion, PTC codegen, tool proxy
+  tool/          Tool schema/types used inside the daemon
+  util/          Retry helpers
 ```
 
-## WHERE TO LOOK
+## Where To Look
 
 | Task | File(s) | Notes |
-|------|---------|-------|
-| Modify gRPC server | `sandbox/daemon.ts` | HarnessService + OrchestratorService RPCs on port 50051 |
-| Fix harness bug | `harness/{langgraph,claude-agents,pi-agent}.ts` | Harness code runs HERE, inside containers |
-| Proto ↔ TS conversion | `sandbox/proto-convert.ts` (701 lines) | AgentEvent ↔ proto ↔ AG-UI event mapping |
-| Checkpoint format | `sandbox/checkpoint.ts` | Session state serialization (v2 format, 5 MB limit) |
-| Tool proxying | `sandbox/tool-proxy.ts` | gRPC RequestTool RPC to orchestrator, 3 retries, exponential backoff |
-| Execution phases | `sandbox/execution-phase.ts` | Safe suspend points: idle, before_llm, after_llm, after_tool, hitl_wait |
-| Session lifecycle | `sandbox/runner.ts` (582 lines) | Harness resolution, turn execution, event streaming |
-| PTC codegen | `sandbox/ptc-codegen.ts` | Programmatic tool calling code generation |
-| Artifact handling | `artifact/` + `sandbox/artifact-handler.ts` | S3 upload/download at daemon location |
+|---|---|---|
+| Modify gRPC server | `sandbox/daemon.ts` | HarnessService plus local daemon API used by PTC scripts. |
+| Fix harness behavior | `harness/{langgraph,claude-agents,pi-agent}.ts` | This code runs inside containers. |
+| Change turn lifecycle | `sandbox/runner.ts` | Terminal-frame discipline, suspend/kill, checkpoint export. |
+| Change proto mapping | `sandbox/proto-convert.ts` | AgentEvent <-> SessionEvent conversion. |
+| Change callback auth | `sandbox/callback-auth.ts`, `sandbox/tool-proxy.ts` | Session-scoped HMAC headers are sent on sandbox callbacks. |
+| Change artifact tools | `artifact/artifact-store.ts`, `sandbox/artifact-handler.ts` | Upload/download bytes from daemon location. |
+| Change PTC | `sandbox/ptc-codegen.ts`, `sandbox/daemon.ts` | Programmatic tools are generated in `/workspace/.tools` for eligible tools. |
 
-## KEY DIFFERENCES FROM ORCHESTRATOR
+## Invariants
 
-- **Runtime**: Bun (not Node) — entrypoint uses `bun run`
-- **Deployed inside Docker containers** — one per agent run, ephemeral
-- **No direct DB access** — communicates with orchestrator via gRPC only
-- **No SSE** — events flow back to orchestrator via gRPC stream, then SSE
-- **Harness adapters live HERE** — `packages/ctxmill/src/harness/` is registry + types only
-- **Rebuilding**: Changes here require rebuilding harness images: `docker build --target harness-{name} -t ctxmill/harness-{name} -f Dockerfile.sandbox .`
-- **Process management**: tini for Claude/PI agents (signal handling for subprocess cleanup), not for LangGraph
+- Never import orchestrator modules; the daemon has no runtime access to them.
+- Never serialize resolved secrets into checkpoints.
+- A normal completed/failed turn must emit a terminal frame. Suspend is non-terminal. Abnormal stream end should fail the turn.
+- Always log harness catch blocks to stderr; otherwise only the error string reaches the orchestrator.
+- Workspace `ENOENT` often means the `cwd` does not exist, not that the executable is missing.
 
-## HARNESS ADAPTER PATTERNS
+## Rebuilding
 
-Each adapter implements the session lifecycle:
-1. `createSession(config)` → Initialize harness SDK
-2. `executeTurn(messages)` → Yield `AgentEvent` stream
-3. `suspend()` → Export state for checkpoint
-4. `restore(state)` → Resume from checkpoint
+Changes here require rebuilding harness images, not just the orchestrator:
 
-**Claude Agent SDK** — Spawns `node cli.js` subprocess. Needs: SDK package installed, `node` on PATH, writable `cwd`.
-**PI Agent SDK** — No `getMessages()` on native session. Use harness's own `transcript` array.
-**LangGraph** — LangChain-based, supports OpenAI/Anthropic/Google providers.
-
-## ANTI-PATTERNS
-
-- **NEVER import orchestrator modules** — daemon has no access to orchestrator code at runtime
-- **ALWAYS `console.error` in harness catch blocks** — Container stderr is the ONLY place you'll see stack traces. Without it, only "1 events emitted" appears in orchestrator logs
-- **NEVER assume /workspace exists** — Pre-created in Dockerfile, may be overlaid at runtime. ENOENT from `spawn()` usually means `cwd` is missing, not the binary
-- **NEVER store secrets in checkpoint** — secrets arrive through sandbox env at session startup / restore and are not serialized
-
-## KNOWN RELIABILITY CONCERNS
-
-Key issues in this package:
-- `runner.ts:64` — `.catch(() => {})` on mkdir silently hides permission/disk errors
-- `daemon.ts:92,140` — Empty catches on JSON parsing default to wrong values
-- `ptc-codegen.ts:49` — JSON parse fallback masks tool API failures
-- `tool-proxy.ts` — No idempotency key; gRPC connection drop can cause duplicate tool execution
-- `claude-agents.ts:930` — JSON parse fallback returns raw string, causing type confusion downstream
+```bash
+docker build --target harness-langgraph -t ctxmill/harness-langgraph -f Dockerfile.sandbox .
+docker build --target harness-claude-agents -t ctxmill/harness-claude-agents -f Dockerfile.sandbox .
+docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile.sandbox .
+```

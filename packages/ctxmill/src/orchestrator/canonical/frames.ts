@@ -30,8 +30,6 @@ export const CTXMILL_CUSTOM_NAMES = [
   'ctxmill.a2ui.render',
 ] as const;
 
-export type CtxmillCustomName = typeof CTXMILL_CUSTOM_NAMES[number];
-
 export type FrameChannel = 'run' | 'custom' | 'system';
 
 /**
@@ -45,16 +43,16 @@ export interface CanonicalFrame {
   turnId?: string | null;
   conversationId?: string | null;
   body: Record<string, unknown>;
+  /** Raw TypedEventBus event name. Set only on the first frame from one bus event. */
+  sourceType?: string | null;
+  /** JSON-serialized raw TypedEventBus payload. Set only with sourceType. */
+  sourcePayload?: string | null;
 }
 
 /** A frame after persistence, carrying its global seq. */
 export interface PersistedFrame extends CanonicalFrame {
   seq: number;
   createdAt: number;
-}
-
-export function isCanonicalFrameType(type: string): type is CanonicalFrameType {
-  return (CANONICAL_FRAME_TYPES as readonly string[]).includes(type);
 }
 
 /** Internal bus events projected onto the run channel. */

@@ -17,6 +17,8 @@ import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js'
 import type { ContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { AgentDefinition, Message } from '../../types.js';
+import { SessionStateStore } from '../session-manager/session-state-store.js';
+import { SessionStatusCoordinator } from '../session-manager/session-status-coordinator.js';
 
 type MockGrpcClient = {
   deliverTurn: ReturnType<typeof vi.fn>;
@@ -45,7 +47,6 @@ type SandboxSessionManagerInternals = {
 
 function createMockContainerManager(): ContainerManager {
   return {
-    extractContainerDiff: vi.fn().mockResolvedValue(null),
     extractWorkspaceDiff: vi.fn().mockResolvedValue(null),
   } as unknown as ContainerManager;
 }
@@ -154,11 +155,15 @@ function createManager(options?: { turnTimeoutMs?: number }) {
   const db = createMockDb();
   const lifecyclePolicy = createMockLifecyclePolicy();
   const logger = createLogger();
+  const stateStore = new SessionStateStore();
+  const statusCoordinator = new SessionStatusCoordinator({ db, logger, stateStore });
 
   const manager = new SandboxSessionManager({
     containerManager,
     db,
     lifecyclePolicy,
+    stateStore,
+    statusCoordinator,
     workspaceDiffService: new WorkspaceDiffService({ containerManager }),
     buildSandboxSecrets: async () => ({}),
     logger,

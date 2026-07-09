@@ -124,6 +124,23 @@ describe('Agent CRUD & related endpoints', () => {
       expect(body).not.toHaveProperty('model');
     });
 
+    it('normalizes provider aliases before storing created agents', async () => {
+      const res = await createAgent({
+        name: 'create-provider-alias',
+        harnessConfig: { provider: 'gemini', model: 'gemini-3-flash-preview' },
+      });
+
+      expect(res.statusCode).toBe(201);
+      const body = res.json();
+      expect(body.harnessConfig).toEqual({ provider: 'google', model: 'gemini-3-flash-preview' });
+
+      const stored = await container.db.getAgent(body.id as string);
+      if (!stored) {
+        throw new Error('Expected created agent to be stored');
+      }
+      expect(JSON.parse(stored.harnessConfig)).toEqual({ provider: 'google', model: 'gemini-3-flash-preview' });
+    });
+
     it('rejects missing name', async () => {
       const res = await app.inject({
         method: 'POST',
@@ -239,6 +256,19 @@ describe('Agent CRUD & related endpoints', () => {
       expect(res.json().harnessConfig).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6' });
     });
 
+    it('normalizes provider aliases on harnessConfig update', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/agents/${agentId}`,
+        payload: {
+          harnessConfig: { provider: 'gemini', model: 'gemini-3-flash-preview' },
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().harnessConfig).toEqual({ provider: 'google', model: 'gemini-3-flash-preview' });
+    });
+
     it('updates multiple fields', async () => {
       const res = await app.inject({
         method: 'PUT',
@@ -250,6 +280,59 @@ describe('Agent CRUD & related endpoints', () => {
       expect(body.name).toBe('multi-update');
       expect(body.systemPrompt).toBe('updated prompt');
       expect(body.tools).toEqual(['new-tool']);
+    });
+
+    it('resourceLimits update overrides manifest defaults and clearing falls back to manifest', async () => {
+      const created = await createAgent({
+        name: 'resource-limits-manifest-agent',
+        manifest: {
+          resourceLimits: { cpus: 1, memoryMb: 1024, timeoutSec: 300 },
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const manifestAgentId = created.json().id as string;
+
+      const initial = await app.inject({
+        method: 'GET',
+        url: `/api/agents/${manifestAgentId}`,
+      });
+      expect(initial.statusCode).toBe(200);
+      expect(initial.json().resourceLimits).toEqual({
+        cpus: 1,
+        memoryMb: 1024,
+        timeoutSec: 300,
+      });
+
+      const updated = await app.inject({
+        method: 'PUT',
+        url: `/api/agents/${manifestAgentId}`,
+        payload: {
+          resourceLimits: { cpus: 2, memoryMb: 2048, timeoutSec: 900 },
+        },
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json().resourceLimits).toEqual({
+        cpus: 2,
+        memoryMb: 2048,
+        timeoutSec: 900,
+      });
+
+      const storedUpdated = await container.db.getAgent(manifestAgentId);
+      expect(storedUpdated?.metadata).toEqual(expect.objectContaining({
+        resourceLimits: { cpus: 2, memoryMb: 2048, timeoutSec: 900 },
+      }));
+
+      const cleared = await app.inject({
+        method: 'PUT',
+        url: `/api/agents/${manifestAgentId}`,
+        payload: { resourceLimits: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().resourceLimits).toEqual({
+        cpus: 1,
+        memoryMb: 1024,
+        timeoutSec: 300,
+      });
     });
 
     it('rejects update with no fields', async () => {
@@ -634,26 +717,6 @@ describe('Agent CRUD & related endpoints', () => {
       const res = await app.inject({
         method: 'POST',
         url: `/api/ag-ui/${agentId}/run`,
-        payload: {
-          threadId: wrongConversation.id,
-          runId,
-          messages: [{ id: 'msg-1', role: 'user', content: 'hello' }],
-        },
-      });
-
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toEqual(expect.objectContaining({
-        error: 'Run does not belong to the supplied threadId',
-        runId,
-        threadId: wrongConversation.id,
-      }));
-    });
-
-    it('keeps the documented /api/ag-ui/agents/:id/run alias', async () => {
-      const wrongConversation = await container.db.createConversation(agentId);
-      const res = await app.inject({
-        method: 'POST',
-        url: `/api/ag-ui/agents/${agentId}/run`,
         payload: {
           threadId: wrongConversation.id,
           runId,

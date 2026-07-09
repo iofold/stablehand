@@ -1,0 +1,403 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import type { DatabaseRepository, EventFrameRow, WebhookRow } from '../../database/repository.js';
+import type { CallbackDispatcher } from '../callback-dispatcher.js';
+import { SpineConsumerRunner } from '../../events/spine-consumer-runner.js';
+import type { SpineRawEvent } from '../../events/spine-consumer-runner.js';
+import type { CanonicalLog } from '../canonical/canonical-log.js';
+import type { ValidWebhookEvent } from '../webhook-events.js';
+import { buildWebhookPayload, createWebhookRelaySpineConsumer } from '../webhook-relay.js';
+
+type EnqueueCallbackArgs = Parameters<CallbackDispatcher['enqueue']>[0];
+
+function webhook(id: string, eventType: ValidWebhookEvent): WebhookRow {
+  return {
+    id,
+    agentId: 'agent-1',
+    url: `https://hooks.example/${eventType}`,
+    events: [eventType],
+    secret: null,
+    active: true,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function rawEvent(
+  seq: number,
+  sourceType: ValidWebhookEvent,
+  payload: Record<string, unknown>,
+): SpineRawEvent {
+  return {
+    seq,
+    sourceType,
+    sourcePayload: JSON.stringify(payload),
+    payload,
+    agentId: typeof payload.agentId === 'string' ? payload.agentId : 'agent-1',
+    turnId: typeof payload.turnId === 'string' ? payload.turnId : null,
+    conversationId: typeof payload.conversationId === 'string' ? payload.conversationId : null,
+    createdAt: 1_000 + seq,
+  };
+}
+
+function sourceRow(
+  seq: number,
+  sourceType: ValidWebhookEvent,
+  payload: Record<string, unknown>,
+): EventFrameRow {
+  return {
+    seq,
+    type: sourceType,
+    agentId: typeof payload.agentId === 'string' ? payload.agentId : 'agent-1',
+    payload: '{}',
+    createdAt: 1_000 + seq,
+    turnId: typeof payload.turnId === 'string' ? payload.turnId : null,
+    conversationId: typeof payload.conversationId === 'string' ? payload.conversationId : null,
+    channel: 'run',
+    sourceType,
+    sourcePayload: JSON.stringify(payload),
+  };
+}
+
+function createDispatcher() {
+  return {
+    enqueue: vi.fn(async (_opts: EnqueueCallbackArgs) => 'delivery-id'),
+  };
+}
+
+function createRelayDb(webhooks: WebhookRow[], rows: EventFrameRow[] = []) {
+  const cursors = new Map<string, number>();
+  const db = {
+    listWebhooks: vi.fn(async (agentId: string) =>
+      webhooks.filter((hook) => hook.agentId === agentId && hook.active)),
+    getSpineCursor: vi.fn(async (consumer: string) => cursors.get(consumer) ?? 0),
+    getSourceEventsSince: vi.fn(async (afterSeq: number, limit = 1_000) =>
+      rows.filter((row) => row.seq > afterSeq).slice(0, limit)),
+    advanceSpineCursor: vi.fn(async (consumer: string, lastSeq: number) => {
+      const nextSeq = Math.max(cursors.get(consumer) ?? 0, lastSeq);
+      cursors.set(consumer, nextSeq);
+      return { consumer, lastSeq: nextSeq, updatedAt: Date.now() };
+    }),
+  };
+  return { db: db as unknown as DatabaseRepository & typeof db, cursors };
+}
+
+const goldenFixtures = [
+  {
+    eventType: 'turn.started',
+    payload: {
+      turnId: 'turn-1',
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      mode: 'background',
+      taskDescription: 'Run Pilot sync',
+      timestamp: 100,
+    },
+    expected: {
+      turnId: 'turn-1',
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      mode: 'background',
+      taskDescription: 'Run Pilot sync',
+      timestamp: 100,
+    },
+    expectedJson: '{"turnId":"turn-1","sessionId":"session-1","agentId":"agent-1","conversationId":"conv-1","mode":"background","taskDescription":"Run Pilot sync","timestamp":100}',
+  },
+  {
+    eventType: 'turn.completed',
+    payload: {
+      turnId: 'turn-1',
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      status: 'completed',
+      durationMs: 400,
+      timestamp: 200,
+    },
+    expected: {
+      turnId: 'turn-1',
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      status: 'completed',
+      error: undefined,
+      durationMs: 400,
+      timestamp: 200,
+    },
+    expectedJson: '{"turnId":"turn-1","sessionId":"session-1","agentId":"agent-1","conversationId":"conv-1","status":"completed","durationMs":400,"timestamp":200}',
+  },
+  {
+    eventType: 'run.tool_started',
+    payload: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-1',
+      toolName: 'search',
+      args: { query: 'ctxmill' },
+      timestamp: 300,
+    },
+    expected: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-1',
+      toolName: 'search',
+      args: { query: 'ctxmill' },
+      requiresApproval: undefined,
+      timestamp: 300,
+    },
+    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","toolCallId":"tool-1","toolName":"search","args":{"query":"ctxmill"},"timestamp":300}',
+  },
+  {
+    eventType: 'run.interrupted',
+    payload: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-2',
+      toolName: 'approve',
+      args: { amount: 5 },
+      interruptId: 'interrupt-1',
+      timestamp: 400,
+    },
+    expected: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-2',
+      toolName: 'approve',
+      args: { amount: 5 },
+      interruptId: 'interrupt-1',
+      timestamp: 400,
+    },
+    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","toolCallId":"tool-2","toolName":"approve","args":{"amount":5},"interruptId":"interrupt-1","timestamp":400}',
+  },
+  {
+    eventType: 'run.tool_result',
+    payload: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-1',
+      toolName: 'search',
+      result: '{"ok":true}',
+      durationMs: 12,
+      timestamp: 500,
+    },
+    expected: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-1',
+      toolName: 'search',
+      result: '{"ok":true}',
+      durationMs: 12,
+      error: undefined,
+      timestamp: 500,
+    },
+    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","toolCallId":"tool-1","toolName":"search","result":"{\\"ok\\":true}","durationMs":12,"timestamp":500}',
+  },
+  {
+    eventType: 'run.interrupt_resolved',
+    payload: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      interruptId: 'interrupt-1',
+      action: 'approve',
+      timestamp: 600,
+    },
+    expected: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      interruptId: 'interrupt-1',
+      action: 'approve',
+      timestamp: 600,
+    },
+    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","interruptId":"interrupt-1","action":"approve","timestamp":600}',
+  },
+  {
+    eventType: 'message.committed',
+    payload: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      messageSeq: 2,
+      role: 'assistant',
+      content: 'done',
+      parts: [{ type: 'text', text: 'done' }],
+      toolCalls: [{ id: 'tool-1', name: 'search', args: '{}', status: 'done' }],
+      toolCallId: 'tool-1',
+      timestamp: 700,
+    },
+    expected: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      messageSeq: 2,
+      role: 'assistant',
+      content: 'done',
+      parts: [{ type: 'text', text: 'done' }],
+      toolCalls: [{ id: 'tool-1', name: 'search', args: '{}', status: 'done' }],
+      toolCallId: 'tool-1',
+      timestamp: 700,
+    },
+    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","messageId":"msg-1","messageSeq":2,"role":"assistant","content":"done","parts":[{"type":"text","text":"done"}],"toolCalls":[{"id":"tool-1","name":"search","args":"{}","status":"done"}],"toolCallId":"tool-1","timestamp":700}',
+  },
+  {
+    eventType: 'feedback.received',
+    payload: {
+      feedbackId: 'feedback-1',
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      type: 'thumbs_up',
+      messageId: 'msg-1',
+      timestamp: 800,
+    },
+    expected: {
+      feedbackId: 'feedback-1',
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      type: 'thumbs_up',
+      messageId: 'msg-1',
+      timestamp: 800,
+    },
+    expectedJson: '{"feedbackId":"feedback-1","turnId":"turn-1","agentId":"agent-1","type":"thumbs_up","messageId":"msg-1","timestamp":800}',
+  },
+] satisfies Array<{
+  eventType: ValidWebhookEvent;
+  payload: Record<string, unknown>;
+  expected: Record<string, unknown>;
+  expectedJson: string;
+}>;
+
+describe('WebhookRelay', () => {
+  it('keeps golden payload shapes byte-compatible with the former bus handlers', () => {
+    for (const fixture of goldenFixtures) {
+      const actual = buildWebhookPayload(fixture.eventType, fixture.payload);
+      expect(actual, fixture.eventType).toEqual(fixture.expected);
+      expect(JSON.stringify(actual), fixture.eventType).toBe(fixture.expectedJson);
+    }
+  });
+
+  it('enqueues only subscribed webhooks with the source event seq', async () => {
+    const dispatcher = createDispatcher();
+    const { db } = createRelayDb([
+      webhook('hook-tool', 'run.tool_started'),
+      webhook('hook-completed', 'turn.completed'),
+    ]);
+    const consumer = createWebhookRelaySpineConsumer({ db, callbackDispatcher: dispatcher });
+
+    await consumer.handle(rawEvent(42, 'run.tool_started', {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      toolCallId: 'tool-1',
+      toolName: 'search',
+      args: { query: 'ctxmill' },
+      timestamp: 300,
+    }));
+
+    expect(db.listWebhooks).toHaveBeenCalledWith('agent-1');
+    expect(dispatcher.enqueue).toHaveBeenCalledTimes(1);
+    expect(dispatcher.enqueue).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      sessionId: 'turn-1',
+      callbackUrl: 'https://hooks.example/run.tool_started',
+      eventType: 'run.tool_started',
+      eventSeq: 42,
+      payload: {
+        turnId: 'turn-1',
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        toolCallId: 'tool-1',
+        toolName: 'search',
+        args: { query: 'ctxmill' },
+        requiresApproval: undefined,
+        timestamp: 300,
+      },
+    });
+  });
+
+  it('catches up missed spine events and advances after enqueue succeeds', async () => {
+    const payload = {
+      turnId: 'turn-1',
+      sessionId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      status: 'completed',
+      durationMs: 400,
+      timestamp: 456,
+    };
+    const dispatcher = createDispatcher();
+    const { db, cursors } = createRelayDb(
+      [webhook('hook-completed', 'turn.completed')],
+      [sourceRow(7, 'turn.completed', payload)],
+    );
+    const consumer = createWebhookRelaySpineConsumer({ db, callbackDispatcher: dispatcher });
+    const runner = new SpineConsumerRunner({
+      canonicalLog: {
+        subscribe: vi.fn(() => () => undefined),
+      } satisfies Pick<CanonicalLog, 'subscribe'>,
+      db,
+      consumers: [consumer],
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      rescanIntervalMs: 60_000,
+      batchSize: 100,
+    });
+
+    await runner.start();
+
+    expect(dispatcher.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'turn.completed',
+      eventSeq: 7,
+    }));
+    expect(db.advanceSpineCursor).toHaveBeenCalledWith('webhook-relay', 7);
+    expect(cursors.get('webhook-relay')).toBe(7);
+    runner.stop();
+  });
+
+  it('keeps the cursor behind a missed spine event when enqueue fails', async () => {
+    const payload = {
+      turnId: 'turn-1',
+      sessionId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      status: 'completed',
+      durationMs: 400,
+      timestamp: 456,
+    };
+    const dispatcher = {
+      enqueue: vi.fn(async (_opts: EnqueueCallbackArgs) => {
+        throw new Error('outbox unavailable');
+      }),
+    };
+    const { db, cursors } = createRelayDb(
+      [webhook('hook-completed', 'turn.completed')],
+      [sourceRow(7, 'turn.completed', payload)],
+    );
+    const runner = new SpineConsumerRunner({
+      canonicalLog: {
+        subscribe: vi.fn(() => () => undefined),
+      } satisfies Pick<CanonicalLog, 'subscribe'>,
+      db,
+      consumers: [createWebhookRelaySpineConsumer({ db, callbackDispatcher: dispatcher })],
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      rescanIntervalMs: 60_000,
+      batchSize: 100,
+    });
+
+    await runner.start();
+
+    expect(dispatcher.enqueue).toHaveBeenCalledTimes(1);
+    expect(db.advanceSpineCursor).not.toHaveBeenCalled();
+    expect(cursors.get('webhook-relay')).toBeUndefined();
+    runner.stop();
+  });
+});

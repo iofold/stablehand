@@ -16,7 +16,7 @@ Restart the stack. All subsequent agent runs produce traces in the configured pr
 
 ## How It Works
 
-Tracing is **harness-level** — each harness self-instruments using its SDK's native tracing capabilities. The orchestrator passes `LANGSMITH_*` host environment variables to sandbox containers via `SANDBOX_SECRET_ALLOWLIST`.
+Tracing is **harness-level**. LangGraph, Claude Agents, and PI Agent all use the shared sandbox-daemon `traceAgentEvents` decorator, which consumes normalized `AgentEvent` streams and emits one LangSmith span tree per turn. The orchestrator passes `LANGSMITH_*` host environment variables to sandbox containers via `SANDBOX_SECRET_ALLOWLIST`.
 
 ```
 .env → docker-compose → orchestrator → SANDBOX_SECRET_ALLOWLIST → sandbox container → harness
@@ -39,94 +39,89 @@ If you prefer not to rely on host env passthrough, you can also store these keys
 
 ### LangGraph
 
-**Zero code changes.** The `@langchain/core` SDK auto-traces when `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` are set. Produces detailed traces with:
+Uses the shared AgentEvent tracer through `traceAgentEvents()` when `LANGSMITH_TRACING=true`.
 
-- Full LangGraph execution flow (nodes, edges)
-- ChatOpenAI LLM calls with messages, generations, token usage
-- Tool executions (e.g., calculator) with inputs/outputs
-- Middleware steps
+- Root span: `langgraph-agent-<agentId>`
+- Turn span: `langgraph-turn`
+- LLM span: normalized `text_delta` + `message_committed`
+- Tool spans: normalized `tool_call_start`/`tool_call_end`
+- Token usage: normalized `done.usage`
 
 Example trace:
 ```
-LangGraph (chain) [2.80s]
-├── model_request (chain) [1.63s]
-│   └── ChatOpenAI (llm) [1.56s]
-├── model_request (chain) [1.08s]
-│   └── ChatOpenAI (llm) [1.05s]
-└── tools (chain) [21ms]
-    └── calculator (tool) [4ms]
+langgraph-agent-{id} (chain)
+└── langgraph-turn (chain)
+    ├── llm-call (llm)
+    └── calculator (tool)
 ```
 
 ### Claude Agents
 
-Uses `wrapClaudeAgentSDK()` from `langsmith/experimental/anthropic`. The wrapper is applied in `ClaudeAgentsHarness.loadSdkModule()` when `LANGSMITH_TRACING=true`.
+Uses the same shared AgentEvent tracer as LangGraph and PI Agent. The Claude SDK is not wrapped with `langsmith/experimental/anthropic`; the parity tests prove the normalized Claude `AgentEvent` stream produces the same agent → turn → LLM/tool span shape as the other harnesses.
 
 - Dynamic import — `langsmith` only loaded when tracing is enabled
 - Graceful fallback — if import fails, harness runs without tracing
-- SDK wrapper intercepts all Claude API calls and creates spans
+- Root span: `claude-agents-agent-<agentId>`
+- Turn span: `claude-agents-turn`
+- LLM span: normalized `text_delta` + `message_committed`
+- Tool spans: normalized `tool_call_start`/`tool_call_end`
+- Token usage: normalized `done.usage`
 
-> **Stability note**: the import path is `langsmith/experimental/anthropic` — LangSmith reserves the `experimental/` namespace for APIs that may break across minor versions. Pin `langsmith` to a known-good minor (currently `^0.5.25`) and review the [LangSmith JS releases](https://github.com/langchain-ai/langsmith-sdk/releases) before bumping. The PI Agent custom tracer also depends on the (stable but pre-1.0) `RunTree` API — same pin strategy applies.
-
-Example trace:
-```
-claude.conversation (chain) [87.68s]
-├── claude.assistant.turn (llm) [10.83s]
-├── ToolSearch (tool) [12ms]
-├── claude.assistant.turn (llm) [4.55s]
-└── Bash (tool) [238ms]
-```
-
-**File:** `packages/sandbox-daemon/src/harness/claude-agents.ts`
-
-### PI Agent
-
-Custom tracer using the `RunTree` API from the `langsmith` package. The tracer maps PI Agent SDK subscribe events to LangSmith spans.
-
-- Created per `deliverTurn()` call via `createPiLangSmithTracer()`
-- Events forwarded from the PI SDK's `subscribe()` callback
-- Serialized event chain ensures span ordering
-- Explicit `patchRun()` calls ensure end times reach the server
-- `Client.awaitPendingTraceBatches()` + drain timeout in flush
-
-**Event → Span mapping:**
-
-| PI SDK Event | LangSmith Span | Data Captured |
-|-------------|---------------|---------------|
-| `agent_start` | Root chain | agentId, conversationId |
-| `turn_start` / `turn_end` | Turn chain | turnIndex, assistant text, usage |
-| `message_start` (assistant) | LLM span start | model, provider, api |
-| `message_update` | LLM text buffer | Accumulated delta text |
-| `message_end` (assistant) | LLM span end | generations, token usage, stopReason |
-| `message_start/end` (user) | — | Stored as next LLM span input |
-| `tool_execution_start/end` | Tool span | toolName, args, result |
-| `agent_end` | Root end | status=completed |
+> **Stability note**: the shared AgentEvent tracer depends on the stable but pre-1.0 `RunTree` API. Pin `langsmith` to a known-good minor (currently `^0.5.25`) and review the [LangSmith JS releases](https://github.com/langchain-ai/langsmith-sdk/releases) before bumping.
 
 Example trace:
 ```
-pi-agent-{id} (chain) [2.05s]
-├── pi-turn (chain) [1.07s]
-│   ├── llm-call (llm) [295ms]     ← model=gpt-5.4-mini, usage={in:68,out:68}
-│   └── bash (tool) [4ms]
-└── pi-turn (chain) [970ms]
-    └── llm-call (llm) [264ms]
+claude-agents-agent-{id} (chain)
+└── claude-agents-turn (chain)
+    ├── llm-call (llm)
+    └── Bash (tool)
 ```
 
 **Files:**
-- `packages/sandbox-daemon/src/harness/pi-langsmith-tracer.ts` — Tracer module
-- `packages/sandbox-daemon/src/harness/pi-agent.ts` — Wiring (subscribe + flush)
+- `packages/sandbox-daemon/src/harness/kit/agent-event-langsmith-tracer.ts` — Shared tracer module
+- `packages/sandbox-daemon/src/harness/kit/trace-agent-events.ts` — HarnessSession decorator
+- `packages/sandbox-daemon/src/harness/claude-agents.ts` — Decorator wiring
+
+### PI Agent
+
+Uses the same shared AgentEvent tracer as LangGraph. PI SDK subscribe events are still used only for adapter-local event mapping and extension hooks; LangSmith spans are emitted from normalized `AgentEvent`s after mapping.
+
+**AgentEvent → Span mapping:**
+
+| AgentEvent | LangSmith Span | Data Captured |
+|-------------|---------------|---------------|
+| `text_delta` | LLM span | Accumulated assistant text |
+| `tool_call_start` | Tool span | toolName, args, toolCallId |
+| `tool_call_end` | Tool span end | result, error, durationMs |
+| `message_committed` | LLM span end | final assistant text, toolCalls |
+| `done` | Turn/root span end | token usage, status=completed |
+| `error` | Turn/root span end | error, status=errored |
+
+Example trace:
+```
+pi-agent-agent-{id} (chain)
+└── pi-agent-turn (chain)
+    ├── llm-call (llm)
+    └── bash (tool)
+```
+
+**Files:**
+- `packages/sandbox-daemon/src/harness/kit/agent-event-langsmith-tracer.ts` — Shared tracer module
+- `packages/sandbox-daemon/src/harness/kit/trace-agent-events.ts` — HarnessSession decorator
+- `packages/sandbox-daemon/src/harness/pi-agent.ts` — Decorator wiring
 
 ## Subagent visibility
 
 | Harness | Subagent invocation | Subagent internals | Tokens |
 |---|---|---|---|
-| LangGraph | ✅ Full sub-chain (`task` → subagent name → `__start__` → `model_request` → provider-specific LLM span) | ✅ Each subagent's LLM call traced with its own provider (`ChatOpenAI`/`ChatGoogleGenerativeAI`/`ChatAnthropic`) | ✅ Aggregate up through parent |
-| Claude Agents | ✅ Visible as named chain marker under root | ❌ **Not traced** | ❌ Subagent-internal tokens missing |
+| LangGraph | Visible only if the adapter maps it into normal AgentEvents | Not traced by the shared AgentEvent tracer | Only aggregate `done.usage` when available |
+| Claude Agents | Visible only if the SDK stream folds it into normal AgentEvents | Not traced by the shared AgentEvent tracer | Only aggregate `done.usage` when available |
 
-The Claude Agents subagent gap is a JS↔Python parity issue in the upstream `langsmith` SDK. The Anthropic claude-agent-sdk only streams the *first* assistant message of each subagent through the live iterator; subsequent turns are folded into the parent's `Agent` tool result and only appear in the SDK's session JSONL transcript file. The Python integration handles this with a post-conversation reconciler (`python/langsmith/integrations/claude_agent_sdk/_transcripts.py`) — the JS integration does not. Tracked upstream at [langchain-ai/langsmith-sdk#2813](https://github.com/langchain-ai/langsmith-sdk/issues/2813).
+The shared tracer intentionally records the normalized CTXMILL event contract, not SDK-private execution graphs. If subagent-internal token attribution becomes critical, add a second explicit reconciler that reads each harness' persisted transcript/log format and posts separate RunTrees, rather than reintroducing harness-specific live tracing paths.
 
 Workaround options if subagent token attribution becomes critical:
 - Implement local transcript reconciliation in our harness (read `~/.claude/projects/<sanitized>/sessions/<conversationId>.jsonl` after each run, post fresh `RunTree`s for missing subagent turns, patch usage on existing LLM runs).
-- Subscribe to upstream issue #2813 and adopt JS parity once shipped.
+- Adopt upstream SDK-level tracing only if it can preserve the normalized agent → turn → LLM/tool parity guaranteed by the shared tracer.
 
 PI Agent does not currently support subagents.
 
@@ -144,7 +139,7 @@ Then in LangSmith (`https://smith.langchain.com`):
 
 1. Open the project named in `LANGSMITH_PROJECT` (default `ctxmill`).
 2. The run should appear within 5–15s of the agent completing.
-3. The root span name reflects the harness: `LangGraph` (chain), `claude.conversation` (chain), or `pi-agent-<id>` (chain).
+3. The root span name reflects the harness: `langgraph-agent-<id>` (chain), `claude-agents-agent-<id>` (chain), or `pi-agent-agent-<id>` (chain).
 
 **Common reasons traces don't appear:**
 
@@ -153,8 +148,8 @@ Then in LangSmith (`https://smith.langchain.com`):
 | Run never appears in any project | `LANGSMITH_TRACING` not exactly `"true"` (case-sensitive), or `LANGSMITH_API_KEY` empty |
 | `403`/`401` warnings in sandbox logs | Service-account key (`lsv2_sk_…`) without `LANGSMITH_WORKSPACE_ID` set |
 | Run appears in `default` project, not yours | `LANGSMITH_PROJECT` only forwarded to the sandbox via `SANDBOX_SECRET_ALLOWLIST` — orchestrator restart picks it up; sandbox containers are launched per run, so the next run will pick it up |
-| Spans for Claude harness missing tool calls | `langsmith` version mismatch with `@anthropic-ai/claude-agent-sdk` — `wrapClaudeAgentSDK` lives in `experimental/` and the field schema can shift between minor versions |
-| `[pi-langsmith] Failed to post ...` warnings | Sandbox egress to `api.smith.langchain.com` is blocked by external network policy, DNS, firewall, or proxy configuration |
+| Tool spans missing | The harness did not emit normalized `tool_call_start`/`tool_call_end` events, or an old sandbox image is still running |
+| `[harness-trace] Failed to ...` warnings | Sandbox egress to `api.smith.langchain.com` is blocked by external network policy, DNS, firewall, or proxy configuration |
 
 To see what the sandbox logged during a run:
 
@@ -166,15 +161,15 @@ docker logs $(docker ps --filter "label=ctxmill.managed=true" --format "{{.Names
 
 Remove or unset `LANGSMITH_TRACING` in `.env` and restart. When `LANGSMITH_TRACING` is not `true`:
 
-- LangGraph: no auto-tracing (env var check in `@langchain/core`)
-- Claude: `loadSdkModule()` returns unwrapped SDK (no `langsmith` import)
-- PI Agent: `createPiLangSmithTracer()` returns `null` (no RunTree created)
+- LangGraph: shared AgentEvent tracer returns `null`
+- Claude: shared AgentEvent tracer returns `null` (no RunTree created)
+- PI Agent: shared AgentEvent tracer returns `null` (no RunTree created)
 
 No performance overhead when disabled — `langsmith` is never imported.
 
 ## Dependency
 
-`langsmith@^0.5.15` is added to `packages/sandbox-daemon/package.json`. It runs inside sandbox containers only, not the orchestrator.
+`langsmith@^0.5.25` is added to `packages/sandbox-daemon/package.json`. It runs inside sandbox containers only, not the orchestrator.
 
 ## Files Changed
 
@@ -184,7 +179,8 @@ No performance overhead when disabled — `langsmith` is never imported.
 | `docker-compose.yml` | Pass `LANGSMITH_*` env vars to orchestrator |
 | `.env.example` | Documented new env vars |
 | `packages/sandbox-daemon/package.json` | Added `langsmith` dependency |
-| `packages/sandbox-daemon/src/harness/claude-agents.ts` | Conditional SDK wrapping |
-| `packages/sandbox-daemon/src/harness/pi-agent.ts` | Tracer wiring + event logging |
-| `packages/sandbox-daemon/src/harness/pi-langsmith-tracer.ts` | New file — PI Agent RunTree tracer |
-| `packages/sandbox-daemon/src/harness/index.ts` | Export `createPiLangSmithTracer` |
+| `packages/sandbox-daemon/src/harness/kit/agent-event-langsmith-tracer.ts` | Shared AgentEvent RunTree tracer |
+| `packages/sandbox-daemon/src/harness/kit/trace-agent-events.ts` | HarnessSession tracing decorator |
+| `packages/sandbox-daemon/src/harness/langgraph.ts` | Shared tracer decorator wiring |
+| `packages/sandbox-daemon/src/harness/claude-agents.ts` | Shared tracer decorator wiring |
+| `packages/sandbox-daemon/src/harness/pi-agent.ts` | Shared tracer decorator wiring + event logging |

@@ -9,14 +9,10 @@ import { create } from '@bufbuild/protobuf';
 import { ConnectError, Code } from '@connectrpc/connect';
 import {
   RequestToolResponseSchema,
-  ToolMetadataSchema,
-  ToolLocation,
-  type ToolMetadata as ProtoToolMetadata,
 } from '@ctxmill/proto/sandbox/v1';
 
 import {
   createToolProxy,
-  createOrchestratorToolProxies,
   type OrchestratorServiceClient,
 } from '../tool-proxy.js';
 
@@ -50,20 +46,6 @@ function makeMockClient(
     resolveArtifact: vi.fn(),
     ...impl,
   };
-}
-
-function makeProtoToolMetadata(
-  name: string,
-  description: string,
-  inputSchema: Record<string, unknown>,
-  location: ToolLocation = ToolLocation.SANDBOX,
-): ProtoToolMetadata {
-  return create(ToolMetadataSchema, {
-    name,
-    description,
-    inputSchemaJson: JSON.stringify(inputSchema),
-    location,
-  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -235,138 +217,6 @@ describe('createToolProxy', () => {
 
     const callArgs = requestTool.mock.calls[0][0];
     expect(callArgs.argsJson).toBe('{"count":"9007199254740993"}');
-  });
-});
-
-/* -------------------------------------------------------------------------- */
-/*  createOrchestratorToolProxies                                              */
-/* -------------------------------------------------------------------------- */
-
-describe('createOrchestratorToolProxies', () => {
-  it('creates proxy handlers only for ORCHESTRATOR location tools', () => {
-    const tools = [
-      makeProtoToolMetadata(
-        'emit-event',
-        'Emit a custom event',
-        { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
-        ToolLocation.ORCHESTRATOR,
-      ),
-      makeProtoToolMetadata(
-        'request-approval',
-        'Request user approval',
-        { type: 'object', properties: { reason: { type: 'string' } }, required: ['reason'] },
-        ToolLocation.ORCHESTRATOR,
-      ),
-      makeProtoToolMetadata(
-        'read-file',
-        'Read a file from the workspace',
-        { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
-        ToolLocation.SANDBOX,
-      ),
-    ];
-
-    const client = makeMockClient();
-    const defs = createOrchestratorToolProxies(tools, client, 'run-1', 'agent-1');
-
-    // Only the 2 ORCHESTRATOR tools should be returned
-    expect(defs).toHaveLength(2);
-    expect(defs[0].name).toBe('emit-event');
-    expect(defs[1].name).toBe('request-approval');
-  });
-
-  it('sandbox tools are not included in results', () => {
-    const tools = [
-      makeProtoToolMetadata(
-        'read-file',
-        'Read a file',
-        { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
-        ToolLocation.SANDBOX,
-      ),
-      makeProtoToolMetadata(
-        'write-file',
-        'Write a file',
-        { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
-        ToolLocation.SANDBOX,
-      ),
-    ];
-
-    const client = makeMockClient();
-    const defs = createOrchestratorToolProxies(tools, client, 'run-1', 'agent-1');
-
-    expect(defs).toHaveLength(0);
-  });
-
-  it('creates correct Zod schema and handler for each tool', async () => {
-    const requestTool = vi.fn().mockResolvedValue(
-      makeSuccessResponse('rpc-1', '{"emitted":true}'),
-    );
-    const client = makeMockClient({ requestTool });
-
-    const tools = [
-      makeProtoToolMetadata(
-        'emit-event',
-        'Emit a custom event',
-        {
-          type: 'object',
-          properties: {
-            event_type: { type: 'string' },
-            payload: { type: 'object' },
-          },
-          required: ['event_type'],
-        },
-        ToolLocation.ORCHESTRATOR,
-      ),
-    ];
-
-    const defs = createOrchestratorToolProxies(tools, client, 'run-1', 'agent-1', {
-      retryDelays: [],
-    });
-
-    expect(defs).toHaveLength(1);
-
-    // Verify Zod schema works
-    const parsed = (defs[0].input as { safeParse: (input: unknown) => { success: boolean } }).safeParse({ event_type: 'test' });
-    expect(parsed.success).toBe(true);
-
-    // Verify handler proxies through
-    const result = await defs[0].handler({ event_type: 'test' }, {} as any);
-    expect(result).toBe('{"emitted":true}');
-    expect(requestTool).toHaveBeenCalledTimes(1);
-  });
-
-  it('returns empty array for empty tool list', () => {
-    const client = makeMockClient();
-    const defs = createOrchestratorToolProxies([], client, 'run-1', 'agent-1');
-    expect(defs).toEqual([]);
-  });
-
-  it('throws for malformed orchestrator tool schemas', () => {
-    const client = makeMockClient();
-
-    expect(() => createOrchestratorToolProxies([
-      create(ToolMetadataSchema, {
-        name: 'emit-event',
-        description: 'Emit event',
-        inputSchemaJson: '{bad-json',
-        location: ToolLocation.ORCHESTRATOR,
-      }),
-    ], client, 'run-1', 'agent-1')).toThrow(/Failed to parse tool emit-event input schema/);
-  });
-
-  it('filters out UNSPECIFIED location tools', () => {
-    const tools = [
-      makeProtoToolMetadata(
-        'unknown-tool',
-        'Unknown location',
-        { type: 'object', properties: {} },
-        ToolLocation.UNSPECIFIED,
-      ),
-    ];
-
-    const client = makeMockClient();
-    const defs = createOrchestratorToolProxies(tools, client, 'run-1', 'agent-1');
-
-    expect(defs).toHaveLength(0);
   });
 });
 

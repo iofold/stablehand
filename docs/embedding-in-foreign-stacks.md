@@ -40,10 +40,16 @@ services:
       dockerfile: Dockerfile
       target: orchestrator
     environment:
+      - NODE_ENV=production
       - DATABASE_URL=postgres://ctxmill:ctxmill@postgres:5432/ctxmill
+      - SECRET_MASTER_KEY=${SECRET_MASTER_KEY}
+      - CTXMILL_API_TOKEN=${CTXMILL_API_TOKEN}
+      # Optional: set when callback auth should not reuse CTXMILL_API_TOKEN.
+      - CTXMILL_CALLBACK_TOKEN_SECRET=${CTXMILL_CALLBACK_TOKEN_SECRET}
       - ORCHESTRATOR_CALLBACK_URL=http://orchestrator:3001
       - CTXMILL_DATA_VOLUME=myapp_ctxmill-data
       - S3_ENDPOINT=http://minio:9000
+      - S3_PUBLIC_ENDPOINT=https://myapp.com/minio
       - S3_ACCESS_KEY=ctxmill
       - S3_SECRET_KEY=ctxmill-dev
       - CORS_ORIGINS=https://myapp.com,http://localhost:3200
@@ -121,7 +127,7 @@ Sandbox containers are isolated from your main application network by default. T
 ## Configuration & Timeouts
 
 ### CTXMILL_TURN_TIMEOUT_MS
-By default, a single agent turn (one LLM call + tool executions) times out after 5 minutes (300,000ms). For long-running agents or complex tasks, this may be too short.
+By default, a single agent turn (one LLM call + tool executions) times out after 30 minutes (1,800,000ms). For long-running agents or complex tasks, this may be too short.
 
 *   **How to configure**: This is a system setting stored in the database. You can update it via the UI (Settings page) or by sending a `PUT` request to `/api/settings`:
     ```json
@@ -136,11 +142,11 @@ By default, a single agent turn (one LLM call + tool executions) times out after
 *   **Symptom of failure**: The agent run stops abruptly with a "Turn timed out" error in the logs.
 
 ### Concurrency Limits
-The system limits global concurrent containers (default 20) and per-agent concurrent runs (default 3). These are also configurable via the Settings API or UI.
+The system limits global concurrent containers (default 20) and per-agent concurrent runs/sessions (default 20). These are also configurable via the Settings API or UI.
 
 ## Sandbox Image Building
 
-Harness images (e.g., `ctxmill/harness-langgraph`) are **not** built by a standard `docker compose up`. They are multi-stage builds that must be triggered manually before agents can run.
+In this repository's default compose file, harness images are wired through build-only services and build with `docker compose up --build`. In a foreign compose stack, keep those services or build the images manually before agents run.
 
 Run these commands from the project root:
 ```bash
@@ -149,7 +155,7 @@ docker build --target harness-claude-agents -t ctxmill/harness-claude-agents -f 
 docker build --target harness-pi-agent -t ctxmill/harness-pi-agent -f Dockerfile.sandbox .
 ```
 
-Alternatively, build all services including sandbox images via compose:
+In this repo, build all services including sandbox images via compose:
 ```bash
 docker compose build
 ```
@@ -162,7 +168,7 @@ The effective runtime contract is:
 
 1. read a hardcoded allowlist of host env vars from the orchestrator process
 2. read all per-agent secrets from the CTXMILL Secret Store
-3. merge any explicit per-run `sandboxSecrets` from `POST /api/agents/:id/session`
+3. merge any explicit per-run `sandboxSecrets` from `POST /api/agents/:id/message` or `POST /api/agents/:id/session`
 4. inject the merged map into the sandbox container's `Env`
 
 Merge precedence is: allowlisted host env < per-agent Secret Store < per-run `sandboxSecrets`.
@@ -183,7 +189,7 @@ This means the current model is:
 
 - host env → sandbox: **allowlisted only**
 - per-agent secret store → sandbox: **any key name**
-- per-run `sandboxSecrets` → sandbox: **only for that initial background run**
+- per-run `sandboxSecrets` → sandbox: **runtime-only for the created interactive/background run**
 
 If you need custom secrets for tools or harnesses, the supported path today is to store them in the CTXMILL Secret Store (via the API/UI) rather than expecting arbitrary host env passthrough.
 
@@ -191,6 +197,7 @@ For short-lived integration tokens that should not be stored on the agent, pass 
 
 ```bash
 curl -X POST http://orchestrator:3001/api/agents/$AGENT_ID/session \
+  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"task":"Run the monthly close workflow","sandboxSecrets":{"MYAPP_SERVICE_TOKEN":"jwt-or-token"}}'
 ```
@@ -206,14 +213,18 @@ The Secret Store API is per-agent. Once stored, the key is injected as an env va
 # the sandbox process will see in its environment — pick whatever your tool
 # code expects to read.
 curl -X POST http://orchestrator:3001/api/agents/$AGENT_ID/secrets \
+  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"key":"MYAPP_SERVICE_TOKEN","value":"sk-..."}'
 
 # List stored keys (values are never returned).
-curl http://orchestrator:3001/api/agents/$AGENT_ID/secrets
+curl -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+  http://orchestrator:3001/api/agents/$AGENT_ID/secrets
 
 # Delete when rotating.
-curl -X DELETE http://orchestrator:3001/api/agents/$AGENT_ID/secrets/MYAPP_SERVICE_TOKEN
+curl -X DELETE \
+  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+  http://orchestrator:3001/api/agents/$AGENT_ID/secrets/MYAPP_SERVICE_TOKEN
 ```
 
 Inside the sandbox, tool/harness code just reads the env var directly:
@@ -264,7 +275,7 @@ If you want to use a third-party AG-UI renderer (CopilotKit, agui-hooks, @assist
 POST http://<orchestrator>:3002/api/ag-ui/:agentId/run
 ```
 
-The older `/api/ag-ui/agents/:agentId/run` path is retained as a compatibility alias. Point any AG-UI renderer at either URL, or use the CTXMill React wrapper documented in [React Chat Integration](integrate-chat-ui.md). See [AG-UI Compatibility](ag-ui-compat.md) for protocol details.
+Point any AG-UI renderer at that URL, or use the CTXMill React wrapper documented in [React Chat Integration](integrate-chat-ui.md). See [AG-UI Compatibility](ag-ui-compat.md) for protocol details.
 
 ## Troubleshooting Checklist
 

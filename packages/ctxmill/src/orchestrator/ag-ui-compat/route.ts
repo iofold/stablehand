@@ -300,5 +300,4 @@ export async function agUiCompatRoutes(
   };
 
   app.post('/:id/run', runHandler);
-  app.post('/agents/:id/run', runHandler);
 }

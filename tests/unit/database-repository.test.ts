@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+import { isUniqueConstraintViolation } from '../../packages/ctxmill/src/database/errors.js';
 
 describe('DatabaseRepository', () => {
   let testDb: TestDb;
@@ -39,11 +40,12 @@ describe('DatabaseRepository', () => {
         'messages',
         'pending_interrupts',
         'sandbox_sessions',
-        'scheduled_events',
         'secrets',
+        'spine_cursors',
         'suspended_sessions',
         'system_settings',
         'tool_request_dedup',
+        'trigger_firings',
         'turns',
         'webhooks',
       ]);
@@ -195,22 +197,6 @@ describe('DatabaseRepository', () => {
         mode: 'interactive',
       });
 
-      await repo.createSuspendedSession({
-        id: 'delete-cascade-suspended',
-        agentSessionId: turn.id,
-        agentId: agent.id,
-        waitEventType: 'custom',
-        waitSelector: '{}',
-        snapshotState: '{}',
-        createdAt: Date.now(),
-      });
-      await repo.createScheduledEvent({
-        id: 'delete-cascade-scheduled',
-        agentId: agent.id,
-        type: 'turn.started',
-        payload: '{}',
-        wakeAt: Date.now(),
-      });
       await repo.enqueueCallback({
         id: 'delete-cascade-callback',
         agentId: agent.id,
@@ -268,11 +254,7 @@ describe('DatabaseRepository', () => {
         status: 'active',
       });
       expect(await repo.getPendingInterrupt('delete-cascade-interrupt')).toBeUndefined();
-      expect(await repo.getScheduledEventsDue(Date.now() + 1_000)).toEqual([]);
 
-      const [suspendedCount] = await testDb.conn.pgClient`
-        SELECT count(*)::int AS count FROM suspended_sessions WHERE agent_id = ${agent.id}
-      `;
       const [callbackCount] = await testDb.conn.pgClient`
         SELECT count(*)::int AS count FROM callback_outbox WHERE agent_id = ${agent.id}
       `;
@@ -282,26 +264,11 @@ describe('DatabaseRepository', () => {
       const [dedupCount] = await testDb.conn.pgClient`
         SELECT count(*)::int AS count FROM tool_request_dedup WHERE request_id = 'delete-cascade-dedup'
       `;
-      expect(suspendedCount.count).toBe(0);
       expect(callbackCount.count).toBe(0);
       expect(secretCount.count).toBe(0);
       expect(dedupCount.count).toBe(0);
     });
 
-    it('saves agent manifest versions sequentially with a unique database constraint', async () => {
-      const agent = await repo.createAgent({ ...agentData, name: 'Manifest Version Agent' });
-
-      await repo.saveAgentManifest(agent.id, { metadata: { name: 'v2' } }, 'tester', 'first update');
-      await repo.saveAgentManifest(agent.id, { metadata: { name: 'v3' } }, 'tester', 'second update');
-
-      const versions = await repo.getAgentVersions(agent.id);
-      expect(versions.map((version) => version.version)).toEqual([3, 2]);
-
-      await expect(testDb.conn.pgClient`
-        INSERT INTO agent_versions (id, agent_id, version, manifest, created_at)
-        VALUES ('duplicate-manifest-version', ${agent.id}, 3, '{}', ${Date.now()})
-      `).rejects.toThrow(/duplicate|unique/i);
-    });
   });
 
   // --- Conversations & Messages (CFG-05) ---
@@ -466,6 +433,35 @@ describe('DatabaseRepository', () => {
       await expect(
         repo.updateSandboxSessionStatus('missing-session-id', 'ACTIVE'),
       ).rejects.toThrow('Sandbox session missing-session-id not found for status update');
+    });
+
+    it('compare-and-set status updates reject stale expectedFrom values without writing', async () => {
+      const created = await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        harnessName: 'pi-agent',
+      });
+
+      await expect(
+        repo.updateSandboxSessionStatus(created.id, 'CHECKPOINTED', undefined, {
+          expectedFrom: 'RESTORING',
+        }),
+      ).rejects.toMatchObject({ name: 'SandboxSessionStatusConflictError' });
+
+      const afterStaleWrite = await repo.getSandboxSession(created.id);
+      expect(afterStaleWrite?.status).toBe('ACTIVE');
+
+      await expect(
+        repo.updateSandboxSessionStatus(created.id, 'CHECKPOINTED', {
+          checkpointRef: 'checkpoint-ref-cas',
+        }, {
+          expectedFrom: 'ACTIVE',
+        }),
+      ).resolves.toBeUndefined();
+
+      const afterCasWrite = await repo.getSandboxSession(created.id);
+      expect(afterCasWrite?.status).toBe('CHECKPOINTED');
+      expect(afterCasWrite?.checkpointRef).toBe('checkpoint-ref-cas');
     });
 
     it('should list active sandbox sessions', async () => {
@@ -694,38 +690,6 @@ describe('DatabaseRepository', () => {
       return { agent, conversation, sandboxSession, turn };
     }
 
-    it('atomically claims due scheduled events and reclaims expired leases', async () => {
-      const { agent } = await createRuntimeTurn('Scheduled Claim');
-      const now = Date.now();
-      await repo.createScheduledEvent({
-        id: 'scheduled-claim-1',
-        agentId: agent.id,
-        type: 'turn.started',
-        payload: JSON.stringify({ runId: 'scheduled-claim-1' }),
-        wakeAt: now - 1,
-      });
-
-      const firstClaim = await repo.getScheduledEventsDue(now, 10);
-      expect(firstClaim.map((event) => event.id)).toEqual(['scheduled-claim-1']);
-      expect(firstClaim[0].status).toBe('in_progress');
-      expect(firstClaim[0].claimedAt).toBeTypeOf('number');
-
-      const secondClaim = await repo.getScheduledEventsDue(now + 1, 10);
-      expect(secondClaim).toEqual([]);
-
-      await testDb.conn.pgClient`
-        UPDATE scheduled_events
-        SET claim_expires_at = ${now - 10_000}
-        WHERE id = 'scheduled-claim-1'
-      `;
-      const reclaimed = await repo.getScheduledEventsDue(now + 2, 10);
-      expect(reclaimed.map((event) => event.id)).toEqual(['scheduled-claim-1']);
-
-      await repo.markScheduledEventCompleted(reclaimed[0].id, reclaimed[0].claimedAt);
-      const afterComplete = await repo.getScheduledEventsDue(now + 3, 10);
-      expect(afterComplete).toEqual([]);
-    });
-
     it('enforces logical uniqueness for trigger agent, event type, and selector', async () => {
       const { agent } = await createRuntimeTurn('Trigger Signature');
 
@@ -747,7 +711,7 @@ describe('DatabaseRepository', () => {
         taskTemplate: 'Second',
         enabled: true,
         createdAt: new Date().toISOString(),
-      })).rejects.toMatchObject({ code: '23505' });
+      })).rejects.toSatisfy((err: unknown) => isUniqueConstraintViolation(err, 'idx_event_triggers_signature'));
 
       await expect(repo.saveTrigger({
         id: 'trigger-signature-3',
@@ -801,6 +765,48 @@ describe('DatabaseRepository', () => {
 
       await repo.markCallbackDelivered('callback-claim-1', reclaimed[0].claimedAt);
       expect((await repo.getCallbacksForAgent(agent.id))[0].status).toBe('delivered');
+    });
+
+    it('deduplicates callback outbox inserts by callback URL, event type, and event seq', async () => {
+      const { agent, turn } = await createRuntimeTurn('Callback Event Seq');
+      const now = Date.now();
+      const first = await repo.enqueueCallback({
+        id: 'callback-event-seq-1',
+        agentId: agent.id,
+        sessionId: turn.id,
+        callbackUrl: 'https://example.test/hook',
+        eventType: 'turn.completed',
+        eventSeq: 123,
+        payload: { status: 'completed' },
+        status: 'pending',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: now,
+        createdAt: now,
+      });
+
+      const duplicate = await repo.enqueueCallback({
+        id: 'callback-event-seq-2',
+        agentId: agent.id,
+        sessionId: turn.id,
+        callbackUrl: 'https://example.test/hook',
+        eventType: 'turn.completed',
+        eventSeq: 123,
+        payload: { status: 'completed', redelivered: true },
+        status: 'pending',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: now + 1,
+        createdAt: now + 1,
+      });
+
+      expect(duplicate.id).toBe(first.id);
+      const rows = await repo.getCallbacksForAgent(agent.id);
+      expect(rows.filter((row) =>
+        row.callbackUrl === 'https://example.test/hook'
+        && row.eventType === 'turn.completed'
+        && row.eventSeq === 123,
+      )).toHaveLength(1);
     });
 
     it('uses compare-and-set for HITL resolution and clears stale resolved fields on pending upsert', async () => {
@@ -995,7 +1001,16 @@ describe('DatabaseRepository', () => {
 
     it('saveEventBatch persists frames in one round trip and returns seqs in order', async () => {
       const seqs = await repo.saveEventBatch([
-        { type: 'RUN_STARTED', agentId, payload: '{"a":1}', turnId: 'turn-f1', conversationId: 'conv-f1', channel: 'run' },
+        {
+          type: 'RUN_STARTED',
+          agentId,
+          payload: '{"a":1}',
+          turnId: 'turn-f1',
+          conversationId: 'conv-f1',
+          channel: 'run',
+          sourceType: 'turn.started',
+          sourcePayload: '{"turnId":"turn-f1"}',
+        },
         { type: 'TEXT_MESSAGE_CONTENT', agentId, payload: '{"a":2}', turnId: 'turn-f1', conversationId: 'conv-f1', channel: 'run' },
         { type: 'stress.langgraph.complete', agentId, payload: '{"schemaVersion":1}', channel: 'custom' },
       ]);
@@ -1014,6 +1029,9 @@ describe('DatabaseRepository', () => {
       const runOnly = await repo.getFramesSince(agentId, 0, { channels: ['run'] });
       expect(runOnly.every((row) => row.channel === 'run')).toBe(true);
       expect(runOnly.map((row) => row.type)).toEqual(['RUN_STARTED', 'TEXT_MESSAGE_CONTENT']);
+      expect(runOnly[0]!.sourceType).toBe('turn.started');
+      expect(runOnly[0]!.sourcePayload).toBe('{"turnId":"turn-f1"}');
+      expect(runOnly[1]!.sourceType).toBeNull();
 
       const afterFirst = await repo.getFramesSince(agentId, runOnly[0]!.seq, { channels: ['run'] });
       expect(afterFirst.map((row) => row.type)).toEqual(['TEXT_MESSAGE_CONTENT']);
@@ -1028,15 +1046,55 @@ describe('DatabaseRepository', () => {
       expect(tail.map((row) => row.type)).toEqual(['TEXT_MESSAGE_CONTENT']);
     });
 
-    it('saveEvent (legacy single-row path) defaults new columns', async () => {
-      const seq = await repo.saveEvent('turn.completed', agentId, '{}');
-      const [row] = await repo.getFramesSince(agentId, seq - 1, { limit: 1 });
-      expect(row).toEqual(expect.objectContaining({
-        type: 'turn.completed',
-        channel: 'system',
-        turnId: null,
-        conversationId: null,
-      }));
+    it('tracks raw source rows and spine cursors for durable consumers', async () => {
+      const [seq] = await repo.saveEventBatch([
+        {
+          type: 'RUN_STARTED',
+          agentId,
+          payload: '{"event":"cursor"}',
+          turnId: 'turn-cursor',
+          conversationId: 'conv-cursor',
+          channel: 'run',
+          sourceType: 'turn.started',
+          sourcePayload: '{"turnId":"turn-cursor"}',
+        },
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          agentId,
+          payload: '{"event":"cursor-content"}',
+          turnId: 'turn-cursor',
+          conversationId: 'conv-cursor',
+          channel: 'run',
+        },
+      ]);
+      const sourceRows = await repo.getSourceEventsSince((seq ?? 0) - 1);
+      expect(sourceRows.map((row) => row.type)).toContain('RUN_STARTED');
+      expect(sourceRows.every((row) => row.sourceType)).toBe(true);
+
+      const sourceSeq = sourceRows.find((row) => row.type === 'RUN_STARTED')!.seq;
+      await repo.advanceSpineCursor('event-triggers', sourceSeq);
+      await repo.advanceSpineCursor('event-triggers', 1);
+      expect(await repo.getSpineCursor('event-triggers')).toBe(sourceSeq);
     });
+
+    it('deduplicates trigger firings by trigger id and event seq', async () => {
+      const trigger = await repo.saveTrigger({
+        id: 'trigger-firing-test',
+        agentId,
+        eventType: 'turn.started',
+        selector: null,
+        taskTemplate: 'run',
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      });
+      const first = await repo.recordTriggerFiring(trigger.id, 123);
+      const duplicate = await repo.recordTriggerFiring(trigger.id, 123);
+
+      expect(first?.triggerId).toBe(trigger.id);
+      expect(duplicate).toBeUndefined();
+      expect(await repo.hasTriggerFiring(trigger.id, 123)).toBe(true);
+      expect(await repo.hasTriggerFiring(trigger.id, 124)).toBe(false);
+    });
+
   });
 });

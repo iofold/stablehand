@@ -98,6 +98,7 @@ describe('CallbackDispatcher', () => {
       expect(call.sessionId).toBe('run-1');
       expect(call.callbackUrl).toBe('https://example.com/hook');
       expect(call.eventType).toBe('turn.completed');
+      expect(call.eventSeq).toBeNull();
       expect(call.payload).toEqual({ status: 'completed' });
       expect(call.status).toBe('pending');
       expect(call.attempts).toBe(0);
@@ -114,6 +115,19 @@ describe('CallbackDispatcher', () => {
 
       const call = (db.enqueueCallback as any).mock.calls[0][0];
       expect(call.sessionId).toBeNull();
+    });
+
+    it('persists eventSeq when provided for spine redelivery dedupe', async () => {
+      await dispatcher.enqueue({
+        agentId: 'agent-1',
+        callbackUrl: 'https://example.com/hook',
+        eventType: 'turn.completed',
+        eventSeq: 42,
+        payload: {},
+      });
+
+      const call = vi.mocked(db.enqueueCallback).mock.calls[0][0];
+      expect(call.eventSeq).toBe(42);
     });
   });
 

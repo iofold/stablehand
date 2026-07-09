@@ -16,6 +16,8 @@ import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js'
 import type { ContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { AgentDefinition } from '../../types.js';
+import { SessionStateStore } from '../session-manager/session-state-store.js';
+import { SessionStatusCoordinator } from '../session-manager/session-status-coordinator.js';
 
 type SandboxSessionManagerInternals = {
   stateStore: {
@@ -25,7 +27,6 @@ type SandboxSessionManagerInternals = {
 
 function createMockContainerManager(): ContainerManager {
   return {
-    extractContainerDiff: vi.fn().mockResolvedValue(null),
     extractWorkspaceDiff: vi.fn().mockResolvedValue(null),
   } as unknown as ContainerManager;
 }
@@ -181,11 +182,15 @@ describe('SandboxSessionManager interrupt resume characterization', () => {
     db = createMockDb();
     lifecyclePolicy = createMockLifecyclePolicy();
     logger = createLogger();
+    const stateStore = new SessionStateStore();
+    const statusCoordinator = new SessionStatusCoordinator({ db, logger, stateStore });
 
     manager = new SandboxSessionManager({
       containerManager,
       db,
       lifecyclePolicy,
+      stateStore,
+      statusCoordinator,
       workspaceDiffService: new WorkspaceDiffService({ containerManager }),
       buildSandboxSecrets: async () => ({}),
       logger,

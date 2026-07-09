@@ -23,9 +23,18 @@ import type {
 import type { ToolContext, ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
 import {
+  CanonicalProviderSchema,
   normalizeStreamTextDeltas,
   resolveSecretRef,
 } from './shared.js';
+import {
+  TurnAccumulator,
+  createAgentEventLangSmithTracer,
+  linkAbortSignal,
+  normalizeTokenUsage,
+  requestToolApproval,
+  traceAgentEvents,
+} from './kit/index.js';
 
 const ClaudeAgentDefinitionSchema = z.object({
   description: z.string(),
@@ -41,7 +50,7 @@ const CLAUDE_SKILL_TOOL_NAME = 'Skill';
 const CLAUDE_PROJECT_SKILLS_DIR = '.claude/skills';
 
 export const ClaudeAgentsConfigSchema = z.object({
-  provider: z.string().optional(),
+  provider: CanonicalProviderSchema.optional(),
   model: z.string().min(1),
   apiKeyRef: z.string().optional(),
   baseUrl: z.string().refine((value) => URL.canParse(value)).optional(),
@@ -215,17 +224,11 @@ class ClaudeSession implements HarnessSession {
     this.activeApprovalHandler = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
 
     const abortController = new AbortController();
-    const cleanupAbort = this.linkAbortSignals(
-      [this.config.signal, context.signal],
-      abortController,
-    );
+    const cleanupConfigAbort = linkAbortSignal(this.config.signal, () => abortController.abort());
+    const cleanupContextAbort = linkAbortSignal(context.signal, () => abortController.abort());
     const toolStartTimes = new Map<string, number>();
     const streamState = this.harness.createStreamMappingState();
-    let assistantText = '';
-    let doneEvent: Extract<AgentEvent, { type: 'done' }> | undefined;
-    const accumulatedToolCalls: Array<
-      NonNullable<Message['toolCalls']>[number] & { args: string; status: 'complete' | 'error' }
-    > = [];
+    const accumulator = new TurnAccumulator({ turnId: input.turnId });
 
     try {
       const maxTurns = this.harnessConfig.maxTurns;
@@ -258,26 +261,28 @@ class ClaudeSession implements HarnessSession {
         yield* this.flushQueuedEvents();
         for (const event of this.harness.mapSDKMessage(message, toolStartTimes, streamState)) {
           if (event.type === 'text_delta' && typeof event.content === 'string') {
-            assistantText += event.content;
+            accumulator.appendText(event.content);
           }
 
           if (event.type === 'tool_call_start') {
-            accumulatedToolCalls.push({
+            accumulator.recordToolStart({
               id: event.id,
               name: event.name,
-              arguments: typeof event.args === 'object' && event.args !== null && !Array.isArray(event.args)
-                ? Object.fromEntries(Object.entries(event.args as Record<string, unknown>))
-                : {},
-              args: typeof event.args === 'string' ? event.args : JSON.stringify(event.args ?? {}),
-              status: 'complete',
+              args: event.args,
             });
           } else if (event.type === 'tool_call_end' && event.error) {
-            const existing = accumulatedToolCalls.find((tc) => tc.id === event.id);
-            if (existing) existing.status = 'error';
+            accumulator.recordToolEnd({
+              id: event.id,
+              result: event.result,
+              error: event.error,
+            });
           }
 
           if (event.type === 'done') {
-            doneEvent = event;
+            accumulator.recordDone(event);
+            if (!accumulator.hasCommitContent() && typeof event.result === 'string') {
+              accumulator.recordAssistantText(event.result);
+            }
             continue;
           }
 
@@ -291,43 +296,31 @@ class ClaudeSession implements HarnessSession {
       }
 
       yield* this.flushQueuedEvents();
-      const committedToolCalls: Message['toolCalls'] | undefined =
-        accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined;
-      const committedAssistantText =
-        assistantText.length > 0 || accumulatedToolCalls.length > 0
-          ? assistantText
-          : typeof doneEvent?.result === 'string'
-            ? doneEvent.result
-            : '';
-      if (committedAssistantText.length > 0 || accumulatedToolCalls.length > 0) {
+      const committed = accumulator.createMessageCommitted(this.transcript.length);
+      if (committed) {
         this.transcript.push({
           id: randomUUID(),
           agentId: this.config.agentId ?? this.config.conversationId,
           role: 'assistant',
-          content: committedAssistantText,
-          ...(committedToolCalls ? { toolCalls: committedToolCalls } : {}),
+          content: committed.content,
+          ...(committed.toolCalls ? { toolCalls: committed.toolCalls } : {}),
           createdAt: new Date(),
         });
 
-        yield {
-          type: 'message_committed',
-          role: 'assistant',
-          content: committedAssistantText,
-          ...(committedToolCalls ? { toolCalls: committedToolCalls } : {}),
-          turnId: input.turnId,
-          messageSeq: this.transcript.length - 1,
-        };
+        yield committed;
       }
 
-      if (doneEvent) {
-        yield doneEvent;
+      const done = accumulator.doneEvent();
+      if (done) {
+        yield done;
       }
     } catch (error) {
       console.error('[claude-agents] deliverTurn error:', error);
       yield* this.flushQueuedEvents();
       yield { type: 'error', error: this.stringifyError(error) };
     } finally {
-      cleanupAbort();
+      cleanupConfigAbort();
+      cleanupContextAbort();
     }
   }
 
@@ -594,24 +587,6 @@ class ClaudeSession implements HarnessSession {
     return this.harnessConfig.subagents;
   }
 
-  private linkAbortSignals(
-    signals: (AbortSignal | undefined)[],
-    abortController: AbortController,
-  ): () => void {
-    const cleanups: (() => void)[] = [];
-    for (const signal of signals) {
-      if (!signal) continue;
-      if (signal.aborted) {
-        abortController.abort();
-        return () => undefined;
-      }
-      const onAbort = () => abortController.abort();
-      signal.addEventListener('abort', onAbort, { once: true });
-      cleanups.push(() => signal.removeEventListener('abort', onAbort));
-    }
-    return () => { for (const c of cleanups) c(); };
-  }
-
   private stringifyError(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
   }
@@ -621,48 +596,21 @@ export class ClaudeAgentsHarness implements AgentHarness {
   readonly name = 'claude-agents';
   readonly configSchema = ClaudeAgentsConfigSchema;
 
-  protected async loadSdkModule(
-    sessionMetadata?: { agentId?: string; conversationId?: string },
-  ): Promise<ClaudeSdkModule> {
+  protected async loadSdkModule(): Promise<ClaudeSdkModule> {
     const baseSdk: ClaudeSdkModule = {
       query: sdkQuery,
       tool: sdkTool as unknown as SdkToolFactory,
       createSdkMcpServer,
     };
 
-    if (process.env.LANGSMITH_TRACING !== 'true') {
-      return baseSdk;
-    }
-
-    try {
-      const { wrapClaudeAgentSDK } = await import('langsmith/experimental/anthropic');
-      const metadata: Record<string, unknown> = {};
-      if (sessionMetadata?.agentId) metadata.agentId = sessionMetadata.agentId;
-      if (sessionMetadata?.conversationId) metadata.conversationId = sessionMetadata.conversationId;
-      const wrapped = wrapClaudeAgentSDK(
-        baseSdk,
-        Object.keys(metadata).length > 0 ? { metadata } : undefined,
-      );
-      console.log('[claude-agents] LangSmith tracing enabled');
-      return {
-        query: wrapped.query ?? baseSdk.query,
-        tool: (wrapped.tool ?? baseSdk.tool) as unknown as SdkToolFactory,
-        createSdkMcpServer: wrapped.createSdkMcpServer ?? baseSdk.createSdkMcpServer,
-      };
-    } catch (err) {
-      console.warn('[claude-agents] LangSmith tracing init failed, continuing without:', err);
-      return baseSdk;
-    }
+    return baseSdk;
   }
 
   async openSession(
     config: HarnessSessionConfig,
     restore?: HarnessRestorePoint,
   ): Promise<HarnessSession> {
-    const sdk = await this.loadSdkModule({
-      agentId: config.agentId,
-      conversationId: config.conversationId,
-    });
+    const sdk = await this.loadSdkModule();
     const harnessConfig = ClaudeAgentsConfigSchema.parse(
       JSON.parse(z.string().parse(config.harnessConfigJson)),
     );
@@ -698,22 +646,14 @@ export class ClaudeAgentsHarness implements AgentHarness {
         });
       }
     }
-    return session;
-  }
-
-  async convertTools(
-    toolDefs: ToolDefinition[],
-    runId: string,
-    config?: HarnessSessionConfig,
-    onApprovalNeeded?: ApprovalCallback,
-  ): Promise<ConvertedMcpTool[]> {
-    return this.convertToolsWithSDK(
-      { tool: sdkTool as unknown as SdkToolFactory },
-      toolDefs,
-      runId,
-      config,
-      onApprovalNeeded,
-    );
+    return traceAgentEvents(session, {
+      createTracer: (input) => createAgentEventLangSmithTracer({
+        agentId: config.agentId,
+        conversationId: config.conversationId,
+        harnessName: this.name,
+        turnId: input.turnId,
+      }),
+    });
   }
 
   convertToolsWithSDK(
@@ -736,30 +676,18 @@ export class ClaudeAgentsHarness implements AgentHarness {
           const approvalId = randomUUID();
 
           if (definition.requiresApproval && onApprovalNeeded) {
-            queuedEvents?.push({
-              type: 'approval_needed',
-              id: approvalId,
-              tool: definition.name,
-              args,
-            });
-
-            const approvalRequest: ApprovalRequest = {
+            const approval = await requestToolApproval({
               id: approvalId,
               runId,
               toolName: definition.name,
               args,
-            };
-            const approvalResponse = await onApprovalNeeded(approvalRequest);
-
-            queuedEvents?.push({
-              type: 'approval_resolved',
-              id: approvalId,
-              action: approvalResponse.action,
+              onApprovalNeeded,
+              emit: (event) => queuedEvents?.push(event),
             });
 
-            if (approvalResponse.action !== 'approve') {
+            if (!approval.approved) {
               return {
-                content: [{ type: 'text', text: 'Tool call was rejected by the user.' }],
+                content: [{ type: 'text', text: approval.rejectionMessage }],
                 isError: true,
               };
             }
@@ -783,41 +711,6 @@ export class ClaudeAgentsHarness implements AgentHarness {
         },
       ) as ConvertedMcpTool;
     });
-  }
-
-  buildCanUseTool(
-    toolDefs: ToolDefinition[],
-    onApprovalNeeded: ApprovalCallback | undefined,
-    runId: string,
-  ) {
-    const approvalSet = new Set(
-      toolDefs
-        .filter((toolDefinition) => toolDefinition.requiresApproval)
-        .map((toolDefinition) => toolDefinition.name),
-    );
-
-    return async (
-      toolName: string,
-      input: Record<string, unknown>,
-      options: { signal: AbortSignal; toolUseID: string },
-    ): Promise<{ behavior: 'allow' } | { behavior: 'deny'; message: string }> => {
-      if (options.signal.aborted || !approvalSet.has(toolName) || !onApprovalNeeded) {
-        return { behavior: 'allow' };
-      }
-
-      const approvalRequest: ApprovalRequest = {
-        id: options.toolUseID || randomUUID(),
-        runId,
-        toolName,
-        args: input,
-      };
-      const response = await onApprovalNeeded(approvalRequest);
-      if (response.action === 'approve') {
-        return { behavior: 'allow' };
-      }
-
-      return { behavior: 'deny', message: 'Tool call was rejected by the user.' };
-    };
   }
 
   createStreamMappingState(): StreamMappingState {
@@ -980,16 +873,11 @@ export class ClaudeAgentsHarness implements AgentHarness {
       return undefined;
     }
 
-    const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0;
-    const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : 0;
     const cost = typeof message.total_cost_usd === 'number' ? message.total_cost_usd : undefined;
-
-    return {
-      inputTokens,
-      outputTokens,
-      totalTokens: inputTokens + outputTokens,
+    return normalizeTokenUsage({
+      ...(usage as Record<string, unknown>),
       ...(cost != null ? { cost } : {}),
-    };
+    });
   }
 
   private extractResultError(message: SDKErrorResultMessage): string {

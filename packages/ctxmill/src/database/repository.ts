@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
+import { isUniqueConstraintViolation } from './errors.js';
 import { projectSessionStatus, type ApiSessionStatusCounts, type SandboxSessionStatus } from '@ctxmill/shared';
 
 import type {
@@ -24,10 +25,9 @@ import type {
   MessageInsert,
   MessageSelect,
   SandboxSessionRow,
-  ScheduledEventRow,
-  SuspendedSessionInsert,
-  SuspendedSessionRow,
   SystemSettingRow,
+  SpineCursorRow,
+  TriggerFiringRow,
   TriggerInsert,
   TriggerSelect,
   TurnInsert,
@@ -47,14 +47,26 @@ export type {
   InterruptResumeAttemptRow,
   InterruptRow,
   SandboxSessionRow,
-  ScheduledEventRow,
-  SuspendedSessionRow,
+  SpineCursorRow,
   SystemSettingRow,
+  TriggerFiringRow,
   WebhookRow,
 } from './types.js';
 
 const sanitizeTypedDbValue = <T>(value: T, context: string): T => sanitizeDbValue(value, context) as T;
 const DEFAULT_CLAIM_LEASE_MS = 60_000;
+const CALLBACK_EVENT_SEQ_DEDUPE_INDEX = 'idx_outbox_callback_event_seq';
+
+export class SandboxSessionStatusConflictError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly expectedFrom: string,
+    readonly toStatus: string,
+  ) {
+    super(`Sandbox session ${sessionId} status was not ${expectedFrom}; could not transition to ${toStatus}`);
+    this.name = 'SandboxSessionStatusConflictError';
+  }
+}
 
 const sanitizeOptionalDbText = <T extends string | null | undefined>(value: T, context: string): T => {
   if (value == null) return value;
@@ -93,22 +105,6 @@ export class DatabaseRepository {
 
   constructor(db: DrizzleDb) {
     this.db = db;
-  }
-
-  private getTurnStatusWhere(status: string, agentId?: string) {
-    const normalized = status === 'failed' ? 'error' : status;
-    const concreteStatuses = new Set(['queued', 'running', 'completed', 'error', 'cancelled']);
-    const condition = concreteStatuses.has(normalized)
-      ? eq(this.schema.turns.status, normalized as TurnStatus)
-      : normalized === 'active' || normalized === 'paused' || normalized === 'suspended'
-        ? isNull(this.schema.turns.completedAt)
-        : sql`1 = 0`;
-
-    if (!agentId) {
-      return condition;
-    }
-
-    return and(eq(this.schema.turns.agentId, agentId), condition);
   }
 
   // ── Agents ──────────────────────────────────────────────
@@ -165,8 +161,6 @@ export class DatabaseRepository {
       if (conversationIds.length > 0) {
         await tx.delete(this.schema.messages).where(inArray(this.schema.messages.conversationId, conversationIds));
       }
-      await tx.delete(this.schema.suspendedSessions).where(eq(this.schema.suspendedSessions.agentId, agentId));
-      await tx.delete(this.schema.scheduledEvents).where(eq(this.schema.scheduledEvents.agentId, agentId));
       await tx.delete(this.schema.pendingInterrupts).where(eq(this.schema.pendingInterrupts.agentId, agentId));
       if (sandboxSessionIds.length > 0) {
         await tx.delete(this.schema.toolRequestDedup).where(inArray(this.schema.toolRequestDedup.sessionId, sandboxSessionIds));
@@ -268,38 +262,6 @@ export class DatabaseRepository {
     });
   }
 
-  /**
-   * Get session summaries for an agent's conversations, including
-   * message count and last message timestamp per conversation.
-   */
-  async getSessionsForAgent(
-    agentId: string,
-  ): Promise<
-    {
-      conversationId: string;
-      startedAt: number;
-      messageCount: number;
-      lastMessageAt: number | null;
-    }[]
-  > {
-    const rows = await this.db
-      .select({
-        conversationId: this.schema.conversations.id,
-        startedAt: this.schema.conversations.createdAt,
-        messageCount: sql<number>`count(${this.schema.messages.id})`.as('message_count'),
-        lastMessageAt: sql<number | null>`max(${this.schema.messages.createdAt})`.as('last_message_at'),
-      })
-      .from(this.schema.conversations)
-      .leftJoin(
-        this.schema.messages,
-        eq(this.schema.conversations.id, this.schema.messages.conversationId),
-      )
-      .where(eq(this.schema.conversations.agentId, agentId))
-      .groupBy(this.schema.conversations.id);
-
-    return rows;
-  }
-
   async getConversationSummaries(agentId: string): Promise<ConversationSummaryRow[]> {
     return this.queryConversationSummaries({ agentId });
   }
@@ -336,12 +298,6 @@ export class DatabaseRepository {
     });
   }
 
-  async getActiveTurns(): Promise<TurnSelect[]> {
-    return this.db.query.turns.findMany({
-      where: isNull(this.schema.turns.completedAt),
-    });
-  }
-
   /** Open turns started before the cutoff — stranded by construction after a restart (ADR-014). */
   async getOpenTurnsStartedBefore(cutoffMs: number): Promise<TurnSelect[]> {
     return this.db.query.turns.findMany({
@@ -367,35 +323,9 @@ export class DatabaseRepository {
     return updated.length > 0;
   }
 
-  async getAllTurns(): Promise<TurnSelect[]> {
-    return this.db.query.turns.findMany();
-  }
-
   async getTurn(id: string): Promise<TurnSelect | undefined> {
     return this.db.query.turns.findFirst({
       where: eq(this.schema.turns.id, id),
-    });
-  }
-
-  async getLatestTurnForConversation(conversationId: string): Promise<TurnSelect | undefined> {
-    return this.db.query.turns.findFirst({
-      where: eq(this.schema.turns.conversationId, conversationId),
-      orderBy: [desc(this.schema.turns.startedAt), desc(this.schema.turns.id)],
-    });
-  }
-
-  async getTurnsByStatus(
-    agentId: string,
-    status: string,
-  ): Promise<TurnSelect[]> {
-    return this.db.query.turns.findMany({
-      where: this.getTurnStatusWhere(status, agentId),
-    });
-  }
-
-  async getTurnsByStatusGlobal(status: string): Promise<TurnSelect[]> {
-    return this.db.query.turns.findMany({
-      where: this.getTurnStatusWhere(status),
     });
   }
 
@@ -405,16 +335,6 @@ export class DatabaseRepository {
     });
   }
 
-  async getTurnsCount(agentId: string): Promise<number> {
-    const rows = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(this.schema.turns)
-      .where(eq(this.schema.turns.agentId, agentId));
-    return rows[0]?.count ?? 0;
-  }
-
-  // ── Conversation Analysis ──────────────────────────────
-
   async getConversationCount(agentId: string): Promise<number> {
     const rows = await this.db
       .select({ count: sql<number>`count(*)` })
@@ -423,56 +343,7 @@ export class DatabaseRepository {
     return rows[0]?.count ?? 0;
   }
 
-  async getMessageCount(conversationId: string): Promise<number> {
-    const rows = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(this.schema.messages)
-      .where(eq(this.schema.messages.conversationId, conversationId));
-    return rows[0]?.count ?? 0;
-  }
-
-  async getAgentAnalytics(agentId: string): Promise<{
-    totalSessions: number;
-    completedSessions: number;
-    failedSessions: number;
-    totalConversations: number;
-    avgSessionDuration: number;
-  }> {
-    const [sessionStats] = await this.db
-      .select({
-        totalSessions: sql<number>`count(*)`.as('total_sessions'),
-        completedSessions: sql<number>`sum(case when ${this.schema.turns.completedAt} is not null and ${this.schema.turns.error} is null then 1 else 0 end)`.as('completed_sessions'),
-        failedSessions: sql<number>`sum(case when ${this.schema.turns.error} is not null then 1 else 0 end)`.as('failed_sessions'),
-        avgSessionDuration: sql<number>`coalesce(avg(case when ${this.schema.turns.completedAt} is not null and ${this.schema.turns.startedAt} is not null then ${this.schema.turns.completedAt} - ${this.schema.turns.startedAt} end), 0)`.as('avg_session_duration'),
-      })
-      .from(this.schema.turns)
-      .where(eq(this.schema.turns.agentId, agentId));
-
-    const conversationCount = await this.getConversationCount(agentId);
-
-    return {
-      totalSessions: sessionStats?.totalSessions ?? 0,
-      completedSessions: sessionStats?.completedSessions ?? 0,
-      failedSessions: sessionStats?.failedSessions ?? 0,
-      totalConversations: conversationCount,
-      avgSessionDuration: Math.round(sessionStats?.avgSessionDuration ?? 0),
-    };
-  }
-
   // ── Event Store ──────────────────────────────────────────
-
-  async saveEvent(type: string, agentId: string, payload: string): Promise<number> {
-    const sanitizedType = sanitizeDbText(type, 'eventStore.type');
-    const sanitizedPayload = sanitizeDbText(payload, 'eventStore.payload');
-    const [row] = await this.db
-      .insert(this.schema.eventStore)
-      .values({ type: sanitizedType, agentId, payload: sanitizedPayload, createdAt: Date.now() })
-      .returning({ seq: this.schema.eventStore.seq });
-    if (!row) {
-      throw new Error('Expected insert to return a row but got undefined');
-    }
-    return row.seq;
-  }
 
   /**
    * Batch-persist canonical frames in one round trip (ADR-015). Returns the
@@ -493,6 +364,8 @@ export class DatabaseRepository {
         turnId: frame.turnId ?? null,
         conversationId: frame.conversationId ?? null,
         channel: frame.channel ?? 'system',
+        sourceType: sanitizeOptionalDbText(frame.sourceType ?? null, 'eventStore.sourceType'),
+        sourcePayload: sanitizeOptionalDbText(frame.sourcePayload ?? null, 'eventStore.sourcePayload'),
       })))
       .returning({ seq: this.schema.eventStore.seq });
     return rows.map((row) => row.seq);
@@ -538,56 +411,44 @@ export class DatabaseRepository {
     });
   }
 
-  async createSuspendedSession(data: SuspendedSessionInsert): Promise<void> {
-    const sanitizedData = sanitizeTypedDbValue(data, 'suspendedSessions.insert');
-    await this.db.insert(this.schema.suspendedSessions).values(sanitizedData);
-  }
-
-  async getSuspendedSessionsByEventType(eventType: string): Promise<SuspendedSessionRow[]> {
-    return this.db.query.suspendedSessions.findMany({
-      where: eq(this.schema.suspendedSessions.waitEventType, eventType),
+  /** Source-bearing rows in seq order — raw event input for durable spine consumers (ADR-016/017). */
+  async getSourceEventsSince(afterSeq: number, limit = 1_000): Promise<EventFrameRow[]> {
+    return this.db.query.eventStore.findMany({
+      where: and(
+        gt(this.schema.eventStore.seq, afterSeq),
+        isNotNull(this.schema.eventStore.sourceType),
+      ),
+      orderBy: [asc(this.schema.eventStore.seq)],
+      limit,
     });
   }
 
-  async deleteSuspendedSession(id: string): Promise<void> {
-    await this.db.delete(this.schema.suspendedSessions).where(eq(this.schema.suspendedSessions.id, id));
+  async getSpineCursor(consumer: string): Promise<number> {
+    const sanitizedConsumer = sanitizeDbText(consumer, 'spineCursors.consumer');
+    const row = await this.db.query.spineCursors.findFirst({
+      where: eq(this.schema.spineCursors.consumer, sanitizedConsumer),
+    });
+    return row?.lastSeq ?? 0;
   }
 
-  async expireOldSuspendedSessions(beforeTime: number): Promise<number> {
-    const deleted = await this.db
-      .delete(this.schema.suspendedSessions)
-      .where(
-        and(
-          isNotNull(this.schema.suspendedSessions.waitExpiresAt),
-          lt(this.schema.suspendedSessions.waitExpiresAt, beforeTime),
-        ),
-      )
-      .returning({ id: this.schema.suspendedSessions.id });
-    return deleted.length;
-  }
-
-  async getEventsSince(
-    agentId: string,
-    afterSeq: number,
-    limit = 100,
-  ): Promise<Array<{ seq: number; type: string; agentId: string; payload: string; createdAt: number }>> {
-    return this.db
-      .select({
-        seq: this.schema.eventStore.seq,
-        type: this.schema.eventStore.type,
-        agentId: this.schema.eventStore.agentId,
-        payload: this.schema.eventStore.payload,
-        createdAt: this.schema.eventStore.createdAt,
+  async advanceSpineCursor(consumer: string, lastSeq: number): Promise<SpineCursorRow> {
+    const sanitizedConsumer = sanitizeDbText(consumer, 'spineCursors.consumer');
+    const now = Date.now();
+    const [row] = await this.db
+      .insert(this.schema.spineCursors)
+      .values({ consumer: sanitizedConsumer, lastSeq, updatedAt: now })
+      .onConflictDoUpdate({
+        target: this.schema.spineCursors.consumer,
+        set: {
+          lastSeq: sql<number>`greatest(${this.schema.spineCursors.lastSeq}, ${lastSeq})`,
+          updatedAt: now,
+        },
       })
-      .from(this.schema.eventStore)
-      .where(
-        and(
-          eq(this.schema.eventStore.agentId, agentId),
-          gt(this.schema.eventStore.seq, afterSeq),
-        ),
-      )
-      .orderBy(this.schema.eventStore.seq)
-      .limit(limit);
+      .returning();
+    if (!row) {
+      throw new Error('Expected spine cursor upsert to return a row but got undefined');
+    }
+    return row;
   }
 
   /**
@@ -693,107 +554,6 @@ export class DatabaseRepository {
     return rows.map((r) => r.type);
   }
 
-  // ── Scheduled Events ──────────────────────────────────────
-
-  async createScheduledEvent(data: { id: string; agentId: string; type: string; payload: string; wakeAt: number }): Promise<void> {
-    const sanitizedData = sanitizeTypedDbValue(data, 'scheduledEvents.insert');
-    await this.db.insert(this.schema.scheduledEvents).values({
-      id: sanitizedData.id,
-      agentId: sanitizedData.agentId,
-      type: sanitizedData.type,
-      payload: sanitizedData.payload,
-      wakeAt: sanitizedData.wakeAt,
-      status: 'pending',
-      createdAt: Date.now(),
-    });
-  }
-
-  async getScheduledEventsDue(beforeTime: number, limit = 100): Promise<ScheduledEventRow[]> {
-    return this.claimScheduledEventsDue(limit, beforeTime);
-  }
-
-  async claimScheduledEventsDue(
-    limit: number,
-    beforeTime: number,
-    leaseMs = DEFAULT_CLAIM_LEASE_MS,
-  ): Promise<ScheduledEventRow[]> {
-    const now = Date.now();
-    const claimExpiresAt = now + leaseMs;
-    const rows = await this.db
-      .update(this.schema.scheduledEvents)
-      .set({
-        status: 'in_progress',
-        claimedAt: now,
-        claimExpiresAt,
-        attempts: sql`${this.schema.scheduledEvents.attempts} + 1`,
-      })
-      .where(
-        inArray(
-          this.schema.scheduledEvents.id,
-          this.db
-            .select({ id: this.schema.scheduledEvents.id })
-            .from(this.schema.scheduledEvents)
-            .where(
-              and(
-                lte(this.schema.scheduledEvents.wakeAt, beforeTime),
-                or(
-                  eq(this.schema.scheduledEvents.status, 'pending'),
-                  and(
-                    eq(this.schema.scheduledEvents.status, 'in_progress'),
-                    lt(this.schema.scheduledEvents.claimExpiresAt, now),
-                  ),
-                ),
-              ),
-            )
-            .orderBy(this.schema.scheduledEvents.wakeAt)
-            .limit(limit)
-            .for('update', { skipLocked: true }),
-        ),
-      )
-      .returning();
-    return rows;
-  }
-
-  async markScheduledEventCompleted(id: string, claimedAt?: number | null): Promise<void> {
-    const conditions = [
-      eq(this.schema.scheduledEvents.id, id),
-      eq(this.schema.scheduledEvents.status, 'in_progress'),
-    ];
-    if (claimedAt != null) {
-      conditions.push(eq(this.schema.scheduledEvents.claimedAt, claimedAt));
-    }
-
-    await this.db
-      .update(this.schema.scheduledEvents)
-      .set({
-        status: 'completed',
-        claimedAt: null,
-        claimExpiresAt: null,
-      })
-      .where(and(...conditions));
-  }
-
-  async releaseScheduledEventClaim(id: string, error: string, claimedAt?: number | null): Promise<void> {
-    const sanitizedError = sanitizeDbText(error, 'scheduledEvents.lastError');
-    const conditions = [
-      eq(this.schema.scheduledEvents.id, id),
-      eq(this.schema.scheduledEvents.status, 'in_progress'),
-    ];
-    if (claimedAt != null) {
-      conditions.push(eq(this.schema.scheduledEvents.claimedAt, claimedAt));
-    }
-
-    await this.db
-      .update(this.schema.scheduledEvents)
-      .set({
-        status: 'pending',
-        claimedAt: null,
-        claimExpiresAt: null,
-        lastError: sanitizedError,
-      })
-      .where(and(...conditions));
-  }
-
   // ── Event Triggers ──────────────────────────────────────
 
   async saveTrigger(data: TriggerInsert): Promise<TriggerSelect> {
@@ -822,12 +582,6 @@ export class DatabaseRepository {
     return trigger;
   }
 
-  async getTrigger(id: string): Promise<TriggerSelect | undefined> {
-    return this.db.query.eventTriggers.findFirst({
-      where: eq(this.schema.eventTriggers.id, id),
-    });
-  }
-
   async getTriggerBySignature(
     agentId: string,
     eventType: string,
@@ -851,69 +605,44 @@ export class DatabaseRepository {
     return this.db.query.eventTriggers.findMany();
   }
 
-  async getTriggersForEvent(eventType: string): Promise<TriggerSelect[]> {
-    return this.db.query.eventTriggers.findMany({
-      where: eq(this.schema.eventTriggers.eventType, eventType),
-    });
-  }
-
   async deleteTrigger(id: string): Promise<void> {
     await this.db.delete(this.schema.eventTriggers).where(eq(this.schema.eventTriggers.id, id));
   }
 
-  // ── Agent Manifest ─────────────────────────────────────
-
-  async saveAgentManifest(
-    agentId: string,
-    manifest: Record<string, unknown>,
-    changedBy?: string,
-    changeNote?: string,
-  ): Promise<void> {
-    const sanitizedManifest = sanitizeTypedDbValue(manifest, 'agents.manifest');
-    await this.db.transaction(async (tx) => {
-      const lockedAgents = await tx.execute(sql`
-        SELECT version
-        FROM agents
-        WHERE id = ${agentId}
-        FOR UPDATE
-      `);
-      const lockedAgent = Array.isArray(lockedAgents) ? lockedAgents[0] : lockedAgents?.[0];
-      if (!lockedAgent) throw new Error(`Agent ${agentId} not found`);
-
-      const currentVersion = Number(lockedAgent.version ?? 0);
-      const newVersion = currentVersion + 1;
-      const versionData = sanitizeTypedDbValue({
-        agentId,
-        version: newVersion,
-        manifest: sanitizedManifest,
-        changedBy: changedBy ?? null,
-        changeNote: changeNote ?? null,
+  async recordTriggerFiring(triggerId: string, eventSeq: number): Promise<TriggerFiringRow | undefined> {
+    const sanitizedTriggerId = sanitizeDbText(triggerId, 'triggerFirings.triggerId');
+    const [row] = await this.db
+      .insert(this.schema.triggerFirings)
+      .values({
+        triggerId: sanitizedTriggerId,
+        eventSeq,
         createdAt: Date.now(),
-      }, 'agentVersions.insert');
-
-      await tx.update(this.schema.agents).set({ manifest: sanitizedManifest, version: newVersion, updatedAt: Date.now() }).where(eq(this.schema.agents.id, agentId));
-      await tx.insert(this.schema.agentVersions).values(versionData);
-    });
+      })
+      .onConflictDoNothing({
+        target: [
+          this.schema.triggerFirings.triggerId,
+          this.schema.triggerFirings.eventSeq,
+        ],
+      })
+      .returning();
+    return row;
   }
 
-  async getAgentManifest(agentId: string): Promise<Record<string, unknown> | null> {
-    const agent = await this.getAgent(agentId);
-    return agent?.manifest ?? null;
+  async hasTriggerFiring(triggerId: string, eventSeq: number): Promise<boolean> {
+    const sanitizedTriggerId = sanitizeDbText(triggerId, 'triggerFirings.triggerId');
+    const row = await this.db.query.triggerFirings.findFirst({
+      where: and(
+        eq(this.schema.triggerFirings.triggerId, sanitizedTriggerId),
+        eq(this.schema.triggerFirings.eventSeq, eventSeq),
+      ),
+    });
+    return Boolean(row);
   }
 
   async getAgentVersions(agentId: string): Promise<VersionSelect[]> {
     return this.db.query.agentVersions.findMany({
       where: eq(this.schema.agentVersions.agentId, agentId),
       orderBy: (v, { desc }) => [desc(v.version)],
-    });
-  }
-
-  async getAgentVersion(agentId: string, version: number): Promise<VersionSelect | undefined> {
-    return this.db.query.agentVersions.findFirst({
-      where: and(
-        eq(this.schema.agentVersions.agentId, agentId),
-        eq(this.schema.agentVersions.version, version),
-      ),
     });
   }
 
@@ -955,16 +684,6 @@ export class DatabaseRepository {
     });
   }
 
-  async getPendingInterruptsForAgent(agentId: string): Promise<InterruptRow[]> {
-    return this.db.query.pendingInterrupts.findMany({
-      where: and(
-        eq(this.schema.pendingInterrupts.agentId, agentId),
-        eq(this.schema.pendingInterrupts.status, 'pending'),
-      ),
-      orderBy: (row, { asc }) => [asc(row.createdAt)],
-    });
-  }
-
   async getActionableInterruptsForAgent(
     agentId: string,
   ): Promise<Array<{ interrupt: InterruptRow; resumeAttempt?: InterruptResumeAttemptRow }>> {
@@ -1003,18 +722,6 @@ export class DatabaseRepository {
         interrupt,
         resumeAttempt: attemptByInterruptId.get(interrupt.id),
       }));
-  }
-
-  async getPendingInterruptsForSession(sessionId: string): Promise<InterruptRow[]> {
-    return this.db
-      .select()
-      .from(this.schema.pendingInterrupts)
-      .where(
-        and(
-          eq(this.schema.pendingInterrupts.sessionId, sessionId),
-          eq(this.schema.pendingInterrupts.status, 'pending'),
-        ),
-      );
   }
 
   async getAllPendingInterrupts(): Promise<InterruptRow[]> {
@@ -1179,10 +886,24 @@ export class DatabaseRepository {
 
   async enqueueCallback(data: CallbackOutboxInsert): Promise<CallbackOutboxRow> {
     const sanitizedData = sanitizeTypedDbValue(data, 'callbackOutbox.insert');
-    const [row] = await this.db
-      .insert(this.schema.callbackOutbox)
-      .values(sanitizedData)
-      .returning();
+    let row: CallbackOutboxRow | undefined;
+    try {
+      [row] = await this.db
+        .insert(this.schema.callbackOutbox)
+        .values(sanitizedData)
+        .returning();
+    } catch (err) {
+      if (sanitizedData.eventSeq == null || !isUniqueConstraintViolation(err, CALLBACK_EVENT_SEQ_DEDUPE_INDEX)) {
+        throw err;
+      }
+      row = await this.db.query.callbackOutbox.findFirst({
+        where: and(
+          eq(this.schema.callbackOutbox.callbackUrl, sanitizedData.callbackUrl),
+          eq(this.schema.callbackOutbox.eventType, sanitizedData.eventType),
+          eq(this.schema.callbackOutbox.eventSeq, sanitizedData.eventSeq),
+        ),
+      });
+    }
     if (!row) {
       throw new Error('Expected insert to return a row but got undefined');
     }
@@ -1307,10 +1028,6 @@ export class DatabaseRepository {
       .where(and(eq(this.schema.webhooks.agentId, agentId), eq(this.schema.webhooks.active, true)));
   }
 
-  async deleteWebhook(id: string): Promise<boolean> {
-    return this.deleteWebhookForAgent(id);
-  }
-
   async deleteWebhookForAgent(id: string, agentId?: string): Promise<boolean> {
     const conditions = [eq(this.schema.webhooks.id, id)];
     if (agentId) {
@@ -1340,13 +1057,6 @@ export class DatabaseRepository {
       .where(and(eq(this.schema.webhooks.id, id), eq(this.schema.webhooks.agentId, agentId)))
       .returning();
     return row;
-  }
-
-  async getWebhooksForAgent(agentId: string): Promise<WebhookRow[]> {
-    return this.db
-      .select()
-      .from(this.schema.webhooks)
-      .where(and(eq(this.schema.webhooks.agentId, agentId), eq(this.schema.webhooks.active, true)));
   }
 
   // ── Sandbox Sessions ───────────────────────────────────────
@@ -1408,9 +1118,15 @@ export class DatabaseRepository {
       restoreAttempts?: number | null;
       lastRestoreError?: string | null;
     },
+    options?: {
+      expectedFrom?: string;
+    },
   ): Promise<void> {
     const sanitizedStatus = sanitizeDbText(status, 'sandboxSessions.status');
     const sanitizedExtra = extra ? sanitizeTypedDbValue(extra, 'sandboxSessions.update') : undefined;
+    const expectedFrom = options?.expectedFrom
+      ? sanitizeDbText(options.expectedFrom, 'sandboxSessions.expectedFrom')
+      : undefined;
 
     const [updated] = await this.db
       .update(this.schema.sandboxSessions)
@@ -1428,10 +1144,15 @@ export class DatabaseRepository {
           ? { lastRestoreError: sanitizedExtra.lastRestoreError }
           : {}),
       })
-      .where(eq(this.schema.sandboxSessions.id, id))
+      .where(expectedFrom
+        ? and(eq(this.schema.sandboxSessions.id, id), eq(this.schema.sandboxSessions.status, expectedFrom))
+        : eq(this.schema.sandboxSessions.id, id))
       .returning({ id: this.schema.sandboxSessions.id });
 
     if (!updated) {
+      if (expectedFrom) {
+        throw new SandboxSessionStatusConflictError(id, expectedFrom, sanitizedStatus);
+      }
       throw new Error(`Sandbox session ${id} not found for status update`);
     }
   }
@@ -1729,15 +1450,6 @@ export class DatabaseRepository {
     return deleted.length;
   }
 
-  async getSystemSetting(key: string): Promise<string | null> {
-    const rows = await this.db
-      .select()
-      .from(this.schema.systemSettings)
-      .where(eq(this.schema.systemSettings.key, key))
-      .limit(1);
-    return rows[0]?.value ?? null;
-  }
-
   async setSystemSetting(key: string, value: string): Promise<void> {
     const sanitizedKey = sanitizeDbText(key, 'systemSettings.key');
     const sanitizedValue = sanitizeDbText(value, 'systemSettings.value');
@@ -1762,8 +1474,7 @@ export class DatabaseRepository {
       );
       return true;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg.includes('unique') || msg.includes('duplicate') || msg.includes('23505')) {
+      if (isUniqueConstraintViolation(err)) {
         return false;
       }
       throw err;

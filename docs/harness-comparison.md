@@ -8,7 +8,7 @@ This document provides a comprehensive comparison of the three agent harnesses s
 | :--- | :--- | :--- | :--- |
 | **SDK Package** | `deepagents` (LangGraph JS) | `@anthropic-ai/claude-agent-sdk` | `@mariozechner/pi-coding-agent` |
 | **Default Model** | `gpt-5.4-mini` | `claude-sonnet-4-6` | `gpt-5.4-mini` |
-| **Skills** | ✅ (`.ctxmill/skills`) | ❌ | ❌ |
+| **Skills** | Workspace-file pattern only | Claude SDK-native `.claude/skills` when present | Workspace-file pattern only |
 | **Subagents** | ✅ (Configurable) | ❌ | ❌ |
 | **Hooks** | ❌ (Planned) | ❌ (Planned) | ❌ (Planned) |
 | **Middleware** | ✅ (Tool blocklist) | ❌ | ❌ |
@@ -24,7 +24,7 @@ This document provides a comprehensive comparison of the three agent harnesses s
 
 ### LangGraph
 **Best for:** Multi-step workflows, tool-heavy agents, and complex agent architectures.
-- Use if you need **Skills** or **Subagents** support today.
+- Use if you need **Subagents** support today.
 - Use if you want a lightweight, pure TypeScript runtime without Python or heavy CLI dependencies.
 - Use if you need custom **Middleware** for tool execution (e.g., global blocklists).
 - Best for general-purpose agents using OpenAI, Anthropic, or Google models via LangChain.

@@ -1,22 +1,10 @@
 import { create } from 'zustand';
-import type { ApiToolCallState } from '@ctxmill/shared';
+import type { ApiMessage, ApiMessagePart, ApiToolCallState } from '@ctxmill/shared';
 import { useInterruptStore } from './interrupt';
 
 export type ToolCallState = ApiToolCallState;
-
-export type MessagePart =
-  | { type: 'text'; content: string }
-  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: ToolCallState['status'] };
-
-export interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
-  parts?: MessagePart[];
-  toolCallId?: string;
-  toolCalls?: ToolCallState[];
-  createdAt: string;
-}
+export type MessagePart = ApiMessagePart;
+export type Message = ApiMessage;
 
 function normalizeCreatedAt(value: unknown): string {
   if (typeof value === 'number' && Number.isFinite(value)) {

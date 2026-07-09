@@ -100,7 +100,7 @@ describe('Trigger cascade protection', () => {
     manager.emitCustomEvent('custom.test', 'agent-1', { _triggerDepth: 3 });
     await settle();
     expect(onFire).toHaveBeenCalledTimes(1);
-    expect(onFire).toHaveBeenCalledWith('agent-1', 'Do something', expect.any(String), 4);
+    expect(onFire).toHaveBeenCalledWith('agent-1', 'Do something', expect.any(String), 4, undefined);
 
     onFire.mockClear();
 
@@ -130,7 +130,7 @@ describe('Trigger cascade protection', () => {
     manager.emitCustomEvent('custom.test', 'agent-1', { someData: 'hello' });
     await settle();
     expect(onFire).toHaveBeenCalledTimes(1);
-    expect(onFire).toHaveBeenCalledWith('agent-1', 'Do something', expect.any(String), 1);
+    expect(onFire).toHaveBeenCalledWith('agent-1', 'Do something', expect.any(String), 1, undefined);
   });
 
   it('should propagate _triggerDepth through emitCustomEvent', async () => {
@@ -152,7 +152,7 @@ describe('Trigger cascade protection', () => {
       manager.emitCustomEvent('custom.chain', 'agent-1', { _triggerDepth: depth });
       await settle();
       expect(onFire).toHaveBeenCalledTimes(1);
-      expect(onFire).toHaveBeenCalledWith('agent-1', 'Chain step', expect.any(String), depth + 1);
+      expect(onFire).toHaveBeenCalledWith('agent-1', 'Chain step', expect.any(String), depth + 1, undefined);
     }
 
     onFire.mockClear();

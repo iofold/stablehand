@@ -449,13 +449,13 @@ export class SessionTurnOrchestrator {
         this.deps.logger.warn(
           `${TAG} stream aborted mid-turn (${eventCount} events received) for turn ${turnId} on session ${sessionId} — connection dropped during tool execution`,
         );
-        this.deps.stateStore.deleteSession(record.conversationId);
         await this.deps.statusCoordinator.transition({
           sessionId,
           fromStatus: record.status,
           toStatus: 'TERMINATED',
           clearRuntime: true,
         });
+        this.deps.stateStore.deleteSession(record.conversationId);
       }
 
       const agentDef = this.deps.stateStore.getAgentDef(record.conversationId);
@@ -464,7 +464,6 @@ export class SessionTurnOrchestrator {
         this.deps.logger.warn(
           `${TAG} stale container for session ${sessionId}, recovering and retrying turn: ${failureSummary}`,
         );
-        this.deps.stateStore.deleteSession(record.conversationId);
         await this.deps.statusCoordinator.transition({
           sessionId,
           fromStatus: record.status,
@@ -472,6 +471,7 @@ export class SessionTurnOrchestrator {
           extra: { lastRestoreError: failureSummary },
           clearRuntime: true,
         });
+        this.deps.stateStore.deleteSession(record.conversationId);
         const newRecord = await this.deps.onStaleContainer(
           sessionId,
           record.conversationId,

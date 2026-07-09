@@ -1,6 +1,6 @@
 # CTXMill Architecture
 
-> Status: Current shipped architecture as of 2026-03-17.
+> Status: Current shipped architecture as of 2026-07-06.
 > Future sandbox work is tracked separately in [docs/plans/2026-03-17-sandbox-execution-requirements.md](/path/to/stablehand/docs/plans/2026-03-17-sandbox-execution-requirements.md).
 
 ## Purpose
@@ -9,9 +9,10 @@ CTXMill is a self-hosted framework for running tool-using agents behind a Fastif
 
 - A Node.js orchestrator process
 - PostgreSQL persistence
+- Production bearer-token auth for `/api/*`
 - A multi-harness agent runtime
-- SSE streaming to the UI
-- HITL interrupt handling
+- Durable canonical SSE streaming to the UI
+- Durable HITL interrupt handling
 - Event-triggered background runs
 - Session-scoped workspace snapshots
 
@@ -45,7 +46,7 @@ The supported workflow in this repo is `docker compose`.
 
 ### 1. Orchestrator
 
-The orchestrator is a Fastify server that wires together the database, SSE manager, interrupt manager, sandbox session manager, trigger routes, and agent execution services.
+The orchestrator is a Fastify server that wires together API auth, the database, the canonical event log, SSE manager, interrupt manager, sandbox session manager, trigger routes, and agent execution services.
 
 Relevant code:
 
@@ -53,6 +54,7 @@ Relevant code:
 - [agent-session-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/agent-session-service.ts)
 - [sandbox-session-manager.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-session-manager.ts)
 - [routes/agents.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents.ts)
+- [auth.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/auth.ts)
 
 ### 2. Multi-Harness Agent Execution
 
@@ -78,9 +80,11 @@ Relevant code:
 - [tool/providers/index.ts](/path/to/stablehand/packages/ctxmill/src/tool/providers/index.ts)
 - [tool/registry.ts](/path/to/stablehand/packages/ctxmill/src/tool/registry.ts)
 
-### 4. Event Bus and Triggers
+### 4. Event Bus, Canonical Log, and Triggers
 
-CTXMill uses a typed in-process event bus. It persists events, powers SSE broadcasting, exposes run/feedback signals for external learning modules, drives suspended-session matching, and can fire background runs through persisted event triggers.
+CTXMill uses a typed in-process event bus plus a durable canonical event spine. Internal events are projected by `CanonicalProjector`, batch-persisted to `event_store` by `CanonicalLog`, and only then fanned out to live SSE clients. Browser reconnects replay from durable global sequence ids rather than volatile in-memory history.
+
+User-emitted custom events are persisted with their original type and payload and still drive trigger matching. Run-channel events are projected into AG-UI frames for native SSE streams; `?wire=legacy` remains a transition escape hatch.
 
 The TypedEventBus emits the following events:
 
@@ -108,7 +112,10 @@ Relevant code:
 
 - [events/bus.ts](/path/to/stablehand/packages/ctxmill/src/events/bus.ts)
 - [events/trigger-manager.ts](/path/to/stablehand/packages/ctxmill/src/events/trigger-manager.ts)
-- [sse-broadcaster.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sse-broadcaster.ts)
+- [orchestrator/canonical/canonical-log.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/canonical/canonical-log.ts)
+- [orchestrator/canonical/projector.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/canonical/projector.ts)
+- [orchestrator/sse.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sse.ts)
+- [orchestrator/routes/agents/stream.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents/stream.ts)
 
 ### 5. HITL and Suspend/Resume
 
@@ -119,7 +126,8 @@ Relevant code:
 - [interrupt.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/interrupt.ts)
 - [suspended-session-matcher.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/suspended-session-matcher.ts)
 - [sandbox-session-manager.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/sandbox-session-manager.ts)
-- [routes/agents.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents.ts)
+- [routes/agents/interrupts.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/routes/agents/interrupts.ts)
+- [orchestrator/session-manager/interrupt-resume-service.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/session-manager/interrupt-resume-service.ts)
 
 ### 6. Workspace Isolation
 
@@ -130,17 +138,16 @@ Relevant code:
 - [workspace/session-workspace.ts](/path/to/stablehand/packages/ctxmill/src/workspace/session-workspace.ts)
 - [workspace/tar-upload.ts](/path/to/stablehand/packages/ctxmill/src/workspace/tar-upload.ts)
 - [workspace/ensure.ts](/path/to/stablehand/packages/ctxmill/src/workspace/ensure.ts)
-- [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
 
 ### 7. External Learning Hooks
 
-CTXMill emits run, message, tool, feedback, and custom events that external learning or evaluation services can consume. Core CTXMill does not own a memory layer; domain-specific retrieval should live in explicit tools, MCP servers, HTTP providers, or downstream services connected through webhooks/events.
+CTXMill emits run, message, tool, feedback, and custom events that external learning or evaluation services can consume. Core CTXMill does not currently own an active internal memory layer; domain-specific retrieval should live in explicit tools, MCP servers, HTTP providers, artifact workflows, or downstream services connected through webhooks/events.
 
 Relevant code:
 
 - [events/bus.ts](/path/to/stablehand/packages/ctxmill/src/events/bus.ts)
 - [orchestrator/webhook-events.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/webhook-events.ts)
-- [config/presets.ts](/path/to/stablehand/packages/ctxmill/src/config/presets.ts)
+- [callback-dispatcher.ts](/path/to/stablehand/packages/ctxmill/src/orchestrator/callback-dispatcher.ts)
 
 ### 8. Sandbox Infrastructure
 
@@ -165,7 +172,7 @@ Structured A2UI blocks are produced through the intrinsic `a2ui-render` tool and
 Relevant code:
 
 - [tool/builtin/a2ui-render.ts](/path/to/stablehand/packages/ctxmill/src/tool/builtin/a2ui-render.ts)
-- [ToolCallCard.tsx](/path/to/stablehand/packages/ui/src/components/chat/ToolCallCard.tsx)
+- [ToolCallCard.tsx](/path/to/stablehand/packages/ui/src/components/session/ToolCallCard.tsx)
 
 ### 10. Harness Model Configuration
 
@@ -176,25 +183,17 @@ Relevant code:
 - [manifest/index.ts](/path/to/stablehand/packages/ctxmill/src/manifest/index.ts)
 - [harness/index.ts](/path/to/stablehand/packages/ctxmill/src/harness/index.ts)
 
-### 11. Skills Loader
+### 11. Configuration and DI
 
-Loads skill definitions in SKILL.md format (frontmatter + markdown body) for agent tool augmentation.
-
-Relevant code:
-
-- [skills/loader.ts](/path/to/stablehand/packages/ctxmill/src/skills/loader.ts)
-
-### 12. Configuration and DI
-
-The `docker` execution preset, component factories, and the dependency injection container that wires runtime services together.
+The `docker` execution preset, config resolver, and dependency injection container wire runtime services together.
 
 Relevant code:
 
 - [config/presets.ts](/path/to/stablehand/packages/ctxmill/src/config/presets.ts)
-- [config/factories.ts](/path/to/stablehand/packages/ctxmill/src/config/factories.ts)
+- [config/resolve.ts](/path/to/stablehand/packages/ctxmill/src/config/resolve.ts)
 - [config/container.ts](/path/to/stablehand/packages/ctxmill/src/config/container.ts)
 
-### 13. Proto Package
+### 12. Proto Package
 
 Protocol Buffer definitions for sandbox gRPC communication. Defines the `HarnessService` and `OrchestratorService` with streaming RPCs for agent execution, tool results, suspend, and kill operations.
 
@@ -208,9 +207,9 @@ Relevant code:
 
 1. The UI posts a message to the orchestrator.
 2. The orchestrator creates or reuses a conversation, starts a run, and invokes the selected agent harness.
-3. The harness yields streamed events.
-4. The run service persists messages, tool calls, and run state.
-5. SSE broadcasts stream updates to subscribed clients.
+3. The sandbox daemon yields streamed events over gRPC.
+4. The orchestrator persists messages, tool calls, turn state, and canonical event frames.
+5. SSE streams canonical AG-UI frames to subscribed clients, replaying by durable seq on reconnect.
 6. If the run requests approval, the run is interrupted and later resumed when the user responds.
 
 ### Triggered background flow
@@ -220,6 +219,12 @@ Relevant code:
 3. A background run is created for the target agent.
 4. The same run service handles execution, persistence, and SSE.
 
+### Restart and queued-turn flow
+
+1. Incoming turns get durable status and a user-message link before execution.
+2. Startup reconciliation fails stranded running turns, skips HITL-parked turns, and re-dispatches queued turns that never started.
+3. `turn.started` emission is idempotent for redispatched turns, so replay does not double-count run starts.
+
 ## Persistence Model
 
 PostgreSQL is the current system of record for:
@@ -228,15 +233,17 @@ PostgreSQL is the current system of record for:
 - `conversations` — Chat conversation sessions per agent
 - `messages` — Individual messages within conversations
 - `agentRuns` — Run lifecycle (status, timing, errors, session, pause/resume)
-- `eventStore` — Persisted event log
+- `eventStore` — Durable canonical event log and operational event API source
 - `suspendedRuns` — Runs waiting on external events
-- `scheduledEvents` — Time-based scheduled event delivery
 - `eventTriggers` — Event-driven agent trigger rules
 - `agentVersions` — Agent manifest version history
 - `pendingInterrupts` — HITL approval requests in progress
+- `interruptResumeAttempts` — Durable restart-safe HITL resume attempts
 - `agentCheckpoints` — Sandbox checkpoint/resume state
 - `callbackOutbox` — Outbound webhook delivery queue with retry
 - `webhooks` — Registered webhook endpoints per agent
+- `artifacts` — S3/MinIO artifact metadata
+- `systemSettings` — Runtime configuration overrides
 
 Relevant code:
 

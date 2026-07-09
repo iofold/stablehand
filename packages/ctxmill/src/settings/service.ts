@@ -47,6 +47,10 @@ export const ENV_KEYS: Record<SettingsKey, string> = {
   defaultTimeoutSec:         'CTXMILL_DEFAULT_TIMEOUT_SEC',
 };
 
+const LEGACY_ENV_ALIASES: Partial<Record<SettingsKey, string>> = {
+  maxGlobalContainers: 'CTXMILL_MAX_CONTAINERS',
+};
+
 export interface SystemSettings {
   maxWorkspaceTarBytes:        number;
   maxTarUploadBytes:           number;
@@ -144,16 +148,6 @@ function parseIntSetting(raw: string | undefined, defaultValue: number): number 
   return parsed;
 }
 
-function parseNonNegativeIntSetting(raw: string | undefined, defaultValue: number): number {
-  if (raw === undefined) return defaultValue;
-  const parsed = parseInt(raw, 10);
-  if (Number.isNaN(parsed) || parsed < 0) {
-    console.warn(`[SystemSettings] Invalid setting value "${raw}", using default ${defaultValue}`);
-    return defaultValue;
-  }
-  return parsed;
-}
-
 function parseFloatSetting(raw: string | undefined, defaultValue: number): number {
   if (raw === undefined) return defaultValue;
   const parsed = parseFloat(raw);
@@ -166,23 +160,28 @@ function parseFloatSetting(raw: string | undefined, defaultValue: number): numbe
 
 /** Read env var as positive integer, or fall back to hardcoded default. */
 function envInt(key: SettingsKey, hardDefault: number): number {
-  const val = process.env[ENV_KEYS[key]];
+  const canonicalKey = ENV_KEYS[key];
+  const legacyKey = LEGACY_ENV_ALIASES[key];
+  const canonicalVal = process.env[canonicalKey];
+  const legacyVal = legacyKey ? process.env[legacyKey] : undefined;
+
+  let sourceKey = canonicalKey;
+  let val = canonicalVal;
+
+  if (legacyKey && legacyVal !== undefined && legacyVal !== '') {
+    if (canonicalVal !== undefined && canonicalVal !== '') {
+      console.warn(`[SystemSettings] ${legacyKey} is deprecated and ignored because ${canonicalKey} is set`);
+    } else {
+      console.warn(`[SystemSettings] ${legacyKey} is deprecated; use ${canonicalKey} instead`);
+      sourceKey = legacyKey;
+      val = legacyVal;
+    }
+  }
+
   if (val === undefined || val === '') return hardDefault;
   const parsed = parseInt(val, 10);
   if (Number.isNaN(parsed) || parsed <= 0) {
-    console.warn(`[SystemSettings] Invalid ${ENV_KEYS[key]}="${val}", using default ${hardDefault}`);
-    return hardDefault;
-  }
-  return parsed;
-}
-
-/** Read env var as non-negative integer (allows 0), or fall back to hardcoded default. */
-function envNonNegativeInt(key: SettingsKey, hardDefault: number): number {
-  const val = process.env[ENV_KEYS[key]];
-  if (val === undefined || val === '') return hardDefault;
-  const parsed = parseInt(val, 10);
-  if (Number.isNaN(parsed) || parsed < 0) {
-    console.warn(`[SystemSettings] Invalid ${ENV_KEYS[key]}="${val}", using default ${hardDefault}`);
+    console.warn(`[SystemSettings] Invalid ${sourceKey}="${val}", using default ${hardDefault}`);
     return hardDefault;
   }
   return parsed;

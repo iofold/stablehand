@@ -1,26 +1,6 @@
-import type { SessionCheckpoint } from '@ctxmill/proto/sandbox/v1';
-
 import type { CheckpointV2, SandboxSessionRow } from '../../database/repository.js';
-import type { AgentDefinition, Message } from '../../types.js';
-import type { SessionEvent } from '../session-turn-service.js';
+import type { AgentDefinition } from '../../types.js';
 import type { HarnessGrpcClient, SessionRecord, TurnQueueEntry } from './types.js';
-
-export interface SessionTurnPort {
-  ensureSession(
-    conversationId: string,
-    agentDef: AgentDefinition,
-    agentId: string,
-  ): Promise<{ sessionId: string }>;
-  deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<SessionEvent>;
-}
-
-export interface SessionAdminPort {
-  getSession(conversationId: string): Promise<SessionRecord | null>;
-  getActiveSessions(): Promise<SessionRecord[]>;
-  getSessionsByAgent(agentId: string): Promise<SessionRecord[]>;
-  suspendSession(sessionId: string, reason: string): Promise<SessionCheckpoint>;
-  killSession(sessionId: string): Promise<void>;
-}
 
 export interface SessionReconciler {
   onSessionReconnected(session: SandboxSessionRow, grpcClient?: HarnessGrpcClient): void;
@@ -33,10 +13,6 @@ export interface SessionReconciler {
     failedOp: string,
     err: unknown,
   ): Promise<SessionRecord>;
-}
-
-export interface InterruptResumePort {
-  resumeWithInterruptResolution(sessionId: string, turnId: string, agentId: string): Promise<void>;
 }
 
 export interface SessionStatePort {

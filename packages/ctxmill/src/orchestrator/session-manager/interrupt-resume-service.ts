@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { AgentDefinition, Message } from '../../types.js';
 import type { SessionEvent } from '../session-turn-service.js';
-import type { InterruptResumePort, SessionStatePort } from './ports.js';
+import type { SessionStatePort } from './ports.js';
 import type { Logger } from './types.js';
 
 const TAG = '[SandboxSessionManager]';
@@ -139,7 +139,7 @@ function buildContinuationMessages(input: {
   ];
 }
 
-export class InterruptResumeService implements InterruptResumePort {
+export class InterruptResumeService {
   constructor(private readonly deps: InterruptResumeServiceDeps) {}
 
   async resumeWithInterruptResolution(

@@ -1,51 +1,50 @@
-# packages/ui — React Dashboard
+# packages/ui - React Dashboard
 
-## OVERVIEW
+## Overview
 
-Vite + React 18 + Zustand + Tailwind CSS. SSE streaming from orchestrator. 10 pages, 7 agent detail tabs, A2UI chart rendering (15 Recharts types), HITL approval cards. Dark mode, WCAG AA. 78 source files.
+Vite + React 18 + Zustand + Tailwind dashboard for CTXMill operations. It talks to authenticated `/api/*` routes through `lib/api.ts`, stores the API token in localStorage via `TokenGate`, and streams canonical SSE frames through `lib/useSSE.ts` into Zustand stores.
 
-## STRUCTURE
+## Structure
 
-```
+```text
 src/
-  pages/              10 route pages (Dashboard, Chat, AgentDetail, RunDetail, Events, Tools, Flow, Knowledge, Triggers, Settings)
+  pages/        Dashboard, agent detail, session, events, tools, flow, artifacts, triggers, settings
   components/
-    a2ui/             Agent-to-UI block renderer (5 files — 15 chart types via Recharts)
-    agent/            Agent detail tabs: Overview, Knowledge, Runs, Tools, Files, Subagents, Secrets (8 files, has index.ts barrel)
-    agents/           Agent list, create/edit modals — AgentFormModal (3 files)
-    chat/             ChatThread, ChatInput, message streaming, tool call rendering (6 files)
-    charts/           15 Recharts wrappers — bar, line, area, pie, radar, scatter, funnel, treemap, etc. (15 files)
-    dashboard/        Dashboard widgets and stat cards (4 files)
-    explorer/         File browser and code viewer
-    hitl/             ApprovalCard, EditableDocument, FieldRequestForm (3 files)
-    tools/            Tool execution UI and test interface
-    ui/               Sidebar, layout, shared primitives (5 files)
-  stores/             3 Zustand stores (agents, conversation, interrupt) + 2 colocated tests in __tests__/
-  lib/                API client (api.ts), SSE hook (useSSE.ts), A2UI helpers, utils (6 files)
-  hooks/              useAgentDetail, useAgentKnowledge, useAgentRuns — data fetching hooks (3 files)
+    a2ui/       A2UI block renderer and catalog registry
+    agent/      Agent detail tabs and session/file/tool views
+    agents/     Agent list and create/edit modals
+    artifacts/  Artifact browsing
+    dashboard/  Dashboard widgets
+    explorer/   File browser/code viewer
+    hitl/       Approval/editable-document/field-request UI
+    session/    Chat/session thread, input, message bubble, tool-call cards
+    tools/      Tool registry/test-run UI
+    ui/         Layout, sidebar, token gate, shared primitives
+  stores/       agents, artifacts, conversation, interrupt
+  lib/          API client, auth helpers, SSE hook, routes, A2UI/session utilities
+  hooks/        Data-fetching hooks
 ```
 
-## WHERE TO LOOK
+## Where To Look
 
 | Task | File(s) | Notes |
-|------|---------|-------|
-| Add a page | `pages/*.tsx` + `App.tsx` route + `Sidebar.tsx` nav | React Router, lazy loaded |
-| Add agent detail tab | `components/agent/*.tsx` + `AgentDetailPage.tsx` TABS array | TabId type union |
-| Add a chart type | `components/charts/*.tsx` + `components/a2ui/A2UIBlock.tsx` registry | Recharts wrapper + registry entry |
-| Modify API calls | `lib/api.ts` | `apiFetch<T>()` and `apiMutate<T>()` helpers |
-| Add global state | `stores/*.ts` | Zustand with `create()`, selectors pattern |
-| Modify SSE handling | `lib/useSSE.ts` + `stores/conversation.ts` | EventSource → Zustand updates |
-| Add HITL interaction | `components/hitl/*.tsx` + `stores/interrupt.ts` | ApprovalCard → sendInterrupt API |
+|---|---|---|
+| Add a page | `pages/*.tsx`, `App.tsx`, `components/ui/Sidebar.tsx` | Keep routes in `lib/routes.ts` where applicable. |
+| Change auth | `lib/auth.ts`, `components/ui/TokenGate.tsx`, `lib/api.ts` | Fetches use bearer headers; EventSource uses `access_token`. |
+| Change SSE handling | `lib/useSSE.ts`, `stores/conversation.ts` | Default stream wire is canonical; selected `ctxmill.*` custom names map to UI behavior. |
+| Change session UI | `pages/SessionPage.tsx`, `components/session/*` | Tool call cards and message bubbles must fit mobile. |
+| Change Events page | `pages/EventsPage.tsx` | `/api/events` is operational log data, not just AG-UI run frames. |
+| Add A2UI component | `components/a2ui/CatalogRegistry.tsx`, `components/a2ui/A2UIBlock.tsx` | Keep unknown-component fallback safe. |
 
-## CONVENTIONS (differs from backend)
+## Gotchas
 
-- **Vite proxy** — `/api` proxied to `orchestrator:3001` in dev (vite.config.ts). Port configurable via `CTXMILL_UI_PORT` (default 3200)
-- **Path alias** — `@/` maps to `src/` (Vite + vitest only, not in backend)
-- **Tailwind theme** — Custom colors: `accent` (teal), `surface` (grayscale), `highlight` (amber), `status-*` (success/warning/error/info)
-- **Fonts** — Inter (sans), JetBrains Mono (mono)
-- **SSE auto-reconnect** — `useSSE` hook reconnects on error
-- **No barrel exports** — Direct imports from component files (unlike backend barrel pattern)
-- **Component files** — PascalCase `.tsx` files, one component per file
-- **No CSS modules** — Tailwind utility classes only
-- **jsdom test environment** — UI tests run in jsdom (packages/ui/vitest.config.ts), globals enabled
-- **State selectors** — Zustand stores use selector pattern for optimal re-renders
+- Do not assume the dashboard can set EventSource headers; token auth goes through `?access_token=`.
+- The React embed package is separate from this dashboard and does not imply full dashboard feature parity.
+- Keep text and JSON responsive on mobile; several release audits have caught clipping in Events and tool-call cards.
+- UI setting ranges should match backend validators in `packages/ctxmill/src/orchestrator/routes/settings.ts`; verify before changing either side.
+
+## Verification
+
+- Run `pnpm -C packages/ui test` for UI logic.
+- Run `pnpm -C packages/ui typecheck` or root `pnpm -r typecheck` for type changes.
+- For visible UI/API-shape changes, rebuild Docker and capture agent-browser screenshots/console/errors under `.tmp/`.

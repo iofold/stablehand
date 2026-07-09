@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { EventMap, EventName } from '../../../events/bus.js';
+import { KNOWN_BUS_EVENT_NAMES } from '../frames.js';
 import { CanonicalLog } from '../canonical-log.js';
 
 function createDeps() {
@@ -22,6 +24,143 @@ function createDeps() {
 const CHUNK = {
   turnId: 'turn-1', agentId: 'agent-1', conversationId: 'conv-1',
   messageId: 'sandbox-msg', content: 'hello', timestamp: 1_000,
+};
+
+const EVENT_MAP_SAMPLES: { [K in EventName]: EventMap[K] } = {
+  'turn.started': {
+    turnId: 'turn-1',
+    sessionId: 'session-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    mode: 'interactive',
+    taskDescription: 'hello',
+    timestamp: 1_000,
+  },
+  'run.text_chunk': CHUNK,
+  'run.tool_started': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    toolCallId: 'tool-1',
+    toolName: 'bash',
+    args: { cmd: 'pwd' },
+    timestamp: 1_000,
+  },
+  'run.tool_result': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    toolCallId: 'tool-1',
+    toolName: 'bash',
+    result: 'ok',
+    durationMs: 5,
+    timestamp: 1_000,
+  },
+  'run.interrupted': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    toolCallId: 'tool-1',
+    toolName: 'bash',
+    args: { cmd: 'deploy' },
+    interruptId: 'interrupt-1',
+    timestamp: 1_000,
+  },
+  'run.interrupt_resolved': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    interruptId: 'interrupt-1',
+    action: 'approve',
+    timestamp: 1_000,
+  },
+  'turn.completed': {
+    turnId: 'turn-1',
+    sessionId: 'session-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    status: 'completed',
+    durationMs: 10,
+    timestamp: 1_000,
+  },
+  'feedback.received': {
+    feedbackId: 'feedback-1',
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    type: 'thumbs_up',
+    timestamp: 1_000,
+  },
+  'agent.created': {
+    agentId: 'agent-1',
+    name: 'agent',
+    timestamp: 1_000,
+  },
+  'agent.deleted': {
+    agentId: 'agent-1',
+    timestamp: 1_000,
+  },
+  'client.connected': {
+    agentId: 'agent-1',
+    clientId: 'client-1',
+    timestamp: 1_000,
+  },
+  'client.disconnected': {
+    agentId: 'agent-1',
+    clientId: 'client-1',
+    timestamp: 1_000,
+  },
+  'run.resumed': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    triggeredBy: 'restore',
+    suspendedDurationMs: 250,
+    timestamp: 1_000,
+  },
+  'trigger.fired': {
+    triggerId: 'trigger-1',
+    agentId: 'agent-1',
+    eventType: 'turn.completed',
+    turnId: 'turn-1',
+    timestamp: 1_000,
+  },
+  'message.committed': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    messageId: 'message-1',
+    messageSeq: 1,
+    role: 'assistant',
+    content: 'done',
+    timestamp: 1_000,
+  },
+  'turn.pending': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    mode: 'interactive',
+    taskDescription: 'hello',
+    timestamp: 1_000,
+  },
+  'run.ag_ui_event': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    event: { type: 'STATE_DELTA', delta: [] },
+    timestamp: 1_000,
+  },
+  'user.message': {
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    messageId: 'user-message-1',
+    content: 'hello',
+    timestamp: 1_000,
+  },
+  custom: {
+    type: 'stress.langgraph.complete',
+    agentId: 'agent-1',
+    payload: { status: 'ok' },
+    timestamp: 1_000,
+  },
 };
 
 describe('CanonicalLog (ADR-015)', () => {
@@ -86,5 +225,23 @@ describe('CanonicalLog (ADR-015)', () => {
     });
     expect(persisted).toHaveLength(1);
     expect(persisted[0]!.type).toBe('STATE_DELTA');
+  });
+
+  it('persists exactly one source-bearing row for every EventMap event', async () => {
+    expect(new Set(Object.keys(EVENT_MAP_SAMPLES))).toEqual(new Set(KNOWN_BUS_EVENT_NAMES));
+
+    for (const eventName of KNOWN_BUS_EVENT_NAMES as EventName[]) {
+      const deps = createDeps();
+      const log = new CanonicalLog(deps as never);
+      const payload = EVENT_MAP_SAMPLES[eventName] as Record<string, unknown>;
+
+      const persisted = await log.ingest(eventName, payload);
+      const sourceRows = deps.rows.filter((row) => row.sourceType === eventName);
+
+      expect(persisted.length, eventName).toBeGreaterThanOrEqual(1);
+      expect(sourceRows, eventName).toHaveLength(1);
+      expect(JSON.parse(sourceRows[0]!.sourcePayload as string), eventName).toEqual(payload);
+      expect(persisted.filter((frame) => frame.sourceType === eventName), eventName).toHaveLength(1);
+    }
   });
 });

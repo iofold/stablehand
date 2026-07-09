@@ -18,9 +18,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import {
+  createTriggerSpineConsumer,
   EventTriggerManager,
   MAX_TRIGGER_DEPTH,
 } from '../../packages/ctxmill/src/events/trigger-manager.js';
+import { SpineConsumerRunner } from '../../packages/ctxmill/src/events/spine-consumer-runner.js';
 import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
 import type { ContainerManager, ContainerInfo, ContainerMetrics } from '../../packages/ctxmill/src/sandbox/container-manager.js';
 import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
@@ -273,10 +275,22 @@ function makeMockDb(
   agentRows: Record<string, any> = {},
   counters: { runCounter: number },
 ): DatabaseRepository {
+  const triggerFirings = new Set<string>();
   return {
     getTriggers: vi.fn().mockResolvedValue([]),
     saveTrigger: vi.fn().mockResolvedValue(undefined),
     deleteTrigger: vi.fn().mockResolvedValue(undefined),
+    getTriggerBySignature: vi.fn().mockResolvedValue(undefined),
+    hasTriggerFiring: vi.fn(async (triggerId: string, eventSeq: number) =>
+      triggerFirings.has(`${triggerId}:${eventSeq}`)),
+    recordTriggerFiring: vi.fn(async (triggerId: string, eventSeq: number) => {
+      const key = `${triggerId}:${eventSeq}`;
+      if (triggerFirings.has(key)) {
+        return undefined;
+      }
+      triggerFirings.add(key);
+      return { id: `firing-${eventSeq}`, triggerId, eventSeq, createdAt: Date.now() };
+    }),
     getAgent: vi.fn(async (agentId: string) => agentRows[agentId] ?? null),
     createConversation: vi.fn(async (agentId: string) => ({
       id: `conv-triggered-${agentId}-${++counters.runCounter}`,
@@ -331,6 +345,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
   let sandboxRunService: SandboxRunService;
   let agentRunService: AgentRunService;
   let triggerManager: EventTriggerManager;
+  let spineRunner: SpineConsumerRunner | null;
   let unsubscribeWire: (() => void) | null;
   let testCounters: { containerCounter: number; runCounter: number };
 
@@ -401,12 +416,14 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
   beforeEach(() => {
     unsubscribeWire = null;
+    spineRunner = null;
     testCounters = { containerCounter: 0, runCounter: 0 };
     vi.restoreAllMocks();
   });
 
   afterEach(() => {
     unsubscribeWire?.();
+    spineRunner?.stop();
     if (triggerManager) triggerManager.shutdown();
   });
 
@@ -414,15 +431,43 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
    * Wire up the full component graph with given agent definitions.
    * Returns references to all components for assertions.
    */
-  function wireComponents(opts: {
+  async function wireComponents(opts: {
     agentRows: Record<string, any>;
     sandboxExecuteSessionTurn?: (...args: any[]) => AsyncGenerator<AGUIEvent>;
   }) {
     // Canonical wire (ADR-015): bus persist → CanonicalLog → run-channel frames to SSE.
     let frameSeq = 0;
+    const frameRows: Array<{
+      seq: number;
+      type: string;
+      agentId: string;
+      payload: string;
+      createdAt: number;
+      turnId: string | null;
+      conversationId: string | null;
+      channel: string;
+      sourceType: string | null;
+      sourcePayload: string | null;
+    }> = [];
+    const spineCursors = new Map<string, number>();
     const canonicalLog = new CanonicalLog({
       db: {
-        saveEventBatch: async (frames: unknown[]) => frames.map(() => ++frameSeq),
+        saveEventBatch: async (frames: Array<Record<string, unknown>>) => frames.map((frame) => {
+          frameSeq += 1;
+          frameRows.push({
+            seq: frameSeq,
+            type: String(frame.type ?? ''),
+            agentId: String(frame.agentId ?? ''),
+            payload: String(frame.payload ?? '{}'),
+            createdAt: Date.now(),
+            turnId: typeof frame.turnId === 'string' ? frame.turnId : null,
+            conversationId: typeof frame.conversationId === 'string' ? frame.conversationId : null,
+            channel: String(frame.channel ?? 'custom'),
+            sourceType: typeof frame.sourceType === 'string' ? frame.sourceType : null,
+            sourcePayload: typeof frame.sourcePayload === 'string' ? frame.sourcePayload : null,
+          });
+          return frameSeq;
+        }),
         getFramesSince: async () => [],
         getTurnFrames: async () => [],
       } as never,
@@ -434,6 +479,18 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       },
     });
     db = makeMockDb(opts.agentRows, testCounters);
+    Object.assign(db, {
+      getSourceEventsSince: vi.fn(async (afterSeq: number, limit = 1_000) =>
+        frameRows
+          .filter((row) => row.seq > afterSeq && row.sourceType)
+          .slice(0, limit)),
+      getSpineCursor: vi.fn(async (consumer: string) => spineCursors.get(consumer) ?? 0),
+      advanceSpineCursor: vi.fn(async (consumer: string, lastSeq: number) => {
+        const nextSeq = Math.max(spineCursors.get(consumer) ?? 0, lastSeq);
+        spineCursors.set(consumer, nextSeq);
+        return { consumer, lastSeq: nextSeq, updatedAt: Date.now() };
+      }),
+    });
     sessionRegistry = makeMockRunRegistry(testCounters);
     sse = makeMockSse();
     unsubscribeWire = canonicalLog.subscribe((frames) => {
@@ -488,6 +545,14 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       eventBus,
     });
     agentRunServiceRef = agentRunService;
+    spineRunner = new SpineConsumerRunner({
+      canonicalLog,
+      db,
+      consumers: [createTriggerSpineConsumer(triggerManager)],
+      logger: { info: () => {}, warn: () => {}, error: console.error },
+      rescanIntervalMs: 60_000,
+    } as never);
+    await spineRunner.start();
 
     return {
       eventBus,
@@ -503,7 +568,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
   describe('single-hop chain: Agent A triggers Agent B', () => {
     it('Agent A emits event -> EventTriggerManager matches -> Agent B starts in sandbox', async () => {
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-B': makeChainAgentRow('agent-B', {
             harness: 'claude-agents',
@@ -553,7 +618,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       let triggerBResolve: (() => void) | null = null;
       const triggerBStarted = new Promise<void>((r) => { triggerBResolve = r; });
 
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-B': makeChainAgentRow('agent-B', {
             harness: 'pi-agent',
@@ -613,7 +678,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
 
     it('both Agent A and Agent B produce AGUIEvents via SSE', async () => {
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-B': makeChainAgentRow('agent-B', {
             systemPrompt: 'Agent B',
@@ -967,7 +1032,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     it('triggered run is queued when max containers reached, proceeds when slot opens', async () => {
       const executionOrder: string[] = [];
 
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-queued': makeChainAgentRow('agent-queued', {
             systemPrompt: 'Queued agent',
@@ -1007,7 +1072,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     it('multiple concurrent triggers queue and all eventually complete', async () => {
       const completedRuns = new Set<string>();
 
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-concurrent': makeChainAgentRow('agent-concurrent', {
             systemPrompt: 'Concurrent',
@@ -1041,7 +1106,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
   describe('error in triggered agent does not affect triggering agent', () => {
     it('Agent A succeeds even when Agent B fails', async () => {
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-fail-B': makeChainAgentRow('agent-fail-B', {
             systemPrompt: 'Failing agent',
@@ -1104,7 +1169,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
 
     it('Agent A events continue normally when Agent B throws', async () => {
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-throw-B': makeChainAgentRow('agent-throw-B', {
             systemPrompt: 'Throwing agent',
@@ -1162,7 +1227,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     it('Agent B receives event payload as task template interpolation', async () => {
       let receivedTask = '';
 
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-payload-B': makeChainAgentRow('agent-payload-B', {
             systemPrompt: 'Payload agent',
@@ -1199,7 +1264,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     it('complex payload data preserved through serialization', async () => {
       let capturedTask = '';
 
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-complex-B': makeChainAgentRow('agent-complex-B', {
             systemPrompt: 'Complex payload agent',
@@ -1332,51 +1397,16 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
   describe('end-to-end emit-event to trigger flow', () => {
     it('full flow: emit-event tool result -> emitCustom -> TriggerManager -> sandbox run', async () => {
-      // This test verifies the real EventBus wiring between components
-      const triggeredRuns: Array<{ agentId: string; task: string }> = [];
-
-      eventBus = new TypedEventBus();
-      db = makeMockDb({
-        'agent-listener': makeChainAgentRow('agent-listener', {
-          systemPrompt: 'Listener',
-        }),
-      }, testCounters);
-      sessionRegistry = makeMockRunRegistry(testCounters);
-      sse = makeMockSse();
-
-      let agentRunServiceRef: AgentRunService | null = null;
-
-      triggerManager = new EventTriggerManager(
-        eventBus,
-        db,
-        async (agentId, task, _triggerId) => {
-          triggeredRuns.push({ agentId, task });
-          await startTriggeredRun({
-            agentId,
-            task,
-            agentRunServiceRef,
-          });
+      const components = await wireComponents({
+        agentRows: {
+          'agent-listener': makeChainAgentRow('agent-listener', {
+            systemPrompt: 'Listener',
+          }),
         },
-      );
-
-      sandboxRunService = {
-        executeSessionTurn: vi.fn((_agentDef: AgentDefinition, _conversationId: string, _messages: Message[], turnId: string) =>
-          mockTriggeredStream(turnId || `run-listener-${++testCounters.runCounter}`),
-        ),
-      } as unknown as SandboxRunService;
-
-      agentRunService = new AgentRunService({
-        sse: sse as any,
-        db: db as any,
-        runRegistry: sessionRegistry as any,
-        sandboxRunService,
-        toolExecutor: { list: vi.fn().mockReturnValue([]) } as any,
-        eventBus,
       });
-      agentRunServiceRef = agentRunService;
 
       // Register trigger
-      await triggerManager.register({
+      await components.triggerManager.register({
         agentId: 'agent-listener',
         eventType: 'custom.email.classified',
         taskTemplate: 'Handle classified email: category={{payload.category}}',
@@ -1385,18 +1415,20 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       // Simulate what the orchestrator-side emit-event handler does:
       // eventBus.emitCustom(type, agentId, payload)
-      eventBus.emitCustom('custom.email.classified', 'agent-A', {
+      components.eventBus.emitCustom('custom.email.classified', 'agent-A', {
         category: 'billing',
         confidence: 0.92,
       });
 
-      // Wait for the triggerManager to handle via its custom subscription
+      // Wait for the trigger spine consumer to handle the persisted source row.
       await settle(100);
-      expect(triggeredRuns).toHaveLength(1);
-      expect(triggeredRuns[0].agentId).toBe('agent-listener');
-      expect(triggeredRuns[0].task).toContain('Handle classified email: category=billing');
-
-      expect(sandboxRunService.executeSessionTurn).toHaveBeenCalledTimes(1);
+      expect(components.runRegistry.startRun).toHaveBeenCalledWith(
+        'agent-listener',
+        expect.any(String),
+        'background',
+        expect.stringContaining('Handle classified email: category=billing'),
+      );
+      expect(components.sandboxRunService.executeSessionTurn).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1491,7 +1523,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     it('each triggered run gets its own runId, conversationId, and agentDef', async () => {
       const capturedCalls: Array<{ name: string; runId: string }> = [];
 
-      const components = wireComponents({
+      const components = await wireComponents({
         agentRows: {
           'agent-alpha': makeChainAgentRow('agent-alpha', {
             harness: 'langgraph',

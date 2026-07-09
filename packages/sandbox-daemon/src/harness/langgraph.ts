@@ -14,14 +14,22 @@ import type {
   HarnessTurnInput,
   HarnessTurnContext,
   HarnessExportedState,
-  ApprovalRequest,
+  TokenUsage,
 } from './types.js';
 import type { Message } from '../types.js';
-import { resolveSecretRef, normalizeStreamTextDeltas } from './shared.js';
+import { CanonicalProviderSchema, resolveSecretRef, normalizeStreamTextDeltas } from './shared.js';
 import { makeIterableAbortable } from './abort-iterator.js';
+import {
+  TurnAccumulator,
+  createAgentEventLangSmithTracer,
+  linkAbortSignal,
+  normalizeTokenUsage,
+  requestToolApproval,
+  traceAgentEvents,
+} from './kit/index.js';
 
 export const LangGraphConfigSchema = z.object({
-  provider: z.enum(['openai', 'anthropic', 'google']).default('openai'),
+  provider: CanonicalProviderSchema.default('openai'),
   model: z.string().min(1),
   apiKeyRef: z.string().optional(),
   baseUrl: z.string().refine((value) => URL.canParse(value)).optional(),
@@ -39,7 +47,7 @@ export const LangGraphConfigSchema = z.object({
     name: z.string(),
     description: z.string(),
     systemPrompt: z.string(),
-    provider: z.enum(['openai', 'anthropic', 'google']).optional(),
+    provider: CanonicalProviderSchema.optional(),
     model: z.string().min(1).optional(),
     apiKeyRef: z.string().optional(),
     tools: z.array(z.string()).optional(),
@@ -111,7 +119,14 @@ export class LangGraphHarness implements AgentHarness {
         session.restoreTranscript(restore.messages);
       }
     }
-    return session;
+    return traceAgentEvents(session, {
+      createTracer: (input) => createAgentEventLangSmithTracer({
+        agentId: config.agentId,
+        conversationId: config.conversationId,
+        harnessName: this.name,
+        turnId: input.turnId,
+      }),
+    });
   }
 }
 
@@ -133,18 +148,14 @@ class LangGraphSession implements HarnessSession {
     const { agentId, conversationId, workspaceDir, tools, systemPrompt } = this.config;
 
     const ac = new AbortController();
-    const linkSignal = (s: AbortSignal | undefined) => {
-      if (!s) return () => {};
-      if (s.aborted) { ac.abort(); return () => {}; }
-      const on = () => ac.abort();
-      s.addEventListener('abort', on, { once: true });
-      return () => s.removeEventListener('abort', on);
-    };
-    const unlinkConfig = linkSignal(this.config.signal);
-    const unlinkContext = linkSignal(context.signal);
+    const unlinkConfig = linkAbortSignal(this.config.signal, () => ac.abort());
+    const unlinkContext = linkAbortSignal(context.signal, () => ac.abort());
 
     try {
       this.transcript = [...input.messages];
+      const accumulator = new TurnAccumulator({ turnId: input.turnId });
+      const queuedEvents: AgentEvent[] = [];
+      const drainQueuedEvents = () => queuedEvents.splice(0);
 
       // Step 1: Resolve the chat model from config + secrets
       const chatModel = await this.buildModelFromConfig();
@@ -161,7 +172,7 @@ class LangGraphSession implements HarnessSession {
       const onApprovalNeeded = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
 
       // Step 4: Build langchain tools that wrap our tool definitions
-      const lcTools = this.buildLangChainTools(ctx, input.turnId, tools, onApprovalNeeded);
+      const lcTools = this.buildLangChainTools(ctx, input.turnId, tools, onApprovalNeeded, queuedEvents);
 
       // Step 5: Create the deep agent with LocalShellBackend for full filesystem/shell capabilities
       const { createDeepAgent, LocalShellBackend } = await this.loadDeepAgentsModule();
@@ -232,22 +243,23 @@ class LangGraphSession implements HarnessSession {
 
       const pendingToolCalls: Array<{ id: string; name: string }> = [];
       const toolRunIdToInfo = new Map<string, { toolCallId: string; startTime: number }>();
-      let assistantText = '';
-      const accumulatedToolCalls: Array<
-        NonNullable<Message['toolCalls']>[number] & { args: string; status: 'complete' | 'error' }
-      > = [];
+      let usage: TokenUsage | undefined;
 
       for await (const ev of makeIterableAbortable(eventStream, ac.signal)) {
+        for (const queuedEvent of drainQueuedEvents()) {
+          yield queuedEvent;
+        }
+
         const event = ev.event;
         const data = ev.data;
 
         if (event === 'on_chat_model_stream') {
           const chunk = data.chunk;
           if (!chunk) continue;
+          usage = this.extractUsage(data) ?? usage;
 
           for (const textDelta of normalizeStreamTextDeltas(chunk.content)) {
-            assistantText += textDelta;
-            yield { type: 'text_delta', content: textDelta };
+            yield accumulator.appendText(textDelta);
           }
 
           const toolCallChunks = chunk.tool_call_chunks;
@@ -290,21 +302,18 @@ class LangGraphSession implements HarnessSession {
           }
           if (fullArgs == null) fullArgs = {};
 
-          yield {
+          const toolStartEvent = {
             type: 'tool_call_start',
             id: toolCallId,
             name: toolName,
             args: fullArgs,
-          };
+          } as const;
+          yield toolStartEvent;
 
-          accumulatedToolCalls.push({
+          accumulator.recordToolStart({
             id: toolCallId,
             name: toolName,
-            arguments: typeof fullArgs === 'object' && fullArgs !== null && !Array.isArray(fullArgs)
-              ? Object.fromEntries(Object.entries(fullArgs as Record<string, unknown>))
-              : {},
-            args: typeof fullArgs === 'string' ? fullArgs : JSON.stringify(fullArgs ?? {}),
-            status: 'complete',
+            args: fullArgs,
           });
 
           if (toolRunId) {
@@ -340,6 +349,7 @@ class LangGraphSession implements HarnessSession {
             result: resultStr,
             durationMs,
           };
+          accumulator.recordToolEnd({ id: toolCallId, result: resultStr });
         }
 
         if (event === 'on_tool_error') {
@@ -363,36 +373,30 @@ class LangGraphSession implements HarnessSession {
             error: errMsg,
             durationMs,
           };
-
-          const errEntry = accumulatedToolCalls.find((tc) => tc.id === toolCallId);
-          if (errEntry) errEntry.status = 'error';
+          accumulator.recordToolEnd({ id: toolCallId, result: errMsg, error: errMsg });
         }
       }
 
-      const committedToolCalls: Message['toolCalls'] | undefined =
-        accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined;
+      for (const queuedEvent of drainQueuedEvents()) {
+        yield queuedEvent;
+      }
 
-      if (assistantText.length > 0 || accumulatedToolCalls.length > 0) {
+      const committed = accumulator.createMessageCommitted(this.transcript.length);
+      if (committed) {
         this.transcript.push({
           id: randomUUID(),
           agentId,
           role: 'assistant',
-          content: assistantText,
-          ...(committedToolCalls ? { toolCalls: committedToolCalls } : {}),
+          content: committed.content,
+          ...(committed.toolCalls ? { toolCalls: committed.toolCalls } : {}),
           createdAt: new Date(),
         });
 
-        yield {
-          type: 'message_committed' as const,
-          role: 'assistant' as const,
-          content: assistantText,
-          ...(committedToolCalls ? { toolCalls: committedToolCalls } : {}),
-          turnId: `turn-${randomUUID().slice(0, 8)}`,
-          messageSeq: this.transcript.length - 1,
-        };
+        yield committed;
       }
 
-      yield { type: 'done' };
+      accumulator.recordDone({ type: 'done', usage: usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
+      yield accumulator.doneEvent()!;
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         return;
@@ -407,7 +411,7 @@ class LangGraphSession implements HarnessSession {
 
   async exportState(): Promise<HarnessExportedState> {
     return {
-      stateVersion: '1',
+      stateVersion: '2',
       payload: { transcript: this.transcript },
     };
   }
@@ -451,6 +455,27 @@ class LangGraphSession implements HarnessSession {
         return { blocked: false };
       },
     };
+  }
+
+  private extractUsage(data: Record<string, unknown>): TokenUsage | undefined {
+    const chunk = data.chunk;
+    if (typeof chunk === 'object' && chunk !== null && !Array.isArray(chunk)) {
+      const chunkRecord = chunk as Record<string, unknown>;
+      const chunkUsage = normalizeTokenUsage(chunkRecord.usage_metadata as Record<string, unknown> | undefined);
+      if (chunkUsage) {
+        return chunkUsage;
+      }
+
+      const responseMetadata = chunkRecord.response_metadata;
+      if (typeof responseMetadata === 'object' && responseMetadata !== null && !Array.isArray(responseMetadata)) {
+        const responseRecord = responseMetadata as Record<string, unknown>;
+        return normalizeTokenUsage(
+          (responseRecord.tokenUsage ?? responseRecord.usage) as Record<string, unknown> | undefined,
+        );
+      }
+    }
+
+    return normalizeTokenUsage(data.usage as Record<string, unknown> | undefined);
   }
 
   private async buildModelFromConfig(): Promise<BaseLanguageModel> {
@@ -580,6 +605,7 @@ class LangGraphSession implements HarnessSession {
     turnId: string,
     toolDefs: import('../tool/types.js').ToolDefinition[],
     onApprovalNeeded: import('./types.js').ApprovalCallback | undefined,
+    queuedEvents: AgentEvent[] = [],
   ) {
     return toolDefs.map((def) => {
       return lcTool(
@@ -587,15 +613,16 @@ class LangGraphSession implements HarnessSession {
           // HITL: if the tool requires approval, delegate to onApprovalNeeded callback
           if (def.requiresApproval) {
             if (onApprovalNeeded) {
-              const req: ApprovalRequest = {
+              const approval = await requestToolApproval({
                 id: randomUUID(),
                 runId: turnId,
                 toolName: def.name,
                 args: args as Record<string, unknown>,
-              };
-              const res = await onApprovalNeeded(req);
-              if (res.action !== 'approve') {
-                return 'Tool call was rejected by the user.';
+                onApprovalNeeded,
+                emit: (event) => queuedEvents.push(event),
+              });
+              if (!approval.approved) {
+                return approval.rejectionMessage;
               }
             }
           }

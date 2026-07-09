@@ -1,3 +1,8 @@
+import {
+  normalizeLLMProvider,
+  supportedLLMProviderDescription,
+  type CanonicalLLMProvider,
+} from '@ctxmill/shared';
 import type { AgentDefinition, AgentResourceLimits } from '../types.js';
 import type { AgentManifest, ManifestToolRef } from './types.js';
 
@@ -7,9 +12,54 @@ function toolRefToName(toolRef: ManifestToolRef): string {
   return toolRef.inline.name;
 }
 
+function requireCanonicalProvider(provider: string): CanonicalLLMProvider {
+  const normalized = normalizeLLMProvider(provider);
+  if (!normalized) {
+    throw new Error(`Unsupported LLM provider "${provider}". Supported providers: ${supportedLLMProviderDescription()}`);
+  }
+  return normalized;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeProviderField(config: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...config };
+  if (typeof result.provider === 'string') {
+    result.provider = requireCanonicalProvider(result.provider);
+  }
+  return result;
+}
+
+function normalizeSubagentProviders(subagents: unknown): unknown {
+  if (Array.isArray(subagents)) {
+    return subagents.map((subagent) => (
+      isObjectRecord(subagent) ? normalizeProviderField(subagent) : subagent
+    ));
+  }
+
+  if (isObjectRecord(subagents)) {
+    return Object.fromEntries(Object.entries(subagents).map(([name, subagent]) => [
+      name,
+      isObjectRecord(subagent) ? normalizeProviderField(subagent) : subagent,
+    ]));
+  }
+
+  return subagents;
+}
+
+function normalizeHarnessConfigProviders(config: Record<string, unknown>): Record<string, unknown> {
+  const result = normalizeProviderField(config);
+  if ('subagents' in result) {
+    result.subagents = normalizeSubagentProviders(result.subagents);
+  }
+  return result;
+}
+
 function resolveHarnessConfig(spec: AgentManifest['spec']): Record<string, unknown> {
   if (spec.harnessConfig) {
-    return { ...spec.harnessConfig };
+    return normalizeHarnessConfigProviders(spec.harnessConfig);
   }
 
   if (!spec.model) {
@@ -17,7 +67,7 @@ function resolveHarnessConfig(spec: AgentManifest['spec']): Record<string, unkno
   }
 
   return {
-    provider: spec.model.provider,
+    provider: requireCanonicalProvider(spec.model.provider),
     model: spec.model.id,
     ...(spec.model.baseUrl ? { baseUrl: spec.model.baseUrl } : {}),
     ...(spec.model.apiKeyRef ? { apiKeyRef: spec.model.apiKeyRef } : {}),

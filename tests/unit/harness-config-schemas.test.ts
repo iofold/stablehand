@@ -35,6 +35,13 @@ describe('harness config schemas', () => {
       });
     });
 
+    it('normalizes gemini provider alias to google', () => {
+      expect(LangGraphConfigSchema.parse({ provider: 'gemini', model: 'gemini-2.5-flash' })).toEqual({
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+      });
+    });
+
     it('requires model', () => {
       expect(() => LangGraphConfigSchema.parse({})).toThrow();
     });
@@ -56,6 +63,19 @@ describe('harness config schemas', () => {
           systemPrompt: 'You are a researcher.',
         }],
       });
+    });
+
+    it('normalizes subagent provider aliases', () => {
+      expect(LangGraphConfigSchema.parse({
+        model: 'gpt-5.4-mini',
+        subagents: [{
+          name: 'researcher',
+          description: 'Researches topics',
+          systemPrompt: 'You are a researcher.',
+          provider: 'gemini',
+          model: 'gemini-2.5-flash',
+        }],
+      }).subagents?.[0]?.provider).toBe('google');
     });
 
     it('rejects temperature above 2', () => {
@@ -84,6 +104,13 @@ describe('harness config schemas', () => {
       });
     });
 
+    it('normalizes optional provider aliases', () => {
+      expect(ClaudeAgentsConfigSchema.parse({ provider: 'gemini', model: 'claude-sonnet-4-6' })).toEqual({
+        provider: 'google',
+        model: 'claude-sonnet-4-6',
+      });
+    });
+
     it('rejects negative maxTurns', () => {
       expect(() => ClaudeAgentsConfigSchema.parse({
         model: 'claude-sonnet-4-6',
@@ -102,6 +129,13 @@ describe('harness config schemas', () => {
 
     it('requires model', () => {
       expect(() => PIAgentConfigSchema.parse({})).toThrow();
+    });
+
+    it('normalizes gemini provider alias to google', () => {
+      expect(PIAgentConfigSchema.parse({ provider: 'gemini', model: 'gemini-2.5-flash' })).toEqual({
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+      });
     });
 
     it('rejects invalid provider', () => {

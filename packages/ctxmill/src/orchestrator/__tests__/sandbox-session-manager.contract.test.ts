@@ -16,6 +16,8 @@ import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js'
 import type { ContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { AgentDefinition, Message } from '../../types.js';
+import { SessionStateStore } from '../session-manager/session-state-store.js';
+import { SessionStatusCoordinator } from '../session-manager/session-status-coordinator.js';
 import {
   CALLBACK_AGENT_ENV,
   CALLBACK_SESSION_ENV,
@@ -70,7 +72,6 @@ function createMockContainerManager(): ContainerManager {
     startContainer: vi.fn().mockResolvedValue(undefined),
     stopContainer: vi.fn().mockResolvedValue(undefined),
     removeContainer: vi.fn().mockResolvedValue(undefined),
-    extractContainerDiff: vi.fn().mockResolvedValue(undefined),
     extractWorkspaceDiff: vi.fn().mockResolvedValue(undefined),
     extractLogs: vi.fn().mockResolvedValue(undefined),
     getContainer: vi.fn().mockResolvedValue(undefined),
@@ -276,6 +277,8 @@ function createManager(options?: { turnTimeoutMs?: number }) {
   const resolveToolsForAgent = vi.fn().mockReturnValue([]);
   const logger = createLogger();
   const buildSandboxSecrets = vi.fn().mockResolvedValue({});
+  const stateStore = new SessionStateStore();
+  const statusCoordinator = new SessionStatusCoordinator({ db, logger, stateStore });
 
   connectMocks.createConnectTransportMock.mockReturnValue({});
   connectMocks.createClientMock.mockReturnValue(grpcClient);
@@ -284,6 +287,8 @@ function createManager(options?: { turnTimeoutMs?: number }) {
     containerManager,
     db,
     lifecyclePolicy,
+    stateStore,
+    statusCoordinator,
     workspaceDiffService: new WorkspaceDiffService({ containerManager }),
     buildSandboxSecrets,
     resolveToolsForAgent,
@@ -459,6 +464,8 @@ describe('SandboxSessionManager contract', () => {
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         'sess-1',
         'RESTORING',
+        undefined,
+        { expectedFrom: 'CHECKPOINTED' },
       );
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         'sess-1',
@@ -467,6 +474,7 @@ describe('SandboxSessionManager contract', () => {
           containerId: 'c-1',
           containerName: 'ctxmill-run-sess-1',
         }),
+        { expectedFrom: 'RESTORING' },
       );
       expect(session).toMatchObject({ sessionId: 'sess-1', status: 'ACTIVE' });
     });
@@ -495,10 +503,13 @@ describe('SandboxSessionManager contract', () => {
           containerId: null,
           containerName: null,
         }),
+        { expectedFrom: 'ACTIVE' },
       );
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         'sess-1',
         'RESTORING',
+        undefined,
+        { expectedFrom: 'CHECKPOINTED' },
       );
       expect(session).toMatchObject({ sessionId: 'sess-1', status: 'ACTIVE' });
     });
@@ -684,6 +695,7 @@ describe('SandboxSessionManager contract', () => {
           containerId: null,
           containerName: null,
         }),
+        { expectedFrom: 'ACTIVE' },
       );
       expect(lifecyclePolicy.cancelIdleTimeout).toHaveBeenCalledWith(session.sessionId);
       expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
@@ -781,6 +793,8 @@ describe('SandboxSessionManager contract', () => {
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         session.sessionId,
         'RESTORING',
+        undefined,
+        { expectedFrom: 'CHECKPOINTED' },
       );
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         session.sessionId,
@@ -789,6 +803,7 @@ describe('SandboxSessionManager contract', () => {
           containerId: 'c-1',
           containerName: 'ctxmill-run-sess-1',
         }),
+        { expectedFrom: 'RESTORING' },
       );
       expect(restored).toMatchObject({ sessionId: session.sessionId, status: 'ACTIVE' });
     });
@@ -811,6 +826,7 @@ describe('SandboxSessionManager contract', () => {
           containerId: null,
           containerName: null,
         }),
+        { expectedFrom: 'ACTIVE' },
       );
       expect(internals.stateStore.sessions.has('conv-1')).toBe(false);
       expect(internals.stateStore.agentDefs.has('conv-1')).toBe(false);
@@ -834,6 +850,7 @@ describe('SandboxSessionManager contract', () => {
           containerId: null,
           containerName: null,
         }),
+        { expectedFrom: 'ACTIVE' },
       );
       expect(db.updateSandboxSessionStatus).toHaveBeenNthCalledWith(
         2,
@@ -843,6 +860,7 @@ describe('SandboxSessionManager contract', () => {
           containerId: null,
           containerName: null,
         }),
+        { expectedFrom: 'ACTIVE' },
       );
     });
   });

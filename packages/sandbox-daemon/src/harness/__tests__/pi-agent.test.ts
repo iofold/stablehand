@@ -1,7 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import { Type } from '@sinclair/typebox';
 
 const mockCreateAgentSession = vi.fn();
 const mockSetRuntimeApiKey = vi.fn();
+const mockLangSmith = vi.hoisted(() => {
+  class FakeClient {
+    awaitPendingTraceBatches = vi.fn(async () => undefined);
+  }
+
+  class FakeRunTree {
+    static runs: FakeRunTree[] = [];
+
+    readonly children: FakeRunTree[] = [];
+    readonly postRun = vi.fn(async () => undefined);
+    readonly end = vi.fn(async (_outputs?: Record<string, unknown>) => undefined);
+    readonly patchRun = vi.fn(async () => undefined);
+
+    constructor(readonly config: Record<string, unknown>) {
+      FakeRunTree.runs.push(this);
+    }
+
+    createChild(config: Record<string, unknown>): FakeRunTree {
+      const child = new FakeRunTree(config);
+      this.children.push(child);
+      return child;
+    }
+  }
+
+  return { FakeClient, FakeRunTree };
+});
 
 vi.mock('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
@@ -41,9 +69,23 @@ vi.mock('@mariozechner/pi-ai', async () => {
   };
 });
 
-import { PIAgentHarness } from '../pi-agent.js';
+vi.mock('langsmith', () => ({
+  Client: mockLangSmith.FakeClient,
+  RunTree: mockLangSmith.FakeRunTree,
+}));
+
+import { convertTools, PIAgentHarness } from '../pi-agent.js';
 import type { AgentEvent, HarnessSessionConfig } from '../types.js';
 import type { Message } from '../../types.js';
+import type { ToolDefinition } from '../../tool/types.js';
+import {
+  assertAbortContract,
+  assertApprovalFlowContract,
+  assertPlainTextTurnContract,
+  assertRestorePromptShape,
+  assertToolErrorContract,
+  assertToolRoundTripContract,
+} from './contract/assert-agent-event-contract.js';
 
 function makeConfig(overrides: Partial<HarnessSessionConfig> = {}): HarnessSessionConfig {
   return {
@@ -88,6 +130,55 @@ describe('PIAgentHarness transcript syncing', () => {
     delete process.env.GOOGLE_API_KEY;
     delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     delete process.env.GEMINI_API_KEY;
+  });
+
+  it('satisfies the shared plain-text turn contract when the PI SDK reports no usage', async () => {
+    const replaceMessages = vi.fn();
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    const prompt = vi.fn(async () => {
+      listener?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'PI contract reply' },
+      });
+      listener?.({ type: 'agent_end', messages: [] });
+    });
+
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt,
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages,
+        },
+      },
+    });
+
+    const turnId = 'turn-pi-contract';
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig());
+    try {
+      const events = await collectEvents(session.deliverTurn({
+        turnId,
+        messages: [makeMessage('user', 'Hello', '2026-04-05T10:00:00.000Z')],
+      }, {}));
+      const exportedState = await session.exportState();
+
+      assertPlainTextTurnContract({
+        events,
+        turnId,
+        exportedState,
+        expectedContent: 'PI contract reply',
+      });
+    } finally {
+      await session.close();
+    }
   });
 
   it('registers Google runtime key under the model API auth bucket', async () => {
@@ -243,7 +334,10 @@ describe('PIAgentHarness transcript syncing', () => {
     expect(prompt).toHaveBeenCalledOnce();
     expect(prompt).toHaveBeenCalledWith('Latest question');
     expect(replaceMessages.mock.invocationCallOrder[0]).toBeLessThan(prompt.mock.invocationCallOrder[0]!);
-    expect(events.at(-1)).toEqual({ type: 'done', usage: undefined });
+    expect(events.at(-1)).toEqual({
+      type: 'done',
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    });
 
     await session.close();
   });
@@ -293,6 +387,12 @@ describe('PIAgentHarness transcript syncing', () => {
     }, {}));
 
     expect(replaceMessages).toHaveBeenCalledOnce();
+    const restoredNativeMessages = replaceMessages.mock.calls[0]?.[0] as Array<{ content: string }> | undefined;
+    assertRestorePromptShape(restoredNativeMessages?.map((message) => message.content) ?? [], [
+      'Restore user',
+      '[Previous tool result (tool-restore)]\nRestored tool output',
+      '[Previous assistant response]\nRestored assistant reply',
+    ]);
     expect(replaceMessages).toHaveBeenCalledWith([
       {
         role: 'user',
@@ -313,5 +413,350 @@ describe('PIAgentHarness transcript syncing', () => {
     expect(prompt).toHaveBeenCalledWith('Continue from restore');
 
     await session.close();
+  });
+});
+
+describe('PIAgentHarness AgentEvent contract baseline', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLangSmith.FakeRunTree.runs = [];
+    delete process.env.LANGSMITH_TRACING;
+    delete process.env.LANGSMITH_PROJECT;
+  });
+
+  it('satisfies the shared tool round-trip contract when usage is available', async () => {
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    const prompt = vi.fn(async () => {
+      listener?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'PI used search.' },
+      });
+      listener?.({
+        type: 'tool_execution_start',
+        toolCallId: 'tool-pi-search',
+        toolName: 'search',
+        args: { query: 'ctxmill' },
+      });
+      listener?.({
+        type: 'tool_execution_end',
+        toolCallId: 'tool-pi-search',
+        result: { content: [{ type: 'text', text: 'pi search result' }] },
+      });
+      listener?.({
+        type: 'turn_end',
+        message: { usage: { input: 2, output: 3, totalTokens: 5 } },
+      });
+      listener?.({ type: 'agent_end', messages: [] });
+    });
+
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt,
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+        },
+      },
+    });
+
+    const turnId = 'turn-pi-tool-contract';
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig());
+    try {
+      const events = await collectEvents(session.deliverTurn({
+        turnId,
+        messages: [makeMessage('user', 'Search', '2026-04-05T12:00:00.000Z')],
+      }, {}));
+      const exportedState = await session.exportState();
+
+      assertToolRoundTripContract({
+        events,
+        turnId,
+        exportedState,
+        expectedContent: 'PI used search.',
+        expectedTool: {
+          id: 'tool-pi-search',
+          name: 'search',
+          args: { query: 'ctxmill' },
+          result: 'pi search result',
+        },
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('traces PI normalized AgentEvents through the shared decorator', async () => {
+    process.env.LANGSMITH_TRACING = 'true';
+    process.env.LANGSMITH_PROJECT = 'ctxmill-test';
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    const prompt = vi.fn(async () => {
+      listener?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'PI used search.' },
+      });
+      listener?.({
+        type: 'tool_execution_start',
+        toolCallId: 'tool-pi-search',
+        toolName: 'search',
+        args: { query: 'ctxmill' },
+      });
+      listener?.({
+        type: 'tool_execution_end',
+        toolCallId: 'tool-pi-search',
+        result: { content: [{ type: 'text', text: 'pi search result' }] },
+      });
+      listener?.({
+        type: 'turn_end',
+        message: { usage: { input: 2, output: 3, totalTokens: 5 } },
+      });
+      listener?.({ type: 'agent_end', messages: [] });
+    });
+
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt,
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+        },
+      },
+    });
+
+    const turnId = 'turn-pi-traced';
+    let session: Awaited<ReturnType<PIAgentHarness['openSession']>> | undefined;
+    try {
+      session = await new PIAgentHarness().openSession(makeConfig());
+      await collectEvents(session.deliverTurn({
+        turnId,
+        messages: [makeMessage('user', 'Search', '2026-04-05T12:00:00.000Z')],
+      }, {}));
+    } finally {
+      await session?.close();
+      delete process.env.LANGSMITH_TRACING;
+      delete process.env.LANGSMITH_PROJECT;
+    }
+
+    const root = mockLangSmith.FakeRunTree.runs[0];
+    expect(root.config).toEqual(expect.objectContaining({
+      name: 'pi-agent-agent-test-agent',
+      run_type: 'chain',
+      project_name: 'ctxmill-test',
+    }));
+    const turn = root.children[0];
+    expect(turn.config).toEqual(expect.objectContaining({
+      name: 'pi-agent-turn',
+      inputs: { turnId },
+    }));
+    const llm = turn.children.find((child) => child.config.run_type === 'llm');
+    expect(llm?.end).toHaveBeenCalledWith(expect.objectContaining({
+      generations: [{ text: 'PI used search.' }],
+      toolCalls: [expect.objectContaining({ id: 'tool-pi-search', name: 'search' })],
+    }));
+    const tool = turn.children.find((child) => child.config.run_type === 'tool');
+    expect(tool?.config).toEqual(expect.objectContaining({
+      name: 'search',
+      inputs: { args: { query: 'ctxmill' }, toolCallId: 'tool-pi-search' },
+    }));
+    expect(tool?.end).toHaveBeenCalledWith(expect.objectContaining({
+      result: 'pi search result',
+    }));
+    expect(root.end).toHaveBeenCalledWith({ status: 'completed' });
+  });
+
+  it('satisfies the shared tool-error contract when usage is available', async () => {
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    const prompt = vi.fn(async () => {
+      listener?.({
+        type: 'tool_execution_start',
+        toolCallId: 'tool-pi-error',
+        toolName: 'search',
+        args: { query: 'bad' },
+      });
+      listener?.({
+        type: 'tool_execution_end',
+        toolCallId: 'tool-pi-error',
+        result: { content: [{ type: 'text', text: 'pi search failed' }] },
+        isError: true,
+      });
+      listener?.({
+        type: 'turn_end',
+        message: { usage: { input: 4, output: 1, totalTokens: 5 } },
+      });
+      listener?.({ type: 'agent_end', messages: [] });
+    });
+
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt,
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+        },
+      },
+    });
+
+    const turnId = 'turn-pi-tool-error-contract';
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig());
+    try {
+      const events = await collectEvents(session.deliverTurn({
+        turnId,
+        messages: [makeMessage('user', 'Search badly', '2026-04-05T12:00:00.000Z')],
+      }, {}));
+      const exportedState = await session.exportState();
+
+      assertToolErrorContract({
+        events,
+        turnId,
+        exportedState,
+        expectedTool: {
+          id: 'tool-pi-error',
+          name: 'search',
+          args: { query: 'bad' },
+          error: 'pi search failed',
+        },
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('satisfies the shared approval approve contract', async () => {
+    const approvalTool: ToolDefinition = {
+      name: 'guarded_search',
+      description: 'Searches with approval',
+      input: z.object({ query: z.string() }),
+      requiresApproval: true,
+      handler: vi.fn(async () => 'approved result'),
+    };
+    const approvalEvents: AgentEvent[] = [];
+    const tools = convertTools(
+      Type,
+      [approvalTool],
+      {
+        agentId: 'agent-1',
+        conversationId: 'conversation-1',
+        workspaceDir: '/tmp/workspace',
+        runId: 'turn-pi-approval',
+        onApprovalNeeded: vi.fn(async () => ({ action: 'approve' as const })),
+        queuedEvents: approvalEvents,
+      },
+    ) as Array<{
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    }>;
+
+    await tools[0]?.execute('tool-pi-approval', { query: 'allowed' });
+    assertApprovalFlowContract(approvalEvents, {
+      tool: 'guarded_search',
+      action: 'approve',
+      args: { query: 'allowed' },
+    });
+  });
+
+  it('satisfies the shared approval reject contract', async () => {
+    const approvalTool: ToolDefinition = {
+      name: 'guarded_search',
+      description: 'Searches with approval',
+      input: z.object({ query: z.string() }),
+      requiresApproval: true,
+      handler: vi.fn(async () => 'approved result'),
+    };
+    const approvalEvents: AgentEvent[] = [];
+    const tools = convertTools(
+      Type,
+      [approvalTool],
+      {
+        agentId: 'agent-1',
+        conversationId: 'conversation-1',
+        workspaceDir: '/tmp/workspace',
+        runId: 'turn-pi-approval-rejected',
+        onApprovalNeeded: vi.fn(async () => ({ action: 'reject' as const })),
+        queuedEvents: approvalEvents,
+      },
+    ) as Array<{
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    }>;
+
+    await expect(tools[0]?.execute('tool-pi-approval-rejected', { query: 'blocked' })).resolves.toEqual({
+      content: [{ type: 'text', text: 'Tool call was rejected by the user.' }],
+      details: {},
+    });
+    assertApprovalFlowContract(approvalEvents, {
+      tool: 'guarded_search',
+      action: 'reject',
+      args: { query: 'blocked' },
+    });
+  });
+
+  it('satisfies the shared abort contract by ending without done', async () => {
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    let resolvePrompt: (() => void) | undefined;
+    const prompt = vi.fn(async () => new Promise<void>((resolve) => {
+      resolvePrompt = resolve;
+    }));
+    const abort = vi.fn(async () => {
+      resolvePrompt?.();
+      listener?.({ type: 'agent_end', messages: [] });
+    });
+
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt,
+        abort,
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+        },
+      },
+    });
+
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig());
+    try {
+      const abortController = new AbortController();
+      const eventsPromise = collectEvents(session.deliverTurn({
+        turnId: 'turn-pi-abort-contract',
+        messages: [makeMessage('user', 'Abort', '2026-04-05T12:00:00.000Z')],
+      }, { signal: abortController.signal }));
+
+      while (prompt.mock.calls.length === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      abortController.abort();
+
+      const events = await eventsPromise;
+      expect(abort).toHaveBeenCalledTimes(1);
+      assertAbortContract(events);
+    } finally {
+      await session.close();
+    }
   });
 });

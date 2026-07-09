@@ -1,3 +1,5 @@
+import type { CanonicalLLMProvider } from '@ctxmill/shared';
+
 // ── Envelope ────────────────────────────────────────────
 export interface AgentManifest {
   apiVersion: 'ctxmill.io/v1';
@@ -30,7 +32,7 @@ export interface ManifestSpec {
 }
 
 export interface ManifestHarnessConfig {
-  provider?: string;
+  provider?: CanonicalLLMProvider;
   model?: string;
   apiKeyRef?: string;
   temperature?: number;
@@ -56,7 +58,7 @@ export interface ManifestSubagentConfig {
   /** Tool names to disallow */
   disallowedTools?: string[];
   /** Override provider for this subagent (LangGraph only) */
-  provider?: string;
+  provider?: CanonicalLLMProvider;
   /** Override model for this subagent */
   model?: string;
   /** Secret ref for subagent-specific API key (LangGraph only) */
@@ -70,7 +72,7 @@ export interface ManifestSubagentConfig {
 }
 
 export interface ManifestModelConfig {
-  provider: string;
+  provider: CanonicalLLMProvider;
   id: string;
   apiKeyRef?: string;
   temperature?: number;

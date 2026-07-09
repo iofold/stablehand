@@ -1,4 +1,7 @@
-import type { DatabaseRepository } from '../../database/repository.js';
+import {
+  SandboxSessionStatusConflictError,
+  type DatabaseRepository,
+} from '../../database/repository.js';
 import { assertTransition } from './session-status-machine.js';
 import type { SessionStatePort } from './ports.js';
 import type { Logger, SessionStatus } from './types.js';
@@ -23,6 +26,17 @@ export interface SessionStatusTransition {
   toStatus: SessionStatus;
   extra?: StatusExtra;
   clearRuntime?: boolean;
+}
+
+export class StaleTransitionError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly expectedFrom: SessionStatus,
+    readonly toStatus: SessionStatus,
+  ) {
+    super(`Stale status transition for session ${sessionId}: expected ${expectedFrom}, wanted ${toStatus}`);
+    this.name = 'StaleTransitionError';
+  }
 }
 
 export class SessionStatusCoordinator {
@@ -55,10 +69,21 @@ export class SessionStatusCoordinator {
 
     const normalizedExtra = normalizeStatusExtra(toStatus, extra, clearRuntime);
 
-    if (normalizedExtra === undefined) {
-      await this.deps.db.updateSandboxSessionStatus(sessionId, toStatus);
-    } else {
-      await this.deps.db.updateSandboxSessionStatus(sessionId, toStatus, normalizedExtra);
+    try {
+      if (normalizedExtra === undefined) {
+        await this.deps.db.updateSandboxSessionStatus(sessionId, toStatus, undefined, {
+          expectedFrom: currentStatus,
+        });
+      } else {
+        await this.deps.db.updateSandboxSessionStatus(sessionId, toStatus, normalizedExtra, {
+          expectedFrom: currentStatus,
+        });
+      }
+    } catch (error) {
+      if (error instanceof SandboxSessionStatusConflictError) {
+        throw new StaleTransitionError(sessionId, currentStatus, toStatus);
+      }
+      throw error;
     }
 
     if (record) {

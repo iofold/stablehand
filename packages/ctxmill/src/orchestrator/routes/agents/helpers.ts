@@ -117,9 +117,8 @@ export function toAgentResponse(agent: StoredAgent): Record<string, unknown> {
     ...agent,
     harnessConfig: parseStoredHarnessConfig(agent.harnessConfig),
     ...extractManifestFields(agent),
-    // Canonical resolution (manifest ?? spec.resources ?? metadata) so the API
-    // reports the limits the runtime actually enforces (ctx-8l4; ctx-92us tracks
-    // the PUT-precedence gap this surfaces for manifest agents).
+    // Canonical resolution (metadata ?? manifest ?? spec.resources) so the API
+    // reports the limits the runtime actually enforces.
     resourceLimits: resolveResourceLimits(agent) ?? null,
   };
 }

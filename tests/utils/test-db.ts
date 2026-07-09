@@ -68,12 +68,14 @@ const ALL_TABLES = [
   'turns',
   'sandbox_sessions',
   'agent_versions',
+  'trigger_firings',
   'event_triggers',
-  'scheduled_events',
   'suspended_sessions',
   'event_store',
+  'spine_cursors',
   // Legacy tables removed from the runtime schema; keep them in test cleanup so
   // old local databases do not block fresh migrations.
+  'scheduled_events',
   'feedback_signals',
   'execution_traces',
   'messages',

@@ -5,6 +5,7 @@ import {
   DEFAULT_TURN_TIMEOUT_MS,
   DEFAULT_IDLE_TIMEOUT_MS,
   DEFAULT_DEFAULT_CPUS,
+  DEFAULT_MAX_GLOBAL_CONTAINERS,
 } from '../../packages/ctxmill/src/settings/service.js';
 import type { SettingsDb } from '../../packages/ctxmill/src/settings/service.js';
 
@@ -15,7 +16,8 @@ function createMockDb(overrides: Record<string, string> = {}): SettingsDb {
   };
 }
 
-const ALL_ENV_KEYS = Object.values(ENV_KEYS) as string[];
+const LEGACY_MAX_CONTAINERS_ENV_KEY = 'CTXMILL_MAX_CONTAINERS';
+const ALL_ENV_KEYS = [...Object.values(ENV_KEYS), LEGACY_MAX_CONTAINERS_ENV_KEY] as string[];
 
 describe('SystemSettingsService env var overrides', () => {
   const envBackup: Record<string, string | undefined> = {};
@@ -49,12 +51,57 @@ describe('SystemSettingsService env var overrides', () => {
   it('env var overrides hardcoded default when no DB value exists', async () => {
     process.env.CTXMILL_TURN_TIMEOUT_MS = '600000';
     process.env.CTXMILL_IDLE_TIMEOUT_MS = '120000';
+    process.env.CTXMILL_MAX_GLOBAL_CONTAINERS = '9';
 
     const service = new SystemSettingsService(createMockDb());
     const settings = await service.getAll();
 
     expect(settings.turnTimeoutMs).toBe(600_000);
     expect(settings.idleTimeoutMs).toBe(120_000);
+    expect(settings.maxGlobalContainers).toBe(9);
+  });
+
+  it('deprecated CTXMILL_MAX_CONTAINERS aliases maxGlobalContainers with a warning', async () => {
+    process.env.CTXMILL_MAX_CONTAINERS = '7';
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const service = new SystemSettingsService(createMockDb());
+    const settings = await service.getAll();
+
+    expect(settings.maxGlobalContainers).toBe(7);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('CTXMILL_MAX_CONTAINERS is deprecated; use CTXMILL_MAX_GLOBAL_CONTAINERS instead'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('canonical CTXMILL_MAX_GLOBAL_CONTAINERS wins over deprecated CTXMILL_MAX_CONTAINERS', async () => {
+    process.env.CTXMILL_MAX_GLOBAL_CONTAINERS = '11';
+    process.env.CTXMILL_MAX_CONTAINERS = '7';
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const service = new SystemSettingsService(createMockDb());
+    const settings = await service.getAll();
+
+    expect(settings.maxGlobalContainers).toBe(11);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('CTXMILL_MAX_CONTAINERS is deprecated and ignored because CTXMILL_MAX_GLOBAL_CONTAINERS is set'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('invalid deprecated CTXMILL_MAX_CONTAINERS falls back to hardcoded default', async () => {
+    process.env.CTXMILL_MAX_CONTAINERS = 'not-a-number';
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const service = new SystemSettingsService(createMockDb());
+    const settings = await service.getAll();
+
+    expect(settings.maxGlobalContainers).toBe(DEFAULT_MAX_GLOBAL_CONTAINERS);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('CTXMILL_MAX_CONTAINERS'),
+    );
+    warnSpy.mockRestore();
   });
 
   it('DB value takes precedence over env var', async () => {

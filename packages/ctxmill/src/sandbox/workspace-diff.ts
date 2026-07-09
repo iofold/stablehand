@@ -32,7 +32,7 @@ export class WorkspaceDiffService {
 
   /**
    * Capture workspace changes from a running/stopped container.
-   * Uses ContainerManager.extractContainerDiff() to get the workspace tar.
+   * Uses ContainerManager.extractWorkspaceDiff() to get the workspace tar.
    * Compresses and stores at: {checkpointDir}/{turnId}/workspace.tar.gz
    * Returns the path to the stored file, or 'none' if no changes.
    */

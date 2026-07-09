@@ -23,7 +23,7 @@ curl -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
 
 Browser `EventSource` cannot set custom headers, so `GET /api/agents/:id/stream` also accepts `?access_token=...` for SSE clients. Query-token authentication is intentionally limited to that route.
 
-This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy auth, network allowlists, TLS, and rate limits in front of any shared deployment. Internal ConnectRPC and sandbox callback surfaces should remain on private networks.
+This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy auth, network allowlists, TLS, and rate limits in front of any shared deployment. Sandbox ConnectRPC callbacks are additionally protected by session-scoped HMAC credentials derived from `CTXMILL_CALLBACK_TOKEN_SECRET` or `CTXMILL_API_TOKEN`, but the ConnectRPC surface should still remain on private networks.
 
 ## 2. Quick Reference Table
 
@@ -54,7 +54,7 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | **SSE Streaming** |  |  |
 | GET | `/api/agents/:id/stream` | Subscribe to live agent events |
 | **AG-UI Compatibility** |  |  |
-| POST | `/api/ag-ui/:id/run` | AG-UI protocol endpoint — accepts `RunAgentInput`, returns run-scoped SSE ([docs](ag-ui-compat.md)); `/api/ag-ui/agents/:id/run` remains a compatibility alias |
+| POST | `/api/ag-ui/:id/run` | AG-UI protocol endpoint — accepts `RunAgentInput` and returns run-scoped SSE ([docs](ag-ui-compat.md)) |
 | **Conversations & Messages** |  |  |
 | GET | `/api/agents/:id/conversations` | List conversations |
 | GET | `/api/agents/:id/conversations/summary` | List enriched conversation summaries |
@@ -108,7 +108,6 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | DELETE | `/api/triggers/:id` | Delete trigger |
 | POST | `/api/triggers/emit` | Emit custom event |
 | **Catalogs & Tools** |  |  |
-| GET | `/api/catalogs` | Get A2UI component catalogs |
 | GET | `/api/catalogs/tools` | List tools |
 | POST | `/api/catalogs/tools/test` | Test-run a tool |
 | **Sandbox Metrics** |  |  |
@@ -178,7 +177,7 @@ Also used by specific file/workspace endpoints:
 
 Useful exported types from `@ctxmill/shared`:
 
-- API resources: `ApiAgent`, `ApiAgentSession`, `ApiMessage`, `ApiSandboxSession`
+- API resources: `ApiAgent`, `ApiAgentSession`, `ApiMessage`
 - Streaming: `AGUIEvent`, `AGUIEventType`, `MessageCommittedEvent`
 - Skills: `LoadedSkill`, `SkillFrontmatter`
 
@@ -198,7 +197,7 @@ Per-agent sandbox resource limits:
 #### `GET /health`
 
 - **Description:** Direct health check.
-- **Query params:** None.
+- **Query params:** `access_token` for browser EventSource auth, `wire=legacy` for transition clients.
 - **Response:**
 
 ```json
@@ -432,7 +431,8 @@ Per-agent sandbox resource limits:
 - **Notes:**
   - Request body must contain at least one field.
   - If you change `harness`, you must also send `harnessConfig`.
-  - Set `resourceLimits` to `null` to clear stored per-agent limits.
+  - `resourceLimits` updates are metadata overrides and take precedence over manifest defaults on future sandbox starts.
+  - Set `resourceLimits` to `null` to clear the metadata override and fall back to manifest/default limits.
 
 #### `DELETE /api/agents/:id`
 
@@ -739,8 +739,8 @@ data: {"type":"CONNECTED","agentId":"agent_123","timestamp":1712140000000}
 
 data: {"type":"CUSTOM","subtype":"state_snapshot","agentId":"agent_123","conversationId":"conv_123","sessionId":"sbx_123","status":"ACTIVE","activeTurnId":null,"timestamp":1712140001000}
 
-id: agent_123-42
-data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","timestamp":1712140002000}
+id: 000000000042
+data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversationId":"conv_123","timestamp":1712140002000}
 
 ```
 
@@ -1594,29 +1594,6 @@ data: {"type":"RUN_STARTED","runId":"turn_123","conversationId":"conv_123","time
 - **Notes:** `payload` must be an object.
 
 ### q. Catalogs & Tools (`/api/catalogs`)
-
-#### `GET /api/catalogs`
-
-- **Description:** Returns A2UI component catalogs supported by the UI.
-- **Query params:** None.
-- **Response:**
-
-```json
-{
-  "catalogs": [
-    {
-      "name": "ctxmill.charts",
-      "components": {
-        "TimeSeriesChart": { "props": { "title": "string", "data": "array" } },
-        "MetricCard": { "props": { "title": "string", "value": "string|number" } },
-        "KnowledgeGraphView": { "props": { "nodes": "array", "edges": "array" } }
-      }
-    }
-  ]
-}
-```
-
-- **Notes:** The current catalog is chart-heavy and intended for structured agent-to-UI output.
 
 #### `GET /api/catalogs/tools`
 

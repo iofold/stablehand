@@ -1,8 +1,15 @@
 // Shared types between @ctxmill/ui and ctxmill packages
 export { API_SESSION_STATUSES } from './api.js';
 export { SESSION_CANCELLED_MESSAGE, isSessionCancelled, projectSessionStatus } from './status.js';
-export type { ServiceModule } from './service.js';
+export {
+  CANONICAL_LLM_PROVIDERS,
+  LLM_PROVIDER_ALIASES,
+  isCanonicalLLMProvider,
+  normalizeLLMProvider,
+  supportedLLMProviderDescription,
+} from './llm-providers.js';
 export type { AGUIEventType, AGUIEvent, MessageCommittedEvent } from './events.js';
+export type { CanonicalLLMProvider } from './llm-providers.js';
 export type {
   ApiAgent,
   ApiAgentResourceLimits,
@@ -14,10 +21,7 @@ export type {
   ApiA2UIBlock,
   ApiInterruptPayload,
   ApiFeedbackRequest,
-  ApiSandboxSession,
-  ApiSandboxRestoreError,
   ApiSandboxRestoreSuccess,
-  ApiSessionTurn,
   SandboxSessionStatus,
   ApiSessionStatusCounts,
   ApiConversationSummary,

@@ -27,19 +27,13 @@ const HARNESS_CONFIG_TEMPLATES: Record<string, object> = {
 function TagList({
   items,
   onRemove,
-  color = 'brand',
 }: {
   items: string[];
   onRemove: (index: number) => void;
-  color?: 'brand' | 'accent';
 }) {
   if (items.length === 0) return null;
-  const pillBg =
-    color === 'brand'
-      ? 'bg-accent-600/15 text-accent-300 border-accent-500/20'
-      : 'bg-accent-600/15 text-accent-300 border-accent-500/20';
-  const hoverX =
-    color === 'brand' ? 'hover:text-accent-100' : 'hover:text-accent-100';
+  const pillBg = 'bg-accent-600/15 text-accent-300 border-accent-500/20';
+  const hoverX = 'hover:text-accent-100';
 
   return (
     <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -473,7 +467,6 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
                 <TagList
                   items={nativeToolsList}
                   onRemove={(i) => setNativeToolsList(nativeToolsList.filter((_, idx) => idx !== i))}
-                  color={nativeToolsMode === 'allowlist' ? 'brand' : 'accent'}
                 />
               </>
             )}

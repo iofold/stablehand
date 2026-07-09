@@ -1,195 +1,67 @@
-# Writing a Skill
+# Working With Skills
 
-Skills are the primary way to extend agent capabilities in ctxmill. They provide a structured format for bundling instructions, scripts, and reference materials that agents can use during a run.
+> Current status as of 2026-07-06: CTXMill does not have an active first-class
+> skill registry, `{{skills}}` prompt injection, or `spec.workspace.content.skills`
+> manifest field. Older plan docs may describe those features, but they are not
+> current runtime behavior.
 
-## What is a Skill?
+## What Works Today
 
-A skill is a directory containing a `SKILL.md` file and optional subdirectories for scripts, references, and assets. When you enable a skill for an agent, the orchestrator seeds these files into the agent's workspace and injects the skill's instructions into its system prompt.
+Skills are best treated as SDK-native workspace files:
 
-This system allows you to give agents specialized knowledge or tools without bloating the main agent manifest.
+- Claude Agents can use Claude-style skill directories when those files are
+  present in the sandbox workspace and the relevant native tool allowlist allows
+  skill access.
+- LangGraph and PI Agent do not receive a CTXMill-generated `{{skills}}`
+  prompt block.
+- Workspace content is controlled by the manifest workspace fields that are
+  actually supported by `manifest/validate.ts` and the workspace preparation
+  code, such as file copies and setup symlinks.
 
-## Skill File Format
+## Recommended Pattern
 
-The core of every skill is the `SKILL.md` file. It uses YAML frontmatter for metadata and Markdown for the instruction body.
+Place skill-like instructions or assets in your project workspace and copy or
+symlink them into the sandbox with supported workspace setup fields. For Claude
+Agents, use the SDK's expected `.claude/skills/...` layout when you want the
+Claude SDK to discover a skill.
 
-### Required Frontmatter Fields
-
-- `name`: A unique identifier for the skill. Use lowercase letters, numbers, and hyphens. Max 64 characters.
-- `description`: A short summary of what the skill does. This helps you identify the skill in the UI. Max 1024 characters.
-
-### Optional Frontmatter Fields
-
-- `license`: The license for the skill (e.g., MIT).
-- `compatibility`: Version requirements or harness compatibility notes.
-- `metadata`: A key-value map for any custom data you want to attach.
-- `allowed-tools`: A comma-separated list of tools this skill expects to use.
-
-### Markdown Body
-
-The body of the `SKILL.md` file contains the actual instructions for the agent. These instructions are injected into the agent's system prompt wherever you place the `{{skills}}` placeholder.
-
-Keep instructions concise and focused. Use standard Markdown headers, lists, and code blocks.
-
-## Directory Structure
-
-Organize your skill files in a dedicated directory. The standard location is a `skills/` folder at the root of your project.
+Example project layout:
 
 ```text
-skills/<skill-name>/
-├── SKILL.md          # Required: Metadata and instructions
-├── scripts/           # Optional: Helper scripts (bash, python, etc.)
-├── references/        # Optional: Documentation or reference files
-└── assets/            # Optional: Static assets like images or templates
+agents/my-agent/agent.yaml
+workspace/
+  .claude/
+    skills/
+      code-review/
+        SKILL.md
+        references/
+          checklist.md
 ```
 
-When seeded, these files appear in the agent's workspace at `.ctxmill/skills/<skill-name>/`.
+Then configure the agent workspace setup to make those files available inside
+the session workspace. Keep the instructions explicit in the agent manifest when
+you need harness-agnostic behavior.
 
-## Agent Manifest Configuration
+## What Not To Use
 
-You enable skills in the `spec.workspace.content.skills` field of your agent manifest (`agent.yaml`).
+These are not current runtime features:
 
-### Load All Skills
+- `spec.workspace.content.skills`
+- `{{skills}}` placeholder injection
+- automatic seeding into `.ctxmill/skills`
+- a CTXMill-managed skill catalog exposed through the API/UI
 
-To load every skill found in your project's `skills/` directory:
+## Related Code
 
-```yaml
-spec:
-  workspace:
-    content:
-      skills: true
-```
+- [manifest/validate.ts](/path/to/stablehand/packages/ctxmill/src/manifest/validate.ts)
+- [manifest/types.ts](/path/to/stablehand/packages/ctxmill/src/manifest/types.ts)
+- [workspace-preparation.ts](/path/to/stablehand/packages/ctxmill/src/sandbox/workspace-preparation.ts)
+- [claude-agents.ts](/path/to/stablehand/packages/sandbox-daemon/src/harness/claude-agents.ts)
 
-### Load Specific Skills
+## Gotchas
 
-Use a list to load only a subset of skills:
-
-```yaml
-spec:
-  workspace:
-    content:
-      skills:
-        - code-review
-        - security-audit
-```
-
-### The {{skills}} Placeholder
-
-For the instructions to reach the agent, you must include the `{{skills}}` placeholder in your agent's `spec.instructions`:
-
-```yaml
-spec:
-  instructions: |
-    You are a senior developer.
-    
-    {{skills}}
-    
-    Always follow the provided skill instructions when performing specialized tasks.
-```
-
-## Per-Harness Behavior
-
-Different harnesses handle skills in specific ways.
-
-### LangGraph Harness
-
-This is the most mature implementation. Skills are loaded from the project root, seeded into `.ctxmill/skills/` in the container, and passed to the agent via the system prompt injection.
-
-### Claude Agents Harness (Planned)
-
-Support for auto-discovering skills via Claude's `settingSources` is planned. Currently, it uses the same system prompt injection as LangGraph.
-
-### PI Agent Harness (Planned)
-
-Support for loading skills via a `skillsOverride()` callback is planned. Currently, it uses the same system prompt injection as LangGraph.
-
-## Step-by-Step Tutorial: Creating a Code Review Skill
-
-Let's build a skill that helps an agent perform high-quality code reviews.
-
-### 1. Create the Directory
-
-Start by creating the folder structure in your project root:
-
-```bash
-mkdir -p skills/code-review/scripts
-```
-
-### 2. Write the SKILL.md
-
-Create `skills/code-review/SKILL.md` with the following content:
-
-```markdown
----
-name: code-review
-description: Guidelines for performing thorough code reviews with a focus on security and performance.
----
-
-# Code Review Guidelines
-
-When reviewing code, always check for these common issues:
-
-1. **Security**: Look for unsanitized inputs, hardcoded secrets, and insecure dependencies.
-2. **Performance**: Identify O(n^2) loops, unnecessary database queries, and memory leaks.
-3. **Readability**: Ensure variable names are descriptive and functions are small.
-
-Use the provided `check-complexity.sh` script to analyze function length.
-```
-
-### 3. Add a Helper Script
-
-Create a simple script at `skills/code-review/scripts/check-complexity.sh`:
-
-```bash
-#!/bin/bash
-# Simple script to find long functions
-find . -name "*.ts" | xargs wc -l | sort -nr | head -n 10
-```
-
-### 4. Enable the Skill
-
-Update your `agent.yaml` to include the skill:
-
-```yaml
-apiVersion: ctxmill.io/v1
-kind: Agent
-metadata:
-  name: reviewer
-spec:
-  harness: langgraph
-  workspace:
-    content:
-      skills:
-        - code-review
-  instructions: |
-    You are a helpful code review assistant.
-    
-    {{skills}}
-```
-
-## Validation Rules
-
-The ctxmill loader validates skills before seeding them. If a skill fails validation, it will be skipped, and a warning will appear in the orchestrator logs.
-
-- **Name**: Must be lowercase, numbers, and hyphens only. No spaces or special characters. Max 64 chars.
-- **Description**: Required. Max 1024 chars.
-- **Body**: The Markdown body cannot be empty.
-- **File Presence**: Every skill directory must contain a `SKILL.md` file.
-
-## Testing Your Skill
-
-To verify your skill loaded correctly:
-
-1. Start your agent session.
-2. Check the agent's system prompt in the UI (Agent Detail -> Overview tab). You should see your skill instructions rendered there.
-3. Use a tool like `ls` or `find` to verify the files exist in the workspace at `.ctxmill/skills/<skill-name>/`.
-
-## Troubleshooting
-
-### Skill instructions not appearing
-Ensure you included the `{{skills}}` placeholder in your agent's `spec.instructions`. Check the orchestrator logs for validation errors if the placeholder is empty.
-
-### Scripts not executable
-The sandbox seeds files with standard permissions. If your script needs to be executable, ensure your agent knows to run `chmod +x` on it before execution, or call it via its interpreter (e.g., `bash script.sh`).
-
-### Missing files in workspace
-Verify that `workspace.content.skills` is set to `true` or includes your skill name in the agent manifest.
+- `docs/plans/` and older proposals may still use "skill" to mean a planned
+  CTXMill abstraction. Treat those as historical unless the code paths above
+  implement the feature.
+- The workspace tar upload API rejects `.ctxmill/`; do not rely on
+  `.ctxmill/skills` as an upload target.

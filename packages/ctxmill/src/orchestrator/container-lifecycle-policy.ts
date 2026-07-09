@@ -11,8 +11,9 @@ import {
   waitForContainerReady,
 } from './session-manager/grpc-session-client.js';
 import { sandboxGrpcBaseUrl } from './session-manager/sandbox-endpoint.js';
-import { SessionStatusCoordinator } from './session-manager/session-status-coordinator.js';
+import type { SessionStatusCoordinator } from './session-manager/session-status-coordinator.js';
 import type { SessionStatus } from './session-manager/types.js';
+import { isAliveContainerStatus } from '../sandbox/runtime/status.js';
 
 const TAG = '[LifecyclePolicy]';
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
@@ -57,6 +58,7 @@ export interface ContainerLifecyclePolicyDeps {
     idleTimeoutMs?: number;
   };
   reconciliationCallbacks: ReconciliationCallbacks;
+  statusCoordinator: SessionStatusCoordinator;
 }
 
 export interface LifecycleRuntimeConfigUpdate {
@@ -88,10 +90,6 @@ function hasStatusCode(err: unknown, statusCode: number): boolean {
     && 'statusCode' in err
     && typeof (err as { statusCode?: unknown }).statusCode === 'number'
     && (err as { statusCode: number }).statusCode === statusCode;
-}
-
-function isAliveStatus(status: ContainerInfo['status']): boolean {
-  return status === 'running' || status === 'paused' || status === 'created';
 }
 
 function parsePositiveMs(value: unknown): number | undefined {
@@ -129,10 +127,7 @@ export class ContainerLifecyclePolicy {
     this.containerManager = deps.containerManager;
     this.db = deps.db;
     this.logger = deps.logger;
-    this.statusCoordinator = new SessionStatusCoordinator({
-      db: deps.db,
-      logger: deps.logger,
-    });
+    this.statusCoordinator = deps.statusCoordinator;
     this.reconciliationCallbacks = deps.reconciliationCallbacks;
     this.reconciliationIntervalMs = deps.config.reconciliationIntervalMs ?? DEFAULT_RECONCILIATION_INTERVAL_MS;
     this.idleTimeoutMs = deps.config.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
@@ -211,7 +206,7 @@ export class ContainerLifecyclePolicy {
     container: ManagedContainerWithLabels,
     sessionId: string | undefined,
   ): boolean {
-    if (!sessionId || !isAliveStatus(container.status)) {
+    if (!sessionId || !isAliveContainerStatus(container.status)) {
       return false;
     }
 
@@ -226,8 +221,9 @@ export class ContainerLifecyclePolicy {
       return false;
     }
 
+    const releasedSlot = this.containerManager.releaseContainerSlot?.(container.containerId) ?? false;
     this.logger.debug(
-      `${TAG} skipping orphan cleanup for recent startup container ${container.containerName} (${container.containerId}); session=${sessionId}, ageMs=${ageMs}, graceMs=${startupGraceMs}`,
+      `${TAG} skipping orphan cleanup for recent startup container ${container.containerName} (${container.containerId}); session=${sessionId}, ageMs=${ageMs}, graceMs=${startupGraceMs}, releasedSlot=${releasedSlot}`,
     );
     return true;
   }
@@ -474,7 +470,7 @@ export class ContainerLifecyclePolicy {
       if (container) {
         knownContainerIds.add(container.containerId);
       }
-      const alive = container !== undefined && isAliveStatus(container.status);
+      const alive = container !== undefined && isAliveContainerStatus(container.status);
 
       if (!alive) {
         const checkpoint = await this.db.getCheckpointV2(session.id);
@@ -627,7 +623,7 @@ export class ContainerLifecyclePolicy {
     for (const session of dbSessions) {
       this.sessionConversationIds.set(session.id, session.conversationId);
       const container = this.findLiveContainerForSession(session, liveContainers, containerById, containerByName);
-      const alive = container !== undefined && isAliveStatus(container.status);
+      const alive = container !== undefined && isAliveContainerStatus(container.status);
 
       if (alive) {
         if (session.containerName !== container.containerName || session.containerId !== container.containerId) {

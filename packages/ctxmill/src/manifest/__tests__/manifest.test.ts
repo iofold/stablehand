@@ -1,10 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { AgentManifest } from '../types.js';
 import type { AgentDefinition } from '../../types.js';
 import { validateManifest, safeValidateManifest } from '../validate.js';
 import { parseManifestString, serializeManifestYAML, serializeManifestJSON } from '../parser.js';
 import { manifestToDefinition, definitionToManifest } from '../convert.js';
-import { ManifestService } from '../service.js';
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -85,6 +84,80 @@ describe('validate', () => {
 
   it('validates a legacy manifest with spec.model', () => {
     expect(() => validateManifest(minimalLegacyManifest())).not.toThrow();
+  });
+
+  it('normalizes spec.model provider aliases during validation', () => {
+    const result = safeValidateManifest({
+      ...minimalLegacyManifest(),
+      spec: {
+        ...minimalLegacyManifest().spec,
+        model: { provider: 'gemini', id: 'gemini-2.5-flash' },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.spec.model?.provider).toBe('google');
+    }
+  });
+
+  it('normalizes harnessConfig provider aliases during validation', () => {
+    const result = safeValidateManifest({
+      ...minimalManifest(),
+      spec: {
+        ...minimalManifest().spec,
+        harnessConfig: { provider: 'gemini', model: 'gemini-2.5-flash' },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.spec.harnessConfig?.provider).toBe('google');
+    }
+  });
+
+  it('normalizes harnessConfig subagent provider aliases during validation', () => {
+    const result = safeValidateManifest({
+      ...minimalManifest(),
+      spec: {
+        ...minimalManifest().spec,
+        harnessConfig: {
+          provider: 'openai',
+          model: 'gpt-5.4-mini',
+          subagents: [{
+            name: 'researcher',
+            description: 'Researches topics',
+            systemPrompt: 'You are a researcher.',
+            provider: 'gemini',
+          }],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const subagents = result.data.spec.harnessConfig?.subagents;
+      if (!Array.isArray(subagents)) {
+        throw new Error('Expected subagents to remain an array');
+      }
+      expect(subagents[0]?.provider).toBe('google');
+    }
+  });
+
+  it('rejects unknown model providers during validation', () => {
+    const result = safeValidateManifest({
+      ...minimalLegacyManifest(),
+      spec: {
+        ...minimalLegacyManifest().spec,
+        model: { provider: 'bedrock', id: 'anthropic.claude' },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errors.issues[0]?.path).toEqual(['spec', 'model', 'provider']);
+      expect(result.errors.issues[0]?.message).toContain('Unsupported LLM provider');
+    }
   });
 
   it('rejects invalid apiVersion', () => {
@@ -309,6 +382,61 @@ describe('convert', () => {
         provider: 'openai',
         model: 'gpt-4o',
       });
+    });
+
+    it('normalizes provider aliases when converting legacy model config', () => {
+      const def = manifestToDefinition({
+        ...minimalLegacyManifest(),
+        spec: {
+          ...minimalLegacyManifest().spec,
+          model: { provider: 'gemini', id: 'gemini-2.5-flash' },
+        },
+      } as unknown as AgentManifest);
+
+      expect(def.harnessConfig).toEqual({
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+      });
+    });
+
+    it('normalizes provider aliases when converting harnessConfig', () => {
+      const def = manifestToDefinition({
+        ...minimalManifest(),
+        spec: {
+          ...minimalManifest().spec,
+          harnessConfig: { provider: 'gemini', model: 'gemini-2.5-flash' },
+        },
+      } as unknown as AgentManifest);
+
+      expect(def.harnessConfig).toEqual({
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+      });
+    });
+
+    it('normalizes subagent provider aliases when converting harnessConfig', () => {
+      const def = manifestToDefinition({
+        ...minimalManifest(),
+        spec: {
+          ...minimalManifest().spec,
+          harnessConfig: {
+            provider: 'openai',
+            model: 'gpt-5.4-mini',
+            subagents: [{
+              name: 'researcher',
+              description: 'Researches topics',
+              systemPrompt: 'You are a researcher.',
+              provider: 'gemini',
+            }],
+          },
+        },
+      } as unknown as AgentManifest);
+
+      const subagents = def.harnessConfig.subagents;
+      if (!Array.isArray(subagents)) {
+        throw new Error('Expected subagents to remain an array');
+      }
+      expect((subagents[0] as Record<string, unknown>).provider).toBe('google');
     });
 
     it('maps instructions to systemPrompt', () => {
@@ -553,185 +681,5 @@ describe('convert', () => {
         },
       });
     });
-  });
-});
-
-// ── service.ts (mocked DB) ────────────────────────────────
-
-describe('ManifestService', () => {
-  let service: ManifestService;
-  let mockDb: Record<string, ReturnType<typeof vi.fn>>;
-
-  beforeEach(() => {
-    mockDb = {
-      listAgents: vi.fn().mockResolvedValue([]),
-      createAgent: vi.fn().mockResolvedValue({ id: 'new-id', name: 'test-agent' }),
-      updateAgent: vi.fn().mockResolvedValue({ id: 'existing-id' }),
-      getAgent: vi.fn(),
-      saveAgentManifest: vi.fn().mockResolvedValue(undefined),
-      getAgentManifest: vi.fn().mockResolvedValue(null),
-    };
-    service = new ManifestService(mockDb as any);
-  });
-
-  it('importManifest creates new agent', async () => {
-    const yamlStr = serializeManifestYAML(minimalManifest());
-    const result = await service.importManifest(yamlStr);
-
-    expect(result.created).toBe(true);
-    expect(result.agentId).toBe('new-id');
-    expect(mockDb.createAgent).toHaveBeenCalledOnce();
-    expect(mockDb.createAgent.mock.calls[0][0].name).toBe('test-agent');
-    expect(JSON.parse(mockDb.createAgent.mock.calls[0][0].harnessConfig)).toEqual({
-      provider: 'openai',
-      model: 'gpt-4o',
-    });
-  });
-
-  it('importManifest updates existing agent when overwrite: true is supplied', async () => {
-    mockDb.listAgents.mockResolvedValue([{ id: 'existing-id', name: 'test-agent' }]);
-
-    const yamlStr = serializeManifestYAML(minimalManifest());
-    const result = await service.importManifest(yamlStr, { overwrite: true });
-
-    expect(result.created).toBe(false);
-    expect(result.agentId).toBe('existing-id');
-    expect(mockDb.updateAgent).toHaveBeenCalledOnce();
-    expect(mockDb.saveAgentManifest).toHaveBeenCalledOnce();
-    expect(mockDb.createAgent).not.toHaveBeenCalled();
-  });
-
-  it('importManifest fails closed when an agent with the same name already exists and overwrite is not set', async () => {
-    mockDb.listAgents.mockResolvedValue([{ id: 'existing-id', name: 'test-agent' }]);
-
-    const yamlStr = serializeManifestYAML(minimalManifest());
-
-    await expect(service.importManifest(yamlStr)).rejects.toThrow(
-      /Agent manifest with name "test-agent" already exists/,
-    );
-    expect(mockDb.updateAgent).not.toHaveBeenCalled();
-    expect(mockDb.saveAgentManifest).not.toHaveBeenCalled();
-    expect(mockDb.createAgent).not.toHaveBeenCalled();
-  });
-
-  it('exportManifest returns stored manifest as YAML', async () => {
-    const stored = minimalManifest() as unknown as Record<string, unknown>;
-    mockDb.getAgent.mockResolvedValue({
-      id: 'a1',
-      name: 'test-agent',
-      harness: 'langgraph',
-      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
-      systemPrompt: 'hi',
-      tools: [],
-    });
-    mockDb.getAgentManifest.mockResolvedValue(stored);
-
-    const yaml = await service.exportManifest('a1', 'yaml');
-    expect(yaml).toContain('test-agent');
-    expect(yaml).toContain('ctxmill.io/v1');
-  });
-
-  it('exportManifest auto-generates from denormalized fields when no manifest stored', async () => {
-    mockDb.getAgent.mockResolvedValue({
-      id: 'a1',
-      name: 'gen-agent',
-      harness: 'langgraph',
-      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
-      systemPrompt: 'Be helpful.',
-      tools: ['bash'],
-      description: 'Auto-generated',
-    });
-    mockDb.getAgentManifest.mockResolvedValue(null);
-
-    const yaml = await service.exportManifest('a1', 'yaml');
-    expect(yaml).toContain('gen-agent');
-    expect(yaml).toContain('Be helpful.');
-    expect(yaml).toContain('bash');
-  });
-
-  it('exportManifest throws when stored harnessConfig is invalid JSON', async () => {
-    mockDb.getAgent.mockResolvedValue({
-      id: 'a1',
-      name: 'bad-json-agent',
-      harness: 'langgraph',
-      harnessConfig: '{bad json',
-      systemPrompt: 'Be helpful.',
-      tools: [],
-    });
-    mockDb.getAgentManifest.mockResolvedValue(null);
-
-    await expect(service.exportManifest('a1', 'yaml')).rejects.toThrow(
-      /Invalid stored harnessConfig for agent a1/,
-    );
-  });
-
-  it('exportManifest throws when stored harnessConfig is not an object', async () => {
-    mockDb.getAgent.mockResolvedValue({
-      id: 'a1',
-      name: 'array-agent',
-      harness: 'langgraph',
-      harnessConfig: JSON.stringify([]),
-      systemPrompt: 'Be helpful.',
-      tools: [],
-    });
-    mockDb.getAgentManifest.mockResolvedValue(null);
-
-    await expect(service.exportManifest('a1', 'yaml')).rejects.toThrow(
-      'Invalid stored harnessConfig for agent a1: expected JSON object',
-    );
-  });
-
-  it('exportManifest throws for unknown agent', async () => {
-    mockDb.getAgent.mockResolvedValue(undefined);
-    await expect(service.exportManifest('nonexistent')).rejects.toThrow('Agent not found');
-  });
-
-  it('syncFromDefinition creates manifest for agents without one', async () => {
-    mockDb.getAgentManifest.mockResolvedValue(null);
-
-    const def: AgentDefinition = {
-      name: 'sync-agent',
-      harness: 'langgraph',
-      harnessConfig: { provider: 'openai', model: 'gpt-4o' },
-      tools: ['read_file'],
-      systemPrompt: 'Sync me.',
-    };
-    await service.syncFromDefinition('a1', def);
-
-    expect(mockDb.saveAgentManifest).toHaveBeenCalledOnce();
-    const savedManifest = mockDb.saveAgentManifest.mock.calls[0][1];
-    expect(savedManifest.metadata.name).toBe('sync-agent');
-    expect(savedManifest.spec.instructions).toBe('Sync me.');
-  });
-
-  it('syncFromDefinition skips when manifest already exists', async () => {
-    mockDb.getAgentManifest.mockResolvedValue({ apiVersion: 'ctxmill.io/v1' });
-
-    const def: AgentDefinition = {
-      name: 'sync-agent',
-      harness: 'langgraph',
-      harnessConfig: { provider: 'openai', model: 'gpt-4o' },
-      tools: [],
-      systemPrompt: 'hi',
-    };
-    await service.syncFromDefinition('a1', def);
-
-    expect(mockDb.saveAgentManifest).not.toHaveBeenCalled();
-  });
-
-  it('exportManifest returns JSON when format is json', async () => {
-    mockDb.getAgent.mockResolvedValue({
-      id: 'a1',
-      name: 'json-agent',
-      harness: 'langgraph',
-      harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
-      systemPrompt: 'hi',
-      tools: [],
-    });
-    mockDb.getAgentManifest.mockResolvedValue(minimalManifest());
-
-    const json = await service.exportManifest('a1', 'json');
-    const parsed = JSON.parse(json);
-    expect(parsed.apiVersion).toBe('ctxmill.io/v1');
   });
 });

@@ -397,7 +397,7 @@ describe('runner openSession PTC bootstrap', () => {
     await turnPromise;
   });
 
-  it('suspendSession waits for the next safe phase before exporting state (ctx-6nu)', async () => {
+  it('suspendSession waits for the committed-message safe phase before exporting state (ctx-6nu)', async () => {
     const { deliverTurn, killSession, openSession, suspendSession } = await importRunner();
     const stream = createControllableGenerator();
     const exportState = vi.fn(async () => ({ stateVersion: '2', payload: {} }));
@@ -412,6 +412,7 @@ describe('runner openSession PTC bootstrap', () => {
 
     const reachedToolStart = createDeferred<void>();
     const reachedToolEnd = createDeferred<void>();
+    const reachedCommit = createDeferred<void>();
     const turnPromise = (async () => {
       let count = 0;
       const payloadCases: string[] = [];
@@ -420,6 +421,7 @@ describe('runner openSession PTC bootstrap', () => {
         count++;
         if (count === 1) reachedToolStart.resolve();
         if (count === 2) reachedToolEnd.resolve();
+        if (count === 3) reachedCommit.resolve();
       }
       return payloadCases;
     })();
@@ -434,16 +436,101 @@ describe('runner openSession PTC bootstrap', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(exportState).not.toHaveBeenCalled();
 
-    // Push a safe-phase event (`tool_call_end` -> `after_tool`). The runner's
-    // post-yield safe-point check resolves the queued suspend.
+    // A tool result alone is not enough: the assistant message must be
+    // committed before the runner exports checkpoint state.
     stream.emitEvent({ type: 'tool_call_end', id: 'call-1', result: 'ok', durationMs: 1 });
     await reachedToolEnd.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(exportState).not.toHaveBeenCalled();
+
+    stream.emitEvent({
+      type: 'message_committed',
+      role: 'assistant',
+      content: 'Done',
+      turnId: 'turn-wait-safe',
+      messageSeq: 0,
+    });
+    await reachedCommit.promise;
 
     // Now suspend should be allowed to proceed.
     const response = await suspendPromise;
     expect(exportState).toHaveBeenCalledTimes(1);
     expect(response.sessionCheckpoint).toBeDefined();
-    await expect(turnPromise).resolves.toEqual(['agUiEvent', 'agUiEvent']);
+    await expect(turnPromise).resolves.toEqual(['agUiEvent', 'agUiEvent', 'messageCommitted']);
+
+    stream.finish();
+    await killSession().catch(() => undefined);
+  });
+
+  it('does not suspend between a final tool result and the assistant commit (ctx-2c7d)', async () => {
+    const { deliverTurn, killSession, openSession, suspendSession } = await importRunner();
+    const stream = createControllableGenerator();
+    const assistantMessage = {
+      id: 'assistant-final',
+      role: 'assistant',
+      content: 'Final answer after tool.',
+    };
+    let committed = false;
+    const exportState = vi.fn(async () => ({
+      stateVersion: '2',
+      payload: {
+        transcript: committed ? [assistantMessage] : [],
+      },
+    }));
+
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: stream.generator,
+      exportState,
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/suspend-after-tool-before-commit'), {});
+
+    const reachedToolStart = createDeferred<void>();
+    const reachedToolEnd = createDeferred<void>();
+    const reachedCommit = createDeferred<void>();
+    const turnPromise = (async () => {
+      const payloadCases: string[] = [];
+      for await (const event of deliverTurn(createDeliverTurnRequest(session.sessionId, 'turn-suspend-commit'))) {
+        payloadCases.push(event.payload.case ?? 'missing');
+        if (payloadCases.length === 1) reachedToolStart.resolve();
+        if (payloadCases.length === 2) reachedToolEnd.resolve();
+        if (payloadCases.length === 3) reachedCommit.resolve();
+      }
+      return payloadCases;
+    })();
+
+    stream.emitEvent({ type: 'tool_call_start', id: 'call-1', name: 'op', args: {} });
+    await reachedToolStart.promise;
+
+    const suspendPromise = suspendSession('wait-for-commit', session.sessionId, 30_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(exportState).not.toHaveBeenCalled();
+
+    stream.emitEvent({ type: 'tool_call_end', id: 'call-1', result: 'ok', durationMs: 1 });
+    await reachedToolEnd.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(exportState).not.toHaveBeenCalled();
+
+    committed = true;
+    stream.emitEvent({
+      type: 'message_committed',
+      role: 'assistant',
+      content: assistantMessage.content,
+      turnId: 'turn-suspend-commit',
+      messageSeq: 0,
+    });
+    await reachedCommit.promise;
+
+    const response = await suspendPromise;
+    expect(exportState).toHaveBeenCalledTimes(1);
+    expect(response.sessionCheckpoint?.harnessState).toEqual({
+      stateVersion: '2',
+      payload: {
+        transcript: [assistantMessage],
+      },
+    });
+    await expect(turnPromise).resolves.toEqual(['agUiEvent', 'agUiEvent', 'messageCommitted']);
 
     stream.finish();
     await killSession().catch(() => undefined);

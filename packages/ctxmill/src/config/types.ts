@@ -15,7 +15,7 @@ export interface CTXMillConfig {
   execution?: {
     type: 'docker';
     warmPool?: number;
-    /** Maximum number of concurrent sandbox containers. Default: 20, env: CTXMILL_MAX_CONTAINERS */
+    /** Maximum number of concurrent sandbox containers. Default: 20, env: CTXMILL_MAX_GLOBAL_CONTAINERS */
     maxGlobalContainers?: number;
   };
   database?: {

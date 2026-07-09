@@ -5,7 +5,7 @@ import { agentRoutes } from '../routes/agents.js';
 import { createServer } from '../server.js';
 import { SessionTurnService } from '../session-turn-service.js';
 import type { SessionEvent } from '../session-turn-service.js';
-import { mapAgentHttpToolsToConfigs, validateAgentHttpToolsConfig } from '../http-tools.js';
+import { mapAgentHttpToolsToConfigs, validateAgentHttpToolsConfig, registerAgentHttpTools } from '../http-tools.js';
 import type { AgentSessionService } from '../agent-session-service.js';
 import type { RunStartupService } from '../run-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
@@ -88,7 +88,6 @@ async function buildAgentsApp(
 ) {
   const app = Fastify();
   const sse = {
-    getActiveAgentIds: vi.fn(() => []),
     getClientCount: vi.fn(() => 0),
     getLastActivity: vi.fn(() => null),
   } as unknown as SSEManager;
@@ -493,5 +492,36 @@ describe('HTTP tool registration', () => {
     expect(capturedAgentDef[0]).toBe(agentDef);
     expect(capturedAgentDef[0].tools).toContain('remote-search');
     expect(capturedAgentDef[0].metadata?.httpTools).toBeDefined();
+  });
+});
+
+describe('HTTP tool SSRF egress guard (wiring)', () => {
+  it('blocks a registered HTTP tool from reaching the cloud metadata endpoint', async () => {
+    const toolRegistry = new DefaultToolRegistry();
+    await registerAgentHttpTools(toolRegistry, {
+      id: 'agent-ssrf',
+      name: 'agent-ssrf',
+      metadata: {
+        httpTools: [{
+          name: 'metadata-probe',
+          description: 'Attempts to read cloud metadata',
+          endpoint: 'http://169.254.169.254/latest/meta-data/',
+          method: 'GET',
+        }],
+      },
+    });
+    await toolRegistry.refresh();
+
+    const tool = toolRegistry.getTool('metadata-probe', 'agent-ssrf');
+    expect(tool).toBeDefined();
+
+    await expect(
+      tool!.handler({}, {
+        agentId: 'agent-ssrf',
+        conversationId: 'conv-1',
+        instanceId: 'run-1',
+        workspaceDir: '/tmp',
+      }),
+    ).rejects.toThrow(/blocked/i);
   });
 });

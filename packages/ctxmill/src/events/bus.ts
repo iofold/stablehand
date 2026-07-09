@@ -225,16 +225,6 @@ export class TypedEventBus {
     await this.persistThenDispatch(event, payload, { rejectOnPersistFailure: true });
   }
 
-  /**
-   * Explicit post-persist dispatch hook. Use only when a repository/service already
-   * durably persisted the event and wants normal listener dispatch without writing a
-   * duplicate event_store row.
-   */
-  emitPersisted<K extends EventName>(event: K, payload: EventMap[K]): void {
-    this.ensureTimestamp(payload);
-    this.dispatchListeners(event, payload);
-  }
-
   private ensureTimestamp(payload: EventPayloadBase): void {
     if (!payload.timestamp) {
       payload.timestamp = Date.now();
@@ -327,11 +317,6 @@ export class TypedEventBus {
 
   async emitCustomAsync(eventType: string, agentId: string, payload: Record<string, unknown>): Promise<void> {
     await this.persistThenDispatchCustom(eventType, agentId, payload, { rejectOnPersistFailure: true });
-  }
-
-  emitCustomPersisted(eventType: string, payload: Record<string, unknown>): void {
-    const fullPayload = { ...payload, timestamp: payload.timestamp ?? Date.now() };
-    this.dispatchListeners(eventType, fullPayload);
   }
 
   private async persistThenDispatchCustom(

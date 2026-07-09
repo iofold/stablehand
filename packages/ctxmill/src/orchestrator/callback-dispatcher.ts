@@ -16,6 +16,7 @@ interface EnqueueCallbackOpts {
   sessionId?: string;
   callbackUrl: string;
   eventType: string;
+  eventSeq?: number;
   payload: Record<string, unknown>;
 }
 
@@ -35,10 +36,14 @@ export class CallbackDispatcher {
   /** Pluggable fetch for testing. Defaults to global fetch. */
   fetchFn: (url: string, init: RequestInit) => Promise<Response>;
 
-  constructor(db: DatabaseRepository, pollIntervalMs = 5000) {
+  constructor(
+    db: DatabaseRepository,
+    pollIntervalMs = 5000,
+    fetchFn?: (url: string, init: RequestInit) => Promise<Response>,
+  ) {
     this.db = db;
     this.pollIntervalMs = pollIntervalMs;
-    this.fetchFn = globalThis.fetch.bind(globalThis);
+    this.fetchFn = fetchFn ?? globalThis.fetch.bind(globalThis);
   }
 
   /**
@@ -54,6 +59,7 @@ export class CallbackDispatcher {
       sessionId: opts.sessionId ?? null,
       callbackUrl: opts.callbackUrl,
       eventType: opts.eventType,
+      eventSeq: opts.eventSeq ?? null,
       payload: opts.payload,
       status: 'pending',
       attempts: 0,

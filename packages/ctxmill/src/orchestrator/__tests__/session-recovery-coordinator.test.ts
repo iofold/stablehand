@@ -19,6 +19,8 @@ import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js'
 import type { ContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { AgentDefinition } from '../../types.js';
+import { SessionStateStore } from '../session-manager/session-state-store.js';
+import { SessionStatusCoordinator } from '../session-manager/session-status-coordinator.js';
 
 const connectMocks = vi.hoisted(() => ({
   createClientMock: vi.fn(),
@@ -53,7 +55,6 @@ function createMockContainerManager(): ContainerManager {
     startContainer: vi.fn().mockResolvedValue(undefined),
     stopContainer: vi.fn().mockResolvedValue(undefined),
     removeContainer: vi.fn().mockResolvedValue(undefined),
-    extractContainerDiff: vi.fn().mockResolvedValue(undefined),
     extractWorkspaceDiff: vi.fn().mockResolvedValue(undefined),
     extractLogs: vi.fn().mockResolvedValue(undefined),
     getContainer: vi.fn().mockResolvedValue(undefined),
@@ -219,6 +220,8 @@ function createManager(options?: { dataDir?: string }) {
   const db = createMockDb();
   const lifecyclePolicy = createMockLifecyclePolicy();
   const logger = createLogger();
+  const stateStore = new SessionStateStore();
+  const statusCoordinator = new SessionStatusCoordinator({ db, logger, stateStore });
   const grpcClient = createMockGrpcClient();
   const resolveToolsForAgent = vi.fn().mockReturnValue([
     create(ToolMetadataSchema, {
@@ -237,6 +240,8 @@ function createManager(options?: { dataDir?: string }) {
     containerManager,
     db,
     lifecyclePolicy,
+    stateStore,
+    statusCoordinator,
     workspaceDiffService: new WorkspaceDiffService({ containerManager }),
     buildSandboxSecrets: async () => ({}),
     resolveToolsForAgent,

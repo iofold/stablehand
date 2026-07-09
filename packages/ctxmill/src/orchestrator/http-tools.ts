@@ -3,6 +3,20 @@ import { DefaultToolRegistry } from '../tool/registry.js';
 import type { AgentDefinition } from '../types.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { SecretProvider } from '../secrets/types.js';
+import { createGuardedFetch } from '../util/egress.js';
+
+/**
+ * Guarded fetch shared by every agent HTTP tool provider so that
+ * agent-supplied endpoints cannot reach private/control-plane networks
+ * (SSRF). Lazily built from CTXMILL_EGRESS_* env policy.
+ */
+let sharedGuardedFetch: typeof fetch | undefined;
+function getGuardedFetch(): typeof fetch {
+  if (!sharedGuardedFetch) {
+    sharedGuardedFetch = createGuardedFetch();
+  }
+  return sharedGuardedFetch;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -130,6 +144,8 @@ export async function registerAgentHttpTools(
   toolRegistry: DefaultToolRegistry,
   agent: { id: string; name: string; metadata?: Record<string, unknown> | null },
   secretProvider?: SecretProvider,
+  /** Injectable fetch (defaults to the SSRF egress guard). Override in tests. */
+  fetchFn: typeof fetch = getGuardedFetch(),
 ): Promise<void> {
   const providerName = getAgentHttpToolProviderName(agent.id);
   toolRegistry.removeProvider(providerName);
@@ -153,6 +169,7 @@ export async function registerAgentHttpTools(
   toolRegistry.addProvider(new HTTPToolProvider(configs, {
     name: providerName,
     secrets: await resolveProviderSecrets(agent.id, secretProvider),
+    fetchFn,
   }));
   await toolRegistry.refresh();
 }

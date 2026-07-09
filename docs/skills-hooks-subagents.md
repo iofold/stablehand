@@ -26,7 +26,7 @@ Paths are relative to the workspace root. Symlinks are created after workspace p
 
 For example, you upload a tarball with `skills/code-review/SKILL.md` and configure a symlink to `.claude/skills`. The Claude SDK then auto-discovers it.
 
-For LangGraph, the deepagents SDK accepts arbitrary skill paths via config. Symlinks might not be needed. Skills in any directory work if passed via `harnessConfig.skillSources` or placed in `.ctxmill/skills/` for auto-discovery.
+For LangGraph, keep skill-like instructions explicit in workspace files or harness configuration. CTXMill does not currently auto-seed `.ctxmill/skills`.
 
 ## Skills (User-Managed)
 
@@ -34,7 +34,7 @@ Skills are user content. ctxmill doesn't manage them. You include skills in your
 
 The `SKILL.md` format with YAML frontmatter is an SDK convention, not a ctxmill convention.
 *   **Claude Agents**: Place in a directory and symlink to `.claude/skills/`.
-*   **LangGraph**: Place in `.ctxmill/skills/` for auto-discovery by deepagents, or any path.
+*   **LangGraph**: Keep instructions in workspace files or harness-specific configuration; CTXMill does not manage a skill catalog for it.
 
 See [Writing a Skill](writing-skills.md) for `SKILL.md` format reference.
 
@@ -153,7 +153,7 @@ workspace.tar.gz
 
 | Feature | Claude Agents | LangGraph | PI Agent |
 | :--- | :--- | :--- | :--- |
-| **Skills Discovery** | User-managed (via symlink) | User-managed (via `.ctxmill/skills/`) | User-managed (via extensions) |
+| **Skills Discovery** | User-managed (via symlink) | User-managed workspace/config files | User-managed (via extensions) |
 | **Subagent Config** | Record (Map) | Array | N/A |
 | **Subagent Model** | Supported | Supported | N/A |
 | **Multi-Provider** | No (Anthropic only) | Yes (OpenAI, Anthropic, Google) | No (PI only) |

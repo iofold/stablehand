@@ -10,7 +10,9 @@ This API allows external services to initialize or replace an agent's base works
 Replaces the entire base workspace for the specified agent.
 
 #### Request
-- **Headers**: `Content-Type: application/gzip`
+- **Headers**:
+  - `Authorization: Bearer $CTXMILL_API_TOKEN` unless auth is explicitly disabled.
+  - `Content-Type: application/gzip` or `application/x-gzip`.
 - **Body**: Raw `tar.gz` binary data.
 - **Query Parameters**:
   - `force` (optional): Set to `true` to automatically kill any active sessions before replacing the workspace.
@@ -26,7 +28,7 @@ Replaces the entire base workspace for the specified agent.
 - **400 Bad Request**: Extraction failed due to validation errors or the agent has no workspace configured.
 - **409 Conflict**: The agent has active sessions. You must kill them first or use `?force=true`.
 - **413 Payload Too Large**: The extracted content exceeds the system size limit (default 100 MB).
-- **415 Unsupported Media Type**: The `Content-Type` header isn't `application/gzip`.
+- **415 Unsupported Media Type**: The `Content-Type` header isn't `application/gzip` or `application/x-gzip`.
 
 ## Security Validation Rules
 
@@ -44,16 +46,16 @@ The system strictly validates every entry in the tarball to prevent security bre
 
 The workspace should contain the files your agent needs to function. Different harnesses look for specific directories:
 
-- **Skills**: Place `SKILL.md` files in `.ctxmill/skills/`.
 - **Claude Agents**: Configuration and hooks go in `.claude/`.
 - **Custom Tools**: Define tools in a `tools/` directory if your agent is configured to load them from there.
 
 Example layout:
 ```text
 .
-├── .ctxmill/
+├── .claude/
 │   └── skills/
-│       └── my-skill.md
+│       └── my-skill/
+│           └── SKILL.md
 ├── tools/
 │   └── custom-tool.ts
 ├── data/
@@ -75,6 +77,7 @@ Send the raw binary data using the `--data-binary` flag.
 
 ```bash
 curl -X POST http://localhost:3002/api/agents/agent-123/workspace \
+  -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
   -H "Content-Type: application/gzip" \
   --data-binary @workspace.tar.gz
 ```
@@ -89,7 +92,10 @@ const axios = require('axios');
 async function uploadWorkspace(agentId, filePath) {
   const stream = fs.createReadStream(filePath);
   await axios.post(`http://localhost:3002/api/agents/${agentId}/workspace`, stream, {
-    headers: { 'Content-Type': 'application/gzip' }
+    headers: {
+      'Authorization': `Bearer ${process.env.CTXMILL_API_TOKEN}`,
+      'Content-Type': 'application/gzip',
+    },
   });
 }
 ```
@@ -108,5 +114,6 @@ async function uploadWorkspace(agentId, filePath) {
 1. **Initialization**: The base workspace is created when an agent is first registered or imported.
 2. **Session Isolation**: When a new session starts, the system copies the base workspace into a session-specific directory.
 3. **Persistence**: Changes made during a session stay in that session's directory. They don't affect the base workspace or other sessions.
-4. **Promotion**: You can manually promote session changes back to the base workspace using the promote API.
-5. **Replacement**: Uploading a new tarball completely replaces the base workspace. This is an atomic operation.
+4. **Replacement**: Uploading a new tarball completely replaces the base workspace. This is an atomic operation.
+
+There is no shipped session promote endpoint today. Workspace diff/promote/discard APIs are tracked separately as planned work.

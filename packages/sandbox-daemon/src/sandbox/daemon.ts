@@ -71,10 +71,6 @@ export function getSessionTools(): ToolDefinition[] {
   return _sessionTools;
 }
 
-export function setSessionToolContext(context: ToolContext | null): void {
-  _sessionToolContext = context;
-}
-
 export function getToolApiToken(): string {
   return _toolApiToken;
 }

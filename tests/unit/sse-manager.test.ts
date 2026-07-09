@@ -302,19 +302,6 @@ describe('SSEManager', () => {
     });
   });
 
-  // Task 18: quiet connection handling
-  describe('Task 18: quiet connection handling', () => {
-    it('should keep quiet connections alive when heartbeats continue to succeed', () => {
-      const reply = createMockReply();
-      manager.subscribe('agent-1', reply);
-
-      vi.advanceTimersByTime(10 * 60 * 1000);
-
-      expect(manager.getClientCount('agent-1')).toBe(1);
-      expect(getRaw(reply).end).not.toHaveBeenCalled();
-    });
-  });
-
   // Task 19: Heartbeat error logging
   describe('Task 19: heartbeat error logging', () => {
     it('should log warning on heartbeat failure', () => {

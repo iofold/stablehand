@@ -40,7 +40,8 @@ sandbox Jobs.
 | `ORCHESTRATOR_CALLBACK_URL` | `http://orchestrator:3001` | **Yes*** | URL for sandboxes to call back to the orchestrator. *Required in foreign stacks. | `http://ctxmill-api:3001` |
 | `CTXMILL_SANDBOX_RUNTIME` | `docker` | No | Sandbox runtime. Use `kubernetes` or `k8s` to create sandbox sessions as Kubernetes Jobs. | `kubernetes` |
 | `CTXMILL_IMAGE_PREFIX` | `ctxmill/harness` | No | Prefix for sandbox harness images. Runtime image = `<prefix>-<harness>:latest`. | `myregistry.com/ctxmill` |
-| `CTXMILL_MAX_CONTAINERS` | `20` | No | Maximum number of concurrent sandbox containers globally. | `50` |
+| `CTXMILL_MAX_GLOBAL_CONTAINERS` | `20` | No | Maximum number of concurrent sandbox containers globally. | `50` |
+| `CTXMILL_MAX_CONTAINERS` | - | No | Deprecated compatibility alias for `CTXMILL_MAX_GLOBAL_CONTAINERS`; ignored when the canonical variable is set. | `50` |
 | `CTXMILL_DATA_VOLUME` | - | No | Docker volume name for persistent agent data. Required for volume-based persistence. | `myapp_ctxmill-data` |
 | `CTXMILL_K8S_NAMESPACE` | service account namespace or `default` | No | Kubernetes namespace where sandbox Jobs are created. Used only by the Kubernetes sandbox runtime. | `ctxmill` |
 | `CTXMILL_K8S_DATA_HOST_PATH` | `CTXMILL_DATA_DIR` or `/var/lib/ctxmill/data` | No | Host path mounted into Kubernetes sandbox Jobs for workspace data. Use only on single-node/dev clusters unless the path is backed by cluster storage. | `/var/lib/ctxmill/dev2/data` |
@@ -104,7 +105,11 @@ Used for persistent artifact storage (file uploads/downloads).
 | `SECRET_MASTER_KEY` | Development fallback outside production | **Yes in production** | Master key for per-agent secret encryption (AES-256-GCM). Production startup fails if this is unset, the development fallback, or shorter than 16 characters. | `openssl rand -hex 32` |
 | `CTXMILL_API_TOKEN` | - | **Yes in production** | Static bearer token required for HTTP control-plane API routes. Production startup fails if this is unset unless `CTXMILL_AUTH_DISABLED=true`. | `openssl rand -hex 32` |
 | `CTXMILL_CALLBACK_TOKEN_SECRET` | `CTXMILL_API_TOKEN` | No | Optional separate HMAC secret for session-scoped sandbox ConnectRPC callback tokens. Set this when you want callback auth independent from the HTTP API token. | `openssl rand -hex 32` |
-| `CTXMILL_AUTH_DISABLED` | `false` | No | Explicitly disables HTTP API bearer-token enforcement. Use only for isolated local development or trusted private test stacks. | `true` |
+| `CTXMILL_AUTH_DISABLED` | `false` | No | Allows open HTTP API and callback auth mode only when no token/secret is configured. If `CTXMILL_API_TOKEN` or `CTXMILL_CALLBACK_TOKEN_SECRET` is set, auth still enforces. Use only for isolated local development or trusted private test stacks. | `true` |
+| `CTXMILL_EGRESS_ENFORCE` | `true` | No | Egress guard for orchestrator-originated HTTP tool and webhook/callback requests. When enabled, destinations resolving to private, loopback, link-local (incl. `169.254.169.254` metadata), or reserved ranges are blocked before the request is made, and each redirect hop is re-validated. Set `false` only for local development. | `false` |
+| `CTXMILL_EGRESS_ALLOWLIST` | - | No | Comma-separated hosts allowed to bypass the egress block so agents can reach internal services on purpose. Matches exact host, parent domain, and `*.wildcard` patterns. | `hooks.internal.example.com,*.corp.example` |
+| `CTXMILL_EGRESS_ALLOWLIST_ONLY` | `false` | No | When `true`, only allowlisted hosts are reachable (deny public destinations by default). | `true` |
+| `CTXMILL_EGRESS_MAX_REDIRECTS` | `5` | No | Maximum redirects the egress guard follows while re-validating each hop. | `3` |
 
 ## Debug / Development
 
@@ -125,7 +130,7 @@ Each setting also supports an **environment variable override** that sets the de
 | :--- | :--- | :--- | :--- |
 | `turnTimeoutMs` | `CTXMILL_TURN_TIMEOUT_MS` | `1,800,000` (30m) | Timeout for a single agent turn (LLM call + tools). |
 | `idleTimeoutMs` | `CTXMILL_IDLE_TIMEOUT_MS` | `300,000` (5m) | Time before an idle session is checkpointed by lifecycle policy. |
-| `maxGlobalContainers` | `CTXMILL_MAX_GLOBAL_CONTAINERS` | `20` | Maximum concurrent sandbox containers globally. |
+| `maxGlobalContainers` | `CTXMILL_MAX_GLOBAL_CONTAINERS` (`CTXMILL_MAX_CONTAINERS` deprecated alias) | `20` | Maximum concurrent sandbox containers globally. |
 | `maxConcurrentSessionsPerAgent` | `CTXMILL_MAX_CONCURRENT_SESSIONS_PER_AGENT` | `3` | Maximum concurrent live sandbox sessions for a single agent. |
 | `maxTriggerDepth` | `CTXMILL_MAX_TRIGGER_DEPTH` | `5` | Maximum depth for event-triggered background runs. |
 | `defaultCpus` | `CTXMILL_DEFAULT_CPUS` | `1.0` | Default CPU allocation for sandboxes. |
@@ -188,6 +193,7 @@ SECRET_MASTER_KEY=
 CTXMILL_API_TOKEN=
 # Optional separate HMAC secret for sandbox callback tokens.
 CTXMILL_CALLBACK_TOKEN_SECRET=
+# Allows open auth only when CTXMILL_API_TOKEN/CTXMILL_CALLBACK_TOKEN_SECRET are absent.
 # Set only for isolated local development or trusted private test stacks.
 CTXMILL_AUTH_DISABLED=
 ```

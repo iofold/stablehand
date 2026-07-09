@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { RUN_CHANNEL_EVENTS } from '../frames.js';
 import { CanonicalProjector } from '../projector.js';
 
 const T = 1_000;
@@ -100,11 +101,47 @@ describe('CanonicalProjector (ADR-015)', () => {
     const system = projector.project('agent.created', { agentId: 'agent-1', name: 'a', timestamp: T });
     expect(system[0]).toEqual(expect.objectContaining({ type: 'agent.created', channel: 'system' }));
     expect(system[0]!.body).toEqual({ agentId: 'agent-1', name: 'a', timestamp: T });
+    expect(system[0]!.sourceType).toBe('agent.created');
+    expect(JSON.parse(system[0]!.sourcePayload ?? '{}')).toEqual({ agentId: 'agent-1', name: 'a', timestamp: T });
 
     const custom = projector.project('stress.langgraph.complete', {
       agentId: 'agent-1', schemaVersion: 1, status: 'ok', harness: 'langgraph', timestamp: T,
     });
     expect(custom[0]).toEqual(expect.objectContaining({ type: 'stress.langgraph.complete', channel: 'custom' }));
     expect(custom[0]!.body.schemaVersion).toBe(1);
+    expect(custom[0]!.sourceType).toBe('stress.langgraph.complete');
+  });
+
+  it('tags only the first frame projected from a raw bus event', () => {
+    const projector = new CanonicalProjector();
+    const payload = textChunk('turn-1', 'hello');
+
+    const frames = projector.project('run.text_chunk', payload);
+
+    expect(frames.map((frame) => frame.type)).toEqual(['TEXT_MESSAGE_START', 'TEXT_MESSAGE_CONTENT']);
+    expect(frames[0]!.sourceType).toBe('run.text_chunk');
+    expect(JSON.parse(frames[0]!.sourcePayload ?? '{}')).toEqual(payload);
+    expect(frames[1]!.sourceType).toBeUndefined();
+    expect(frames[1]!.sourcePayload).toBeUndefined();
+  });
+
+  it('creates a provenance-only row for future run-channel events without a projector mapping', () => {
+    const mutableRunEvents = RUN_CHANNEL_EVENTS as string[];
+    mutableRunEvents.push('run.future_zero_frame');
+    try {
+      const projector = new CanonicalProjector();
+      const frames = projector.project('run.future_zero_frame', {
+        turnId: 'turn-1', agentId: 'agent-1', conversationId: 'conv-1', timestamp: T,
+      });
+
+      expect(frames).toHaveLength(1);
+      expect(frames[0]).toEqual(expect.objectContaining({
+        type: 'ctxmill.raw_event',
+        channel: 'system',
+        sourceType: 'run.future_zero_frame',
+      }));
+    } finally {
+      mutableRunEvents.pop();
+    }
   });
 });

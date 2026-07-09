@@ -147,7 +147,7 @@ describe('EventTriggerManager sandbox mode', () => {
       await settle();
 
       expect(onFire).toHaveBeenCalledTimes(1);
-      expect(onFire).toHaveBeenCalledWith('agent-1', 'Handle event', expect.any(String), 4);
+      expect(onFire).toHaveBeenCalledWith('agent-1', 'Handle event', expect.any(String), 4, undefined);
     });
 
     it('blocks triggers at MAX_TRIGGER_DEPTH regardless of execution mode', async () => {
@@ -191,7 +191,7 @@ describe('EventTriggerManager sandbox mode', () => {
         manager.emitCustomEvent('custom.chain', 'agent-chain', { _triggerDepth: depth });
         await settle();
         expect(onFire).toHaveBeenCalledTimes(1);
-        expect(onFire).toHaveBeenCalledWith('agent-chain', 'Chain step', expect.any(String), depth + 1);
+        expect(onFire).toHaveBeenCalledWith('agent-chain', 'Chain step', expect.any(String), depth + 1, undefined);
       }
 
       onFire.mockClear();
@@ -340,6 +340,7 @@ describe('EventTriggerManager sandbox mode', () => {
         'Process data: source=pipeline-A, count=42',
         expect.any(String),
         1,
+        undefined,
       );
     });
   });

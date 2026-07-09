@@ -11,8 +11,6 @@ import { ErrorDisplay } from '@/components/session/ErrorDisplay';
 import { ApprovalCard } from '@/components/hitl/ApprovalCard';
 import { EditableDocument } from '@/components/hitl/EditableDocument';
 import { FieldRequestForm } from '@/components/hitl/FieldRequestForm';
-import { FileExplorer } from '@/components/explorer/FileExplorer';
-import { FileViewer } from '@/components/explorer/FileViewer';
 import { ConnectionBanner } from '@/components/ui/ConnectionBanner';
 import { useConversationStore } from '@/stores/conversation';
 import { normalizeConversationMessage } from '@/stores/conversation';
@@ -69,8 +67,6 @@ export function SessionPage() {
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [pastRunError, setPastRunError] = useState<string | null>(null);
   const [lastFailedContent, setLastFailedContent] = useState<string | null>(null);
-  const [explorerOpen] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>(routeConversationId);
 
 
@@ -312,10 +308,6 @@ export function SessionPage() {
     [id, clearInterrupt, interrupt?.sessionId],
   );
 
-  const handleFileSelect = useCallback((path: string) => {
-    setSelectedFile(path);
-  }, []);
-
   const connectionDot = sseStatus === 'connected'
     ? 'bg-emerald-400'
     : sseStatus === 'connecting'
@@ -396,38 +388,6 @@ export function SessionPage() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* File Explorer Sidebar */}
-        <div
-          className={cn(
-            'flex-shrink-0 border-r border-surface-700/40 bg-surface-900/60 transition-all duration-300 ease-in-out overflow-hidden',
-            explorerOpen ? 'w-[280px]' : 'w-0',
-          )}
-        >
-          {explorerOpen && id && (
-            <div className="flex h-full w-[280px] flex-col">
-              {/* Explorer tree */}
-              <div className={cn('flex-1 overflow-hidden', selectedFile ? 'h-1/2' : 'h-full')}>
-                <FileExplorer
-                  agentId={id}
-                  onFileSelect={handleFileSelect}
-                  selectedFile={selectedFile}
-                />
-              </div>
-
-              {/* File viewer (bottom half of sidebar) */}
-              {selectedFile && (
-                <div className="h-1/2 border-t border-surface-700/40">
-                  <FileViewer
-                    agentId={id}
-                    filePath={selectedFile}
-                    onClose={() => setSelectedFile(null)}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
         <div className="flex flex-1 flex-col overflow-hidden">
           <SessionThread
             messages={messages}

@@ -141,13 +141,24 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
   });
 
   describe('resolveResourceLimits', () => {
-    test('uses manifest.resourceLimits when present', () => {
+    test('uses metadata.resourceLimits as an override when present', () => {
       const agent = createAgent({
         manifest: {
           resourceLimits: { cpus: 4 },
           spec: { resources: { cpus: 2 } },
         },
         metadata: { resourceLimits: { cpus: 1 } },
+      });
+
+      expect(resolveResourceLimits(agent)).toEqual({ cpus: 1 });
+    });
+
+    test('falls back to manifest.resourceLimits when metadata has no override', () => {
+      const agent = createAgent({
+        manifest: {
+          resourceLimits: { cpus: 4 },
+          spec: { resources: { cpus: 2 } },
+        },
       });
 
       expect(resolveResourceLimits(agent)).toEqual({ cpus: 4 });
@@ -158,7 +169,6 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
         manifest: {
           spec: { resources: { memoryMb: 768 } },
         },
-        metadata: { resourceLimits: { memoryMb: 256 } },
       });
 
       expect(resolveResourceLimits(agent)).toEqual({ memoryMb: 768 });
@@ -224,16 +234,42 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
         manifest: { resourceLimits: { cpus: 2, memoryMb: 1024 } },
         metadata: null,
       });
+      const editedManifestAgent = createAgent({
+        manifest: { resourceLimits: { cpus: 2, memoryMb: 1024 } },
+        metadata: { resourceLimits: { cpus: 3, memoryMb: 2048 } },
+      });
       const metadataAgent = createAgent({
         metadata: { resourceLimits: { timeoutSec: 120 } },
       });
       const bareAgent = createAgent();
 
-      for (const agent of [manifestAgent, metadataAgent, bareAgent]) {
+      for (const agent of [manifestAgent, editedManifestAgent, metadataAgent, bareAgent]) {
         const api = toAgentResponse(agent);
         const runtime = buildAgentDefinition(agent);
         expect(api.resourceLimits ?? null).toEqual(runtime.resourceLimits ?? null);
       }
+    });
+
+    test('metadata override makes PUT-ed limits effective for manifest agents', () => {
+      const agent = createAgent({
+        manifest: {
+          resourceLimits: { cpus: 1, memoryMb: 1024, timeoutSec: 300 },
+        },
+        metadata: {
+          resourceLimits: { cpus: 2, memoryMb: 2048, timeoutSec: 900 },
+        },
+      });
+
+      expect(buildAgentDefinition(agent).resourceLimits).toEqual({
+        cpus: 2,
+        memoryMb: 2048,
+        timeoutSec: 900,
+      });
+      expect(toAgentResponse(agent).resourceLimits).toEqual({
+        cpus: 2,
+        memoryMb: 2048,
+        timeoutSec: 900,
+      });
     });
   });
 });

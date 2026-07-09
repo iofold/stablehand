@@ -1,11 +1,14 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { registerCallbackSubscriptions, VALID_WEBHOOK_EVENTS } from '../../config/container.js';
-import type { CallbackOutboxRow, DatabaseRepository, WebhookRow } from '../../database/repository.js';
+import { VALID_WEBHOOK_EVENTS } from '../../config/container.js';
+import type { CallbackOutboxRow, DatabaseRepository, EventFrameRow, WebhookRow } from '../../database/repository.js';
+import type { CallbackOutboxInsert } from '../../database/types.js';
+import { SpineConsumerRunner } from '../../events/spine-consumer-runner.js';
 import { TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition } from '../../types.js';
 import { CallbackDispatcher } from '../callback-dispatcher.js';
+import { CanonicalLog } from '../canonical/canonical-log.js';
 import type { AgentSessionService } from '../agent-session-service.js';
 import { InterruptManager } from '../interrupt.js';
 import { agentRoutes } from '../routes/agents.js';
@@ -13,6 +16,7 @@ import { mapAgentHttpToolsToConfigs } from '../http-tools.js';
 import { SSEManager } from '../sse.js';
 import { RunStartupService } from '../run-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
+import { createWebhookRelaySpineConsumer } from '../webhook-relay.js';
 
 type AgentRow = {
   id: string;
@@ -188,16 +192,8 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
     }),
     listWebhooks: vi.fn(async (agentId: string) => {
       return Array.from(webhooks.values())
-        .filter((hook) => hook.agentId === agentId)
-        .map((hook) => ({ ...hook }));
-    }),
-    getWebhooksForAgent: vi.fn(async (agentId: string) => {
-      return Array.from(webhooks.values())
         .filter((hook) => hook.agentId === agentId && hook.active)
         .map((hook) => ({ ...hook }));
-    }),
-    deleteWebhook: vi.fn(async (webhookId: string) => {
-      return webhooks.delete(webhookId);
     }),
     deleteWebhookForAgent: vi.fn(async (webhookId: string, agentId?: string) => {
       const hook = webhooks.get(webhookId);
@@ -225,8 +221,17 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
       webhooks.set(webhookId, updated);
       return { ...updated };
     }),
-    enqueueCallback: vi.fn(async (data: CallbackOutboxRow) => {
-      const row = { ...data };
+    enqueueCallback: vi.fn(async (data: CallbackOutboxInsert) => {
+      const row = {
+        claimedAt: null,
+        claimExpiresAt: null,
+        ...data,
+        eventSeq: data.eventSeq ?? null,
+        sessionId: data.sessionId ?? null,
+        lastAttemptAt: data.lastAttemptAt ?? null,
+        lastError: data.lastError ?? null,
+        deliveredAt: data.deliveredAt ?? null,
+      } as CallbackOutboxRow;
       callbackOutbox.set(row.id, row);
       return { ...row };
     }),
@@ -281,13 +286,6 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
   return db as unknown as DatabaseRepository & typeof db;
 }
 
-function createDispatcherMock() {
-  const dispatcher = {
-    enqueue: vi.fn(async () => 'delivery-id'),
-  };
-  return dispatcher as unknown as CallbackDispatcher & typeof dispatcher;
-}
-
 function flushEvents(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -311,6 +309,67 @@ function createMockSessionManager(): SandboxSessionManager {
 
 function createRunStartupServiceStub(): RunStartupService {
   return new RunStartupService({ logger: console });
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : { value };
+}
+
+async function createWebhookRelayRuntime(
+  db: ReturnType<typeof createMockDb>,
+  callbackDispatcher: Pick<CallbackDispatcher, 'enqueue'>,
+): Promise<{ eventBus: TypedEventBus; runner: SpineConsumerRunner }> {
+  const rows: EventFrameRow[] = [];
+  const cursors = new Map<string, number>();
+  let seq = 0;
+
+  const relayDb = Object.assign(db, {
+    saveEventBatch: vi.fn(async (frames: Array<Omit<EventFrameRow, 'seq' | 'createdAt'>>) =>
+      frames.map((frame) => {
+        seq += 1;
+        rows.push({
+          ...frame,
+          seq,
+          createdAt: Date.now(),
+          turnId: frame.turnId ?? null,
+          conversationId: frame.conversationId ?? null,
+          sourceType: frame.sourceType ?? null,
+          sourcePayload: frame.sourcePayload ?? null,
+        });
+        return seq;
+      })),
+    getFramesSince: vi.fn(async () => [] as EventFrameRow[]),
+    getTurnFrames: vi.fn(async () => [] as EventFrameRow[]),
+    getSourceEventsSince: vi.fn(async (afterSeq: number, limit = 1_000) =>
+      rows.filter((row) => row.seq > afterSeq && row.sourceType).slice(0, limit)),
+    getSpineCursor: vi.fn(async (consumer: string) => cursors.get(consumer) ?? 0),
+    advanceSpineCursor: vi.fn(async (consumer: string, lastSeq: number) => {
+      const nextSeq = Math.max(cursors.get(consumer) ?? 0, lastSeq);
+      cursors.set(consumer, nextSeq);
+      return { consumer, lastSeq: nextSeq, updatedAt: Date.now() };
+    }),
+  }) as DatabaseRepository & typeof db;
+
+  const canonicalLog = new CanonicalLog({
+    db: relayDb,
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  });
+  const eventBus = new TypedEventBus({
+    persistEvent: async (type, _agentId, payload, parsedPayload) => {
+      await canonicalLog.ingest(type, parsedPayload ?? toRecord(JSON.parse(payload) as unknown));
+    },
+  });
+  const runner = new SpineConsumerRunner({
+    canonicalLog,
+    db: relayDb,
+    consumers: [createWebhookRelaySpineConsumer({ db: relayDb, callbackDispatcher })],
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    rescanIntervalMs: 60_000,
+  });
+  await runner.start();
+  return { eventBus, runner };
 }
 
 async function buildApp(options?: {
@@ -474,146 +533,6 @@ describe('Pilot integration', () => {
     });
   });
 
-  describe('callback event subscriptions', () => {
-    it('enqueues only matching webhooks for each subscribed event', async () => {
-      const eventBus = new TypedEventBus();
-      const db = createMockDb({
-        agents: [createAgentRow()],
-        webhooks: [
-          {
-            id: 'hook-started',
-            agentId: 'agent-1',
-            url: 'https://hooks.example/run-started',
-            events: ['turn.started'],
-            secret: null,
-            active: true,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-          {
-            id: 'hook-tool',
-            agentId: 'agent-1',
-            url: 'https://hooks.example/tool-called',
-            events: ['run.tool_started'],
-            secret: null,
-            active: true,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-          {
-            id: 'hook-completed',
-            agentId: 'agent-1',
-            url: 'https://hooks.example/run-completed',
-            events: ['turn.completed'],
-            secret: null,
-            active: true,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        ],
-      });
-      const callbackDispatcher = createDispatcherMock();
-
-      registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
-
-      eventBus.emit('turn.started', {
-        turnId: 'run-1',
-        sessionId: 'run-1',
-        agentId: 'agent-1',
-        conversationId: 'conv-1',
-        mode: 'background',
-        taskDescription: 'Run Pilot sync',
-        timestamp: 100,
-      });
-      await flushEvents();
-
-      expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
-      expect(callbackDispatcher.enqueue).toHaveBeenCalledWith({
-        agentId: 'agent-1',
-        sessionId: 'run-1',
-        callbackUrl: 'https://hooks.example/run-started',
-        eventType: 'turn.started',
-        payload: {
-          turnId: 'run-1',
-          sessionId: 'run-1',
-          agentId: 'agent-1',
-          conversationId: 'conv-1',
-          mode: 'background',
-          taskDescription: 'Run Pilot sync',
-          timestamp: 100,
-        },
-      });
-
-      callbackDispatcher.enqueue.mockClear();
-
-      eventBus.emit('run.tool_started', {
-        turnId: 'run-1',
-        agentId: 'agent-1',
-        toolCallId: 'tool-1',
-        toolName: 'remote-search',
-        args: { query: 'pilot order status' },
-        timestamp: 200,
-      });
-      await flushEvents();
-
-      expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
-      expect(callbackDispatcher.enqueue).toHaveBeenCalledWith({
-        agentId: 'agent-1',
-         sessionId: 'run-1',
-         callbackUrl: 'https://hooks.example/tool-called',
-         eventType: 'run.tool_started',
-         payload: {
-           turnId: 'run-1',
-           agentId: 'agent-1',
-           toolCallId: 'tool-1',
-           toolName: 'remote-search',
-           args: { query: 'pilot order status' },
-           timestamp: 200,
-         },
-       });
-
-      callbackDispatcher.enqueue.mockClear();
-
-      eventBus.emit('turn.completed', {
-        turnId: 'run-1',
-        sessionId: 'run-1',
-        agentId: 'agent-1',
-        conversationId: 'conv-1',
-        status: 'completed',
-        durationMs: 300,
-        timestamp: 300,
-      });
-      await flushEvents();
-
-      expect(callbackDispatcher.enqueue).toHaveBeenCalledTimes(1);
-      expect(callbackDispatcher.enqueue).toHaveBeenCalledWith({
-        agentId: 'agent-1',
-        sessionId: 'run-1',
-        callbackUrl: 'https://hooks.example/run-completed',
-        eventType: 'turn.completed',
-        payload: {
-          turnId: 'run-1',
-          sessionId: 'run-1',
-          agentId: 'agent-1',
-          conversationId: 'conv-1',
-          status: 'completed',
-          error: undefined,
-          durationMs: 300,
-          timestamp: 300,
-        },
-      });
-
-      expect(callbackDispatcher.enqueue).not.toHaveBeenCalledWith(expect.objectContaining({
-        callbackUrl: 'https://hooks.example/run-started',
-        eventType: 'turn.completed',
-      }));
-      expect(callbackDispatcher.enqueue).not.toHaveBeenCalledWith(expect.objectContaining({
-        callbackUrl: 'https://hooks.example/tool-called',
-        eventType: 'turn.completed',
-      }));
-    });
-  });
-
   describe('HTTP tool resolution', () => {
     it('maps stored agent HTTP tool metadata to endpoint configs', () => {
       expect(mapAgentHttpToolsToConfigs(createHttpAgent({
@@ -678,10 +597,10 @@ describe('Pilot integration', () => {
 
     it('dispatches a run, emits tool callbacks, and delivers cancelled completion callbacks', async () => {
       const db = createMockDb();
-      const eventBus = new TypedEventBus();
       const callbackDispatcher = new CallbackDispatcher(db);
       callbackDispatcher.fetchFn = fetchMock;
-      registerCallbackSubscriptions(eventBus, db, callbackDispatcher);
+      const webhookRuntime = await createWebhookRelayRuntime(db, callbackDispatcher);
+      const { eventBus } = webhookRuntime;
 
       const sessionManager = createMockSessionManager();
       const cancelSessionSpy = vi.spyOn(sessionManager, 'cancelCurrentTurn');
@@ -809,6 +728,7 @@ describe('Pilot integration', () => {
           headers: expect.objectContaining({ 'X-Event-Type': 'turn.completed' }),
         }),
       );
+      webhookRuntime.runner.stop();
     });
   });
 

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ApiAgentSession, ApiSessionStatusCounts } from '@ctxmill/shared';
+import type { ApiAgent, ApiAgentSession } from '@ctxmill/shared';
 import {
   fetchAgents as apiFetchAgents,
   startBackgroundRun as apiStartRun,
@@ -14,30 +14,11 @@ import { normalizeSessionStatusCounts } from '@/lib/session-status';
 
 export type AgentSession = ApiAgentSession;
 
-export interface Agent {
-  id: string;
-  name: string;
-  status: string;
-  description?: string;
-  tools: string[];
+export interface Agent extends ApiAgent {
   httpTools?: HttpToolDefinition[];
   nativeTools?: { allowlist?: string[]; blocklist?: string[] } | null;
   workspaceContent?: { files?: Array<{ src: string; dest: string }> } | null;
-  harness: string;
-  harnessConfig: Record<string, unknown>;
-  sseClients?: number;
-  conversationCount?: number;
-  sessionsByStatus?: ApiSessionStatusCounts;
-  hasPendingInterrupt?: boolean;
-  lastActivity?: number;
-  totalSessions?: number;
-  systemPrompt?: string;
   createdAt?: number;
-
-  workspaceDir?: string | null;
-  metadata?: Record<string, unknown> | null;
-  manifest?: Record<string, unknown> | null;
-  version?: number;
 }
 
 interface AgentsStore {

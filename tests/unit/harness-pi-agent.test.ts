@@ -51,7 +51,7 @@ vi.mock('@mariozechner/pi-ai', async () => {
 });
 
 import { Type } from '@sinclair/typebox';
-import { PIAgentHarness, convertTools, zodToTypeBox } from '../../packages/sandbox-daemon/src/index.ts';
+import { PIAgentHarness, convertTools, zodToTypeBox, _piMapAgentEvent } from '../../packages/sandbox-daemon/src/index.ts';
 import type {
   AgentEvent,
   AgentHarness,
@@ -95,7 +95,6 @@ async function collectEvents(stream: AsyncGenerator<AgentEvent>): Promise<AgentE
   return events;
 }
 
-type PiEventMapper = (piEvent: Record<string, unknown>, usage: TokenUsage | undefined) => AgentEvent | null;
 type NativeToolBuilder = (
   config: HarnessSessionConfig,
   factories: {
@@ -109,10 +108,6 @@ type NativeToolBuilder = (
     createCodingTools: (cwd: string) => unknown[];
   },
 ) => unknown[];
-
-function getMapPiEvent(harness: PIAgentHarness): PiEventMapper {
-  return Reflect.get(harness, 'mapPiAgentEvent') as PiEventMapper;
-}
 
 function getBuildNativeTools(harness: PIAgentHarness): NativeToolBuilder {
   return Reflect.get(harness, 'buildNativeTools') as NativeToolBuilder;
@@ -324,15 +319,12 @@ describe('convertTools', () => {
 
 describe('PIAgentHarness private helpers', () => {
   it('should map PI events to ctxmill events', () => {
-    const harness = new PIAgentHarness();
-    const mapPiEvent = getMapPiEvent(harness);
-
-    expect(mapPiEvent({
+    expect(_piMapAgentEvent({
       type: 'message_update',
       assistantMessageEvent: { type: 'text_delta', delta: 'Hello world' },
     }, undefined)).toEqual({ type: 'text_delta', content: 'Hello world' });
 
-    expect(mapPiEvent({
+    expect(_piMapAgentEvent({
       type: 'tool_execution_start',
       toolCallId: 'call-123',
       toolName: 'get-weather',
@@ -344,7 +336,7 @@ describe('PIAgentHarness private helpers', () => {
       args: { city: 'NYC' },
     });
 
-    expect(mapPiEvent({
+    expect(_piMapAgentEvent({
       type: 'tool_execution_end',
       toolCallId: 'call-123',
       result: { content: [{ type: 'text', text: '72F and sunny' }] },
@@ -359,11 +351,9 @@ describe('PIAgentHarness private helpers', () => {
   });
 
   it('should map agent_end to done with accumulated usage', () => {
-    const harness = new PIAgentHarness();
-    const mapPiEvent = getMapPiEvent(harness);
     const usage: TokenUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
 
-    expect(mapPiEvent({ type: 'agent_end', messages: [] }, usage)).toEqual({
+    expect(_piMapAgentEvent({ type: 'agent_end', messages: [] }, usage)).toEqual({
       type: 'done',
       usage,
     });

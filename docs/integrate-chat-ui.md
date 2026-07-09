@@ -20,8 +20,6 @@ Content-Type: application/json
 Accept: text/event-stream
 ```
 
-`/api/ag-ui/agents/:agentId/run` remains available as a compatibility alias.
-
 `threadId` is optional. If omitted, CTXMill creates a conversation and returns the chosen id in the first `MESSAGES_SNAPSHOT`. If supplied and missing, the AG-UI route creates that conversation id so the embedding app can keep its own durable thread key.
 
 ## Fast Path
