@@ -2,7 +2,7 @@ import { resolve, normalize } from 'node:path';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { Message } from '../../types.js';
 import type { DatabaseRepository } from '../../database/repository.js';
-import { getConversationWorkspacePath, getSessionWorkspacePath } from '../../workspace/session-workspace.js';
+import { getConversationWorkspacePath } from '../../workspace/session-workspace.js';
 
 /** Patterns that should never be exposed via the file browsing API. */
 const BLOCKED_PATTERNS = ['.env', '.git', '.ctxmill', 'credentials', '.pem', '.key', '.secret'];
@@ -19,6 +19,12 @@ interface RawTranscriptMessage {
 
 type InternalToolCall = NonNullable<Message['toolCalls']>[number];
 
+type WorkspaceTargetRequest = FastifyRequest<{
+  Params: { id: string };
+  Querystring: { sessionId?: string };
+}>;
+type WorkspaceTargetAgent = { id: string; workspaceDir?: string | null };
+
 /** Check if a filename or path segment matches any blocked pattern. */
 export function isBlockedPath(name: string): boolean {
   const lower = name.toLowerCase();
@@ -33,14 +39,10 @@ export function isBlockedPath(name: string): boolean {
  */
 export function resolveBaseDir(
   agent: { id: string; workspaceDir?: string | null },
-  opts?: { conversationId?: string | null; sandboxSessionId?: string; dataDir?: string },
+  opts?: { conversationId?: string | null; dataDir?: string },
 ): string | null {
   if (opts?.conversationId && opts.dataDir) {
     return getConversationWorkspacePath(opts.dataDir, agent.id, opts.conversationId);
-  }
-
-  if (opts?.sandboxSessionId && opts.dataDir) {
-    return getSessionWorkspacePath(opts.dataDir, agent.id, opts.sandboxSessionId);
   }
 
   return agent.workspaceDir ? resolve(agent.workspaceDir) : null;
@@ -72,6 +74,47 @@ export function validateSandboxPath(
   }
 
   return null;
+}
+
+export async function resolveWorkspaceTarget(
+  request: WorkspaceTargetRequest,
+  reply: FastifyReply,
+  deps: { db: Pick<DatabaseRepository, 'getTurn'>; dataDir?: string },
+  filePath: string,
+): Promise<{ baseDir: string; target: string } | null> {
+  const { id } = request.params;
+  const query = request.query as { sessionId?: string };
+  let conversationId: string | null | undefined;
+
+  if (query.sessionId) {
+    const run = await deps.db.getTurn(query.sessionId);
+    if (!run || run.agentId !== id) {
+      await reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
+      return null;
+    }
+    conversationId = run.conversationId;
+  }
+
+  const agent = (request as WorkspaceTargetRequest & { agent: WorkspaceTargetAgent }).agent;
+  const baseDir = resolveBaseDir(agent, {
+    conversationId,
+    dataDir: deps.dataDir,
+  });
+  if (!baseDir) {
+    await reply.status(500).send({ error: 'Agent has no workspace configured' });
+    return null;
+  }
+
+  const pathError = validateSandboxPath(baseDir, filePath);
+  if (pathError) {
+    await reply.status(pathError.status).send(pathError.body);
+    return null;
+  }
+
+  return {
+    baseDir,
+    target: resolve(baseDir, normalize(filePath)),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

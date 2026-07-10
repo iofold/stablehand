@@ -26,6 +26,7 @@ const INDIVIDUALLY_HANDLED = new Set([
   'TOOL_CALL_RESULT',
   'RUN_ERROR',
   'RUN_FINISHED',
+  'HITL_PAUSE',
 ]);
 
 /** Extended AG-UI event fields used when extracting tool/message data. */
@@ -152,6 +153,15 @@ export class AgentSessionService {
       status: tc.status,
       ...(tc.error ? { error: tc.error } : {}),
     }));
+
+    const updateFlushedAssistantToolState = async () => {
+      if (!flushedAssistantMessageId) return;
+      await this.db.updateMessageToolCallsAndParts(
+        flushedAssistantMessageId,
+        buildPersistedToolCalls(),
+        [...streamingParts],
+      );
+    };
 
     const buildCommittedParts = (committed: MessageCommittedEvent): StreamingPart[] => {
       if (streamingParts.length > 0) {
@@ -307,7 +317,7 @@ export class AgentSessionService {
         accumulatedText = '';
         assistantFlushedForBatch = true;
       } else if (pendingToolCalls.size > 0 && assistantFlushedForBatch && flushedAssistantMessageId) {
-        await this.db.updateMessageToolCalls(flushedAssistantMessageId, buildPersistedToolCalls());
+        await updateFlushedAssistantToolState();
       } else if (accumulatedText) {
         const parts = [...streamingParts];
         const messageId = await persistMessage('assistant', accumulatedText, {
@@ -471,7 +481,7 @@ export class AgentSessionService {
             accumulatedText = '';
             assistantFlushedForBatch = true;
           } else if (assistantFlushedForBatch && flushedAssistantMessageId) {
-            await this.db.updateMessageToolCalls(flushedAssistantMessageId, buildPersistedToolCalls());
+            await updateFlushedAssistantToolState();
           }
 
           await persistMessage('tool', normalizeContent(e.result), {

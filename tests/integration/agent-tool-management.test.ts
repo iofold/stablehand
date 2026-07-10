@@ -1,14 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import type { FastifyInstance } from 'fastify';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -19,37 +12,21 @@ const VALID_AGENT = {
 };
 
 describe('Agent tool management integration', () => {
-  let app: FastifyInstance;
-  let container: AppContainer;
-  let dataDir: string;
+  let app: TestAppHandle['app'];
+  let testApp: TestAppHandle | undefined;
 
   beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-agent-tool-management-'));
-
-    container = await createContainer(
-      {
-        preset: 'local',
-        database: { url: resolveTestDatabaseUrl() },
-      },
-      dataDir,
-    );
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      runStartupService: container.runStartupService,
-      dataDir,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-agent-tool-management-',
+      preset: 'local',
     });
-
-    await app.ready();
+    app = testApp.app;
   });
 
   afterAll(async () => {
-    await app.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   async function createAgent(overrides: Record<string, unknown> = {}) {

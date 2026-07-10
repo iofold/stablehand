@@ -1,11 +1,10 @@
 import type { CTXMillConfig } from './types.js';
 
-export function defineConfig(config: CTXMillConfig): CTXMillConfig {
+export function defineConfig<T extends CTXMillConfig>(config: T): T {
   return config;
 }
 
-export type { CTXMillConfig, ResolvedConfig, Preset } from './types.js';
-export { presets } from './presets.js';
-export { resolveConfig } from './resolve.js';
+export type { CTXMillConfig } from './types.js';
+export { resolveDatabaseUrl } from './resolve.js';
 export { createContainer } from './container.js';
 export type { AppContainer } from './container.js';

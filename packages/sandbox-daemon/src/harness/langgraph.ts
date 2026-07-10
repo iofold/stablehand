@@ -17,7 +17,7 @@ import type {
   TokenUsage,
 } from './types.js';
 import type { Message } from '../types.js';
-import { CanonicalProviderSchema, resolveSecretRef, normalizeStreamTextDeltas } from './shared.js';
+import { CanonicalProviderSchema, normalizeStreamTextDeltas } from './shared.js';
 import { makeIterableAbortable } from './abort-iterator.js';
 import {
   TurnAccumulator,
@@ -25,6 +25,7 @@ import {
   linkAbortSignal,
   normalizeTokenUsage,
   requestToolApproval,
+  resolveModelAuth,
   traceAgentEvents,
 } from './kit/index.js';
 
@@ -497,13 +498,7 @@ class LangGraphSession implements HarnessSession {
   }): Promise<BaseLanguageModel> {
     const { secrets } = this.config;
     const { provider, model, apiKeyRef, baseUrl, temperature, maxTokens, reasoning } = config;
-    const resolvedApiKey = apiKeyRef
-      ? resolveSecretRef(apiKeyRef, secrets)
-      : provider === 'anthropic'
-        ? (secrets.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY)
-        : provider === 'google'
-          ? (secrets.GOOGLE_API_KEY ?? process.env.GOOGLE_API_KEY)
-          : (secrets.OPENAI_API_KEY ?? process.env.OPENAI_API_KEY);
+    const { apiKey: resolvedApiKey } = resolveModelAuth({ provider, apiKeyRef, secrets });
 
     if (provider === 'anthropic') {
       const { ChatAnthropic } = await import('@langchain/anthropic');

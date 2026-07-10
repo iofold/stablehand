@@ -247,7 +247,7 @@ test.describe('Kitchen Sink — Multi-Agent Chain @extended', () => {
     expect(analyst).toBeTruthy();
 
     // Navigate to chat
-    await page.goto(`/agents/${analyst!.id}/sessions/new`);
+    await page.goto(`/agents/${analyst!.id}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     // Send a message that triggers analysis

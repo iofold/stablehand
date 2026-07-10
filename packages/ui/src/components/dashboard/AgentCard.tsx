@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { MessageSquare, Settings, AlertCircle, Activity, Clock, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getAgentStatusConfig } from '@/lib/agent-status';
-import { agentLegacyNewSessionPath } from '@/lib/routes';
+import { agentNewConversationPath } from '@/lib/routes';
 import { countActiveSessions, countAllSessions, describeSessionCounts } from '@/lib/session-status';
 import type { Agent } from '@/stores/agents';
 import { AgentAvatar } from './illustrations/AgentAvatar';
@@ -27,18 +27,16 @@ function formatRelativeTime(timestamp: number | undefined): string {
   return `${days}d ago`;
 }
 
-type DashboardStatus = 'running' | 'error' | 'idle';
+type DashboardStatus = 'running' | 'idle';
 
 function getDashboardStatus(agent: Agent, activeSessionCount: number): DashboardStatus {
   const status = agent.status.toLowerCase();
-  if (status === 'error') return 'error';
-  if (status === 'running' || status === 'booting' || activeSessionCount > 0) return 'running';
+  if (status === 'running' || activeSessionCount > 0) return 'running';
   return 'idle';
 }
 
 function formatAgentStatusLabel(status: DashboardStatus): string {
   const labels: Record<DashboardStatus, string> = {
-    error: 'Error',
     idle: 'Idle',
     running: 'Running',
   };
@@ -194,12 +192,12 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
           <div className="flex items-center gap-2 mt-1 w-full md:w-auto">
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); navigate(agentLegacyNewSessionPath(agent.id)); }}
-              aria-label={`Open session for ${agent.name}`}
+              onClick={(e) => { e.stopPropagation(); navigate(agentNewConversationPath(agent.id)); }}
+              aria-label={`Open conversation for ${agent.name}`}
               className="flex-1 md:flex-none flex items-center justify-center gap-1.5 rounded-md bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 transition-colors shadow-sm focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
             >
               <MessageSquare className="h-3.5 w-3.5" />
-              New Session
+              New Conversation
             </button>
             <button
               type="button"

@@ -6,6 +6,8 @@ import {
 } from '../sandbox/container-manager.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../database/repository.js';
 import { retryWithBackoff } from '../util/retry.js';
+import { hasStatusCode } from '../util/status-code-error.js';
+import { parsePositiveMs, unrefTimer } from '../util/timing.js';
 import {
   type HarnessGrpcClient,
   waitForContainerReady,
@@ -14,6 +16,7 @@ import { sandboxGrpcBaseUrl } from './session-manager/sandbox-endpoint.js';
 import type { SessionStatusCoordinator } from './session-manager/session-status-coordinator.js';
 import type { SessionStatus } from './session-manager/types.js';
 import { isAliveContainerStatus } from '../sandbox/runtime/status.js';
+import { stopAndRemoveContainer } from './container-cleanup.js';
 
 const TAG = '[LifecyclePolicy]';
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
@@ -47,6 +50,7 @@ interface Logger {
 export interface ReconciliationCallbacks {
   onSessionReconnected: (session: SandboxSessionRow, grpcClient?: HarnessGrpcClient) => void;
   onSessionEvicted: (sessionId: string, conversationId: string) => void | Promise<void>;
+  reconcileStrandedRestoring: (session: SandboxSessionRow) => Promise<'CHECKPOINTED' | 'TERMINATED'>;
 }
 
 export interface ContainerLifecyclePolicyDeps {
@@ -72,30 +76,10 @@ export interface ActiveSandboxReadbackOptions {
 
 type ContainerCleanupDecision = 'kill' | 'kill-after-checkpoint' | 'skip';
 
-function unrefTimer(timer: ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>): void {
-  if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
-    timer.unref();
-  }
-}
-
 function clearTimeoutSafe(timer?: ReturnType<typeof setTimeout>): void {
   if (timer) {
     clearTimeout(timer);
   }
-}
-
-function hasStatusCode(err: unknown, statusCode: number): boolean {
-  return typeof err === 'object'
-    && err !== null
-    && 'statusCode' in err
-    && typeof (err as { statusCode?: unknown }).statusCode === 'number'
-    && (err as { statusCode: number }).statusCode === statusCode;
-}
-
-function parsePositiveMs(value: unknown): number | undefined {
-  if (value === undefined || value === null) return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function getStartupGraceMs(labels: Record<string, string>): number {
@@ -414,37 +398,11 @@ export class ContainerLifecyclePolicy {
     let restoringTerminated = 0;
     for (const stranded of strandedRestoring) {
       this.sessionConversationIds.set(stranded.id, stranded.conversationId);
-      const checkpoint = await this.db.getCheckpointV2(stranded.id);
-      if (checkpoint) {
-        this.logger.warn(
-          `${TAG} startup: session ${stranded.id} stranded in RESTORING (attempts=${stranded.restoreAttempts ?? 0}) -> CHECKPOINTED`,
-        );
-        await this.statusCoordinator.transition({
-          sessionId: stranded.id,
-          fromStatus: 'RESTORING',
-          toStatus: 'CHECKPOINTED',
-          clearRuntime: true,
-          extra: {
-            lastRestoreError:
-              stranded.lastRestoreError ?? 'orchestrator restarted while restoring',
-          },
-        });
-        await this.reconciliationCallbacks.onSessionEvicted(stranded.id, stranded.conversationId);
+      const outcome = await this.reconciliationCallbacks.reconcileStrandedRestoring(stranded);
+      await this.reconciliationCallbacks.onSessionEvicted(stranded.id, stranded.conversationId);
+      if (outcome === 'CHECKPOINTED') {
         restoringReconciled++;
       } else {
-        this.logger.warn(
-          `${TAG} startup: session ${stranded.id} stranded in RESTORING with no checkpoint -> TERMINATED`,
-        );
-        await this.statusCoordinator.transition({
-          sessionId: stranded.id,
-          fromStatus: 'RESTORING',
-          toStatus: 'TERMINATED',
-          clearRuntime: true,
-          extra: {
-            lastRestoreError: 'orchestrator restart: no recoverable checkpoint',
-          },
-        });
-        await this.reconciliationCallbacks.onSessionEvicted(stranded.id, stranded.conversationId);
         restoringTerminated++;
       }
       this.cleanup(stranded.id);
@@ -545,31 +503,12 @@ export class ContainerLifecyclePolicy {
         continue;
       }
 
-      this.logger.info(`${TAG} removing orphan container ${container.containerName} (${container.containerId})`);
-      this.removingContainers.add(container.containerId);
-      let stopError: unknown;
-      try {
-        await this.containerManager.stopContainer(container.containerId, 5);
-      } catch (err) {
-        stopError = err;
-        this.logger.warn(`${TAG} failed stopping orphan container ${container.containerName}; attempting force removal:`, err);
-      }
-
-      try {
-        await this.containerManager.removeContainer(container.containerId, true);
+      if (await this.cleanupManagedContainer(
+        container,
+        'orphan container without a persisted session',
+        5,
+      )) {
         orphansCleaned++;
-      } catch (err) {
-        if (hasStatusCode(err, 404)) {
-          orphansCleaned++;
-        } else {
-          this.logger.warn(
-            `${TAG} failed cleaning orphan container ${container.containerName}:`,
-            err,
-            stopError ? { stopError } : undefined,
-          );
-        }
-      } finally {
-        this.removingContainers.delete(container.containerId);
       }
     }
 
@@ -847,7 +786,11 @@ export class ContainerLifecyclePolicy {
     }
   }
 
-  private async cleanupManagedContainer(container: ContainerInfo, reason: string): Promise<boolean> {
+  private async cleanupManagedContainer(
+    container: ContainerInfo,
+    reason: string,
+    stopTimeoutSec = 10,
+  ): Promise<boolean> {
     if (this.removingContainers.has(container.containerId)) {
       return false;
     }
@@ -857,27 +800,14 @@ export class ContainerLifecyclePolicy {
     );
 
     this.removingContainers.add(container.containerId);
-    let stopError: unknown;
     try {
-      await this.containerManager.stopContainer(container.containerId, 10);
-    } catch (err) {
-      stopError = err;
-      this.logger.warn(`${TAG} failed stopping container ${container.containerId}; attempting force removal:`, err);
-    }
-
-    try {
-      await this.containerManager.removeContainer(container.containerId, true);
-      return true;
-    } catch (err) {
-      if (hasStatusCode(err, 404)) {
-        return true;
-      }
-      this.logger.warn(
-        `${TAG} failed cleaning container ${container.containerId}:`,
-        err,
-        stopError ? { stopError } : undefined,
+      return await stopAndRemoveContainer(
+        this.containerManager,
+        container.containerId,
+        this.logger,
+        `${TAG} cleanup for container ${container.containerId}`,
+        stopTimeoutSec,
       );
-      return false;
     } finally {
       this.removingContainers.delete(container.containerId);
     }

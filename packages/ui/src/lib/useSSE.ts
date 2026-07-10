@@ -50,7 +50,7 @@ export function useSSE(agentId: string | undefined) {
           data._eventId = event.lastEventId;
         }
 
-        if (data.type === 'CUSTOM' && (data.subtype === 'interrupted' || data.subtype === 'hitl_pause' || data.name === 'ctxmill.hitl.requested' || data.internalType === 'run.interrupted')) {
+        if (data.type === 'CUSTOM' && (data.subtype === 'hitl_pause' || data.name === 'ctxmill.hitl.requested')) {
           setPending({
             agentId: data.agentId ?? latestAgentIdRef.current ?? '',
             toolName: data.toolName ?? '',

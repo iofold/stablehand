@@ -49,14 +49,14 @@ describe('SessionStatusCoordinator', () => {
       sessionId: record.sessionId,
       fromStatus: 'CHECKPOINTED',
       toStatus: 'ACTIVE',
-      extra: { checkpointRef: null },
+      extra: { restoreAttempts: 0 },
     });
 
     expect(updateSandboxSessionStatus).toHaveBeenCalledWith(
       record.sessionId,
       'ACTIVE',
       expect.objectContaining({
-        checkpointRef: null,
+        restoreAttempts: 0,
       }),
       { expectedFrom: 'RESTORING' },
     );

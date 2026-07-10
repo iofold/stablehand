@@ -29,7 +29,7 @@ function makeRow(overrides: Partial<SandboxSessionRow> = {}): SandboxSessionRow 
     containerId: null,
     status: 'CHECKPOINTED',
     harnessName: 'langgraph',
-    checkpointRef: 'ckpt-1',
+    checkpointRef: null,
     createdAt: 1,
     updatedAt: 1,
     lastActivityAt: 1,
@@ -90,6 +90,7 @@ function createHarness(rows: SandboxSessionRow[] = [makeRow(), makeRow()]) {
     recoverOrReconnect,
     stateStore,
     record,
+    logger,
   };
 }
 
@@ -122,7 +123,12 @@ describe('SessionLifecycleService.restoreSession', () => {
     const harness = createHarness([row, row]);
     harness.recoverOrReconnect.mockReturnValue(new Promise<SessionRecord>(() => {}));
 
-    await expect(harness.service.startRestoreSession(row.id, harness.agentDef, row.agentId))
+    await expect(harness.service.restoreSession(
+      row.id,
+      harness.agentDef,
+      row.agentId,
+      { background: true },
+    ))
       .resolves.toEqual({ sessionId: row.id, status: 'RESTORING', restoreAttempts: 0 });
 
     expect(harness.transition).toHaveBeenCalledWith({
@@ -137,6 +143,26 @@ describe('SessionLifecycleService.restoreSession', () => {
       row.agentId,
       expect.objectContaining({ id: row.id, restoreAttempts: 0, lastRestoreError: null }),
     );
+  });
+
+  it('logs background restore failures without rejecting the start response', async () => {
+    const row = makeRow();
+    const harness = createHarness([row, row]);
+    const failure = new Error('restore failed');
+    harness.recoverOrReconnect.mockRejectedValue(failure);
+
+    await expect(harness.service.restoreSession(
+      row.id,
+      harness.agentDef,
+      row.agentId,
+      { background: true },
+    )).resolves.toEqual({ sessionId: row.id, status: 'RESTORING', restoreAttempts: 0 });
+    await vi.waitFor(() => {
+      expect(harness.logger.warn).toHaveBeenCalledWith(
+        `[SandboxSessionManager] background restore failed for session ${row.id}:`,
+        failure,
+      );
+    });
   });
 
   it('throws SandboxSessionNotFoundError when the session row is missing before the lock', async () => {

@@ -1,14 +1,8 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
 import { vi } from 'vitest';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -19,42 +13,23 @@ const VALID_AGENT = {
 };
 
 describe('Agent CRUD & related endpoints', () => {
-  let app: Awaited<ReturnType<typeof createServer>>;
-  let container: AppContainer;
-  let dataDir: string;
+  let app: TestAppHandle['app'];
+  let container: TestAppHandle['container'];
+  let testApp: TestAppHandle | undefined;
 
   beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-agent-crud-'));
-
-    container = await createContainer(
-      {
-        preset: 'docker',
-        database: { url: resolveTestDatabaseUrl() },
-      },
-      dataDir,
-    );
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      harnessRegistry: container.harnessRegistry,
-      containerManager: container.containerManager,
-      interrupts: container.interruptManager,
-      sessionManager: container.sessionManager,
-      dataDir,
-      runStartupService: container.runStartupService,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-agent-crud-',
+      preset: 'docker',
     });
-
-    await app.ready();
+    app = testApp.app;
+    container = testApp.container;
   });
 
   afterAll(async () => {
-    await app.close();
-    await container.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   async function createAgent(overrides: Record<string, unknown> = {}) {
@@ -668,31 +643,6 @@ describe('Agent CRUD & related endpoints', () => {
     });
   });
 
-  describe('legacy sandbox admin shims', () => {
-    let agentId: string;
-
-    beforeAll(async () => {
-      const res = await createAgent({ name: 'legacy-admin-agent' });
-      agentId = res.json().id;
-    });
-
-    it.each([
-      ['suspend', 'Use /api/agents/:id/sandbox-sessions/:sessionId/suspend.'],
-      ['kill', 'Use /api/agents/:id/sandbox-sessions/:sessionId/kill.'],
-    ])('keeps %s shim as a 410 guidance response', async (action, guidance) => {
-      const res = await app.inject({
-        method: 'POST',
-        url: `/api/agents/${agentId}/sessions/legacy-session/${action}`,
-      });
-
-      expect(res.statusCode).toBe(410);
-      expect(res.json()).toEqual({
-        error: `Legacy session admin route removed. ${guidance}`,
-        sessionId: 'legacy-session',
-      });
-    });
-  });
-
   describe('POST /api/ag-ui/:id/run', () => {
     let agentId: string;
     let conversationId: string;
@@ -880,6 +830,7 @@ describe('Agent CRUD & related endpoints', () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body).toEqual(expect.objectContaining({ system: expect.any(Object), agentDefaults: expect.any(Object) }));
+      expect(body.agentDefaults).not.toHaveProperty('model');
       expect(body).not.toHaveProperty('llm');
     });
   });

@@ -27,14 +27,6 @@ async function chownRecursive(targetPath: string): Promise<void> {
   }
 }
 
-export function getSessionDir(dataDir: string, agentId: string, sessionId: string): string {
-  return resolve(join(dataDir, 'agents', agentId, 'sessions', sessionId));
-}
-
-export function getSessionWorkspacePath(dataDir: string, agentId: string, sessionId: string): string {
-  return resolve(join(dataDir, 'agents', agentId, 'sessions', sessionId, 'workspace'));
-}
-
 export function getConversationDir(dataDir: string, agentId: string, conversationId: string): string {
   return resolve(join(dataDir, 'agents', agentId, 'conversations', conversationId));
 }
@@ -59,10 +51,6 @@ async function copyBaseIntoWorkspace(baseWorkspaceDir: string, workspaceDir: str
   }
 
   await chownRecursive(workspaceDir);
-}
-
-export async function copyBaseToSession(baseWorkspaceDir: string, sessionDir: string): Promise<void> {
-  await copyBaseIntoWorkspace(baseWorkspaceDir, join(sessionDir, 'workspace'));
 }
 
 export async function ensureConversationWorkspace(

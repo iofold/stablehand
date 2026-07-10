@@ -318,19 +318,16 @@ describe('orchestrator emit-event handler', () => {
     );
   });
 
-  it('defaults to "custom" when no type field is provided', async () => {
+  it('returns an error string when no type field is provided', async () => {
     const handler = registry.get('emit-event')!;
 
-    await handler(
+    const result = await handler(
       { payload: { data: 'test' } },
       { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
-    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
-      'custom',
-      'agent-1',
-      expect.objectContaining({ data: 'test', runId: 'run-1' }),
-    );
+    expect(result).toBe('Error: emit-event requires a non-empty string "type"');
+    expect(eventBus.emitCustomAsync).not.toHaveBeenCalled();
   });
 
   it('handles empty payload gracefully', async () => {

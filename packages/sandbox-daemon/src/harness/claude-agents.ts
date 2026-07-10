@@ -123,10 +123,8 @@ type ToolUseBlock = {
 type ToolResultBlock = {
   type: 'tool_result';
   tool_use_id?: string;
-  toolUseId?: string;
   content?: unknown;
   is_error?: boolean;
-  isError?: boolean;
 };
 
 type TextBlock = {
@@ -816,13 +814,13 @@ export class ClaudeAgentsHarness implements AgentHarness {
       case 'user': {
         const resultBlocks = this.extractToolResultBlocks(message);
         for (const toolResultBlock of resultBlocks) {
-          const callId = toolResultBlock.tool_use_id ?? toolResultBlock.toolUseId ?? message.parent_tool_use_id ?? randomUUID();
+          const callId = toolResultBlock.tool_use_id ?? message.parent_tool_use_id ?? randomUUID();
           const startedAt = toolStartTimes.get(callId) ?? Date.now();
           const durationMs = Date.now() - startedAt;
           toolStartTimes.delete(callId);
 
           const result = this.stringifyToolResultContent(toolResultBlock.content);
-          const error = toolResultBlock.is_error || toolResultBlock.isError
+          const error = toolResultBlock.is_error
             ? (result || 'Tool call was rejected by the user.')
             : undefined;
 
@@ -931,21 +929,18 @@ export class ClaudeAgentsHarness implements AgentHarness {
       const toolUseId =
         typeof value.tool_use_id === 'string'
           ? value.tool_use_id
-          : typeof value.toolUseId === 'string'
-            ? value.toolUseId
-            : parentToolUseId ?? undefined;
+          : parentToolUseId ?? undefined;
 
       if (
         toolUseId ||
         'content' in value ||
-        'is_error' in value ||
-        'isError' in value
+        'is_error' in value
       ) {
         return {
           type: 'tool_result',
           tool_use_id: toolUseId,
           content: value.content ?? value,
-          is_error: value.is_error === true || value.isError === true,
+          is_error: value.is_error === true,
         };
       }
     }

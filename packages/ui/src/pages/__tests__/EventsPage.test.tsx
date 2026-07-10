@@ -136,54 +136,66 @@ describe('EventsPage', () => {
       events: [
         {
           seq: 1,
-          type: 'run.tool_started',
+          type: 'TOOL_CALL_START',
           agentId: 'agent-1',
           createdAt: Date.now(),
           payload: JSON.stringify({
-            toolName: 'search_docs',
+            toolCallName: 'search_docs',
             args: { query: 'checkpoint restore failures', limit: 5 },
             requiresApproval: true,
           }),
         },
         {
           seq: 2,
-          type: 'run.tool_result',
+          type: 'TOOL_CALL_RESULT',
           agentId: 'agent-1',
           createdAt: Date.now(),
           payload: JSON.stringify({
-            toolName: 'search_docs',
-            result: 'Found checkpoint lifecycle notes and restore retry guidance.',
+            toolCallName: 'search_docs',
+            content: 'Found checkpoint lifecycle notes and restore retry guidance.',
             durationMs: 1240,
           }),
         },
         {
           seq: 3,
-          type: 'turn.started',
+          type: 'CUSTOM',
           agentId: 'agent-1',
           createdAt: Date.now(),
           payload: JSON.stringify({
+            name: 'ctxmill.turn.pending',
             mode: 'background',
             taskDescription: 'Summarize recent restore failures for the operator.',
           }),
         },
         {
           seq: 4,
-          type: 'message.committed',
+          type: 'CUSTOM',
           agentId: 'agent-1',
           createdAt: Date.now(),
           payload: JSON.stringify({
+            name: 'ctxmill.message.committed',
             role: 'assistant',
             content: 'Restore failed because the checkpoint exceeded the configured limit.',
           }),
         },
         {
           seq: 5,
-          type: 'custom',
+          type: 'TEXT_MESSAGE_CONTENT',
           agentId: 'agent-1',
           createdAt: Date.now(),
           payload: JSON.stringify({
-            type: 'artifact.uploaded',
-            payload: { name: 'report.md', path: '/workspace/report.md' },
+            role: 'assistant',
+            delta: 'Streaming restore analysis in progress.',
+          }),
+        },
+        {
+          seq: 6,
+          type: 'CUSTOM',
+          agentId: 'agent-1',
+          createdAt: Date.now(),
+          payload: JSON.stringify({
+            name: 'ctxmill.a2ui.render',
+            block: { component: 'MetricCard', props: { label: 'Failures' } },
           }),
         },
       ],
@@ -198,9 +210,10 @@ describe('EventsPage', () => {
     expect(container.textContent).toContain('Tool started: search_docs approval required');
     expect(container.textContent).toContain('query: checkpoint restore failures');
     expect(container.textContent).toContain('Tool result: search_docs (1.2s) - Found checkpoint lifecycle notes');
-    expect(container.textContent).toContain('Background run started: Summarize recent restore failures');
+    expect(container.textContent).toContain('Background run queued: Summarize recent restore failures');
     expect(container.textContent).toContain('Assistant message: Restore failed because');
-    expect(container.textContent).toContain('Custom artifact.uploaded: name: report.md');
+    expect(container.textContent).toContain('Assistant text: Streaming restore analysis');
+    expect(container.textContent).toContain('UI rendered: MetricCard');
   });
 
   it('keeps the event log responsive by separating mobile rows from the desktop table', async () => {

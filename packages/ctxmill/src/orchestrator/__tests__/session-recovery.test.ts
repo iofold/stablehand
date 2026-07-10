@@ -71,7 +71,7 @@ function createMockDb(): DatabaseRepository {
     getCheckpointV2: vi.fn().mockResolvedValue(null),
     updateTurn: vi.fn().mockResolvedValue(undefined),
     updateSandboxSessionStatus: vi.fn().mockResolvedValue(undefined),
-    createSandboxSession: vi.fn().mockImplementation(async (session: { id?: string; conversationId: string; agentId: string; containerName?: string; containerId?: string; status?: string; harnessName: string; checkpointRef?: string }) => ({
+    createSandboxSession: vi.fn().mockImplementation(async (session: { id?: string; conversationId: string; agentId: string; containerName?: string; containerId?: string; status?: string; harnessName: string }) => ({
       id: session.id ?? 'generated-session',
       conversationId: session.conversationId,
       agentId: session.agentId,
@@ -79,7 +79,7 @@ function createMockDb(): DatabaseRepository {
       containerId: session.containerId ?? null,
       status: session.status ?? 'ACTIVE',
       harnessName: session.harnessName,
-      checkpointRef: session.checkpointRef ?? null,
+      checkpointRef: null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       lastActivityAt: Date.now(),
@@ -604,7 +604,6 @@ describe('SandboxSessionManager session recovery', () => {
         session.sessionId,
         'CHECKPOINTED',
         expect.objectContaining({
-          checkpointRef: 'ckpt-1',
           containerId: null,
           containerName: null,
         }),
@@ -629,7 +628,6 @@ describe('SandboxSessionManager session recovery', () => {
         session.sessionId,
         'CHECKPOINTED',
         expect.objectContaining({
-          checkpointRef: 'ckpt-1',
           containerId: null,
           containerName: null,
         }),

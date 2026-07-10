@@ -18,10 +18,10 @@ import { DefaultOrchestratorToolRegistry, registerDefaultToolHandlers } from '..
 export async function startDev() {
   const cwd = process.cwd();
 
-  // Load config — env var override takes precedence
-  let config: { preset: string } = { preset: process.env.CTXMILL_PRESET || 'docker' };
+  // Load optional project config. Runtime services only require DATABASE_URL.
+  let config: CTXMillConfig = {};
   const configPath = join(cwd, 'ctxmill.config.ts');
-  if (!process.env.CTXMILL_PRESET && existsSync(configPath)) {
+  if (existsSync(configPath)) {
     const mod = await import(pathToFileURL(configPath).href);
     config = mod.default;
   }
@@ -110,7 +110,6 @@ export async function startDev() {
   ╚═══════════════════════════════════════╝\x1b[0m
   `);
 
-  console.log(`  \x1b[1mPreset:\x1b[0m   ${config.preset}`);
   console.log(`  \x1b[1mProvider:\x1b[0m ${provider} (${model})`);
   console.log(`  \x1b[1mAgents:\x1b[0m   ${agents.length} [${agents.join(', ')}]`);
   console.log(`  \x1b[1mTools:\x1b[0m    ${tools.length} [${tools.join(', ')}]`);
@@ -120,10 +119,7 @@ export async function startDev() {
   const apiPort = parseInt(process.env.CTXMILL_PORT || '3001', 10);
   const uiPort = parseInt(process.env.CTXMILL_UI_PORT || '3200', 10);
 
-  const userConfig: CTXMillConfig = {
-    preset: config.preset as CTXMillConfig['preset'],
-  };
-  const container: AppContainer = await createContainer(userConfig, dataDir);
+  const container: AppContainer = await createContainer(config, dataDir);
   console.log('  \x1b[32m✓\x1b[0m Database initialized');
   console.log('  \x1b[1mExecution:\x1b[0m sandbox (Docker containers)');
 

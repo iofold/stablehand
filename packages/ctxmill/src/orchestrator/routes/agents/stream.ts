@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { formatNativeLegacy } from '../../canonical/format-native-legacy.js';
-import { formatSeqId, parseSeqId, type WireMode } from '../../sse.js';
+import { formatSeqId, parseSeqId, writeSseHead, type WireMode } from '../../sse.js';
 import type { AgentSubRouteOptions } from './types.js';
 
 export async function streamRoutes(
@@ -19,12 +19,7 @@ export async function streamRoutes(
     ) => {
       const { id } = request.params;
 
-      reply.raw.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
+      writeSseHead(reply);
 
       if (!canonicalLog) {
         reply.raw.write(`data: ${JSON.stringify({ type: 'RUN_ERROR', message: 'canonical event log not configured', timestamp: Date.now() })}\n\n`);

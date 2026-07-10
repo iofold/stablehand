@@ -33,7 +33,7 @@ test.describe(`${HARNESS} Live Streaming Visual QA @extended`, () => {
     const capture = new ScreenshotCapture(page, HARNESS, 'live');
 
     // 1. Navigate to chat page
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
     await capture.captureViewport('empty-state', 'Chat page initial empty state');
 
@@ -103,7 +103,7 @@ test.describe(`${HARNESS} Live Streaming Visual QA @extended`, () => {
   test('verifies markdown rendering in assistant response', async ({ page }) => {
     const capture = new ScreenshotCapture(page, HARNESS, 'live');
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     await page.getByTestId('session-input').fill('Run the visual QA sequence');
@@ -122,7 +122,7 @@ test.describe(`${HARNESS} Live Streaming Visual QA @extended`, () => {
   test('captures Claude native tool execution', async ({ page }) => {
     const capture = new ScreenshotCapture(page, HARNESS, 'live');
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     await page.getByTestId('session-input').fill('Run the visual QA sequence');

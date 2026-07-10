@@ -65,7 +65,7 @@ test.describe('Visual regression @extended', () => {
   });
 
   test('chat page empty state', async ({ page }) => {
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await page.waitForLoadState('domcontentloaded');
 
     // Chat page should show the input area

@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { DatabaseRepository } from '../../database/repository.js';
-import type { EventMap, EventName, TypedEventBus } from '../../events/bus.js';
+import type { TypedEventBus } from '../../events/bus.js';
 import type { PreparedRunStart, RunStartupService } from '../run-startup-service.js';
-import { ConcurrencyLimitError } from '../session-manager/concurrency-limit-error.js';
+import { sendRunStartError } from '../run-start-errors.js';
+import { writeSseHead } from '../sse.js';
 import type { AGUIMessage, AGUIMessageRole, AGUIRunAgentInput } from './types.js';
 import type { CanonicalLog } from '../canonical/canonical-log.js';
 import type { PersistedFrame } from '../canonical/frames.js';
@@ -90,16 +91,6 @@ function toAGUIMessage(message: {
   } as AGUIMessage;
 }
 
-function matchesRun<K extends EventName>(agentId: string, turnId: string, payload: EventMap[K]): boolean {
-  if ('turnId' in payload) {
-    return payload.turnId === turnId;
-  }
-  if ('agentId' in payload) {
-    return payload.agentId === agentId;
-  }
-  return false;
-}
-
 export async function agUiCompatRoutes(
   app: FastifyInstance,
   opts: AGUICompatRouteOptions,
@@ -167,18 +158,7 @@ export async function agUiCompatRoutes(
         turn = await db.getTurn(start.turnId);
         executionParams = start;
       } catch (err) {
-        if (err instanceof ConcurrencyLimitError) {
-          return reply
-            .status(err.statusCode)
-            .header('Retry-After', String(err.retryAfterSec))
-            .send({
-              error: err.message,
-              code: 'concurrency_limit_reached',
-              agentId: err.agentId,
-              maxConcurrent: err.maxConcurrent,
-              retryAfterSec: err.retryAfterSec,
-            });
-        }
+        if (sendRunStartError(reply, err)) return reply;
         const message = err instanceof Error ? err.message : 'Failed to start session';
         if (message.startsWith('Conversation ')) {
           return reply.status(404).send({ error: message, threadId: body.threadId });
@@ -195,12 +175,7 @@ export async function agUiCompatRoutes(
     }
     const activeTurn = turn;
 
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
+    writeSseHead(reply);
 
     const writeEvent = (event: Record<string, unknown>): void => {
       if (reply.raw.writableEnded || reply.raw.destroyed) {
@@ -243,16 +218,12 @@ export async function agUiCompatRoutes(
 
     {
       // A2 (ADR-015): one canonical-log subscription serves this run's wire.
-      // Frames already carry stable messageIds and the ctxmill.* CUSTOM
-      // vocabulary; RUN_ERROR keeps a legacy `error` alias for one release.
+      // Frames already carry stable messageIds and the ctxmill.* CUSTOM vocabulary.
       const frameMatchesRun = (frame: PersistedFrame): boolean =>
         frame.turnId === activeTurn.id || (!frame.turnId && frame.agentId === id && frame.conversationId === conversationId);
 
       const writeFrame = (frame: PersistedFrame): void => {
-        const event = frame.type === 'RUN_ERROR'
-          ? { ...frame.body, error: frame.body.message }
-          : frame.body;
-        writeEvent(event as Record<string, unknown>);
+        writeEvent(frame.body as Record<string, unknown>);
       };
 
       if (isReconnect) {

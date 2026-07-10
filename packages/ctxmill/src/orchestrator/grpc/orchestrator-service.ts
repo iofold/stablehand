@@ -196,22 +196,26 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           }
         }
 
-        const handler = toolRegistry.get(toolName, agentId);
-        if (!handler) {
+        const failToolRequest = async (error: string, phase: string): Promise<RequestToolResponse> => {
           if (dedupInserted && deps.repository) {
             await completeToolDedupOrThrow(
               deps.repository,
               requestId,
               null,
-              `Unknown orchestrator tool: ${toolName}`,
-              'unknown tool',
+              error,
+              phase,
             );
           }
           return create(RequestToolResponseSchema, {
             requestId,
             result: '',
-            error: `Unknown orchestrator tool: ${toolName}`,
+            error,
           });
+        };
+
+        const handler = toolRegistry.get(toolName, agentId);
+        if (!handler) {
+          return failToolRequest(`Unknown orchestrator tool: ${toolName}`, 'unknown tool');
         }
 
         let args: Record<string, unknown> = {};
@@ -219,20 +223,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           try {
             args = JSON.parse(argsJson) as Record<string, unknown>;
           } catch {
-            if (dedupInserted && deps.repository) {
-              await completeToolDedupOrThrow(
-                deps.repository,
-                requestId,
-                null,
-                'Invalid args_json: failed to parse JSON',
-                'invalid args_json',
-              );
-            }
-            return create(RequestToolResponseSchema, {
-              requestId,
-              result: '',
-              error: `Invalid args_json: failed to parse JSON`,
-            });
+            return failToolRequest('Invalid args_json: failed to parse JSON', 'invalid args_json');
           }
         }
 
@@ -241,20 +232,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           result = await handler(args, { sessionId, agentId, requestId });
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
-          if (dedupInserted && deps.repository) {
-            await completeToolDedupOrThrow(
-              deps.repository,
-              requestId,
-              null,
-              errorMsg,
-              'failed execution',
-            );
-          }
-          return create(RequestToolResponseSchema, {
-            requestId,
-            result: '',
-            error: errorMsg,
-          });
+          return failToolRequest(errorMsg, 'failed execution');
         }
 
         if (dedupInserted && deps.repository) {
@@ -426,9 +404,11 @@ export function registerDefaultToolHandlers(
   const { eventBus, interruptManager, repository } = deps;
 
   registry.set('emit-event', async (args, ctx) => {
-    const eventType = typeof args.type === 'string' ? args.type
-      : typeof args.event_type === 'string' ? args.event_type
-      : 'custom';
+    if (typeof args.type !== 'string' || args.type.trim() === '') {
+      return 'Error: emit-event requires a non-empty string "type"';
+    }
+
+    const eventType = args.type;
     const payload = typeof args.payload === 'object' && args.payload !== null
       ? args.payload as Record<string, unknown>
       : {};

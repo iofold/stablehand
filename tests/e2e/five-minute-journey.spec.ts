@@ -71,7 +71,7 @@ test.describe('Five-Minute Journey (E2E-01) @extended', () => {
     await expect(page).toHaveURL(`/agents/${agentId}`);
 
     // Navigate to chat from agent detail page
-    const chatUrl = page.url() + '/sessions/new';
+    const chatUrl = page.url() + '/conversations/new';
     await page.goto(chatUrl);
 
     // ---------------------------------------------------------------

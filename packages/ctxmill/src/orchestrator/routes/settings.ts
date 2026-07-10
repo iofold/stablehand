@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { SystemSettings, SystemSettingsService } from '../../settings/service.js';
+import type { SettingsKey, SystemSettings, SystemSettingsService } from '../../settings/service.js';
 import { SETTINGS_KEYS } from '../../settings/service.js';
 
 export interface SettingsRouteOptions {
@@ -15,7 +15,9 @@ interface FieldValidator {
   isFloat?: boolean;
 }
 
-const FIELD_VALIDATORS: Record<string, FieldValidator> = {
+type SettingsField = keyof SystemSettings;
+
+const FIELD_VALIDATORS = {
   maxWorkspaceTarBytes:        { min: 1 * MB,    max: 1024 * MB },
   maxTarUploadBytes:           { min: 1 * MB,    max: 1024 * MB },
   idleTimeoutMs:               { min: 10_000,    max: 3_600_000 },
@@ -29,7 +31,17 @@ const FIELD_VALIDATORS: Record<string, FieldValidator> = {
   defaultMemoryMb:             { min: 128,       max: 32_768 },
   defaultPidsLimit:            { min: 32,        max: 2_048 },
   defaultTimeoutSec:           { min: 60,        max: 43_200 },
-};
+} satisfies Record<SettingsField, FieldValidator>;
+
+const SETTINGS_FIELDS = Object.keys(FIELD_VALIDATORS) as SettingsField[];
+
+function serializeSettings(settings: SystemSettings): SystemSettings {
+  const serialized = {} as SystemSettings;
+  for (const field of SETTINGS_FIELDS) {
+    serialized[field] = settings[field];
+  }
+  return serialized;
+}
 
 export async function settingsRoutes(
   app: FastifyInstance,
@@ -38,22 +50,7 @@ export async function settingsRoutes(
   const { settingsService } = opts;
 
   app.get('/', async () => {
-    const s = await settingsService.getAll();
-    return {
-      maxWorkspaceTarBytes:        s.maxWorkspaceTarBytes,
-      maxTarUploadBytes:           s.maxTarUploadBytes,
-      idleTimeoutMs:               s.idleTimeoutMs,
-      turnTimeoutMs:               s.turnTimeoutMs,
-      reconciliationIntervalMs:    s.reconciliationIntervalMs,
-      maxGlobalContainers:         s.maxGlobalContainers,
-      queueTimeoutMs:              s.queueTimeoutMs,
-      maxConcurrentSessionsPerAgent:   s.maxConcurrentSessionsPerAgent,
-      maxTriggerDepth:             s.maxTriggerDepth,
-      defaultCpus:                 s.defaultCpus,
-      defaultMemoryMb:             s.defaultMemoryMb,
-      defaultPidsLimit:            s.defaultPidsLimit,
-      defaultTimeoutSec:           s.defaultTimeoutSec,
-    };
+    return serializeSettings(await settingsService.getAll());
   });
 
   app.put('/', async (request, reply) => {
@@ -62,9 +59,10 @@ export async function settingsRoutes(
       return reply.status(400).send({ error: 'Request body must be a JSON object' });
     }
 
-    const updates: Array<{ key: string; value: number }> = [];
+    const updates: Array<{ key: SettingsKey; value: number }> = [];
 
-    for (const [fieldKey, validator] of Object.entries(FIELD_VALIDATORS)) {
+    for (const fieldKey of SETTINGS_FIELDS) {
+      const validator: FieldValidator = FIELD_VALIDATORS[fieldKey];
       const raw = body[fieldKey];
       if (raw === undefined) continue;
 
@@ -84,10 +82,7 @@ export async function settingsRoutes(
         });
       }
 
-      const settingKey = SETTINGS_KEYS[fieldKey as keyof typeof SETTINGS_KEYS];
-      if (settingKey) {
-        updates.push({ key: settingKey, value: raw });
-      }
+      updates.push({ key: SETTINGS_KEYS[fieldKey], value: raw });
     }
 
     if (updates.length === 0) {
@@ -100,20 +95,6 @@ export async function settingsRoutes(
 
     const updated = await settingsService.getAll();
     await opts.onSettingsUpdated?.(updated);
-    return {
-      maxWorkspaceTarBytes:        updated.maxWorkspaceTarBytes,
-      maxTarUploadBytes:           updated.maxTarUploadBytes,
-      idleTimeoutMs:               updated.idleTimeoutMs,
-      turnTimeoutMs:               updated.turnTimeoutMs,
-      reconciliationIntervalMs:    updated.reconciliationIntervalMs,
-      maxGlobalContainers:         updated.maxGlobalContainers,
-      queueTimeoutMs:              updated.queueTimeoutMs,
-      maxConcurrentSessionsPerAgent:   updated.maxConcurrentSessionsPerAgent,
-      maxTriggerDepth:             updated.maxTriggerDepth,
-      defaultCpus:                 updated.defaultCpus,
-      defaultMemoryMb:             updated.defaultMemoryMb,
-      defaultPidsLimit:            updated.defaultPidsLimit,
-      defaultTimeoutSec:           updated.defaultTimeoutSec,
-    };
+    return serializeSettings(updated);
   });
 }

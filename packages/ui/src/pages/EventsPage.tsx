@@ -64,6 +64,22 @@ function recordField(obj: Record<string, unknown>, key: string): Record<string, 
     : undefined;
 }
 
+function parseRecordField(obj: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = obj[key];
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function formatDuration(ms: number | undefined): string | undefined {
   if (ms === undefined) return undefined;
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -102,69 +118,107 @@ function summarizeToolArgs(args: Record<string, unknown> | undefined): string {
   return ` (${summarizeRecord(args)})`;
 }
 
+function summarizeMessageCommit(parsed: Record<string, unknown>): string {
+  const role = stringField(parsed, 'role') ?? 'message';
+  const content = stringField(parsed, 'content');
+  if (content) return truncateSummary(`${role[0]?.toUpperCase() ?? 'M'}${role.slice(1)} message: ${content}`);
+
+  const toolCalls = parsed.toolCalls;
+  if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+    const names = toolCalls
+      .map((call) => typeof call === 'object' && call !== null ? stringField(call as Record<string, unknown>, 'name') : undefined)
+      .filter((name): name is string => Boolean(name));
+    if (names.length > 0) return truncateSummary(`${role} message: tool calls ${names.join(', ')}`);
+  }
+  return summarizeRecord(parsed, ['messageId', 'toolCallId']);
+}
+
+function summarizeRunState(parsed: Record<string, unknown>, state: 'queued' | 'started'): string {
+  const mode = stringField(parsed, 'mode');
+  const task = stringField(parsed, 'taskDescription') ?? stringField(parsed, 'task');
+  return truncateSummary(`${mode === 'background' ? 'Background run' : 'Run'} ${state}${task ? `: ${task}` : ''}`);
+}
+
 /** Extract a human-readable summary from a JSON payload string. */
 function extractSummary(type: string, payload: unknown): string {
   const parsed = parsePayload(payload);
   if (typeof parsed === 'string') return truncateSummary(parsed);
 
   switch (type) {
-    case 'run.tool_started': {
-      const toolName = stringField(parsed, 'toolName') ?? 'tool';
-      const approval = parsed.requiresApproval === true ? ' approval required' : '';
-      return truncateSummary(`Tool started: ${toolName}${approval}${summarizeToolArgs(recordField(parsed, 'args'))}`);
+    case 'RUN_STARTED':
+      return summarizeRunState(parsed, 'started');
+    case 'RUN_FINISHED': {
+      const status = stringField(parsed, 'status');
+      const duration = formatDuration(numberField(parsed, 'durationMs'));
+      return truncateSummary(`Run ${status ?? 'finished'}${duration ? ` in ${duration}` : ''}`);
     }
-    case 'run.tool_result': {
-      const toolName = stringField(parsed, 'toolName') ?? 'tool';
+    case 'RUN_ERROR': {
+      const message = stringField(parsed, 'message');
+      return truncateSummary(`Run failed${message ? `: ${message}` : ''}`);
+    }
+    case 'TEXT_MESSAGE_START': {
+      const role = stringField(parsed, 'role') ?? 'assistant';
+      return truncateSummary(`${role[0]?.toUpperCase() ?? 'M'}${role.slice(1)} message started`);
+    }
+    case 'TEXT_MESSAGE_CONTENT': {
+      const role = stringField(parsed, 'role');
+      const delta = stringField(parsed, 'delta');
+      return truncateSummary(`${role ? `${role[0]?.toUpperCase() ?? 'M'}${role.slice(1)} ` : ''}text${delta ? `: ${delta}` : ''}`);
+    }
+    case 'TEXT_MESSAGE_END': {
+      const role = stringField(parsed, 'role') ?? 'assistant';
+      return truncateSummary(`${role[0]?.toUpperCase() ?? 'M'}${role.slice(1)} message ended`);
+    }
+    case 'TOOL_CALL_START': {
+      const toolName = stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
+      const approval = parsed.requiresApproval === true ? ' approval required' : '';
+      return truncateSummary(`Tool started: ${toolName}${approval}${summarizeToolArgs(parseRecordField(parsed, 'args'))}`);
+    }
+    case 'TOOL_CALL_ARGS': {
+      const toolName = stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
+      const args = parseRecordField(parsed, 'args') ?? parseRecordField(parsed, 'delta');
+      return truncateSummary(`Tool args: ${toolName}${summarizeToolArgs(args)}`);
+    }
+    case 'TOOL_CALL_END': {
+      const toolName = stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
+      return truncateSummary(`Tool ended: ${toolName}`);
+    }
+    case 'TOOL_CALL_RESULT': {
+      const toolName = stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
       const duration = formatDuration(numberField(parsed, 'durationMs'));
       const error = stringField(parsed, 'error');
       if (error) {
         return truncateSummary(`Tool failed: ${toolName} - ${error}${duration ? ` (${duration})` : ''}`);
       }
-      const result = stringField(parsed, 'result');
+      const result = stringField(parsed, 'content');
       return truncateSummary(`Tool result: ${toolName}${duration ? ` (${duration})` : ''}${result ? ` - ${result}` : ''}`);
     }
-    case 'turn.started':
-    case 'turn.pending': {
-      const mode = stringField(parsed, 'mode');
-      const task = stringField(parsed, 'taskDescription');
-      const state = type === 'turn.started' ? 'started' : 'queued';
-      return truncateSummary(`${mode === 'background' ? 'Background run' : 'Run'} ${state}${task ? `: ${task}` : ''}`);
-    }
-    case 'turn.completed': {
-      const status = stringField(parsed, 'status') ?? 'completed';
-      const duration = formatDuration(numberField(parsed, 'durationMs'));
-      const error = stringField(parsed, 'error');
-      return truncateSummary(`Run ${status}${duration ? ` in ${duration}` : ''}${error ? ` - ${error}` : ''}`);
-    }
-    case 'message.committed': {
-      const role = stringField(parsed, 'role') ?? 'message';
-      const content = stringField(parsed, 'content');
-      if (content) return truncateSummary(`${role[0]?.toUpperCase() ?? 'M'}${role.slice(1)} message: ${content}`);
-      const toolCalls = parsed.toolCalls;
-      if (Array.isArray(toolCalls) && toolCalls.length > 0) {
-        const names = toolCalls
-          .map((call) => typeof call === 'object' && call !== null ? stringField(call as Record<string, unknown>, 'name') : undefined)
-          .filter((name): name is string => Boolean(name));
-        if (names.length > 0) return truncateSummary(`${role} message: tool calls ${names.join(', ')}`);
+    case 'CUSTOM': {
+      const name = stringField(parsed, 'name') ?? 'custom';
+      if (name === 'ctxmill.turn.pending') {
+        return summarizeRunState(parsed, 'queued');
       }
-      return summarizeRecord(parsed, ['messageId', 'toolCallId']);
-    }
-    case 'user.message': {
-      const content = stringField(parsed, 'content');
-      return truncateSummary(content ? `User message: ${content}` : summarizeRecord(parsed, ['messageId']));
-    }
-    case 'trigger.fired': {
-      const triggerId = stringField(parsed, 'triggerId') ?? 'trigger';
-      const eventType = stringField(parsed, 'eventType');
-      return truncateSummary(`Trigger fired: ${triggerId}${eventType ? ` from ${eventType}` : ''}`);
-    }
-    case 'custom': {
-      const customType = stringField(parsed, 'type') ?? 'custom';
-      const innerPayload = recordField(parsed, 'payload');
-      return truncateSummary(`Custom ${customType}: ${innerPayload ? summarizeRecord(innerPayload) : summarizeRecord(parsed)}`);
+      if (name === 'ctxmill.message.committed') {
+        return summarizeMessageCommit(parsed);
+      }
+      if (name === 'ctxmill.hitl.requested') {
+        const toolName = stringField(parsed, 'toolName') ?? stringField(parsed, 'toolCallName') ?? 'tool';
+        return truncateSummary(`Approval requested: ${toolName}`);
+      }
+      if (name === 'ctxmill.hitl.resolved') {
+        const approved = parsed.approved === true ? 'approved' : parsed.approved === false ? 'rejected' : 'resolved';
+        return truncateSummary(`Approval ${approved}`);
+      }
+      if (name === 'ctxmill.a2ui.render') {
+        const block = recordField(parsed, 'block') ?? recordField(recordField(parsed, 'value') ?? {}, 'block');
+        const component = block ? stringField(block, 'component') : undefined;
+        return truncateSummary(`UI rendered${component ? `: ${component}` : ''}`);
+      }
+      const innerPayload = recordField(parsed, 'payload') ?? recordField(parsed, 'value');
+      return truncateSummary(`Custom ${name}: ${innerPayload ? summarizeRecord(innerPayload) : summarizeRecord(parsed)}`);
     }
     default:
-      return summarizeRecord(parsed, ['message', 'description', 'task', 'taskDescription', 'content', 'name', 'error', 'type']);
+      return summarizeRecord(parsed, ['message', 'description', 'task', 'taskDescription', 'content', 'delta', 'name', 'type']);
   }
 }
 
@@ -201,8 +255,7 @@ function isRunFrameType(type: string): boolean {
     || type.startsWith('TOOL_CALL_')
     || type === 'CUSTOM'
     || type === 'STATE_DELTA'
-    || type === 'MESSAGES_SNAPSHOT'
-    || type.startsWith('turn.');
+    || type === 'MESSAGES_SNAPSHOT';
 }
 
 /** Category color mapping based on event type prefix. */

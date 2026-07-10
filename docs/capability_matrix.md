@@ -185,7 +185,6 @@ run.interrupted, run.interrupt_resolved,
 feedback.received,
 agent.created, agent.deleted,
 client.connected, client.disconnected,
-run.resumed,
 trigger.fired,
 custom (type: string, payload: object)
 ```

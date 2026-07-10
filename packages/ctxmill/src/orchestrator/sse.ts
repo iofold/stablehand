@@ -21,6 +21,16 @@ export function parseSeqId(id: string | undefined): number | null {
   const parsed = Number(id);
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
+
+export function writeSseHead(reply: FastifyReply): void {
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+}
+
 const MAX_HEARTBEAT_FAILURES = 3;
 
 export type WireMode = 'legacy' | 'canonical';
@@ -39,7 +49,7 @@ interface ConnectionState {
   agentId: string;
   clientId: string;
   /** Wire negotiation (ADR-015): which vocabulary this client receives. */
-  wireMode?: WireMode;
+  wireMode: WireMode;
 }
 
 /**
@@ -63,7 +73,7 @@ export class SSEManager {
    * Subscribe a client connection to an agent's event stream.
    * Sets up heartbeat and cleanup on disconnect.
    */
-  subscribe(agentId: string, reply: FastifyReply): void {
+  subscribe(agentId: string, reply: FastifyReply, wireMode: WireMode): void {
     const clientId = randomUUID();
     const state: ConnectionState = {
       queue: [],
@@ -72,6 +82,7 @@ export class SSEManager {
       consecutiveHeartbeatFailures: 0,
       agentId,
       clientId,
+      wireMode,
     };
     this.connectionState.set(reply, state);
 
@@ -191,7 +202,8 @@ export class SSEManager {
     if (!clients || clients.size === 0) return;
     for (const reply of clients) {
       const state = this.connectionState.get(reply);
-      const mode: WireMode = state?.wireMode ?? 'legacy';
+      if (!state) continue;
+      const mode = state.wireMode;
       if (!(mode in rendered)) {
         const event = mode === 'canonical' ? renderings.canonical : renderings.legacy;
         rendered[mode] = event ? `id: ${formatSeqId(seq)}\ndata: ${JSON.stringify(event)}\n\n` : null;
@@ -215,7 +227,7 @@ export class SSEManager {
     reply: FastifyReply,
     afterSeq: number,
     replayedSeqs: ReadonlySet<number>,
-    wireMode: WireMode = 'legacy',
+    wireMode: WireMode,
   ): void {
     const ring = this.recentFrames.get(agentId) ?? [];
     const gap = ring
@@ -232,11 +244,7 @@ export class SSEManager {
       console.debug('[SSE] Failed to flush attach buffer for agent', agentId, writeErr);
       return;
     }
-    this.subscribe(agentId, reply);
-    const state = this.connectionState.get(reply);
-    if (state) {
-      state.wireMode = wireMode;
-    }
+    this.subscribe(agentId, reply, wireMode);
   }
 
   private writeToClient(agentId: string, reply: FastifyReply, data: string): void {

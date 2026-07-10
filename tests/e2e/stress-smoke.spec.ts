@@ -346,7 +346,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     ).toBe(1);
   });
 
-  test('HITL: approve flow emits stress.hitl.complete deterministically @extended', async ({ request }) => {
+  test('HITL: approve flow emits stress.hitl.complete deterministically @smoke @extended', async ({ request }) => {
     test.setTimeout(180_000);
 
     const agent = agents['stress-hitl'];

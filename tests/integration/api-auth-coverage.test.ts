@@ -1,11 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
-import { createContainer, type AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 const TEST_TOKEN = 'coverage-token';
 
@@ -18,9 +13,8 @@ function restoreEnv(key: string, value: string | undefined): void {
 }
 
 describe('API auth route coverage', () => {
-  let app: Awaited<ReturnType<typeof createServer>>;
-  let container: AppContainer;
-  let dataDir: string;
+  let app: TestAppHandle['app'];
+  let testApp: TestAppHandle | undefined;
   let oldToken: string | undefined;
   let oldDisabled: string | undefined;
 
@@ -30,41 +24,15 @@ describe('API auth route coverage', () => {
     process.env.CTXMILL_API_TOKEN = TEST_TOKEN;
     delete process.env.CTXMILL_AUTH_DISABLED;
 
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-api-auth-'));
-    container = await createContainer(
-      {
-        preset: 'docker',
-        database: { url: resolveTestDatabaseUrl() },
-      },
-      dataDir,
-    );
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      harnessRegistry: container.harnessRegistry,
-      triggerManager: container.triggerManager,
-      sse: container.sseManager,
-      interrupts: container.interruptManager,
-      secretProvider: container.secretProvider,
-      toolDefinitionRegistry: container.toolRegistry,
-      toolExecutor: container.toolExecutor,
-      containerManager: container.containerManager,
-      sessionManager: container.sessionManager,
-      settingsService: container.settingsService,
-      lifecyclePolicy: container.lifecyclePolicy,
-      runStartupService: container.runStartupService,
-      canonicalLog: container.canonicalLog,
-      dataDir,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-api-auth-',
+      preset: 'docker',
     });
-    await app.ready();
+    app = testApp.app;
   });
 
   afterAll(async () => {
-    await app.close();
-    await container.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
     restoreEnv('CTXMILL_API_TOKEN', oldToken);
     restoreEnv('CTXMILL_AUTH_DISABLED', oldDisabled);
   });

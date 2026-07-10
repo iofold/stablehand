@@ -1,19 +1,15 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import type { FastifyInstance } from 'fastify';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import { getConversationWorkspacePath } from '../../packages/ctxmill/src/workspace/session-workspace.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 describe('File endpoint integration tests', () => {
-  let app: FastifyInstance;
-  let container: AppContainer;
+  let app: TestAppHandle['app'];
+  let container: TestAppHandle['container'];
+  let testApp: TestAppHandle | undefined;
   let dataDir: string;
   let agentId: string;
   let workspaceDir: string;
@@ -21,27 +17,13 @@ describe('File endpoint integration tests', () => {
   beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'file-test-'));
-
-    container = await createContainer(
-      {
-        preset: 'local',
-        database: {
-          url: resolveTestDatabaseUrl(),
-        },
-      },
-      dataDir,
-    );
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      runStartupService: container.runStartupService,
-      dataDir,
+    testApp = await createTestApp({
+      dirPrefix: 'file-test-',
+      preset: 'local',
     });
-
-    await app.ready();
+    app = testApp.app;
+    container = testApp.container;
+    dataDir = testApp.dataDir;
 
     // Create a test agent
     const createRes = await app.inject({
@@ -78,8 +60,7 @@ describe('File endpoint integration tests', () => {
   });
 
   afterAll(async () => {
-    await app.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   // ── Listing Tests ──

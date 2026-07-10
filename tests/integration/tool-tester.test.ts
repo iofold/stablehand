@@ -1,19 +1,12 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
 import { DefaultToolRegistry } from '../../packages/ctxmill/src/tool/registry.js';
 import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
 import { LocalToolProvider } from '../../packages/ctxmill/src/tool/providers/local.js';
 import { emitEventTool } from '../../packages/ctxmill/src/tool/builtin/emit-event.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 interface ToolTestSuccessResponse {
   success: true;
@@ -28,23 +21,12 @@ interface ToolTestErrorResponse {
 }
 
 describe('POST /api/catalogs/tools/test', () => {
-  let app: FastifyInstance;
-  let container: AppContainer;
-  let dataDir: string;
+  let app: TestAppHandle['app'];
+  let testApp: TestAppHandle | undefined;
 
   beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-tool-tester-'));
-
-    container = await createContainer(
-      {
-        preset: 'local',
-        database: { url: resolveTestDatabaseUrl() },
-      },
-      dataDir,
-    );
-
     const toolExecutor = new LocalFunctionExecutor();
     toolExecutor.register(emitEventTool);
     toolExecutor.register({
@@ -58,22 +40,16 @@ describe('POST /api/catalogs/tools/test', () => {
     toolRegistry.addProvider(new LocalToolProvider(toolExecutor));
     await toolRegistry.refresh();
 
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      runStartupService: container.runStartupService,
-      dataDir,
-      toolDefinitionRegistry: toolRegistry,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-tool-tester-',
+      preset: 'local',
+      serverOptions: { toolDefinitionRegistry: toolRegistry },
     });
-
-    await app.ready();
+    app = testApp.app;
   });
 
   afterAll(async () => {
-    await app.close();
-    await container.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   it('returns success with result and durationMs for a valid tool', async () => {

@@ -1,13 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -24,15 +18,6 @@ interface CatalogTool {
   inputSchema?: Record<string, unknown>;
 }
 
-interface TestApp {
-  inject: (opts: { method: string; url: string; payload?: unknown }) => Promise<{
-    statusCode: number;
-    json: <T = unknown>() => T;
-  }>;
-  ready: () => PromiseLike<unknown>;
-  close: () => Promise<void>;
-}
-
 function uniqueId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -42,36 +27,20 @@ function sortCatalog(tools: CatalogTool[]): CatalogTool[] {
 }
 
 describe('GET /api/catalogs/tools', () => {
-  let app: TestApp;
-  let container: AppContainer;
-  let dataDir: string;
+  let app: TestAppHandle['app'];
+  let testApp: TestAppHandle | undefined;
 
   beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-tool-catalog-'));
-
-    container = await createContainer(
-      {
-        database: { url: resolveTestDatabaseUrl() },
-      },
-      dataDir,
-    );
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      runStartupService: container.runStartupService,
-      dataDir,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-tool-catalog-',
     });
-
-    await app.ready();
+    app = testApp.app;
   });
 
   afterAll(async () => {
-    await app.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   async function createAgent(overrides: Record<string, unknown> = {}) {

@@ -16,7 +16,7 @@ interface DashboardProps {
   onRetry?: () => void;
 }
 
-type FilterStatus = 'all' | 'running' | 'error' | 'idle';
+type FilterStatus = 'all' | 'running' | 'idle';
 
 function SkeletonCard() {
   return (
@@ -80,11 +80,9 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange, onRet
       let matchesStatus = true;
       const activeOrPaused = countActiveSessions(agent.sessionsByStatus);
       if (statusFilter === 'running') {
-        matchesStatus = agent.status === 'running' || agent.status === 'booting' || activeOrPaused > 0;
-      } else if (statusFilter === 'error') {
-        matchesStatus = agent.status === 'error';
+        matchesStatus = agent.status === 'running' || activeOrPaused > 0;
       } else if (statusFilter === 'idle') {
-        matchesStatus = agent.status !== 'running' && agent.status !== 'booting' && activeOrPaused === 0 && agent.status !== 'error';
+        matchesStatus = agent.status !== 'running' && activeOrPaused === 0;
       }
 
       return matchesSearch && matchesStatus;
@@ -168,7 +166,7 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange, onRet
           />
         </div>
         <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0">
-          {(['all', 'running', 'error', 'idle'] as const).map((status) => (
+          {(['all', 'running', 'idle'] as const).map((status) => (
             <button
               key={status}
               type="button"

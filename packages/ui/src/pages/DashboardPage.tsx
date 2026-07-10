@@ -43,8 +43,7 @@ export function DashboardPage() {
         const agentConvPromises = currentAgents
           .filter(a => (a.conversationCount ?? 0) > 0 || (a.totalSessions ?? 0) > 0)
           .map(a => fetchConversationSummaries(a.id).then(d => {
-            const convs = (d as { conversations?: ApiConversationSummary[] })?.conversations || d;
-            return Array.isArray(convs) ? convs : [];
+            return d.conversations;
           }).catch(() => []));
         const allAgentConvs = (await Promise.all(agentConvPromises)).flat();
 
@@ -71,7 +70,7 @@ export function DashboardPage() {
   const stats = useMemo(() => {
     const totalTools = agents.reduce((sum, a) => sum + a.tools.length, 0);
     const activeAgents = agents.filter(
-      (a) => countActiveSessions(a.sessionsByStatus) > 0 || a.status === 'running' || a.status === 'booting',
+      (a) => countActiveSessions(a.sessionsByStatus) > 0 || a.status === 'running',
     ).length;
     return { totalTools, activeAgents };
   }, [agents]);

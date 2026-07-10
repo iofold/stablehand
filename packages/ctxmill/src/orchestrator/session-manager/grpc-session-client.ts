@@ -4,6 +4,8 @@ import { createConnectTransport } from '@connectrpc/connect-node';
 import { HarnessService, KillSessionRequestSchema } from '@ctxmill/proto/sandbox/v1';
 import { Agent } from 'node:http';
 
+import { unrefTimer } from '../../util/timing.js';
+
 const HEALTH_CHECK_TIMEOUT_MS = 10_000;
 
 const sandboxAgent = new Agent({
@@ -101,10 +103,4 @@ export async function retryGrpcCall<T>(
   }
 
   throw lastError;
-}
-
-export function unrefTimer(timer: ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>): void {
-  if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
-    timer.unref();
-  }
 }

@@ -57,7 +57,7 @@ export type CtxmillStreamEvent =
   | { type: 'TOOL_CALL_ARGS'; runId: string; threadId: string; toolCallId: string; delta?: string; args?: unknown; timestamp?: number; [key: string]: unknown }
   | { type: 'TOOL_CALL_END'; runId: string; threadId: string; toolCallId: string; toolCallName?: string; result?: unknown; timestamp?: number; [key: string]: unknown }
   | { type: 'RUN_FINISHED'; runId: string; threadId: string; status?: string; timestamp?: number; [key: string]: unknown }
-  | { type: 'RUN_ERROR'; runId: string; threadId: string; error?: string; status?: string; timestamp?: number; [key: string]: unknown }
+  | { type: 'RUN_ERROR'; runId: string; threadId: string; message?: string; status?: string; timestamp?: number; [key: string]: unknown }
   | { type: 'CUSTOM'; name?: string; subtype?: string; runId?: string; threadId?: string; timestamp?: number; [key: string]: unknown };
 
 export type CtxmillHeadersProvider = HeadersInit | (() => HeadersInit | Promise<HeadersInit>);

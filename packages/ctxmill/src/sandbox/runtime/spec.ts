@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { CONTAINER_SCOPE_LABEL } from '../container-scope.js';
+import { parsePositiveMs } from '../../util/timing.js';
 
 export const STARTUP_GRACE_MS_LABEL = 'ctxmill.startup-grace-ms';
 export const DEFAULT_CONTAINER_STARTUP_GRACE_MS = 90_000;
@@ -122,12 +123,6 @@ export interface KubernetesJobSpec {
   workspaceHostPath: string;
   resources: SandboxRuntimeResources;
   manifest: KubernetesJobManifest;
-}
-
-function parsePositiveMs(value: unknown): number | undefined {
-  if (value === undefined || value === null) return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export function resolveContainerStartupGraceMs(explicitMs?: number): number {

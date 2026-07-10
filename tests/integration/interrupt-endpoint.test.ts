@@ -1,12 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 /**
  * Integration tests for POST /api/agents/:id/interrupt
@@ -16,38 +10,21 @@ import { resolveTestDatabaseUrl } from '../utils/test-db.js';
  * and error responses (400, 404).
  */
 describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
-  let app: Awaited<ReturnType<typeof createServer>>;
-  let container: AppContainer;
-  let dataDir: string;
+  let app: TestAppHandle['app'];
+  let container: TestAppHandle['container'];
+  let testApp: TestAppHandle | undefined;
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-interrupt-'));
-
-    container = await createContainer(
-      {
-        preset: 'docker',
-        database: { url: resolveTestDatabaseUrl() },
-      },
-      dataDir,
-    );
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      interrupts: container.interruptManager,
-      sessionManager: container.sessionManager,
-      runStartupService: container.runStartupService,
-      dataDir,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-interrupt-',
+      preset: 'docker',
     });
-
-    await app.ready();
+    app = testApp.app;
+    container = testApp.container;
   });
 
   afterAll(async () => {
-    await app.close();
-    await container.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   /** Helper: create an agent via HTTP and return its id. */

@@ -26,7 +26,7 @@ test.describe('Error State Rendering Visual QA @extended', () => {
     });
     agentId = agent.id;
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     await page.getByTestId('session-input').fill('Hello');
@@ -60,7 +60,7 @@ test.describe('Error State Rendering Visual QA @extended', () => {
     const capture = new ScreenshotCapture(page, 'error-not-found', 'live');
 
     // Navigate to a non-existent agent
-    await page.goto('/agents/nonexistent-agent-id-12345/sessions/new');
+    await page.goto('/agents/nonexistent-agent-id-12345/conversations/new');
     await page.waitForLoadState('domcontentloaded');
 
     // Capture whatever error state renders
@@ -83,7 +83,7 @@ test.describe('Error State Rendering Visual QA @extended', () => {
     });
     agentId = agent.id;
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     await page.getByTestId('session-input').fill('Run the command that fails');

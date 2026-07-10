@@ -29,16 +29,14 @@ export type {
 export { createCtxmillGuideTool, CTXMILL_GUIDE_TOOL_NAME } from './tool/builtin/ctxmill-guide.js';
 
 // Config types
-export type { CTXMillConfig, ResolvedConfig, Preset } from './config/types.js';
+export type { CTXMillConfig } from './config/types.js';
 
 // Event types
 export type {
   AGUIEventType,
   AGUIEvent,
-  EventMap,
-  EventName,
 } from './events/types.js';
-export type { PersistEventFn } from './events/bus.js';
+export type { EventMap, EventName, PersistEventFn } from './events/bus.js';
 
 // Event trigger system
 export type { EventTrigger } from './events/triggers.js';

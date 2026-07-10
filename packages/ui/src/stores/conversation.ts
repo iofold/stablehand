@@ -173,9 +173,6 @@ function resolveEventTurnId(event: Record<string, unknown>): string | undefined 
   const runId = event.runId;
   if (typeof runId === 'string' && runId.length > 0) return runId;
 
-  const sessionId = event.sessionId;
-  if (typeof sessionId === 'string' && sessionId.length > 0) return sessionId;
-
   return undefined;
 }
 
@@ -450,7 +447,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
 
       case 'TEXT_MESSAGE_CONTENT': {
         if (get().streamingRole === 'user') break;
-        const delta = (event.delta as string) || (event.content as string) || '';
+        const delta = (event.delta as string) || '';
         previewController.pendingDelta += delta;
         scheduleDeltaFlush();
         break;
@@ -475,7 +472,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           : '';
         const tc: ToolCallState = {
           id: (event.toolCallId as string) || nextId(),
-          name: (event.toolCallName as string) || (event.name as string) || (event.toolName as string) || 'unknown',
+          name: (event.toolCallName as string) || 'unknown',
           args: argsStr,
           status: 'running',
         };
@@ -524,7 +521,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         }
         if (!tcId) break;
         previewController.toolCallsWithStartArgs.delete(tcId);
-        const result = (event.content as string) || (event.result as string) || '';
+        const result = (event.content as string) || '';
         const error = event.error as string | undefined;
 
         const state = get();
@@ -564,12 +561,11 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           }
           break;
         }
-        if (subtype === 'interrupt_resolved' || subtype === 'hitl_resolved' || event.name === 'ctxmill.hitl.resolved') {
+        if (subtype === 'hitl_resolved' || event.name === 'ctxmill.hitl.resolved') {
           const action = (event.action as string) || 'resolved';
-          const toolName = (event.toolName as string) || '';
           const isApproved = action === 'approve';
           const prefix = isApproved ? '✓ Approved' : '✗ Rejected';
-          const label = toolName ? `${prefix}: ${toolName}` : prefix;
+          const label = prefix;
           const existing = get().messages;
           const alreadyLogged = existing.length > 0 &&
             existing[existing.length - 1].role === 'system' &&
@@ -693,7 +689,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       }
 
       case 'RUN_ERROR': {
-        const errorMsg = (event.message as string) || (event.error as string) || 'Unknown error';
+        const errorMsg = (event.message as string) || 'Unknown error';
         useInterruptStore.getState().clear();
         resetPreviewController();
         const msg: Message = {

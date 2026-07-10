@@ -6,11 +6,18 @@ const mockCreateDeepAgent = vi.fn(() => ({
 }));
 const mockLcTool = vi.fn((_fn: unknown, _opts: unknown) => ({}));
 const mockChatOpenAI = vi.fn();
+const mockChatGoogleGenerativeAI = vi.fn();
 const mockLocalShellBackend = vi.fn();
 
 class MockChatOpenAI {
   constructor(...args: unknown[]) {
     mockChatOpenAI(...args);
+  }
+}
+
+class MockChatGoogleGenerativeAI {
+  constructor(...args: unknown[]) {
+    mockChatGoogleGenerativeAI(...args);
   }
 }
 
@@ -45,6 +52,16 @@ vi.mock('file:///path/to/stablehand/node_modules/.pnpm/@langchain+core@1.1.31_@o
 vi.mock('@langchain/openai', () => ({
   __esModule: true,
   ChatOpenAI: MockChatOpenAI,
+}));
+
+vi.mock('@langchain/google-genai', () => ({
+  __esModule: true,
+  ChatGoogleGenerativeAI: MockChatGoogleGenerativeAI,
+}));
+
+vi.mock('file:///path/to/stablehand/node_modules/.pnpm/@langchain+google-genai@2.1.26_@langchain+core@1.1.41_@opentelemetry+api@1.9.1_@opentel_dfed4a14c2922945cec0233f607563aa/node_modules/@langchain/google-genai/dist/index.js', () => ({
+  __esModule: true,
+  ChatGoogleGenerativeAI: MockChatGoogleGenerativeAI,
 }));
 
 vi.mock('file:///path/to/stablehand/node_modules/.pnpm/@langchain+openai@1.2.12_@langchain+core@1.1.31_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6___ws@8.19.0/node_modules/@langchain/openai/dist/index.js', () => ({
@@ -168,6 +185,11 @@ async function openRestoredTestSession(
 describe('LangGraphHarness', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
     mockCreateDeepAgent.mockReturnValue({
       streamEvents: mockStreamEvents,
     });
@@ -176,6 +198,34 @@ describe('LangGraphHarness', () => {
   it('should have name "langgraph"', async () => {
     const { harness } = await openTestSession();
     expect(harness.name).toBe('langgraph');
+  });
+
+  it('resolves Google model auth from GEMINI_API_KEY', async () => {
+    process.env.GEMINI_API_KEY = 'gemini-env-key';
+    vi.resetModules();
+    const { LangGraphHarness } = await import('../../packages/sandbox-daemon/src/harness/langgraph.ts');
+    const harness = new LangGraphHarness();
+    const session = await harness.openSession(makeConfig({
+      secrets: {},
+      harnessConfigJson: JSON.stringify({
+        model: 'gemini-2.5-flash',
+        provider: 'google',
+      }),
+    }));
+
+    const buildModelForConfig = Reflect.get(session, 'buildModelForConfig') as (config: {
+      provider: 'google';
+      model: string;
+    }) => Promise<unknown>;
+    await buildModelForConfig.call(session, {
+      provider: 'google',
+      model: 'gemini-2.5-flash',
+    });
+
+    expect(mockChatGoogleGenerativeAI).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'gemini-env-key',
+      model: 'gemini-2.5-flash',
+    }));
   });
 
   it('openSession with restore populates transcript from payload.transcript', async () => {

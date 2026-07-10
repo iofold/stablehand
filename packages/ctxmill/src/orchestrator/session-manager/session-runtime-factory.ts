@@ -11,6 +11,7 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspacePreparationService } from '../../sandbox/workspace-preparation.js';
 import type { AgentDefinition } from '../../types.js';
+import { stopAndRemoveContainer } from '../container-cleanup.js';
 import {
   cleanupSession,
   ensureConversationWorkspace,
@@ -29,14 +30,9 @@ import type {
   SessionRecord,
   ToolMetadata,
 } from './types.js';
+import { asStringArray } from './types.js';
 
 const TAG = '[SandboxSessionManager]';
-
-function asStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const strings = value.filter((entry): entry is string => typeof entry === 'string');
-  return strings.length > 0 ? strings : undefined;
-}
 
 export interface SessionRuntimeFactoryDeps {
   containerManager: Pick<SandboxContainerManager, 'createContainer' | 'startContainer' | 'stopContainer' | 'removeContainer'>;
@@ -210,17 +206,13 @@ export class SessionRuntimeFactory {
     cleanupWorkspace: boolean,
   ): Promise<void> {
     if (containerId) {
-      try {
-        await this.deps.containerManager.stopContainer(containerId, 10);
-      } catch (err) {
-        this.deps.logger.warn(`${TAG} container stop failed during startup rollback for session ${sessionId}:`, err);
-      }
-
-      try {
-        await this.deps.containerManager.removeContainer(containerId, true);
-      } catch (err) {
-        this.deps.logger.warn(`${TAG} container removal failed during startup rollback for session ${sessionId}:`, err);
-      }
+      await stopAndRemoveContainer(
+        this.deps.containerManager,
+        containerId,
+        this.deps.logger,
+        `${TAG} startup rollback for session ${sessionId}`,
+        10,
+      );
     }
 
     if (!conversationDir || !cleanupWorkspace) {

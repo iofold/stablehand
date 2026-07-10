@@ -419,14 +419,12 @@ describe('DatabaseRepository', () => {
 
       await repo.updateSandboxSessionStatus(created.id, 'CHECKPOINTED', {
         containerName: 'checkpointed-container',
-        checkpointRef: 'checkpoint-ref-1',
       });
 
       const fetched = await repo.getSandboxSession(created.id);
       expect(fetched).not.toBeNull();
       expect(fetched!.status).toBe('CHECKPOINTED');
       expect(fetched!.containerName).toBe('checkpointed-container');
-      expect(fetched!.checkpointRef).toBe('checkpoint-ref-1');
     });
 
     it('should throw when updating a missing sandbox session status', async () => {
@@ -452,16 +450,13 @@ describe('DatabaseRepository', () => {
       expect(afterStaleWrite?.status).toBe('ACTIVE');
 
       await expect(
-        repo.updateSandboxSessionStatus(created.id, 'CHECKPOINTED', {
-          checkpointRef: 'checkpoint-ref-cas',
-        }, {
+        repo.updateSandboxSessionStatus(created.id, 'CHECKPOINTED', undefined, {
           expectedFrom: 'ACTIVE',
         }),
       ).resolves.toBeUndefined();
 
       const afterCasWrite = await repo.getSandboxSession(created.id);
       expect(afterCasWrite?.status).toBe('CHECKPOINTED');
-      expect(afterCasWrite?.checkpointRef).toBe('checkpoint-ref-cas');
     });
 
     it('should list active sandbox sessions', async () => {
@@ -743,12 +738,12 @@ describe('DatabaseRepository', () => {
         createdAt: now,
       });
 
-      const firstClaim = await repo.getPendingCallbacks(10, now);
+      const firstClaim = await repo.claimPendingCallbacks(10, now);
       expect(firstClaim.map((callback) => callback.id)).toEqual(['callback-claim-1']);
       expect(firstClaim[0].status).toBe('in_progress');
       const staleClaimedAt = firstClaim[0].claimedAt;
 
-      const secondClaim = await repo.getPendingCallbacks(10, now + 1);
+      const secondClaim = await repo.claimPendingCallbacks(10, now + 1);
       expect(secondClaim).toEqual([]);
 
       await testDb.conn.pgClient`
@@ -756,7 +751,7 @@ describe('DatabaseRepository', () => {
         SET claim_expires_at = ${now - 10_000}
         WHERE id = 'callback-claim-1'
       `;
-      const reclaimed = await repo.getPendingCallbacks(10, now + 2);
+      const reclaimed = await repo.claimPendingCallbacks(10, now + 2);
       expect(reclaimed.map((callback) => callback.id)).toEqual(['callback-claim-1']);
       expect(reclaimed[0].claimedAt).not.toBe(staleClaimedAt);
 

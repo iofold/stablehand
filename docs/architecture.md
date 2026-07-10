@@ -99,7 +99,6 @@ The TypedEventBus emits the following events:
 - `run.tool_result` — Tool call completed
 - `run.interrupted` — HITL approval needed
 - `run.interrupt_resolved` — HITL approval/rejection received
-- `run.resumed` — Suspended run resumed after event match
 - `feedback.received` — User thumbs up/down signal for external consumers
 - `agent.created` — New agent registered
 - `agent.deleted` — Agent removed
@@ -119,7 +118,7 @@ Relevant code:
 
 ### 5. HITL and Suspend/Resume
 
-HITL is implemented through durable interrupt records and UI responses. Sandbox sessions can be checkpointed, restored, and resumed through the session manager. Separately, `SuspendedSessionMatcher` can emit `run.resumed` for event-driven resumptions. This is application-level checkpoint/restore of harness and workspace state, not raw Docker memory snapshotting.
+HITL is implemented through durable interrupt records and UI responses. Sandbox sessions can be checkpointed, restored, and resumed through the session manager. This is application-level checkpoint/restore of harness and workspace state, not raw Docker memory snapshotting.
 
 Relevant code:
 

@@ -14,9 +14,6 @@ import { TokenGate } from './components/ui/TokenGate';
 import { useApiAuthStore } from './lib/auth';
 import {
   CONVERSATION_ROUTE,
-  LEGACY_CHAT_ROUTE,
-  LEGACY_NEW_SESSION_ROUTE,
-  LEGACY_SESSION_ROUTE,
   NEW_CONVERSATION_ROUTE,
 } from './lib/routes';
 
@@ -40,11 +37,6 @@ export function App() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path={NEW_CONVERSATION_ROUTE} element={<SessionPage />} />
             <Route path={CONVERSATION_ROUTE} element={<SessionPage />} />
-            {/* Backwards-compatible session/chat routes stay mounted directly so older deep links
-                still render the composer/history even outside nested route resolution. */}
-            <Route path={LEGACY_NEW_SESSION_ROUTE} element={<SessionPage />} />
-            <Route path={LEGACY_SESSION_ROUTE} element={<SessionPage />} />
-            <Route path={LEGACY_CHAT_ROUTE} element={<SessionPage />} />
             <Route path="/agents/:id" element={<AgentDetailPage />} />
           </Routes>
         </ErrorBoundary>

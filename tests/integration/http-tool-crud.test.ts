@@ -1,14 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { FastifyInstance } from 'fastify';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 type HttpToolDefinition = {
   name?: string;
@@ -19,9 +12,8 @@ type HttpToolDefinition = {
 };
 
 describe('HTTP tool CRUD via agent API', () => {
-  let app: FastifyInstance;
-  let container: AppContainer;
-  let dataDir: string;
+  let app: TestAppHandle['app'];
+  let testApp: TestAppHandle | undefined;
 
   const validAgent = {
     name: 'http-tool-agent',
@@ -65,32 +57,15 @@ describe('HTTP tool CRUD via agent API', () => {
   });
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-http-tool-crud-'));
-
-    container = await createContainer(
-      {
-        preset: 'local',
-        database: {
-          url: resolveTestDatabaseUrl(),
-        },
-      },
-      dataDir,
-    );
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      runStartupService: container.runStartupService,
-      dataDir,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-http-tool-crud-',
+      preset: 'local',
     });
-
-    await app.ready();
+    app = testApp.app;
   });
 
   afterAll(async () => {
-    await app.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   it('POST /api/agents with httpTools includes HTTP tool names in tools', async () => {

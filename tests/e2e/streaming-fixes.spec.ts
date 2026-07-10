@@ -76,7 +76,7 @@ test.describe('Streaming fixes @extended', () => {
   });
 
   test('sending a message streams in UI and completes', async ({ page }) => {
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     const input = page.getByTestId('session-input');
 
     await expect(input).toBeVisible({ timeout: 15_000 });
@@ -109,7 +109,7 @@ test.describe('Streaming fixes @extended', () => {
     const { conversationId, sessionId } = await sendAgentMessage(request, agentId, prompt);
 
     await waitForRunStatus(request, agentId, sessionId, ['completed', 'error'], 90_000);
-    await page.goto(`/agents/${agentId}/sessions/${conversationId}`);
+    await page.goto(`/agents/${agentId}/conversations/${conversationId}`);
     await page.waitForLoadState('domcontentloaded');
 
     const userBubbles = page.getByTestId('message-bubble-user');

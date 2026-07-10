@@ -217,9 +217,9 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         dbPath: opts.dataDir ?? '.ctxmill',
       },
       agentDefaults: {
-        harness: process.env.DEFAULT_HARNESS ?? 'langgraph',
-        temperature: Number(process.env.DEFAULT_TEMPERATURE ?? '0.7'),
-        maxTokens: Number(process.env.DEFAULT_MAX_TOKENS ?? '4096'),
+        harness: 'langgraph',
+        temperature: 0.7,
+        maxTokens: 4096,
       },
     };
   });

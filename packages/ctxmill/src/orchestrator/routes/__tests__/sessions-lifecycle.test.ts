@@ -61,12 +61,10 @@ describe('session lifecycle routes', () => {
 
   it('returns the active-turn suspend conflict body from the public sandbox suspend endpoint', async () => {
     const db = {
-      getSandboxSessionsByAgent: vi.fn().mockResolvedValue([
-        { id: 'sandbox-1', conversationId: 'conversation-1', status: 'ACTIVE' },
-      ]),
       getSandboxSession: vi.fn().mockResolvedValue({
         id: 'sandbox-1',
         conversationId: 'conversation-1',
+        agentId: 'agent-1',
         status: 'ACTIVE',
       }),
     };
@@ -93,9 +91,12 @@ describe('session lifecycle routes', () => {
 
   it('suspends an idle ACTIVE sandbox even when the latest turn already completed (ctx-jgb5)', async () => {
     const db = {
-      getSandboxSessionsByAgent: vi.fn().mockResolvedValue([
-        { id: 'sandbox-1', conversationId: 'conversation-1', status: 'ACTIVE' },
-      ]),
+      getSandboxSession: vi.fn().mockResolvedValue({
+        id: 'sandbox-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+        status: 'ACTIVE',
+      }),
     };
     const sessionManager = {
       suspendSession: vi.fn().mockResolvedValue(undefined),
@@ -114,9 +115,12 @@ describe('session lifecycle routes', () => {
 
   it('rejects suspend with the real sandbox status when the row is not ACTIVE', async () => {
     const db = {
-      getSandboxSessionsByAgent: vi.fn().mockResolvedValue([
-        { id: 'sandbox-1', conversationId: 'conversation-1', status: 'CHECKPOINTED' },
-      ]),
+      getSandboxSession: vi.fn().mockResolvedValue({
+        id: 'sandbox-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+        status: 'CHECKPOINTED',
+      }),
     };
     const sessionManager = {
       suspendSession: vi.fn(),
@@ -181,8 +185,7 @@ describe('session lifecycle routes', () => {
       }),
     };
     const sessionManager = {
-      restoreSession: vi.fn(),
-      startRestoreSession: vi.fn().mockResolvedValue({
+      restoreSession: vi.fn().mockResolvedValue({
         sessionId: 'sandbox-1',
         status: 'RESTORING',
         restoreAttempts: 0,
@@ -202,12 +205,12 @@ describe('session lifecycle routes', () => {
       status: 'RESTORING',
       restoreAttempts: 0,
     });
-    expect(sessionManager.startRestoreSession).toHaveBeenCalledWith(
+    expect(sessionManager.restoreSession).toHaveBeenCalledWith(
       'sandbox-1',
       expect.objectContaining({ name: agent.name }),
       'agent-1',
+      { background: true },
     );
-    expect(sessionManager.restoreSession).not.toHaveBeenCalled();
   });
 
   it('returns 404 for restore when the sandbox session does not belong to the agent', async () => {
@@ -373,21 +376,56 @@ describe('session lifecycle routes', () => {
     }));
   });
 
-  it('returns 410 for the legacy turn-id restore route', async () => {
-    const app = createAgentRoutesApp({} as Partial<AgentSubRouteOptions>);
+  it('kills an owned sandbox session through the public kill endpoint', async () => {
+    const db = {
+      getSandboxSession: vi.fn().mockResolvedValue({
+        id: 'sandbox-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+        status: 'ACTIVE',
+      }),
+    };
+    const sessionManager = {
+      killSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
     apps.push(app);
 
     const response = await app.inject({
       method: 'POST',
-      url: '/api/agents/agent-1/sessions/turn-1/restore',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/kill',
     });
 
-    expect(response.statusCode).toBe(410);
-    expect(response.json()).toEqual({
-      error: 'Legacy session admin route removed. Use /api/agents/:id/sandbox-sessions/:sessionId/restore.',
-      sessionId: 'turn-1',
-    });
+    expect(response.statusCode).toBe(204);
+    expect(db.getSandboxSession).toHaveBeenCalledWith('sandbox-1');
+    expect(sessionManager.killSession).toHaveBeenCalledWith('sandbox-1');
   });
+
+  it('returns 404 for kill when the sandbox session does not belong to the agent', async () => {
+    const db = {
+      getSandboxSession: vi.fn().mockResolvedValue({
+        id: 'sandbox-1',
+        conversationId: 'conversation-1',
+        agentId: 'other-agent',
+        status: 'ACTIVE',
+      }),
+    };
+    const sessionManager = {
+      killSession: vi.fn(),
+    };
+    const app = createAgentRoutesApp({ db, sessionManager } as unknown as Partial<AgentSubRouteOptions>);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/sandbox-sessions/sandbox-1/kill',
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: 'Session not found', sessionId: 'sandbox-1' });
+    expect(sessionManager.killSession).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('global sandbox session readback route', () => {

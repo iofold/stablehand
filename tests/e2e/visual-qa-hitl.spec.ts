@@ -33,7 +33,7 @@ test.describe('HITL Approval Flow Visual QA @extended', () => {
   test('captures approval card pending and approved states', async ({ page, request: _request }) => {
     const capture = new ScreenshotCapture(page, 'hitl', 'live');
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
     await capture.captureViewport('hitl-empty', 'Chat page before HITL trigger');
 
@@ -81,7 +81,7 @@ test.describe('HITL Approval Flow Visual QA @extended', () => {
   test('captures rejection flow', async ({ page, request: _request }) => {
     const capture = new ScreenshotCapture(page, 'hitl-reject', 'live');
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     await page.getByTestId('session-input').fill('Request approval now');

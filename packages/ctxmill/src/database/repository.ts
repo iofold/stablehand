@@ -1,4 +1,4 @@
-import { eq, sql, gt, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike } from 'drizzle-orm';
+import { eq, sql, gt, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike, type SQL } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
@@ -56,6 +56,9 @@ export type {
 const sanitizeTypedDbValue = <T>(value: T, context: string): T => sanitizeDbValue(value, context) as T;
 const DEFAULT_CLAIM_LEASE_MS = 60_000;
 const CALLBACK_EVENT_SEQ_DEDUPE_INDEX = 'idx_outbox_callback_event_seq';
+type InterruptResumeAttemptUpdate = Omit<Partial<InterruptResumeAttemptInsert>, 'attempts'> & {
+  attempts?: number | SQL<unknown>;
+};
 
 export class SandboxSessionStatusConflictError extends Error {
   constructor(
@@ -228,13 +231,6 @@ export class DatabaseRepository {
       }
       return message;
     });
-  }
-
-  async updateMessageToolCalls(id: string, toolCalls: unknown[]): Promise<void> {
-    const sanitizedToolCalls = sanitizeTypedDbValue(toolCalls, 'messages.toolCalls');
-    await this.db.update(this.schema.messages)
-      .set({ toolCalls: sanitizedToolCalls })
-      .where(eq(this.schema.messages.id, id));
   }
 
   /** Repair both persisted tool-call projections of a message in one write (ctx-nm3o). */
@@ -841,42 +837,39 @@ export class DatabaseRepository {
   }
 
   async markInterruptResumeAttemptInProgress(id: string): Promise<InterruptResumeAttemptRow | undefined> {
-    const [row] = await this.db
-      .update(this.schema.interruptResumeAttempts)
-      .set({
-        status: 'in_progress',
-        attempts: sql`${this.schema.interruptResumeAttempts.attempts} + 1`,
-        updatedAt: Date.now(),
-        lastError: null,
-      })
-      .where(eq(this.schema.interruptResumeAttempts.id, id))
-      .returning();
-    return row;
+    return this.updateInterruptResumeAttempt(id, {
+      status: 'in_progress',
+      attempts: sql`${this.schema.interruptResumeAttempts.attempts} + 1`,
+      updatedAt: Date.now(),
+      lastError: null,
+    });
   }
 
   async markInterruptResumeAttemptCompleted(id: string): Promise<InterruptResumeAttemptRow | undefined> {
     const now = Date.now();
-    const [row] = await this.db
-      .update(this.schema.interruptResumeAttempts)
-      .set({
-        status: 'completed',
-        updatedAt: now,
-        completedAt: now,
-        lastError: null,
-      })
-      .where(eq(this.schema.interruptResumeAttempts.id, id))
-      .returning();
-    return row;
+    return this.updateInterruptResumeAttempt(id, {
+      status: 'completed',
+      updatedAt: now,
+      completedAt: now,
+      lastError: null,
+    });
   }
 
   async markInterruptResumeAttemptFailed(id: string, error: string): Promise<InterruptResumeAttemptRow | undefined> {
+    return this.updateInterruptResumeAttempt(id, {
+      status: 'failed',
+      updatedAt: Date.now(),
+      lastError: sanitizeDbText(error, 'interruptResumeAttempts.lastError'),
+    });
+  }
+
+  private async updateInterruptResumeAttempt(
+    id: string,
+    set: InterruptResumeAttemptUpdate,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
     const [row] = await this.db
       .update(this.schema.interruptResumeAttempts)
-      .set({
-        status: 'failed',
-        updatedAt: Date.now(),
-        lastError: sanitizeDbText(error, 'interruptResumeAttempts.lastError'),
-      })
+      .set(set)
       .where(eq(this.schema.interruptResumeAttempts.id, id))
       .returning();
     return row;
@@ -910,17 +903,12 @@ export class DatabaseRepository {
     return row;
   }
 
-  async getPendingCallbacks(limit: number, beforeTime: number): Promise<CallbackOutboxRow[]> {
-    return this.claimPendingCallbacks(limit, beforeTime);
-  }
-
   async claimPendingCallbacks(
     limit: number,
     beforeTime: number,
-    leaseMs = DEFAULT_CLAIM_LEASE_MS,
   ): Promise<CallbackOutboxRow[]> {
     const now = Date.now();
-    const claimExpiresAt = now + leaseMs;
+    const claimExpiresAt = now + DEFAULT_CLAIM_LEASE_MS;
     const rows = await this.db
       .update(this.schema.callbackOutbox)
       .set({
@@ -1069,7 +1057,6 @@ export class DatabaseRepository {
     containerId?: string;
     status?: string;
     harnessName: string;
-    checkpointRef?: string;
   }): Promise<SandboxSessionRow> {
     const sanitizedSession = sanitizeTypedDbValue(session, 'sandboxSessions.insert');
     const [row] = await this.db
@@ -1082,7 +1069,6 @@ export class DatabaseRepository {
         containerId: sanitizedSession.containerId ?? null,
         status: sanitizedSession.status ?? 'ACTIVE',
         harnessName: sanitizedSession.harnessName,
-        checkpointRef: sanitizedSession.checkpointRef ?? null,
       })
       .returning();
     if (!row) throw new Error('Expected insert to return a row but got undefined');
@@ -1114,7 +1100,6 @@ export class DatabaseRepository {
     extra?: {
       containerName?: string | null;
       containerId?: string | null;
-      checkpointRef?: string | null;
       restoreAttempts?: number | null;
       lastRestoreError?: string | null;
     },
@@ -1136,7 +1121,6 @@ export class DatabaseRepository {
         lastActivityAt: Date.now(),
         ...(sanitizedExtra?.containerName !== undefined ? { containerName: sanitizedExtra.containerName } : {}),
         ...(sanitizedExtra?.containerId !== undefined ? { containerId: sanitizedExtra.containerId } : {}),
-        ...(sanitizedExtra?.checkpointRef !== undefined ? { checkpointRef: sanitizedExtra.checkpointRef } : {}),
         ...(sanitizedExtra?.restoreAttempts !== undefined && sanitizedExtra.restoreAttempts !== null
           ? { restoreAttempts: sanitizedExtra.restoreAttempts }
           : {}),
@@ -1550,27 +1534,24 @@ export class DatabaseRepository {
   }
 
   async markArtifactUploadFailed(id: string): Promise<ArtifactRow | undefined> {
-    const [row] = await this.db
-      .update(this.schema.artifacts)
-      .set({ status: 'upload_failed', updatedAt: Date.now() })
-      .where(eq(this.schema.artifacts.id, id))
-      .returning();
-    return row;
+    return this.setArtifactStatus(id, 'upload_failed');
   }
 
   async markArtifactDeleting(id: string): Promise<ArtifactRow | undefined> {
-    const [row] = await this.db
-      .update(this.schema.artifacts)
-      .set({ status: 'deleting', updatedAt: Date.now() })
-      .where(eq(this.schema.artifacts.id, id))
-      .returning();
-    return row;
+    return this.setArtifactStatus(id, 'deleting');
   }
 
   async markArtifactDeleteFailed(id: string): Promise<ArtifactRow | undefined> {
+    return this.setArtifactStatus(id, 'delete_failed');
+  }
+
+  private async setArtifactStatus(
+    id: string,
+    status: NonNullable<ArtifactInsert['status']>,
+  ): Promise<ArtifactRow | undefined> {
     const [row] = await this.db
       .update(this.schema.artifacts)
-      .set({ status: 'delete_failed', updatedAt: Date.now() })
+      .set({ status, updatedAt: Date.now() })
       .where(eq(this.schema.artifacts.id, id))
       .returning();
     return row;

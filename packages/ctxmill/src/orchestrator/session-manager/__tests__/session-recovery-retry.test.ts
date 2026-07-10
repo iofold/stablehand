@@ -60,7 +60,7 @@ function makeRow(overrides: Partial<SandboxSessionRow> = {}): SandboxSessionRow 
     containerId: null,
     status: 'CHECKPOINTED',
     harnessName: 'langgraph',
-    checkpointRef: 'ckpt-1',
+    checkpointRef: null,
     createdAt: 1,
     updatedAt: 1,
     lastActivityAt: 1,
@@ -281,7 +281,7 @@ describe('SessionRecoveryCoordinator — restore retry policy (ADR 013)', () => 
       harnessName: 'langgraph',
     });
 
-    const record = await harness.coordinator.reconcileStrandedRestoring(
+    const record = await harness.coordinator.recoverOrReconnect(
       'conv-1',
       harness.agentDef,
       'agent-1',
@@ -298,52 +298,12 @@ describe('SessionRecoveryCoordinator — restore retry policy (ADR 013)', () => 
     });
   });
 
-  it('reconcileStrandedRestoringOnStartup checkpoints rows with a checkpoint and terminates rows without', async () => {
-    const harness = createHarness();
-
-    const withCheckpoint = makeRow({ id: 'sess-with', status: 'RESTORING', restoreAttempts: 0 });
-    const withoutCheckpoint = makeRow({ id: 'sess-without', status: 'RESTORING', restoreAttempts: 1 });
-
-    harness.getCheckpointV2.mockImplementation(async (id: string) => {
-      if (id === 'sess-with') {
-        return {
-          id: 'ckpt-1',
-          sessionId: 'sess-with',
-          agentId: 'agent-1',
-          checkpointVersion: 2,
-          checkpointData: {},
-          harnessState: {},
-          workspaceRef: null,
-          suspendReason: null,
-          createdAt: 0,
-        };
-      }
-      return null;
-    });
-
-    const result = await harness.coordinator.reconcileStrandedRestoringOnStartup([
-      withCheckpoint,
-      withoutCheckpoint,
-    ]);
-
-    expect(result).toEqual({ checkpointed: 1, terminated: 1 });
-
-    const checkpointedUpdate = harness.statusUpdates.find((u) => u.status === 'CHECKPOINTED');
-    const terminatedUpdate = harness.statusUpdates.find((u) => u.status === 'TERMINATED');
-    expect(checkpointedUpdate?.extra).toMatchObject({
-      lastRestoreError: expect.stringContaining('orchestrator'),
-    });
-    expect(terminatedUpdate?.extra).toMatchObject({
-      lastRestoreError: expect.stringContaining('no recoverable checkpoint'),
-    });
-  });
-
   it('reconcileStrandedRestoring with no checkpoint terminates the session and creates a fresh one', async () => {
     const harness = createHarness();
     harness.getCheckpointV2.mockResolvedValueOnce(null);
     const stranded = makeRow({ status: 'RESTORING', restoreAttempts: 0 });
 
-    const record = await harness.coordinator.reconcileStrandedRestoring(
+    const record = await harness.coordinator.recoverOrReconnect(
       'conv-1',
       harness.agentDef,
       'agent-1',

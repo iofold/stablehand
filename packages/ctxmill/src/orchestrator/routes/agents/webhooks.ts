@@ -4,6 +4,48 @@ import type { FastifyInstance } from 'fastify';
 import { VALID_WEBHOOK_EVENTS, isValidWebhookEvent } from '../../webhook-events.js';
 import type { AgentSubRouteOptions } from './types.js';
 
+type WebhookBody = {
+  url?: string;
+  events?: string[];
+  secret?: string | null;
+};
+
+type ValidatedWebhookBody = {
+  url: string;
+  events: string[];
+  secret?: string | null;
+};
+
+type WebhookValidationResult =
+  | { ok: true; body: ValidatedWebhookBody }
+  | { ok: false; error: { error: string; validEvents?: typeof VALID_WEBHOOK_EVENTS } };
+
+function validateWebhookBody(body: WebhookBody | undefined): WebhookValidationResult {
+  if (!body?.url || !body?.events?.length) {
+    return { ok: false, error: { error: 'url and events are required' } };
+  }
+
+  const invalidEvents = body.events.filter((eventType) => !isValidWebhookEvent(eventType));
+  if (invalidEvents.length > 0) {
+    return {
+      ok: false,
+      error: {
+        error: `Invalid event types: ${invalidEvents.join(', ')}`,
+        validEvents: VALID_WEBHOOK_EVENTS,
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    body: {
+      url: body.url,
+      events: body.events,
+      secret: body.secret,
+    },
+  };
+}
+
 export async function webhookRoutes(
   app: FastifyInstance,
   opts: AgentSubRouteOptions,
@@ -12,19 +54,11 @@ export async function webhookRoutes(
 
   app.post('/:id/webhooks', { preHandler: [loadAgent] }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = request.body as { url?: string; events?: string[]; secret?: string } | undefined;
-
-    if (!body?.url || !body?.events?.length) {
-      return reply.status(400).send({ error: 'url and events are required' });
+    const validated = validateWebhookBody(request.body as WebhookBody | undefined);
+    if (!validated.ok) {
+      return reply.status(400).send(validated.error);
     }
-
-    const invalidEvents = body.events.filter((eventType) => !isValidWebhookEvent(eventType));
-    if (invalidEvents.length > 0) {
-      return reply.status(400).send({
-        error: `Invalid event types: ${invalidEvents.join(', ')}`,
-        validEvents: VALID_WEBHOOK_EVENTS,
-      });
-    }
+    const body = validated.body;
 
     const now = Date.now();
     const webhook = await db.createWebhook({
@@ -42,19 +76,11 @@ export async function webhookRoutes(
 
   app.put('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {
     const { id, webhookId } = request.params as { id: string; webhookId: string };
-    const body = request.body as { url?: string; events?: string[]; secret?: string | null } | undefined;
-
-    if (!body?.url || !body?.events?.length) {
-      return reply.status(400).send({ error: 'url and events are required' });
+    const validated = validateWebhookBody(request.body as WebhookBody | undefined);
+    if (!validated.ok) {
+      return reply.status(400).send(validated.error);
     }
-
-    const invalidEvents = body.events.filter((eventType) => !isValidWebhookEvent(eventType));
-    if (invalidEvents.length > 0) {
-      return reply.status(400).send({
-        error: `Invalid event types: ${invalidEvents.join(', ')}`,
-        validEvents: VALID_WEBHOOK_EVENTS,
-      });
-    }
+    const body = validated.body;
 
     const updated = await db.updateWebhookForAgent(webhookId, id, {
       url: body.url,

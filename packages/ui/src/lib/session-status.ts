@@ -1,22 +1,12 @@
-import type { ApiSessionStatusCounts } from '@ctxmill/shared';
+import { API_SESSION_STATUSES, type ApiSessionStatusCounts } from '@ctxmill/shared';
 
-const SESSION_STATUS_ALIASES: Record<string, string> = {
-  active: 'ACTIVE',
-  running: 'ACTIVE',
-  checkpointed: 'CHECKPOINTED',
-  restoring: 'RESTORING',
-  terminated: 'TERMINATED',
-  completed: 'completed',
-  error: 'error',
-  failed: 'error',
-  cancelled: 'cancelled',
-  canceled: 'cancelled',
-};
+const KNOWN_SESSION_STATUSES = new Set<string>(API_SESSION_STATUSES);
 
 export function normalizeSessionStatus(status: string | null | undefined): string {
   if (!status) return '';
   const trimmed = String(status).trim();
-  return SESSION_STATUS_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+  const canonical = trimmed.toUpperCase();
+  return KNOWN_SESSION_STATUSES.has(canonical) ? canonical : trimmed;
 }
 
 export function normalizeRunStatus(status: string | null | undefined): string {

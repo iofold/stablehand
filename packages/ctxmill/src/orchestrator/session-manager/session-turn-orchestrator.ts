@@ -13,6 +13,7 @@ import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js'
 import type { InterruptManager } from '../interrupt.js';
 import type { SessionEvent as CustomSessionEvent } from '../session-turn-service.js';
 import { SESSION_CANCELLED_MESSAGE } from '../session-cancellation.js';
+import { unrefTimer } from '../../util/timing.js';
 import { SessionRecoveryCoordinator } from './session-recovery-coordinator.js';
 import type { SessionStateStore } from './session-state-store.js';
 import {
@@ -21,7 +22,6 @@ import {
   type SessionRecord,
 } from './types.js';
 import { ConcurrencyLimitError } from './concurrency-limit-error.js';
-import { unrefTimer } from './grpc-session-client.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
 import {
   turnErrorSandboxConnectionLost,
@@ -129,13 +129,6 @@ export class SessionTurnOrchestrator {
     durationMs: number,
     error?: string,
   ): void {
-    const record = this.deps.stateStore.getSessionById(sessionId);
-    if (record) {
-      if (record.currentTurnId === turnId) {
-        record.currentTurnAbortController = undefined;
-        record.currentTurnId = undefined;
-      }
-    }
     this.deps.stateStore.clearTurnController(sessionId, turnId);
     this.deps.stateStore.markTurnInactive(sessionId, turnId);
     this.deps.eventBus?.emit('turn.completed', {
@@ -426,12 +419,7 @@ export class SessionTurnOrchestrator {
     } catch (err) {
       if (err instanceof Error && err.message === `Turn ${turnId} cancelled for session ${sessionId}`) {
         this.deps.logger.info(`${TAG} turn ${turnId} cancelled for session ${sessionId}`);
-        await this.deps.statusCoordinator.transition({
-          sessionId,
-          fromStatus: record.status,
-          toStatus: 'ACTIVE',
-        });
-        this.scheduleIdleTimeoutForActiveSession(sessionId, record);
+        await this.settleTurnActive(sessionId, record);
         return;
       }
 
@@ -508,12 +496,7 @@ export class SessionTurnOrchestrator {
     if (eventCount === 0) {
       const errorMessage = `Sandbox turn ${turnId} completed without emitting any events for session ${sessionId}`;
       this.deps.logger.warn(`${TAG} ${errorMessage}`);
-      await this.deps.statusCoordinator.transition({
-        sessionId,
-        fromStatus: record.status,
-        toStatus: 'ACTIVE',
-      });
-      this.scheduleIdleTimeoutForActiveSession(sessionId, record);
+      await this.settleTurnActive(sessionId, record);
       yield {
         type: 'turn_failed' as const,
         turnId,
@@ -527,12 +510,7 @@ export class SessionTurnOrchestrator {
       this.deps.logger.warn(`${TAG} turn ${turnId} on session ${sessionId} ${errorMessage}`);
       const liveRecord = this.deps.stateStore.getSessionById(sessionId);
       if (liveRecord) {
-        await this.deps.statusCoordinator.transition({
-          sessionId,
-          fromStatus: liveRecord.status,
-          toStatus: 'ACTIVE',
-        });
-        this.scheduleIdleTimeoutForActiveSession(sessionId, liveRecord);
+        await this.settleTurnActive(sessionId, liveRecord);
       }
       yield {
         type: 'turn_failed' as const,
@@ -542,12 +520,7 @@ export class SessionTurnOrchestrator {
       return;
     }
 
-    await this.deps.statusCoordinator.transition({
-      sessionId,
-      fromStatus: record.status,
-      toStatus: 'ACTIVE',
-    });
-    this.scheduleIdleTimeoutForActiveSession(sessionId, record);
+    await this.settleTurnActive(sessionId, record);
 
     this.deps.logger.debug(`${TAG} turn ${turnId} completed for session ${sessionId}`);
   }
@@ -618,6 +591,15 @@ export class SessionTurnOrchestrator {
         }
       }
     }
+  }
+
+  private async settleTurnActive(sessionId: string, record: SessionRecord): Promise<void> {
+    await this.deps.statusCoordinator.transition({
+      sessionId,
+      fromStatus: record.status,
+      toStatus: 'ACTIVE',
+    });
+    this.scheduleIdleTimeoutForActiveSession(sessionId, record);
   }
 
   private scheduleIdleTimeoutForActiveSession(sessionId: string, record: SessionRecord): void {

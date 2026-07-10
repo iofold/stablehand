@@ -1,7 +1,7 @@
 import { createClient } from '@connectrpc/connect';
 import { HarnessService } from '@ctxmill/proto/sandbox/v1';
 
-import type { DatabaseRepository } from '../../database/repository.js';
+import type { DatabaseRepository, SandboxSessionRow } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
 import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 import type { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
@@ -40,11 +40,29 @@ export interface SessionRecord {
   status: SessionStatus;
   harnessName: string;
   sessionWorkspaceDir?: string;
-  /** @deprecated Turn ownership is tracked by SessionStateStore. */
-  currentTurnAbortController?: AbortController;
-  /** @deprecated Turn ownership is tracked by SessionStateStore. */
-  currentTurnId?: string;
   grpcClient?: HarnessGrpcClient;
+}
+
+export function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((entry): entry is string => typeof entry === 'string');
+  return strings.length > 0 ? strings : undefined;
+}
+
+export function dbSessionToRecord(
+  row: SandboxSessionRow,
+  grpcClient?: HarnessGrpcClient,
+): SessionRecord {
+  return {
+    sessionId: row.id,
+    conversationId: row.conversationId,
+    agentId: row.agentId,
+    containerName: row.containerName ?? '',
+    containerId: row.containerId ?? '',
+    status: (row.status as SessionRecord['status']) ?? 'ACTIVE',
+    harnessName: row.harnessName,
+    ...(grpcClient ? { grpcClient } : {}),
+  };
 }
 
 export interface TurnQueueEntry {

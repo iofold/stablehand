@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { resolveConfig } from '../resolve.js';
+import { resolveDatabaseUrl } from '../resolve.js';
 
-describe('resolveConfig validation', () => {
+describe('resolveDatabaseUrl validation', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
@@ -14,22 +14,21 @@ describe('resolveConfig validation', () => {
   });
 
   it('throws if database URL resolves to empty string', () => {
-    // All presets now require DATABASE_URL
-    expect(() => resolveConfig({ preset: 'docker' })).toThrow(/database.*url/i);
+    expect(() => resolveDatabaseUrl()).toThrow(/database.*url/i);
   });
 
   it('throws if database URL still contains env: prefix', () => {
-    // Simulate a case where the env var name itself is wrong
     expect(() =>
-      resolveConfig({
-        preset: 'docker',
+      resolveDatabaseUrl({
         database: { url: 'env:NONEXISTENT_VAR' },
       }),
     ).toThrow(/database.*url/i);
   });
 
-  it('throws for docker preset without DATABASE_URL', () => {
-    expect(() => resolveConfig({ preset: 'docker' })).toThrow(/database.*url/i);
+  it('returns an explicit database URL without reading the environment', () => {
+    expect(resolveDatabaseUrl({
+      database: { url: 'postgres://localhost/direct' },
+    })).toBe('postgres://localhost/direct');
   });
 
 });

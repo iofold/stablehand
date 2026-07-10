@@ -45,10 +45,12 @@ export async function interruptRoutes(
       }));
 
       try {
+        const actionableInterrupts = await db.getActionableInterruptsForAgent(id);
         const dbRows = includeResolved
-          ? await db.getActionableInterruptsForAgent(id)
-          : (await db.getActionableInterruptsForAgent(id))
-              .filter(({ interrupt, resumeAttempt }) => interrupt.status !== 'resolved' || resumeAttempt?.status === 'failed');
+          ? actionableInterrupts
+          : actionableInterrupts.filter(({ interrupt, resumeAttempt }) =>
+              interrupt.status !== 'resolved' || resumeAttempt?.status === 'failed',
+            );
         const seenIds = new Set(pending.map((p) => p.id));
         for (const { interrupt, resumeAttempt } of dbRows) {
           if (!seenIds.has(interrupt.id)) {

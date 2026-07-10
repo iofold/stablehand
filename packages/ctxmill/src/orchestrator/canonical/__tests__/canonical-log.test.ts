@@ -109,13 +109,6 @@ const EVENT_MAP_SAMPLES: { [K in EventName]: EventMap[K] } = {
     clientId: 'client-1',
     timestamp: 1_000,
   },
-  'run.resumed': {
-    turnId: 'turn-1',
-    agentId: 'agent-1',
-    triggeredBy: 'restore',
-    suspendedDurationMs: 250,
-    timestamp: 1_000,
-  },
   'trigger.fired': {
     triggerId: 'trigger-1',
     agentId: 'agent-1',

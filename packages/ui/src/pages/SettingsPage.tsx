@@ -22,7 +22,6 @@ interface ConfigData {
   };
   agentDefaults?: {
     harness?: string;
-    model?: string;
     temperature?: number;
     maxTokens?: number;
   };
@@ -247,7 +246,7 @@ export function SettingsPage() {
                   label="Uptime"
                   value={config?.system?.uptime != null ? formatUptime(config.system.uptime) : undefined}
                 />
-                <ConfigRow label="Database Path" value={config?.system?.dbPath} mono />
+                <ConfigRow label="Data Directory" value={config?.system?.dbPath} mono />
               </div>
             </div>
 
@@ -262,7 +261,6 @@ export function SettingsPage() {
               </div>
               <div className="divide-y divide-surface-700/50">
                 <ConfigRow label="Default Harness" value={config?.agentDefaults?.harness} />
-                <ConfigRow label="Default Model" value={config?.agentDefaults?.model} />
                 <ConfigRow
                   label="Temperature"
                   value={config?.agentDefaults?.temperature != null ? String(config.agentDefaults.temperature) : undefined}

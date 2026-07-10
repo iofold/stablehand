@@ -61,19 +61,19 @@ describe('AgentCard', () => {
     expect(navigateMock).toHaveBeenCalledWith('/agents/agent-1');
   });
 
-  it('opens a new session without bubbling to the detail navigation', async () => {
+  it('opens a new conversation without bubbling to the detail navigation', async () => {
     renderCard();
 
-    const newSessionButton = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('New Session'),
+    const newConversationButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('New Conversation'),
     );
 
     await act(async () => {
-      newSessionButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      newConversationButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
     expect(navigateMock).toHaveBeenCalledTimes(1);
-    expect(navigateMock).toHaveBeenCalledWith('/agents/agent-1/sessions/new');
+    expect(navigateMock).toHaveBeenCalledWith('/agents/agent-1/conversations/new');
   });
 
   it('shows an explicit idle status even with no active sessions', () => {
@@ -84,9 +84,9 @@ describe('AgentCard', () => {
     expect(container.textContent).toContain('0');
   });
 
-  it('maps created agents with no active sessions to an explicit idle status', () => {
+  it('maps unknown agent status values with no active sessions to idle', () => {
     act(() => {
-      root.render(<AgentCard agent={{ ...baseAgent, status: 'created' }} />);
+      root.render(<AgentCard agent={{ ...baseAgent, status: 'legacy-status' }} />);
     });
 
     expect(statusLabel()).toContain('Idle');
@@ -104,7 +104,7 @@ describe('AgentCard', () => {
     act(() => {
       root.render(<AgentCard agent={{
         ...baseAgent,
-        status: 'created',
+        status: 'legacy-status',
         sessionsByStatus: {
           ACTIVE: 1,
           CHECKPOINTED: 0,

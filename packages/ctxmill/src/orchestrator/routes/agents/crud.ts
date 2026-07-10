@@ -1,6 +1,7 @@
 import { seedAgentWorkspace } from '../../../workspace/ensure.js';
-import type { AgentResourceLimits } from '../../../types.js';
+import type { TurnSelect } from '../../../database/types.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { ApiSessionStatusCounts } from '@ctxmill/shared';
 
 import { getAgentHttpToolProviderName, registerAgentHttpTools } from '../../http-tools.js';
 import {
@@ -15,9 +16,57 @@ import {
   isNonEmptyString,
   isObjectRecord,
 } from './helpers.js';
-import type { AgentHttpToolDefinition, AgentSubRouteOptions } from './types.js';
+import type { AgentHttpToolDefinition, AgentRouteBody, AgentSubRouteOptions, StoredAgent } from './types.js';
 
-const defaultSessionCounts = () => ({ ACTIVE: 0, CHECKPOINTED: 0, RESTORING: 0, TERMINATED: 0 });
+const defaultSessionCounts = (): ApiSessionStatusCounts => ({
+  ACTIVE: 0,
+  CHECKPOINTED: 0,
+  RESTORING: 0,
+  TERMINATED: 0,
+});
+
+type LegacyModelFields = {
+  model?: unknown;
+  modelConfig?: unknown;
+};
+
+type AgentCreateRouteBody = AgentRouteBody & LegacyModelFields & {
+  manifest?: Record<string, unknown>;
+};
+
+type AgentUpdateRouteBody = AgentRouteBody & LegacyModelFields;
+
+function buildAgentSummary(
+  agent: StoredAgent,
+  opts: {
+    allRuns: TurnSelect[];
+    activeRuns: TurnSelect[];
+    conversationCount: number;
+    sessionsByStatus: ApiSessionStatusCounts;
+  },
+  deps: Pick<AgentSubRouteOptions, 'sse' | 'interrupts'>,
+): Record<string, unknown> {
+  const completedRuns = opts.allRuns.filter((run) => run.completedAt !== null && !run.error).length;
+  const failedRuns = opts.allRuns.filter((run) => !!run.error).length;
+  const recentRuns = [...opts.allRuns]
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .slice(0, 5);
+
+  return {
+    ...toAgentResponse(agent),
+    // Derived at read from open turns (ctx-1xb); the stored column is vestigial.
+    status: opts.activeRuns.length > 0 ? 'running' : 'idle',
+    sseClients: deps.sse.getClientCount(agent.id),
+    hasPendingInterrupt: deps.interrupts.hasPendingForAgent(agent.id),
+    activeSessions: opts.activeRuns.length,
+    totalSessions: opts.conversationCount,
+    completedSessions: completedRuns,
+    failedSessions: failedRuns,
+    conversationCount: opts.conversationCount,
+    sessions: recentRuns.map((turn) => toApiAgentSession(turn)),
+    sessionsByStatus: opts.sessionsByStatus,
+  };
+}
 
 export async function crudRoutes(
   app: FastifyInstance,
@@ -48,26 +97,15 @@ export async function crudRoutes(
       const allRunsPromise = db.getTurnsByAgent(agent.id);
       const activeRunsPromise = db.getActiveTurnsForAgent(agent.id);
       const [allRuns, activeRuns] = await Promise.all([allRunsPromise, activeRunsPromise]);
-      const completedRuns = allRuns.filter((run) => run.completedAt !== null && !run.error).length;
-      const failedRuns = allRuns.filter((run) => !!run.error).length;
-      const recentRuns = [...allRuns]
-        .sort((a, b) => b.startedAt - a.startedAt)
-        .slice(0, 5);
 
       return {
-        ...toAgentResponse(agent),
-        // Derived at read from open turns (ctx-1xb); the stored column is vestigial.
-        status: activeRuns.length > 0 ? 'running' : 'idle',
-        sseClients: sse.getClientCount(agent.id),
+        ...buildAgentSummary(agent, {
+          allRuns,
+          activeRuns,
+          conversationCount: conversationCounts[idx],
+          sessionsByStatus: sessionStatusMap.get(agent.id) ?? defaultSessionCounts(),
+        }, { sse, interrupts }),
         lastActivity: sse.getLastActivity(agent.id) ?? null,
-        activeSessions: activeRuns.length,
-        totalSessions: conversationCounts[idx],
-        completedSessions: completedRuns,
-        failedSessions: failedRuns,
-        conversationCount: conversationCounts[idx],
-        hasPendingInterrupt: interrupts.hasPendingForAgent(agent.id),
-        sessions: recentRuns.map((turn) => toApiAgentSession(turn)),
-        sessionsByStatus: sessionStatusMap.get(agent.id) ?? defaultSessionCounts(),
       };
     });
 
@@ -78,39 +116,11 @@ export async function crudRoutes(
     '/',
     async (
       request: FastifyRequest<{
-        Body:
-          | string
-          | {
-            name?: string;
-            harness?: string;
-            harnessConfig?: Record<string, unknown>;
-            systemPrompt?: string;
-            tools?: string[];
-            httpTools?: AgentHttpToolDefinition[];
-            description?: string;
-            metadata?: Record<string, unknown>;
-            resourceLimits?: AgentResourceLimits | null;
-            manifest?: Record<string, unknown>;
-            model?: unknown;
-            modelConfig?: unknown;
-          };
+        Body: AgentCreateRouteBody | undefined;
       }>,
       reply: FastifyReply,
     ) => {
-      const body = request.body as {
-        name?: string;
-        harness?: string;
-        harnessConfig?: Record<string, unknown>;
-        systemPrompt?: string;
-        tools?: string[];
-        httpTools?: AgentHttpToolDefinition[];
-        description?: string;
-        metadata?: Record<string, unknown>;
-        resourceLimits?: AgentResourceLimits | null;
-        manifest?: Record<string, unknown>;
-        model?: unknown;
-        modelConfig?: unknown;
-      } | undefined;
+      const body = request.body;
 
       if (body && ('model' in body || 'modelConfig' in body)) {
         return reply.status(400).send({
@@ -171,7 +181,7 @@ export async function crudRoutes(
         description: body.description ?? null,
         metadata: Object.keys(metadata).length > 0 ? metadata : null,
         ...(body.manifest && typeof body.manifest === 'object'
-          ? { manifest: body.manifest as Record<string, unknown> }
+          ? { manifest: body.manifest }
           : {}),
       });
 
@@ -206,34 +216,12 @@ export async function crudRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Body: {
-          name?: string;
-          harness?: string;
-          harnessConfig?: Record<string, unknown>;
-          systemPrompt?: string;
-          tools?: string[];
-          httpTools?: AgentHttpToolDefinition[];
-          description?: string;
-          metadata?: Record<string, unknown>;
-          resourceLimits?: AgentResourceLimits | null;
-        };
+        Body: AgentUpdateRouteBody | undefined;
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const body = request.body as {
-        name?: string;
-        harness?: string;
-        harnessConfig?: Record<string, unknown>;
-        systemPrompt?: string;
-        tools?: string[];
-        httpTools?: AgentHttpToolDefinition[];
-        description?: string;
-        metadata?: Record<string, unknown>;
-        resourceLimits?: AgentResourceLimits | null;
-        model?: unknown;
-        modelConfig?: unknown;
-      } | undefined;
+      const body = request.body;
 
       if (!body || Object.keys(body).length === 0) {
         return reply.status(400).send({ error: 'Request body must contain at least one field to update' });
@@ -413,32 +401,18 @@ export async function crudRoutes(
         db.getActiveTurnsForAgent(id),
         db.getSandboxSessionsByAgent(id),
       ]);
-      const completedRuns = allRuns.filter((session) => session.completedAt !== null && !session.error).length;
-      const failedRuns = allRuns.filter((session) => !!session.error).length;
-      const recentRuns = [...allRuns]
-        .sort((a, b) => b.startedAt - a.startedAt)
-        .slice(0, 5);
-
       const sessionsByStatus = defaultSessionCounts();
       for (const session of sandboxSessions) {
         const key = session.status as keyof typeof sessionsByStatus;
         if (key in sessionsByStatus) sessionsByStatus[key]++;
       }
 
-      return reply.send({
-        ...toAgentResponse(agent),
-        // Derived at read from open turns (ctx-1xb); the stored column is vestigial.
-        status: activeRuns.length > 0 ? 'running' : 'idle',
+      return reply.send(buildAgentSummary(agent, {
+        allRuns,
+        activeRuns,
         conversationCount: conversations.length,
-        sseClients: sse.getClientCount(id),
-        hasPendingInterrupt: interrupts.hasPendingForAgent(id),
-        activeSessions: activeRuns.length,
-        totalSessions: conversations.length,
-        completedSessions: completedRuns,
-        failedSessions: failedRuns,
-        sessions: recentRuns.map((turn) => toApiAgentSession(turn)),
         sessionsByStatus,
-      });
+      }, { sse, interrupts }));
     },
   );
 }

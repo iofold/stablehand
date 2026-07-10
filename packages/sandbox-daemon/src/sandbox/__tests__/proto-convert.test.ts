@@ -343,7 +343,7 @@ describe('protoDeliverTurnToInput', () => {
 });
 
 describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
-  it('wraps standard agent events in the agUiEvent payload case', () => {
+  it('encodes every agUiEvent variant with the expected nested payload', () => {
     const events: Array<{
       event: AgentEvent;
       expectedCase: string | undefined;
@@ -364,7 +364,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
           type: 'tool_call_start',
           id: 'tc-1',
           name: 'search',
-          args: { query: 'ctxmill', limit: 3 },
+          args: '{"query":"ctxmill"}',
         },
         expectedCase: 'toolCallStart',
         assert: (payload) => {
@@ -374,7 +374,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
           expect(payload.event.value).toMatchObject({
             id: 'tc-1',
             name: 'search',
-            argsJson: '{"query":"ctxmill","limit":3}',
+            argsJson: '{"query":"ctxmill"}',
           });
         },
       },
@@ -402,7 +402,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
           type: 'approval_needed',
           id: 'approval-1',
           tool: 'delete-file',
-          args: '{"path":"/tmp/demo"}',
+          args: { path: '/tmp/demo', recursive: true },
         },
         expectedCase: 'approvalNeeded',
         assert: (payload) => {
@@ -412,7 +412,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
           expect(payload.event.value).toMatchObject({
             id: 'approval-1',
             toolName: 'delete-file',
-            argsJson: '{"path":"/tmp/demo"}',
+            argsJson: '{"path":"/tmp/demo","recursive":true}',
           });
         },
       },
@@ -439,6 +439,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
             subtype: 'claude_hook',
             lifecycle: 'response',
             hookEvent: 'Stop',
+            outcome: 'success',
             output: '{"decision":"block"}',
           },
         },
@@ -452,6 +453,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
             subtype: 'claude_hook',
             lifecycle: 'response',
             hookEvent: 'Stop',
+            outcome: 'success',
             output: '{"decision":"block"}',
           });
         },
@@ -477,6 +479,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
             inputTokens: 100,
             outputTokens: 55,
             totalTokens: 155,
+            cost: 0.0045,
           },
         },
         expectedCase: 'done',
@@ -490,6 +493,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
             inputTokens: 100n,
             outputTokens: 55n,
             totalTokens: 155n,
+            cost: 0.0045,
           });
         },
       },

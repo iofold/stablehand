@@ -140,7 +140,7 @@ describe('createToolProxy', () => {
     const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
       retryDelays: [1, 1, 1], // Short delays for testing
     });
-    const result = await handler({ event_type: 'test' });
+    const result = await handler({ type: 'test' });
 
     expect(result).toBe('{"retry":"ok"}');
     expect(requestTool).toHaveBeenCalledTimes(3);
@@ -155,7 +155,7 @@ describe('createToolProxy', () => {
     const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
       retryDelays: [1, 1], // 2 retries + 1 initial = 3 attempts
     });
-    await expect(handler({ event_type: 'test' })).rejects.toThrow(
+    await expect(handler({ type: 'test' })).rejects.toThrow(
       /failed after 3 attempts: network failure/,
     );
     expect(requestTool).toHaveBeenCalledTimes(3);

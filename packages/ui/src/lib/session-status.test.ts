@@ -20,6 +20,7 @@ describe('session status normalization', () => {
     expect(normalizeRunStatus('restoring')).toBe('running');
     expect(normalizeRunStatus('checkpointed')).toBe('completed');
     expect(normalizeRunStatus('TERMINATED')).toBe('cancelled');
-    expect(normalizeRunStatus('FAILED')).toBe('error');
+    expect(normalizeRunStatus('ERROR')).toBe('error');
+    expect(normalizeRunStatus('FAILED')).toBe('failed');
   });
 });

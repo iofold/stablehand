@@ -453,7 +453,7 @@ describe('registerDefaultToolHandlers', () => {
 
     const handler = registry.get('emit-event')!;
     const result = await handler(
-      { event_type: 'my.custom.event', payload: { key: 'value' } },
+      { type: 'my.custom.event', payload: { key: 'value' } },
       { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
@@ -468,22 +468,34 @@ describe('registerDefaultToolHandlers', () => {
     );
   });
 
-  it('defaults event_type to "custom" when not provided', async () => {
+  it('returns an error string when type is not provided', async () => {
     const eventBus = makeEventBus();
     const registry = new DefaultOrchestratorToolRegistry();
     registerDefaultToolHandlers(registry, eventBus);
 
     const handler = registry.get('emit-event')!;
-    await handler(
+    const result = await handler(
       {},
       { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
-    expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
-      'custom',
-      'agent-1',
-      expect.objectContaining({ runId: 'run-1', agentId: 'agent-1' }),
+    expect(result).toBe('Error: emit-event requires a non-empty string "type"');
+    expect(eventBus.emitCustomAsync).not.toHaveBeenCalled();
+  });
+
+  it('returns an error string when type is empty', async () => {
+    const eventBus = makeEventBus();
+    const registry = new DefaultOrchestratorToolRegistry();
+    registerDefaultToolHandlers(registry, eventBus);
+
+    const handler = registry.get('emit-event')!;
+    const result = await handler(
+      { type: '   ', payload: { key: 'value' } },
+      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
     );
+
+    expect(result).toBe('Error: emit-event requires a non-empty string "type"');
+    expect(eventBus.emitCustomAsync).not.toHaveBeenCalled();
   });
 });
 

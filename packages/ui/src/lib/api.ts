@@ -1,5 +1,5 @@
 import { getApiToken, markAuthRequired, withApiAuth } from './auth';
-import type { ApiFeedbackRequest, ApiSandboxRestoreSuccess } from '@ctxmill/shared';
+import type { ApiAgent, ApiConversationSummary, ApiFeedbackRequest, ApiSandboxRestoreSuccess } from '@ctxmill/shared';
 
 const API_BASE = '/api';
 
@@ -97,8 +97,8 @@ function withQuery(
 
 // ── Query operations (throw on failure) ─────────────────────────────
 
-export async function fetchAgents() {
-  return apiFetch(`${API_BASE}/agents`);
+export async function fetchAgents(): Promise<ApiAgent[]> {
+  return apiFetch<ApiAgent[]>(`${API_BASE}/agents`);
 }
 
 export async function fetchAgent(id: string) {
@@ -125,8 +125,8 @@ export async function fetchConversations(agentId: string) {
   return apiFetch(`${API_BASE}/agents/${agentId}/conversations`);
 }
 
-export async function fetchConversationSummaries(agentId: string) {
-  return apiFetch(`${API_BASE}/agents/${agentId}/conversations/summary`);
+export async function fetchConversationSummaries(agentId: string): Promise<{ conversations: ApiConversationSummary[] }> {
+  return apiFetch<{ conversations: ApiConversationSummary[] }>(`${API_BASE}/agents/${agentId}/conversations/summary`);
 }
 
 export async function fetchMessages(agentId: string, conversationId: string) {
@@ -388,7 +388,6 @@ export interface AppConfig {
   };
   agentDefaults?: {
     harness?: string;
-    model?: string;
     temperature?: number;
     maxTokens?: number;
   };

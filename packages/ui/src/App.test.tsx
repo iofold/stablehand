@@ -6,9 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import {
   CONVERSATION_ROUTE,
-  LEGACY_CHAT_ROUTE,
-  LEGACY_NEW_SESSION_ROUTE,
-  LEGACY_SESSION_ROUTE,
   NEW_CONVERSATION_ROUTE,
 } from './lib/routes';
 
@@ -91,9 +88,6 @@ describe('App routes', () => {
   it.each([
     NEW_CONVERSATION_ROUTE.replace(':id', 'agent-1'),
     CONVERSATION_ROUTE.replace(':id', 'agent-1').replace(':conversationId', 'conversation-1'),
-    LEGACY_NEW_SESSION_ROUTE.replace(':id', 'agent-1'),
-    LEGACY_SESSION_ROUTE.replace(':id', 'agent-1').replace(':conversationId', 'conversation-1'),
-    LEGACY_CHAT_ROUTE.replace(':id', 'agent-1'),
   ])('renders SessionPage for %s', (path) => {
     renderAt(path);
     expect(container.querySelector('[data-testid="session-page"]')).not.toBeNull();

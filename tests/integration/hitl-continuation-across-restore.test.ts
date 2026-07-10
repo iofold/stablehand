@@ -58,7 +58,7 @@ function makeDbSession(overrides?: Partial<SandboxSessionRow>): SandboxSessionRo
     containerId: 'c-1',
     status: 'CHECKPOINTED',
     harnessName: 'langgraph',
-    checkpointRef: 'ckpt-1',
+    checkpointRef: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     lastActivityAt: Date.now(),

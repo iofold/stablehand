@@ -11,6 +11,7 @@ import type { ContainerInfo, SandboxContainerManager } from '../../sandbox/conta
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../../database/repository.js';
 import type { AgentDefinition } from '../../types.js';
+import { stopAndRemoveContainer } from '../container-cleanup.js';
 import type { SessionReconciler, SessionStatePort } from './ports.js';
 import {
   retryGrpcCall,
@@ -31,6 +32,7 @@ import type {
   SessionRecord,
   ToolMetadata,
 } from './types.js';
+import { asStringArray, dbSessionToRecord } from './types.js';
 
 const TAG = '[SandboxSessionManager]';
 const TRANSPORT_ERROR_RE = /ENOTFOUND|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ETIMEDOUT|UND_ERR_SOCKET|socket hang up/i;
@@ -41,12 +43,6 @@ function shortHash(input: string): string {
 
 function sessionContainerName(conversationId: string): string {
   return `ctxmill-session-${shortHash(conversationId)}`;
-}
-
-function asStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const strings = value.filter((entry): entry is string => typeof entry === 'string');
-  return strings.length > 0 ? strings : undefined;
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -140,7 +136,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
        return;
      }
 
-    const record = this.dbSessionToRecord(
+    const record = dbSessionToRecord(
       sessionOrConversationId,
       this.isSessionRecord(grpcClientOrRecord) ? undefined : grpcClientOrRecord,
     );
@@ -308,7 +304,6 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         extra: {
           containerName: reachableContainerInfo.containerName,
           containerId: reachableContainerInfo.containerId,
-          checkpointRef: null,
           restoreAttempts: 0,
           lastRestoreError: null,
         },
@@ -445,23 +440,13 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     sessionId: string,
     container: ContainerInfo,
   ): Promise<void> {
-    try {
-      await this.deps.containerManager.stopContainer(container.containerId, 10);
-    } catch (stopErr) {
-      this.deps.logger.warn(
-        `${TAG} rollback stop failed for newly-created container ${container.containerId} (session ${sessionId}):`,
-        stopErr,
-      );
-    }
-
-    try {
-      await this.deps.containerManager.removeContainer(container.containerId, true);
-    } catch (removeErr) {
-      this.deps.logger.warn(
-        `${TAG} rollback removal failed for newly-created container ${container.containerId} (session ${sessionId}):`,
-        removeErr,
-      );
-    }
+    await stopAndRemoveContainer(
+      this.deps.containerManager,
+      container.containerId,
+      this.deps.logger,
+      `${TAG} rollback for newly-created container ${container.containerId} (session ${sessionId})`,
+      10,
+    );
   }
 
   async recoverDeadSession(
@@ -516,18 +501,9 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     return false;
   }
 
-  /**
-   * Reconcile a single session that is stranded in RESTORING (e.g. after an
-   * orchestrator crash mid-restore). The session is moved to CHECKPOINTED
-   * (with no checkpoint -> TERMINATED) and a fresh restore attempt is started
-   * if the auto-retry budget still has room.
-   */
   async reconcileStrandedRestoring(
-    conversationId: string,
-    agentDef: AgentDefinition,
-    agentId: string | undefined,
     dbSession: SandboxSessionRow,
-  ): Promise<SessionRecord> {
+  ): Promise<'CHECKPOINTED' | 'TERMINATED'> {
     const sessionId = dbSession.id;
     const checkpoint = await this.deps.db.getCheckpointV2(sessionId);
 
@@ -541,10 +517,10 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         toStatus: 'TERMINATED',
         clearRuntime: true,
         extra: {
-          lastRestoreError: 'orchestrator restarted with no recoverable checkpoint',
+          lastRestoreError: 'orchestrator restart: no recoverable checkpoint',
         },
       });
-      return this.deps.createFreshSession(conversationId, agentDef, agentId);
+      return 'TERMINATED';
     }
 
     this.deps.logger.info(
@@ -561,73 +537,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       },
     });
 
-    if ((dbSession.restoreAttempts ?? 0) >= MAX_RESTORE_ATTEMPTS) {
-      this.deps.logger.warn(
-        `${TAG} stranded RESTORING session ${sessionId} exceeded retry budget; staying CHECKPOINTED`,
-      );
-      throw new Error(
-        `Session ${sessionId} exceeded restore retry budget; manual retry required`,
-      );
-    }
-
-    return this.restoreFromCheckpoint(
-      { ...dbSession, status: 'CHECKPOINTED' },
-      agentDef,
-    );
-  }
-
-  /**
-   * Startup-time helper: scan for sessions stranded in RESTORING and roll them
-   * back to a recoverable state (CHECKPOINTED if a checkpoint exists,
-   * TERMINATED otherwise). Does not start a new restore loop — that happens on
-   * the next user-driven request.
-   *
-   * Returns the count of sessions reconciled.
-   */
-  async reconcileStrandedRestoringOnStartup(
-    rows: readonly SandboxSessionRow[],
-  ): Promise<{ checkpointed: number; terminated: number }> {
-    let checkpointed = 0;
-    let terminated = 0;
-
-    for (const row of rows) {
-      if (row.status !== 'RESTORING') continue;
-
-      const checkpoint = await this.deps.db.getCheckpointV2(row.id);
-      if (!checkpoint) {
-        await this.deps.statusCoordinator.transition({
-          sessionId: row.id,
-          fromStatus: 'RESTORING',
-          toStatus: 'TERMINATED',
-          clearRuntime: true,
-          extra: {
-            lastRestoreError: 'orchestrator restart: no recoverable checkpoint',
-          },
-        });
-        terminated++;
-        this.deps.logger.warn(
-          `${TAG} startup: stranded RESTORING session ${row.id} -> TERMINATED (no checkpoint)`,
-        );
-        continue;
-      }
-
-      await this.deps.statusCoordinator.transition({
-        sessionId: row.id,
-        fromStatus: 'RESTORING',
-        toStatus: 'CHECKPOINTED',
-        clearRuntime: true,
-        extra: {
-          lastRestoreError:
-            row.lastRestoreError ?? 'orchestrator restarted while restoring',
-        },
-      });
-      checkpointed++;
-      this.deps.logger.info(
-        `${TAG} startup: stranded RESTORING session ${row.id} -> CHECKPOINTED (attempts=${row.restoreAttempts ?? 0})`,
-      );
-    }
-
-    return { checkpointed, terminated };
+    return 'CHECKPOINTED';
   }
 
   private async doRecover(
@@ -651,7 +561,22 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         // attempt was interrupted (orchestrator crash, request abort, etc.).
         // Demote to CHECKPOINTED and resume the retry loop, preserving the
         // attempts counter so we honour the auto-retry budget.
-        return this.reconcileStrandedRestoring(conversationId, agentDef, agentId, dbSession);
+        const outcome = await this.reconcileStrandedRestoring(dbSession);
+        if (outcome === 'TERMINATED') {
+          return this.deps.createFreshSession(conversationId, agentDef, agentId);
+        }
+        if ((dbSession.restoreAttempts ?? 0) >= MAX_RESTORE_ATTEMPTS) {
+          this.deps.logger.warn(
+            `${TAG} stranded RESTORING session ${dbSession.id} exceeded retry budget; staying CHECKPOINTED`,
+          );
+          throw new Error(
+            `Session ${dbSession.id} exceeded restore retry budget; manual retry required`,
+          );
+        }
+        return this.restoreFromCheckpoint(
+          { ...dbSession, status: 'CHECKPOINTED' },
+          agentDef,
+        );
       }
       case 'TERMINATED':
         this.deps.logger.info(
@@ -664,22 +589,6 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         );
         return this.deps.createFreshSession(conversationId, agentDef, agentId);
     }
-  }
-
-  private dbSessionToRecord(
-    row: SandboxSessionRow,
-    grpcClient?: HarnessGrpcClient,
-  ): SessionRecord {
-    return {
-      sessionId: row.id,
-      conversationId: row.conversationId,
-      agentId: row.agentId,
-      containerName: row.containerName ?? '',
-      containerId: row.containerId ?? '',
-      status: (row.status as SessionRecord['status']) ?? 'ACTIVE',
-      harnessName: row.harnessName,
-      ...(grpcClient ? { grpcClient } : {}),
-    };
   }
 
   private isSessionRecord(value: HarnessGrpcClient | SessionRecord | undefined): value is SessionRecord {

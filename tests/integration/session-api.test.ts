@@ -1,45 +1,23 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 describe('Session API lifecycle', () => {
-  let app: Awaited<ReturnType<typeof createServer>>;
-  let container: AppContainer;
-  let dataDir: string;
+  let app: TestAppHandle['app'];
+  let container: TestAppHandle['container'];
+  let testApp: TestAppHandle | undefined;
   let agentId: string;
 
   beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-session-test-'));
-
-    container = await createContainer(
-      {
-        preset: 'docker',
-        database: {
-          url: resolveTestDatabaseUrl(),
-        },
-      },
-      dataDir,
-    );
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      sessionManager: container.sessionManager,
-      runStartupService: container.runStartupService,
-      dataDir,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-session-test-',
+      preset: 'docker',
     });
-
-    await app.ready();
+    app = testApp.app;
+    container = testApp.container;
 
     const createRes = await app.inject({
       method: 'POST',
@@ -57,9 +35,7 @@ describe('Session API lifecycle', () => {
   });
 
   afterAll(async () => {
-    await app.close();
-    await container.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   it('GET /api/agents/:id/sessions returns persisted sessions', async () => {

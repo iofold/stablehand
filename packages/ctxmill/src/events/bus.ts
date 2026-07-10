@@ -94,13 +94,6 @@ export type EventMap = {
     clientId: string;
     timestamp: number;
   };
-  'run.resumed': {
-    turnId: string;
-    agentId: string;
-    triggeredBy: string;
-    suspendedDurationMs: number;
-    timestamp: number;
-  };
   'trigger.fired': {
     triggerId: string;
     agentId: string;

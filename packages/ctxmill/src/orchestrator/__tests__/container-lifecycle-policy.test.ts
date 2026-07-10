@@ -33,6 +33,7 @@ const mockDb = {
 
 const mockOnSessionReconnected = vi.fn();
 const mockOnSessionEvicted = vi.fn().mockResolvedValue(undefined);
+const mockReconcileStrandedRestoring = vi.fn();
 
 const mockLogger = {
   info: vi.fn(),
@@ -89,6 +90,7 @@ function createPolicy() {
     reconciliationCallbacks: {
       onSessionReconnected: mockOnSessionReconnected,
       onSessionEvicted: mockOnSessionEvicted,
+      reconcileStrandedRestoring: mockReconcileStrandedRestoring,
     },
     statusCoordinator,
   });
@@ -139,6 +141,7 @@ describe('ContainerLifecyclePolicy', () => {
 
     mockOnSessionReconnected.mockReset();
     mockOnSessionEvicted.mockReset();
+    mockReconcileStrandedRestoring.mockReset();
 
     policy = createPolicy();
   });
@@ -451,6 +454,27 @@ describe('ContainerLifecyclePolicy', () => {
   });
 
   describe('reconciliation', () => {
+    it('delegates stranded RESTORING transitions, then evicts and cleans local state', async () => {
+      const checkpointed = createSession({ id: 'restore-checkpointed', status: 'RESTORING' });
+      const terminated = createSession({ id: 'restore-terminated', status: 'RESTORING' });
+      mockDb.getStrandedRestoringSessions.mockResolvedValue([checkpointed, terminated]);
+      mockReconcileStrandedRestoring
+        .mockResolvedValueOnce('CHECKPOINTED')
+        .mockResolvedValueOnce('TERMINATED');
+      const entries = Reflect.get(policy, 'entries') as Map<string, unknown>;
+      entries.set(checkpointed.id, { state: 'none' });
+      entries.set(terminated.id, { state: 'none' });
+
+      await getReconcileOnStartup(policy)();
+
+      expect(mockReconcileStrandedRestoring).toHaveBeenNthCalledWith(1, checkpointed);
+      expect(mockReconcileStrandedRestoring).toHaveBeenNthCalledWith(2, terminated);
+      expect(mockOnSessionEvicted).toHaveBeenCalledWith(checkpointed.id, checkpointed.conversationId);
+      expect(mockOnSessionEvicted).toHaveBeenCalledWith(terminated.id, terminated.conversationId);
+      expect(entries.has(checkpointed.id)).toBe(false);
+      expect(entries.has(terminated.id)).toBe(false);
+    });
+
     it('reconcileOnStartup removes dead containers that were checkpointed during startup reconciliation', async () => {
       mockDb.getActiveSandboxSessions.mockResolvedValue([
         createSession({

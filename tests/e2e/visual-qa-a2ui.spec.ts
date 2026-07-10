@@ -38,7 +38,7 @@ Always output the JSON block as part of your natural text response. Surround it 
   test('renders BarChart from inline JSON block', async ({ page, request }) => {
     const capture = new ScreenshotCapture(page, 'a2ui-barchart', 'live');
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     const sendResponsePromise = page.waitForResponse((response) =>
@@ -82,7 +82,7 @@ Always output the JSON block as part of your natural text response. Surround it 
   test('renders LineChart from inline JSON block', async ({ page }) => {
     const capture = new ScreenshotCapture(page, 'a2ui-linechart', 'live');
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     await page.getByTestId('session-input').fill('Generate a line chart of monthly sales data');
@@ -108,7 +108,7 @@ Always output the JSON block as part of your natural text response. Surround it 
   test('renders PieChart from inline JSON block', async ({ page }) => {
     const capture = new ScreenshotCapture(page, 'a2ui-piechart', 'live');
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     await page.getByTestId('session-input').fill('Generate a pie chart of browser market share');

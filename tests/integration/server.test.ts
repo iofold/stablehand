@@ -1,53 +1,26 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
-  let app: Awaited<ReturnType<typeof createServer>>;
-  let container: AppContainer;
-  let dataDir: string;
+  let app: TestAppHandle['app'];
+  let container: TestAppHandle['container'];
+  let testApp: TestAppHandle | undefined;
 
   beforeEach(() => { allowConsoleErrors(); });
 
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-test-'));
-
-    container = await createContainer(
-      {
-        preset: 'docker',
-        database: {
-          url: resolveTestDatabaseUrl(),
-        },
-      },
-      dataDir,
-    );
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      harnessRegistry: container.harnessRegistry,
-      sessionManager: container.sessionManager,
-      runStartupService: container.runStartupService,
-      canonicalLog: container.canonicalLog,
-      dataDir,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-test-',
+      preset: 'docker',
     });
-
-    // Use inject() — no listen() call needed
-    await app.ready();
+    app = testApp.app;
+    container = testApp.container;
   });
 
   afterAll(async () => {
-    await app.close();
-    await container.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   // ── ORC-01: Health check ────────────────────────────────
@@ -149,19 +122,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
       controller.abort();
       reader.releaseLock();
     } finally {
-      await app.close();
-      // Re-create the server for remaining tests and afterAll cleanup
-        app = await createServer({
-          db: container.db,
-          agentSessionService: container.agentSessionService,
-          eventBus: container.eventBus,
-          harnessRegistry: container.harnessRegistry,
-          sessionManager: container.sessionManager,
-          runStartupService: container.runStartupService,
-          canonicalLog: container.canonicalLog,
-          dataDir,
-        });
-        await app.ready();
+      app = await testApp.restart();
     }
   });
 
@@ -223,18 +184,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();
     } finally {
-      await app.close();
-      app = await createServer({
-        db: container.db,
-        agentSessionService: container.agentSessionService,
-        eventBus: container.eventBus,
-        harnessRegistry: container.harnessRegistry,
-        sessionManager: container.sessionManager,
-        runStartupService: container.runStartupService,
-        canonicalLog: container.canonicalLog,
-        dataDir,
-      });
-      await app.ready();
+      app = await testApp.restart();
     }
   }, 15_000);
 

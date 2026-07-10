@@ -27,7 +27,7 @@ test.describe('Conversation continuity @extended', () => {
   });
 
   test('second message includes conversationId from first message response', async ({ page }) => {
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     const messageRequests: Array<{ body: Record<string, unknown> }> = [];

@@ -105,7 +105,7 @@ export class CallbackDispatcher {
    */
   async processPending(): Promise<number> {
     const now = Date.now();
-    const pending = await this.db.getPendingCallbacks(50, now);
+    const pending = await this.db.claimPendingCallbacks(50, now);
     let processed = 0;
 
     for (const entry of pending) {

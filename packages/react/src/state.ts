@@ -299,7 +299,7 @@ export function reduceCtxmillChatState(
         return {
           ...state,
           isRunning: false,
-          error: event.error ?? 'Run failed',
+          error: event.message ?? 'Run failed',
         };
       }
       if (event.type === 'RUN_FINISHED') {

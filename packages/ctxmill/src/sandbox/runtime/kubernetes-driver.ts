@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import * as tar from 'tar-stream';
 
+import { hasStatusCode, statusCodeError } from '../../util/status-code-error.js';
 import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from '../container-scope.js';
 import {
   buildKubernetesJobSpec,
@@ -76,25 +77,11 @@ interface ContainerRecord {
   startedAt: number;
 }
 
-class KubernetesApiError extends Error {
-  constructor(
-    public readonly statusCode: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'KubernetesApiError';
-  }
-}
-
 function envNumber(name: string): number | undefined {
   const value = process.env[name];
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function statusCodeError(statusCode: number, message: string): Error {
-  return Object.assign(new KubernetesApiError(statusCode, message), { statusCode });
 }
 
 async function readNamespace(): Promise<string> {
@@ -389,7 +376,7 @@ export class KubernetesContainerDriver {
         },
       );
     } catch (err) {
-      if (!(err instanceof KubernetesApiError) || err.statusCode !== 404) {
+      if (!hasStatusCode(err, 404)) {
         jobDeleteError = err;
       }
     }
@@ -434,16 +421,6 @@ export class KubernetesContainerDriver {
       try {
         await fs.access(conversationWorkspaceDir);
         return conversationWorkspaceDir;
-      } catch {
-        // fall through to legacy session workspace
-      }
-    }
-
-    if (agentId) {
-      const sessionWorkspaceDir = join(this.dataHostPathRoot, 'agents', agentId, 'sessions', sessionId, 'workspace');
-      try {
-        await fs.access(sessionWorkspaceDir);
-        return sessionWorkspaceDir;
       } catch {
         // fall through to sandbox-empty
       }

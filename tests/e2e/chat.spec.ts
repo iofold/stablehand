@@ -39,7 +39,7 @@ test.describe('Chat conversation flow @extended', () => {
     });
     agentId = agent.id;
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
   });
 

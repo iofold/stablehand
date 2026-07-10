@@ -36,21 +36,15 @@ describe('resolveBaseDir', () => {
   it('uses conversation workspace when a conversation id and data dir are available', () => {
     expect(resolveBaseDir(
       { id: 'agent-1', workspaceDir: '/workspace/agent-1' },
-      { dataDir: '/var/lib/ctxmill', conversationId: 'conversation-1', sandboxSessionId: 'sandbox-1' },
+      { dataDir: '/var/lib/ctxmill', conversationId: 'conversation-1' },
     )).toBe('/var/lib/ctxmill/agents/agent-1/conversations/conversation-1/workspace');
   });
 
-  it('falls back to legacy sandbox session workspace when only a sandbox session id is available', () => {
-    expect(resolveBaseDir(
-      { id: 'agent-1', workspaceDir: '/workspace/agent-1' },
-      { dataDir: '/var/lib/ctxmill', sandboxSessionId: 'sandbox-1' },
-    )).toBe('/var/lib/ctxmill/agents/agent-1/sessions/sandbox-1/workspace');
-  });
-
-  it('falls back to the agent workspace without a sandbox session mapping', () => {
+  it('does not resolve a legacy sandbox session workspace without a conversation id', () => {
     expect(resolveBaseDir(
       { id: 'agent-1', workspaceDir: '/workspace/agent-1' },
       { dataDir: '/var/lib/ctxmill' },
     )).toBe('/workspace/agent-1');
   });
+
 });

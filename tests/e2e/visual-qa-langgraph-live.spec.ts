@@ -32,7 +32,7 @@ test.describe(`${HARNESS} Live Streaming Visual QA @extended`, () => {
     test.setTimeout(180_000);
     const capture = new ScreenshotCapture(page, HARNESS, 'live');
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
     await capture.captureViewport('empty-state', 'Chat page initial empty state');
 
@@ -89,7 +89,7 @@ test.describe(`${HARNESS} Live Streaming Visual QA @extended`, () => {
     test.setTimeout(180_000);
     const capture = new ScreenshotCapture(page, HARNESS, 'live');
 
-    await page.goto(`/agents/${agentId}/sessions/new`);
+    await page.goto(`/agents/${agentId}/conversations/new`);
     await expect(page.getByTestId('session-input')).toBeVisible({ timeout: 15_000 });
 
     const sendResponsePromise = page.waitForResponse((response) =>

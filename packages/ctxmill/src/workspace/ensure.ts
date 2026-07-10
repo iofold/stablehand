@@ -1,22 +1,12 @@
-import { mkdirSync, existsSync, renameSync, writeFileSync, readdirSync, chownSync } from 'node:fs';
+import { mkdirSync, existsSync, writeFileSync, readdirSync, chownSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 export function ensureAgentWorkspace(dataDir: string, agentId: string): string {
   const agentDir = join(dataDir, 'agents', agentId);
   const baseDir = join(agentDir, 'base');
-  const sessionsDir = join(agentDir, 'sessions');
-
-  // Migration: if old flat layout exists, move into base/
-  const oldWorkspace = join(agentDir, 'workspace');
-  if (existsSync(oldWorkspace) && !existsSync(baseDir)) {
-    mkdirSync(baseDir, { recursive: true });
-    renameSync(oldWorkspace, join(baseDir, 'workspace'));
-    const oldNotes = join(agentDir, 'notes');
-    if (existsSync(oldNotes)) renameSync(oldNotes, join(baseDir, 'notes'));
-  }
 
   // Ensure directories exist with ctxmill user ownership (UID 1000)
-  for (const dir of [join(baseDir, 'workspace'), join(baseDir, 'notes'), sessionsDir]) {
+  for (const dir of [join(baseDir, 'workspace'), join(baseDir, 'notes')]) {
     mkdirSync(dir, { recursive: true });
     try { chownSync(dir, 1000, 1000); } catch { /* non-root orchestrator — skip chown */ }
   }

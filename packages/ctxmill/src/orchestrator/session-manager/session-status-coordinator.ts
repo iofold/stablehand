@@ -9,7 +9,6 @@ import type { Logger, SessionStatus } from './types.js';
 interface StatusExtra {
   containerName?: string | null;
   containerId?: string | null;
-  checkpointRef?: string | null;
   restoreAttempts?: number | null;
   lastRestoreError?: string | null;
 }

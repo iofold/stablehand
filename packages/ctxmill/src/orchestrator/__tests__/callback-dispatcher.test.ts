@@ -12,7 +12,7 @@ function createMockDb() {
       store.set(row.id, row);
       return row;
     }),
-    getPendingCallbacks: vi.fn(async (limit: number, beforeTime: number) => {
+    claimPendingCallbacks: vi.fn(async (limit: number, beforeTime: number) => {
       const results: CallbackOutboxRow[] = [];
       for (const row of store.values()) {
         if (row.status === 'pending' && row.nextAttemptAt <= beforeTime) {

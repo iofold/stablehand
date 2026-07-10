@@ -222,9 +222,31 @@ describe('ContainerManager', () => {
       const arg = docker.createContainer.mock.calls[0][0];
       expect(arg.HostConfig.CpuQuota).toBe(250_000); // 2.5 * 100000
       expect(arg.HostConfig.Memory).toBe(4096 * 1024 * 1024);
+      expect(arg.HostConfig.MemorySwap).toBe(4096 * 1024 * 1024);
       expect(arg.HostConfig.PidsLimit).toBe(512);
       expect(arg.Labels['ctxmill.timeout']).toBe('1200');
       expect(arg.Env).toContain(`NODE_OPTIONS=--max-old-space-size=${Math.floor(4096 * 0.9)}`);
+    });
+
+    it('keeps swap disabled by matching MemorySwap to Memory', async () => {
+      await manager.createContainer({
+        ...defaultCreateOpts(),
+        memoryMb: 1024,
+      });
+
+      const arg = docker.createContainer.mock.calls[0][0];
+      expect(arg.HostConfig.MemorySwap).toBe(arg.HostConfig.Memory);
+    });
+
+    it('derives NODE_OPTIONS from the resolved memory limit', async () => {
+      await manager.createContainer({
+        ...defaultCreateOpts(),
+        memoryMb: 1024,
+      });
+
+      const arg = docker.createContainer.mock.calls[0][0];
+      const nodeOptions = arg.Env.find((entry: string) => entry.startsWith('NODE_OPTIONS='));
+      expect(nodeOptions).toBe(`NODE_OPTIONS=--max-old-space-size=${Math.floor(2048 * 0.9)}`);
     });
 
     it('mounts workspace directory when provided', async () => {
@@ -686,6 +708,7 @@ describe('ContainerManager', () => {
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
+            [CONTAINER_SCOPE_LABEL]: resolveContainerScopeId(),
             'ctxmill.session-id': 'run-001',
             'ctxmill.agent-id': 'agent-abc',
             'ctxmill.harness': 'claude-agents',
@@ -711,13 +734,41 @@ describe('ContainerManager', () => {
        expect(info!.networkIp).toBe('172.18.0.5');
      });
 
+    it('falls back to another attached network when the configured network has no IP', async () => {
+      docker.listContainers.mockResolvedValue([
+        {
+          Id: 'sha256-found',
+          Names: ['/ctxmill-run-run-001'],
+          State: 'running',
+          Labels: {
+            [CONTAINER_SCOPE_LABEL]: resolveContainerScopeId(),
+            'ctxmill.session-id': 'run-001',
+          },
+          NetworkSettings: {
+            Networks: {
+              'ctxmill-agents': { IPAddress: '' },
+              fallback: { IPAddress: '172.19.0.7' },
+            },
+          },
+        },
+      ]);
+
+      const info = await manager.getContainer('run-001');
+
+      expect(info?.networkIp).toBe('172.19.0.7');
+    });
+
     it('filters by ctxmill.session-id label', async () => {
       await manager.getContainer('run-xyz');
 
       expect(docker.listContainers).toHaveBeenCalledWith({
         all: true,
         filters: {
-          label: ['ctxmill.managed=true', 'ctxmill.session-id=run-xyz'],
+          label: [
+            'ctxmill.managed=true',
+            `${CONTAINER_SCOPE_LABEL}=${resolveContainerScopeId()}`,
+            'ctxmill.session-id=run-xyz',
+          ],
         },
       });
     });
@@ -767,11 +818,13 @@ describe('ContainerManager', () => {
 
       expect(docker.listContainers).toHaveBeenCalledWith({
         all: true,
-        filters: { label: ['ctxmill.managed=true'] },
+        filters: { label: ['ctxmill.managed=true', `${CONTAINER_SCOPE_LABEL}=${resolveContainerScopeId()}`] },
       });
     });
 
     it('returns all managed containers', async () => {
+      const currentScopeId = resolveContainerScopeId();
+
       docker.listContainers.mockResolvedValue([
         {
           Id: 'c1',
@@ -779,6 +832,7 @@ describe('ContainerManager', () => {
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
+            [CONTAINER_SCOPE_LABEL]: currentScopeId,
             'ctxmill.session-id': 'r1',
             'ctxmill.agent-id': 'a1',
             'ctxmill.harness': 'langgraph',
@@ -791,6 +845,7 @@ describe('ContainerManager', () => {
           State: 'exited',
           Labels: {
             'ctxmill.managed': 'true',
+            [CONTAINER_SCOPE_LABEL]: currentScopeId,
             'ctxmill.session-id': 'r2',
             'ctxmill.agent-id': 'a2',
             'ctxmill.harness': 'pi-agent',
@@ -807,9 +862,7 @@ describe('ContainerManager', () => {
        expect(result[1].status).toBe('stopped');
      });
 
-    it('excludes foreign ctxmill containers from broad lifecycle cleanup lists', async () => {
-      vi.stubEnv('CTXMILL_DATA_VOLUME', 'ctxmill_ctxmill-data');
-      manager = new ContainerManager(undefined, docker as unknown as Dockerode);
+    it('excludes foreign and unscoped ctxmill containers from broad lifecycle cleanup lists', async () => {
       const currentScopeId = resolveContainerScopeId();
 
       docker.listContainers.mockResolvedValue([
@@ -836,7 +889,7 @@ describe('ContainerManager', () => {
           NetworkSettings: { Networks: {} },
         },
         {
-          Id: 'legacy-current-volume',
+          Id: 'unscoped-current-volume',
           Names: ['/ctxmill-run-r3'],
           State: 'running',
           Labels: {
@@ -849,7 +902,7 @@ describe('ContainerManager', () => {
           NetworkSettings: { Networks: {} },
         },
         {
-          Id: 'legacy-foreign-volume',
+          Id: 'unscoped-foreign-volume',
           Names: ['/ctxmill-run-r4'],
           State: 'running',
           Labels: {
@@ -866,7 +919,6 @@ describe('ContainerManager', () => {
       const result = await manager.listManagedContainers();
       expect(result.map((container) => container.containerId)).toEqual([
         'current-scoped',
-        'legacy-current-volume',
       ]);
     });
   });
@@ -989,6 +1041,7 @@ describe('ContainerManager', () => {
           State: dockerState,
           Labels: {
             'ctxmill.managed': 'true',
+            [CONTAINER_SCOPE_LABEL]: resolveContainerScopeId(),
             'ctxmill.session-id': `r-${dockerState}`,
             'ctxmill.agent-id': 'a1',
             'ctxmill.harness': 'claude-agents',

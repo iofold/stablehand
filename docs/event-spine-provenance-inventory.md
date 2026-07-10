@@ -22,7 +22,6 @@ for a single bus event.
 | `agent.deleted` | `system` | 1 | Verbatim typed bus payload. |
 | `client.connected` | `system` | 1 | Verbatim typed bus payload. |
 | `client.disconnected` | `system` | 1 | Verbatim typed bus payload. |
-| `run.resumed` | `system` | 1 | Verbatim typed bus payload; not an SSE run-channel frame. |
 | `trigger.fired` | `system` | 1 | Verbatim typed bus payload. |
 | `message.committed` | `run` | 1 | `CUSTOM name: ctxmill.message.committed`. |
 | `turn.pending` | `run` | 1 | `CUSTOM name: ctxmill.turn.pending`. |

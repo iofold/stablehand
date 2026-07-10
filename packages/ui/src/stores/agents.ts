@@ -63,8 +63,7 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
     if (isInitial) set({ loading: true });
     try {
       const data = await apiFetchAgents();
-      const rawAgents: Agent[] = Array.isArray(data) ? data : ((data as Record<string, unknown>)?.agents as Agent[] ?? []);
-      const agents = rawAgents.map((agent) => ({
+      const agents = data.map((agent) => ({
         ...agent,
         sessionsByStatus: normalizeSessionStatusCounts(agent.sessionsByStatus) ?? undefined,
       }));

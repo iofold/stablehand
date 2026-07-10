@@ -6,12 +6,13 @@ import {
 } from '@ctxmill/proto/sandbox/v1';
 import { resolve } from 'node:path';
 
-import type { DatabaseRepository, SandboxSessionRow } from '../../database/repository.js';
+import type { DatabaseRepository } from '../../database/repository.js';
 import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 import type { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import { cleanupSession } from '../../workspace/session-workspace.js';
 import type { AgentDefinition } from '../../types.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
+import { stopAndRemoveContainer } from '../container-cleanup.js';
 import type { SessionReconciler } from './ports.js';
 import { SessionRecoveryCoordinator } from './session-recovery-coordinator.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
@@ -20,6 +21,7 @@ import type {
   Logger,
   SessionRecord,
 } from './types.js';
+import { dbSessionToRecord } from './types.js';
 
 const TAG = '[SandboxSessionManager]';
 
@@ -31,6 +33,10 @@ export interface RestoreSessionStart {
   sessionId: string;
   status: 'RESTORING';
   restoreAttempts: 0;
+}
+
+export interface RestoreSessionOptions {
+  background?: boolean;
 }
 
 export class ActiveTurnSuspendError extends Error {
@@ -83,7 +89,6 @@ export interface SessionLifecycleServiceDeps {
     | 'getSandboxSession'
     | 'getSandboxSessionByConversation'
     | 'getSandboxSessionsByAgent'
-    | 'getStrandedRestoringSessions'
   >;
   statusCoordinator: SessionStatusCoordinator;
   containerManager: Pick<SandboxContainerManager, 'getContainer' | 'removeContainer' | 'stopContainer'>;
@@ -133,7 +138,19 @@ export class SessionLifecycleService {
     sessionId: string,
     agentDef: AgentDefinition,
     agentId?: string,
-  ): Promise<SessionRecord> {
+  ): Promise<SessionRecord>;
+  async restoreSession(
+    sessionId: string,
+    agentDef: AgentDefinition,
+    agentId: string | undefined,
+    options: { background: true },
+  ): Promise<RestoreSessionStart>;
+  async restoreSession(
+    sessionId: string,
+    agentDef: AgentDefinition,
+    agentId?: string,
+    options: RestoreSessionOptions = {},
+  ): Promise<SessionRecord | RestoreSessionStart> {
     const initial = await this.deps.db.getSandboxSession(sessionId);
     if (!initial) {
       throw new SandboxSessionNotFoundError(sessionId);
@@ -158,50 +175,18 @@ export class SessionLifecycleService {
         extra: { restoreAttempts: 0, lastRestoreError: null },
       });
 
-      return this.deps.recoveryCoordinator.recoverOrReconnect(
+      const recovery = this.deps.recoveryCoordinator.recoverOrReconnect(
         current.conversationId,
         agentDef,
         agentId ?? current.agentId,
         { ...current, restoreAttempts: 0, lastRestoreError: null },
       );
-    });
-  }
 
-  async startRestoreSession(
-    sessionId: string,
-    agentDef: AgentDefinition,
-    agentId?: string,
-  ): Promise<RestoreSessionStart> {
-    const initial = await this.deps.db.getSandboxSession(sessionId);
-    if (!initial) {
-      throw new SandboxSessionNotFoundError(sessionId);
-    }
-
-    return this.deps.stateStore.withConversationLock(initial.conversationId, async () => {
-      this.deps.stateStore.setAgentDef(initial.conversationId, agentDef);
-
-      const current = await this.deps.db.getSandboxSession(sessionId);
-      if (!current) {
-        throw new SandboxSessionNotFoundError(sessionId);
+      if (!options.background) {
+        return recovery;
       }
 
-      if (current.status !== 'CHECKPOINTED') {
-        throw new RestoreConflictError(sessionId, current.status);
-      }
-
-      await this.deps.statusCoordinator.transition({
-        sessionId,
-        fromStatus: 'CHECKPOINTED',
-        toStatus: 'CHECKPOINTED',
-        extra: { restoreAttempts: 0, lastRestoreError: null },
-      });
-
-      void this.deps.recoveryCoordinator.recoverOrReconnect(
-        current.conversationId,
-        agentDef,
-        agentId ?? current.agentId,
-        { ...current, restoreAttempts: 0, lastRestoreError: null },
-      ).catch((err: unknown) => {
+      void recovery.catch((err: unknown) => {
         this.deps.logger.warn(
           `${TAG} background restore failed for session ${sessionId}:`,
           err,
@@ -259,7 +244,7 @@ export class SessionLifecycleService {
     const workspaceRef = await this.deps.workspaceDiffService.capture(sessionId, record.containerId);
     this.deps.logger.info(`${TAG} workspace captured for session ${sessionId}: ${workspaceRef}`);
 
-    const checkpointRow: { id: string } = await this.deps.db.createCheckpointV2({
+    await this.deps.db.createCheckpointV2({
       sessionId,
       agentId: record.agentId,
       checkpointData: {
@@ -286,9 +271,6 @@ export class SessionLifecycleService {
       fromStatus: record.status,
       toStatus: 'CHECKPOINTED',
       clearRuntime: true,
-      extra: {
-        checkpointRef: checkpointRow.id,
-      },
     });
 
     this.deps.stateStore.cleanupSession(sessionId, record.conversationId);
@@ -337,41 +319,17 @@ export class SessionLifecycleService {
     }
 
     const dbSession = await this.deps.db.getSandboxSessionByConversation(conversationId);
-    return dbSession ? this.dbSessionToRecord(dbSession) : null;
+    return dbSession ? dbSessionToRecord(dbSession) : null;
   }
 
   async getActiveSessions(): Promise<SessionRecord[]> {
     const rows = await this.deps.db.getActiveSandboxSessions();
-    return rows.map((row) => this.dbSessionToRecord(row));
+    return rows.map((row) => dbSessionToRecord(row));
   }
 
   async getSessionsByAgent(agentId: string): Promise<SessionRecord[]> {
     const rows = await this.deps.db.getSandboxSessionsByAgent(agentId);
-    return rows.map((row) => this.dbSessionToRecord(row));
-  }
-
-  /**
-   * Startup-time reconciliation per ctx-7fz: rolls any session stranded in
-   * RESTORING back to a recoverable state (CHECKPOINTED if a checkpoint
-   * exists, TERMINATED otherwise). Should be called once during orchestrator
-   * boot, before serving requests, to repair rows left behind by a crash
-   * mid-restore.
-   *
-   * @param updatedBeforeMs Optional cutoff (epoch ms). Only rows older than
-   *   this timestamp are considered stranded — useful when reconciliation runs
-   *   after some restores may have already started.
-   */
-  async reconcileStrandedRestoringSessions(
-    updatedBeforeMs?: number,
-  ): Promise<{ checkpointed: number; terminated: number }> {
-    const rows = await this.deps.db.getStrandedRestoringSessions(updatedBeforeMs);
-    if (rows.length === 0) {
-      return { checkpointed: 0, terminated: 0 };
-    }
-    this.deps.logger.info(
-      `${TAG} reconciling ${rows.length} stranded RESTORING session(s) on startup`,
-    );
-    return this.deps.recoveryCoordinator.reconcileStrandedRestoringOnStartup(rows);
+    return rows.map((row) => dbSessionToRecord(row));
   }
 
   private async cleanupRuntime(
@@ -384,17 +342,13 @@ export class SessionLifecycleService {
       : await this.deps.containerManager.getContainer(sessionId);
 
     if (runtimeContainer?.containerId) {
-      try {
-        await this.deps.containerManager.stopContainer(runtimeContainer.containerId, 10);
-      } catch (err) {
-        this.deps.logger.warn(`${TAG} container stop failed for session ${sessionId}:`, err);
-      }
-
-      try {
-        await this.deps.containerManager.removeContainer(runtimeContainer.containerId, true);
-      } catch (err) {
-        this.deps.logger.warn(`${TAG} container removal failed for session ${sessionId}:`, err);
-      }
+      await stopAndRemoveContainer(
+        this.deps.containerManager,
+        runtimeContainer.containerId,
+        this.deps.logger,
+        `${TAG} cleanup for session ${sessionId}`,
+        10,
+      );
     }
 
     if (!cleanupWorkspace || !record?.sessionWorkspaceDir) {
@@ -410,15 +364,4 @@ export class SessionLifecycleService {
     }
   }
 
-  private dbSessionToRecord(row: SandboxSessionRow): SessionRecord {
-    return {
-      sessionId: row.id,
-      conversationId: row.conversationId,
-      agentId: row.agentId,
-      containerName: row.containerName ?? '',
-      containerId: row.containerId ?? '',
-      status: (row.status as SessionRecord['status']) ?? 'ACTIVE',
-      harnessName: row.harnessName,
-    };
-  }
 }

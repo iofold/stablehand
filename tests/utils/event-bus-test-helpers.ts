@@ -244,19 +244,6 @@ export function makeAgentCreatedEvent(
   };
 }
 
-export function makeRunResumedEvent(
-  overrides?: Partial<EventMap['run.resumed']>,
-): EventMap['run.resumed'] {
-  return {
-    turnId: 'run-test-1',
-    agentId: 'agent-test-1',
-    triggeredBy: 'feedback.received',
-    suspendedDurationMs: 5000,
-    timestamp: Date.now(),
-    ...overrides,
-  };
-}
-
 export function makeTurnPendingEvent(
   overrides?: Partial<EventMap['turn.pending']>,
 ): EventMap['turn.pending'] {

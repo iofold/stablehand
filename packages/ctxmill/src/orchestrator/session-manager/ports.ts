@@ -5,6 +5,7 @@ import type { HarnessGrpcClient, SessionRecord, TurnQueueEntry } from './types.j
 export interface SessionReconciler {
   onSessionReconnected(session: SandboxSessionRow, grpcClient?: HarnessGrpcClient): void;
   onSessionEvicted(sessionId: string, conversationId: string): void | Promise<void>;
+  reconcileStrandedRestoring(session: SandboxSessionRow): Promise<'CHECKPOINTED' | 'TERMINATED'>;
   recoverDeadSession?(
     session: SandboxSessionRow,
     conversationId: string,

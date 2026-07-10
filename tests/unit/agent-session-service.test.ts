@@ -104,7 +104,6 @@ function createDeps(overrides: {
     updateTurn: ReturnType<typeof vi.fn>;
     finalizeTurnIfOpen?: ReturnType<typeof vi.fn>;
     getTurn?: ReturnType<typeof vi.fn>;
-    updateMessageToolCalls?: ReturnType<typeof vi.fn>;
     getMessages?: ReturnType<typeof vi.fn>;
     updateMessageToolCallsAndParts?: ReturnType<typeof vi.fn>;
   };
@@ -122,7 +121,6 @@ function createDeps(overrides: {
     updateTurn: vi.fn().mockResolvedValue(undefined),
     finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
     getTurn: vi.fn().mockResolvedValue({ id: 'run-1', sessionId: 'sandbox-1' }),
-    updateMessageToolCalls: vi.fn().mockResolvedValue(undefined),
     getMessages: vi.fn().mockResolvedValue([]),
     updateMessageToolCallsAndParts: vi.fn().mockResolvedValue(undefined),
     ...overrides.db,
@@ -280,10 +278,11 @@ describe('AgentSessionService', () => {
       { type: 'TEXT_MESSAGE_START', timestamp: 2, runId: 'run-1', messageId: 'm1', role: 'assistant' },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 3, runId: 'run-1', messageId: 'm1', content: 'Hi' },
       makeCommittedEvent({ timestamp: 4, content: 'Hi' }),
-      { type: 'RUN_FINISHED', timestamp: 5, runId: 'run-1' },
+      { type: 'HITL_PAUSE', timestamp: 5, runId: 'run-1', reason: 'approval_required' },
+      { type: 'RUN_FINISHED', timestamp: 6, runId: 'run-1' },
     ];
 
-    const individuallyHandled = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT', 'MESSAGE_COMMITTED', 'RUN_ERROR', 'RUN_FINISHED']);
+    const individuallyHandled = new Set(['TEXT_MESSAGE_CONTENT', 'TOOL_CALL_START', 'TOOL_CALL_RESULT', 'MESSAGE_COMMITTED', 'RUN_ERROR', 'RUN_FINISHED', 'HITL_PAUSE']);
     const forwardedEvents = events.filter((event) => !individuallyHandled.has(event.type));
 
     const eventBus = createEventBusMock();
@@ -438,6 +437,32 @@ describe('AgentSessionService', () => {
     }));
   });
 
+  it('updates both persisted assistant tool-call projections after later tool results', async () => {
+    const events: StreamEvent[] = [
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', content: 'Checking.' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search', result: 'first', durationMs: 1 },
+      { type: 'TOOL_CALL_START', timestamp: 4, runId: 'run-1', toolCallId: 'tc-2', toolName: 'lookup' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc-2', toolName: 'lookup', result: 'second', durationMs: 1 },
+      { type: 'RUN_FINISHED', timestamp: 6, runId: 'run-1' },
+    ];
+
+    const { db } = await executeEvents(events);
+
+    expect(db.updateMessageToolCallsAndParts).toHaveBeenCalledWith(
+      'msg-1',
+      [
+        { id: 'tc-1', name: 'search', args: '', status: 'complete' },
+        { id: 'tc-2', name: 'lookup', args: '', status: 'complete' },
+      ],
+      [
+        { type: 'text', content: 'Checking.' },
+        { type: 'tool_call', id: 'tc-1', name: 'search', args: '', result: 'first', status: 'complete' },
+        { type: 'tool_call', id: 'tc-2', name: 'lookup', args: '', result: 'second', status: 'complete' },
+      ],
+    );
+  });
+
   it('calls completeSession after a successful turn', async () => {
     const { sessionManager } = await executeEvents([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]);
 
@@ -557,7 +582,6 @@ describe('AgentSessionService', () => {
       updateTurn: vi.fn().mockResolvedValue(undefined),
       finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
       getTurn: vi.fn().mockResolvedValue({ id: 'run-1', sessionId: 'sandbox-1' }),
-      updateMessageToolCalls: vi.fn().mockResolvedValue(undefined),
       getMessages: vi.fn().mockResolvedValue([
         {
           id: 'msg-persisted',

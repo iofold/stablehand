@@ -14,99 +14,97 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+const WEBHOOK_PAYLOAD_FIELDS = {
+  'turn.completed': [
+    'turnId',
+    'sessionId',
+    'agentId',
+    'conversationId',
+    'status',
+    'error',
+    'durationMs',
+    'timestamp',
+  ],
+  'turn.started': [
+    'turnId',
+    'sessionId',
+    'agentId',
+    'conversationId',
+    'mode',
+    'taskDescription',
+    'timestamp',
+  ],
+  'run.tool_started': [
+    'turnId',
+    'agentId',
+    'conversationId',
+    'toolCallId',
+    'toolName',
+    'args',
+    'requiresApproval',
+    'timestamp',
+  ],
+  'run.interrupted': [
+    'turnId',
+    'agentId',
+    'conversationId',
+    'toolCallId',
+    'toolName',
+    'args',
+    'interruptId',
+    'timestamp',
+  ],
+  'run.tool_result': [
+    'turnId',
+    'agentId',
+    'conversationId',
+    'toolCallId',
+    'toolName',
+    'result',
+    'durationMs',
+    'error',
+    'timestamp',
+  ],
+  'run.interrupt_resolved': [
+    'turnId',
+    'agentId',
+    'conversationId',
+    'interruptId',
+    'action',
+    'timestamp',
+  ],
+  'message.committed': [
+    'turnId',
+    'agentId',
+    'conversationId',
+    'messageId',
+    'messageSeq',
+    'role',
+    'content',
+    'parts',
+    'toolCalls',
+    'toolCallId',
+    'timestamp',
+  ],
+  'feedback.received': [
+    'feedbackId',
+    'turnId',
+    'agentId',
+    'type',
+    'messageId',
+    'timestamp',
+  ],
+} as const satisfies Record<ValidWebhookEvent, readonly string[]>;
+
 export function buildWebhookPayload(
   eventType: ValidWebhookEvent,
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
-  switch (eventType) {
-    case 'turn.completed':
-      return {
-        turnId: payload.turnId,
-        sessionId: payload.sessionId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        status: payload.status,
-        error: payload.error,
-        durationMs: payload.durationMs,
-        timestamp: payload.timestamp,
-      };
-    case 'turn.started':
-      return {
-        turnId: payload.turnId,
-        sessionId: payload.sessionId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        mode: payload.mode,
-        taskDescription: payload.taskDescription,
-        timestamp: payload.timestamp,
-      };
-    case 'run.tool_started':
-      return {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        toolCallId: payload.toolCallId,
-        toolName: payload.toolName,
-        args: payload.args,
-        requiresApproval: payload.requiresApproval,
-        timestamp: payload.timestamp,
-      };
-    case 'run.interrupted':
-      return {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        toolCallId: payload.toolCallId,
-        toolName: payload.toolName,
-        args: payload.args,
-        interruptId: payload.interruptId,
-        timestamp: payload.timestamp,
-      };
-    case 'run.tool_result':
-      return {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        toolCallId: payload.toolCallId,
-        toolName: payload.toolName,
-        result: payload.result,
-        durationMs: payload.durationMs,
-        error: payload.error,
-        timestamp: payload.timestamp,
-      };
-    case 'run.interrupt_resolved':
-      return {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        interruptId: payload.interruptId,
-        action: payload.action,
-        timestamp: payload.timestamp,
-      };
-    case 'message.committed':
-      return {
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        conversationId: payload.conversationId,
-        messageId: payload.messageId,
-        messageSeq: payload.messageSeq,
-        role: payload.role,
-        content: payload.content,
-        parts: payload.parts,
-        toolCalls: payload.toolCalls,
-        toolCallId: payload.toolCallId,
-        timestamp: payload.timestamp,
-      };
-    case 'feedback.received':
-      return {
-        feedbackId: payload.feedbackId,
-        turnId: payload.turnId,
-        agentId: payload.agentId,
-        type: payload.type,
-        messageId: payload.messageId,
-        timestamp: payload.timestamp,
-      };
+  const webhookPayload: Record<string, unknown> = {};
+  for (const field of WEBHOOK_PAYLOAD_FIELDS[eventType]) {
+    webhookPayload[field] = payload[field];
   }
+  return webhookPayload;
 }
 
 export class WebhookRelay {

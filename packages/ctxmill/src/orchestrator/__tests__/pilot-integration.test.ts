@@ -235,7 +235,7 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
       callbackOutbox.set(row.id, row);
       return { ...row };
     }),
-    getPendingCallbacks: vi.fn(async (limit: number, beforeTime: number) => {
+    claimPendingCallbacks: vi.fn(async (limit: number, beforeTime: number) => {
       return Array.from(callbackOutbox.values())
         .filter((row) => row.status === 'pending' && row.nextAttemptAt <= beforeTime)
         .slice(0, limit)

@@ -46,4 +46,17 @@ describe('@ctxmill/react chat reducer', () => {
     });
     expect(state.pendingHitl?.id).toBe('run-1');
   });
+
+  it('uses the canonical RUN_ERROR message field', () => {
+    const state = reduceCtxmillChatState(
+      { ...createInitialChatState('conv-1'), isRunning: true },
+      {
+        type: 'stream_event',
+        event: { type: 'RUN_ERROR', runId: 'run-1', threadId: 'conv-1', message: 'tool execution failed' },
+      },
+    );
+
+    expect(state.isRunning).toBe(false);
+    expect(state.error).toBe('tool execution failed');
+  });
 });

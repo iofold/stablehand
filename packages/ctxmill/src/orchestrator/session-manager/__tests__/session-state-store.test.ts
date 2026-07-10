@@ -14,8 +14,6 @@ function createSessionRecord(overrides?: Partial<SessionRecord>): SessionRecord 
     status: overrides?.status ?? 'ACTIVE',
     harnessName: overrides?.harnessName ?? 'langgraph',
     sessionWorkspaceDir: overrides?.sessionWorkspaceDir,
-    currentTurnAbortController: overrides?.currentTurnAbortController,
-    currentTurnId: overrides?.currentTurnId,
     grpcClient: overrides?.grpcClient,
   };
 }

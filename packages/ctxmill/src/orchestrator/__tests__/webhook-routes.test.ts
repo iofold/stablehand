@@ -186,6 +186,20 @@ describe('webhook routes', () => {
     expect(db.createWebhook).not.toHaveBeenCalled();
   });
 
+  it('rejects create payloads missing required webhook fields', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/webhooks',
+      payload: {
+        url: 'https://hooks.example/new',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'url and events are required' });
+    expect(db.createWebhook).not.toHaveBeenCalled();
+  });
+
   it('updates a webhook with valid events', async () => {
     const response = await app.inject({
       method: 'PUT',
@@ -228,6 +242,20 @@ describe('webhook routes', () => {
       error: 'Invalid event types: run.unknown',
       validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed', 'feedback.received'],
     });
+  });
+
+  it('rejects update payloads missing required webhook fields', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/agents/agent-1/webhooks/hook-1',
+      payload: {
+        events: ['turn.completed'],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'url and events are required' });
+    expect(db.updateWebhookForAgent).not.toHaveBeenCalled();
   });
 
   it('returns 404 when updating a webhook outside the agent', async () => {

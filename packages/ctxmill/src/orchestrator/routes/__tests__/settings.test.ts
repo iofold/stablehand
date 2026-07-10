@@ -40,6 +40,23 @@ describe('settings routes', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
+  it('serializes all system settings on read', async () => {
+    const settingsService = {
+      getAll: vi.fn().mockResolvedValue(baseSettings),
+      set: vi.fn().mockResolvedValue(undefined),
+    };
+    const app = await createApp(settingsService, vi.fn());
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/settings',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(baseSettings);
+  });
+
   it('notifies runtime components after settings are updated', async () => {
     const updatedSettings = { ...baseSettings, idleTimeoutMs: 10_000 };
     const settingsService = {
@@ -57,6 +74,7 @@ describe('settings routes', () => {
     });
 
     expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(updatedSettings);
     expect(settingsService.set).toHaveBeenCalledWith('idleTimeoutMs', 10_000);
     expect(onSettingsUpdated).toHaveBeenCalledWith(updatedSettings);
   });

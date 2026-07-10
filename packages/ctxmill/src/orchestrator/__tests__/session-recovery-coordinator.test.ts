@@ -79,7 +79,6 @@ function createMockDb(): DatabaseRepository {
       containerId?: string;
       status?: string;
       harnessName: string;
-      checkpointRef?: string;
     }) => ({
       id: session.id ?? 'generated-session',
       conversationId: session.conversationId,
@@ -88,7 +87,7 @@ function createMockDb(): DatabaseRepository {
       containerId: session.containerId ?? null,
       status: session.status ?? 'ACTIVE',
       harnessName: session.harnessName,
-      checkpointRef: session.checkpointRef ?? null,
+      checkpointRef: null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       lastActivityAt: Date.now(),

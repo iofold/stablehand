@@ -262,4 +262,45 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     }));
     expect(db.markInterruptResumeAttemptFailed).toHaveBeenCalledWith('attempt-1', 'Session resume service is not available');
   });
+
+  it('loads actionable interrupt rows once and filters resolved rows by default', async () => {
+    const interrupts = new InterruptManager(undefined, createManagerStore());
+    const getActionableInterruptsForAgent = vi.fn().mockResolvedValue([
+      { interrupt: createInterruptRow({ id: 'pending-1', agentSessionId: 'pending-1' }), resumeAttempt: undefined },
+      { interrupt: createInterruptRow({ id: 'resolved-1', agentSessionId: 'resolved-1', status: 'resolved' }), resumeAttempt: undefined },
+      {
+        interrupt: createInterruptRow({ id: 'failed-1', agentSessionId: 'failed-1', status: 'resolved' }),
+        resumeAttempt: { status: 'failed', lastError: 'resume failed' },
+      },
+    ]);
+    const db = createRouteDb({ getActionableInterruptsForAgent });
+    const app = await buildApp({ db, interrupts });
+    apps.push(app);
+
+    const defaultResponse = await app.inject({
+      method: 'GET',
+      url: '/api/agents/agent-1/interrupts',
+    });
+
+    expect(defaultResponse.statusCode).toBe(200);
+    expect(defaultResponse.json().interrupts).toEqual([
+      expect.objectContaining({ id: 'pending-1', status: 'pending' }),
+      expect.objectContaining({ id: 'failed-1', status: 'resume_failed', resumeError: 'resume failed' }),
+    ]);
+    expect(getActionableInterruptsForAgent).toHaveBeenCalledTimes(1);
+    expect(getActionableInterruptsForAgent).toHaveBeenLastCalledWith('agent-1');
+
+    const includeResolvedResponse = await app.inject({
+      method: 'GET',
+      url: '/api/agents/agent-1/interrupts?include_resolved=true',
+    });
+
+    expect(includeResolvedResponse.statusCode).toBe(200);
+    expect(includeResolvedResponse.json().interrupts.map((row: { id: string }) => row.id)).toEqual([
+      'pending-1',
+      'resolved-1',
+      'failed-1',
+    ]);
+    expect(getActionableInterruptsForAgent).toHaveBeenCalledTimes(2);
+  });
 });

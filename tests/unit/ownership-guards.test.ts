@@ -35,7 +35,6 @@ describe('Ownership enforcement on routes', () => {
 
     container = await createContainer(
       {
-        preset: 'docker',
         database: { url: resolveTestDatabaseUrl() },
       },
       dataDir,

@@ -39,9 +39,11 @@ describe('create-ctxmill scaffold', () => {
   const expectedFiles = [
     'package.json',
     'tsconfig.json',
-    'ctxmill.config.ts',
-    'agents/assistant/agent.ts',
+    'vitest.config.ts',
+    'agents/assistant/agent.yaml',
     'tools/read-file.ts',
+    'tools/list-directory.ts',
+    'tools/search-files.ts',
     'tests/assistant.test.ts',
     '.gitignore',
     '.env.example',
@@ -57,8 +59,6 @@ describe('create-ctxmill scaffold', () => {
   const expectedDirs = [
     'agents/assistant',
     'tools',
-    'feedback',
-    'policies',
     'tests',
     '.ctxmill',
   ];
@@ -101,6 +101,8 @@ describe('create-ctxmill scaffold', () => {
       const scripts = pkg.scripts as Record<string, string>;
       expect(scripts).toHaveProperty('dev');
       expect(scripts).toHaveProperty('test');
+      expect(scripts).toHaveProperty('typecheck');
+      expect(scripts).not.toHaveProperty('eval');
     });
   });
 
@@ -115,24 +117,41 @@ describe('create-ctxmill scaffold', () => {
     });
   });
 
-  // --- Agent definition imports defineAgent (AC CLI-01) ---
+  // --- Agent manifest (AC CLI-01) ---
 
-  describe('agents/assistant/agent.ts', () => {
-    it('imports defineAgent from ctxmill', () => {
+  describe('agents/assistant/agent.yaml', () => {
+    it('uses a manifest with explicit harness config', () => {
       const content = readFileSync(
-        join(projectDir, 'agents', 'assistant', 'agent.ts'),
+        join(projectDir, 'agents', 'assistant', 'agent.yaml'),
         'utf-8',
       );
-      expect(content).toContain("import { defineAgent } from 'ctxmill'");
+      expect(content).toContain('apiVersion: ctxmill.io/v1');
+      expect(content).toContain('kind: Agent');
+      expect(content).toContain('name: assistant');
+      expect(content).toContain('harness: langgraph');
+      expect(content).toContain('harnessConfig:');
+      expect(content).toContain('provider: openai');
+      expect(content).toContain('model: gpt-5.4-mini');
+      expect(content).toContain('apiKeyRef: "$secret:OPENAI_API_KEY"');
     });
 
-    it('exports a defineAgent call with name assistant', () => {
+    it('references the generated starter tools', () => {
       const content = readFileSync(
-        join(projectDir, 'agents', 'assistant', 'agent.ts'),
+        join(projectDir, 'agents', 'assistant', 'agent.yaml'),
         'utf-8',
       );
-      expect(content).toContain("name: 'assistant'");
-      expect(content).toContain('export default defineAgent(');
+      expect(content).toContain('- ref: read-file');
+      expect(content).toContain('- ref: list-directory');
+      expect(content).toContain('- ref: search-files');
+    });
+  });
+
+  describe('retired scaffold output', () => {
+    it('does not emit stale config, policies, feedback, or TypeScript agent files', () => {
+      expect(existsSync(join(projectDir, 'ctxmill.config.ts'))).toBe(false);
+      expect(existsSync(join(projectDir, 'agents', 'assistant', 'agent.ts'))).toBe(false);
+      expect(existsSync(join(projectDir, 'feedback'))).toBe(false);
+      expect(existsSync(join(projectDir, 'policies'))).toBe(false);
     });
   });
 
@@ -160,24 +179,13 @@ describe('create-ctxmill scaffold', () => {
   // --- .env.example ---
 
   describe('.env.example', () => {
-    it('contains ANTHROPIC_API_KEY placeholder', () => {
+    it('contains OPENAI_API_KEY placeholder', () => {
       const content = readFileSync(
         join(projectDir, '.env.example'),
         'utf-8',
       );
-      expect(content).toContain('ANTHROPIC_API_KEY');
-    });
-  });
-
-  // --- ctxmill.config.ts ---
-
-  describe('ctxmill.config.ts', () => {
-    it('imports defineConfig from ctxmill', () => {
-      const content = readFileSync(
-        join(projectDir, 'ctxmill.config.ts'),
-        'utf-8',
-      );
-      expect(content).toContain("import { defineConfig } from 'ctxmill'");
+      expect(content).toContain('OPENAI_MODEL=gpt-5.4-mini');
+      expect(content).toContain('OPENAI_API_KEY');
     });
   });
 

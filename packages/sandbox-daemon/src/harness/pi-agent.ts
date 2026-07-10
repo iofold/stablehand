@@ -16,13 +16,14 @@ import type {
 } from './types.js';
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
-import { CanonicalProviderSchema, resolveSecretRef } from './shared.js';
+import { CanonicalProviderSchema } from './shared.js';
 import {
   TurnAccumulator,
   createAgentEventLangSmithTracer,
   linkAbortSignal,
   normalizeTokenUsage,
   requestToolApproval,
+  resolveModelAuth,
   traceAgentEvents,
 } from './kit/index.js';
 
@@ -254,7 +255,7 @@ function resolveModel(
   secrets: ResolvedSecrets,
 ): any {
   const { provider, model, baseUrl, apiKeyRef } = harnessConfig;
-  const resolvedApiKey = resolvePIApiKey(provider, apiKeyRef, secrets);
+  const { apiKey: resolvedApiKey } = resolveModelAuth({ provider, apiKeyRef, secrets });
 
   if (baseUrl) {
     return {
@@ -297,39 +298,6 @@ function resolveModel(
     contextWindow: 128000,
     maxTokens: 16384,
   };
-}
-
-const PROVIDER_API_KEY_ENV_NAMES: Record<string, readonly string[]> = {
-  openai: ['OPENAI_API_KEY'],
-  anthropic: ['ANTHROPIC_API_KEY'],
-  google: ['GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY'],
-};
-
-function resolveProviderApiKey(
-  provider: string,
-  secrets: ResolvedSecrets,
-): string | undefined {
-  const keys = PROVIDER_API_KEY_ENV_NAMES[provider] ?? [];
-  for (const key of keys) {
-    const value = secrets[key] ?? process.env[key];
-    if (value) return value;
-  }
-  return undefined;
-}
-
-function resolvePIApiKey(
-  provider: string,
-  apiKeyRef: string | undefined,
-  secrets: ResolvedSecrets,
-): string | undefined {
-  const resolved = resolveSecretRef(apiKeyRef, secrets);
-  if (resolved) return resolved;
-  if (!apiKeyRef) return resolveProviderApiKey(provider, secrets);
-
-  const key = apiKeyRef.startsWith('$secret:')
-    ? apiKeyRef.slice('$secret:'.length)
-    : apiKeyRef;
-  return process.env[key] ?? process.env[apiKeyRef];
 }
 
 function _piUpdateUsage(
@@ -469,7 +437,11 @@ export class PIAgentHarness implements AgentHarness {
         console.error(`[pi-agent] Failed to load extension: ${extPath}`, err);
       }
     }
-    const resolvedApiKey = resolvePIApiKey(harnessConfig.provider, harnessConfig.apiKeyRef, config.secrets);
+    const { apiKey: resolvedApiKey } = resolveModelAuth({
+      provider: harnessConfig.provider,
+      apiKeyRef: harnessConfig.apiKeyRef,
+      secrets: config.secrets,
+    });
     const model = resolveModel(sdk.getModel, harnessConfig, config.secrets);
 
     const nativeTools = this.buildNativeTools(config, {

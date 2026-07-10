@@ -1,9 +1,9 @@
-import { dirname, join, normalize, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { validateAndExtractTarball } from '../../../workspace/tar-upload.js';
-import { isBlockedPath, resolveBaseDir, validateSandboxPath } from '../agent-helpers.js';
+import { isBlockedPath, resolveWorkspaceTarget } from '../agent-helpers.js';
 import { chownRecursive, getRequestAgent, safeError } from './helpers.js';
 import type { AgentSubRouteOptions } from './types.js';
 
@@ -23,37 +23,11 @@ export async function fileRoutes(
       }>,
       reply: FastifyReply,
     ) => {
-      const { id } = request.params;
       const query = request.query as { path?: string; sessionId?: string };
-      const agent = getRequestAgent(request);
-      let conversationId: string | null | undefined;
-      let sandboxSessionId: string | undefined;
-
-      if (query.sessionId) {
-        const run = await db.getTurn(query.sessionId);
-        if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
-        }
-        conversationId = run.conversationId;
-        sandboxSessionId = run.sessionId ?? undefined;
-      }
-
-      const baseDir = resolveBaseDir(agent, {
-        conversationId,
-        sandboxSessionId,
-        dataDir,
-      });
-      if (!baseDir) {
-        return reply.status(500).send({ error: 'Agent has no workspace configured' });
-      }
       const requestedPath = query.path || '.';
-
-      const pathError = validateSandboxPath(baseDir, requestedPath);
-      if (pathError) {
-        return reply.status(pathError.status).send(pathError.body);
-      }
-
-      const targetDir = resolve(baseDir, normalize(requestedPath));
+      const resolvedTarget = await resolveWorkspaceTarget(request, reply, { db, dataDir }, requestedPath);
+      if (!resolvedTarget) return;
+      const targetDir = resolvedTarget.target;
 
       try {
         const dirEntries = await readdir(targetDir, { withFileTypes: true });
@@ -94,39 +68,15 @@ export async function fileRoutes(
       }>,
       reply: FastifyReply,
     ) => {
-      const { id } = request.params;
       const query = request.query as { path?: string; sessionId?: string };
-      const agent = getRequestAgent(request);
-      let conversationId: string | null | undefined;
-      let sandboxSessionId: string | undefined;
 
       if (!query.path) {
         return reply.status(400).send({ error: 'path query parameter is required' });
       }
 
-      if (query.sessionId) {
-        const run = await db.getTurn(query.sessionId);
-        if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
-        }
-        conversationId = run.conversationId;
-        sandboxSessionId = run.sessionId ?? undefined;
-      }
-
-      const baseDir = resolveBaseDir(agent, {
-        conversationId,
-        sandboxSessionId,
-        dataDir,
-      });
-      if (!baseDir) {
-        return reply.status(500).send({ error: 'Agent has no workspace configured' });
-      }
-      const targetFile = resolve(baseDir, normalize(query.path));
-
-      const pathError = validateSandboxPath(baseDir, query.path);
-      if (pathError) {
-        return reply.status(pathError.status).send(pathError.body);
-      }
+      const resolvedTarget = await resolveWorkspaceTarget(request, reply, { db, dataDir }, query.path);
+      if (!resolvedTarget) return;
+      const targetFile = resolvedTarget.target;
 
       try {
         const fileStat = await stat(targetFile);
@@ -169,40 +119,16 @@ export async function fileRoutes(
       }>,
       reply: FastifyReply,
     ) => {
-      const { id } = request.params;
       const query = request.query as { sessionId?: string };
       const body = request.body as { path?: string; content?: string };
-      const agent = getRequestAgent(request);
-      let conversationId: string | null | undefined;
-      let sandboxSessionId: string | undefined;
 
       if (!body.path || typeof body.content !== 'string') {
         return reply.status(400).send({ error: 'path and content are required' });
       }
 
-      if (query.sessionId) {
-        const run = await db.getTurn(query.sessionId);
-        if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
-        }
-        conversationId = run.conversationId;
-        sandboxSessionId = run.sessionId ?? undefined;
-      }
-
-      const baseDir = resolveBaseDir(agent, {
-        conversationId,
-        sandboxSessionId,
-        dataDir,
-      });
-      if (!baseDir) {
-        return reply.status(500).send({ error: 'Agent has no workspace configured' });
-      }
-      const targetFile = resolve(baseDir, normalize(body.path));
-
-      const pathError = validateSandboxPath(baseDir, body.path);
-      if (pathError) {
-        return reply.status(pathError.status).send(pathError.body);
-      }
+      const resolvedTarget = await resolveWorkspaceTarget(request, reply, { db, dataDir }, body.path);
+      if (!resolvedTarget) return;
+      const targetFile = resolvedTarget.target;
 
       try {
         await mkdir(dirname(targetFile), { recursive: true });
@@ -226,40 +152,16 @@ export async function fileRoutes(
       }>,
       reply: FastifyReply,
     ) => {
-      const { id } = request.params;
       const query = request.query as { sessionId?: string };
       const body = request.body as { path?: string; content?: string };
-      const agent = getRequestAgent(request);
-      let conversationId: string | null | undefined;
-      let sandboxSessionId: string | undefined;
 
       if (!body.path || typeof body.content !== 'string') {
         return reply.status(400).send({ error: 'path and content are required' });
       }
 
-      if (query.sessionId) {
-        const run = await db.getTurn(query.sessionId);
-        if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
-        }
-        conversationId = run.conversationId;
-        sandboxSessionId = run.sessionId ?? undefined;
-      }
-
-      const baseDir = resolveBaseDir(agent, {
-        conversationId,
-        sandboxSessionId,
-        dataDir,
-      });
-      if (!baseDir) {
-        return reply.status(500).send({ error: 'Agent has no workspace configured' });
-      }
-      const targetFile = resolve(baseDir, normalize(body.path));
-
-      const pathError = validateSandboxPath(baseDir, body.path);
-      if (pathError) {
-        return reply.status(pathError.status).send(pathError.body);
-      }
+      const resolvedTarget = await resolveWorkspaceTarget(request, reply, { db, dataDir }, body.path);
+      if (!resolvedTarget) return;
+      const targetFile = resolvedTarget.target;
 
       try {
         const fileStat = await stat(targetFile);
@@ -289,39 +191,15 @@ export async function fileRoutes(
       }>,
       reply: FastifyReply,
     ) => {
-      const { id } = request.params;
       const query = request.query as { path?: string; sessionId?: string };
-      const agent = getRequestAgent(request);
-      let conversationId: string | null | undefined;
-      let sandboxSessionId: string | undefined;
 
       if (!query.path) {
         return reply.status(400).send({ error: 'path query parameter is required' });
       }
 
-      if (query.sessionId) {
-        const run = await db.getTurn(query.sessionId);
-        if (!run || run.agentId !== id) {
-          return reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
-        }
-        conversationId = run.conversationId;
-        sandboxSessionId = run.sessionId ?? undefined;
-      }
-
-      const baseDir = resolveBaseDir(agent, {
-        conversationId,
-        sandboxSessionId,
-        dataDir,
-      });
-      if (!baseDir) {
-        return reply.status(500).send({ error: 'Agent has no workspace configured' });
-      }
-      const targetFile = resolve(baseDir, normalize(query.path));
-
-      const pathError = validateSandboxPath(baseDir, query.path);
-      if (pathError) {
-        return reply.status(pathError.status).send(pathError.body);
-      }
+      const resolvedTarget = await resolveWorkspaceTarget(request, reply, { db, dataDir }, query.path);
+      if (!resolvedTarget) return;
+      const targetFile = resolvedTarget.target;
 
       try {
         const fileStat = await stat(targetFile);

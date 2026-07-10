@@ -1,59 +1,29 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
-import { createContainer } from '../../packages/ctxmill/src/config/container.js';
-import { createServer } from '../../packages/ctxmill/src/orchestrator/server.js';
-import type { AppContainer } from '../../packages/ctxmill/src/config/container.js';
-import { resolveTestDatabaseUrl } from '../utils/test-db.js';
+import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
 
 describe('Failure injection — rollback and cleanup', () => {
-  let app: Awaited<ReturnType<typeof createServer>>;
-  let container: AppContainer;
+  let app: TestAppHandle['app'];
+  let container: TestAppHandle['container'];
+  let testApp: TestAppHandle | undefined;
   let dataDir: string;
   let agentAId: string;
   let agentBId: string;
 
   beforeEach(() => { allowConsoleErrors(); });
 
-  async function createContainerWithRetry() {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        return await createContainer(
-          {
-            preset: 'docker',
-            database: { url: resolveTestDatabaseUrl() },
-          },
-          dataDir,
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.includes('already exists') || attempt === 2) {
-          throw error;
-        }
-      }
-    }
-
-    throw new Error('unreachable');
-  }
-
   beforeAll(async () => {
-    dataDir = mkdtempSync(join(tmpdir(), 'ctxmill-failure-inj-'));
-
-    container = await createContainerWithRetry();
-
-    app = await createServer({
-      db: container.db,
-      agentSessionService: container.agentSessionService,
-      eventBus: container.eventBus,
-      sessionManager: container.sessionManager,
-      runStartupService: container.runStartupService,
-      dataDir,
+    testApp = await createTestApp({
+      dirPrefix: 'ctxmill-failure-inj-',
+      preset: 'docker',
+      containerRetriesOnAlreadyExists: 3,
     });
-
-    await app.ready();
+    app = testApp.app;
+    container = testApp.container;
+    dataDir = testApp.dataDir;
 
     // Create agent A
     const resA = await app.inject({
@@ -87,9 +57,7 @@ describe('Failure injection — rollback and cleanup', () => {
   });
 
   afterAll(async () => {
-    await app?.close();
-    await container?.close();
-    rmSync(dataDir, { recursive: true, force: true });
+    await testApp?.close();
   });
 
   // ── 1. Wrong-agent sessionId returns 404 for file operations ──

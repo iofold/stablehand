@@ -1,6 +1,6 @@
 import type { CTXMillConfig, ResolvedConfig } from './types.js';
 import { createHash } from 'node:crypto';
-import { resolveConfig } from './resolve.js';
+import { resolveDatabaseUrl } from './resolve.js';
 import { createDatabase, type DatabaseConnection } from '../database/connection.js';
 import { runMigrations } from '../database/migrations.js';
 import { DatabaseRepository } from '../database/repository.js';
@@ -153,7 +153,12 @@ export async function createContainer(
   userConfig: CTXMillConfig,
   dataDir: string,
 ): Promise<AppContainer> {
-  const config = resolveConfig(userConfig);
+  const config: ResolvedConfig = {
+    database: {
+      type: 'postgres',
+      url: resolveDatabaseUrl(userConfig),
+    },
+  };
   const secretMasterPassphrase = resolveSecretMasterKeyPassphrase();
 
   // ── Database ────────────────────────────────────────────
@@ -343,6 +348,13 @@ export async function createContainer(
       },
       onSessionEvicted: (sessionId, conversationId) => {
         return sessionManagerRef?.getSessionReconciler().onSessionEvicted(sessionId, conversationId);
+      },
+      reconcileStrandedRestoring: async (session) => {
+        const reconciler = sessionManagerRef?.getSessionReconciler();
+        if (!reconciler) {
+          throw new Error('Session reconciler is unavailable during startup reconciliation');
+        }
+        return reconciler.reconcileStrandedRestoring(session);
       },
     },
     statusCoordinator: sessionStatusCoordinator,

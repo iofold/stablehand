@@ -82,7 +82,7 @@ for (const harness of HARNESSES) {
 
       // Navigate to the run detail page
       // Try direct URL navigation to the run
-      await page.goto(`/agents/${agentId}/sessions/${conversationId}`);
+      await page.goto(`/agents/${agentId}/conversations/${conversationId}`);
       await page.waitForLoadState('domcontentloaded');
 
       // Wait for the page to load content

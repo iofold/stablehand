@@ -1,6 +1,6 @@
 import { PassThrough, Readable } from 'node:stream';
-import { resolve } from 'node:path';
 import Dockerode from 'dockerode';
+import { isStatusCodeError } from '../../util/status-code-error.js';
 import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from '../container-scope.js';
 import {
   buildDockerContainerSpec,
@@ -31,7 +31,6 @@ export class DockerContainerDriver {
   private readonly imagePrefix: string;
   private readonly scopeId: string;
   private readonly dataVolume?: string;
-  private readonly dataDir?: string;
   private readonly defaultCpus: number;
   private readonly defaultMemoryMb: number;
   private readonly defaultPidsLimit: number;
@@ -44,7 +43,6 @@ export class DockerContainerDriver {
     this.imagePrefix = options?.imagePrefix ?? process.env.CTXMILL_IMAGE_PREFIX ?? 'ctxmill/harness';
     this.scopeId = resolveContainerScopeId();
     this.dataVolume = process.env.CTXMILL_DATA_VOLUME;
-    this.dataDir = process.env.CTXMILL_DATA_DIR ? resolve(process.env.CTXMILL_DATA_DIR) : undefined;
     this.defaultCpus = options?.defaultCpus ?? 1.0;
     this.defaultMemoryMb = options?.defaultMemoryMb ?? 1024;
     this.defaultPidsLimit = options?.defaultPidsLimit ?? 256;
@@ -96,7 +94,7 @@ export class DockerContainerDriver {
     await container.start();
     console.debug(`${TAG} container ${containerId} started`);
     const info = await container.inspect();
-    return this.containerInspectItemToInfo(containerId, info);
+    return this.containerItemToInfo(info, containerId);
   }
 
   async stopContainer(containerId: string, timeoutSec?: number): Promise<void> {
@@ -107,11 +105,11 @@ export class DockerContainerDriver {
       console.debug(`${TAG} container ${containerId} stopped`);
     } catch (err: unknown) {
       // Docker returns 304 if container is already stopped
-      if (isDockerError(err) && err.statusCode === 304) {
+      if (isStatusCodeError(err) && err.statusCode === 304) {
         console.debug(`${TAG} container ${containerId} already stopped`);
         return;
       }
-      if (isDockerError(err) && err.statusCode === 404) {
+      if (isStatusCodeError(err) && err.statusCode === 404) {
         console.debug(`${TAG} container ${containerId} not found while stopping`);
         return;
       }
@@ -127,7 +125,7 @@ export class DockerContainerDriver {
       console.debug(`${TAG} container ${containerId} removed`);
     } catch (err: unknown) {
       // Docker returns 404 if container doesn't exist
-      if (isDockerError(err) && err.statusCode === 404) {
+      if (isStatusCodeError(err) && err.statusCode === 404) {
         console.debug(`${TAG} container ${containerId} not found (already removed)`);
         return;
       }
@@ -200,114 +198,43 @@ export class DockerContainerDriver {
     container: Dockerode.Container,
     paths: string[],
   ): Promise<Buffer> {
-    const exec = await container.exec({
-      Cmd: ['tar', '-C', WORKSPACE_ROOT, 'cf', '-', '--no-recursion', '--ignore-failed-read', '-T', '-'],
-      AttachStdin: true,
-      AttachStdout: true,
-      AttachStderr: true,
-    });
-    const stream = await exec.start({ hijack: true, stdin: true });
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-
-    stdout.on('data', (chunk: Buffer | string) => {
-      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    stderr.on('data', (chunk: Buffer | string) => {
-      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-
-    this.docker.modem.demuxStream(stream, stdout, stderr);
-
-    const streamDone = new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        stdout.end();
-        stderr.end();
-        resolve();
-      };
-      stream.on('error', reject);
-      stream.on('end', finish);
-      stream.on('finish', finish);
-      stream.on('close', finish);
-    });
-
-    stream.write(paths.join('\n') + '\n');
-    stream.end();
-
-    await streamDone;
-
-    const execResult = await exec.inspect();
-    if ((execResult.ExitCode ?? 0) !== 0) {
-      const stderrText = Buffer.concat(stderrChunks).toString('utf-8').trim();
+    const result = await this.execInContainer(
+      container,
+      ['tar', '-C', WORKSPACE_ROOT, 'cf', '-', '--no-recursion', '--ignore-failed-read', '-T', '-'],
+      { stdinPayload: paths.join('\n') + '\n' },
+    );
+    if (result.exitCode !== 0) {
+      const stderrText = result.stderr.toString('utf-8').trim();
       throw new Error(
         stderrText.length > 0
           ? `Failed to extract container diff: ${stderrText}`
-          : `Failed to extract container diff: tar exited with code ${execResult.ExitCode}`,
+          : `Failed to extract container diff: tar exited with code ${result.exitCode}`,
       );
     }
 
-    return Buffer.concat(stdoutChunks);
+    return result.stdout;
   }
 
   private async deleteWorkspacePaths(
     container: Dockerode.Container,
     paths: string[],
   ): Promise<void> {
-    const exec = await container.exec({
-      Cmd: [
+    const result = await this.execInContainer(
+      container,
+      [
         'sh',
         '-c',
         'for target do rm -rf -- "/workspace/$target"; done',
         'sh',
         ...paths,
       ],
-      AttachStdout: true,
-      AttachStderr: true,
-    });
-    const stream = await exec.start({});
-    const stdout = new PassThrough();
-    const stderr = new PassThrough();
-    const stderrChunks: Buffer[] = [];
-
-    stderr.on('data', (chunk: Buffer | string) => {
-      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-
-    this.docker.modem.demuxStream(stream, stdout, stderr);
-
-    const streamDone = new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        stdout.end();
-        stderr.end();
-        resolve();
-      };
-      stream.on('error', reject);
-      stream.on('end', finish);
-      stream.on('finish', finish);
-      stream.on('close', finish);
-    });
-
-    await streamDone;
-
-    const execResult = await exec.inspect();
-    if ((execResult.ExitCode ?? 0) !== 0) {
-      const stderrText = Buffer.concat(stderrChunks).toString('utf-8').trim();
+    );
+    if (result.exitCode !== 0) {
+      const stderrText = result.stderr.toString('utf-8').trim();
       throw new Error(
         stderrText.length > 0
           ? `Failed to apply workspace tombstones: ${stderrText}`
-          : `Failed to apply workspace tombstones: rm exited with code ${execResult.ExitCode}`,
+          : `Failed to apply workspace tombstones: rm exited with code ${result.exitCode}`,
       );
     }
   }
@@ -330,38 +257,42 @@ export class DockerContainerDriver {
     const containers = await this.docker.listContainers({
       all: true,
       filters: {
-        label: [`ctxmill.managed=true`, `ctxmill.session-id=${sessionId}`],
+        label: [
+          `ctxmill.managed=true`,
+          `${CONTAINER_SCOPE_LABEL}=${this.scopeId}`,
+          `ctxmill.session-id=${sessionId}`,
+        ],
       },
     });
 
     if (containers.length === 0) return null;
 
-    const c = this.pickScopedOrLegacyContainer(containers);
+    const c = containers.find((container) => this.isContainerInCurrentScope(container));
     if (!c) return null;
-    return this.containerListItemToInfo(c);
+    return this.containerItemToInfo(c);
   }
 
   async listManagedContainers(): Promise<ContainerInfo[]> {
     const containers = await this.docker.listContainers({
       all: true,
-      filters: { label: ['ctxmill.managed=true'] },
+      filters: { label: ['ctxmill.managed=true', `${CONTAINER_SCOPE_LABEL}=${this.scopeId}`] },
     });
 
     return containers
       .filter((c) => this.isContainerInCurrentScope(c))
-      .map((c) => this.containerListItemToInfo(c));
+      .map((c) => this.containerItemToInfo(c));
   }
 
   async listManagedContainersWithLabels(): Promise<ManagedContainerWithLabels[]> {
     const containers = await this.docker.listContainers({
       all: true,
-      filters: { label: ['ctxmill.managed=true'] },
+      filters: { label: ['ctxmill.managed=true', `${CONTAINER_SCOPE_LABEL}=${this.scopeId}`] },
     });
 
     return containers
       .filter((c) => this.isContainerInCurrentScope(c))
       .map((c) => ({
-        ...this.containerListItemToInfo(c),
+        ...this.containerItemToInfo(c),
         labels: c.Labels ?? {},
       }));
   }
@@ -375,7 +306,7 @@ export class DockerContainerDriver {
       }
       return null;
     } catch (err: unknown) {
-      if (isDockerError(err) && err.statusCode === 404) {
+      if (isStatusCodeError(err) && err.statusCode === 404) {
         return null;
       }
       throw err;
@@ -388,7 +319,7 @@ export class DockerContainerDriver {
       const state = info.State.Status.toLowerCase();
       return state === 'running' || state === 'paused';
     } catch (err: unknown) {
-      if (isDockerError(err) && err.statusCode === 404) {
+      if (isStatusCodeError(err) && err.statusCode === 404) {
         return false;
       }
       throw err;
@@ -402,7 +333,7 @@ export class DockerContainerDriver {
       await this.docker.getNetwork(this.networkName).inspect();
       console.debug(`${TAG} network ${this.networkName} already exists`);
     } catch (err) {
-      if (!isDockerError(err) || err.statusCode !== 404) {
+      if (!isStatusCodeError(err) || err.statusCode !== 404) {
         console.warn(`${TAG} failed to inspect network ${this.networkName}:`, err);
         throw err;
       }
@@ -418,92 +349,81 @@ export class DockerContainerDriver {
 
   // ── Private helpers ─────────────────────────────────────
 
-  private pickScopedOrLegacyContainer(
-    containers: Dockerode.ContainerInfo[],
-  ): Dockerode.ContainerInfo | undefined {
-    return containers.find((container) => this.isContainerInCurrentScope(container))
-      ?? containers.find((container) => this.isLegacyContainerCompatibleWithCurrentScope(container));
-  }
-
   private isContainerInCurrentScope(container: Dockerode.ContainerInfo): boolean {
     const labels = container.Labels ?? {};
-    const containerScope = labels[CONTAINER_SCOPE_LABEL];
-    if (containerScope) {
-      return containerScope === this.scopeId;
-    }
-
-    return this.isLegacyContainerCompatibleWithCurrentScope(container);
+    return labels[CONTAINER_SCOPE_LABEL] === this.scopeId;
   }
 
-  private isLegacyContainerCompatibleWithCurrentScope(container: Dockerode.ContainerInfo): boolean {
-    const labels = container.Labels ?? {};
-    if (labels[CONTAINER_SCOPE_LABEL]) {
-      return false;
+  private async execInContainer(
+    container: Dockerode.Container,
+    command: string[],
+    options: { stdinPayload?: string } = {},
+  ): Promise<{ stdout: Buffer; stderr: Buffer; exitCode: number }> {
+    const hasStdin = options.stdinPayload !== undefined;
+    const exec = await container.exec({
+      Cmd: command,
+      ...(hasStdin ? { AttachStdin: true } : {}),
+      AttachStdout: true,
+      AttachStderr: true,
+    });
+    const stream = await exec.start(hasStdin ? { hijack: true, stdin: true } : {});
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    stdout.on('data', (chunk: Buffer | string) => {
+      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    stderr.on('data', (chunk: Buffer | string) => {
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    this.docker.modem.demuxStream(stream, stdout, stderr);
+
+    const streamDone = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        stdout.end();
+        stderr.end();
+        resolve();
+      };
+      stream.on('error', reject);
+      stream.on('end', finish);
+      stream.on('finish', finish);
+      stream.on('close', finish);
+    });
+
+    if (options.stdinPayload !== undefined) {
+      stream.write(options.stdinPayload);
+      stream.end();
     }
+    await streamDone;
 
-    const mounts = (container as {
-      Mounts?: Array<{ Name?: string; Source?: string; Destination?: string }>;
-    }).Mounts ?? [];
-
-    if (this.dataVolume) {
-      return mounts.some((mount) => (
-        mount.Name === this.dataVolume
-        || Boolean(mount.Source?.includes(`/volumes/${this.dataVolume}/`))
-      ));
-    }
-
-    if (this.dataDir) {
-      return mounts.some((mount) => (
-        mount.Source !== undefined && (
-          resolve(mount.Source) === this.dataDir
-          || resolve(mount.Source).startsWith(`${this.dataDir}/`)
-        )
-      ));
-    }
-
-    return true;
-  }
-
-  private containerListItemToInfo(c: Dockerode.ContainerInfo): ContainerInfo {
-    const labels = c.Labels;
-    const info: ContainerInfo = {
-      containerId: c.Id,
-      containerName: c.Names?.[0]?.replace(/^\//, '') ?? '',
-      sessionId: labels['ctxmill.session-id'] || labels['ctxmill.run-id'] || '',
-      agentId: labels['ctxmill.agent-id'] ?? '',
-      harnessName: labels['ctxmill.harness'] ?? '',
-      status: normalizeDockerContainerStatus(c.State),
+    const execResult = await exec.inspect();
+    return {
+      stdout: Buffer.concat(stdoutChunks),
+      stderr: Buffer.concat(stderrChunks),
+      exitCode: execResult.ExitCode ?? 0,
     };
-
-    const startedAt = labels['ctxmill.started-at'];
-    if (startedAt) {
-      info.startedAt = new Date(startedAt);
-    }
-
-    // Extract network IP if available
-    const networks = c.NetworkSettings?.Networks;
-    if (networks) {
-      const net = networks[this.networkName];
-      if (net?.IPAddress) {
-        info.networkIp = net.IPAddress;
-      }
-    }
-
-    return info;
   }
 
-  private containerInspectItemToInfo(
-    containerId: string,
-    c: Dockerode.ContainerInspectInfo,
+  private containerItemToInfo(
+    item: Dockerode.ContainerInfo | Dockerode.ContainerInspectInfo,
+    inspectedContainerId?: string,
   ): ContainerInfo {
-    const labels = c.Config?.Labels ?? {};
+    const inspected = inspectedContainerId !== undefined;
+    const inspectItem = item as Dockerode.ContainerInspectInfo;
+    const listItem = item as Dockerode.ContainerInfo;
+    const labels = inspected ? inspectItem.Config?.Labels ?? {} : listItem.Labels ?? {};
     const info: ContainerInfo = {
-      containerId,
-      containerName: c.Name?.replace(/^\//, '') ?? '',
+      containerId: inspectedContainerId ?? listItem.Id,
+      containerName: (inspected ? inspectItem.Name : listItem.Names?.[0])?.replace(/^\//, '') ?? '',
       sessionId: labels['ctxmill.session-id'] || labels['ctxmill.run-id'] || '',
       agentId: labels['ctxmill.agent-id'] ?? '',
       harnessName: labels['ctxmill.harness'] ?? '',
-      status: normalizeDockerContainerStatus(c.State.Status),
+      status: normalizeDockerContainerStatus(inspected ? inspectItem.State.Status : listItem.State),
     };
 
     const startedAt = labels['ctxmill.started-at'];
@@ -511,9 +431,12 @@ export class DockerContainerDriver {
       info.startedAt = new Date(startedAt);
     }
 
-    const networks = c.NetworkSettings?.Networks;
+    const networks = item.NetworkSettings?.Networks;
     if (networks) {
-      const net = networks[this.networkName] ?? Object.values(networks).find((candidate) => candidate?.IPAddress);
+      const preferredNetwork = networks[this.networkName];
+      const net = preferredNetwork?.IPAddress
+        ? preferredNetwork
+        : Object.values(networks).find((candidate) => candidate?.IPAddress);
       if (net?.IPAddress) {
         info.networkIp = net.IPAddress;
       }
@@ -521,20 +444,4 @@ export class DockerContainerDriver {
 
     return info;
   }
-}
-
-// ── Error helpers ─────────────────────────────────────────────
-
-interface DockerError {
-  statusCode: number;
-  message: string;
-}
-
-function isDockerError(err: unknown): err is DockerError {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'statusCode' in err &&
-    typeof (err as DockerError).statusCode === 'number'
-  );
 }

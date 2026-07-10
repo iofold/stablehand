@@ -115,7 +115,7 @@ describe('conversation store', () => {
     setActiveConversation('conv-a');
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1', conversationId: 'conv-a' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant', turnId: 'r1', conversationId: 'conv-a' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'stale', turnId: 'r1', conversationId: 'conv-a' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'stale', turnId: 'r1', conversationId: 'conv-a' }));
 
     const [staleFrameId] = getScheduledFrameIds();
 
@@ -123,7 +123,7 @@ describe('conversation store', () => {
     setActiveConversation('conv-b');
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r2', conversationId: 'conv-b' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant', turnId: 'r2', conversationId: 'conv-b' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'fresh', turnId: 'r2', conversationId: 'conv-b' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'fresh', turnId: 'r2', conversationId: 'conv-b' }));
 
     const frameIds = getScheduledFrameIds();
     expect(frameIds).toHaveLength(1);
@@ -139,15 +139,15 @@ describe('conversation store', () => {
   it('ignores streaming deltas when no run is active or when they target a different turn', async () => {
     const { handleSSEEvent } = getStore();
 
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'ignored while idle' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'ignored while idle' }));
     await flushStreamingContent();
 
     expect(getStore().streamingContent).toBe('');
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r2' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'stale', turnId: 'r1' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'fresh', turnId: 'r2' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'stale', turnId: 'r1' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'fresh', turnId: 'r2' }));
 
     await flushStreamingContent();
 
@@ -227,8 +227,8 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'Hello ' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'world' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'Hello ' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'world' }));
 
     await flushStreamingContent();
 
@@ -263,7 +263,7 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'user' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'echo' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'echo' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_END'));
 
     expect(getStore().messages).toHaveLength(0);
@@ -275,10 +275,10 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"test"}' }));
     handleSSEEvent(makeEvent('TOOL_CALL_END', { toolCallId: 'tc1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'found it' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'found it' }));
 
     const state = getStore();
     expect(state.messages).toHaveLength(0);
@@ -297,9 +297,9 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'done' }));
     handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
       role: 'assistant',
       content: '',
@@ -329,7 +329,7 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
     handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
       role: 'assistant',
@@ -343,7 +343,7 @@ describe('conversation store', () => {
 
     expect(getStore().toolCalls.size).toBe(0);
 
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'done' }));
     handleSSEEvent(makeEvent('RUN_FINISHED'));
 
     const committed = getStore().messages[0];
@@ -374,10 +374,10 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"test"}' }));
     handleSSEEvent(makeEvent('TOOL_CALL_END', { toolCallId: 'tc1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'found it' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'found it' }));
 
     expect(getStore().messages).toHaveLength(0);
 
@@ -411,7 +411,7 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'partial' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'partial' }));
 
     await flushStreamingContent();
 
@@ -436,13 +436,13 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'Using a tool' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'Using a tool' }));
 
     await flushStreamingContent();
 
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'result payload' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'result payload' }));
     handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
       role: 'assistant',
       content: 'Using a tool',
@@ -484,7 +484,7 @@ describe('conversation store', () => {
     }));
 
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'second' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'second' }));
 
     await flushStreamingContent();
 
@@ -507,7 +507,7 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { content: 'partial' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'partial' }));
 
     await flushStreamingContent();
 
@@ -524,9 +524,9 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'done' }));
 
     handleSSEEvent(makeEvent('RUN_FINISHED'));
 
@@ -559,8 +559,8 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', name: 'fail' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: '', error: 'boom' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'fail' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: '', error: 'boom' }));
 
     expect(getStore().messages).toHaveLength(0);
     expect(getStore().toolCalls.get('tc1')).toEqual({

@@ -94,7 +94,7 @@ describe('useAgentSessions filter normalization (ctx-u4p)', () => {
     expect(ids).toEqual(['a', 'b']);
   });
 
-  it('matches uppercase ERROR (and "FAILED" alias) to the lowercase "error" filter', () => {
+  it('matches uppercase ERROR to the lowercase "error" filter without synonym mapping', () => {
     const sessions = [
       makeSession({ status: 'ERROR', conversationId: 'a' }),
       makeSession({ status: 'failed' as never, conversationId: 'b' }),
@@ -102,7 +102,7 @@ describe('useAgentSessions filter normalization (ctx-u4p)', () => {
     ];
 
     const ids = captureFiltered(sessions, 'error').map((s) => s.conversationId).sort();
-    expect(ids).toEqual(['a', 'b']);
+    expect(ids).toEqual(['a']);
   });
 
   it('matches uppercase CANCELLED/TERMINATED to the lowercase "cancelled" filter', () => {
