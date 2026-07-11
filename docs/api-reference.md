@@ -69,11 +69,6 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | PUT | `/api/agents/:id/files` | Update a workspace file |
 | DELETE | `/api/agents/:id/files` | Delete a workspace file |
 | POST | `/api/agents/:id/workspace` | Replace base workspace from tarball |
-| **Skills** |  |  |
-| GET | `/api/agents/:id/skills` | List skills |
-| POST | `/api/agents/:id/skills` | Create skill |
-| PUT | `/api/agents/:id/skills/:skillName` | Update skill |
-| DELETE | `/api/agents/:id/skills/:skillName` | Delete skill |
 | **Secrets** |  |  |
 | GET | `/api/agents/:id/secrets` | List secret keys |
 | POST | `/api/agents/:id/secrets` | Set secret |
@@ -179,7 +174,6 @@ Useful exported types from `@ctxmill/shared`:
 
 - API resources: `ApiAgent`, `ApiAgentSession`, `ApiMessage`
 - Streaming: `AGUIEvent`, `AGUIEventType`, `MessageCommittedEvent`
-- Skills: `LoadedSkill`, `SkillFrontmatter`
 
 ### Validation ranges
 
@@ -197,7 +191,7 @@ Per-agent sandbox resource limits:
 #### `GET /health`
 
 - **Description:** Direct health check.
-- **Query params:** `access_token` for browser EventSource auth, `wire=legacy` for transition clients.
+- **Query params:** `access_token` for browser EventSource auth.
 - **Response:**
 
 ```json
@@ -274,9 +268,10 @@ Per-agent sandbox resource limits:
     "tools": ["web_search", "artifact_upload"],
     "resourceLimits": { "cpus": 1, "memoryMb": 1024 },
     "conversationCount": 12,
-    "activeSessions": 1,
-    "completedSessions": 20,
-    "failedSessions": 1,
+    "turnCount": 22,
+    "completedTurnCount": 20,
+    "failedTurnCount": 1,
+    "activeTurnCount": 1,
     "sseClients": 2,
     "hasPendingInterrupt": false,
     "sessionsByStatus": {
@@ -285,7 +280,7 @@ Per-agent sandbox resource limits:
       "RESTORING": 0,
       "TERMINATED": 0
     },
-    "sessions": [
+    "recentTurns": [
       {
         "id": "turn_123",
         "agentId": "agent_123",
@@ -299,7 +294,7 @@ Per-agent sandbox resource limits:
 ]
 ```
 
-- **Notes:** Returns a denormalized operational view, not just the stored agent row.
+- **Notes:** Returns a denormalized operational view, not just the stored agent row. Counters are one-per-concept: `conversationCount` counts durable conversations, the `*TurnCount` fields count execution turns, and `sessionsByStatus` counts sandbox sessions (containers).
 
 #### `POST /api/agents`
 
@@ -375,10 +370,10 @@ Per-agent sandbox resource limits:
   "harnessConfig": { "model": "gpt-5.4-mini" },
   "tools": ["web_search", "crm_lookup"],
   "conversationCount": 12,
-  "activeSessions": 1,
-  "totalSessions": 12,
-  "completedSessions": 10,
-  "failedSessions": 1,
+  "turnCount": 12,
+  "completedTurnCount": 10,
+  "failedTurnCount": 1,
+  "activeTurnCount": 1,
   "sseClients": 1,
   "hasPendingInterrupt": false,
   "sessionsByStatus": {
@@ -387,7 +382,7 @@ Per-agent sandbox resource limits:
     "RESTORING": 0,
     "TERMINATED": 0
   },
-  "sessions": []
+  "recentTurns": []
 }
 ```
 
@@ -719,9 +714,8 @@ Per-agent sandbox resource limits:
   - Sends an initial `CONNECTED` event immediately, carrying `latestSeq`.
   - Streams the canonical AG-UI vocabulary (ADR-015): spec frame types plus
     `CUSTOM{name:'ctxmill.*'}` for orchestrator signals, with stable
-    `${turnId}-m${n}` message ids. `?wire=legacy` keeps the pre-canonical
-    vocabulary (`TURN_PENDING`, `HITL_PAUSE`, `MESSAGE_COMMITTED`,
-    `internalType` fields) for one release.
+    `${turnId}-m${n}` message ids. The pre-canonical `?wire=legacy`
+    vocabulary was removed (W6c); clients receive canonical frames only.
   - Accepts the `Last-Event-ID` header for replay. The event id is a
     zero-padded durable global seq (e.g. `000000000042`); replay is served
     from the persisted event log (works past any in-memory cap and across
@@ -1003,84 +997,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   - Maximum upload size is controlled by `maxTarUploadBytes` in `/api/settings`.
   - The replacement is atomic: CTXMill extracts to a temp dir and swaps it into place.
 
-### i. Skills
-
-#### `GET /api/agents/:id/skills`
-
-- **Description:** Lists skills for an agent.
-- **Query params:**
-  - `sessionId` (optional; uses merged session skills when present)
-- **Response:**
-
-```json
-{
-  "skills": [
-    {
-      "name": "incident-response",
-      "description": "Guide for incident triage",
-      "path": "/data/.../incident-response/SKILL.md",
-      "source": "project",
-      "frontmatter": {
-        "name": "incident-response",
-        "description": "Guide for incident triage"
-      },
-      "instructions": "Follow these steps...",
-      "scripts": [],
-      "references": [],
-      "assets": []
-    }
-  ]
-}
-```
-
-- **Notes:** Returns `{ skills: [] }` if data storage is unavailable or no skills are found.
-
-#### `POST /api/agents/:id/skills`
-
-- **Description:** Creates a new `SKILL.md`-based skill.
-- **Request body:**
-
-```json
-{
-  "name": "incident-response",
-  "description": "Guide for incident triage",
-  "instructions": "1. Check alerts\n2. Confirm blast radius",
-  "scripts": {
-    "triage.sh": "#!/usr/bin/env bash\necho triage"
-  }
-}
-```
-
-- **Query params:** None.
-- **Response:** created skill object.
-- **Notes:**
-  - Skill names must be lowercase, hyphenated, and max 64 chars.
-  - Returns `409` if the skill already exists.
-
-#### `PUT /api/agents/:id/skills/:skillName`
-
-- **Description:** Updates `SKILL.md` frontmatter and/or instructions.
-- **Request body:**
-
-```json
-{
-  "description": "Updated guide",
-  "instructions": "Updated instructions"
-}
-```
-
-- **Query params:** None.
-- **Response:** updated skill object.
-- **Notes:** At least one of `description` or `instructions` is required.
-
-#### `DELETE /api/agents/:id/skills/:skillName`
-
-- **Description:** Deletes a skill directory.
-- **Query params:** None.
-- **Response:** no body.
-- **Notes:** Returns `204` on success.
-
-### j. Secrets
+### i. Secrets
 
 #### `GET /api/agents/:id/secrets`
 
@@ -1122,7 +1039,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Response:** no body.
 - **Notes:** Returns `204` on success.
 
-### k. Webhooks
+### j. Webhooks
 
 #### `POST /api/agents/:id/webhooks`
 
@@ -1201,7 +1118,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Response:** no body.
 - **Notes:** Returns `204` on success. Returns `404` when the webhook does not belong to the agent.
 
-### l. Feedback
+### k. Feedback
 
 #### `POST /api/agents/:id/feedback`
 
@@ -1254,7 +1171,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Notes:** Useful for configuration audit trails.
 
-### m. Settings (`/api/settings`)
+### l. Settings (`/api/settings`)
 
 #### `GET /api/settings`
 
@@ -1317,7 +1234,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 | `defaultPidsLimit` | `32` to `2048` |
 | `defaultTimeoutSec` | `60` to `3600` |
 
-### n. Artifacts (`/api/artifacts`)
+### m. Artifacts (`/api/artifacts`)
 
 #### `GET /api/artifacts`
 
@@ -1428,7 +1345,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Notes:** Returns `404` if the artifact does not exist.
 
-### o. Events (`/api/events`)
+### n. Events (`/api/events`)
 
 #### `GET /api/events`
 
@@ -1494,7 +1411,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Notes:** Useful for building filters in dashboards.
 
-### p. Triggers (`/api/triggers`)
+### o. Triggers (`/api/triggers`)
 
 #### `POST /api/triggers`
 
@@ -1593,7 +1510,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Notes:** `payload` must be an object.
 
-### q. Catalogs & Tools (`/api/catalogs`)
+### p. Catalogs & Tools (`/api/catalogs`)
 
 #### `GET /api/catalogs/tools`
 
@@ -1646,7 +1563,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   - The tool must exist and support execution.
   - Time limit is `30s`.
 
-### r. Sandbox Metrics (`/api/sandbox`)
+### q. Sandbox Metrics (`/api/sandbox`)
 
 #### `GET /api/sandbox/metrics`
 

@@ -33,14 +33,6 @@ export function writeSseHead(reply: FastifyReply): void {
 
 const MAX_HEARTBEAT_FAILURES = 3;
 
-export type WireMode = 'legacy' | 'canonical';
-
-/** Both renderings of a canonical frame; legacy is null for canonical-only frames. */
-export interface WireRenderings {
-  legacy: Record<string, unknown> | null;
-  canonical: Record<string, unknown>;
-}
-
 interface ConnectionState {
   queue: string[];
   draining: boolean;
@@ -48,8 +40,6 @@ interface ConnectionState {
   consecutiveHeartbeatFailures: number;
   agentId: string;
   clientId: string;
-  /** Wire negotiation (ADR-015): which vocabulary this client receives. */
-  wireMode: WireMode;
 }
 
 /**
@@ -62,7 +52,7 @@ export class SSEManager {
   private lastActivityMap = new Map<string, number>();
   private connectionState = new Map<FastifyReply, ConnectionState>();
   /** Attach buffer: recent frames per agent for the replay→live-tail handoff. */
-  private recentFrames = new Map<string, Array<{ seq: number; renderings: WireRenderings }>>();
+  private recentFrames = new Map<string, Array<{ seq: number; event: Record<string, unknown> }>>();
   private eventBus?: TypedEventBus;
 
   constructor(eventBus?: TypedEventBus) {
@@ -73,7 +63,7 @@ export class SSEManager {
    * Subscribe a client connection to an agent's event stream.
    * Sets up heartbeat and cleanup on disconnect.
    */
-  subscribe(agentId: string, reply: FastifyReply, wireMode: WireMode): void {
+  subscribe(agentId: string, reply: FastifyReply): void {
     const clientId = randomUUID();
     const state: ConnectionState = {
       queue: [],
@@ -82,7 +72,6 @@ export class SSEManager {
       consecutiveHeartbeatFailures: 0,
       agentId,
       clientId,
-      wireMode,
     };
     this.connectionState.set(reply, state);
 
@@ -178,13 +167,12 @@ export class SSEManager {
   }
 
   /**
-   * Serve-mode broadcast: the event id is the durable global seq.
-   * Each client receives its negotiated vocabulary (canonical default,
-   * ?wire=legacy transition escape hatch). Frames also land in a small per-agent ring buffer
-   * so subscribeDurable can close the SERIAL-vs-commit-order race between a
-   * reconnect's DB replay and the live tail.
+   * Serve-mode broadcast: the event id is the durable global seq. Frames also
+   * land in a small per-agent ring buffer so subscribeDurable can close the
+   * SERIAL-vs-commit-order race between a reconnect's DB replay and the live
+   * tail.
    */
-  broadcastFrame(agentId: string, renderings: WireRenderings, seq: number): void {
+  broadcastFrame(agentId: string, event: Record<string, unknown>, seq: number): void {
     this.lastActivityMap.set(agentId, Date.now());
 
     let ring = this.recentFrames.get(agentId);
@@ -192,26 +180,17 @@ export class SSEManager {
       ring = [];
       this.recentFrames.set(agentId, ring);
     }
-    ring.push({ seq, renderings });
+    ring.push({ seq, event });
     if (ring.length > RECENT_FRAMES_CAP) {
       ring.splice(0, ring.length - RECENT_FRAMES_CAP);
     }
 
-    const rendered: Partial<Record<WireMode, string | null>> = {};
     const clients = this.connections.get(agentId);
     if (!clients || clients.size === 0) return;
+    const data = `id: ${formatSeqId(seq)}\ndata: ${JSON.stringify(event)}\n\n`;
     for (const reply of clients) {
-      const state = this.connectionState.get(reply);
-      if (!state) continue;
-      const mode = state.wireMode;
-      if (!(mode in rendered)) {
-        const event = mode === 'canonical' ? renderings.canonical : renderings.legacy;
-        rendered[mode] = event ? `id: ${formatSeqId(seq)}\ndata: ${JSON.stringify(event)}\n\n` : null;
-      }
-      const data = rendered[mode];
-      if (data) {
-        this.writeToClient(agentId, reply, data);
-      }
+      if (!this.connectionState.has(reply)) continue;
+      this.writeToClient(agentId, reply, data);
     }
   }
 
@@ -227,7 +206,6 @@ export class SSEManager {
     reply: FastifyReply,
     afterSeq: number,
     replayedSeqs: ReadonlySet<number>,
-    wireMode: WireMode,
   ): void {
     const ring = this.recentFrames.get(agentId) ?? [];
     const gap = ring
@@ -235,16 +213,13 @@ export class SSEManager {
       .sort((a, b) => a.seq - b.seq);
     try {
       for (const entry of gap) {
-        const event = wireMode === 'canonical' ? entry.renderings.canonical : entry.renderings.legacy;
-        if (event) {
-          reply.raw.write(`id: ${formatSeqId(entry.seq)}\ndata: ${JSON.stringify(event)}\n\n`);
-        }
+        reply.raw.write(`id: ${formatSeqId(entry.seq)}\ndata: ${JSON.stringify(entry.event)}\n\n`);
       }
     } catch (writeErr) {
       console.debug('[SSE] Failed to flush attach buffer for agent', agentId, writeErr);
       return;
     }
-    this.subscribe(agentId, reply, wireMode);
+    this.subscribe(agentId, reply);
   }
 
   private writeToClient(agentId: string, reply: FastifyReply, data: string): void {

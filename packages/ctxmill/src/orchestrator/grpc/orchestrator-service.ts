@@ -58,10 +58,10 @@ export interface OrchestratorToolRegistry {
 }
 
 export interface ToolRegistryDelegate {
-  getTool(name: string, agentId?: string): { handler: (input: unknown, ctx: import('../../tool/types.js').ToolContext) => Promise<string> } | undefined;
+  getTool(name: string, agentId?: string): { handler: (input: unknown, ctx: import('@ctxmill/sandbox-daemon').ToolContext) => Promise<string> } | undefined;
 }
 
-export type ToolContextFactory = (ctx: ToolHandlerContext) => import('../../tool/types.js').ToolContext;
+export type ToolContextFactory = (ctx: ToolHandlerContext) => import('@ctxmill/sandbox-daemon').ToolContext;
 
 function ensureConnectError(err: unknown): ConnectError {
   if (err instanceof ConnectError) return err;

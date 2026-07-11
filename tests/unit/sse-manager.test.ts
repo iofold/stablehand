@@ -28,7 +28,7 @@ function getRaw(reply: import('fastify').FastifyReply): MockRaw {
 let frameSeq = 0;
 function broadcastEvent(mgr: SSEManager, agentId: string, event: Record<string, unknown>): number {
   frameSeq += 1;
-  mgr.broadcastFrame(agentId, { legacy: event, canonical: event }, frameSeq);
+  mgr.broadcastFrame(agentId, event, frameSeq);
   return frameSeq;
 }
 
@@ -54,7 +54,7 @@ describe('SSEManager', () => {
   describe('ORC-14: heartbeat', () => {
     it('should send heartbeat comments at 15s intervals', () => {
       const reply = createMockReply();
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       // No heartbeat yet
       expect(getRaw(reply).write).not.toHaveBeenCalled();
@@ -70,7 +70,7 @@ describe('SSEManager', () => {
 
     it('should not send heartbeat after unsubscribe', () => {
       const reply = createMockReply();
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
       manager.unsubscribe('agent-1', reply);
 
       vi.advanceTimersByTime(15_000);
@@ -79,7 +79,7 @@ describe('SSEManager', () => {
 
     it('should clean up heartbeat on connection close event', () => {
       const reply = createMockReply();
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       // Simulate connection close
       getRaw(reply).emit('close');
@@ -91,7 +91,7 @@ describe('SSEManager', () => {
 
     it('should keep a quiet connection open as long as heartbeats succeed', () => {
       const reply = createMockReply();
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       vi.advanceTimersByTime(6 * 60 * 1000);
 
@@ -107,9 +107,9 @@ describe('SSEManager', () => {
       const reply2 = createMockReply();
       const reply3 = createMockReply();
 
-      manager.subscribe('agent-1', reply1, 'canonical');
-      manager.subscribe('agent-1', reply2, 'canonical');
-      manager.subscribe('agent-1', reply3, 'canonical');
+      manager.subscribe('agent-1', reply1);
+      manager.subscribe('agent-1', reply2);
+      manager.subscribe('agent-1', reply3);
 
       expect(manager.getClientCount('agent-1')).toBe(3);
 
@@ -126,8 +126,8 @@ describe('SSEManager', () => {
       const reply1 = createMockReply();
       const reply2 = createMockReply();
 
-      manager.subscribe('agent-1', reply1, 'canonical');
-      manager.subscribe('agent-2', reply2, 'canonical');
+      manager.subscribe('agent-1', reply1);
+      manager.subscribe('agent-2', reply2);
 
       broadcastEvent(manager, 'agent-1', { type: 'test' });
 
@@ -145,7 +145,7 @@ describe('SSEManager', () => {
   describe('ORC-16: client disconnect cleanup', () => {
     it('should remove client on unsubscribe', () => {
       const reply = createMockReply();
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
       expect(manager.getClientCount('agent-1')).toBe(1);
 
       manager.unsubscribe('agent-1', reply);
@@ -156,8 +156,8 @@ describe('SSEManager', () => {
       const reply1 = createMockReply();
       const reply2 = createMockReply();
 
-      manager.subscribe('agent-1', reply1, 'canonical');
-      manager.subscribe('agent-1', reply2, 'canonical');
+      manager.subscribe('agent-1', reply1);
+      manager.subscribe('agent-1', reply2);
       expect(manager.getClientCount('agent-1')).toBe(2);
 
       manager.unsubscribe('agent-1', reply1);
@@ -171,8 +171,8 @@ describe('SSEManager', () => {
       const reply1 = createMockReply();
       const reply2 = createMockReply();
 
-      manager.subscribe('agent-1', reply1, 'canonical');
-      manager.subscribe('agent-1', reply2, 'canonical');
+      manager.subscribe('agent-1', reply1);
+      manager.subscribe('agent-1', reply2);
 
       // Simulate a broken connection on reply1
       getRaw(reply1).write.mockImplementation(() => {
@@ -191,7 +191,7 @@ describe('SSEManager', () => {
 
     it('should auto-remove client after 3 consecutive heartbeat failures', () => {
       const reply = createMockReply();
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       // Make write throw to simulate broken connection
       getRaw(reply).write.mockImplementation(() => {
@@ -216,9 +216,9 @@ describe('SSEManager', () => {
       const reply2 = createMockReply();
       const reply3 = createMockReply();
 
-      manager.subscribe('agent-1', reply1, 'canonical');
-      manager.subscribe('agent-1', reply2, 'canonical');
-      manager.subscribe('agent-2', reply3, 'canonical');
+      manager.subscribe('agent-1', reply1);
+      manager.subscribe('agent-1', reply2);
+      manager.subscribe('agent-2', reply3);
 
       manager.shutdown();
 
@@ -231,7 +231,7 @@ describe('SSEManager', () => {
   describe('Task 17: backpressure handling', () => {
     it('should queue events when write returns false (backpressure)', () => {
       const reply = createMockReply();
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       // First write returns false (buffer full)
       getRaw(reply).write.mockReturnValueOnce(false);
@@ -245,7 +245,7 @@ describe('SSEManager', () => {
 
     it('should flush queued events on drain', () => {
       const reply = createMockReply();
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       // First write returns false (backpressure)
       getRaw(reply).write.mockReturnValueOnce(false);
@@ -273,7 +273,7 @@ describe('SSEManager', () => {
     it('should disconnect slow client when queue exceeds 100 items', () => {
       const reply = createMockReply();
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       // First write returns false to trigger backpressure
       getRaw(reply).write.mockReturnValueOnce(false);
@@ -294,7 +294,7 @@ describe('SSEManager', () => {
 
     it('should clean up client on raw stream error', () => {
       const reply = createMockReply();
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       getRaw(reply).emit('error');
 
@@ -307,7 +307,7 @@ describe('SSEManager', () => {
     it('should log warning on heartbeat failure', () => {
       const reply = createMockReply();
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       const error = new Error('write failed');
       getRaw(reply).write.mockImplementation(() => {
@@ -328,7 +328,7 @@ describe('SSEManager', () => {
     it('should reset failure count on successful heartbeat', () => {
       const reply = createMockReply();
       vi.spyOn(console, 'warn').mockImplementation(() => {});
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       // Fail twice
       getRaw(reply).write.mockImplementation(() => {
@@ -357,7 +357,7 @@ describe('SSEManager', () => {
     it('should disconnect after exactly 3 consecutive heartbeat failures', () => {
       const reply = createMockReply();
       vi.spyOn(console, 'warn').mockImplementation(() => {});
-      manager.subscribe('agent-1', reply, 'canonical');
+      manager.subscribe('agent-1', reply);
 
       getRaw(reply).write.mockImplementation(() => {
         throw new Error('fail');
@@ -385,7 +385,7 @@ describe('SSEManager', () => {
       bus.on('client.connected', (payload) => events.push(payload));
 
       const reply = createMockReply();
-      busManager.subscribe('agent-1', reply, 'canonical');
+      busManager.subscribe('agent-1', reply);
 
       expect(events).toHaveLength(1);
       expect(events[0].agentId).toBe('agent-1');
@@ -403,7 +403,7 @@ describe('SSEManager', () => {
       bus.on('client.disconnected', (payload) => events.push(payload));
 
       const reply = createMockReply();
-      busManager.subscribe('agent-1', reply, 'canonical');
+      busManager.subscribe('agent-1', reply);
       busManager.unsubscribe('agent-1', reply);
 
       expect(events).toHaveLength(1);

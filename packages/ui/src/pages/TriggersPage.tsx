@@ -16,17 +16,11 @@ import {
   updateTrigger,
   deleteTrigger,
   fetchEventTypes,
+  type Trigger,
 } from '@/lib/api';
-
-interface Trigger {
-  id: string;
-  agentId: string;
-  eventType: string;
-  selector?: Record<string, unknown>;
-  taskTemplate: string;
-  enabled: boolean;
-  createdAt?: number;
-}
+import { AlertBanner } from '@/components/ui/AlertBanner';
+import { PageShell } from '@/components/ui/PageShell';
+import { StatsRow } from '@/components/ui/StatsRow';
 
 interface TriggerFormData {
   agentId: string;
@@ -281,101 +275,56 @@ export function TriggersPage() {
   return (
     <div className="flex min-h-screen flex-col bg-surface-950">
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-5 space-y-6">
-        {/* Header */}
         <div>
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-2xl font-semibold tracking-tight text-surface-200">
-                Event Triggers
-              </h2>
-              <p className="mt-1.5 text-sm text-surface-400 max-w-lg">
-                Configure automated responses to event bus activity.
-              </p>
-            </div>
-            <button type="button" onClick={openCreateModal} className="btn-primary">
-              <Plus className="h-4 w-4" />
-              Create Trigger
-            </button>
-          </div>
+          <PageShell
+            title="Event Triggers"
+            description="Configure automated responses to event bus activity."
+            actions={(
+              <button type="button" onClick={openCreateModal} className="btn-primary">
+                <Plus className="h-4 w-4" />
+                Create Trigger
+              </button>
+            )}
+          />
 
-          {/* Stats row */}
-          <div className="mt-6 flex flex-col sm:flex-row items-stretch divide-y sm:divide-y-0 sm:divide-x divide-surface-700">
-            <div className="flex-1 p-4 first:pl-0">
-              <p className="text-label">Total Triggers</p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
-                {loading ? '--' : stats.total}
-              </p>
-            </div>
-            <div className="flex-1 p-4">
-              <p className="text-label">Active</p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
-                {loading ? '--' : stats.active}
-              </p>
-            </div>
-            <div className="flex-1 p-4">
-              <p className="text-label">Inactive</p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
-                {loading ? '--' : stats.inactive}
-              </p>
-            </div>
-            <div className="flex-1 p-4">
-              <p className="text-label">Event Types</p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
-                {loading ? '--' : stats.types}
-              </p>
-            </div>
-          </div>
+          <StatsRow
+            items={[
+              { label: 'Total Triggers', value: loading ? '--' : stats.total },
+              { label: 'Active', value: loading ? '--' : stats.active },
+              { label: 'Inactive', value: loading ? '--' : stats.inactive },
+              { label: 'Event Types', value: loading ? '--' : stats.types },
+            ]}
+          />
         </div>
 
         {error && hasLoadedTriggers && (
-          <div
-            role="alert"
-            className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
-          >
-            <span>{error}</span>
-            <button
-              type="button"
-              data-testid="triggers-retry-button"
-              onClick={() => void loadTriggers()}
-              className="rounded-md border border-red-400/30 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-500/10"
-            >
-              Retry
-            </button>
-          </div>
+          <AlertBanner
+            tone="error"
+            message={error}
+            actionLabel="Retry"
+            onAction={() => void loadTriggers()}
+            testId="triggers-retry-button"
+          />
         )}
 
         {eventTypesError && (
-          <div
-            role="alert"
-            className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
-          >
-            <span>{eventTypesError}</span>
-            <button
-              type="button"
-              data-testid="triggers-type-retry-button"
-              onClick={() => void loadEventTypes()}
-              className="rounded-md border border-amber-400/30 px-3 py-1.5 text-xs font-medium text-amber-100 transition-colors hover:bg-amber-500/10"
-            >
-              Retry
-            </button>
-          </div>
+          <AlertBanner
+            tone="warning"
+            message={eventTypesError}
+            actionLabel="Retry"
+            onAction={() => void loadEventTypes()}
+            testId="triggers-type-retry-button"
+          />
         )}
 
         {actionError && (
-          <div
-            role="alert"
-            className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
-          >
-            <span>{actionError}</span>
-            <button
-              type="button"
-              data-testid="triggers-action-error-dismiss"
-              onClick={() => setActionError(null)}
-              className="rounded-md border border-red-400/30 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-500/10"
-            >
-              Dismiss
-            </button>
-          </div>
+          <AlertBanner
+            tone="error"
+            message={actionError}
+            actionLabel="Dismiss"
+            onAction={() => setActionError(null)}
+            testId="triggers-action-error-dismiss"
+          />
         )}
 
         {/* Filter bar */}

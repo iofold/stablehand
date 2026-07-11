@@ -1,4 +1,4 @@
-import type { AgentDefinition, Message } from '../types.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { SessionEvent as CustomSessionEvent } from './session-turn-service.js';
 import { buildAgentDefinition } from './agent-definition.js';
 import { TurnFinalizer } from './turn-finalizer.js';

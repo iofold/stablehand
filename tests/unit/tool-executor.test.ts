@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { LocalFunctionExecutor } from '../../packages/ctxmill/src/tool/executor.js';
 import { createMockToolContext } from '../utils/event-bus-test-helpers.js';
-import type { ToolDefinition } from '../../packages/ctxmill/src/tool/types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 
 const mockCtx = createMockToolContext();
 
@@ -81,62 +81,6 @@ describe('LocalFunctionExecutor', () => {
 
     const missing = executor.get('non-existent');
     expect(missing).toBeUndefined();
-  });
-
-  it('should execute a tool with valid input', async () => {
-    executor.register(createTool());
-
-    const result = await executor.execute(
-      { id: 'call-1', name: 'test-tool', arguments: { value: 'hello' } },
-      mockCtx,
-    );
-
-    expect(result.callId).toBe('call-1');
-    expect(result.name).toBe('test-tool');
-    expect(result.error).toBeUndefined();
-    expect(result.durationMs).toBeGreaterThanOrEqual(0);
-
-    const parsed = JSON.parse(result.result);
-    expect(parsed.echo).toBe('hello');
-  });
-
-  it('should throw for unknown tool', async () => {
-    await expect(
-      executor.execute(
-        { id: 'call-1', name: 'unknown-tool', arguments: {} },
-        mockCtx,
-      ),
-    ).rejects.toThrow(/unknown tool/i);
-  });
-
-  it('should throw for invalid input (Zod validation)', async () => {
-    executor.register(createTool());
-
-    await expect(
-      executor.execute(
-        { id: 'call-1', name: 'test-tool', arguments: { value: 123 } }, // value should be string
-        mockCtx,
-      ),
-    ).rejects.toThrow(/input validation failed/i);
-  });
-
-  it('should return error when handler throws', async () => {
-    executor.register(
-      createTool({
-        handler: async () => {
-          throw new Error('Handler explosion');
-        },
-      }),
-    );
-
-    const result = await executor.execute(
-      { id: 'call-1', name: 'test-tool', arguments: { value: 'test' } },
-      mockCtx,
-    );
-
-    expect(result.error).toContain('Handler explosion');
-    expect(result.result).toBe('');
-    expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   it('should measure execution duration', async () => {

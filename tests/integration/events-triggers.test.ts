@@ -17,7 +17,6 @@ describe('Events and Triggers Integration', () => {
   beforeAll(async () => {
     testApp = await createTestApp({
       dirPrefix: 'ctxmill-ekt-',
-      preset: 'local',
     });
     app = testApp.app;
     container = testApp.container;

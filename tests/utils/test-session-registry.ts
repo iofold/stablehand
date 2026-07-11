@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { vi } from 'vitest';
 import type { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
-import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { SessionEvent } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
 
 export const MAX_CONCURRENT_SESSIONS_PER_AGENT = 3;

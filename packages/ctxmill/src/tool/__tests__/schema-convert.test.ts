@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { zodToJsonSchema, jsonSchemaToZod } from '../schema-convert.js';
+import { zodToJsonSchema, jsonSchemaToZod } from '@ctxmill/sandbox-daemon';
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */

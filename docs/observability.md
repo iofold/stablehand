@@ -30,11 +30,16 @@ LANGSMITH_WORKSPACE_ID=...           # Required for service account keys (lsv2_s
 
 ### Per-Harness Behavior
 
-Tracing is implemented at the harness level. The orchestrator forwards `LANGSMITH_*` environment variables to sandbox containers.
+Tracing is implemented at the harness level. All three harnesses share the same
+sandbox-daemon `traceAgentEvents()` decorator, which consumes normalized
+`AgentEvent` streams and emits one LangSmith span tree per turn. The orchestrator
+forwards `LANGSMITH_*` environment variables to sandbox containers.
 
-- **LangGraph**: Auto-traces via `@langchain/core`. No code changes required. Captures full graph flow, ChatOpenAI calls, and tool executions.
-- **Claude Agents**: Uses `wrapClaudeAgentSDK()` from `langsmith/experimental/anthropic`. The wrapper intercepts Claude API calls and creates spans for assistant turns and tool usage.
-- **PI Agent**: Uses a custom `RunTree` tracer that maps PI SDK events (e.g., `agent_start`, `turn_start`, `tool_execution_start`) to LangSmith spans.
+- **LangGraph**: Traces through the shared AgentEvent tracer. Captures the agent → turn → LLM/tool span shape from normalized events.
+- **Claude Agents**: Traces through the same shared AgentEvent tracer. The Claude SDK is **not** wrapped with `langsmith/experimental/anthropic`; spans come from the normalized `AgentEvent` stream.
+- **PI Agent**: Traces through the same shared AgentEvent tracer. PI SDK subscribe events are used only for adapter-local event mapping, not for span emission.
+
+See `docs/langsmith-tracing.md` for the full AgentEvent → span mapping.
 
 ### Disabling Tracing
 

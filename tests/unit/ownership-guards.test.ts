@@ -44,6 +44,10 @@ describe('Ownership enforcement on routes', () => {
       db: container.db,
       agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
+      harnessSchemas: container.harnessSchemas,
+      sse: container.sseManager,
+      interrupts: container.interruptManager,
+      toolDefinitionRegistry: container.toolRegistry,
       runStartupService: container.runStartupService,
       dataDir,
     });

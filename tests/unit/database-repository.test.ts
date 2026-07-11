@@ -352,6 +352,84 @@ describe('DatabaseRepository', () => {
     });
   });
 
+  describe('Conversation summaries', () => {
+    let agentId: string;
+
+    beforeAll(async () => {
+      const agent = await repo.createAgent({
+        name: 'Summary Agent',
+        harness: 'claude-agents',
+        harnessConfig: JSON.stringify({ model: 'claude-sonnet-4-6' }),
+        systemPrompt: 'Summary test prompt',
+        tools: [],
+      });
+      agentId = agent.id;
+    });
+
+    it('reports completedAt when the latest turn finished successfully', async () => {
+      const conv = await repo.createConversation(agentId);
+      const startedAt = Date.now() - 60_000;
+      const completedAt = startedAt + 4_300;
+      await repo.createTurn({
+        agentId,
+        conversationId: conv.id,
+        taskDescription: 'Short completed run',
+        status: 'completed',
+        startedAt,
+        completedAt,
+      });
+
+      const summaries = await repo.getConversationSummaries(agentId);
+      const summary = summaries.find((s) => s.id === conv.id);
+      expect(summary).toBeDefined();
+      expect(summary!.status).toBe('COMPLETED');
+      expect(summary!.startedAt).toBe(startedAt);
+      expect(summary!.completedAt).toBe(completedAt);
+    });
+
+    it('reports completedAt from the latest turn when it errored', async () => {
+      const conv = await repo.createConversation(agentId);
+      const firstStartedAt = Date.now() - 120_000;
+      await repo.createTurn({
+        agentId,
+        conversationId: conv.id,
+        status: 'completed',
+        startedAt: firstStartedAt,
+        completedAt: firstStartedAt + 1_000,
+      });
+      const secondStartedAt = firstStartedAt + 30_000;
+      const secondCompletedAt = secondStartedAt + 2_500;
+      await repo.createTurn({
+        agentId,
+        conversationId: conv.id,
+        status: 'error',
+        startedAt: secondStartedAt,
+        completedAt: secondCompletedAt,
+        error: 'boom',
+      });
+
+      const summaries = await repo.getConversationSummaries(agentId);
+      const summary = summaries.find((s) => s.id === conv.id);
+      expect(summary!.status).toBe('ERROR');
+      expect(summary!.startedAt).toBe(firstStartedAt);
+      expect(summary!.completedAt).toBe(secondCompletedAt);
+    });
+
+    it('leaves completedAt null while the latest turn is open', async () => {
+      const conv = await repo.createConversation(agentId);
+      await repo.createTurn({
+        agentId,
+        conversationId: conv.id,
+        status: 'running',
+        startedAt: Date.now(),
+      });
+
+      const summaries = await repo.getConversationSummaries(agentId);
+      const summary = summaries.find((s) => s.id === conv.id);
+      expect(summary!.completedAt).toBeNull();
+    });
+  });
+
   describe('Sandbox Sessions', () => {
     let agentId: string;
     let conversationId: string;

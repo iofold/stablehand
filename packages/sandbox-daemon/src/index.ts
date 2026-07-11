@@ -4,6 +4,7 @@ export * from './tool/schema-convert.js';
 export * from './util/retry.js';
 export * from './harness/types.js';
 export * from './harness/shared.js';
+export * from './harness/schemas.js';
 export * from './harness/langgraph.js';
 export * from './harness/claude-agents.js';
 export * from './harness/pi-agent.js';
@@ -22,10 +23,7 @@ export {
   protoAgentEventToAGUI,
   protoSessionEventToCustom,
 } from './sandbox/proto-convert.js';
-export type {
-  SessionCheckpoint as ProtoConvertSessionCheckpoint,
-  ProtoToolDefsOptions,
-} from './sandbox/proto-convert.js';
+export type { ProtoToolDefsOptions } from './sandbox/proto-convert.js';
 export * from './sandbox/tool-proxy.js';
 export * from './sandbox/artifact-handler.js';
 export {

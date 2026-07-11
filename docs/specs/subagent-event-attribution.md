@@ -1,5 +1,7 @@
 # Subagent Event Attribution: Cross-Harness Analysis
 
+> Sources: distilled from the retired research docs `claude-sdk-subagent-analysis.md` and `langgraph-subagent-event-analysis.md` (see git history).
+
 **Status:** Research (pre-implementation)  
 **Date:** 2026-04-08  
 **Scope:** All 3 harnesses — event stream, persistence, UI rendering

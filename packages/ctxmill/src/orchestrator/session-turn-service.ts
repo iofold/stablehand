@@ -1,5 +1,5 @@
 /**
- * SessionTurnService — session-turn executor that delegates to SandboxSessionManager.
+ * Session-turn executor that delegates to SandboxSessionManager.
  *
  * Flow:
  *  1. ensureSession(conversationId, agentDef) — get or create a persistent session
@@ -13,8 +13,8 @@
 import type { MessageCommittedEvent } from '@ctxmill/shared';
 import type { AGUIEvent } from '../events/types.js';
 import type { SessionEvent } from '@ctxmill/sandbox-daemon';
-import type { AgentDefinition, Message } from '../types.js';
-import type { TypedEventBus } from '../events/bus.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
+import type { SandboxSessionManager } from './sandbox-session-manager.js';
 
 export type { AGUISessionEvent, MessageCommittedSessionEvent, TurnFailedSessionEvent, SessionEvent } from '@ctxmill/sandbox-daemon';
 
@@ -36,37 +36,21 @@ const defaultLogger: Logger = {
   debug: (msg, ...args) => console.debug(`${TAG} ${msg}`, ...args),
 };
 
-// ── SandboxSessionManager interface ─────────────────────────
+export type SessionTurnSessionManager = {
+  ensureSession: (
+    ...args: Parameters<SandboxSessionManager['ensureSession']>
+  ) => Promise<Pick<Awaited<ReturnType<SandboxSessionManager['ensureSession']>>, 'sessionId'>>;
+  deliverTurn: SandboxSessionManager['deliverTurn'];
+};
 
-export interface SandboxSessionManager {
-  ensureSession(conversationId: string, agentDef: AgentDefinition, agentId: string): Promise<{ sessionId: string }>;
-  deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<SessionEvent>;
-  killSession(sessionId: string): Promise<void>;
-  suspendSession(sessionId: string, reason: string, options?: { allowActiveTurn?: boolean }): Promise<unknown>;
-  resumeWithInterruptResolution?(sessionId: string, agentSessionId: string, agentId: string): Promise<void>;
-}
-
-// ── Deps ──────────────────────────────────────────────────────
-
-export interface SessionTurnServiceDeps {
-  sessionManager: SandboxSessionManager;
-  eventBus: TypedEventBus;
+export interface SessionTurnExecutorDeps {
+  sessionManager: SessionTurnSessionManager;
   logger?: Logger;
   onSessionReady?: (agentSessionId: string, sandboxSessionId: string) => void;
 }
 
-export class SessionTurnService {
-  private readonly logger: Logger;
-
-  constructor(private readonly deps: SessionTurnServiceDeps) {
-    this.logger = deps.logger ?? defaultLogger;
-  }
-
-  /**
-   * Execute one conversation turn inside a persistent sandbox session.
-   * Yields AGUIEvents so SSE broadcasters and AgentSessionService can consume them uniformly.
-   */
-  async *executeSessionTurn(
+export interface SessionTurnExecutor {
+  executeSessionTurn(
     agentDef: AgentDefinition,
     conversationId: string,
     messages: Message[],
@@ -74,78 +58,115 @@ export class SessionTurnService {
     signal?: AbortSignal,
     agentId?: string,
     existingSessionId?: string,
-  ): AsyncGenerator<AGUIEvent> {
-    const { sessionManager } = this.deps;
+  ): AsyncGenerator<AGUIEvent>;
+}
 
-    const sessionId = existingSessionId
-      ?? (await sessionManager.ensureSession(conversationId, agentDef, agentId ?? agentDef.name)).sessionId;
-    this.deps.onSessionReady?.(turnId, sessionId);
-    this.logger.debug(`Session ${sessionId} ready for turn ${turnId} (agent=${agentDef.name})`);
+export function createSessionTurnExecutor(deps: SessionTurnExecutorDeps): SessionTurnExecutor {
+  const logger = deps.logger ?? defaultLogger;
 
-    if (signal?.aborted) {
-      this.logger.info(`Turn ${turnId} aborted before delivery`);
-      return;
-    }
+  return {
+    executeSessionTurn: (
+      agentDef,
+      conversationId,
+      messages,
+      turnId,
+      signal,
+      agentId,
+      existingSessionId,
+    ) => executeSessionTurn(
+      deps,
+      logger,
+      agentDef,
+      conversationId,
+      messages,
+      turnId,
+      signal,
+      agentId,
+      existingSessionId,
+    ),
+  };
+}
 
-    try {
-      const stream = sessionManager.deliverTurn(sessionId, messages, turnId);
+/** Execute one conversation turn inside a persistent sandbox session. */
+async function* executeSessionTurn(
+  deps: SessionTurnExecutorDeps,
+  logger: Logger,
+  agentDef: AgentDefinition,
+  conversationId: string,
+  messages: Message[],
+  turnId: string,
+  signal?: AbortSignal,
+  agentId?: string,
+  existingSessionId?: string,
+): AsyncGenerator<AGUIEvent> {
+  const { sessionManager } = deps;
 
-      for await (const sessionEvent of stream) {
-        if (signal?.aborted) {
-          this.logger.info(`Turn ${turnId} aborted during streaming`);
-          break;
-        }
+  const sessionId = existingSessionId
+    ?? (await sessionManager.ensureSession(conversationId, agentDef, agentId ?? agentDef.name)).sessionId;
+  deps.onSessionReady?.(turnId, sessionId);
+  logger.debug(`Session ${sessionId} ready for turn ${turnId} (agent=${agentDef.name})`);
 
-        const aguiEvent = this.convertSessionEvent(sessionEvent, turnId);
-        if (aguiEvent !== null) {
-          yield aguiEvent;
-        }
-      }
-    } finally {
-      if (signal?.aborted) {
-        this.logger.info(`Turn ${turnId} aborted; preserving session ${sessionId}`);
-      }
-    }
+  if (signal?.aborted) {
+    logger.info(`Turn ${turnId} aborted before delivery`);
+    return;
   }
 
-  // ── SessionEvent → AGUIEvent conversion ─────────────────────
+  try {
+    const stream = sessionManager.deliverTurn(sessionId, messages, turnId);
 
-  private convertSessionEvent(
-    sessionEvent: SessionEvent,
-    turnId: string,
-  ): AGUIEvent | null {
-    switch (sessionEvent.type) {
-      case 'ag_ui_event':
-        return sessionEvent.event;
-
-      case 'message_committed': {
-        const event: MessageCommittedEvent = {
-          type: 'MESSAGE_COMMITTED',
-          timestamp: Date.now(),
-          // turnId serves as the agent session id in the session-turn model
-          runId: turnId,
-          role: sessionEvent.role,
-          content: sessionEvent.content,
-          toolCalls: sessionEvent.toolCalls,
-          toolCallId: sessionEvent.toolCallId,
-          turnId: sessionEvent.turnId,
-          messageSeq: sessionEvent.messageSeq,
-        };
-        return event;
+    for await (const sessionEvent of stream) {
+      if (signal?.aborted) {
+        logger.info(`Turn ${turnId} aborted during streaming`);
+        break;
       }
 
-      case 'turn_failed': {
-        const errorEvent: AGUIEvent = {
-          type: 'RUN_ERROR',
-          timestamp: Date.now(),
-          runId: turnId,
-          error: sessionEvent.errorMessage,
-        };
-        return errorEvent;
+      const aguiEvent = convertSessionEvent(sessionEvent, turnId);
+      if (aguiEvent !== null) {
+        yield aguiEvent;
       }
-
-      default:
-        return null;
     }
+  } finally {
+    if (signal?.aborted) {
+      logger.info(`Turn ${turnId} aborted; preserving session ${sessionId}`);
+    }
+  }
+}
+
+function convertSessionEvent(
+  sessionEvent: SessionEvent,
+  turnId: string,
+): AGUIEvent | null {
+  switch (sessionEvent.type) {
+    case 'ag_ui_event':
+      return sessionEvent.event;
+
+    case 'message_committed': {
+      const event: MessageCommittedEvent = {
+        type: 'MESSAGE_COMMITTED',
+        timestamp: Date.now(),
+        // turnId serves as the agent session id in the session-turn model
+        runId: turnId,
+        role: sessionEvent.role,
+        content: sessionEvent.content,
+        toolCalls: sessionEvent.toolCalls,
+        toolCallId: sessionEvent.toolCallId,
+        turnId: sessionEvent.turnId,
+        messageSeq: sessionEvent.messageSeq,
+      };
+      return event;
+    }
+
+    case 'turn_failed': {
+      const errorEvent: AGUIEvent = {
+        type: 'RUN_ERROR',
+        timestamp: Date.now(),
+        runId: turnId,
+        error: sessionEvent.errorMessage,
+      };
+      return errorEvent;
+    }
+
+    default:
+      return null;
   }
 }

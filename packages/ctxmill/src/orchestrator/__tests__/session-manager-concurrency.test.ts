@@ -16,7 +16,7 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { ContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
-import type { AgentDefinition, Message } from '../../types.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import { SessionStateStore } from '../session-manager/session-state-store.js';
 import { SessionStatusCoordinator } from '../session-manager/session-status-coordinator.js';
 

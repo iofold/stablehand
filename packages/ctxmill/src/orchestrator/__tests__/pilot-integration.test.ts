@@ -6,7 +6,7 @@ import type { CallbackOutboxRow, DatabaseRepository, EventFrameRow, WebhookRow }
 import type { CallbackOutboxInsert } from '../../database/types.js';
 import { SpineConsumerRunner } from '../../events/spine-consumer-runner.js';
 import { TypedEventBus } from '../../events/bus.js';
-import type { AgentDefinition } from '../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import { CallbackDispatcher } from '../callback-dispatcher.js';
 import { CanonicalLog } from '../canonical/canonical-log.js';
 import type { AgentSessionService } from '../agent-session-service.js';
@@ -400,23 +400,13 @@ async function buildApp(options?: {
 
   const app = Fastify();
   const configSchema = z.object({ model: z.string().min(1) }).passthrough();
-  const harness = {
-    name: 'langgraph',
-    configSchema,
-    openSession: vi.fn(),
-  };
   await app.register(agentRoutes, {
     prefix: '/api/agents',
     db,
     sse: new SSEManager(),
     interrupts: new InterruptManager() as unknown as InterruptManager,
     sessionManager,
-    harnessRegistry: {
-      register: vi.fn(),
-      get: vi.fn(() => harness),
-      getConfigSchema: vi.fn(() => configSchema),
-      list: vi.fn(() => ['langgraph']),
-    },
+    harnessSchemas: { langgraph: configSchema },
     agentSessionService,
     runStartupService,
     eventBus,

@@ -25,7 +25,7 @@ CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persi
 - The supported workflow in this repo is the Docker stack.
 - Agent harnesses execute inside Docker containers (one per run) via the sandbox subsystem.
 - Firecracker sandbox execution is planned, not shipped.
-- The Docker preset currently uses PostgreSQL for system persistence, but pgvector-backed knowledge search is not wired into the active runtime yet.
+- System persistence uses PostgreSQL. CTXMill does not ship a built-in knowledge/RAG search layer; the previously planned pgvector-backed knowledge search was removed and is not part of the active runtime.
 
 ## Quick Start
 
@@ -92,8 +92,7 @@ packages/
       config/           Presets, factories, DI container
       database/         PostgreSQL schema, repository, migrations
       events/           Typed event bus, triggers, wait primitives
-      harness/          Harness adapters (3 shipped: LangGraph, Claude Agents, PI Agent)
-      knowledge/        Reserved for future knowledge abstractions
+      harness/          Harness registry and interfaces (3 shipped: LangGraph, Claude Agents, PI Agent)
       manifest/         YAML manifest parsing and conversion
       orchestrator/     Fastify server, SSE, HITL, routes
       sandbox/          Container lifecycle, gRPC daemon, checkpoint/resume
@@ -102,9 +101,13 @@ packages/
       tool/             Tool executors and providers
       util/             Shared runtime utilities
       workspace/        Session-scoped workspace environments
+  sandbox-daemon/       @ctxmill/sandbox-daemon — gRPC daemon running inside harness
+                        containers: harness adapters, tool proxy, proto-convert, checkpoint
   proto/                Protocol Buffers for sandbox gRPC IPC
   ui/                   React frontend (Vite + Tailwind)
   shared/               Shared event and API types
+  client/               @ctxmill/client — typed browser client for AG-UI streaming
+  react/                @ctxmill/react — React components and hooks for AG-UI chat
   create-ctxmill/       Generic starter-project scaffold
   examples/
     kitchen-sink/       Multi-harness example project and tests

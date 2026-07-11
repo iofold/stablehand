@@ -25,7 +25,7 @@ import {
 import { SpineConsumerRunner } from '../../packages/ctxmill/src/events/spine-consumer-runner.js';
 import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
 import type { ContainerManager, ContainerInfo, ContainerMetrics } from '../../packages/ctxmill/src/sandbox/container-manager.js';
-import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 import type { AGUIEvent } from '../../packages/ctxmill/src/events/types.js';
 import { settle } from '../utils/event-bus-test-helpers.js';

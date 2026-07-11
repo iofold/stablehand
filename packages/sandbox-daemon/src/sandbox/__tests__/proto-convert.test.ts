@@ -23,6 +23,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent, ResolvedSecrets } from '../../harness/types.js';
 import type { ToolContext, ToolDefinition } from '../../tool/types.js';
+import type { SessionCheckpoint as InternalSessionCheckpoint } from '../checkpoint.js';
 import type { OrchestratorServiceClient } from '../tool-proxy.js';
 import {
   agentEventToSessionEvent,
@@ -33,7 +34,6 @@ import {
   protoSessionCheckpointToInternal,
   protoToToolDefs,
   sessionCheckpointToProto,
-  type SessionCheckpoint as InternalSessionCheckpoint,
 } from '../proto-convert.js';
 
 interface ZodLike {
@@ -96,30 +96,33 @@ function makeSessionCheckpoint(
       lastCompletedTurnId: 'turn-16',
     },
     runnerState: {
-      status: 'waiting_for_input',
+      status: 'WAITING_INPUT',
       pendingRequests: [
         {
           type: 'approval',
           id: 'req-1',
-          payloadJson: '{"tool":"delete-file"}',
+          payload: { tool: 'delete-file' },
         },
         {
-          type: 'tool',
+          type: 'tool_call',
           id: 'req-2',
-          payloadJson: '{"tool":"emit-event"}',
+          payload: { tool: 'emit-event' },
         },
       ],
     },
     workspaceRef: {
-      strategy: 'fuse',
+      strategy: 'tar',
       reference: '/overlay/session-123',
     },
     harnessState: {
-      nested: {
-        ok: true,
-        count: 3,
+      stateVersion: '1',
+      payload: {
+        nested: {
+          ok: true,
+          count: 3,
+        },
+        labels: ['alpha', 'beta'],
       },
-      labels: ['alpha', 'beta'],
     },
     ...overrides,
   };
@@ -592,9 +595,12 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
     const checkpoint = sessionCheckpointToProto(
       makeSessionCheckpoint({
         harnessState: {
-          checkpointSeq: 9007199254740997n,
-          nested: {
-            values: [1n, 2n],
+          stateVersion: '1',
+          payload: {
+            checkpointSeq: 9007199254740997n,
+            nested: {
+              values: [1n, 2n],
+            },
           },
         },
       }),
@@ -616,9 +622,12 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
     expect(approvalPayload.event.value.argsJson).toBe('{"limit":"9007199254740995"}');
 
     expect(checkpoint.harnessState).toEqual({
-      checkpointSeq: '9007199254740997',
-      nested: {
-        values: ['1', '2'],
+      stateVersion: '1',
+      payload: {
+        checkpointSeq: '9007199254740997',
+        nested: {
+          values: ['1', '2'],
+        },
       },
     });
   });
@@ -643,7 +652,7 @@ describe('sessionCheckpointToProto and protoSessionCheckpointToInternal', () => 
   it('fills internal defaults when proto checkpoint omits optional nested messages', () => {
     const checkpoint = protoSessionCheckpointToInternal(
       create(SessionCheckpointSchema, {
-        checkpointVersion: 1,
+        checkpointVersion: 2,
         sessionId: 'session-empty',
         conversationId: 'conv-empty',
         harnessName: 'openai',
@@ -651,7 +660,7 @@ describe('sessionCheckpointToProto and protoSessionCheckpointToInternal', () => 
     );
 
     expect(checkpoint).toEqual({
-      checkpointVersion: 1,
+      checkpointVersion: 2,
       sessionId: 'session-empty',
       conversationId: 'conv-empty',
       harnessName: 'openai',
@@ -660,14 +669,17 @@ describe('sessionCheckpointToProto and protoSessionCheckpointToInternal', () => 
         lastCompletedTurnId: undefined,
       },
       runnerState: {
-        status: 'idle',
-        pendingRequests: [],
+        status: 'IDLE',
+        pendingRequests: undefined,
       },
       workspaceRef: {
         strategy: 'none',
         reference: '',
       },
-      harnessState: {},
+      harnessState: {
+        stateVersion: '1',
+        payload: {},
+      },
     });
   });
 });

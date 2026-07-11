@@ -3,7 +3,7 @@ import { chown, readdir, stat } from 'node:fs/promises';
 import type { FastifyRequest } from 'fastify';
 import { projectSessionStatus } from '@ctxmill/shared';
 
-import type { HarnessRegistry } from '../../../harness/types.js';
+import type { HarnessConfigSchemas } from '@ctxmill/sandbox-daemon/harness/schemas';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared } from '../../../workspace/ensure.js';
 import { parseStoredHarnessConfig, resolveResourceLimits } from '../../agent-definition.js';
 import { validateAgentHttpToolsConfig } from '../../http-tools.js';
@@ -156,8 +156,8 @@ export function toApiAgentSession(
   };
 }
 
-export function getHarnessError(harnessName: string, harnessRegistry: HarnessRegistry): string {
-  const available = harnessRegistry.list();
+export function getHarnessError(harnessName: string, harnessSchemas: HarnessConfigSchemas): string {
+  const available = Object.keys(harnessSchemas);
   if (available.length === 0) {
     return `Unknown harness: ${harnessName}`;
   }
@@ -168,7 +168,7 @@ export function getHarnessError(harnessName: string, harnessRegistry: HarnessReg
 export function validateHarnessConfigInput(
   harnessName: string,
   harnessConfig: unknown,
-  harnessRegistry: HarnessRegistry,
+  harnessSchemas: HarnessConfigSchemas,
 ):
   | { success: true; harnessConfig: Record<string, unknown> }
   | { success: false; status: number; body: Record<string, unknown> } {
@@ -183,18 +183,16 @@ export function validateHarnessConfigInput(
     };
   }
 
-  let harness: ReturnType<HarnessRegistry['get']>;
-  try {
-    harness = harnessRegistry.get(harnessName);
-  } catch {
+  const schema = harnessSchemas[harnessName];
+  if (!schema) {
     return {
       success: false,
       status: 400,
-      body: { error: getHarnessError(harnessName, harnessRegistry) },
+      body: { error: getHarnessError(harnessName, harnessSchemas) },
     };
   }
 
-  const parseResult = harness.configSchema.safeParse(harnessConfig);
+  const parseResult = schema.safeParse(harnessConfig);
   if (!parseResult.success) {
     return {
       success: false,

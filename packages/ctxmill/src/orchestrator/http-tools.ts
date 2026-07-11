@@ -1,6 +1,6 @@
 import { HTTPToolProvider, type HttpEndpointConfig } from '../tool/providers/http.js';
 import { DefaultToolRegistry } from '../tool/registry.js';
-import type { AgentDefinition } from '../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { SecretProvider } from '../secrets/types.js';
 import { createGuardedFetch } from '../util/egress.js';

@@ -12,3 +12,16 @@ export function linkAbortSignal(signal: AbortSignal | undefined, abort: () => vo
   signal.addEventListener('abort', onAbort, { once: true });
   return () => signal.removeEventListener('abort', onAbort);
 }
+
+export function linkTurnAbort(
+  configSignal: AbortSignal | undefined,
+  contextSignal: AbortSignal | undefined,
+  abort: () => void,
+): () => void {
+  const unlinkConfig = linkAbortSignal(configSignal, abort);
+  const unlinkContext = linkAbortSignal(contextSignal, abort);
+  return () => {
+    unlinkConfig();
+    unlinkContext();
+  };
+}

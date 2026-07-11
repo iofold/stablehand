@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { HTTPToolProvider, type HttpEndpointConfig } from '../providers/http.js';
-import type { ToolContext } from '../types.js';
+import type { ToolContext } from '@ctxmill/sandbox-daemon';
 
 function makeCtx(): ToolContext {
   return {

@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { CONTAINER_SCOPE_LABEL } from '../container-scope.js';
 import { parsePositiveMs } from '../../util/timing.js';
+import type { ContainerInfo, ContainerManagerOptions } from './types.js';
 
 export const STARTUP_GRACE_MS_LABEL = 'ctxmill.startup-grace-ms';
 export const DEFAULT_CONTAINER_STARTUP_GRACE_MS = 90_000;
@@ -10,13 +11,6 @@ const HARNESS_MEMORY_FLOOR: ReadonlyMap<string, number> = new Map([
   ['claude-agents', 2048],
   ['pi-agent', 2048],
 ]);
-
-export interface SandboxRuntimeDefaults {
-  cpus: number;
-  memoryMb: number;
-  pidsLimit: number;
-  timeoutSec: number;
-}
 
 export interface SandboxRuntimeCreateOptions {
   sessionId: string;
@@ -36,6 +30,48 @@ export interface SandboxRuntimeResources {
   memoryMb: number;
   pidsLimit: number;
   timeoutSec: number;
+}
+
+export type SandboxRuntimeDefaults = SandboxRuntimeResources;
+
+const DEFAULT_SANDBOX_RUNTIME_RESOURCES: Readonly<SandboxRuntimeResources> = {
+  cpus: 1,
+  memoryMb: 1024,
+  pidsLimit: 256,
+  timeoutSec: 600,
+};
+
+export function resolveSandboxRuntimeDefaults(
+  options: ContainerManagerOptions = {},
+): SandboxRuntimeDefaults {
+  return {
+    cpus: options.defaultCpus ?? DEFAULT_SANDBOX_RUNTIME_RESOURCES.cpus,
+    memoryMb: options.defaultMemoryMb ?? DEFAULT_SANDBOX_RUNTIME_RESOURCES.memoryMb,
+    pidsLimit: options.defaultPidsLimit ?? DEFAULT_SANDBOX_RUNTIME_RESOURCES.pidsLimit,
+    timeoutSec: options.defaultTimeoutSec ?? DEFAULT_SANDBOX_RUNTIME_RESOURCES.timeoutSec,
+  };
+}
+
+interface RuntimeContainerInfoInput {
+  containerId: string;
+  containerName: string;
+  labels: Record<string, string>;
+  status: ContainerInfo['status'];
+  startedAt?: string;
+  networkIp?: string;
+}
+
+export function runtimeLabelsToContainerInfo(input: RuntimeContainerInfoInput): ContainerInfo {
+  return {
+    containerId: input.containerId,
+    containerName: input.containerName,
+    sessionId: input.labels['ctxmill.session-id'] ?? '',
+    agentId: input.labels['ctxmill.agent-id'] ?? '',
+    harnessName: input.labels['ctxmill.harness'] ?? '',
+    status: input.status,
+    ...(input.startedAt ? { startedAt: new Date(input.startedAt) } : {}),
+    ...(input.networkIp ? { networkIp: input.networkIp } : {}),
+  };
 }
 
 export interface DockerContainerSpecInput {
@@ -202,7 +238,10 @@ function resolveResources(
 }
 
 function imageName(imagePrefix: string, harnessName: string): string {
-  return `${imagePrefix}-${harnessName}:latest`;
+  // Deploys that import commit-tagged harness images pin the tag via
+  // CTXMILL_SANDBOX_IMAGE_TAG (ctx-wvq6); local stacks use :latest.
+  const tag = process.env.CTXMILL_SANDBOX_IMAGE_TAG || 'latest';
+  return `${imagePrefix}-${harnessName}:${tag}`;
 }
 
 function commonRuntimeLabels(

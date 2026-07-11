@@ -21,14 +21,12 @@ export interface TestAppHandle {
   close: () => Promise<void>;
 }
 
-type TestPreset = 'docker' | 'local';
 type TestServerOverrides =
   | Partial<ServerOptions>
   | ((ctx: { container: AppContainer; dataDir: string }) => Partial<ServerOptions>);
 
 interface CreateTestAppOptions {
   dirPrefix?: string;
-  preset?: TestPreset;
   config?: CTXMillConfig;
   databaseUrl?: string;
   serverOptions?: TestServerOverrides;
@@ -69,7 +67,7 @@ function defaultServerOptions(container: AppContainer, dataDir: string): ServerO
     db: container.db,
     agentSessionService: container.agentSessionService,
     eventBus: container.eventBus,
-    harnessRegistry: container.harnessRegistry,
+    harnessSchemas: container.harnessSchemas,
     triggerManager: container.triggerManager,
     sse: container.sseManager,
     interrupts: container.interruptManager,

@@ -1,7 +1,7 @@
 import { dirname } from 'node:path';
 
 import type { DatabaseRepository } from '../database/repository.js';
-import type { AgentDefinition, AgentResourceLimits } from '../types.js';
+import type { AgentDefinition, AgentResourceLimits } from '@ctxmill/sandbox-daemon';
 
 /**
  * Canonical stored-agent → AgentDefinition shaping (ctx-8l4).

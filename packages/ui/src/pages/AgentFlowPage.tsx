@@ -9,17 +9,10 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAgentsStore } from '@/stores/agents';
-import { fetchTriggers } from '@/lib/api';
+import { fetchTriggers, type Trigger } from '@/lib/api';
 import { SankeyDiagram } from '@/components/charts/SankeyDiagram';
 import { NetworkGraph } from '@/components/charts/NetworkGraph';
-
-interface Trigger {
-  id: string;
-  agentId: string;
-  eventType: string;
-  taskTemplate?: string;
-  enabled?: boolean;
-}
+import { PageShell } from '@/components/ui/PageShell';
 
 type ViewMode = 'sankey' | 'network';
 
@@ -132,61 +125,54 @@ export function AgentFlowPage() {
   return (
     <div className="flex min-h-screen flex-col bg-surface-950">
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-5 space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-semibold tracking-tight text-surface-200 flex items-center gap-3">
-              <GitBranch className="h-6 w-6 text-accent-400" />
-              Agent Flow
-            </h2>
-            <p className="mt-1.5 text-sm text-surface-400 max-w-lg">
-              Visualize agent-to-agent event flows and trigger connections.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            {/* View toggle */}
-            <div className="flex rounded-lg border border-surface-700 overflow-hidden">
+        <PageShell
+          title="Agent Flow"
+          description="Visualize agent-to-agent event flows and trigger connections."
+          icon={<GitBranch className="h-6 w-6 text-accent-400" />}
+          actions={(
+            <div className="flex items-center gap-3">
+              <div className="flex overflow-hidden rounded-lg border border-surface-700">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('network')}
+                  className={cn(
+                    'px-3 py-1.5 text-xs font-medium transition-colors',
+                    viewMode === 'network'
+                      ? 'bg-surface-700 text-surface-100'
+                      : 'bg-surface-800 text-surface-400 hover:text-surface-200',
+                  )}
+                >
+                  Network
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('sankey')}
+                  className={cn(
+                    'px-3 py-1.5 text-xs font-medium transition-colors',
+                    viewMode === 'sankey'
+                      ? 'bg-surface-700 text-surface-100'
+                      : 'bg-surface-800 text-surface-400 hover:text-surface-200',
+                  )}
+                >
+                  Sankey
+                </button>
+              </div>
+
               <button
                 type="button"
-                onClick={() => setViewMode('network')}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium transition-colors',
-                  viewMode === 'network'
-                    ? 'bg-surface-700 text-surface-100'
-                    : 'bg-surface-800 text-surface-400 hover:text-surface-200',
-                )}
+                onClick={() => setSidePanel(!sidePanel)}
+                className="flex items-center gap-1.5 rounded-lg border border-surface-700 bg-surface-800 px-3 py-1.5 text-xs font-medium text-surface-400 transition-colors hover:text-surface-200"
               >
-                Network
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('sankey')}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium transition-colors',
-                  viewMode === 'sankey'
-                    ? 'bg-surface-700 text-surface-100'
-                    : 'bg-surface-800 text-surface-400 hover:text-surface-200',
+                {sidePanel ? (
+                  <PanelRightClose className="h-3.5 w-3.5" />
+                ) : (
+                  <PanelRightOpen className="h-3.5 w-3.5" />
                 )}
-              >
-                Sankey
+                Details
               </button>
             </div>
-
-            {/* Side panel toggle */}
-            <button
-              type="button"
-              onClick={() => setSidePanel(!sidePanel)}
-              className="flex items-center gap-1.5 rounded-lg border border-surface-700 bg-surface-800 px-3 py-1.5 text-xs font-medium text-surface-400 hover:text-surface-200 transition-colors"
-            >
-              {sidePanel ? (
-                <PanelRightClose className="h-3.5 w-3.5" />
-              ) : (
-                <PanelRightOpen className="h-3.5 w-3.5" />
-              )}
-              Details
-            </button>
-          </div>
-        </div>
+          )}
+        />
 
         {/* Content */}
         {loading ? (
@@ -204,12 +190,12 @@ export function AgentFlowPage() {
             </p>
           </div>
         ) : (
-          <div className="flex gap-6">
+          <div className="flex flex-col gap-6 lg:flex-row">
             {/* Graph area */}
             <div
               className={cn(
-                'border border-surface-700 rounded-lg bg-surface-800/30 overflow-hidden min-h-[500px]',
-                sidePanel ? 'flex-1' : 'w-full',
+                'min-h-[500px] w-full overflow-hidden rounded-lg border border-surface-700 bg-surface-800/30',
+                sidePanel && 'lg:flex-1',
               )}
             >
               {viewMode === 'sankey' ? (
@@ -231,7 +217,7 @@ export function AgentFlowPage() {
 
             {/* Side panel */}
             {sidePanel && (
-              <div className="w-80 flex-shrink-0 border border-surface-700 rounded-lg bg-surface-800/30 overflow-hidden">
+              <div className="w-full flex-shrink-0 overflow-hidden rounded-lg border border-surface-700 bg-surface-800/30 lg:w-80">
                 <div className="border-b border-surface-700 px-4 py-3 bg-surface-800/50 flex items-center justify-between">
                   <span className="text-sm font-medium text-surface-200">Details</span>
                   {selectedNode && (

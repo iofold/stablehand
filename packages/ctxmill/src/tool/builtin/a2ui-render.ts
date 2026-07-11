@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ToolDefinition } from '../types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 import { isAllowedComponent, sanitizeProps } from '../../a2ui/extract.js';
 
 export const a2uiRenderTool: ToolDefinition = {

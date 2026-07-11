@@ -5,7 +5,7 @@ export interface ContainerManagerOptions {
   imagePrefix?: string;
   /** Default CPU allocation (fractional cores). Default: 1.0 */
   defaultCpus?: number;
-  /** Default memory limit in MiB. Default: 512 */
+  /** Default memory limit in MiB. Default: 1024 */
   defaultMemoryMb?: number;
   /** Default PID limit. Default: 256 */
   defaultPidsLimit?: number;
@@ -91,6 +91,18 @@ export interface SandboxContainerManager {
    * unowned container, so it does not starve new sandbox work during grace.
    */
   releaseContainerSlot?(containerId: string): boolean;
+  /**
+   * Apply new runtime settings without a restart (ctx-reir): slot limits and
+   * queue timeout immediately, resource defaults on the next creation.
+   */
+  applySettings?(update: {
+    maxGlobalContainers?: number;
+    queueTimeoutMs?: number;
+    defaultCpus?: number;
+    defaultMemoryMb?: number;
+    defaultPidsLimit?: number;
+    defaultTimeoutSec?: number;
+  }): void;
   getActiveCount(): number;
   getQueuedCount(): number;
   getPeakCount(): number;

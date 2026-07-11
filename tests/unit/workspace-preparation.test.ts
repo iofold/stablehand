@@ -2,15 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { WorkspacePreparationService } from '../../packages/ctxmill/src/sandbox/workspace-preparation.js';
+import { prepareWorkspace } from '../../packages/ctxmill/src/sandbox/workspace-preparation.js';
 
-describe('WorkspacePreparationService', () => {
+describe('prepareWorkspace', () => {
   let tempDir: string;
-  let wps: WorkspacePreparationService;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(join(tmpdir(), 'wps-test-'));
-    wps = new WorkspacePreparationService({ logger: { debug: () => {} } });
   });
 
   afterEach(async () => {
@@ -25,11 +23,11 @@ describe('WorkspacePreparationService', () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(join(projectDir, 'data', 'config.json'), '{"key":"val"}');
 
-      await wps.prepare({
+      await prepareWorkspace({
         workspaceDir,
         projectDir,
         workspaceContent: { files: [{ src: 'data/config.json', dest: 'config.json' }] },
-      });
+      }, { debug: () => {} });
 
       const content = await fs.readFile(join(workspaceDir, 'config.json'), 'utf-8');
       expect(content).toBe('{"key":"val"}');
@@ -42,11 +40,11 @@ describe('WorkspacePreparationService', () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(join(projectDir, 'f.txt'), 'hello');
 
-      await wps.prepare({
+      await prepareWorkspace({
         workspaceDir,
         projectDir,
         workspaceContent: { files: [{ src: 'f.txt', dest: 'deep/nested/f.txt' }] },
-      });
+      }, { debug: () => {} });
 
       const content = await fs.readFile(join(workspaceDir, 'deep', 'nested', 'f.txt'), 'utf-8');
       expect(content).toBe('hello');
@@ -56,7 +54,7 @@ describe('WorkspacePreparationService', () => {
       const workspaceDir = join(tempDir, 'workspace');
       await fs.mkdir(workspaceDir, { recursive: true });
 
-      await wps.prepare({ workspaceDir, workspaceContent: {} });
+      await prepareWorkspace({ workspaceDir, workspaceContent: {} }, { debug: () => {} });
 
       const entries = await fs.readdir(workspaceDir);
       expect(entries).toHaveLength(0);
@@ -66,7 +64,7 @@ describe('WorkspacePreparationService', () => {
       const workspaceDir = join(tempDir, 'workspace');
       await fs.mkdir(workspaceDir, { recursive: true });
 
-      await wps.prepare({ workspaceDir });
+      await prepareWorkspace({ workspaceDir }, { debug: () => {} });
 
       const entries = await fs.readdir(workspaceDir);
       expect(entries).toHaveLength(0);

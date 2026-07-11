@@ -68,7 +68,7 @@ The Claude harness is unique because the SDK spawns a Node.js subprocess (`node 
 
 -   **Subprocess Behavior**: If the child process crashes, the harness might report a generic "Claude agent query failed" error. Check container logs for subprocess `stderr`.
 -   **MCP Server Issues**: Claude uses an internal MCP server to communicate with CTXMill tools. If tool calls fail with "connection lost," it usually indicates the MCP bridge has crashed.
--   **LangSmith Tracing**: If `LANGSMITH_TRACING=true` is set, the harness uses `wrapClaudeAgentSDK()`. If tracing fails to initialize, it logs a warning but continues.
+-   **LangSmith Tracing**: If `LANGSMITH_TRACING=true` is set, the harness traces through the shared AgentEvent tracer (`traceAgentEvents()`); the Claude SDK itself is not wrapped. If tracing fails to initialize, it logs a warning but continues.
 -   **`canUseTool` Errors**: Approval logic is handled via a `canUseTool` callback. If this callback throws, the entire turn will fail.
 
 ### PI Agent (@mariozechner/pi-coding-agent)

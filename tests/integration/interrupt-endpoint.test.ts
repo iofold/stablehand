@@ -17,7 +17,6 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
   beforeAll(async () => {
     testApp = await createTestApp({
       dirPrefix: 'ctxmill-interrupt-',
-      preset: 'docker',
     });
     app = testApp.app;
     container = testApp.container;

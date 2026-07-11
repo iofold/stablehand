@@ -42,7 +42,6 @@ describe('POST /api/catalogs/tools/test', () => {
 
     testApp = await createTestApp({
       dirPrefix: 'ctxmill-tool-tester-',
-      preset: 'local',
       serverOptions: { toolDefinitionRegistry: toolRegistry },
     });
     app = testApp.app;

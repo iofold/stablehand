@@ -5,7 +5,10 @@ import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from '../container-sco
 import {
   buildDockerContainerSpec,
   resolveContainerStartupGraceMs,
+  resolveSandboxRuntimeDefaults,
+  runtimeLabelsToContainerInfo,
 } from './spec.js';
+import type { SandboxRuntimeDefaults } from './spec.js';
 import { normalizeDockerContainerStatus } from './status.js';
 import type {
   ContainerInfo,
@@ -31,10 +34,7 @@ export class DockerContainerDriver {
   private readonly imagePrefix: string;
   private readonly scopeId: string;
   private readonly dataVolume?: string;
-  private readonly defaultCpus: number;
-  private readonly defaultMemoryMb: number;
-  private readonly defaultPidsLimit: number;
-  private readonly defaultTimeoutSec: number;
+  private defaults: SandboxRuntimeDefaults;
   private readonly startupGraceMs: number;
 
   constructor(options?: ContainerManagerOptions, dockerInstance?: Dockerode) {
@@ -43,11 +43,23 @@ export class DockerContainerDriver {
     this.imagePrefix = options?.imagePrefix ?? process.env.CTXMILL_IMAGE_PREFIX ?? 'ctxmill/harness';
     this.scopeId = resolveContainerScopeId();
     this.dataVolume = process.env.CTXMILL_DATA_VOLUME;
-    this.defaultCpus = options?.defaultCpus ?? 1.0;
-    this.defaultMemoryMb = options?.defaultMemoryMb ?? 1024;
-    this.defaultPidsLimit = options?.defaultPidsLimit ?? 256;
-    this.defaultTimeoutSec = options?.defaultTimeoutSec ?? 600;
+    this.defaults = resolveSandboxRuntimeDefaults(options);
     this.startupGraceMs = resolveContainerStartupGraceMs(options?.startupGraceMs);
+  }
+
+  updateDefaults(update: {
+    defaultCpus?: number;
+    defaultMemoryMb?: number;
+    defaultPidsLimit?: number;
+    defaultTimeoutSec?: number;
+  }): void {
+    this.defaults = {
+      ...this.defaults,
+      ...(update.defaultCpus !== undefined ? { cpus: update.defaultCpus } : {}),
+      ...(update.defaultMemoryMb !== undefined ? { memoryMb: update.defaultMemoryMb } : {}),
+      ...(update.defaultPidsLimit !== undefined ? { pidsLimit: update.defaultPidsLimit } : {}),
+      ...(update.defaultTimeoutSec !== undefined ? { timeoutSec: update.defaultTimeoutSec } : {}),
+    };
   }
 
   // ── Lifecycle ────────────────────────────────────────────
@@ -58,12 +70,7 @@ export class DockerContainerDriver {
       imagePrefix: this.imagePrefix,
       scopeId: this.scopeId,
       networkName: this.networkName,
-      defaults: {
-        cpus: this.defaultCpus,
-        memoryMb: this.defaultMemoryMb,
-        pidsLimit: this.defaultPidsLimit,
-        timeoutSec: this.defaultTimeoutSec,
-      },
+      defaults: this.defaults,
       startupGraceMs: this.startupGraceMs,
       startedAtIso: new Date().toISOString(),
       orchestratorUrl: process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001',
@@ -417,31 +424,18 @@ export class DockerContainerDriver {
     const inspectItem = item as Dockerode.ContainerInspectInfo;
     const listItem = item as Dockerode.ContainerInfo;
     const labels = inspected ? inspectItem.Config?.Labels ?? {} : listItem.Labels ?? {};
-    const info: ContainerInfo = {
+    const networks = item.NetworkSettings?.Networks;
+    const preferredNetwork = networks?.[this.networkName];
+    const network = preferredNetwork?.IPAddress
+      ? preferredNetwork
+      : Object.values(networks ?? {}).find((candidate) => candidate?.IPAddress);
+    return runtimeLabelsToContainerInfo({
       containerId: inspectedContainerId ?? listItem.Id,
       containerName: (inspected ? inspectItem.Name : listItem.Names?.[0])?.replace(/^\//, '') ?? '',
-      sessionId: labels['ctxmill.session-id'] || labels['ctxmill.run-id'] || '',
-      agentId: labels['ctxmill.agent-id'] ?? '',
-      harnessName: labels['ctxmill.harness'] ?? '',
+      labels,
       status: normalizeDockerContainerStatus(inspected ? inspectItem.State.Status : listItem.State),
-    };
-
-    const startedAt = labels['ctxmill.started-at'];
-    if (startedAt) {
-      info.startedAt = new Date(startedAt);
-    }
-
-    const networks = item.NetworkSettings?.Networks;
-    if (networks) {
-      const preferredNetwork = networks[this.networkName];
-      const net = preferredNetwork?.IPAddress
-        ? preferredNetwork
-        : Object.values(networks).find((candidate) => candidate?.IPAddress);
-      if (net?.IPAddress) {
-        info.networkIp = net.IPAddress;
-      }
-    }
-
-    return info;
+      startedAt: labels['ctxmill.started-at'],
+      networkIp: network?.IPAddress,
+    });
   }
 }

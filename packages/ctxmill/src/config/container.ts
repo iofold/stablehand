@@ -5,11 +5,10 @@ import { createDatabase, type DatabaseConnection } from '../database/connection.
 import { runMigrations } from '../database/migrations.js';
 import { DatabaseRepository } from '../database/repository.js';
 import { LocalFunctionExecutor } from '../tool/executor.js';
-import { DefaultHarnessRegistry } from '../harness/registry.js';
-import { LangGraphHarness } from '../harness/langgraph.js';
-import { ClaudeAgentsHarness } from '../harness/claude-agents.js';
-import { PIAgentHarness } from '../harness/pi-agent.js';
-import type { HarnessRegistry } from '../harness/types.js';
+import {
+  HARNESS_CONFIG_SCHEMAS,
+  type HarnessConfigSchemas,
+} from '@ctxmill/sandbox-daemon/harness/schemas';
 import { TypedEventBus } from '../events/bus.js';
 import { SSEManager } from '../orchestrator/sse.js';
 import { InterruptManager } from '../orchestrator/interrupt.js';
@@ -23,7 +22,6 @@ import { RunStartupService } from '../orchestrator/run-startup-service.js';
 import { TurnFinalizer } from '../orchestrator/turn-finalizer.js';
 import { reconcileStrandedTurnsOnStartup } from '../orchestrator/turn-reconciler.js';
 import { CanonicalLog } from '../orchestrator/canonical/canonical-log.js';
-import { formatNativeLegacy } from '../orchestrator/canonical/format-native-legacy.js';
 import { PostgresSecretProvider } from '../secrets/postgres-provider.js';
 import { deriveKey } from '../secrets/crypto.js';
 import { resolveSecretMasterKeyPassphrase } from '../secrets/master-key.js';
@@ -33,8 +31,8 @@ import { KubernetesContainerManager } from '../sandbox/kubernetes-container-mana
 import { WorkspaceDiffService } from '../sandbox/workspace-diff.js';
 import { SystemSettingsService } from '../settings/service.js';
 import { ContainerLifecyclePolicy } from '../orchestrator/container-lifecycle-policy.js';
-import { SessionTurnService } from '../orchestrator/session-turn-service.js';
-import type { SandboxSessionManager } from '../orchestrator/session-turn-service.js';
+import { createSessionTurnExecutor } from '../orchestrator/session-turn-service.js';
+import type { SandboxSessionManager } from '../orchestrator/sandbox-session-manager.js';
 import { SandboxSessionManager as SandboxSessionManagerImpl } from '../orchestrator/sandbox-session-manager.js';
 import { SessionStateStore } from '../orchestrator/session-manager/session-state-store.js';
 import { SessionStatusCoordinator } from '../orchestrator/session-manager/session-status-coordinator.js';
@@ -44,9 +42,16 @@ import { ArtifactToolProvider } from '../tool/providers/artifact.js';
 import { builtinTools, builtinToolNames } from '../tool/builtin/index.js';
 import { createCtxmillGuideTool } from '../tool/builtin/ctxmill-guide.js';
 import { resolveToolLocation } from '../tool/metadata.js';
-import { zodToJsonSchema } from '../tool/schema-convert.js';
+import { zodToJsonSchema } from '@ctxmill/sandbox-daemon';
 import { ArtifactStore } from '../artifact/artifact-store.js';
 import { VALID_WEBHOOK_EVENTS } from '../orchestrator/webhook-events.js';
+import { ToolLocation } from '@ctxmill/proto/sandbox/v1';
+
+const LOCATION_TO_PROTO = {
+  sandbox: ToolLocation.SANDBOX,
+  orchestrator: ToolLocation.ORCHESTRATOR,
+  daemon: ToolLocation.DAEMON,
+} as const;
 
 export interface AppContainer {
   config: ResolvedConfig;
@@ -59,7 +64,7 @@ export interface AppContainer {
   triggerManager: EventTriggerManager;
   spineConsumerRunner: SpineConsumerRunner;
   agentSessionService: AgentSessionService;
-  harnessRegistry: HarnessRegistry;
+  harnessSchemas: HarnessConfigSchemas;
   secretProvider: SecretProvider;
   callbackDispatcher: CallbackDispatcher;
   runStartupService: RunStartupService;
@@ -236,15 +241,11 @@ export async function createContainer(
 
   // ── SSE + Interrupts ───────────────────────────────────
   const sseManager = new SSEManager(eventBus);
-  // Run-channel frames feed the native wire with durable seq ids; each client
-  // receives its negotiated vocabulary (canonical default, ?wire=legacy).
+  // Run-channel frames feed the native wire with durable seq ids.
   canonicalLog.subscribe((frames) => {
     for (const frame of frames) {
       if (frame.channel !== 'run') continue;
-      sseManager.broadcastFrame(frame.agentId, {
-        legacy: formatNativeLegacy(frame),
-        canonical: frame.body,
-      }, frame.seq);
+      sseManager.broadcastFrame(frame.agentId, frame.body, frame.seq);
     }
   });
   const interruptManager = new InterruptManager(eventBus, db, async (sessionId) => {
@@ -255,14 +256,6 @@ export async function createContainer(
   await interruptManager.loadFromDb();
 
   let sessionManagerRef: SandboxSessionManagerImpl | null = null;
-
-  // ── Harness Registry ────────────────────────────────────
-  // All harnesses are now stateless — they resolve dependencies from
-  // HarnessRunConfig at runtime, so no orchestrator objects are needed.
-  const harnessRegistry = new DefaultHarnessRegistry();
-  harnessRegistry.register(new LangGraphHarness());
-  harnessRegistry.register(new ClaudeAgentsHarness());
-  harnessRegistry.register(new PIAgentHarness());
 
   // ── Event Triggers ─────────────────────────────────────
   // Webhook/callback delivery targets agent-supplied URLs from the trusted
@@ -403,8 +396,6 @@ export async function createContainer(
     const declaredTools = new Set(toolNames);
     const excluded = excludeBuiltins ? new Set(excludeBuiltins) : undefined;
     const allTools = new Map<string, { name: string; description: string; input: unknown; requiresApproval?: boolean; location?: 'sandbox' | 'orchestrator' | 'daemon'; programmatic?: boolean }>();
-    const LOCATION_TO_PROTO = { sandbox: 1, orchestrator: 2, daemon: 3 } as const;
-
     for (const tool of toolExecutor.list()) {
       if (declaredTools.has(tool.name) || builtinToolNames.has(tool.name)) {
         allTools.set(tool.name, tool);
@@ -466,22 +457,18 @@ export async function createContainer(
   const sessionManager: SandboxSessionManager = realSessionManager;
   sessionManagerRef = realSessionManager;
 
-  const sessionTurnService = new SessionTurnService({
+  const sessionTurnService = createSessionTurnExecutor({
     sessionManager,
-    eventBus,
     onSessionReady: (agentSessionId, sandboxSessionId) => {
       void db.updateTurn(agentSessionId, { sessionId: sandboxSessionId });
     },
   });
 
   const agentSessionService = new AgentSessionService({
-    sse: sseManager,
     db,
     sessionManager: realSessionManager,
     eventBus,
     sessionTurnService,
-    toolExecutor,
-    toolRegistry,
   });
   runStartupService.configureExecution({
     db,
@@ -505,7 +492,7 @@ export async function createContainer(
     triggerManager,
     spineConsumerRunner,
     agentSessionService,
-    harnessRegistry,
+    harnessSchemas: HARNESS_CONFIG_SCHEMAS,
     secretProvider,
     callbackDispatcher,
     runStartupService,

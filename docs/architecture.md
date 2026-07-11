@@ -1,7 +1,7 @@
 # CTXMill Architecture
 
 > Status: Current shipped architecture as of 2026-07-06.
-> Future sandbox work is tracked separately in [docs/plans/2026-03-17-sandbox-execution-requirements.md](/path/to/stablehand/docs/plans/2026-03-17-sandbox-execution-requirements.md).
+> The sandbox execution migration shipped; its requirements spec is archived at [docs/plans/shipped/2026-03-17-sandbox-execution-requirements.md](plans/shipped/2026-03-17-sandbox-execution-requirements.md).
 
 ## Purpose
 
@@ -84,7 +84,7 @@ Relevant code:
 
 CTXMill uses a typed in-process event bus plus a durable canonical event spine. Internal events are projected by `CanonicalProjector`, batch-persisted to `event_store` by `CanonicalLog`, and only then fanned out to live SSE clients. Browser reconnects replay from durable global sequence ids rather than volatile in-memory history.
 
-User-emitted custom events are persisted with their original type and payload and still drive trigger matching. Run-channel events are projected into AG-UI frames for native SSE streams; `?wire=legacy` remains a transition escape hatch.
+User-emitted custom events are persisted with their original type and payload and still drive trigger matching. Run-channel events are projected into canonical AG-UI frames for native SSE streams. The pre-canonical `?wire=legacy` escape hatch was removed (W6c, 2026-07-10); the canonical vocabulary is the only wire.
 
 The TypedEventBus emits the following events:
 
@@ -231,9 +231,10 @@ PostgreSQL is the current system of record for:
 - `agents` — Agent definitions (name, model, harness, tools, status)
 - `conversations` — Chat conversation sessions per agent
 - `messages` — Individual messages within conversations
-- `agentRuns` — Run lifecycle (status, timing, errors, session, pause/resume)
-- `eventStore` — Durable canonical event log and operational event API source
-- `suspendedRuns` — Runs waiting on external events
+- `sandbox_sessions` — Sandbox session per conversation (status, restore attempts)
+- `turns` — Per-turn run lifecycle (status, timing, errors, session link, pause/resume)
+- `event_store` — Durable canonical event log and operational event API source
+- `suspended_sessions` — Sessions waiting on external events
 - `eventTriggers` — Event-driven agent trigger rules
 - `agentVersions` — Agent manifest version history
 - `pendingInterrupts` — HITL approval requests in progress
@@ -257,13 +258,13 @@ The shipped frontend is broader than a basic dashboard/chat shell. It includes:
 - Dashboard
 - Chat
 - Agent detail
-- Run detail
 - Events
 - Tools
 - Agent flow
 - Triggers
+- Artifacts
 - Settings
-- Overview, Sessions, Runs, Tools, Files, Subagents, and Secrets tabs inside agent detail
+- Overview, Sessions, Tools, Files, Artifacts, and Secrets tabs inside agent detail
 
 Relevant code:
 
@@ -285,4 +286,4 @@ If a document describes any of the following as current behavior, treat it as fu
 - VM snapshots or exact process-state resume
 - Graph or vector-backed retrieval as a first-class runtime subsystem
 
-That future work is tracked in plan documents, especially [2026-03-17-sandbox-execution-requirements.md](/path/to/stablehand/docs/plans/2026-03-17-sandbox-execution-requirements.md).
+That future work is tracked in plan documents; the original sandbox migration spec is archived at [2026-03-17-sandbox-execution-requirements.md](plans/shipped/2026-03-17-sandbox-execution-requirements.md).

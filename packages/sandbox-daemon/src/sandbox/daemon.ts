@@ -169,13 +169,19 @@ export function startToolApi(
     fetch: async (request: Request) => {
       const url = new URL(request.url);
       const token = opts?.token ?? getToolApiToken();
+      const started = performance.now();
+      const respond = (response: Response): Response => {
+        const elapsedMs = Math.round(performance.now() - started);
+        console.error(`[sandbox] tool API ${request.method} ${url.pathname} -> ${response.status} (${elapsedMs}ms)`);
+        return response;
+      };
 
       if (!isAuthorized(request, token)) {
-        return jsonResponse({ error: 'Unauthorized' }, 401);
+        return respond(jsonResponse({ error: 'Unauthorized' }, 401));
       }
 
       if (request.method === 'GET' && url.pathname === '/tools') {
-        return jsonResponse(getTools().map((tool) => tool.name));
+        return respond(jsonResponse(getTools().map((tool) => tool.name)));
       }
 
       if (request.method === 'POST' && url.pathname.startsWith('/tools/')) {
@@ -183,7 +189,7 @@ export function startToolApi(
         const tool = getTools().find((candidate) => candidate.name === toolName);
 
         if (!tool) {
-          return jsonResponse({ error: `Tool not found: ${toolName}` }, 404);
+          return respond(jsonResponse({ error: `Tool not found: ${toolName}` }, 404));
         }
 
         let parsedBody: unknown;
@@ -191,24 +197,25 @@ export function startToolApi(
           parsedBody = await request.json();
         } catch (parseErr: unknown) {
           console.error(`[daemon] Failed to parse tool request body for ${toolName}:`, parseErr);
-          return jsonResponse({ error: 'Invalid request body: failed to parse JSON' }, 400);
+          return respond(jsonResponse({ error: 'Invalid request body: failed to parse JSON' }, 400));
         }
 
         try {
           const inputResult = validateToolInput(tool, parsedBody);
           if (!inputResult.ok) {
-            return jsonResponse(inputResult.body, 400);
+            return respond(jsonResponse(inputResult.body, 400));
           }
 
           const result = await tool.handler(inputResult.data, opts?.makeContext?.() ?? getSessionToolContext());
-          return jsonResponse(parseToolResult(result));
+          return respond(jsonResponse(parseToolResult(result)));
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : String(error);
-          return jsonResponse({ error: message }, 500);
+          console.error(`[sandbox] tool ${toolName} failed:`, error);
+          return respond(jsonResponse({ error: message }, 500));
         }
       }
 
-      return jsonResponse({ error: `Not found: ${url.pathname}` }, 404);
+      return respond(jsonResponse({ error: `Not found: ${url.pathname}` }, 404));
     },
   });
 

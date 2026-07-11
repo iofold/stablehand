@@ -9,8 +9,8 @@ import { createServer } from '../orchestrator/server.js';
 import { discoverAgents, discoverManifests, discoverTools } from '../agent/discovery.js';
 import { manifestToDefinition } from '../manifest/convert.js';
 import type { CTXMillConfig } from '../config/types.js';
-import type { AgentDefinition } from '../types.js';
-import type { ToolDefinition } from '../tool/types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 
 import { ensureAgentWorkspace, seedAgentWorkspace } from '../workspace/ensure.js';
 import { DefaultOrchestratorToolRegistry, registerDefaultToolHandlers } from '../orchestrator/grpc/orchestrator-service.js';
@@ -220,6 +220,7 @@ export async function startDev() {
     port: apiPort,
     host: '0.0.0.0',
     eventBus: container.eventBus,
+    harnessSchemas: container.harnessSchemas,
     dataDir,
     triggerManager: container.triggerManager,
     sse: container.sseManager,

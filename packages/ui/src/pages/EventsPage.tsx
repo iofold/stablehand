@@ -17,6 +17,10 @@ import {
   type EventRecord,
   type EventStats,
 } from '@/lib/api';
+import { AlertBanner } from '@/components/ui/AlertBanner';
+import { PageShell } from '@/components/ui/PageShell';
+import { StatsRow } from '@/components/ui/StatsRow';
+import { formatEventDuration, formatEventTime } from '@/lib/format';
 
 /** Map time range labels to API values */
 const TIME_RANGES = [
@@ -78,12 +82,6 @@ function parseRecordField(obj: Record<string, unknown>, key: string): Record<str
   } catch {
     return undefined;
   }
-}
-
-function formatDuration(ms: number | undefined): string | undefined {
-  if (ms === undefined) return undefined;
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
 }
 
 function compactValue(value: unknown): string {
@@ -149,7 +147,7 @@ function extractSummary(type: string, payload: unknown): string {
       return summarizeRunState(parsed, 'started');
     case 'RUN_FINISHED': {
       const status = stringField(parsed, 'status');
-      const duration = formatDuration(numberField(parsed, 'durationMs'));
+      const duration = formatEventDuration(numberField(parsed, 'durationMs'));
       return truncateSummary(`Run ${status ?? 'finished'}${duration ? ` in ${duration}` : ''}`);
     }
     case 'RUN_ERROR': {
@@ -185,7 +183,7 @@ function extractSummary(type: string, payload: unknown): string {
     }
     case 'TOOL_CALL_RESULT': {
       const toolName = stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
-      const duration = formatDuration(numberField(parsed, 'durationMs'));
+      const duration = formatEventDuration(numberField(parsed, 'durationMs'));
       const error = stringField(parsed, 'error');
       if (error) {
         return truncateSummary(`Tool failed: ${toolName} - ${error}${duration ? ` (${duration})` : ''}`);
@@ -220,20 +218,6 @@ function extractSummary(type: string, payload: unknown): string {
     default:
       return summarizeRecord(parsed, ['message', 'description', 'task', 'taskDescription', 'content', 'delta', 'name', 'type']);
   }
-}
-
-/** Format a timestamp to a readable relative or absolute string. */
-function formatTime(ts: number): string {
-  const elapsed = Date.now() - ts;
-  if (elapsed < 60_000) return `${Math.max(0, Math.floor(elapsed / 1000))}s ago`;
-  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
-  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`;
-  return new Date(ts).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 function formatEventPayload(payload: unknown): string {
@@ -411,102 +395,60 @@ export function EventsPage() {
   return (
     <div className="flex min-h-screen flex-col bg-surface-950">
       <main className="mx-auto w-full max-w-7xl flex-1 space-y-6 px-4 py-5 sm:px-6">
-        {/* Header */}
         <div>
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h2 className="text-2xl font-semibold tracking-tight text-surface-200">
-                Event Log
-              </h2>
-              <p className="mt-1.5 text-sm text-surface-400 max-w-lg">
-                Monitor event bus activity across all agents.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setAutoRefresh(!autoRefresh)}
-              className={cn(
-                'inline-flex w-fit shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors sm:self-start',
-                autoRefresh
-                  ? 'bg-accent-600/20 text-accent-300 ring-1 ring-accent-500/30'
-                  : 'bg-surface-800 text-surface-400 hover:text-surface-200',
-              )}
-            >
-              <RefreshCw
-                className={cn('h-3.5 w-3.5', autoRefresh && 'animate-spin')}
-              />
-              <span className="hidden sm:inline">
-                {autoRefresh ? 'Auto-refresh on' : 'Auto-refresh'}
-              </span>
-              <span className="sm:hidden">
-                {autoRefresh ? 'Auto on' : 'Auto'}
-              </span>
-            </button>
-          </div>
+          <PageShell
+            title="Event Log"
+            description="Monitor event bus activity across all agents."
+            actions={(
+              <button
+                type="button"
+                onClick={() => setAutoRefresh(!autoRefresh)}
+                className={cn(
+                  'inline-flex w-fit items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
+                  autoRefresh
+                    ? 'bg-accent-600/20 text-accent-300 ring-1 ring-accent-500/30'
+                    : 'bg-surface-800 text-surface-400 hover:text-surface-200',
+                )}
+              >
+                <RefreshCw className={cn('h-3.5 w-3.5', autoRefresh && 'animate-spin')} />
+                <span className="hidden sm:inline">
+                  {autoRefresh ? 'Auto-refresh on' : 'Auto-refresh'}
+                </span>
+                <span className="sm:hidden">{autoRefresh ? 'Auto on' : 'Auto'}</span>
+              </button>
+            )}
+          />
 
-          {/* Stats row */}
           {stats && (
-            <div className="mt-6 flex flex-col sm:flex-row items-stretch divide-y sm:divide-y-0 sm:divide-x divide-surface-700">
-              <div className="flex-1 p-4 first:pl-0">
-                <p className="text-label">Total Events</p>
-                <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
-                  {stats.total.toLocaleString()}
-                </p>
-              </div>
-              <div className="flex-1 p-4">
-                <p className="text-label">Events/min</p>
-                <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
-                  {stats.recentRate}
-                </p>
-              </div>
-              <div className="flex-1 p-4">
-                <p className="text-label">Event Types</p>
-                <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
-                  {Object.keys(stats.byType).length}
-                </p>
-              </div>
-              <div className="flex-1 p-4">
-                <p className="text-label">Active Agents</p>
-                <p className="mt-1 text-2xl font-semibold tabular-nums text-surface-100">
-                  {stats.topAgents.length}
-                </p>
-              </div>
-            </div>
+            <StatsRow
+              items={[
+                { label: 'Total Events', value: stats.total.toLocaleString() },
+                { label: 'Events/min', value: stats.recentRate },
+                { label: 'Event Types', value: Object.keys(stats.byType).length },
+                { label: 'Active Agents', value: stats.topAgents.length },
+              ]}
+            />
           )}
         </div>
 
         {loadError && hasLoadedEventData && (
-          <div
-            role="alert"
-            className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
-          >
-            <span>{loadError}</span>
-            <button
-              type="button"
-              data-testid="events-retry-button"
-              onClick={() => loadEvents()}
-              className="rounded-md border border-red-400/30 px-3 py-1.5 text-xs font-medium text-red-100 transition-colors hover:bg-red-500/10"
-            >
-              Retry
-            </button>
-          </div>
+          <AlertBanner
+            tone="error"
+            message={loadError}
+            actionLabel="Retry"
+            onAction={() => loadEvents()}
+            testId="events-retry-button"
+          />
         )}
 
         {eventTypesError && (
-          <div
-            role="alert"
-            className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
-          >
-            <span>{eventTypesError}</span>
-            <button
-              type="button"
-              data-testid="events-type-retry-button"
-              onClick={() => void loadEventTypes()}
-              className="rounded-md border border-amber-400/30 px-3 py-1.5 text-xs font-medium text-amber-100 transition-colors hover:bg-amber-500/10"
-            >
-              Retry
-            </button>
-          </div>
+          <AlertBanner
+            tone="warning"
+            message={eventTypesError}
+            actionLabel="Retry"
+            onAction={() => void loadEventTypes()}
+            testId="events-type-retry-button"
+          />
         )}
 
         {/* Filter bar */}
@@ -819,7 +761,7 @@ function EventMobileRow({
             )}
 
             <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-surface-500 tabular-nums">
-              <span>{formatTime(event.createdAt)}</span>
+              <span>{formatEventTime(event.createdAt)}</span>
               <span>#{event.seq}</span>
               {isExpanded ? (
                 <ChevronDown className="h-3.5 w-3.5 text-surface-400" />
@@ -916,7 +858,7 @@ function EventRow({
           )}
         </td>
         <td className="px-4 py-3 text-xs text-surface-400 tabular-nums whitespace-nowrap">
-          {formatTime(event.createdAt)}
+          {formatEventTime(event.createdAt)}
         </td>
         {showType && (
           <td className="px-4 py-3">

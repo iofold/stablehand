@@ -9,12 +9,12 @@ This document provides a comprehensive comparison of the three agent harnesses s
 | **SDK Package** | `deepagents` (LangGraph JS) | `@anthropic-ai/claude-agent-sdk` | `@mariozechner/pi-coding-agent` |
 | **Default Model** | `gpt-5.4-mini` | `claude-sonnet-4-6` | `gpt-5.4-mini` |
 | **Skills** | Workspace-file pattern only | Claude SDK-native `.claude/skills` when present | Workspace-file pattern only |
-| **Subagents** | ✅ (Configurable) | ❌ | ❌ |
+| **Subagents** | ✅ (Configurable) | ✅ (`harnessConfig.subagents`) | ❌ |
 | **Hooks** | ❌ (Planned) | ❌ (Planned) | ❌ (Planned) |
 | **Middleware** | ✅ (Tool blocklist) | ❌ | ❌ |
 | **Native Tools** | `LocalShellBackend` | SDK-provided (MCP) | SDK-provided |
 | **MCP Support** | ❌ | ✅ | ❌ |
-| **LangSmith Tracing** | ✅ (Native) | ✅ (Wrapped) | ✅ (Custom) |
+| **LangSmith Tracing** | ✅ (Native) | ✅ (Shared AgentEvent tracer) | ✅ (Shared AgentEvent tracer) |
 | **HITL/Approval** | ✅ | ✅ (Queued) | ✅ |
 | **Streaming** | ✅ | ✅ | ✅ |
 | **Checkpoint/Resume** | ✅ | ✅ | ✅ |
@@ -24,7 +24,7 @@ This document provides a comprehensive comparison of the three agent harnesses s
 
 ### LangGraph
 **Best for:** Multi-step workflows, tool-heavy agents, and complex agent architectures.
-- Use if you need **Subagents** support today.
+- Use for LangChain-style **Subagents** via deep-agent params (Claude Agents also supports subagents; see below).
 - Use if you want a lightweight, pure TypeScript runtime without Python or heavy CLI dependencies.
 - Use if you need custom **Middleware** for tool execution (e.g., global blocklists).
 - Best for general-purpose agents using OpenAI, Anthropic, or Google models via LangChain.
@@ -32,6 +32,7 @@ This document provides a comprehensive comparison of the three agent harnesses s
 ### Claude Agents
 **Best for:** Claude-native workflows, high-fidelity code generation, and MCP-heavy environments.
 - Use if you want the official **Anthropic Agent SDK** experience.
+- Use for **Subagents** defined via `harnessConfig.subagents` (passed to the SDK `agents` option).
 - Use if your agent relies heavily on **MCP (Model Context Protocol)** servers.
 - Use for tasks requiring deep filesystem access and complex code editing (via native `Edit` and `Bash` tools).
 - Best for agents exclusively using Claude models (`claude-sonnet-4-6`, `claude-opus-4-6`).

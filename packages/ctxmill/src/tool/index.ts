@@ -1,7 +1,9 @@
-import type { ToolDefinition } from './types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 
 export function defineTool(def: ToolDefinition): ToolDefinition {
-  return { location: 'sandbox' as const, ...def };
+  // Local tool handlers live in the orchestrator process; the sandbox only
+  // ever sees a throwing placeholder for them (ctx-5xyo).
+  return { location: 'orchestrator' as const, ...def };
 }
 
 export { LocalFunctionExecutor } from './executor.js';
@@ -9,7 +11,7 @@ export { discoverTools } from '../agent/discovery.js';
 export { builtinTools, builtinToolNames } from './builtin/index.js';
 
 // Tool provider interfaces
-export type { ToolProvider, ToolRegistry } from './provider.js';
+export type { ToolProvider } from './provider.js';
 
 // Tool provider implementations
 export { LocalToolProvider } from './providers/local.js';
@@ -22,7 +24,7 @@ export type { ComposioConfig } from './providers/composio.js';
 export { DefaultToolRegistry } from './registry.js';
 
 // Schema conversion (Zod <-> JSON Schema for gRPC transport)
-export { zodToJsonSchema, jsonSchemaToZod } from './schema-convert.js';
+export { zodToJsonSchema, jsonSchemaToZod } from '@ctxmill/sandbox-daemon';
 
 // Tool metadata (serializable representation for gRPC transport)
 export type { ToolMetadata } from './metadata.js';

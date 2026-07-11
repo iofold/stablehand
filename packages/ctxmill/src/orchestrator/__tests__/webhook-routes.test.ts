@@ -85,11 +85,6 @@ function createRunStartupServiceStub(): RunStartupService {
 async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
   const app = Fastify();
   const configSchema = z.object({ model: z.string().min(1) }).passthrough();
-  const harness = {
-    name: 'langgraph',
-    configSchema,
-    openSession: vi.fn(),
-  };
   const sessionManager = {
     ensureSession: vi.fn(),
     deliverTurn: vi.fn(),
@@ -108,12 +103,7 @@ async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
     sse: new SSEManager(),
     interrupts: new InterruptManager(),
     sessionManager,
-    harnessRegistry: {
-      register: vi.fn(),
-      get: vi.fn(() => harness),
-      getConfigSchema: vi.fn(() => configSchema),
-      list: vi.fn(() => ['langgraph']),
-    },
+    harnessSchemas: { langgraph: configSchema },
     agentSessionService: {
       executeSession: vi.fn(),
     } as unknown as AgentSessionService,

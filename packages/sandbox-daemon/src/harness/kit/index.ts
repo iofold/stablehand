@@ -1,10 +1,13 @@
-export { linkAbortSignal } from './abort.js';
+export { linkAbortSignal, linkTurnAbort } from './abort.js';
 export { requestToolApproval, TOOL_REJECTION_MESSAGE } from './approval.js';
 export { resolveModelAuth } from './model-auth.js';
 export { normalizeTokenUsage } from './usage.js';
 export { TurnAccumulator } from './turn-accumulator.js';
 export { traceAgentEvents } from './trace-agent-events.js';
 export { createAgentEventLangSmithTracer } from './agent-event-langsmith-tracer.js';
+export { finalizeTurn, withTurnTracing } from './turn-lifecycle.js';
+export { parseHarnessConfig } from './config.js';
+export { errorMessage } from './value.js';
 export type { ModelAuth, ModelAuthInput } from './model-auth.js';
 export type { NormalizedApprovalResult } from './approval.js';
 export type { AgentEventTracer, TraceAgentEventsOptions } from './trace-agent-events.js';

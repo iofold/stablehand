@@ -9,6 +9,13 @@ export function normalizeSessionStatus(status: string | null | undefined): strin
   return KNOWN_SESSION_STATUSES.has(canonical) ? canonical : trimmed;
 }
 
+const TERMINAL_SESSION_STATUSES = new Set<string>(['COMPLETED', 'ERROR', 'CANCELLED']);
+
+/** Terminal conversation states: the run has ended, so there is nothing left to cancel. */
+export function isTerminalSessionStatus(status: string | null | undefined): boolean {
+  return TERMINAL_SESSION_STATUSES.has(normalizeSessionStatus(status));
+}
+
 export function normalizeRunStatus(status: string | null | undefined): string {
   const normalized = normalizeSessionStatus(status);
   if (normalized === 'ACTIVE' || normalized === 'RESTORING') return 'running';

@@ -46,17 +46,7 @@ export interface EventFrameInsert {
 export type ArtifactInsert = typeof pgSchema.artifacts.$inferInsert;
 export type ArtifactRow = typeof pgSchema.artifacts.$inferSelect;
 
-export interface CheckpointV2 {
-  id: string;
-  sessionId: string;
-  agentId: string;
-  checkpointVersion: number;
-  checkpointData: Record<string, unknown>;
-  harnessState: Record<string, unknown> | null;
-  workspaceRef: string | null;
-  suspendReason: string | null;
-  createdAt: number;
-}
+export type CheckpointV2 = typeof pgSchema.agentCheckpoints.$inferSelect;
 
 export interface ConversationSummaryRow {
   id: string;
@@ -67,6 +57,7 @@ export interface ConversationSummaryRow {
   messageCount: number;
   taskDescription: string | null;
   startedAt: number;
+  completedAt: number | null;
   updatedAt: number;
   latestTurnId: string | null;
   sandboxSessionId: string | null;

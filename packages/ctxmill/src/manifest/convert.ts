@@ -3,7 +3,7 @@ import {
   supportedLLMProviderDescription,
   type CanonicalLLMProvider,
 } from '@ctxmill/shared';
-import type { AgentDefinition, AgentResourceLimits } from '../types.js';
+import type { AgentDefinition, AgentResourceLimits } from '@ctxmill/sandbox-daemon';
 import type { AgentManifest, ManifestToolRef } from './types.js';
 
 function toolRefToName(toolRef: ManifestToolRef): string {

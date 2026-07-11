@@ -5,7 +5,7 @@ import type { DatabaseRepository, SandboxSessionRow } from '../../database/repos
 import type { TypedEventBus } from '../../events/bus.js';
 import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 import type { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
-import type { Message } from '../../types.js';
+import type { Message } from '@ctxmill/sandbox-daemon';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { InterruptManager } from '../interrupt.js';
 import type { SessionStateStore } from './session-state-store.js';

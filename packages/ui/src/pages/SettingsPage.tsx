@@ -12,21 +12,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { fetchConfig, fetchSettings, updateSettings } from '@/lib/api';
-import type { SystemSettings } from '@/lib/api';
-
-interface ConfigData {
-  system?: {
-    version?: string;
-    uptime?: number;
-    dbPath?: string;
-  };
-  agentDefaults?: {
-    harness?: string;
-    temperature?: number;
-    maxTokens?: number;
-  };
-  [key: string]: unknown;
-}
+import type { AppConfig, SystemSettings } from '@/lib/api';
+import { PageShell } from '@/components/ui/PageShell';
 
 function formatUptime(ms: number): string {
   const secs = Math.floor(ms / 1000);
@@ -90,7 +77,7 @@ function SettingsSection({
 }
 
 export function SettingsPage() {
-  const [config, setConfig] = useState<ConfigData | null>(null);
+  const [config, setConfig] = useState<AppConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -202,20 +189,11 @@ export function SettingsPage() {
   return (
     <div className="flex min-h-screen flex-col bg-surface-950">
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-5 space-y-6">
-        {/* Header */}
-        <div>
-          <div className="flex items-center gap-3">
-            <Settings className="h-6 w-6 text-surface-400" />
-            <div>
-              <h2 className="text-2xl font-semibold tracking-tight text-surface-200">
-                Settings
-              </h2>
-              <p className="mt-1.5 text-sm text-surface-400 max-w-lg">
-                System configuration and defaults.
-              </p>
-            </div>
-          </div>
-        </div>
+        <PageShell
+          title="Settings"
+          description="System configuration and defaults."
+          icon={<Settings className="h-6 w-6 text-surface-400" />}
+        />
 
         {loading ? (
           <div className="flex items-center justify-center py-20">

@@ -71,8 +71,8 @@ export function AgentDetailPage() {
   } = useAgentDetail(id, activeTab);
 
   const { filteredSessions } = useAgentSessions(allSessions, sessionsFilter);
-  const totalSessions = agent?.totalSessions ?? 0;
-  const activeSessionsCount = countActiveSessions(agent?.sessionsByStatus);
+  const conversationCount = agent?.conversationCount ?? 0;
+  const activeSandboxSessionCount = countActiveSessions(agent?.sessionsByStatus);
 
   const recentSessions = useMemo(() => {
     return [...allSessions]
@@ -273,8 +273,8 @@ export function AgentDetailPage() {
         {activeTab === 'overview' && (
           <AgentOverviewTab
             agent={agent}
-            totalSessions={totalSessions}
-            activeSessions={activeSessionsCount}
+            conversationCount={conversationCount}
+            activeSandboxSessions={activeSandboxSessionCount}
             toolsCount={toolsCount}
             recentSessions={recentSessions}
             onContinueSession={(conversationId) => {

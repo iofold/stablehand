@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { PostgresSecretProvider } from '../../packages/ctxmill/src/secrets/postgres-provider.js';
 import { deriveKey } from '../../packages/ctxmill/src/secrets/crypto.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
@@ -72,5 +72,20 @@ describe('PostgresSecretProvider', () => {
     await expect(provider.get('agent-1', 'DOES_NOT_EXIST')).resolves.toBeNull();
     await expect(provider.get('no-agent', 'KEY')).resolves.toBeNull();
     await expect(provider.get('agent-1', 'KEY', 'no-tool')).resolves.toBeNull();
+  });
+
+  it('warns and returns null when the master key cannot decrypt a stored secret', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mismatchedProvider = new PostgresSecretProvider(testDb.conn.pgClient, deriveKey('other-passphrase'));
+
+    await provider.set('agent-mismatch', 'ROTATED_KEY', 'value-under-original-key');
+    await expect(mismatchedProvider.get('agent-mismatch', 'ROTATED_KEY')).resolves.toBeNull();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('decrypt failed for agent=agent-mismatch tool= key=ROTATED_KEY'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('reencrypt-secrets.mjs'));
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('value-under-original-key'));
+    warnSpy.mockRestore();
   });
 });

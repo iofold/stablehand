@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SessionTurnService, type SandboxSessionManager, type SessionEvent } from '../session-turn-service.js';
-import { TypedEventBus } from '../../events/bus.js';
-import type { Message } from '../../types.js';
-
-function createTestBus(options?: ConstructorParameters<typeof TypedEventBus>[0]): TypedEventBus {
-  return new TypedEventBus(options);
-}
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  createSessionTurnExecutor,
+  type SessionEvent,
+  type SessionTurnExecutor,
+  type SessionTurnSessionManager,
+} from '../session-turn-service.js';
+import type { Message } from '@ctxmill/sandbox-daemon';
 
 function msg(content: string, role = 'user'): Message {
   return { id: `m-${Date.now()}`, role, content, agentId: 'a-1', createdAt: Date.now() } as unknown as Message;
@@ -15,33 +15,30 @@ function aguiWrap(event: Record<string, unknown>): SessionEvent {
   return { type: 'ag_ui_event', event } as SessionEvent;
 }
 
-function createMockSessionManager(): SandboxSessionManager {
+type MockSessionManager = SessionTurnSessionManager & {
+  killSession: ReturnType<typeof vi.fn>;
+};
+
+function createMockSessionManager(): MockSessionManager {
   return {
     ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sess-1' }),
     deliverTurn: vi.fn().mockImplementation(async function* () {
       yield aguiWrap({ type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'r-1', content: 'Hello' });
     }),
     killSession: vi.fn().mockResolvedValue(undefined),
-  } as unknown as SandboxSessionManager;
+  } as MockSessionManager;
 }
 
 describe('SessionTurnService (session-based)', () => {
-  let sessionManager: SandboxSessionManager;
-  let eventBus: TypedEventBus;
-  let service: SessionTurnService;
+  let sessionManager: MockSessionManager;
+  let service: SessionTurnExecutor;
 
   beforeEach(() => {
     sessionManager = createMockSessionManager();
-    eventBus = createTestBus();
-    service = new SessionTurnService({
+    service = createSessionTurnExecutor({
       sessionManager,
-      eventBus,
       logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     });
-  });
-
-  afterEach(() => {
-    eventBus.removeAllListeners();
   });
 
   describe('executeSessionTurn', () => {

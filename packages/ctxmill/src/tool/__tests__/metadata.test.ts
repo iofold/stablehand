@@ -4,8 +4,8 @@ import {
   toToolMetadata,
   toToolMetadataList,
 } from '../metadata.js';
-import { jsonSchemaToZod } from '../schema-convert.js';
-import type { ToolDefinition } from '../types.js';
+import { jsonSchemaToZod } from '@ctxmill/sandbox-daemon';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */
@@ -32,7 +32,7 @@ describe('toToolMetadata', () => {
 
     expect(meta.name).toBe('test-tool');
     expect(meta.description).toBe('A test tool');
-    expect(meta.location).toBe('sandbox');
+    expect(meta.location).toBe('orchestrator');
     expect(meta.inputSchema).toBeDefined();
     expect(meta.inputSchema.type).toBe('object');
 
@@ -64,7 +64,7 @@ describe('toToolMetadata', () => {
 
     expect(meta.name).toBe('complex-tool');
     expect(meta.description).toBe('A complex tool with many field types');
-    expect(meta.location).toBe('sandbox');
+    expect(meta.location).toBe('orchestrator');
 
     const props = meta.inputSchema.properties as Record<
       string,
@@ -95,10 +95,10 @@ describe('toToolMetadata', () => {
     expect(required).toContain('mode');
   });
 
-  it('defaults location to sandbox', () => {
-    const tool = makeTool({ name: 'my-sandbox-tool' });
+  it('defaults location to orchestrator', () => {
+    const tool = makeTool({ name: 'my-registry-tool' });
     const meta = toToolMetadata(tool);
-    expect(meta.location).toBe('sandbox');
+    expect(meta.location).toBe('orchestrator');
   });
 
   it('uses explicit orchestrator location on the tool', () => {
@@ -149,11 +149,11 @@ describe('toToolMetadata', () => {
     expect(meta.location).toBe('orchestrator');
   });
 
-  it('defaults to sandbox when tool.location is unset', () => {
+  it('defaults to orchestrator when tool.location is unset', () => {
     const tool = makeTool({ name: 'plain-tool' });
     expect(tool.location).toBeUndefined();
     const meta = toToolMetadata(tool);
-    expect(meta.location).toBe('sandbox');
+    expect(meta.location).toBe('orchestrator');
   });
 });
 
@@ -173,9 +173,9 @@ describe('toToolMetadataList', () => {
 
     expect(metaList).toHaveLength(3);
     expect(metaList[0].name).toBe('tool-a');
-    expect(metaList[0].location).toBe('sandbox');
+    expect(metaList[0].location).toBe('orchestrator');
     expect(metaList[1].name).toBe('tool-b');
-    expect(metaList[1].location).toBe('sandbox');
+    expect(metaList[1].location).toBe('orchestrator');
     expect(metaList[2].name).toBe('emit-event');
     expect(metaList[2].location).toBe('orchestrator');
   });

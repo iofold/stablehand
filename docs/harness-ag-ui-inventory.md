@@ -291,7 +291,7 @@ SSE event → React UI
 | **Shell Backend** | ✅ (LocalShellBackend) | Via native Bash | Via native Bash |
 | **Knowledge Lookup** | Stub only | Stub only | Stub only |
 | **Skill Loading** | Historical claim only | ❌ | ❌ |
-| **Subagents** | ✅ (config) | ❌ | ❌ |
+| **Subagents** | ✅ (config) | ✅ (config) | ❌ |
 
 ---
 

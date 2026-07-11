@@ -13,6 +13,7 @@ export type { CanonicalLLMProvider } from './llm-providers.js';
 export type {
   ApiAgent,
   ApiAgentResourceLimits,
+  HttpToolDefinition,
   ApiAgentSession,
   ApiSessionStatus,
   ApiMessage,

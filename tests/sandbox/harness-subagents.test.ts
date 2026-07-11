@@ -22,7 +22,7 @@ import {
   createMockContainer,
   createMockDocker,
 } from '../utils/event-bus-test-helpers.js';
-import type { AgentEvent, AgentHarness } from '../../packages/ctxmill/src/harness/types.js';
+import type { AgentEvent, AgentHarness } from '@ctxmill/sandbox-daemon';
 
 type MockHarnessRunConfig = {
   harnessConfig: Record<string, unknown>;
@@ -426,9 +426,9 @@ describe('Harness-Native Sub-Agents', () => {
   describe('each harness can be instantiated without orchestrator deps', () => {
     async function constructHarness(name: 'pi-agent' | 'langgraph' | 'claude-agents'): Promise<AgentHarness> {
       const constructors = {
-        'pi-agent': async () => new (await import('../../packages/ctxmill/src/harness/pi-agent.js')).PIAgentHarness(),
-        langgraph: async () => new (await import('../../packages/ctxmill/src/harness/langgraph.js')).LangGraphHarness(),
-        'claude-agents': async () => new (await import('../../packages/ctxmill/src/harness/claude-agents.js')).ClaudeAgentsHarness(),
+        'pi-agent': async () => new (await import('@ctxmill/sandbox-daemon')).PIAgentHarness(),
+        langgraph: async () => new (await import('@ctxmill/sandbox-daemon')).LangGraphHarness(),
+        'claude-agents': async () => new (await import('@ctxmill/sandbox-daemon')).ClaudeAgentsHarness(),
       };
       return constructors[name]();
     }
@@ -457,41 +457,7 @@ describe('Harness-Native Sub-Agents', () => {
       }
     });
   });
-  // 5. Harness selection in runner.ts
-
-  describe('harness selection in runner', () => {
-    it('runner.ts switch covers all 3 harness names', async () => {
-      // Read the runner source and verify the switch statement covers all names.
-      // This is a structural assertion — we import the module and verify the
-      // harness names it resolves match the expected set.
-      const supportedNames = [
-        'pi-agent',
-        'langgraph',
-        'claude-agents',
-      ];
-
-      // Verify each name produces a valid harness by instantiating them
-      // the same way runner.ts does (lazy import + new)
-      const harnessModules: Record<string, { default?: any; [key: string]: any }> = {
-        'pi-agent': await import('../../packages/ctxmill/src/harness/pi-agent.js'),
-        'langgraph': await import('../../packages/ctxmill/src/harness/langgraph.js'),
-        'claude-agents': await import('../../packages/ctxmill/src/harness/claude-agents.js'),
-      };
-
-      for (const name of supportedNames) {
-        const mod = harnessModules[name];
-        expect(mod).toEqual(expect.any(Object));
-        // Each module exports exactly one harness class
-        const className = Object.keys(mod).find(
-          (k) => k.endsWith('Harness') && typeof mod[k] === 'function',
-        );
-        expect(className).toEqual(expect.any(String));
-        const instance = new mod[className!]();
-        expect(instance.name).toBe(name);
-      }
-    });
-  });
-  // 6. Proto event envelope preserves sub-agent context
+  // 5. Proto event envelope preserves sub-agent context
 
   describe('proto event envelope preserves sub-agent context', () => {
     it('should assign monotonically increasing sequence numbers to all events including sub-agent tool calls', () => {

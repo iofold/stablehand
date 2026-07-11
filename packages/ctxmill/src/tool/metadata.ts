@@ -7,8 +7,8 @@
  * sandbox side via `jsonSchemaToZod`.
  */
 
-import type { ToolDefinition } from './types.js';
-import { zodToJsonSchema } from './schema-convert.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
+import { zodToJsonSchema } from '@ctxmill/sandbox-daemon';
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -33,12 +33,14 @@ export interface ToolMetadata {
 
 /**
  * Canonical resolver for tool execution location.
- * Every tool should set `location` explicitly; defaults to `'sandbox'`.
+ * Every tool should set `location` explicitly; defaults to `'orchestrator'`,
+ * where registry tool handlers actually execute — the sandbox has no real
+ * handler for registry tools (ctx-5xyo).
  */
 export function resolveToolLocation(
   tool: Pick<ToolDefinition, 'location'>,
 ): 'sandbox' | 'orchestrator' | 'daemon' {
-  return tool.location ?? 'sandbox';
+  return tool.location ?? 'orchestrator';
 }
 
 /**

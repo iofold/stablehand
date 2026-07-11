@@ -5,7 +5,7 @@ import type { AgentSessionServiceDeps } from '../../packages/ctxmill/src/orchest
 import { createTestBus, createMockTriggerDb } from '../utils/event-bus-test-helpers.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 import type { AgentDefinition } from '../../packages/sandbox-daemon/src/types.js';
-import type { SessionTurnService } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
+import type { SessionTurnExecutor } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
 
 async function* mockEventStream(events: Array<Record<string, unknown>>) {
   for (const e of events) {
@@ -15,7 +15,7 @@ async function* mockEventStream(events: Array<Record<string, unknown>>) {
 
 const settle = () => new Promise((r) => setTimeout(r, 15));
 
-type MockSessionTurnService = SessionTurnService & {
+type MockSessionTurnService = SessionTurnExecutor & {
   executeSessionTurn: ReturnType<typeof vi.fn>;
 };
 
@@ -28,19 +28,18 @@ function makeMockSessionTurnService(): MockSessionTurnService {
 }
 
 function makeAgentRunService(): ReturnType<typeof buildAgentRunService> & { sessionTurnService: MockSessionTurnService };
-function makeAgentRunService(sessionTurnService: SessionTurnService): ReturnType<typeof buildAgentRunService>;
-function makeAgentRunService(sessionTurnService: SessionTurnService = makeMockSessionTurnService()) {
+function makeAgentRunService(sessionTurnService: SessionTurnExecutor): ReturnType<typeof buildAgentRunService>;
+function makeAgentRunService(sessionTurnService: SessionTurnExecutor = makeMockSessionTurnService()) {
   return buildAgentRunService(sessionTurnService);
 }
 
-function buildAgentRunService(sessionTurnService: SessionTurnService) {
+function buildAgentRunService(sessionTurnService: SessionTurnExecutor) {
   const sessionManager = {
     ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
     startTurn: vi.fn().mockReturnValue(undefined),
     completeTurn: vi.fn().mockResolvedValue(undefined),
   };
   const deps: AgentSessionServiceDeps = {
-    sse: { broadcast: vi.fn() } as unknown as AgentSessionServiceDeps['sse'],
     db: {
       addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
       updateTurn: vi.fn().mockResolvedValue(undefined),
@@ -48,6 +47,7 @@ function buildAgentRunService(sessionTurnService: SessionTurnService) {
     } as unknown as AgentSessionServiceDeps['db'],
     sessionManager: sessionManager as unknown as AgentSessionServiceDeps['sessionManager'],
     sessionTurnService,
+    eventBus: createTestBus(),
   };
 
   return {
@@ -210,7 +210,7 @@ describe('EventTriggerManager sandbox mode', () => {
           }
           throw new Error('container failed to start');
         }),
-      } as unknown as SessionTurnService;
+      } as unknown as SessionTurnExecutor;
 
       const { agentRunService, sessionManager } = makeAgentRunService(failingSandbox);
 

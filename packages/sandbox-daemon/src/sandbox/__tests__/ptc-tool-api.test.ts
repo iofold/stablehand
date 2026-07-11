@@ -273,6 +273,52 @@ describe('startToolApi', () => {
     expect(payload.error).not.toContain('at ');
   });
 
+  it('logs method, path, status, and duration for each request', async () => {
+    const mockBun = installMockBun();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    setSessionTools([makeTool('search', async () => JSON.stringify({ ok: true }))]);
+
+    startToolApi(8080, getSessionTools);
+
+    const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ query: 'hello' }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/^\[sandbox\] tool API POST \/tools\/search -> 200 \(\d+ms\)$/),
+    );
+  });
+
+  it('logs the tool name and error when a handler throws', async () => {
+    const mockBun = installMockBun();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failure = new Error('Tool exploded');
+
+    setSessionTools([
+      makeTool('search', async () => {
+        throw failure;
+      }),
+    ]);
+
+    startToolApi(8080, getSessionTools);
+
+    const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ query: 'hello' }),
+    }));
+
+    expect(response.status).toBe(500);
+    expect(errorSpy).toHaveBeenCalledWith('[sandbox] tool search failed:', failure);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/^\[sandbox\] tool API POST \/tools\/search -> 500 \(\d+ms\)$/),
+    );
+  });
+
   it('POST /tools/:name returns raw string when handler returns non-JSON', async () => {
     const mockBun = installMockBun();
 

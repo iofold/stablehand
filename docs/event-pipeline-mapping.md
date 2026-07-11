@@ -77,7 +77,7 @@ and [ADR 016](/path/to/stablehand/docs/adr/016-raw-event-provenance-on-event-spi
 | `run.text_chunk` | `TEXT_MESSAGE_START` if needed, then `TEXT_MESSAGE_CONTENT` | Assistant message ids are stable server-side ids: `${turnId}-m${n}`. |
 | `run.tool_started` | `TOOL_CALL_START`, `TOOL_CALL_ARGS` | Closes an open assistant text message before the tool call. |
 | `run.tool_result` | `TOOL_CALL_END`, `TOOL_CALL_RESULT`, optional `CUSTOM name: ctxmill.a2ui.render` | A2UI blocks are detected from `a2ui-render` tool results and become replayable. |
-| `run.interrupted` | `CUSTOM name: ctxmill.hitl.requested` | Legacy rendering maps this to `HITL_PAUSE` for transition clients. |
+| `run.interrupted` | `CUSTOM name: ctxmill.hitl.requested` | HITL pause signal on the canonical wire. |
 | `run.interrupt_resolved` | `CUSTOM name: ctxmill.hitl.resolved` | Resolution marker. |
 | `message.committed` | `CUSTOM name: ctxmill.message.committed` | Durable message commit signal. |
 | `turn.completed` | Optional `RUN_ERROR`, then `RUN_FINISHED` | Error/cancelled turns emit AG-UI `RUN_ERROR.message`, then terminal finish. |
@@ -107,10 +107,8 @@ single replay query uses the repository default frame limit; very large reconnec
 windows should be paged if they become a product requirement. A small per-agent
 ring buffer only closes the replay-to-live attach race.
 
-Wire negotiation:
-
-- Default: canonical AG-UI vocabulary.
-- `?wire=legacy`: transition rendering for one release.
+The canonical AG-UI vocabulary is the only wire. The pre-canonical
+`?wire=legacy` rendering was removed (W6c, 2026-07-10).
 
 ## gRPC Proto Mapping
 

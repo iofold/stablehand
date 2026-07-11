@@ -9,7 +9,7 @@ import { SessionStatusBadge } from './SessionStatusBadge';
 import { cn } from '@/lib/utils';
 import type { AgentSession } from '@/stores/agents';
 import { restoreSandboxSession } from '@/lib/api';
-import { formatTime, formatDuration } from './types';
+import { formatDurationBetween, formatTimestamp } from '@/lib/format';
 
 /* ------------------------------------------------------------------ */
 /*  AgentSessionsTab                                                   */
@@ -195,7 +195,7 @@ export function AgentSessionsTab({
                         />
                       </td>
                       <td className="px-4 py-3 text-sm text-surface-400 tabular-nums">
-                        {formatTime(session.startedAt)}
+                        {formatTimestamp(session.startedAt)}
                       </td>
                       <td className="px-4 py-3 text-sm text-surface-400 tabular-nums">
                         {session.entries.length}
@@ -249,10 +249,10 @@ export function AgentSessionsTab({
                                           lastRestoreError={entry.lastRestoreError}
                                         />
                                         <span className="text-xs text-surface-400 tabular-nums">
-                                          {formatTime(entry.startedAt)}
+                                          {formatTimestamp(entry.startedAt)}
                                         </span>
                                         <span className="text-xs text-surface-400 tabular-nums">
-                                          {entry.completedAt ? formatDuration(entry.startedAt, entry.completedAt) : 'In progress...'}
+                                          {entry.completedAt ? formatDurationBetween(entry.startedAt, entry.completedAt) : 'In progress...'}
                                         </span>
                                       </div>
                                       {showRetryRestore && (

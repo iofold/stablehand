@@ -12,7 +12,7 @@ import { SessionStateStore } from '../session-state-store.js';
 import { SessionStatusCoordinator } from '../session-status-coordinator.js';
 import { InvalidCheckpointError, MAX_RESTORE_ATTEMPTS } from '../restore-retry-policy.js';
 import type { SandboxSessionRow } from '../../../database/repository.js';
-import type { AgentDefinition } from '../../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 
 type StatusUpdate = {
   status: string;

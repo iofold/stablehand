@@ -1,6 +1,5 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
 import { tool as lcTool } from '@langchain/core/tools';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseLanguageModel } from '@langchain/core/language_models/base';
@@ -17,48 +16,20 @@ import type {
   TokenUsage,
 } from './types.js';
 import type { Message } from '../types.js';
-import { CanonicalProviderSchema, normalizeStreamTextDeltas } from './shared.js';
+import { normalizeStreamTextDeltas } from './shared.js';
+import { LangGraphConfigSchema, type LangGraphConfig } from './schemas.js';
 import { makeIterableAbortable } from './abort-iterator.js';
 import {
   TurnAccumulator,
-  createAgentEventLangSmithTracer,
-  linkAbortSignal,
+  errorMessage,
+  finalizeTurn,
+  linkTurnAbort,
   normalizeTokenUsage,
+  parseHarnessConfig,
   requestToolApproval,
   resolveModelAuth,
-  traceAgentEvents,
+  withTurnTracing,
 } from './kit/index.js';
-
-export const LangGraphConfigSchema = z.object({
-  provider: CanonicalProviderSchema.default('openai'),
-  model: z.string().min(1),
-  apiKeyRef: z.string().optional(),
-  baseUrl: z.string().refine((value) => URL.canParse(value)).optional(),
-  temperature: z.number().min(0).max(2).optional(),
-  maxTokens: z.number().int().positive().optional(),
-  topP: z.number().min(0).max(1).optional(),
-  reasoning: z.enum(['off', 'low', 'medium', 'high']).optional(),
-  setup: z.object({
-    symlinks: z.array(z.object({
-      src: z.string(),
-      dest: z.string(),
-    })).optional(),
-  }).optional(),
-  subagents: z.array(z.object({
-    name: z.string(),
-    description: z.string(),
-    systemPrompt: z.string(),
-    provider: CanonicalProviderSchema.optional(),
-    model: z.string().min(1).optional(),
-    apiKeyRef: z.string().optional(),
-    tools: z.array(z.string()).optional(),
-    temperature: z.number().min(0).max(2).optional(),
-    maxTokens: z.number().int().positive().optional(),
-  })).optional(),
-  middleware: z.array(z.string()).optional(),
-});
-
-export type LangGraphConfig = z.infer<typeof LangGraphConfigSchema>;
 
 /**
  * Minimal interface for a deep agent that supports streamEvents.
@@ -120,14 +91,7 @@ export class LangGraphHarness implements AgentHarness {
         session.restoreTranscript(restore.messages);
       }
     }
-    return traceAgentEvents(session, {
-      createTracer: (input) => createAgentEventLangSmithTracer({
-        agentId: config.agentId,
-        conversationId: config.conversationId,
-        harnessName: this.name,
-        turnId: input.turnId,
-      }),
-    });
+    return withTurnTracing(session, config, this.name);
   }
 }
 
@@ -136,9 +100,7 @@ class LangGraphSession implements HarnessSession {
   private readonly harnessConfig: LangGraphConfig;
 
   constructor(private readonly config: HarnessSessionConfig) {
-    this.harnessConfig = LangGraphConfigSchema.parse(
-      JSON.parse(z.string().parse(config.harnessConfigJson)),
-    );
+    this.harnessConfig = parseHarnessConfig(LangGraphConfigSchema, config.harnessConfigJson);
   }
 
   restoreTranscript(messages: Message[]): void {
@@ -149,8 +111,7 @@ class LangGraphSession implements HarnessSession {
     const { agentId, conversationId, workspaceDir, tools, systemPrompt } = this.config;
 
     const ac = new AbortController();
-    const unlinkConfig = linkAbortSignal(this.config.signal, () => ac.abort());
-    const unlinkContext = linkAbortSignal(context.signal, () => ac.abort());
+    const unlinkAbort = linkTurnAbort(this.config.signal, context.signal, () => ac.abort());
 
     try {
       this.transcript = [...input.messages];
@@ -365,7 +326,7 @@ class LangGraphSession implements HarnessSession {
           }
 
           const rawErr: unknown = data.error;
-          const errMsg = rawErr instanceof Error ? rawErr.message : String(rawErr ?? 'Unknown tool error');
+          const errMsg = errorMessage(rawErr ?? 'Unknown tool error');
 
           yield {
             type: 'tool_call_end',
@@ -382,22 +343,8 @@ class LangGraphSession implements HarnessSession {
         yield queuedEvent;
       }
 
-      const committed = accumulator.createMessageCommitted(this.transcript.length);
-      if (committed) {
-        this.transcript.push({
-          id: randomUUID(),
-          agentId,
-          role: 'assistant',
-          content: committed.content,
-          ...(committed.toolCalls ? { toolCalls: committed.toolCalls } : {}),
-          createdAt: new Date(),
-        });
-
-        yield committed;
-      }
-
       accumulator.recordDone({ type: 'done', usage: usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
-      yield accumulator.doneEvent()!;
+      yield* finalizeTurn(accumulator, this.transcript, agentId);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         return;
@@ -405,8 +352,7 @@ class LangGraphSession implements HarnessSession {
       console.error('[langgraph] deliverTurn error:', err);
       yield { type: 'error', error: String(err) };
     } finally {
-      unlinkConfig();
-      unlinkContext();
+      unlinkAbort();
     }
   }
 
@@ -532,7 +478,7 @@ class LangGraphSession implements HarnessSession {
   }
 
   private async buildSubagentParams(
-    subagentConfigs: z.infer<typeof LangGraphConfigSchema>['subagents'],
+    subagentConfigs: LangGraphConfig['subagents'],
     parentTools?: unknown[],
     workspaceMiddleware?: Record<string, unknown>[],
   ): Promise<Record<string, unknown>[] | undefined> {
@@ -629,7 +575,7 @@ class LangGraphSession implements HarnessSession {
           } catch (handlerErr) {
             // Return handler errors as tool results so the LLM can see and recover,
             // rather than letting them propagate and crash the entire turn.
-            const msg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
+            const msg = errorMessage(handlerErr);
             return `Tool "${def.name}" execution failed: ${msg}`;
           }
         },
@@ -672,7 +618,7 @@ function createToolErrorBoundaryMiddleware(): Record<string, unknown> {
           throw err;
         }
 
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         console.error(`[sandbox] tool error boundary caught: ${request.toolCall.name} — ${msg}`);
         return new ToolMessage({
           content: `Tool "${request.toolCall.name}" failed: ${msg}`,

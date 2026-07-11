@@ -1,4 +1,4 @@
-import type { AgentDefinition } from '../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 
 export type RuntimeSandboxSecrets = Readonly<Record<string, string>>;
 

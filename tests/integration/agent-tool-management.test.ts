@@ -20,7 +20,6 @@ describe('Agent tool management integration', () => {
   beforeAll(async () => {
     testApp = await createTestApp({
       dirPrefix: 'ctxmill-agent-tool-management-',
-      preset: 'local',
     });
     app = testApp.app;
   });

@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 
 import { builtinToolNames } from '../../tool/builtin/index.js';
-import type { ToolContext } from '../../tool/types.js';
+import { resolveToolLocation } from '../../tool/metadata.js';
+import type { ToolContext } from '@ctxmill/sandbox-daemon';
 
 interface CatalogToolResponse {
   name: string;
@@ -120,7 +121,7 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
           requiresApproval: toolDef.requiresApproval ?? false,
           secrets: toolDef.secrets,
           builtin: builtinToolNames.has(toolDef.name),
-          location: toolDef.location ?? 'sandbox',
+          location: resolveToolLocation(toolDef),
         };
 
         if (toolDef.input !== undefined) {

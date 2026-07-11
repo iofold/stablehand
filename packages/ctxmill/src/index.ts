@@ -17,7 +17,7 @@ export type {
   Agent,
   Message,
   Conversation,
-} from './types.js';
+} from '@ctxmill/sandbox-daemon';
 
 // Tool types
 export type {
@@ -25,7 +25,7 @@ export type {
   ToolCall,
   ToolResult,
   ToolContext,
-} from './tool/types.js';
+} from '@ctxmill/sandbox-daemon';
 export { createCtxmillGuideTool, CTXMILL_GUIDE_TOOL_NAME } from './tool/builtin/ctxmill-guide.js';
 
 // Config types
@@ -45,15 +45,14 @@ export { EventTriggerManager } from './events/trigger-manager.js';
 
 export { ensureAgentWorkspace, seedAgentWorkspace } from './workspace/index.js';
 
-// Harness types and implementations
+// Harness types
 export type {
   AgentHarness, AgentEvent,
   HarnessRegistry, ApprovalRequest, ApprovalResponse, TokenUsage,
   ResolvedSecrets, HarnessSession, HarnessSessionConfig, HarnessTurnInput,
   HarnessTurnContext, HarnessExportedState, HarnessRestorePoint,
 } from './harness/index.js';
-export { DefaultHarnessRegistry, LangGraphHarness, ClaudeAgentsHarness, PIAgentHarness } from './harness/index.js';
-export type { ToolProvider, ToolRegistry } from './tool/provider.js';
+export type { ToolProvider } from './tool/provider.js';
 export { LocalToolProvider, MCPToolProvider, ComposioToolProvider, HTTPToolProvider } from './tool/providers/index.js';
 export type { MCPTransportConfig, ComposioConfig, HttpEndpointConfig, HttpAuthConfig } from './tool/providers/index.js';
 export { DefaultToolRegistry } from './tool/registry.js';
@@ -70,5 +69,5 @@ export { validateManifest, parseManifestString, serializeManifestYAML,
 
 // Error utilities
 export { getErrorMessage, isHttpError } from './util/errors.js';
-export type { RetryOptions } from './util/retry.js';
-export { retryWithBackoff } from './util/retry.js';
+export type { RetryOptions } from '@ctxmill/sandbox-daemon';
+export { retryWithBackoff } from '@ctxmill/sandbox-daemon';

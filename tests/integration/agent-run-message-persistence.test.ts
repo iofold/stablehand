@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentSessionService } from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
-import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { AGUIEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
 import { createTestDb, type TestDb } from '../utils/test-db.js';
 import { TestSessionRegistry, createTestSessionManager } from '../utils/test-session-registry.js';
+import { createTestBus } from '../utils/event-bus-test-helpers.js';
 
 type StreamEvent = AGUIEvent | MessageCommittedEvent;
 
@@ -87,11 +88,9 @@ describe('AgentRunService message persistence integration', () => {
       sessionTurnService: {
         executeSessionTurn: vi.fn().mockReturnValue(eventStream(events)),
       } as never,
-      sse: {
-        broadcast: vi.fn(),
-      } as never,
       db: testDb.repo,
       sessionManager: createTestSessionManager(sessionRegistry, { sessionId: sandboxSession.id }) as never,
+      eventBus: createTestBus(),
     });
 
     await service.executeSession({
@@ -179,6 +178,65 @@ describe('AgentRunService message persistence integration', () => {
     ]);
     expect(messages[1]).toMatchObject({ role: 'tool', toolCallId: 'tc1', content: 'Alpha result' });
     expect(messages[2]).toMatchObject({ role: 'tool', toolCallId: 'tc2', content: 'Sunny, 72°F' });
+  });
+
+  it('persists each tool_call part on exactly one assistant message (ctx-hb4b)', async () => {
+    const messages = await executeAndReadMessages([
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', content: 'Let me compute.' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolName: 'search' },
+      { type: 'TOOL_CALL_ARGS', timestamp: 3, runId: 'run-1', toolCallId: 'tc1', args: '{"q":"2+2"}' },
+      { type: 'TOOL_CALL_END', timestamp: 4, runId: 'run-1', toolCallId: 'tc1' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc1', result: '4', toolName: 'search' },
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 6, runId: 'run-1', messageId: 'm1', content: 'The answer is 4.' },
+      makeCommittedEvent({ timestamp: 7, content: 'The answer is 4.' }),
+      { type: 'RUN_FINISHED', timestamp: 8, runId: 'run-1' },
+    ]);
+
+    expect(messages).toHaveLength(3);
+
+    type PersistedPart = { type: string; id?: string; content?: string };
+    const toolCallPartIds = messages.flatMap((message) =>
+      ((message.parts ?? []) as PersistedPart[])
+        .filter((part) => part.type === 'tool_call')
+        .map((part) => part.id));
+    expect(toolCallPartIds).toEqual(['tc1']);
+
+    const finalMessage = messages[2];
+    expect(finalMessage).toMatchObject({ role: 'assistant', content: 'The answer is 4.' });
+    expect(((finalMessage.parts ?? []) as PersistedPart[]).map((part) => part.type)).toEqual(['text']);
+  });
+
+  it('keeps text between tool calls on the flushed message only (ctx-hb4b)', async () => {
+    const messages = await executeAndReadMessages([
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', content: 'First lookup.' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolName: 'search' },
+      { type: 'TOOL_CALL_END', timestamp: 3, runId: 'run-1', toolCallId: 'tc1' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 4, runId: 'run-1', toolCallId: 'tc1', result: 'A', toolName: 'search' },
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 5, runId: 'run-1', messageId: 'm1', content: 'Now the weather.' },
+      { type: 'TOOL_CALL_START', timestamp: 6, runId: 'run-1', toolCallId: 'tc2', toolName: 'weather' },
+      { type: 'TOOL_CALL_END', timestamp: 7, runId: 'run-1', toolCallId: 'tc2' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 8, runId: 'run-1', toolCallId: 'tc2', result: 'Sunny', toolName: 'weather' },
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 9, runId: 'run-1', messageId: 'm1', content: 'All done.' },
+      makeCommittedEvent({ timestamp: 10, content: 'All done.' }),
+      { type: 'RUN_FINISHED', timestamp: 11, runId: 'run-1' },
+    ]);
+
+    type PersistedPart = { type: string; id?: string; content?: string };
+    const assistantMessages = messages.filter((message) => message.role === 'assistant');
+    expect(assistantMessages).toHaveLength(2);
+
+    const [flushed, final] = assistantMessages;
+    const flushedToolCallIds = ((flushed.parts ?? []) as PersistedPart[])
+      .filter((part) => part.type === 'tool_call')
+      .map((part) => part.id);
+    expect(flushedToolCallIds).toEqual(['tc1', 'tc2']);
+    expect(((flushed.parts ?? []) as PersistedPart[])
+      .filter((part) => part.type === 'text')
+      .map((part) => part.content)).toEqual(['First lookup.', 'Now the weather.']);
+
+    expect(final.content).toBe('All done.');
+    expect(((final.parts ?? []) as PersistedPart[]).filter((part) => part.type === 'tool_call')).toEqual([]);
+    expect(final.content).not.toContain('Now the weather.');
   });
 
   it('simple text response without tools persists as a single assistant message', async () => {

@@ -10,6 +10,7 @@ import {
   getEvents,
   getConversationMessages,
   cancelSession,
+  releaseAgentSandboxes,
   type TestAgent,
 } from './support';
 import {
@@ -47,6 +48,54 @@ async function listRuns(
   return body.sessions ?? [];
 }
 
+type PersistedMessage = {
+  id: string;
+  role: string;
+  content: string | null;
+  parts?: Array<{ type: string; toolCallId?: string; id?: string }> | null;
+};
+
+async function assertRegistryToolExecution(
+  request: APIRequestContext,
+  agentId: string,
+  conversationId: string,
+): Promise<void> {
+  const response = await request.get(
+    `${API_BASE}/api/agents/${agentId}/conversations/${conversationId}/messages`,
+  );
+  expect(response.ok()).toBeTruthy();
+  const messages = (await response.json()) as PersistedMessage[];
+
+  const toolResults = messages
+    .filter((message) => message.role === 'tool')
+    .map((message) => String(message.content ?? ''));
+  const placeholderFailures = toolResults.filter(
+    (content) => content.includes('was called directly') || content.includes('execution failed'),
+  );
+  expect(
+    placeholderFailures,
+    `[ctx-5xyo] registry tool calls must execute their real handler, got: ${placeholderFailures[0] ?? ''}`,
+  ).toEqual([]);
+  // Models occasionally pick their own operands, so assert the handler's
+  // result format rather than one exact value — a real computed result can
+  // only come from the registry handler actually executing.
+  const calculatorResults = toolResults.filter((content) =>
+    /-?\d+(\.\d+)? (add|subtract|multiply|divide) -?\d+(\.\d+)? = -?\d+/.test(content));
+  expect(
+    calculatorResults.length,
+    `[ctx-5xyo] expected at least one real persisted calculator result in tool messages: ${JSON.stringify(toolResults)}`,
+  ).toBeGreaterThan(0);
+
+  const toolCallIds = messages.flatMap((message) => (message.parts ?? [])
+    .filter((part) => part.type === 'tool_call')
+    .map((part) => part.toolCallId ?? part.id ?? ''));
+  const duplicates = toolCallIds.filter((id, index) => id && toolCallIds.indexOf(id) !== index);
+  expect(
+    duplicates,
+    `[ctx-hb4b] each tool invocation must persist exactly one tool_call part, duplicates: ${JSON.stringify(duplicates)}`,
+  ).toEqual([]);
+}
+
 async function ensureStressTrigger(
   request: APIRequestContext,
   chainResponderId: string,
@@ -72,6 +121,14 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     }
 
     await ensureStressTrigger(request, agents['stress-chain-responder'].id);
+  });
+
+  test.afterEach(async ({ request }) => {
+    // Completed runs keep their sandbox warm for the idle window, so retained
+    // smoke sandboxes starve later cases on a small node (ctx-7o33). Release
+    // every stress-agent sandbox — including the trigger-spawned chain
+    // responder's — before the next case starts.
+    await releaseAgentSandboxes(request, Object.values(agents).map((agent) => agent.id));
   });
 
   test.afterAll(async ({ request }) => {
@@ -100,7 +157,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
-      'Run the stress test now. Confirm you are operational and emit stress.tools.complete.',
+      'Run the stress test now, including the calculator step. Confirm you are operational and emit stress.tools.complete.',
     );
     trackRun('stress-lg-openai', sessionId);
 
@@ -127,6 +184,8 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       'stress-lg-openai',
       { agentId: agent.id },
     );
+
+    await assertRegistryToolExecution(request, agent.id, conversationId);
   });
 
   test('LangGraph + Gemini: extended stress.gemini.complete @extended', async ({ request }) => {
@@ -176,7 +235,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
-      'Run the stress test now. Confirm you are operational and emit exactly one stress.pi.complete event with payload {"schemaVersion":1,"harness":"stress-pi-openai","agent":"stress-pi-openai","model":"gpt-5.4","status":"ok"}.',
+      'Run the stress test now, including the calculator step. Confirm you are operational and emit exactly one stress.pi.complete event with payload {"schemaVersion":1,"harness":"stress-pi-openai","agent":"stress-pi-openai","model":"gpt-5.4","status":"ok"}.',
     );
     trackRun('stress-pi-openai', sessionId);
 
@@ -203,6 +262,8 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       'stress-pi-openai',
       { agentId: agent.id },
     );
+
+    await assertRegistryToolExecution(request, agent.id, conversationId);
   });
 
   test('PI Agent + Gemini: extended stress.pi-gemini.complete @extended', async ({ request }) => {
@@ -252,7 +313,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const { sessionId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
-      'Write a Python file at /workspace/stress_test.py that computes the first 10 Fibonacci numbers and prints them as a JSON array. Then execute it with Bash, verify the output is correct, and read the file back to confirm it exists. Finally emit exactly one stress.claude.complete event with payload {"schemaVersion":1,"harness":"stress-claude-sonnet","agent":"stress-claude-sonnet","model":"claude-sonnet-4-6","status":"ok"}.',
+      'Write a Python file at /workspace/stress_test.py that computes the first 10 Fibonacci numbers and prints them as a JSON array. Then execute it with Bash, verify the output is correct, and read the file back to confirm it exists. Then use the calculator tool exactly once to multiply 42 by 17. Finally emit exactly one stress.claude.complete event with payload {"schemaVersion":1,"harness":"stress-claude-sonnet","agent":"stress-claude-sonnet","model":"claude-sonnet-4-6","status":"ok"}.',
     );
     trackRun('stress-claude-sonnet', sessionId);
 
@@ -279,6 +340,8 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       'stress-claude-sonnet',
       { agentId: agent.id },
     );
+
+    await assertRegistryToolExecution(request, agent.id, conversationId);
   });
 
   test('Event chain: direct emit starts chain-responder run @extended', async ({ request }) => {

@@ -11,12 +11,13 @@ import { settingsRoutes } from './routes/settings.js';
 import { triggerRoutes } from './routes/triggers.js';
 import { sandboxRoutes } from './routes/sandbox.js';
 import type { EventTriggerManager } from '../events/trigger-manager.js';
-import { SSEManager } from './sse.js';
-import { InterruptManager } from './interrupt.js';
+import type { SSEManager } from './sse.js';
+import type { InterruptManager } from './interrupt.js';
 import type { AgentSessionService } from './agent-session-service.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { RunStartupService } from './run-startup-service.js';
 import type { TypedEventBus } from '../events/bus.js';
+import type { HarnessConfigSchemas } from '@ctxmill/sandbox-daemon/harness/schemas';
 import type { SecretProvider } from '../secrets/types.js';
 import { createGrpcRoutes } from './grpc/router.js';
 import {
@@ -26,14 +27,9 @@ import {
 import type { OrchestratorToolRegistry } from './grpc/orchestrator-service.js';
 import type { SandboxContainerManager } from '../sandbox/container-manager.js';
 import type { LocalFunctionExecutor } from '../tool/executor.js';
-import { DefaultToolRegistry } from '../tool/registry.js';
+import type { DefaultToolRegistry } from '../tool/registry.js';
 import type { ArtifactStore } from '../artifact/index.js';
 import { registerExistingAgentHttpTools } from './http-tools.js';
-import { DefaultHarnessRegistry } from '../harness/registry.js';
-import { LangGraphHarness } from '../harness/langgraph.js';
-import { ClaudeAgentsHarness } from '../harness/claude-agents.js';
-import { PIAgentHarness } from '../harness/pi-agent.js';
-import type { HarnessRegistry } from '../harness/types.js';
 import type { SystemSettingsService } from '../settings/service.js';
 import type { SandboxSessionManager } from './sandbox-session-manager.js';
 import type { ContainerLifecyclePolicy } from './container-lifecycle-policy.js';
@@ -50,21 +46,19 @@ export interface ServerOptions {
   port?: number;
   host?: string;
   db: DatabaseRepository;
-  harnessRegistry?: HarnessRegistry;
-  eventBus?: TypedEventBus;
+  harnessSchemas: HarnessConfigSchemas;
+  eventBus: TypedEventBus;
   /** Path to the .ctxmill data directory for agent workspaces. */
   dataDir?: string;
   /** Event trigger manager for pub/sub trigger system. */
   triggerManager?: EventTriggerManager;
-  /** Pre-wired SSEManager (e.g. from DI container). Falls back to a new instance. */
-  sse?: SSEManager;
-  /** Pre-wired InterruptManager (e.g. from DI container). Falls back to a new instance. */
-  interrupts?: InterruptManager;
+  sse: SSEManager;
+  interrupts: InterruptManager;
   /** Pre-wired SecretProvider for per-agent encrypted secrets. */
   secretProvider?: SecretProvider;
   /** Pre-wired OrchestratorToolRegistry for gRPC tool callbacks from sandboxes. */
   toolRegistry?: OrchestratorToolRegistry;
-  toolDefinitionRegistry?: DefaultToolRegistry;
+  toolDefinitionRegistry: DefaultToolRegistry;
   /** Pre-wired LocalFunctionExecutor with built-in and user-defined tools. */
   toolExecutor?: LocalFunctionExecutor;
   /** Pre-wired sandbox manager for sandbox concurrency stats. */
@@ -82,14 +76,6 @@ export interface ServerOptions {
   canonicalLog?: CanonicalLog;
 }
 
-function createDefaultHarnessRegistry(): HarnessRegistry {
-  const harnessRegistry = new DefaultHarnessRegistry();
-  harnessRegistry.register(new LangGraphHarness());
-  harnessRegistry.register(new ClaudeAgentsHarness());
-  harnessRegistry.register(new PIAgentHarness());
-  return harnessRegistry;
-}
-
 /**
  * Create and configure the Fastify orchestrator server.
  *
@@ -97,9 +83,16 @@ function createDefaultHarnessRegistry(): HarnessRegistry {
  * the database, SSE manager, interrupt manager, and agent routes.
  */
 export async function createServer(opts: ServerOptions): Promise<FastifyInstance> {
-  const { db, harnessRegistry: optHarnessRegistry, eventBus, dataDir, triggerManager } = opts;
-  const harnessRegistry = optHarnessRegistry ?? createDefaultHarnessRegistry();
-  const toolDefinitionRegistry = opts.toolDefinitionRegistry ?? new DefaultToolRegistry();
+  const {
+    db,
+    eventBus,
+    harnessSchemas,
+    interrupts,
+    sse,
+    toolDefinitionRegistry,
+    dataDir,
+    triggerManager,
+  } = opts;
 
   const app = Fastify({
     logger: {
@@ -131,10 +124,6 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
   registerApiAuth(app, resolveApiAuthConfig());
 
-  // Shared infrastructure — prefer injected instances from the DI container
-  const sse = opts.sse ?? new SSEManager();
-  const interrupts = opts.interrupts ?? new InterruptManager();
-
   // Decorate the app instance so other plugins can access shared state
   app.decorate('sse', sse);
   app.decorate('interrupts', interrupts);
@@ -148,22 +137,20 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   // into the orchestrator for tool execution and event emission.
   // REST routes coexist on the same port — ConnectRPC only handles
   // its own paths (e.g. /ctxmill.sandbox.v1.OrchestratorService/*).
-  if (eventBus) {
-    const callbackAuthInterceptor = createGrpcCallbackAuthInterceptor(
-      resolveGrpcCallbackAuthConfig(),
-    );
-    await app.register(fastifyConnectPlugin, {
-      routes: createGrpcRoutes({
-        eventBus,
-        toolRegistry: opts.toolRegistry,
-        interruptManager: interrupts,
-        toolExecutor: opts.toolExecutor,
-        toolDefinitionRegistry: toolDefinitionRegistry,
-        repository: db,
-      }),
-      interceptors: callbackAuthInterceptor ? [callbackAuthInterceptor] : [],
-    });
-  }
+  const callbackAuthInterceptor = createGrpcCallbackAuthInterceptor(
+    resolveGrpcCallbackAuthConfig(),
+  );
+  await app.register(fastifyConnectPlugin, {
+    routes: createGrpcRoutes({
+      eventBus,
+      toolRegistry: opts.toolRegistry,
+      interruptManager: interrupts,
+      toolExecutor: opts.toolExecutor,
+      toolDefinitionRegistry,
+      repository: db,
+    }),
+    interceptors: callbackAuthInterceptor ? [callbackAuthInterceptor] : [],
+  });
 
   // ── Health check ───────────────────────────────────────
   const healthHandler = async () => {
@@ -225,7 +212,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessRegistry, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService, canonicalLog: opts.canonicalLog });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessSchemas, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService, canonicalLog: opts.canonicalLog });
   await app.register(sessionsRoutes, {
     prefix: '/api/sessions',
     db,
@@ -254,6 +241,14 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         opts.lifecyclePolicy?.updateConfig({
           idleTimeoutMs: settings.idleTimeoutMs,
           reconciliationIntervalMs: settings.reconciliationIntervalMs,
+        });
+        opts.containerManager?.applySettings?.({
+          maxGlobalContainers: settings.maxGlobalContainers,
+          queueTimeoutMs: settings.queueTimeoutMs,
+          defaultCpus: settings.defaultCpus,
+          defaultMemoryMb: settings.defaultMemoryMb,
+          defaultPidsLimit: settings.defaultPidsLimit,
+          defaultTimeoutSec: settings.defaultTimeoutSec,
         });
       },
     });

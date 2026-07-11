@@ -32,7 +32,8 @@ export function KnowledgeGraphView({ nodes, edges }: KnowledgeGraphViewProps) {
     const cy = 300;
     nodes.forEach((n, i) => {
       const angle = (2 * Math.PI * i) / Math.max(nodes.length, 1);
-      const r = 120 + Math.random() * 80;
+      // Deterministic pseudo-scatter keeps the initial layout reproducible.
+      const r = 120 + ((i * 37) % 80);
       map.set(n.id, { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r, vx: 0, vy: 0 });
     });
     return map;

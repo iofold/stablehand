@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import type { ContainerInfo, SandboxContainerManager } from '../../sandbox/container-manager.js';
 import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../../database/repository.js';
-import type { AgentDefinition } from '../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import { stopAndRemoveContainer } from '../container-cleanup.js';
 import type { SessionReconciler, SessionStatePort } from './ports.js';
 import {
@@ -361,18 +361,18 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         lastError = err;
         attemptsSoFar += 1;
         const outcome = decideRestoreOutcome(err, attemptsSoFar);
+        await this.deps.statusCoordinator.transition({
+          sessionId,
+          fromStatus: 'RESTORING',
+          toStatus: outcome.toStatus === 'RETRY' ? 'CHECKPOINTED' : outcome.toStatus,
+          clearRuntime: true,
+          extra: {
+            restoreAttempts: attemptsSoFar,
+            lastRestoreError: outcome.classification.message,
+          },
+        });
 
         if (outcome.toStatus === 'TERMINATED') {
-          await this.deps.statusCoordinator.transition({
-            sessionId,
-            fromStatus: 'RESTORING',
-            toStatus: 'TERMINATED',
-            clearRuntime: true,
-            extra: {
-              restoreAttempts: attemptsSoFar,
-              lastRestoreError: outcome.classification.message,
-            },
-          });
           this.deps.logger.warn(
             `${TAG} session ${sessionId} restore non-retryable after attempt ${attemptNumber}: ${outcome.classification.message}`,
           );
@@ -380,33 +380,11 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         }
 
         if (outcome.toStatus === 'CHECKPOINTED') {
-          await this.deps.statusCoordinator.transition({
-            sessionId,
-            fromStatus: 'RESTORING',
-            toStatus: 'CHECKPOINTED',
-            clearRuntime: true,
-            extra: {
-              restoreAttempts: attemptsSoFar,
-              lastRestoreError: outcome.classification.message,
-            },
-          });
           this.deps.logger.warn(
             `${TAG} session ${sessionId} restore exhausted after ${attemptsSoFar} attempts: ${outcome.classification.message}`,
           );
           throw err;
         }
-
-        // outcome.toStatus === 'RETRY'
-        await this.deps.statusCoordinator.transition({
-          sessionId,
-          fromStatus: 'RESTORING',
-          toStatus: 'CHECKPOINTED',
-          clearRuntime: true,
-          extra: {
-            restoreAttempts: attemptsSoFar,
-            lastRestoreError: outcome.classification.message,
-          },
-        });
 
         if (outcome.retryDelayMs && outcome.retryDelayMs > 0) {
           this.deps.logger.info(

@@ -33,7 +33,7 @@ function createAgentRoutesApp(overrides: Partial<AgentSubRouteOptions>) {
     db: {},
     sse: {},
     interrupts: {},
-    harnessRegistry: {},
+    harnessSchemas: {},
     agentSessionService: {},
     runStartupService: createTestRunStartupService(),
     loadAgent,

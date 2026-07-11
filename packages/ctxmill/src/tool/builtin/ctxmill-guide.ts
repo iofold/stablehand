@@ -1,5 +1,7 @@
 import { z } from 'zod';
-import type { ToolDefinition } from '../types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
+
+import { resolveToolLocation } from '../metadata.js';
 
 export const TOPICS = ['ptc', 'a2ui', 'hitl', 'events', 'artifacts', 'capabilities'] as const;
 export type GuideTopic = typeof TOPICS[number];
@@ -169,7 +171,7 @@ ${formatToolList(approvalTools, (tool) => `- \`${tool.name}\` — ${tool.descrip
 ## Tool Inventory
 ${formatToolList(
       tools,
-      (tool) => `- \`${tool.name}\` — ${tool.description} _(location: ${tool.location ?? 'sandbox'})_`,
+      (tool) => `- \`${tool.name}\` — ${tool.description} _(location: ${resolveToolLocation(tool)})_`,
     )}`;
   }
 

@@ -10,6 +10,22 @@ export interface ApiAgentResourceLimits {
   timeoutSec?: number;
 }
 
+export interface HttpToolDefinition {
+  name: string;
+  description: string;
+  endpoint: string;
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  inputSchema?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  timeout?: number;
+  authentication?: {
+    type: 'bearer' | 'api-key';
+    secretName: string;
+    allowEnvFallback?: boolean;
+  };
+  programmatic?: boolean;
+}
+
 export const API_SESSION_STATUSES = [
   'QUEUED',
   'ACTIVE',
@@ -41,14 +57,22 @@ export interface ApiAgent {
   manifest?: Record<string, unknown> | null;
   version?: number;
   sseClients?: number;
+  /** Durable conversations (chat threads) for this agent. */
   conversationCount?: number;
+  /** Execution turns (user-message → agent-response cycles) across all conversations. */
+  turnCount?: number;
+  /** Turns that finished without an error. */
+  completedTurnCount?: number;
+  /** Turns that ended with an error. */
+  failedTurnCount?: number;
+  /** Turns currently in flight (not yet completed). */
+  activeTurnCount?: number;
   hasPendingInterrupt?: boolean;
   lastActivity?: number;
-  activeSessions?: number;
-  totalSessions?: number;
-  sessions?: ApiAgentSession[];
+  /** The five most recently started turns. */
+  recentTurns?: ApiAgentSession[];
   systemPrompt?: string;
-  /** Sandbox session counts grouped by lifecycle state. */
+  /** Sandbox session (container) counts grouped by lifecycle state. */
   sessionsByStatus?: ApiSessionStatusCounts;
 }
 
@@ -135,6 +159,8 @@ export interface ApiConversationSummary {
   messageCount: number;
   taskDescription?: string;
   startedAt: number;
+  /** Epoch ms when the latest turn reached a terminal state; unset while a turn is open. */
+  completedAt?: number;
   updatedAt: number;
   latestTurnId?: string;
   sandboxSessionId?: string;

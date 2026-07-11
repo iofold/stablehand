@@ -110,15 +110,22 @@ export class DatabaseRepository {
     this.db = db;
   }
 
+  private async insertOne<T>(query: PromiseLike<T[]>, context: string): Promise<T> {
+    const [row] = await query;
+    if (!row) {
+      throw new Error(`Expected ${context} insert to return a row but got undefined`);
+    }
+    return row;
+  }
+
   // ── Agents ──────────────────────────────────────────────
 
   async createAgent(data: AgentInsert): Promise<AgentSelect> {
     const sanitizedData = sanitizeTypedDbValue(data, 'agents.insert');
-    const [agent] = await this.db.insert(this.schema.agents).values(sanitizedData).returning();
-    if (!agent) {
-      throw new Error('Expected insert to return a row but got undefined');
-    }
-    return agent;
+    return this.insertOne(
+      this.db.insert(this.schema.agents).values(sanitizedData).returning(),
+      'agent',
+    );
   }
 
   async getAgent(id: string): Promise<AgentSelect | undefined> {
@@ -185,17 +192,16 @@ export class DatabaseRepository {
   async createConversation(agentId: string, id?: string): Promise<ConversationSelect> {
     const sanitizedAgentId = sanitizeDbText(agentId, 'conversations.agentId');
     const sanitizedId = id ? sanitizeDbText(id, 'conversations.id') : undefined;
-    const [conversation] = await this.db
-      .insert(this.schema.conversations)
-      .values({
-        ...(sanitizedId ? { id: sanitizedId } : {}),
-        agentId: sanitizedAgentId,
-      })
-      .returning();
-    if (!conversation) {
-      throw new Error('Expected insert to return a row but got undefined');
-    }
-    return conversation;
+    return this.insertOne(
+      this.db
+        .insert(this.schema.conversations)
+        .values({
+          ...(sanitizedId ? { id: sanitizedId } : {}),
+          agentId: sanitizedAgentId,
+        })
+        .returning(),
+      'conversation',
+    );
   }
 
   async getConversation(id: string): Promise<ConversationSelect | undefined> {
@@ -268,11 +274,10 @@ export class DatabaseRepository {
 
   async createTurn(data: TurnInsert): Promise<TurnSelect> {
     const sanitizedData = sanitizeTypedDbValue(data, 'turns.insert');
-    const [turn] = await this.db.insert(this.schema.turns).values(sanitizedData).returning();
-    if (!turn) {
-      throw new Error('Expected insert to return a row but got undefined');
-    }
-    return turn;
+    return this.insertOne(
+      this.db.insert(this.schema.turns).values(sanitizedData).returning(),
+      'turn',
+    );
   }
 
   async updateTurn(
@@ -333,7 +338,7 @@ export class DatabaseRepository {
 
   async getConversationCount(agentId: string): Promise<number> {
     const rows = await this.db
-      .select({ count: sql<number>`count(*)` })
+      .select({ count: sql<number>`count(*)::int` })
       .from(this.schema.conversations)
       .where(eq(this.schema.conversations.agentId, agentId));
     return rows[0]?.count ?? 0;
@@ -1002,11 +1007,10 @@ export class DatabaseRepository {
 
   async createWebhook(data: WebhookInsert): Promise<WebhookRow> {
     const sanitizedData = sanitizeTypedDbValue(data, 'webhooks.insert');
-    const [row] = await this.db.insert(this.schema.webhooks).values(sanitizedData).returning();
-    if (!row) {
-      throw new Error('Expected insert to return a row but got undefined');
-    }
-    return row;
+    return this.insertOne(
+      this.db.insert(this.schema.webhooks).values(sanitizedData).returning(),
+      'webhook',
+    );
   }
 
   async listWebhooks(agentId: string): Promise<WebhookRow[]> {
@@ -1059,20 +1063,21 @@ export class DatabaseRepository {
     harnessName: string;
   }): Promise<SandboxSessionRow> {
     const sanitizedSession = sanitizeTypedDbValue(session, 'sandboxSessions.insert');
-    const [row] = await this.db
-      .insert(this.schema.sandboxSessions)
-      .values({
-        ...(sanitizedSession.id !== undefined ? { id: sanitizedSession.id } : {}),
-        conversationId: sanitizedSession.conversationId,
-        agentId: sanitizedSession.agentId,
-        containerName: sanitizedSession.containerName ?? null,
-        containerId: sanitizedSession.containerId ?? null,
-        status: sanitizedSession.status ?? 'ACTIVE',
-        harnessName: sanitizedSession.harnessName,
-      })
-      .returning();
-    if (!row) throw new Error('Expected insert to return a row but got undefined');
-    return row;
+    return this.insertOne(
+      this.db
+        .insert(this.schema.sandboxSessions)
+        .values({
+          ...(sanitizedSession.id !== undefined ? { id: sanitizedSession.id } : {}),
+          conversationId: sanitizedSession.conversationId,
+          agentId: sanitizedSession.agentId,
+          containerName: sanitizedSession.containerName ?? null,
+          containerId: sanitizedSession.containerId ?? null,
+          status: sanitizedSession.status ?? 'ACTIVE',
+          harnessName: sanitizedSession.harnessName,
+        })
+        .returning(),
+      'sandbox session',
+    );
   }
 
   async getSandboxSession(id: string): Promise<SandboxSessionRow | null> {
@@ -1162,20 +1167,15 @@ export class DatabaseRepository {
    * from a process that just started).
    */
   async getStrandedRestoringSessions(updatedBeforeMs?: number): Promise<SandboxSessionRow[]> {
-    if (updatedBeforeMs === undefined) {
-      return this.db
-        .select()
-        .from(this.schema.sandboxSessions)
-        .where(eq(this.schema.sandboxSessions.status, 'RESTORING'));
-    }
-
     return this.db
       .select()
       .from(this.schema.sandboxSessions)
       .where(
         and(
           eq(this.schema.sandboxSessions.status, 'RESTORING'),
-          lt(this.schema.sandboxSessions.updatedAt, updatedBeforeMs),
+          updatedBeforeMs === undefined
+            ? undefined
+            : lt(this.schema.sandboxSessions.updatedAt, updatedBeforeMs),
         ),
       );
   }
@@ -1225,7 +1225,8 @@ export class DatabaseRepository {
     const turnStats = this.db
       .select({
         conversationId: this.schema.turns.conversationId,
-        startedAt: sql<number | null>`min(${this.schema.turns.startedAt})`.as('started_at'),
+        // ::float8 so postgres.js decodes the bigint aggregate as a number (exact below 2^53).
+        startedAt: sql<number | null>`min(${this.schema.turns.startedAt})::float8`.as('started_at'),
         turnCount: sql<number>`count(*)::int`.as('turn_count'),
       })
       .from(this.schema.turns)
@@ -1354,6 +1355,7 @@ export class DatabaseRepository {
         messageCount: row.messageCount ?? 0,
         taskDescription: row.taskDescription ?? null,
         startedAt: row.startedAt ?? row.conversationCreatedAt,
+        completedAt: row.completedAt ?? null,
         updatedAt: row.updatedAt,
         latestTurnId: row.latestTurnId ?? null,
         sandboxSessionId: row.sandboxSessionId ?? null,
@@ -1412,18 +1414,7 @@ export class DatabaseRepository {
 
     const row = rows[0];
     if (!row) return null;
-
-    return {
-      id: row.id,
-      sessionId: row.sessionId,
-      agentId: row.agentId,
-      checkpointVersion: row.checkpointVersion,
-      checkpointData: row.checkpointData,
-      harnessState: row.harnessState,
-      workspaceRef: row.workspaceRef,
-      suspendReason: row.suspendReason,
-      createdAt: row.createdAt,
-    };
+    return row;
   }
 
   async deleteCheckpointsForSession(sessionId: string): Promise<number> {
@@ -1502,9 +1493,10 @@ export class DatabaseRepository {
 
   async saveArtifact(data: ArtifactInsert): Promise<ArtifactRow> {
     const sanitizedData = sanitizeTypedDbValue(data, 'artifacts.insert');
-    const [row] = await this.db.insert(this.schema.artifacts).values(sanitizedData).returning();
-    if (!row) throw new Error('Expected insert to return a row but got undefined');
-    return row;
+    return this.insertOne(
+      this.db.insert(this.schema.artifacts).values(sanitizedData).returning(),
+      'artifact',
+    );
   }
 
   async getArtifact(id: string): Promise<ArtifactRow | undefined> {

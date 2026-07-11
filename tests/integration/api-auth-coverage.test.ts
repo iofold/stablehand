@@ -26,7 +26,6 @@ describe('API auth route coverage', () => {
 
     testApp = await createTestApp({
       dirPrefix: 'ctxmill-api-auth-',
-      preset: 'docker',
     });
     app = testApp.app;
   });

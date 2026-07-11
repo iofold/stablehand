@@ -1,4 +1,4 @@
-import type { AgentDefinition } from '../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import type { SessionStatePort } from './ports.js';
 import type { SessionRecord, TurnQueueEntry } from './types.js';
 

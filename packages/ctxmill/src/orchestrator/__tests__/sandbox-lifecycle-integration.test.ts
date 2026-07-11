@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SessionTurnService, type SandboxSessionManager, type SessionEvent } from '../session-turn-service.js';
-import { TypedEventBus } from '../../events/bus.js';
-import type { AgentDefinition, Message } from '../../types.js';
-
-function createTestBus(options?: ConstructorParameters<typeof TypedEventBus>[0]): TypedEventBus {
-  return new TypedEventBus(options);
-}
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  createSessionTurnExecutor,
+  type SessionEvent,
+  type SessionTurnExecutor,
+  type SessionTurnSessionManager,
+} from '../session-turn-service.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 
 function msg(content: string, role = 'user'): Message {
   return { id: `m-${Date.now()}`, role, content, agentId: 'a-1', createdAt: Date.now() } as unknown as Message;
@@ -15,7 +15,7 @@ function aguiWrap(event: Record<string, unknown>): SessionEvent {
   return { type: 'ag_ui_event', event } as SessionEvent;
 }
 
-function createMockSessionManager(): SandboxSessionManager {
+function createMockSessionManager(): SessionTurnSessionManager {
   return {
     ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sess-1' }),
     deliverTurn: vi.fn().mockImplementation(async function* () {
@@ -25,15 +25,14 @@ function createMockSessionManager(): SandboxSessionManager {
       yield { type: 'message_committed', role: 'assistant', content: 'response', turnId: 'turn-1', messageSeq: 1 } as SessionEvent;
     }),
     killSession: vi.fn().mockResolvedValue(undefined),
-  } as unknown as SandboxSessionManager;
+  } as SessionTurnSessionManager;
 }
 
 const silentLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 
 describe('Sandbox Session Lifecycle Integration', () => {
-  let sessionManager: SandboxSessionManager;
-  let eventBus: TypedEventBus;
-  let service: SessionTurnService;
+  let sessionManager: SessionTurnSessionManager;
+  let service: SessionTurnExecutor;
 
   const agentDef = {
     name: 'test-agent',
@@ -45,12 +44,7 @@ describe('Sandbox Session Lifecycle Integration', () => {
 
   beforeEach(() => {
     sessionManager = createMockSessionManager();
-    eventBus = createTestBus();
-    service = new SessionTurnService({ sessionManager, eventBus, logger: silentLogger });
-  });
-
-  afterEach(() => {
-    eventBus.removeAllListeners();
+    service = createSessionTurnExecutor({ sessionManager, logger: silentLogger });
   });
 
   describe('session-per-conversation', () => {

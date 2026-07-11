@@ -5,7 +5,7 @@
 
 ## Context
 
-The customer-readiness ralplan (`docs/plans/2026-04-30-customer-functionality-readiness-ralplan.md`) names release gates against the dev1 docker-compose stack only. We have two operational targets: dev1 (local docker-compose under traefik on `*.dev.example.com`) and dev2 (k3s on `[redacted-ip]`, exposed at `*.demo.example.com`, images via `imagePullPolicy: Never`).
+The customer-readiness ralplan (`docs/plans/shipped/2026-04-30-customer-functionality-readiness-ralplan.md`) names release gates against the dev1 docker-compose stack only. We have two operational targets: dev1 (local docker-compose under traefik on `*.dev.example.com`) and dev2 (k3s on `[redacted-ip]`, exposed at `*.demo.example.com`, images via `imagePullPolicy: Never`).
 
 The customer-shape question shapes whether dev2 must pass release gates and how much we invest in image-build automation.
 

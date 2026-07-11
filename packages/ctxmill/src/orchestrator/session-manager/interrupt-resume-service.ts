@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { DatabaseRepository } from '../../database/repository.js';
-import type { AgentDefinition, Message } from '../../types.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { SessionEvent } from '../session-turn-service.js';
 import type { SessionStatePort } from './ports.js';
 import type { Logger } from './types.js';

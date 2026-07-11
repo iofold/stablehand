@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { AgentEvent, HarnessSession } from '../types.js';
 import {
   TurnAccumulator,
+  errorMessage,
+  finalizeTurn,
   linkAbortSignal,
+  linkTurnAbort,
   normalizeTokenUsage,
+  parseHarnessConfig,
   requestToolApproval,
   resolveModelAuth,
   traceAgentEvents,
@@ -71,6 +76,35 @@ describe('harness adapter kit', () => {
       content: 'terminal result',
       turnId: 'turn-1',
       messageSeq: 1,
+    });
+  });
+
+  it('finalizes the transcript before emitting commit and done events', () => {
+    const accumulator = new TurnAccumulator({ turnId: 'turn-1' });
+    const transcript = [{
+      id: 'message-1',
+      agentId: 'agent-1',
+      role: 'user' as const,
+      content: 'Hello',
+      createdAt: new Date('2026-07-10T00:00:00.000Z'),
+    }];
+    accumulator.recordAssistantText('Hi');
+    accumulator.recordDone({ type: 'done', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+
+    expect([...finalizeTurn(accumulator, transcript, 'agent-1')]).toEqual([
+      {
+        type: 'message_committed',
+        role: 'assistant',
+        content: 'Hi',
+        turnId: 'turn-1',
+        messageSeq: 1,
+      },
+      { type: 'done', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+    ]);
+    expect(transcript[1]).toMatchObject({
+      agentId: 'agent-1',
+      role: 'assistant',
+      content: 'Hi',
     });
   });
 
@@ -178,6 +212,29 @@ describe('harness adapter kit', () => {
     cleanup();
 
     expect(abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('links both turn abort sources with one cleanup', () => {
+    const configController = new AbortController();
+    const contextController = new AbortController();
+    const abort = vi.fn();
+    const cleanup = linkTurnAbort(configController.signal, contextController.signal, abort);
+
+    configController.abort();
+    cleanup();
+    contextController.abort();
+
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('parses harness config through its schema', () => {
+    expect(parseHarnessConfig(z.object({ model: z.string() }), '{"model":"test"}')).toEqual({ model: 'test' });
+    expect(() => parseHarnessConfig(z.object({ model: z.string() }), '{"model":1}')).toThrow();
+  });
+
+  it('normalizes error messages', () => {
+    expect(errorMessage(new Error('failed'))).toBe('failed');
+    expect(errorMessage('failed')).toBe('failed');
   });
 
   it('traces normalized AgentEvents without changing the stream', async () => {

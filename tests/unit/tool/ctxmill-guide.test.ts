@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import type { ToolDefinition } from '../../../packages/ctxmill/src/tool/types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 import {
   createCtxmillGuideTool,
   CTXMILL_GUIDE_TOOL_NAME,

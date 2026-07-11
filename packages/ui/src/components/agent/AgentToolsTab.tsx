@@ -1,36 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
+import { ToolBadges, ToolDetailsPanel } from '@/components/tools/ToolPresentation';
 
 export interface AgentToolsTabProps {
   tools: string[];
   agentId: string;
   nativeTools?: { allowlist?: string[]; blocklist?: string[] } | null;
-}
-
-function sourceBadgeClass(source?: string): string {
-  switch (source) {
-    case 'local':
-      return 'bg-teal-500/10 border-teal-500/20 text-teal-400';
-    case 'mcp':
-      return 'bg-violet-500/10 border-violet-500/20 text-violet-400';
-    case 'composio':
-      return 'bg-amber-500/10 border-amber-500/20 text-amber-400';
-    default:
-      return 'bg-surface-700/30 border-surface-600/30 text-surface-400';
-  }
-}
-
-function locationBadgeClass(location?: string): string {
-  switch (location) {
-    case 'orchestrator':
-      return 'bg-blue-500/10 border-blue-500/20 text-blue-400';
-    case 'daemon':
-      return 'bg-purple-500/10 border-purple-500/20 text-purple-400';
-    case 'sandbox':
-    default:
-      return 'bg-surface-700/30 border-surface-600/30 text-surface-400';
-  }
 }
 
 export function AgentToolsTab({ tools = [], agentId: _agentId, nativeTools }: AgentToolsTabProps) {
@@ -134,24 +110,7 @@ export function AgentToolsTab({ tools = [], agentId: _agentId, nativeTools }: Ag
                 <div className="flex items-start justify-between gap-2">
                   <h4 className="break-all font-mono text-sm font-bold text-surface-200">{name}</h4>
                   <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                    {catalog?.builtin ? (
-                      <span className="inline-flex items-center rounded-md border border-sky-500/20 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-400">
-                        builtin
-                      </span>
-                    ) : null}
-                    {catalog?.location ? (
-                      <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${locationBadgeClass(catalog.location)}`}>
-                        {catalog.location}
-                      </span>
-                    ) : null}
-                    <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${sourceBadgeClass(catalog?.source)}`}>
-                      {catalog?.source || 'unknown'}
-                    </span>
-                    {catalog?.requiresApproval ? (
-                      <span className="inline-flex items-center gap-1 rounded-md border border-orange-500/20 bg-orange-500/10 px-2 py-0.5 text-[10px] font-medium text-orange-400">
-                        <ShieldCheck className="h-3 w-3" /> approval
-                      </span>
-                    ) : null}
+                    <ToolBadges tool={catalog ?? { source: undefined }} compact />
                   </div>
                 </div>
 
@@ -171,10 +130,8 @@ export function AgentToolsTab({ tools = [], agentId: _agentId, nativeTools }: Ag
                   </div>
                 ) : null}
 
-                {expandedTool === name && catalog?.inputSchema ? (
-                  <div className="mt-2 overflow-x-auto rounded-md border border-surface-700/50 bg-surface-900/50 px-3 py-2 font-mono text-xs whitespace-pre-wrap text-surface-300">
-                    {JSON.stringify(catalog.inputSchema, null, 2)}
-                  </div>
+                {expandedTool === name && catalog ? (
+                  <ToolDetailsPanel tool={catalog} compact showEmpty={false} className="mt-2" />
                 ) : null}
               </div>
             ))}

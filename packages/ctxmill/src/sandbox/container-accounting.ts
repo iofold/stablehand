@@ -20,9 +20,9 @@ export interface ContainerAccountingMetrics {
  * Slot + metrics accounting for sandbox containers (ctx-wbt), shared by the
  * docker and kubernetes managers. Membership is keyed by containerId — any
  * tracked container frees its slot on release, whether it was created by this
- * process or rehydrated from labels at boot. Rehydration may push `active`
- * past maxGlobalContainers until reaping catches up; new acquires queue until
- * a slot frees (documented boot edge).
+ * process or rehydrated from labels at boot. Rehydration (or a live limit
+ * decrease, ctx-reir) may push `active` past maxGlobalContainers; new
+ * acquires queue until active converges below the limit (hard cap).
  */
 export class ContainerAccounting {
   private readonly semaphore: ContainerSemaphore;
@@ -34,10 +34,21 @@ export class ContainerAccounting {
   private lifetimeSumMs = 0;
 
   constructor(
-    private readonly maxGlobalContainers: number,
+    private maxGlobalContainers: number,
     queueTimeoutMs: number,
   ) {
     this.semaphore = new ContainerSemaphore(maxGlobalContainers, queueTimeoutMs);
+  }
+
+  /** Apply new limits at runtime (live settings, ctx-reir). */
+  updateLimits(update: { maxGlobalContainers?: number; queueTimeoutMs?: number }): void {
+    if (update.maxGlobalContainers !== undefined) {
+      this.maxGlobalContainers = update.maxGlobalContainers;
+    }
+    this.semaphore.updateLimits({
+      maxConcurrent: update.maxGlobalContainers,
+      queueTimeoutMs: update.queueTimeoutMs,
+    });
   }
 
   /** Acquire a creation slot (queues at capacity, rejects on timeout). */

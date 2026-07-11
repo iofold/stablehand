@@ -1,5 +1,5 @@
 import type { CheckpointV2, SandboxSessionRow } from '../../database/repository.js';
-import type { AgentDefinition } from '../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import type { HarnessGrpcClient, SessionRecord, TurnQueueEntry } from './types.js';
 
 export interface SessionReconciler {

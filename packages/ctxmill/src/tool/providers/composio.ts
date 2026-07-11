@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ToolProvider } from '../provider.js';
-import type { ToolDefinition, ToolContext } from '../types.js';
+import type { ToolDefinition, ToolContext } from '@ctxmill/sandbox-daemon';
 
 const DEFAULT_BASE_URL = 'https://backend.composio.dev';
 const COMPOSIO_PREFIX = 'composio.';

@@ -22,7 +22,6 @@ describe('Agent CRUD & related endpoints', () => {
   beforeAll(async () => {
     testApp = await createTestApp({
       dirPrefix: 'ctxmill-agent-crud-',
-      preset: 'docker',
     });
     app = testApp.app;
     container = testApp.container;
@@ -182,6 +181,18 @@ describe('Agent CRUD & related endpoints', () => {
       const body = res.json();
       expect(body.error).toContain('Invalid harnessConfig');
       expect(Array.isArray(body.details)).toBe(true);
+    });
+
+    it('lists available harnesses when the selected harness is unknown', async () => {
+      const res = await createAgent({
+        name: 'unknown-harness',
+        harness: 'missing-harness',
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe(
+        'Unknown harness: missing-harness. Available: claude-agents, langgraph, pi-agent',
+      );
     });
 
     it('rejects legacy model field payloads', async () => {
@@ -401,6 +412,93 @@ describe('Agent CRUD & related endpoints', () => {
       await container.db.updateTurn(session.id, { completedAt: Date.now() });
       res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
       expect(res.json().status).toBe('idle');
+    });
+
+    it('reports conversation, turn, and sandbox-session counts as distinct fields (ctx-ohq4)', async () => {
+      const created = await createAgent({ name: 'counter-agent' });
+      const agentId = created.json().id as string;
+
+      // Conversation A: one ACTIVE sandbox session, three completed turns, two failed turns.
+      const convA = await container.db.createConversation(agentId);
+      const sandboxSession = await container.db.createSandboxSession({
+        conversationId: convA.id,
+        agentId,
+        harnessName: VALID_AGENT.harness,
+        status: 'ACTIVE',
+        containerId: 'counter-container-id',
+        containerName: 'counter-container',
+      });
+      for (let i = 0; i < 3; i++) {
+        const turn = await container.db.createTurn({
+          agentId,
+          conversationId: convA.id,
+          mode: 'background',
+          taskDescription: `completed turn ${i}`,
+          sessionId: sandboxSession.id,
+        });
+        await container.db.updateTurn(turn.id, { completedAt: Date.now() });
+      }
+      for (let i = 0; i < 2; i++) {
+        const turn = await container.db.createTurn({
+          agentId,
+          conversationId: convA.id,
+          mode: 'background',
+          taskDescription: `failed turn ${i}`,
+          sessionId: sandboxSession.id,
+        });
+        await container.db.updateTurn(turn.id, { completedAt: Date.now(), error: 'boom' });
+      }
+
+      // Conversation B: multi-turn conversation with no sandbox session at all.
+      const convB = await container.db.createConversation(agentId);
+      const completedNoSandbox = await container.db.createTurn({
+        agentId,
+        conversationId: convB.id,
+        mode: 'interactive',
+        taskDescription: 'completed without sandbox',
+      });
+      await container.db.updateTurn(completedNoSandbox.id, { completedAt: Date.now() });
+      await container.db.createTurn({
+        agentId,
+        conversationId: convB.id,
+        mode: 'interactive',
+        taskDescription: 'still in flight',
+      });
+
+      const expectedCounters = {
+        conversationCount: 2,
+        turnCount: 7,
+        completedTurnCount: 4,
+        failedTurnCount: 2,
+        activeTurnCount: 1,
+      };
+      const expectedSessionsByStatus = {
+        ACTIVE: 1,
+        CHECKPOINTED: 0,
+        RESTORING: 0,
+        TERMINATED: 0,
+      };
+      const legacyFields = ['totalSessions', 'completedSessions', 'failedSessions', 'activeSessions', 'sessions'];
+
+      const res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body).toMatchObject(expectedCounters);
+      expect(body.sessionsByStatus).toEqual(expectedSessionsByStatus);
+      expect(body.recentTurns).toHaveLength(5);
+      for (const field of legacyFields) {
+        expect(body).not.toHaveProperty(field);
+      }
+
+      const listRes = await app.inject({ method: 'GET', url: '/api/agents' });
+      expect(listRes.statusCode).toBe(200);
+      const listed = listRes.json().find((entry: Record<string, unknown>) => entry.id === agentId);
+      expect(listed).toMatchObject(expectedCounters);
+      expect(listed.sessionsByStatus).toEqual(expectedSessionsByStatus);
+      expect(listed.recentTurns).toHaveLength(5);
+      for (const field of legacyFields) {
+        expect(listed).not.toHaveProperty(field);
+      }
     });
   });
 

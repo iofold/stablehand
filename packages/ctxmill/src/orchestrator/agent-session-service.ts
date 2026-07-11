@@ -1,14 +1,11 @@
 import type { AGUIEvent } from '../events/types.js';
 import type { MessageCommittedEvent } from '@ctxmill/shared';
-import type { AgentDefinition, Message } from '../types.js';
-import type { SSEManager } from './sse.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { EventMap, TypedEventBus } from '../events/bus.js';
-import type { SessionTurnService } from './session-turn-service.js';
+import type { SessionTurnExecutor } from './session-turn-service.js';
 import type { SandboxSessionManager, SessionRecord } from './sandbox-session-manager.js';
 import type { ConcurrencyReservation } from './session-manager/session-turn-orchestrator.js';
-import type { LocalFunctionExecutor } from '../tool/executor.js';
-import { DefaultToolRegistry } from '../tool/registry.js';
 import { sanitizeDbText } from '../util/sanitize.js';
 import { withRuntimeSandboxSecrets, type RuntimeSandboxSecrets } from './session-manager/runtime-sandbox-secrets.js';
 import { SESSION_CANCELLED_MESSAGE, isSessionCancelled } from './session-cancellation.js';
@@ -61,15 +58,11 @@ type StreamingPart =
   | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: string };
 
 export interface AgentSessionServiceDeps {
-  sse: SSEManager;
   db: DatabaseRepository;
   sessionManager: SandboxSessionManager;
-  eventBus?: TypedEventBus;
-  /** SessionTurnService for executing sessions in Docker containers. */
-  sessionTurnService: SessionTurnService;
-  /** Tool executor for resolving tool definitions for sandbox sessions. */
-  toolExecutor?: LocalFunctionExecutor;
-  toolRegistry?: DefaultToolRegistry;
+  eventBus: TypedEventBus;
+  /** Session-turn executor for running turns in sandbox containers. */
+  sessionTurnService: SessionTurnExecutor;
 }
 
 export interface ExecuteSessionParams {
@@ -88,15 +81,15 @@ export interface ExecuteSessionParams {
 /**
   * Extracted business logic for executing an agent session.
  *
- * Streams events from the sandbox, broadcasts ALL events via SSE,
+ * Streams events from the sandbox, emits typed lifecycle events,
  * persists messages only from MESSAGE_COMMITTED events (sandbox is source of truth),
   * completes the session in the registry.
  */
 export class AgentSessionService {
   private db: DatabaseRepository;
   private sessionManager: SandboxSessionManager;
-  private eventBus?: TypedEventBus;
-  private sessionTurnService: SessionTurnService;
+  private eventBus: TypedEventBus;
+  private sessionTurnService: SessionTurnExecutor;
   private turnFinalizer: TurnFinalizer;
 
   constructor(deps: AgentSessionServiceDeps) {
@@ -108,7 +101,7 @@ export class AgentSessionService {
   }
 
   /**
-   * Execute an agent run: iterate over sandbox events, broadcast ALL via SSE,
+   * Execute an agent run: iterate over sandbox events, emit typed lifecycle events,
    * persist messages only from MESSAGE_COMMITTED events and complete the run
    * in the registry.
    *
@@ -226,10 +219,6 @@ export class AgentSessionService {
         messageSeq?: number;
       },
     ): void => {
-      if (!this.eventBus) {
-        return;
-      }
-
       const messageSeq = options?.messageSeq ?? (lastCommittedMessageSeq + 1);
       lastCommittedMessageSeq = Math.max(lastCommittedMessageSeq, messageSeq);
 
@@ -318,6 +307,7 @@ export class AgentSessionService {
         assistantFlushedForBatch = true;
       } else if (pendingToolCalls.size > 0 && assistantFlushedForBatch && flushedAssistantMessageId) {
         await updateFlushedAssistantToolState();
+        accumulatedText = '';
       } else if (accumulatedText) {
         const parts = [...streamingParts];
         const messageId = await persistMessage('assistant', accumulatedText, {
@@ -388,7 +378,7 @@ export class AgentSessionService {
       for await (const event of eventSource) {
         if (signal?.aborted) break;
 
-        if (!INDIVIDUALLY_HANDLED.has(event.type) && this.eventBus) {
+        if (!INDIVIDUALLY_HANDLED.has(event.type)) {
           this.eventBus.emit('run.ag_ui_event', {
             turnId,
             agentId,
@@ -482,6 +472,10 @@ export class AgentSessionService {
             assistantFlushedForBatch = true;
           } else if (assistantFlushedForBatch && flushedAssistantMessageId) {
             await updateFlushedAssistantToolState();
+            // Text between tool calls is now recorded on the flushed message's
+            // parts; only text after the LAST tool result may reach the final
+            // message (ctx-hb4b).
+            accumulatedText = '';
           }
 
           await persistMessage('tool', normalizeContent(e.result), {
@@ -492,32 +486,44 @@ export class AgentSessionService {
         if (event.type === 'MESSAGE_COMMITTED') {
           const committed = event as unknown as MessageCommittedEvent;
           lastCommittedMessageSeq = Math.max(lastCommittedMessageSeq, committed.messageSeq);
-          const finalParts = buildCommittedParts(committed);
           if (assistantFlushedForBatch) {
+            // The tool-carrying assistant message was already persisted at the
+            // first tool result; the final message owns only content produced
+            // after that flush so a tool_call part is never persisted twice
+            // (ctx-hb4b). With no trailing text there is nothing new to say.
+            const trailingParts: StreamingPart[] = accumulatedText
+              ? [{ type: 'text', content: accumulatedText }]
+              : [];
             if (accumulatedText) {
               flushedAssistantMessageId = await persistMessage(committed.role, accumulatedText, {
-                parts: finalParts,
+                parts: trailingParts,
+              });
+              emitCommittedMessage(committed.role, accumulatedText, {
+                parts: trailingParts,
+                messageId: flushedAssistantMessageId ?? undefined,
+                messageSeq: committed.messageSeq,
               });
             }
             assistantFlushedForBatch = false;
             pendingToolCalls.clear();
             accumulatedText = '';
           } else {
+            const finalParts = buildCommittedParts(committed);
             flushedAssistantMessageId = await persistMessage(committed.role, committed.content, {
               parts: finalParts,
               toolCalls: committed.toolCalls as ReturnType<typeof buildPersistedToolCalls> | undefined,
               toolCallId: committed.toolCallId,
             });
             accumulatedText = '';
-          }
 
-          emitCommittedMessage(committed.role, committed.content, {
-            parts: finalParts,
-            toolCalls: committed.toolCalls as ReturnType<typeof buildPersistedToolCalls> | undefined,
-            toolCallId: committed.toolCallId,
-            messageId: flushedAssistantMessageId ?? undefined,
-            messageSeq: committed.messageSeq,
-          });
+            emitCommittedMessage(committed.role, committed.content, {
+              parts: finalParts,
+              toolCalls: committed.toolCalls as ReturnType<typeof buildPersistedToolCalls> | undefined,
+              toolCallId: committed.toolCallId,
+              messageId: flushedAssistantMessageId ?? undefined,
+              messageSeq: committed.messageSeq,
+            });
+          }
 
           streamingParts = [];
         }
@@ -537,31 +543,27 @@ export class AgentSessionService {
             });
           }
 
-          if (this.eventBus) {
-            this.eventBus.emit('run.text_chunk', {
-              turnId,
-              agentId,
-              conversationId,
-              messageId: textEvent.messageId ?? '',
-              content: textEvent.content,
-              timestamp: Date.now(),
-            } as unknown as EventMap['run.text_chunk']);
-          }
+          this.eventBus.emit('run.text_chunk', {
+            turnId,
+            agentId,
+            conversationId,
+            messageId: textEvent.messageId ?? '',
+            content: textEvent.content,
+            timestamp: Date.now(),
+          } as unknown as EventMap['run.text_chunk']);
         }
 
         if (event.type === 'TOOL_CALL_START' && 'toolName' in event) {
           const toolStart = event as unknown as ToolCallStartEvent;
-          if (this.eventBus) {
-            this.eventBus.emit('run.tool_started', {
-              turnId,
-              agentId,
-              conversationId,
-              toolCallId: toolStart.toolCallId ?? '',
-              toolName: toolStart.toolName,
-              args: toolStart.args ?? {},
-              timestamp: Date.now(),
-            } as unknown as EventMap['run.tool_started']);
-          }
+          this.eventBus.emit('run.tool_started', {
+            turnId,
+            agentId,
+            conversationId,
+            toolCallId: toolStart.toolCallId ?? '',
+            toolName: toolStart.toolName,
+            args: toolStart.args ?? {},
+            timestamp: Date.now(),
+          } as unknown as EventMap['run.tool_started']);
         }
         if (event.type === 'TOOL_CALL_RESULT' && 'result' in event) {
           const toolResult = event as unknown as ToolCallResultEvent;
@@ -570,18 +572,16 @@ export class AgentSessionService {
           const toolName = toolResult.toolName && toolResult.toolName.length > 0
             ? toolResult.toolName
             : knownToolName ?? '';
-          if (this.eventBus) {
-            this.eventBus.emit('run.tool_result', {
-              turnId,
-              agentId,
-              conversationId,
-              toolCallId,
-              toolName,
-              result: String(toolResult.result).slice(0, 500),
-              durationMs: toolResult.durationMs ?? 0,
-              timestamp: Date.now(),
-            } as unknown as EventMap['run.tool_result']);
-          }
+          this.eventBus.emit('run.tool_result', {
+            turnId,
+            agentId,
+            conversationId,
+            toolCallId,
+            toolName,
+            result: String(toolResult.result).slice(0, 500),
+            durationMs: toolResult.durationMs ?? 0,
+            timestamp: Date.now(),
+          } as unknown as EventMap['run.tool_result']);
         }
 
         if (event.type === 'HITL_PAUSE') {

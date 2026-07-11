@@ -46,36 +46,9 @@ import type {
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
 import { jsonSchemaToZod } from '../tool/schema-convert.js';
+import type { SessionCheckpoint } from './checkpoint.js';
 import { stringifyJsonWithBigInts, toJsonCompatibleValue } from './json-serialization.js';
 import { createToolProxy, type OrchestratorServiceClient } from './tool-proxy.js';
-
-/* -------------------------------------------------------------------------- */
-/*  Internal SessionCheckpoint type                                            */
-/* -------------------------------------------------------------------------- */
-
-export interface SessionCheckpoint {
-  checkpointVersion: number;
-  sessionId: string;
-  conversationId: string;
-  harnessName: string;
-  cursor: {
-    nextMessageSeq: number;
-    lastCompletedTurnId?: string;
-  };
-  runnerState: {
-    status: string;
-    pendingRequests: Array<{
-      type: string;
-      id: string;
-      payloadJson: string;
-    }>;
-  };
-  workspaceRef: {
-    strategy: string;
-    reference: string;
-  };
-  harnessState: Record<string, unknown>;
-}
 
 type ProtoAGUISessionEvent = ProtoSessionEvent & {
   payload: {
@@ -236,11 +209,11 @@ export function sessionCheckpointToProto(
     }),
     runnerState: create(RunnerStateSchema, {
       status: checkpoint.runnerState.status,
-      pendingRequests: checkpoint.runnerState.pendingRequests.map((pr) =>
+      pendingRequests: (checkpoint.runnerState.pendingRequests ?? []).map((pr) =>
         create(PendingRequestSchema, {
           type: pr.type,
           id: pr.id,
-          payloadJson: pr.payloadJson,
+          payloadJson: stringifyJsonWithBigInts(pr.payload),
         }),
       ),
     }),
@@ -255,8 +228,15 @@ export function sessionCheckpointToProto(
 export function protoSessionCheckpointToInternal(
   proto: ProtoSessionCheckpoint,
 ): SessionCheckpoint {
+  const pendingRequests = (proto.runnerState?.pendingRequests ?? []).map((pr) => ({
+    type: pr.type === 'approval' ? 'approval' as const : 'tool_call' as const,
+    id: pr.id,
+    payload: parseJsonOrThrow(pr.payloadJson, `pending request ${pr.id}`),
+  }));
+  const harnessState = isRecord(proto.harnessState) ? proto.harnessState : {};
+
   return {
-    checkpointVersion: proto.checkpointVersion,
+    checkpointVersion: 2,
     sessionId: proto.sessionId,
     conversationId: proto.conversationId,
     harnessName: proto.harnessName,
@@ -265,18 +245,17 @@ export function protoSessionCheckpointToInternal(
       lastCompletedTurnId: proto.cursor?.lastCompletedTurnId,
     },
     runnerState: {
-      status: proto.runnerState?.status ?? 'idle',
-      pendingRequests: (proto.runnerState?.pendingRequests ?? []).map((pr) => ({
-        type: pr.type,
-        id: pr.id,
-        payloadJson: pr.payloadJson,
-      })),
+      status: proto.runnerState?.status === 'WAITING_INPUT' ? 'WAITING_INPUT' : 'IDLE',
+      pendingRequests: pendingRequests.length > 0 ? pendingRequests : undefined,
     },
     workspaceRef: {
-      strategy: proto.workspaceRef?.strategy ?? 'none',
+      strategy: toWorkspaceStrategy(proto.workspaceRef?.strategy),
       reference: proto.workspaceRef?.reference ?? '',
     },
-    harnessState: (proto.harnessState ?? {}) as Record<string, unknown>,
+    harnessState: {
+      stateVersion: typeof harnessState.stateVersion === 'string' ? harnessState.stateVersion : '1',
+      payload: isRecord(harnessState.payload) ? harnessState.payload : {},
+    },
   };
 }
 
@@ -520,6 +499,14 @@ function parseJsonOrThrow(s: string, context: string): Record<string, unknown> {
       { cause: err },
     );
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toWorkspaceStrategy(value: string | undefined): SessionCheckpoint['workspaceRef']['strategy'] {
+  return value === 'tar' || value === 'git' ? value : 'none';
 }
 
 function stringifyProtoJsonPayload(value: unknown): string {

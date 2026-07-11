@@ -1,6 +1,6 @@
 import type { TypedEventBus } from '../events/bus.js';
 import type { DatabaseRepository } from '../database/repository.js';
-import type { AgentDefinition } from '../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import { buildAgentDefinition, type StoredAgent } from './agent-definition.js';
 import type { AgentSessionService } from './agent-session-service.js';
 import { mapMessagesToInternal } from './routes/agent-helpers.js';

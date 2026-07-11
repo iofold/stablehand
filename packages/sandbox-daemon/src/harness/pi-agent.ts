@@ -16,15 +16,17 @@ import type {
 } from './types.js';
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
-import { CanonicalProviderSchema } from './shared.js';
+import { PIAgentConfigSchema, type PIAgentConfig } from './schemas.js';
 import {
   TurnAccumulator,
-  createAgentEventLangSmithTracer,
-  linkAbortSignal,
+  errorMessage,
+  finalizeTurn,
+  linkTurnAbort,
   normalizeTokenUsage,
+  parseHarnessConfig,
   requestToolApproval,
   resolveModelAuth,
-  traceAgentEvents,
+  withTurnTracing,
 } from './kit/index.js';
 
 let _sdk: {
@@ -239,7 +241,7 @@ export function convertTools(
       try {
         return await chain();
       } catch (handlerErr) {
-        const msg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
+        const msg = errorMessage(handlerErr);
         return {
           content: [{ type: 'text' as const, text: `Tool "${def.name}" execution failed: ${msg}` }],
           details: {},
@@ -399,16 +401,6 @@ type NativePiSession = {
   };
 };
 
-export const PIAgentConfigSchema = z.object({
-  provider: CanonicalProviderSchema.default('openai'),
-  model: z.string().min(1),
-  apiKeyRef: z.string().optional(),
-  baseUrl: z.string().refine((value) => URL.canParse(value)).optional(),
-  extensions: z.array(z.string()).optional(),
-});
-
-export type PIAgentConfig = z.infer<typeof PIAgentConfigSchema>;
-
 export class PIAgentHarness implements AgentHarness {
   readonly name = 'pi-agent';
   readonly configSchema = PIAgentConfigSchema;
@@ -416,9 +408,7 @@ export class PIAgentHarness implements AgentHarness {
   async openSession(config: HarnessSessionConfig, restore?: HarnessRestorePoint): Promise<HarnessSession> {
     const sdk = await getSDK();
     const cwd = config.workspaceDir ?? process.cwd();
-    const harnessConfig = PIAgentConfigSchema.parse(
-      JSON.parse(z.string().parse(config.harnessConfigJson)),
-    );
+    const harnessConfig = parseHarnessConfig(PIAgentConfigSchema, config.harnessConfigJson);
     const extensions: PIAgentExtension[] = [];
     const workspaceDir = config.workspaceDir ?? process.cwd();
     for (const extPath of (harnessConfig.extensions ?? [])) {
@@ -515,14 +505,7 @@ export class PIAgentHarness implements AgentHarness {
       }
     }
 
-    return traceAgentEvents(session, {
-      createTracer: (input) => createAgentEventLangSmithTracer({
-        agentId: config.agentId,
-        conversationId: config.conversationId,
-        harnessName: this.name,
-        turnId: input.turnId,
-      }),
-    });
+    return withTurnTracing(session, config, this.name);
   }
 
   private buildNativeTools(
@@ -621,8 +604,7 @@ class PiAgentSession implements HarnessSession {
     let totalUsage: TokenUsage | undefined;
     let unsubscribe: (() => void) | undefined;
     let aborted = false;
-    let unlinkConfigAbort: () => void = () => {};
-    let unlinkContextAbort: () => void = () => {};
+    let unlinkAbort: () => void = () => {};
     const accumulator = new TurnAccumulator({ turnId: input.turnId });
 
     try {
@@ -685,8 +667,7 @@ class PiAgentSession implements HarnessSession {
           console.error('[pi-agent] abort failed:', err);
         });
       };
-      unlinkConfigAbort = linkAbortSignal(this.config.signal, abortNativeSession);
-      unlinkContextAbort = linkAbortSignal(context.signal, abortNativeSession);
+      unlinkAbort = linkTurnAbort(this.config.signal, context.signal, abortNativeSession);
 
       if (!lastUserMsg) {
         done = true;
@@ -715,32 +696,18 @@ class PiAgentSession implements HarnessSession {
         }
       }
 
-      const committed = accumulator.createMessageCommitted(this.transcript.length);
-      if (committed) {
-        this.transcript.push({
-          id: randomUUID(),
-          agentId: this.config.agentId ?? this.config.conversationId,
-          role: 'assistant',
-          content: committed.content,
-          ...(committed.toolCalls ? { toolCalls: committed.toolCalls } : {}),
-          createdAt: new Date(),
-        });
-
-        yield committed;
-      }
-
-      const doneEvent = accumulator.doneEvent();
-      if (doneEvent) {
-        yield doneEvent;
-      }
+      yield* finalizeTurn(
+        accumulator,
+        this.transcript,
+        this.config.agentId ?? this.config.conversationId,
+      );
 
       await promptPromise;
     } catch (err) {
       console.error('[pi-agent] deliverTurn error:', err);
       yield { type: 'error', error: String(err) };
     } finally {
-      unlinkConfigAbort();
-      unlinkContextAbort();
+      unlinkAbort();
       this.turnRef.queuedEvents = undefined;
       unsubscribe?.();
     }

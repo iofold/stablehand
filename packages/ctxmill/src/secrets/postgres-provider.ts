@@ -6,7 +6,8 @@ import { encrypt, decrypt } from './crypto.js';
 /**
  * PostgreSQL-backed SecretProvider — every read goes to the database; every
  * write is single-pass. No in-process cache, no boot-time hydration. Master
- * key rotation must be handled by an external migration, not at runtime.
+ * key rotation is handled offline by scripts/reencrypt-secrets.mjs, not at
+ * runtime.
  */
 export class PostgresSecretProvider implements SecretProvider {
   private readonly sql: postgres.Sql;
@@ -31,6 +32,10 @@ export class PostgresSecretProvider implements SecretProvider {
         this.masterKey,
       );
     } catch {
+      console.warn(
+        `[secrets] decrypt failed for agent=${agentId} tool=${tid} key=${key} — ` +
+          'likely SECRET_MASTER_KEY mismatch; run scripts/reencrypt-secrets.mjs to rotate stored secrets',
+      );
       return null;
     }
   }

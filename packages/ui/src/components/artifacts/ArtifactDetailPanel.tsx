@@ -1,7 +1,8 @@
 import React from 'react';
 import { X, Download } from 'lucide-react';
 import { useArtifactsStore } from '@/stores/artifacts';
-import { formatBytes, getMimeIcon } from './ArtifactRow';
+import { getMimeIcon } from './ArtifactRow';
+import { formatBytes } from '@/lib/format';
 
 
 export function ArtifactDetailPanel() {

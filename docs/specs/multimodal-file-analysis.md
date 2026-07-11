@@ -1,8 +1,11 @@
 # Multimodal File Analysis: Research & Design Analysis
 
+> Sources: distilled from the retired survey `multimodal_support_analysis.md` (see git history).
+
 **Status:** Research (pre-implementation)  
 **Date:** 2026-04-07  
 **Scope:** All 3 harnesses × all 3 model providers  
+**Shipping status (2026-07):** Proposal only — not shipped.  
 
 ---
 

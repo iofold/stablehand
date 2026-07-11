@@ -5,7 +5,7 @@ import {
   type SandboxContainerManager,
 } from '../sandbox/container-manager.js';
 import type { DatabaseRepository, SandboxSessionRow } from '../database/repository.js';
-import { retryWithBackoff } from '../util/retry.js';
+import { retryWithBackoff } from '@ctxmill/sandbox-daemon';
 import { hasStatusCode } from '../util/status-code-error.js';
 import { parsePositiveMs, unrefTimer } from '../util/timing.js';
 import {
@@ -431,58 +431,29 @@ export class ContainerLifecyclePolicy {
       const alive = container !== undefined && isAliveContainerStatus(container.status);
 
       if (!alive) {
-        const checkpoint = await this.db.getCheckpointV2(session.id);
-        if (checkpoint) {
-           this.logger.info(`${TAG} session ${session.id}: container gone, checkpoint exists -> CHECKPOINTED`);
-             await this.statusCoordinator.transition({
-               sessionId: session.id,
-               fromStatus: session.status as SessionStatus,
-               toStatus: 'CHECKPOINTED',
-               clearRuntime: true,
-             });
-           await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
-           markedCheckpointed++;
-         } else {
-           this.logger.info(`${TAG} session ${session.id}: container gone, no checkpoint -> TERMINATED`);
-           await this.statusCoordinator.transition({
-             sessionId: session.id,
-             fromStatus: session.status as SessionStatus,
-             toStatus: 'TERMINATED',
-             clearRuntime: true,
-           });
-           await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
+        const resultingStatus = await this.demoteDeadSession(
+          session.id,
+          session.conversationId,
+          session.status as SessionStatus,
+        );
+        if (resultingStatus === 'CHECKPOINTED') {
+          markedCheckpointed++;
+        } else {
           deleted++;
         }
         if (container && await this.cleanupManagedContainer(
           container,
-          checkpoint
+          resultingStatus === 'CHECKPOINTED'
             ? 'dead container retained after checkpoint promotion'
             : 'dead container retained after session termination',
         )) {
           deadCleaned++;
         }
-        this.cleanup(session.id);
         continue;
       }
 
       if (session.status === 'ACTIVE' && container.status !== 'paused') {
-        let reconnectedSession = session;
-        if (session.containerName !== container.containerName || session.containerId !== container.containerId) {
-          await this.statusCoordinator.transition({
-            sessionId: session.id,
-            fromStatus: session.status as SessionStatus,
-            toStatus: session.status as SessionStatus,
-            extra: {
-              containerName: container.containerName,
-              containerId: container.containerId,
-            },
-          });
-          reconnectedSession = {
-            ...session,
-            containerName: container.containerName,
-            containerId: container.containerId,
-          };
-        }
+        const reconnectedSession = await this.syncContainerBinding(session, container);
 
         this.logger.info(`${TAG} session ${session.id}: container running, reconnecting gRPC client`);
         const baseUrl = sandboxGrpcBaseUrl(container);
@@ -526,6 +497,30 @@ export class ContainerLifecyclePolicy {
     );
   }
 
+  private async syncContainerBinding(
+    session: SandboxSessionRow,
+    container: ContainerInfo,
+  ): Promise<SandboxSessionRow> {
+    if (session.containerName === container.containerName && session.containerId === container.containerId) {
+      return session;
+    }
+
+    await this.statusCoordinator.transition({
+      sessionId: session.id,
+      fromStatus: session.status as SessionStatus,
+      toStatus: session.status as SessionStatus,
+      extra: {
+        containerName: container.containerName,
+        containerId: container.containerId,
+      },
+    });
+    return {
+      ...session,
+      containerName: container.containerName,
+      containerId: container.containerId,
+    };
+  }
+
   private findLiveContainerForSession(
     session: SandboxSessionRow,
     liveContainers: Array<ContainerInfo & { labels: Record<string, string> }>,
@@ -543,8 +538,7 @@ export class ContainerLifecyclePolicy {
     }
 
     return liveContainers.find((container) => {
-      const labelSessionId = container.labels['ctxmill.session-id'] || container.labels['ctxmill.run-id'];
-      return labelSessionId === session.id;
+      return container.labels['ctxmill.session-id'] === session.id;
     });
   }
 
@@ -565,24 +559,7 @@ export class ContainerLifecyclePolicy {
       const alive = container !== undefined && isAliveContainerStatus(container.status);
 
       if (alive) {
-        if (session.containerName !== container.containerName || session.containerId !== container.containerId) {
-          await this.statusCoordinator.transition({
-            sessionId: session.id,
-            fromStatus: session.status as SessionStatus,
-            toStatus: session.status as SessionStatus,
-            extra: {
-              containerName: container.containerName,
-              containerId: container.containerId,
-            },
-          });
-          activeRows.push({
-            ...session,
-            containerName: container.containerName,
-            containerId: container.containerId,
-          });
-        } else {
-          activeRows.push(session);
-        }
+        activeRows.push(await this.syncContainerBinding(session, container));
         continue;
       }
 
@@ -591,18 +568,14 @@ export class ContainerLifecyclePolicy {
         continue;
       }
 
-      const checkpoint = await this.db.getCheckpointV2(session.id);
-      await this.statusCoordinator.transition({
-        sessionId: session.id,
-        fromStatus: session.status as SessionStatus,
-        toStatus: checkpoint ? 'CHECKPOINTED' : 'TERMINATED',
-        clearRuntime: true,
-      });
-      await this.releaseMissingContainerSlot(session);
-      await this.reconciliationCallbacks.onSessionEvicted(session.id, session.conversationId);
-      this.cleanup(session.id);
+      const resultingStatus = await this.demoteDeadSession(
+        session.id,
+        session.conversationId,
+        session.status as SessionStatus,
+        { afterTransition: () => this.releaseMissingContainerSlot(session) },
+      );
       this.logger.info(
-        checkpoint
+        resultingStatus === 'CHECKPOINTED'
           ? `${TAG} readback: session ${session.id} container gone, checkpoint exists -> CHECKPOINTED`
           : `${TAG} readback: session ${session.id} container gone, no checkpoint -> TERMINATED`,
       );
@@ -739,36 +712,43 @@ export class ContainerLifecyclePolicy {
       return 'skip';
     }
 
-    const checkpoint = await this.db.getCheckpointV2(sessionId);
     const conversationId = this.sessionConversationIds.get(sessionId);
-
-    if (checkpoint) {
-      await this.statusCoordinator.transition({
-        sessionId,
-        fromStatus: (currentStatus as SessionStatus) ?? 'ACTIVE',
-        toStatus: 'CHECKPOINTED',
-        clearRuntime: true,
-      });
-      if (conversationId) {
-        await this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
-      }
-      this.cleanup(sessionId);
-      this.logger.info(`${TAG} session ${sessionId}: dead container ${containerId}, checkpoint exists -> CHECKPOINTED`);
+    const resultingStatus = await this.demoteDeadSession(
+      sessionId,
+      conversationId,
+      (currentStatus as SessionStatus) ?? 'ACTIVE',
+    );
+    if (resultingStatus === 'CHECKPOINTED') {
       return 'kill-after-checkpoint';
     }
+    return 'kill';
+  }
 
+  private async demoteDeadSession(
+    sessionId: string,
+    conversationId: string | undefined,
+    fromStatus: SessionStatus,
+    options: { afterTransition?: () => Promise<void> } = {},
+  ): Promise<'CHECKPOINTED' | 'TERMINATED'> {
+    const checkpoint = await this.db.getCheckpointV2(sessionId);
+    const resultingStatus = checkpoint ? 'CHECKPOINTED' : 'TERMINATED';
     await this.statusCoordinator.transition({
       sessionId,
-      fromStatus: (currentStatus as SessionStatus) ?? 'ACTIVE',
-      toStatus: 'TERMINATED',
+      fromStatus,
+      toStatus: resultingStatus,
       clearRuntime: true,
     });
+    await options.afterTransition?.();
     if (conversationId) {
       await this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
     }
     this.cleanup(sessionId);
-    this.logger.info(`${TAG} session ${sessionId}: dead container ${containerId}, no checkpoint -> TERMINATED`);
-    return 'kill';
+    this.logger.info(
+      checkpoint
+        ? `${TAG} session ${sessionId}: dead container, checkpoint exists -> CHECKPOINTED`
+        : `${TAG} session ${sessionId}: dead container, no checkpoint -> TERMINATED`,
+    );
+    return resultingStatus;
   }
 
   private async releaseMissingContainerSlot(session: SandboxSessionRow): Promise<void> {

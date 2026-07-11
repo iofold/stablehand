@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { AgentManifest } from '../types.js';
-import type { AgentDefinition } from '../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import { validateManifest, safeValidateManifest } from '../validate.js';
 import { parseManifestString, serializeManifestYAML, serializeManifestJSON } from '../parser.js';
 import { manifestToDefinition, definitionToManifest } from '../convert.js';

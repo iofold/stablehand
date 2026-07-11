@@ -3,17 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { agentRoutes } from '../routes/agents.js';
 import { createServer } from '../server.js';
-import { SessionTurnService } from '../session-turn-service.js';
+import { createSessionTurnExecutor } from '../session-turn-service.js';
 import type { SessionEvent } from '../session-turn-service.js';
 import { mapAgentHttpToolsToConfigs, validateAgentHttpToolsConfig, registerAgentHttpTools } from '../http-tools.js';
 import type { AgentSessionService } from '../agent-session-service.js';
 import type { RunStartupService } from '../run-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
-import type { SSEManager } from '../sse.js';
-import type { InterruptManager } from '../interrupt.js';
+import { SSEManager } from '../sse.js';
+import { InterruptManager } from '../interrupt.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import { TypedEventBus } from '../../events/bus.js';
-import type { AgentDefinition, Message } from '../../types.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import { DefaultToolRegistry } from '../../tool/registry.js';
 import { createTestRunStartupService } from './run-startup-test-helper.js';
 
@@ -21,19 +21,9 @@ function createTestBus(options?: ConstructorParameters<typeof TypedEventBus>[0])
   return new TypedEventBus(options);
 }
 
-function createHarnessRegistry() {
+function createHarnessSchemas() {
   const configSchema = z.object({ model: z.string().min(1) }).passthrough();
-  const harness = {
-    name: 'langgraph',
-    configSchema,
-    openSession: vi.fn(),
-  };
-  return {
-    register: vi.fn(),
-    get: vi.fn(() => harness),
-    getConfigSchema: vi.fn(() => configSchema),
-    list: vi.fn(() => ['langgraph']),
-  };
+  return { langgraph: configSchema };
 }
 
 function createRunStartupServiceStub(): RunStartupService {
@@ -113,7 +103,7 @@ async function buildAgentsApp(
     sse,
     interrupts,
     sessionManager,
-    harnessRegistry: createHarnessRegistry() as never,
+    harnessSchemas: createHarnessSchemas(),
     agentSessionService,
     runStartupService: createRunStartupServiceStub(),
     toolRegistry,
@@ -381,6 +371,10 @@ describe('HTTP tool registration', () => {
       agentSessionService: { executeSession: vi.fn() } as unknown as AgentSessionService,
       runStartupService: createRunStartupServiceStub(),
       toolDefinitionRegistry: toolRegistry,
+      eventBus: createTestBus(),
+      harnessSchemas: createHarnessSchemas(),
+      sse: new SSEManager(),
+      interrupts: new InterruptManager(),
     });
 
     expect(app.toolDefinitionRegistry).toBe(toolRegistry);
@@ -477,9 +471,8 @@ describe('HTTP tool registration', () => {
       suspendSession: vi.fn(async () => {}),
     } as unknown as SandboxSessionManager;
 
-    const service = new SessionTurnService({
+    const service = createSessionTurnExecutor({
       sessionManager,
-      eventBus: createTestBus(),
       logger: silentLogger,
     });
 

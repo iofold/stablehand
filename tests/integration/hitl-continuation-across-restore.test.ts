@@ -29,7 +29,7 @@ import type {
   InterruptRow,
   SandboxSessionRow,
 } from '../../packages/ctxmill/src/database/repository.js';
-import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { SessionEvent } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
 
 // ── Minimal helpers ─────────────────────────────────────────────────────────

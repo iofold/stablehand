@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AgentHarness, HarnessRegistry } from './types.js';
+import type { AgentHarness, HarnessRegistry } from '@ctxmill/sandbox-daemon';
 
 export class DefaultHarnessRegistry implements HarnessRegistry {
   private harnesses = new Map<string, AgentHarness>();

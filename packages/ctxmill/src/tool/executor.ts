@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolCall, ToolResult, ToolContext } from './types.js';
+import type { ToolDefinition, ToolCall, ToolResult, ToolContext } from '@ctxmill/sandbox-daemon';
 import { zodToJsonSchema } from '../util/zod-to-json-schema.js';
 
 export class LocalFunctionExecutor {

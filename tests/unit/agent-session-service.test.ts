@@ -7,9 +7,8 @@ import type {
 import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import type { EventMap } from '../../packages/ctxmill/src/events/bus.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import type { SSEManager } from '../../packages/ctxmill/src/orchestrator/sse.js';
-import type { SessionTurnService } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
-import type { AgentDefinition, Message } from '../../packages/ctxmill/src/types.js';
+import type { SessionTurnExecutor } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { AGUIEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
 import { SESSION_CANCELLED_MESSAGE } from '../../packages/ctxmill/src/orchestrator/session-cancellation.js';
 import { TestSessionRegistry, createTestSessionManager } from '../utils/test-session-registry.js';
@@ -98,7 +97,6 @@ function makeCommittedEvent(
 
 function createDeps(overrides: {
   sessionTurnService?: { executeSessionTurn: ReturnType<typeof vi.fn> };
-  sse?: { broadcast: ReturnType<typeof vi.fn> };
   db?: {
     addMessage: ReturnType<typeof vi.fn>;
     updateTurn: ReturnType<typeof vi.fn>;
@@ -112,9 +110,6 @@ function createDeps(overrides: {
 } = {}) {
   const sessionTurnService = overrides.sessionTurnService ?? {
     executeSessionTurn: vi.fn(),
-  };
-  const sse = overrides.sse ?? {
-    broadcast: vi.fn(),
   };
   const db = {
     addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
@@ -130,17 +125,16 @@ function createDeps(overrides: {
     startTurn: vi.fn().mockReturnValue(undefined),
     completeTurn: vi.fn().mockResolvedValue(undefined),
   };
-  const eventBus = overrides.eventBus;
+  const eventBus = overrides.eventBus ?? new TypedEventBus();
 
   const deps: AgentSessionServiceDeps = {
-    sessionTurnService: sessionTurnService as unknown as SessionTurnService,
-    sse: sse as unknown as SSEManager,
+    sessionTurnService: sessionTurnService as unknown as SessionTurnExecutor,
     db: db as unknown as DatabaseRepository,
     sessionManager: sessionManager as unknown as AgentSessionServiceDeps['sessionManager'],
     eventBus,
   };
 
-  return { deps, sessionTurnService, sse, db, sessionManager, eventBus };
+  return { deps, sessionTurnService, db, sessionManager, eventBus };
 }
 
 type ExecuteEventsOptions = {

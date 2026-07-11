@@ -10,8 +10,11 @@ import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from '../container-sco
 import {
   buildKubernetesJobSpec,
   resolveContainerStartupGraceMs,
+  resolveSandboxRuntimeDefaults,
+  runtimeLabelsToContainerInfo,
   sanitizeKubernetesName,
 } from './spec.js';
+import type { SandboxRuntimeDefaults } from './spec.js';
 import type {
   ContainerInfo,
   ContainerManagerOptions,
@@ -37,6 +40,7 @@ export interface KubernetesContainerManagerOptions extends ContainerManagerOptio
   namespace?: string;
   dataHostPathRoot?: string;
   podReadyTimeoutMs?: number;
+  podPollIntervalMs?: number;
 }
 
 interface KubeMetadata {
@@ -51,6 +55,12 @@ interface KubePod {
   status?: {
     phase?: string;
     podIP?: string;
+    conditions?: Array<{
+      type?: string;
+      status?: string;
+      reason?: string;
+      message?: string;
+    }>;
     containerStatuses?: Array<{
       state?: {
         terminated?: { exitCode?: number };
@@ -84,6 +94,14 @@ function envNumber(name: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function unschedulableReason(pod: KubePod | null): string | null {
+  const condition = pod?.status?.conditions?.find(
+    (c) => c.type === 'PodScheduled' && c.status === 'False' && c.reason === 'Unschedulable',
+  );
+  if (!condition) return null;
+  return condition.message || condition.reason || 'Unschedulable';
+}
+
 async function readNamespace(): Promise<string> {
   const explicit = process.env.CTXMILL_K8S_NAMESPACE || process.env.POD_NAMESPACE;
   if (explicit) return explicit;
@@ -100,12 +118,11 @@ export class KubernetesContainerDriver {
   private readonly apiPort: string;
   private readonly imagePrefix: string;
   private readonly scopeId: string;
-  private readonly defaultCpus: number;
-  private readonly defaultMemoryMb: number;
-  private readonly defaultPidsLimit: number;
-  private readonly defaultTimeoutSec: number;
+  private defaults: SandboxRuntimeDefaults;
   private readonly dataHostPathRoot: string;
   private readonly podReadyTimeoutMs: number;
+  private schedulingWaitMs: number;
+  private readonly podPollIntervalMs: number;
   private readonly startupGraceMs: number;
   /** Kept for workspaceDirFor and record metadata only; not slot accounting. */
   private readonly records = new Map<string, ContainerRecord>();
@@ -118,12 +135,11 @@ export class KubernetesContainerDriver {
     this.apiPort = process.env.KUBERNETES_SERVICE_PORT ?? '443';
     this.imagePrefix = options.imagePrefix ?? process.env.CTXMILL_IMAGE_PREFIX ?? 'ctxmill/harness';
     this.scopeId = resolveContainerScopeId();
-    this.defaultCpus = options.defaultCpus ?? 1.0;
-    this.defaultMemoryMb = options.defaultMemoryMb ?? 1024;
-    this.defaultPidsLimit = options.defaultPidsLimit ?? 256;
-    this.defaultTimeoutSec = options.defaultTimeoutSec ?? 600;
+    this.defaults = resolveSandboxRuntimeDefaults(options);
     this.dataHostPathRoot = options.dataHostPathRoot ?? process.env.CTXMILL_K8S_DATA_HOST_PATH ?? process.env.CTXMILL_DATA_DIR ?? '/var/lib/ctxmill/data';
     this.podReadyTimeoutMs = options.podReadyTimeoutMs ?? envNumber('CTXMILL_K8S_POD_READY_TIMEOUT_MS') ?? 60_000;
+    this.schedulingWaitMs = options.queueTimeoutMs ?? this.podReadyTimeoutMs;
+    this.podPollIntervalMs = options.podPollIntervalMs ?? 500;
     this.startupGraceMs = resolveContainerStartupGraceMs(
       options.startupGraceMs
         ?? envNumber('CTXMILL_CONTAINER_STARTUP_GRACE_MS')
@@ -133,6 +149,25 @@ export class KubernetesContainerDriver {
     this.caPromise = fs.readFile(`${SERVICE_ACCOUNT_ROOT}/ca.crt`);
   }
 
+  updateDefaults(update: {
+    defaultCpus?: number;
+    defaultMemoryMb?: number;
+    defaultPidsLimit?: number;
+    defaultTimeoutSec?: number;
+    queueTimeoutMs?: number;
+  }): void {
+    this.defaults = {
+      ...this.defaults,
+      ...(update.defaultCpus !== undefined ? { cpus: update.defaultCpus } : {}),
+      ...(update.defaultMemoryMb !== undefined ? { memoryMb: update.defaultMemoryMb } : {}),
+      ...(update.defaultPidsLimit !== undefined ? { pidsLimit: update.defaultPidsLimit } : {}),
+      ...(update.defaultTimeoutSec !== undefined ? { timeoutSec: update.defaultTimeoutSec } : {}),
+    };
+    if (update.queueTimeoutMs !== undefined) {
+      this.schedulingWaitMs = update.queueTimeoutMs;
+    }
+  }
+
   async createContainer(opts: CreateContainerOptions): Promise<ContainerInfo> {
     const namespace = await this.namespacePromise;
     const spec = buildKubernetesJobSpec({
@@ -140,12 +175,7 @@ export class KubernetesContainerDriver {
       namespace,
       imagePrefix: this.imagePrefix,
       scopeId: this.scopeId,
-      defaults: {
-        cpus: this.defaultCpus,
-        memoryMb: this.defaultMemoryMb,
-        pidsLimit: this.defaultPidsLimit,
-        timeoutSec: this.defaultTimeoutSec,
-      },
+      defaults: this.defaults,
       startupGraceMs: this.startupGraceMs,
       startedAtIso: new Date().toISOString(),
       orchestratorUrl: process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001',
@@ -344,22 +374,45 @@ export class KubernetesContainerDriver {
   }
 
   private async waitForPod(jobName: string): Promise<KubePod> {
-    const deadline = Date.now() + this.podReadyTimeoutMs;
-    let lastPod: KubePod | null = null;
+    const capacityDeadline = Date.now() + this.schedulingWaitMs;
+    let readyDeadline: number | null = null;
+    let waitingForCapacity = false;
 
-    while (Date.now() < deadline) {
+    while (true) {
       const pod = await this.findPod(jobName);
-      lastPod = pod;
       if (pod?.status?.phase === 'Running' && pod.status.podIP) {
         return pod;
       }
       if (pod?.status?.phase === 'Failed' || pod?.status?.phase === 'Succeeded') {
         throw new Error(`Sandbox pod ${pod.metadata?.name ?? jobName} exited before becoming ready`);
       }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
 
-    throw new Error(`Timed out waiting for sandbox pod for Job ${jobName}; last phase=${lastPod?.status?.phase ?? 'missing'}`);
+      const unschedulable = unschedulableReason(pod);
+      if (unschedulable) {
+        // The scheduler keeps Unschedulable pods queued and places them as
+        // soon as capacity frees (e.g. an idle sandbox is reaped), so this
+        // wait consumes the queue budget, not the boot budget.
+        readyDeadline = null;
+        if (!waitingForCapacity) {
+          waitingForCapacity = true;
+          console.info(`${TAG} sandbox Job ${jobName} is waiting for cluster capacity: ${unschedulable}`);
+        }
+        if (Date.now() >= capacityDeadline) {
+          throw statusCodeError(503, `No sandbox capacity for Job ${jobName} after ${this.schedulingWaitMs}ms: ${unschedulable}`);
+        }
+      } else {
+        if (waitingForCapacity) {
+          waitingForCapacity = false;
+          console.info(`${TAG} sandbox Job ${jobName} was scheduled after waiting for capacity`);
+        }
+        readyDeadline ??= Date.now() + this.podReadyTimeoutMs;
+        if (Date.now() >= readyDeadline) {
+          throw new Error(`Timed out waiting for sandbox pod for Job ${jobName}; last phase=${pod?.status?.phase ?? 'missing'}`);
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, this.podPollIntervalMs));
+    }
   }
 
   private async deleteJob(jobName: string): Promise<void> {
@@ -389,16 +442,14 @@ export class KubernetesContainerDriver {
   private podToContainerInfo(jobName: string, pod: KubePod): ContainerInfo {
     const labels = pod.metadata?.labels ?? {};
     const annotations = pod.metadata?.annotations ?? {};
-    return {
+    return runtimeLabelsToContainerInfo({
       containerId: jobName,
       containerName: pod.metadata?.name ?? jobName,
-      sessionId: labels['ctxmill.session-id'] ?? '',
-      agentId: labels['ctxmill.agent-id'] ?? '',
-      harnessName: labels['ctxmill.harness'] ?? '',
+      labels,
       status: normalizeKubernetesPodStatus(pod),
-      startedAt: annotations['ctxmill.started-at'] ? new Date(annotations['ctxmill.started-at']) : undefined,
+      startedAt: annotations['ctxmill.started-at'],
       networkIp: pod.status?.podIP,
-    };
+    });
   }
 
   private jobNameFromPod(pod: KubePod): string | undefined {

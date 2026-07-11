@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, type ChangeEvent, type DragEvent } from 'r
 import { X, Upload, File as FileIcon, Loader2 } from 'lucide-react';
 import { useArtifactsStore } from '@/stores/artifacts';
 import { useAgentsStore } from '@/stores/agents';
+import { formatBytes } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 interface UploadArtifactModalProps {
@@ -83,14 +84,6 @@ export function UploadArtifactModal({ open, onClose, preSelectedAgentId, onSucce
     setError(null);
     setAgentId(preSelectedAgentId || '');
     onClose();
-  };
-
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   return (

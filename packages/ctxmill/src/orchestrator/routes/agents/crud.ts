@@ -46,9 +46,9 @@ function buildAgentSummary(
   },
   deps: Pick<AgentSubRouteOptions, 'sse' | 'interrupts'>,
 ): Record<string, unknown> {
-  const completedRuns = opts.allRuns.filter((run) => run.completedAt !== null && !run.error).length;
-  const failedRuns = opts.allRuns.filter((run) => !!run.error).length;
-  const recentRuns = [...opts.allRuns]
+  const completedTurns = opts.allRuns.filter((run) => run.completedAt !== null && !run.error).length;
+  const failedTurns = opts.allRuns.filter((run) => !!run.error).length;
+  const recentTurns = [...opts.allRuns]
     .sort((a, b) => b.startedAt - a.startedAt)
     .slice(0, 5);
 
@@ -58,12 +58,13 @@ function buildAgentSummary(
     status: opts.activeRuns.length > 0 ? 'running' : 'idle',
     sseClients: deps.sse.getClientCount(agent.id),
     hasPendingInterrupt: deps.interrupts.hasPendingForAgent(agent.id),
-    activeSessions: opts.activeRuns.length,
-    totalSessions: opts.conversationCount,
-    completedSessions: completedRuns,
-    failedSessions: failedRuns,
+    // One counter per concept (ctx-ohq4): conversations, turns, sandbox sessions.
     conversationCount: opts.conversationCount,
-    sessions: recentRuns.map((turn) => toApiAgentSession(turn)),
+    turnCount: opts.allRuns.length,
+    completedTurnCount: completedTurns,
+    failedTurnCount: failedTurns,
+    activeTurnCount: opts.activeRuns.length,
+    recentTurns: recentTurns.map((turn) => toApiAgentSession(turn)),
     sessionsByStatus: opts.sessionsByStatus,
   };
 }
@@ -76,7 +77,7 @@ export async function crudRoutes(
     db,
     sse,
     interrupts,
-    harnessRegistry,
+    harnessSchemas,
     eventBus,
     dataDir,
     secretProvider,
@@ -141,7 +142,7 @@ export async function crudRoutes(
         });
       }
 
-      const validatedHarnessConfig = validateHarnessConfigInput(body.harness, body.harnessConfig, harnessRegistry);
+      const validatedHarnessConfig = validateHarnessConfigInput(body.harness, body.harnessConfig, harnessSchemas);
       if (!validatedHarnessConfig.success) {
         return reply.status(validatedHarnessConfig.status).send(validatedHarnessConfig.body);
       }
@@ -270,7 +271,7 @@ export async function crudRoutes(
 
       const nextHarness = body.harness ?? agent.harness;
       if (body.harnessConfig !== undefined) {
-        const validatedHarnessConfig = validateHarnessConfigInput(nextHarness, body.harnessConfig, harnessRegistry);
+        const validatedHarnessConfig = validateHarnessConfigInput(nextHarness, body.harnessConfig, harnessSchemas);
         if (!validatedHarnessConfig.success) {
           return reply.status(validatedHarnessConfig.status).send(validatedHarnessConfig.body);
         }

@@ -11,6 +11,8 @@ import type {
 
 export interface SandboxRuntimeDriver {
   ensureNetwork(): Promise<void>;
+  /** Apply new per-sandbox resource defaults at runtime (live settings, ctx-reir). */
+  updateDefaults?(update: SandboxRuntimeSettingsUpdate): void;
   createContainer(opts: CreateContainerOptions): Promise<ContainerInfo>;
   startContainer(containerId: string): Promise<ContainerInfo | undefined>;
   stopContainer(containerId: string, timeoutSec?: number): Promise<void>;
@@ -32,11 +34,34 @@ export interface SandboxContainerCoreOptions {
   loggerTag: string;
 }
 
+/** Container-manager-relevant subset of runtime settings (live updates, ctx-reir). */
+export interface SandboxRuntimeSettingsUpdate {
+  maxGlobalContainers?: number;
+  queueTimeoutMs?: number;
+  defaultCpus?: number;
+  defaultMemoryMb?: number;
+  defaultPidsLimit?: number;
+  defaultTimeoutSec?: number;
+}
+
 export class SandboxContainerCore implements SandboxContainerManager {
   private readonly accounting: ContainerAccounting;
 
   constructor(private readonly options: SandboxContainerCoreOptions) {
     this.accounting = new ContainerAccounting(options.maxGlobalContainers, options.queueTimeoutMs);
+  }
+
+  /**
+   * Apply new settings to the running manager (ctx-reir): slot limits and
+   * queue timeout take effect immediately, resource defaults on the next
+   * container creation.
+   */
+  applySettings(update: SandboxRuntimeSettingsUpdate): void {
+    this.accounting.updateLimits({
+      maxGlobalContainers: update.maxGlobalContainers,
+      queueTimeoutMs: update.queueTimeoutMs,
+    });
+    this.options.driver.updateDefaults?.(update);
   }
 
   async createContainer(opts: CreateContainerOptions): Promise<ContainerInfo> {

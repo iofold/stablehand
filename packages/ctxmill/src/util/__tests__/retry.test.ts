@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { retryWithBackoff } from '../retry.js';
+import { retryWithBackoff } from '@ctxmill/sandbox-daemon';
 
 describe('retryWithBackoff', () => {
   it('succeeds on first attempt without delay', async () => {

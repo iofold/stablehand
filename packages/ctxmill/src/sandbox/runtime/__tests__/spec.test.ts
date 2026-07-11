@@ -3,6 +3,8 @@ import { CONTAINER_SCOPE_LABEL } from '../../container-scope.js';
 import {
   buildDockerContainerSpec,
   buildKubernetesJobSpec,
+  resolveSandboxRuntimeDefaults,
+  runtimeLabelsToContainerInfo,
   sanitizeKubernetesName,
 } from '../spec.js';
 
@@ -29,6 +31,45 @@ const defaults = {
 };
 
 describe('sandbox runtime spec builders', () => {
+  it('resolves shared driver defaults with explicit overrides', () => {
+    expect(resolveSandboxRuntimeDefaults()).toEqual({
+      cpus: 1,
+      memoryMb: 1024,
+      pidsLimit: 256,
+      timeoutSec: 600,
+    });
+    expect(resolveSandboxRuntimeDefaults({ defaultMemoryMb: 4096, defaultTimeoutSec: 30 })).toEqual({
+      cpus: 1,
+      memoryMb: 4096,
+      pidsLimit: 256,
+      timeoutSec: 30,
+    });
+  });
+
+  it('projects runtime labels into container info', () => {
+    expect(runtimeLabelsToContainerInfo({
+      containerId: 'container-1',
+      containerName: 'ctxmill-run-1',
+      labels: {
+        'ctxmill.session-id': 'session-1',
+        'ctxmill.agent-id': 'agent-1',
+        'ctxmill.harness': 'langgraph',
+      },
+      status: 'running',
+      startedAt: '2026-07-08T15:00:00.000Z',
+      networkIp: '10.0.0.2',
+    })).toEqual({
+      containerId: 'container-1',
+      containerName: 'ctxmill-run-1',
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      harnessName: 'langgraph',
+      status: 'running',
+      startedAt: new Date('2026-07-08T15:00:00.000Z'),
+      networkIp: '10.0.0.2',
+    });
+  });
+
   it('builds the Docker create spec from shared runtime inputs', () => {
     const spec = buildDockerContainerSpec({
       options: createOptions,

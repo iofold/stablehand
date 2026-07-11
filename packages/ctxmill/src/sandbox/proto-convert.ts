@@ -1,4 +1,4 @@
-export type { SessionCheckpoint as ProtoConvertSessionCheckpoint, ProtoToolDefsOptions } from '@ctxmill/sandbox-daemon';
+export type { ProtoToolDefsOptions } from '@ctxmill/sandbox-daemon';
 export {
   protoFreshBootstrapToSessionConfig,
   protoRestoreBootstrapToRestorePoint,

@@ -25,7 +25,12 @@ spec:
     to emit "stress.claude.complete", call emit-event exactly once with type="stress.claude.complete"
     and payload={"schemaVersion": 1, "harness": "stress-claude-sonnet", "agent": "stress-claude-sonnet", "model": "claude-sonnet-4-6", "status": "ok"}.
     Do NOT just print or log the event name — you must use the emit-event tool.
+
+    You also have a calculator tool. When asked to use the calculator, you MUST call
+    the calculator tool (not Bash, not mental math) exactly once with the requested
+    operation and operands.
   tools:
+    - ref: calculator
     - ref: emit-event
   nativeTools:
     allowlist:

@@ -8,7 +8,7 @@ import {
 
 import type { TypedEventBus } from '../../events/bus.js';
 import { protoSessionEventToCustom } from '../../sandbox/proto-convert.js';
-import type { AgentDefinition, Message } from '../../types.js';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { InterruptManager } from '../interrupt.js';
 import type { SessionEvent as CustomSessionEvent } from '../session-turn-service.js';

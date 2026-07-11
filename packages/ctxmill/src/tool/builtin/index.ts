@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '../types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 import { a2uiRenderTool } from './a2ui-render.js';
 import { CTXMILL_GUIDE_TOOL_NAME } from './ctxmill-guide.js';
 import { emitEventTool } from './emit-event.js';

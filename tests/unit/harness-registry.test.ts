@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DefaultHarnessRegistry } from '../../packages/ctxmill/src/harness/registry.js';
-import type { AgentHarness } from '../../packages/ctxmill/src/harness/types.js';
+import type { AgentHarness } from '@ctxmill/sandbox-daemon';
 
 /**
  * Create a lightweight stub harness with the given canonical name.

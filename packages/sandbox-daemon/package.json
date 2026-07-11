@@ -17,6 +17,10 @@
     "./sandbox/checkpoint": {
       "import": "./dist/sandbox/checkpoint.js",
       "types": "./dist/sandbox/checkpoint.d.ts"
+    },
+    "./harness/schemas": {
+      "import": "./dist/harness/schemas.js",
+      "types": "./dist/harness/schemas.d.ts"
     }
   },
   "scripts": {

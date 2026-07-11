@@ -33,18 +33,7 @@ vi.mock('deepagents', () => ({
   LocalShellBackend: MockLocalShellBackend,
 }));
 
-vi.mock('file:///path/to/stablehand/node_modules/.pnpm/deepagents@1.8.1_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6__react-dom@_220e5e351a3af6f29d5ecee1bbd1c2a4/node_modules/deepagents/dist/index.js', () => ({
-  __esModule: true,
-  createDeepAgent: mockCreateDeepAgent,
-  LocalShellBackend: MockLocalShellBackend,
-}));
-
 vi.mock('@langchain/core/tools', () => ({
-  __esModule: true,
-  tool: mockLcTool,
-}));
-
-vi.mock('file:///path/to/stablehand/node_modules/.pnpm/@langchain+core@1.1.31_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6_/node_modules/@langchain/core/dist/tools/index.js', () => ({
   __esModule: true,
   tool: mockLcTool,
 }));
@@ -59,18 +48,8 @@ vi.mock('@langchain/google-genai', () => ({
   ChatGoogleGenerativeAI: MockChatGoogleGenerativeAI,
 }));
 
-vi.mock('file:///path/to/stablehand/node_modules/.pnpm/@langchain+google-genai@2.1.26_@langchain+core@1.1.41_@opentelemetry+api@1.9.1_@opentel_dfed4a14c2922945cec0233f607563aa/node_modules/@langchain/google-genai/dist/index.js', () => ({
-  __esModule: true,
-  ChatGoogleGenerativeAI: MockChatGoogleGenerativeAI,
-}));
-
-vi.mock('file:///path/to/stablehand/node_modules/.pnpm/@langchain+openai@1.2.12_@langchain+core@1.1.31_@opentelemetry+api@1.9.0_openai@6.27.0_ws@8.19.0_zod@4.3.6___ws@8.19.0/node_modules/@langchain/openai/dist/index.js', () => ({
-  __esModule: true,
-  ChatOpenAI: MockChatOpenAI,
-}));
-
-import type { AgentEvent, HarnessSessionConfig } from '../../packages/ctxmill/src/harness/types.js';
-import type { Message } from '../../packages/ctxmill/src/types.js';
+import type { AgentEvent, HarnessSessionConfig } from '@ctxmill/sandbox-daemon';
+import type { Message } from '@ctxmill/sandbox-daemon';
 
 function makeMessage(role: Message['role'], content: string): Message {
   return {
@@ -117,7 +96,7 @@ function createMockChatModel() {
   return {
     getName: () => 'mock-model',
     _llmType: () => 'mock',
-    bindTools: vi.fn(function bindTools() {
+    bindTools: vi.fn(function bindTools(this: object) {
       return this;
     }),
     invoke: vi.fn(async () => ({ content: '' })),
@@ -157,7 +136,7 @@ function getCommittedWithToolCalls(
 
 async function openTestSession(config: HarnessSessionConfig = makeConfig()) {
   vi.resetModules();
-  const { LangGraphHarness } = await import('../../packages/sandbox-daemon/src/harness/langgraph.ts');
+  const { LangGraphHarness } = await import('../langgraph.js');
   const harness = new LangGraphHarness();
   const session = await harness.openSession(config);
 
@@ -172,7 +151,7 @@ async function openRestoredTestSession(
   config: HarnessSessionConfig = makeConfig(),
 ) {
   vi.resetModules();
-  const { LangGraphHarness } = await import('../../packages/sandbox-daemon/src/harness/langgraph.ts');
+  const { LangGraphHarness } = await import('../langgraph.js');
   const harness = new LangGraphHarness();
   const session = await harness.openSession(config, restore);
 
@@ -203,7 +182,7 @@ describe('LangGraphHarness', () => {
   it('resolves Google model auth from GEMINI_API_KEY', async () => {
     process.env.GEMINI_API_KEY = 'gemini-env-key';
     vi.resetModules();
-    const { LangGraphHarness } = await import('../../packages/sandbox-daemon/src/harness/langgraph.ts');
+    const { LangGraphHarness } = await import('../langgraph.js');
     const harness = new LangGraphHarness();
     const session = await harness.openSession(makeConfig({
       secrets: {},

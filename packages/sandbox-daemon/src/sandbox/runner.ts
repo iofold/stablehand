@@ -55,13 +55,11 @@ import {
   messageToCommittedEvent,
   sessionCheckpointToProto,
   protoToToolDefs,
-  type SessionCheckpoint as ProtoConvertSessionCheckpoint,
 } from './proto-convert.js';
 import { createArtifactHandlers } from './artifact-handler.js';
 import { createSandboxCallbackAuthInterceptor } from './callback-auth.js';
 import type { OrchestratorServiceClient } from './tool-proxy.js';
 import { getToolApiToken, setSessionTools } from './daemon.js';
-import { stringifyJsonWithBigInts } from './json-serialization.js';
 import { generatePtcScripts } from './ptc-codegen.js';
 
 async function mkdirSafe(dir: string): Promise<void> {
@@ -725,29 +723,7 @@ export async function suspendSession(
     { strategy: 'none', reference: '' },
   );
 
-  // Bridge checkpoint.ts::SessionCheckpoint → proto-convert.ts::SessionCheckpoint.
-  // The key differences are:
-  //   • pendingRequests.payload (Record) → payloadJson (JSON string)
-  //   • harnessState (HarnessExportedState) → Record<string, unknown>
-  const protoConvertCheckpoint: ProtoConvertSessionCheckpoint = {
-    checkpointVersion: checkpointFromCollector.checkpointVersion,
-    sessionId: checkpointFromCollector.sessionId,
-    conversationId: checkpointFromCollector.conversationId,
-    harnessName: checkpointFromCollector.harnessName,
-    cursor: checkpointFromCollector.cursor,
-    runnerState: {
-      status: checkpointFromCollector.runnerState.status,
-      pendingRequests: (checkpointFromCollector.runnerState.pendingRequests ?? []).map((pr) => ({
-        type: pr.type,
-        id: pr.id,
-        payloadJson: stringifyJsonWithBigInts(pr.payload),
-      })),
-    },
-    workspaceRef: checkpointFromCollector.workspaceRef,
-    harnessState: checkpointFromCollector.harnessState as unknown as Record<string, unknown>,
-  };
-
-  const protoCheckpoint = sessionCheckpointToProto(protoConvertCheckpoint);
+  const protoCheckpoint = sessionCheckpointToProto(checkpointFromCollector);
 
   openingContext = null;
 

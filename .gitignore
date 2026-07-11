@@ -36,3 +36,6 @@ agent.md
 # oh-my-claudecode runtime state (ephemeral, per-session / auto-regenerated)
 .omc/
 .omx/
+
+# Private planning docs — kept local, excluded from the public tree
+docs/plans/private/

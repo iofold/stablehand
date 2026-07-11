@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ToolProvider } from '../provider.js';
-import type { ToolDefinition } from '../types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 
 /**
  * Provides artifact:upload and artifact:download tool definitions.

@@ -1,14 +1,14 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { HttpToolDefinition } from '@ctxmill/shared';
+import type { HarnessConfigSchemas } from '@ctxmill/sandbox-daemon/harness/schemas';
 
 import type { DatabaseRepository } from '../../../database/repository.js';
 import type { TypedEventBus } from '../../../events/bus.js';
-import type { HarnessRegistry } from '../../../harness/types.js';
 import type { SecretProvider } from '../../../secrets/types.js';
 import type { SystemSettingsService } from '../../../settings/service.js';
 import type { SandboxContainerManager } from '../../../sandbox/container-manager.js';
-import type { HttpAuthConfig, HttpEndpointConfig } from '../../../tool/providers/http.js';
 import type { DefaultToolRegistry } from '../../../tool/registry.js';
-import type { AgentResourceLimits } from '../../../types.js';
+import type { AgentResourceLimits } from '@ctxmill/sandbox-daemon';
 import type { AgentSessionService } from '../../agent-session-service.js';
 import type { InterruptManager } from '../../interrupt.js';
 import type { RunStartupService } from '../../run-startup-service.js';
@@ -17,16 +17,7 @@ import type { SSEManager } from '../../sse.js';
 import type { ContainerLifecyclePolicy } from '../../container-lifecycle-policy.js';
 import type { CanonicalLog } from '../../canonical/canonical-log.js';
 
-export type AgentHttpToolDefinition = {
-  name: string;
-  description: string;
-  endpoint: string;
-  method?: HttpEndpointConfig['method'];
-  inputSchema?: Record<string, unknown>;
-  headers?: Record<string, string>;
-  timeout?: number;
-  authentication?: HttpAuthConfig;
-};
+export type AgentHttpToolDefinition = HttpToolDefinition;
 
 export type StoredAgent = NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
 
@@ -34,7 +25,7 @@ export interface AgentRouteOptions {
   db: DatabaseRepository;
   sse: SSEManager;
   interrupts: InterruptManager;
-  harnessRegistry: HarnessRegistry;
+  harnessSchemas: HarnessConfigSchemas;
   agentSessionService: AgentSessionService;
   eventBus?: TypedEventBus;
   dataDir?: string;

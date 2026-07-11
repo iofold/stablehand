@@ -6,7 +6,7 @@ import {
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { cn } from '@/lib/utils';
 import type { AgentSession } from '@/stores/agents';
-import { formatTime } from './types';
+import { formatTimestamp } from '@/lib/format';
 
 /* ------------------------------------------------------------------ */
 /*  StatCard                                                           */
@@ -44,8 +44,8 @@ export interface AgentOverviewTabProps {
     tools?: string[];
     metadata?: Record<string, unknown> | null;
   };
-  totalSessions: number;
-  activeSessions: number;
+  conversationCount: number;
+  activeSandboxSessions: number;
   toolsCount: number;
   recentSessions: AgentSession[];
   onContinueSession: (conversationId: string) => void;
@@ -53,8 +53,8 @@ export interface AgentOverviewTabProps {
 
 export function AgentOverviewTab({
   agent,
-  totalSessions,
-  activeSessions,
+  conversationCount,
+  activeSandboxSessions,
   toolsCount,
   recentSessions,
   onContinueSession,
@@ -77,8 +77,8 @@ export function AgentOverviewTab({
     <div className="space-y-6">
       {/* Stats grid */}
       <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-surface-700">
-        <div className="flex-1 min-w-0"><StatCard label="Total Sessions" value={totalSessions} /></div>
-        <div className="flex-1 min-w-0"><StatCard label="Active Sandboxes" value={activeSessions} /></div>
+        <div className="flex-1 min-w-0"><StatCard label="Conversations" value={conversationCount} /></div>
+        <div className="flex-1 min-w-0"><StatCard label="Active Sandboxes" value={activeSandboxSessions} /></div>
         <div className="flex-1 min-w-0"><StatCard label="Tools Count" value={toolsCount} /></div>
       </div>
 
@@ -109,7 +109,7 @@ export function AgentOverviewTab({
                     {run.taskDescription || 'No description'}
                   </span>
                   <span className="flex-shrink-0 text-[11px] font-mono text-surface-400 tabular-nums">
-                    {formatTime(run.startedAt)}
+                    {formatTimestamp(run.startedAt)}
                   </span>
                   <ChevronRight className="h-4 w-4 text-surface-400" />
                 </button>

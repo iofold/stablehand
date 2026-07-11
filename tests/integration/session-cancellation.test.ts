@@ -13,7 +13,6 @@ import { AgentSessionService } from '../../packages/ctxmill/src/orchestrator/age
 import {
   createTestBus,
   collectEvents,
-  createMockSSEManager,
   createMockDatabase,
 } from '../utils/event-bus-test-helpers.js';
 import { TestSessionRegistry, createTestSessionManager } from '../utils/test-session-registry.js';
@@ -92,7 +91,6 @@ describe('Run Cancellation with AbortSignal', () => {
 
   describe('Signal propagation to executor loop (AgentRunService)', () => {
     it('cancelling mid-execution terminates the executor loop early and persists partial content', async () => {
-      const mockSSE = createMockSSEManager();
       const mockDB = createMockDatabase();
       mockDB.addMessage = vi.fn().mockResolvedValue({ id: 'msg-1' });
       (mockDB as Record<string, unknown>).updateTurn = vi.fn().mockResolvedValue(undefined);
@@ -155,7 +153,6 @@ describe('Run Cancellation with AbortSignal', () => {
 
       const service = new AgentSessionService({
         sessionTurnService: mockSandboxRunService as any,
-        sse: mockSSE as any,
         db: mockDB as any,
         sessionManager: sessionManager as any,
         eventBus: bus,

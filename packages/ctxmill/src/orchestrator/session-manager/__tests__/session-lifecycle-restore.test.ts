@@ -7,7 +7,7 @@ import {
   type SessionLifecycleServiceDeps,
 } from '../session-lifecycle-service.js';
 import type { SandboxSessionRow } from '../../../database/repository.js';
-import type { AgentDefinition } from '../../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import type { SessionRecord } from '../types.js';
 
 function makeAgentDef(): AgentDefinition {

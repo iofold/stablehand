@@ -6,8 +6,11 @@ import { Dashboard } from '@/components/dashboard/Dashboard';
 import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
 import { fetchActiveConversations, fetchConversationSummaries } from '@/lib/api';
 import { useApiAuthStore } from '@/lib/auth';
-import { countActiveSessions } from '@/lib/session-status';
+import { countActiveSessions, isTerminalSessionStatus } from '@/lib/session-status';
 import type { ApiConversationSummary } from '@ctxmill/shared';
+import { PageShell } from '@/components/ui/PageShell';
+import { StatsRow } from '@/components/ui/StatsRow';
+import { formatDurationBetween, formatRunningDuration } from '@/lib/format';
 
 export function DashboardPage() {
   const agents = useAgentsStore((s) => s.agents);
@@ -41,7 +44,7 @@ export function DashboardPage() {
         
         const currentAgents = useAgentsStore.getState().agents;
         const agentConvPromises = currentAgents
-          .filter(a => (a.conversationCount ?? 0) > 0 || (a.totalSessions ?? 0) > 0)
+          .filter(a => (a.conversationCount ?? 0) > 0)
           .map(a => fetchConversationSummaries(a.id).then(d => {
             return d.conversations;
           }).catch(() => []));
@@ -92,39 +95,16 @@ export function DashboardPage() {
     <div className="flex min-h-screen flex-col bg-surface-950">
       {/* Content */}
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-5 space-y-8">
-        {/* Hero section */}
         <div>
-          <div>
-            <h2 className="text-2xl font-semibold tracking-tight text-surface-200">
-              Agent Dashboard
-            </h2>
-            <p className="mt-1.5 text-sm text-surface-400 max-w-lg">
-              Manage your agentic workflows.
-            </p>
-          </div>
-
-          {/* Stats row */}
-          <div className="mt-6 flex flex-col sm:flex-row items-stretch divide-y sm:divide-y-0 sm:divide-x divide-surface-700">
-            <div className="flex-1 p-4 first:pl-0">
-              <p className="text-label">Total Agents</p>
-              <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
-                {displayLoading ? '--' : agents.length}
-              </p>
-            </div>
-            <div className="flex-1 p-4">
-              <p className="text-label">Active</p>
-              <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
-                {displayLoading ? '--' : stats.activeAgents}
-              </p>
-            </div>
-            <div className="flex-1 p-4">
-              <p className="text-label">Tools Loaded</p>
-              <p className="mt-1 text-3xl font-bold tabular-nums text-surface-100">
-                {displayLoading ? '--' : stats.totalTools}
-              </p>
-            </div>
-
-          </div>
+          <PageShell title="Agent Dashboard" description="Manage your agentic workflows." />
+          <StatsRow
+            prominent
+            items={[
+              { label: 'Total Agents', value: displayLoading ? '--' : agents.length },
+              { label: 'Active', value: displayLoading ? '--' : stats.activeAgents },
+              { label: 'Tools Loaded', value: displayLoading ? '--' : stats.totalTools },
+            ]}
+          />
         </div>
 
         <div>
@@ -163,42 +143,52 @@ export function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-surface-700/50">
-                  {activeConversations.map((conv) => (
-                    <tr
-                      key={conv.id}
-                      onClick={() => navigate(`/agents/${conv.agentId}/conversations/${conv.id}`)}
-                      className="hover:bg-surface-800/50 cursor-pointer transition-colors focus-visible:bg-surface-800/50 group"
-                    >
-                      <td className="px-4 py-3 text-sm font-medium text-surface-200">
-                        {agentNameMap[conv.agentId] || conv.agentId}
-                      </td>
-                      <td className="px-4 py-3">
-                        <RunStatusBadge status={conv.status} />
-                      </td>
-                      <td className="px-4 py-3 text-sm text-surface-400">
-                        <div className="max-w-[200px] sm:max-w-xs md:max-w-md truncate">
-                          {conv.taskDescription || '--'}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-surface-400 tabular-nums text-right">
-                        {formatDuration(conv.startedAt)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          data-testid="cancel-run-button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCancelRun(conv);
-                          }}
-                          className="rounded-md p-1.5 text-surface-400 transition-colors hover:text-red-400 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                          title="Cancel conversation"
+                  {activeConversations.map((conv) => {
+                    const terminal = isTerminalSessionStatus(conv.status);
+                    return (
+                      <tr
+                        key={conv.id}
+                        onClick={() => navigate(`/agents/${conv.agentId}/conversations/${conv.id}`)}
+                        className="hover:bg-surface-800/50 cursor-pointer transition-colors focus-visible:bg-surface-800/50 group"
+                      >
+                        <td className="px-4 py-3 text-sm font-medium text-surface-200">
+                          {agentNameMap[conv.agentId] || conv.agentId}
+                        </td>
+                        <td className="px-4 py-3">
+                          <RunStatusBadge status={conv.status} />
+                        </td>
+                        <td className="px-4 py-3 text-sm text-surface-400">
+                          <div className="max-w-[200px] sm:max-w-xs md:max-w-md truncate">
+                            {conv.taskDescription || '--'}
+                          </div>
+                        </td>
+                        <td
+                          data-testid="conversation-duration"
+                          className="px-4 py-3 text-sm text-surface-400 tabular-nums text-right"
                         >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                          {terminal
+                            ? formatDurationBetween(conv.startedAt, conv.completedAt ?? conv.updatedAt)
+                            : formatRunningDuration(conv.startedAt)}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {!terminal && (
+                            <button
+                              type="button"
+                              data-testid="cancel-run-button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCancelRun(conv);
+                              }}
+                              className="rounded-md p-1.5 text-surface-400 transition-colors hover:text-red-400 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                              title="Cancel conversation"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -207,16 +197,4 @@ export function DashboardPage() {
       </main>
     </div>
   );
-}
-
-
-
-function formatDuration(startedAt: number): string {
-  const elapsed = Math.max(0, Date.now() - startedAt);
-  const secs = Math.floor(elapsed / 1000);
-  if (secs < 60) return `${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ${secs % 60}s`;
-  const hrs = Math.floor(mins / 60);
-  return `${hrs}h ${mins % 60}m`;
 }

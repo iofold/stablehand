@@ -107,7 +107,7 @@ PTC scripts are designed to be safe. They never dump raw payloads to stdout on e
 
 ## Observability
 
-PTC tool calls are fully observable. The daemon emits `run.tool_started` and `run.tool_result` events via the `EmitEvent` RPC. These events are tagged with `executionMode: 'ptc'`, allowing the UI to distinguish them from standard tool calls. While the full result size is logged, the large payload itself is not stored in the message history.
+PTC tool calls currently go through the daemon tool API (`POST /tools/:name`) without emitting run events. `startToolApi` invokes the tool handler and returns the JSON result directly; it does not emit `run.tool_started`/`run.tool_result` and does not tag calls with any `executionMode`. Consequently the UI cannot yet distinguish PTC calls from standard tool calls. The upside is that large PTC payloads stay in code scope inside the sandbox rather than the message history. Adding PTC observability is an open question tracked in `ctx-s6o`.
 
 ## Provider Compatibility
 

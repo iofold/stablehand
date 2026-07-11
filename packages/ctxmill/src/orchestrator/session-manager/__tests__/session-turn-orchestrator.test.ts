@@ -5,7 +5,7 @@ import {
 } from '@ctxmill/proto/sandbox/v1';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Message } from '../../../types.js';
+import type { Message } from '@ctxmill/sandbox-daemon';
 import { SESSION_CANCELLED_MESSAGE } from '../../session-cancellation.js';
 import { ConcurrencyLimitError } from '../concurrency-limit-error.js';
 import { AsyncChannel, type SessionRecord } from '../types.js';

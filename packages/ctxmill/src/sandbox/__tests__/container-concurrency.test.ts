@@ -193,6 +193,63 @@ describe('ContainerSemaphore', () => {
     });
   });
 
+  describe('live limit updates (ctx-reir)', () => {
+    it('raising the limit wakes queued waiters immediately', async () => {
+      const sem = new ContainerSemaphore(1, 60_000);
+
+      await sem.acquire();
+      const queued1 = sem.acquire();
+      const queued2 = sem.acquire();
+      expect(sem.getQueued()).toBe(2);
+
+      sem.updateLimits({ maxConcurrent: 3 });
+      await queued1;
+      await queued2;
+
+      expect(sem.getActive()).toBe(3);
+      expect(sem.getQueued()).toBe(0);
+
+      // Original timers were cleared — advancing must not reject anything.
+      await vi.advanceTimersByTimeAsync(60_001);
+    });
+
+    it('lowering the limit never evicts running work and gates waiters on the new cap', async () => {
+      const sem = new ContainerSemaphore(2, 60_000);
+
+      await sem.acquire();
+      await sem.acquire();
+
+      sem.updateLimits({ maxConcurrent: 1 });
+      expect(sem.getActive()).toBe(2);
+
+      const queued = sem.acquire();
+      expect(sem.getQueued()).toBe(1);
+
+      // First release only brings active back to the new cap; the waiter
+      // must not run until a slot opens BELOW the cap.
+      sem.release();
+      expect(sem.getActive()).toBe(1);
+      expect(sem.getQueued()).toBe(1);
+
+      sem.release();
+      await queued;
+      expect(sem.getActive()).toBe(1);
+      expect(sem.getQueued()).toBe(0);
+    });
+
+    it('a new queue timeout applies to future acquires', async () => {
+      const sem = new ContainerSemaphore(1, 60_000);
+      await sem.acquire();
+
+      sem.updateLimits({ queueTimeoutMs: 1_000 });
+      const queued = sem.acquire();
+      const rejection = expect(queued).rejects.toBeInstanceOf(ContainerLimitError);
+
+      await vi.advanceTimersByTimeAsync(1_001);
+      await rejection;
+    });
+  });
+
 });
 
 // ── ContainerManager concurrency integration tests ───────────

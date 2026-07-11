@@ -8,8 +8,9 @@ import {
   createAgent as apiCreateAgent,
   updateAgent as apiUpdateAgent,
   deleteAgent as apiDeleteAgent,
-  type HttpToolDefinition,
+  type AgentUpsertInput,
 } from '@/lib/api';
+import type { HttpToolDefinition } from '@ctxmill/shared';
 import { normalizeSessionStatusCounts } from '@/lib/session-status';
 
 export type AgentSession = ApiAgentSession;
@@ -27,26 +28,8 @@ interface AgentsStore {
   error: string | null;
   fetchAgents: () => Promise<void>;
   updateAgentLocal: (id: string, updates: Partial<Agent>) => void;
-  createAgent: (data: {
-    name: string;
-    harness: string;
-    harnessConfig: Record<string, unknown>;
-    systemPrompt: string;
-    tools: string[];
-    description?: string;
-    metadata?: Record<string, unknown>;
-    httpTools?: HttpToolDefinition[];
-  }) => Promise<Agent>;
-  updateAgent: (id: string, data: Partial<{
-    name: string;
-    harness: string;
-    harnessConfig: Record<string, unknown>;
-    systemPrompt: string;
-    tools: string[];
-    description?: string;
-    metadata?: Record<string, unknown>;
-    httpTools?: HttpToolDefinition[];
-  }>) => Promise<Agent>;
+  createAgent: (data: AgentUpsertInput) => Promise<Agent>;
+  updateAgent: (id: string, data: Partial<AgentUpsertInput>) => Promise<Agent>;
   deleteAgent: (id: string) => Promise<void>;
   startPolling: () => () => void;
   startBackgroundRun: (agentId: string, task: string) => Promise<void>;

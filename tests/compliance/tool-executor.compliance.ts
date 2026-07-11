@@ -24,7 +24,7 @@ import type {
   ToolCall,
   ToolResult,
   ToolContext,
-} from '../../packages/ctxmill/src/tool/types.js';
+} from '@ctxmill/sandbox-daemon';
 
 /* ------------------------------------------------------------------ */
 /*  Shared helpers                                                     */

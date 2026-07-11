@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   ExecutionPhaseTracker,
@@ -14,9 +14,7 @@ import {
   protoSessionCheckpointToInternal,
 } from '../../packages/ctxmill/src/sandbox/proto-convert.js';
 import type { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
-import type { HarnessExportedState } from '../../packages/ctxmill/src/harness/types.js';
-
-type ProtoCompatibleCheckpoint = Parameters<typeof sessionCheckpointToProto>[0];
+import type { HarnessExportedState } from '@ctxmill/sandbox-daemon';
 
 type StoredToolCall = {
   id: string;
@@ -44,8 +42,8 @@ const WORKSPACE_TAR: WorkspaceRef = {
   reference: 'data/checkpoints/run-suspend-1/workspace.tar.gz',
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+function getHarnessPayload(state: HarnessExportedState): Record<string, unknown> {
+  return state.payload;
 }
 
 function makeMessage(overrides?: Partial<StoredMessage>): StoredMessage {
@@ -103,86 +101,8 @@ function createTestCheckpointState(overrides?: Partial<SessionCheckpoint>): Sess
   };
 }
 
-function getHarnessPayload(state: HarnessExportedState | Record<string, unknown>): Record<string, unknown> {
-  if ('payload' in state && isRecord(state.payload)) {
-    return state.payload;
-  }
-
-  throw new Error('Expected harnessState payload to be an object');
-}
-
-function toProtoCompatibleCheckpoint(checkpoint: SessionCheckpoint): ProtoCompatibleCheckpoint {
-  return {
-    checkpointVersion: checkpoint.checkpointVersion,
-    sessionId: checkpoint.sessionId,
-    conversationId: checkpoint.conversationId,
-    harnessName: checkpoint.harnessName,
-    cursor: {
-      nextMessageSeq: checkpoint.cursor.nextMessageSeq,
-      lastCompletedTurnId: checkpoint.cursor.lastCompletedTurnId,
-    },
-    runnerState: {
-      status: checkpoint.runnerState.status,
-      pendingRequests: (checkpoint.runnerState.pendingRequests ?? []).map((pending) => ({
-        type: pending.type,
-        id: pending.id,
-        payloadJson: JSON.stringify(pending.payload),
-      })),
-    },
-    workspaceRef: {
-      strategy: checkpoint.workspaceRef.strategy,
-      reference: checkpoint.workspaceRef.reference,
-    },
-    harnessState: {
-      stateVersion: checkpoint.harnessState.stateVersion,
-      payload: checkpoint.harnessState.payload,
-    },
-  };
-}
-
-function fromProtoCompatibleCheckpoint(checkpoint: ProtoCompatibleCheckpoint): SessionCheckpoint {
-  const workspaceStrategy =
-    checkpoint.workspaceRef.strategy === 'git' || checkpoint.workspaceRef.strategy === 'none'
-      ? checkpoint.workspaceRef.strategy
-      : 'tar';
-
-  const harnessStateRecord = checkpoint.harnessState;
-  const stateVersion =
-    typeof harnessStateRecord.stateVersion === 'string' ? harnessStateRecord.stateVersion : '1';
-  const payload = getHarnessPayload(harnessStateRecord);
-  const pendingRequests: NonNullable<SessionCheckpoint['runnerState']['pendingRequests']> = checkpoint.runnerState.pendingRequests.map((pending) => ({
-    type: pending.type === 'approval' ? 'approval' : 'tool_call',
-    id: pending.id,
-    payload: JSON.parse(pending.payloadJson) as Record<string, unknown>,
-  }));
-
-  return {
-    checkpointVersion: 2,
-    sessionId: checkpoint.sessionId,
-    conversationId: checkpoint.conversationId,
-    harnessName: checkpoint.harnessName,
-    cursor: {
-      nextMessageSeq: checkpoint.cursor.nextMessageSeq,
-      lastCompletedTurnId: checkpoint.cursor.lastCompletedTurnId,
-    },
-    runnerState: {
-      status: checkpoint.runnerState.status === 'WAITING_INPUT' ? 'WAITING_INPUT' : 'IDLE',
-      pendingRequests: pendingRequests.length > 0 ? pendingRequests : undefined,
-    },
-    workspaceRef: {
-      strategy: workspaceStrategy,
-      reference: checkpoint.workspaceRef.reference,
-    },
-    harnessState: {
-      stateVersion,
-      payload,
-    },
-  };
-}
-
 function roundTripProto(checkpoint: SessionCheckpoint): SessionCheckpoint {
-  const proto = sessionCheckpointToProto(toProtoCompatibleCheckpoint(checkpoint));
-  return fromProtoCompatibleCheckpoint(protoSessionCheckpointToInternal(proto));
+  return protoSessionCheckpointToInternal(sessionCheckpointToProto(checkpoint));
 }
 
 function createCheckpointFromCollector(options: {
@@ -200,21 +120,6 @@ function createCheckpointFromCollector(options: {
     makeHarnessState(options.payload),
     options.workspaceRef ?? WORKSPACE_TAR,
   );
-}
-
-function createMockContainerManager(): ContainerManager {
-  return {
-    createContainer: vi.fn(),
-    startContainer: vi.fn(),
-    stopContainer: vi.fn(),
-    removeContainer: vi.fn(),
-    extractWorkspaceDiff: vi.fn(),
-    extractLogs: vi.fn(),
-    getContainer: vi.fn(),
-    listManagedContainers: vi.fn(),
-    getContainerExitCode: vi.fn(),
-    ensureNetwork: vi.fn(),
-  } as unknown as ContainerManager;
 }
 
 describe('Suspend at after_llm phase', () => {
@@ -532,7 +437,7 @@ describe('Resume with rotated API key', () => {
     expect(json).not.toContain('sk_');
     expect(json).not.toContain('API_KEY');
 
-    const proto = sessionCheckpointToProto(toProtoCompatibleCheckpoint(checkpoint));
+    const proto = sessionCheckpointToProto(checkpoint);
     const protoJson = JSON.stringify(proto, (_key, value) =>
       typeof value === 'bigint' ? value.toString() : value,
     );

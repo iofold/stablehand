@@ -24,7 +24,7 @@ This document provides a comprehensive reference for all environment variables u
 | `NODE_ENV` | `production` | No | Environment mode. Set to `development` for detailed error messages. | `development` |
 | `CTXMILL_PORT` | `3001` | No | Port the orchestrator API listens on. (Mapped to `3002` in default Docker stack). | `3001` |
 | `CTXMILL_UI_PORT` | `3200` | No | Port the React UI listens on. | `3200` |
-| `CTXMILL_PRESET` | `docker` | No | Configuration preset to use. | `docker` |
+| `CTXMILL_PRESET` | `docker` | No | Inert. Present in some deploy manifests but not read by the application code. | `docker` |
 | `CTXMILL_DATA_DIR` | `./.ctxmill` | No | Root directory for persisted agent workspace data. | `/data/ctxmill` |
 | `CTXMILL_UI_MODE` | `disabled` | No | UI mode for `ctxmill dev`. Options: `disabled`, `embedded`, `vite`. | `vite` |
 | `CTXMILL_API_URL` | `http://localhost:3002` | No | Base URL for the API (used by CLI chat). | `https://api.ctxmill.com` |
@@ -38,8 +38,11 @@ sandbox Jobs.
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
 | `ORCHESTRATOR_CALLBACK_URL` | `http://orchestrator:3001` | **Yes*** | URL for sandboxes to call back to the orchestrator. *Required in foreign stacks. | `http://ctxmill-api:3001` |
+| `ORCHESTRATOR_URL` | - | No | Injected by the orchestrator into each sandbox container's environment; the daemon uses it to proxy tool calls back to the orchestrator. Derived from the stack's orchestrator URL, not normally set by hand. | `http://orchestrator:3001` |
 | `CTXMILL_SANDBOX_RUNTIME` | `docker` | No | Sandbox runtime. Use `kubernetes` or `k8s` to create sandbox sessions as Kubernetes Jobs. | `kubernetes` |
-| `CTXMILL_IMAGE_PREFIX` | `ctxmill/harness` | No | Prefix for sandbox harness images. Runtime image = `<prefix>-<harness>:latest`. | `myregistry.com/ctxmill` |
+| `CTXMILL_IMAGE_PREFIX` | `ctxmill/harness` | No | Prefix for sandbox harness images. Runtime image = `<prefix>-<harness>:<tag>`. | `myregistry.com/ctxmill` |
+| `CTXMILL_SANDBOX_IMAGE_TAG` | `latest` | No | Tag appended to sandbox harness images (`<prefix>-<harness>:<tag>`). Local stacks use `latest`; deploy pins a commit tag so sandbox Jobs run the deployed revision. | `75435dd` |
+| `CLAUDE_CONFIG_DIR` | `$HOME/.claude` | No | Directory the Claude Agents harness reads its Claude SDK config and session JSONL from. | `/home/ctxmill/.claude` |
 | `CTXMILL_MAX_GLOBAL_CONTAINERS` | `20` | No | Maximum number of concurrent sandbox containers globally. | `50` |
 | `CTXMILL_MAX_CONTAINERS` | - | No | Deprecated compatibility alias for `CTXMILL_MAX_GLOBAL_CONTAINERS`; ignored when the canonical variable is set. | `50` |
 | `CTXMILL_DATA_VOLUME` | - | No | Docker volume name for persistent agent data. Required for volume-based persistence. | `myapp_ctxmill-data` |
@@ -66,10 +69,8 @@ sandbox Jobs.
 | `OPENAI_BASE_URL` | - | No | Base URL for OpenAI-compatible APIs (e.g., Cloudflare AI Gateway, OpenRouter). | `https://openrouter.ai/api/v1` |
 | `ANTHROPIC_API_KEY` | - | No | API key for Anthropic. Also accepts OpenRouter keys when using a custom `baseUrl`. See [Custom Providers](custom-providers.md). | `sk-ant-...` |
 | `GOOGLE_API_KEY` | - | No | API key for Google Gemini. | `AIza...` |
-| `LLM_PROVIDER` | `openai` | No | Default LLM provider. | `anthropic` |
-| `DEFAULT_HARNESS` | `langgraph` | No | Default harness for new agents. | `claude-agents` |
-| `DEFAULT_TEMPERATURE` | `0.7` | No | Default temperature for LLM calls. | `0.5` |
-| `DEFAULT_MAX_TOKENS` | `4096` | No | Default max tokens for LLM calls. | `8192` |
+| `GEMINI_API_KEY` | - | No | Alternative key name for Google/Gemini models. Recognized alongside `GOOGLE_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` by harness model auth. | `AIza...` |
+
 ## LangSmith / Tracing
 
 | Name | Default | Required? | Description | Example |

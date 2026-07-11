@@ -3,20 +3,12 @@ import { FileText, Image, File, Download, Trash2, Archive } from 'lucide-react';
 import type { Artifact } from '@/lib/api';
 import { useArtifactsStore } from '@/stores/artifacts';
 import { useAgentsStore } from '@/stores/agents';
+import { formatBytes } from '@/lib/format';
 
 interface ArtifactRowProps {
   artifact: Artifact;
   isSelected: boolean;
   showAgentName?: boolean;
-}
-
-export function formatBytes(bytes: number, decimals = 2) {
-  if (!+bytes) return '0 Bytes';
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
 export function getMimeIcon(mimeType: string) {

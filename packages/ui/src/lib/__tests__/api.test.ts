@@ -15,6 +15,8 @@ import {
   fetchAllArtifacts,
   listFiles,
   readFile,
+  updateFile,
+  deleteFile,
   fetchInterrupts,
   uploadWorkspaceTarball,
   requestArtifactUploadUrl,
@@ -349,6 +351,21 @@ describe('uploadWorkspaceTarball', () => {
   });
 });
 
+describe('file mutations', () => {
+  it('builds update and delete queries through the shared query encoder', async () => {
+    await updateFile('a1', 'notes/a file.txt', 'updated', 'session 1');
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/files?sessionId=session+1', expect.objectContaining({
+      method: 'PUT',
+      body: JSON.stringify({ path: 'notes/a file.txt', content: 'updated' }),
+    }));
+
+    await deleteFile('a1', 'notes/a file.txt', 'session 1');
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/files?path=notes%2Fa+file.txt&sessionId=session+1', {
+      method: 'DELETE',
+    });
+  });
+});
+
 describe('artifact uploads', () => {
   it('authenticates orchestrator upload URL requests', async () => {
     useApiAuthStore.getState().setToken('secret-token');
@@ -364,6 +381,17 @@ describe('artifact uploads', () => {
       },
       body: JSON.stringify({ agentId: 'a1', name: 'report.txt', mimeType: 'text/plain', sizeBytes: 10 }),
     });
+  });
+
+  it('surfaces orchestrator upload URL error details through the shared mutation path', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'invalid artifact request' }),
+    });
+
+    await expect(requestArtifactUploadUrl('a1', 'report.txt', 'text/plain', 10))
+      .rejects.toThrow('API POST /api/artifacts/upload-url failed: 400 - invalid artifact request');
   });
 
   it('authenticates direct multipart uploads to the orchestrator', async () => {

@@ -58,7 +58,7 @@ describe('ContainerAccounting (ctx-wbt)', () => {
     expect(accounting.getActive()).toBe(2);
   });
 
-  it('seeds past maxGlobalContainers at boot; new acquires queue until a slot frees', async () => {
+  it('seeds past maxGlobalContainers at boot; new acquires queue until active converges below the limit', async () => {
     const accounting = new ContainerAccounting(1, 1_000);
     accounting.rehydrate([
       { containerId: 'boot-1', harnessName: 'langgraph' },
@@ -72,9 +72,16 @@ describe('ContainerAccounting (ctx-wbt)', () => {
     expect(acquired).toBe(false);
     expect(accounting.getQueued()).toBe(1);
 
+    // Still at the limit after the first release — the cap is a hard
+    // invariant, so new work waits until active drops below it.
     accounting.releaseFor('boot-1');
+    expect(accounting.getActive()).toBe(1);
+    expect(accounting.getQueued()).toBe(1);
+
+    accounting.releaseFor('boot-2');
     await pending;
     expect(acquired).toBe(true);
+    expect(accounting.getActive()).toBe(1);
   });
 
   it('reports metrics equivalent to the old per-manager bookkeeping', async () => {

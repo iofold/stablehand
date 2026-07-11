@@ -67,7 +67,7 @@ Artifact upload/download are daemon tools, not provider-managed HTTP uploads: `a
 | Harness | Model Support | Native Tools | Subagents | State Export | Approval Flow | Notes |
 |---------|---------------|--------------|-----------|--------------|---------------|-------|
 | **LangGraph** | OpenAI, Anthropic | Blocklist | Yes | JSON payload | Via tool_call_start | Graph-based; supports deep agent params |
-| **Claude Agents** | Anthropic | Allowlist | No | JSON payload | approval_needed event | Uses @anthropic-sdk; streaming text_delta |
+| **Claude Agents** | Anthropic | Allowlist | Yes | JSON payload | approval_needed event | Uses @anthropic-sdk; streaming text_delta |
 | **PI Agent** | OpenAI | Allowlist | No | JSON payload | Via tool_call_start | TypeBox schema conversion; strict typing |
 
 **Session Lifecycle**:
@@ -152,7 +152,7 @@ Artifact upload/download are daemon tools, not provider-managed HTTP uploads: `a
 | Harness | Supported | Mechanism | Notes |
 |---------|-----------|-----------|-------|
 | **LangGraph** | **Yes** | `harnessConfig.subagents` | Deep agent params passed to graph |
-| **Claude Agents** | No | — | Single-agent only |
+| **Claude Agents** | **Yes** | `harnessConfig.subagents` | Definitions passed to the Claude Agent SDK `agents` option; `Agent` tool enabled |
 | **PI Agent** | No | — | Single-agent only |
 
 **Subagent Flow**:
@@ -197,7 +197,7 @@ custom (type: string, payload: object)
 - **Cascade Protection**: MAX_TRIGGER_DEPTH = 5 (prevents infinite loops)
 
 #### Event Persistence
-- Events stored in PostgreSQL `events` table
+- Events stored in PostgreSQL `event_store` table
 - Timestamp, agentId, runId, type, payload indexed
 - Custom events support arbitrary JSON payloads
 
@@ -233,7 +233,6 @@ CTXMill emits run, message, tool, feedback, and custom events so external learni
 agents/{agentId}/
   base/
     workspace/          ← workspaceDir (session-scoped overlay)
-    skills/             ← auto-discovered SKILL.md files
     notes/              ← agent-written notes
   sessions/
     {sessionId}/        ← session workspace snapshot data
@@ -268,7 +267,6 @@ agents/{agentId}/
 - Permission denied scenarios
 - Workspace promotion on session completion
 - Base/session isolation enforcement
-- Skill auto-discovery and loading
 
 ---
 
@@ -286,7 +284,7 @@ interface SecretProvider {
 
 ### Secret Resolution
 1. **Manifest Reference**: `$secret:ANTHROPIC_API_KEY` in agent YAML
-2. **Provider Lookup**: CachedPostgresSecretProvider queries `secrets` table
+2. **Provider Lookup**: PostgresSecretProvider queries `secrets` table (no caching layer)
 3. **Encryption**: AES-256-GCM (same as former SQLite provider)
 4. **Injection**: Secrets passed to harness via `HarnessSessionConfig.secrets`
 5. **Runtime Env**: On resume, secrets injected fresh into the sandbox environment
@@ -420,17 +418,21 @@ nativeTools:
 
 ### Feature Support Grid
 
+Only the LangGraph, Claude Agents, and PI Agent adapters are shipped. The
+OpenAI Agents and Vercel AI SDK columns are planned, not implemented (see
+`docs/harness-ag-ui-inventory.md`); their cells are marked `n/a`.
+
 | Feature | LangGraph | Claude | PI Agent | OpenAI | Vercel |
 |---------|-----------|--------|----------|--------|--------|
-| **Custom Tools** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Native Tools** | ✓ (blocklist) | ✓ (allowlist) | ✓ (allowlist) | ? | ? |
-| **Subagents** | ✓ | ✗ | ✗ | ? | ? |
-| **Approval Flow** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **State Export** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Streaming** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Token Tracking** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Abort Signal** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **A2UI Extraction** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Custom Tools** | ✓ | ✓ | ✓ | n/a | n/a |
+| **Native Tools** | ✓ (blocklist) | ✓ (allowlist) | ✓ (allowlist) | n/a | n/a |
+| **Subagents** | ✓ | ✓ | ✗ | n/a | n/a |
+| **Approval Flow** | ✓ | ✓ | ✓ | n/a | n/a |
+| **State Export** | ✓ | ✓ | ✓ | n/a | n/a |
+| **Streaming** | ✓ | ✓ | ✓ | n/a | n/a |
+| **Token Tracking** | ✓ | ✓ | ✓ | n/a | n/a |
+| **Abort Signal** | ✓ | ✓ | ✓ | n/a | n/a |
+| **A2UI Extraction** | ✓ | ✓ | ✓ | n/a | n/a |
 
 ---
 

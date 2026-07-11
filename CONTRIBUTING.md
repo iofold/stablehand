@@ -47,10 +47,13 @@ docker compose down
 
 ```text
 packages/
-  ctxmill/           Core runtime, orchestrator, harnesses, tools, workspace
+  ctxmill/           Core runtime, orchestrator, harness registry, tools, workspace
+  sandbox-daemon/    gRPC daemon + harness adapters that run inside sandbox containers
   proto/             Protocol Buffers for sandbox gRPC IPC
   ui/                Frontend (React, SSE, Zustand, Tailwind)
   shared/            Shared API and event types
+  client/            Typed browser client for AG-UI streaming integrations
+  react/             React components and hooks for AG-UI chat integrations
   create-ctxmill/    Starter-project scaffold
   examples/          Example projects
 ```
@@ -98,15 +101,17 @@ pnpm test:e2e
 
 ## CI Pipeline
 
-GitHub Actions runs three jobs on every push and PR:
+GitHub Actions (`.github/workflows/ci.yml`) runs these jobs on every push and PR:
 
 | Job | What it does |
 |-----|-------------|
-| **test** | Installs, builds, lints, typechecks, and runs the Vitest suite on a Node 22/24 matrix |
-| **e2e** | Spins up the Docker stack and runs the Playwright suite against it |
-| **fuse-tests** | Runs FUSE overlay contract tests with `fuse-overlayfs` |
+| **test** | Installs, builds, lints, typechecks, and runs the backend (strict mode) and UI Vitest suites on a Node 22/24 matrix |
+| **audit** | Runs `pnpm audit:prod` against production dependencies |
+| **e2e** | Spins up the Docker stack and runs the required `@smoke` Playwright gate against it (needs `test`) |
+| **images** | Builds the deployable orchestrator, UI, and per-harness sandbox Docker images (needs `test`) |
+| **dev2-deploy** | Gated on `DEV2_DEPLOY_ENABLED`; deploys to the dev2 k3s target and runs the required smoke suite (ADR 009, needs `e2e` + `images`) |
 
-All three must pass before merge.
+`test`, `audit`, `e2e`, and `images` must pass before merge; `dev2-deploy` runs only when enabled.
 
 ## Notes on Current Architecture
 

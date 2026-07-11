@@ -1,6 +1,6 @@
 import { resolve, normalize } from 'node:path';
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import type { Message } from '../../types.js';
+import type { Message } from '@ctxmill/sandbox-daemon';
 import type { DatabaseRepository } from '../../database/repository.js';
 import { getConversationWorkspacePath } from '../../workspace/session-workspace.js';
 

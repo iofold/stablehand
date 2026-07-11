@@ -13,7 +13,6 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
   beforeAll(async () => {
     testApp = await createTestApp({
       dirPrefix: 'ctxmill-test-',
-      preset: 'docker',
     });
     app = testApp.app;
     container = testApp.container;

@@ -9,8 +9,8 @@ import {
 
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
-import { WorkspacePreparationService } from '../../sandbox/workspace-preparation.js';
-import type { AgentDefinition } from '../../types.js';
+import { prepareWorkspace } from '../../sandbox/workspace-preparation.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import { stopAndRemoveContainer } from '../container-cleanup.js';
 import {
   cleanupSession,
@@ -83,13 +83,12 @@ export class SessionRuntimeFactory {
       }
 
       if (workspaceDir && agentDef.workspaceContent && (!this.deps.dataDir || createdConversationWorkspace)) {
-        const workspacePreparation = new WorkspacePreparationService({ logger: this.deps.logger });
-        await workspacePreparation.prepare({
+        await prepareWorkspace({
           workspaceDir,
           projectDir: agentDef.projectDir,
           harnessName,
           workspaceContent: agentDef.workspaceContent,
-        });
+        }, this.deps.logger);
       }
 
       const setup = agentDef.harnessConfig['setup'];

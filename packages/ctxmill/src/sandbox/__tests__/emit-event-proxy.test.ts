@@ -33,7 +33,7 @@ import {
   registerDefaultToolHandlers,
 } from '../../orchestrator/grpc/orchestrator-service.js';
 import { TypedEventBus } from '../../events/bus.js';
-import { zodToJsonSchema } from '../../tool/schema-convert.js';
+import { zodToJsonSchema } from '@ctxmill/sandbox-daemon';
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */

@@ -80,8 +80,29 @@ describe('AgentCard', () => {
     renderCard();
 
     expect(statusLabel()).toContain('Idle');
-    expect(container.textContent).toContain('Sessions');
+    expect(container.textContent).toContain('Sandboxes');
     expect(container.textContent).toContain('0');
+  });
+
+  it('renders sandbox session counts under an honest label (ctx-ohq4)', () => {
+    act(() => {
+      root.render(<AgentCard agent={{
+        ...baseAgent,
+        sessionsByStatus: {
+          ACTIVE: 2,
+          CHECKPOINTED: 1,
+          RESTORING: 0,
+          TERMINATED: 3,
+        },
+      }} />);
+    });
+
+    expect(container.textContent).toContain('Sandboxes');
+    const counts = container.querySelector('[role="status"]');
+    expect(counts?.getAttribute('aria-label')).toBe('6 sandbox sessions: 2 active, 1 checkpointed, 3 terminated');
+    expect(counts?.textContent).toContain('2');
+    expect(counts?.textContent).toContain('1');
+    expect(counts?.textContent).toContain('3');
   });
 
   it('maps unknown agent status values with no active sessions to idle', () => {

@@ -1,9 +1,12 @@
 # Workspace Middleware: Analysis & Unified Pattern
 
+> Sources: distilled from the retired survey `middleware-patterns-research.md` (see git history).
+
 **Status:** Analysis (pre-implementation)  
 **Date:** 2026-04-07  
 **Input:** `client-repo/docs/specs/ctxmill-workspace-middleware.md`  
-**Scope:** All 3 harnesses (LangGraph, Claude Agents, PI Agent)
+**Scope:** All 3 harnesses (LangGraph, Claude Agents, PI Agent)  
+**Shipping status (2026-07):** Only a narrow subset shipped — `harnessConfig.middleware` (a list of middleware paths) for LangGraph and the `wrapToolCall` extension hook for PI Agent. The unified `WorkspaceMiddleware` / `defineMiddleware` design described here never shipped.
 
 ---
 

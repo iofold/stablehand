@@ -14,7 +14,6 @@ describe('Session API lifecycle', () => {
   beforeAll(async () => {
     testApp = await createTestApp({
       dirPrefix: 'ctxmill-session-test-',
-      preset: 'docker',
     });
     app = testApp.app;
     container = testApp.container;

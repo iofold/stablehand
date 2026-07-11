@@ -318,3 +318,17 @@ export async function cancelSession(
 ): Promise<void> {
   await request.post(`${API_BASE}/api/agents/${agentId}/sessions/${sessionId}/cancel`);
 }
+
+export async function releaseAgentSandboxes(
+  request: APIRequestContext,
+  agentIds: Iterable<string>,
+): Promise<void> {
+  const ids = new Set(agentIds);
+  const response = await request.get(`${API_BASE}/api/sessions?format=sandbox`);
+  if (!response.ok()) return;
+  const sessions = (await response.json()) as Array<{ id: string; agentId: string; status: string }>;
+  for (const session of sessions) {
+    if (session.status !== 'ACTIVE' || !ids.has(session.agentId)) continue;
+    await request.post(`${API_BASE}/api/agents/${session.agentId}/sandbox-sessions/${session.id}/kill`);
+  }
+}

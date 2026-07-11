@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
-import { z } from 'zod';
 import { query as sdkQuery, createSdkMcpServer, tool as sdkTool } from '@anthropic-ai/claude-agent-sdk';
 import type {
   AgentDefinition,
@@ -23,55 +22,23 @@ import type {
 import type { ToolContext, ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
 import {
-  CanonicalProviderSchema,
   normalizeStreamTextDeltas,
   resolveSecretRef,
 } from './shared.js';
+import { ClaudeAgentsConfigSchema, type ClaudeAgentsConfig } from './schemas.js';
 import {
   TurnAccumulator,
-  createAgentEventLangSmithTracer,
-  linkAbortSignal,
+  errorMessage,
+  finalizeTurn,
+  linkTurnAbort,
   normalizeTokenUsage,
+  parseHarnessConfig,
   requestToolApproval,
-  traceAgentEvents,
+  withTurnTracing,
 } from './kit/index.js';
-
-const ClaudeAgentDefinitionSchema = z.object({
-  description: z.string(),
-  prompt: z.string(),
-  tools: z.array(z.string()).optional(),
-  disallowedTools: z.array(z.string()).optional(),
-  skills: z.array(z.string()).optional(),
-  model: z.string().optional(),
-  maxTurns: z.number().int().positive().optional(),
-});
 
 const CLAUDE_SKILL_TOOL_NAME = 'Skill';
 const CLAUDE_PROJECT_SKILLS_DIR = '.claude/skills';
-
-export const ClaudeAgentsConfigSchema = z.object({
-  provider: CanonicalProviderSchema.optional(),
-  model: z.string().min(1),
-  apiKeyRef: z.string().optional(),
-  baseUrl: z.string().refine((value) => URL.canParse(value)).optional(),
-  maxTurns: z.number().int().positive().optional(),
-  setup: z.object({
-    symlinks: z.array(z.object({
-      src: z.string(),
-      dest: z.string(),
-    })).optional(),
-  }).optional(),
-  subagents: z.record(z.string(), ClaudeAgentDefinitionSchema).optional(),
-  // nativeTools in harnessConfig is the only path that survives proto serialization.
-  // HarnessSessionConfig.nativeTools[] is never populated from the FreshBootstrap proto,
-  // so buildAllowedTools() checks here too.
-  nativeTools: z.object({
-    allowlist: z.array(z.string()).optional(),
-    blocklist: z.array(z.string()).optional(),
-  }).optional(),
-});
-
-export type ClaudeAgentsConfig = z.infer<typeof ClaudeAgentsConfigSchema>;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -222,8 +189,11 @@ class ClaudeSession implements HarnessSession {
     this.activeApprovalHandler = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
 
     const abortController = new AbortController();
-    const cleanupConfigAbort = linkAbortSignal(this.config.signal, () => abortController.abort());
-    const cleanupContextAbort = linkAbortSignal(context.signal, () => abortController.abort());
+    const cleanupAbort = linkTurnAbort(
+      this.config.signal,
+      context.signal,
+      () => abortController.abort(),
+    );
     const toolStartTimes = new Map<string, number>();
     const streamState = this.harness.createStreamMappingState();
     const accumulator = new TurnAccumulator({ turnId: input.turnId });
@@ -231,6 +201,7 @@ class ClaudeSession implements HarnessSession {
     try {
       const maxTurns = this.harnessConfig.maxTurns;
       const sdkSessionId = this.sdkSessionId;
+      const agents = this.harnessConfig.subagents;
 
       const q = this.sdk.query({
         prompt: this.generateInput(input.messages, { replayAllMessages: shouldReplayFullPrompt }),
@@ -247,7 +218,7 @@ class ClaudeSession implements HarnessSession {
           includeHookEvents: true,
           includePartialMessages: false,
           persistSession: true,
-          ...(this.buildAgents() ? { agents: this.buildAgents() } : {}),
+          ...(agents ? { agents } : {}),
           ...(isFirstTurn ? { sessionId: sdkSessionId } : { resume: sdkSessionId }),
           abortController,
           env: this.buildClaudeEnv(),
@@ -294,31 +265,17 @@ class ClaudeSession implements HarnessSession {
       }
 
       yield* this.flushQueuedEvents();
-      const committed = accumulator.createMessageCommitted(this.transcript.length);
-      if (committed) {
-        this.transcript.push({
-          id: randomUUID(),
-          agentId: this.config.agentId ?? this.config.conversationId,
-          role: 'assistant',
-          content: committed.content,
-          ...(committed.toolCalls ? { toolCalls: committed.toolCalls } : {}),
-          createdAt: new Date(),
-        });
-
-        yield committed;
-      }
-
-      const done = accumulator.doneEvent();
-      if (done) {
-        yield done;
-      }
+      yield* finalizeTurn(
+        accumulator,
+        this.transcript,
+        this.config.agentId ?? this.config.conversationId,
+      );
     } catch (error) {
       console.error('[claude-agents] deliverTurn error:', error);
       yield* this.flushQueuedEvents();
-      yield { type: 'error', error: this.stringifyError(error) };
+      yield { type: 'error', error: errorMessage(error) };
     } finally {
-      cleanupConfigAbort();
-      cleanupContextAbort();
+      cleanupAbort();
     }
   }
 
@@ -581,13 +538,6 @@ class ClaudeSession implements HarnessSession {
     return claudeEnv;
   }
 
-  private buildAgents(): Record<string, AgentDefinition> | undefined {
-    return this.harnessConfig.subagents;
-  }
-
-  private stringifyError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
 }
 
 export class ClaudeAgentsHarness implements AgentHarness {
@@ -609,9 +559,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
     restore?: HarnessRestorePoint,
   ): Promise<HarnessSession> {
     const sdk = await this.loadSdkModule();
-    const harnessConfig = ClaudeAgentsConfigSchema.parse(
-      JSON.parse(z.string().parse(config.harnessConfigJson)),
-    );
+    const harnessConfig = parseHarnessConfig(ClaudeAgentsConfigSchema, config.harnessConfigJson);
     const apiKey =
       resolveSecretRef(harnessConfig.apiKeyRef, config.secrets) ??
       process.env.ANTHROPIC_API_KEY;
@@ -644,14 +592,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
         });
       }
     }
-    return traceAgentEvents(session, {
-      createTracer: (input) => createAgentEventLangSmithTracer({
-        agentId: config.agentId,
-        conversationId: config.conversationId,
-        harnessName: this.name,
-        turnId: input.turnId,
-      }),
-    });
+    return withTurnTracing(session, config, this.name);
   }
 
   convertToolsWithSDK(
@@ -702,7 +643,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
             };
           } catch (error) {
             return {
-              content: [{ type: 'text', text: this.stringifyError(error) }],
+              content: [{ type: 'text', text: errorMessage(error) }],
               isError: true,
             };
           }
@@ -983,7 +924,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
     try {
       return JSON.parse(raw) as unknown;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       const preview = raw.slice(0, 200);
       console.error(`[claude-agents] Failed to parse tool args for call ${callId}; surfacing degraded args. Raw: ${preview}`, err);
       return {
@@ -1054,10 +995,6 @@ export class ClaudeAgentsHarness implements AgentHarness {
     } catch {
       return String(result);
     }
-  }
-
-  private stringifyError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
   }
 
   private toArgsRecord(args: unknown): Record<string, unknown> {

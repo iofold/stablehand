@@ -1,6 +1,6 @@
 # CTXMILL — PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-04-06 · **Commit:** c2561f2 · **Branch:** master
+**Generated:** 2026-07-10 · **Branch:** master
 
 ## OVERVIEW
 
@@ -10,21 +10,23 @@ Multi-harness agent runtime. Agents defined in YAML, execute inside Docker sandb
 
 ```
 packages/
-  ctxmill/              Core runtime — orchestrator, 3 harnesses, sandbox, tools, events, DB (126 src files)
-  sandbox-daemon/       Daemon process inside sandbox containers — gRPC server, harness adapters, tool proxy (30 src files)
-  ui/                   React dashboard — Vite, React 18, Zustand, Tailwind, SSE streaming (84 files)
+  ctxmill/              Core runtime — orchestrator, harness registry, sandbox orchestration, tools, events, DB
+  sandbox-daemon/       Daemon process inside sandbox containers — gRPC server, harness adapters, tool proxy
+  ui/                   React dashboard — Vite, React 18, Zustand, Tailwind, SSE streaming
   shared/               Types only — AG-UI events, API contracts (no build step, src/index.ts direct)
   proto/                Protobuf (buf) — HarnessService + OrchestratorService gRPC definitions
+  client/               Typed browser client for AG-UI streaming integrations (@ctxmill/client)
+  react/                React components and hooks for AG-UI chat integrations (@ctxmill/react)
   create-ctxmill/       Scaffold CLI — generates new project from template
   examples/
-    kitchen-sink/       3 agents (LangGraph, Claude, PI), 12 shared tools, event-chained
+    kitchen-sink/       3 agents (LangGraph, Claude, PI), 11 shared tools, event-chained
 tests/
-  unit/                 53 files — harness adapters, config, events, sandbox, tools
-  integration/          23 files — orchestrator scenarios, event flows, CRUD
+  unit/                 harness adapters, config, events, sandbox, tools
+  integration/          orchestrator scenarios, event flows, CRUD
   e2e/                  Legacy scripted browser specs — chat, background runs, visual regression, visual QA
-  compliance/           13 files — interface contract conformance via pluggable factories
+  compliance/           interface contract conformance via pluggable factories
   contract/             EMPTY — no shipped contract suite currently
-  sandbox/              4 files — container lifecycle, suspend/resume, harness integration
+  sandbox/              container lifecycle, suspend/resume, harness integration
   stress/               Stress test agents and tools (not in main test suite)
   utils/                Shared helpers — test-db.ts, event-bus-test-helpers.ts
 docs/
@@ -37,7 +39,7 @@ docs/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Add a new harness | `packages/ctxmill/src/harness/` | Implement `AgentHarness`, register in `DefaultHarnessRegistry` |
+| Add a new harness | Registry: `packages/ctxmill/src/harness/`; adapter: `packages/sandbox-daemon/src/harness/` | Implement the `AgentHarness` adapter in `sandbox-daemon`, register it in `DefaultHarnessRegistry` |
 | Add a tool provider | `packages/ctxmill/src/tool/providers/` | Implement `ToolProvider`, register in `DefaultToolRegistry` |
 | Add an API route | `packages/ctxmill/src/orchestrator/routes/` | Fastify plugin pattern, register in `server.ts` |
 | Add a UI page | `packages/ui/src/pages/` + `App.tsx` | Add route in App.tsx, nav item in Sidebar.tsx |

@@ -19,7 +19,6 @@ describe('File endpoint integration tests', () => {
   beforeAll(async () => {
     testApp = await createTestApp({
       dirPrefix: 'file-test-',
-      preset: 'local',
     });
     app = testApp.app;
     container = testApp.container;

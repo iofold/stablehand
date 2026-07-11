@@ -78,12 +78,12 @@ Operators can trigger these actions via the API:
 ### Suspend a Session
 Immediately checkpoints and removes the live container.
 
-`POST /api/agents/{agentId}/sessions/{sessionId}/suspend`
+`POST /api/agents/{agentId}/sandbox-sessions/{sessionId}/suspend`
 
 ### Kill a Session
 Stops and removes the live container, terminating the sandbox session.
 
-`POST /api/agents/{agentId}/sessions/{sessionId}/kill`
+`POST /api/agents/{agentId}/sandbox-sessions/{sessionId}/kill`
 
 ## Workspace Tar Restore
 

@@ -1,23 +1,27 @@
 import { getApiToken, markAuthRequired, withApiAuth } from './auth';
-import type { ApiAgent, ApiConversationSummary, ApiFeedbackRequest, ApiSandboxRestoreSuccess } from '@ctxmill/shared';
+import type {
+  ApiAgent,
+  ApiConversationSummary,
+  ApiFeedbackRequest,
+  ApiSandboxRestoreSuccess,
+  HttpToolDefinition,
+} from '@ctxmill/shared';
 
 const API_BASE = '/api';
 
 // ── Session types ────────────────────────────────────────────────────
 
-export interface HttpToolDefinition {
+export type { HttpToolDefinition } from '@ctxmill/shared';
+
+export interface AgentUpsertInput {
   name: string;
-  description: string;
-  endpoint: string;
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-  inputSchema?: Record<string, unknown>;
-  headers?: Record<string, string>;
-  timeout?: number;
-  authentication?: {
-    type: 'bearer' | 'api-key' | 'none';
-    token?: string;
-    apiKey?: string;
-  };
+  harness: string;
+  harnessConfig: Record<string, unknown>;
+  systemPrompt: string;
+  tools: string[];
+  description?: string;
+  metadata?: Record<string, unknown>;
+  httpTools?: HttpToolDefinition[];
 }
 
 // ── Internal fetch helpers ───────────────────────────────────────────
@@ -237,16 +241,18 @@ export async function createFile(agentId: string, path: string, content: string,
 }
 
 export async function updateFile(agentId: string, path: string, content: string, sessionId?: string) {
-  const params = new URLSearchParams();
-  if (sessionId) params.set('sessionId', sessionId);
-  const url = `${API_BASE}/agents/${agentId}/files${params.size > 0 ? `?${params}` : ''}`;
-  return apiMutate<{ path: string; size: number }>(url, 'PUT', { path, content });
+  return apiMutate<{ path: string; size: number }>(
+    withQuery(`${API_BASE}/agents/${agentId}/files`, { sessionId }),
+    'PUT',
+    { path, content },
+  );
 }
 
 export async function deleteFile(agentId: string, path: string, sessionId?: string): Promise<void> {
-  const params = new URLSearchParams({ path });
-  if (sessionId) params.set('sessionId', sessionId);
-  await apiFetch(`${API_BASE}/agents/${agentId}/files?${params}`, { method: 'DELETE' });
+  await apiFetch(
+    withQuery(`${API_BASE}/agents/${agentId}/files`, { path, sessionId }),
+    { method: 'DELETE' },
+  );
 }
 
 export interface UploadWorkspaceResponse {
@@ -269,29 +275,11 @@ export async function uploadWorkspaceTarball(
   );
 }
 
-export async function createAgent(data: {
-  name: string;
-  harness: string;
-  harnessConfig: Record<string, unknown>;
-  systemPrompt: string;
-  tools: string[];
-  description?: string;
-  metadata?: Record<string, unknown>;
-  httpTools?: HttpToolDefinition[];
-}) {
+export async function createAgent(data: AgentUpsertInput) {
   return apiMutate(`${API_BASE}/agents`, 'POST', data);
 }
 
-export async function updateAgent(id: string, data: Partial<{
-  name: string;
-  harness: string;
-  harnessConfig: Record<string, unknown>;
-  systemPrompt: string;
-  tools: string[];
-  description?: string;
-  metadata?: Record<string, unknown>;
-  httpTools?: HttpToolDefinition[];
-}>) {
+export async function updateAgent(id: string, data: Partial<AgentUpsertInput>) {
   return apiMutate(`${API_BASE}/agents/${id}`, 'PUT', data);
 }
 
@@ -511,16 +499,12 @@ export async function deleteArtifact(id: string): Promise<void> {
 }
 
 export async function requestArtifactUploadUrl(agentId: string, name: string, mimeType: string, sizeBytes: number): Promise<{ artifactId: string; uploadUrl: string; storageKey: string; expiresIn: number }> {
-  const res = await fetch(`${API_BASE}/artifacts/upload-url`, withApiAuth({
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agentId, name, mimeType, sizeBytes }),
-  }));
-  if (res.status === 401) {
-    markAuthRequired();
-  }
-  if (!res.ok) throw new Error(`Upload URL request failed: ${res.status}`);
-  return res.json();
+  return apiMutate(`${API_BASE}/artifacts/upload-url`, 'POST', {
+    agentId,
+    name,
+    mimeType,
+    sizeBytes,
+  });
 }
 
 export async function uploadArtifactToSignedUrl(uploadUrl: string, file: File): Promise<void> {

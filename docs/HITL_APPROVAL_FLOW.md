@@ -22,7 +22,7 @@ This document describes the current human-in-the-loop approval path in CTXMill. 
 1. A tool path reaches the built-in `request-approval` tool in the orchestrator gRPC service.
 2. `OrchestratorService` calls `interruptManager.waitForApproval(...)` with the current turn ID, agent ID, tool call ID, tool args, and sandbox session ID when available.
 3. `InterruptManager` stores the pending interrupt in memory, persists it to the database when configured, and emits `run.interrupted`.
-4. `CanonicalProjector` maps `run.interrupted` to `CUSTOM name: ctxmill.hitl.requested` on canonical streams; legacy wire rendering maps the same frame to `HITL_PAUSE` for transition clients.
+4. `CanonicalProjector` maps `run.interrupted` to `CUSTOM name: ctxmill.hitl.requested` on the canonical wire, which is the only wire the projector emits.
 5. The human resolves the interrupt through the agent interrupt route.
 6. The route writes the resolution to the database first, then attempts the in-memory fast path via `interrupts.resolve(...)`.
 7. If the session is still live, the in-memory interrupt resolves immediately and the original tool path continues.
@@ -44,8 +44,7 @@ Internal bus events:
 
 AG-UI stream behavior:
 
-- Canonical wire: `run.interrupted` becomes `CUSTOM name: ctxmill.hitl.requested`; `run.interrupt_resolved` becomes `CUSTOM name: ctxmill.hitl.resolved`.
-- Legacy wire: `run.interrupted` is rendered as `HITL_PAUSE` for transition clients.
+- Canonical wire (the only wire): `run.interrupted` becomes `CUSTOM name: ctxmill.hitl.requested`; `run.interrupt_resolved` becomes `CUSTOM name: ctxmill.hitl.resolved`.
 
 HITL state is driven by durable interrupt records. Dedicated session pause APIs and the old session-paused event are no longer supported runtime surfaces.
 

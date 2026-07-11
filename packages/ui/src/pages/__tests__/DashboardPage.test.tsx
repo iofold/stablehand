@@ -103,6 +103,90 @@ describe('DashboardPage', () => {
     expect(cancelRunMock).not.toHaveBeenCalledWith('agent-1', 'sandbox-1');
   });
 
+  it('renders a fixed duration and no cancel action for completed conversations', async () => {
+    const startedAt = Date.now() - 13 * 60_000;
+    fetchActiveConversationsMock.mockResolvedValue([
+      {
+        id: 'conv-done',
+        agentId: 'agent-1',
+        status: 'COMPLETED',
+        mode: 'interactive',
+        turnCount: 1,
+        messageCount: 2,
+        taskDescription: 'Finished task',
+        startedAt,
+        completedAt: startedAt + 4_300,
+        updatedAt: startedAt + 4_300,
+        latestTurnId: 'turn-done',
+        sandboxSessionId: 'sandbox-done',
+      },
+    ]);
+
+    act(() => {
+      root.render(<DashboardPage />);
+    });
+    await flushEffects();
+
+    const durationCell = container.querySelector('[data-testid="conversation-duration"]');
+    expect(durationCell?.textContent).toBe('4s');
+    expect(container.querySelector('button[data-testid="cancel-run-button"]')).toBeNull();
+  });
+
+  it('renders a fixed duration from updatedAt and no cancel action for errored conversations', async () => {
+    const startedAt = Date.now() - 13 * 60_000;
+    fetchActiveConversationsMock.mockResolvedValue([
+      {
+        id: 'conv-error',
+        agentId: 'agent-1',
+        status: 'ERROR',
+        mode: 'interactive',
+        turnCount: 1,
+        messageCount: 2,
+        taskDescription: 'Failed task',
+        startedAt,
+        updatedAt: startedAt + 4_300,
+        latestTurnId: 'turn-error',
+        sandboxSessionId: 'sandbox-error',
+      },
+    ]);
+
+    act(() => {
+      root.render(<DashboardPage />);
+    });
+    await flushEffects();
+
+    const durationCell = container.querySelector('[data-testid="conversation-duration"]');
+    expect(durationCell?.textContent).toBe('4s');
+    expect(container.querySelector('button[data-testid="cancel-run-button"]')).toBeNull();
+  });
+
+  it('renders a live duration and cancel action for running conversations', async () => {
+    fetchActiveConversationsMock.mockResolvedValue([
+      {
+        id: 'conv-live',
+        agentId: 'agent-1',
+        status: 'ACTIVE',
+        mode: 'interactive',
+        turnCount: 1,
+        messageCount: 2,
+        taskDescription: 'In-flight task',
+        startedAt: Date.now() - 5_000,
+        updatedAt: Date.now(),
+        latestTurnId: 'turn-live',
+        sandboxSessionId: 'sandbox-live',
+      },
+    ]);
+
+    act(() => {
+      root.render(<DashboardPage />);
+    });
+    await flushEffects();
+
+    const durationCell = container.querySelector('[data-testid="conversation-duration"]');
+    expect(durationCell?.textContent).toMatch(/^[5-9]s$/);
+    expect(container.querySelector('button[data-testid="cancel-run-button"]')).not.toBeNull();
+  });
+
   it('suppresses dashboard load errors and protected follow-up polls while auth is required', async () => {
     const fetchAgents = vi.fn().mockRejectedValue(new Error('API GET /api/agents failed: 401'));
     useAgentsStore.setState((state) => ({

@@ -8,23 +8,11 @@ import type { Agent } from '@/stores/agents';
 import { AgentAvatar } from './illustrations/AgentAvatar';
 import { StatusPulse } from './illustrations/StatusPulse';
 import { AnimatedCounter } from './MicroInteractions';
+import { formatRelativeTime } from '@/lib/format';
 
 interface AgentCardProps {
   agent: Agent;
   onEdit?: (agent: Agent) => void;
-}
-
-function formatRelativeTime(timestamp: number | undefined): string {
-  if (!timestamp) return 'Never';
-  const diff = Date.now() - timestamp;
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return 'just now';
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
 }
 
 type DashboardStatus = 'running' | 'idle';
@@ -63,7 +51,7 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
     const title = describeSessionCounts(stats);
 
     return (
-      <div role="status" aria-label={`${total} sessions: ${title}`} className="flex items-center gap-2 tabular-nums font-medium text-surface-200" title={title}>
+      <div role="status" aria-label={`${total} sandbox sessions: ${title}`} className="flex items-center gap-2 tabular-nums font-medium text-surface-200" title={title}>
         {stats.ACTIVE > 0 && (
           <span className="inline-flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
@@ -149,7 +137,7 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
 
         <div className="flex flex-wrap md:flex-nowrap items-center gap-6 text-sm text-surface-300 md:px-6 md:border-x md:border-surface-700/50">
           <div className="flex flex-col min-w-[70px]">
-            <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Sessions</span>
+            <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Sandboxes</span>
             {renderSessions()}
           </div>
           <div className="flex flex-col min-w-[70px]">

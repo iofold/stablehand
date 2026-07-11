@@ -10,7 +10,7 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 import type { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 import { cleanupSession } from '../../workspace/session-workspace.js';
-import type { AgentDefinition } from '../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import { stopAndRemoveContainer } from '../container-cleanup.js';
 import type { SessionReconciler } from './ports.js';

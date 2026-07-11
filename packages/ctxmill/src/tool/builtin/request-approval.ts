@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ToolDefinition } from '../types.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 
 export const requestApprovalTool: ToolDefinition = {
   name: 'request-approval',

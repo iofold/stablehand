@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AgentDefinition } from '../../../types.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import { AsyncChannel, type SessionRecord, type TurnQueueEntry } from '../types.js';
 import { SessionStateStore } from '../session-state-store.js';
 

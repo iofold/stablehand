@@ -30,9 +30,31 @@ export class ContainerSemaphore {
   private readonly queue: QueueEntry[] = [];
 
   constructor(
-    private readonly maxConcurrent: number,
-    private readonly queueTimeoutMs: number,
+    private maxConcurrent: number,
+    private queueTimeoutMs: number,
   ) {}
+
+  /**
+   * Apply new limits at runtime (live settings, ctx-reir). Raising the limit
+   * wakes queued waiters immediately; lowering it only affects new acquires
+   * (running containers are never evicted). A new queue timeout applies to
+   * future acquires; already-queued waiters keep their original deadline.
+   */
+  updateLimits(update: { maxConcurrent?: number; queueTimeoutMs?: number }): void {
+    if (update.queueTimeoutMs !== undefined) {
+      this.queueTimeoutMs = update.queueTimeoutMs;
+    }
+    if (update.maxConcurrent !== undefined) {
+      this.maxConcurrent = update.maxConcurrent;
+      while (this.queue.length > 0 && this.active < this.maxConcurrent) {
+        const next = this.queue.shift()!;
+        clearTimeout(next.timer);
+        this.active++;
+        this.peak = Math.max(this.peak, this.active);
+        next.resolve();
+      }
+    }
+  }
 
   /**
    * Acquire a slot. Resolves immediately if under the limit,
@@ -71,18 +93,19 @@ export class ContainerSemaphore {
   }
 
   /**
-   * Release a slot. Wakes the next queued request (FIFO) or decrements
-   * the active count if the queue is empty.
-   * Gracefully handles over-release (active count never goes below 0).
+   * Release a slot, then wake queued requests (FIFO) while capacity remains
+   * under the current limit — after a live limit decrease (or boot-time
+   * over-seeding) the active count must fall back under the limit before
+   * waiters run. Gracefully handles over-release (active never goes below 0).
    */
   release(): void {
-    if (this.queue.length > 0) {
+    this.active = Math.max(0, this.active - 1);
+    while (this.queue.length > 0 && this.active < this.maxConcurrent) {
       const next = this.queue.shift()!;
       clearTimeout(next.timer);
-      // Active count stays the same — the slot transfers to the next waiter
+      this.active++;
+      this.peak = Math.max(this.peak, this.active);
       next.resolve();
-    } else {
-      this.active = Math.max(0, this.active - 1);
     }
   }
 

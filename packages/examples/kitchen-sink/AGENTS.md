@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-3 agents (LangGraph, Claude, PI) chained via events, 12 shared tools, HITL approval patterns. Canonical example for building multi-agent workflows in ctxmill.
+3 agents (LangGraph, Claude, PI) chained via events, 11 shared tools, HITL approval patterns. Canonical example for building multi-agent workflows in ctxmill.
 
 ## STRUCTURE
 

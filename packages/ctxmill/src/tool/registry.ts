@@ -1,5 +1,5 @@
-import type { ToolProvider, ToolRegistry } from './provider.js';
-import type { ToolDefinition } from './types.js';
+import type { ToolProvider } from './provider.js';
+import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 import { builtinToolNames } from './builtin/index.js';
 
 /**
@@ -9,7 +9,7 @@ import { builtinToolNames } from './builtin/index.js';
  * Tools are looked up by name, and the originating provider is tracked
  * so that execution can be delegated correctly.
  */
-export class DefaultToolRegistry implements ToolRegistry {
+export class DefaultToolRegistry {
   private providers = new Map<string, ToolProvider>();
   private toolCache = new Map<string, { tool: ToolDefinition; provider: string }>();
   private dirty = true;

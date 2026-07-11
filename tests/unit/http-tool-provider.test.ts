@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { HTTPToolProvider } from '../../packages/ctxmill/src/tool/providers/http.js';
 import { createMockToolContext } from '../utils/event-bus-test-helpers.js';
 import type { HttpEndpointConfig } from '../../packages/ctxmill/src/tool/providers/http.js';
-import type { ToolContext } from '../../packages/ctxmill/src/tool/types.js';
+import type { ToolContext } from '@ctxmill/sandbox-daemon';
 
 const mockCtx = createMockToolContext();
 
