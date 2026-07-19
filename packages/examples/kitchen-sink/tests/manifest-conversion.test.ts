@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseManifestString, validateManifest, manifestToDefinition } from 'ctxmill';
+import {
+  manifestToAgentCreateInput,
+  parseManifestString,
+  validateManifest,
+} from '@ctxmill/manifest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');
@@ -19,19 +23,19 @@ async function loadManifest(dir: string) {
   return validateManifest(parsed);
 }
 
-describe('manifest to AgentDefinition conversion', () => {
+describe('manifest to canonical agent create input conversion', () => {
   for (const { dir, harness, provider, model, harnessLabel, expectedTools } of agents) {
     describe(dir, () => {
-      it('converts to AgentDefinition with correct harness', async () => {
+      it('converts to the create contract with correct harness', async () => {
         const manifest = await loadManifest(dir);
-        const definition = manifestToDefinition(manifest);
+        const definition = manifestToAgentCreateInput(manifest);
 
         expect(definition.harness).toBe(harness);
       });
 
       it('converts harness config correctly', async () => {
         const manifest = await loadManifest(dir);
-        const definition = manifestToDefinition(manifest);
+        const definition = manifestToAgentCreateInput(manifest);
         const harnessConfig = (definition.harnessConfig ?? {}) as {
           provider?: string;
           model?: string;
@@ -43,21 +47,21 @@ describe('manifest to AgentDefinition conversion', () => {
 
       it('converts tools as string array', async () => {
         const manifest = await loadManifest(dir);
-        const definition = manifestToDefinition(manifest);
+        const definition = manifestToAgentCreateInput(manifest);
 
         expect(definition.tools).toEqual(expectedTools);
       });
 
       it('converts instructions to systemPrompt', async () => {
         const manifest = await loadManifest(dir);
-        const definition = manifestToDefinition(manifest);
+        const definition = manifestToAgentCreateInput(manifest);
 
         expect(definition.systemPrompt).toContain(harnessLabel);
       });
 
       it('preserves mode', async () => {
         const manifest = await loadManifest(dir);
-        const definition = manifestToDefinition(manifest);
+        const definition = manifestToAgentCreateInput(manifest);
 
         expect(definition.mode).toBe('interactive');
       });

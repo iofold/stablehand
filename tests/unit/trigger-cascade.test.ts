@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { TestSessionRegistry, MAX_CONCURRENT_SESSIONS_PER_AGENT } from '../utils/test-session-registry.js';
+import { TestTurnRegistry, MAX_CONCURRENT_TURNS_PER_AGENT } from '../utils/test-turn-registry.js';
 import { EventTriggerManager, MAX_TRIGGER_DEPTH } from '../../packages/ctxmill/src/events/trigger-manager.js';
 import { createTestBus, createMockTriggerDb } from '../utils/event-bus-test-helpers.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
@@ -9,66 +9,66 @@ const settle = () => new Promise((r) => setTimeout(r, 15));
 describe('Trigger cascade protection', () => {
   // ─── Protection 2: concurrent run limit ───────────────────────────
 
-  it('should export MAX_CONCURRENT_SESSIONS_PER_AGENT = 3', () => {
-    expect(MAX_CONCURRENT_SESSIONS_PER_AGENT).toBe(3);
+  it('should export MAX_CONCURRENT_TURNS_PER_AGENT = 3', () => {
+    expect(MAX_CONCURRENT_TURNS_PER_AGENT).toBe(3);
   });
 
   it('should allow up to the concurrent limit', async () => {
-    const registry = new TestSessionRegistry();
+    const registry = new TestTurnRegistry();
 
-    await registry.startSession('agent-1', 'conv-1', 'background');
-    await registry.startSession('agent-1', 'conv-2', 'background');
-    await registry.startSession('agent-1', 'conv-3', 'background');
+    await registry.startTurn('agent-1', 'conv-1', 'background');
+    await registry.startTurn('agent-1', 'conv-2', 'background');
+    await registry.startTurn('agent-1', 'conv-3', 'background');
 
-    expect(registry.getActiveSessions('agent-1').length).toBe(3);
+    expect(registry.getActiveTurns('agent-1').length).toBe(3);
   });
 
   it('should reject runs beyond the concurrent limit', async () => {
-    const registry = new TestSessionRegistry();
+    const registry = new TestTurnRegistry();
 
-    await registry.startSession('agent-1', 'conv-1', 'background');
-    await registry.startSession('agent-1', 'conv-2', 'background');
-    await registry.startSession('agent-1', 'conv-3', 'background');
+    await registry.startTurn('agent-1', 'conv-1', 'background');
+    await registry.startTurn('agent-1', 'conv-2', 'background');
+    await registry.startTurn('agent-1', 'conv-3', 'background');
 
     await expect(
-      registry.startSession('agent-1', 'conv-4', 'background'),
-    ).rejects.toThrow(/concurrent run limit/i);
+      registry.startTurn('agent-1', 'conv-4', 'background'),
+    ).rejects.toThrow(/concurrent turn limit/i);
   });
 
   it('should respect a custom maxConcurrent option', async () => {
-    const registry = new TestSessionRegistry();
+    const registry = new TestTurnRegistry();
 
-    await registry.startSession('agent-1', 'conv-1', 'background');
-    await registry.startSession('agent-1', 'conv-2', 'background');
+    await registry.startTurn('agent-1', 'conv-1', 'background');
+    await registry.startTurn('agent-1', 'conv-2', 'background');
 
     // With maxConcurrent=2, the 3rd should fail
     await expect(
-      registry.startSession('agent-1', 'conv-3', 'background', undefined, { maxConcurrent: 2 }),
-    ).rejects.toThrow(/concurrent run limit/i);
+      registry.startTurn('agent-1', 'conv-3', 'background', undefined, { maxConcurrent: 2 }),
+    ).rejects.toThrow(/concurrent turn limit/i);
   });
 
   it('should allow runs for different agents independently', async () => {
-    const registry = new TestSessionRegistry();
+    const registry = new TestTurnRegistry();
 
-    await registry.startSession('agent-1', 'conv-1', 'background');
-    await registry.startSession('agent-1', 'conv-2', 'background');
-    await registry.startSession('agent-1', 'conv-3', 'background');
+    await registry.startTurn('agent-1', 'conv-1', 'background');
+    await registry.startTurn('agent-1', 'conv-2', 'background');
+    await registry.startTurn('agent-1', 'conv-3', 'background');
 
-    const session = await registry.startSession('agent-2', 'conv-4', 'background');
-    expect(session.agentId).toBe('agent-2');
+    const turn = await registry.startTurn('agent-2', 'conv-4', 'background');
+    expect(turn.agentId).toBe('agent-2');
   });
 
   it('should allow new runs after completing existing ones', async () => {
-    const registry = new TestSessionRegistry();
+    const registry = new TestTurnRegistry();
 
-    const session1 = await registry.startSession('agent-1', 'conv-1', 'background');
-    await registry.startSession('agent-1', 'conv-2', 'background');
-    await registry.startSession('agent-1', 'conv-3', 'background');
+    const turn1 = await registry.startTurn('agent-1', 'conv-1', 'background');
+    await registry.startTurn('agent-1', 'conv-2', 'background');
+    await registry.startTurn('agent-1', 'conv-3', 'background');
 
-    await registry.completeSession(session1.id);
+    await registry.completeTurn(turn1.turnId);
 
-    const session4 = await registry.startSession('agent-1', 'conv-4', 'background');
-    expect(session4.agentId).toBe('agent-1');
+    const turn4 = await registry.startTurn('agent-1', 'conv-4', 'background');
+    expect(turn4.agentId).toBe('agent-1');
   });
 
   // ─── Protection 1: max trigger depth (real TypedEventBus) ─────────

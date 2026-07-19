@@ -21,7 +21,7 @@ interface Logger {
 export interface ArtifactHandlerDeps {
   artifactStore: ArtifactStore;
   orchestratorClient: OrchestratorServiceClient;
-  sessionId: string | { current: string };
+  turnId: string | { current: string };
   agentId: string;
   workspaceDir: string;
   logger?: Logger;
@@ -63,8 +63,8 @@ function detectMimeType(filename: string): string {
   return MIME_TYPES[ext] ?? 'application/octet-stream';
 }
 
-function getEffectiveSessionId(sessionId: string | { current: string }): string {
-  return typeof sessionId === 'string' ? sessionId : sessionId.current;
+function getEffectiveTurnId(turnId: string | { current: string }): string {
+  return typeof turnId === 'string' ? turnId : turnId.current;
 }
 
 function resolveWorkspacePath(workspaceDir: string, requestedPath: string): string | null {
@@ -80,7 +80,7 @@ function resolveWorkspacePath(workspaceDir: string, requestedPath: string): stri
 }
 
 export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (input: unknown) => Promise<string>> {
-  const { artifactStore, orchestratorClient, sessionId, agentId, workspaceDir, logger: maybeLogger } = deps;
+  const { artifactStore, orchestratorClient, turnId, agentId, workspaceDir, logger: maybeLogger } = deps;
   const logger = maybeLogger ?? console;
   const handlers = new Map<string, (input: unknown) => Promise<string>>();
 
@@ -112,7 +112,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       const filename = input.name ?? basename(fullPath);
       const mimeType = input.mimeType ?? detectMimeType(fullPath);
       const artifactId = randomUUID();
-      const effectiveSessionId = getEffectiveSessionId(sessionId);
+      const effectiveTurnId = getEffectiveTurnId(turnId);
       const storageKey = buildArtifactStorageKey(artifactId, filename);
 
       await artifactStore.upload(storageKey, fileBuffer, mimeType);
@@ -122,12 +122,12 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       try {
         response = await orchestratorClient.registerArtifact(
           create(RegisterArtifactRequestSchema, {
-            sessionId: effectiveSessionId,
+            turnId: effectiveTurnId,
             agentId,
             artifact: create(ArtifactMetaSchema, {
               id: artifactId,
               agentId,
-              sessionId: effectiveSessionId,
+              turnId: effectiveTurnId,
               name: filename,
               mimeType,
               sizeBytes: BigInt(fileBuffer.byteLength),

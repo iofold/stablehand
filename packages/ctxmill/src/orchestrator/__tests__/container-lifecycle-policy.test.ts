@@ -479,7 +479,7 @@ describe('ContainerLifecyclePolicy', () => {
       mockDb.getActiveSandboxSessions.mockResolvedValue([
         createSession({
           containerId: 'container-dead',
-          containerName: 'ctxmill-run-session-1',
+          containerName: 'ctxmill-sandbox-session-1',
           status: 'ACTIVE',
         }),
       ]);
@@ -487,9 +487,9 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'container-dead',
-          containerName: 'ctxmill-run-session-1',
+          containerName: 'ctxmill-sandbox-session-1',
           status: 'dead',
-          labels: { 'ctxmill.session-id': 'session-1' },
+          labels: { 'ctxmill.sandbox-session-id': 'session-1' },
         }),
       ]);
 
@@ -503,7 +503,7 @@ describe('ContainerLifecyclePolicy', () => {
       mockDb.getActiveSandboxSessions.mockResolvedValue([
         createSession({
           containerId: 'container-dead',
-          containerName: 'ctxmill-run-session-1',
+          containerName: 'ctxmill-sandbox-session-1',
           status: 'ACTIVE',
         }),
       ]);
@@ -512,9 +512,9 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'container-dead',
-          containerName: 'ctxmill-run-session-1',
+          containerName: 'ctxmill-sandbox-session-1',
           status: 'dead',
-          labels: { 'ctxmill.session-id': 'session-1' },
+          labels: { 'ctxmill.sandbox-session-id': 'session-1' },
         }),
       ]);
 
@@ -535,8 +535,8 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'container-live',
-          containerName: 'ctxmill-run-session-1',
-          labels: { 'ctxmill.session-id': 'session-1' },
+          containerName: 'ctxmill-sandbox-session-1',
+          labels: { 'ctxmill.sandbox-session-id': 'session-1' },
         }),
       ]);
 
@@ -547,18 +547,18 @@ describe('ContainerLifecyclePolicy', () => {
         'ACTIVE',
         expect.objectContaining({
         containerId: 'container-live',
-        containerName: 'ctxmill-run-session-1',
+        containerName: 'ctxmill-sandbox-session-1',
       }),
       { expectedFrom: 'ACTIVE' },
     );
       expect(grpcSessionClientMocks.waitForContainerReady).toHaveBeenCalledWith(
-        'http://ctxmill-run-session-1:50051',
+        'http://ctxmill-sandbox-session-1:50051',
       );
       expect(mockOnSessionReconnected).toHaveBeenCalledWith(
         expect.objectContaining({
           id: 'session-1',
           containerId: 'container-live',
-          containerName: 'ctxmill-run-session-1',
+          containerName: 'ctxmill-sandbox-session-1',
         }),
         expect.any(Object),
       );
@@ -571,10 +571,10 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'startup-live',
-          containerName: 'ctxmill-run-startup-live',
+          containerName: 'ctxmill-sandbox-startup-live',
           status: 'created',
           labels: {
-            'ctxmill.session-id': 'startup-session',
+            'ctxmill.sandbox-session-id': 'startup-session',
             'ctxmill.started-at': new Date(Date.now() - 1_000).toISOString(),
             'ctxmill.startup-grace-ms': '60000',
           },
@@ -649,7 +649,7 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           status: 'dead',
-          labels: { 'ctxmill.session-id': 'session-1' },
+          labels: { 'ctxmill.sandbox-session-id': 'session-1' },
         }),
       ]);
 
@@ -661,7 +661,7 @@ describe('ContainerLifecyclePolicy', () => {
     it('runReconciliation removes dead checkpointed containers after promoting the session', async () => {
       const session = createSession({
         containerId: 'container-dead',
-        containerName: 'ctxmill-run-session-1',
+        containerName: 'ctxmill-sandbox-session-1',
       });
 
       mockDb.getActiveSandboxSessions.mockResolvedValue([session]);
@@ -670,9 +670,9 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'container-dead',
-          containerName: 'ctxmill-run-session-1',
+          containerName: 'ctxmill-sandbox-session-1',
           status: 'dead',
-          labels: { 'ctxmill.session-id': 'session-1' },
+          labels: { 'ctxmill.sandbox-session-id': 'session-1' },
         }),
       ]);
 
@@ -694,7 +694,7 @@ describe('ContainerLifecyclePolicy', () => {
     it('runReconciliation releases in-memory slots for externally removed active containers', async () => {
       const session = createSession({
         containerId: 'externally-removed',
-        containerName: 'ctxmill-run-session-1',
+        containerName: 'ctxmill-sandbox-session-1',
       });
 
       mockDb.getActiveSandboxSessions.mockResolvedValue([session]);
@@ -724,7 +724,7 @@ describe('ContainerLifecyclePolicy', () => {
         createContainer({
           status: 'running',
           labels: {
-            'ctxmill.session-id': 'session-1',
+            'ctxmill.sandbox-session-id': 'session-1',
             'ctxmill.timeout': '1',
             'ctxmill.started-at': new Date(Date.now() - 10_000).toISOString(),
           },
@@ -742,9 +742,9 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'orphan-live',
-          containerName: 'ctxmill-run-orphan-live',
+          containerName: 'ctxmill-sandbox-orphan-live',
           status: 'running',
-          labels: { 'ctxmill.session-id': 'orphan-session' },
+          labels: { 'ctxmill.sandbox-session-id': 'orphan-session' },
         }),
       ]);
 
@@ -760,10 +760,10 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'startup-live',
-          containerName: 'ctxmill-run-startup-live',
+          containerName: 'ctxmill-sandbox-startup-live',
           status: 'running',
           labels: {
-            'ctxmill.session-id': 'startup-session',
+            'ctxmill.sandbox-session-id': 'startup-session',
             'ctxmill.started-at': new Date(Date.now() - 10_000).toISOString(),
             'ctxmill.startup-grace-ms': '60000',
           },
@@ -782,10 +782,10 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'startup-stale',
-          containerName: 'ctxmill-run-startup-stale',
+          containerName: 'ctxmill-sandbox-startup-stale',
           status: 'running',
           labels: {
-            'ctxmill.session-id': 'startup-session',
+            'ctxmill.sandbox-session-id': 'startup-session',
             'ctxmill.started-at': new Date(Date.now() - 70_000).toISOString(),
             'ctxmill.startup-grace-ms': '60000',
           },
@@ -804,9 +804,9 @@ describe('ContainerLifecyclePolicy', () => {
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           containerId: 'orphan-live',
-          containerName: 'ctxmill-run-orphan-live',
+          containerName: 'ctxmill-sandbox-orphan-live',
           status: 'running',
-          labels: { 'ctxmill.session-id': 'orphan-session' },
+          labels: { 'ctxmill.sandbox-session-id': 'orphan-session' },
         }),
       ]);
 

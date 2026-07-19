@@ -62,10 +62,10 @@ export function ArtifactDetailPanel() {
             </p>
           </div>
 
-          {selectedArtifact.sessionId && (
+          {selectedArtifact.turnId && (
             <div>
-              <div className="text-xs font-medium text-surface-500 uppercase tracking-wider">Session ID</div>
-              <p className="text-sm text-surface-100 mt-1 font-mono break-all">{selectedArtifact.sessionId}</p>
+              <div className="text-xs font-medium text-surface-500 uppercase tracking-wider">Turn ID</div>
+              <p className="text-sm text-surface-100 mt-1 font-mono break-all">{selectedArtifact.turnId}</p>
             </div>
           )}
 

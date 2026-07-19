@@ -54,11 +54,11 @@ describe('TriggersPage', () => {
     fetchTriggersMock.mockResolvedValue([{
       id: 'trigger-1',
       agentId: 'agent-1',
-      eventType: 'run.completed',
+      eventType: 'turn.completed',
       taskTemplate: 'summarize',
       enabled: true,
     }]);
-    fetchEventTypesMock.mockResolvedValue({ types: ['run.completed'] });
+    fetchEventTypesMock.mockResolvedValue({ types: ['turn.completed'] });
     updateTriggerMock.mockResolvedValue({ id: 'trigger-1' } as never);
     deleteTriggerMock.mockResolvedValue(undefined);
   });
@@ -88,7 +88,7 @@ describe('TriggersPage', () => {
     });
     await flushEffects();
 
-    expect(container.textContent).toContain('run.completed');
+    expect(container.textContent).toContain('turn.completed');
     expect(fetchTriggersMock).toHaveBeenCalledTimes(2);
   });
 

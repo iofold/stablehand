@@ -1,9 +1,7 @@
 # CTXMill Event Pipeline Mapping
 
-> Current reference as of 2026-07-06. This document describes the shipped
-> canonical event spine. Historical plans and audits may still mention the
-> deleted `SSEBroadcaster`, `AGUIEventNormalizer`, or
-> `CTXMILL_CANONICAL_EVENTS` flag; those are no longer runtime surfaces.
+> Current reference as of 2026-07-17. This document describes the canonical
+> event spine.
 
 ## Core Identifiers
 
@@ -11,9 +9,11 @@
 |---|---|
 | `conversationId` | Persistent conversation/thread row. |
 | `turnId` | One user request and agent response cycle. This becomes AG-UI `runId` for run-scoped frames. |
-| `sessionId` | Sandbox session/container lifecycle identity in `sandbox_sessions`. |
+| `sandboxSessionId` | Sandbox container lifecycle identity in `sandbox_sessions`. |
+| `interruptId` | Independent durable human-in-the-loop approval identity. |
 | `seq` | Global durable `event_store.seq`; SSE ids are zero-padded with `formatSeqId(seq)`. |
-| `runId` | AG-UI wire field only. Internal code should prefer `turnId`, `conversationId`, or `sessionId`. |
+| `runId` | AG-UI wire field only; maps to `turnId`. |
+| `threadId` | AG-UI wire field only; maps to `conversationId`. |
 
 ## Runtime Pipeline
 
@@ -67,28 +67,31 @@ ORDER BY seq;
 See [docs/event-spine-provenance-inventory.md](/path/to/stablehand/docs/event-spine-provenance-inventory.md)
 and [ADR 016](/path/to/stablehand/docs/adr/016-raw-event-provenance-on-event-spine.md).
 
-## Run-Channel Projection
+## AG-UI Channel Projection
 
 | Internal event | Canonical frame(s) | Notes |
 |---|---|---|
 | `turn.pending` | `CUSTOM name: ctxmill.turn.pending` | Pre-start queued/accepted signal. |
 | `turn.started` | `RUN_STARTED` | `runId = turnId`, `threadId = conversationId`. |
-| `user.message` | `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END` | User echo uses `runId = conversationId` because it is conversation-scoped. |
-| `run.text_chunk` | `TEXT_MESSAGE_START` if needed, then `TEXT_MESSAGE_CONTENT` | Assistant message ids are stable server-side ids: `${turnId}-m${n}`. |
-| `run.tool_started` | `TOOL_CALL_START`, `TOOL_CALL_ARGS` | Closes an open assistant text message before the tool call. |
-| `run.tool_result` | `TOOL_CALL_END`, `TOOL_CALL_RESULT`, optional `CUSTOM name: ctxmill.a2ui.render` | A2UI blocks are detected from `a2ui-render` tool results and become replayable. |
-| `run.interrupted` | `CUSTOM name: ctxmill.hitl.requested` | HITL pause signal on the canonical wire. |
-| `run.interrupt_resolved` | `CUSTOM name: ctxmill.hitl.resolved` | Resolution marker. |
+| `user.message` | `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END` | User echo uses `runId = turnId`, `threadId = conversationId`. |
+| `message.delta` | `TEXT_MESSAGE_START` if needed, then `TEXT_MESSAGE_CONTENT` | Assistant message ids are stable server-side ids: `${turnId}-m${n}`. |
+| `tool_call.started` | `TOOL_CALL_START`, `TOOL_CALL_ARGS` | Closes an open assistant text message before the tool call. |
+| `tool_call.completed` | `TOOL_CALL_END`, `TOOL_CALL_RESULT`, optional `CUSTOM name: ctxmill.a2ui.render` | A2UI blocks are detected from `a2ui-render` tool results and become replayable. |
+| `interrupt.requested` | `CUSTOM name: ctxmill.interrupt.requested` | HITL pause signal on the canonical wire. |
+| `interrupt.resolved` | `CUSTOM name: ctxmill.interrupt.resolved` | Resolution marker. |
 | `message.committed` | `CUSTOM name: ctxmill.message.committed` | Durable message commit signal. |
 | `turn.completed` | Optional `RUN_ERROR`, then `RUN_FINISHED` | Error/cancelled turns emit AG-UI `RUN_ERROR.message`, then terminal finish. |
-| `run.ag_ui_event` | Passthrough frame type | Used for harness frames not otherwise normalized. |
+| `ag_ui.event` | Passthrough frame type | Used for harness frames not otherwise normalized. |
 
 ## SSE Stream Behavior
 
 `GET /api/agents/:id/stream` writes:
 
 1. A `CONNECTED` bootstrap frame with `latestSeq`.
-2. `CUSTOM subtype: state_snapshot` frames for live/restoring sandbox sessions.
+2. `CUSTOM name: ctxmill.sandbox_session.snapshot` frames for live/restoring
+   sandbox sessions. Each carries `agentId`, `conversationId`,
+   `sandboxSessionId`, `activeTurnId`, `status`, `harnessName`,
+   `containerName`, and `timestamp`.
 3. Durable replay frames when `Last-Event-ID` parses as a seq id.
 4. Live frames through `SSEManager.subscribeDurable(...)`.
 
@@ -101,14 +104,14 @@ id: 000000000042
 data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123"}
 ```
 
-Unknown or legacy-format `Last-Event-ID` values are treated as a fresh connect.
-Replay is served from `event_store`, not volatile in-memory history. The current
-single replay query uses the repository default frame limit; very large reconnect
-windows should be paged if they become a product requirement. A small per-agent
-ring buffer only closes the replay-to-live attach race.
-
-The canonical AG-UI vocabulary is the only wire. The pre-canonical
-`?wire=legacy` rendering was removed (W6c, 2026-07-10).
+Unparseable `Last-Event-ID` values are treated as a fresh connect.
+Replay is served from `event_store`, not volatile in-memory history, in pages of
+1,000 frames through a fixed committed watermark. `agent_event_heads` serializes
+same-agent writers from sequence allocation through commit and exposes that
+watermark. Durable subscribers continue tailing the database; in-process
+broadcasts wake them immediately, while periodic watermark checks pick up commits
+from other orchestrator processes. There is no correctness dependency on an
+in-memory replay buffer.
 
 ## gRPC Proto Mapping
 
@@ -137,7 +140,8 @@ conversion lives in
 
 ## Gotchas
 
-- `runId` is a wire/API term. Do not introduce internal `runId` state when the value is actually a `turnId`.
+- `runId` and `threadId` are AG-UI terms. Do not introduce them into internal
+  state when the value is a `turnId` or `conversationId`.
 - `/api/events` is an operational event log over `event_store`; custom events retain their original type strings.
 - The deleted scheduled-event queue is not the active run dispatch path; durable event work should build on `event_store`.
 - The canonical stream is durable, but trigger dispatch cursoring is still tracked separately in beads.

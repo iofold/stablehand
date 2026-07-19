@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 import {
   API_BASE,
-  cancelSession,
+  cancelTurn,
   deleteTestAgent,
   getConversationMessages,
   importStressAgent,
@@ -50,7 +50,7 @@ test.describe('Harness matrix slice 1 — fresh turns across native harnesses @e
       const agent = agents[agentDir as HarnessSliceCase['agentDir']];
       if (!agent) continue;
       for (const runId of runIds) {
-        await cancelSession(request, agent.id, runId);
+        await cancelTurn(request, agent.id, runId);
       }
     }
 
@@ -68,12 +68,12 @@ test.describe('Harness matrix slice 1 — fresh turns across native harnesses @e
       const agent = agents[testCase.agentDir];
       expect(agent).toBeTruthy();
 
-      const { sessionId, conversationId } = await startBackgroundRun(request, agent!.id, testCase.prompt);
+      const { turnId, conversationId } = await startBackgroundRun(request, agent!.id, testCase.prompt);
       const runs = runsByAgent.get(testCase.agentDir) ?? new Set<string>();
-      runs.add(sessionId);
+      runs.add(turnId);
       runsByAgent.set(testCase.agentDir, runs);
 
-      const finalRun = await waitForRunStatus(request, agent!.id, sessionId, ['completed', 'error'], 150_000);
+      const finalRun = await waitForRunStatus(request, agent!.id, turnId, ['completed', 'error'], 150_000);
       expect(finalRun.status).toBe('completed');
 
       const messages = await getConversationMessages(request, agent!.id, conversationId);
@@ -83,7 +83,7 @@ test.describe('Harness matrix slice 1 — fresh turns across native harnesses @e
       const eventsResponse = await request.get(`${API_BASE}/api/events?type=${encodeURIComponent(testCase.expectedEventType)}&agentId=${encodeURIComponent(agent!.id)}&limit=20`);
       expect(eventsResponse.ok()).toBe(true);
       const eventsBody = await eventsResponse.json() as { events?: Array<{ payload?: string }> };
-      expect(eventsBody.events?.some((event) => (event.payload ?? '').includes(sessionId))).toBe(true);
+      expect(eventsBody.events?.some((event) => (event.payload ?? '').includes(turnId))).toBe(true);
     });
   }
 });

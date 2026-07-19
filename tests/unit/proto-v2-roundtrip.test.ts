@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FreshBootstrapSchema,
+  NativeToolConfigSchema,
   OpenSessionRequestSchema,
   ToolLocation,
   ToolMetadataSchema,
@@ -49,6 +50,10 @@ describe('proto v2 sandbox roundtrip', () => {
             },
           ],
           workspaceDir: '/workspace',
+          nativeTools: create(NativeToolConfigSchema, {
+            allowlist: ['Read', 'Glob'],
+            blocklist: ['Bash'],
+          }),
         }),
       },
     });
@@ -63,6 +68,10 @@ describe('proto v2 sandbox roundtrip', () => {
     expect(decoded.bootstrap.value.tools[0]?.programmatic).toBe(true);
     expect(decoded.bootstrap.value.tools[1]?.name).toBe('manual-tool');
     expect(decoded.bootstrap.value.tools[1]?.programmatic).toBe(false);
+    expect(decoded.bootstrap.value.nativeTools).toMatchObject({
+      allowlist: ['Read', 'Glob'],
+      blocklist: ['Bash'],
+    });
   });
 
   it('preserves programmatic flag when tools are pre-created proto messages', () => {

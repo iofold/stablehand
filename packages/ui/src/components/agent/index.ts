@@ -1,5 +1,5 @@
 export { AgentOverviewTab } from './AgentOverviewTab';
-export { AgentSessionsTab } from './AgentSessionsTab';
+export { AgentTurnsTab } from './AgentTurnsTab';
 export { AgentToolsTab } from './AgentToolsTab';
 export { AgentFilesTab } from './AgentFilesTab';
 export { AgentArtifactsTab } from './AgentArtifactsTab';

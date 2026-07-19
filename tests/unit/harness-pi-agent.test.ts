@@ -374,10 +374,10 @@ describe('PIAgentHarness private helpers', () => {
     };
 
     const tools = buildNativeTools(makeConfig({
-      nativeTools: [{
+      nativeTools: {
         allowlist: ['read', 'bash', 'edit'],
         blocklist: ['bash'],
-      }],
+      },
     }), factories) as Array<{ name: string }>;
 
     expect(tools).toEqual([
@@ -556,10 +556,10 @@ describe('PIAgentHarness native tool flow', () => {
     };
 
     const nativeTools = getBuildNativeTools(harness)(makeConfig({
-      nativeTools: [{
+      nativeTools: {
         allowlist: ['read', 'bash'],
         blocklist: ['bash'],
-      }],
+      },
     }), {
       createReadTool: mockCreateReadTool,
       createBashTool: mockCreateBashTool,

@@ -470,7 +470,7 @@ export class ContainerLifecyclePolicy {
 
       if (this.removingContainers.has(container.containerId)) continue;
 
-      if (this.shouldDeferUnownedStartupContainer(container, container.labels['ctxmill.session-id'])) {
+      if (this.shouldDeferUnownedStartupContainer(container, container.labels['ctxmill.sandbox-session-id'])) {
         continue;
       }
 
@@ -538,7 +538,7 @@ export class ContainerLifecyclePolicy {
     }
 
     return liveContainers.find((container) => {
-      return container.labels['ctxmill.session-id'] === session.id;
+      return container.labels['ctxmill.sandbox-session-id'] === session.id;
     });
   }
 
@@ -639,7 +639,7 @@ export class ContainerLifecyclePolicy {
       }
 
       for (const container of managedContainers) {
-        const sessionId = container.labels['ctxmill.session-id'];
+        const sessionId = container.labels['ctxmill.sandbox-session-id'];
         const timeoutSec = Number.parseInt(container.labels['ctxmill.timeout'] ?? '600', 10);
         const startedAtRaw = container.labels['ctxmill.started-at'];
         const startedAtMs = startedAtRaw ? new Date(startedAtRaw).getTime() : Number.NaN;

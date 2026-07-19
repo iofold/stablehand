@@ -3,19 +3,23 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { fastifyConnectPlugin } from '@connectrpc/connect-fastify';
 import { agUiCompatRoutes } from './ag-ui-compat/index.js';
-import { agentRoutes, sessionsRoutes } from './routes/agents.js';
+import {
+  activeConversationRoutes,
+  activeSandboxSessionRoutes,
+  agentRoutes,
+} from './routes/agents.js';
 import { artifactRoutes } from './routes/artifacts.js';
 import { catalogRoutes } from './routes/catalogs.js';
 import { eventRoutes } from './routes/events.js';
 import { settingsRoutes } from './routes/settings.js';
+import { budgetRoutes } from './routes/budgets.js';
 import { triggerRoutes } from './routes/triggers.js';
 import { sandboxRoutes } from './routes/sandbox.js';
 import type { EventTriggerManager } from '../events/trigger-manager.js';
 import type { SSEManager } from './sse.js';
 import type { InterruptManager } from './interrupt.js';
-import type { AgentSessionService } from './agent-session-service.js';
 import type { DatabaseRepository } from '../database/repository.js';
-import type { RunStartupService } from './run-startup-service.js';
+import type { TurnStartupService } from './turn-startup-service.js';
 import type { TypedEventBus } from '../events/bus.js';
 import type { HarnessConfigSchemas } from '@ctxmill/sandbox-daemon/harness/schemas';
 import type { SecretProvider } from '../secrets/types.js';
@@ -66,9 +70,7 @@ export interface ServerOptions {
   artifactStore?: ArtifactStore;
   /** S3 bucket name for artifact storage. Required when artifactStore is provided. */
   artifactBucket?: string;
-  /** Pre-wired AgentSessionService from DI container. */
-  agentSessionService: AgentSessionService;
-  runStartupService: RunStartupService;
+  turnStartupService: TurnStartupService;
   sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
   lifecyclePolicy?: ContainerLifecyclePolicy;
@@ -114,6 +116,20 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     origin: process.env.CORS_ORIGINS
       ? process.env.CORS_ORIGINS.split(',')
       : ['http://localhost:3200', 'http://127.0.0.1:3200'],
+  });
+
+  // Chrome Private Network Access: pages on public origins (e.g. a hosted
+  // artifact console) fetching a tailnet/private-address deployment must see
+  // this header on the preflight or the browser drops the request. Only
+  // meaningful when the origin already passed the CORS allowlist above.
+  app.addHook('onSend', async (request, reply) => {
+    if (
+      request.method === 'OPTIONS'
+      && request.headers['access-control-request-private-network'] === 'true'
+      && reply.getHeader('access-control-allow-origin')
+    ) {
+      reply.header('access-control-allow-private-network', 'true');
+    }
   });
 
   await app.register(multipart, {
@@ -191,9 +207,6 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     });
   }
 
-  // ── AgentSessionService ───────────────────────────────────
-  const agentSessionService = opts.agentSessionService;
-
   // ── Config endpoint ──────────────────────────────────────
   app.get('/api/config', async () => {
     const startTime = process.uptime() * 1000;
@@ -212,9 +225,15 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessSchemas, agentSessionService, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, runStartupService: opts.runStartupService, canonicalLog: opts.canonicalLog });
-  await app.register(sessionsRoutes, {
-    prefix: '/api/sessions',
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessSchemas, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, turnStartupService: opts.turnStartupService, canonicalLog: opts.canonicalLog });
+  await app.register(activeConversationRoutes, {
+    prefix: '/api/conversations',
+    db,
+    lifecyclePolicy: opts.lifecyclePolicy,
+    sessionManager: opts.sessionManager,
+  });
+  await app.register(activeSandboxSessionRoutes, {
+    prefix: '/api/sandbox-sessions',
     db,
     lifecyclePolicy: opts.lifecyclePolicy,
     sessionManager: opts.sessionManager,
@@ -224,12 +243,13 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
       prefix: '/api/ag-ui',
       db,
       eventBus,
-      runStartupService: opts.runStartupService,
+      turnStartupService: opts.turnStartupService,
       canonicalLog: opts.canonicalLog,
     });
   }
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
   await app.register(eventRoutes, { prefix: '/api/events', db });
+  await app.register(budgetRoutes, { prefix: '/api/budgets', db });
   if (triggerManager) {
     await app.register(triggerRoutes, { prefix: '/api/triggers', triggerManager, db });
   }

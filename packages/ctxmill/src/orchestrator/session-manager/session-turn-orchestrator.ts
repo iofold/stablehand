@@ -12,7 +12,7 @@ import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { InterruptManager } from '../interrupt.js';
 import type { SessionEvent as CustomSessionEvent } from '../session-turn-service.js';
-import { SESSION_CANCELLED_MESSAGE } from '../session-cancellation.js';
+import { TURN_CANCELLED_MESSAGE } from '../turn-cancellation.js';
 import { unrefTimer } from '../../util/timing.js';
 import { SessionRecoveryCoordinator } from './session-recovery-coordinator.js';
 import type { SessionStateStore } from './session-state-store.js';
@@ -40,6 +40,16 @@ function summarizeTurnDeliveryFailure(err: unknown): string {
     return err.message;
   }
   return String(err);
+}
+
+function abortReason(signal: AbortSignal, fallback: string): Error {
+  if (signal.reason instanceof Error) {
+    return signal.reason;
+  }
+  if (typeof signal.reason === 'string') {
+    return new Error(signal.reason);
+  }
+  return new Error(fallback);
 }
 
 export interface SessionTurnOrchestratorDeps {
@@ -72,6 +82,7 @@ export interface SessionTurnOrchestratorDeps {
     messages: Message[],
     turnId: string,
     onSessionRebound?: (nextSessionId: string) => void,
+    signal?: AbortSignal,
   ) => AsyncGenerator<CustomSessionEvent>;
 }
 
@@ -109,7 +120,7 @@ export class SessionTurnOrchestrator {
     if (!options?.suppressEvent) {
       this.deps.eventBus?.emit('turn.started', {
         turnId,
-        sessionId,
+        sandboxSessionId: sessionId,
         agentId,
         conversationId,
         mode,
@@ -123,24 +134,15 @@ export class SessionTurnOrchestrator {
   completeTurn(
     sessionId: string,
     turnId: string,
-    agentId: string,
-    conversationId: string,
-    status: 'completed' | 'error' | 'cancelled',
-    durationMs: number,
-    error?: string,
+    _agentId: string,
+    _conversationId: string,
+    _status: 'completed' | 'error' | 'cancelled',
+    _durationMs: number,
+    _error?: string,
+    _usage?: { inputTokens: number; outputTokens: number; totalTokens: number; costUsd?: number },
   ): void {
     this.deps.stateStore.clearTurnController(sessionId, turnId);
     this.deps.stateStore.markTurnInactive(sessionId, turnId);
-    this.deps.eventBus?.emit('turn.completed', {
-      turnId,
-      sessionId,
-      agentId,
-      conversationId,
-      status,
-      error,
-      durationMs,
-      timestamp: Date.now(),
-    });
   }
 
   cancelCurrentTurn(sessionId: string, turnId?: string): boolean {
@@ -153,7 +155,7 @@ export class SessionTurnOrchestrator {
     const queuedIndex = queue?.findIndex((entry) => entry.turnId === targetTurnId) ?? -1;
     if (queue && queuedIndex >= 0) {
       const [entry] = queue.splice(queuedIndex, 1);
-      entry?.channel.fail(new Error(SESSION_CANCELLED_MESSAGE));
+      entry?.channel.fail(new Error(TURN_CANCELLED_MESSAGE));
       this.deps.stateStore.clearTurnController(sessionId, targetTurnId);
       return true;
     }
@@ -226,7 +228,9 @@ export class SessionTurnOrchestrator {
     sessionId: string,
     messages: Message[],
     turnId: string,
+    signal?: AbortSignal,
   ): AsyncGenerator<CustomSessionEvent> {
+    signal?.throwIfAborted();
     const record = this.deps.stateStore.getSessionById(sessionId);
     const conversationId = record?.conversationId;
     if (!conversationId) {
@@ -249,12 +253,38 @@ export class SessionTurnOrchestrator {
         );
       }
       const channel = new AsyncChannel<CustomSessionEvent>();
-      queue.push({ messages, turnId, channel });
+      const entry = { messages, turnId, channel, signal };
+      queue.push(entry);
       this.deps.logger.debug(
         `${TAG} session ${sessionId}: buffering turn ${turnId} (queue depth: ${queue.length})`,
       );
-      yield* channel.generator();
-      return;
+      const onAbort = signal
+        ? () => {
+          const queuedIndex = queue.indexOf(entry);
+          if (queuedIndex < 0) {
+            return;
+          }
+          queue.splice(queuedIndex, 1);
+          channel.fail(abortReason(
+            signal,
+            `Turn ${turnId} cancelled for session ${sessionId}`,
+          ));
+        }
+        : undefined;
+      if (signal && onAbort) {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+      if (signal?.aborted) {
+        onAbort?.();
+      }
+      try {
+        yield* channel.generator();
+        return;
+      } finally {
+        if (onAbort) {
+          signal?.removeEventListener('abort', onAbort);
+        }
+      }
     }
 
     let currentSessionId = sessionId;
@@ -263,7 +293,14 @@ export class SessionTurnOrchestrator {
     };
 
     try {
-      yield* this.executeDeliverTurn(sessionId, messages, turnId, false, onSessionRebound);
+      yield* this.executeDeliverTurn(
+        sessionId,
+        messages,
+        turnId,
+        false,
+        onSessionRebound,
+        signal,
+      );
     } finally {
       await this.deps.stateStore.withConversationLock(conversationId, async () => {
         this.deps.stateStore.markTurnInactive(currentSessionId, turnId);
@@ -281,6 +318,7 @@ export class SessionTurnOrchestrator {
     turnId: string,
     _retried = false,
     onSessionRebound?: (nextSessionId: string) => void,
+    signal?: AbortSignal,
   ): AsyncGenerator<CustomSessionEvent> {
     const record = this.deps.stateStore.getSessionById(sessionId);
     if (!record) {
@@ -302,7 +340,10 @@ export class SessionTurnOrchestrator {
     let sawTerminalFrame = false;
 
     try {
-      const stream: AsyncIterable<ProtoSessionEvent> = record.grpcClient!.deliverTurn(request);
+      signal?.throwIfAborted();
+      const stream: AsyncIterable<ProtoSessionEvent> = signal
+        ? record.grpcClient!.deliverTurn(request, { signal })
+        : record.grpcClient!.deliverTurn(request);
       const turnTimeout = this.deps.config.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
       const abortController = new AbortController();
       let timeoutId: ReturnType<typeof setTimeout> | undefined = setTimeout(
@@ -310,7 +351,7 @@ export class SessionTurnOrchestrator {
         turnTimeout,
       );
       unrefTimer(timeoutId);
-      let hitlActive = false;
+      let interruptActive = false;
 
       let iterator: AsyncIterator<ProtoSessionEvent> | undefined;
       try {
@@ -319,12 +360,14 @@ export class SessionTurnOrchestrator {
         const timeoutError = () =>
           new Error(`Turn ${turnId} timed out after ${turnTimeout}ms for session ${sessionId}`);
         const cancellationError = () => new Error(`Turn ${turnId} cancelled for session ${sessionId}`);
+        signal?.throwIfAborted();
         if (turnAbortSignal?.aborted) {
           throw cancellationError();
         }
         const waitForNext = async () => {
           let onTimeoutAbort: (() => void) | null = null;
           let onTurnAbort: (() => void) | null = null;
+          let onExternalAbort: (() => void) | null = null;
           const onAbortError = new Promise<never>((_, reject) => {
             const listener = () => {
               reject(timeoutError());
@@ -355,12 +398,33 @@ export class SessionTurnOrchestrator {
 
             turnAbortSignal.addEventListener('abort', listener, { once: true });
           });
+          const onExternalAbortError = new Promise<never>((_, reject) => {
+            if (!signal) {
+              return;
+            }
+
+            const listener = () => {
+              reject(abortReason(
+                signal,
+                `Turn ${turnId} cancelled for session ${sessionId}`,
+              ));
+            };
+            onExternalAbort = listener;
+
+            if (signal.aborted) {
+              listener();
+              return;
+            }
+
+            signal.addEventListener('abort', listener, { once: true });
+          });
 
           try {
             return await Promise.race<IteratorResult<ProtoSessionEvent>>([
               iterator!.next(),
               onAbortError,
               onTurnAbortError,
+              onExternalAbortError,
             ]);
           } finally {
             if (onTimeoutAbort) {
@@ -368,6 +432,9 @@ export class SessionTurnOrchestrator {
             }
             if (turnAbortSignal && onTurnAbort) {
               turnAbortSignal.removeEventListener('abort', onTurnAbort);
+            }
+            if (signal && onExternalAbort) {
+              signal.removeEventListener('abort', onExternalAbort);
             }
           }
         };
@@ -384,21 +451,21 @@ export class SessionTurnOrchestrator {
           }
           const converted = protoSessionEventToCustom(event, turnId);
           if (converted) {
-            if (converted.type === 'ag_ui_event' && converted.event.type === 'HITL_PAUSE') {
+            if (converted.type === 'ag_ui_event' && converted.event.type === 'INTERRUPT_REQUESTED') {
               if (timeoutId !== undefined) {
                 clearTimeout(timeoutId);
                 timeoutId = undefined;
               }
-              hitlActive = true;
+              interruptActive = true;
               this.deps.logger.debug(
-                `${TAG} HITL_PAUSE detected for session ${sessionId}, turn timeout suspended`,
+                `${TAG} INTERRUPT_REQUESTED detected for session ${sessionId}, turn timeout suspended`,
               );
-            } else if (hitlActive) {
-              hitlActive = false;
+            } else if (interruptActive) {
+              interruptActive = false;
               timeoutId = setTimeout(() => abortController.abort(), turnTimeout);
               unrefTimer(timeoutId);
               this.deps.logger.debug(
-                `${TAG} HITL resolved for session ${sessionId}, turn timeout re-armed`,
+                `${TAG} interrupt resolved for session ${sessionId}, turn timeout re-armed`,
               );
             }
 
@@ -417,6 +484,13 @@ export class SessionTurnOrchestrator {
         }
       }
     } catch (err) {
+      if (signal?.aborted) {
+        this.deps.logger.info(
+          `${TAG} externally fenced turn ${turnId} for session ${sessionId}`,
+        );
+        await this.settleTurnActive(sessionId, record);
+        return;
+      }
       if (err instanceof Error && err.message === `Turn ${turnId} cancelled for session ${sessionId}`) {
         this.deps.logger.info(`${TAG} turn ${turnId} cancelled for session ${sessionId}`);
         await this.settleTurnActive(sessionId, record);
@@ -429,7 +503,14 @@ export class SessionTurnOrchestrator {
         this.deps.logger.warn(
           `${TAG} stream aborted before any events for turn ${turnId} on session ${sessionId}, retrying once`,
         );
-        yield* this.executeDeliverTurn(sessionId, messages, turnId, true);
+        yield* this.executeDeliverTurn(
+          sessionId,
+          messages,
+          turnId,
+          true,
+          undefined,
+          signal,
+        );
         return;
       }
 
@@ -473,7 +554,14 @@ export class SessionTurnOrchestrator {
           sessionId: newRecord.sessionId,
         });
         onSessionRebound?.(newRecord.sessionId);
-        yield* this.executeDeliverTurn(newRecord.sessionId, messages, turnId, true, onSessionRebound);
+        yield* this.executeDeliverTurn(
+          newRecord.sessionId,
+          messages,
+          turnId,
+          true,
+          onSessionRebound,
+          signal,
+        );
         return;
       }
 
@@ -552,11 +640,13 @@ export class SessionTurnOrchestrator {
         if (turnAbortSignal?.aborted) {
           throw new Error(`Turn ${nextEntry.turnId} cancelled for session ${sessionId}`);
         }
+        nextEntry.signal?.throwIfAborted();
         for await (const event of this.deps.executeDeliverTurn(
           sessionId,
           nextEntry.messages,
           nextEntry.turnId,
           onSessionRebound,
+          nextEntry.signal,
         )) {
           nextEntry.channel.push(event);
         }
@@ -602,7 +692,7 @@ export class SessionTurnOrchestrator {
     this.scheduleIdleTimeoutForActiveSession(sessionId, record);
   }
 
-  private scheduleIdleTimeoutForActiveSession(sessionId: string, record: SessionRecord): void {
+  scheduleIdleTimeoutForActiveSession(sessionId: string, record: SessionRecord): void {
     this.deps.lifecyclePolicy.scheduleIdleTimeout(sessionId, record.containerId, {
       onCheckpoint: async (sid) => {
         await this.deps.onCheckpoint(sid);

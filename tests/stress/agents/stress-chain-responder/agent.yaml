@@ -10,9 +10,9 @@ metadata:
     harness: pi-agent
 spec:
   harness: pi-agent
-  model:
+  harnessConfig:
     provider: openai
-    id: gpt-5.4
+    model: gpt-5.4
     apiKeyRef: "$secret:OPENAI_API_KEY"
   instructions: |
     You received a chain event from another agent. Acknowledge receipt by using emit-event exactly once to emit type='stress.chain.done' with payload containing {schemaVersion: 1, harness: 'stress-chain-responder', agent: 'stress-chain-responder', model: 'gpt-5.4', status: 'ok', responder: 'stress-chain-responder'} plus the received data.
@@ -22,6 +22,3 @@ spec:
     allowlist:
       - read
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 120
-    maxTokensPerSession: 8000

@@ -2,9 +2,42 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createGzip } from 'node:zlib';
 
 import { getConversationWorkspacePath } from '../../packages/ctxmill/src/workspace/session-workspace.js';
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
+
+interface TarPack {
+  entry(header: { name: string; size: number; type: 'file'; mode: number }, data: string): void;
+  finalize(): void;
+  pipe<T extends NodeJS.WritableStream>(destination: T): T;
+}
+
+async function createWorkspaceArchive(files: Record<string, string>): Promise<Buffer> {
+  const tarModulePath = new URL(
+    '../../packages/ctxmill/node_modules/tar-stream/index.js',
+    import.meta.url,
+  ).href;
+  const tar = await import(tarModulePath) as { pack(): TarPack };
+  const pack = tar.pack();
+  for (const [name, content] of Object.entries(files)) {
+    pack.entry({
+      name,
+      size: Buffer.byteLength(content),
+      type: 'file',
+      mode: 0o644,
+    }, content);
+  }
+  pack.finalize();
+
+  const gzip = createGzip();
+  const chunks: Buffer[] = [];
+  pack.pipe(gzip);
+  for await (const chunk of gzip) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
 
 describe('File endpoint integration tests', () => {
   let app: TestAppHandle['app'];
@@ -160,18 +193,6 @@ describe('File endpoint integration tests', () => {
 
   it('reads exact hidden diagnostics files from the conversation workspace', async () => {
     const conversation = await container.db.createConversation(agentId);
-    const sandboxSession = await container.db.createSandboxSession({
-      conversationId: conversation.id,
-      agentId,
-      harnessName: 'langgraph',
-    });
-    const turn = await container.db.createTurn({
-      agentId,
-      conversationId: conversation.id,
-      sessionId: sandboxSession.id,
-      mode: 'background',
-      taskDescription: 'diagnostics',
-    });
 
     mkdirSync(join(workspaceDir, '.claude'), { recursive: true });
     writeFileSync(join(workspaceDir, '.claude', 'settings.json'), '{"source":"base"}');
@@ -183,14 +204,14 @@ describe('File endpoint integration tests', () => {
 
     const settingsRes = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentId}/files/read?path=${encodeURIComponent('.claude/settings.json')}&sessionId=${turn.id}`,
+      url: `/api/agents/${agentId}/files/read?path=${encodeURIComponent('.claude/settings.json')}&conversationId=${conversation.id}`,
     });
     expect(settingsRes.statusCode).toBe(200);
     expect(settingsRes.json().content).toBe('{"source":"conversation"}');
 
     const traceRes = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentId}/files/read?path=${encodeURIComponent('.hook-trace.log')}&sessionId=${turn.id}`,
+      url: `/api/agents/${agentId}/files/read?path=${encodeURIComponent('.hook-trace.log')}&conversationId=${conversation.id}`,
     });
     expect(traceRes.statusCode).toBe(200);
     expect(traceRes.json().content).toBe('hook trace from conversation');
@@ -296,5 +317,47 @@ describe('File endpoint integration tests', () => {
     });
 
     expect(res.statusCode).toBe(404);
+  });
+
+  it('persists and reads back a deterministic workspace revision', async () => {
+    const archive = await createWorkspaceArchive({
+      'AGENTS.md': '# Workspace contract',
+      'bin/pilot': '#!/bin/sh\necho pilot\n',
+    });
+
+    const upload = await app.inject({
+      method: 'POST',
+      url: `/api/agents/${agentId}/workspace`,
+      headers: { 'content-type': 'application/gzip' },
+      payload: archive,
+    });
+
+    expect(upload.statusCode).toBe(201);
+    expect(upload.json()).toMatchObject({
+      revision: 1,
+      fileCount: 2,
+      totalBytes: 42,
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      appliedAt: expect.any(Number),
+    });
+
+    const readback = await app.inject({
+      method: 'GET',
+      url: `/api/agents/${agentId}/workspace`,
+    });
+    expect(readback.statusCode).toBe(200);
+    expect(readback.json()).toEqual(upload.json());
+
+    const repeat = await app.inject({
+      method: 'POST',
+      url: `/api/agents/${agentId}/workspace`,
+      headers: { 'content-type': 'application/gzip' },
+      payload: archive,
+    });
+    expect(repeat.statusCode).toBe(201);
+    expect(repeat.json()).toMatchObject({
+      revision: 2,
+      sha256: upload.json().sha256,
+    });
   });
 });

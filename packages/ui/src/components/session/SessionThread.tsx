@@ -276,6 +276,7 @@ export function SessionThread({
             <MessageBubble
               message={{
                 id: 'streaming',
+                messageRevision: 0,
                 role: 'assistant',
                 content: streamingContent,
                 createdAt: new Date().toISOString(),

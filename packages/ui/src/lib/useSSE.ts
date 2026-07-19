@@ -1,5 +1,9 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { create } from 'zustand';
+import {
+  AgentStreamEventSchema,
+  InterruptRequestedEventSchema,
+} from '@ctxmill/contracts';
 import { useConversationStore } from '@/stores/conversation';
 import { useInterruptStore } from '@/stores/interrupt';
 import { createSSEConnection } from '@/lib/api';
@@ -21,7 +25,15 @@ export function useSSEStatus(): SSEStatus {
   return useSSEStatusStore((s) => s.status);
 }
 
-export function useSSE(agentId: string | undefined) {
+export function useSSE(
+  agentId: string | undefined,
+  options: {
+    enabled?: boolean;
+    eventCursor?: string;
+  } = {},
+) {
+  const enabled = options.enabled ?? true;
+  const eventCursor = options.eventCursor;
   const eventSourceRef = useRef<EventSource | null>(null);
   const mountedRef = useRef(false);
   const latestAgentIdRef = useRef(agentId);
@@ -45,31 +57,40 @@ export function useSSE(agentId: string | undefined) {
       if (!mountedRef.current) return;
 
       try {
-        const data = JSON.parse(event.data);
+        const parsed: unknown = JSON.parse(event.data);
+        const validated = AgentStreamEventSchema.parse(parsed);
+        const data: Record<string, unknown> = { ...validated };
         if (event.lastEventId) {
           data._eventId = event.lastEventId;
         }
 
-        if (data.type === 'CUSTOM' && (data.subtype === 'hitl_pause' || data.name === 'ctxmill.hitl.requested')) {
-          setPending({
-            agentId: data.agentId ?? latestAgentIdRef.current ?? '',
-            toolName: data.toolName ?? '',
-            args: data.args ?? {},
-            toolCallId: data.toolCallId ?? '',
-            sessionId: data.runId,
-          });
+        if (validated.type === 'CUSTOM' && validated.name === 'ctxmill.interrupt.requested') {
+          const interrupt = InterruptRequestedEventSchema.safeParse(validated);
+          if (interrupt.success) {
+            setPending({
+              interruptId: interrupt.data.interruptId,
+              turnId: interrupt.data.turnId,
+              agentId: interrupt.data.agentId ?? latestAgentIdRef.current ?? '',
+              toolCallName: interrupt.data.toolCallName,
+              args: interrupt.data.args,
+              toolCallId: interrupt.data.toolCallId,
+              ...(interrupt.data.sandboxSessionId
+                ? { sandboxSessionId: interrupt.data.sandboxSessionId }
+                : {}),
+            });
+          }
         }
 
         handleSSEEvent(data);
       } catch (err) {
-        console.debug('[SSE] Failed to parse event:', err);
+        console.debug('[SSE] Rejected invalid event:', err);
       }
     },
     [handleSSEEvent, setPending],
   );
 
   useEffect(() => {
-    if (!agentId) {
+    if (!agentId || !enabled) {
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       if (mountedRef.current) {
@@ -80,7 +101,7 @@ export function useSSE(agentId: string | undefined) {
 
     setStatus('connecting');
     useConversationStore.getState().seenEventIds?.clear();
-    const es = createSSEConnection(agentId);
+    const es = createSSEConnection(agentId, eventCursor);
     eventSourceRef.current = es;
 
     es.onopen = () => {
@@ -111,7 +132,7 @@ export function useSSE(agentId: string | undefined) {
         setStatus('disconnected');
       }
     };
-  }, [agentId, handleEvent, setStatus]);
+  }, [agentId, enabled, eventCursor, handleEvent, setStatus]);
 
   return { status: useSSEStatusStore((s) => s.status) };
 }

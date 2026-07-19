@@ -29,7 +29,7 @@ import {
   type Message as ProtoMessage,
 } from '@ctxmill/proto/sandbox/v1';
 
-import type { AGUIEvent } from '@ctxmill/shared';
+import type { AgentSessionEvent } from '@ctxmill/shared';
 import type {
   AgentEvent,
   HarnessSessionConfig,
@@ -50,9 +50,9 @@ import type { SessionCheckpoint } from './checkpoint.js';
 import { stringifyJsonWithBigInts, toJsonCompatibleValue } from './json-serialization.js';
 import { createToolProxy, type OrchestratorServiceClient } from './tool-proxy.js';
 
-type ProtoAGUISessionEvent = ProtoSessionEvent & {
+type ProtoAgentSessionEvent = ProtoSessionEvent & {
   payload: {
-    case: 'agUiEvent';
+    case: 'agentEvent';
     value: ProtoAgentEvent;
   };
 };
@@ -81,6 +81,14 @@ export function protoFreshBootstrapToSessionConfig(
     secrets,
     workspaceDir: fresh.workspaceDir || '/workspace',
     harnessConfigJson: fresh.harnessConfigJson,
+    ...(fresh.nativeTools
+      ? {
+          nativeTools: {
+            allowlist: [...fresh.nativeTools.allowlist],
+            blocklist: [...fresh.nativeTools.blocklist],
+          },
+        }
+      : {}),
   };
 }
 
@@ -135,14 +143,14 @@ export function protoDeliverTurnToInput(req: DeliverTurnRequest): HarnessTurnInp
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Internal → Proto: AgentEvent → SessionEvent (agUiEvent variant)            */
+/*  Internal → Proto: AgentEvent → SessionEvent (agentEvent variant)           */
 /* -------------------------------------------------------------------------- */
 
 export function agentEventToSessionEvent(
   event: AgentEvent,
-): ProtoAGUISessionEvent {
-  const payload: ProtoAGUISessionEvent['payload'] = {
-    case: 'agUiEvent',
+): ProtoAgentSessionEvent {
+  const payload: ProtoAgentSessionEvent['payload'] = {
+    case: 'agentEvent',
     value: convertAgentEvent(event),
   };
   const sessionEvent = create(SessionEventSchema, { payload });
@@ -272,8 +280,8 @@ export function protoSessionCheckpointToInternal(
  */
 export interface ProtoToolDefsOptions {
   orchestratorClient?: OrchestratorServiceClient;
-  sessionId?: string;
-  sessionIdRef?: { current: string };
+  turnId?: string;
+  turnIdRef?: { current: string };
   agentId?: string;
   daemonHandlers?: Map<string, (input: unknown) => Promise<string>>;
 }
@@ -300,15 +308,15 @@ export function protoToToolDefs(
 
     let handler: (input: unknown) => Promise<string>;
 
-    const effectiveSessionId = opts?.sessionId ?? opts?.sessionIdRef;
+    const effectiveTurnId = opts?.turnId ?? opts?.turnIdRef;
     if (isDaemon && opts?.daemonHandlers?.has(t.name)) {
       handler = opts.daemonHandlers.get(t.name)!;
     } else if (isDaemon) {
       throw new Error(
         `Daemon handler for "${t.name}" is not configured. Ensure artifact storage and orchestrator routing are enabled before opening the session.`,
       );
-    } else if (isOrchestrator && opts?.orchestratorClient && effectiveSessionId && opts.agentId) {
-      handler = createToolProxy(t.name, opts.orchestratorClient, effectiveSessionId, opts.agentId);
+    } else if (isOrchestrator && opts?.orchestratorClient && effectiveTurnId && opts.agentId) {
+      handler = createToolProxy(t.name, opts.orchestratorClient, effectiveTurnId, opts.agentId);
     } else if (isOrchestrator) {
       throw new Error(
         `Orchestrator proxy for "${t.name}" is not connected. Session startup requires ORCHESTRATOR_URL and routing metadata.`,
@@ -444,7 +452,7 @@ function convertAgentEvent(event: AgentEvent): ProtoAgentEvent {
                     inputTokens: BigInt(event.usage.inputTokens),
                     outputTokens: BigInt(event.usage.outputTokens),
                     totalTokens: BigInt(event.usage.totalTokens),
-                    cost: event.usage.cost,
+                    costUsd: event.usage.costUsd,
                   }),
                 }
               : {}),
@@ -514,13 +522,13 @@ function stringifyProtoJsonPayload(value: unknown): string {
 }
 
 /**
- * Convert a proto AgentEvent (from gRPC stream) into an AGUIEvent for SSE broadcast.
+ * Convert a proto AgentEvent (from gRPC stream) into an AgentSessionEvent for SSE broadcast.
  * This is the REVERSE of convertAgentEvent().
  */
 export function protoAgentEventToAGUI(
   proto: ProtoAgentEvent,
   runId: string,
-): AGUIEvent | null {
+): AgentSessionEvent | null {
   const ts = Date.now();
 
   switch (proto.event.case) {
@@ -529,7 +537,7 @@ export function protoAgentEventToAGUI(
         type: 'TEXT_MESSAGE_CONTENT',
         timestamp: ts,
         runId,
-        content: proto.event.value.content,
+        delta: proto.event.value.content,
       };
 
     case 'toolCallStart': {
@@ -539,7 +547,7 @@ export function protoAgentEventToAGUI(
         timestamp: ts,
         runId,
         toolCallId: v.id,
-        toolName: v.name,
+        toolCallName: v.name,
         args: v.argsJson ? JSON.parse(v.argsJson) : {},
       };
     }
@@ -551,7 +559,7 @@ export function protoAgentEventToAGUI(
         timestamp: ts,
         runId,
         toolCallId: v.id,
-        toolName: '',
+        toolCallName: '',
         result: v.result,
         error: v.error,
         durationMs: Number(v.durationMs),
@@ -561,11 +569,11 @@ export function protoAgentEventToAGUI(
     case 'approvalNeeded': {
       const v = proto.event.value;
       return {
-        type: 'HITL_PAUSE',
+        type: 'INTERRUPT_REQUESTED',
         timestamp: ts,
         runId,
         id: v.id,
-        tool: v.toolName,
+        toolCallName: v.toolName,
         args: v.argsJson ? JSON.parse(v.argsJson) : {},
       };
     }
@@ -609,7 +617,7 @@ export function protoAgentEventToAGUI(
             inputTokens: Number(v.usage.inputTokens),
             outputTokens: Number(v.usage.outputTokens),
             totalTokens: Number(v.usage.totalTokens),
-            cost: v.usage.cost,
+            costUsd: v.usage.costUsd,
           }
         : undefined;
 
@@ -636,7 +644,7 @@ export function protoSessionEventToCustom(
   turnId: string,
 ): CustomSessionEvent | null {
   switch (proto.payload.case) {
-    case 'agUiEvent': {
+    case 'agentEvent': {
       const agui = protoAgentEventToAGUI(proto.payload.value, turnId);
       if (!agui) return null;
 

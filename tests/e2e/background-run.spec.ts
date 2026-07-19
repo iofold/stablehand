@@ -16,11 +16,11 @@ async function startBackgroundRun(
   agentId: string,
   task: string,
 ) {
-  const startRunButton = page.getByTestId('start-session-button').first();
+  const startRunButton = page.getByTestId('start-turn-button').first();
   await expect(startRunButton).toBeVisible();
   const runResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST' &&
-    response.url().includes(`/api/agents/${agentId}/session`) &&
+    response.url().includes(`/api/agents/${agentId}/turns`) &&
     response.status() === 201,
   );
   await startRunButton.click();
@@ -32,7 +32,7 @@ async function startBackgroundRun(
 
   // Wait for the form to close after submission
   await expect(taskInput).toBeHidden({ timeout: 10000 });
-  return (await (await runResponse).json()) as { sessionId: string; conversationId: string };
+  return (await (await runResponse).json()) as { turnId: string; conversationId: string };
 }
 
 test.describe('Background Run Lifecycle @extended', () => {
@@ -64,10 +64,10 @@ test.describe('Background Run Lifecycle @extended', () => {
     await page.waitForLoadState('networkidle');
 
     await expect(async () => {
-      const runsRes = await page.request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
+      const runsRes = await page.request.get(`${API_BASE}/api/agents/${agentId}/turns`);
       const body = await runsRes.json();
-      const runs = body.sessions;
-      const matchingRun = runs.find((entry: { id: string; sessionId?: string; status: string }) => entry.sessionId === run.sessionId || entry.id === run.sessionId);
+      const runs = body.turns;
+      const matchingRun = runs.find((entry: { id: string; status: string }) => entry.id === run.turnId);
       expect(matchingRun).toBeTruthy();
       expect(['queued', 'active', 'paused', 'checkpointed', 'restoring', 'terminated', 'completed', 'error', 'cancelled', 'idle'])
         .toContain(String(matchingRun.status).toLowerCase());
@@ -80,7 +80,7 @@ test.describe('Background Run Lifecycle @extended', () => {
     const finalRun = await waitForRunStatus(
       page.request,
       agentId,
-      run.sessionId,
+      run.turnId,
       ['completed', 'error'],
       120_000,
     );
@@ -94,13 +94,13 @@ test.describe('Background Run Lifecycle @extended', () => {
       'Background run cancellation regression test.',
     );
     const cancelRes = await page.request.post(
-      `${API_BASE}/api/agents/${agentId}/sessions/${run.sessionId}/cancel`,
+      `${API_BASE}/api/agents/${agentId}/turns/${run.turnId}/cancel`,
     );
     expect([200, 404]).toContain(cancelRes.status());
     const finalRun = await waitForRunStatus(
       page.request,
       agentId,
-      run.sessionId,
+      run.turnId,
       ['cancelled', 'completed', 'error'],
       120_000,
     );
@@ -112,10 +112,10 @@ test.describe('Background Run Lifecycle @extended', () => {
 
     // Verify the run exists via API
     await expect(async () => {
-      const runsRes = await page.request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
+      const runsRes = await page.request.get(`${API_BASE}/api/agents/${agentId}/turns`);
       const body = await runsRes.json();
-      const runs = body.sessions;
-      expect(runs.some((entry: { id: string; sessionId?: string }) => entry.sessionId === run.sessionId || entry.id === run.sessionId)).toBe(true);
+      const runs = body.turns;
+      expect(runs.some((entry: { id: string }) => entry.id === run.turnId)).toBe(true);
     }).toPass({ timeout: 60000, intervals: [1000, 2000, 5000] });
   });
 });

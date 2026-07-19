@@ -32,12 +32,12 @@ export function normalizeTokenUsage(usage: Record<string, unknown> | undefined):
   const inputTokens = readNumber(usage, ['inputTokens', 'input', 'input_tokens']) ?? 0;
   const outputTokens = readNumber(usage, ['outputTokens', 'output', 'output_tokens']) ?? 0;
   const totalTokens = readNumber(usage, ['totalTokens', 'total', 'total_tokens']) ?? inputTokens + outputTokens;
-  const cost = readCost(usage);
+  const costUsd = readCost(usage);
 
   return {
     inputTokens,
     outputTokens,
     totalTokens,
-    ...(cost !== undefined ? { cost } : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
   };
 }

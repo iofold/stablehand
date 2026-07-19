@@ -2,19 +2,38 @@
   "name": "@ctxmill/client",
   "version": "0.1.0",
   "type": "module",
-  "description": "Typed browser client for CTXMill AG-UI streaming integrations",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "Strict control-plane and AG-UI clients for CTXMill integrations",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./control": {
+      "types": "./dist/control-client.d.ts",
+      "import": "./dist/control-client.js"
+    },
+    "./ag-ui": {
+      "types": "./dist/ag-ui-client.d.ts",
+      "import": "./dist/ag-ui-client.js"
     }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@ctxmill/contracts": "workspace:*",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "typescript": "^5.8.0",

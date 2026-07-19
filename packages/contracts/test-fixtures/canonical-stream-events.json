@@ -1,0 +1,243 @@
+[
+  {
+    "type": "MESSAGES_SNAPSHOT",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "messages": [
+      {
+        "id": "message-user-1",
+        "role": "user",
+        "content": "Close April"
+      }
+    ]
+  },
+  {
+    "type": "CUSTOM",
+    "name": "ctxmill.turn.pending",
+    "agentId": "agent-1",
+    "turnId": "turn-1",
+    "conversationId": "conversation-1",
+    "mode": "interactive",
+    "taskDescription": "Close April",
+    "timestamp": 1
+  },
+  {
+    "type": "RUN_STARTED",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "timestamp": 2
+  },
+  {
+    "type": "TEXT_MESSAGE_START",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "messageId": "message-assistant-1",
+    "role": "assistant",
+    "timestamp": 3
+  },
+  {
+    "type": "TEXT_MESSAGE_CONTENT",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "messageId": "message-assistant-1",
+    "delta": "Working",
+    "timestamp": 4
+  },
+  {
+    "type": "TEXT_MESSAGE_END",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "messageId": "message-assistant-1",
+    "timestamp": 5
+  },
+  {
+    "type": "TOOL_CALL_START",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "toolCallId": "tool-call-1",
+    "toolCallName": "reconcile",
+    "timestamp": 6
+  },
+  {
+    "type": "TOOL_CALL_ARGS",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "toolCallId": "tool-call-1",
+    "delta": "{\"period\":\"2026-04\"}",
+    "timestamp": 7
+  },
+  {
+    "type": "TOOL_CALL_END",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "toolCallId": "tool-call-1",
+    "timestamp": 8
+  },
+  {
+    "type": "TOOL_CALL_RESULT",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "toolCallId": "tool-call-1",
+    "result": {
+      "balanced": true
+    },
+    "timestamp": 9
+  },
+  {
+    "type": "STATE_DELTA",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "delta": [
+      {
+        "op": "replace",
+        "path": "/status",
+        "value": "balanced"
+      }
+    ],
+    "timestamp": 10
+  },
+  {
+    "type": "CUSTOM",
+    "name": "ctxmill.interrupt.requested",
+    "agentId": "agent-1",
+    "turnId": "turn-1",
+    "conversationId": "conversation-1",
+    "sandboxSessionId": "sandbox-1",
+    "interruptId": "interrupt-1",
+    "toolCallId": "tool-call-2",
+    "toolCallName": "post-journal",
+    "args": {
+      "journalId": "journal-1"
+    },
+    "timestamp": 11
+  },
+  {
+    "type": "CUSTOM",
+    "name": "ctxmill.interrupt.resolved",
+    "agentId": "agent-1",
+    "turnId": "turn-1",
+    "conversationId": "conversation-1",
+    "sandboxSessionId": "sandbox-1",
+    "interruptId": "interrupt-1",
+    "action": "approve",
+    "timestamp": 12
+  },
+  {
+    "type": "CUSTOM",
+    "name": "ctxmill.message.committed",
+    "agentId": "agent-1",
+    "turnId": "turn-1",
+    "conversationId": "conversation-1",
+    "messageId": "message-assistant-1",
+    "messageSeq": 1,
+    "role": "assistant",
+    "content": "Working",
+    "parts": [
+      {
+        "type": "text",
+        "content": "Working"
+      }
+    ],
+    "toolCalls": [],
+    "timestamp": 13
+  },
+  {
+    "type": "CUSTOM",
+    "name": "ctxmill.message.updated",
+    "agentId": "agent-1",
+    "turnId": "turn-1",
+    "conversationId": "conversation-1",
+    "messageId": "message-assistant-1",
+    "messageSeq": 1,
+    "messageRevision": 1,
+    "role": "assistant",
+    "content": "Working",
+    "parts": [
+      {
+        "type": "text",
+        "content": "Working"
+      },
+      {
+        "type": "tool_call",
+        "id": "tool-call-1",
+        "name": "lookup",
+        "args": "{\"query\":\"ctxmill\"}",
+        "result": "found",
+        "status": "complete"
+      },
+      {
+        "type": "text",
+        "content": "Checking one more source"
+      },
+      {
+        "type": "tool_call",
+        "id": "tool-call-2",
+        "name": "read",
+        "args": "{\"path\":\"README.md\"}",
+        "result": "contents",
+        "status": "complete"
+      }
+    ],
+    "toolCalls": [
+      {
+        "id": "tool-call-1",
+        "name": "lookup",
+        "args": "{\"query\":\"ctxmill\"}",
+        "status": "complete"
+      },
+      {
+        "id": "tool-call-2",
+        "name": "read",
+        "args": "{\"path\":\"README.md\"}",
+        "status": "complete"
+      }
+    ],
+    "timestamp": 14
+  },
+  {
+    "type": "CUSTOM",
+    "name": "ctxmill.a2ui.render",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "block": {
+      "id": "block-1",
+      "component": "MetricCard",
+      "props": {
+        "title": "Variance",
+        "value": 0
+      }
+    },
+    "timestamp": 14
+  },
+  {
+    "type": "CUSTOM",
+    "name": "pilot.stage.changed",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "value": {
+      "stage": "review"
+    },
+    "timestamp": 15
+  },
+  {
+    "type": "RUN_FINISHED",
+    "runId": "turn-1",
+    "threadId": "conversation-1",
+    "status": "completed",
+    "usage": {
+      "inputTokens": 10,
+      "outputTokens": 5,
+      "totalTokens": 15,
+      "costUsd": 0.01
+    },
+    "timestamp": 16
+  },
+  {
+    "type": "RUN_ERROR",
+    "runId": "turn-2",
+    "threadId": "conversation-2",
+    "message": "Harness failed",
+    "status": "error",
+    "timestamp": 17
+  }
+]

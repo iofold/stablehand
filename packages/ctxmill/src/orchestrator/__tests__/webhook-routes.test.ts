@@ -6,10 +6,9 @@ import { TypedEventBus } from '../../events/bus.js';
 import type { DatabaseRepository, WebhookRow } from '../../database/repository.js';
 import { SSEManager } from '../sse.js';
 import { InterruptManager } from '../interrupt.js';
-import type { AgentSessionService } from '../agent-session-service.js';
-import type { RunStartupService } from '../run-startup-service.js';
+import type { TurnStartupService } from '../turn-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
-import { createTestRunStartupService } from './run-startup-test-helper.js';
+import { createTestTurnStartupService } from './turn-startup-test-helper.js';
 
 function createMockDb() {
   const agent = {
@@ -50,7 +49,7 @@ function createMockDb() {
         agentId: 'agent-1',
         url: 'https://hooks.example/run-completed',
         events: ['turn.completed'],
-        secret: null,
+        secret: 'stored-list-secret',
         active: true,
         createdAt: 10,
         updatedAt: 10,
@@ -78,8 +77,8 @@ function createMockDb() {
   return db as unknown as DatabaseRepository & typeof db;
 }
 
-function createRunStartupServiceStub(): RunStartupService {
-  return createTestRunStartupService();
+function createTurnStartupServiceStub(): TurnStartupService {
+  return createTestTurnStartupService();
 }
 
 async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
@@ -104,10 +103,7 @@ async function buildApp(db: DatabaseRepository): Promise<FastifyInstance> {
     interrupts: new InterruptManager(),
     sessionManager,
     harnessSchemas: { langgraph: configSchema },
-    agentSessionService: {
-      executeSession: vi.fn(),
-    } as unknown as AgentSessionService,
-    runStartupService: createRunStartupServiceStub(),
+    turnStartupService: createTurnStartupServiceStub(),
     eventBus: new TypedEventBus(),
   });
   await app.ready();
@@ -153,9 +149,10 @@ describe('webhook routes', () => {
       agentId: 'agent-1',
       url: 'https://hooks.example/new',
       events: ['turn.started', 'turn.completed'],
-      secret: 'top-secret',
+      hasSecret: true,
       active: true,
     }));
+    expect(response.json()).not.toHaveProperty('secret');
   });
 
   it('rejects invalid event types', async () => {
@@ -165,13 +162,14 @@ describe('webhook routes', () => {
       payload: {
         url: 'https://hooks.example/new',
         events: ['turn.completed', 'run.unknown'],
+        secret: 'top-secret',
       },
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({
-      error: 'Invalid event types: run.unknown',
-      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed', 'feedback.received'],
+    expect(response.json()).toMatchObject({
+      error: 'Invalid webhook definition',
+      issues: [{ path: 'events.1' }],
     });
     expect(db.createWebhook).not.toHaveBeenCalled();
   });
@@ -186,7 +184,31 @@ describe('webhook routes', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: 'url and events are required' });
+    expect(response.json()).toEqual({
+      error: 'Invalid webhook definition',
+      issues: [
+        expect.objectContaining({ path: 'events' }),
+        expect.objectContaining({ path: 'secret' }),
+      ],
+    });
+    expect(db.createWebhook).not.toHaveBeenCalled();
+  });
+
+  it('rejects creating an unsigned webhook', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/webhooks',
+      payload: {
+        url: 'https://hooks.example/new',
+        events: ['turn.completed'],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: 'Invalid webhook definition',
+      issues: [{ path: 'secret' }],
+    });
     expect(db.createWebhook).not.toHaveBeenCalled();
   });
 
@@ -196,7 +218,7 @@ describe('webhook routes', () => {
       url: '/api/agents/agent-1/webhooks/hook-1',
       payload: {
         url: 'https://hooks.example/updated',
-        events: ['turn.completed', 'message.committed'],
+        events: ['turn.completed', 'message.committed', 'message.updated'],
         secret: 'rotated-secret',
       },
     });
@@ -204,16 +226,17 @@ describe('webhook routes', () => {
     expect(response.statusCode).toBe(200);
     expect(db.updateWebhookForAgent).toHaveBeenCalledWith('hook-1', 'agent-1', {
       url: 'https://hooks.example/updated',
-      events: ['turn.completed', 'message.committed'],
+      events: ['turn.completed', 'message.committed', 'message.updated'],
       secret: 'rotated-secret',
     });
     expect(response.json()).toEqual(expect.objectContaining({
       id: 'hook-1',
       agentId: 'agent-1',
       url: 'https://hooks.example/updated',
-      events: ['turn.completed', 'message.committed'],
-      secret: 'rotated-secret',
+      events: ['turn.completed', 'message.committed', 'message.updated'],
+      hasSecret: true,
     }));
+    expect(response.json()).not.toHaveProperty('secret');
   });
 
   it('rejects invalid event types when updating a webhook', async () => {
@@ -223,14 +246,15 @@ describe('webhook routes', () => {
       payload: {
         url: 'https://hooks.example/updated',
         events: ['message.committed', 'run.unknown'],
+        secret: 'rotated-secret',
       },
     });
 
     expect(response.statusCode).toBe(400);
     expect(db.updateWebhookForAgent).not.toHaveBeenCalled();
-    expect(response.json()).toEqual({
-      error: 'Invalid event types: run.unknown',
-      validEvents: ['turn.started', 'turn.completed', 'run.tool_started', 'run.tool_result', 'run.interrupted', 'run.interrupt_resolved', 'message.committed', 'feedback.received'],
+    expect(response.json()).toMatchObject({
+      error: 'Invalid webhook definition',
+      issues: [{ path: 'events.1' }],
     });
   });
 
@@ -240,11 +264,15 @@ describe('webhook routes', () => {
       url: '/api/agents/agent-1/webhooks/hook-1',
       payload: {
         events: ['turn.completed'],
+        secret: 'rotated-secret',
       },
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: 'url and events are required' });
+    expect(response.json()).toMatchObject({
+      error: 'Invalid webhook definition',
+      issues: [{ path: 'url' }],
+    });
     expect(db.updateWebhookForAgent).not.toHaveBeenCalled();
   });
 
@@ -255,6 +283,7 @@ describe('webhook routes', () => {
       payload: {
         url: 'https://hooks.example/updated',
         events: ['turn.completed'],
+        secret: 'rotated-secret',
       },
     });
 
@@ -275,8 +304,10 @@ describe('webhook routes', () => {
         id: 'hook-1',
         agentId: 'agent-1',
         url: 'https://hooks.example/run-completed',
+        hasSecret: true,
       }),
     ]);
+    expect(response.json()[0]).not.toHaveProperty('secret');
   });
 
   it('deletes a webhook', async () => {

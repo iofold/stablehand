@@ -34,6 +34,7 @@ message FreshBootstrap {
   repeated ToolMetadata tools = 7;
   string workspace_dir = 8;
   string session_id = 9;
+  NativeToolConfig native_tools = 10;
 }
 
 message RestoreBootstrap {
@@ -42,6 +43,7 @@ message RestoreBootstrap {
   string agent_id = 3;
   string harness_config_json = 4;
   string system_prompt = 5;
+  NativeToolConfig native_tools = 6;
 }
 
 message OpenSessionResponse {
@@ -57,7 +59,7 @@ message DeliverTurnRequest {
 
 message SessionEvent {
   oneof payload {
-    AgentEvent ag_ui_event = 1;
+    AgentEvent agent_event = 1;
     MessageCommitted message_committed = 2;
     TurnCompleted turn_completed = 3;
     TurnFailed turn_failed = 4;
@@ -133,7 +135,7 @@ message KillSessionResponse {
 }
 
 message RequestToolRequest {
-  string session_id = 1;
+  string turn_id = 1;
   string agent_id = 2;
   string tool_name = 3;
   string args_json = 4;
@@ -147,7 +149,7 @@ message RequestToolResponse {
 }
 
 message EmitEventRequest {
-  string session_id = 1;
+  string turn_id = 1;
   string event_type = 2;
   string payload_json = 3;
 }
@@ -251,13 +253,13 @@ message TokenUsage {
   int64 input_tokens = 1;
   int64 output_tokens = 2;
   int64 total_tokens = 3;
-  optional double cost = 4;
+  optional double cost_usd = 4;
 }
 
 message ArtifactMeta {
   string id = 1;
   string agent_id = 2;
-  string session_id = 3;
+  string turn_id = 3;
   string name = 4;
   string mime_type = 5;
   int64 size_bytes = 6;
@@ -268,7 +270,7 @@ message ArtifactMeta {
 }
 
 message RegisterArtifactRequest {
-  string session_id = 1;
+  string turn_id = 1;
   string agent_id = 2;
   ArtifactMeta artifact = 3;
 }

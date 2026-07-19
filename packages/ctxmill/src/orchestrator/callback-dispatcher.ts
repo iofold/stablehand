@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import type { DatabaseRepository, CallbackOutboxRow } from '../database/repository.js';
 
 /** Retry delay schedule in milliseconds: attempt 1 -> immediate, 2 -> 5s, 3 -> 30s, 4 -> 5min, 5 -> 30min. */
@@ -13,7 +13,8 @@ export function getRetryDelay(attempt: number): number {
 
 interface EnqueueCallbackOpts {
   agentId: string;
-  sessionId?: string;
+  turnId?: string;
+  webhookId?: string;
   callbackUrl: string;
   eventType: string;
   eventSeq?: number;
@@ -56,7 +57,8 @@ export class CallbackDispatcher {
     await this.db.enqueueCallback({
       id,
       agentId: opts.agentId,
-      sessionId: opts.sessionId ?? null,
+      turnId: opts.turnId ?? null,
+      webhookId: opts.webhookId ?? null,
       callbackUrl: opts.callbackUrl,
       eventType: opts.eventType,
       eventSeq: opts.eventSeq ?? null,
@@ -123,15 +125,31 @@ export class CallbackDispatcher {
    */
   private async deliver(entry: CallbackOutboxRow): Promise<boolean> {
     try {
+      const body = JSON.stringify(entry.payload);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-Agent-Id': entry.agentId,
+        'X-Event-Type': entry.eventType,
+        'X-Delivery-Id': entry.id,
+      };
+
+      if (entry.webhookId) {
+        const webhook = await this.db.getWebhookForAgent(entry.webhookId, entry.agentId);
+        if (!webhook?.secret) {
+          throw new Error(`Webhook signing secret unavailable for delivery ${entry.id}`);
+        }
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const signature = createHmac('sha256', webhook.secret)
+          .update(`${timestamp}.${body}`)
+          .digest('hex');
+        headers['X-Webhook-Timestamp'] = timestamp;
+        headers['X-Webhook-Signature'] = `v1=${signature}`;
+      }
+
       const response = await this.fetchFn(entry.callbackUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Agent-Id': entry.agentId,
-          'X-Event-Type': entry.eventType,
-          'X-Delivery-Id': entry.id,
-        },
-        body: JSON.stringify(entry.payload),
+        headers,
+        body,
         signal: AbortSignal.timeout(10_000),
       });
 

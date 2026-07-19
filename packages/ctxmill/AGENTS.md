@@ -17,7 +17,7 @@ src/
   events/         TypedEventBus, triggers, waits
   harness/        Harness registry/types and compatibility adapter classes
   manifest/       YAML manifest parsing, validation, conversion, service
-  orchestrator/   Fastify server, auth, routes, canonical log, SSE, HITL, session services
+  orchestrator/   Fastify server, auth, routes, canonical log, SSE, HITL, turn and sandbox-session services
   sandbox/        Container managers, accounting, workspace diff, proto conversion helpers
   secrets/        Encrypted per-agent secrets and production master-key guard
   settings/       DB/env-backed runtime settings
@@ -32,7 +32,7 @@ src/
 
 | Task | File(s) | Notes |
 |---|---|---|
-| Trace an interactive turn | `orchestrator/routes/agents/sessions.ts` -> `run-startup-service.ts` -> `agent-session-service.ts` -> `sandbox-session-manager.ts` | Turn rows are durable and move queued -> running -> terminal. |
+| Trace an interactive turn | `orchestrator/routes/agents/turns.ts` -> `turn-startup-service.ts` -> `agent-turn-service.ts` -> `sandbox-session-manager.ts` | Turn rows are durable and move queued -> running -> terminal. |
 | Trace sandbox lifecycle | `orchestrator/sandbox-session-manager.ts`, `orchestrator/session-manager/*`, `sandbox/container-manager.ts` | Checkpoint/restore, manual restore, retry budgets, accounting. |
 | Trace event streaming | `events/bus.ts`, `orchestrator/canonical/*`, `orchestrator/sse.ts`, `orchestrator/routes/agents/stream.ts` | EventBus -> CanonicalLog -> event_store -> SSEManager. No `SSEBroadcaster`. |
 | Add an API route | `orchestrator/routes/` and `orchestrator/server.ts` | `/api/*` is bearer-token protected unless route config is public. |
@@ -48,8 +48,8 @@ src/
 HTTP/API request
   -> registerApiAuth on /api/*
   -> route creates turn/message rows
-  -> RunStartupService builds launch contract
-  -> AgentSessionService/SandboxSessionManager opens or reuses sandbox session
+  -> TurnStartupService builds launch contract
+  -> AgentTurnService/SandboxSessionManager opens or reuses sandbox session
   -> sandbox daemon HarnessService streams SessionEvent values
   -> TurnFinalizer writes terminal state
   -> TypedEventBus emits internal events
@@ -65,7 +65,9 @@ Startup reconciliation:
 
 ## Gotchas
 
-- `runId` is a wire field. Internally use `turnId`, `conversationId`, or `sessionId`.
+- `runId` and `threadId` are AG-UI wire fields. Internally use `turnId`,
+  `conversationId`, `sandboxSessionId`, or `interruptId` for their distinct
+  concepts.
 - `CTXMILL_API_TOKEN` protects `/api/*`; browser SSE uses `?access_token=` only on the stream route.
 - ConnectRPC sandbox callbacks use session-scoped HMAC credentials derived from `CTXMILL_CALLBACK_TOKEN_SECRET` or `CTXMILL_API_TOKEN`.
 - Secrets are injected at fresh start/restore and must never be serialized into checkpoints.

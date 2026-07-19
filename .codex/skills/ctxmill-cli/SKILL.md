@@ -1,6 +1,6 @@
 ---
 name: ctxmill-cli
-description: Use when operating, debugging, or inspecting a ctxmill app via its HTTP API. Wraps full agent/session/conversation/event/artifact/file/secret/setting/trigger/webhook/knowledge/feedback CRUD plus SSE streaming, AG-UI runs, multipart and gzip uploads with bundled Bun TypeScript CLIs.
+description: Use when operating, debugging, or inspecting a ctxmill app via its HTTP API. Wraps agent/turn/conversation/sandbox-session/event/artifact/file/secret/setting/trigger/webhook/knowledge/feedback CRUD plus SSE and AG-UI wire streaming, multipart uploads, and gzip uploads with bundled Bun TypeScript CLIs.
 ---
 
 # ctxmill CLI
@@ -14,7 +14,9 @@ Use the bundled self-contained Bun TypeScript scripts before raw HTTP:
 ```bash
 bun <skill-dir>/scripts/ctxmill.ts health
 bun <skill-dir>/scripts/ctxmill.ts agents list
-bun <skill-dir>/scripts/ctxmill.ts sessions active
+bun <skill-dir>/scripts/ctxmill.ts turns list <agentId>
+bun <skill-dir>/scripts/ctxmill.ts conversations active
+bun <skill-dir>/scripts/ctxmill.ts sandbox-sessions active
 ```
 
 Base URL resolution:
@@ -38,20 +40,20 @@ The scripts attach `Authorization: Bearer ...` to ctxmill API calls. GET SSE hel
 1. Check service: `ctxmill.ts health`, `config`, `sandbox metrics`, `settings get`.
 2. Identify the agent: `agents list`, then `agents get <agentId>`.
 3. Define or update agents: `agents create --from-file <path>` / `agents update <id> --from-file <path>`.
-4. Drive a turn: `sessions message <agentId> --content "..."` or `sessions start <agentId> --task "..."` (add `--wait-for terminal --timeout <ms>` to block until done).
-5. Stream live activity: `stream <agentId>` (SSE) or `run <agentId> --task "..."` (AG-UI run).
-6. Identify runs/sessions: `sessions list <agentId>`, `sessions get <agentId> <sessionId>`, or `sessions active`.
-7. Pull history: `conversations summary <agentId>` and `conversations messages <agentId> <conversationId>`.
-8. Extract tool behavior: `ctxmill-toolcalls.ts --agent <agentId> --session <sessionId>`.
+4. Drive a turn: `turns message <agentId> --content "..."` or `turns start <agentId> --task "..."` (add `--wait-for terminal --timeout <ms>` to block until done).
+5. Stream live activity: `stream <agentId>` (SSE) or `ag-ui run <agentId> --task "..."` (AG-UI wire run).
+6. Inspect each identity directly: `turns list|get`, `conversations active`, and `sandbox-sessions active|suspend|restore|kill`.
+7. Pull history: `conversations summary <agentId>` and `conversations snapshot <agentId> <conversationId>`.
+8. Extract tool behavior: `ctxmill-toolcalls.ts --agent <agentId> --turn <turnId>`.
 9. Inspect interrupts/events/artifacts: `interrupts list`, `events list`, `artifacts list`.
-10. If still unclear, create a bundle: `ctxmill-bundle.ts --agent <agentId> --session <sessionId>`.
+10. If still unclear, create a bundle: `ctxmill-bundle.ts --agent <agentId> --turn <turnId>`.
 
 ## Bundled scripts
 
 - `scripts/ctxmill.ts` — main agent-friendly API CLI (operate + debug, ~95% API coverage).
 - `scripts/ctxmill-toolcalls.ts` — extracts tool-call timeline from messages and events.
 - `scripts/ctxmill-bundle.ts` — writes a redacted debug bundle under `.ctxmill/debug/<timestamp>/`.
-- `scripts/ctxmill-tail.ts` — tails SSE/event logs and waits for sessions/events.
+- `scripts/ctxmill-tail.ts` — tails SSE/event logs and waits for turns/events.
 
 Run any script with `--help` for exact commands.
 
@@ -65,7 +67,7 @@ Run any script with `--help` for exact commands.
 ## Mutation safety
 
 - Destructive commands (`agents delete`, `secrets delete`, `webhooks delete`, `triggers delete`, `artifacts delete`, `files delete`, `knowledge shared delete`) refuse to run without `--yes` (or `CTXMILL_YES=1`). They exit code 4 (unsafe-blocked) when the guard fires.
-- Mutation commands (`sessions cancel|message|start`, `interrupts resolve`, `tools test`, `triggers create|update|emit`, `artifacts upload`, `workspace upload`, anything that writes secrets/settings/webhooks/feedback) must be explicit in the user's task — do not invoke speculatively.
+- Mutation commands (`turns cancel|message|start`, `sandbox-sessions suspend|restore|kill`, `interrupts resolve`, `tools test`, `triggers create|update|emit`, `artifacts upload`, `workspace upload`, anything that writes secrets/settings/webhooks/feedback) must be explicit in the user's task — do not invoke speculatively.
 - Body input flags: `--data '<json>'` (inline) or `--from-file <path|->` (file or stdin).
 
 ## Exit codes

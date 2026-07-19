@@ -47,10 +47,10 @@ test.describe('Required release gate smoke @smoke', () => {
       )
       .toBe(true);
 
-    const sessions = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
-    expect(sessions.ok()).toBe(true);
-    const sessionsBody = (await sessions.json()) as { sessions?: Array<{ id?: string; status?: string; error?: unknown }> };
-    await assertNoUnexpectedTerminalErrorStates(sessionsBody.sessions ?? []);
+    const turns = await request.get(`${API_BASE}/api/agents/${agentId}/turns`);
+    expect(turns.ok()).toBe(true);
+    const turnsBody = (await turns.json()) as { turns?: Array<{ id?: string; status?: string; error?: unknown }> };
+    await assertNoUnexpectedTerminalErrorStates(turnsBody.turns ?? []);
   });
 
   test('dashboard and agent files tab render without strict console errors @smoke', async ({ page }) => {

@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
+import { digestWorkspace } from '../../../workspace/digest.js';
 import { validateAndExtractTarball } from '../../../workspace/tar-upload.js';
 import { isBlockedPath, resolveWorkspaceTarget } from '../agent-helpers.js';
 import { chownRecursive, getRequestAgent, safeError } from './helpers.js';
@@ -13,17 +14,37 @@ export async function fileRoutes(
 ): Promise<void> {
   const { db, dataDir, sessionManager, settingsService, loadAgent } = opts;
 
+  const toWorkspaceRevision = (state: {
+    revision: number;
+    sha256: string;
+    fileCount: number;
+    totalBytes: number;
+    appliedAt: number;
+  }): {
+    revision: number;
+    sha256: string;
+    fileCount: number;
+    totalBytes: number;
+    appliedAt: number;
+  } => ({
+    revision: state.revision,
+    sha256: state.sha256,
+    fileCount: state.fileCount,
+    totalBytes: state.totalBytes,
+    appliedAt: state.appliedAt,
+  });
+
   app.get(
     '/:id/files',
     { preHandler: [loadAgent] },
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { path?: string; sessionId?: string };
+        Querystring: { path?: string; conversationId?: string };
       }>,
       reply: FastifyReply,
     ) => {
-      const query = request.query as { path?: string; sessionId?: string };
+      const query = request.query as { path?: string; conversationId?: string };
       const requestedPath = query.path || '.';
       const resolvedTarget = await resolveWorkspaceTarget(request, reply, { db, dataDir }, requestedPath);
       if (!resolvedTarget) return;
@@ -64,11 +85,11 @@ export async function fileRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { path?: string; sessionId?: string };
+        Querystring: { path?: string; conversationId?: string };
       }>,
       reply: FastifyReply,
     ) => {
-      const query = request.query as { path?: string; sessionId?: string };
+      const query = request.query as { path?: string; conversationId?: string };
 
       if (!query.path) {
         return reply.status(400).send({ error: 'path query parameter is required' });
@@ -114,12 +135,11 @@ export async function fileRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { sessionId?: string };
+        Querystring: { conversationId?: string };
         Body: { path: string; content: string };
       }>,
       reply: FastifyReply,
     ) => {
-      const query = request.query as { sessionId?: string };
       const body = request.body as { path?: string; content?: string };
 
       if (!body.path || typeof body.content !== 'string') {
@@ -147,12 +167,11 @@ export async function fileRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { sessionId?: string };
+        Querystring: { conversationId?: string };
         Body: { path: string; content: string };
       }>,
       reply: FastifyReply,
     ) => {
-      const query = request.query as { sessionId?: string };
       const body = request.body as { path?: string; content?: string };
 
       if (!body.path || typeof body.content !== 'string') {
@@ -187,11 +206,11 @@ export async function fileRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { path?: string; sessionId?: string };
+        Querystring: { path?: string; conversationId?: string };
       }>,
       reply: FastifyReply,
     ) => {
-      const query = request.query as { path?: string; sessionId?: string };
+      const query = request.query as { path?: string; conversationId?: string };
 
       if (!query.path) {
         return reply.status(400).send({ error: 'path query parameter is required' });
@@ -218,6 +237,24 @@ export async function fileRoutes(
     },
   );
 
+  app.get(
+    '/:id/workspace',
+    { preHandler: [loadAgent] },
+    async (
+      request: FastifyRequest<{ Params: { id: string } }>,
+      reply: FastifyReply,
+    ) => {
+      const state = await db.getAgentWorkspaceState(request.params.id);
+      if (!state) {
+        return reply.status(404).send({
+          error: 'Workspace revision not found',
+          code: 'workspace_revision_not_found',
+        });
+      }
+      return reply.send(toWorkspaceRevision(state));
+    },
+  );
+
   app.post(
     '/:id/workspace',
     { preHandler: [loadAgent] },
@@ -237,30 +274,35 @@ export async function fileRoutes(
       }
 
       try {
-        const allSessions = await db.getActiveSandboxSessions();
-        const agentSessions = allSessions.filter((session) => session.agentId === agent.id);
+        const allSandboxSessions = await db.getActiveSandboxSessions();
+        const agentSandboxSessions = allSandboxSessions.filter(
+          (sandboxSession) => sandboxSession.agentId === agent.id,
+        );
 
-        if (agentSessions.length > 0) {
+        if (agentSandboxSessions.length > 0) {
           const force = request.query.force === 'true';
           if (!force) {
             return reply.status(409).send({
-              error: 'Agent has active sessions. Kill them first or use ?force=true',
-              activeSessions: agentSessions.map((session) => session.id),
+              error: 'Agent has active sandbox sessions. Kill them first or use ?force=true',
+              activeSandboxSessions: agentSandboxSessions.map((sandboxSession) => sandboxSession.id),
             });
           }
 
           if (sessionManager) {
-            for (const session of agentSessions) {
+            for (const sandboxSession of agentSandboxSessions) {
               try {
-                await sessionManager.killSession(session.id);
+                await sessionManager.killSession(sandboxSession.id);
               } catch (err) {
-                console.error(`[agents] failed to kill session ${session.id} during force upload:`, err);
+                console.error(
+                  `[agents] failed to kill sandbox session ${sandboxSession.id} during force upload:`,
+                  err,
+                );
               }
             }
           }
         }
       } catch (err) {
-        return reply.status(500).send(safeError('Failed to check active sessions', err));
+        return reply.status(500).send(safeError('Failed to check active sandbox sessions', err));
       }
 
       const baseDir = agent.workspaceDir;
@@ -287,7 +329,19 @@ export async function fileRoutes(
 
         await chownRecursive(baseDir, 1000, 1000);
 
-        return reply.status(201).send({ files: result.files, totalBytes: result.totalBytes });
+        const digest = await digestWorkspace(baseDir);
+        if (digest.fileCount !== result.files || digest.totalBytes !== result.totalBytes) {
+          throw new Error(
+            'Extracted workspace accounting did not match the applied filesystem',
+          );
+        }
+        const appliedAt = Date.now();
+        const state = await db.recordAgentWorkspaceRevision(agent.id, {
+          ...digest,
+          appliedAt,
+        });
+
+        return reply.status(201).send(toWorkspaceRevision(state));
       } catch (err) {
         await rm(tempDir, { recursive: true, force: true });
 

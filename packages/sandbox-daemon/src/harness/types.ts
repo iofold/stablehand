@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AGUIEvent } from '@ctxmill/shared';
+import type { AgentSessionEvent } from '@ctxmill/shared';
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message, NativeToolConfig } from '../types.js';
 
@@ -7,7 +7,7 @@ export type ResolvedSecrets = Record<string, string>;
 
 export interface ApprovalRequest {
   id: string;
-  runId: string;
+  turnId: string;
   toolName: string;
   args: Record<string, unknown>;
 }
@@ -35,7 +35,7 @@ export type AgentEvent =
   | { type: 'tool_call_end'; id: string; result: string; error?: string; durationMs: number }
   | { type: 'approval_needed'; id: string; tool: string; args: unknown }
   | { type: 'approval_resolved'; id: string; action: 'approve' | 'reject' }
-  | { type: 'custom_agui_event'; event: AGUIEvent }
+  | { type: 'custom_agui_event'; event: AgentSessionEvent }
   | MessageCommittedAgentEvent
   | { type: 'error'; error: string }
   | { type: 'done'; result?: string; usage?: TokenUsage };
@@ -44,7 +44,7 @@ export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  cost?: number;
+  costUsd?: number;
 }
 
 export interface AgentHarness {
@@ -64,7 +64,7 @@ export interface HarnessSessionConfig {
   conversationId: string;
   systemPrompt: string;
   tools: ToolDefinition[];
-  nativeTools?: NativeToolConfig[];
+  nativeTools?: NativeToolConfig;
   secrets: ResolvedSecrets;
   workspaceDir: string;
   harnessConfigJson: string;

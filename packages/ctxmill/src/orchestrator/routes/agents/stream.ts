@@ -1,7 +1,19 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { formatSeqId, parseSeqId, writeSseHead } from '../../sse.js';
+import { parseSeqId, writeSseHead } from '../../sse.js';
 import type { AgentSubRouteOptions } from './types.js';
+
+export function resolveStreamCursor(
+  lastEventId: string | undefined,
+  eventCursor: string | undefined,
+): { afterSeq: number | null } | { error: string } {
+  const explicitSeq = parseSeqId(eventCursor);
+  if (eventCursor !== undefined && explicitSeq === null) {
+    return { error: 'Invalid event cursor' };
+  }
+  const resumedSeq = parseSeqId(lastEventId);
+  return { afterSeq: resumedSeq ?? explicitSeq };
+}
 
 export async function streamRoutes(
   app: FastifyInstance,
@@ -13,10 +25,20 @@ export async function streamRoutes(
     '/:id/stream',
     { preHandler: [loadAgent], config: { allowTokenQuery: true } },
     async (
-      request: FastifyRequest<{ Params: { id: string } }>,
+      request: FastifyRequest<{
+        Params: { id: string };
+        Querystring: { cursor?: string };
+      }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
+      const resolvedCursor = resolveStreamCursor(
+        request.headers['last-event-id'] as string | undefined,
+        request.query.cursor,
+      );
+      if ('error' in resolvedCursor) {
+        return reply.status(400).send({ error: resolvedCursor.error });
+      }
 
       writeSseHead(reply);
 
@@ -26,7 +48,14 @@ export async function streamRoutes(
         return;
       }
 
-      await serveDurableStream({ db, sse, canonicalLog, agentId: id, request, reply });
+      await serveDurableStream({
+        db,
+        sse,
+        canonicalLog,
+        agentId: id,
+        afterSeq: resolvedCursor.afterSeq,
+        reply,
+      });
     },
   );
 }
@@ -36,19 +65,19 @@ export async function streamRoutes(
  * all-turns activeTurn heuristic), replay from the durable log when the
  * client presents a seq-format Last-Event-ID (non-seq ids → fresh connect,
  * snapshot only — pilot's proxy forwards old-format ids across the cutover),
- * then attach to the live tail with the ring-buffer dedupe closing the
- * replay→live handoff race. Replay works past any in-memory cap and across
- * restarts (ctx-16s).
+ * then attach to the database-backed live tail. Replay is paginated, local
+ * canonical broadcasts wake the tail, and periodic watermark checks observe
+ * commits made by other orchestrator processes.
  */
 async function serveDurableStream(input: {
   db: AgentSubRouteOptions['db'];
   sse: AgentSubRouteOptions['sse'];
   canonicalLog: NonNullable<AgentSubRouteOptions['canonicalLog']>;
   agentId: string;
-  request: FastifyRequest;
+  afterSeq: number | null;
   reply: FastifyReply;
 }): Promise<void> {
-  const { db, sse, canonicalLog, agentId, request, reply } = input;
+  const { db, sse, canonicalLog, agentId, afterSeq, reply } = input;
 
   const [sandboxSessions, openTurns, latestSeq] = await Promise.all([
     db.getSandboxSessionsByAgent(agentId),
@@ -62,8 +91,8 @@ async function serveDurableStream(input: {
 
   const activeTurnBySandboxSessionId = new Map<string, string>();
   for (const turn of [...openTurns].sort((a, b) => b.startedAt - a.startedAt)) {
-    if (turn.sessionId && !activeTurnBySandboxSessionId.has(turn.sessionId)) {
-      activeTurnBySandboxSessionId.set(turn.sessionId, turn.id);
+    if (turn.sandboxSessionId && !activeTurnBySandboxSessionId.has(turn.sandboxSessionId)) {
+      activeTurnBySandboxSessionId.set(turn.sandboxSessionId, turn.id);
     }
   }
 
@@ -71,10 +100,10 @@ async function serveDurableStream(input: {
     reply.raw.write(
       `data: ${JSON.stringify({
         type: 'CUSTOM',
-        subtype: 'state_snapshot',
+        name: 'ctxmill.sandbox_session.snapshot',
         agentId,
         conversationId: session.conversationId,
-        sessionId: session.id,
+        sandboxSessionId: session.id,
         activeTurnId: activeTurnBySandboxSessionId.get(session.id) ?? null,
         status: session.status,
         harnessName: session.harnessName,
@@ -84,22 +113,24 @@ async function serveDurableStream(input: {
     );
   }
 
-  const lastEventId = request.headers['last-event-id'] as string | undefined;
-  const afterSeq = parseSeqId(lastEventId);
-  const replayedSeqs = new Set<number>();
-
-  if (afterSeq !== null) {
-    const frames = await canonicalLog.replaySince(agentId, afterSeq, { channels: ['run'] });
-    try {
-      for (const frame of frames) {
-        replayedSeqs.add(frame.seq);
-        reply.raw.write(`id: ${formatSeqId(frame.seq)}\ndata: ${JSON.stringify(frame.body)}\n\n`);
-      }
-    } catch (writeErr) {
-      request.log.debug({ err: writeErr }, 'durable replay write failed');
-      return;
-    }
-  }
-
-  sse.subscribeDurable(agentId, reply, afterSeq ?? latestSeq, replayedSeqs);
+  await sse.subscribeDurable(
+    agentId,
+    reply,
+    afterSeq ?? latestSeq,
+    latestSeq,
+    {
+      getWatermark: () => db.getLatestEventSeq(agentId),
+      getPage: async (pageAfterSeq, throughSeq, limit) => {
+        const frames = await canonicalLog.replaySince(agentId, pageAfterSeq, {
+          channels: ['run'],
+          throughSeq,
+          limit,
+        });
+        return frames.map((frame) => ({
+          seq: frame.seq,
+          event: frame.body,
+        }));
+      },
+    },
+  );
 }

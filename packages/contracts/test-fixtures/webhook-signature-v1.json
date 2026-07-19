@@ -1,0 +1,15 @@
+{
+  "timestamp": "1784304000",
+  "rawBody": "{\"turnId\":\"turn-fixture-1\",\"sandboxSessionId\":\"sandbox-fixture-1\",\"agentId\":\"agent-fixture-1\",\"conversationId\":\"conversation-fixture-1\",\"status\":\"completed\",\"durationMs\":1200,\"timestamp\":1784304000000}",
+  "currentSecret": "ctxmill_fixture_current_secret",
+  "previousSecret": "ctxmill_fixture_previous_secret",
+  "currentSignature": "v1=494d7158173d13fee3ee39c6c5f4df2411037cabb376f6991529e26f3ee1873e",
+  "previousSignature": "v1=2d94a875b698aad3179c410c3ca33ff41e2822d9f1d169e226e8a222e570f69f",
+  "headers": {
+    "X-Delivery-Id": "delivery-fixture-1",
+    "X-Event-Type": "turn.completed",
+    "X-Agent-Id": "agent-fixture-1",
+    "X-Webhook-Timestamp": "1784304000",
+    "X-Webhook-Signature": "v1=494d7158173d13fee3ee39c6c5f4df2411037cabb376f6991529e26f3ee1873e"
+  }
+}

@@ -31,6 +31,7 @@ export function scaffold({ projectDir, packageName }: ScaffoldOptions): void {
           chat: 'docker compose exec orchestrator npx ctxmill chat',
         },
         dependencies: {
+          '@ctxmill/manifest': '^0.1.0',
           ctxmill: '^0.1.0',
           zod: '^3.24.0',
         },
@@ -114,9 +115,6 @@ spec:
     blocklist:
       - execute
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 120
-    maxTokensPerSession: 4000
 `,
   );
 
@@ -335,7 +333,7 @@ dist/
     join(projectDir, 'tests', 'assistant.test.ts'),
     `import { readFile } from 'node:fs/promises';
 import { describe, it, expect } from 'vitest';
-import { parseManifestString, validateManifest } from 'ctxmill';
+import { parseManifestString, validateManifest } from '@ctxmill/manifest';
 
 describe('Assistant Agent', () => {
   it('agent manifest is valid', async () => {

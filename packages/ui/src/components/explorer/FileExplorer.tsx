@@ -34,8 +34,8 @@ interface FileExplorerProps {
   agentId: string;
   onFileSelect: (path: string) => void;
   selectedFile?: string | null;
-  /** When provided, files are served from the session overlay instead of base workspace */
-  sessionId?: string;
+  /** When provided, files are served from the conversation workspace instead of base workspace */
+  conversationId?: string;
   /** Called after a file is created so the parent can react (e.g. select the new file) */
   onFileCreated?: (path: string) => void;
 }
@@ -173,7 +173,7 @@ function TreeItem({
   );
 }
 
-export function FileExplorer({ agentId, onFileSelect, selectedFile, sessionId, onFileCreated }: FileExplorerProps) {
+export function FileExplorer({ agentId, onFileSelect, selectedFile, conversationId, onFileCreated }: FileExplorerProps) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [rootLoading, setRootLoading] = useState(true);
@@ -188,7 +188,7 @@ export function FileExplorer({ agentId, onFileSelect, selectedFile, sessionId, o
     setRootLoading(true);
     setError(null);
     try {
-      const data = await listFiles(agentId, '.', sessionId);
+      const data = await listFiles(agentId, '.', conversationId);
       const entries: FileEntry[] = data.entries || [];
       const sorted = sortEntries(entries);
       setTree(
@@ -206,7 +206,7 @@ export function FileExplorer({ agentId, onFileSelect, selectedFile, sessionId, o
     } finally {
       setRootLoading(false);
     }
-  }, [agentId, sessionId]);
+  }, [agentId, conversationId]);
 
   useEffect(() => {
     loadRoot();
@@ -229,7 +229,7 @@ export function FileExplorer({ agentId, onFileSelect, selectedFile, sessionId, o
       // Load children
       setTree((prev) => updateNode(prev, node.path, { loading: true, expanded: true }));
       try {
-        const data = await listFiles(agentId, node.path, sessionId);
+        const data = await listFiles(agentId, node.path, conversationId);
         const entries: FileEntry[] = data.entries || [];
         const sorted = sortEntries(entries);
         const children: TreeNode[] = sorted.map((e) => ({
@@ -248,7 +248,7 @@ export function FileExplorer({ agentId, onFileSelect, selectedFile, sessionId, o
         setTree((prev) => updateNode(prev, node.path, { loading: false }));
       }
     },
-    [agentId, sessionId],
+    [agentId, conversationId],
   );
 
   const handleCreateFile = async () => {
@@ -257,7 +257,7 @@ export function FileExplorer({ agentId, onFileSelect, selectedFile, sessionId, o
     setCreateError(null);
     try {
       const createdPath = newFileName.trim();
-      await createFile(agentId, createdPath, newFileContent, sessionId);
+      await createFile(agentId, createdPath, newFileContent, conversationId);
       setShowNewFile(false);
       setNewFileName('');
       setNewFileContent('');
@@ -277,14 +277,14 @@ export function FileExplorer({ agentId, onFileSelect, selectedFile, sessionId, o
       {/* Header with New File button */}
       <div className="flex items-center justify-between border-b border-surface-700 px-3 py-2">
         <span className="text-xs font-medium text-surface-400">
-          {sessionId ? 'Session Files' : 'Files'}
+          {conversationId ? 'Conversation Files' : 'Files'}
         </span>
         <button
           type="button"
           data-testid="new-file-btn"
           onClick={() => setShowNewFile(true)}
           className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-surface-400 hover:bg-surface-800 hover:text-surface-200 transition-colors"
-          title={sessionId ? 'New file in session overlay' : 'New file'}
+          title={conversationId ? 'New file in conversation workspace' : 'New file'}
         >
           <Plus className="h-3.5 w-3.5" />
           <span>New</span>

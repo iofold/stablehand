@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useAgentsStore } from '@/stores/agents';
-import type { AgentSession } from '@/stores/agents';
+import type { AgentTurn } from '@/stores/agents';
 import type { Agent } from '@/stores/agents';
 import type { TabId } from '@/components/agent/types';
 
@@ -10,19 +10,19 @@ export interface UseAgentDetailReturn {
   agents: Agent[];
   error: string | null;
 
-  allSessions: AgentSession[];
-  sessionsLoading: boolean;
-  loadSessions: () => Promise<void>;
+  allTurns: AgentTurn[];
+  turnsLoading: boolean;
+  loadTurns: () => Promise<void>;
 }
 
 export function useAgentDetail(id: string | undefined, activeTab: TabId): UseAgentDetailReturn {
   const agents = useAgentsStore((s) => s.agents);
   const loading = useAgentsStore((s) => s.loading);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
-  const storeFetchSessions = useAgentsStore((s) => s.fetchSessions);
+  const storeFetchTurns = useAgentsStore((s) => s.fetchTurns);
 
-  const [allSessions, setAllSessions] = useState<AgentSession[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [allTurns, setAllTurns] = useState<AgentTurn[]>([]);
+  const [turnsLoading, setTurnsLoading] = useState(false);
 
   // Error state
   const [error, setError] = useState<string | null>(null);
@@ -33,31 +33,31 @@ export function useAgentDetail(id: string | undefined, activeTab: TabId): UseAge
 
   const agent = agents.find((a) => a.id === id);
 
-  const loadSessions = useCallback(async () => {
+  const loadTurns = useCallback(async () => {
     if (!id) return;
-    setSessionsLoading(true);
+    setTurnsLoading(true);
     setError(null);
     try {
-      const sessions = await storeFetchSessions(id);
-      setAllSessions(sessions);
+      const turns = await storeFetchTurns(id);
+      setAllTurns(turns);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setSessionsLoading(false);
+      setTurnsLoading(false);
     }
-  }, [id, storeFetchSessions]);
+  }, [id, storeFetchTurns]);
 
   useEffect(() => {
-    if (activeTab === 'sessions' || activeTab === 'overview') loadSessions();
-  }, [activeTab, loadSessions]);
+    if (activeTab === 'turns' || activeTab === 'overview') loadTurns();
+  }, [activeTab, loadTurns]);
 
   return {
     agent,
     loading,
     agents,
     error,
-    allSessions,
-    sessionsLoading,
-    loadSessions,
+    allTurns,
+    turnsLoading,
+    loadTurns,
   };
 }

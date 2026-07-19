@@ -79,33 +79,33 @@ export class CanonicalProjector {
       case 'turn.started': {
         const p = payload as unknown as EventMap['turn.started'];
         return [this.runFrame('RUN_STARTED', p.agentId, p.turnId, p.conversationId, {
-          ...payload,
           runId: p.turnId,
           threadId: p.conversationId,
+          timestamp: p.timestamp,
         })];
       }
       case 'user.message': {
         const p = payload as unknown as EventMap['user.message'];
-        const base = {
-          runId: p.conversationId,
+        const identity = {
+          runId: p.turnId,
           threadId: p.conversationId,
           messageId: p.messageId,
-          role: 'user',
-          content: p.content,
           timestamp: p.timestamp,
         };
         return [
-          this.runFrame('TEXT_MESSAGE_START', p.agentId, null, p.conversationId, base),
-          this.runFrame('TEXT_MESSAGE_CONTENT', p.agentId, null, p.conversationId, {
-            ...base,
-            delta: p.content,
-            content: p.content,
+          this.runFrame('TEXT_MESSAGE_START', p.agentId, p.turnId, p.conversationId, {
+            ...identity,
+            role: 'user',
           }),
-          this.runFrame('TEXT_MESSAGE_END', p.agentId, null, p.conversationId, base),
+          this.runFrame('TEXT_MESSAGE_CONTENT', p.agentId, p.turnId, p.conversationId, {
+            ...identity,
+            delta: p.content,
+          }),
+          this.runFrame('TEXT_MESSAGE_END', p.agentId, p.turnId, p.conversationId, identity),
         ];
       }
-      case 'run.text_chunk': {
-        const p = payload as unknown as EventMap['run.text_chunk'];
+      case 'message.delta': {
+        const p = payload as unknown as EventMap['message.delta'];
         const frames: CanonicalFrame[] = [];
         const state = this.textState(p.turnId);
         if (!state.inProgress) {
@@ -121,110 +121,205 @@ export class CanonicalProjector {
           }));
         }
         frames.push(this.runFrame('TEXT_MESSAGE_CONTENT', p.agentId, p.turnId, p.conversationId, {
-          ...payload,
           runId: p.turnId,
           threadId: p.conversationId,
           messageId: state.messageId,
-          delta: p.content,
+          delta: p.delta,
+          timestamp: p.timestamp,
         }));
         return frames;
       }
-      case 'run.tool_started': {
-        const p = payload as unknown as EventMap['run.tool_started'];
+      case 'tool_call.started': {
+        const p = payload as unknown as EventMap['tool_call.started'];
         const frames = this.closeTextMessage(p.agentId, p.turnId, p.conversationId, p.timestamp);
         const serializedArgs = typeof p.args === 'string' ? p.args : JSON.stringify(p.args);
         frames.push(
           this.runFrame('TOOL_CALL_START', p.agentId, p.turnId, p.conversationId, {
-            ...payload,
             runId: p.turnId,
             threadId: p.conversationId,
-            toolCallName: p.toolName,
+            toolCallId: p.toolCallId,
+            toolCallName: p.toolCallName,
+            timestamp: p.timestamp,
           }),
           this.runFrame('TOOL_CALL_ARGS', p.agentId, p.turnId, p.conversationId, {
-            ...payload,
             runId: p.turnId,
             threadId: p.conversationId,
-            args: serializedArgs,
+            toolCallId: p.toolCallId,
             delta: serializedArgs,
+            timestamp: p.timestamp,
           }),
         );
         return frames;
       }
-      case 'run.tool_result': {
-        const p = payload as unknown as EventMap['run.tool_result'];
+      case 'tool_call.completed': {
+        const p = payload as unknown as EventMap['tool_call.completed'];
         const frames: CanonicalFrame[] = [
           this.runFrame('TOOL_CALL_END', p.agentId, p.turnId, p.conversationId, {
             runId: p.turnId,
             threadId: p.conversationId,
             toolCallId: p.toolCallId,
-            toolCallName: p.toolName,
-            result: p.error ?? p.result,
             timestamp: p.timestamp,
           }),
           this.runFrame('TOOL_CALL_RESULT', p.agentId, p.turnId, p.conversationId, {
-            ...payload,
             runId: p.turnId,
             threadId: p.conversationId,
-            ...(typeof p.result === 'string' ? { content: p.result } : {}),
+            toolCallId: p.toolCallId,
+            result: p.result,
+            ...(p.error ? { error: p.error } : {}),
+            timestamp: p.timestamp,
           }),
         ];
-        const a2uiBlock = !p.error && isA2UIRenderTool(p.toolName) && typeof p.result === 'string'
+        const a2uiBlock = !p.error && isA2UIRenderTool(p.toolCallName) && typeof p.result === 'string'
           ? parseA2UIRenderBlock(p.toolCallId, p.result)
           : null;
         if (a2uiBlock) {
           frames.push(this.runFrame('CUSTOM', p.agentId, p.turnId, p.conversationId, {
             name: 'ctxmill.a2ui.render',
-            subtype: 'a2ui_render',
             runId: p.turnId,
             threadId: p.conversationId,
-            agentId: p.agentId,
-            conversationId: p.conversationId,
-            toolCallId: p.toolCallId,
-            toolCallName: p.toolName,
-            value: { block: a2uiBlock },
             block: a2uiBlock,
             timestamp: p.timestamp,
           }));
         }
         return frames;
       }
-      case 'run.interrupted':
-        return [this.custom('ctxmill.hitl.requested', payload as EventMap['run.interrupted'], 'hitl_pause')];
-      case 'run.interrupt_resolved':
-        return [this.custom('ctxmill.hitl.resolved', payload as EventMap['run.interrupt_resolved'], 'hitl_resolved')];
+      case 'interrupt.requested':
+        return [this.custom('ctxmill.interrupt.requested', payload as EventMap['interrupt.requested'])];
+      case 'interrupt.resolved':
+        return [this.custom('ctxmill.interrupt.resolved', payload as EventMap['interrupt.resolved'])];
       case 'message.committed':
         return [this.custom('ctxmill.message.committed', payload as EventMap['message.committed'])];
+      case 'message.updated':
+        return [this.custom('ctxmill.message.updated', payload as EventMap['message.updated'])];
       case 'turn.completed': {
         const p = payload as unknown as EventMap['turn.completed'];
         const frames = this.closeTextMessage(p.agentId, p.turnId, p.conversationId, p.timestamp);
         this.textStates.delete(p.turnId);
         if (p.status === 'error' || p.status === 'cancelled') {
-          const { error: _error, ...rest } = payload;
           frames.push(this.runFrame('RUN_ERROR', p.agentId, p.turnId, p.conversationId, {
-            ...rest,
             runId: p.turnId,
             threadId: p.conversationId,
             // AG-UI spec field for RUN_ERROR is top-level `message`.
             message: p.error ?? (p.status === 'cancelled' ? 'Run cancelled' : 'Run failed'),
+            status: p.status,
+            timestamp: p.timestamp,
           }));
         }
         frames.push(this.runFrame('RUN_FINISHED', p.agentId, p.turnId, p.conversationId, {
-          ...payload,
           runId: p.turnId,
           threadId: p.conversationId,
+          status: p.status,
+          ...(p.usage ? { usage: p.usage } : {}),
+          timestamp: p.timestamp,
         }));
         return frames;
       }
-      case 'run.ag_ui_event': {
-        const p = payload as unknown as EventMap['run.ag_ui_event'];
+      case 'ag_ui.event': {
+        const p = payload as unknown as EventMap['ag_ui.event'];
         const event = isRecord(p.event) ? p.event : {};
         const type = typeof event.type === 'string' ? event.type : 'CUSTOM';
-        return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
-          ...event,
+        const identity = {
           runId: p.turnId,
           threadId: p.conversationId,
-          timestamp: p.timestamp,
-        })];
+          timestamp: typeof event.timestamp === 'number' ? event.timestamp : p.timestamp,
+        };
+        switch (type) {
+          case 'RUN_STARTED':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, identity)];
+          case 'RUN_FINISHED':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              ...(typeof event.status === 'string' ? { status: event.status } : {}),
+              ...(isRecord(event.usage) ? { usage: event.usage } : {}),
+            })];
+          case 'RUN_ERROR':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              message: typeof event.message === 'string'
+                ? event.message
+                : typeof event.error === 'string'
+                  ? event.error
+                  : 'Run failed',
+              ...(typeof event.status === 'string' ? { status: event.status } : {}),
+            })];
+          case 'TEXT_MESSAGE_START':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              messageId: event.messageId,
+              role: event.role,
+            })];
+          case 'TEXT_MESSAGE_CONTENT':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              messageId: event.messageId,
+              delta: event.delta,
+            })];
+          case 'TEXT_MESSAGE_END':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              messageId: event.messageId,
+            })];
+          case 'TOOL_CALL_START':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              toolCallId: event.toolCallId,
+              toolCallName: event.toolCallName,
+              ...(typeof event.parentMessageId === 'string'
+                ? { parentMessageId: event.parentMessageId }
+                : {}),
+            })];
+          case 'TOOL_CALL_ARGS':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              toolCallId: event.toolCallId,
+              delta: event.delta,
+            })];
+          case 'TOOL_CALL_END':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              toolCallId: event.toolCallId,
+            })];
+          case 'TOOL_CALL_RESULT':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              toolCallId: event.toolCallId,
+              result: event.result,
+              ...(typeof event.error === 'string' ? { error: event.error } : {}),
+            })];
+          case 'STATE_DELTA':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              delta: event.delta,
+            })];
+          case 'MESSAGES_SNAPSHOT':
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              ...identity,
+              messages: Array.isArray(event.messages) ? event.messages : [],
+            })];
+          case 'CUSTOM': {
+            const name = typeof event.name === 'string' ? event.name : '';
+            if (!name || name.startsWith('ctxmill.')) {
+              return [];
+            }
+            const value = event.value;
+            const customFields = Object.fromEntries(
+              Object.entries(event).filter(([key]) =>
+                !['type', 'name', 'runId', 'threadId', 'timestamp', 'value'].includes(key)),
+            );
+            const normalizedValue = value === undefined && Object.keys(customFields).length > 0
+              ? customFields
+              : value;
+            return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
+              name,
+              runId: p.turnId,
+              threadId: p.conversationId,
+              ...(normalizedValue === undefined ? {} : { value: normalizedValue }),
+              timestamp: identity.timestamp,
+            })];
+          }
+          default:
+            return [];
+        }
       }
       default:
         return [];
@@ -262,7 +357,6 @@ export class CanonicalProjector {
       runId: turnId,
       threadId: conversationId,
       messageId,
-      role: 'assistant',
       timestamp,
     })];
   }
@@ -281,8 +375,6 @@ export class CanonicalProjector {
       turnId: turnId ?? null,
       conversationId: conversationId ?? null,
       body: {
-        agentId,
-        conversationId: conversationId ?? undefined,
         ...body,
         type,
       },
@@ -292,17 +384,12 @@ export class CanonicalProjector {
   private custom(
     name: string,
     payload: Record<string, unknown>,
-    subtype?: string,
   ): CanonicalFrame {
     const agentId = typeof payload.agentId === 'string' ? payload.agentId : '';
     const turnId = typeof payload.turnId === 'string' ? payload.turnId : null;
     const conversationId = typeof payload.conversationId === 'string' ? payload.conversationId : null;
     return this.runFrame('CUSTOM', agentId, turnId, conversationId, {
       name,
-      ...(subtype ? { subtype } : {}),
-      runId: turnId ?? undefined,
-      threadId: conversationId ?? undefined,
-      value: payload,
       ...payload,
     });
   }

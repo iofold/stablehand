@@ -70,19 +70,19 @@ post_message() {
     "${AUTH_HEADER[@]}" \
     -H 'Content-Type: application/json' \
     -d "$(jq -nc --arg content "$content" '{content: $content}')" \
-    | jq -r '.runId // .sessionId // .id'
+    | jq -er '.turnId'
 }
 
 wait_for_status() {
   local agent_id="$1"
-  local session_id="$2"
+  local turn_id="$2"
   local wanted="$3"
 
   while true; do
-    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/sessions" \
-      | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
+    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/turns" \
+      | jq -r --arg turn_id "$turn_id" 'first(.turns[]? | select(.id == $turn_id) | .status) // empty' \
       | tr '[:upper:]' '[:lower:]')"
-    echo "session=$session_id status=${status:-missing}"
+    echo "turn=$turn_id status=${status:-missing}"
 
     case "$status" in
       "$wanted") return 0 ;;
@@ -95,17 +95,17 @@ wait_for_status() {
 
 wait_for_interrupt() {
   local agent_id="$1"
-  local session_id="$2"
+  local turn_id="$2"
 
   while true; do
-    interrupt_session_id="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/interrupts" \
-      | jq -r --arg session_id "$session_id" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId) // empty')"
-    [[ -n "$interrupt_session_id" ]] && return 0
+    interrupt_id="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/interrupts" \
+      | jq -r --arg turn_id "$turn_id" 'first(.interrupts[]? | select(.turnId == $turn_id) | .interruptId) // empty')"
+    [[ -n "$interrupt_id" ]] && return 0
 
-    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/sessions" \
-      | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
+    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/turns" \
+      | jq -r --arg turn_id "$turn_id" 'first(.turns[]? | select(.id == $turn_id) | .status) // empty' \
       | tr '[:upper:]' '[:lower:]')"
-    echo "session=$session_id status=${status:-missing} waiting_for_interrupt"
+    echo "turn=$turn_id status=${status:-missing} waiting_for_interrupt"
     [[ "$status" =~ ^(completed|error|failed|cancelled|rejected)$ ]] && return 1
     sleep 2
   done
@@ -115,75 +115,75 @@ wait_for_interrupt() {
 ### stress-lg-openai
 
 ```bash
-LG_OPENAI_RUN="$(post_message "$LG_OPENAI_ID" "Quick smoke test: use a basic tool, finish cleanly, and emit stress.tools.complete.")"
+LG_OPENAI_TURN="$(post_message "$LG_OPENAI_ID" "Quick smoke test: use a basic tool, finish cleanly, and emit stress.tools.complete.")"
 
-wait_for_status "$LG_OPENAI_ID" "$LG_OPENAI_RUN" completed
+wait_for_status "$LG_OPENAI_ID" "$LG_OPENAI_TURN" completed
 ```
 
 ### stress-lg-gemini
 
 ```bash
-LG_GEMINI_RUN="$(post_message "$LG_GEMINI_ID" "Quick smoke test: verify Gemini tool execution and emit stress.gemini.complete.")"
+LG_GEMINI_TURN="$(post_message "$LG_GEMINI_ID" "Quick smoke test: verify Gemini tool execution and emit stress.gemini.complete.")"
 
-wait_for_status "$LG_GEMINI_ID" "$LG_GEMINI_RUN" completed
+wait_for_status "$LG_GEMINI_ID" "$LG_GEMINI_TURN" completed
 ```
 
 ### stress-pi-openai
 
 ```bash
-PI_OPENAI_RUN="$(post_message "$PI_OPENAI_ID" "Quick smoke test: run once and emit stress.pi.complete.")"
+PI_OPENAI_TURN="$(post_message "$PI_OPENAI_ID" "Quick smoke test: run once and emit stress.pi.complete.")"
 
-wait_for_status "$PI_OPENAI_ID" "$PI_OPENAI_RUN" completed
+wait_for_status "$PI_OPENAI_ID" "$PI_OPENAI_TURN" completed
 ```
 
 ### stress-pi-gemini
 
 ```bash
-PI_GEMINI_RUN="$(post_message "$PI_GEMINI_ID" "Quick smoke test: run once and emit stress.pi-gemini.complete.")"
+PI_GEMINI_TURN="$(post_message "$PI_GEMINI_ID" "Quick smoke test: run once and emit stress.pi-gemini.complete.")"
 
-wait_for_status "$PI_GEMINI_ID" "$PI_GEMINI_RUN" completed
+wait_for_status "$PI_GEMINI_ID" "$PI_GEMINI_TURN" completed
 ```
 
 ### stress-claude-sonnet
 
 ```bash
-CLAUDE_RUN="$(post_message "$CLAUDE_ID" "Quick smoke test: write and verify a tiny file, then emit stress.claude.complete.")"
+CLAUDE_TURN="$(post_message "$CLAUDE_ID" "Quick smoke test: write and verify a tiny file, then emit stress.claude.complete.")"
 
-wait_for_status "$CLAUDE_ID" "$CLAUDE_RUN" completed
+wait_for_status "$CLAUDE_ID" "$CLAUDE_TURN" completed
 ```
 
 ### stress-chain-responder
 
 ```bash
-CHAIN_RUN="$(post_message "$CHAIN_ID" "Quick smoke test: acknowledge the request and emit stress.chain.done.")"
+CHAIN_TURN="$(post_message "$CHAIN_ID" "Quick smoke test: acknowledge the request and emit stress.chain.done.")"
 
-wait_for_status "$CHAIN_ID" "$CHAIN_RUN" completed
+wait_for_status "$CHAIN_ID" "$CHAIN_TURN" completed
 ```
 
 ### stress-hitl
 
 ```bash
-HITL_RUN="$(post_message "$HITL_ID" "Create the approval smoke file now.")"
+HITL_TURN="$(post_message "$HITL_ID" "Create the approval smoke file now.")"
 
-wait_for_interrupt "$HITL_ID" "$HITL_RUN"
+wait_for_interrupt "$HITL_ID" "$HITL_TURN"
 ```
 
 ## 4) Approve HITL interrupt
 
 ```bash
-INTERRUPT_SESSION_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$HITL_ID/interrupts" \
-  | jq -r --arg session_id "$HITL_RUN" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId)')"
+INTERRUPT_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$HITL_ID/interrupts" \
+  | jq -er --arg turn_id "$HITL_TURN" 'first(.interrupts[]? | select(.turnId == $turn_id) | .interruptId)')"
 
 curl -s -X POST "$API_BASE/api/agents/$HITL_ID/interrupt" \
   "${AUTH_HEADER[@]}" \
   -H 'Content-Type: application/json' \
-  -d "$(jq -nc --arg action approve --arg sessionId "$INTERRUPT_SESSION_ID" '{action: $action, sessionId: $sessionId}')" \
+  -d "$(jq -nc --arg action approve --arg interruptId "$INTERRUPT_ID" '{action: $action, interruptId: $interruptId}')" \
   | jq .
 
-wait_for_status "$HITL_ID" "$HITL_RUN" completed
+wait_for_status "$HITL_ID" "$HITL_TURN" completed
 ```
 
-Pass if the interrupt resolves successfully and the HITL session ends in `completed`.
+Pass if the interrupt resolves successfully and the HITL turn ends in `completed`.
 
 ## 5) Check completion events
 
@@ -195,7 +195,7 @@ Pass if at least one `stress.tools.complete` event exists from this run.
 
 ## Post-run cleanup (manual, after human verification)
 
-Do NOT run cleanup as part of the test. Cleanup cascade-deletes events/sessions/messages.
+Do NOT run cleanup as part of the test. Cleanup cascade-deletes events, turns, conversations, and messages.
 
 Run only after the human has reviewed all results:
 

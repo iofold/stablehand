@@ -24,11 +24,11 @@ function formatRequestFailure(request: Request): string {
 }
 
 export async function assertNoUnexpectedTerminalErrorStates(
-  sessions: Array<{ id?: string; sessionId?: string; status?: string | null; error?: unknown }>,
+  turns: Array<{ id?: string; turnId?: string; status?: string | null; error?: unknown }>,
   options: { allowCancelled?: boolean } = {},
 ): Promise<void> {
-  const unexpected = sessions.filter((session) => {
-    const status = String(session.status ?? '').toLowerCase();
+  const unexpected = turns.filter((turn) => {
+    const status = String(turn.status ?? '').toLowerCase();
     if (status === 'error' || status === 'failed') return true;
     if (status === 'cancelled' && !options.allowCancelled) return true;
     return false;
@@ -38,21 +38,21 @@ export async function assertNoUnexpectedTerminalErrorStates(
 
   // Surface error details inline so the gate failure points at the cause.
   const summary = unexpected
-    .map((session) => {
-      const id = session.id ?? session.sessionId ?? '<unknown-id>';
-      const status = session.status ?? '<unknown-status>';
-      const error = session.error
-        ? typeof session.error === 'string'
-          ? session.error
-          : JSON.stringify(session.error)
+    .map((turn) => {
+      const id = turn.id ?? turn.turnId ?? '<unknown-id>';
+      const status = turn.status ?? '<unknown-status>';
+      const error = turn.error
+        ? typeof turn.error === 'string'
+          ? turn.error
+          : JSON.stringify(turn.error)
         : '<no error detail>';
-      return `  - session=${id} status=${status} error=${error}`;
+      return `  - turn=${id} status=${status} error=${error}`;
     })
     .join('\n');
 
   expect(
     unexpected,
-    `[ADR-008] unexpected terminal error sessions:\n${summary}`,
+    `[ADR-008] unexpected terminal error turns:\n${summary}`,
   ).toEqual([]);
 }
 

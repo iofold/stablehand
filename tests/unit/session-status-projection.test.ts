@@ -1,35 +1,39 @@
 import { describe, expect, it } from 'vitest';
-import { SESSION_CANCELLED_MESSAGE, projectSessionStatus } from '@ctxmill/shared';
+import {
+  TURN_CANCELLED_MESSAGE,
+  projectConversationStatus,
+  projectTurnStatus,
+} from '@ctxmill/shared';
 
-describe('projectSessionStatus (ctx-bl4)', () => {
+describe('status projections', () => {
   const openTurn = { completedAt: null, error: null };
 
-  it('maps a cancelled turn to CANCELLED regardless of sandbox status', () => {
-    const turn = { completedAt: Date.now(), error: SESSION_CANCELLED_MESSAGE };
-    expect(projectSessionStatus(turn, 'ACTIVE', 'ACTIVE')).toBe('CANCELLED');
-    expect(projectSessionStatus(turn, null, 'IDLE')).toBe('CANCELLED');
+  it('maps a cancelled turn to CANCELLED', () => {
+    const turn = { completedAt: Date.now(), error: TURN_CANCELLED_MESSAGE };
+    expect(projectTurnStatus({ ...turn, status: 'failed' })).toBe('CANCELLED');
   });
 
   it('maps an errored turn to ERROR', () => {
-    expect(projectSessionStatus({ completedAt: Date.now(), error: 'boom' }, 'ACTIVE', 'ACTIVE')).toBe('ERROR');
+    expect(projectTurnStatus({ completedAt: Date.now(), error: 'boom', status: 'failed' })).toBe('ERROR');
   });
 
   it('maps a completed turn to COMPLETED', () => {
-    expect(projectSessionStatus({ completedAt: Date.now(), error: null }, 'ACTIVE', 'IDLE')).toBe('COMPLETED');
+    expect(projectTurnStatus({ completedAt: Date.now(), error: null, status: 'completed' })).toBe('COMPLETED');
   });
 
-  it('passes through a live sandbox status for an open turn', () => {
-    expect(projectSessionStatus(openTurn, 'CHECKPOINTED', 'ACTIVE')).toBe('CHECKPOINTED');
-    expect(projectSessionStatus(openTurn, 'RESTORING', 'IDLE')).toBe('RESTORING');
+  it('uses execution vocabulary for open turns', () => {
+    expect(projectTurnStatus({ ...openTurn, status: 'queued' })).toBe('QUEUED');
+    expect(projectTurnStatus({ ...openTurn, status: 'running' })).toBe('RUNNING');
   });
 
-  it('treats TERMINATED as not live and falls back', () => {
-    expect(projectSessionStatus(openTurn, 'TERMINATED', 'ACTIVE')).toBe('ACTIVE');
-    expect(projectSessionStatus(openTurn, 'TERMINATED', 'IDLE')).toBe('IDLE');
+  it('projects sandbox lifecycle only onto conversation aggregates', () => {
+    expect(projectConversationStatus(openTurn, 'CHECKPOINTED')).toBe('CHECKPOINTED');
+    expect(projectConversationStatus(openTurn, 'RESTORING')).toBe('RESTORING');
+    expect(projectConversationStatus(openTurn, 'ACTIVE')).toBe('ACTIVE');
   });
 
-  it('uses the caller fallback when there is no turn and no sandbox', () => {
-    expect(projectSessionStatus(null, null, 'ACTIVE')).toBe('ACTIVE');
-    expect(projectSessionStatus(undefined, undefined, 'IDLE')).toBe('IDLE');
+  it('treats a terminated or absent sandbox as an idle conversation', () => {
+    expect(projectConversationStatus(openTurn, 'TERMINATED')).toBe('IDLE');
+    expect(projectConversationStatus(null, null)).toBe('IDLE');
   });
 });

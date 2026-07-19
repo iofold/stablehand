@@ -6,14 +6,37 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import type { FastifyInstance } from 'fastify';
 import { createContainer, type AppContainer } from '../config/container.js';
 import { createServer } from '../orchestrator/server.js';
-import { discoverAgents, discoverManifests, discoverTools } from '../agent/discovery.js';
-import { manifestToDefinition } from '../manifest/convert.js';
+import { discoverAgents, discoverManifestProjects, discoverTools } from '../agent/discovery.js';
+import type { AgentCreateInput } from '@ctxmill/contracts';
+import type { LoadedManifestProject } from '@ctxmill/manifest/node';
 import type { CTXMillConfig } from '../config/types.js';
 import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 
 import { ensureAgentWorkspace, seedAgentWorkspace } from '../workspace/ensure.js';
 import { DefaultOrchestratorToolRegistry, registerDefaultToolHandlers } from '../orchestrator/grpc/orchestrator-service.js';
+
+function agentInputToDefinition(
+  input: AgentCreateInput,
+  projectDir: string,
+): AgentDefinition {
+  return {
+    name: input.name,
+    harness: input.harness,
+    harnessConfig: input.harnessConfig,
+    tools: input.tools,
+    systemPrompt: input.systemPrompt,
+    ...(input.nativeTools ? { nativeTools: input.nativeTools } : {}),
+    ...(input.description !== undefined ? { description: input.description } : {}),
+    ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.workspaceContent !== undefined
+      ? { workspaceContent: input.workspaceContent }
+      : {}),
+    ...(input.resourceLimits ? { resourceLimits: input.resourceLimits } : {}),
+    projectDir,
+  };
+}
 
 export async function startDev() {
   const cwd = process.cwd();
@@ -125,12 +148,15 @@ export async function startDev() {
 
   // ── Discover agents & tools from project directories ─
   let agentDefs: AgentDefinition[] = [];
+  let manifestProjects: LoadedManifestProject[] = [];
   let toolDefs: ToolDefinition[] = [];
 
   if (existsSync(agentsDir)) {
     agentDefs = await discoverAgents(agentsDir);
-    const manifests = await discoverManifests(agentsDir);
-    const manifestDefs = manifests.map((m) => manifestToDefinition(m, { projectDir: cwd }));
+    manifestProjects = await discoverManifestProjects(agentsDir);
+    const manifestDefs = manifestProjects.map((project) =>
+      agentInputToDefinition(project.agentCreateInput, project.projectDir),
+    );
     agentDefs = [...agentDefs, ...manifestDefs];
   }
   if (existsSync(toolsDir)) {
@@ -143,10 +169,14 @@ export async function startDev() {
   }
 
   // Register discovered agents in the database
+  const manifestProjectsByName = new Map(
+    manifestProjects.map((project) => [project.agentCreateInput.name, project]),
+  );
   for (const def of agentDefs) {
     const existing = await container.db.listAgents();
     const alreadyRegistered = existing.find((a) => a.name === def.name);
     if (!alreadyRegistered) {
+      const manifestProject = manifestProjectsByName.get(def.name);
       await container.db.createAgent({
         name: def.name,
         harness: def.harness,
@@ -155,6 +185,7 @@ export async function startDev() {
         tools: def.tools,
         description: def.description ?? null,
         metadata: def.metadata ?? null,
+        manifest: manifestProject?.agentCreateInput.manifest,
         status: 'created',
       });
     }
@@ -176,8 +207,8 @@ export async function startDev() {
     container.toolRegistry,
     (ctx) => ({
       agentId: ctx.agentId,
-      conversationId: '',
-      instanceId: ctx.sessionId,
+      conversationId: ctx.conversationId ?? '',
+      turnId: ctx.turnId,
       requestId: ctx.requestId,
       workspaceDir: '/workspace',
       eventBus: container.eventBus,
@@ -190,12 +221,12 @@ export async function startDev() {
     toolRegistry.set(tool.name, async (args, ctx) => {
       if (tool.requiresApproval && container.interruptManager && container.sseManager) {
         if (container.eventBus) {
-          container.eventBus.emit('run.tool_started', {
-            turnId: ctx.sessionId,
+          container.eventBus.emit('tool_call.started', {
+            turnId: ctx.turnId,
             agentId: ctx.agentId,
-            conversationId: ctx.sessionId,
+            conversationId: ctx.conversationId ?? '',
             toolCallId: ctx.requestId,
-            toolName: tool.name,
+            toolCallName: tool.name,
             args: args as Record<string, unknown>,
             requiresApproval: true,
             timestamp: Date.now(),
@@ -203,7 +234,14 @@ export async function startDev() {
         }
 
         const resolution = await container.interruptManager.waitForApproval(
-            ctx.sessionId, ctx.agentId, ctx.requestId, tool.name, args as Record<string, unknown>, undefined, undefined, ctx.sessionId,
+          ctx.turnId,
+          ctx.agentId,
+          ctx.requestId,
+          tool.name,
+          args as Record<string, unknown>,
+          undefined,
+          undefined,
+          ctx.conversationId,
         );
 
         if (resolution.action !== 'approve') {
@@ -229,8 +267,7 @@ export async function startDev() {
     containerManager: container.containerManager,
     artifactStore: container.artifactStore,
     artifactBucket: process.env.S3_BUCKET || 'ctxmill-artifacts',
-    agentSessionService: container.agentSessionService,
-    runStartupService: container.runStartupService,
+    turnStartupService: container.turnStartupService,
     toolRegistry,
     toolDefinitionRegistry: container.toolRegistry,
     toolExecutor: container.toolExecutor,

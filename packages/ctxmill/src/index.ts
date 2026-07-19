@@ -7,7 +7,7 @@ export { defineTool, LocalFunctionExecutor } from './tool/index.js';
 export { TypedEventBus } from './events/bus.js';
 
 // Discovery
-export { discoverAgents, discoverTools, discoverManifests } from './agent/discovery.js';
+export { discoverAgents, discoverTools, discoverManifestProjects } from './agent/discovery.js';
 
 // Core types
 export type {
@@ -33,8 +33,8 @@ export type { CTXMillConfig } from './config/types.js';
 
 // Event types
 export type {
-  AGUIEventType,
-  AGUIEvent,
+  AgentSessionEventType,
+  AgentSessionEvent,
 } from './events/types.js';
 export type { EventMap, EventName, PersistEventFn } from './events/bus.js';
 
@@ -57,15 +57,6 @@ export { LocalToolProvider, MCPToolProvider, ComposioToolProvider, HTTPToolProvi
 export type { MCPTransportConfig, ComposioConfig, HttpEndpointConfig, HttpAuthConfig } from './tool/providers/index.js';
 export { DefaultToolRegistry } from './tool/registry.js';
 export type { SecretProvider } from './secrets/index.js';
-
-// Manifest types and service
-export type {
-  AgentManifest, ManifestMetadata, ManifestSpec, ManifestModelConfig,
-  ManifestToolRef, ManifestTrigger, ManifestEmit, ManifestHITL,
-  ManifestWorkspace, ManifestResources,
-} from './manifest/index.js';
-export { validateManifest, parseManifestString, serializeManifestYAML,
-  manifestToDefinition, definitionToManifest } from './manifest/index.js';
 
 // Error utilities
 export { getErrorMessage, isHttpError } from './util/errors.js';

@@ -14,6 +14,7 @@ import {
 import { fetchConfig, fetchSettings, updateSettings } from '@/lib/api';
 import type { AppConfig, SystemSettings } from '@/lib/api';
 import { PageShell } from '@/components/ui/PageShell';
+import { BudgetsSection } from '@/components/settings/BudgetsSection';
 
 function formatUptime(ms: number): string {
   const secs = Math.floor(ms / 1000);
@@ -316,6 +317,8 @@ export function SettingsPage() {
               <LimitRow label="Default PID Limit" description="Default process limit per container" value={draftPidsLimit} onChange={setDraftPidsLimit} unit="" min={32} max={4096} />
               <LimitRow label="Default Session Timeout" description="Default session timeout in seconds" value={draftTimeoutSec} onChange={setDraftTimeoutSec} unit="s" min={10} max={3600} />
             </SettingsSection>
+
+            <BudgetsSection />
           </div>
         )}
         

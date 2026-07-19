@@ -11,7 +11,7 @@ event spine observe. Many code paths can end a turn:
 
 - live completion when the sandbox stream finishes,
 - startup reconciliation of turns stranded by an orchestrator restart,
-- run-startup failures before the sandbox is ever reached,
+- turn-startup failures before the sandbox is ever reached,
 - explicit cancellation.
 
 When more than one of these can write the terminal row — or when they race each

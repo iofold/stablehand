@@ -1,1 +1,1 @@
-export type TabId = 'overview' | 'sessions' | 'tools' | 'files' | 'artifacts' | 'secrets';
+export type TabId = 'overview' | 'turns' | 'tools' | 'files' | 'artifacts' | 'secrets';

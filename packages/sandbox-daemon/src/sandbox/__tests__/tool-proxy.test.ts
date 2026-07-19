@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Tests for the sandbox tool proxy — verifies that orchestrator-location
  * tools are correctly proxied via gRPC with retries and error handling.
@@ -73,7 +72,7 @@ describe('createToolProxy', () => {
     expect(client.requestTool).toHaveBeenCalledTimes(1);
 
     const callArgs = (client.requestTool as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(callArgs.sessionId).toBe('run-1');
+    expect(callArgs.turnId).toBe('run-1');
     expect(callArgs.agentId).toBe('agent-1');
     expect(callArgs.toolName).toBe('search');
     expect(JSON.parse(callArgs.argsJson)).toEqual({ query: 'hello' });

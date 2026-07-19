@@ -1,6 +1,15 @@
 // Shared types between @ctxmill/ui and ctxmill packages
-export { API_SESSION_STATUSES } from './api.js';
-export { SESSION_CANCELLED_MESSAGE, isSessionCancelled, projectSessionStatus } from './status.js';
+export {
+  API_CONVERSATION_STATUSES,
+  API_TURN_STATUSES,
+  SANDBOX_SESSION_STATUSES,
+} from './api.js';
+export {
+  TURN_CANCELLED_MESSAGE,
+  isTurnCancelled,
+  projectConversationStatus,
+  projectTurnStatus,
+} from './status.js';
 export {
   CANONICAL_LLM_PROVIDERS,
   LLM_PROVIDER_ALIASES,
@@ -8,14 +17,19 @@ export {
   normalizeLLMProvider,
   supportedLLMProviderDescription,
 } from './llm-providers.js';
-export type { AGUIEventType, AGUIEvent, MessageCommittedEvent } from './events.js';
+export type { AgentSessionEventType, AgentSessionEvent, MessageCommittedEvent } from './events.js';
 export type { CanonicalLLMProvider } from './llm-providers.js';
 export type {
   ApiAgent,
   ApiAgentResourceLimits,
   HttpToolDefinition,
-  ApiAgentSession,
-  ApiSessionStatus,
+  ApiAgentTurn,
+  ApiTurnStatus,
+  ApiConversationStatus,
+  ApiTokenUsage,
+  ApiBudgetPolicy,
+  ApiBudgetSpend,
+  ApiBudgetSpendBucket,
   ApiMessage,
   ApiMessagePart,
   ApiToolCallState,
@@ -24,6 +38,6 @@ export type {
   ApiFeedbackRequest,
   ApiSandboxRestoreSuccess,
   SandboxSessionStatus,
-  ApiSessionStatusCounts,
+  ApiSandboxSessionStatusCounts,
   ApiConversationSummary,
 } from './api.js';

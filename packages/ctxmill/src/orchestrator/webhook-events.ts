@@ -3,12 +3,14 @@ import type { EventName } from '../events/bus.js';
 export const VALID_WEBHOOK_EVENTS = [
   'turn.started',
   'turn.completed',
-  'run.tool_started',
-  'run.tool_result',
-  'run.interrupted',
-  'run.interrupt_resolved',
+  'tool_call.started',
+  'tool_call.completed',
+  'interrupt.requested',
+  'interrupt.resolved',
   'message.committed',
+  'message.updated',
   'feedback.received',
+  'budget.threshold',
 ] as const satisfies readonly EventName[];
 
 export type ValidWebhookEvent = typeof VALID_WEBHOOK_EVENTS[number];

@@ -17,7 +17,14 @@ import { normalizeConversationMessage } from '@/stores/conversation';
 import { useInterruptStore } from '@/stores/interrupt';
 import { useAgentsStore } from '@/stores/agents';
 import { useSSE, useSSEStatus } from '@/lib/useSSE';
-import { sendMessage, sendInterrupt, fetchMessages, fetchConversations, fetchSessions, fetchTurns, fetchInterrupts } from '@/lib/api';
+import {
+  sendMessage,
+  sendInterrupt,
+  fetchConversationSnapshot,
+  fetchConversations,
+  fetchAgentTurns,
+  fetchInterrupts,
+} from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { isNewConversationPath } from '@/lib/routes';
 
@@ -55,6 +62,7 @@ export function SessionPage() {
     streamingContent,
     toolCalls,
     addUserMessage,
+    discardOptimisticUserMessage,
     loadMessages,
     setActiveConversation,
     reset,
@@ -68,9 +76,19 @@ export function SessionPage() {
   const [pastRunError, setPastRunError] = useState<string | null>(null);
   const [lastFailedContent, setLastFailedContent] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>(routeConversationId);
+  const requestedConversationKey = routeConversationId
+    ?? (isNewConversationPath(location.pathname) ? '__new__' : '__latest__');
+  const historyKey = `${id ?? ''}:${requestedConversationKey}`;
+  const [streamBoundary, setStreamBoundary] = useState<{
+    historyKey: string;
+    eventCursor?: string;
+  } | null>(null);
 
-
-  useSSE(id);
+  const streamReady = streamBoundary?.historyKey === historyKey;
+  useSSE(streamReady ? id : undefined, {
+    enabled: streamReady,
+    eventCursor: streamBoundary?.eventCursor,
+  });
 
   useEffect(() => {
     if (agents.length === 0) fetchAgents();
@@ -81,6 +99,7 @@ export function SessionPage() {
     if (!id) {
       setConversationId(undefined);
       loadMessages([]);
+      setStreamBoundary(null);
       return;
     }
 
@@ -89,6 +108,7 @@ export function SessionPage() {
     setConversationId(routeConversationId);
     setActiveConversation(routeConversationId ?? null);
     loadMessages([]);
+    setStreamBoundary(null);
     setPastRunError(null);
     setIsReadOnly(false);  
 
@@ -109,65 +129,73 @@ export function SessionPage() {
           setConversationId(undefined);
           setActiveConversation(null);
           loadMessages([]);
+          setStreamBoundary({ historyKey });
         } else {
           setConversationId(resolvedConversationId);
           setActiveConversation(resolvedConversationId);
 
-          const msgs = await fetchMessages(id!, resolvedConversationId);
+          const snapshot = await fetchConversationSnapshot(
+            id!,
+            resolvedConversationId,
+          );
           if (!mounted) return;
-          if (!Array.isArray(msgs) || msgs.length === 0) {
+          if (snapshot.messages.length === 0) {
             loadMessages([]);
           } else {
-            const parsed = msgs.map((m: Record<string, unknown>, i: number) =>
-              normalizeConversationMessage(m, `msg-${i}`),
+            const parsed = snapshot.messages.map((message, index) =>
+              normalizeConversationMessage(
+                message as unknown as Record<string, unknown>,
+                `msg-${index}`,
+              ),
             );
 
             if (mounted) {
               loadMessages(parsed);
             }
           }
+          if (mounted) {
+            setStreamBoundary({
+              historyKey,
+              eventCursor: snapshot.eventCursor,
+            });
+          }
         }
 
         if (mounted) {
           try {
-            const [sessionsRaw, turnsRaw] = await Promise.all([
-              fetchSessions(id!),
-              fetchTurns(id!),
-            ]);
+            const turnsRaw = await fetchAgentTurns(id!);
             if (!mounted) return;
 
-            const sessions = ((sessionsRaw as { sessions?: Record<string, unknown>[] }).sessions ?? []);
-            const turns = Array.isArray(turnsRaw) ? turnsRaw : [] as Record<string, unknown>[];
+            const turns = turnsRaw;
 
             const isRuntimeActiveStatus = (status: unknown) =>
               status === 'ACTIVE' || status === 'RESTORING';
-            const matchingSessions = resolvedConversationId
-              ? sessions.filter((s: Record<string, unknown>) => s.conversationId === resolvedConversationId)
-              : sessions;
-            const hasActiveContainer = matchingSessions.some(
-              (s: Record<string, unknown>) => isRuntimeActiveStatus(s.status),
+            const matchingTurns = resolvedConversationId
+              ? turns.filter((turn) => turn.conversationId === resolvedConversationId)
+              : turns;
+            const hasActiveContainer = matchingTurns.some(
+              (turn) => isRuntimeActiveStatus(turn.sandboxStatus),
             );
             // Container being ACTIVE is not enough — we also need an incomplete turn.
             // Sandbox sessions stay ACTIVE even after a turn completes (container persists).
             const hasActiveTurn = resolvedConversationId
               ? turns.some(
-                  (t: Record<string, unknown>) =>
+                  (t) =>
                     t.conversationId === resolvedConversationId &&
                     t.completedAt == null &&
                     !t.error,
                 )
               : turns.some(
-                  (t: Record<string, unknown>) =>
+                  (t) =>
                     t.completedAt == null && !t.error,
                 );
             useConversationStore.setState({ isStreaming: hasActiveContainer && hasActiveTurn });
 
             if (resolvedConversationId) {
               const convTurns = turns
-                .filter((t: Record<string, unknown>) => t.conversationId === resolvedConversationId)
+                .filter((t) => t.conversationId === resolvedConversationId)
                 .sort(
-                  (a: Record<string, unknown>, b: Record<string, unknown>) =>
-                    ((b.startedAt as number) || 0) - ((a.startedAt as number) || 0),
+                  (a, b) => b.startedAt - a.startedAt,
                 );
               const lastTurn = convTurns[0];
               if (lastTurn?.error) {
@@ -178,8 +206,8 @@ export function SessionPage() {
 
               // Only lock read-only when the unified session status is TERMINATED
               // (no checkpoint to restore). ACTIVE/CHECKPOINTED/RESTORING sessions can resume.
-              const isTerminated = matchingSessions.length > 0 &&
-                matchingSessions.every((s: Record<string, unknown>) => s.status === 'TERMINATED');
+              const isTerminated = matchingTurns.length > 0 &&
+                matchingTurns.every((turn) => turn.sandboxStatus === 'TERMINATED');
               if (isTerminated && !hasActiveTurn && convTurns.length > 0) {
                 setIsReadOnly(true);
               }
@@ -195,11 +223,13 @@ export function SessionPage() {
             if (mounted && Array.isArray(pendingInterrupts) && pendingInterrupts.length > 0) {
               const first = [...pendingInterrupts].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))[0];
               useInterruptStore.getState().setPending({
+                interruptId: first.interruptId,
+                turnId: first.turnId,
                 agentId: id!,
-                toolName: first.toolName,
+                toolCallName: first.toolCallName,
                 args: first.args,
                 toolCallId: first.toolCallId,
-                sessionId: first.sessionId,
+                ...(first.sandboxSessionId ? { sandboxSessionId: first.sandboxSessionId } : {}),
               });
             }
           } catch (err) {
@@ -216,7 +246,15 @@ export function SessionPage() {
       mounted = false;
       reset();
     };
-  }, [id, routeConversationId, loadMessages, setActiveConversation, reset, location.pathname]);
+  }, [
+    historyKey,
+    id,
+    routeConversationId,
+    loadMessages,
+    setActiveConversation,
+    reset,
+    location.pathname,
+  ]);
 
   const agent = agents.find((a) => a.id === id);
 
@@ -225,11 +263,11 @@ export function SessionPage() {
 
   const handleSend = useCallback(
     async (content: string) => {
-      if (!id) return;
+      if (!id || !streamReady) return;
       setError(null);
       setPastRunError(null);
       setLastFailedContent(null);
-      addUserMessage(content);
+      const optimisticMessageId = addUserMessage(content);
       try {
         const response = await sendMessage(id, content, conversationId);
         if (response?.conversationId && !conversationId) {
@@ -238,59 +276,68 @@ export function SessionPage() {
           navigate(`/agents/${id}/conversations/${response.conversationId}`, { replace: true });
         }
       } catch (err) {
+        discardOptimisticUserMessage(optimisticMessageId);
         console.error('[Session] Failed to send message:', err);
         setError(err instanceof Error ? err.message : String(err));
         setLastFailedContent(content);
       }
     },
-    [id, addUserMessage, conversationId, setActiveConversation, navigate],
+    [
+      id,
+      streamReady,
+      addUserMessage,
+      discardOptimisticUserMessage,
+      conversationId,
+      setActiveConversation,
+      navigate,
+    ],
   );
 
   const handleApprove = useCallback(async () => {
     if (!id) return;
     setError(null);
     try {
-      const toolName = interrupt?.toolName || '';
+      const toolCallName = interrupt?.toolCallName || '';
       useConversationStore.getState().addSystemMessage(
-        `✓ Approved${toolName ? `: ${toolName}` : ''}`,
+        `✓ Approved${toolCallName ? `: ${toolCallName}` : ''}`,
       );
-      await sendInterrupt(id, 'approve', undefined, interrupt?.sessionId);
+      await sendInterrupt(id, 'approve', undefined, interrupt?.interruptId);
       clearInterrupt();
     } catch (err) {
       console.error('[Session] Failed to send approval:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.sessionId, interrupt?.toolName]);
+  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolCallName]);
 
   const handleReject = useCallback(async () => {
     if (!id) return;
     setError(null);
     try {
-      const toolName = interrupt?.toolName || '';
+      const toolCallName = interrupt?.toolCallName || '';
       useConversationStore.getState().addSystemMessage(
-        `✗ Rejected${toolName ? `: ${toolName}` : ''}`,
+        `✗ Rejected${toolCallName ? `: ${toolCallName}` : ''}`,
       );
-      await sendInterrupt(id, 'reject', undefined, interrupt?.sessionId);
+      await sendInterrupt(id, 'reject', undefined, interrupt?.interruptId);
       clearInterrupt();
     } catch (err) {
       console.error('[Session] Failed to send rejection:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.sessionId, interrupt?.toolName]);
+  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolCallName]);
 
   const handleDocSubmit = useCallback(
     async (content: string) => {
       if (!id) return;
       setError(null);
       try {
-        await sendInterrupt(id, 'submit', { content }, interrupt?.sessionId);
+        await sendInterrupt(id, 'submit', { content }, interrupt?.interruptId);
         clearInterrupt();
       } catch (err) {
         console.error('[Session] Failed to submit document:', err);
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [id, clearInterrupt, interrupt?.sessionId],
+    [id, clearInterrupt, interrupt?.interruptId],
   );
 
   const handleFormSubmit = useCallback(
@@ -298,14 +345,14 @@ export function SessionPage() {
       if (!id) return;
       setError(null);
       try {
-        await sendInterrupt(id, 'submit', values, interrupt?.sessionId);
+        await sendInterrupt(id, 'submit', values, interrupt?.interruptId);
         clearInterrupt();
       } catch (err) {
         console.error('[Session] Failed to submit form:', err);
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [id, clearInterrupt, interrupt?.sessionId],
+    [id, clearInterrupt, interrupt?.interruptId],
   );
 
   const connectionDot = sseStatus === 'connected'
@@ -404,14 +451,14 @@ export function SessionPage() {
           {/* HITL interrupt components */}
           {interrupt && id && (
             <div className="mx-auto w-full max-w-3xl px-4 pb-2">
-              {interrupt.toolName === 'edit_document' ? (
+              {interrupt.toolCallName === 'edit_document' ? (
                 <EditableDocument
                   title={(interrupt.args.title as string) ?? 'Review Document'}
                   content={(interrupt.args.content as string) ?? ''}
                   onSubmit={handleDocSubmit}
                   onCancel={() => clearInterrupt()}
                 />
-              ) : interrupt.toolName === 'request_fields' ? (
+              ) : interrupt.toolCallName === 'request_fields' ? (
                 <FieldRequestForm
                   title={(interrupt.args.title as string) ?? 'Additional Information'}
                   fields={
@@ -421,9 +468,9 @@ export function SessionPage() {
                 />
               ) : (
                 <ApprovalCard
-                  title={`Approve: ${interrupt.toolName}`}
-                  description={`The agent wants to execute "${interrupt.toolName}".`}
-                  action={interrupt.toolName}
+                  title={`Approve: ${interrupt.toolCallName}`}
+                  description={`The agent wants to execute "${interrupt.toolCallName}".`}
+                  action={interrupt.toolCallName}
                   details={interrupt.args}
                   onApprove={handleApprove}
                   onReject={handleReject}
@@ -452,7 +499,10 @@ export function SessionPage() {
               </div>
             </div>
           ) : (
-            <SessionInput onSend={handleSend} disabled={isStreaming} />
+            <SessionInput
+              onSend={handleSend}
+              disabled={isStreaming || !streamReady}
+            />
           )}
         </div>
       </div>

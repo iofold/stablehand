@@ -1,4 +1,6 @@
 import { expect, type APIRequestContext } from '@playwright/test';
+import { join } from 'node:path';
+import { loadManifestProject } from '@ctxmill/manifest/node';
 
 export const API_BASE =
   process.env.PLAYWRIGHT_API_BASE_URL ?? 'http://localhost:3002';
@@ -55,12 +57,12 @@ export async function startBackgroundRun(
   request: APIRequestContext,
   agentId: string,
   task: string,
-): Promise<{ sessionId: string; conversationId: string }> {
-  const response = await request.post(`${API_BASE}/api/agents/${agentId}/session`, {
-    data: { task, mode: 'background' },
+): Promise<{ turnId: string; conversationId: string }> {
+  const response = await request.post(`${API_BASE}/api/agents/${agentId}/turns`, {
+    data: { task },
   });
   expect(response.ok()).toBeTruthy();
-  return (await response.json()) as { sessionId: string; conversationId: string };
+  return (await response.json()) as { turnId: string; conversationId: string };
 }
 
 export async function sendAgentMessage(
@@ -68,7 +70,7 @@ export async function sendAgentMessage(
   agentId: string,
   content: string,
   conversationId?: string,
-): Promise<{ messageId: string; conversationId: string; sessionId: string }> {
+): Promise<{ messageId: string; conversationId: string; turnId: string }> {
   const response = await request.post(
     `${API_BASE}/api/agents/${agentId}/message`,
     {
@@ -79,65 +81,51 @@ export async function sendAgentMessage(
   return (await response.json()) as {
     messageId: string;
     conversationId: string;
-    sessionId: string;
+    turnId: string;
   };
 }
 
 export async function waitForRunStatus(
   request: APIRequestContext,
   agentId: string,
-  sessionId: string,
+  turnId: string,
   statuses: string[],
   timeoutMs = 60_000,
-): Promise<{ id: string; sessionId?: string; status: string; conversationId: string }> {
+): Promise<{ id: string; sandboxSessionId?: string; status: string; conversationId: string }> {
   const deadline = Date.now() + timeoutMs;
   const expectedStatuses = new Set(statuses.map((status) => status.toLowerCase()));
 
   while (Date.now() < deadline) {
-    const sessionsResponse = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
-    if (sessionsResponse.ok()) {
-      const body = await sessionsResponse.json();
-      const sessions = body.sessions ?? [];
-      const session = sessions.find((entry: Record<string, unknown>) =>
-        entry.id === sessionId || entry.sessionId === sessionId || entry.conversationId === sessionId,
-      );
-      if (session) {
-        const status = normalizeSessionStatus(String(session.status ?? ''));
-        if (expectedStatuses.has(status)) {
-          return { ...session, status } as { id: string; sessionId?: string; status: string; conversationId: string };
-        }
-      }
-    }
-
     const response = await request.get(`${API_BASE}/api/agents/${agentId}/turns`);
     if (!response.ok()) {
       await delay(1_000);
       continue;
     }
-    const body = await response.json();
-    const turns = Array.isArray(body) ? body : [];
+    const body = await response.json() as { turns?: Array<Record<string, unknown>> };
+    const turns = body.turns ?? [];
     const turn = turns.find((t: Record<string, unknown>) =>
-      t.id === sessionId || t.conversationId === sessionId,
+      t.id === turnId,
     );
     if (turn) {
-      const derivedStatus = turn.error
-        ? 'error'
-        : turn.completedAt !== null
-          ? 'completed'
-          : 'running';
+      const derivedStatus = normalizeTurnStatus(String(turn.status ?? ''));
       if (expectedStatuses.has(derivedStatus)) {
-        return { ...turn, status: derivedStatus } as { id: string; sessionId?: string; status: string; conversationId: string };
+        return { ...turn, status: derivedStatus } as {
+          id: string;
+          sandboxSessionId?: string;
+          status: string;
+          conversationId: string;
+        };
       }
     }
     await delay(1_000);
   }
 
   throw new Error(
-    `Timed out waiting for session ${sessionId} to reach one of: ${statuses.join(', ')}`,
+    `Timed out waiting for turn ${turnId} to reach one of: ${statuses.join(', ')}`,
   );
 }
 
-function normalizeSessionStatus(status: string): string {
+function normalizeTurnStatus(status: string): string {
   switch (status.toUpperCase()) {
     case 'QUEUED':
       return 'queued';
@@ -166,14 +154,17 @@ export async function getConversationMessages(
   conversationId: string,
 ): Promise<Array<{ id: string; role: string; content: string }>> {
   const response = await request.get(
-    `${API_BASE}/api/agents/${agentId}/conversations/${conversationId}/messages`,
+    `${API_BASE}/api/agents/${agentId}/conversations/${conversationId}/snapshot`,
   );
   expect(response.ok()).toBeTruthy();
-  return (await response.json()) as Array<{
+  const snapshot = (await response.json()) as {
+    messages: Array<{
     id: string;
     role: string;
     content: string;
-  }>;
+    }>;
+  };
+  return snapshot.messages;
 }
 
 export async function waitForNonUserMessage(
@@ -200,64 +191,30 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-declare const process: {
-  env: Record<string, string | undefined>;
-  cwd(): string;
-};
-
-type FsModule = {
-  readFileSync(path: string, encoding: string): string;
-};
-
-type PathModule = {
-  join(...paths: string[]): string;
-};
-
-const loadFs = new Function('return import("node:fs")') as () => Promise<FsModule>;
-const loadPath = new Function('return import("node:path")') as () => Promise<PathModule>;
-const loadYaml = new Function('return import("yaml")') as () => Promise<{ parse(s: string): unknown }>;
-
 export async function importStressAgent(
   request: APIRequestContext,
   agentDir: string,
 ): Promise<TestAgent> {
-  const fs = await loadFs();
-  const path = await loadPath();
-  const yamlLib = await loadYaml();
-  const manifestPath = path.join(process.cwd(), 'tests', 'stress', 'agents', agentDir, 'agent.yaml');
-  const raw = yamlLib.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>;
-  const meta = (raw.metadata ?? {}) as Record<string, unknown>;
-  const spec = (raw.spec ?? {}) as Record<string, unknown>;
-  const tools = (spec.tools as Array<{ ref?: string }> | undefined) ?? [];
-  const model = spec.model as Record<string, unknown> | undefined;
-  const harnessConfig = (spec.harnessConfig ?? (model ? {
-    provider: model.provider,
-    model: model.id,
-    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
-    ...(model.apiKeyRef ? { apiKeyRef: model.apiKeyRef } : {}),
-    ...(model.temperature !== undefined ? { temperature: model.temperature } : {}),
-    ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
-    ...(model.topP !== undefined ? { topP: model.topP } : {}),
-    ...(model.reasoning ? { reasoning: model.reasoning } : {}),
-  } : {})) as Record<string, unknown>;
+  const manifestPath = join(
+    process.cwd(),
+    'tests',
+    'stress',
+    'agents',
+    agentDir,
+    'agent.yaml',
+  );
+  const payload = (await loadManifestProject(manifestPath)).agentCreateInput;
 
   const existingAgentsResponse = await request.get(`${API_BASE}/api/agents`);
   expect(existingAgentsResponse.ok()).toBeTruthy();
   const existingAgents = await existingAgentsResponse.json() as Array<{ id: string; name: string }>;
-  const sameNameAgents = existingAgents.filter((agent) => agent.name === (meta.name as string));
+  const sameNameAgents = existingAgents.filter((agent) => agent.name === payload.name);
   for (const agent of sameNameAgents) {
     await deleteTestAgent(request, agent.id);
   }
 
   const response = await request.post(`${API_BASE}/api/agents`, {
-    data: {
-      name: meta.name as string,
-      harness: spec.harness as string,
-      harnessConfig,
-      systemPrompt: (spec.instructions ?? '') as string,
-      tools: tools.map((t) => t.ref).filter(Boolean),
-      description: (meta.description ?? null) as string | null,
-    },
+    data: payload,
   });
   expect(response.ok()).toBeTruthy();
   const result = await response.json();
@@ -267,31 +224,27 @@ export async function importStressAgent(
 export async function getInterrupts(
   request: APIRequestContext,
   agentId: string,
-): Promise<Array<{ id: string; sessionId: string; runId: string; toolName: string; args: Record<string, unknown> }>> {
+): Promise<Array<{
+  interruptId: string;
+  turnId: string;
+  sandboxSessionId?: string;
+  toolName: string;
+  args: Record<string, unknown>;
+}>> {
   const response = await request.get(`${API_BASE}/api/agents/${agentId}/interrupts`);
   expect(response.ok()).toBeTruthy();
   const body = await response.json();
-  return (body.interrupts ?? []).map((entry: {
-    id: string;
-    sessionId?: string;
-    runId?: string;
-    toolName: string;
-    args: Record<string, unknown>;
-  }) => ({
-    ...entry,
-    sessionId: entry.sessionId ?? entry.runId ?? entry.id,
-    runId: entry.runId ?? entry.sessionId ?? entry.id,
-  }));
+  return body.interrupts ?? [];
 }
 
 export async function resolveInterrupt(
   request: APIRequestContext,
   agentId: string,
-  runId: string,
+  interruptId: string,
   action: 'approve' | 'reject',
 ): Promise<{ resolved: boolean; action: string }> {
   const response = await request.post(`${API_BASE}/api/agents/${agentId}/interrupt`, {
-    data: { action, sessionId: runId },
+    data: { action, interruptId },
   });
   expect(response.ok()).toBeTruthy();
   return (await response.json()) as { resolved: boolean; action: string };
@@ -311,12 +264,12 @@ export async function getEvents(
   return body.events ?? [];
 }
 
-export async function cancelSession(
+export async function cancelTurn(
   request: APIRequestContext,
   agentId: string,
-  sessionId: string,
+  turnId: string,
 ): Promise<void> {
-  await request.post(`${API_BASE}/api/agents/${agentId}/sessions/${sessionId}/cancel`);
+  await request.post(`${API_BASE}/api/agents/${agentId}/turns/${turnId}/cancel`);
 }
 
 export async function releaseAgentSandboxes(
@@ -324,7 +277,7 @@ export async function releaseAgentSandboxes(
   agentIds: Iterable<string>,
 ): Promise<void> {
   const ids = new Set(agentIds);
-  const response = await request.get(`${API_BASE}/api/sessions?format=sandbox`);
+  const response = await request.get(`${API_BASE}/api/sandbox-sessions?status=active`);
   if (!response.ok()) return;
   const sessions = (await response.json()) as Array<{ id: string; agentId: string; status: string }>;
   for (const session of sessions) {

@@ -20,7 +20,7 @@ function createMockSessionManager(): SessionTurnSessionManager {
     ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sess-1' }),
     deliverTurn: vi.fn().mockImplementation(async function* () {
       yield aguiWrap({ type: 'TEXT_MESSAGE_START', timestamp: Date.now(), runId: 'r-1' });
-      yield aguiWrap({ type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'r-1', content: 'response' });
+      yield aguiWrap({ type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'r-1', delta: 'response' });
       yield aguiWrap({ type: 'TEXT_MESSAGE_END', timestamp: Date.now(), runId: 'r-1' });
       yield { type: 'message_committed', role: 'assistant', content: 'response', turnId: 'turn-1', messageSeq: 1 } as SessionEvent;
     }),

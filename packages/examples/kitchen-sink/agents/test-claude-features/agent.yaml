@@ -49,6 +49,3 @@ spec:
       - Glob
   workspace: {}
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 120
-    maxTokensPerSession: 8000

@@ -57,8 +57,8 @@ test.describe('Conversation continuity @extended', () => {
     const firstBody = messageRequests[0].body;
     expect(firstBody.content).toBe('What is 1 + 1?');
     expect(typeof firstResponseBody.conversationId).toBe('string');
-    expect(typeof firstResponseBody.sessionId).toBe('string');
-    const firstRun = await waitForRunStatus(page.request, agentId, firstResponseBody.sessionId, ['completed', 'error'], 120_000);
+    expect(typeof firstResponseBody.turnId).toBe('string');
+    const firstRun = await waitForRunStatus(page.request, agentId, firstResponseBody.turnId, ['completed', 'error'], 120_000);
     expect(firstRun.status).toBe('completed');
     await expect(chatInput).toBeEnabled({ timeout: 15_000 });
 

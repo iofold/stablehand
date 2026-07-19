@@ -9,18 +9,21 @@ import {
   HARNESS_CONFIG_SCHEMAS,
   type HarnessConfigSchemas,
 } from '@ctxmill/sandbox-daemon/harness/schemas';
-import { TypedEventBus } from '../events/bus.js';
+import { TypedEventBus, type EventMap } from '../events/bus.js';
+import { BudgetEnforcer } from '../orchestrator/budget-enforcer.js';
 import { SSEManager } from '../orchestrator/sse.js';
 import { InterruptManager } from '../orchestrator/interrupt.js';
 import { createTriggerSpineConsumer, EventTriggerManager, type TriggerRunCallback } from '../events/trigger-manager.js';
 import { SpineConsumerRunner } from '../events/spine-consumer-runner.js';
-import { AgentSessionService } from '../orchestrator/agent-session-service.js';
+import { AgentTurnService } from '../orchestrator/agent-turn-service.js';
 import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
 import { createGuardedFetch } from '../util/egress.js';
 import { createWebhookRelaySpineConsumer } from '../orchestrator/webhook-relay.js';
-import { RunStartupService } from '../orchestrator/run-startup-service.js';
+import { TurnStartupService } from '../orchestrator/turn-startup-service.js';
 import { TurnFinalizer } from '../orchestrator/turn-finalizer.js';
 import { reconcileStrandedTurnsOnStartup } from '../orchestrator/turn-reconciler.js';
+import { reconcilePendingMessagePublishesOnStartup } from '../orchestrator/message-publisher.js';
+import { reconcilePendingTerminalPublishesOnStartup } from '../orchestrator/turn-terminal-publisher.js';
 import { CanonicalLog } from '../orchestrator/canonical/canonical-log.js';
 import { PostgresSecretProvider } from '../secrets/postgres-provider.js';
 import { deriveKey } from '../secrets/crypto.js';
@@ -63,11 +66,11 @@ export interface AppContainer {
   interruptManager: InterruptManager;
   triggerManager: EventTriggerManager;
   spineConsumerRunner: SpineConsumerRunner;
-  agentSessionService: AgentSessionService;
+  agentTurnService: AgentTurnService;
   harnessSchemas: HarnessConfigSchemas;
   secretProvider: SecretProvider;
   callbackDispatcher: CallbackDispatcher;
-  runStartupService: RunStartupService;
+  turnStartupService: TurnStartupService;
   /** Container manager for sandbox lifecycle. */
   containerManager: SandboxContainerManager;
   workspaceDiffService: WorkspaceDiffService;
@@ -93,13 +96,13 @@ export { VALID_WEBHOOK_EVENTS };
 
 interface TriggerRunCallbackDeps {
   db: Pick<DatabaseRepository, 'getAgent'>;
-  runStartupService: Pick<RunStartupService, 'prepareRunStart' | 'launchPreparedRun'>;
+  turnStartupService: Pick<TurnStartupService, 'prepareTurnStart' | 'launchPreparedTurn'>;
   eventBus: Pick<TypedEventBus, 'emit'>;
 }
 
 export function createTriggerRunCallback({
   db,
-  runStartupService,
+  turnStartupService,
   eventBus,
 }: TriggerRunCallbackDeps): TriggerRunCallback {
   return async (agentId, task, triggerId, triggerDepth, eventSeq) => {
@@ -111,9 +114,9 @@ export function createTriggerRunCallback({
     const requestedTurnId = eventSeq === undefined
       ? undefined
       : `trigger-${createHash('sha256').update(`${triggerId}:${eventSeq}`).digest('hex').slice(0, 24)}`;
-    let start: Awaited<ReturnType<RunStartupService['prepareRunStart']>>;
+    let start: Awaited<ReturnType<TurnStartupService['prepareTurnStart']>>;
     try {
-      start = await runStartupService.prepareRunStart({
+      start = await turnStartupService.prepareTurnStart({
         agent,
         agentId,
         content: task,
@@ -129,10 +132,10 @@ export function createTriggerRunCallback({
       throw err;
     }
 
-    // Fire-and-forget — AgentSessionService handles SSE broadcasting, run.text_chunk events,
+    // Fire-and-forget — AgentTurnService handles SSE broadcasting, message.delta events,
     // message persistence, and session completion. trigger.fired preserves the cascade
     // depth that EventTriggerManager already computed for this triggered run.
-    void runStartupService.launchPreparedRun(start, agentId, {
+    void turnStartupService.launchPreparedTurn(start, agentId, {
       onSuccess: () => {
         eventBus.emit('trigger.fired', {
           triggerId,
@@ -196,12 +199,12 @@ export async function createContainer(
   toolExecutor.register(ctxmillGuideTool);
   const toolRegistry = new DefaultToolRegistry();
   toolRegistry.addProvider(new LocalToolProvider(toolExecutor));
-  const runStartupService = new RunStartupService({
+  const turnStartupService = new TurnStartupService({
     logger: {
-      info: (msg: string, ...args: unknown[]) => console.log('[RunStartupService]', msg, ...args),
-      warn: (msg: string, ...args: unknown[]) => console.warn('[RunStartupService]', msg, ...args),
-      error: (msg: string, ...args: unknown[]) => console.error('[RunStartupService]', msg, ...args),
-      debug: (msg: string, ...args: unknown[]) => console.debug('[RunStartupService]', msg, ...args),
+      info: (msg: string, ...args: unknown[]) => console.log('[TurnStartupService]', msg, ...args),
+      warn: (msg: string, ...args: unknown[]) => console.warn('[TurnStartupService]', msg, ...args),
+      error: (msg: string, ...args: unknown[]) => console.error('[TurnStartupService]', msg, ...args),
+      debug: (msg: string, ...args: unknown[]) => console.debug('[TurnStartupService]', msg, ...args),
     },
   });
 
@@ -235,7 +238,11 @@ export async function createContainer(
   const canonicalLog = new CanonicalLog({ db, logger: console });
   const eventBus = new TypedEventBus({
     persistEvent: async (type, _agentId, payload, parsedPayload) => {
-      await canonicalLog.ingest(type, parsedPayload ?? JSON.parse(payload) as Record<string, unknown>);
+      const persisted = await canonicalLog.ingest(
+        type,
+        parsedPayload ?? JSON.parse(payload) as Record<string, unknown>,
+      );
+      return persisted.length > 0;
     },
   });
 
@@ -264,7 +271,7 @@ export async function createContainer(
   const triggerManager = new EventTriggerManager(
     eventBus,
     db,
-    createTriggerRunCallback({ db, runStartupService, eventBus }),
+    createTriggerRunCallback({ db, turnStartupService, eventBus }),
     startupSettings.maxTriggerDepth,
   );
   const spineConsumerRunner = new SpineConsumerRunner({
@@ -459,25 +466,44 @@ export async function createContainer(
 
   const sessionTurnService = createSessionTurnExecutor({
     sessionManager,
-    onSessionReady: (agentSessionId, sandboxSessionId) => {
-      void db.updateTurn(agentSessionId, { sessionId: sandboxSessionId });
+    onSessionReady: (turnId, sandboxSessionId) => {
+      void db.updateTurn(turnId, { sandboxSessionId });
     },
   });
 
-  const agentSessionService = new AgentSessionService({
+  const agentTurnService = new AgentTurnService({
     db,
     sessionManager: realSessionManager,
     eventBus,
     sessionTurnService,
   });
-  runStartupService.configureExecution({
+  // Tag-based budget policies: block at turn admission, warn on threshold
+  // crossings observed at turn completion (usage is only known at done).
+  const budgetEnforcer = new BudgetEnforcer({ db, eventBus, logger: console });
+  eventBus.on('turn.completed', (payload) => {
+    void budgetEnforcer.onTurnCompleted(payload as EventMap['turn.completed']);
+  });
+  turnStartupService.configureExecution({
     db,
     eventBus,
     sessionManager: realSessionManager,
-    agentSessionService,
+    agentTurnService,
+    budgetEnforcer,
   });
   await triggerManager.start();
   await spineConsumerRunner.start();
+  // Crash/event-store recovery must finish before createContainer returns and
+  // the HTTP/SSE server starts accepting readers.
+  await reconcilePendingMessagePublishesOnStartup({
+    db,
+    eventBus,
+    logger: console,
+  });
+  await reconcilePendingTerminalPublishesOnStartup({
+    db,
+    eventBus,
+    logger: console,
+  });
 
   callbackDispatcher.start();
 
@@ -491,11 +517,11 @@ export async function createContainer(
     interruptManager,
     triggerManager,
     spineConsumerRunner,
-    agentSessionService,
+    agentTurnService,
     harnessSchemas: HARNESS_CONFIG_SCHEMAS,
     secretProvider,
     callbackDispatcher,
-    runStartupService,
+    turnStartupService,
     containerManager,
     workspaceDiffService,
     settingsService,
@@ -504,9 +530,11 @@ export async function createContainer(
     reconcileStrandedTurns: (bootTimeMs: number) => reconcileStrandedTurnsOnStartup(
       {
         db,
+        eventBus,
         finalizer: new TurnFinalizer({ db, eventBus, logger: console }),
         logger: console,
-        redispatchQueuedTurn: (params) => runStartupService.redispatchQueuedRun(params),
+        redispatchQueuedTurn: (params, signal) =>
+          turnStartupService.redispatchQueuedTurn(params, signal),
         resetStrandedSession: (sessionId) => realSessionManager.killSession(sessionId),
       },
       bootTimeMs,
@@ -515,6 +543,7 @@ export async function createContainer(
     sessionManager: realSessionManager,
     close: async () => {
       lifecyclePolicy.stop();
+      await canonicalLog.drain();
       spineConsumerRunner.stop();
       callbackDispatcher.stop();
       await dbConn.close();

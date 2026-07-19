@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+export {};
+
 type JsonRecord = Record<string, unknown>;
 type Flags = Record<string, string | boolean>;
 interface ParsedArgs { positionals: string[]; flags: Flags }
@@ -13,12 +15,12 @@ const TERMINAL_STATUSES = new Set(['COMPLETED', 'ERROR', 'CANCELLED', 'TERMINATE
 const args = parseArgs(Bun.argv.slice(2));
 
 try {
-  await run();
+  await executeCli();
 } catch (error) {
   emitError(error, args.flags);
 }
 
-async function run(): Promise<void> {
+async function executeCli(): Promise<void> {
   const [command, first, second] = args.positionals;
   if (!command || command === 'help' || hasFlag(args.flags, 'help', 'h')) {
     console.log(helpText());
@@ -36,10 +38,10 @@ async function run(): Promise<void> {
     case 'wait-event':
       await waitEvent();
       return;
-    case 'wait-session':
+    case 'wait-turn':
       requireArg(first, 'agentId');
-      requireArg(second, 'sessionId');
-      await waitSession(first, second);
+      requireArg(second, 'turnId');
+      await waitTurn(first, second);
       return;
     default:
       throw new UsageError(`Unknown command: ${command}\n\n${helpText()}`);
@@ -126,27 +128,27 @@ async function waitEvent(): Promise<void> {
   throw new TimeoutError(`Timed out after ${timeoutMs}ms waiting for event`);
 }
 
-async function waitSession(agentId: string, sessionId: string): Promise<void> {
+async function waitTurn(agentId: string, turnId: string): Promise<void> {
   const timeoutMs = numberFlag('timeout-ms', 120_000);
   const intervalMs = numberFlag('interval-ms', 2000);
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const payload = await requestJson(`/api/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}`);
-    const session = isRecord(payload) && isRecord(payload.session) ? payload.session : undefined;
-    const status = inferSessionStatus(session);
-    const line = { sessionId, agentId, status, elapsedMs: Date.now() - started, error: isRecord(session) ? session.error : undefined };
+    const payload = await requestJson(`/api/agents/${encodeURIComponent(agentId)}/turns/${encodeURIComponent(turnId)}`);
+    const turn = isRecord(payload) && isRecord(payload.turn) ? payload.turn : undefined;
+    const status = inferTurnStatus(turn);
+    const line = { turnId, agentId, status, elapsedMs: Date.now() - started, error: isRecord(turn) ? turn.error : undefined };
     emitLine(line);
     if (TERMINAL_STATUSES.has(status)) return;
     await sleep(intervalMs);
   }
-  throw new TimeoutError(`Timed out after ${timeoutMs}ms waiting for session ${sessionId}`);
+  throw new TimeoutError(`Timed out after ${timeoutMs}ms waiting for turn ${turnId}`);
 }
 
-function inferSessionStatus(session: JsonRecord | undefined): string {
-  if (!session) return 'missing';
-  if (session.error) return 'ERROR';
-  if (session.completedAt) return 'COMPLETED';
-  return 'ACTIVE';
+function inferTurnStatus(turn: JsonRecord | undefined): string {
+  if (!turn) return 'missing';
+  if (turn.error) return 'ERROR';
+  if (turn.completedAt) return 'COMPLETED';
+  return String(turn.status ?? 'RUNNING');
 }
 
 function emitSseFrame(frame: string): void {
@@ -210,4 +212,4 @@ function eventArray(value: unknown): JsonRecord[] { return isRecord(value) && Ar
 function matchesPayload(event: JsonRecord, contains: string | undefined): boolean { return contains ? JSON.stringify(event).includes(contains) : true; }
 function redact(value: unknown, seen = new WeakSet<object>()): unknown { if (Array.isArray(value)) return value.map((item) => redact(item, seen)); if (!isRecord(value)) return value; if (seen.has(value)) return '[Circular]'; seen.add(value); const out: JsonRecord = {}; for (const [key, child] of Object.entries(value)) out[key] = SECRET_KEY_RE.test(key) ? '[REDACTED]' : redact(child, seen); return out; }
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
-function helpText(): string { return `ctxmill-tail.ts — follow ctxmill live streams and wait for events/sessions\n\nUsage:\n  bun scripts/ctxmill-tail.ts stream <agentId> [--jsonl]\n  bun scripts/ctxmill-tail.ts events [--agent <agentId>] [--type <type>] [--cursor n]\n  bun scripts/ctxmill-tail.ts wait-event (--type <type> | --agent <agentId>) [--contains text] [--timeout-ms 120000]\n  bun scripts/ctxmill-tail.ts wait-session <agentId> <sessionId> [--timeout-ms 120000]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --json / --jsonl       Emit one JSON object per line\n  --interval-ms <n>      Poll interval for events/session waits (default 2000)\n  --limit <n>            Event page size (default 50)\n  --no-redact            Disable secret redaction\n`; }
+function helpText(): string { return `ctxmill-tail.ts — follow ctxmill live streams and wait for events/turns\n\nUsage:\n  bun scripts/ctxmill-tail.ts stream <agentId> [--jsonl]\n  bun scripts/ctxmill-tail.ts events [--agent <agentId>] [--type <type>] [--cursor n]\n  bun scripts/ctxmill-tail.ts wait-event (--type <type> | --agent <agentId>) [--contains text] [--timeout-ms 120000]\n  bun scripts/ctxmill-tail.ts wait-turn <agentId> <turnId> [--timeout-ms 120000]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --json / --jsonl       Emit one JSON object per line\n  --interval-ms <n>      Poll interval for events/turn waits (default 2000)\n  --limit <n>            Event page size (default 50)\n  --no-redact            Disable secret redaction\n`; }

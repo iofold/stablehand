@@ -1,7 +1,8 @@
-import { isSessionCancelled } from '@ctxmill/shared';
+import { isTurnCancelled, type ApiTokenUsage } from '@ctxmill/shared';
 
 import type { DatabaseRepository } from '../database/repository.js';
 import type { TypedEventBus } from '../events/bus.js';
+import { turnCompletedPayload } from './turn-terminal-publisher.js';
 
 export type TurnFinalStatus = 'completed' | 'error' | 'cancelled';
 
@@ -33,7 +34,7 @@ export const TOOL_CALL_INTERRUPTED_ERROR =
   'Tool call was still running when the turn ended and was closed without a result.';
 
 export function deriveTurnStatus(input: { cancelled?: boolean; error?: string | null }): TurnFinalStatus {
-  if (input.cancelled || isSessionCancelled(input.error)) {
+  if (input.cancelled || isTurnCancelled(input.error)) {
     return 'cancelled';
   }
   return input.error ? 'error' : 'completed';
@@ -46,8 +47,8 @@ interface Logger {
 }
 
 interface TurnFinalizerDeps {
-  db: Pick<DatabaseRepository, 'finalizeTurnIfOpen'>;
-  eventBus?: Pick<TypedEventBus, 'emit'> | null;
+  db: Pick<DatabaseRepository, 'finalizeTurnIfOpen' | 'getTurn'>;
+  eventBus: Pick<TypedEventBus, 'emitAsync'>;
   logger?: Logger;
 }
 
@@ -58,15 +59,17 @@ export interface FinalizeTurnParams {
   status: TurnFinalStatus;
   error?: string;
   /** Sandbox session id to persist on the turn row (kept fresh by callers that track rebinds). */
-  sessionId?: string;
+  sandboxSessionId?: string;
   durationMs?: number;
+  /** Harness-reported token usage from the turn's RUN_FINISHED event. */
+  usage?: ApiTokenUsage;
   /**
-   * Override for the turn.completed signal — used by the live path to route
-   * through SandboxSessionManager.completeTurn (which also drains queues and
-   * schedules idle timeouts). When absent, the finalizer emits turn.completed
-   * on the bus directly. Only invoked when this call actually finalized the turn.
+   * Live-session cleanup after terminal publication is attempted. This callback
+   * clears the controller/in-memory active marker only; TurnFinalizer is the
+   * sole turn.completed publisher. Invoked exactly when this call finalized
+   * the durable row, including when publication fails and startup must repair it.
    */
-  emitCompletion?: (completedAt: number) => void;
+  settleSessionLifecycle?: (completedAt: number) => void;
 }
 
 /**
@@ -74,51 +77,77 @@ export interface FinalizeTurnParams {
  * paths that end a turn — live completion, startup reconciliation, run
  * startup failures, cancellation — go through finalize(). Idempotence is
  * enforced at the database (finalizeTurnIfOpen), so a second finalizer
- * losing the race cannot overwrite the first outcome or double-signal
- * turn.completed. turn.completed status stays within completed|error|cancelled
- * (frozen webhook contract).
+ * losing the race cannot overwrite the first outcome. Canonical terminal
+ * publication is awaited and independently idempotent, so a retry can repair
+ * a row finalized before its RUN_ERROR/RUN_FINISHED transaction committed.
+ * turn.completed status stays within completed|error|cancelled (frozen
+ * webhook contract).
  */
 export class TurnFinalizer {
   constructor(private readonly deps: TurnFinalizerDeps) {}
 
-  async finalize(params: FinalizeTurnParams): Promise<{ finalized: boolean }> {
+  async finalize(params: FinalizeTurnParams): Promise<{ finalized: boolean; published: boolean }> {
     const completedAt = Date.now();
     const finalized = await this.deps.db.finalizeTurnIfOpen(params.turnId, {
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.sandboxSessionId ? { sandboxSessionId: params.sandboxSessionId } : {}),
       completedAt,
       error: params.error ?? null,
       status: params.status,
+      ...(params.usage
+        ? {
+          inputTokens: params.usage.inputTokens,
+          outputTokens: params.usage.outputTokens,
+          totalTokens: params.usage.totalTokens,
+          ...(params.usage.costUsd !== undefined ? { costUsd: params.usage.costUsd } : {}),
+        }
+        : {}),
     });
 
-    if (!finalized) {
-      this.deps.logger?.info(
-        `[TurnFinalizer] turn ${params.turnId} already terminal; skipping ${params.status} finalize`,
-      );
-      return { finalized: false };
-    }
-
     try {
-      if (params.emitCompletion) {
-        params.emitCompletion(completedAt);
-      } else {
-        this.deps.eventBus?.emit('turn.completed', {
+      if (finalized) {
+        await this.deps.eventBus.emitAsync('turn.completed', {
           turnId: params.turnId,
-          sessionId: params.sessionId ?? '',
+          ...(params.sandboxSessionId ? { sandboxSessionId: params.sandboxSessionId } : {}),
           agentId: params.agentId,
           conversationId: params.conversationId,
           status: params.status,
           error: params.error,
           durationMs: params.durationMs ?? 0,
-          timestamp: Date.now(),
+          ...(params.usage ? { usage: params.usage } : {}),
+          timestamp: completedAt,
         });
+        return { finalized: true, published: true };
       }
-    } catch (err) {
-      this.deps.logger?.error(
-        `[TurnFinalizer] turn.completed signal failed for turn ${params.turnId} (turn is finalized):`,
-        err,
-      );
-    }
 
-    return { finalized: true };
+      const turn = await this.deps.db.getTurn(params.turnId);
+      if (!turn) {
+        throw new Error(`Cannot publish terminal state for missing turn ${params.turnId}`);
+      }
+      if (turn.terminalPublishedSeq != null) {
+        if (!finalized) {
+          this.deps.logger?.info(
+            `[TurnFinalizer] turn ${params.turnId} is already finalized and canonically published`,
+          );
+        }
+        return { finalized: false, published: false };
+      }
+
+      await this.deps.eventBus.emitAsync('turn.completed', turnCompletedPayload(turn));
+      this.deps.logger?.info(
+        `[TurnFinalizer] repaired canonical terminal publication for turn ${params.turnId}`,
+      );
+      return { finalized: false, published: true };
+    } finally {
+      if (finalized && params.settleSessionLifecycle) {
+        try {
+          params.settleSessionLifecycle(completedAt);
+        } catch (err) {
+          this.deps.logger?.error(
+            `[TurnFinalizer] session lifecycle settlement failed for turn ${params.turnId}:`,
+            err,
+          );
+        }
+      }
+    }
   }
 }

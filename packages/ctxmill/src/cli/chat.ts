@@ -80,13 +80,13 @@ export async function startChat() {
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue;
             try {
-              const event = JSON.parse(line.slice(6)) as { type: string; content?: string };
-              if (event.type === 'TEXT_MESSAGE_CONTENT' && event.content) {
+              const event = JSON.parse(line.slice(6)) as { type: string; delta?: string };
+              if (event.type === 'TEXT_MESSAGE_CONTENT' && event.delta) {
                 if (!started) {
                   process.stdout.write('\nAssistant: ');
                   started = true;
                 }
-                process.stdout.write(event.content);
+                process.stdout.write(event.delta);
               }
               if (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR') {
                 reader.cancel();

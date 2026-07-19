@@ -46,7 +46,10 @@ export async function feedbackRoutes(
       const matchingTurn = allTurns
         .filter((turn) => turn.conversationId === body.conversationId)
         .sort((a, b) => b.startedAt - a.startedAt)[0];
-      const turnId = matchingTurn?.id ?? body.conversationId;
+      if (!matchingTurn) {
+        return reply.status(404).send({ error: 'No turn found for conversation' });
+      }
+      const turnId = matchingTurn.id;
       const feedbackId = randomUUID();
 
       const eventPayload: EventMap['feedback.received'] = {

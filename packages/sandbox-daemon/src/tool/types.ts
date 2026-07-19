@@ -28,7 +28,8 @@ export interface ToolResult {
 export interface ToolContext {
   agentId: string;
   conversationId: string;
-  instanceId?: string;
+  turnId?: string;
+  sandboxSessionId?: string;
   requestId?: string;
   workspaceDir: string;
   eventBus?: {

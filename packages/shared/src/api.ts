@@ -26,20 +26,43 @@ export interface HttpToolDefinition {
   programmatic?: boolean;
 }
 
-export const API_SESSION_STATUSES = [
+export const API_TURN_STATUSES = [
   'QUEUED',
+  'RUNNING',
+  'COMPLETED',
+  'ERROR',
+  'CANCELLED',
+] as const;
+
+export const API_CONVERSATION_STATUSES = [
   'ACTIVE',
   'CHECKPOINTED',
   'RESTORING',
-  'TERMINATED',
   'COMPLETED',
   'ERROR',
   'CANCELLED',
   'IDLE',
 ] as const;
 
-export type ApiSessionStatus = typeof API_SESSION_STATUSES[number];
-export type SandboxSessionStatus = Extract<ApiSessionStatus, 'ACTIVE' | 'CHECKPOINTED' | 'RESTORING' | 'TERMINATED'>;
+export const SANDBOX_SESSION_STATUSES = [
+  'ACTIVE',
+  'CHECKPOINTED',
+  'RESTORING',
+  'TERMINATED',
+] as const;
+
+export type ApiTurnStatus = typeof API_TURN_STATUSES[number];
+export type ApiConversationStatus = typeof API_CONVERSATION_STATUSES[number];
+export type SandboxSessionStatus = typeof SANDBOX_SESSION_STATUSES[number];
+
+/** Normalized LLM token usage for a turn, as reported by the harness at done. */
+export interface ApiTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** Provider-reported cost in USD when the harness supplies it. */
+  costUsd?: number;
+}
 
 /** Agent as returned by GET /api/agents and GET /api/agents/:id */
 export interface ApiAgent {
@@ -69,44 +92,54 @@ export interface ApiAgent {
   activeTurnCount?: number;
   hasPendingInterrupt?: boolean;
   lastActivity?: number;
+  /** Total tokens consumed by turns started in the trailing 24 hours. */
+  tokensLast24h?: number;
+  /** Total tokens consumed across all recorded turns. */
+  tokensTotal?: number;
   /** The five most recently started turns. */
-  recentTurns?: ApiAgentSession[];
+  recentTurns?: ApiAgentTurn[];
   systemPrompt?: string;
   /** Sandbox session (container) counts grouped by lifecycle state. */
-  sessionsByStatus?: ApiSessionStatusCounts;
+  sandboxSessionsByStatus?: ApiSandboxSessionStatusCounts;
 }
 
-/** Session counts grouped by sandbox lifecycle state. */
-export type ApiSessionStatusCounts = Record<SandboxSessionStatus, number>;
+/** Sandbox session counts grouped by container lifecycle state. */
+export type ApiSandboxSessionStatusCounts = Record<SandboxSessionStatus, number>;
 
-/** Session as returned by GET /api/agents/:id/sessions */
-export interface ApiAgentSession {
+/** One agent execution turn as returned by GET /api/agents/:id/turns. */
+export interface ApiAgentTurn {
   id: string;
   agentId: string;
   conversationId: string;
   sandboxSessionId?: string;
   sandboxStatus?: SandboxSessionStatus;
-  status: ApiSessionStatus;
+  status: ApiTurnStatus;
   mode: 'interactive' | 'background';
   startedAt: number;
   completedAt?: number;
   error?: string;
   taskDescription?: string;
-  messageCount?: number;
+  conversationMessageCount?: number;
   restoreAttempts?: number | null;
   lastRestoreError?: string | null;
   checkpointAt?: number;
+  usage?: ApiTokenUsage;
 }
 
-/** Message as returned by GET /api/agents/:id/conversations/:cid/messages */
+/** Message inside a GET /api/agents/:id/conversations/:cid/snapshot response. */
 export interface ApiMessage {
   id: string;
+  conversationId?: string;
+  agentId?: string;
+  turnId?: string;
+  messageSeq?: number;
+  messageRevision: number;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   toolCallId?: string;
   toolCalls?: ApiToolCallState[];
   parts?: ApiMessagePart[];
-  createdAt: string;
+  createdAt: string | number;
 }
 
 /** Ordered content part within a message. Preserves text ↔ tool_call interleaving. */
@@ -133,11 +166,13 @@ export interface ApiA2UIBlock {
 
 /** HITL interrupt payload */
 export interface ApiInterruptPayload {
+  interruptId: string;
+  turnId: string;
   agentId: string;
-  toolName: string;
+  toolCallName: string;
   args: Record<string, unknown>;
   toolCallId: string;
-  sessionId?: string;
+  sandboxSessionId?: string;
 }
 
 /** POST /api/agents/:id/feedback request body */
@@ -153,7 +188,7 @@ export interface ApiFeedbackRequest {
 export interface ApiConversationSummary {
   id: string;
   agentId: string;
-  status: ApiSessionStatus;
+  status: ApiConversationStatus;
   mode: 'interactive' | 'background';
   turnCount: number;
   messageCount: number;
@@ -164,10 +199,37 @@ export interface ApiConversationSummary {
   updatedAt: number;
   latestTurnId?: string;
   sandboxSessionId?: string;
+  /** Sum of harness-reported tokens across the conversation's turns. */
+  totalTokens?: number;
+}
+
+/** Budget policy as returned by /api/budgets. */
+export interface ApiBudgetPolicy {
+  id: string;
+  name: string;
+  enabled: boolean;
+  doc: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ApiBudgetSpendBucket {
+  /** groupBy value, "(untagged)", or null for ungrouped policies. */
+  bucket: string | null;
+  spend: { totalTokens: number; costUsd: number; turns: number };
+  statuses: Array<{ metric: 'totalTokens' | 'costUsd' | 'turns'; spent: number; limit: number; ratio: number }>;
+}
+
+/** Response of GET /api/budgets/:id/spend. */
+export interface ApiBudgetSpend {
+  policyId: string;
+  window: string;
+  windowStart: number;
+  buckets: ApiBudgetSpendBucket[];
 }
 
 export interface ApiSandboxRestoreSuccess {
-  sessionId: string;
+  sandboxSessionId: string;
   status: SandboxSessionStatus;
   restoreAttempts: 0;
 }

@@ -146,7 +146,7 @@ describe('ContainerManager', () => {
       // Labels
       expect(arg.Labels['ctxmill.managed']).toBe('true');
       expect(arg.Labels[CONTAINER_SCOPE_LABEL]).toBe(resolveContainerScopeId());
-      expect(arg.Labels['ctxmill.session-id']).toBe('run-001');
+      expect(arg.Labels['ctxmill.sandbox-session-id']).toBe('run-001');
       expect(arg.Labels['ctxmill.agent-id']).toBe('agent-abc');
       expect(arg.Labels['ctxmill.harness']).toBe('claude-agents');
       expect(arg.Labels['ctxmill.timeout']).toBe('600');
@@ -174,19 +174,19 @@ describe('ContainerManager', () => {
 
       // Return info
       expect(info.containerId).toBe('sha256-abc123');
-      expect(info.containerName).toBe('ctxmill-run-run-001');
+      expect(info.containerName).toBe('ctxmill-sandbox-run-001');
       expect(info.status).toBe('created');
     });
 
-    it('uses ctxmill-run-{sessionId} naming convention', async () => {
+    it('uses ctxmill-sandbox-{sessionId} naming convention', async () => {
       const info = await manager.createContainer({
         ...defaultCreateOpts(),
         sessionId: 'my-special-run',
       });
 
       const arg = docker.createContainer.mock.calls[0][0];
-      expect(arg.name).toBe('ctxmill-run-my-special-run');
-      expect(info.containerName).toBe('ctxmill-run-my-special-run');
+      expect(arg.name).toBe('ctxmill-sandbox-my-special-run');
+      expect(info.containerName).toBe('ctxmill-sandbox-my-special-run');
     });
 
     it('applies default resource limits when not specified', async () => {
@@ -315,11 +315,11 @@ describe('ContainerManager', () => {
     it('calls docker start on the container and returns its network IP', async () => {
       docker._mockContainer.inspect.mockResolvedValueOnce({
         State: { Status: 'running', ExitCode: 0, Running: true },
-        Name: '/ctxmill-run-run-001',
+        Name: '/ctxmill-sandbox-run-001',
         Config: {
           Labels: {
             'ctxmill.managed': 'true',
-            'ctxmill.session-id': 'run-001',
+            'ctxmill.sandbox-session-id': 'run-001',
             'ctxmill.agent-id': 'agent-abc',
             'ctxmill.harness': 'claude-agents',
           },
@@ -337,7 +337,7 @@ describe('ContainerManager', () => {
       expect(docker._mockContainer.start).toHaveBeenCalledTimes(1);
       expect(info).toMatchObject({
         containerId: 'sha256-abc123',
-        containerName: 'ctxmill-run-run-001',
+        containerName: 'ctxmill-sandbox-run-001',
         sessionId: 'run-001',
         networkIp: '172.18.0.5',
       });
@@ -704,12 +704,12 @@ describe('ContainerManager', () => {
       docker.listContainers.mockResolvedValue([
         {
           Id: 'sha256-found',
-          Names: ['/ctxmill-run-run-001'],
+          Names: ['/ctxmill-sandbox-run-001'],
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
             [CONTAINER_SCOPE_LABEL]: resolveContainerScopeId(),
-            'ctxmill.session-id': 'run-001',
+            'ctxmill.sandbox-session-id': 'run-001',
             'ctxmill.agent-id': 'agent-abc',
             'ctxmill.harness': 'claude-agents',
             'ctxmill.started-at': '2026-03-17T10:00:00.000Z',
@@ -725,7 +725,7 @@ describe('ContainerManager', () => {
        const info = await manager.getContainer('run-001');
        expect(info).not.toBeNull();
        expect(info!.containerId).toBe('sha256-found');
-       expect(info!.containerName).toBe('ctxmill-run-run-001');
+       expect(info!.containerName).toBe('ctxmill-sandbox-run-001');
        expect(info!.sessionId).toBe('run-001');
        expect(info!.agentId).toBe('agent-abc');
        expect(info!.harnessName).toBe('claude-agents');
@@ -738,11 +738,11 @@ describe('ContainerManager', () => {
       docker.listContainers.mockResolvedValue([
         {
           Id: 'sha256-found',
-          Names: ['/ctxmill-run-run-001'],
+          Names: ['/ctxmill-sandbox-run-001'],
           State: 'running',
           Labels: {
             [CONTAINER_SCOPE_LABEL]: resolveContainerScopeId(),
-            'ctxmill.session-id': 'run-001',
+            'ctxmill.sandbox-session-id': 'run-001',
           },
           NetworkSettings: {
             Networks: {
@@ -758,7 +758,7 @@ describe('ContainerManager', () => {
       expect(info?.networkIp).toBe('172.19.0.7');
     });
 
-    it('filters by ctxmill.session-id label', async () => {
+    it('filters by ctxmill.sandbox-session-id label', async () => {
       await manager.getContainer('run-xyz');
 
       expect(docker.listContainers).toHaveBeenCalledWith({
@@ -767,7 +767,7 @@ describe('ContainerManager', () => {
           label: [
             'ctxmill.managed=true',
             `${CONTAINER_SCOPE_LABEL}=${resolveContainerScopeId()}`,
-            'ctxmill.session-id=run-xyz',
+            'ctxmill.sandbox-session-id=run-xyz',
           ],
         },
       });
@@ -781,23 +781,23 @@ describe('ContainerManager', () => {
       docker.listContainers.mockResolvedValue([
         {
           Id: 'foreign',
-          Names: ['/ctxmill-run-run-001'],
+          Names: ['/ctxmill-sandbox-run-001'],
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
             [CONTAINER_SCOPE_LABEL]: 's-foreign',
-            'ctxmill.session-id': 'run-001',
+            'ctxmill.sandbox-session-id': 'run-001',
           },
           NetworkSettings: { Networks: {} },
         },
         {
           Id: 'current',
-          Names: ['/ctxmill-run-run-001'],
+          Names: ['/ctxmill-sandbox-run-001'],
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
             [CONTAINER_SCOPE_LABEL]: currentScopeId,
-            'ctxmill.session-id': 'run-001',
+            'ctxmill.sandbox-session-id': 'run-001',
           },
           NetworkSettings: { Networks: {} },
         },
@@ -828,12 +828,12 @@ describe('ContainerManager', () => {
       docker.listContainers.mockResolvedValue([
         {
           Id: 'c1',
-          Names: ['/ctxmill-run-r1'],
+          Names: ['/ctxmill-sandbox-r1'],
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
             [CONTAINER_SCOPE_LABEL]: currentScopeId,
-            'ctxmill.session-id': 'r1',
+            'ctxmill.sandbox-session-id': 'r1',
             'ctxmill.agent-id': 'a1',
             'ctxmill.harness': 'langgraph',
           },
@@ -841,12 +841,12 @@ describe('ContainerManager', () => {
         },
         {
           Id: 'c2',
-          Names: ['/ctxmill-run-r2'],
+          Names: ['/ctxmill-sandbox-r2'],
           State: 'exited',
           Labels: {
             'ctxmill.managed': 'true',
             [CONTAINER_SCOPE_LABEL]: currentScopeId,
-            'ctxmill.session-id': 'r2',
+            'ctxmill.sandbox-session-id': 'r2',
             'ctxmill.agent-id': 'a2',
             'ctxmill.harness': 'pi-agent',
           },
@@ -868,33 +868,33 @@ describe('ContainerManager', () => {
       docker.listContainers.mockResolvedValue([
         {
           Id: 'current-scoped',
-          Names: ['/ctxmill-run-r1'],
+          Names: ['/ctxmill-sandbox-r1'],
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
             [CONTAINER_SCOPE_LABEL]: currentScopeId,
-            'ctxmill.session-id': 'r1',
+            'ctxmill.sandbox-session-id': 'r1',
           },
           NetworkSettings: { Networks: {} },
         },
         {
           Id: 'foreign-scoped',
-          Names: ['/ctxmill-run-r2'],
+          Names: ['/ctxmill-sandbox-r2'],
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
             [CONTAINER_SCOPE_LABEL]: 's-foreign',
-            'ctxmill.session-id': 'r2',
+            'ctxmill.sandbox-session-id': 'r2',
           },
           NetworkSettings: { Networks: {} },
         },
         {
           Id: 'unscoped-current-volume',
-          Names: ['/ctxmill-run-r3'],
+          Names: ['/ctxmill-sandbox-r3'],
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
-            'ctxmill.session-id': 'r3',
+            'ctxmill.sandbox-session-id': 'r3',
           },
           Mounts: [
             { Name: 'ctxmill_ctxmill-data', Destination: '/workspace' },
@@ -903,11 +903,11 @@ describe('ContainerManager', () => {
         },
         {
           Id: 'unscoped-foreign-volume',
-          Names: ['/ctxmill-run-r4'],
+          Names: ['/ctxmill-sandbox-r4'],
           State: 'running',
           Labels: {
             'ctxmill.managed': 'true',
-            'ctxmill.session-id': 'r4',
+            'ctxmill.sandbox-session-id': 'r4',
           },
           Mounts: [
             { Name: 'pilot-app_ctxmill_data', Destination: '/workspace' },
@@ -1037,12 +1037,12 @@ describe('ContainerManager', () => {
       docker.listContainers.mockResolvedValue([
         {
           Id: `c-${dockerState}`,
-          Names: [`/ctxmill-run-r-${dockerState}`],
+          Names: [`/ctxmill-sandbox-r-${dockerState}`],
           State: dockerState,
           Labels: {
             'ctxmill.managed': 'true',
             [CONTAINER_SCOPE_LABEL]: resolveContainerScopeId(),
-            'ctxmill.session-id': `r-${dockerState}`,
+            'ctxmill.sandbox-session-id': `r-${dockerState}`,
             'ctxmill.agent-id': 'a1',
             'ctxmill.harness': 'claude-agents',
           },

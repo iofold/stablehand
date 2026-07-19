@@ -179,9 +179,9 @@ Artifact upload/download are daemon tools, not provider-managed HTTP uploads: `a
 #### Built-in Events (EventMap)
 ```
 turn.pending, turn.started, turn.completed,
-user.message, message.committed, run.ag_ui_event,
-run.text_chunk, run.tool_started, run.tool_result,
-run.interrupted, run.interrupt_resolved,
+user.message, message.committed, ag_ui.event,
+message.delta, tool_call.started, tool_call.completed,
+interrupt.requested, interrupt.resolved,
 feedback.received,
 agent.created, agent.deleted,
 client.connected, client.disconnected,

@@ -2,8 +2,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
-import type { PreparedRunStart, RunStartupService } from '../run-startup-service.js';
-import { sendRunStartError } from '../run-start-errors.js';
+import type { PreparedTurnStart, TurnStartupService } from '../turn-startup-service.js';
+import { sendTurnStartError } from '../turn-start-errors.js';
 import { writeSseHead } from '../sse.js';
 import type { AGUIMessage, AGUIMessageRole, AGUIRunAgentInput } from './types.js';
 import type { CanonicalLog } from '../canonical/canonical-log.js';
@@ -12,7 +12,7 @@ import type { PersistedFrame } from '../canonical/frames.js';
 export interface AGUICompatRouteOptions {
   db: DatabaseRepository;
   eventBus: TypedEventBus;
-  runStartupService: RunStartupService;
+  turnStartupService: TurnStartupService;
   /** Durable canonical event spine (ADR-015). */
   canonicalLog?: CanonicalLog;
 }
@@ -95,7 +95,7 @@ export async function agUiCompatRoutes(
   app: FastifyInstance,
   opts: AGUICompatRouteOptions,
 ): Promise<void> {
-  const { db, runStartupService, canonicalLog } = opts;
+  const { db, turnStartupService, canonicalLog } = opts;
 
   const runHandler = async (
     request: AGUIRunRequest,
@@ -132,7 +132,7 @@ export async function agUiCompatRoutes(
 
     const isReconnect = Boolean(turn && !turn.completedAt);
     let conversationId = turn?.conversationId ?? body.threadId;
-    let executionParams: PreparedRunStart | null = null;
+    let executionParams: PreparedTurnStart | null = null;
 
     if (!isReconnect) {
       const lastUserMessage = [...body.messages].reverse().find((message) => message.role === 'user');
@@ -142,8 +142,18 @@ export async function agUiCompatRoutes(
         return reply.status(400).send({ error: 'A non-empty user message is required' });
       }
 
+      // Budget-attribution tags ride on forwardedProps.tags (flat string map).
+      const forwarded = body.forwardedProps as Record<string, unknown> | undefined;
+      const forwardedTags = forwarded && typeof forwarded === 'object' && !Array.isArray(forwarded)
+        && forwarded.tags && typeof forwarded.tags === 'object' && !Array.isArray(forwarded.tags)
+        ? Object.fromEntries(
+          Object.entries(forwarded.tags as Record<string, unknown>)
+            .filter(([, value]) => typeof value === 'string') as Array<[string, string]>,
+        )
+        : undefined;
+
       try {
-        const start = await runStartupService.prepareRunStart({
+        const start = await turnStartupService.prepareTurnStart({
           agent,
           agentId: id,
           content: userContent,
@@ -153,12 +163,13 @@ export async function agUiCompatRoutes(
           requireExistingConversation: false,
           createMissingConversationWithRequestedId: Boolean(body.threadId),
           emitUserMessageEvent: true,
+          ...(forwardedTags && Object.keys(forwardedTags).length > 0 ? { tags: forwardedTags } : {}),
         });
         conversationId = start.conversationId;
         turn = await db.getTurn(start.turnId);
         executionParams = start;
       } catch (err) {
-        if (sendRunStartError(reply, err)) return reply;
+        if (sendTurnStartError(reply, err)) return reply;
         const message = err instanceof Error ? err.message : 'Failed to start session';
         if (message.startsWith('Conversation ')) {
           return reply.status(404).send({ error: message, threadId: body.threadId });
@@ -226,12 +237,15 @@ export async function agUiCompatRoutes(
         writeEvent(frame.body as Record<string, unknown>);
       };
 
-      if (isReconnect) {
-        // Durable tail replay: reproduce in-flight partials with stable ids (ctx-4fs).
-        for (const frame of await canonicalLog.replayTurnTail(activeTurn.id)) {
-          if (frame.channel === 'run') {
-            writeFrame(frame);
-          }
+      // Durable tail replay. Reconnects reproduce in-flight partials with
+      // stable ids (ctx-4fs); fresh runs pick up the frames prepareTurnStart
+      // persisted before this subscription existed (ctxmill.turn.pending,
+      // user.message) so clients get provisioning feedback immediately —
+      // launchPreparedTurn only fires below, so nothing can slip between
+      // this replay and the live subscription.
+      for (const frame of await canonicalLog.replayTurnTail(activeTurn.id)) {
+        if (frame.channel === 'run') {
+          writeFrame(frame);
         }
       }
 
@@ -264,7 +278,7 @@ export async function agUiCompatRoutes(
     });
 
     if (executionParams) {
-      void runStartupService.launchPreparedRun(executionParams, id);
+      void turnStartupService.launchPreparedTurn(executionParams, id);
     }
 
     return reply;

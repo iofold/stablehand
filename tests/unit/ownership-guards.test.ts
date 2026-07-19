@@ -42,13 +42,12 @@ describe('Ownership enforcement on routes', () => {
 
     app = await createServer({
       db: container.db,
-      agentSessionService: container.agentSessionService,
       eventBus: container.eventBus,
       harnessSchemas: container.harnessSchemas,
       sse: container.sseManager,
       interrupts: container.interruptManager,
       toolDefinitionRegistry: container.toolRegistry,
-      runStartupService: container.runStartupService,
+      turnStartupService: container.turnStartupService,
       dataDir,
     });
 
@@ -88,10 +87,10 @@ describe('Ownership enforcement on routes', () => {
     });
   });
 
-  // ── POST /agents/:id/sessions/:runId/cancel ──────────────────
+  // ── POST /agents/:id/turns/:turnId/cancel ───────────────────
 
-  describe('POST /agents/:id/sessions/:runId/cancel', () => {
-    it('returns 404 when runId belongs to a different agent', async () => {
+  describe('POST /agents/:id/turns/:turnId/cancel', () => {
+    it('returns 404 when turnId belongs to a different agent', async () => {
       const agentAId = await createAgent('cancel-owner-A');
       const agentBId = await createAgent('cancel-owner-B');
 
@@ -106,25 +105,25 @@ describe('Ownership enforcement on routes', () => {
       const turn = await container.db.createTurn({
         agentId: agentAId,
         conversationId: conv.id,
-        sessionId: session.id,
+        sandboxSessionId: session.id,
         mode: 'interactive',
         taskDescription: 'test',
       });
 
       const cancel = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentBId}/sessions/${turn.id}/cancel`,
+        url: `/api/agents/${agentBId}/turns/${turn.id}/cancel`,
       });
       expect(cancel.statusCode).toBe(404);
-      expect(cancel.json().error).toBe('Session not found');
+      expect(cancel.json().error).toBe('Turn not found');
     });
 
-    it('returns 404 for a non-existent runId', async () => {
+    it('returns 404 for a non-existent turnId', async () => {
       const agentId = await createAgent('cancel-nonexistent');
 
       const cancel = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentId}/sessions/non-existent-run-id/cancel`,
+        url: `/api/agents/${agentId}/turns/non-existent-turn-id/cancel`,
       });
       expect(cancel.statusCode).toBe(404);
     });
@@ -133,11 +132,11 @@ describe('Ownership enforcement on routes', () => {
   // ── POST /agents/:id/interrupt ──────────────────────────────
 
   describe('POST /agents/:id/interrupt', () => {
-    it('returns 404 when runId in body belongs to a different agent', async () => {
+    it('returns 404 when interruptId belongs to a different agent', async () => {
       const agentAId = await createAgent('interrupt-owner-A');
       const agentBId = await createAgent('interrupt-owner-B');
 
-      // Start a run on Agent A
+      // Create a durable pending interrupt owned by Agent A.
       const conv = await container.db.createConversation(agentAId);
       const session = await container.db.createSandboxSession({
         agentId: agentAId,
@@ -149,36 +148,59 @@ describe('Ownership enforcement on routes', () => {
       const turn = await container.db.createTurn({
         agentId: agentAId,
         conversationId: conv.id,
-        sessionId: session.id,
+        sandboxSessionId: session.id,
         mode: 'interactive',
         taskDescription: 'test',
+      });
+      await container.db.savePendingInterrupt({
+        id: 'foreign-interrupt',
+        turnId: turn.id,
+        sandboxSessionId: session.id,
+        agentId: agentAId,
+        toolCallId: 'foreign-tool-call',
+        toolName: 'request-approval',
+        args: {},
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
       });
 
       const result = await app.inject({
         method: 'POST',
         url: `/api/agents/${agentBId}/interrupt`,
-        payload: { action: 'approve', sessionId: turn.id },
+        payload: { action: 'approve', interruptId: 'foreign-interrupt' },
       });
       expect(result.statusCode).toBe(404);
       expect(result.json().error).toBe('No pending interrupt for agent');
     });
 
-    it('returns 404 when runId does not exist at all', async () => {
+    it('returns 404 when interruptId does not exist', async () => {
       const agentId = await createAgent('interrupt-nonexistent');
 
       const result = await app.inject({
         method: 'POST',
         url: `/api/agents/${agentId}/interrupt`,
-        payload: { action: 'approve', sessionId: 'totally-fake-run-id' },
+        payload: { action: 'approve', interruptId: 'totally-fake-interrupt-id' },
       });
       expect(result.statusCode).toBe(404);
       expect(result.json().error).toBe('No pending interrupt for agent');
     });
   });
 
-  // ── GET /agents/:id/conversations/:convId/messages ──────────
+  // ── GET /agents/:id/conversations/:convId/snapshot ──────────
 
-  describe('GET /agents/:id/conversations/:convId/messages', () => {
+  describe('GET /agents/:id/conversations/:convId/snapshot', () => {
+    it('does not expose the retired messages endpoint', async () => {
+      const agentId = await createAgent('msg-retired-route');
+      const conversation = await container.db.createConversation(agentId);
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/agents/${agentId}/conversations/${conversation.id}/messages`,
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
     it('returns 404 when conversation belongs to a different agent', async () => {
       const agentAId = await createAgent('msg-owner-A');
       const agentBId = await createAgent('msg-owner-B');
@@ -187,12 +209,12 @@ describe('Ownership enforcement on routes', () => {
       const conversation = await container.db.createConversation(agentAId);
 
       // Try to access Agent A's conversation via Agent B's endpoint
-      const messages = await app.inject({
+      const snapshot = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentBId}/conversations/${conversation.id}/messages`,
+        url: `/api/agents/${agentBId}/conversations/${conversation.id}/snapshot`,
       });
-      expect(messages.statusCode).toBe(404);
-      expect(messages.json().error).toBe('Conversation not found');
+      expect(snapshot.statusCode).toBe(404);
+      expect(snapshot.json().error).toBe('Conversation not found');
     });
 
     it('succeeds when conversation belongs to the correct agent', async () => {
@@ -200,15 +222,19 @@ describe('Ownership enforcement on routes', () => {
 
       const conversation = await container.db.createConversation(agentId);
 
-      const messages = await app.inject({
+      const snapshot = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/conversations/${conversation.id}/messages`,
+        url: `/api/agents/${agentId}/conversations/${conversation.id}/snapshot`,
       });
-      expect(messages.statusCode).toBe(200);
-      expect(Array.isArray(messages.json())).toBe(true);
+      expect(snapshot.statusCode).toBe(200);
+      expect(snapshot.json()).toEqual({
+        conversationId: conversation.id,
+        eventCursor: expect.stringMatching(/^\d{12,15}$/),
+        messages: [],
+      });
     });
 
-    it('returns raw persisted message payloads in chronological order', async () => {
+    it('returns canonical public message projections in chronological order', async () => {
       const agentId = await createAgent('msg-format-ok');
       const conversation = await container.db.createConversation(agentId);
 
@@ -230,20 +256,25 @@ describe('Ownership enforcement on routes', () => {
 
       const response = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/conversations/${conversation.id}/messages`,
+        url: `/api/agents/${agentId}/conversations/${conversation.id}/snapshot`,
       });
 
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual([
+      const body = response.json();
+      expect(body).toEqual({
+        conversationId: conversation.id,
+        eventCursor: expect.stringMatching(/^\d{12,15}$/),
+        messages: [
         expect.objectContaining({
           role: 'user',
           content: 'first',
-          toolCalls: null,
+          messageRevision: 0,
           createdAt: 1,
         }),
         expect.objectContaining({
           role: 'assistant',
           content: '',
+          messageRevision: 0,
           createdAt: 2,
           toolCalls: [
             expect.objectContaining({
@@ -253,17 +284,21 @@ describe('Ownership enforcement on routes', () => {
             }),
           ],
         }),
-      ]);
+        ],
+      });
+      expect(body.messages[0]).not.toHaveProperty('toolCalls');
+      expect(body.messages[0]).not.toHaveProperty('publishedRevision');
+      expect(body.messages[1]).not.toHaveProperty('publishedRevision');
     });
 
     it('returns 404 for a non-existent conversation', async () => {
       const agentId = await createAgent('msg-nonexistent');
 
-      const messages = await app.inject({
+      const snapshot = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/conversations/fake-conv-id/messages`,
+        url: `/api/agents/${agentId}/conversations/fake-conv-id/snapshot`,
       });
-      expect(messages.statusCode).toBe(404);
+      expect(snapshot.statusCode).toBe(404);
     });
   });
 });

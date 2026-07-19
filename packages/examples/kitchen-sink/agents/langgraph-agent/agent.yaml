@@ -37,6 +37,3 @@ spec:
     blocklist:
       - execute
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 60
-    maxTokensPerSession: 4000

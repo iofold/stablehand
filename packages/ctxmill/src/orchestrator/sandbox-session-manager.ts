@@ -59,6 +59,9 @@ export class SandboxSessionManager {
         this.createFreshSession(conversationId, agentDef, agentId, options),
       getExistingConversationWorkspaceDir: (agentId, conversationId) =>
         this.getExistingConversationWorkspaceDir(agentId, conversationId),
+      onActiveSessionReconnected: (record) => {
+        this.turnOrchestrator.scheduleIdleTimeoutForActiveSession(record.sessionId, record);
+      },
     });
     this.turnOrchestrator = new SessionTurnOrchestrator({
       stateStore: this.stateStore,
@@ -78,21 +81,30 @@ export class SandboxSessionManager {
       onStaleContainer: (_sessionId, conversationId, agentDef, agentId) =>
         this.ensureSession(conversationId, agentDef, agentId),
       onSessionRebound: async ({ turnId, sessionId }) => {
-        await deps.db.updateTurn(turnId, { sessionId });
+        await deps.db.updateTurn(turnId, { sandboxSessionId: sessionId });
       },
       onTurnActive: async (turnId) => {
         await deps.db.updateTurn(turnId, { status: 'running' });
       },
-      executeDeliverTurn: (sessionId, messages, turnId, onSessionRebound) =>
-        this.executeDeliverTurn(sessionId, messages, turnId, false, onSessionRebound),
+      executeDeliverTurn: (sessionId, messages, turnId, onSessionRebound, signal) =>
+        this.executeDeliverTurn(
+          sessionId,
+          messages,
+          turnId,
+          false,
+          onSessionRebound,
+          signal,
+        ),
     });
     const turnFinalizer = new TurnFinalizer({ db: deps.db, eventBus: deps.eventBus, logger: deps.logger });
     this.interruptResumeService = new InterruptResumeService({
       db: deps.db,
+      eventBus: deps.eventBus,
       stateStore: this.stateStore,
       logger: deps.logger,
       ensureSession: (conversationId, agentDef, agentId) => this.ensureSession(conversationId, agentDef, agentId),
-      deliverTurn: (sessionId, messages, turnId) => this.deliverTurn(sessionId, messages, turnId),
+      deliverTurn: (sessionId, messages, turnId, signal) =>
+        this.deliverTurn(sessionId, messages, turnId, signal),
       resolveAgentDefinition: async (agentId) => {
         const agent = await deps.db.getAgent(agentId);
         return agent ? buildAgentDefinition(agent) : null;
@@ -120,12 +132,12 @@ export class SandboxSessionManager {
   onSessionReconnected(conversationId: string, record: SessionRecord): void { this.lifecycleService.onSessionReconnected(conversationId, record); }
   async onSessionEvicted(sessionId: string, conversationId: string): Promise<void> { await this.lifecycleService.onSessionEvicted(sessionId, conversationId); }
   startTurn(sessionId: string, turnId: string, agentId: string, conversationId: string, mode: 'interactive' | 'background', taskDescription?: string, options?: SessionTurnStartOptions): AbortSignal { return this.turnOrchestrator.startTurn(sessionId, turnId, agentId, conversationId, mode, taskDescription, options); }
-  completeTurn(sessionId: string, turnId: string, agentId: string, conversationId: string, status: 'completed' | 'error' | 'cancelled', durationMs: number, error?: string): void { this.turnOrchestrator.completeTurn(sessionId, turnId, agentId, conversationId, status, durationMs, error); }
+  completeTurn(sessionId: string, turnId: string, agentId: string, conversationId: string, status: 'completed' | 'error' | 'cancelled', durationMs: number, error?: string, usage?: { inputTokens: number; outputTokens: number; totalTokens: number; costUsd?: number }): void { this.turnOrchestrator.completeTurn(sessionId, turnId, agentId, conversationId, status, durationMs, error, usage); }
   cancelCurrentTurn(sessionId: string, turnId?: string): boolean { return this.turnOrchestrator.cancelCurrentTurn(sessionId, turnId); }
   getAbortSignal(sessionId: string, turnId?: string): AbortSignal | undefined { return this.turnOrchestrator.getAbortSignal(sessionId, turnId); }
   checkConcurrencyLimit(agentId: string): void { this.turnOrchestrator.checkConcurrencyLimit(agentId); }
   reserveConcurrencySlot(agentId: string): ConcurrencyReservation { return this.turnOrchestrator.reserveConcurrencySlot(agentId); }
-  async *deliverTurn(sessionId: string, messages: Message[], turnId: string): AsyncGenerator<CustomSessionEvent> { yield* this.turnOrchestrator.deliverTurn(sessionId, messages, turnId); }
+  async *deliverTurn(sessionId: string, messages: Message[], turnId: string, signal?: AbortSignal): AsyncGenerator<CustomSessionEvent> { yield* this.turnOrchestrator.deliverTurn(sessionId, messages, turnId, signal); }
   suspendSession(sessionId: string, reason: string, options?: SuspendSessionOptions) { return this.lifecycleService.suspendSession(sessionId, reason, options); }
   restoreSession(sessionId: string, agentDef: AgentDefinition, agentId?: string): Promise<SessionRecord>;
   restoreSession(sessionId: string, agentDef: AgentDefinition, agentId: string | undefined, options: { background: true }): Promise<RestoreSessionStart>;
@@ -136,7 +148,7 @@ export class SandboxSessionManager {
     return this.lifecycleService.restoreSession(sessionId, agentDef, agentId);
   }
   killSession(sessionId: string) { return this.lifecycleService.killSession(sessionId); }
-  resumeWithInterruptResolution(sessionId: string, turnId: string, agentId: string): Promise<void> { return this.interruptResumeService.resumeWithInterruptResolution(sessionId, turnId, agentId); }
+  resumeWithInterruptResolution(sessionId: string, turnId: string, agentId: string, interruptId: string, signal?: AbortSignal): Promise<void> { return this.interruptResumeService.resumeWithInterruptResolution(sessionId, turnId, agentId, interruptId, signal); }
   getSession(conversationId: string) { return this.lifecycleService.getSession(conversationId); }
   getActiveSessions() { return this.lifecycleService.getActiveSessions(); }
   getSessionsByAgent(agentId: string) { return this.lifecycleService.getSessionsByAgent(agentId); }
@@ -149,8 +161,16 @@ export class SandboxSessionManager {
     turnId: string,
     retried = false,
     onSessionRebound?: (nextSessionId: string) => void,
+    signal?: AbortSignal,
   ): AsyncGenerator<CustomSessionEvent> {
-    yield* this.turnOrchestrator.executeDeliverTurn(sessionId, messages, turnId, retried, onSessionRebound);
+    yield* this.turnOrchestrator.executeDeliverTurn(
+      sessionId,
+      messages,
+      turnId,
+      retried,
+      onSessionRebound,
+      signal,
+    );
   }
   drainCoalescedQueue(sessionId: string): Promise<void> { return this.turnOrchestrator.drainCoalescedQueue(sessionId); }
   findSessionById(sessionId: string): SessionRecord | undefined { return this.lifecycleService.findSessionById(sessionId); }

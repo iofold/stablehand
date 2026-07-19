@@ -8,7 +8,7 @@
   - `GET /api/agents/:id/stream` uses `text/event-stream`
   - `POST /api/agents/:id/workspace` expects `application/gzip` or `application/x-gzip`
 - **Authentication:** HTTP API routes are protected by a static bearer token when `CTXMILL_API_TOKEN` is set. Production startup fails without that token unless `CTXMILL_AUTH_DISABLED=true` is explicitly set.
-- **Shared TypeScript types:** CTXMill exports API and streaming types from `@ctxmill/shared` (for example `ApiAgent`, `ApiAgentSession`, `ApiMessage`, `AGUIEvent`, `MessageCommittedEvent`).
+- **Shared TypeScript types:** CTXMill exports API and streaming types from `@ctxmill/shared` (for example `ApiAgent`, `ApiAgentTurn`, `ApiMessage`, `AgentSessionEvent`, `MessageCommittedEvent`).
 
 ### Authentication
 
@@ -41,24 +41,24 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | DELETE | `/api/agents/:id` | Delete agent |
 | **Agent Execution** |  |  |
 | POST | `/api/agents/:id/message` | Send interactive message |
-| POST | `/api/agents/:id/session` | Start background run |
-| POST | `/api/agents/:id/sessions/:sessionId/cancel` | Cancel a running turn |
-| GET | `/api/agents/:id/sessions/:sessionId` | Get a turn plus its messages |
-| **Sessions** |  |  |
-| GET | `/api/agents/:id/sessions` | List agent sessions |
-| GET | `/api/agents/:id/turns` | List raw turn history |
-| POST | `/api/agents/:id/sandbox-sessions/:sessionId/suspend` | Checkpoint a sandbox session |
-| POST | `/api/agents/:id/sandbox-sessions/:sessionId/restore` | Manually restore a checkpointed sandbox session |
-| POST | `/api/agents/:id/sandbox-sessions/:sessionId/kill` | Terminate a sandbox session |
-| GET | `/api/sessions` | List active conversation summaries or sandbox sessions |
+| POST | `/api/agents/:id/turns` | Start a background turn |
+| POST | `/api/agents/:id/turns/:turnId/cancel` | Cancel a running turn |
+| GET | `/api/agents/:id/turns/:turnId` | Get a turn plus its conversation messages |
+| GET | `/api/agents/:id/turns` | List agent turns |
+| **Conversation & Sandbox Lifecycle** |  |  |
+| POST | `/api/agents/:id/sandbox-sessions/:sandboxSessionId/suspend` | Checkpoint a sandbox session |
+| POST | `/api/agents/:id/sandbox-sessions/:sandboxSessionId/restore` | Manually restore a checkpointed sandbox session |
+| POST | `/api/agents/:id/sandbox-sessions/:sandboxSessionId/kill` | Terminate a sandbox session |
+| GET | `/api/conversations?status=active` | List active conversation summaries |
+| GET | `/api/sandbox-sessions?status=active` | List active sandbox sessions |
 | **SSE Streaming** |  |  |
 | GET | `/api/agents/:id/stream` | Subscribe to live agent events |
-| **AG-UI Compatibility** |  |  |
+| **AG-UI Protocol** |  |  |
 | POST | `/api/ag-ui/:id/run` | AG-UI protocol endpoint — accepts `RunAgentInput` and returns run-scoped SSE ([docs](ag-ui-compat.md)) |
 | **Conversations & Messages** |  |  |
 | GET | `/api/agents/:id/conversations` | List conversations |
 | GET | `/api/agents/:id/conversations/summary` | List enriched conversation summaries |
-| GET | `/api/agents/:id/conversations/:convId/messages` | List conversation messages |
+| GET | `/api/agents/:id/conversations/:convId/snapshot` | Read ordered messages and their exact SSE replay boundary |
 | **Human-in-the-Loop** |  |  |
 | GET | `/api/agents/:id/interrupts` | List pending interrupts |
 | POST | `/api/agents/:id/interrupt` | Resolve an interrupt |
@@ -115,15 +115,14 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 - **Raw arrays** are used for some list endpoints, including:
   - `GET /api/agents`
   - `GET /api/agents/:id/conversations`
-  - `GET /api/agents/:id/conversations/:convId/messages`
-  - `GET /api/agents/:id/turns`
+  - `GET /api/conversations?status=active`
+  - `GET /api/sandbox-sessions?status=active`
   - `GET /api/agents/:id/webhooks`
-  - `GET /api/sessions?format=sandbox`
-  - `GET /api/sessions` (default mode)
   - `GET /api/triggers`
   - `GET /api/catalogs/tools`
 - **Wrapped objects** are used elsewhere, for example:
-  - `{ sessions: [...] }`
+  - `{ conversationId, eventCursor, messages: [...] }`
+  - `{ turns: [...] }`
   - `{ conversations: [...] }`
   - `{ artifacts: [...], total }`
   - `{ items: [...], total }`
@@ -138,7 +137,7 @@ Most errors use:
 { "error": "message", "detail": "optional detail" }
 ```
 
-Some endpoints also add endpoint-specific fields such as `details`, `sessionId`, `agentId`, `validEvents`, `activeSessions`, `size`, or `maxSize`.
+Some endpoints also add endpoint-specific fields such as `details`, `turnId`, `sandboxSessionId`, `agentId`, `validEvents`, `activeSessions`, `size`, or `maxSize`.
 
 ### Status codes
 
@@ -172,8 +171,8 @@ Also used by specific file/workspace endpoints:
 
 Useful exported types from `@ctxmill/shared`:
 
-- API resources: `ApiAgent`, `ApiAgentSession`, `ApiMessage`
-- Streaming: `AGUIEvent`, `AGUIEventType`, `MessageCommittedEvent`
+- API resources: `ApiAgent`, `ApiAgentTurn`, `ApiMessage`
+- Streaming: `AgentSessionEvent`, `AgentSessionEventType`, `MessageCommittedEvent`
 
 ### Validation ranges
 
@@ -274,7 +273,7 @@ Per-agent sandbox resource limits:
     "activeTurnCount": 1,
     "sseClients": 2,
     "hasPendingInterrupt": false,
-    "sessionsByStatus": {
+    "sandboxSessionsByStatus": {
       "ACTIVE": 1,
       "CHECKPOINTED": 0,
       "RESTORING": 0,
@@ -294,7 +293,7 @@ Per-agent sandbox resource limits:
 ]
 ```
 
-- **Notes:** Returns a denormalized operational view, not just the stored agent row. Counters are one-per-concept: `conversationCount` counts durable conversations, the `*TurnCount` fields count execution turns, and `sessionsByStatus` counts sandbox sessions (containers).
+- **Notes:** Returns a denormalized operational view, not just the stored agent row. Counters are one-per-concept: `conversationCount` counts durable conversations, the `*TurnCount` fields count execution turns, and `sandboxSessionsByStatus` counts sandbox sessions (containers).
 
 #### `POST /api/agents`
 
@@ -376,7 +375,7 @@ Per-agent sandbox resource limits:
   "activeTurnCount": 1,
   "sseClients": 1,
   "hasPendingInterrupt": false,
-  "sessionsByStatus": {
+  "sandboxSessionsByStatus": {
     "ACTIVE": 1,
     "CHECKPOINTED": 0,
     "RESTORING": 0,
@@ -457,16 +456,17 @@ Per-agent sandbox resource limits:
 {
   "messageId": "msg_123",
   "conversationId": "conv_123",
-  "sessionId": "turn_123"
+  "turnId": "turn_123"
 }
 ```
 
 - **Notes:**
   - If `conversationId` is omitted, CTXMill creates one.
   - The actual run starts asynchronously.
-  - SSE clients receive `TEXT_MESSAGE_*` user-message bootstrap events plus `TURN_PENDING` before the canonical `RUN_STARTED`.
+  - SSE clients receive `TEXT_MESSAGE_*` user-message bootstrap events plus
+    `CUSTOM name: ctxmill.turn.pending` before the canonical `RUN_STARTED`.
 
-#### `POST /api/agents/:id/session`
+#### `POST /api/agents/:id/turns`
 
 - **Description:** Starts a background run using `task` as the synthetic user message.
 - **Request body:**
@@ -486,16 +486,17 @@ Per-agent sandbox resource limits:
 
 ```json
 {
-  "sessionId": "turn_456",
-  "conversationId": "conv_456"
+  "turnId": "turn_456",
+  "conversationId": "conv_456",
+  "sandboxSessionId": null
 }
 ```
 
 - **Notes:**
   - Updates the agent status to `running` and returns before the run completes.
-  - `sandboxSecrets` is optional and memory-only for the created run. Values are merged into the sandbox container environment for the initial session start, override same-named stored agent/env secrets for that run, and are not written to task messages, checkpoints, or agent records.
+  - `sandboxSecrets` is optional and memory-only for the created turn. Values are merged into the sandbox container environment for the initial sandbox-session start, override same-named stored agent/env secrets for that turn, and are not written to task messages, checkpoints, or agent records.
 
-#### `POST /api/agents/:id/sessions/:sessionId/cancel`
+#### `POST /api/agents/:id/turns/:turnId/cancel`
 
 - **Description:** Cancels a running turn.
 - **Request body:** None.
@@ -505,13 +506,13 @@ Per-agent sandbox resource limits:
 ```json
 {
   "cancelled": true,
-  "sessionId": "turn_123"
+  "turnId": "turn_123"
 }
 ```
 
 - **Notes:** Returns `404` if the turn or live sandbox session cannot be found.
 
-#### `GET /api/agents/:id/sessions/:sessionId`
+#### `GET /api/agents/:id/turns/:turnId`
 
 - **Description:** Returns a turn plus all messages in its conversation.
 - **Query params:** None.
@@ -519,7 +520,7 @@ Per-agent sandbox resource limits:
 
 ```json
 {
-  "session": {
+  "turn": {
     "id": "turn_123",
     "agentId": "agent_123",
     "conversationId": "conv_123",
@@ -539,65 +540,35 @@ Per-agent sandbox resource limits:
 }
 ```
 
-- **Notes:** The `:sessionId` slot accepts a turn ID; if no turn is found, CTXMill also checks whether the value is a conversation ID and resolves the latest turn for that conversation.
+### d. Turns and sandbox lifecycle
 
-### d. Sessions
+#### `GET /api/agents/:id/turns`
 
-#### `GET /api/agents/:id/sessions`
-
-- **Description:** Lists normalized session summaries for one agent.
+- **Description:** Returns normalized execution summaries for an agent.
 - **Query params:** None.
-- **Response:**
+- **Response:** `{ "turns": [...] }`.
 
 ```json
 {
-  "sessions": [
+  "turns": [
     {
       "id": "turn_123",
       "agentId": "agent_123",
       "conversationId": "conv_123",
       "sandboxSessionId": "sbx_123",
       "sandboxStatus": "CHECKPOINTED",
-      "status": "ERROR",
-      "mode": "background",
+      "status": "completed",
+      "mode": "interactive",
+      "taskDescription": "Summarize alerts",
       "startedAt": 1712140000000,
-      "completedAt": 1712140005000,
-      "error": "Restore retry budget exhausted for session sbx_123",
-      "restoreAttempts": 3,
-      "lastRestoreError": "connect ECONNREFUSED",
-      "checkpointAt": 1712140005000,
-      "taskDescription": "Index artifacts"
+      "completedAt": 1712140015000,
+      "error": null
     }
   ]
 }
 ```
 
-- **Notes:** This is the best session list for customers; it normalizes turn and sandbox state.
-
-#### `GET /api/agents/:id/turns`
-
-- **Description:** Returns raw turn rows.
-- **Query params:** None.
-- **Response:** raw array.
-
-```json
-[
-  {
-    "id": "turn_123",
-    "agentId": "agent_123",
-    "conversationId": "conv_123",
-    "mode": "interactive",
-    "taskDescription": "Summarize alerts",
-    "startedAt": 1712140000000,
-    "completedAt": 1712140015000,
-    "error": null
-  }
-]
-```
-
-- **Notes:** Use `/api/agents/:id/sessions` for a friendlier operational view.
-
-#### `POST /api/agents/:id/sandbox-sessions/:sessionId/suspend`
+#### `POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/suspend`
 
 - **Description:** Checkpoints a sandbox session.
 - **Request body:** None.
@@ -605,14 +576,14 @@ Per-agent sandbox resource limits:
 - **Response:**
 
 ```json
-{ "sessionId": "sbx_123", "status": "CHECKPOINTED" }
+{ "sandboxSessionId": "sbx_123", "status": "CHECKPOINTED" }
 ```
 
 - **Notes:**
   - Requires sandbox session management to be enabled.
   - Returns `501` if session management is unavailable.
 
-#### `POST /api/agents/:id/sandbox-sessions/:sessionId/restore`
+#### `POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/restore`
 
 - **Description:** Resets the manual restore retry budget and attempts to restore a `CHECKPOINTED` sandbox session.
 - **Request body:** None.
@@ -621,13 +592,13 @@ Per-agent sandbox resource limits:
 - **Success response:**
 
 ```json
-{ "sessionId": "sbx_123", "status": "ACTIVE", "restoreAttempts": 0 }
+{ "sandboxSessionId": "sbx_123", "status": "ACTIVE", "restoreAttempts": 0 }
 ```
 
 - **Async success response (`202`):**
 
 ```json
-{ "sessionId": "sbx_123", "status": "RESTORING", "restoreAttempts": 0 }
+{ "sandboxSessionId": "sbx_123", "status": "RESTORING", "restoreAttempts": 0 }
 ```
 
 - **Error responses:**
@@ -643,13 +614,13 @@ Per-agent sandbox resource limits:
   "detail": "connect ECONNREFUSED",
   "status": "CHECKPOINTED",
   "restoreAttempts": 1,
-  "sessionId": "sbx_123"
+  "sandboxSessionId": "sbx_123"
 }
 ```
 
-- **Notes:** Manual restore is synchronous by default and may take long enough to create and bootstrap a sandbox container. Automatic restore budget exhaustion does not prevent this route from retrying; it resets `restoreAttempts` to `0` and clears `lastRestoreError` before recovery. When `async=true`, subsequent restore failure details are visible from session readback (`restoreAttempts`, `lastRestoreError`, `sandboxStatus`).
+- **Notes:** Manual restore is synchronous by default and may take long enough to create and bootstrap a sandbox container. Automatic restore budget exhaustion does not prevent this route from retrying; it resets `restoreAttempts` to `0` and clears `lastRestoreError` before recovery. When `async=true`, subsequent restore failure details are visible from turn readback (`restoreAttempts`, `lastRestoreError`, `sandboxStatus`).
 
-#### `POST /api/agents/:id/sandbox-sessions/:sessionId/kill`
+#### `POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/kill`
 
 - **Description:** Terminates a sandbox session.
 - **Request body:** None.
@@ -657,12 +628,10 @@ Per-agent sandbox resource limits:
 - **Response:** no body.
 - **Notes:** Returns `204` on success.
 
-#### `GET /api/sessions`
+#### `GET /api/conversations?status=active`
 
-- **Description:** Lists active conversations by default, or active sandbox sessions when `format=sandbox`.
-- **Query params:**
-  - `format`: set to `sandbox` to get raw active sandbox sessions
-- **Response (default):** raw array of conversation summaries.
+- **Description:** Lists active conversation summaries.
+- **Response:** raw array.
 
 ```json
 [
@@ -683,7 +652,11 @@ Per-agent sandbox resource limits:
 ]
 ```
 
-- **Response (`format=sandbox`):** raw array of sandbox session rows.
+#### `GET /api/sandbox-sessions?status=active`
+
+- **Description:** Lists active sandbox session rows after lifecycle readback
+  reconciliation.
+- **Response:** raw array.
 
 ```json
 [
@@ -700,7 +673,8 @@ Per-agent sandbox resource limits:
 ]
 ```
 
-- **Notes:** Default mode only returns active conversation summaries.
+- **Notes:** Both active lifecycle routes accept only `status=active` (or an
+  omitted status); other values return `400`.
 
 ### e. SSE Streaming
 
@@ -714,14 +688,13 @@ Per-agent sandbox resource limits:
   - Sends an initial `CONNECTED` event immediately, carrying `latestSeq`.
   - Streams the canonical AG-UI vocabulary (ADR-015): spec frame types plus
     `CUSTOM{name:'ctxmill.*'}` for orchestrator signals, with stable
-    `${turnId}-m${n}` message ids. The pre-canonical `?wire=legacy`
-    vocabulary was removed (W6c); clients receive canonical frames only.
+    `${turnId}-m${n}` message ids.
   - Accepts the `Last-Event-ID` header for replay. The event id is a
     zero-padded durable global seq (e.g. `000000000042`); replay is served
     from the persisted event log (works past any in-memory cap and across
-    orchestrator restarts). A legacy-format `Last-Event-ID` is treated as a
-    fresh connect (snapshot only).
-  - Also emits `CUSTOM` `state_snapshot` events for active sandbox sessions when the connection opens.
+    orchestrator restarts).
+  - Also emits `CUSTOM name: ctxmill.sandbox_session.snapshot` events for
+    active sandbox sessions when the connection opens.
   - `/api/events` rows for the run stream carry the canonical frame
     vocabulary; user-emitted custom events and system events are persisted
     verbatim.
@@ -731,7 +704,7 @@ Example initial frames:
 ```text
 data: {"type":"CONNECTED","agentId":"agent_123","timestamp":1712140000000}
 
-data: {"type":"CUSTOM","subtype":"state_snapshot","agentId":"agent_123","conversationId":"conv_123","sessionId":"sbx_123","status":"ACTIVE","activeTurnId":null,"timestamp":1712140001000}
+data: {"type":"CUSTOM","name":"ctxmill.sandbox_session.snapshot","agentId":"agent_123","conversationId":"conv_123","sandboxSessionId":"sbx_123","activeTurnId":null,"status":"ACTIVE","harnessName":"langgraph","containerName":"ctxmill-sandbox-sbx_123","timestamp":1712140001000}
 
 id: 000000000042
 data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversationId":"conv_123","timestamp":1712140002000}
@@ -788,38 +761,44 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Notes:** Sandbox session statuses are uppercase (`ACTIVE`, `CHECKPOINTED`, `RESTORING`, `TERMINATED`) when a response includes sandbox state. Conversation lifecycle status fields remain lower-case (`running`, `suspended`, `completed`, `error`, `idle`).
 
-#### `GET /api/agents/:id/conversations/:convId/messages`
+#### `GET /api/agents/:id/conversations/:convId/snapshot`
 
-- **Description:** Lists messages for one conversation.
+- **Description:** Returns one consistent conversation snapshot. Install its messages first, then open the agent SSE stream with `?cursor=<eventCursor>` so events committed after that snapshot are replayed without gaps.
 - **Query params:** None.
-- **Response:** raw array.
+- **Response:** snapshot envelope.
 
 ```json
-[
-  {
-    "id": "msg_1",
-    "role": "user",
-    "content": "Summarize alerts",
-    "createdAt": 1712140000000
-  },
-  {
-    "id": "msg_2",
-    "role": "assistant",
-    "content": "Here is the summary...",
-    "toolCalls": [
-      {
-        "id": "tc_1",
-        "name": "artifact_search",
-        "args": "{\"query\":\"alerts\"}",
-        "status": "complete"
-      }
-    ],
-    "createdAt": 1712140005000
-  }
-]
+{
+  "conversationId": "conv_123",
+  "eventCursor": "000000000042",
+  "messages": [
+    {
+      "id": "msg_1",
+      "role": "user",
+      "content": "Summarize alerts",
+      "messageRevision": 0,
+      "createdAt": 1712140000000
+    },
+    {
+      "id": "msg_2",
+      "role": "assistant",
+      "content": "Here is the summary...",
+      "messageRevision": 1,
+      "toolCalls": [
+        {
+          "id": "tc_1",
+          "name": "artifact_search",
+          "args": "{\"query\":\"alerts\"}",
+          "status": "complete"
+        }
+      ],
+      "createdAt": 1712140005000
+    }
+  ]
+}
 ```
 
-- **Notes:** Returns `404` if the conversation does not belong to the agent.
+- **Notes:** Returns `404` if the conversation does not belong to the agent. `eventCursor` is an opaque, zero-padded durable event sequence; clients must not derive their own boundary.
 
 ### g. Human-in-the-Loop (interrupts)
 
@@ -834,11 +813,12 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 {
   "interrupts": [
     {
-      "id": "turn_123",
-      "sessionId": "turn_123",
+      "interruptId": "int_123",
+      "turnId": "turn_123",
+      "sandboxSessionId": "sbx_123",
       "agentId": "agent_123",
       "toolCallId": "tc_1",
-      "toolName": "approve_invoice",
+      "toolCallName": "approve_invoice",
       "args": { "invoiceId": "inv_9" },
       "createdAt": 1712140000000,
       "status": "pending"
@@ -857,7 +837,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 ```json
 {
   "action": "approve",
-  "sessionId": "turn_123",
+  "interruptId": "int_123",
   "data": { "comment": "Approved by ops" }
 }
 ```
@@ -887,7 +867,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Description:** Lists directory contents in the agent workspace.
 - **Query params:**
   - `path` (default `.`)
-  - `sessionId` (optional ownership check)
+  - `conversationId` (optional durable conversation workspace)
 - **Response:**
 
 ```json
@@ -908,7 +888,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Description:** Reads a text file from the agent workspace.
 - **Query params:**
   - `path` (required)
-  - `sessionId` (optional)
+  - `conversationId` (optional)
 - **Response:**
 
 ```json
@@ -926,7 +906,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 #### `POST /api/agents/:id/files`
 
 - **Description:** Creates a file in the agent workspace.
-- **Query params:** `sessionId` (optional)
+- **Query params:** `conversationId` (optional)
 - **Request body:**
 
 ```json
@@ -947,7 +927,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 #### `PUT /api/agents/:id/files`
 
 - **Description:** Updates an existing file.
-- **Query params:** `sessionId` (optional)
+- **Query params:** `conversationId` (optional)
 - **Request body:**
 
 ```json
@@ -970,7 +950,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Description:** Deletes a file.
 - **Query params:**
   - `path` (required)
-  - `sessionId` (optional)
+  - `conversationId` (optional)
 - **Response:** no body.
 - **Notes:** Returns `204` on success and `404` if the file does not exist.
 
@@ -981,7 +961,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Headers:**
   - `Content-Type: application/gzip` or `application/x-gzip`
 - **Query params:**
-  - `force=true` to kill active sessions first
+  - `force=true` to kill active sandbox sessions first
 - **Response:**
 
 ```json
@@ -993,7 +973,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Notes:**
   - Rejects uploads unless the content type is gzip.
-  - If the agent has active sessions, returns `409` unless `force=true`.
+  - If the agent has active sandbox sessions, returns `409` unless `force=true`.
   - Maximum upload size is controlled by `maxTarUploadBytes` in `/api/settings`.
   - The replacement is atomic: CTXMill extracts to a temp dir and swaps it into place.
 
@@ -1238,15 +1218,15 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 #### `GET /api/artifacts`
 
-- **Description:** Lists artifacts globally, by agent, or by session.
+- **Description:** Lists artifacts globally, by agent, or by turn.
 - **Query params:**
   - `agentId`
-  - `sessionId`
+  - `turnId`
   - `limit` (default `100`)
   - `offset` (default `0`)
   - `search` (global listing only)
 - **Response:**
-  - with `sessionId`: `{ artifacts: [...] }`
+  - with `turnId`: `{ artifacts: [...] }`
   - with `agentId`: `{ artifacts: [...] }`
   - without `agentId`: `{ artifacts: [...], total }`
 
@@ -1256,7 +1236,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
     {
       "id": "art_123",
       "agentId": "agent_123",
-      "sessionId": "turn_123",
+      "turnId": "turn_123",
       "name": "summary.pdf",
       "mimeType": "application/pdf",
       "sizeBytes": 23456,
@@ -1270,7 +1250,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 }
 ```
 
-- **Notes:** `sessionId` takes precedence when provided.
+- **Notes:** `turnId` takes precedence when provided.
 
 #### `GET /api/artifacts/:id`
 
@@ -1388,7 +1368,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   "byType": {
     "turn.started": 30,
     "turn.completed": 30,
-    "run.tool_started": 60
+    "tool_call.started": 60
   },
   "topAgents": [
     { "agentId": "agent_123", "count": 40 }
@@ -1406,7 +1386,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Response:**
 
 ```json
-{ "types": ["turn.started", "turn.completed", "run.tool_started"] }
+{ "types": ["turn.started", "turn.completed", "tool_call.started"] }
 ```
 
 - **Notes:** Useful for building filters in dashboards.
@@ -1611,8 +1591,9 @@ data: <json>
 ```
 
 - **Common event types:**
-  - `TURN_PENDING`
   - `RUN_STARTED`
+  - `RUN_FINISHED`
+  - `RUN_ERROR`
   - `TEXT_MESSAGE_START`
   - `TEXT_MESSAGE_CONTENT`
   - `TEXT_MESSAGE_END`
@@ -1620,24 +1601,26 @@ data: <json>
   - `TOOL_CALL_ARGS`
   - `TOOL_CALL_END`
   - `TOOL_CALL_RESULT`
-  - `RUN_FINISHED`
-  - `RUN_ERROR`
-  - `CUSTOM`
-  - `MESSAGE_COMMITTED`
-  - `HITL_PAUSE`
   - `STATE_DELTA`
+  - `MESSAGES_SNAPSHOT`
+  - `CUSTOM`
 
 Notes on actual stream behavior today:
 
-- `CONNECTED` and `CUSTOM` `state_snapshot` are emitted by the stream endpoint itself.
-- `TURN_PENDING` is emitted before the canonical `RUN_STARTED` when a turn has been accepted but the sandbox session is not fully ready yet.
-- `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `MESSAGE_COMMITTED`, `HITL_PAUSE`, and forwarded `CUSTOM` events can all appear on the live stream.
-- `STATE_DELTA` remains part of the shared event type surface but is not emitted by the route-owned code covered here.
+- `CONNECTED` and `CUSTOM name: ctxmill.sandbox_session.snapshot` are emitted
+  by the stream endpoint itself.
+- Turn acceptance, durable message commits, and interrupts use
+  `CUSTOM.name`: `ctxmill.turn.pending`, `ctxmill.message.committed`,
+  `ctxmill.interrupt.requested`, and `ctxmill.interrupt.resolved`.
+- `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `TEXT_MESSAGE_*`,
+  `TOOL_CALL_*`, `STATE_DELTA`, `MESSAGES_SNAPSHOT`, and `CUSTOM` can appear
+  on the live stream.
 
 ### Connection lifecycle
 
 - Initial `CONNECTED` event is sent immediately.
-- If the agent has active sandbox sessions, the stream starts with `CUSTOM` `state_snapshot` events.
+- If the agent has active sandbox sessions, the stream starts with
+  `CUSTOM name: ctxmill.sandbox_session.snapshot` events.
 - Heartbeat comments are sent every **15 seconds**:
 
 ```text
@@ -1650,17 +1633,20 @@ Notes on actual stream behavior today:
 
 ### History & replay
 
-- CTXMill stores up to **500 events per conversation** in memory.
-- After `RUN_FINISHED` or `RUN_ERROR`, CTXMill keeps the last **50** events for that conversation.
-- Conversation event history expires after **30 minutes**.
+- Canonical frames are persisted in `event_store` before fan-out.
+- Reconnect with the last global sequence in `Last-Event-ID`; replay survives
+  process restarts.
+- Retention is an operational policy over completed-turn AG-UI frames, not an
+  in-memory replay cap.
 
 ### Event examples
 
-`TURN_PENDING`
+`ctxmill.turn.pending`
 
 ```json
 {
-  "type": "TURN_PENDING",
+  "type": "CUSTOM",
+  "name": "ctxmill.turn.pending",
   "runId": "turn_123",
   "conversationId": "conv_123",
   "agentId": "agent_123",
@@ -1675,8 +1661,9 @@ Notes on actual stream behavior today:
 {
   "type": "RUN_STARTED",
   "runId": "turn_123",
+  "threadId": "conv_123",
   "conversationId": "conv_123",
-  "sessionId": "sbx_123",
+  "sandboxSessionId": "sbx_123",
   "agentId": "agent_123",
   "mode": "interactive",
   "timestamp": 1712140000000
@@ -1691,7 +1678,6 @@ Notes on actual stream behavior today:
   "runId": "turn_123",
   "conversationId": "conv_123",
   "messageId": "msg_2",
-  "content": "Here is the summary...",
   "delta": "Here is the summary...",
   "timestamp": 1712140000100
 }
@@ -1704,7 +1690,7 @@ Notes on actual stream behavior today:
   "type": "TOOL_CALL_START",
   "runId": "turn_123",
   "toolCallId": "tc_1",
-  "toolName": "artifact_search",
+  "toolCallName": "artifact_search",
   "args": { "query": "alerts" },
   "timestamp": 1712140000200
 }
@@ -1729,18 +1715,19 @@ Notes on actual stream behavior today:
   "type": "TOOL_CALL_RESULT",
   "runId": "turn_123",
   "toolCallId": "tc_1",
-  "toolName": "artifact_search",
+  "toolCallName": "artifact_search",
   "result": "2 matching artifacts",
   "durationMs": 180,
   "timestamp": 1712140000400
 }
 ```
 
-`MESSAGE_COMMITTED`
+`ctxmill.message.committed`
 
 ```json
 {
-  "type": "MESSAGE_COMMITTED",
+  "type": "CUSTOM",
+  "name": "ctxmill.message.committed",
   "runId": "turn_123",
   "turnId": "turn_123",
   "conversationId": "conv_123",
@@ -1782,16 +1769,18 @@ es.onmessage = (event) => {
       console.log("run started", payload.runId);
       break;
     case "TEXT_MESSAGE_CONTENT":
-      process.stdout.write(payload.content || "");
+      process.stdout.write(payload.delta || "");
       break;
     case "TOOL_CALL_START":
-      console.log("tool start", payload.toolName, payload.args);
+      console.log("tool start", payload.toolCallName, payload.args);
       break;
     case "TOOL_CALL_RESULT":
-      console.log("tool result", payload.result);
+      console.log("tool result", payload.content);
       break;
-    case "HITL_PAUSE":
-      console.log("approval required");
+    case "CUSTOM":
+      if (payload.name === "ctxmill.interrupt.requested") {
+        console.log("approval required", payload.interruptId);
+      }
       break;
     case "RUN_FINISHED":
     case "RUN_ERROR":
@@ -1811,10 +1800,10 @@ es.onerror = (err) => {
 
 - `turn.started`
 - `turn.completed`
-- `run.tool_started`
-- `run.tool_result`
-- `run.interrupted`
-- `run.interrupt_resolved`
+- `tool_call.started`
+- `tool_call.completed`
+- `interrupt.requested`
+- `interrupt.resolved`
 - `message.committed`
 
 ### Delivery format
@@ -1833,7 +1822,7 @@ Body = raw JSON payload for the event.
 ```json
 {
   "turnId": "turn_123",
-  "sessionId": "sbx_123",
+  "sandboxSessionId": "sbx_123",
   "agentId": "agent_123",
   "conversationId": "conv_123",
   "mode": "interactive",
@@ -1847,7 +1836,7 @@ Body = raw JSON payload for the event.
 ```json
 {
   "turnId": "turn_123",
-  "sessionId": "sbx_123",
+  "sandboxSessionId": "sbx_123",
   "agentId": "agent_123",
   "conversationId": "conv_123",
   "status": "completed",
@@ -1856,7 +1845,7 @@ Body = raw JSON payload for the event.
 }
 ```
 
-`run.tool_started` example payload:
+`tool_call.started` example payload:
 
 ```json
 {
@@ -1864,7 +1853,7 @@ Body = raw JSON payload for the event.
   "agentId": "agent_123",
   "conversationId": "conv_123",
   "toolCallId": "tc_1",
-  "toolName": "artifact_search",
+  "toolCallName": "artifact_search",
   "args": { "query": "alerts" },
   "timestamp": 1712140000200
 }
@@ -1922,19 +1911,19 @@ const send = await fetch(`${base}/api/agents/${agent.id}/message`, {
   body: JSON.stringify({ content: "How do I upload a workspace tarball?" })
 }).then((r) => r.json());
 
-console.log(send.conversationId, send.sessionId);
+console.log(send.conversationId, send.turnId);
 ```
 
 ### Background task execution
 
 ```js
-const run = await fetch(`http://localhost:3002/api/agents/${agentId}/session`, {
+const run = await fetch(`http://localhost:3002/api/agents/${agentId}/turns`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ task: "Process all new artifacts" })
 }).then((r) => r.json());
 
-const status = await fetch(`http://localhost:3002/api/agents/${agentId}/sessions/${run.sessionId}`)
+const status = await fetch(`http://localhost:3002/api/agents/${agentId}/turns/${run.turnId}`)
   .then((r) => r.json());
 ```
 
@@ -1951,7 +1940,7 @@ await fetch(`http://localhost:3002/api/agents/${agentId}/interrupt`, {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     action: "approve",
-    sessionId: interrupt.sessionId,
+    interruptId: interrupt.interruptId,
     data: { approvedBy: "ops@example.com" }
   })
 });
@@ -1960,11 +1949,11 @@ await fetch(`http://localhost:3002/api/agents/${agentId}/interrupt`, {
 ### Checkpoint and resume
 
 ```js
-await fetch(`http://localhost:3002/api/agents/${agentId}/sessions/${sandboxSessionId}/suspend`, {
+await fetch(`http://localhost:3002/api/agents/${agentId}/sandbox-sessions/${sandboxSessionId}/suspend`, {
   method: "POST"
 });
 
-await fetch(`http://localhost:3002/api/sessions/${sandboxSessionId}/resume`, {
+await fetch(`http://localhost:3002/api/agents/${agentId}/sandbox-sessions/${sandboxSessionId}/restore`, {
   method: "POST"
 });
 ```

@@ -267,7 +267,7 @@ export class DockerContainerDriver {
         label: [
           `ctxmill.managed=true`,
           `${CONTAINER_SCOPE_LABEL}=${this.scopeId}`,
-          `ctxmill.session-id=${sessionId}`,
+          `ctxmill.sandbox-session-id=${sessionId}`,
         ],
       },
     });

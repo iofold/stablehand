@@ -1,10 +1,10 @@
 import {
-  CtxmillClient,
+  CtxmillAgUiClient,
   createCtxmillId,
   createUserMessage,
   type CtxmillA2UIBlock,
   type CtxmillClientOptions,
-  type CtxmillHitlRequest,
+  type CtxmillInterruptRequest,
 } from '@ctxmill/client';
 import {
   createContext,
@@ -29,6 +29,7 @@ import {
   type CtxmillChatMessage,
   type CtxmillChatPart,
   type CtxmillChatState,
+  type CtxmillRunPhase,
   type CtxmillToolCallPart,
 } from './state.js';
 
@@ -36,7 +37,7 @@ type A2UIComponent = ComponentType<Record<string, unknown>>;
 export type CtxmillA2UIComponents = Record<string, A2UIComponent>;
 
 interface CtxmillContextValue {
-  client?: CtxmillClient;
+  client?: CtxmillAgUiClient;
   components: CtxmillA2UIComponents;
 }
 
@@ -132,6 +133,62 @@ const styles: Record<string, CSSProperties> = {
     marginTop: 10,
   },
 };
+
+// Keyframes for the streaming caret, thinking dots, and running-tool pulse.
+// Rendered as a <style> tag by CtxmillThread; duplicate tags are harmless.
+const ANIMATION_CSS = `
+@keyframes ctxmill-caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+@keyframes ctxmill-dot-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .45; } 40% { transform: translateY(-3px); opacity: 1; } }
+@keyframes ctxmill-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+`;
+
+function StreamingCaret() {
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: 'inline-block',
+        width: 8,
+        height: 15,
+        marginLeft: 2,
+        verticalAlign: 'text-bottom',
+        borderRadius: 2,
+        background: palette.accent,
+        animation: 'ctxmill-caret-blink 1s steps(1) infinite',
+      }}
+    />
+  );
+}
+
+const PHASE_LABELS: Partial<Record<CtxmillRunPhase, string>> = {
+  submitted: 'Sending…',
+  provisioning: 'Starting sandbox…',
+  thinking: 'Thinking…',
+  tool: 'Running tools…',
+};
+
+function ThinkingIndicator({ phase }: { phase: CtxmillRunPhase }) {
+  const label = PHASE_LABELS[phase] ?? 'Working…';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: palette.muted, paddingLeft: 14 }}>
+      <span style={{ display: 'inline-flex', gap: 4 }}>
+        {[0, 1, 2].map((dot) => (
+          <span
+            key={dot}
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: palette.accent,
+              animation: `ctxmill-dot-bounce 1.2s ease-in-out ${dot * 0.16}s infinite`,
+            }}
+          />
+        ))}
+      </span>
+      <span style={{ fontSize: 13 }}>{label}</span>
+    </div>
+  );
+}
 
 function isRecordArray(value: unknown): value is Array<Record<string, unknown>> {
   return Array.isArray(value) && value.every((entry) => entry !== null && typeof entry === 'object' && !Array.isArray(entry));
@@ -232,7 +289,7 @@ export function CtxmillProvider({
   components,
   children,
 }: {
-  client?: CtxmillClient;
+  client?: CtxmillAgUiClient;
   apiBase?: string;
   headers?: CtxmillClientOptions['headers'];
   credentials?: CtxmillClientOptions['credentials'];
@@ -240,7 +297,7 @@ export function CtxmillProvider({
   children: ReactNode;
 }) {
   const resolvedClient = useMemo(
-    () => client ?? new CtxmillClient({ apiBase, headers, credentials }),
+    () => client ?? new CtxmillAgUiClient({ apiBase, headers, credentials }),
     [apiBase, client, credentials, headers],
   );
   const value = useMemo(
@@ -270,9 +327,24 @@ export function CtxmillA2UI({ block, components }: { block: CtxmillA2UIBlock; co
 }
 
 function ToolCall({ part }: { part: CtxmillToolCallPart }) {
+  const running = part.status === 'running';
   return (
-    <details style={styles.card} open={part.status === 'running'}>
+    <details style={styles.card} open={running}>
       <summary style={{ cursor: 'pointer', color: part.status === 'error' ? palette.danger : palette.accent }}>
+        {running ? (
+          <span
+            aria-hidden
+            style={{
+              display: 'inline-block',
+              width: 8,
+              height: 8,
+              marginRight: 8,
+              borderRadius: '50%',
+              background: palette.warn,
+              animation: 'ctxmill-pulse 1.1s ease-in-out infinite',
+            }}
+          />
+        ) : null}
         {part.name} {part.status}
       </summary>
       {part.args ? <pre style={{ whiteSpace: 'pre-wrap', color: palette.muted }}>{part.args}</pre> : null}
@@ -281,9 +353,22 @@ function ToolCall({ part }: { part: CtxmillToolCallPart }) {
   );
 }
 
-function MessagePart({ part, components }: { part: CtxmillChatPart; components?: CtxmillA2UIComponents }) {
+function MessagePart({
+  part,
+  components,
+  streaming,
+}: {
+  part: CtxmillChatPart;
+  components?: CtxmillA2UIComponents;
+  streaming?: boolean;
+}) {
   if (part.type === 'text') {
-    return <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{part.content}</div>;
+    return (
+      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+        {part.content}
+        {streaming ? <StreamingCaret /> : null}
+      </div>
+    );
   }
   if (part.type === 'tool_call') {
     return <ToolCall part={part} />;
@@ -294,25 +379,73 @@ function MessagePart({ part, components }: { part: CtxmillChatPart; components?:
 export function CtxmillThread({
   messages,
   components,
+  isRunning,
+  phase = 'idle',
+  activeMessageId,
 }: {
   messages: CtxmillChatMessage[];
   components?: CtxmillA2UIComponents;
+  /** Show run-in-progress feedback (thinking indicator, streaming caret). */
+  isRunning?: boolean;
+  phase?: CtxmillRunPhase;
+  /** The assistant message currently receiving streamed text. */
+  activeMessageId?: string | null;
 }) {
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  // Follow the stream only while the user is already at the bottom; an
+  // IntersectionObserver on the end sentinel tracks whether they scrolled
+  // away, so we never yank them back down mid-read.
+  useEffect(() => {
+    const el = endRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (entry) stickToBottomRef.current = entry.isIntersecting;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const lastMessage = messages[messages.length - 1];
+  const lastContentLength = lastMessage ? lastMessage.content.length + lastMessage.parts.length : 0;
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    endRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [messages.length, lastContentLength, isRunning, phase]);
+
+  const showThinking = Boolean(isRunning) && phase !== 'streaming' && phase !== 'idle';
+
   return (
     <div style={styles.thread}>
-      {messages.map((message) => (
-        <div key={message.id} style={styles.message}>
-          {message.role === 'user' ? (
-            <div style={styles.userBubble}>{message.content}</div>
-          ) : (
-            <div style={styles.assistantBubble}>
-              {message.parts.map((part, index) => (
-                <MessagePart key={`${message.id}-${index}`} part={part} components={components} />
-              ))}
-            </div>
-          )}
-        </div>
-      ))}
+      <style>{ANIMATION_CSS}</style>
+      {messages.map((message) => {
+        const streamingThis = phase === 'streaming' && message.id === activeMessageId;
+        const lastTextIndex = streamingThis
+          ? message.parts.reduce((last, part, index) => (part.type === 'text' ? index : last), -1)
+          : -1;
+        return (
+          <div key={message.id} style={styles.message}>
+            {message.role === 'user' ? (
+              <div style={styles.userBubble}>{message.content}</div>
+            ) : (
+              <div style={styles.assistantBubble}>
+                {message.parts.map((part, index) => (
+                  <MessagePart
+                    key={`${message.id}-${index}`}
+                    part={part}
+                    components={components}
+                    streaming={index === lastTextIndex}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {showThinking ? <ThinkingIndicator phase={phase} /> : null}
+      <div ref={endRef} />
     </div>
   );
 }
@@ -322,11 +455,11 @@ export function CtxmillHITL({
   onResolve,
   disabled,
 }: {
-  request: CtxmillHitlRequest;
+  request: CtxmillInterruptRequest;
   onResolve: (action: 'approve' | 'reject' | 'submit', data?: unknown) => void | Promise<void>;
   disabled?: boolean;
 }) {
-  const reason = typeof request.args.reason === 'string' ? request.args.reason : request.toolName;
+  const reason = typeof request.args.reason === 'string' ? request.args.reason : request.toolCallName;
   return (
     <div style={{ ...styles.card, borderColor: palette.warn, margin: '0 14px 14px' }}>
       <div style={{ color: palette.warn, fontWeight: 800, marginBottom: 6 }}>Human approval required</div>
@@ -382,14 +515,14 @@ export function CtxmillComposer({
 export interface UseCtxmillChatOptions extends CtxmillClientOptions {
   agentId: string;
   threadId?: string;
-  client?: CtxmillClient;
+  client?: CtxmillAgUiClient;
 }
 
 export function useCtxmillChat(options: UseCtxmillChatOptions) {
   const context = useContext(CtxmillContext);
   const { agentId, apiBase, client: providedClient, credentials, headers, threadId } = options;
   const client = useMemo(
-    () => providedClient ?? context.client ?? new CtxmillClient({ apiBase, credentials, headers }),
+    () => providedClient ?? context.client ?? new CtxmillAgUiClient({ apiBase, credentials, headers }),
     [apiBase, context.client, credentials, headers, providedClient],
   );
   const [state, dispatch] = useReducer(reduceCtxmillChatState, undefined, () => createInitialChatState(threadId));
@@ -408,7 +541,7 @@ export function useCtxmillChat(options: UseCtxmillChatOptions) {
   const sendMessage = useCallback(async (content: string) => {
     const userMessage = createUserMessage(content);
     dispatch({ type: 'append_user_message', message: userMessage });
-    const runId = createCtxmillId('run');
+    const runId = createCtxmillId('turn');
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -428,6 +561,9 @@ export function useCtxmillChat(options: UseCtxmillChatOptions) {
         dispatch({ type: 'set_error', error: err instanceof Error ? err.message : String(err) });
       }
     } finally {
+      // Covers stop()/aborts and streams that close without RUN_FINISHED —
+      // otherwise isRunning wedges true and the composer stays disabled.
+      dispatch({ type: 'run_settled' });
       if (abortRef.current === controller) {
         abortRef.current = null;
       }
@@ -438,12 +574,12 @@ export function useCtxmillChat(options: UseCtxmillChatOptions) {
     const request = stateRef.current.pendingHitl;
     if (!request) return;
     await client.resolveInterrupt({
-      agentId: request.agentId ?? options.agentId,
-      interruptId: request.id,
+      agentId: request.agentId,
+      interruptId: request.interruptId,
       action,
       data,
     });
-    dispatch({ type: 'hitl_resolved', interruptId: request.id });
+    dispatch({ type: 'hitl_resolved', interruptId: request.interruptId });
   }, [agentId, client]);
 
   return {
@@ -470,7 +606,13 @@ export function CtxmillChat({
   const chat = useCtxmillChat({ agentId, threadId, client, apiBase, headers, credentials });
   return (
     <div style={styles.shell}>
-      <CtxmillThread messages={chat.messages} components={components} />
+      <CtxmillThread
+        messages={chat.messages}
+        components={components}
+        isRunning={chat.isRunning}
+        phase={chat.runPhase}
+        activeMessageId={chat.activeAssistantMessageId}
+      />
       {chat.pendingHitl ? <CtxmillHITL request={chat.pendingHitl} onResolve={chat.resolveHitl} /> : null}
       {chat.error ? <div style={{ color: palette.danger, padding: '0 14px 14px' }}>{chat.error}</div> : null}
       <CtxmillComposer onSend={chat.sendMessage} disabled={chat.isRunning || Boolean(chat.pendingHitl)} placeholder={placeholder} />

@@ -584,7 +584,7 @@ export function TriggersPage() {
                   type="text"
                   value={form.eventType}
                   onChange={(e) => setForm({ ...form, eventType: e.target.value })}
-                  placeholder="e.g. run.completed"
+                  placeholder="e.g. turn.completed"
                   className="input-base"
                 />
               </div>

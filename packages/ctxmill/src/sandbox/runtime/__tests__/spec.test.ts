@@ -49,9 +49,9 @@ describe('sandbox runtime spec builders', () => {
   it('projects runtime labels into container info', () => {
     expect(runtimeLabelsToContainerInfo({
       containerId: 'container-1',
-      containerName: 'ctxmill-run-1',
+      containerName: 'ctxmill-sandbox-1',
       labels: {
-        'ctxmill.session-id': 'session-1',
+        'ctxmill.sandbox-session-id': 'session-1',
         'ctxmill.agent-id': 'agent-1',
         'ctxmill.harness': 'langgraph',
       },
@@ -60,7 +60,7 @@ describe('sandbox runtime spec builders', () => {
       networkIp: '10.0.0.2',
     })).toEqual({
       containerId: 'container-1',
-      containerName: 'ctxmill-run-1',
+      containerName: 'ctxmill-sandbox-1',
       sessionId: 'session-1',
       agentId: 'agent-1',
       harnessName: 'langgraph',
@@ -83,7 +83,7 @@ describe('sandbox runtime spec builders', () => {
       sandboxOtelEnv: ['OTEL_SERVICE_NAME=ctxmill-sandbox-claude-agents'],
     });
 
-    expect(spec.containerName).toBe('ctxmill-run-run-001');
+    expect(spec.containerName).toBe('ctxmill-sandbox-run-001');
     expect(spec.resources).toEqual({
       cpus: 2,
       memoryMb: 2048,
@@ -92,11 +92,11 @@ describe('sandbox runtime spec builders', () => {
     });
     expect(spec.createOptions).toMatchObject({
       Image: 'ctxmill/harness-claude-agents:latest',
-      name: 'ctxmill-run-run-001',
+      name: 'ctxmill-sandbox-run-001',
       Labels: {
         'ctxmill.managed': 'true',
         [CONTAINER_SCOPE_LABEL]: 'scope-1',
-        'ctxmill.session-id': 'run-001',
+        'ctxmill.sandbox-session-id': 'run-001',
         'ctxmill.conversation-id': 'conversation-1',
         'ctxmill.agent-id': 'agent-abc',
         'ctxmill.harness': 'claude-agents',
@@ -138,7 +138,7 @@ describe('sandbox runtime spec builders', () => {
       sandboxOtelEnv: ['OTEL_SERVICE_NAME=ctxmill-sandbox-claude-agents'],
     });
 
-    expect(spec.jobName).toBe('ctxmill-run-run-001');
+    expect(spec.jobName).toBe('ctxmill-sandbox-run-001');
     expect(spec.workspaceHostPath).toBe('/tmp/workspaces/run-001');
     expect(spec.resources).toEqual({
       cpus: 2,
@@ -150,14 +150,14 @@ describe('sandbox runtime spec builders', () => {
       apiVersion: 'batch/v1',
       kind: 'Job',
       metadata: {
-        name: 'ctxmill-run-run-001',
+        name: 'ctxmill-sandbox-run-001',
         namespace: 'ctxmill',
         labels: {
           'app.kubernetes.io/name': 'ctxmill-sandbox',
           'app.kubernetes.io/part-of': 'ctxmill',
           'ctxmill.managed': 'true',
           [CONTAINER_SCOPE_LABEL]: 'scope-1',
-          'ctxmill.session-id': 'run-001',
+          'ctxmill.sandbox-session-id': 'run-001',
           'ctxmill.conversation-id': 'conversation-1',
           'ctxmill.agent-id': 'agent-abc',
           'ctxmill.harness': 'claude-agents',

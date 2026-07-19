@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { create } from '@bufbuild/protobuf';
 import {
+  NativeToolConfigSchema,
   OpenSessionRequestSchema,
   ToolMetadataSchema,
 } from '@ctxmill/proto/sandbox/v1';
@@ -157,6 +158,12 @@ export class SessionRuntimeFactory {
             harnessConfigJson: JSON.stringify(agentDef.harnessConfig),
             systemPrompt: agentDef.systemPrompt,
             workspaceDir: '/workspace',
+            nativeTools: agentDef.nativeTools
+              ? create(NativeToolConfigSchema, {
+                  allowlist: agentDef.nativeTools.allowlist ?? [],
+                  blocklist: agentDef.nativeTools.blocklist ?? [],
+                })
+              : undefined,
             tools: resolvedTools.map((tool) => create(ToolMetadataSchema, {
               name: tool.name,
               description: tool.description,

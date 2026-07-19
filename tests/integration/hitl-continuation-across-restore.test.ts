@@ -38,6 +38,10 @@ function makeLogger() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 }
 
+function makeEventBus() {
+  return { emitAsync: vi.fn().mockResolvedValue(undefined) };
+}
+
 function makeAgentDef(overrides?: Partial<AgentDefinition>): AgentDefinition {
   return {
     name: 'test-agent',
@@ -54,7 +58,7 @@ function makeDbSession(overrides?: Partial<SandboxSessionRow>): SandboxSessionRo
     id: 'sess-1',
     conversationId: 'conv-1',
     agentId: 'agent-1',
-    containerName: 'ctxmill-run-sess-1',
+    containerName: 'ctxmill-sandbox-sess-1',
     containerId: 'c-1',
     status: 'CHECKPOINTED',
     harnessName: 'langgraph',
@@ -69,7 +73,7 @@ function makeDbSession(overrides?: Partial<SandboxSessionRow>): SandboxSessionRo
 function makeResolvedInterrupt(overrides?: Partial<InterruptRow>): InterruptRow {
   return {
     id: 'interrupt-1',
-    agentSessionId: 'turn-1',
+    turnId: 'turn-1',
     agentId: 'agent-1',
     toolCallId: 'tc-approval-1',
     toolName: 'request-approval',
@@ -80,7 +84,7 @@ function makeResolvedInterrupt(overrides?: Partial<InterruptRow>): InterruptRow 
     status: 'resolved',
     resolvedAction: 'approve',
     resolvedData: { reason: 'looks good' },
-    sessionId: 'sess-1',
+    sandboxSessionId: 'sess-1',
     ...overrides,
   } as InterruptRow;
 }
@@ -88,7 +92,7 @@ function makeResolvedInterrupt(overrides?: Partial<InterruptRow>): InterruptRow 
 function makeCheckpoint(checkpointData: Record<string, unknown>): CheckpointV2 {
   return {
     id: 'ckpt-1',
-    sessionId: 'sess-1',
+    sandboxSessionId: 'sess-1',
     agentId: 'agent-1',
     checkpointVersion: 2,
     checkpointData,
@@ -134,17 +138,30 @@ interface MockDbOpts {
 
 function makeMockDb(opts: MockDbOpts = {}): Pick<
   DatabaseRepository,
-  'getSandboxSession' | 'getResolvedInterruptsForSession' | 'getCheckpointV2' | 'addMessage' | 'getAgent'
+  'getTurn' | 'getSandboxSession' | 'getResolvedInterruptsForSandboxSession' | 'getCheckpointV2' | 'addCanonicalMessage' | 'getAgent'
 > {
+  let messageSeq = 0;
+  const canonicalMessages = new Map<string, Record<string, unknown>>();
   return {
+    getTurn: vi.fn().mockResolvedValue({ status: 'running' }),
     getSandboxSession: vi.fn().mockResolvedValue(opts.dbSession ?? makeDbSession()),
-    getResolvedInterruptsForSession: vi.fn().mockResolvedValue(opts.resolvedInterrupts ?? [makeResolvedInterrupt()]),
+    getResolvedInterruptsForSandboxSession: vi.fn().mockResolvedValue(opts.resolvedInterrupts ?? [makeResolvedInterrupt()]),
     getCheckpointV2: vi.fn().mockResolvedValue(opts.checkpoint !== undefined ? opts.checkpoint : makeCheckpointWithApproval('tc-approval-1', 'send_email', { to: 'user@example.com', body: 'Hello' })),
-    addMessage: vi.fn().mockImplementation(async (data: Record<string, unknown>) => ({
-      id: randomUUID(),
-      createdAt: Date.now(),
-      ...data,
-    })),
+    addCanonicalMessage: vi.fn().mockImplementation(async (data: Record<string, unknown>) => {
+      const id = typeof data.id === 'string' ? data.id : randomUUID();
+      const existing = canonicalMessages.get(id);
+      if (existing) return existing;
+      const message = {
+        id,
+        createdAt: Date.now(),
+        messageSeq: messageSeq++,
+        messageRevision: 0,
+        publishedRevision: -1,
+        ...data,
+      };
+      canonicalMessages.set(id, message);
+      return message;
+    }),
     getAgent: vi.fn().mockResolvedValue(opts.agentRow ?? null),
   };
 }
@@ -154,22 +171,24 @@ function makeMockDb(opts: MockDbOpts = {}): Pick<
 function makeService(opts: {
   db: ReturnType<typeof makeMockDb>;
   agentDef?: AgentDefinition;
-  deliverTurn?: (sessionId: string, messages: Message[], turnId: string) => AsyncGenerator<SessionEvent>;
-  sessionId?: string;
+  deliverTurn?: (sandboxSessionId: string, messages: Message[], turnId: string) => AsyncGenerator<SessionEvent>;
+  eventBus?: ReturnType<typeof makeEventBus>;
+  sandboxSessionId?: string;
 }): InterruptResumeService {
   const agentDef = opts.agentDef ?? makeAgentDef();
-  const resolvedSessionId = opts.sessionId ?? 'sess-1';
+  const resolvedSandboxSessionId = opts.sandboxSessionId ?? 'sess-1';
 
   const agentDefs = new Map<string, AgentDefinition>([['conv-1', agentDef]]);
 
   return new InterruptResumeService({
-    db: opts.db as unknown as Pick<DatabaseRepository, 'getSandboxSession' | 'getResolvedInterruptsForSession' | 'getCheckpointV2' | 'addMessage'>,
+    db: opts.db,
+    eventBus: opts.eventBus ?? makeEventBus(),
     stateStore: {
       getAgentDef: (conversationId: string) => agentDefs.get(conversationId) ?? undefined,
       setAgentDef: (conversationId: string, def: AgentDefinition) => { agentDefs.set(conversationId, def); },
     },
     logger: makeLogger(),
-    ensureSession: vi.fn().mockResolvedValue({ sessionId: resolvedSessionId }),
+    ensureSession: vi.fn().mockResolvedValue({ sessionId: resolvedSandboxSessionId }),
     deliverTurn: opts.deliverTurn ?? (async function* () {}),
     resolveAgentDefinition: vi.fn().mockResolvedValue(null),
   });
@@ -187,28 +206,28 @@ describe('HITL continuation across restore', () => {
 
   describe('Test 1 — continuation message fires after approval (no restore)', () => {
     it('calls deliverTurn with an assistant tool-call message and a tool-result message after approval', async () => {
-      const capturedCalls: Array<{ sessionId: string; messages: Message[]; turnId: string }> = [];
+      const capturedCalls: Array<{ sandboxSessionId: string; messages: Message[]; turnId: string }> = [];
 
       const db = makeMockDb();
       const service = makeService({
         db,
-        deliverTurn: async function* (sessionId, messages, turnId) {
-          capturedCalls.push({ sessionId, messages, turnId });
+        deliverTurn: async function* (sandboxSessionId, messages, turnId) {
+          capturedCalls.push({ sandboxSessionId, messages, turnId });
           yield* streamEvents();
         },
       });
 
-      await service.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1');
+      await service.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
 
       // deliverTurn must have been called exactly once
       expect(capturedCalls).toHaveLength(1);
-      const { sessionId, messages, turnId } = capturedCalls[0]!;
+      const { sandboxSessionId, messages, turnId } = capturedCalls[0]!;
 
       // Session ID forwarded correctly
-      expect(sessionId).toBe('sess-1');
+      expect(sandboxSessionId).toBe('sess-1');
 
-      // Turn ID follows the expected naming convention
-      expect(turnId).toMatch(/^hitl-resume-turn-1-/);
+      // The interrupt-derived ID is stable across process retries.
+      expect(turnId).toBe('hitl-resume-d718a80a945f45badc81fb3dc779eb89');
 
       // Exactly two messages: assistant (tool-call) + tool (result)
       expect(messages).toHaveLength(2);
@@ -230,23 +249,71 @@ describe('HITL continuation across restore', () => {
 
     it('persists the assistant and tool messages to the database before delivering the turn', async () => {
       const db = makeMockDb();
-      const service = makeService({ db, deliverTurn: async function* () {} });
+      const eventBus = makeEventBus();
+      const service = makeService({
+        db,
+        eventBus,
+        deliverTurn: async function* () {},
+      });
 
-      await service.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1');
+      await service.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
 
-      // addMessage called twice — assistant then tool
-      expect(db.addMessage).toHaveBeenCalledTimes(2);
-      expect(db.addMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      // Canonical commit called twice — assistant then tool.
+      expect(db.addCanonicalMessage).toHaveBeenCalledTimes(2);
+      expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
         role: 'assistant',
         agentId: 'agent-1',
         conversationId: 'conv-1',
         toolCalls: [expect.objectContaining({ id: 'tc-approval-1', name: 'request-approval' })],
       }));
-      expect(db.addMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
         role: 'tool',
         content: 'APPROVED',
         toolCallId: 'tc-approval-1',
       }));
+      expect(eventBus.emitAsync).toHaveBeenCalledTimes(2);
+      expect(eventBus.emitAsync).toHaveBeenNthCalledWith(
+        1,
+        'message.committed',
+        expect.objectContaining({ role: 'assistant', messageSeq: 0 }),
+      );
+      expect(eventBus.emitAsync).toHaveBeenNthCalledWith(
+        2,
+        'message.committed',
+        expect.objectContaining({ role: 'tool', messageSeq: 1 }),
+      );
+    });
+
+    it('reuses deterministic continuation rows when canonical publication is retried', async () => {
+      const db = makeMockDb();
+      const eventBus = makeEventBus();
+      eventBus.emitAsync
+        .mockRejectedValueOnce(new Error('injected canonical publication failure'))
+        .mockResolvedValue(undefined);
+      let deliveries = 0;
+      const service = makeService({
+        db,
+        eventBus,
+        deliverTurn: async function* () {
+          deliveries++;
+          yield* streamEvents();
+        },
+      });
+
+      await expect(
+        service.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1'),
+      ).rejects.toThrow(/injected canonical publication failure/);
+      await service.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
+
+      const inserts = db.addCanonicalMessage.mock.calls
+        .map(([input]) => input as Record<string, unknown>);
+      expect(inserts).toHaveLength(3);
+      expect(inserts[0]?.role).toBe('assistant');
+      expect(inserts[1]?.role).toBe('assistant');
+      expect(inserts[0]?.id).toBe(inserts[1]?.id);
+      expect(inserts[2]?.role).toBe('tool');
+      expect(new Set(inserts.map((input) => input.id)).size).toBe(2);
+      expect(deliveries).toBe(1);
     });
 
     it('produces a REJECTED tool message when the interrupt was rejected', async () => {
@@ -263,7 +330,7 @@ describe('HITL continuation across restore', () => {
         },
       });
 
-      await service.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1');
+      await service.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
 
       expect(capturedMessages).toHaveLength(1);
       const toolMsg = capturedMessages[0]![1]!;
@@ -276,7 +343,7 @@ describe('HITL continuation across restore', () => {
 
       const db = makeMockDb({
         // interrupt exists but for a different turn
-        resolvedInterrupts: [makeResolvedInterrupt({ agentSessionId: 'other-turn' })],
+        resolvedInterrupts: [makeResolvedInterrupt({ turnId: 'other-turn' })],
       });
       const service = makeService({
         db,
@@ -286,7 +353,14 @@ describe('HITL continuation across restore', () => {
         },
       });
 
-      await service.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1');
+      await expect(
+        service.resumeWithInterruptResolution(
+          'sess-1',
+          'turn-1',
+          'agent-1',
+          'interrupt-1',
+        ),
+      ).rejects.toThrow(/does not match continuation ownership/);
 
       expect(capturedCalls).toHaveLength(0);
     });
@@ -309,7 +383,7 @@ describe('HITL continuation across restore', () => {
      * and deliver them to the harness without any in-memory interrupt state.
      */
     it('delivers the continuation turn after restore when runnerState.pendingRequests contains the approval', async () => {
-      const capturedCalls: Array<{ sessionId: string; messages: Message[]; turnId: string }> = [];
+      const capturedCalls: Array<{ sandboxSessionId: string; messages: Message[]; turnId: string }> = [];
 
       // Checkpoint contains the serialised pending approval request
       const checkpointData = {
@@ -327,7 +401,7 @@ describe('HITL continuation across restore', () => {
 
       // DB has the resolved interrupt (human approved while process was down)
       const resolvedInterrupt = makeResolvedInterrupt({
-        agentSessionId: 'turn-restored',
+        turnId: 'turn-restored',
         toolCallId: 'tc-approval-restored',
         toolName: 'delete_file',
         args: { path: '/critical/data.json' },
@@ -343,28 +417,34 @@ describe('HITL continuation across restore', () => {
       // Build service with agent def cached for the restored conversation
       const agentDefs = new Map<string, AgentDefinition>([['conv-restored', makeAgentDef()]]);
       const service = new InterruptResumeService({
-        db: db as unknown as Pick<DatabaseRepository, 'getSandboxSession' | 'getResolvedInterruptsForSession' | 'getCheckpointV2' | 'addMessage'>,
+        db,
+        eventBus: makeEventBus(),
         stateStore: {
           getAgentDef: (cid) => agentDefs.get(cid) ?? undefined,
           setAgentDef: (cid, def) => { agentDefs.set(cid, def); },
         },
         logger: makeLogger(),
         ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sess-restored' }),
-        deliverTurn: async function* (sessionId, messages, turnId) {
-          capturedCalls.push({ sessionId, messages, turnId });
+        deliverTurn: async function* (sandboxSessionId, messages, turnId) {
+          capturedCalls.push({ sandboxSessionId, messages, turnId });
           yield* streamEvents();
         },
         resolveAgentDefinition: vi.fn().mockResolvedValue(null),
       });
 
-      await service.resumeWithInterruptResolution('sess-restored', 'turn-restored', 'agent-1');
+      await service.resumeWithInterruptResolution(
+        'sess-restored',
+        'turn-restored',
+        'agent-1',
+        'interrupt-1',
+      );
 
       // The continuation turn must have been delivered
       expect(capturedCalls).toHaveLength(1);
-      const { sessionId, messages, turnId } = capturedCalls[0]!;
+      const { sandboxSessionId, messages, turnId } = capturedCalls[0]!;
 
-      expect(sessionId).toBe('sess-restored');
-      expect(turnId).toMatch(/^hitl-resume-turn-res/);
+      expect(sandboxSessionId).toBe('sess-restored');
+      expect(turnId).toBe('hitl-resume-d718a80a945f45badc81fb3dc779eb89');
 
       expect(messages).toHaveLength(2);
       const [assistantMsg, toolMsg] = messages;
@@ -392,7 +472,7 @@ describe('HITL continuation across restore', () => {
       const capturedCalls: Array<{ messages: Message[] }> = [];
 
       const resolvedInterrupt = makeResolvedInterrupt({
-        agentSessionId: 'turn-stale',
+        turnId: 'turn-stale',
         toolCallId: 'tc-stale-fallback',
         args: { tool: 'send_slack', args: { channel: '#ops', text: 'alert' } },
         resolvedAction: 'approve',
@@ -406,7 +486,8 @@ describe('HITL continuation across restore', () => {
 
       const agentDefs = new Map<string, AgentDefinition>([['conv-stale', makeAgentDef()]]);
       const service = new InterruptResumeService({
-        db: db as unknown as Pick<DatabaseRepository, 'getSandboxSession' | 'getResolvedInterruptsForSession' | 'getCheckpointV2' | 'addMessage'>,
+        db,
+        eventBus: makeEventBus(),
         stateStore: {
           getAgentDef: (cid) => agentDefs.get(cid) ?? undefined,
           setAgentDef: (cid, def) => { agentDefs.set(cid, def); },
@@ -420,7 +501,12 @@ describe('HITL continuation across restore', () => {
         resolveAgentDefinition: vi.fn().mockResolvedValue(null),
       });
 
-      await service.resumeWithInterruptResolution('sess-stale', 'turn-stale', 'agent-1');
+      await service.resumeWithInterruptResolution(
+        'sess-stale',
+        'turn-stale',
+        'agent-1',
+        'interrupt-1',
+      );
 
       expect(capturedCalls).toHaveLength(1);
       const [assistantMsg, toolMsg] = capturedCalls[0]!.messages;
@@ -435,7 +521,7 @@ describe('HITL continuation across restore', () => {
       const db = makeMockDb({
         dbSession: makeDbSession({ id: 'sess-r2', conversationId: 'conv-r2' }),
         resolvedInterrupts: [makeResolvedInterrupt({
-          agentSessionId: 'turn-r2',
+          turnId: 'turn-r2',
           toolCallId: 'tc-r2',
           resolvedAction: 'approve',
         })],
@@ -444,7 +530,8 @@ describe('HITL continuation across restore', () => {
 
       const agentDefs = new Map<string, AgentDefinition>([['conv-r2', makeAgentDef()]]);
       const service = new InterruptResumeService({
-        db: db as unknown as Pick<DatabaseRepository, 'getSandboxSession' | 'getResolvedInterruptsForSession' | 'getCheckpointV2' | 'addMessage'>,
+        db,
+        eventBus: makeEventBus(),
         stateStore: {
           getAgentDef: (cid) => agentDefs.get(cid) ?? undefined,
           setAgentDef: (cid, def) => { agentDefs.set(cid, def); },
@@ -455,15 +542,20 @@ describe('HITL continuation across restore', () => {
         resolveAgentDefinition: vi.fn().mockResolvedValue(null),
       });
 
-      await service.resumeWithInterruptResolution('sess-r2', 'turn-r2', 'agent-1');
+      await service.resumeWithInterruptResolution(
+        'sess-r2',
+        'turn-r2',
+        'agent-1',
+        'interrupt-1',
+      );
 
-      expect(db.addMessage).toHaveBeenCalledTimes(2);
-      expect(db.addMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      expect(db.addCanonicalMessage).toHaveBeenCalledTimes(2);
+      expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
         role: 'assistant',
         conversationId: 'conv-r2',
         toolCalls: [expect.objectContaining({ id: 'tc-r2', name: 'request-approval' })],
       }));
-      expect(db.addMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
         role: 'tool',
         content: 'APPROVED',
         toolCallId: 'tc-r2',

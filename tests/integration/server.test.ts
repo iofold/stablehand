@@ -138,7 +138,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
     const sandboxSession = await container.db.createSandboxSession({
       conversationId: conversation.id,
       agentId: agent.id,
-      containerName: 'ctxmill-run-stream-test',
+      containerName: 'ctxmill-sandbox-stream-test',
       containerId: 'container-stream-test',
       harnessName: 'langgraph',
       status: 'ACTIVE',
@@ -147,7 +147,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
       id: turnId,
       agentId: agent.id,
       conversationId: conversation.id,
-      sessionId: sandboxSession.id,
+      sandboxSessionId: sandboxSession.id,
       mode: 'interactive',
     });
 
@@ -162,7 +162,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
       const reader = res.body!.getReader();
       let text = '';
 
-      while (!text.includes('state_snapshot')) {
+      while (!text.includes('ctxmill.sandbox_session.snapshot')) {
         const { value, done } = await Promise.race([
           reader.read(),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for state snapshot')), 2_000)),
@@ -175,9 +175,17 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
         text += new TextDecoder().decode(value);
       }
 
-      expect(text).toContain('state_snapshot');
-      expect(text).toContain(`"sessionId":"${sandboxSession.id}"`);
+      expect(text).toContain('"type":"CUSTOM"');
+      expect(text).toContain('"name":"ctxmill.sandbox_session.snapshot"');
+      expect(text).not.toContain('"subtype":"state_snapshot"');
+      expect(text).toContain(`"agentId":"${agent.id}"`);
+      expect(text).toContain(`"conversationId":"${conversation.id}"`);
+      expect(text).toContain(`"sandboxSessionId":"${sandboxSession.id}"`);
       expect(text).toContain(`"activeTurnId":"${turnId}"`);
+      expect(text).toContain('"status":"ACTIVE"');
+      expect(text).toContain('"harnessName":"langgraph"');
+      expect(text).toContain('"containerName":"ctxmill-sandbox-stream-test"');
+      expect(text).toMatch(/"timestamp":\d+/);
 
       controller.abort();
       await reader.cancel().catch(() => undefined);
@@ -198,7 +206,7 @@ describe('CTXMill Server Integration (ORC-01, ORC-02)', () => {
 
   it('container creates all services with interface types', async () => {
     expect(container.toolExecutor).toBeDefined();
-    expect(container.agentSessionService).toBeDefined();
+    expect(container.agentTurnService).toBeDefined();
     expect(container.eventBus).toBeDefined();
     expect(container.sseManager).toBeDefined();
     expect(container.interruptManager).toBeDefined();

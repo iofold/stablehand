@@ -168,7 +168,7 @@ interface PIAgentExtension {
 
 /**
  * Mutable context object shared between `convertTools` closures and `PiAgentSession`.
- * The session updates `onApprovalNeeded` and `runId` before each turn so tool
+ * The session updates `onApprovalNeeded` and `turnId` before each turn so tool
  * `execute` callbacks always observe the current turn's approval handler without
  * requiring the entire tool list to be rebuilt.
  */
@@ -177,7 +177,7 @@ interface ConvertToolsContext {
   conversationId: string;
   workspaceDir?: string;
   onApprovalNeeded?: ApprovalCallback;
-  runId?: string;
+  turnId?: string;
   queuedEvents?: CtxMillAgentEvent[];
 }
 
@@ -201,7 +201,7 @@ export function convertTools(
       if (def.requiresApproval && config.onApprovalNeeded) {
         const approval = await requestToolApproval({
           id: toolCallId,
-          runId: config.runId ?? config.conversationId,
+          turnId: config.turnId ?? config.conversationId,
           toolName: def.name,
           args: params,
           onApprovalNeeded: config.onApprovalNeeded,
@@ -329,8 +329,8 @@ function _piUpdateUsage(
   nextUsage.inputTokens += normalized.inputTokens;
   nextUsage.outputTokens += normalized.outputTokens;
   nextUsage.totalTokens += normalized.totalTokens;
-  if (normalized.cost !== undefined) {
-    nextUsage.cost = (nextUsage.cost ?? 0) + normalized.cost;
+  if (normalized.costUsd !== undefined) {
+    nextUsage.costUsd = (nextUsage.costUsd ?? 0) + normalized.costUsd;
   }
 
   return nextUsage;
@@ -450,7 +450,7 @@ export class PIAgentHarness implements AgentHarness {
       conversationId: config.conversationId,
       workspaceDir: config.workspaceDir,
       onApprovalNeeded: config.onApprovalNeeded,
-      runId: config.conversationId,
+      turnId: config.conversationId,
     };
     const customTools = convertTools(sdk.Type, config.tools, turnRef, extensions);
 
@@ -532,13 +532,13 @@ export class PIAgentHarness implements AgentHarness {
       ls: () => factories.createLsTool(cwd),
     };
 
-    const primaryConf = config.nativeTools?.[0];
+    const primaryConf = config.nativeTools;
     if (!primaryConf) {
       return factories.createCodingTools(cwd);
     }
 
     let names = primaryConf.allowlist ?? Object.keys(allFactories);
-    const blocked = new Set(config.nativeTools?.flatMap((nc) => nc.blocklist ?? []) ?? []);
+    const blocked = new Set(primaryConf.blocklist ?? []);
     if (blocked.size > 0) {
       names = names.filter((n) => !blocked.has(n));
     }
@@ -591,7 +591,7 @@ class PiAgentSession implements HarnessSession {
   async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<CtxMillAgentEvent> {
     this.transcript = [...input.messages];
     this.turnRef.onApprovalNeeded = context.onApprovalNeeded ?? this.config.onApprovalNeeded;
-    this.turnRef.runId = input.turnId;
+    this.turnRef.turnId = input.turnId;
 
     const latestMessage = input.messages[input.messages.length - 1];
     const lastUserMsg = latestMessage?.role === 'user' ? latestMessage : undefined;

@@ -34,6 +34,3 @@ spec:
       - read
       - bash
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 120
-    maxTokensPerSession: 4000

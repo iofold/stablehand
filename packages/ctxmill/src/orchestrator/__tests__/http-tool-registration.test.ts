@@ -6,8 +6,7 @@ import { createServer } from '../server.js';
 import { createSessionTurnExecutor } from '../session-turn-service.js';
 import type { SessionEvent } from '../session-turn-service.js';
 import { mapAgentHttpToolsToConfigs, validateAgentHttpToolsConfig, registerAgentHttpTools } from '../http-tools.js';
-import type { AgentSessionService } from '../agent-session-service.js';
-import type { RunStartupService } from '../run-startup-service.js';
+import type { TurnStartupService } from '../turn-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 import { SSEManager } from '../sse.js';
 import { InterruptManager } from '../interrupt.js';
@@ -15,7 +14,7 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import { TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import { DefaultToolRegistry } from '../../tool/registry.js';
-import { createTestRunStartupService } from './run-startup-test-helper.js';
+import { createTestTurnStartupService } from './turn-startup-test-helper.js';
 
 function createTestBus(options?: ConstructorParameters<typeof TypedEventBus>[0]): TypedEventBus {
   return new TypedEventBus(options);
@@ -26,8 +25,8 @@ function createHarnessSchemas() {
   return { langgraph: configSchema };
 }
 
-function createRunStartupServiceStub(): RunStartupService {
-  return createTestRunStartupService();
+function createTurnStartupServiceStub(): TurnStartupService {
+  return createTestTurnStartupService();
 }
 
 let mockStartRunIterator: AsyncGenerator<unknown>;
@@ -71,6 +70,30 @@ function createRouteDbMock(): {
   };
 }
 
+function storedAgent(
+  input: Record<string, unknown>,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id: 'agent-1',
+    name: input.name ?? 'Agent',
+    systemPrompt: input.systemPrompt ?? 'test',
+    tools: input.tools ?? [],
+    description: input.description ?? null,
+    metadata: input.metadata ?? null,
+    harness: input.harness ?? 'langgraph',
+    harnessConfig: input.harnessConfig
+      ?? JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
+    workspaceDir: null,
+    status: 'created',
+    manifest: null,
+    version: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
 async function buildAgentsApp(
   db: DatabaseRepository,
   toolRegistry?: DefaultToolRegistry,
@@ -94,18 +117,13 @@ async function buildAgentsApp(
     getTurn: vi.fn(),
     getActiveTurns: vi.fn(() => []),
   } as unknown as SandboxSessionManager;
-  const agentSessionService = {
-    executeSession: vi.fn(),
-  } as unknown as AgentSessionService;
-
   await app.register(agentRoutes, {
     db,
     sse,
     interrupts,
     sessionManager,
     harnessSchemas: createHarnessSchemas(),
-    agentSessionService,
-    runStartupService: createRunStartupServiceStub(),
+    turnStartupService: createTurnStartupServiceStub(),
     toolRegistry,
     eventBus,
   });
@@ -161,17 +179,7 @@ describe('HTTP tool registration', () => {
 
   it('stores POST httpTools in metadata and appends tool names', async () => {
     const { db, createAgent } = createRouteDbMock();
-    createAgent.mockImplementation(async (input: Record<string, unknown>) => ({
-      id: 'agent-1',
-      name: input.name,
-      systemPrompt: input.systemPrompt,
-      tools: input.tools,
-      description: input.description,
-      metadata: input.metadata,
-      harness: input.harness,
-      harnessConfig: input.harnessConfig,
-      workspaceDir: null,
-    }));
+    createAgent.mockImplementation(async (input: Record<string, unknown>) => storedAgent(input));
 
     const app = await buildAgentsApp(db);
 
@@ -221,17 +229,7 @@ describe('HTTP tool registration', () => {
 
   it('registers POST httpTools before emitting agent.created', async () => {
     const { db, createAgent } = createRouteDbMock();
-    createAgent.mockImplementation(async (input: Record<string, unknown>) => ({
-      id: 'agent-1',
-      name: input.name,
-      systemPrompt: input.systemPrompt,
-      tools: input.tools,
-      description: input.description,
-      metadata: input.metadata,
-      harness: input.harness,
-      harnessConfig: input.harnessConfig,
-      workspaceDir: null,
-    }));
+    createAgent.mockImplementation(async (input: Record<string, unknown>) => storedAgent(input));
 
     const toolRegistry = new DefaultToolRegistry();
     const eventBus = createTestBus();
@@ -286,7 +284,12 @@ describe('HTTP tool registration', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: 'HTTP tool requires name, description, and endpoint' });
+    expect(response.json()).toMatchObject({
+      error: 'Invalid agent definition',
+      details: [expect.objectContaining({
+        path: ['httpTools', 0, 'endpoint'],
+      })],
+    });
     expect(createAgent).not.toHaveBeenCalled();
 
     await app.close();
@@ -294,8 +297,7 @@ describe('HTTP tool registration', () => {
 
   it('updates PUT httpTools and refreshes merged tool names', async () => {
     const { db, getAgent, updateAgent } = createRouteDbMock();
-    getAgent.mockResolvedValue({
-      id: 'agent-1',
+    getAgent.mockResolvedValue(storedAgent({
       name: 'Agent',
       harness: 'langgraph',
       harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
@@ -308,9 +310,8 @@ describe('HTTP tool registration', () => {
           endpoint: 'https://old.example.com',
         }],
       },
-    });
-    updateAgent.mockImplementation(async (_id: string, input: Record<string, unknown>) => ({
-      id: 'agent-1',
+    }));
+    updateAgent.mockImplementation(async (_id: string, input: Record<string, unknown>) => storedAgent({
       name: 'Agent',
       harness: typeof input.harness === 'string' ? input.harness : 'langgraph',
       harnessConfig: typeof input.harnessConfig === 'string'
@@ -320,7 +321,6 @@ describe('HTTP tool registration', () => {
       tools: Array.isArray(input.tools) ? input.tools : ['read_file', 'old-http-tool'],
       metadata: input.metadata ?? null,
       description: input.description ?? null,
-      workspaceDir: null,
     }));
 
     const app = await buildAgentsApp(db);
@@ -368,8 +368,7 @@ describe('HTTP tool registration', () => {
 
     const app = await createServer({
       db,
-      agentSessionService: { executeSession: vi.fn() } as unknown as AgentSessionService,
-      runStartupService: createRunStartupServiceStub(),
+      turnStartupService: createTurnStartupServiceStub(),
       toolDefinitionRegistry: toolRegistry,
       eventBus: createTestBus(),
       harnessSchemas: createHarnessSchemas(),
@@ -512,7 +511,8 @@ describe('HTTP tool SSRF egress guard (wiring)', () => {
       tool!.handler({}, {
         agentId: 'agent-ssrf',
         conversationId: 'conv-1',
-        instanceId: 'run-1',
+        turnId: 'turn-1',
+        sandboxSessionId: 'sandbox-1',
         workspaceDir: '/tmp',
       }),
     ).rejects.toThrow(/blocked/i);

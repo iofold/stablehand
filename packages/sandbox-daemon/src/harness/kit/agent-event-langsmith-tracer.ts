@@ -44,7 +44,7 @@ function toLangSmithUsage(usage: TokenUsage | undefined): Record<string, unknown
     input_tokens: usage.inputTokens,
     output_tokens: usage.outputTokens,
     total_tokens: usage.totalTokens,
-    ...(usage.cost !== undefined ? { cost: usage.cost } : {}),
+    ...(usage.costUsd !== undefined ? { cost: usage.costUsd } : {}),
   };
 }
 

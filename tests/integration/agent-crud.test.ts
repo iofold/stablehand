@@ -2,7 +2,9 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
 
 import { vi } from 'vitest';
+import { AgentSchema } from '@ctxmill/contracts';
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
+import { buildAgentDefinition } from '../../packages/ctxmill/src/orchestrator/agent-definition.js';
 
 const VALID_AGENT = {
   name: 'test-agent',
@@ -11,6 +13,24 @@ const VALID_AGENT = {
   systemPrompt: 'You are a test agent.',
   tools: ['tool-a', 'tool-b'],
 };
+
+function canonicalManifest(
+  name: string,
+  spec: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    apiVersion: 'ctxmill.io/v1',
+    kind: 'Agent',
+    metadata: { name },
+    spec: {
+      harness: VALID_AGENT.harness,
+      harnessConfig: VALID_AGENT.harnessConfig,
+      instructions: VALID_AGENT.systemPrompt,
+      tools: VALID_AGENT.tools.map((ref) => ({ ref })),
+      ...spec,
+    },
+  };
+}
 
 describe('Agent CRUD & related endpoints', () => {
   let app: TestAppHandle['app'];
@@ -40,7 +60,7 @@ describe('Agent CRUD & related endpoints', () => {
     return res;
   }
 
-  async function createActiveSession(agentId: string, taskDescription: string, mode: 'interactive' | 'background' = 'background') {
+  async function createActiveTurn(agentId: string, taskDescription: string, mode: 'interactive' | 'background' = 'background') {
     const agent = await container.db.getAgent(agentId);
     if (!agent) {
       throw new Error(`Agent ${agentId} not found`);
@@ -55,12 +75,12 @@ describe('Agent CRUD & related endpoints', () => {
       containerId: 'test-container-id',
       containerName: 'test-container',
     });
-    const session = await container.db.createTurn({
+    const turn = await container.db.createTurn({
       agentId,
       conversationId: conversation.id,
       mode,
       taskDescription,
-      sessionId: sandboxSession.id,
+      sandboxSessionId: sandboxSession.id,
     });
     container.sessionManager.onSessionReconnected(conversation.id, {
       sessionId: sandboxSession.id,
@@ -73,14 +93,14 @@ describe('Agent CRUD & related endpoints', () => {
     });
     container.sessionManager.startTurn(
       sandboxSession.id,
-      session.id,
+      turn.id,
       agentId,
       conversation.id,
       mode,
       taskDescription,
     );
 
-    return { session, conversation };
+    return { turn, conversation };
   }
 
   // ── POST /api/agents ───────────────────────────────────────
@@ -88,7 +108,7 @@ describe('Agent CRUD & related endpoints', () => {
   describe('POST /api/agents', () => {
     it('creates agent with valid payload', async () => {
       const res = await createAgent({ name: 'create-valid' });
-      expect(res.statusCode).toBe(201);
+      expect(res.statusCode, res.body).toBe(201);
       const body = res.json();
       expect(body.id).toEqual(expect.any(String));
       expect(body.name).toBe('create-valid');
@@ -96,23 +116,88 @@ describe('Agent CRUD & related endpoints', () => {
       expect(body.harnessConfig).toEqual(VALID_AGENT.harnessConfig);
       expect(body.tools).toEqual(VALID_AGENT.tools);
       expect(body).not.toHaveProperty('model');
+      expect(() => AgentSchema.parse(body)).not.toThrow();
     });
 
-    it('normalizes provider aliases before storing created agents', async () => {
+    it('persists the complete compiled registration contract once', async () => {
       const res = await createAgent({
-        name: 'create-provider-alias',
-        harnessConfig: { provider: 'gemini', model: 'gemini-3-flash-preview' },
+        name: 'complete-registration',
+        nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+        workspaceContent: {
+          files: [{ src: 'skills', dest: '.claude/skills' }],
+        },
+        mode: 'background',
+        manifest: canonicalManifest('complete-registration', {
+          nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+          workspace: {
+            content: {
+              files: [{ src: 'skills', dest: '.claude/skills' }],
+            },
+          },
+          mode: 'background',
+        }),
       });
 
-      expect(res.statusCode).toBe(201);
+      expect(res.statusCode, res.body).toBe(201);
       const body = res.json();
-      expect(body.harnessConfig).toEqual({ provider: 'google', model: 'gemini-3-flash-preview' });
+      expect(body).toMatchObject({
+        nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+        workspaceContent: {
+          files: [{ src: 'skills', dest: '.claude/skills' }],
+        },
+        mode: 'background',
+      });
 
       const stored = await container.db.getAgent(body.id as string);
       if (!stored) {
         throw new Error('Expected created agent to be stored');
       }
-      expect(JSON.parse(stored.harnessConfig)).toEqual({ provider: 'google', model: 'gemini-3-flash-preview' });
+      expect(stored.metadata).toMatchObject({
+        nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+        workspaceContent: {
+          files: [{ src: 'skills', dest: '.claude/skills' }],
+        },
+        mode: 'background',
+      });
+      expect(stored.manifest).toMatchObject({
+        metadata: { name: 'complete-registration' },
+      });
+      expect(buildAgentDefinition(stored)).toMatchObject({
+        nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+        workspaceContent: {
+          files: [{ src: 'skills', dest: '.claude/skills' }],
+        },
+        mode: 'background',
+      });
+    });
+
+    it('rejects non-canonical provider aliases', async () => {
+      const res = await createAgent({
+        name: 'reject-provider-alias',
+        harnessConfig: { provider: 'gemini', model: 'gemini-3-flash-preview' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('Invalid harnessConfig');
+    });
+
+    it('rejects invalid or unrepresentable manifest snapshots', async () => {
+      const invalid = await createAgent({
+        name: 'invalid-manifest',
+        manifest: { revision: 'not-a-canonical-manifest' },
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json().error).toBe('Invalid canonical agent manifest');
+
+      const unrepresentable = await createAgent({
+        name: 'unrepresentable-manifest',
+        manifest: canonicalManifest('unrepresentable-manifest', {
+          triggers: [{ event: 'invoice.ready' }],
+        }),
+      });
+      expect(unrepresentable.statusCode).toBe(400);
+      expect(unrepresentable.json().error).toBe('Invalid canonical agent manifest');
+      expect(unrepresentable.json().details).toContain('triggers cannot be registered');
     });
 
     it('rejects missing name', async () => {
@@ -206,7 +291,7 @@ describe('Agent CRUD & related endpoints', () => {
       });
 
       expect(res.statusCode).toBe(400);
-      expect(res.json().error).toContain('no longer supported');
+      expect(res.json().error).toBe('Invalid agent definition');
     });
   });
 
@@ -242,7 +327,7 @@ describe('Agent CRUD & related endpoints', () => {
       expect(res.json().harnessConfig).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6' });
     });
 
-    it('normalizes provider aliases on harnessConfig update', async () => {
+    it('rejects provider aliases on harnessConfig update', async () => {
       const res = await app.inject({
         method: 'PUT',
         url: `/api/agents/${agentId}`,
@@ -251,8 +336,8 @@ describe('Agent CRUD & related endpoints', () => {
         },
       });
 
-      expect(res.statusCode).toBe(200);
-      expect(res.json().harnessConfig).toEqual({ provider: 'google', model: 'gemini-3-flash-preview' });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('Invalid harnessConfig');
     });
 
     it('updates multiple fields', async () => {
@@ -271,11 +356,13 @@ describe('Agent CRUD & related endpoints', () => {
     it('resourceLimits update overrides manifest defaults and clearing falls back to manifest', async () => {
       const created = await createAgent({
         name: 'resource-limits-manifest-agent',
-        manifest: {
-          resourceLimits: { cpus: 1, memoryMb: 1024, timeoutSec: 300 },
-        },
+        manifest: canonicalManifest('resource-limits-manifest-agent', {
+          resources: {
+            sandbox: { cpus: 1, memoryMb: 1024, timeoutSec: 300 },
+          },
+        }),
       });
-      expect(created.statusCode).toBe(201);
+      expect(created.statusCode, created.body).toBe(201);
       const manifestAgentId = created.json().id as string;
 
       const initial = await app.inject({
@@ -321,6 +408,72 @@ describe('Agent CRUD & related endpoints', () => {
       });
     });
 
+    it('updates and explicitly clears compiled manifest runtime fields', async () => {
+      const created = await createAgent({
+        name: 'runtime-field-update-agent',
+        nativeTools: { allowlist: ['Bash'] },
+        workspaceContent: { files: [{ src: 'skills', dest: 'skills' }] },
+        mode: 'background',
+        manifest: canonicalManifest('runtime-field-update-agent', {
+          nativeTools: { allowlist: ['Bash'] },
+          workspace: {
+            content: {
+              files: [{ src: 'skills', dest: 'skills' }],
+            },
+          },
+          mode: 'background',
+        }),
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      const runtimeAgentId = created.json().id as string;
+
+      const updated = await app.inject({
+        method: 'PUT',
+        url: `/api/agents/${runtimeAgentId}`,
+        payload: {
+          nativeTools: { blocklist: ['Write'] },
+          workspaceContent: { files: [{ src: 'hooks', dest: 'hooks' }] },
+          mode: 'both',
+          manifest: canonicalManifest('runtime-field-update-agent', {
+            nativeTools: { blocklist: ['Write'] },
+            workspace: {
+              content: {
+                files: [{ src: 'hooks', dest: 'hooks' }],
+              },
+            },
+            mode: 'both',
+          }),
+        },
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json()).toMatchObject({
+        nativeTools: { blocklist: ['Write'] },
+        workspaceContent: { files: [{ src: 'hooks', dest: 'hooks' }] },
+        mode: 'both',
+        manifest: {
+          metadata: { name: 'runtime-field-update-agent' },
+        },
+      });
+
+      const cleared = await app.inject({
+        method: 'PUT',
+        url: `/api/agents/${runtimeAgentId}`,
+        payload: {
+          nativeTools: null,
+          workspaceContent: null,
+          mode: null,
+          manifest: null,
+        },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json()).toMatchObject({
+        nativeTools: null,
+        workspaceContent: null,
+        mode: null,
+        manifest: null,
+      });
+    });
+
     it('rejects update with no fields', async () => {
       const res = await app.inject({
         method: 'PUT',
@@ -363,7 +516,7 @@ describe('Agent CRUD & related endpoints', () => {
       });
 
       expect(res.statusCode).toBe(400);
-      expect(res.json().error).toContain('no longer supported');
+      expect(res.json().error).toBe('Invalid agent update');
     });
 
     it('rejects update on non-existent agent', async () => {
@@ -401,7 +554,7 @@ describe('Agent CRUD & related endpoints', () => {
       let res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
       expect(res.json().status).toBe('idle');
 
-      const { session } = await createActiveSession(agentId, 'status derivation task');
+      const { turn } = await createActiveTurn(agentId, 'status derivation task');
       res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
       expect(res.json().status).toBe('running');
 
@@ -409,7 +562,7 @@ describe('Agent CRUD & related endpoints', () => {
       const listed = listRes.json().find((entry: Record<string, unknown>) => entry.id === agentId);
       expect(listed.status).toBe('running');
 
-      await container.db.updateTurn(session.id, { completedAt: Date.now() });
+      await container.db.updateTurn(turn.id, { completedAt: Date.now() });
       res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
       expect(res.json().status).toBe('idle');
     });
@@ -434,7 +587,7 @@ describe('Agent CRUD & related endpoints', () => {
           conversationId: convA.id,
           mode: 'background',
           taskDescription: `completed turn ${i}`,
-          sessionId: sandboxSession.id,
+          sandboxSessionId: sandboxSession.id,
         });
         await container.db.updateTurn(turn.id, { completedAt: Date.now() });
       }
@@ -444,7 +597,7 @@ describe('Agent CRUD & related endpoints', () => {
           conversationId: convA.id,
           mode: 'background',
           taskDescription: `failed turn ${i}`,
-          sessionId: sandboxSession.id,
+          sandboxSessionId: sandboxSession.id,
         });
         await container.db.updateTurn(turn.id, { completedAt: Date.now(), error: 'boom' });
       }
@@ -472,19 +625,26 @@ describe('Agent CRUD & related endpoints', () => {
         failedTurnCount: 2,
         activeTurnCount: 1,
       };
-      const expectedSessionsByStatus = {
+      const expectedSandboxSessionsByStatus = {
         ACTIVE: 1,
         CHECKPOINTED: 0,
         RESTORING: 0,
         TERMINATED: 0,
       };
-      const legacyFields = ['totalSessions', 'completedSessions', 'failedSessions', 'activeSessions', 'sessions'];
+      const legacyFields = [
+        'totalSessions',
+        'completedSessions',
+        'failedSessions',
+        'activeSessions',
+        'sessions',
+        'sessionsByStatus',
+      ];
 
       const res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body).toMatchObject(expectedCounters);
-      expect(body.sessionsByStatus).toEqual(expectedSessionsByStatus);
+      expect(body.sandboxSessionsByStatus).toEqual(expectedSandboxSessionsByStatus);
       expect(body.recentTurns).toHaveLength(5);
       for (const field of legacyFields) {
         expect(body).not.toHaveProperty(field);
@@ -494,7 +654,7 @@ describe('Agent CRUD & related endpoints', () => {
       expect(listRes.statusCode).toBe(200);
       const listed = listRes.json().find((entry: Record<string, unknown>) => entry.id === agentId);
       expect(listed).toMatchObject(expectedCounters);
-      expect(listed.sessionsByStatus).toEqual(expectedSessionsByStatus);
+      expect(listed.sandboxSessionsByStatus).toEqual(expectedSandboxSessionsByStatus);
       expect(listed.recentTurns).toHaveLength(5);
       for (const field of legacyFields) {
         expect(listed).not.toHaveProperty(field);
@@ -549,7 +709,7 @@ describe('Agent CRUD & related endpoints', () => {
       const stopSpy = vi.spyOn(container.containerManager, 'stopContainer');
       const removeSpy = vi.spyOn(container.containerManager, 'removeContainer');
 
-      await createActiveSession(id, 'Delete me while active');
+      await createActiveTurn(id, 'Delete me while active');
 
       const delRes = await app.inject({
         method: 'DELETE',
@@ -570,7 +730,7 @@ describe('Agent CRUD & related endpoints', () => {
       vi.spyOn(container.containerManager, 'listManagedContainersWithLabels').mockResolvedValueOnce([
         {
           containerId: 'orphan-container-id',
-          containerName: 'ctxmill-run-orphan',
+          containerName: 'ctxmill-sandbox-orphan',
           sessionId: 'orphan-session-id',
           agentId: id,
           harnessName: 'langgraph',
@@ -631,9 +791,9 @@ describe('Agent CRUD & related endpoints', () => {
     });
   });
 
-  // ── GET /api/agents/:id/sessions ───────────────────────────
+  // ── GET /api/agents/:id/turns ──────────────────────────────
 
-  describe('GET /api/agents/:id/sessions', () => {
+  describe('GET /api/agents/:id/turns', () => {
     let agentId: string;
 
     beforeAll(async () => {
@@ -644,13 +804,13 @@ describe('Agent CRUD & related endpoints', () => {
     it('returns empty for fresh agent', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/sessions`,
+        url: `/api/agents/${agentId}/turns`,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ sessions: [] });
+      expect(res.json()).toEqual({ turns: [] });
     });
 
-    it('lists runs after creating one', async () => {
+    it('lists turns after creating one', async () => {
       const conv = await container.db.createConversation(agentId);
       const run = await container.db.createTurn({
         agentId,
@@ -661,18 +821,18 @@ describe('Agent CRUD & related endpoints', () => {
 
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/sessions`,
+        url: `/api/agents/${agentId}/turns`,
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.sessions.length).toBeGreaterThanOrEqual(1);
-      expect(body.sessions.some((r: any) => r.id === run.id)).toBe(true);
+      expect(body.turns.length).toBeGreaterThanOrEqual(1);
+      expect(body.turns.some((turn: { id: string }) => turn.id === run.id)).toBe(true);
     });
   });
 
-  // ── GET /api/agents/:id/sessions/:sessionId ─────────────────
+  // ── GET /api/agents/:id/turns/:turnId ───────────────────────
 
-  describe('GET /api/agents/:id/sessions/:sessionId', () => {
+  describe('GET /api/agents/:id/turns/:turnId', () => {
     let agentId: string;
     let runId: string;
 
@@ -689,20 +849,20 @@ describe('Agent CRUD & related endpoints', () => {
       runId = run.id;
     });
 
-    it('returns run with messages array', async () => {
+    it('returns a turn with its conversation messages', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/sessions/${runId}`,
+        url: `/api/agents/${agentId}/turns/${runId}`,
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.session).toEqual(expect.objectContaining({ id: runId }));
-      expect(body.session.id).toBe(runId);
-      expect(body.session.status).toBe('ACTIVE');
+      expect(body.turn).toEqual(expect.objectContaining({ id: runId }));
+      expect(body.turn.id).toBe(runId);
+      expect(body.turn.status).toBe('QUEUED');
       expect(Array.isArray(body.messages)).toBe(true);
     });
 
-    it('returns derived COMPLETED status for a finished run', async () => {
+    it('returns derived COMPLETED status for a finished turn', async () => {
       const conv = await container.db.createConversation(agentId);
       const run = await container.db.createTurn({
         agentId,
@@ -714,28 +874,28 @@ describe('Agent CRUD & related endpoints', () => {
 
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/sessions/${run.id}`,
+        url: `/api/agents/${agentId}/turns/${run.id}`,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().session).toEqual(expect.objectContaining({
+      expect(res.json().turn).toEqual(expect.objectContaining({
         id: run.id,
         status: 'COMPLETED',
       }));
     });
 
-    it('returns 404 for non-existent runId', async () => {
+    it('returns 404 for a non-existent turnId', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/sessions/nonexistent-run`,
+        url: `/api/agents/${agentId}/turns/nonexistent-turn`,
       });
       expect(res.statusCode).toBe(404);
     });
 
-    it('returns 404 when given a conversationId instead of a runId', async () => {
+    it('returns 404 when given a conversationId instead of a turnId', async () => {
       const conversation = await container.db.createConversation(agentId);
       const res = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/sessions/${conversation.id}`,
+        url: `/api/agents/${agentId}/turns/${conversation.id}`,
       });
       expect(res.statusCode).toBe(404);
     });
@@ -807,27 +967,27 @@ describe('Agent CRUD & related endpoints', () => {
     });
   });
 
-  // ── POST /api/agents/:id/sessions/:runId/cancel ────────────────
+  // ── POST /api/agents/:id/turns/:turnId/cancel ─────────────────
 
-  describe('POST /api/agents/:id/sessions/:runId/cancel', () => {
-    it('cancels existing run', async () => {
+  describe('POST /api/agents/:id/turns/:turnId/cancel', () => {
+    it('cancels an existing turn', async () => {
       const created = await createAgent({ name: 'cancel-agent' });
       const agentId = created.json().id;
-      const { session } = await createActiveSession(agentId, 'cancel me');
+      const { turn } = await createActiveTurn(agentId, 'cancel me');
 
       const res = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentId}/sessions/${session.id}/cancel`,
+        url: `/api/agents/${agentId}/turns/${turn.id}/cancel`,
       });
       expect(res.statusCode).toBe(200);
       expect(res.json().cancelled).toBe(true);
     });
 
-    it('durably cancels a run before its sandbox session is registered', async () => {
+    it('durably cancels a turn before its sandbox session is registered', async () => {
       const created = await createAgent({ name: 'cancel-before-sandbox-agent' });
       const agentId = created.json().id;
       const conversation = await container.db.createConversation(agentId);
-      const session = await container.db.createTurn({
+      const turn = await container.db.createTurn({
         agentId,
         conversationId: conversation.id,
         mode: 'background',
@@ -836,34 +996,35 @@ describe('Agent CRUD & related endpoints', () => {
 
       const res = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentId}/sessions/${session.id}/cancel`,
+        url: `/api/agents/${agentId}/turns/${turn.id}/cancel`,
       });
       expect(res.statusCode).toBe(200);
       expect(res.json().cancelled).toBe(true);
 
-      const cancelledTurn = await container.db.getTurn(session.id);
+      const cancelledTurn = await container.db.getTurn(turn.id);
       expect(cancelledTurn?.completedAt).toEqual(expect.any(Number));
-      expect(cancelledTurn?.error).toBe('Session cancelled');
+      expect(cancelledTurn?.error).toBe('Turn cancelled');
 
       const readback = await app.inject({
         method: 'GET',
-        url: `/api/agents/${agentId}/sessions/${session.id}`,
+        url: `/api/agents/${agentId}/turns/${turn.id}`,
       });
       expect(readback.statusCode).toBe(200);
-      expect(readback.json().session.status).toBe('CANCELLED');
+      expect(readback.json().turn.status).toBe('CANCELLED');
     });
 
-    it('resolves a pending HITL interrupt when cancelling a run', async () => {
+    it('resolves a pending HITL interrupt when cancelling a turn', async () => {
       const created = await createAgent({ name: 'cancel-hitl-agent' });
       const agentId = created.json().id;
-      const { session } = await createActiveSession(agentId, 'cancel pending approval');
+      const { turn } = await createActiveTurn(agentId, 'cancel pending approval');
       const now = Date.now();
 
+      const interruptId = 'interrupt-cancel-hitl';
       await container.db.savePendingInterrupt({
-        id: session.id,
-        agentSessionId: session.id,
+        id: interruptId,
+        turnId: turn.id,
         agentId,
-        sessionId: session.sessionId,
+        sandboxSessionId: turn.sandboxSessionId,
         toolCallId: 'approval-call',
         toolName: 'request-approval',
         args: { reason: 'test cancellation cleanup' },
@@ -874,25 +1035,25 @@ describe('Agent CRUD & related endpoints', () => {
 
       const res = await app.inject({
         method: 'POST',
-        url: `/api/agents/${agentId}/sessions/${session.id}/cancel`,
+        url: `/api/agents/${agentId}/turns/${turn.id}/cancel`,
       });
 
       expect(res.statusCode).toBe(200);
       expect(res.json().cancelled).toBe(true);
-      const interrupt = await container.db.getPendingInterrupt(session.id);
+      const interrupt = await container.db.getPendingInterrupt(interruptId);
       expect(interrupt?.status).toBe('resolved');
       expect(interrupt?.resolvedAction).toBe('reject');
-      expect(interrupt?.resolvedData).toBe('Session cancelled');
+      expect(interrupt?.resolvedData).toBe('Turn cancelled');
     });
   });
 
-  // ── GET /api/sessions ──────────────────────────────────────────
+  // ── GET /api/conversations?status=active ───────────────────────
 
-  describe('GET /api/sessions', () => {
-    it('returns active runs list', async () => {
+  describe('GET /api/conversations?status=active', () => {
+    it('returns active conversation summaries', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: '/api/sessions',
+        url: '/api/conversations?status=active',
       });
       expect(res.statusCode).toBe(200);
       expect(Array.isArray(res.json())).toBe(true);

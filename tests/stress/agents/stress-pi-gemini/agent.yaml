@@ -10,9 +10,9 @@ metadata:
     harness: pi-agent
 spec:
   harness: pi-agent
-  model:
+  harnessConfig:
     provider: google
-    id: gemini-2.5-flash
+    model: gemini-2.5-flash
     apiKeyRef: "$secret:GOOGLE_API_KEY"
   instructions: |
     You are a Gemini-powered PI Agent stress test.
@@ -26,6 +26,3 @@ spec:
     allowlist:
       - read
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 120
-    maxTokensPerSession: 8000

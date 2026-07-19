@@ -244,21 +244,21 @@ describe('SessionStateCollector', () => {
     expect(cp.runnerState.pendingRequests).toBeUndefined();
   });
 
-  it('startTurn sets the active turnId in cursor.lastCompletedTurnId when no endTurn', () => {
+  it('does not misreport an active turn as the last completed turn', () => {
     collector.startTurn('t-active');
     const cp = collector.getCheckpointSnapshot(
       'sess-1', 'conv-1', 'claude-agents', makeHarnessState(), WORKSPACE_NONE,
     );
-    expect(cp.cursor.lastCompletedTurnId).toBe('t-active');
+    expect(cp.cursor.lastCompletedTurnId).toBeUndefined();
   });
 
-  it('endTurn clears the active turnId', () => {
+  it('records a successfully completed turn for delivery deduplication', () => {
     collector.startTurn('t-done');
-    collector.endTurn();
+    collector.endTurn(true);
     const cp = collector.getCheckpointSnapshot(
       'sess-1', 'conv-1', 'claude-agents', makeHarnessState(), WORKSPACE_NONE,
     );
-    expect(cp.cursor.lastCompletedTurnId).toBeUndefined();
+    expect(cp.cursor.lastCompletedTurnId).toBe('t-done');
   });
 
   it('tracks tool_call_start and removes on tool_call_end', () => {

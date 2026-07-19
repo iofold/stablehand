@@ -7,39 +7,14 @@ This document describes the current lifecycle of sandbox containers in CTXMill, 
 Sandbox containers are managed jointly by `SandboxSessionManager` (request path) and `ContainerLifecyclePolicy` (idle timeout + reconciliation).
 
 ```text
-       [ Start ]
-           |
-           v
-      +---------+      open/ready      +---------+
-      | Created | -------------------> | Active  |
-      +---------+                      +---------+
-                                           |   \
-                                           |    \
-                                manual     |     \ idle timeout / suspend
-                                pause      |      \
-                                           v       v
-                                      +---------+ +--------------+
-                                      | Paused  | | Checkpointed |
-                                      +---------+ +--------------+
-                                           |   \         |
-                                           |    \        | restore
-                                     resume |     \      v
-                                           |      +--> +-----------+
-                                           +---------- | Restoring |
-                                                      +-----------+
-                                                           |
-                                                           v
-                                                       +---------+
-                                                       | Active  |
-                                                       +---------+
-
-Any live container can also be terminated and removed.
+Created -> ACTIVE -> CHECKPOINTED -> RESTORING -> ACTIVE
+              \             \                    \
+               +-------------+---------------------> TERMINATED
 ```
 
 Key points:
-- There is no persisted `FROZEN` state in the current runtime.
 - Automatic idle handling checkpoints sessions directly.
-- HITL is modeled through durable interrupt records plus `run.interrupted` / `run.interrupt_resolved`, not through a distinct sandbox-session status.
+- HITL is modeled through durable interrupt records plus `interrupt.requested` / `interrupt.resolved`, not through a distinct sandbox-session status.
 
 ### Transitions
 1. **Start**: Container created and started via `ContainerManager`.
@@ -55,7 +30,7 @@ Containers are created using the `ctxmill/harness-{harness}:latest` images.
 - **Network**: Attached to the `ctxmill-agents` bridge network.
 - **Labels**:
   - `ctxmill.managed`: `true`
-  - `ctxmill.session-id`: UUID of the sandbox session
+  - `ctxmill.sandbox-session-id`: UUID of the sandbox session
   - `ctxmill.agent-id`: ID of the agent
   - `ctxmill.harness`: Harness type (for example `langgraph`)
   - `ctxmill.started-at`: ISO timestamp
@@ -82,7 +57,7 @@ Containers are created using the `ctxmill/harness-{harness}:latest` images.
 ### 5. Restoring
 - **Trigger**: A new turn, interrupt resolution, or explicit manual restore targets a checkpointed session.
 - **Action**: A new container is provisioned, secrets and callback credentials are re-injected, checkpoint state is restored, and the session returns to `ACTIVE`.
-- **Manual restore**: `POST /api/agents/:id/sandbox-sessions/:sessionId/restore` validates ownership/status, resets the restore retry budget, and can return immediately with `?async=true`.
+- **Manual restore**: `POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/restore` validates ownership/status, resets the restore retry budget, and can return immediately with `?async=true`.
 
 ### 6. Cleanup
 Containers are removed when:
@@ -136,17 +111,18 @@ To prevent resource exhaustion, the orchestrator uses a global `ContainerSemapho
 - **Boot accounting**: Live containers are rehydrated into `ContainerAccounting` before lifecycle reconciliation. This can temporarily exceed the configured maximum until stale containers are reconciled and slots are released.
 - **Metrics**: Health responses and `GET /api/sandbox/metrics` expose active, queued, peak, total-created, and max-container values.
 
-This semaphore queue is separate from durable per-session turn queueing. Turns are persisted with status and user-message linkage; startup reconciliation re-dispatches queued turns that never started and fails stranded running turns unless they are parked on durable HITL.
+This semaphore queue is separate from durable per-conversation turn queueing.
+Turns are persisted with status and user-message linkage; startup reconciliation
+re-dispatches queued turns that never started and fails stranded running turns
+unless they are parked on durable HITL.
 
 ## Manual Sandbox Session APIs
 
 | Operation | Route | Notes |
 |---|---|---|
-| Suspend | `POST /api/agents/:id/sandbox-sessions/:sessionId/suspend` | Exports harness state, captures workspace tar, removes the container, and marks the session `CHECKPOINTED`. |
-| Restore | `POST /api/agents/:id/sandbox-sessions/:sessionId/restore` | Requires an owned `CHECKPOINTED` session. Resets `restoreAttempts`/`lastRestoreError`; `?async=true` returns `202`. Sync failures return `502 restore_failed` with category/detail/status/attempts fields. |
-| Kill | `POST /api/agents/:id/sandbox-sessions/:sessionId/kill` | Terminates the sandbox session/container. |
-
-The old `/sessions/:sessionId/restore` shape is intentionally not the supported API.
+| Suspend | `POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/suspend` | Exports harness state, captures workspace tar, removes the container, and marks the sandbox session `CHECKPOINTED`. |
+| Restore | `POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/restore` | Requires an owned `CHECKPOINTED` sandbox session. Resets `restoreAttempts`/`lastRestoreError`; `?async=true` returns `202`. Sync failures return `502 restore_failed` with category/detail/status/attempts fields. |
+| Kill | `POST /api/agents/:id/sandbox-sessions/:sandboxSessionId/kill` | Terminates the sandbox session/container. |
 
 ## Manual Operations
 
@@ -159,17 +135,17 @@ docker ps --filter "label=ctxmill.managed=true"
 
 ### Inspect a Session
 ```bash
-docker inspect "$(docker ps -aq --filter "label=ctxmill.session-id=<session-id>")"
+docker inspect "$(docker ps -aq --filter "label=ctxmill.sandbox-session-id=<sandbox-session-id>")"
 ```
 
 ### View Logs
 ```bash
-docker logs "$(docker ps -aq --filter "label=ctxmill.session-id=<session-id>")"
+docker logs "$(docker ps -aq --filter "label=ctxmill.sandbox-session-id=<sandbox-session-id>")"
 ```
 
 ### Manually Kill a Container
 ```bash
-docker rm -f "$(docker ps -aq --filter "label=ctxmill.session-id=<session-id>")"
+docker rm -f "$(docker ps -aq --filter "label=ctxmill.sandbox-session-id=<sandbox-session-id>")"
 ```
 
 The orchestrator will reconcile the missing container on the next lifecycle pass and mark the session `TERMINATED` or `CHECKPOINTED`, depending on checkpoint availability.
@@ -186,7 +162,7 @@ The orchestrator will reconcile the missing container on the next lifecycle pass
 
 Human-in-the-loop approvals are durable, but they are not modeled as a separate lifecycle state.
 
-1. An approval request persists a pending interrupt and emits `run.interrupted`.
+1. An approval request persists a pending interrupt and emits `interrupt.requested`.
 2. The session may stay live or later be checkpointed through normal lifecycle rules.
 3. When the user resolves the interrupt, the orchestrator resumes the matching session or restores it from checkpoint and delivers a continuation turn.
 

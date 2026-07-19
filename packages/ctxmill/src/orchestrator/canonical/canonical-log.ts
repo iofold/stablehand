@@ -1,4 +1,5 @@
 import type { DatabaseRepository } from '../../database/repository.js';
+import { CanonicalStreamEventSchema } from '@ctxmill/contracts';
 import { CanonicalProjector } from './projector.js';
 import type { CanonicalFrame, PersistedFrame } from './frames.js';
 
@@ -9,7 +10,14 @@ interface Logger {
 }
 
 interface CanonicalLogDeps {
-  db: Pick<DatabaseRepository, 'saveEventBatch' | 'getFramesSince' | 'getTurnFrames'>;
+  db: Pick<
+    DatabaseRepository,
+    | 'saveEventBatch'
+    | 'saveMessageEventBatch'
+    | 'saveTerminalEventBatch'
+    | 'getFramesSince'
+    | 'getTurnFrames'
+  >;
   logger: Logger;
 }
 
@@ -36,17 +44,36 @@ function parseBody(payload: string): Record<string, unknown> {
 export class CanonicalLog {
   private readonly projector = new CanonicalProjector();
   private readonly subscribers = new Set<FrameSubscriber>();
+  // Single-lane ingest queue: persist + fan-out run strictly in call order.
+  // The bus's fire-and-forget emit starts ingest for each event without
+  // awaiting, so without this every ingest's async DB insert would race for
+  // its seq — reordering streamed text deltas and tool frames on the wire
+  // (and interleaving the projector's per-turn text state). Chaining onto a
+  // tail promise makes emission order == seq order == fan-out order.
+  private ingestTail: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: CanonicalLogDeps) {}
 
   /** Project + persist + fan-out. Resolves after the batch insert commits (ADR-006). */
-  async ingest(eventName: string, payload: Record<string, unknown>): Promise<PersistedFrame[]> {
+  ingest(eventName: string, payload: Record<string, unknown>): Promise<PersistedFrame[]> {
+    // Chain synchronously (before any await) so the queue order matches the
+    // order emit() called us. `.catch` on the tail keeps one failed ingest
+    // from wedging the lane, while the returned promise still rejects.
+    const run = this.ingestTail.then(() => this.ingestSerial(eventName, payload));
+    this.ingestTail = run.catch(() => undefined);
+    return run;
+  }
+
+  private async ingestSerial(eventName: string, payload: Record<string, unknown>): Promise<PersistedFrame[]> {
     const frames = this.projector.project(eventName, payload);
     if (frames.length === 0) {
       return [];
     }
-    const persisted = await this.persist(frames);
-    this.fanOut(persisted);
+    this.validateRunFrames(eventName, frames);
+    const persisted = await this.persist(frames, eventName, payload);
+    if (persisted.length > 0) {
+      this.fanOut(persisted);
+    }
     return persisted;
   }
 
@@ -55,11 +82,20 @@ export class CanonicalLog {
     return () => this.subscribers.delete(subscriber);
   }
 
+  /** Wait until every queued persist/fan-out operation has settled. */
+  async drain(): Promise<void> {
+    await this.ingestTail;
+  }
+
   /** Durable replay of an agent's frames after a seq (run channel by default includes all). */
   async replaySince(
     agentId: string,
     afterSeq: number,
-    options: { channels?: string[]; limit?: number } = {},
+    options: {
+      channels?: string[];
+      limit?: number;
+      throughSeq?: number;
+    } = {},
   ): Promise<PersistedFrame[]> {
     const rows = await this.deps.db.getFramesSince(agentId, afterSeq, options);
     return rows.map((row) => this.rowToFrame(row));
@@ -71,9 +107,13 @@ export class CanonicalLog {
     return rows.map((row) => this.rowToFrame(row));
   }
 
-  private async persist(frames: CanonicalFrame[]): Promise<PersistedFrame[]> {
+  private async persist(
+    frames: CanonicalFrame[],
+    eventName: string,
+    sourcePayload: Record<string, unknown>,
+  ): Promise<PersistedFrame[]> {
     const now = Date.now();
-    const seqs = await this.deps.db.saveEventBatch(frames.map((frame) => ({
+    const inserts = frames.map((frame) => ({
       type: frame.type,
       agentId: frame.agentId,
       payload: JSON.stringify(frame.body),
@@ -82,12 +122,66 @@ export class CanonicalLog {
       channel: frame.channel,
       sourceType: frame.sourceType ?? null,
       sourcePayload: frame.sourcePayload ?? null,
-    })));
+    }));
+    const isCommittedMessage = eventName === 'message.committed';
+    const isUpdatedMessage = eventName === 'message.updated';
+    const isTerminal = eventName === 'turn.completed';
+    let seqs: number[];
+    if (isCommittedMessage || isUpdatedMessage) {
+      const messageId = sourcePayload.messageId;
+      const targetRevision = isUpdatedMessage ? sourcePayload.messageRevision : 0;
+      if (
+        typeof messageId !== 'string'
+        || !Number.isInteger(targetRevision)
+        || Number(targetRevision) < 0
+      ) {
+        throw new Error(
+          `[CanonicalLog] Cannot durably publish ${eventName}: invalid message identity/revision`,
+        );
+      }
+      seqs = await this.deps.db.saveMessageEventBatch(inserts, {
+        messageId,
+        targetRevision: Number(targetRevision),
+      });
+    } else if (isTerminal) {
+      const turnId = sourcePayload.turnId;
+      if (typeof turnId !== 'string' || turnId.length === 0) {
+        throw new Error('[CanonicalLog] Cannot durably publish turn.completed: invalid turnId');
+      }
+      seqs = await this.deps.db.saveTerminalEventBatch(inserts, { turnId });
+    } else {
+      seqs = await this.deps.db.saveEventBatch(inserts);
+    }
+    if (seqs.length === 0) {
+      return [];
+    }
+    if (seqs.length !== frames.length) {
+      throw new Error(
+        `[CanonicalLog] Persisted ${seqs.length} seq(s) for ${frames.length} ${eventName} frame(s)`,
+      );
+    }
     return frames.map((frame, index) => ({
       ...frame,
       seq: seqs[index]!,
       createdAt: now,
     }));
+  }
+
+  private validateRunFrames(eventName: string, frames: CanonicalFrame[]): void {
+    for (const frame of frames) {
+      if (frame.channel !== 'run') continue;
+      const result = CanonicalStreamEventSchema.safeParse(frame.body);
+      if (result.success) continue;
+
+      const issues = result.error.issues
+        .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+        .join('; ');
+      throw new Error(
+        `[CanonicalLog] Invalid canonical run frame ` +
+        `source=${eventName} type=${frame.type} agentId=${frame.agentId || '<missing>'} ` +
+        `turnId=${frame.turnId ?? '<missing>'}: ${issues}`,
+      );
+    }
   }
 
   private fanOut(frames: PersistedFrame[]): void {

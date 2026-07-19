@@ -54,19 +54,19 @@ post_message() {
     "${AUTH_HEADER[@]}" \
     -H 'Content-Type: application/json' \
     -d "$(jq -nc --arg content "$content" '{content: $content}')" \
-    | jq -r '.runId // .sessionId // .id'
+    | jq -er '.turnId'
 }
 
 wait_for_status() {
   local agent_id="$1"
-  local session_id="$2"
+  local turn_id="$2"
   local ok_statuses="$3"
 
   while true; do
-    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/sessions" \
-      | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
+    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/turns" \
+      | jq -r --arg turn_id "$turn_id" 'first(.turns[]? | select(.id == $turn_id) | .status) // empty' \
       | tr '[:upper:]' '[:lower:]')"
-    echo "session=$session_id status=${status:-missing}"
+    echo "turn=$turn_id status=${status:-missing}"
     [[ " $ok_statuses " == *" $status "* ]] && return 0
     [[ "$status" =~ ^(failed|cancelled|rejected|error)$ ]] && return 1
     sleep 2
@@ -75,17 +75,17 @@ wait_for_status() {
 
 wait_for_interrupt() {
   local agent_id="$1"
-  local session_id="$2"
+  local turn_id="$2"
 
   while true; do
-    interrupt_session_id="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/interrupts" \
-      | jq -r --arg session_id "$session_id" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId) // empty')"
-    [[ -n "$interrupt_session_id" ]] && return 0
+    interrupt_id="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/interrupts" \
+      | jq -r --arg turn_id "$turn_id" 'first(.interrupts[]? | select(.turnId == $turn_id) | .interruptId) // empty')"
+    [[ -n "$interrupt_id" ]] && return 0
 
-    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/sessions" \
-      | jq -r --arg session_id "$session_id" 'first(.sessions[]? | select(.id == $session_id or .sessionId == $session_id) | .status) // empty' \
+    status="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$agent_id/turns" \
+      | jq -r --arg turn_id "$turn_id" 'first(.turns[]? | select(.id == $turn_id) | .status) // empty' \
       | tr '[:upper:]' '[:lower:]')"
-    echo "session=$session_id status=${status:-missing} waiting_for_interrupt"
+    echo "turn=$turn_id status=${status:-missing} waiting_for_interrupt"
     [[ "$status" =~ ^(completed|error|failed|cancelled|rejected)$ ]] && return 1
     sleep 2
   done
@@ -141,14 +141,14 @@ Run the LangGraph agent with GPT-5.4 and verify it can call emit-event.
 
 ```bash
 LG_OPENAI_EVENTS_BEFORE="$(event_count stress.tools.complete "$LG_OPENAI_ID")"
-LG_OPENAI_RUN="$(post_message "$LG_OPENAI_ID" "Run the stress test now. Confirm you are operational and emit stress.tools.complete.")"
+LG_OPENAI_TURN="$(post_message "$LG_OPENAI_ID" "Run the stress test now. Confirm you are operational and emit stress.tools.complete.")"
 
-wait_for_status "$LG_OPENAI_ID" "$LG_OPENAI_RUN" "completed"
+wait_for_status "$LG_OPENAI_ID" "$LG_OPENAI_TURN" "completed"
 expect_event_after stress.tools.complete "$LG_OPENAI_ID" "$LG_OPENAI_EVENTS_BEFORE"
 ```
 
 Expected:
-- Run reaches `completed` after emitting the event
+- Turn reaches `completed` after emitting the event
 - The persisted `stress.tools.complete` count for this agent increases
 
 Pass/fail:
@@ -163,9 +163,9 @@ Pass/fail:
 
 ```bash
 LG_GEMINI_EVENTS_BEFORE="$(event_count stress.gemini.complete "$LG_GEMINI_ID")"
-LG_GEMINI_RUN="$(post_message "$LG_GEMINI_ID" "Verify Gemini LangGraph execution and emit stress.gemini.complete.")"
+LG_GEMINI_TURN="$(post_message "$LG_GEMINI_ID" "Verify Gemini LangGraph execution and emit stress.gemini.complete.")"
 
-wait_for_status "$LG_GEMINI_ID" "$LG_GEMINI_RUN" "completed"
+wait_for_status "$LG_GEMINI_ID" "$LG_GEMINI_TURN" "completed"
 expect_event_after stress.gemini.complete "$LG_GEMINI_ID" "$LG_GEMINI_EVENTS_BEFORE"
 ```
 
@@ -173,9 +173,9 @@ expect_event_after stress.gemini.complete "$LG_GEMINI_ID" "$LG_GEMINI_EVENTS_BEF
 
 ```bash
 PI_OPENAI_EVENTS_BEFORE="$(event_count stress.pi.complete "$PI_OPENAI_ID")"
-PI_OPENAI_RUN="$(post_message "$PI_OPENAI_ID" "Verify PI-agent OpenAI execution and emit stress.pi.complete.")"
+PI_OPENAI_TURN="$(post_message "$PI_OPENAI_ID" "Verify PI-agent OpenAI execution and emit stress.pi.complete.")"
 
-wait_for_status "$PI_OPENAI_ID" "$PI_OPENAI_RUN" "completed"
+wait_for_status "$PI_OPENAI_ID" "$PI_OPENAI_TURN" "completed"
 expect_event_after stress.pi.complete "$PI_OPENAI_ID" "$PI_OPENAI_EVENTS_BEFORE"
 ```
 
@@ -183,9 +183,9 @@ expect_event_after stress.pi.complete "$PI_OPENAI_ID" "$PI_OPENAI_EVENTS_BEFORE"
 
 ```bash
 PI_GEMINI_EVENTS_BEFORE="$(event_count stress.pi-gemini.complete "$PI_GEMINI_ID")"
-PI_GEMINI_RUN="$(post_message "$PI_GEMINI_ID" "Verify Gemini PI-agent execution and emit stress.pi-gemini.complete.")"
+PI_GEMINI_TURN="$(post_message "$PI_GEMINI_ID" "Verify Gemini PI-agent execution and emit stress.pi-gemini.complete.")"
 
-wait_for_status "$PI_GEMINI_ID" "$PI_GEMINI_RUN" "completed"
+wait_for_status "$PI_GEMINI_ID" "$PI_GEMINI_TURN" "completed"
 expect_event_after stress.pi-gemini.complete "$PI_GEMINI_ID" "$PI_GEMINI_EVENTS_BEFORE"
 ```
 
@@ -194,8 +194,8 @@ Expected:
 - Each increases its model-specific persisted event count
 
 Pass/fail:
-- Pass if all three sessions are `completed` and all event counts increase
-- Fail if any session errors or any event is missing
+- Pass if all three turns are `completed` and all event counts increase
+- Fail if any turn errors or any event is missing
 
 ---
 
@@ -204,7 +204,7 @@ Pass/fail:
 Emit the trigger event externally, then verify the responder runs.
 
 ```bash
-CHAIN_BEFORE="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$CHAIN_ID/sessions" | jq '.sessions | length')"
+CHAIN_BEFORE="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$CHAIN_ID/turns" | jq '.turns | length')"
 
 curl -s -X POST "$API_BASE/api/triggers/emit" \
   "${AUTH_HEADER[@]}" \
@@ -213,23 +213,23 @@ curl -s -X POST "$API_BASE/api/triggers/emit" \
   | jq .
 
 while true; do
-  CHAIN_RUN_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$CHAIN_ID/sessions" \
-    | jq -r --argjson before "$CHAIN_BEFORE" 'if (.sessions | length) > $before then first(.sessions[] | .id) else empty end')"
-  [[ -n "$CHAIN_RUN_ID" ]] && break
+  CHAIN_TURN_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$CHAIN_ID/turns" \
+    | jq -r --argjson before "$CHAIN_BEFORE" 'if (.turns | length) > $before then first(.turns[] | .id) else empty end')"
+  [[ -n "$CHAIN_TURN_ID" ]] && break
   sleep 2
 done
 
-wait_for_status "$CHAIN_ID" "$CHAIN_RUN_ID" "completed"
+wait_for_status "$CHAIN_ID" "$CHAIN_TURN_ID" "completed"
 ```
 
 Expected:
 - Trigger emission returns 200
-- `stress-chain-responder` receives a new run
+- `stress-chain-responder` receives a new turn
 - `stress.chain.done` is persisted
 
 Pass/fail:
-- Pass if a new responder run appears and completes
-- Fail if the trigger emits but no responder run starts
+- Pass if a new responder turn appears and completes
+- Fail if the trigger emits but no responder turn starts
 
 ---
 
@@ -237,9 +237,9 @@ Pass/fail:
 
 ```bash
 CLAUDE_EVENTS_BEFORE="$(event_count stress.claude.complete "$CLAUDE_ID")"
-CLAUDE_RUN="$(post_message "$CLAUDE_ID" "Write the stress test file now, verify it exists, and emit stress.claude.complete.")"
+CLAUDE_TURN="$(post_message "$CLAUDE_ID" "Write the stress test file now, verify it exists, and emit stress.claude.complete.")"
 
-wait_for_status "$CLAUDE_ID" "$CLAUDE_RUN" "completed"
+wait_for_status "$CLAUDE_ID" "$CLAUDE_TURN" "completed"
 expect_event_after stress.claude.complete "$CLAUDE_ID" "$CLAUDE_EVENTS_BEFORE"
 ```
 
@@ -248,7 +248,7 @@ Expected:
 - event proves the write/verify workflow finished
 
 Pass/fail:
-- Pass if run is `completed` and event array is non-empty
+- Pass if the turn is `completed` and event array is non-empty
 - Fail otherwise
 
 ---
@@ -259,45 +259,45 @@ Pass/fail:
 
 ```bash
 HITL_EVENTS_BEFORE="$(event_count stress.hitl.complete "$HITL_ID")"
-HITL_APPROVE_RUN="$(post_message "$HITL_ID" "Request approval for writing stress test results, then emit stress.hitl.complete.")"
+HITL_APPROVE_TURN="$(post_message "$HITL_ID" "Request approval for writing stress test results, then emit stress.hitl.complete.")"
 
-wait_for_interrupt "$HITL_ID" "$HITL_APPROVE_RUN"
+wait_for_interrupt "$HITL_ID" "$HITL_APPROVE_TURN"
 
-APPROVE_SESSION_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$HITL_ID/interrupts" \
-  | jq -r --arg session_id "$HITL_APPROVE_RUN" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId)')"
+APPROVE_INTERRUPT_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$HITL_ID/interrupts" \
+  | jq -er --arg turn_id "$HITL_APPROVE_TURN" 'first(.interrupts[]? | select(.turnId == $turn_id) | .interruptId)')"
 
 curl -s -X POST "$API_BASE/api/agents/$HITL_ID/interrupt" \
   "${AUTH_HEADER[@]}" \
   -H 'Content-Type: application/json' \
-  -d "$(jq -nc --arg action approve --arg sessionId "$APPROVE_SESSION_ID" '{action: $action, sessionId: $sessionId}')" \
+  -d "$(jq -nc --arg action approve --arg interruptId "$APPROVE_INTERRUPT_ID" '{action: $action, interruptId: $interruptId}')" \
   | jq .
 
-wait_for_status "$HITL_ID" "$HITL_APPROVE_RUN" "completed"
+wait_for_status "$HITL_ID" "$HITL_APPROVE_TURN" "completed"
 expect_event_after stress.hitl.complete "$HITL_ID" "$HITL_EVENTS_BEFORE"
 ```
 
 ### Reject path
 
 ```bash
-HITL_REJECT_RUN="$(post_message "$HITL_ID" "Request approval again — this one will be rejected.")"
+HITL_REJECT_TURN="$(post_message "$HITL_ID" "Request approval again — this one will be rejected.")"
 
-wait_for_interrupt "$HITL_ID" "$HITL_REJECT_RUN"
+wait_for_interrupt "$HITL_ID" "$HITL_REJECT_TURN"
 
-REJECT_SESSION_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$HITL_ID/interrupts" \
-  | jq -r --arg session_id "$HITL_REJECT_RUN" 'first(.interrupts[]? | select(.sessionId == $session_id) | .sessionId)')"
+REJECT_INTERRUPT_ID="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$HITL_ID/interrupts" \
+  | jq -er --arg turn_id "$HITL_REJECT_TURN" 'first(.interrupts[]? | select(.turnId == $turn_id) | .interruptId)')"
 
 curl -s -X POST "$API_BASE/api/agents/$HITL_ID/interrupt" \
   "${AUTH_HEADER[@]}" \
   -H 'Content-Type: application/json' \
-  -d "$(jq -nc --arg action reject --arg sessionId "$REJECT_SESSION_ID" '{action: $action, sessionId: $sessionId}')" \
+  -d "$(jq -nc --arg action reject --arg interruptId "$REJECT_INTERRUPT_ID" '{action: $action, interruptId: $interruptId}')" \
   | jq .
 
-wait_for_status "$HITL_ID" "$HITL_REJECT_RUN" "error rejected"
+wait_for_status "$HITL_ID" "$HITL_REJECT_TURN" "error rejected"
 ```
 
 Expected:
-- First session creates a pending interrupt, resumes after approval, completes, and emits `stress.hitl.complete`
-- Second session creates a pending interrupt, then ends in `error` or `rejected` after rejection
+- First turn creates a pending interrupt, resumes after approval, completes, and emits `stress.hitl.complete`
+- Second turn creates a pending interrupt, then ends in `error` or `rejected` after rejection
 
 Pass/fail:
 - Pass if both interrupt actions resolve and produce the expected terminal states
@@ -328,7 +328,7 @@ Pass/fail:
 ## Post-run cleanup (manual, after human verification)
 
 Do NOT run cleanup as part of the test. Cleanup deletes agents and cascade-deletes
-their events, sessions, and messages — making post-hoc verification impossible.
+their events, turns, conversations, and messages — making post-hoc verification impossible.
 
 Run only after the human has reviewed all results:
 

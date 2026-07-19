@@ -58,6 +58,18 @@ describe('TypedEventBus durable persistence contract', () => {
     expect(observedOrder).toEqual(['persist:start', 'persist:done', 'listener']);
   });
 
+  it('does not redispatch listeners when persistence reports an idempotent no-op', async () => {
+    const listener = vi.fn();
+    const persistEvent = vi.fn().mockResolvedValue(false);
+    const bus = new TypedEventBus({ persistEvent });
+    bus.on('agent.created', listener);
+
+    await bus.emitAsync('agent.created', agentCreatedPayload());
+
+    expect(persistEvent).toHaveBeenCalledOnce();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it('keeps successful persistence successful when a post-persist listener fails', async () => {
     const errors: Array<{ source: string; event: string; error: string }> = [];
     const persistEvent = vi.fn().mockResolvedValue(undefined);

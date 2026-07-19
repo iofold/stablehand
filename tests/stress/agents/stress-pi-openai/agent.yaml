@@ -10,9 +10,9 @@ metadata:
     harness: pi-agent
 spec:
   harness: pi-agent
-  model:
+  harnessConfig:
     provider: openai
-    id: gpt-5.4
+    model: gpt-5.4
     apiKeyRef: "$secret:OPENAI_API_KEY"
   instructions: |
     You are a PI Agent stress test running GPT-5.4.
@@ -29,6 +29,3 @@ spec:
       - read
       - bash
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 120
-    maxTokensPerSession: 8000

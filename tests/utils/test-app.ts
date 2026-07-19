@@ -65,7 +65,6 @@ async function createContainerWithRetry(
 function defaultServerOptions(container: AppContainer, dataDir: string): ServerOptions {
   return {
     db: container.db,
-    agentSessionService: container.agentSessionService,
     eventBus: container.eventBus,
     harnessSchemas: container.harnessSchemas,
     triggerManager: container.triggerManager,
@@ -78,7 +77,7 @@ function defaultServerOptions(container: AppContainer, dataDir: string): ServerO
     sessionManager: container.sessionManager,
     settingsService: container.settingsService,
     lifecyclePolicy: container.lifecyclePolicy,
-    runStartupService: container.runStartupService,
+    turnStartupService: container.turnStartupService,
     canonicalLog: container.canonicalLog,
     dataDir,
   };

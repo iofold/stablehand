@@ -48,8 +48,8 @@ Always output the JSON block as part of your natural text response. Surround it 
     );
     await page.getByTestId('session-input').fill('Generate a bar chart of city temperatures');
     await page.getByTestId('send-button').click();
-    const sendBody = await (await sendResponsePromise).json() as { sessionId: string };
-    await waitForRunStatus(request, agentId, sendBody.sessionId, ['completed', 'error'], 120_000);
+    const sendBody = await (await sendResponsePromise).json() as { turnId: string };
+    await waitForRunStatus(request, agentId, sendBody.turnId, ['completed', 'error'], 120_000);
 
     await page.waitForSelector('[data-testid="run-finished"]', { state: 'attached', timeout: 120_000 });
     await capture.captureViewport('a2ui-barchart-finished', 'Run complete with BarChart');

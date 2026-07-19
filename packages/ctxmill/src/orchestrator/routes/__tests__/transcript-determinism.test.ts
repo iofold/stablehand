@@ -3,7 +3,7 @@ import { mapMessagesToInternal } from '../agent-helpers.js';
 
 /**
  * Regression coverage for the canonical transcript-assembly path
- * (mapMessagesToInternal). The orchestrator and the run-startup pipeline
+ * (mapMessagesToInternal). The orchestrator and the turn-startup pipeline
  * both depend on this function being deterministic so transcript replay
  * yields the exact same `Message[]` for the same persisted rows.
  *

@@ -2,10 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { query as sdkQuery, createSdkMcpServer, tool as sdkTool } from '@anthropic-ai/claude-agent-sdk';
-import type {
-  AgentDefinition,
-  SDKMessage,
-} from '@anthropic-ai/claude-agent-sdk';
+import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type {
   AgentHarness,
   AgentEvent,
@@ -120,6 +117,29 @@ type StreamMappingState = {
   toolArgsJsonByCallId: Map<string, string>;
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The Claude Agent SDK (>=0.3.195) requires `sessionId`/`resume` to be a bare
+ * UUID and crashes the child process otherwise. ctxmill conversation ids are
+ * not always UUIDs — AG-UI/embed clients allocate ids like `thread-<uuid>` —
+ * so coerce to a stable UUID. Same conversation id → same UUID, so the SDK's
+ * session persistence and cross-turn `resume` stay aligned.
+ */
+export function toSdkSessionId(conversationId: string): string {
+  if (UUID_RE.test(conversationId)) {
+    return conversationId;
+  }
+  // `thread-<uuid>` (and similar) carry a usable UUID; prefer it verbatim.
+  const embedded = conversationId.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  if (embedded) {
+    return embedded[0].toLowerCase();
+  }
+  // Otherwise derive a deterministic v4-shaped UUID from the id.
+  const h = createHash('sha256').update(conversationId).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16]!, 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
 class ClaudeSession implements HarnessSession {
   private transcript: Message[] = [];
   private readonly queuedEvents: AgentEvent[] = [];
@@ -145,11 +165,12 @@ class ClaudeSession implements HarnessSession {
       this.queuedEvents,
     );
     this.mcpServer = sdk.createSdkMcpServer({ name: 'ctxmill', tools: mcpTools });
-    this.sdkSessionId = config.conversationId;
+    this.sdkSessionId = toSdkSessionId(config.conversationId);
   }
 
   setSdkSessionId(sessionId: string): void {
-    this.sdkSessionId = sessionId;
+    // Coerce here too: a restored checkpoint may carry a pre-fix (non-UUID) id.
+    this.sdkSessionId = toSdkSessionId(sessionId);
   }
 
   restoreTranscript(messages: Message[], options?: { markRestoredFromCheckpoint?: boolean }): void {
@@ -216,7 +237,10 @@ class ClaudeSession implements HarnessSession {
           permissionMode: 'bypassPermissions',
           allowDangerouslySkipPermissions: true,
           includeHookEvents: true,
-          includePartialMessages: false,
+          // Token-level text streaming: content_block_delta events feed
+          // text_delta as they arrive; mapSDKMessage dedupes against the
+          // complete assistant message via sawTextDeltaSinceAssistant.
+          includePartialMessages: true,
           persistSession: true,
           ...(agents ? { agents } : {}),
           ...(isFirstTurn ? { sessionId: sdkSessionId } : { resume: sdkSessionId }),
@@ -395,21 +419,11 @@ class ClaudeSession implements HarnessSession {
   }
 
   private buildAllowedTools(): string[] | undefined {
-    // HarnessSessionConfig.nativeTools[] is the canonical source, but it is
-    // never populated from the FreshBootstrap proto. Fall back to
-    // harnessConfig.nativeTools (single object) which survives proto
-    // serialization through harnessConfigJson.
     const nativeTools = this.config.nativeTools;
     const merged: string[] = [];
 
-    if (nativeTools?.length) {
-      for (const nt of nativeTools) {
-        if (nt.allowlist) {
-          merged.push(...nt.allowlist);
-        }
-      }
-    } else if (this.harnessConfig.nativeTools?.allowlist?.length) {
-      merged.push(...this.harnessConfig.nativeTools.allowlist);
+    if (nativeTools?.allowlist) {
+      merged.push(...nativeTools.allowlist);
     }
 
     if (this.harnessConfig.subagents) {
@@ -449,12 +463,8 @@ class ClaudeSession implements HarnessSession {
   private buildDisallowedTools(): string[] | undefined {
     const nativeTools = this.config.nativeTools;
     const merged: string[] = [];
-    if (nativeTools?.length) {
-      for (const nt of nativeTools) {
-        if (nt.blocklist) merged.push(...nt.blocklist);
-      }
-    } else if (this.harnessConfig.nativeTools?.blocklist?.length) {
-      merged.push(...this.harnessConfig.nativeTools.blocklist);
+    if (nativeTools?.blocklist) {
+      merged.push(...nativeTools.blocklist);
     }
     return merged.length ? merged : undefined;
   }
@@ -598,7 +608,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
   convertToolsWithSDK(
     sdk: { tool: SdkToolFactory },
     toolDefs: ToolDefinition[],
-    runId: string,
+    turnId: string,
     config?: HarnessSessionConfig,
     onApprovalNeeded?: ApprovalCallback,
     queuedEvents?: AgentEvent[],
@@ -617,7 +627,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
           if (definition.requiresApproval && onApprovalNeeded) {
             const approval = await requestToolApproval({
               id: approvalId,
-              runId,
+              turnId,
               toolName: definition.name,
               args,
               onApprovalNeeded,
@@ -635,7 +645,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
           try {
             const result = await definition.handler(
               args,
-              this.createToolContext(config, runId),
+              this.createToolContext(config, turnId),
             );
 
             return {
@@ -797,11 +807,12 @@ export class ClaudeAgentsHarness implements AgentHarness {
 
   private createToolContext(
     config: HarnessSessionConfig | undefined,
-    runId: string,
+    turnId: string,
   ): ToolContext {
     return {
       agentId: config?.agentId ?? '',
-      conversationId: config?.conversationId ?? runId,
+      conversationId: config?.conversationId ?? turnId,
+      turnId,
       workspaceDir: config?.workspaceDir ?? process.cwd(),
     };
   }

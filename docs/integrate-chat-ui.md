@@ -115,11 +115,10 @@ When an agent calls `request-approval`, the AG-UI stream emits:
 ```json
 {
   "type": "CUSTOM",
-  "name": "ctxmill.hitl.requested",
-  "subtype": "hitl_pause",
+  "name": "ctxmill.interrupt.requested",
   "interruptId": "interrupt-id",
   "toolCallId": "tool-call-id",
-  "toolName": "request-approval",
+  "toolCallName": "request-approval",
   "args": { "reason": "Deploy to production?" }
 }
 ```

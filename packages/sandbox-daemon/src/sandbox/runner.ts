@@ -42,6 +42,7 @@ import type {
   ResolvedSecrets,
   ApprovalCallback,
   AgentEvent,
+  HarnessSessionConfig,
 } from '../harness/types.js';
 import type { ToolContext } from '../tool/types.js';
 import type { ExecutionPhase } from './execution-phase.js';
@@ -100,17 +101,22 @@ function createDaemonHandlersForSession(
   return createArtifactHandlers({
     artifactStore,
     orchestratorClient: orcClient,
-    sessionId: activeRunId,
+    turnId: activeRunId,
     agentId,
     workspaceDir,
   });
 }
 
-function createToolContext(agentId: string, conversationId: string, sessionId: string, workspaceDir: string): ToolContext {
+function createToolContext(
+  agentId: string,
+  conversationId: string,
+  sandboxSessionId: string,
+  workspaceDir: string,
+): ToolContext {
   return {
     agentId,
     conversationId,
-    instanceId: sessionId,
+    sandboxSessionId,
     workspaceDir,
   };
 }
@@ -361,6 +367,7 @@ export async function openSession(
     let session: HarnessSession;
     let conversationId: string;
     let sessionId: string;
+    let lastCompletedTurnId: string | undefined;
 
     if (req.bootstrap.case === 'fresh') {
       const fresh = req.bootstrap.value;
@@ -378,7 +385,7 @@ export async function openSession(
       const tools = protoToToolDefs(fresh.tools, {
         orchestratorClient: orcClient,
         agentId: fresh.agentId,
-        sessionIdRef: activeRunId,
+        turnIdRef: activeRunId,
         daemonHandlers,
       });
       const config = protoFreshBootstrapToSessionConfig(fresh, tools, secrets);
@@ -422,6 +429,7 @@ export async function openSession(
       harnessName = checkpoint.harnessName;
       conversationId = checkpoint.conversationId;
       sessionId = checkpoint.sessionId;
+      lastCompletedTurnId = checkpoint.cursor?.lastCompletedTurnId;
 
       const restorePoint = protoRestoreBootstrapToRestorePoint(restore);
       const workspaceDir = checkpoint.workspaceRef?.reference || '/workspace';
@@ -434,15 +442,23 @@ export async function openSession(
       const tools = protoToToolDefs(restore.tools, {
         orchestratorClient: orcClient,
         agentId: restore.agentId,
-        sessionIdRef: activeRunId,
+        turnIdRef: activeRunId,
         daemonHandlers,
       });
 
-      const config = {
+      const config: HarnessSessionConfig = {
         agentId: restore.agentId,
         conversationId: checkpoint.conversationId,
         systemPrompt: restore.systemPrompt,
         tools,
+        ...(restore.nativeTools
+          ? {
+              nativeTools: {
+                allowlist: [...restore.nativeTools.allowlist],
+                blocklist: [...restore.nativeTools.blocklist],
+              },
+            }
+          : {}),
         secrets,
         harnessConfigJson: restore.harnessConfigJson,
         workspaceDir,
@@ -480,7 +496,7 @@ export async function openSession(
       sessionId,
       conversationId,
       harnessName,
-      stateCollector: new SessionStateCollector(),
+      stateCollector: new SessionStateCollector(lastCompletedTurnId),
       phaseTracker: new ExecutionPhaseTracker(),
       abortController: new AbortController(),
       currentTurnId: null,
@@ -525,6 +541,18 @@ export async function* deliverTurn(
   },
 ): AsyncGenerator<SessionEvent> {
   const ctx = await getContextForSession(req.sessionId, 'deliverTurn');
+  if (ctx.stateCollector.hasCompletedTurn(req.turnId)) {
+    console.error(
+      `[sandbox] turn ${req.turnId} already completed — acknowledging duplicate delivery without invoking harness`,
+    );
+    yield create(SessionEventSchema, {
+      payload: {
+        case: 'turnCompleted',
+        value: create(TurnCompletedSchema, { turnId: req.turnId }),
+      },
+    });
+    return;
+  }
   if (ctx.currentTurnId) {
     throw new Error('[sandbox] deliverTurn: turn already in progress');
   }
@@ -543,16 +571,20 @@ export async function* deliverTurn(
 
   try {
     const input = protoDeliverTurnToInput(req);
+    const turnSignal = opts?.signal
+      ? AbortSignal.any([ctx.abortController.signal, opts.signal])
+      : ctx.abortController.signal;
+    turnSignal.throwIfAborted();
     const context = {
-      signal: ctx.abortController.signal,
+      signal: turnSignal,
       onApprovalNeeded: opts?.onApprovalNeeded,
     };
 
     for await (const event of ctx.session.deliverTurn(input, context)) {
       if (!event || !event.type) continue;
 
-      if (ctx.abortController.signal.aborted) {
-        console.error(`[sandbox] turn ${turnId} aborted — session killed mid-stream after ${seq} events`);
+      if (turnSignal.aborted) {
+        console.error(`[sandbox] turn ${turnId} aborted mid-stream after ${seq} events`);
         abortBreak = true;
         break;
       }
@@ -586,6 +618,11 @@ export async function* deliverTurn(
     }
 
     if (sawSemanticEnd && pendingTurnRequests.size === 0 && !abortBreak) {
+      // Record acceptance before yielding the terminal acknowledgement. If the
+      // orchestrator disappears after receiving this frame but before marking
+      // its durable resume attempt complete, a retry with the same turn ID
+      // must stop here rather than invoke the model twice.
+      ctx.stateCollector.endTurn(true);
       yield create(SessionEventSchema, {
         payload: {
           case: 'turnCompleted',

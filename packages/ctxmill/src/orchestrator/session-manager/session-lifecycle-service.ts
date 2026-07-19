@@ -30,7 +30,7 @@ export interface SuspendSessionOptions {
 }
 
 export interface RestoreSessionStart {
-  sessionId: string;
+  sandboxSessionId: string;
   status: 'RESTORING';
   restoreAttempts: 0;
 }
@@ -193,7 +193,7 @@ export class SessionLifecycleService {
         );
       });
 
-      return { sessionId, status: 'RESTORING', restoreAttempts: 0 };
+      return { sandboxSessionId: sessionId, status: 'RESTORING', restoreAttempts: 0 };
     });
   }
 
@@ -245,7 +245,7 @@ export class SessionLifecycleService {
     this.deps.logger.info(`${TAG} workspace captured for session ${sessionId}: ${workspaceRef}`);
 
     await this.deps.db.createCheckpointV2({
-      sessionId,
+      sandboxSessionId: sessionId,
       agentId: record.agentId,
       checkpointData: {
         harnessName: record.harnessName,

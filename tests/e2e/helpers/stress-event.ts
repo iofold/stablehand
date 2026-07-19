@@ -5,7 +5,7 @@ import { API_BASE, getEvents } from '../support';
  * Stress event determinism contract per ADR 012.
  *
  * Required-matrix tests assert that:
- *   1. Exactly one event of `eventType` exists for `sessionId`.
+ *   1. Exactly one event of `eventType` exists for `turnId`.
  *   2. The event payload carries `schemaVersion >= 1`.
  *   3. The payload identifies the harness via `agent` or `harness` field.
  *
@@ -31,7 +31,7 @@ interface ParsedStressPayload {
   schemaVersion?: number | string | null;
   agent?: string;
   harness?: string;
-  sessionId?: string;
+  turnId?: string;
   status?: string;
   [key: string]: unknown;
 }
@@ -70,19 +70,19 @@ export interface StressAssertionOptions {
   agentId?: string;
   /**
    * Maximum events to fetch. Defaults to 50 — large enough to expose
-   * duplicate emits per session.
+   * duplicate emits per turn.
    */
   limit?: number;
 }
 
 /**
  * Fetch events of `eventType` and return the subset whose payload references
- * `sessionId`. Used to assert exactly-once observation per (sessionId, type).
+ * `turnId`. Used to assert exactly-once observation per (turnId, type).
  */
-export async function fetchStressEventsForSession(
+export async function fetchStressEventsForTurn(
   request: APIRequestContext,
   eventType: string,
-  sessionId: string,
+  turnId: string,
   options: StressAssertionOptions = {},
 ): Promise<StressEventRecord[]> {
   const events = await getEvents(request, {
@@ -90,7 +90,7 @@ export async function fetchStressEventsForSession(
     agentId: options.agentId,
     limit: options.limit ?? 50,
   });
-  return events.filter((event) => (event.payload ?? '').includes(sessionId));
+  return events.filter((event) => (event.payload ?? '').includes(turnId));
 }
 
 /**
@@ -101,45 +101,45 @@ export async function fetchStressEventsForSession(
  */
 export async function assertStressComplete(
   request: APIRequestContext,
-  sessionId: string,
+  turnId: string,
   eventType: string,
   expectedHarness: string,
   options: StressAssertionOptions = {},
 ): Promise<ParsedStressPayload> {
-  const matches = await fetchStressEventsForSession(
+  const matches = await fetchStressEventsForTurn(
     request,
     eventType,
-    sessionId,
+    turnId,
     options,
   );
 
   expect(
     matches.length,
-    `[ADR-012] expected exactly one ${eventType} event for session ${sessionId}, got ${matches.length}`,
+    `[ADR-012] expected exactly one ${eventType} event for turn ${turnId}, got ${matches.length}`,
   ).toBe(1);
 
   const [match] = matches;
   const payload = parsePayload(match.payload);
   expect(
     payload,
-    `[ADR-012] ${eventType} payload for session ${sessionId} must be a JSON object, got: ${match.payload}`,
+    `[ADR-012] ${eventType} payload for turn ${turnId} must be a JSON object, got: ${match.payload}`,
   ).not.toBeNull();
 
   const harnessLabel = payload!.harness ?? payload!.agent;
   expect(
     String(harnessLabel ?? ''),
-    `[ADR-012] ${eventType} payload missing harness/agent field for session ${sessionId}`,
+    `[ADR-012] ${eventType} payload missing harness/agent field for turn ${turnId}`,
   ).toContain(expectedHarness);
 
   if (!isSchemaVersionOptional()) {
     const schemaVersion = asNumber(payload!.schemaVersion);
     expect(
       schemaVersion,
-      `[ADR-012] ${eventType} payload.schemaVersion must be a number >= 1 for session ${sessionId}, got: ${JSON.stringify(payload!.schemaVersion)}`,
+      `[ADR-012] ${eventType} payload.schemaVersion must be a number >= 1 for turn ${turnId}, got: ${JSON.stringify(payload!.schemaVersion)}`,
     ).not.toBeNull();
     expect(
       schemaVersion!,
-      `[ADR-012] ${eventType} payload.schemaVersion must be >= 1 for session ${sessionId}`,
+      `[ADR-012] ${eventType} payload.schemaVersion must be >= 1 for turn ${turnId}`,
     ).toBeGreaterThanOrEqual(1);
   }
 

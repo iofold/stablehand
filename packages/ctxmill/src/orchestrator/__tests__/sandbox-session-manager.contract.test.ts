@@ -67,7 +67,7 @@ function createMockContainerManager(): ContainerManager {
   return {
     createContainer: vi.fn().mockResolvedValue({
       containerId: 'c-1',
-      containerName: 'ctxmill-run-sess-1',
+      containerName: 'ctxmill-sandbox-sess-1',
     }),
     startContainer: vi.fn().mockResolvedValue(undefined),
     stopContainer: vi.fn().mockResolvedValue(undefined),
@@ -162,6 +162,10 @@ function createAgentDef(): AgentDefinition {
     systemPrompt: 'test system prompt',
     tools: [],
     harnessConfig: {},
+    nativeTools: {
+      allowlist: ['Read', 'Glob'],
+      blocklist: ['Bash'],
+    },
   } as unknown as AgentDefinition;
 }
 
@@ -183,7 +187,7 @@ function createDbSession(
     id: overrides?.id ?? 'sess-1',
     conversationId: overrides?.conversationId ?? 'conv-1',
     agentId: overrides?.agentId ?? 'agent-1',
-    containerName: overrides?.containerName ?? 'ctxmill-run-sess-1',
+    containerName: overrides?.containerName ?? 'ctxmill-sandbox-sess-1',
     containerId: overrides?.containerId ?? 'c-1',
     status,
     harnessName: overrides?.harnessName ?? 'langgraph',
@@ -332,6 +336,17 @@ describe('SandboxSessionManager contract', () => {
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
       expect(buildSandboxSecrets).toHaveBeenCalledWith('agent-1');
       expect(grpcClient.openSession).toHaveBeenCalledTimes(1);
+      expect(grpcClient.openSession).toHaveBeenCalledWith(expect.objectContaining({
+        bootstrap: {
+          case: 'fresh',
+          value: expect.objectContaining({
+            nativeTools: expect.objectContaining({
+              allowlist: ['Read', 'Glob'],
+              blocklist: ['Bash'],
+            }),
+          }),
+        },
+      }));
       expect(db.createSandboxSession).toHaveBeenCalledTimes(1);
       expect(session).toMatchObject({
         conversationId: 'conv-1',
@@ -450,6 +465,21 @@ describe('SandboxSessionManager contract', () => {
       expect(internals.stateStore.sessions.get('conv-1')?.sessionId).toBe('sess-1');
     });
 
+    it('re-arms idle checkpoint monitoring for an ACTIVE session reconnected at startup', () => {
+      const { manager, lifecyclePolicy, grpcClient } = createManager();
+
+      manager.getSessionReconciler().onSessionReconnected(
+        createDbSession('ACTIVE'),
+        grpcClient,
+      );
+
+      expect(lifecyclePolicy.scheduleIdleTimeout).toHaveBeenCalledWith(
+        'sess-1',
+        'c-1',
+        expect.any(Object),
+      );
+    });
+
     it('restores a CHECKPOINTED session from its checkpoint', async () => {
       const { manager, containerManager, db, buildSandboxSecrets } = createManager();
       (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -472,7 +502,7 @@ describe('SandboxSessionManager contract', () => {
         'ACTIVE',
         expect.objectContaining({
           containerId: 'c-1',
-          containerName: 'ctxmill-run-sess-1',
+          containerName: 'ctxmill-sandbox-sess-1',
         }),
         { expectedFrom: 'RESTORING' },
       );
@@ -484,7 +514,7 @@ describe('SandboxSessionManager contract', () => {
       const { manager, db, grpcClient } = createManager();
       const failingClient = createMockGrpcClient();
       failingClient.killSession.mockRejectedValue(
-        new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'),
+        new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'),
       );
       connectMocks.createClientMock.mockReturnValueOnce(failingClient).mockReturnValue(grpcClient);
       (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -519,7 +549,7 @@ describe('SandboxSessionManager contract', () => {
       const { manager, containerManager, db, grpcClient } = createManager();
       const failingClient = createMockGrpcClient();
       failingClient.killSession.mockRejectedValue(
-        new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'),
+        new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'),
       );
       connectMocks.createClientMock.mockReturnValueOnce(failingClient).mockReturnValue(grpcClient);
       (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -685,7 +715,10 @@ describe('SandboxSessionManager contract', () => {
         expect.objectContaining({ sessionId: session.sessionId, reason: 'manual-checkpoint' }),
       );
       expect(db.createCheckpointV2).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: session.sessionId, suspendReason: 'manual-checkpoint' }),
+        expect.objectContaining({
+          sandboxSessionId: session.sessionId,
+          suspendReason: 'manual-checkpoint',
+        }),
       );
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         session.sessionId,
@@ -800,7 +833,7 @@ describe('SandboxSessionManager contract', () => {
         'ACTIVE',
         expect.objectContaining({
           containerId: 'c-1',
-          containerName: 'ctxmill-run-sess-1',
+          containerName: 'ctxmill-sandbox-sess-1',
         }),
         { expectedFrom: 'RESTORING' },
       );

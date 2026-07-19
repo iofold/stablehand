@@ -1,66 +1,80 @@
-# Session identity contract
+# Identity contract
 
-This document is the canonical reference for the IDs used by CTXMILL session, turn, and AG-UI routes.
+This document defines the canonical identities used by CTXMILL. Each name has
+one meaning; APIs must not overload one identifier with another concept.
 
 ## Canonical IDs
 
 ### `conversationId`
-- **Meaning:** the user-facing conversation/thread identity
-- **Scope:** stable across multiple turns in the same conversation
-- **Used by:**
-  - `POST /api/agents/:id/message` request body
-  - `GET /api/agents/:id/conversations/:conversationId/messages`
-  - SSE / AG-UI payloads as both `conversationId` and `threadId`
-  - UI routes like `/agents/:id/conversations/:conversationId`
 
-### `turnId` / `runId`
-- **Meaning:** one execution attempt inside a conversation
-- **Storage:** `turns.id`
-- **Notes:**
-  - internal eventing commonly calls this a **run id**
-  - some REST responses still return it in a field named **`sessionId`** for backward compatibility
-- **Used by:**
-  - `turn.pending`, `turn.started`, `turn.completed`
-  - `POST /api/agents/:id/message` response `sessionId`
-  - `POST /api/agents/:id/session` response `sessionId`
-  - turn-oriented APIs and tests
+- **Meaning:** the durable user conversation/thread and workspace owner.
+- **Scope:** stable across every turn in the conversation.
+- **Storage:** `conversations.id`.
+- **Used by:** conversation/message routes, file/workspace routes, internal
+  events, UI conversation routes, and AG-UI `threadId`.
+
+### `turnId`
+
+- **Meaning:** one agent execution within a conversation.
+- **Scope:** unique for a single interactive or background execution.
+- **Storage:** `turns.id`.
+- **Used by:** turn routes, turn lifecycle events, artifacts, callbacks, tool
+  execution context, and AG-UI `runId`.
 
 ### `sandboxSessionId`
-- **Meaning:** the persistent sandbox container/session identity reused across turns
-- **Storage:** `sandbox_sessions.id`, mirrored onto `turns.sessionId` once a turn is bound to a live sandbox session
-- **Used by:**
-  - sandbox lifecycle APIs like `/api/agents/:id/sandbox-sessions/:sessionId/{suspend|kill}`
-  - route responses as `sandboxSessionId`
-  - recovery / reconciliation logic
 
-### `threadId`
-- **Meaning:** AG-UI thread identity
-- **Contract:** always equal to `conversationId` in CTXMILL
-- **Why:** AG-UI thread semantics map to the persisted CTXMILL conversation, not to an individual turn or sandbox session
+- **Meaning:** the persistent sandbox container lifecycle reused by turns in a
+  conversation.
+- **Scope:** unique for one sandbox session from creation through checkpoint,
+  restore, and termination.
+- **Storage:** `sandbox_sessions.id`, referenced by
+  `turns.sandbox_session_id`.
+- **Used by:** sandbox lifecycle routes, checkpoints, container labels,
+  reconciliation, and sandbox callback authentication.
+
+### `interruptId`
+
+- **Meaning:** one independent human-in-the-loop approval request.
+- **Scope:** unique for a pending or resolved interrupt.
+- **Storage:** `pending_interrupts.id`.
+- **Used by:** interrupt list and resolution APIs. Interrupt records also carry
+  their associated `turnId` and `sandboxSessionId`.
+
+## AG-UI wire mapping
+
+`runId` and `threadId` are AG-UI wire fields, not internal aliases:
+
+| AG-UI field | CTXMILL identity |
+|---|---|
+| `runId` | `turnId` |
+| `threadId` | `conversationId` |
+
+Internal services and persisted records use the canonical CTXMILL names.
 
 ## Route contract summary
 
-### Start an interactive turn
-- `POST /api/agents/:id/message`
-- input: optional `conversationId`
-- response: `{ messageId, conversationId, sessionId }`
-- **Important:** response `sessionId` is the new **turn/run id**, not the persistent sandbox session id
-
-### Start a background turn
-- `POST /api/agents/:id/session`
-- input: `task`
-- response: `{ sessionId, conversationId }`
-- **Important:** response `sessionId` is again the **turn/run id**
-
-### Read turn summaries
-- `GET /api/agents/:id/sessions`
-- returns turn-oriented summaries
-- each item `id` is the **turn/run id**
-- each item may also include `sandboxSessionId`
+- `POST /api/agents/:id/message` starts an interactive turn and returns
+  `{ messageId, conversationId, turnId }`.
+- `POST /api/agents/:id/turns` starts a background turn and returns
+  `{ turnId, conversationId }`.
+- `GET /api/agents/:id/turns` and
+  `GET /api/agents/:id/turns/:turnId` read execution records.
+- `POST /api/agents/:id/turns/:turnId/cancel` cancels an execution.
+- `/api/agents/:id/sandbox-sessions/:sandboxSessionId/*` manages the
+  container lifecycle.
+- `GET /api/conversations?status=active` returns active conversation
+  summaries.
+- `GET /api/sandbox-sessions?status=active` returns active sandbox sessions.
+- Agent file routes require `conversationId`; artifact filters use `turnId`.
+- Interrupt resolution requires `interruptId`.
 
 ## Guardrails
 
-- Never treat `conversationId` as a turn id.
-- Never treat the `sessionId` returned by message/session creation routes as a sandbox session id.
-- When emitting AG-UI events, use `conversationId` for `threadId`.
-- When a response needs both execution scopes, expose both `id`/`sessionId` semantics explicitly rather than overloading one field silently.
+- A `conversationId` never identifies an execution or container.
+- A `turnId` never identifies a conversation, sandbox session, or interrupt.
+- A `sandboxSessionId` never identifies an API turn.
+- An `interruptId` is never derived from or replaced by its `turnId`.
+- APIs that expose more than one scope name every field explicitly.
+- Do not introduce a generic `sessionId` into REST, database, or internal
+  contracts. Protobuf `session_id` remains appropriate only where the
+  `HarnessService` method is explicitly operating on a sandbox session.

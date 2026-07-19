@@ -6,15 +6,15 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { TestSessionRegistry } from '../utils/test-session-registry.js';
+import { TestTurnRegistry } from '../utils/test-turn-registry.js';
 import {
   createTestBus,
   createCanonicalWireHarness,
   collectEvents,
   flushWire,
-  makeRunStartedEvent,
-  makeRunCompletedEvent,
-  makeTextChunkEvent,
+  makeTurnStartedEvent,
+  makeTurnCompletedEvent,
+  makeMessageDeltaEvent,
 } from '../../tests/utils/event-bus-test-helpers.js';
 
 describe('Event Bus Integration Flows', () => {
@@ -26,9 +26,9 @@ describe('Event Bus Integration Flows', () => {
 
   // ── Run lifecycle → canonical wire ─────────────────────────────
 
-  describe('Run lifecycle → canonical wire', () => {
+  describe('Turn lifecycle → canonical wire', () => {
     it('emit turn.started → RUN_STARTED frame on the wire', async () => {
-      const event = makeRunStartedEvent();
+      const event = makeTurnStartedEvent();
       harness.bus.emit('turn.started', event);
       await flushWire();
 
@@ -39,9 +39,9 @@ describe('Event Bus Integration Flows', () => {
       });
     });
 
-    it('emit run.text_chunk x3 → one TEXT_MESSAGE_START boundary + 3 CONTENT frames with a stable messageId', async () => {
+    it('emit message.delta x3 → one TEXT_MESSAGE_START boundary + 3 CONTENT frames with a stable messageId', async () => {
       for (let i = 0; i < 3; i++) {
-        harness.bus.emit('run.text_chunk', makeTextChunkEvent({ content: `chunk-${i}` }));
+        harness.bus.emit('message.delta', makeMessageDeltaEvent({ delta: `chunk-${i}` }));
       }
       await flushWire();
 
@@ -52,7 +52,7 @@ describe('Event Bus Integration Flows', () => {
     });
 
     it('emit turn.completed → RUN_FINISHED frame with status', async () => {
-      const event = makeRunCompletedEvent();
+      const event = makeTurnCompletedEvent();
       harness.bus.emit('turn.completed', event);
       await flushWire();
 
@@ -61,15 +61,15 @@ describe('Event Bus Integration Flows', () => {
     });
   });
 
-  // ── RunRegistry event emission ─────────────────────────────────
+  // ── TurnRegistry event emission ────────────────────────────────
 
-  describe('RunRegistry event emission', () => {
-    it('startRun() → run.started received by collector', async () => {
+  describe('TurnRegistry event emission', () => {
+    it('startTurn() → turn.started received by collector', async () => {
       const bus = createTestBus();
       const collector = collectEvents(bus, 'turn.started');
-      const registry = new TestSessionRegistry(undefined, bus);
+      const registry = new TestTurnRegistry(bus);
 
-      await registry.startRun('agent-reg-1', 'conv-reg-1', 'interactive', 'Registry test');
+      await registry.startTurn('agent-reg-1', 'conv-reg-1', 'interactive', 'Registry test');
 
       expect(collector.events).toHaveLength(1);
       expect(collector.events[0]).toEqual(
@@ -84,42 +84,42 @@ describe('Event Bus Integration Flows', () => {
       collector.unsubscribe();
     });
 
-    it('completeRun() → run.completed received with correct status', async () => {
+    it('completeTurn() → turn.completed received with correct status', async () => {
       const bus = createTestBus();
-      const registry = new TestSessionRegistry(undefined, bus);
-      const run = await registry.startRun('agent-reg-2', 'conv-reg-2', 'background');
+      const registry = new TestTurnRegistry(bus);
+      const turn = await registry.startTurn('agent-reg-2', 'conv-reg-2', 'background');
 
       const collector = collectEvents(bus, 'turn.completed');
-      await registry.completeRun(run.id);
+      await registry.completeTurn(turn.turnId);
 
       expect(collector.events).toHaveLength(1);
       expect(collector.events[0]).toEqual(
         expect.objectContaining({
-            sessionId: run.id,
-            turnId: run.id,
-            agentId: 'agent-reg-2',
-            status: 'completed',
+          sandboxSessionId: turn.sandboxSessionId,
+          turnId: turn.turnId,
+          agentId: 'agent-reg-2',
+          status: 'completed',
         }),
       );
 
       collector.unsubscribe();
     });
 
-    it('cancelRun() → run.completed received with status cancelled', async () => {
+    it('cancelTurn() → turn.completed received with status cancelled', async () => {
       const bus = createTestBus();
-      const registry = new TestSessionRegistry(undefined, bus);
-      const run = await registry.startRun('agent-reg-3', 'conv-reg-3', 'interactive');
+      const registry = new TestTurnRegistry(bus);
+      const turn = await registry.startTurn('agent-reg-3', 'conv-reg-3', 'interactive');
 
       const collector = collectEvents(bus, 'turn.completed');
-      await registry.cancelRun(run.id);
+      await registry.cancelTurn(turn.turnId);
 
       expect(collector.events).toHaveLength(1);
       expect(collector.events[0]).toEqual(
         expect.objectContaining({
-            sessionId: run.id,
-            turnId: run.id,
-            agentId: 'agent-reg-3',
-            status: 'cancelled',
+          sandboxSessionId: turn.sandboxSessionId,
+          turnId: turn.turnId,
+          agentId: 'agent-reg-3',
+          status: 'cancelled',
         }),
       );
 
@@ -134,7 +134,11 @@ describe('Event Bus Integration Flows', () => {
       const persistFn = vi.fn();
       const persistBus = createTestBus({ persistEvent: persistFn });
 
-      const event = makeRunStartedEvent({ turnId: 'run-persist-1', sessionId: 'run-persist-1', agentId: 'agent-persist-1' });
+      const event = makeTurnStartedEvent({
+        turnId: 'turn-persist-1',
+        sandboxSessionId: 'sandbox-persist-1',
+        agentId: 'agent-persist-1',
+      });
       persistBus.emit('turn.started', event);
 
       expect(persistFn).toHaveBeenCalledTimes(1);
@@ -143,13 +147,14 @@ describe('Event Bus Integration Flows', () => {
         'agent-persist-1',
         expect.any(String),
         // Parsed payload rides along so persistence layers avoid a re-parse (ADR-015).
-        expect.objectContaining({ turnId: 'run-persist-1' }),
+        expect.objectContaining({ turnId: 'turn-persist-1' }),
       );
 
       // Verify the JSON payload is valid
       const payloadJson = persistFn.mock.calls[0][2];
       const parsed = JSON.parse(payloadJson);
-      expect(parsed.sessionId).toBe('run-persist-1');
+      expect(parsed.turnId).toBe('turn-persist-1');
+      expect(parsed.sandboxSessionId).toBe('sandbox-persist-1');
     });
 
     it('persistence failure prevents listener dispatch', () => {
@@ -162,7 +167,7 @@ describe('Event Bus Integration Flows', () => {
       const busErrors = collectEvents(persistBus, 'bus.error' as never);
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-      const event = makeRunStartedEvent();
+      const event = makeTurnStartedEvent();
       persistBus.emit('turn.started', event);
 
       expect(collector.events).toHaveLength(0);
@@ -183,7 +188,7 @@ describe('Event Bus Integration Flows', () => {
       const persistBus = createTestBus({ persistEvent: persistFn });
       const collector = collectEvents(persistBus, 'turn.started');
 
-      const event = makeRunStartedEvent();
+      const event = makeTurnStartedEvent();
       persistBus.emit('turn.started', event);
       expect(collector.events).toHaveLength(0);
 
@@ -191,7 +196,8 @@ describe('Event Bus Integration Flows', () => {
 
       expect(persistFn).toHaveBeenCalledTimes(1);
       expect(collector.events).toHaveLength(1);
-      expect(collector.events[0].sessionId).toBe(event.sessionId);
+      expect(collector.events[0].turnId).toBe(event.turnId);
+      expect(collector.events[0].sandboxSessionId).toBe(event.sandboxSessionId);
 
       collector.unsubscribe();
     });
@@ -206,7 +212,7 @@ describe('Event Bus Integration Flows', () => {
         throw new Error('listener failed');
       });
 
-      persistBus.emit('turn.started', makeRunStartedEvent());
+      persistBus.emit('turn.started', makeTurnStartedEvent());
 
       expect(persistFn).toHaveBeenCalledTimes(1);
       expect(busErrors.events).toHaveLength(1);

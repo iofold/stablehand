@@ -80,7 +80,7 @@ describe('AgentCard', () => {
     renderCard();
 
     expect(statusLabel()).toContain('Idle');
-    expect(container.textContent).toContain('Sandboxes');
+    expect(container.textContent).toContain('Sessions');
     expect(container.textContent).toContain('0');
   });
 
@@ -88,7 +88,7 @@ describe('AgentCard', () => {
     act(() => {
       root.render(<AgentCard agent={{
         ...baseAgent,
-        sessionsByStatus: {
+        sandboxSessionsByStatus: {
           ACTIVE: 2,
           CHECKPOINTED: 1,
           RESTORING: 0,
@@ -97,12 +97,16 @@ describe('AgentCard', () => {
       }} />);
     });
 
-    expect(container.textContent).toContain('Sandboxes');
+    expect(container.textContent).toContain('Sessions');
     const counts = container.querySelector('[role="status"]');
-    expect(counts?.getAttribute('aria-label')).toBe('6 sandbox sessions: 2 active, 1 checkpointed, 3 terminated');
+    expect(counts?.getAttribute('aria-label')).toBe('6 sandbox sessions: 2 running, 1 resumable, 3 ended');
+    // Live vocabulary only: running and resumable counts render; ended
+    // sandboxes stay in the tooltip/aria-label.
     expect(counts?.textContent).toContain('2');
+    expect(counts?.textContent).toContain('running');
     expect(counts?.textContent).toContain('1');
-    expect(counts?.textContent).toContain('3');
+    expect(counts?.textContent).toContain('resumable');
+    expect(counts?.textContent).not.toContain('3');
   });
 
   it('maps unknown agent status values with no active sessions to idle', () => {
@@ -126,7 +130,7 @@ describe('AgentCard', () => {
       root.render(<AgentCard agent={{
         ...baseAgent,
         status: 'legacy-status',
-        sessionsByStatus: {
+        sandboxSessionsByStatus: {
           ACTIVE: 1,
           CHECKPOINTED: 0,
           RESTORING: 0,

@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CallbackDispatcher, getRetryDelay } from '../callback-dispatcher.js';
 import type { DatabaseRepository, CallbackOutboxRow } from '../../database/repository.js';
@@ -44,6 +45,7 @@ function createMockDb() {
     getCallbacksForAgent: vi.fn(async (agentId: string) => {
       return Array.from(store.values()).filter((r) => r.agentId === agentId);
     }),
+    getWebhookForAgent: vi.fn(async () => undefined),
     /** Expose internal store for assertions */
     _store: store,
   };
@@ -83,7 +85,7 @@ describe('CallbackDispatcher', () => {
     it('creates an outbox entry and returns its ID', async () => {
       const id = await dispatcher.enqueue({
         agentId: 'agent-1',
-        sessionId: 'run-1',
+        turnId: 'turn-1',
         callbackUrl: 'https://example.com/hook',
         eventType: 'turn.completed',
         payload: { status: 'completed' },
@@ -95,7 +97,7 @@ describe('CallbackDispatcher', () => {
 
       const call = (db.enqueueCallback as any).mock.calls[0][0];
       expect(call.agentId).toBe('agent-1');
-      expect(call.sessionId).toBe('run-1');
+      expect(call.turnId).toBe('turn-1');
       expect(call.callbackUrl).toBe('https://example.com/hook');
       expect(call.eventType).toBe('turn.completed');
       expect(call.eventSeq).toBeNull();
@@ -105,7 +107,7 @@ describe('CallbackDispatcher', () => {
       expect(call.maxAttempts).toBe(5);
     });
 
-    it('sets sessionId to null when not provided', async () => {
+    it('sets turnId to null when not provided', async () => {
       await dispatcher.enqueue({
         agentId: 'agent-1',
         callbackUrl: 'https://example.com/hook',
@@ -114,7 +116,7 @@ describe('CallbackDispatcher', () => {
       });
 
       const call = (db.enqueueCallback as any).mock.calls[0][0];
-      expect(call.sessionId).toBeNull();
+      expect(call.turnId).toBeNull();
     });
 
     it('persists eventSeq when provided for spine redelivery dedupe', async () => {
@@ -142,7 +144,7 @@ describe('CallbackDispatcher', () => {
 
       await dispatcher.enqueue({
         agentId: 'agent-1',
-        sessionId: 'run-1',
+        turnId: 'turn-1',
         callbackUrl: 'https://example.com/hook',
         eventType: 'turn.completed',
         payload: { status: 'completed' },
@@ -181,6 +183,47 @@ describe('CallbackDispatcher', () => {
       expect(init.headers['X-Event-Type']).toBe('turn.completed');
       expect(init.headers['X-Delivery-Id']).toBe(id);
       expect(JSON.parse(init.body)).toEqual({ test: true });
+    });
+
+    it('signs the timestamp and exact request body with the webhook secret', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+      });
+      dispatcher.fetchFn = mockFetch;
+
+      const payload = { status: 'completed', nested: { value: 42 } };
+      vi.mocked(db.getWebhookForAgent).mockResolvedValue({
+        id: 'webhook-1',
+        agentId: 'agent-1',
+        url: 'https://example.com/hook',
+        events: ['turn.completed'],
+        secret: 'pilot-webhook-secret',
+        active: true,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      await dispatcher.enqueue({
+        agentId: 'agent-1',
+        webhookId: 'webhook-1',
+        callbackUrl: 'https://example.com/hook',
+        eventType: 'turn.completed',
+        payload,
+      } as Parameters<CallbackDispatcher['enqueue']>[0] & { webhookId: string });
+
+      await dispatcher.processPending();
+
+      const [, init] = mockFetch.mock.calls[0];
+      const timestamp = init.headers['X-Webhook-Timestamp'];
+      const body = init.body as string;
+      const expected = createHmac('sha256', 'pilot-webhook-secret')
+        .update(`${timestamp}.${body}`)
+        .digest('hex');
+
+      expect(timestamp).toMatch(/^\d+$/);
+      expect(init.headers['X-Webhook-Signature']).toBe(`v1=${expected}`);
+      expect(body).toBe(JSON.stringify(payload));
     });
 
     it('marks entry as failed on non-2xx HTTP response', async () => {

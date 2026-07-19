@@ -1,8 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 import type { DatabaseRepository } from '../../database/repository.js';
+import type { TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { SessionEvent } from '../session-turn-service.js';
+import { publishMessageCanonicalState } from '../message-publisher.js';
 import type { SessionStatePort } from './ports.js';
 import type { Logger } from './types.js';
 
@@ -15,11 +17,20 @@ type PendingRequest = {
 };
 
 interface InterruptResumeServiceDeps {
-  db: Pick<DatabaseRepository, 'getSandboxSession' | 'getResolvedInterruptsForSession' | 'getCheckpointV2' | 'addMessage'>;
+  db: Pick<
+    DatabaseRepository,
+    'getTurn' | 'getSandboxSession' | 'getResolvedInterruptsForSandboxSession' | 'getCheckpointV2' | 'addCanonicalMessage'
+  >;
+  eventBus: Pick<TypedEventBus, 'emitAsync'>;
   stateStore: Pick<SessionStatePort, 'getAgentDef' | 'setAgentDef'>;
   logger: Logger;
   ensureSession: (conversationId: string, agentDef: AgentDefinition, agentId: string) => Promise<{ sessionId: string }>;
-  deliverTurn: (sessionId: string, messages: Message[], turnId: string) => AsyncGenerator<SessionEvent>;
+  deliverTurn: (
+    sessionId: string,
+    messages: Message[],
+    turnId: string,
+    signal?: AbortSignal,
+  ) => AsyncGenerator<SessionEvent>;
   resolveAgentDefinition: (agentId: string) => Promise<AgentDefinition | null>;
   /**
    * Terminalize the original (interrupted) turn after a successful durable
@@ -101,8 +112,25 @@ function resolutionContentForAction(action: string | null | undefined): string {
   return action === 'approve' ? 'APPROVED' : 'REJECTED';
 }
 
-function buildContinuationTurnId(turnId: string): string {
-  return `hitl-resume-${turnId.slice(0, 8)}-${Date.now()}`;
+function buildContinuationTurnId(interruptId: string): string {
+  const digest = createHash('sha256')
+    .update(interruptId)
+    .digest('hex')
+    .slice(0, 32);
+  return `hitl-resume-${digest}`;
+}
+
+function canonicalContinuationMessageId(input: {
+  turnId: string;
+  interruptId: string;
+  toolCallId: string;
+  role: 'assistant' | 'tool';
+}): string {
+  const digest = createHash('sha256')
+    .update(`${input.turnId}\0${input.interruptId}\0${input.toolCallId}\0${input.role}`)
+    .digest('hex')
+    .slice(0, 24);
+  return `hitl-${input.role}-${digest}`;
 }
 
 function normalizeFallbackArgs(args: unknown): Record<string, unknown> {
@@ -111,13 +139,15 @@ function normalizeFallbackArgs(args: unknown): Record<string, unknown> {
 
 function buildContinuationMessages(input: {
   agentId: string;
+  assistantMessageId: string;
+  toolMessageId: string;
   toolCallId: string;
   toolArgs: Record<string, unknown>;
   resolutionContent: string;
 }): Message[] {
   return [
     {
-      id: `hitl-assistant-${randomUUID().slice(0, 8)}`,
+      id: input.assistantMessageId,
       agentId: input.agentId,
       role: 'assistant',
       content: '',
@@ -129,7 +159,7 @@ function buildContinuationMessages(input: {
       createdAt: new Date(),
     },
     {
-      id: `hitl-tool-${randomUUID().slice(0, 8)}`,
+      id: input.toolMessageId,
       agentId: input.agentId,
       role: 'tool',
       content: input.resolutionContent,
@@ -146,10 +176,25 @@ export class InterruptResumeService {
     sessionId: string,
     turnId: string,
     agentId: string,
+    interruptId: string,
+    signal?: AbortSignal,
   ): Promise<void> {
+    signal?.throwIfAborted();
     this.deps.logger.info(
       `${TAG} resuming session ${sessionId} with interrupt resolution (turn=${turnId}, agent=${agentId})`,
     );
+
+    const originalTurn = await this.deps.db.getTurn(turnId);
+    if (
+      originalTurn
+      && originalTurn.status !== 'queued'
+      && originalTurn.status !== 'running'
+    ) {
+      this.deps.logger.info(
+        `${TAG} turn ${turnId} is already terminal (${originalTurn.status}); completing resume without redelivery`,
+      );
+      return;
+    }
 
     const dbSession = await this.deps.db.getSandboxSession(sessionId);
     if (!dbSession) {
@@ -165,17 +210,24 @@ export class InterruptResumeService {
       checkpoint?.checkpointData,
     );
 
-    const resolvedInterrupts = await this.deps.db.getResolvedInterruptsForSession(sessionId);
-    const interrupt = resolvedInterrupts.find((entry) => entry.agentSessionId === turnId);
+    const resolvedInterrupts = await this.deps.db.getResolvedInterruptsForSandboxSession(sessionId);
+    const interrupt = resolvedInterrupts.find((entry) => entry.id === interruptId);
     if (!interrupt) {
-      this.deps.logger.warn(
-        `${TAG} no resolved interrupt matching turnId=${turnId} for session ${sessionId} (found ${resolvedInterrupts.length} other interrupts), skipping continuation turn`,
+      throw new Error(
+        `Resolved interrupt ${interruptId} was not found for session ${sessionId}`,
       );
-      return;
+    }
+    if (interrupt.turnId !== turnId || interrupt.agentId !== agentId) {
+      throw new Error(
+        `Resolved interrupt ${interruptId} does not match continuation ownership `
+        + `(expected turn=${turnId}, agent=${agentId}; `
+        + `found turn=${interrupt.turnId}, agent=${interrupt.agentId})`,
+      );
     }
 
     const pendingApprovals = this.getPendingApprovalRequests(checkpoint?.checkpointData)
       .filter((request) => request.type === 'approval');
+    signal?.throwIfAborted();
     const record = await this.deps.ensureSession(conversationId, agentDef, agentId);
     const resolutionContent = resolutionContentForAction(interrupt.resolvedAction);
 
@@ -184,9 +236,16 @@ export class InterruptResumeService {
       toolCallId: string,
       toolArgs: Record<string, unknown>,
     ) => {
-      await this.deps.db.addMessage({
+      const assistantMessage = await this.deps.db.addCanonicalMessage({
+        id: canonicalContinuationMessageId({
+          turnId,
+          interruptId: interrupt.id,
+          toolCallId,
+          role: 'assistant',
+        }),
         agentId,
         conversationId,
+        turnId,
         role: 'assistant',
         content: '',
         toolCalls: [{
@@ -196,15 +255,26 @@ export class InterruptResumeService {
           status: 'complete',
         }],
       });
-      await this.deps.db.addMessage({
+      await publishMessageCanonicalState({ eventBus: this.deps.eventBus }, assistantMessage);
+      const toolMessage = await this.deps.db.addCanonicalMessage({
+        id: canonicalContinuationMessageId({
+          turnId,
+          interruptId: interrupt.id,
+          toolCallId,
+          role: 'tool',
+        }),
         agentId,
         conversationId,
+        turnId,
         role: 'tool',
         content: resolutionContent,
         toolCallId,
       });
+      await publishMessageCanonicalState({ eventBus: this.deps.eventBus }, toolMessage);
       continuationMessages.push(...buildContinuationMessages({
         agentId,
+        assistantMessageId: assistantMessage.id,
+        toolMessageId: toolMessage.id,
         toolCallId,
         toolArgs,
         resolutionContent,
@@ -225,14 +295,26 @@ export class InterruptResumeService {
       await addContinuationMessages(fallbackToolCallId, fallbackArgs);
     }
 
-    const continuationTurnId = buildContinuationTurnId(turnId);
+    const continuationTurnId = buildContinuationTurnId(interrupt.id);
+    signal?.throwIfAborted();
     this.deps.logger.info(
       `${TAG} delivering continuation turn ${continuationTurnId} for session ${record.sessionId}`,
     );
 
-    for await (const _event of this.deps.deliverTurn(record.sessionId, continuationMessages, continuationTurnId)) {
-      void _event;
+    for await (const event of this.deps.deliverTurn(
+      record.sessionId,
+      continuationMessages,
+      continuationTurnId,
+      signal,
+    )) {
+      signal?.throwIfAborted();
+      if (event.type === 'turn_failed') {
+        throw new Error(
+          `HITL continuation turn ${continuationTurnId} failed: ${event.errorMessage}`,
+        );
+      }
     }
+    signal?.throwIfAborted();
 
     this.deps.logger.info(
       `${TAG} continuation turn ${continuationTurnId} completed for session ${record.sessionId}`,

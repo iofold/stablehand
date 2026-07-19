@@ -15,6 +15,7 @@ export const emitEventTool: ToolDefinition = {
   description:
     'Emit a custom event to the event bus. Other agents can be triggered by these events via event triggers.',
   location: 'orchestrator',
+  programmatic: true,
   input: z.object({
     type: z.string().describe('Event type, e.g. "email.classified", "response.drafted"'),
     payload: z.record(z.string(), z.unknown()).describe('Event payload data'),

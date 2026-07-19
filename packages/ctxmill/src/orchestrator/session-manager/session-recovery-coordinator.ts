@@ -2,6 +2,7 @@ import { create } from '@bufbuild/protobuf';
 import type { JsonObject } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import {
+  NativeToolConfigSchema,
   OpenSessionRequestSchema,
   ToolMetadataSchema,
 } from '@ctxmill/proto/sandbox/v1';
@@ -85,6 +86,7 @@ export interface SessionRecoveryCoordinatorDeps {
     options?: { concurrencyReservationId?: string },
   ) => Promise<SessionRecord>;
   getExistingConversationWorkspaceDir: (agentId: string, conversationId: string) => Promise<string | undefined>;
+  onActiveSessionReconnected?: (record: SessionRecord) => void;
   /**
    * Optional sleep injection for tests. Defaults to a real timer that supports
    * AbortSignal cancellation.
@@ -141,6 +143,7 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       this.isSessionRecord(grpcClientOrRecord) ? undefined : grpcClientOrRecord,
     );
     this.deps.stateStore.setSession(sessionOrConversationId.conversationId, record);
+    this.deps.onActiveSessionReconnected?.(record);
   }
 
   async onSessionEvicted(sessionId: string, conversationId: string): Promise<void> {
@@ -284,6 +287,12 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
             agentId: dbSession.agentId,
             harnessConfigJson: JSON.stringify(agentDef.harnessConfig),
             systemPrompt: agentDef.systemPrompt,
+            nativeTools: agentDef.nativeTools
+              ? create(NativeToolConfigSchema, {
+                  allowlist: agentDef.nativeTools.allowlist ?? [],
+                  blocklist: agentDef.nativeTools.blocklist ?? [],
+                })
+              : undefined,
             tools: restoreTools.map((tool) => create(ToolMetadataSchema, {
               name: tool.name,
               description: tool.description,

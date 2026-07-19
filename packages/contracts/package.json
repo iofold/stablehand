@@ -1,0 +1,50 @@
+{
+  "name": "@ctxmill/contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Strict runtime contracts for CTXMill APIs and event streams",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "import": "./dist/events.js"
+    },
+    "./harness": {
+      "types": "./dist/harness.d.ts",
+      "import": "./dist/harness.js"
+    },
+    "./webhooks": {
+      "types": "./dist/webhooks.d.ts",
+      "import": "./dist/webhooks.js"
+    }
+  },
+  "files": [
+    "dist",
+    "test-fixtures"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.4"
+  }
+}

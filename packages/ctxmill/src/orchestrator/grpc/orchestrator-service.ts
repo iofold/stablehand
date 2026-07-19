@@ -33,8 +33,9 @@ import type { DatabaseRepository } from '../../database/repository.js';
  * a tool call from a sandbox.
  */
 export interface ToolHandlerContext {
-  sessionId: string;
+  turnId: string;
   agentId: string;
+  conversationId?: string;
   requestId: string;
 }
 
@@ -152,7 +153,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
      */
     async requestTool(req: RequestToolRequest): Promise<RequestToolResponse> {
       try {
-        const { sessionId, agentId, toolName, argsJson, requestId } = req;
+        const { turnId, agentId, toolName, argsJson, requestId } = req;
 
         if (!toolName) {
           throw new ConnectError('tool_name is required', Code.InvalidArgument);
@@ -160,13 +161,13 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
 
         let dedupInserted = false;
         if (requestId && deps.repository) {
-          const inserted = await deps.repository.tryInsertToolDedup(requestId, sessionId, toolName);
+          const inserted = await deps.repository.tryInsertToolDedup(requestId, turnId, toolName);
           if (!inserted) {
             const existing = await deps.repository.getToolDedup(requestId);
             if (existing) {
-              if (existing.sessionId !== sessionId || existing.toolName !== toolName) {
+              if (existing.turnId !== turnId || existing.toolName !== toolName) {
                 throw new ConnectError(
-                  `Request ID ${requestId} collision: different session/tool`,
+                  `Request ID ${requestId} collision: different turn/tool`,
                   Code.InvalidArgument,
                 );
               }
@@ -227,9 +228,15 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           }
         }
 
+        const turn = deps.repository ? await deps.repository.getTurn(turnId) : undefined;
         let result: string;
         try {
-          result = await handler(args, { sessionId, agentId, requestId });
+          result = await handler(args, {
+            turnId,
+            agentId,
+            ...(turn?.conversationId ? { conversationId: turn.conversationId } : {}),
+            requestId,
+          });
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           return failToolRequest(errorMsg, 'failed execution');
@@ -260,7 +267,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
      */
     async emitEvent(req: EmitEventRequest): Promise<EmitEventResponse> {
       try {
-        const { sessionId, eventType, payloadJson } = req;
+        const { turnId, eventType, payloadJson } = req;
 
         if (!eventType) {
           throw new ConnectError('event_type is required', Code.InvalidArgument);
@@ -275,7 +282,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           }
         }
 
-        payload.runId = sessionId;
+        payload.turnId = turnId;
 
         // Extract agentId from payload if present, otherwise use empty string
         const agentId = typeof payload.agentId === 'string' ? payload.agentId : '';
@@ -304,7 +311,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           const row = await deps.repository.saveArtifact({
             id: artifact.id || undefined,
             agentId: artifact.agentId,
-            sessionId: artifact.sessionId || undefined,
+            turnId: artifact.turnId || req.turnId || undefined,
             name: artifact.name,
             mimeType: artifact.mimeType,
             sizeBytes: Number(artifact.sizeBytes),
@@ -361,7 +368,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           artifact: create(ArtifactMetaSchema, {
             id: row.id,
             agentId: row.agentId ?? '',
-            sessionId: row.sessionId ?? '',
+            turnId: row.turnId ?? '',
             name: row.name,
             mimeType: row.mimeType,
             sizeBytes: BigInt(row.sizeBytes),
@@ -413,7 +420,8 @@ export function registerDefaultToolHandlers(
       ? args.payload as Record<string, unknown>
       : {};
 
-    payload.runId = ctx.sessionId;
+    payload.turnId = ctx.turnId;
+    payload.conversationId = ctx.conversationId;
     payload.agentId = ctx.agentId;
 
     await eventBus.emitCustomAsync(eventType, ctx.agentId, payload);
@@ -425,11 +433,11 @@ export function registerDefaultToolHandlers(
     registry.set('request-approval', async (args, ctx) => {
       const reason = typeof args.reason === 'string' ? args.reason : 'Tool requires approval';
 
-      const turn = repository ? await repository.getTurn(ctx.sessionId) : undefined;
-      const sandboxSessionId = turn?.sessionId ?? undefined;
+      const turn = repository ? await repository.getTurn(ctx.turnId) : undefined;
+      const sandboxSessionId = turn?.sandboxSessionId ?? undefined;
 
       const resolution = await interruptManager.waitForApproval(
-        ctx.sessionId,
+        ctx.turnId,
         ctx.agentId,
         ctx.requestId,
         'request-approval',

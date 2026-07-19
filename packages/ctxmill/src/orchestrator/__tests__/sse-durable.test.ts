@@ -45,41 +45,71 @@ describe('durable SSE serving (Stage 4 A2, ADR-015)', () => {
     manager.shutdown();
   });
 
-  it('subscribeDurable flushes ring-buffered frames the DB replay missed (commit-order race)', () => {
+  it('subscribeDurable replays the database tail in durable sequence order', async () => {
     const manager = new SSEManager();
-    // Batch B2 (seqs 7,8) committed and fanned out before batch B1 (5,6):
-    // all four are in the ring; the reconnect's DB query saw only 7,8.
-    for (const seq of [7, 8, 5, 6]) {
-      manager.broadcastFrame('agent-1', { type: 'TEXT_MESSAGE_CONTENT', seq }, seq);
-    }
-
     const { reply, written } = createReply();
-    // Client acked seq 4; the route replayed 7,8 from the DB.
-    manager.subscribeDurable('agent-1', reply, 4, new Set([7, 8]));
+    const frames = [5, 6, 7, 8].map((seq) => ({
+      seq,
+      event: { type: 'TEXT_MESSAGE_CONTENT', seq },
+    }));
+    await manager.subscribeDurable('agent-1', reply, 4, 8, {
+      getWatermark: async () => 8,
+      getPage: async (afterSeq, throughSeq, limit) =>
+        frames.filter(({ seq }) => seq > afterSeq && seq <= throughSeq).slice(0, limit),
+    });
 
-    expect(writtenIds(written)).toEqual([formatSeqId(5), formatSeqId(6)]);
+    expect(writtenIds(written)).toEqual(
+      [5, 6, 7, 8].map((seq) => formatSeqId(seq)),
+    );
     manager.shutdown();
   });
 
-  it('subscribeDurable writes nothing extra when replay covered everything', () => {
+  it('subscribeDurable writes nothing when the client cursor covers the watermark', async () => {
     const manager = new SSEManager();
-    manager.broadcastFrame('agent-1', { type: 'RUN_STARTED' }, 10);
-
     const { reply, written } = createReply();
-    manager.subscribeDurable('agent-1', reply, 4, new Set([10]));
+    await manager.subscribeDurable('agent-1', reply, 10, 10, {
+      getWatermark: async () => 10,
+      getPage: async () => [],
+    });
 
     expect(writtenIds(written)).toEqual([]);
     manager.shutdown();
   });
 
-  it('live frames after subscribeDurable reach the client with seq ids', () => {
+  it('live frame broadcasts wake the database tail and reach the client with seq ids', async () => {
     const manager = new SSEManager();
     const { reply, written } = createReply();
-    manager.subscribeDurable('agent-1', reply, 0, new Set());
+    const frames: Array<{ seq: number; event: Record<string, unknown> }> = [];
+    await manager.subscribeDurable('agent-1', reply, 0, 0, {
+      getWatermark: async () => frames.at(-1)?.seq ?? 0,
+      getPage: async (afterSeq, throughSeq, limit) =>
+        frames.filter(({ seq }) => seq > afterSeq && seq <= throughSeq).slice(0, limit),
+    });
 
+    frames.push({ seq: 11, event: { type: 'RUN_FINISHED' } });
     manager.broadcastFrame('agent-1', { type: 'RUN_FINISHED' }, 11);
 
-    expect(writtenIds(written)).toEqual([formatSeqId(11)]);
+    await vi.waitFor(() => {
+      expect(writtenIds(written)).toEqual([formatSeqId(11)]);
+    });
+    manager.shutdown();
+  });
+
+  it('polls the database tail for commits made without a local broadcast', async () => {
+    const manager = new SSEManager();
+    const { reply, written } = createReply();
+    const frames: Array<{ seq: number; event: Record<string, unknown> }> = [];
+    await manager.subscribeDurable('agent-1', reply, 0, 0, {
+      getWatermark: async () => frames.at(-1)?.seq ?? 0,
+      getPage: async (afterSeq, throughSeq, limit) =>
+        frames.filter(({ seq }) => seq > afterSeq && seq <= throughSeq).slice(0, limit),
+    });
+
+    frames.push({ seq: 12, event: { type: 'RUN_FINISHED' } });
+
+    await vi.waitFor(() => {
+      expect(writtenIds(written)).toEqual([formatSeqId(12)]);
+    }, { timeout: 1_000 });
     manager.shutdown();
   });
 });

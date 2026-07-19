@@ -23,7 +23,7 @@
 HTTP/UI request
   -> Fastify API auth (`CTXMILL_API_TOKEN`) for /api/*
   -> route creates/loads conversation, user message, turn
-  -> RunStartupService builds launch contract
+  -> TurnStartupService builds launch contract
   -> AgentSessionService coordinates turn execution
   -> SandboxSessionManager opens/reuses/restores sandbox session
   -> sandbox daemon runs LangGraph / Claude Agents / PI Agent harness
@@ -80,7 +80,9 @@ HTTP/UI request
 
 ### Streaming and Events
 
-- `CONNECTED` and `state_snapshot` SSE bootstrap frames are direct route writes, not persisted canonical run frames.
+- `CONNECTED` and `CUSTOM name: ctxmill.sandbox_session.snapshot` SSE
+  bootstrap frames are direct route writes, not persisted canonical AG-UI
+  frames.
 - Canonical replay is durable but the current reconnect call uses the repository default replay limit; huge replay windows should be paged before treating replay as unbounded.
 - `/api/events` is an operational event log over `event_store`; custom event type strings remain open vocabulary.
 

@@ -9,7 +9,7 @@ export interface EventTrigger {
   id: string;
   /** Agent to invoke when the trigger fires. */
   agentId: string;
-  /** Event type to match (e.g. 'run.completed', 'custom.email.received'). */
+  /** Event type to match (e.g. 'turn.completed', 'custom.email.received'). */
   eventType: string;
   /** Optional field-level matching on the event payload. */
   selector?: Record<string, unknown>;

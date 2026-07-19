@@ -6,7 +6,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Message } from '@ctxmill/sandbox-daemon';
-import { SESSION_CANCELLED_MESSAGE } from '../../session-cancellation.js';
+import { TURN_CANCELLED_MESSAGE } from '../../turn-cancellation.js';
 import { ConcurrencyLimitError } from '../concurrency-limit-error.js';
 import { AsyncChannel, type SessionRecord } from '../types.js';
 import { SessionStateStore } from '../session-state-store.js';
@@ -63,6 +63,14 @@ function createMessage(content: string): Message {
   };
 }
 
+function createIteratorDeferred() {
+  let resolve!: (value: IteratorResult<never>) => void;
+  const promise = new Promise<IteratorResult<never>>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe('SessionTurnOrchestrator turn-owned cancellation', () => {
   it('cancels only the requested turn controller', () => {
     const stateStore = new SessionStateStore();
@@ -102,7 +110,7 @@ describe('SessionTurnOrchestrator turn-owned cancellation', () => {
     expect(queuedSignal.aborted).toBe(false);
     expect(stateStore.getQueue(record.sessionId)).toEqual([]);
     expect(stateStore.getTurnAbortSignal(record.sessionId, 'turn-b')).toBeUndefined();
-    await expect(channel.generator().next()).rejects.toThrow(SESSION_CANCELLED_MESSAGE);
+    await expect(channel.generator().next()).rejects.toThrow(TURN_CANCELLED_MESSAGE);
   });
 
   it('notifies when a turn becomes active at delivery time', async () => {
@@ -119,6 +127,94 @@ describe('SessionTurnOrchestrator turn-owned cancellation', () => {
     }
 
     expect(deps.onTurnActive).toHaveBeenCalledWith('turn-a');
+  });
+
+  it('cancels an active sandbox stream when its external ownership signal aborts', async () => {
+    const next = createIteratorDeferred();
+    const iterator = {
+      next: vi.fn(() => next.promise),
+      return: vi.fn(async () => ({ done: true as const, value: undefined })),
+    };
+    const stateStore = new SessionStateStore();
+    const record = createSessionRecord({
+      grpcClient: {
+        deliverTurn: vi.fn(() => ({
+          [Symbol.asyncIterator]: () => iterator,
+        })),
+      } as never,
+    });
+    stateStore.setSession(record.conversationId, record);
+    const deps = createDeps(stateStore);
+    const orchestrator = new SessionTurnOrchestrator(deps);
+    const controller = new AbortController();
+
+    const eventsPromise = (async () => {
+      const events = [];
+      for await (const event of orchestrator.executeDeliverTurn(
+        record.sessionId,
+        [createMessage('continue')],
+        'turn-resume',
+        false,
+        undefined,
+        controller.signal,
+      )) {
+        events.push(event);
+      }
+      return events;
+    })();
+    await vi.waitFor(() => {
+      expect(iterator.next).toHaveBeenCalledOnce();
+    });
+
+    controller.abort(new Error('lease lost'));
+    next.resolve({ done: true, value: undefined as never });
+    const events = await eventsPromise;
+
+    expect(events).toEqual([]);
+    expect(record.grpcClient?.deliverTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ turnId: 'turn-resume' }),
+      { signal: controller.signal },
+    );
+    expect(iterator.return).toHaveBeenCalledOnce();
+  });
+
+  it('removes a queued delivery immediately when its external ownership signal aborts', async () => {
+    const stateStore = new SessionStateStore();
+    const record = createSessionRecord();
+    stateStore.setSession(record.conversationId, record);
+    stateStore.markTurnActive(record.sessionId, 'turn-active');
+    const deps = createDeps(stateStore);
+    const orchestrator = new SessionTurnOrchestrator(deps);
+    const controller = new AbortController();
+
+    const delivery = (async () => {
+      for await (const event of orchestrator.deliverTurn(
+        record.sessionId,
+        [createMessage('queued')],
+        'turn-resume',
+        controller.signal,
+      )) {
+        // A fenced queued turn must not emit or reach the sandbox.
+        expect(event).toBeUndefined();
+      }
+    })();
+
+    await vi.waitFor(() => {
+      expect(stateStore.getQueue(record.sessionId)).toHaveLength(1);
+    });
+    controller.abort(new Error('lease lost while queued'));
+
+    try {
+      await vi.waitFor(() => {
+        expect(stateStore.getQueue(record.sessionId)).toHaveLength(0);
+      });
+      await expect(delivery).rejects.toThrow('lease lost while queued');
+      expect(deps.executeDeliverTurn).not.toHaveBeenCalled();
+    } finally {
+      const queued = stateStore.getQueue(record.sessionId)?.shift();
+      queued?.channel.fail(new Error('test cleanup'));
+      await delivery.catch(() => undefined);
+    }
   });
 });
 
@@ -214,6 +310,31 @@ describe('SessionTurnOrchestrator concurrency limit', () => {
 });
 
 describe('SessionTurnOrchestrator terminal-frame discipline', () => {
+  it('settles in-memory lifecycle without emitting a second terminal event', () => {
+    const stateStore = new SessionStateStore();
+    const record = createSessionRecord();
+    stateStore.setSession(record.conversationId, record);
+    stateStore.markTurnActive(record.sessionId, 'turn-1');
+    const controller = new AbortController();
+    stateStore.registerTurnController(record.sessionId, 'turn-1', controller);
+    const deps = createDeps(stateStore);
+    deps.eventBus = { emit: vi.fn() } as never;
+    const orchestrator = new SessionTurnOrchestrator(deps);
+
+    orchestrator.completeTurn(
+      record.sessionId,
+      'turn-1',
+      record.agentId,
+      record.conversationId,
+      'completed',
+      10,
+    );
+
+    expect(stateStore.getActiveTurnId(record.sessionId)).toBeUndefined();
+    expect(stateStore.getTurnAbortSignal(record.sessionId, 'turn-1')).toBeUndefined();
+    expect(deps.eventBus.emit).not.toHaveBeenCalled();
+  });
+
   it('fails the turn when a sandbox stream ends without a raw terminal frame after events', async () => {
     const stateStore = new SessionStateStore();
     const record = createSessionRecord({

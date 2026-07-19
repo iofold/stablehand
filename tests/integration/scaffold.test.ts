@@ -3,6 +3,7 @@ import { execSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { parseManifestString, validateManifest } from '@ctxmill/manifest';
 
 const CLI_PATH = join(
   __dirname,
@@ -90,6 +91,7 @@ describe('create-ctxmill scaffold', () => {
     it('has ctxmill dependency', () => {
       const deps = pkg.dependencies as Record<string, string>;
       expect(deps).toHaveProperty('ctxmill');
+      expect(deps).toHaveProperty('@ctxmill/manifest');
     });
 
     it('has vitest devDependency', () => {
@@ -133,6 +135,15 @@ describe('create-ctxmill scaffold', () => {
       expect(content).toContain('provider: openai');
       expect(content).toContain('model: gpt-5.4-mini');
       expect(content).toContain('apiKeyRef: "$secret:OPENAI_API_KEY"');
+    });
+
+    it('is accepted by the canonical manifest schema', () => {
+      const content = readFileSync(
+        join(projectDir, 'agents', 'assistant', 'agent.yaml'),
+        'utf-8',
+      );
+
+      expect(validateManifest(parseManifestString(content)).metadata.name).toBe('assistant');
     });
 
     it('references the generated starter tools', () => {

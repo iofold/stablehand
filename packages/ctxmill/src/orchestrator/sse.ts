@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { TypedEventBus } from '../events/bus.js';
 
 const MAX_QUEUE_SIZE = 100;
-const RECENT_FRAMES_CAP = 256;
+const DURABLE_REPLAY_PAGE_SIZE = 1_000;
+const DURABLE_TAIL_POLL_INTERVAL_MS = 250;
 
 /**
  * Serve-mode SSE ids are zero-padded global seqs so lexicographic order equals
@@ -23,7 +24,18 @@ export function parseSeqId(id: string | undefined): number | null {
 }
 
 export function writeSseHead(reply: FastifyReply): void {
+  // Writing to reply.raw bypasses Fastify's reply pipeline, which is where
+  // @fastify/cors put its headers. Carry them over or cross-origin browsers
+  // (e.g. the hosted artifact console) cancel the stream right after the 200.
+  const corsHeaders: Record<string, string> = {};
+  for (const [name, value] of Object.entries(reply.getHeaders())) {
+    if (name.toLowerCase().startsWith('access-control-') || name.toLowerCase() === 'vary') {
+      if (typeof value === 'string') corsHeaders[name] = value;
+      else if (Array.isArray(value)) corsHeaders[name] = value.join(', ');
+    }
+  }
   reply.raw.writeHead(200, {
+    ...corsHeaders,
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
@@ -40,6 +52,29 @@ interface ConnectionState {
   consecutiveHeartbeatFailures: number;
   agentId: string;
   clientId: string;
+  durableTail: DurableTailState | null;
+}
+
+export interface DurableSseFrame {
+  seq: number;
+  event: Record<string, unknown>;
+}
+
+export interface DurableTailSource {
+  getWatermark(): Promise<number>;
+  getPage(
+    afterSeq: number,
+    throughSeq: number,
+    limit: number,
+  ): Promise<DurableSseFrame[]>;
+}
+
+interface DurableTailState {
+  cursor: number;
+  source: DurableTailSource;
+  draining: boolean;
+  rerun: boolean;
+  pollInterval: NodeJS.Timeout | null;
 }
 
 /**
@@ -51,8 +86,6 @@ export class SSEManager {
   private heartbeatIntervals = new Map<FastifyReply, NodeJS.Timeout>();
   private lastActivityMap = new Map<string, number>();
   private connectionState = new Map<FastifyReply, ConnectionState>();
-  /** Attach buffer: recent frames per agent for the replay→live-tail handoff. */
-  private recentFrames = new Map<string, Array<{ seq: number; event: Record<string, unknown> }>>();
   private eventBus?: TypedEventBus;
 
   constructor(eventBus?: TypedEventBus) {
@@ -64,6 +97,51 @@ export class SSEManager {
    * Sets up heartbeat and cleanup on disconnect.
    */
   subscribe(agentId: string, reply: FastifyReply): void {
+    this.registerConnection(agentId, reply, null);
+  }
+
+  /**
+   * Subscribe through the durable database tail. The connection is registered
+   * before its first query, local broadcasts wake the tail after commit, and a
+   * polling fallback observes commits from other orchestrator processes.
+   */
+  async subscribeDurable(
+    agentId: string,
+    reply: FastifyReply,
+    afterSeq: number,
+    initialThroughSeq: number,
+    source: DurableTailSource,
+  ): Promise<void> {
+    const durableTail: DurableTailState = {
+      cursor: afterSeq,
+      source,
+      draining: false,
+      rerun: false,
+      pollInterval: null,
+    };
+    this.registerConnection(agentId, reply, durableTail);
+    try {
+      await this.drainDurableTail(reply, initialThroughSeq);
+    } catch (error) {
+      this.unsubscribe(agentId, reply);
+      throw error;
+    }
+
+    const state = this.connectionState.get(reply);
+    if (!state?.durableTail) return;
+    state.durableTail.pollInterval = setInterval(() => {
+      this.wakeDurableTail(reply);
+    }, DURABLE_TAIL_POLL_INTERVAL_MS);
+    // Close the cross-process race between the fixed initial watermark and
+    // installing the fallback poller.
+    this.wakeDurableTail(reply);
+  }
+
+  private registerConnection(
+    agentId: string,
+    reply: FastifyReply,
+    durableTail: DurableTailState | null,
+  ): void {
     const clientId = randomUUID();
     const state: ConnectionState = {
       queue: [],
@@ -72,6 +150,7 @@ export class SSEManager {
       consecutiveHeartbeatFailures: 0,
       agentId,
       clientId,
+      durableTail,
     };
     this.connectionState.set(reply, state);
 
@@ -154,6 +233,10 @@ export class SSEManager {
       clearInterval(interval);
       this.heartbeatIntervals.delete(reply);
     }
+    if (state?.durableTail?.pollInterval) {
+      clearInterval(state.durableTail.pollInterval);
+      state.durableTail.pollInterval = null;
+    }
     this.connectionState.delete(reply);
 
     // Emit client disconnected event
@@ -167,59 +250,102 @@ export class SSEManager {
   }
 
   /**
-   * Serve-mode broadcast: the event id is the durable global seq. Frames also
-   * land in a small per-agent ring buffer so subscribeDurable can close the
-   * SERIAL-vs-commit-order race between a reconnect's DB replay and the live
-   * tail.
+   * Serve-mode broadcast: ordinary subscribers receive the durable frame
+   * immediately. Durable subscribers treat this as a low-latency wake and read
+   * the database, preserving sequence order and cross-process correctness.
    */
   broadcastFrame(agentId: string, event: Record<string, unknown>, seq: number): void {
     this.lastActivityMap.set(agentId, Date.now());
-
-    let ring = this.recentFrames.get(agentId);
-    if (!ring) {
-      ring = [];
-      this.recentFrames.set(agentId, ring);
-    }
-    ring.push({ seq, event });
-    if (ring.length > RECENT_FRAMES_CAP) {
-      ring.splice(0, ring.length - RECENT_FRAMES_CAP);
-    }
 
     const clients = this.connections.get(agentId);
     if (!clients || clients.size === 0) return;
     const data = `id: ${formatSeqId(seq)}\ndata: ${JSON.stringify(event)}\n\n`;
     for (const reply of clients) {
-      if (!this.connectionState.has(reply)) continue;
+      const state = this.connectionState.get(reply);
+      if (!state) continue;
+      if (state.durableTail) {
+        state.durableTail.rerun = true;
+        this.wakeDurableTail(reply);
+        continue;
+      }
       this.writeToClient(agentId, reply, data);
     }
   }
 
-  /**
-   * Serve-mode subscribe: the caller replayed durable frames after the
-   * client's acked seq and passes exactly what it wrote (`replayedSeqs`).
-   * Buffered frames the DB query could not see yet — a batch with lower seqs
-   * that committed after the query (SERIAL-vs-commit-order race) — are
-   * flushed from the ring before attaching to the live tail.
-   */
-  subscribeDurable(
-    agentId: string,
+  private wakeDurableTail(reply: FastifyReply): void {
+    void this.drainDurableTail(reply).catch((error) => {
+      const state = this.connectionState.get(reply);
+      if (!state) return;
+      console.warn('[SSE] Durable tail query failed for agent', state.agentId, error);
+    });
+  }
+
+  private async drainDurableTail(
     reply: FastifyReply,
-    afterSeq: number,
-    replayedSeqs: ReadonlySet<number>,
-  ): void {
-    const ring = this.recentFrames.get(agentId) ?? [];
-    const gap = ring
-      .filter((entry) => entry.seq > afterSeq && !replayedSeqs.has(entry.seq))
-      .sort((a, b) => a.seq - b.seq);
-    try {
-      for (const entry of gap) {
-        reply.raw.write(`id: ${formatSeqId(entry.seq)}\ndata: ${JSON.stringify(entry.event)}\n\n`);
-      }
-    } catch (writeErr) {
-      console.debug('[SSE] Failed to flush attach buffer for agent', agentId, writeErr);
+    initialThroughSeq?: number,
+  ): Promise<void> {
+    const initialState = this.connectionState.get(reply);
+    const initialTail = initialState?.durableTail;
+    if (!initialState || !initialTail) return;
+    if (initialTail.draining) {
+      initialTail.rerun = true;
       return;
     }
-    this.subscribe(agentId, reply);
+
+    initialTail.draining = true;
+    let fixedThroughSeq = initialThroughSeq;
+    try {
+      do {
+        const state = this.connectionState.get(reply);
+        const tail = state?.durableTail;
+        if (!state || !tail) return;
+        tail.rerun = false;
+        const throughSeq = fixedThroughSeq
+          ?? await tail.source.getWatermark();
+        fixedThroughSeq = undefined;
+        const targetSeq = Math.max(tail.cursor, throughSeq);
+
+        while (tail.cursor < targetSeq) {
+          const page = await tail.source.getPage(
+            tail.cursor,
+            targetSeq,
+            DURABLE_REPLAY_PAGE_SIZE,
+          );
+          if (page.length === 0) {
+            // The watermark is agent-scoped while this tail may select only
+            // run-channel rows. Advancing over other channels is intentional.
+            tail.cursor = targetSeq;
+            break;
+          }
+
+          for (const frame of page) {
+            if (frame.seq <= tail.cursor || frame.seq > targetSeq) {
+              throw new Error(
+                `Durable tail returned out-of-range seq ${frame.seq} ` +
+                `after ${tail.cursor} through ${targetSeq}`,
+              );
+            }
+            this.writeToClient(
+              state.agentId,
+              reply,
+              `id: ${formatSeqId(frame.seq)}\ndata: ${JSON.stringify(frame.event)}\n\n`,
+            );
+            if (!this.connectionState.has(reply)) return;
+            tail.cursor = frame.seq;
+          }
+
+          if (page.length < DURABLE_REPLAY_PAGE_SIZE) {
+            tail.cursor = targetSeq;
+            break;
+          }
+        }
+      } while (this.connectionState.get(reply)?.durableTail?.rerun);
+    } finally {
+      const state = this.connectionState.get(reply);
+      if (state?.durableTail) {
+        state.durableTail.draining = false;
+      }
+    }
   }
 
   private writeToClient(agentId: string, reply: FastifyReply, data: string): void {
@@ -286,6 +412,5 @@ export class SSEManager {
     this.connections.clear();
     this.heartbeatIntervals.clear();
     this.connectionState.clear();
-    this.recentFrames.clear();
   }
 }

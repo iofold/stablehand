@@ -10,9 +10,9 @@ metadata:
     harness: langgraph
 spec:
   harness: langgraph
-  model:
+  harnessConfig:
     provider: google
-    id: gemini-2.5-flash
+    model: gemini-2.5-flash
     apiKeyRef: "$secret:GOOGLE_API_KEY"
   instructions: |
     You are a Gemini-powered stress test agent on LangGraph.
@@ -26,6 +26,3 @@ spec:
     blocklist:
       - execute
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 120
-    maxTokensPerSession: 8000

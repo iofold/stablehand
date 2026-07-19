@@ -102,14 +102,14 @@ type BuildLangChainTools = (
   ctx: {
     agentId: string;
     conversationId: string;
-    instanceId?: string;
+    turnId?: string;
     workspaceDir: string;
   },
   turnId: string,
   toolDefs: ToolDefinition[],
   onApprovalNeeded: (request: {
     id: string;
-    runId: string;
+    turnId: string;
     toolName: string;
     args: Record<string, unknown>;
   }) => Promise<{ action: 'approve' | 'reject' }>,
@@ -397,7 +397,7 @@ describe('LangGraphHarness message history', () => {
       handler: vi.fn(async () => 'approved result'),
     };
     const approvalEvents: AgentEvent[] = [];
-    const runId = 'turn-langgraph-approval-approved';
+    const turnId = 'turn-langgraph-approval-approved';
     const session = await openRestoredTestSession({
       stateVersion: '1',
       messages: [],
@@ -412,7 +412,7 @@ describe('LangGraphHarness message history', () => {
           conversationId: 'conversation-1',
           workspaceDir: '/tmp/workspace',
         },
-        runId,
+        turnId,
         [approvalTool],
         vi.fn(async () => ({ action: 'approve' as const })),
         approvalEvents,
@@ -442,7 +442,7 @@ describe('LangGraphHarness message history', () => {
       handler: vi.fn(async () => 'approved result'),
     };
     const approvalEvents: AgentEvent[] = [];
-    const runId = 'turn-langgraph-approval-rejected';
+    const turnId = 'turn-langgraph-approval-rejected';
     const session = await openRestoredTestSession({
       stateVersion: '1',
       messages: [],
@@ -457,7 +457,7 @@ describe('LangGraphHarness message history', () => {
           conversationId: 'conversation-1',
           workspaceDir: '/tmp/workspace',
         },
-        runId,
+        turnId,
         [approvalTool],
         vi.fn(async () => ({ action: 'reject' as const })),
         approvalEvents,

@@ -36,8 +36,11 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
     test('includes all required AgentDefinition fields', () => {
       const agent = createAgent({
         manifest: {
-          resourceLimits: { cpus: 2, memoryMb: 512 },
           spec: {
+            resources: {
+              sandbox: { cpus: 2, memoryMb: 512 },
+            },
+            mode: 'background',
             workspace: {
               content: {
                 files: [{ src: 'seed/prompt.md', dest: 'prompt.md' }],
@@ -66,6 +69,7 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
         projectDir: '/tmp/project/agents',
         resourceLimits: { cpus: 2, memoryMb: 512 },
         nativeTools: { allowlist: ['bash'] },
+        mode: 'background',
         workspaceContent: {
           files: [{ src: 'seed/prompt.md', dest: 'prompt.md' }],
         },
@@ -153,21 +157,21 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
       expect(resolveResourceLimits(agent)).toEqual({ cpus: 1 });
     });
 
-    test('falls back to manifest.resourceLimits when metadata has no override', () => {
+    test('ignores retired top-level manifest resource fields', () => {
       const agent = createAgent({
         manifest: {
           resourceLimits: { cpus: 4 },
-          spec: { resources: { cpus: 2 } },
+          spec: { resources: { sandbox: { cpus: 2 } } },
         },
       });
 
-      expect(resolveResourceLimits(agent)).toEqual({ cpus: 4 });
+      expect(resolveResourceLimits(agent)).toEqual({ cpus: 2 });
     });
 
-    test('falls back to manifest.spec.resources', () => {
+    test('falls back to manifest.spec.resources.sandbox', () => {
       const agent = createAgent({
         manifest: {
-          spec: { resources: { memoryMb: 768 } },
+          spec: { resources: { sandbox: { memoryMb: 768 } } },
         },
       });
 
@@ -223,6 +227,30 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
       });
     });
 
+    test('uses persisted API overrides for workspace content and mode', () => {
+      expect(
+        extractManifestRuntimeFields(
+          createAgent({
+            manifest: {
+              spec: {
+                mode: 'interactive',
+                workspace: {
+                  content: { files: [{ src: 'manifest.txt', dest: 'manifest.txt' }] },
+                },
+              },
+            },
+            metadata: {
+              mode: 'background',
+              workspaceContent: { files: [{ src: 'api.txt', dest: 'api.txt' }] },
+            },
+          }),
+        ),
+      ).toEqual({
+        mode: 'background',
+        workspaceContent: { files: [{ src: 'api.txt', dest: 'api.txt' }] },
+      });
+    });
+
     test('returns empty when manifest has no fields', () => {
       expect(extractManifestRuntimeFields(createAgent())).toEqual({});
     });
@@ -231,11 +259,11 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
   describe('API vs runtime parity', () => {
     test('toAgentResponse reports the resourceLimits the runtime enforces', () => {
       const manifestAgent = createAgent({
-        manifest: { resourceLimits: { cpus: 2, memoryMb: 1024 } },
+        manifest: { spec: { resources: { sandbox: { cpus: 2, memoryMb: 1024 } } } },
         metadata: null,
       });
       const editedManifestAgent = createAgent({
-        manifest: { resourceLimits: { cpus: 2, memoryMb: 1024 } },
+        manifest: { spec: { resources: { sandbox: { cpus: 2, memoryMb: 1024 } } } },
         metadata: { resourceLimits: { cpus: 3, memoryMb: 2048 } },
       });
       const metadataAgent = createAgent({
@@ -253,7 +281,11 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
     test('metadata override makes PUT-ed limits effective for manifest agents', () => {
       const agent = createAgent({
         manifest: {
-          resourceLimits: { cpus: 1, memoryMb: 1024, timeoutSec: 300 },
+          spec: {
+            resources: {
+              sandbox: { cpus: 1, memoryMb: 1024, timeoutSec: 300 },
+            },
+          },
         },
         metadata: {
           resourceLimits: { cpus: 2, memoryMb: 2048, timeoutSec: 900 },

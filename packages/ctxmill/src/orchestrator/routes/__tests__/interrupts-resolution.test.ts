@@ -9,8 +9,8 @@ const agent = { id: 'agent-1', name: 'agent' } as unknown as StoredAgent;
 
 function createInterruptRow(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'turn-1',
-    agentSessionId: 'turn-1',
+    id: 'interrupt-1',
+    turnId: 'turn-1',
     agentId: 'agent-1',
     toolCallId: 'tc-1',
     toolName: 'send_email',
@@ -21,21 +21,56 @@ function createInterruptRow(overrides: Record<string, unknown> = {}) {
     status: 'pending',
     resolvedAction: null,
     resolvedData: null,
-    sessionId: 'sess-1',
+    sandboxSessionId: 'sess-1',
     ...overrides,
   };
 }
 
 function createRouteDb(overrides: Record<string, unknown> = {}) {
+  const defaultAttempt = {
+    id: 'attempt-1',
+    interruptId: 'interrupt-1',
+    turnId: 'turn-1',
+    sandboxSessionId: 'sess-1',
+    agentId: 'agent-1',
+    status: 'pending',
+    attempts: 0,
+    lastError: null,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    completedAt: null,
+  };
   return {
     getPendingInterrupt: vi.fn().mockResolvedValue(undefined),
     getInterruptResumeAttemptForInterrupt: vi.fn().mockResolvedValue(undefined),
     getActionableInterruptsForAgent: vi.fn().mockResolvedValue([]),
     resolveInterrupt: vi.fn().mockResolvedValue(createInterruptRow({ status: 'resolved' })),
-    upsertInterruptResumeAttempt: vi.fn().mockResolvedValue({ id: 'attempt-1', status: 'pending' }),
-    markInterruptResumeAttemptInProgress: vi.fn().mockResolvedValue(undefined),
-    markInterruptResumeAttemptCompleted: vi.fn().mockResolvedValue(undefined),
-    markInterruptResumeAttemptFailed: vi.fn().mockResolvedValue(undefined),
+    resolveInterruptWithResumeAttempt: vi.fn().mockResolvedValue({
+      kind: 'ready',
+      interrupt: createInterruptRow({ status: 'resolved', resolvedAction: 'approve' }),
+      resumeAttempt: defaultAttempt,
+    }),
+    retryFailedInterruptResumeAttempt: vi.fn().mockResolvedValue(defaultAttempt),
+    getRecoverableInterruptResumeAttempts: vi.fn().mockResolvedValue([]),
+    claimInterruptResumeAttempt: vi.fn().mockImplementation(async (input: { claimedAt: number }) => ({
+      ...defaultAttempt,
+      status: 'in_progress',
+      attempts: 1,
+      updatedAt: input.claimedAt,
+    })),
+    renewInterruptResumeAttemptLease: vi.fn().mockResolvedValue(undefined),
+    completeInterruptResumeAttempt: vi.fn().mockImplementation(async (
+      _id: string,
+      _expectedUpdatedAt: number,
+      completedAt: number,
+    ) => ({
+      ...defaultAttempt,
+      status: 'completed',
+      completedAt,
+      updatedAt: completedAt,
+    })),
+    failInterruptResumeAttempt: vi.fn().mockResolvedValue(undefined),
+    failPendingInterruptResumeAttempt: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -86,6 +121,8 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const store = createManagerStore();
     const interrupts = new InterruptManager(undefined, store);
     const waiter = interrupts.waitForApproval('turn-1', 'agent-1', 'tc-1', 'send_email', {}, 0, 'sess-1');
+    await Promise.resolve();
+    const interruptId = interrupts.getPendingForAgent('agent-1')[0]?.info.interruptId;
     const db = createRouteDb({ getPendingInterrupt: vi.fn().mockResolvedValue(createInterruptRow()) });
     const sessionManager = { resumeWithInterruptResolution: vi.fn().mockResolvedValue(undefined) };
     const app = await buildApp({ db, interrupts, sessionManager });
@@ -94,7 +131,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/agents/agent-1/interrupt',
-      payload: { action: 'approve', sessionId: 'turn-1' },
+      payload: { action: 'approve', interruptId },
     });
 
     expect(response.statusCode).toBe(200);
@@ -108,8 +145,8 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const store = createManagerStore([row]);
     const interrupts = new InterruptManager(undefined, store);
     await interrupts.loadFromDb();
-    expect(interrupts.hasPending('turn-1')).toBe(true);
-    expect(interrupts.hasLiveWaiter('turn-1')).toBe(false);
+    expect(interrupts.hasPendingForTurn('turn-1')).toBe(true);
+    expect(interrupts.hasLiveWaiterForTurn('turn-1')).toBe(false);
 
     const db = createRouteDb({ getPendingInterrupt: vi.fn().mockResolvedValue(row) });
     const sessionManager = { resumeWithInterruptResolution: vi.fn().mockResolvedValue(undefined) };
@@ -119,7 +156,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/agents/agent-1/interrupt',
-      payload: { action: 'approve', sessionId: 'turn-1' },
+      payload: { action: 'approve', interruptId: 'interrupt-1' },
     });
 
     expect(response.statusCode).toBe(202);
@@ -129,14 +166,27 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
       action: 'approve',
       resumeAttemptId: 'attempt-1',
     }));
-    // resolve() persisted through the manager's store; the route must not
-    // double-call its own db.resolveInterrupt (would 409 on the resolved row).
-    expect(store.resolveInterrupt).toHaveBeenCalledTimes(1);
+    // Rehydrated entries have no live waiter. Resolution and durable attempt
+    // creation happen in one repository transaction, then the in-memory
+    // projection is settled without a second DB mutation.
+    expect(db.resolveInterruptWithResumeAttempt).toHaveBeenCalledTimes(1);
+    expect(store.resolveInterrupt).not.toHaveBeenCalled();
     expect(db.resolveInterrupt).not.toHaveBeenCalled();
+    expect(interrupts.hasPendingForTurn('turn-1')).toBe(false);
 
     await flushAsyncResume();
-    expect(sessionManager.resumeWithInterruptResolution).toHaveBeenCalledWith('sess-1', 'turn-1', 'agent-1');
-    expect(db.markInterruptResumeAttemptCompleted).toHaveBeenCalledWith('attempt-1');
+    expect(sessionManager.resumeWithInterruptResolution).toHaveBeenCalledWith(
+      'sess-1',
+      'turn-1',
+      'agent-1',
+      'interrupt-1',
+      expect.any(AbortSignal),
+    );
+    expect(db.completeInterruptResumeAttempt).toHaveBeenCalledWith(
+      'attempt-1',
+      expect.any(Number),
+      expect.any(Number),
+    );
   });
 
   it('enqueues a durable continuation for reject as well (ctx-qjnz)', async () => {
@@ -153,13 +203,19 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/agents/agent-1/interrupt',
-      payload: { action: 'reject', sessionId: 'turn-1', data: 'not allowed' },
+      payload: { action: 'reject', interruptId: 'interrupt-1', data: 'not allowed' },
     });
 
     expect(response.statusCode).toBe(202);
     expect(response.json()).toEqual(expect.objectContaining({ accepted: true, action: 'reject' }));
     await flushAsyncResume();
-    expect(sessionManager.resumeWithInterruptResolution).toHaveBeenCalledWith('sess-1', 'turn-1', 'agent-1');
+    expect(sessionManager.resumeWithInterruptResolution).toHaveBeenCalledWith(
+      'sess-1',
+      'turn-1',
+      'agent-1',
+      'interrupt-1',
+      expect.any(AbortSignal),
+    );
   });
 
   it('rejects resolution of another agent\'s live interrupt (ctx-aac)', async () => {
@@ -174,11 +230,14 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/agents/agent-1/interrupt',
-      payload: { action: 'approve', sessionId: 'turn-other' },
+      payload: {
+        action: 'approve',
+        interruptId: interrupts.getPendingForAgent('agent-2')[0]?.info.interruptId,
+      },
     });
 
     expect(response.statusCode).toBe(404);
-    expect(interrupts.hasPending('turn-other')).toBe(true);
+    expect(interrupts.hasPendingForTurn('turn-other')).toBe(true);
     expect(store.resolveInterrupt).not.toHaveBeenCalled();
   });
 
@@ -196,7 +255,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/agents/agent-1/interrupt',
-      payload: { action: 'reject', sessionId: 'turn-1' },
+      payload: { action: 'reject', interruptId: 'interrupt-1' },
     });
 
     expect(response.statusCode).toBe(202);
@@ -217,11 +276,184 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/agents/agent-1/interrupt',
-      payload: { action: 'approve', sessionId: 'turn-1' },
+      payload: { action: 'approve', interruptId: 'interrupt-1' },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ alreadyResolved: true, action: 'approve' });
+  });
+
+  it('recovers a stale in-progress resume attempt when the route plugin starts', async () => {
+    const staleAttempt = {
+      id: 'attempt-stale',
+      interruptId: 'interrupt-1',
+      turnId: 'turn-1',
+      sandboxSessionId: 'sess-1',
+      agentId: 'agent-1',
+      status: 'in_progress',
+      attempts: 1,
+      lastError: null,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      completedAt: null,
+    };
+    const claimedAttempt = {
+      ...staleAttempt,
+      status: 'in_progress',
+      attempts: 2,
+      updatedAt: Date.now(),
+    };
+    const db = createRouteDb({
+      getRecoverableInterruptResumeAttempts: vi.fn().mockResolvedValue([staleAttempt]),
+      claimInterruptResumeAttempt: vi.fn().mockResolvedValue(claimedAttempt),
+      completeInterruptResumeAttempt: vi.fn().mockResolvedValue({
+        ...claimedAttempt,
+        status: 'completed',
+      }),
+    });
+    const interrupts = new InterruptManager(undefined, createManagerStore());
+    const sessionManager = { resumeWithInterruptResolution: vi.fn().mockResolvedValue(undefined) };
+
+    const app = await buildApp({ db, interrupts, sessionManager });
+    apps.push(app);
+    await flushAsyncResume();
+
+    expect(db.claimInterruptResumeAttempt).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'attempt-stale',
+      expectedUpdatedAt: 1_000,
+      staleBefore: expect.any(Number),
+      claimedAt: expect.any(Number),
+    }));
+    expect(sessionManager.resumeWithInterruptResolution).toHaveBeenCalledWith(
+      'sess-1',
+      'turn-1',
+      'agent-1',
+      'interrupt-1',
+      expect.any(AbortSignal),
+    );
+    expect(db.completeInterruptResumeAttempt).toHaveBeenCalledWith(
+      'attempt-stale',
+      claimedAttempt.updatedAt,
+      expect.any(Number),
+    );
+  });
+
+  it('keeps a resolved interrupt with an active resume attempt actionable', async () => {
+    const row = createInterruptRow({ status: 'resolved', resolvedAction: 'approve' });
+    const activeAttempt = {
+      id: 'attempt-active',
+      interruptId: 'interrupt-1',
+      turnId: 'turn-1',
+      sandboxSessionId: 'sess-1',
+      agentId: 'agent-1',
+      status: 'in_progress',
+      attempts: 1,
+      lastError: null,
+      createdAt: Date.now() - 1_000,
+      updatedAt: Date.now(),
+      completedAt: null,
+    };
+    const interrupts = new InterruptManager(undefined, createManagerStore());
+    const db = createRouteDb({
+      getPendingInterrupt: vi.fn().mockResolvedValue(row),
+      getInterruptResumeAttemptForInterrupt: vi.fn().mockResolvedValue(activeAttempt),
+    });
+    const sessionManager = { resumeWithInterruptResolution: vi.fn().mockResolvedValue(undefined) };
+    const app = await buildApp({ db, interrupts, sessionManager });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/interrupt',
+      payload: { action: 'approve', interruptId: 'interrupt-1' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({
+      accepted: true,
+      resuming: true,
+      action: 'approve',
+      resumeAttemptId: 'attempt-active',
+    });
+    expect(db.resolveInterruptWithResumeAttempt).not.toHaveBeenCalled();
+  });
+
+  it('repairs a resolved interrupt that has no resume attempt instead of returning 409', async () => {
+    const row = createInterruptRow({
+      status: 'resolved',
+      resolvedAction: 'approve',
+      resolvedData: { approved: true },
+    });
+    const interrupts = new InterruptManager(undefined, createManagerStore());
+    const db = createRouteDb({
+      getPendingInterrupt: vi.fn().mockResolvedValue(row),
+      getInterruptResumeAttemptForInterrupt: vi.fn().mockResolvedValue(undefined),
+    });
+    const sessionManager = { resumeWithInterruptResolution: vi.fn().mockResolvedValue(undefined) };
+    const app = await buildApp({ db, interrupts, sessionManager });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/interrupt',
+      payload: { action: 'approve', interruptId: 'interrupt-1' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual(expect.objectContaining({
+      accepted: true,
+      resuming: true,
+      action: 'approve',
+      resumeAttemptId: 'attempt-1',
+    }));
+    expect(db.resolveInterruptWithResumeAttempt).toHaveBeenCalledWith(
+      'interrupt-1',
+      'approve',
+      { approved: true },
+    );
+  });
+
+  it('rejects a retry action that conflicts with the persisted resolution', async () => {
+    const row = createInterruptRow({
+      status: 'resolved',
+      resolvedAction: 'reject',
+      resolvedData: 'not allowed',
+    });
+    const failedAttempt = {
+      id: 'attempt-failed',
+      interruptId: 'interrupt-1',
+      turnId: 'turn-1',
+      sandboxSessionId: 'sess-1',
+      agentId: 'agent-1',
+      status: 'failed',
+      attempts: 1,
+      lastError: 'restore failed',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      completedAt: null,
+    };
+    const interrupts = new InterruptManager(undefined, createManagerStore());
+    const db = createRouteDb({
+      getPendingInterrupt: vi.fn().mockResolvedValue(row),
+      getInterruptResumeAttemptForInterrupt: vi.fn().mockResolvedValue(failedAttempt),
+    });
+    const sessionManager = { resumeWithInterruptResolution: vi.fn().mockResolvedValue(undefined) };
+    const app = await buildApp({ db, interrupts, sessionManager });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/interrupt',
+      payload: { action: 'approve', interruptId: 'interrupt-1' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: 'Interrupt was already resolved with a different action',
+      action: 'reject',
+    });
+    expect(db.retryFailedInterruptResumeAttempt).not.toHaveBeenCalled();
+    expect(sessionManager.resumeWithInterruptResolution).not.toHaveBeenCalled();
   });
 
   it('404s when no interrupt exists anywhere', async () => {
@@ -232,7 +464,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/agents/agent-1/interrupt',
-      payload: { action: 'approve', sessionId: 'missing-turn' },
+      payload: { action: 'approve', interruptId: 'missing-interrupt' },
     });
 
     expect(response.statusCode).toBe(404);
@@ -251,7 +483,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/agents/agent-1/interrupt',
-      payload: { action: 'approve', sessionId: 'turn-1' },
+      payload: { action: 'approve', interruptId: 'interrupt-1' },
     });
 
     expect(response.statusCode).toBe(202);
@@ -260,16 +492,21 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
       resuming: false,
       resumeAttemptId: 'attempt-1',
     }));
-    expect(db.markInterruptResumeAttemptFailed).toHaveBeenCalledWith('attempt-1', 'Session resume service is not available');
+    expect(db.failPendingInterruptResumeAttempt).toHaveBeenCalledWith(
+      'attempt-1',
+      1_000,
+      expect.any(Number),
+      'Session resume service is not available',
+    );
   });
 
   it('loads actionable interrupt rows once and filters resolved rows by default', async () => {
     const interrupts = new InterruptManager(undefined, createManagerStore());
     const getActionableInterruptsForAgent = vi.fn().mockResolvedValue([
-      { interrupt: createInterruptRow({ id: 'pending-1', agentSessionId: 'pending-1' }), resumeAttempt: undefined },
-      { interrupt: createInterruptRow({ id: 'resolved-1', agentSessionId: 'resolved-1', status: 'resolved' }), resumeAttempt: undefined },
+      { interrupt: createInterruptRow({ id: 'pending-1', turnId: 'turn-pending-1' }), resumeAttempt: undefined },
+      { interrupt: createInterruptRow({ id: 'resolved-1', turnId: 'turn-resolved-1', status: 'resolved' }), resumeAttempt: undefined },
       {
-        interrupt: createInterruptRow({ id: 'failed-1', agentSessionId: 'failed-1', status: 'resolved' }),
+        interrupt: createInterruptRow({ id: 'failed-1', turnId: 'turn-failed-1', status: 'resolved' }),
         resumeAttempt: { status: 'failed', lastError: 'resume failed' },
       },
     ]);
@@ -284,9 +521,23 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
 
     expect(defaultResponse.statusCode).toBe(200);
     expect(defaultResponse.json().interrupts).toEqual([
-      expect.objectContaining({ id: 'pending-1', status: 'pending' }),
-      expect.objectContaining({ id: 'failed-1', status: 'resume_failed', resumeError: 'resume failed' }),
+      expect.objectContaining({
+        interruptId: 'pending-1',
+        turnId: 'turn-pending-1',
+        sandboxSessionId: 'sess-1',
+        toolCallName: 'send_email',
+        status: 'pending',
+      }),
+      expect.objectContaining({
+        interruptId: 'failed-1',
+        turnId: 'turn-failed-1',
+        sandboxSessionId: 'sess-1',
+        status: 'resume_failed',
+        resumeError: 'resume failed',
+      }),
     ]);
+    expect(defaultResponse.json().interrupts[0]).not.toHaveProperty('sessionId');
+    expect(defaultResponse.json().interrupts[0]).not.toHaveProperty('toolName');
     expect(getActionableInterruptsForAgent).toHaveBeenCalledTimes(1);
     expect(getActionableInterruptsForAgent).toHaveBeenLastCalledWith('agent-1');
 
@@ -296,7 +547,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     });
 
     expect(includeResolvedResponse.statusCode).toBe(200);
-    expect(includeResolvedResponse.json().interrupts.map((row: { id: string }) => row.id)).toEqual([
+    expect(includeResolvedResponse.json().interrupts.map((row: { interruptId: string }) => row.interruptId)).toEqual([
       'pending-1',
       'resolved-1',
       'failed-1',

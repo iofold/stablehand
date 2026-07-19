@@ -78,12 +78,9 @@ spec:
   tools:
     - ref: tool-name
   nativeTools:
-    allowlist: [Read, Write, Edit, Bash]   # OR
-    blocklist: [execute]                    # mutually exclusive
+    allowlist: [Read, Write, Edit, Bash]
+    blocklist: [execute]
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 60
-    maxTokensPerSession: 4000
 ```
 
 ## TOOL DEFINITION PATTERN

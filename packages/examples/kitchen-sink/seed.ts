@@ -1,34 +1,14 @@
 #!/usr/bin/env npx tsx
 
-declare const process: {
-  env: Record<string, string | undefined>;
-  exit(code?: number): never;
-};
+import { readdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
-type DirectoryEntry = {
-  name: string;
-  isDirectory(): boolean;
-};
+import {
+  loadManifestProject,
+  type LoadedManifestProject,
+} from '@ctxmill/manifest/node';
 
-type FsPromises = {
-  readdir(path: string | URL, options: { withFileTypes: true }): Promise<DirectoryEntry[]>;
-  readFile(path: string | URL, encoding: 'utf8'): Promise<string>;
-};
-
-type YamlModule = {
-  parse(source: string): unknown;
-};
-
-type AgentPayload = {
-  name: string;
-  harness: string;
-  harnessConfig: Record<string, unknown>;
-  systemPrompt: string;
-  tools: string[];
-  description?: string;
-  metadata?: Record<string, unknown>;
-  resourceLimits?: Record<string, unknown>;
-};
+type AgentPayload = LoadedManifestProject['agentCreateInput'];
 
 type AgentResult = {
   id?: string;
@@ -43,89 +23,11 @@ type TriggerResult = {
   [key: string]: unknown;
 };
 
-const loadFsPromises = new Function('return import("node:fs/promises")') as () => Promise<FsPromises>;
-const loadYaml = new Function('return import("yaml")') as () => Promise<YamlModule>;
-const { readdir, readFile } = await loadFsPromises();
-const { parse: parseYaml } = await loadYaml();
-
 const API_BASE = process.env.API_URL ?? 'http://localhost:3002';
 const AGENTS_DIR = new URL('./agents/', import.meta.url);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function requireString(value: unknown, fieldName: string): string {
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`Manifest field ${fieldName} must be a non-empty string.`);
-  }
-  return value;
-}
-
-function parseManifestToPayload(manifestYaml: string): AgentPayload {
-  const parsed = parseYaml(manifestYaml) as Record<string, unknown>;
-  const metadata = isRecord(parsed.metadata) ? parsed.metadata : {};
-  const spec = isRecord(parsed.spec) ? parsed.spec : {};
-  const agentMetadata: Record<string, unknown> = {};
-
-  if (typeof metadata.displayName === 'string') {
-    agentMetadata.displayName = metadata.displayName;
-  }
-  if (isRecord(metadata.labels)) {
-    agentMetadata.labels = metadata.labels;
-  }
-  if (isRecord(spec.nativeTools)) {
-    agentMetadata.nativeTools = spec.nativeTools;
-  }
-  if (isRecord(spec.resources)) {
-    agentMetadata.resourceLimits = spec.resources;
-  }
-
-  let harnessConfig: Record<string, unknown>;
-  if (isRecord(spec.harnessConfig)) {
-    harnessConfig = { ...spec.harnessConfig };
-  } else {
-    const model = isRecord(spec.model) ? spec.model : null;
-    if (!model) {
-      throw new Error('Manifest requires spec.harnessConfig or spec.model.');
-    }
-    harnessConfig = {
-      provider: requireString(model.provider, 'spec.model.provider'),
-      model: requireString(model.id, 'spec.model.id'),
-    };
-    if (typeof model.apiKeyRef === 'string' && model.apiKeyRef.trim() !== '') {
-      harnessConfig.apiKeyRef = model.apiKeyRef;
-    }
-  }
-
-  const tools = Array.isArray(spec.tools)
-    ? spec.tools
-        .map((tool) => (isRecord(tool) && typeof tool.ref === 'string' ? tool.ref : null))
-        .filter((tool): tool is string => tool !== null)
-    : [];
-
-  const payload: AgentPayload = {
-    name: requireString(metadata.name, 'metadata.name'),
-    harness: requireString(spec.harness, 'spec.harness'),
-    harnessConfig,
-    systemPrompt: requireString(spec.instructions, 'spec.instructions'),
-    tools,
-  };
-
-  if (typeof metadata.description === 'string' && metadata.description.trim() !== '') {
-    payload.description = metadata.description;
-  }
-  if (Object.keys(agentMetadata).length > 0) {
-    payload.metadata = agentMetadata;
-  }
-  if (isRecord(spec.resources)) {
-    payload.resourceLimits = spec.resources;
-  }
-
-  // Preserve the full manifest so spec fields survive the API → DB round-trip.
-  (payload as Record<string, unknown>).manifest = parsed;
-
-  return payload;
 }
 
 async function parseJson(res: Response): Promise<unknown> {
@@ -212,8 +114,8 @@ async function seed(): Promise<void> {
 
   for (const dir of agentDirs) {
     const manifestUrl = new URL(`./${dir}/agent.yaml`, AGENTS_DIR);
-    const manifestYaml = await readFile(manifestUrl, 'utf8');
-    const payload = parseManifestToPayload(manifestYaml);
+    const project = await loadManifestProject(fileURLToPath(manifestUrl));
+    const payload = project.agentCreateInput;
     const result = await upsertAgent(dir, payload, existingByName.get(payload.name));
     const agentId = typeof result.id === 'string' ? result.id : undefined;
     if (agentId) {

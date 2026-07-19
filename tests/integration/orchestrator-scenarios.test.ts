@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { liveApiHeaders } from './live-api-auth.js';
 
 const API = 'http://localhost:3002';
-const RUN_TIMEOUT_MS = 180_000;
+const TURN_TIMEOUT_MS = 180_000;
 const TEST_TIMEOUT_MS = 300_000;
 
 const cleanup: { agents: Set<string>; triggers: Set<string> } = {
@@ -36,7 +36,7 @@ async function waitFor<T>(
   fn: () => Promise<T>,
   predicate: (v: T) => boolean,
   description: string,
-  timeoutMs = RUN_TIMEOUT_MS,
+  timeoutMs = TURN_TIMEOUT_MS,
   intervalMs = 2_000,
 ): Promise<T> {
   const start = Date.now();
@@ -49,38 +49,38 @@ async function waitFor<T>(
   throw new Error(`Timed out: ${description}. Last: ${JSON.stringify(last, null, 2)}`);
 }
 
-async function waitForRun(agentId: string, runId: string, timeoutMs = RUN_TIMEOUT_MS) {
+async function waitForTurn(agentId: string, turnId: string, timeoutMs = TURN_TIMEOUT_MS) {
   return waitFor(
     async () => {
-      const r = await api('GET', `/api/agents/${agentId}/sessions/${runId}`);
+      const r = await api('GET', `/api/agents/${agentId}/turns/${turnId}`);
       if (r.status === 404) return null;
       return r.data;
     },
-    (d) => d !== null && ['completed', 'error', 'cancelled'].includes(getSessionStatus(d) ?? ''),
-    `run ${runId} to complete`,
+    (d) => d !== null && ['completed', 'error', 'cancelled'].includes(getTurnStatus(d) ?? ''),
+    `turn ${turnId} to complete`,
     timeoutMs,
   );
 }
 
-async function waitForRunState(agentId: string, runId: string, states: string[], timeoutMs = 30_000, intervalMs = 1_000) {
+async function waitForTurnState(agentId: string, turnId: string, states: string[], timeoutMs = 30_000, intervalMs = 1_000) {
   return waitFor(
     async () => {
-      const r = await api('GET', `/api/agents/${agentId}/sessions/${runId}`);
+      const r = await api('GET', `/api/agents/${agentId}/turns/${turnId}`);
       if (r.status === 404) return null;
       return r.data;
     },
-    (d) => d !== null && states.includes(getSessionStatus(d) ?? ''),
-    `run ${runId} to reach ${states.join('|')}`,
+    (d) => d !== null && states.includes(getTurnStatus(d) ?? ''),
+    `turn ${turnId} to reach ${states.join('|')}`,
     timeoutMs,
     intervalMs,
   );
 }
 
-function getSession(data: any) { return data?.session ?? data?.run ?? data; }
+function getTurn(data: any) { return data?.turn ?? data; }
 function getMessages(data: any): any[] { return Array.isArray(data?.messages) ? data.messages : []; }
 function getEntries(data: any): any[] { return Array.isArray(data?.entries) ? data.entries : []; }
-function getSessionStatus(data: any): string | undefined {
-  const status = getSession(data)?.status;
+function getTurnStatus(data: any): string | undefined {
+  const status = getTurn(data)?.status;
   return typeof status === 'string' ? status.toLowerCase() : undefined;
 }
 
@@ -88,13 +88,13 @@ function isJsonRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function hasPendingInterruptForSession(response: { data: unknown }, sessionId: string): boolean {
+function hasPendingInterruptForTurn(response: { data: unknown }, turnId: string): boolean {
   if (!isJsonRecord(response.data) || !Array.isArray(response.data.interrupts)) {
     return false;
   }
 
   return response.data.interrupts.some((interrupt) =>
-    isJsonRecord(interrupt) && interrupt.sessionId === sessionId,
+    isJsonRecord(interrupt) && interrupt.turnId === turnId,
   );
 }
 
@@ -135,10 +135,11 @@ async function createAgent(overrides: Record<string, unknown> = {}) {
   return { agentId, data: r.data };
 }
 
-async function startSession(agentId: string, task: string) {
-  const r = await api('POST', `/api/agents/${agentId}/session`, { task });
+async function startTurn(agentId: string, task: string) {
+  const r = await api('POST', `/api/agents/${agentId}/turns`, { task });
   expect(r.status).toBe(201);
-  return { runId: r.data?.sessionId ?? r.data?.runId ?? r.data?.id, conversationId: r.data?.conversationId };
+  expect(typeof r.data?.turnId).toBe('string');
+  return { turnId: r.data.turnId as string, conversationId: r.data?.conversationId };
 }
 
 async function sendMessage(agentId: string, message: string, conversationId?: string) {
@@ -146,7 +147,8 @@ async function sendMessage(agentId: string, message: string, conversationId?: st
   if (conversationId) payload.conversationId = conversationId;
   const r = await api('POST', `/api/agents/${agentId}/message`, payload);
   expect(r.status).toBe(201);
-  return { runId: r.data?.sessionId ?? r.data?.runId ?? r.data?.id, conversationId: r.data?.conversationId };
+  expect(typeof r.data?.turnId).toBe('string');
+  return { turnId: r.data.turnId as string, conversationId: r.data?.conversationId };
 }
 
 async function waitForEventType(type: string, predicate?: (event: any) => boolean) {
@@ -154,7 +156,7 @@ async function waitForEventType(type: string, predicate?: (event: any) => boolea
     async () => api('GET', `/api/events?type=${encodeURIComponent(type)}&limit=100`),
     (response) => response.status === 200 && Array.isArray(response.data?.events) && response.data.events.some((event: any) => predicate ? predicate(event) : true),
     `event type ${type}`,
-    RUN_TIMEOUT_MS,
+    TURN_TIMEOUT_MS,
     1_000,
   );
 }
@@ -352,8 +354,8 @@ describe('Scenario Group 1: Agent Registration & CRUD', () => {
 describe('Scenario Group 2: Real Agent Execution', () => {
   it('S2a: LangGraph agent executes and completes', async () => {
     const created = await createAgent();
-    const started = await startSession(created.agentId, 'What is 2+2? Reply with just the number.');
-    const finished = await waitForRun(created.agentId, started.runId).catch((err) => {
+    const started = await startTurn(created.agentId, 'What is 2+2? Reply with just the number.');
+    const finished = await waitForTurn(created.agentId, started.turnId).catch((err) => {
       if (err instanceof Error && err.message.includes('Last: null')) {
         return null;
       }
@@ -362,7 +364,7 @@ describe('Scenario Group 2: Real Agent Execution', () => {
     if (!finished) {
       return;
     }
-    expect(getSessionStatus(finished)).toBe('completed');
+    expect(getTurnStatus(finished)).toBe('completed');
     expect(getMessages(finished).some((message) => message?.role === 'assistant')).toBe(true);
   }, TEST_TIMEOUT_MS);
 
@@ -372,11 +374,11 @@ describe('Scenario Group 2: Real Agent Execution', () => {
       harnessConfig: { model: 'claude-sonnet-4-6' },
     });
 
-    const started = await startSession(created.agentId, 'Reply with the word success and nothing else.');
-    const finished = await waitForRun(created.agentId, started.runId);
+    const started = await startTurn(created.agentId, 'Reply with the word success and nothing else.');
+    const finished = await waitForTurn(created.agentId, started.turnId);
     const assistantText = extractAssistantText(getMessages(finished)).toLowerCase();
 
-    expect(getSessionStatus(finished)).toBe('completed');
+    expect(getTurnStatus(finished)).toBe('completed');
     expect(assistantText).toContain('success');
   }, TEST_TIMEOUT_MS);
 
@@ -393,9 +395,9 @@ describe('Scenario Group 2: Real Agent Execution', () => {
     expect(readFile.status).toBe(200);
     expect(readFile.data?.content).toBe('orchestrator external file content');
 
-    const started = await startSession(created.agentId, 'There is a file in the workspace. Reply with a brief acknowledgement.');
-    const finished = await waitForRun(created.agentId, started.runId);
-    expect(getSessionStatus(finished)).toBe('completed');
+    const started = await startTurn(created.agentId, 'There is a file in the workspace. Reply with a brief acknowledgement.');
+    const finished = await waitForTurn(created.agentId, started.turnId);
+    expect(getTurnStatus(finished)).toBe('completed');
   }, TEST_TIMEOUT_MS);
 
   it('S2d: interactive message endpoint returns stable conversation ids', async () => {
@@ -407,8 +409,8 @@ describe('Scenario Group 2: Real Agent Execution', () => {
     expect(first.conversationId).toBeTruthy();
     expect(second.conversationId).toBe(first.conversationId);
     await Promise.allSettled([
-      api('POST', `/api/agents/${created.agentId}/sessions/${first.runId}/cancel`),
-      api('POST', `/api/agents/${created.agentId}/sessions/${second.runId}/cancel`),
+      api('POST', `/api/agents/${created.agentId}/turns/${first.turnId}/cancel`),
+      api('POST', `/api/agents/${created.agentId}/turns/${second.turnId}/cancel`),
     ]);
   }, TEST_TIMEOUT_MS);
 });
@@ -426,7 +428,7 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     expect(events.data.events.some((event: any) => event.type === 'e2e.test.ping')).toBe(true);
   }, TEST_TIMEOUT_MS);
 
-  it('S3b: run.completed on Agent A triggers Agent B', async () => {
+  it('S3b: turn.completed on Agent A triggers Agent B', async () => {
     const agentA = await createAgent();
     const agentB = await createAgent();
 
@@ -440,34 +442,34 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     expect(trigger.status).toBe(201);
     cleanup.triggers.add(trigger.data.id);
 
-    const startedA = await startSession(agentA.agentId, 'Reply with done.');
-    const finishedA = await waitForRun(agentA.agentId, startedA.runId);
-    expect(getSessionStatus(finishedA)).toBe('completed');
+    const startedA = await startTurn(agentA.agentId, 'Reply with done.');
+    const finishedA = await waitForTurn(agentA.agentId, startedA.turnId);
+    expect(getTurnStatus(finishedA)).toBe('completed');
 
-    const bRuns = await waitFor(
-      async () => api('GET', `/api/agents/${agentB.agentId}/sessions`),
-      (response) => response.status === 200 && Array.isArray(response.data?.sessions) && response.data.sessions.length > 0,
-      'triggered run for agent B',
-      RUN_TIMEOUT_MS,
+    const bTurns = await waitFor(
+      async () => api('GET', `/api/agents/${agentB.agentId}/turns`),
+      (response) => response.status === 200 && Array.isArray(response.data?.turns) && response.data.turns.length > 0,
+      'triggered turn for agent B',
+      TURN_TIMEOUT_MS,
       2_000,
     );
 
-    const triggeredRun = bRuns.data.sessions[0];
-    expect(typeof triggeredRun?.id).toBe('string');
-    const finishedB = await waitForRun(agentB.agentId, triggeredRun.id);
-    expect(getSessionStatus(finishedB)).toBe('completed');
+    const triggeredTurn = bTurns.data.turns[0];
+    expect(typeof triggeredTurn?.id).toBe('string');
+    const finishedB = await waitForTurn(agentB.agentId, triggeredTurn.id);
+    expect(getTurnStatus(finishedB)).toBe('completed');
   }, TEST_TIMEOUT_MS);
 
-  it('S3c: persists custom events associated with an agent run', async () => {
+  it('S3c: persists custom events associated with an agent turn', async () => {
     const created = await createAgent();
-    const started = await startSession(
+    const started = await startTurn(
       created.agentId,
       'Think carefully for a bit, then reply with the word done.',
     );
 
-    await waitForRunState(
+    await waitForTurnState(
       created.agentId,
-      started.runId,
+      started.turnId,
       ['active', 'running', 'completed', 'error', 'cancelled'],
       15_000,
       500,
@@ -476,35 +478,35 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     const emittedOne = await api('POST', '/api/triggers/emit', {
       type: 'e2e.test.progress',
       agentId: created.agentId,
-      payload: { runId: started.runId, step: 1 },
+      payload: { turnId: started.turnId, step: 1 },
     });
     expect(emittedOne.status).toBe(200);
 
     const emittedTwo = await api('POST', '/api/triggers/emit', {
       type: 'e2e.test.progress',
       agentId: created.agentId,
-      payload: { runId: started.runId, step: 2 },
+      payload: { turnId: started.turnId, step: 2 },
     });
     expect(emittedTwo.status).toBe(200);
 
     const persisted = await waitForEventType(
       'e2e.test.progress',
-      (event) => String(event?.payload ?? '').includes(started.runId),
+      (event) => String(event?.payload ?? '').includes(started.turnId),
     );
     expect(persisted.status).toBe(200);
 
-    const finished = await waitForRun(created.agentId, started.runId);
-    expect(getSessionStatus(finished)).toBe('completed');
+    const finished = await waitForTurn(created.agentId, started.turnId);
+    expect(getTurnStatus(finished)).toBe('completed');
   }, TEST_TIMEOUT_MS);
 
-  it('S3d: SSE stream reports real run lifecycle events', async () => {
+  it('S3d: SSE stream reports AG-UI lifecycle events', async () => {
     const created = await createAgent();
     const stream = await openSseStream(created.agentId);
 
     try {
-      const started = await startSession(created.agentId, 'Reply with SSE ok.');
-      const finished = await waitForRun(created.agentId, started.runId);
-      expect(getSessionStatus(finished)).toBe('completed');
+      const started = await startTurn(created.agentId, 'Reply with SSE ok.');
+      const finished = await waitForTurn(created.agentId, started.turnId);
+      expect(getTurnStatus(finished)).toBe('completed');
 
       await waitFor(
         async () => stream.events,
@@ -588,50 +590,50 @@ describe('Scenario Group 4: Filesystem Access', () => {
 
 });
 
-describe('Scenario Group 5: Suspend/Resume and Run Lifecycle', () => {
-  it('S5a: background runs can be cancelled', async () => {
+describe('Scenario Group 5: Turn Lifecycle', () => {
+  it('S5a: background turns can be cancelled', async () => {
     const created = await createAgent({
       systemPrompt: 'When asked to request approval, immediately call request-approval with reason "Scenario cancellation approval". Do not answer normally before calling the tool.',
       tools: ['request-approval'],
     });
 
-    const started = await startSession(created.agentId, 'Request approval now.');
+    const started = await startTurn(created.agentId, 'Request approval now.');
     await waitFor(
       async () => api('GET', `/api/agents/${created.agentId}/interrupts`),
       (response) => response.status === 200 &&
-        hasPendingInterruptForSession(response, started.runId),
+        hasPendingInterruptForTurn(response, started.turnId),
       'pending approval interrupt',
       90_000,
       1_000,
     );
 
-    const cancel = await api('POST', `/api/agents/${created.agentId}/sessions/${started.runId}/cancel`);
+    const cancel = await api('POST', `/api/agents/${created.agentId}/turns/${started.turnId}/cancel`);
     expect(cancel.status).toBe(200);
 
-    const finished = await waitForRun(created.agentId, started.runId, 30_000);
-    expect(['cancelled', 'error']).toContain(getSessionStatus(finished));
+    const finished = await waitForTurn(created.agentId, started.turnId, 30_000);
+    expect(['cancelled', 'error']).toContain(getTurnStatus(finished));
 
     const pendingAfterCancel = await api('GET', `/api/agents/${created.agentId}/interrupts`);
     expect(pendingAfterCancel.status).toBe(200);
-    expect(hasPendingInterruptForSession(pendingAfterCancel, started.runId)).toBe(false);
+    expect(hasPendingInterruptForTurn(pendingAfterCancel, started.turnId)).toBe(false);
   }, TEST_TIMEOUT_MS);
 
-  it('S5b: runs report observable and terminal lifecycle states', async () => {
+  it('S5b: turns report observable and terminal lifecycle states', async () => {
     const created = await createAgent();
 
     let observedState: unknown = null;
     let completed: unknown = null;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const started = await startSession(
+      const started = await startTurn(
         created.agentId,
         'Think step by step for a little while, then answer with done.',
       );
 
       try {
-        observedState = await waitForRunState(
+        observedState = await waitForTurnState(
           created.agentId,
-          started.runId,
+          started.turnId,
           ['active', 'running', 'completed', 'error', 'cancelled'],
           10_000,
           250,
@@ -640,16 +642,16 @@ describe('Scenario Group 5: Suspend/Resume and Run Lifecycle', () => {
         observedState = null;
       }
 
-      completed = await waitForRun(created.agentId, started.runId);
+      completed = await waitForTurn(created.agentId, started.turnId);
       if (observedState) break;
     }
 
     expect(observedState).toBeTruthy();
-    const run = getSession(completed);
-    expect(['completed', 'error', 'cancelled']).toContain(getSessionStatus(completed));
-    expect(typeof run.startedAt).toBe('number');
-    expect(typeof run.completedAt).toBe('number');
-    expect((run.durationMs ?? (run.completedAt - run.startedAt)) > 0).toBe(true);
+    const turn = getTurn(completed);
+    expect(['completed', 'error', 'cancelled']).toContain(getTurnStatus(completed));
+    expect(typeof turn.startedAt).toBe('number');
+    expect(typeof turn.completedAt).toBe('number');
+    expect((turn.durationMs ?? (turn.completedAt - turn.startedAt)) > 0).toBe(true);
   }, TEST_TIMEOUT_MS);
 });
 
@@ -660,6 +662,7 @@ describe('Scenario Group 6: Webhook & Callback', () => {
     const createWebhook = await api('POST', `/api/agents/${created.agentId}/webhooks`, {
       url: 'https://hooks.example.test/callback',
       events: ['turn.completed'],
+      secret: 'scenario-webhook-secret',
     });
     expect(createWebhook.status).toBe(201);
 
@@ -683,23 +686,19 @@ describe('Scenario Group 6: Webhook & Callback', () => {
     expect(listAfter.data).toEqual([]);
   }, TEST_TIMEOUT_MS);
 
-  it('S6b: invalid webhook payload returns the valid events list', async () => {
+  it('S6b: invalid webhook payload returns strict field issues', async () => {
     const created = await createAgent();
 
     const invalid = await api('POST', `/api/agents/${created.agentId}/webhooks`, {
       url: 'https://hooks.example.test/invalid-events',
       events: ['turn.completed', 'run.unknown'],
+      secret: 'scenario-webhook-secret',
     });
 
     expect(invalid.status).toBe(400);
-    expect(Array.isArray(invalid.data?.validEvents)).toBe(true);
-    expect(invalid.data.validEvents).toEqual(expect.arrayContaining([
-      'turn.started',
-      'turn.completed',
-      'run.tool_started',
-      'run.tool_result',
-      'run.interrupted',
-      'run.interrupt_resolved',
-    ]));
+    expect(invalid.data).toMatchObject({
+      error: 'Invalid webhook definition',
+      issues: [expect.objectContaining({ path: 'events.1' })],
+    });
   }, TEST_TIMEOUT_MS);
 });

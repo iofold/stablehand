@@ -47,13 +47,13 @@ test.describe(`${HARNESS} Live Streaming Visual QA @extended`, () => {
     );
     await page.getByTestId('send-button').click();
     const sendResponse = await sendResponsePromise;
-    const sendBody = await sendResponse.json() as { sessionId: string; conversationId: string };
+    const sendBody = await sendResponse.json() as { turnId: string; conversationId: string };
 
     await expect(page.getByTestId('message-bubble-user').last()).toBeVisible({ timeout: 5_000 });
     await capture.captureViewport('user-message', 'User message sent');
 
     // Wait for run completion via API (reliable, not SSE-dependent)
-    await waitForRunStatus(request, agentId, sendBody.sessionId, ['completed', 'error'], 150_000);
+    await waitForRunStatus(request, agentId, sendBody.turnId, ['completed', 'error'], 150_000);
 
     // Give UI time to process final SSE events after run completes
     await page.waitForTimeout(3_000);
@@ -100,9 +100,9 @@ test.describe(`${HARNESS} Live Streaming Visual QA @extended`, () => {
     await page.getByTestId('session-input').fill('Run the visual QA sequence');
     await page.getByTestId('send-button').click();
     const sendResponse = await sendResponsePromise;
-    const sendBody = await sendResponse.json() as { sessionId: string; conversationId: string };
+    const sendBody = await sendResponse.json() as { turnId: string; conversationId: string };
 
-    await waitForRunStatus(request, agentId, sendBody.sessionId, ['completed', 'error'], 150_000);
+    await waitForRunStatus(request, agentId, sendBody.turnId, ['completed', 'error'], 150_000);
 
     await page.reload();
     await page.waitForLoadState('domcontentloaded');

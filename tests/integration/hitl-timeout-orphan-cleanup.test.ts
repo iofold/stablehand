@@ -9,8 +9,8 @@
  * What the existing hitl-lifecycle.test.ts does NOT cover:
  *   - It stubs onTimeout entirely with vi.fn() — the real cleanup code
  *     is never exercised.
- *   - The tests only assert that suspendSession() was called on the
- *     TestSessionRegistry, not that the container was actually evicted.
+ *   - The tests only asserted that a turn-registry proxy was suspended,
+ *     not that the container was actually evicted.
  *
  * What this test covers:
  *   1. InterruptManager.waitForApproval creates a pending HITL interrupt.
@@ -42,7 +42,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
-import { TestSessionRegistry } from '../utils/test-session-registry.js';
+import { TestTurnRegistry } from '../utils/test-turn-registry.js';
 import { createTestBus } from '../utils/event-bus-test-helpers.js';
 import type { ContainerManager } from '../../packages/ctxmill/src/sandbox/container-manager.js';
 
@@ -73,13 +73,16 @@ function createMockContainerManager(): Pick<ContainerManager, 'stopContainer' | 
 // ---------------------------------------------------------------------------
 
 function createProductionShapedOnTimeout(
-  registry: TestSessionRegistry,
+  registry: TestTurnRegistry,
   containerManager: ReturnType<typeof createMockContainerManager>,
   containerId: string,
-): (sessionId: string) => Promise<void> {
-  return async (sessionId: string) => {
-    // Step 1: Mark session suspended (mirrors DB status → CHECKPOINTED).
-    await registry.suspendSession(sessionId, 'hitl_timeout');
+): (sandboxSessionId: string) => Promise<void> {
+  return async (sandboxSessionId: string) => {
+    // Step 1: Mark the active turn suspended (proxy for sandbox CHECKPOINTED).
+    const activeTurn = registry.getTurnBySandboxSessionId(sandboxSessionId);
+    if (activeTurn) {
+      await registry.suspendTurn(activeTurn.turnId, 'hitl_timeout');
+    }
 
     // Step 2: Evict the container — the critical branch the existing test skips.
     await containerManager.stopContainer(containerId, 10);
@@ -103,13 +106,13 @@ describe('HITL timeout → container orphan cleanup (ctx-i9k)', () => {
 
   it('evicts the container when the HITL timeout fires — no orphaned container', async () => {
     const containerId = 'container-abc123';
-    const registry = new TestSessionRegistry(undefined, createTestBus());
+    const registry = new TestTurnRegistry(createTestBus());
     const containerManager = createMockContainerManager();
 
     const onTimeout = createProductionShapedOnTimeout(registry, containerManager, containerId);
     const manager = new InterruptManager(createTestBus(), undefined, onTimeout);
 
-    const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
+    const turn = await registry.startTurn('agent-1', 'conv-1', 'interactive');
 
     const approval = manager.waitForApproval(
       'run-hitl-1',
@@ -118,14 +121,14 @@ describe('HITL timeout → container orphan cleanup (ctx-i9k)', () => {
       'send_email',
       { to: 'approver@example.com' },
       2_000,   // 2 s HITL window
-      run.id,  // sessionId wired so onTimeout receives it
+      turn.sandboxSessionId,
     );
 
     // Advance to just before expiry — nothing should have fired yet.
     await vi.advanceTimersByTimeAsync(1_500);
     expect(containerManager.stopContainer).not.toHaveBeenCalled();
     expect(containerManager.removeContainer).not.toHaveBeenCalled();
-    expect(registry.getRun(run.id)?.status).toBe('running');
+    expect(registry.getTurn(turn.turnId)?.status).toBe('running');
 
     // Advance past the timeout deadline.
     await vi.advanceTimersByTimeAsync(600);
@@ -137,8 +140,8 @@ describe('HITL timeout → container orphan cleanup (ctx-i9k)', () => {
     await expect(approval).resolves.toMatchObject({ action: 'suspend' });
 
     // Session must be suspended — not left as 'running'.
-    expect(registry.getRun(run.id)?.status).toBe('suspended');
-    expect(registry.getRun(run.id)?.suspendReason).toBe('hitl_timeout');
+    expect(registry.getTurn(turn.turnId)?.status).toBe('suspended');
+    expect(registry.getTurn(turn.turnId)?.suspendReason).toBe('hitl_timeout');
 
     // Container eviction must have been invoked — no orphaned container.
     expect(containerManager.stopContainer).toHaveBeenCalledOnce();
@@ -147,20 +150,20 @@ describe('HITL timeout → container orphan cleanup (ctx-i9k)', () => {
     expect(containerManager.removeContainer).toHaveBeenCalledWith(containerId, true);
 
     // No interrupt should remain pending after timeout.
-    expect(manager.hasPending('run-hitl-1')).toBe(false);
+    expect(manager.hasPendingForTurn('run-hitl-1')).toBe(false);
 
     manager.shutdown();
   });
 
   it('does NOT evict the container when the interrupt is approved before timeout', async () => {
     const containerId = 'container-xyz789';
-    const registry = new TestSessionRegistry(undefined, createTestBus());
+    const registry = new TestTurnRegistry(createTestBus());
     const containerManager = createMockContainerManager();
 
     const onTimeout = createProductionShapedOnTimeout(registry, containerManager, containerId);
     const manager = new InterruptManager(createTestBus(), undefined, onTimeout);
 
-    const run = await registry.startRun('agent-1', 'conv-2', 'interactive');
+    const turn = await registry.startTurn('agent-1', 'conv-2', 'interactive');
 
     const approval = manager.waitForApproval(
       'run-hitl-2',
@@ -169,12 +172,12 @@ describe('HITL timeout → container orphan cleanup (ctx-i9k)', () => {
       'bash',
       { cmd: 'deploy.sh' },
       5_000,
-      run.id,
+      turn.sandboxSessionId,
     );
 
     // Approve before the deadline.
     await vi.advanceTimersByTimeAsync(1_000);
-    await expect(manager.resolve('run-hitl-2', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
+    await expect(manager.resolveForTurn('run-hitl-2', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
 
     await expect(approval).resolves.toEqual({ action: 'approve', data: { ok: true } });
 
@@ -183,7 +186,7 @@ describe('HITL timeout → container orphan cleanup (ctx-i9k)', () => {
     expect(containerManager.removeContainer).not.toHaveBeenCalled();
 
     // Session should remain running (approved, not suspended).
-    expect(registry.getRun(run.id)?.status).toBe('running');
+    expect(registry.getTurn(turn.turnId)?.status).toBe('running');
 
     manager.shutdown();
   });
@@ -194,13 +197,13 @@ describe('HITL timeout → container orphan cleanup (ctx-i9k)', () => {
     // InterruptManager guarantees single-fire via pending.delete(turnId) before
     // invoking onTimeout — this test documents that invariant.
     const containerId = 'container-once-only';
-    const registry = new TestSessionRegistry(undefined, createTestBus());
+    const registry = new TestTurnRegistry(createTestBus());
     const containerManager = createMockContainerManager();
 
     const onTimeout = createProductionShapedOnTimeout(registry, containerManager, containerId);
     const manager = new InterruptManager(createTestBus(), undefined, onTimeout);
 
-    const run = await registry.startRun('agent-1', 'conv-3', 'interactive');
+    const turn = await registry.startTurn('agent-1', 'conv-3', 'interactive');
 
     const approval = manager.waitForApproval(
       'run-hitl-3',
@@ -209,7 +212,7 @@ describe('HITL timeout → container orphan cleanup (ctx-i9k)', () => {
       'delete_file',
       { path: '/prod/data.db' },
       1_000,
-      run.id,
+      turn.sandboxSessionId,
     );
 
     await vi.advanceTimersByTimeAsync(1_100);

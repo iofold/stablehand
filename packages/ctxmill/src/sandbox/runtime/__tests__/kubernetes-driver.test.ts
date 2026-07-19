@@ -6,12 +6,12 @@ import { hasStatusCode } from '../../../util/status-code-error.js';
 import { KubernetesContainerDriver } from '../kubernetes-driver.js';
 
 const runningPod = {
-  metadata: { name: 'ctxmill-run-test-abc', labels: { 'ctxmill.session-id': 's1' } },
+  metadata: { name: 'ctxmill-sandbox-test-abc', labels: { 'ctxmill.sandbox-session-id': 's1' } },
   status: { phase: 'Running', podIP: '10.42.0.99' },
 };
 
 const unschedulablePod = {
-  metadata: { name: 'ctxmill-run-test-abc' },
+  metadata: { name: 'ctxmill-sandbox-test-abc' },
   status: {
     phase: 'Pending',
     conditions: [{
@@ -24,7 +24,7 @@ const unschedulablePod = {
 };
 
 const scheduledPendingPod = {
-  metadata: { name: 'ctxmill-run-test-abc' },
+  metadata: { name: 'ctxmill-sandbox-test-abc' },
   status: {
     phase: 'Pending',
     conditions: [{ type: 'PodScheduled', status: 'True' }],
@@ -61,7 +61,7 @@ describe('KubernetesContainerDriver pod scheduling wait', () => {
     // 20 unschedulable polls x 5ms = ~100ms of capacity wait, past the 40ms ready budget.
     stubFindPod(driver, [...Array.from({ length: 20 }, () => unschedulablePod), runningPod]);
 
-    const info = await driver.startContainer('ctxmill-run-test');
+    const info = await driver.startContainer('ctxmill-sandbox-test');
     expect(info.networkIp).toBe('10.42.0.99');
   });
 
@@ -69,7 +69,7 @@ describe('KubernetesContainerDriver pod scheduling wait', () => {
     const driver = createDriver({ podReadyTimeoutMs: 1_000, queueTimeoutMs: 60 });
     stubFindPod(driver, [unschedulablePod]);
 
-    const failure = await driver.startContainer('ctxmill-run-test').catch((err: unknown) => err);
+    const failure = await driver.startContainer('ctxmill-sandbox-test').catch((err: unknown) => err);
     expect(hasStatusCode(failure, 503)).toBe(true);
     expect((failure as Error).message).toContain('Insufficient cpu');
   });
@@ -83,7 +83,7 @@ describe('KubernetesContainerDriver pod scheduling wait', () => {
       runningPod,
     ]);
 
-    const info = await driver.startContainer('ctxmill-run-test');
+    const info = await driver.startContainer('ctxmill-sandbox-test');
     expect(info.networkIp).toBe('10.42.0.99');
   });
 
@@ -91,7 +91,7 @@ describe('KubernetesContainerDriver pod scheduling wait', () => {
     const driver = createDriver({ podReadyTimeoutMs: 40, queueTimeoutMs: 2_000 });
     stubFindPod(driver, [scheduledPendingPod]);
 
-    const failure = await driver.startContainer('ctxmill-run-test').catch((err: unknown) => err);
+    const failure = await driver.startContainer('ctxmill-sandbox-test').catch((err: unknown) => err);
     expect((failure as Error).message).toMatch(/Timed out waiting for sandbox pod/);
     expect(hasStatusCode(failure, 503)).toBe(false);
   });
@@ -100,6 +100,6 @@ describe('KubernetesContainerDriver pod scheduling wait', () => {
     const driver = createDriver();
     stubFindPod(driver, [{ metadata: { name: 'p' }, status: { phase: 'Failed' } }]);
 
-    await expect(driver.startContainer('ctxmill-run-test')).rejects.toThrow(/exited before becoming ready/);
+    await expect(driver.startContainer('ctxmill-sandbox-test')).rejects.toThrow(/exited before becoming ready/);
   });
 });

@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+export {};
+
 type JsonRecord = Record<string, unknown>;
 type Flags = Record<string, string | boolean>;
 
@@ -36,15 +38,15 @@ try {
 
 async function buildTimeline(flags: Flags): Promise<JsonRecord> {
   const agentId = flagString(flags, 'agent', 'agent-id') ?? args.positionals[0];
-  let sessionId = flagString(flags, 'session', 'session-id') ?? args.positionals[1];
+  let turnId = flagString(flags, 'turn', 'turn-id') ?? args.positionals[1];
   let conversationId = flagString(flags, 'conversation', 'conversation-id') ?? args.positionals[2];
   requireArg(agentId, 'agentId via --agent or positional arg');
 
-  let sessionDetail: unknown = null;
-  if (sessionId && !conversationId) {
-    sessionDetail = await requestJson(`/api/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}`);
-    if (isRecord(sessionDetail) && isRecord(sessionDetail.session) && typeof sessionDetail.session.conversationId === 'string') {
-      conversationId = sessionDetail.session.conversationId;
+  let turnDetail: unknown = null;
+  if (turnId && !conversationId) {
+    turnDetail = await requestJson(`/api/agents/${encodeURIComponent(agentId)}/turns/${encodeURIComponent(turnId)}`);
+    if (isRecord(turnDetail) && isRecord(turnDetail.turn) && typeof turnDetail.turn.conversationId === 'string') {
+      conversationId = turnDetail.turn.conversationId;
     }
   }
 
@@ -54,33 +56,38 @@ async function buildTimeline(flags: Flags): Promise<JsonRecord> {
     const latest = conversations[0];
     if (isRecord(latest) && typeof latest.id === 'string') {
       conversationId = latest.id;
-      if (!sessionId && typeof latest.latestTurnId === 'string') sessionId = latest.latestTurnId;
+      if (!turnId && typeof latest.latestTurnId === 'string') turnId = latest.latestTurnId;
     }
   }
 
-  requireArg(conversationId, 'conversationId via --conversation, --session, or latest conversation summary');
+  requireArg(conversationId, 'conversationId via --conversation, --turn, or latest conversation summary');
 
-  const messages = Array.isArray(isRecord(sessionDetail) ? sessionDetail.messages : undefined)
-    ? sessionDetail.messages as unknown[]
-    : await requestJson(`/api/agents/${encodeURIComponent(agentId)}/conversations/${encodeURIComponent(conversationId)}/messages`);
+  const detailMessages = isRecord(turnDetail) ? turnDetail.messages : undefined;
+  let messages: unknown[];
+  if (Array.isArray(detailMessages)) {
+    messages = detailMessages;
+  } else {
+    const snapshot = await requestJson(`/api/agents/${encodeURIComponent(agentId)}/conversations/${encodeURIComponent(conversationId)}/snapshot`);
+    messages = isRecord(snapshot) && Array.isArray(snapshot.messages) ? snapshot.messages : [];
+  }
 
-  const events = await loadEvents(agentId, sessionId, conversationId, flags);
-  const toolCalls = extractToolCalls(Array.isArray(messages) ? messages : [], events, flags);
+  const events = await loadEvents(agentId, turnId, conversationId, flags);
+  const toolCalls = extractToolCalls(messages, events, flags);
 
   return {
     agentId,
-    sessionId,
+    turnId,
     conversationId,
     toolCalls,
     events,
     sourceEndpoints: [
-      `/api/agents/${agentId}/conversations/${conversationId}/messages`,
+      `/api/agents/${agentId}/conversations/${conversationId}/snapshot`,
       `/api/events?agentId=${agentId}`,
     ],
   };
 }
 
-async function loadEvents(agentId: string, sessionId: string | undefined, conversationId: string | undefined, flags: Flags): Promise<JsonRecord[]> {
+async function loadEvents(agentId: string, turnId: string | undefined, conversationId: string | undefined, flags: Flags): Promise<JsonRecord[]> {
   const query = new URLSearchParams();
   query.set('agentId', agentId);
   query.set('limit', flagString(flags, 'events-limit') ?? flagString(flags, 'limit') ?? '200');
@@ -90,9 +97,9 @@ async function loadEvents(agentId: string, sessionId: string | undefined, conver
   const events = isRecord(payload) && Array.isArray(payload.events) ? payload.events : [];
 
   return events.filter(isRecord).filter((event) => {
-    if (!sessionId && !conversationId) return true;
+    if (!turnId && !conversationId) return true;
     const haystack = JSON.stringify(event);
-    return Boolean((sessionId && haystack.includes(sessionId)) || (conversationId && haystack.includes(conversationId)));
+    return Boolean((turnId && haystack.includes(turnId)) || (conversationId && haystack.includes(conversationId)));
   });
 }
 
@@ -194,7 +201,7 @@ function emit(output: JsonRecord, flags: Flags): void {
 
   const toolCalls = Array.isArray(output.toolCalls) ? output.toolCalls.filter(isRecord) : [];
   console.log(`agent: ${String(output.agentId ?? '')}`);
-  console.log(`session: ${String(output.sessionId ?? '')}`);
+  console.log(`turn: ${String(output.turnId ?? '')}`);
   console.log(`conversation: ${String(output.conversationId ?? '')}`);
   console.log(`tool_calls: ${toolCalls.length}`);
   console.log('');
@@ -261,4 +268,4 @@ function summarizeValue(value: unknown, max = 140): string { const text = typeof
 function redact(value: unknown, seen = new WeakSet<object>()): unknown { if (Array.isArray(value)) return value.map((item) => redact(item, seen)); if (!isRecord(value)) return value; if (seen.has(value)) return '[Circular]'; seen.add(value); const out: JsonRecord = {}; for (const [key, child] of Object.entries(value)) out[key] = SECRET_KEY_RE.test(key) ? '[REDACTED]' : redact(child, seen); return out; }
 function normalizeSince(value: string | undefined): string | undefined { if (!value) return undefined; if (/^\d+$/.test(value)) return value; const parsed = Date.parse(value); if (Number.isFinite(parsed)) return String(parsed); const relative = value.match(/^now-(\d+)(s|m|h|d)$/); if (!relative) throw new UsageError('--since must be epoch ms, ISO datetime, or now-<n>s|m|h|d'); const amount = Number(relative[1]); const unit = relative[2]; const multiplier = unit === 's' ? 1000 : unit === 'm' ? 60_000 : unit === 'h' ? 3_600_000 : 86_400_000; return String(Date.now() - amount * multiplier); }
 function table(rows: Array<Record<string, unknown>>, columns: Array<[string, string, number?]>): string { if (rows.length === 0) return '(none)'; const rendered = rows.map((row) => columns.map(([key, _label, max]) => summarizeValue(row[key], max ?? 40))); const widths = columns.map(([_key, label], i) => Math.max(label.length, ...rendered.map((row) => row[i]!.length))); return [columns.map(([_key, label], i) => label.padEnd(widths[i]!)).join('  '), widths.map((w) => '-'.repeat(w)).join('  '), ...rendered.map((row) => row.map((cell, i) => cell.padEnd(widths[i]!)).join('  '))].join('\n'); }
-function helpText(): string { return `ctxmill-toolcalls.ts — extract ctxmill tool-call timeline\n\nUsage:\n  bun scripts/ctxmill-toolcalls.ts --agent <agentId> [--session <sessionId> | --conversation <conversationId>]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --agent <agentId>      Agent id\n  --session <sessionId>  Turn/run id; used to discover conversation id\n  --conversation <id>    Conversation id\n  --since <time>         Epoch ms, ISO datetime, or now-5m for event lookup\n  --events-limit <n>     Event lookup limit (default 200)\n  --include-results      Include full tool results instead of short summaries\n  --json                 Emit JSON\n  --no-redact            Disable secret redaction\n`; }
+function helpText(): string { return `ctxmill-toolcalls.ts — extract ctxmill tool-call timeline\n\nUsage:\n  bun scripts/ctxmill-toolcalls.ts --agent <agentId> [--turn <turnId> | --conversation <conversationId>]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --agent <agentId>      Agent id\n  --turn <turnId>        Execution turn id; used to discover conversation id\n  --conversation <id>    Conversation id\n  --since <time>         Epoch ms, ISO datetime, or now-5m for event lookup\n  --events-limit <n>     Event lookup limit (default 200)\n  --include-results      Include full tool results instead of short summaries\n  --json                 Emit JSON\n  --no-redact            Disable secret redaction\n`; }

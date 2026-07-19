@@ -61,10 +61,13 @@ const ALL_TABLES = [
   SCHEMA_VERSION_TABLE,
   'secrets',
   'tool_request_dedup',
+  'budget_policies',
   'artifacts',
   'agent_checkpoints',
   'interrupt_resume_attempts',
   'pending_interrupts',
+  'turn_start_requests',
+  'turn_reconciliation_leases',
   'turns',
   'sandbox_sessions',
   'agent_versions',
@@ -72,6 +75,7 @@ const ALL_TABLES = [
   'event_triggers',
   'suspended_sessions',
   'event_store',
+  'agent_event_heads',
   'spine_cursors',
   // Legacy tables removed from the runtime schema; keep them in test cleanup so
   // old local databases do not block fresh migrations.
@@ -84,6 +88,7 @@ const ALL_TABLES = [
   'webhooks',
   'callback_outbox',
   'system_settings',
+  'agent_workspace_state',
   'agents',
 ];
 

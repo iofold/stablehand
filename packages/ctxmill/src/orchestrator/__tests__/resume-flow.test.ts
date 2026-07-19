@@ -23,7 +23,7 @@ function createMockSessionManager(): MockSessionManager {
   return {
     ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sess-1' }),
     deliverTurn: vi.fn().mockImplementation(async function* () {
-      yield aguiWrap({ type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'r-1', content: 'Hello' });
+      yield aguiWrap({ type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), runId: 'r-1', delta: 'Hello' });
     }),
     killSession: vi.fn().mockResolvedValue(undefined),
   } as MockSessionManager;

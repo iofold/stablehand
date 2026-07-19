@@ -17,7 +17,12 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { create } from '@bufbuild/protobuf';
-import { ConnectError, Code, type ConnectRouter } from '@connectrpc/connect';
+import {
+  ConnectError,
+  Code,
+  type ConnectRouter,
+  type HandlerContext,
+} from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 
 import {
@@ -261,8 +266,11 @@ async function handleOpenSession(req: OpenSessionRequest) {
  * DeliverTurn — server-streaming RPC.
  * Feeds user messages into the active session and streams back SessionEvents.
  */
-async function* handleDeliverTurn(req: DeliverTurnRequest) {
-  yield* deliverTurn(req);
+export async function* handleDeliverTurn(
+  req: DeliverTurnRequest,
+  context: HandlerContext,
+) {
+  yield* deliverTurn(req, { signal: context.signal });
 }
 
 /**

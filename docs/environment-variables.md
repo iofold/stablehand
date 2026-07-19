@@ -44,7 +44,6 @@ sandbox Jobs.
 | `CTXMILL_SANDBOX_IMAGE_TAG` | `latest` | No | Tag appended to sandbox harness images (`<prefix>-<harness>:<tag>`). Local stacks use `latest`; deploy pins a commit tag so sandbox Jobs run the deployed revision. | `75435dd` |
 | `CLAUDE_CONFIG_DIR` | `$HOME/.claude` | No | Directory the Claude Agents harness reads its Claude SDK config and session JSONL from. | `/home/ctxmill/.claude` |
 | `CTXMILL_MAX_GLOBAL_CONTAINERS` | `20` | No | Maximum number of concurrent sandbox containers globally. | `50` |
-| `CTXMILL_MAX_CONTAINERS` | - | No | Deprecated compatibility alias for `CTXMILL_MAX_GLOBAL_CONTAINERS`; ignored when the canonical variable is set. | `50` |
 | `CTXMILL_DATA_VOLUME` | - | No | Docker volume name for persistent agent data. Required for volume-based persistence. | `myapp_ctxmill-data` |
 | `CTXMILL_K8S_NAMESPACE` | service account namespace or `default` | No | Kubernetes namespace where sandbox Jobs are created. Used only by the Kubernetes sandbox runtime. | `ctxmill` |
 | `CTXMILL_K8S_DATA_HOST_PATH` | `CTXMILL_DATA_DIR` or `/var/lib/ctxmill/data` | No | Host path mounted into Kubernetes sandbox Jobs for workspace data. Use only on single-node/dev clusters unless the path is backed by cluster storage. | `/var/lib/ctxmill/dev2/data` |
@@ -131,7 +130,7 @@ Each setting also supports an **environment variable override** that sets the de
 | :--- | :--- | :--- | :--- |
 | `turnTimeoutMs` | `CTXMILL_TURN_TIMEOUT_MS` | `1,800,000` (30m) | Timeout for a single agent turn (LLM call + tools). |
 | `idleTimeoutMs` | `CTXMILL_IDLE_TIMEOUT_MS` | `300,000` (5m) | Time before an idle session is checkpointed by lifecycle policy. |
-| `maxGlobalContainers` | `CTXMILL_MAX_GLOBAL_CONTAINERS` (`CTXMILL_MAX_CONTAINERS` deprecated alias) | `20` | Maximum concurrent sandbox containers globally. |
+| `maxGlobalContainers` | `CTXMILL_MAX_GLOBAL_CONTAINERS` | `20` | Maximum concurrent sandbox containers globally. |
 | `maxConcurrentSessionsPerAgent` | `CTXMILL_MAX_CONCURRENT_SESSIONS_PER_AGENT` | `3` | Maximum concurrent live sandbox sessions for a single agent. |
 | `maxTriggerDepth` | `CTXMILL_MAX_TRIGGER_DEPTH` | `5` | Maximum depth for event-triggered background runs. |
 | `defaultCpus` | `CTXMILL_DEFAULT_CPUS` | `1.0` | Default CPU allocation for sandboxes. |

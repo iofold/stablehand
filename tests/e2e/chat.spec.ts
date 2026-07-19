@@ -98,8 +98,8 @@ test.describe('Chat conversation flow @extended', () => {
     await expect(page.getByTestId('message-bubble-user').last()).toBeVisible({ timeout: 5_000 });
     expect(typeof sendBody.conversationId).toBe('string');
     expect(sendBody.conversationId.length).toBeGreaterThan(0);
-    expect(typeof sendBody.sessionId).toBe('string');
-    expect(sendBody.sessionId.length).toBeGreaterThan(0);
+    expect(typeof sendBody.turnId).toBe('string');
+    expect(sendBody.turnId.length).toBeGreaterThan(0);
   });
 
   // ---- 5. Check for tool calls (optional) ----
@@ -183,7 +183,7 @@ test.describe('Chat conversation flow @extended', () => {
     await chatInput.press('Enter');
     await expect(page.getByTestId('message-bubble-user').last()).toContainText('What is 2 + 2?');
     const firstBody = await (await firstSendResponse).json();
-    await waitForRunStatus(page.request, agentId, firstBody.sessionId, ['completed', 'error'], 120_000);
+    await waitForRunStatus(page.request, agentId, firstBody.turnId, ['completed', 'error'], 120_000);
     await expect(chatInput).toBeEnabled({ timeout: 15_000 });
 
     const secondSendResponse = page.waitForResponse((response) =>

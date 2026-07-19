@@ -11,8 +11,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { TypedEventBus, EventMap } from '../../packages/ctxmill/src/events/bus.js';
 import {
-  makeRunStartedEvent,
-  makeRunCompletedEvent,
+  makeTurnStartedEvent,
+  makeTurnCompletedEvent,
 } from '../utils/event-bus-test-helpers.js';
 
 // ── Compliance suite options ────────────────────────────────────
@@ -35,7 +35,7 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       bus.on('turn.started', h1);
       bus.on('turn.started', h2);
 
-      const payload = makeRunStartedEvent();
+      const payload = makeTurnStartedEvent();
       bus.emit('turn.started', payload);
 
       expect(h1).toHaveBeenCalledTimes(1);
@@ -49,8 +49,9 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       const received: EventMap['turn.started'][] = [];
       bus.on('turn.started', (p) => received.push(p));
 
-      const payload = makeRunStartedEvent({
-        runId: 'exact-run',
+      const payload = makeTurnStartedEvent({
+        turnId: 'exact-turn',
+        sandboxSessionId: 'exact-sandbox-session',
         agentId: 'exact-agent',
         conversationId: 'exact-conv',
         mode: 'background',
@@ -59,7 +60,8 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       bus.emit('turn.started', payload);
 
       expect(received).toHaveLength(1);
-      expect(received[0]!.runId).toBe('exact-run');
+      expect(received[0]!.turnId).toBe('exact-turn');
+      expect(received[0]!.sandboxSessionId).toBe('exact-sandbox-session');
       expect(received[0]!.agentId).toBe('exact-agent');
       expect(received[0]!.conversationId).toBe('exact-conv');
       expect(received[0]!.mode).toBe('background');
@@ -71,7 +73,7 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       const received: EventMap['turn.started'][] = [];
       bus.on('turn.started', (p) => received.push(p));
 
-      const payload = makeRunStartedEvent({ timestamp: 0 });
+      const payload = makeTurnStartedEvent({ timestamp: 0 });
       bus.emit('turn.started', payload);
 
       expect(received).toHaveLength(1);
@@ -83,7 +85,7 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       const received: EventMap['turn.started'][] = [];
       bus.on('turn.started', (p) => received.push(p));
 
-      const payload = makeRunStartedEvent({ timestamp: 12345 });
+      const payload = makeTurnStartedEvent({ timestamp: 12345 });
       bus.emit('turn.started', payload);
 
       expect(received).toHaveLength(1);
@@ -99,8 +101,8 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       const handler = vi.fn();
       bus.once('turn.started', handler);
 
-      bus.emit('turn.started', makeRunStartedEvent());
-      bus.emit('turn.started', makeRunStartedEvent());
+      bus.emit('turn.started', makeTurnStartedEvent());
+      bus.emit('turn.started', makeTurnStartedEvent());
 
       expect(handler).toHaveBeenCalledTimes(1);
     });
@@ -115,7 +117,7 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       bus.on('turn.started', handler);
       bus.off('turn.started', handler);
 
-      bus.emit('turn.started', makeRunStartedEvent());
+      bus.emit('turn.started', makeTurnStartedEvent());
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -125,12 +127,12 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       const h1 = vi.fn();
       const h2 = vi.fn();
       bus.on('turn.started', h1);
-      bus.on('run.completed', h2);
+      bus.on('turn.completed', h2);
 
       bus.removeAllListeners('turn.started');
 
-      bus.emit('turn.started', makeRunStartedEvent());
-      bus.emit('run.completed', makeRunCompletedEvent());
+      bus.emit('turn.started', makeTurnStartedEvent());
+      bus.emit('turn.completed', makeTurnCompletedEvent());
 
       expect(h1).not.toHaveBeenCalled();
       expect(h2).toHaveBeenCalledTimes(1);
@@ -141,12 +143,12 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       const h1 = vi.fn();
       const h2 = vi.fn();
       bus.on('turn.started', h1);
-      bus.on('run.completed', h2);
+      bus.on('turn.completed', h2);
 
       bus.removeAllListeners();
 
-      bus.emit('turn.started', makeRunStartedEvent());
-      bus.emit('run.completed', makeRunCompletedEvent());
+      bus.emit('turn.started', makeTurnStartedEvent());
+      bus.emit('turn.completed', makeTurnCompletedEvent());
 
       expect(h1).not.toHaveBeenCalled();
       expect(h2).not.toHaveBeenCalled();
@@ -159,7 +161,7 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
     it('emit with no handlers does not throw', async () => {
       const bus = await opts.createBus();
       expect(() => {
-        bus.emit('agent.created', makeRunStartedEvent() as any);
+        bus.emit('agent.created', makeTurnStartedEvent() as any);
       }).not.toThrow();
     });
 
@@ -173,7 +175,7 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       bus.on('turn.started', h1);
       bus.on('turn.started', h2);
 
-      bus.emit('turn.started', makeRunStartedEvent());
+      bus.emit('turn.started', makeTurnStartedEvent());
 
       expect(h1).toHaveBeenCalledTimes(1);
       expect(h2).toHaveBeenCalledTimes(1);
@@ -190,7 +192,7 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       bus.on('turn.started', h1);
       bus.on('turn.started', h2);
 
-      bus.emit('turn.started', makeRunStartedEvent());
+      bus.emit('turn.started', makeTurnStartedEvent());
 
       expect(h1).toHaveBeenCalledTimes(1);
       expect(h2).toHaveBeenCalledTimes(1);
@@ -209,8 +211,8 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       const handler = vi.fn();
       bus.onAgent('turn.started', 'a1', handler);
 
-      bus.emit('turn.started', makeRunStartedEvent({ agentId: 'a1' }));
-      bus.emit('turn.started', makeRunStartedEvent({ agentId: 'a2' }));
+      bus.emit('turn.started', makeTurnStartedEvent({ agentId: 'a1' }));
+      bus.emit('turn.started', makeTurnStartedEvent({ agentId: 'a2' }));
 
       expect(handler).toHaveBeenCalledTimes(1);
       expect(handler.mock.calls[0]![0].agentId).toBe('a1');
@@ -223,7 +225,7 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
 
       unsub();
 
-      bus.emit('turn.started', makeRunStartedEvent({ agentId: 'a1' }));
+      bus.emit('turn.started', makeTurnStartedEvent({ agentId: 'a1' }));
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -239,7 +241,7 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
       bus.on('turn.started', () => order.push(2));
       bus.on('turn.started', () => order.push(3));
 
-      bus.emit('turn.started', makeRunStartedEvent());
+      bus.emit('turn.started', makeTurnStartedEvent());
 
       expect(order).toEqual([1, 2, 3]);
     });
@@ -254,12 +256,12 @@ export function eventBusComplianceSuite(opts: EventBusComplianceOptions): void {
 
       // Should not crash
       expect(() => {
-        bus.emit('turn.started', makeRunStartedEvent());
+        bus.emit('turn.started', makeTurnStartedEvent());
       }).not.toThrow();
 
       // The laterHandler may or may not be called for the current emit,
       // but a second emit should definitely call it
-      bus.emit('turn.started', makeRunStartedEvent());
+      bus.emit('turn.started', makeTurnStartedEvent());
       expect(laterHandler).toHaveBeenCalled();
     });
   });

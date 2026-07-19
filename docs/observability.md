@@ -62,7 +62,7 @@ For setup and trace verification commands, see [SigNoz for Debugging](./signoz-f
 The orchestrator uses the built-in Fastify logger (`logger: true`). These logs capture HTTP requests, database operations, and sandbox container lifecycle events.
 
 The `ContainerManager` also emits `console.debug` messages for container creation, including resource allocations and concurrency stats:
-`[ContainerManager] creating container ctxmill-run-... (harness=..., cpus=..., mem=...MiB, active=.../...)`
+`[ContainerManager] creating container ctxmill-sandbox-... (harness=..., cpus=..., mem=...MiB, active=.../...)`
 
 Access orchestrator logs via Docker Compose:
 
@@ -81,13 +81,14 @@ If an agent run fails with "1 events emitted," it usually indicates a harness-le
 
 ## Container Logs
 
-Each agent run or session spawns a dedicated Docker container. You can access these logs directly using the Docker CLI.
+Each live sandbox session owns a dedicated Docker container. Multiple turns may
+reuse that sandbox session. You can access its logs directly using the Docker
+CLI.
 
 ### Finding Container IDs
 
-Container names follow these patterns:
-- **Runs**: `ctxmill-run-<sessionId>`
-- **Sessions**: `ctxmill-session-<conversationIdHash>`
+Container names use `ctxmill-sandbox-<sandboxSessionId>`, and the canonical
+selector is `ctxmill.sandbox-session-id=<sandboxSessionId>`.
 
 You can list all managed containers with:
 
@@ -115,13 +116,14 @@ Every significant action in ctxmill emits a typed event. These events are persis
 
 ### Event Types
 
-The current `EventMap` includes turn lifecycle, message-commit, tool, HITL, session, feedback, and trigger events, including:
+The current `EventMap` includes turn lifecycle, message-commit, tool, HITL,
+sandbox-session, feedback, and trigger events, including:
 - `turn.pending` / `turn.started` / `turn.completed`
 - `user.message` / `message.committed`
-- `run.tool_started` / `run.tool_result`
-- `run.text_chunk`
-- `run.interrupted` / `run.interrupt_resolved`
-- `run.ag_ui_event`
+- `tool_call.started` / `tool_call.completed`
+- `message.delta`
+- `interrupt.requested` / `interrupt.resolved`
+- `ag_ui.event`
 - `feedback.received`
 - `trigger.fired`
 
@@ -171,9 +173,9 @@ GET /api/sandbox/metrics
 The internal event bus is the primary tool for tracing execution flow. A typical healthy turn follows this sequence:
 
 1. `turn.started`: The orchestrator begins the run.
-2. `run.text_chunk`: (Optional) Streaming text deltas from the LLM.
-3. `run.tool_started`: The agent calls a tool.
-4. `run.tool_result`: The tool execution completes.
+2. `message.delta`: (Optional) Streaming text deltas from the LLM.
+3. `tool_call.started`: The agent calls a tool.
+4. `tool_call.completed`: The tool execution completes.
 5. `turn.completed`: The run finishes successfully.
 
 If a run hangs, check the event stream to see which step failed to complete. Note that `message_committed` is a harness-level event used for persistence but is not currently emitted on the internal event bus.

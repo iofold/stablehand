@@ -1,8 +1,9 @@
 import { create } from '@bufbuild/protobuf';
-import { Code } from '@connectrpc/connect';
+import { Code, type HandlerContext } from '@connectrpc/connect';
 import {
   DeliverTurnRequestSchema,
   FreshBootstrapSchema,
+  NativeToolConfigSchema,
   OpenSessionRequestSchema,
   RestoreBootstrapSchema,
   SessionCheckpointSchema,
@@ -48,6 +49,10 @@ function createOpenSessionRequest(workspaceDir = '/tmp/custom-workspace') {
 	        systemPrompt: 'Prompt',
 	        workspaceDir,
 	        sessionId: 'session-fresh',
+	        nativeTools: create(NativeToolConfigSchema, {
+	          allowlist: ['Read'],
+	          blocklist: ['Bash'],
+	        }),
 	        tools: [
           create(ToolMetadataSchema, {
             name: 'search',
@@ -173,6 +178,12 @@ describe('runner openSession PTC bootstrap', () => {
       scriptDir: '/tmp/custom-workspace/.tools',
       tools: [expect.objectContaining({ name: 'search', programmatic: true })],
     }));
+    expect(mocks.harnessOpenSession).toHaveBeenCalledWith(expect.objectContaining({
+      nativeTools: {
+        allowlist: ['Read'],
+        blocklist: ['Bash'],
+      },
+    }));
   });
 
   it('surfaces PTC generation failures in the harness prompt instead of silently looking healthy', async () => {
@@ -209,6 +220,10 @@ describe('runner openSession PTC bootstrap', () => {
           agentId: 'agent-restore',
           harnessConfigJson: '{"model":"claude-sonnet-4-6"}',
           systemPrompt: 'Restore system prompt',
+          nativeTools: create(NativeToolConfigSchema, {
+            allowlist: ['Edit'],
+            blocklist: ['WebFetch'],
+          }),
           tools: [
             create(ToolMetadataSchema, {
               name: 'search',
@@ -228,6 +243,15 @@ describe('runner openSession PTC bootstrap', () => {
       scriptDir: '/tmp/restore-workspace/.tools',
       tools: [expect.objectContaining({ name: 'search', programmatic: true })],
     }));
+    expect(mocks.harnessOpenSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nativeTools: {
+          allowlist: ['Edit'],
+          blocklist: ['WebFetch'],
+        },
+      }),
+      expect.any(Object),
+    );
     expect(getSessionTools()).toEqual([
       expect.objectContaining({ name: 'search', programmatic: true }),
     ]);
@@ -276,7 +300,7 @@ describe('runner openSession PTC bootstrap', () => {
     await killSession();
     stream.emitEvent({ type: 'done', result: 'ignored-after-kill' });
 
-    await expect(eventsPromise).resolves.toEqual(['agUiEvent', 'agUiEvent', 'turnFailed']);
+    await expect(eventsPromise).resolves.toEqual(['agentEvent', 'agentEvent', 'turnFailed']);
     expect(mocks.harnessClose).toHaveBeenCalledTimes(1);
   });
 
@@ -308,7 +332,7 @@ describe('runner openSession PTC bootstrap', () => {
     stream.finish();
 
     const events = await eventsPromise;
-    expect(events.map((event) => event.payload.case)).toEqual(['agUiEvent', 'turnFailed']);
+    expect(events.map((event) => event.payload.case)).toEqual(['agentEvent', 'turnFailed']);
     expect(events[1].payload.value).toMatchObject({
       turnId: 'turn-pending-tool',
       errorMessage: expect.stringContaining('call-pending'),
@@ -456,7 +480,7 @@ describe('runner openSession PTC bootstrap', () => {
     const response = await suspendPromise;
     expect(exportState).toHaveBeenCalledTimes(1);
     expect(response.sessionCheckpoint).toBeDefined();
-    await expect(turnPromise).resolves.toEqual(['agUiEvent', 'agUiEvent', 'messageCommitted']);
+    await expect(turnPromise).resolves.toEqual(['agentEvent', 'agentEvent', 'messageCommitted']);
 
     stream.finish();
     await killSession().catch(() => undefined);
@@ -530,7 +554,7 @@ describe('runner openSession PTC bootstrap', () => {
         transcript: [assistantMessage],
       },
     });
-    await expect(turnPromise).resolves.toEqual(['agUiEvent', 'agUiEvent', 'messageCommitted']);
+    await expect(turnPromise).resolves.toEqual(['agentEvent', 'agentEvent', 'messageCommitted']);
 
     stream.finish();
     await killSession().catch(() => undefined);
@@ -640,5 +664,135 @@ describe('runner openSession PTC bootstrap', () => {
     await killSession();
     stream.finish();
     await firstTurnPromise;
+  });
+
+  it('propagates Connect request cancellation through the runner to the harness', async () => {
+    const { handleDeliverTurn } = await import('../daemon.js');
+    const { openSession } = await importRunner();
+    const harnessSawSignal = createDeferred<AbortSignal>();
+
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: async function* (
+        _input: unknown,
+        context: { signal?: AbortSignal },
+      ) {
+        if (!context.signal) {
+          throw new Error('runner omitted the request abort signal');
+        }
+        harnessSawSignal.resolve(context.signal);
+        await new Promise<void>((resolve) => {
+          if (context.signal?.aborted) {
+            resolve();
+            return;
+          }
+          context.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        yield { type: 'done', result: 'should be fenced before delivery' } satisfies AgentEvent;
+      },
+      exportState: async () => ({ stateVersion: '2', payload: {} }),
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/connect-abort'), {});
+    const controller = new AbortController();
+    const context = {
+      signal: controller.signal,
+    } as unknown as HandlerContext;
+    const stream = handleDeliverTurn(
+      createDeliverTurnRequest(session.sessionId, 'turn-connect-abort'),
+      context,
+    );
+    const nextEvent = stream.next();
+
+    const harnessSignal = await harnessSawSignal.promise;
+    expect(harnessSignal.aborted).toBe(false);
+    controller.abort(new Error('lease ownership lost'));
+
+    expect(harnessSignal.aborted).toBe(true);
+    await expect(nextEvent).resolves.toMatchObject({
+      value: {
+        payload: {
+          case: 'turnFailed',
+        },
+      },
+    });
+  });
+
+  it('does not redeliver a completed turn to the harness on the same daemon', async () => {
+    const { deliverTurn, openSession } = await importRunner();
+    const harnessDeliverTurn = vi.fn(async function* () {
+      yield { type: 'done', result: 'ok' } satisfies AgentEvent;
+    });
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: harnessDeliverTurn,
+      exportState: async () => ({ stateVersion: '2', payload: {} }),
+      close: mocks.harnessClose,
+    });
+
+    const session = await openSession(createOpenSessionRequest('/tmp/completed-turn-dedupe'), {});
+    const request = createDeliverTurnRequest(session.sessionId, 'hitl-resume-stable');
+    const firstCases = [];
+    for await (const event of deliverTurn(request)) {
+      firstCases.push(event.payload.case);
+    }
+    const retryCases = [];
+    for await (const event of deliverTurn(request)) {
+      retryCases.push(event.payload.case);
+    }
+
+    expect(firstCases).toEqual(['agentEvent', 'turnCompleted']);
+    expect(retryCases).toEqual(['turnCompleted']);
+    expect(harnessDeliverTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not redeliver the last completed turn restored from a checkpoint', async () => {
+    const { deliverTurn, openSession } = await importRunner();
+    const harnessDeliverTurn = vi.fn(async function* () {
+      yield { type: 'done', result: 'duplicate' } satisfies AgentEvent;
+    });
+    mocks.harnessOpenSession.mockResolvedValue({
+      deliverTurn: harnessDeliverTurn,
+      exportState: async () => ({ stateVersion: '2', payload: {} }),
+      close: mocks.harnessClose,
+    });
+    const req = create(OpenSessionRequestSchema, {
+      bootstrap: {
+        case: 'restore',
+        value: create(RestoreBootstrapSchema, {
+          sessionCheckpoint: create(SessionCheckpointSchema, {
+            checkpointVersion: 2,
+            sessionId: 'session-restored-dedupe',
+            conversationId: 'conv-restored-dedupe',
+            harnessName: 'langgraph',
+            cursor: {
+              nextMessageSeq: 0n,
+              lastCompletedTurnId: 'hitl-resume-restored',
+            },
+            workspaceRef: {
+              strategy: 'dir',
+              reference: '/tmp/restored-dedupe',
+            },
+            harnessState: {
+              stateVersion: '2',
+              payload: {},
+            },
+          }),
+          agentId: 'agent-1',
+          harnessConfigJson: '{}',
+          systemPrompt: 'Prompt',
+        }),
+      },
+    });
+
+    const session = await openSession(req, {});
+    const cases = [];
+    for await (const event of deliverTurn(
+      createDeliverTurnRequest(session.sessionId, 'hitl-resume-restored'),
+    )) {
+      cases.push(event.payload.case);
+    }
+
+    expect(cases).toEqual(['turnCompleted']);
+    expect(harnessDeliverTurn).not.toHaveBeenCalled();
   });
 });

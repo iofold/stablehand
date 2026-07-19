@@ -1,2 +1,2 @@
-// AG-UI event types — re-exported from shared package
-export type { AGUIEventType, AGUIEvent } from '@ctxmill/shared';
+// Sandbox-to-orchestrator agent-session event types.
+export type { AgentSessionEventType, AgentSessionEvent } from '@ctxmill/shared';

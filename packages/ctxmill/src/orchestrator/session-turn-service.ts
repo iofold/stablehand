@@ -5,13 +5,13 @@
  *  1. ensureSession(conversationId, agentDef) — get or create a persistent session
  *  2. deliverTurn(sessionId, messages, turnId) — stream SessionEvents for this turn
  *  3. For each SessionEvent:
- *     - ag_ui_event      → yield the inner AGUIEvent as-is
- *     - message_committed → yield as a MESSAGE_COMMITTED AGUIEvent
+ *     - agent_event      → yield the inner agent event as-is
+ *     - message_committed → yield as a MESSAGE_COMMITTED AgentSessionEvent
  *  4. On abort: stop consuming the turn stream and preserve the persistent session
  */
 
 import type { MessageCommittedEvent } from '@ctxmill/shared';
-import type { AGUIEvent } from '../events/types.js';
+import type { AgentSessionEvent } from '../events/types.js';
 import type { SessionEvent } from '@ctxmill/sandbox-daemon';
 import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { SandboxSessionManager } from './sandbox-session-manager.js';
@@ -46,7 +46,7 @@ export type SessionTurnSessionManager = {
 export interface SessionTurnExecutorDeps {
   sessionManager: SessionTurnSessionManager;
   logger?: Logger;
-  onSessionReady?: (agentSessionId: string, sandboxSessionId: string) => void;
+  onSessionReady?: (turnId: string, sandboxSessionId: string) => void;
 }
 
 export interface SessionTurnExecutor {
@@ -58,7 +58,7 @@ export interface SessionTurnExecutor {
     signal?: AbortSignal,
     agentId?: string,
     existingSessionId?: string,
-  ): AsyncGenerator<AGUIEvent>;
+  ): AsyncGenerator<AgentSessionEvent>;
 }
 
 export function createSessionTurnExecutor(deps: SessionTurnExecutorDeps): SessionTurnExecutor {
@@ -98,7 +98,7 @@ async function* executeSessionTurn(
   signal?: AbortSignal,
   agentId?: string,
   existingSessionId?: string,
-): AsyncGenerator<AGUIEvent> {
+): AsyncGenerator<AgentSessionEvent> {
   const { sessionManager } = deps;
 
   const sessionId = existingSessionId
@@ -135,7 +135,7 @@ async function* executeSessionTurn(
 function convertSessionEvent(
   sessionEvent: SessionEvent,
   turnId: string,
-): AGUIEvent | null {
+): AgentSessionEvent | null {
   switch (sessionEvent.type) {
     case 'ag_ui_event':
       return sessionEvent.event;
@@ -157,7 +157,7 @@ function convertSessionEvent(
     }
 
     case 'turn_failed': {
-      const errorEvent: AGUIEvent = {
+      const errorEvent: AgentSessionEvent = {
         type: 'RUN_ERROR',
         timestamp: Date.now(),
         runId: turnId,

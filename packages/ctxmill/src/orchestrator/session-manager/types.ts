@@ -69,6 +69,7 @@ export interface TurnQueueEntry {
   messages: Message[];
   turnId: string;
   channel: AsyncChannel<SessionEvent>;
+  signal?: AbortSignal;
 }
 
 export class AsyncChannel<T> {
@@ -131,7 +132,7 @@ export interface SandboxSessionManagerDeps {
   lifecyclePolicy: ContainerLifecyclePolicy;
   stateStore: SessionStateStore;
   statusCoordinator: SessionStatusCoordinator;
-  eventBus?: TypedEventBus;
+  eventBus: TypedEventBus;
   maxConcurrentSessionsPerAgent?: number;
   interruptManager?: InterruptManager;
   buildSandboxSecrets: (agentId: string) => Promise<Readonly<Record<string, string>>>;

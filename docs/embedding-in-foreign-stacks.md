@@ -168,10 +168,10 @@ The effective runtime contract is:
 
 1. read a hardcoded allowlist of host env vars from the orchestrator process
 2. read all per-agent secrets from the CTXMILL Secret Store
-3. merge any explicit per-run `sandboxSecrets` from `POST /api/agents/:id/message` or `POST /api/agents/:id/session`
+3. merge any explicit per-turn `sandboxSecrets` from `POST /api/agents/:id/message` or `POST /api/agents/:id/turns`
 4. inject the merged map into the sandbox container's `Env`
 
-Merge precedence is: allowlisted host env < per-agent Secret Store < per-run `sandboxSecrets`.
+Merge precedence is: allowlisted host env < per-agent Secret Store < per-turn `sandboxSecrets`.
 
 ### SANDBOX_SECRET_ALLOWLIST
 The orchestrator only passes specific environment variables to the sandbox. The current allowlist includes:

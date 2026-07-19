@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { AgentSubRouteOptions } from './types.js';
+import { toApiMessage } from '../agent-helpers.js';
+import { formatSeqId } from '../../sse.js';
 
 export async function conversationRoutes(
   app: FastifyInstance,
@@ -37,7 +39,7 @@ export async function conversationRoutes(
   );
 
   app.get(
-    '/:id/conversations/:convId/messages',
+    '/:id/conversations/:convId/snapshot',
     { preHandler: [loadAgent] },
     async (
       request: FastifyRequest<{ Params: { id: string; convId: string } }>,
@@ -50,8 +52,12 @@ export async function conversationRoutes(
         return reply.status(404).send({ error: 'Conversation not found' });
       }
 
-      const messages = await db.getMessages(convId);
-      return reply.send(messages);
+      const snapshot = await db.getConversationSnapshot(convId, id);
+      return reply.send({
+        conversationId: convId,
+        eventCursor: formatSeqId(snapshot.eventCursorSeq),
+        messages: snapshot.messages.map(toApiMessage),
+      });
     },
   );
 }

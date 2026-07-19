@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseManifestString, validateManifest } from 'ctxmill';
+import { parseManifestString, validateManifest } from '@ctxmill/manifest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');
@@ -36,13 +36,12 @@ describe('manifest validation', () => {
         expect(manifest.spec.tools).toEqual(expectedTools);
       });
 
-      it('has valid resource limits', async () => {
+      it('does not declare unenforced legacy resource limits', async () => {
         const yamlContent = await readFile(join(agentsDir, dir, 'agent.yaml'), 'utf-8');
         const parsed = parseManifestString(yamlContent);
         const manifest = validateManifest(parsed);
 
-        expect(manifest.spec.resources?.maxSessionDurationSeconds).toBe(60);
-        expect(manifest.spec.resources?.maxTokensPerSession).toBe(4000);
+        expect(manifest.spec.resources).toBeUndefined();
       });
 
       it('uses harnessConfig instead of model', async () => {
@@ -57,7 +56,6 @@ describe('manifest validation', () => {
           };
         };
 
-        expect(spec.model).toBeUndefined();
         expect(spec.harnessConfig?.provider).toBe(provider);
         expect(spec.harnessConfig?.model).toBe(model);
       });

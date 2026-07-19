@@ -17,7 +17,6 @@ spec:
     provider: anthropic
     model: claude-sonnet-4-6
     apiKeyRef: "$secret:ANTHROPIC_API_KEY"
-    temperature: 0.3
   instructions: |
     You are the Writer in a multi-agent chain. Your role:
     1. Receive an analysis from the Analyst agent.
@@ -39,6 +38,3 @@ spec:
       - Grep
       - Glob
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 60
-    maxTokensPerSession: 4000

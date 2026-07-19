@@ -48,17 +48,17 @@ describe('EventsPage', () => {
       fetchAgents: vi.fn().mockResolvedValue(undefined),
     }));
 
-    fetchEventTypesMock.mockResolvedValue({ types: ['run.completed'] });
+    fetchEventTypesMock.mockResolvedValue({ types: ['turn.completed'] });
     fetchEventStatsMock.mockResolvedValue({
       total: 1,
       recentRate: 1,
-      byType: { 'run.completed': 1 },
+      byType: { 'turn.completed': 1 },
       topAgents: [{ agentId: 'agent-1', count: 1 }],
     });
     fetchEventsMock.mockResolvedValue({
       events: [{
         seq: 1,
-        type: 'run.completed',
+        type: 'turn.completed',
         agentId: 'agent-1',
         createdAt: Date.now(),
         payload: JSON.stringify({ message: 'done' }),
@@ -93,7 +93,7 @@ describe('EventsPage', () => {
     await flushEffects();
 
     expect(container.textContent).toContain('Event Log');
-    expect(container.textContent).toContain('run.completed');
+    expect(container.textContent).toContain('turn.completed');
     expect(fetchEventsMock).toHaveBeenCalledTimes(2);
   });
 

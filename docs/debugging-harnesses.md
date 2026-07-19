@@ -22,21 +22,19 @@ Errors in CTXMill travel through several layers. Understanding this chain helps 
 Since harnesses run in separate containers, you cannot see their logs in the main `docker compose logs` output (unless you are using the `sandbox` profile and even then, individual run logs are separate).
 
 ### 1. Find the Container ID
-Managed containers are labeled with `ctxmill.managed=true`. Use the Docker CLI to find the container for a specific session or run:
+Managed containers are labeled with `ctxmill.managed=true`. Use the Docker CLI
+to find the container for a specific sandbox session:
 
 ```bash
 # List all active managed containers
 docker ps --filter "label=ctxmill.managed=true"
 
-# Find a container by session ID
-docker ps --filter "label=ctxmill.session-id=<sessionId>"
+# Find a container by sandbox session ID
+docker ps --filter "label=ctxmill.sandbox-session-id=<sandboxSessionId>"
 ```
 
-Container names follow these patterns:
-- **Runs**: `ctxmill-run-<sessionId>`
-- **Sessions**: `ctxmill-session-<conversationIdHash>`
-
-`ctxmill.session-id=<sessionId>` is the most reliable selector when you already know the session ID, because the session container name is derived from the conversation ID hash.
+Container names use `ctxmill-sandbox-<sandboxSessionId>`.
+`ctxmill.sandbox-session-id=<sandboxSessionId>` is the canonical selector.
 
 ### 2. Inspect Logs
 Once you have the container ID or name, check its `stdout` and `stderr`:

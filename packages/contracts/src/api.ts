@@ -1,0 +1,536 @@
+import { z } from 'zod';
+
+import {
+  AgentIdSchema,
+  ConversationIdSchema,
+  InterruptIdSchema,
+  MessageIdSchema,
+  SandboxSessionIdSchema,
+  ToolCallIdSchema,
+  TurnIdSchema,
+  WebhookIdSchema,
+} from './ids.js';
+import { WorkspaceRelativePathSchema } from './harness.js';
+
+const UnknownRecordSchema = z.record(z.string(), z.unknown());
+const StringRecordSchema = z.record(z.string(), z.string());
+const EpochMillisecondsSchema = z.number().int().nonnegative();
+
+export const AgentResourceLimitsSchema = z.strictObject({
+  cpus: z.number().min(0.5).max(4).optional(),
+  memoryMb: z.number().int().min(256).max(4096).optional(),
+  pidsLimit: z.number().int().min(64).max(512).optional(),
+  timeoutSec: z.number().int().min(60).max(3600).optional(),
+});
+
+export const AgentNativeToolsSchema = z.strictObject({
+  allowlist: z.array(z.string().trim().min(1)).optional(),
+  blocklist: z.array(z.string().trim().min(1)).optional(),
+}).superRefine((value, context) => {
+  for (const field of ['allowlist', 'blocklist'] as const) {
+    const names = value[field] ?? [];
+    if (new Set(names).size !== names.length) {
+      context.addIssue({
+        code: 'custom',
+        path: [field],
+        message: `${field} must not contain duplicate tool names`,
+      });
+    }
+  }
+
+  const blocked = new Set(value.blocklist ?? []);
+  for (const name of value.allowlist ?? []) {
+    if (blocked.has(name)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['blocklist'],
+        message: `Tool "${name}" cannot appear in both allowlist and blocklist`,
+      });
+    }
+  }
+});
+
+export const AgentWorkspaceContentSchema = z.strictObject({
+  files: z.array(z.strictObject({
+    src: WorkspaceRelativePathSchema,
+    dest: WorkspaceRelativePathSchema,
+  })).optional(),
+});
+
+export const AgentModeSchema = z.enum(['interactive', 'background', 'both']);
+
+export const HttpToolDefinitionSchema = z.strictObject({
+  name: z.string().trim().min(1),
+  description: z.string(),
+  endpoint: z.string().url(),
+  method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']).optional(),
+  inputSchema: UnknownRecordSchema.optional(),
+  headers: StringRecordSchema.optional(),
+  timeout: z.number().int().positive().optional(),
+  authentication: z.strictObject({
+    type: z.enum(['bearer', 'api-key']),
+    secretName: z.string().trim().min(1),
+    allowEnvFallback: z.boolean().optional(),
+  }).optional(),
+  programmatic: z.boolean().optional(),
+});
+
+export const AgentCreateInputSchema = z.strictObject({
+  name: z.string().trim().min(1),
+  harness: z.string().trim().min(1),
+  harnessConfig: UnknownRecordSchema,
+  systemPrompt: z.string(),
+  tools: z.array(z.string().trim().min(1)),
+  httpTools: z.array(HttpToolDefinitionSchema).optional(),
+  description: z.string().optional(),
+  metadata: UnknownRecordSchema.optional(),
+  resourceLimits: AgentResourceLimitsSchema.nullable().optional(),
+  nativeTools: AgentNativeToolsSchema.optional(),
+  workspaceContent: AgentWorkspaceContentSchema.optional(),
+  mode: AgentModeSchema.optional(),
+  manifest: UnknownRecordSchema.optional(),
+});
+
+export const AgentUpdateInputSchema = AgentCreateInputSchema
+  .partial()
+  .extend({
+    nativeTools: AgentNativeToolsSchema.nullable().optional(),
+    workspaceContent: AgentWorkspaceContentSchema.nullable().optional(),
+    mode: AgentModeSchema.nullable().optional(),
+    manifest: UnknownRecordSchema.nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, 'At least one agent field is required');
+
+export const TokenUsageSchema = z.strictObject({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  costUsd: z.number().nonnegative().optional(),
+});
+
+export const TurnStatusSchema = z.enum([
+  'QUEUED',
+  'RUNNING',
+  'COMPLETED',
+  'ERROR',
+  'CANCELLED',
+]);
+
+export const ConversationStatusSchema = z.enum([
+  'ACTIVE',
+  'CHECKPOINTED',
+  'RESTORING',
+  'COMPLETED',
+  'ERROR',
+  'CANCELLED',
+  'IDLE',
+]);
+
+export const SandboxSessionStatusSchema = z.enum([
+  'ACTIVE',
+  'CHECKPOINTED',
+  'RESTORING',
+  'TERMINATED',
+]);
+
+export const TurnSchema = z.strictObject({
+  id: TurnIdSchema,
+  agentId: AgentIdSchema,
+  conversationId: ConversationIdSchema,
+  sandboxSessionId: SandboxSessionIdSchema.optional(),
+  sandboxStatus: SandboxSessionStatusSchema.optional(),
+  status: TurnStatusSchema,
+  mode: z.enum(['interactive', 'background']),
+  startedAt: EpochMillisecondsSchema,
+  completedAt: EpochMillisecondsSchema.optional(),
+  error: z.string().optional(),
+  taskDescription: z.string().optional(),
+  conversationMessageCount: z.number().int().nonnegative().optional(),
+  restoreAttempts: z.number().int().nonnegative().nullable().optional(),
+  lastRestoreError: z.string().nullable().optional(),
+  checkpointAt: EpochMillisecondsSchema.optional(),
+  usage: TokenUsageSchema.optional(),
+});
+
+export const SandboxSessionsByStatusSchema = z.strictObject({
+  ACTIVE: z.number().int().nonnegative(),
+  CHECKPOINTED: z.number().int().nonnegative(),
+  RESTORING: z.number().int().nonnegative(),
+  TERMINATED: z.number().int().nonnegative(),
+});
+
+export const AgentSchema = z.strictObject({
+  id: AgentIdSchema,
+  name: z.string(),
+  harness: z.string(),
+  harnessConfig: UnknownRecordSchema,
+  systemPrompt: z.string(),
+  tools: z.array(z.string()),
+  description: z.string().nullable(),
+  workspaceDir: z.string().nullable(),
+  status: z.string(),
+  manifest: UnknownRecordSchema.nullable(),
+  version: z.number().int().nonnegative().nullable(),
+  metadata: UnknownRecordSchema.nullable(),
+  createdAt: EpochMillisecondsSchema,
+  updatedAt: EpochMillisecondsSchema,
+  nativeTools: AgentNativeToolsSchema.nullable(),
+  workspaceContent: AgentWorkspaceContentSchema.nullable(),
+  mode: AgentModeSchema.nullable(),
+  resourceLimits: AgentResourceLimitsSchema.nullable(),
+  sseClients: z.number().int().nonnegative().optional(),
+  hasPendingInterrupt: z.boolean().optional(),
+  conversationCount: z.number().int().nonnegative().optional(),
+  turnCount: z.number().int().nonnegative().optional(),
+  completedTurnCount: z.number().int().nonnegative().optional(),
+  failedTurnCount: z.number().int().nonnegative().optional(),
+  activeTurnCount: z.number().int().nonnegative().optional(),
+  tokensTotal: z.number().int().nonnegative().optional(),
+  tokensLast24h: z.number().int().nonnegative().optional(),
+  recentTurns: z.array(TurnSchema).optional(),
+  sandboxSessionsByStatus: SandboxSessionsByStatusSchema.optional(),
+  lastActivity: EpochMillisecondsSchema.nullable().optional(),
+});
+
+export const AgentListResponseSchema = z.array(AgentSchema);
+
+export const SecretListResponseSchema = z.strictObject({
+  keys: z.array(z.string().trim().min(1)),
+});
+
+export const SecretPutInputSchema = z.strictObject({
+  key: z.string().trim().min(1),
+  value: z.string().min(1),
+});
+
+export const SecretPutResponseSchema = z.strictObject({
+  key: z.string().trim().min(1),
+});
+
+export const SandboxSecretsSchema = z.record(
+  z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+  z.string(),
+);
+
+export const TagsSchema = z.record(z.string().trim().min(1), z.string().min(1).max(256));
+
+export const BackgroundTurnStartInputSchema = z.strictObject({
+  task: z.string().trim().min(1),
+  requestedTurnId: z.string().trim().min(1).optional(),
+  sandboxSecrets: SandboxSecretsSchema.optional(),
+  tags: TagsSchema.optional(),
+});
+
+export const BackgroundTurnStartResponseSchema = z.strictObject({
+  turnId: TurnIdSchema,
+  conversationId: ConversationIdSchema,
+  sandboxSessionId: SandboxSessionIdSchema.nullable(),
+});
+
+export const ConversationTurnStartInputSchema = z.strictObject({
+  content: z.string().trim().min(1),
+  conversationId: z.string().trim().min(1).optional(),
+  requestedTurnId: z.string().trim().min(1).optional(),
+  sandboxSecrets: SandboxSecretsSchema.optional(),
+  tags: TagsSchema.optional(),
+});
+
+export const ConversationTurnStartResponseSchema = z.strictObject({
+  messageId: MessageIdSchema,
+  turnId: TurnIdSchema,
+  conversationId: ConversationIdSchema,
+});
+
+export const TurnListResponseSchema = z.strictObject({
+  turns: z.array(TurnSchema),
+});
+
+export const ToolCallStateSchema = z.strictObject({
+  id: ToolCallIdSchema,
+  name: z.string(),
+  args: z.string(),
+  result: z.string().optional(),
+  error: z.string().optional(),
+  status: z.enum(['pending', 'running', 'complete', 'error']),
+});
+
+export const MessagePartSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('text'),
+    content: z.string(),
+  }),
+  z.strictObject({
+    type: z.literal('tool_call'),
+    id: ToolCallIdSchema,
+    name: z.string(),
+    args: z.string(),
+    result: z.string().optional(),
+    error: z.string().optional(),
+    status: ToolCallStateSchema.shape.status,
+  }),
+]);
+
+export const MessageSchema = z.strictObject({
+  id: MessageIdSchema,
+  conversationId: ConversationIdSchema.optional(),
+  agentId: AgentIdSchema.nullable().optional(),
+  turnId: TurnIdSchema.optional(),
+  messageSeq: z.number().int().nonnegative().optional(),
+  messageRevision: z.number().int().nonnegative(),
+  role: z.enum(['user', 'assistant', 'system', 'tool']),
+  content: z.string(),
+  toolCallId: ToolCallIdSchema.nullable().optional(),
+  toolCalls: z.array(ToolCallStateSchema).nullable().optional(),
+  parts: z.array(MessagePartSchema).nullable().optional(),
+  createdAt: z.union([z.string(), EpochMillisecondsSchema]),
+});
+
+export const MessageListResponseSchema = z.array(MessageSchema);
+
+export const EventCursorSchema = z.string().regex(/^\d{12,15}$/);
+
+export const ConversationSnapshotResponseSchema = z.strictObject({
+  conversationId: ConversationIdSchema,
+  eventCursor: EventCursorSchema,
+  messages: MessageListResponseSchema,
+});
+
+export const TurnDetailResponseSchema = z.strictObject({
+  turn: TurnSchema,
+  messages: MessageListResponseSchema,
+});
+
+export const TurnCancelResponseSchema = z.strictObject({
+  cancelled: z.boolean(),
+  turnId: TurnIdSchema,
+  alreadyTerminal: z.boolean().optional(),
+});
+
+export const ConversationSchema = z.strictObject({
+  id: ConversationIdSchema,
+  agentId: AgentIdSchema,
+  tags: TagsSchema.nullable(),
+  createdAt: EpochMillisecondsSchema,
+  updatedAt: EpochMillisecondsSchema,
+});
+
+export const ConversationListResponseSchema = z.array(ConversationSchema);
+
+export const ConversationSummarySchema = z.strictObject({
+  id: ConversationIdSchema,
+  agentId: AgentIdSchema,
+  status: ConversationStatusSchema,
+  mode: z.enum(['interactive', 'background']),
+  turnCount: z.number().int().nonnegative(),
+  messageCount: z.number().int().nonnegative(),
+  taskDescription: z.string().nullable(),
+  startedAt: EpochMillisecondsSchema,
+  completedAt: EpochMillisecondsSchema.nullable(),
+  updatedAt: EpochMillisecondsSchema,
+  latestTurnId: TurnIdSchema.nullable(),
+  sandboxSessionId: SandboxSessionIdSchema.nullable(),
+  totalTokens: z.number().int().nonnegative().nullable(),
+});
+
+export const ConversationSummaryListResponseSchema = z.strictObject({
+  conversations: z.array(ConversationSummarySchema),
+});
+
+export const SandboxSessionSchema = z.strictObject({
+  id: SandboxSessionIdSchema,
+  conversationId: ConversationIdSchema,
+  agentId: AgentIdSchema,
+  containerName: z.string().nullable(),
+  containerId: z.string().nullable(),
+  status: SandboxSessionStatusSchema,
+  harnessName: z.string(),
+  checkpointRef: z.string().nullable(),
+  createdAt: EpochMillisecondsSchema,
+  updatedAt: EpochMillisecondsSchema,
+  lastActivityAt: EpochMillisecondsSchema,
+  restoreAttempts: z.number().int().nonnegative().nullable().optional(),
+  lastRestoreError: z.string().nullable().optional(),
+});
+
+export const SandboxSessionListResponseSchema = z.array(SandboxSessionSchema);
+
+export const SandboxSessionActionResponseSchema = z.strictObject({
+  sandboxSessionId: SandboxSessionIdSchema,
+  status: SandboxSessionStatusSchema,
+  restoreAttempts: z.number().int().nonnegative().optional(),
+});
+
+export const InterruptSchema = z.strictObject({
+  interruptId: InterruptIdSchema,
+  turnId: TurnIdSchema,
+  sandboxSessionId: SandboxSessionIdSchema.optional(),
+  agentId: AgentIdSchema,
+  toolCallId: ToolCallIdSchema,
+  toolCallName: z.string(),
+  args: UnknownRecordSchema,
+  createdAt: EpochMillisecondsSchema,
+  status: z.enum(['pending', 'resolved', 'resume_failed', 'timed_out']),
+  resumeError: z.string().optional(),
+});
+
+export const InterruptListResponseSchema = z.strictObject({
+  interrupts: z.array(InterruptSchema),
+});
+
+export const InterruptResolveInputSchema = z.strictObject({
+  interruptId: z.string().trim().min(1),
+  action: z.enum(['approve', 'reject', 'submit']),
+  data: z.unknown().optional(),
+});
+
+export const InterruptResolveResponseSchema = z.union([
+  z.strictObject({
+    resolved: z.literal(true),
+    action: z.enum(['approve', 'reject']),
+    note: z.string().optional(),
+  }),
+  z.strictObject({
+    alreadyResolved: z.literal(true),
+    action: z.enum(['approve', 'reject']).nullable(),
+  }),
+  z.strictObject({
+    accepted: z.literal(true),
+    resuming: z.boolean(),
+    action: z.enum(['approve', 'reject']),
+    resumeAttemptId: z.string().trim().min(1),
+    error: z.string().optional(),
+  }),
+]);
+
+export const FileListResponseSchema = z.strictObject({
+  entries: z.array(z.strictObject({
+    name: z.string(),
+    type: z.enum(['file', 'directory']),
+    size: z.number().int().nonnegative(),
+  })),
+});
+
+export const FileReadResponseSchema = z.strictObject({
+  path: z.string(),
+  content: z.string(),
+  size: z.number().int().nonnegative(),
+});
+
+export const FileWriteInputSchema = z.strictObject({
+  path: z.string().trim().min(1),
+  content: z.string(),
+  conversationId: z.string().trim().min(1).optional(),
+});
+
+export const FileWriteResponseSchema = z.strictObject({
+  path: z.string(),
+  size: z.number().int().nonnegative(),
+});
+
+export const WorkspaceReplaceResponseSchema = z.strictObject({
+  revision: z.number().int().positive(),
+  sha256: z.string().trim().min(1),
+  fileCount: z.number().int().nonnegative(),
+  totalBytes: z.number().int().nonnegative(),
+  appliedAt: EpochMillisecondsSchema,
+});
+
+export const WorkspaceRevisionResponseSchema = WorkspaceReplaceResponseSchema;
+
+export const WebhookEventNameSchema = z.enum([
+  'turn.started',
+  'turn.completed',
+  'tool_call.started',
+  'tool_call.completed',
+  'interrupt.requested',
+  'interrupt.resolved',
+  'message.committed',
+  'message.updated',
+  'feedback.received',
+  'budget.threshold',
+]);
+
+export const WebhookUpsertInputSchema = z.strictObject({
+  url: z.string().url(),
+  events: z.array(WebhookEventNameSchema).min(1),
+  secret: z.string().min(1),
+});
+
+export const WebhookSchema = z.strictObject({
+  id: WebhookIdSchema,
+  agentId: AgentIdSchema,
+  url: z.string().url(),
+  events: z.array(WebhookEventNameSchema),
+  active: z.boolean(),
+  hasSecret: z.boolean(),
+  createdAt: EpochMillisecondsSchema,
+  updatedAt: EpochMillisecondsSchema,
+});
+
+export const WebhookListResponseSchema = z.array(WebhookSchema);
+
+export const HealthResponseSchema = z.strictObject({
+  status: z.literal('ok'),
+  timestamp: z.string(),
+  sandbox: z.strictObject({
+    execution_mode: z.literal('sandbox'),
+    containers: z.strictObject({
+      active: z.number().int().nonnegative(),
+      queued: z.number().int().nonnegative(),
+      peak: z.number().int().nonnegative(),
+      total_created: z.number().int().nonnegative(),
+    }),
+    limits: z.strictObject({
+      max_global_containers: z.number().int().positive(),
+    }),
+  }).optional(),
+});
+
+export const ConfigResponseSchema = z.strictObject({
+  system: z.strictObject({
+    version: z.string(),
+    uptime: z.number().nonnegative(),
+    dbPath: z.string(),
+  }),
+  agentDefaults: z.strictObject({
+    harness: z.string(),
+    temperature: z.number(),
+    maxTokens: z.number().int().positive(),
+  }),
+});
+
+export const SandboxMetricsResponseSchema = z.strictObject({
+  execution_mode: z.literal('sandbox'),
+  containers: z.strictObject({
+    active: z.number().int().nonnegative(),
+    queued: z.number().int().nonnegative(),
+    peak: z.number().int().nonnegative(),
+    total_created: z.number().int().nonnegative(),
+    by_harness: z.record(z.string(), z.number().int().nonnegative()),
+    average_lifetime_ms: z.number().nonnegative(),
+  }),
+  limits: z.strictObject({
+    max_global_containers: z.number().int().positive(),
+  }),
+});
+
+export type AgentResourceLimits = z.infer<typeof AgentResourceLimitsSchema>;
+export type AgentNativeTools = z.infer<typeof AgentNativeToolsSchema>;
+export type AgentWorkspaceContent = z.infer<typeof AgentWorkspaceContentSchema>;
+export type AgentMode = z.infer<typeof AgentModeSchema>;
+export type AgentCreateInput = z.input<typeof AgentCreateInputSchema>;
+export type AgentUpdateInput = z.input<typeof AgentUpdateInputSchema>;
+export type Agent = z.infer<typeof AgentSchema>;
+export type Turn = z.infer<typeof TurnSchema>;
+export type Message = z.infer<typeof MessageSchema>;
+export type ConversationSnapshot = z.infer<typeof ConversationSnapshotResponseSchema>;
+export type Conversation = z.infer<typeof ConversationSchema>;
+export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
+export type SandboxSession = z.infer<typeof SandboxSessionSchema>;
+export type Interrupt = z.infer<typeof InterruptSchema>;
+export type Webhook = z.infer<typeof WebhookSchema>;
+export type BackgroundTurnStartInput = z.input<typeof BackgroundTurnStartInputSchema>;
+export type ConversationTurnStartInput = z.input<typeof ConversationTurnStartInputSchema>;
+export type InterruptResolveInput = z.input<typeof InterruptResolveInputSchema>;
+export type FileWriteInput = z.input<typeof FileWriteInputSchema>;
+export type WebhookUpsertInput = z.input<typeof WebhookUpsertInputSchema>;

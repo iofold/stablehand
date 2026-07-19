@@ -366,6 +366,13 @@ describe('Events and Triggers Integration', () => {
 
   describe('Feedback and removed learning endpoints', () => {
     it('POST /api/agents/:id/feedback emits feedback.received', async () => {
+      const conversation = await container.db.createConversation(agentId);
+      const turn = await container.db.createTurn({
+        agentId,
+        conversationId: conversation.id,
+        mode: 'interactive',
+        taskDescription: 'feedback target',
+      });
       const received = new Promise<unknown>((resolve) => {
         container.eventBus.once('feedback.received', resolve);
       });
@@ -374,7 +381,7 @@ describe('Events and Triggers Integration', () => {
         method: 'POST',
         url: `/api/agents/${agentId}/feedback`,
         payload: {
-          conversationId: 'conversation-feedback-test',
+          conversationId: conversation.id,
           messageId: 'message-feedback-test',
           type: 'thumbs_up',
         },
@@ -383,14 +390,30 @@ describe('Events and Triggers Integration', () => {
       expect(res.statusCode).toBe(201);
       const body = res.json();
       expect(body.feedbackId).toEqual(expect.any(String));
-      expect(body.turnId).toBe('conversation-feedback-test');
+      expect(body.turnId).toBe(turn.id);
       await expect(received).resolves.toMatchObject({
         feedbackId: body.feedbackId,
-        turnId: 'conversation-feedback-test',
+        turnId: turn.id,
         agentId,
         type: 'thumbs_up',
         messageId: 'message-feedback-test',
       });
+    });
+
+    it('does not invent a turn identity for feedback on an empty conversation', async () => {
+      const conversation = await container.db.createConversation(agentId);
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/feedback`,
+        payload: {
+          conversationId: conversation.id,
+          messageId: 'message-without-turn',
+          type: 'thumbs_down',
+        },
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual({ error: 'No turn found for conversation' });
     });
 
     it('trace and feedback stats endpoints are removed', async () => {

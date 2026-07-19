@@ -29,6 +29,8 @@
     "@connectrpc/connect": "^2.1.1",
     "@connectrpc/connect-fastify": "^2.1.1",
     "@connectrpc/connect-node": "^2.1.1",
+    "@ctxmill/contracts": "workspace:*",
+    "@ctxmill/manifest": "workspace:*",
     "@ctxmill/proto": "workspace:*",
     "@ctxmill/sandbox-daemon": "workspace:*",
     "@ctxmill/shared": "workspace:*",

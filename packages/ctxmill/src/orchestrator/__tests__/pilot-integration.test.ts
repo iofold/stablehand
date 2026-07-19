@@ -1,7 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { VALID_WEBHOOK_EVENTS } from '../../config/container.js';
 import type { CallbackOutboxRow, DatabaseRepository, EventFrameRow, WebhookRow } from '../../database/repository.js';
 import type { CallbackOutboxInsert } from '../../database/types.js';
 import { SpineConsumerRunner } from '../../events/spine-consumer-runner.js';
@@ -9,12 +8,12 @@ import { TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import { CallbackDispatcher } from '../callback-dispatcher.js';
 import { CanonicalLog } from '../canonical/canonical-log.js';
-import type { AgentSessionService } from '../agent-session-service.js';
+import type { AgentTurnService } from '../agent-turn-service.js';
 import { InterruptManager } from '../interrupt.js';
 import { agentRoutes } from '../routes/agents.js';
 import { mapAgentHttpToolsToConfigs } from '../http-tools.js';
 import { SSEManager } from '../sse.js';
-import { RunStartupService } from '../run-startup-service.js';
+import { TurnStartupService } from '../turn-startup-service.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 import { createWebhookRelaySpineConsumer } from '../webhook-relay.js';
 
@@ -45,10 +44,11 @@ type MessageRow = {
   createdAt: number;
 };
 
-type RunRow = {
+type TurnRow = {
   id: string;
   agentId: string;
   conversationId: string;
+  sandboxSessionId?: string | null;
   status: string;
   mode: 'interactive' | 'background';
   startedAt: number;
@@ -82,7 +82,7 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
   const webhooks = new Map((options?.webhooks ?? []).map((hook) => [hook.id, { ...hook }]));
   const conversations = new Map<string, { id: string; agentId: string; createdAt: number; updatedAt: number }>();
   const messages = new Map<string, MessageRow[]>();
-  const runs = new Map<string, RunRow>();
+  const turns = new Map<string, TurnRow>();
   const callbackOutbox = new Map<string, CallbackOutboxRow>();
 
   let agentCounter = agents.size;
@@ -153,25 +153,7 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
     getMessages: vi.fn(async (conversationId: string) => {
       return (messages.get(conversationId) ?? []).map((message) => ({ ...message }));
     }),
-    createRun: vi.fn(async (data: RunRow) => {
-      const row: RunRow = {
-        ...data,
-        completedAt: data.completedAt ?? null,
-        error: data.error ?? null,
-        taskDescription: data.taskDescription ?? null,
-      };
-      runs.set(row.id, row);
-      return { ...row };
-    }),
-    updateRun: vi.fn(async (id: string, data: Partial<RunRow>) => {
-      const existing = runs.get(id);
-      if (!existing) return undefined;
-      const updated = { ...existing, ...data };
-      runs.set(id, updated);
-      return { ...updated };
-    }),
-    getAllRuns: vi.fn(async () => Array.from(runs.values()).map((run) => ({ ...run }))),
-    getPendingInterrupt: vi.fn(async () => null),
+    getPendingInterruptForTurn: vi.fn(async () => null),
     resolveInterrupt: vi.fn(async () => undefined),
     createWebhook: vi.fn(async (data: {
       id: string;
@@ -194,6 +176,10 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
       return Array.from(webhooks.values())
         .filter((hook) => hook.agentId === agentId && hook.active)
         .map((hook) => ({ ...hook }));
+    }),
+    getWebhookForAgent: vi.fn(async (webhookId: string, agentId: string) => {
+      const hook = webhooks.get(webhookId);
+      return hook?.agentId === agentId ? { ...hook } : undefined;
     }),
     deleteWebhookForAgent: vi.fn(async (webhookId: string, agentId?: string) => {
       const hook = webhooks.get(webhookId);
@@ -227,7 +213,7 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
         claimExpiresAt: null,
         ...data,
         eventSeq: data.eventSeq ?? null,
-        sessionId: data.sessionId ?? null,
+        turnId: data.turnId ?? null,
         lastAttemptAt: data.lastAttemptAt ?? null,
         lastError: data.lastError ?? null,
         deliveredAt: data.deliveredAt ?? null,
@@ -261,14 +247,21 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
     }),
     createTurn: vi.fn(async (data: Record<string, unknown>) => {
       const id = `turn-${Date.now()}`;
-      const row = { id, ...data, sessionId: `sandbox-${id}`, startedAt: Date.now(), completedAt: null, error: null };
-      runs.set(id, row as unknown as RunRow);
+      const row = {
+        id,
+        ...data,
+        sandboxSessionId: `sandbox-${id}`,
+        startedAt: Date.now(),
+        completedAt: null,
+        error: null,
+      };
+      turns.set(id, row as unknown as TurnRow);
       return row;
     }),
     updateTurn: vi.fn(async () => undefined),
     finalizeTurnIfOpen: vi.fn(async () => true),
     getTurn: vi.fn(async (id: string) => {
-      const row = runs.get(id);
+      const row = turns.get(id);
       return row ? { ...row } : undefined;
     }),
     getTurnsByAgent: vi.fn(async () => []),
@@ -278,7 +271,7 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
       webhooks,
       conversations,
       messages,
-      runs,
+      turns,
       callbackOutbox,
     },
   };
@@ -307,8 +300,8 @@ function createMockSessionManager(): SandboxSessionManager {
   } as unknown as SandboxSessionManager;
 }
 
-function createRunStartupServiceStub(): RunStartupService {
-  return new RunStartupService({ logger: console });
+function createTurnStartupServiceStub(): TurnStartupService {
+  return new TurnStartupService({ logger: console });
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -324,22 +317,24 @@ async function createWebhookRelayRuntime(
   const rows: EventFrameRow[] = [];
   const cursors = new Map<string, number>();
   let seq = 0;
+  const persistFrames = async (frames: Array<Omit<EventFrameRow, 'seq' | 'createdAt'>>) =>
+    frames.map((frame) => {
+      seq += 1;
+      rows.push({
+        ...frame,
+        seq,
+        createdAt: Date.now(),
+        turnId: frame.turnId ?? null,
+        conversationId: frame.conversationId ?? null,
+        sourceType: frame.sourceType ?? null,
+        sourcePayload: frame.sourcePayload ?? null,
+      });
+      return seq;
+    });
 
   const relayDb = Object.assign(db, {
-    saveEventBatch: vi.fn(async (frames: Array<Omit<EventFrameRow, 'seq' | 'createdAt'>>) =>
-      frames.map((frame) => {
-        seq += 1;
-        rows.push({
-          ...frame,
-          seq,
-          createdAt: Date.now(),
-          turnId: frame.turnId ?? null,
-          conversationId: frame.conversationId ?? null,
-          sourceType: frame.sourceType ?? null,
-          sourcePayload: frame.sourcePayload ?? null,
-        });
-        return seq;
-      })),
+    saveEventBatch: vi.fn(persistFrames),
+    saveTerminalEventBatch: vi.fn(persistFrames),
     getFramesSince: vi.fn(async () => [] as EventFrameRow[]),
     getTurnFrames: vi.fn(async () => [] as EventFrameRow[]),
     getSourceEventsSince: vi.fn(async (afterSeq: number, limit = 1_000) =>
@@ -376,26 +371,26 @@ async function buildApp(options?: {
   db?: ReturnType<typeof createMockDb>;
   eventBus?: TypedEventBus;
   sessionManager?: SandboxSessionManager;
-  agentSessionService?: AgentSessionService;
+  agentTurnService?: AgentTurnService;
 }): Promise<{
   app: FastifyInstance;
   db: ReturnType<typeof createMockDb>;
   eventBus: TypedEventBus;
   sessionManager: SandboxSessionManager;
-  agentSessionService: AgentSessionService;
+  agentTurnService: AgentTurnService;
 }> {
   const db = options?.db ?? createMockDb();
   const eventBus = options?.eventBus ?? new TypedEventBus();
   const sessionManager = options?.sessionManager ?? createMockSessionManager();
-  const agentSessionService = options?.agentSessionService ?? ({
-    executeSession: vi.fn(async () => {}),
-  } as unknown as AgentSessionService);
-  const runStartupService = createRunStartupServiceStub();
-  runStartupService.configureExecution({
+  const agentTurnService = options?.agentTurnService ?? ({
+    executeTurn: vi.fn(async () => {}),
+  } as unknown as AgentTurnService);
+  const turnStartupService = createTurnStartupServiceStub();
+  turnStartupService.configureExecution({
     db,
     eventBus,
     sessionManager,
-    agentSessionService,
+    agentTurnService,
   });
 
   const app = Fastify();
@@ -407,13 +402,12 @@ async function buildApp(options?: {
     interrupts: new InterruptManager() as unknown as InterruptManager,
     sessionManager,
     harnessSchemas: { langgraph: configSchema },
-    agentSessionService,
-    runStartupService,
+    turnStartupService,
     eventBus,
   });
   await app.ready();
 
-  return { app, db, eventBus, sessionManager, agentSessionService };
+  return { app, db, eventBus, sessionManager, agentTurnService };
 }
 
 function createHttpAgent(overrides?: Partial<AgentDefinition>): AgentDefinition {
@@ -501,7 +495,8 @@ describe('Pilot integration', () => {
         url: '/api/agents/agent-1/webhooks',
         payload: {
           url: 'https://hooks.example/pilot',
-          events: ['turn.started', 'turn.completed', 'run.tool_started'],
+          events: ['turn.started', 'turn.completed', 'tool_call.started'],
+          secret: 'pilot-test-secret',
         },
       });
 
@@ -517,7 +512,7 @@ describe('Pilot integration', () => {
         expect.objectContaining({
           agentId: 'agent-1',
           url: 'https://hooks.example/pilot',
-          events: ['turn.started', 'turn.completed', 'run.tool_started'],
+          events: ['turn.started', 'turn.completed', 'tool_call.started'],
         }),
       ]);
     });
@@ -594,22 +589,22 @@ describe('Pilot integration', () => {
 
       const sessionManager = createMockSessionManager();
       const cancelSessionSpy = vi.spyOn(sessionManager, 'cancelCurrentTurn');
-      const agentSessionService = {
-        executeSession: vi.fn(async (params: { agentId: string; sessionId: string; conversationId: string }) => {
-          eventBus.emit('run.tool_started', {
-            turnId: params.sessionId,
+      const agentTurnService = {
+        executeTurn: vi.fn(async (params: { agentId: string; turnId: string; conversationId: string }) => {
+          eventBus.emit('tool_call.started', {
+            turnId: params.turnId,
             agentId: params.agentId,
             conversationId: params.conversationId,
             toolCallId: 'tool-1',
-            toolName: 'remote-search',
+            toolCallName: 'remote-search',
             args: { query: 'pilot shipment 42' },
             timestamp: 222,
           });
           return new Promise<void>(() => {});
         }),
-      } as unknown as AgentSessionService;
+      } as unknown as AgentTurnService;
 
-      const system = await buildApp({ db, eventBus, sessionManager, agentSessionService });
+      const system = await buildApp({ db, eventBus, sessionManager, agentTurnService });
       app = system.app;
 
       const createResponse = await app.inject({
@@ -635,14 +630,15 @@ describe('Pilot integration', () => {
         url: '/api/agents/agent-1/webhooks',
         payload: {
           url: 'https://hooks.example/pilot',
-          events: ['turn.started', 'turn.completed', 'run.tool_started'],
+          events: ['turn.started', 'turn.completed', 'tool_call.started'],
+          secret: 'pilot-test-secret',
         },
       });
       expect(webhookResponse.statusCode).toBe(201);
 
       const startResponse = await app.inject({
         method: 'POST',
-        url: '/api/agents/agent-1/session',
+        url: '/api/agents/agent-1/turns',
         payload: {
           task: 'Dispatch Pilot order sync',
           sandboxSecrets: {
@@ -653,28 +649,28 @@ describe('Pilot integration', () => {
       });
 
       expect(startResponse.statusCode).toBe(201);
-      expect(agentSessionService.executeSession).toHaveBeenCalledTimes(1);
-      expect(agentSessionService.executeSession).toHaveBeenCalledWith(expect.objectContaining({
+      expect(agentTurnService.executeTurn).toHaveBeenCalledTimes(1);
+      expect(agentTurnService.executeTurn).toHaveBeenCalledWith(expect.objectContaining({
         sandboxSecrets: {
           PILOT_SERVICE_TOKEN: 'runtime-token',
           PILOT_API_BASE: 'http://api:3000',
         },
       }));
 
-      const { sessionId } = startResponse.json() as { sessionId: string; conversationId: string };
+      const { turnId } = startResponse.json() as { turnId: string; conversationId: string };
 
       await flushEvents();
       await callbackDispatcher.processPending();
 
       const preCancelDeliveries = getDeliveredBodies(fetchMock);
       // turn.started is emitted by sessionManager.startTurn() which is mocked in this test
-      // and doesn't fire events on the eventBus. Only run.tool_started (from executeSession mock) is delivered.
+      // and doesn't fire events on the eventBus. Only tool_call.started (from executeTurn mock) is delivered.
        expect(preCancelDeliveries).toEqual(expect.arrayContaining([
          expect.objectContaining({
-           eventType: 'run.tool_started',
+           eventType: 'tool_call.started',
            body: expect.objectContaining({
-             turnId: sessionId,
-             toolName: 'remote-search',
+             turnId,
+             toolCallName: 'remote-search',
              args: { query: 'pilot shipment 42' },
            }),
          }),
@@ -682,15 +678,15 @@ describe('Pilot integration', () => {
 
       const cancelResponse = await app.inject({
         method: 'POST',
-        url: `/api/agents/agent-1/sessions/${sessionId}/cancel`,
+        url: `/api/agents/agent-1/turns/${turnId}/cancel`,
       });
 
-      expect(cancelResponse.statusCode).toBe(200);
-      expect(cancelSessionSpy).toHaveBeenCalledWith(`sandbox-${sessionId}`, sessionId);
+      expect(cancelResponse.statusCode, JSON.stringify(cancelResponse.json())).toBe(200);
+      expect(cancelSessionSpy).toHaveBeenCalledWith(`sandbox-${turnId}`, turnId);
 
       eventBus.emit('turn.completed', {
-        turnId: sessionId,
-        sessionId,
+        turnId,
+        sandboxSessionId: `sandbox-${turnId}`,
         agentId: 'agent-1',
         conversationId: 'conv-1',
         status: 'cancelled' as const,
@@ -705,7 +701,8 @@ describe('Pilot integration', () => {
       expect(completedDeliveries).toEqual(expect.arrayContaining([
         expect.objectContaining({
           body: expect.objectContaining({
-            sessionId,
+            turnId,
+            sandboxSessionId: `sandbox-${turnId}`,
             agentId: 'agent-1',
             status: 'cancelled',
           }),
@@ -737,6 +734,7 @@ describe('Pilot integration', () => {
         payload: {
           url: 'https://hooks.example/lifecycle',
           events: ['turn.completed'],
+          secret: 'pilot-test-secret',
         },
       });
       expect(createResponse.statusCode).toBe(201);
@@ -775,12 +773,13 @@ describe('Pilot integration', () => {
         payload: {
           url: 'https://hooks.example/invalid',
           events: ['turn.completed', 'run.invalid'],
+          secret: 'pilot-test-secret',
         },
       });
       expect(invalidResponse.statusCode).toBe(400);
-      expect(invalidResponse.json()).toEqual({
-        error: 'Invalid event types: run.invalid',
-        validEvents: [...VALID_WEBHOOK_EVENTS],
+      expect(invalidResponse.json()).toMatchObject({
+        error: 'Invalid webhook definition',
+        issues: [expect.objectContaining({ path: 'events.1' })],
       });
 
       const missingDeleteResponse = await app.inject({

@@ -40,7 +40,7 @@ If `--raw` is present, only the API payload is emitted.
 ```json
 {
   "agentId": "agent-id",
-  "sessionId": "turn-id",
+  "turnId": "turn-id",
   "conversationId": "conversation-id",
   "toolCalls": [
     {
@@ -67,8 +67,8 @@ manifest.json
 health.json
 config.json
 agent.json
-sessions.json
-session.json
+turns.json
+turn.json
 conversations.json
 messages.json
 toolcalls.json

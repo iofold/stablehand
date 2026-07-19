@@ -38,7 +38,7 @@ import { stringifyJsonWithBigInts } from './json-serialization.js';
 export interface OrchestratorServiceClient {
   requestTool: (
     req: {
-      sessionId: string;
+      turnId: string;
       agentId: string;
       toolName: string;
       argsJson: string;
@@ -91,7 +91,7 @@ const DEFAULT_RETRY_DELAYS = [100, 500, 2000]; // 3 retries with exponential bac
 export function createToolProxy(
   toolName: string,
   orchestratorClient: OrchestratorServiceClient,
-  sessionId: string | { current: string },
+  turnId: string | { current: string },
   agentId: string,
   opts?: ToolProxyOptions,
 ): (input: unknown) => Promise<string> {
@@ -100,12 +100,12 @@ export function createToolProxy(
   const retryDelays = opts?.retryDelays ?? DEFAULT_RETRY_DELAYS;
 
   return async (input: unknown): Promise<string> => {
-    const resolvedSessionId = typeof sessionId === 'string' ? sessionId : sessionId.current;
+    const resolvedTurnId = typeof turnId === 'string' ? turnId : turnId.current;
     const requestId = generateRequestId();
     const argsJson = typeof input === 'string' ? input : stringifyJsonWithBigInts(input ?? {});
 
     const req = create(RequestToolRequestSchema, {
-      sessionId: resolvedSessionId,
+      turnId: resolvedTurnId,
       agentId,
       toolName,
       argsJson,

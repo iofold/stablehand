@@ -3,7 +3,7 @@ import { AlertTriangle, Plus, Search } from 'lucide-react';
 import { AgentCard } from './AgentCard';
 import { AgentFormModal } from '@/components/agents/AgentFormModal';
 import { cn } from '@/lib/utils';
-import { countActiveSessions } from '@/lib/session-status';
+import { countActiveSandboxSessions } from '@/lib/lifecycle-status';
 import type { Agent } from '@/stores/agents';
 import { EmptyDashboard } from './illustrations/EmptyDashboard';
 import { HoverGlow } from './MicroInteractions';
@@ -78,7 +78,7 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange, onRet
       const matchesSearch = agent.name.toLowerCase().includes(searchQuery.toLowerCase());
       
       let matchesStatus = true;
-      const activeOrPaused = countActiveSessions(agent.sessionsByStatus);
+      const activeOrPaused = countActiveSandboxSessions(agent.sandboxSessionsByStatus);
       if (statusFilter === 'running') {
         matchesStatus = agent.status === 'running' || activeOrPaused > 0;
       } else if (statusFilter === 'idle') {

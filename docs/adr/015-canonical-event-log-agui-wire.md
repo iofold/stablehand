@@ -35,15 +35,49 @@ the SSE wire.
   (ADR 006).
 - **Durable replay via `Last-Event-ID`.** The `/:id/stream` route
   (`routes/agents/stream.ts`) opens with a snapshot of open turns plus a
-  `state_snapshot` for each `ACTIVE`/`RESTORING` session, replays from the
-  durable log when the client presents a seq-format `Last-Event-ID`, then
-  attaches to the live tail with ring-buffer dedupe to close the replay→live
-  handoff race. Replay works past any in-memory cap and across restarts.
+  `CUSTOM name: ctxmill.sandbox_session.snapshot` for each
+  `ACTIVE`/`RESTORING` session, replays from the
+  durable log when the client presents a seq-format `Last-Event-ID`, then tails
+  the database from the same cursor. Replay is paginated through a fixed
+  committed watermark. In-process broadcasts provide a low-latency wake, and a
+  database watermark poll observes commits made by other orchestrator
+  processes. Replay and handoff therefore work past any in-memory cap, across
+  restarts, and across replicas.
+- **Per-agent commit ordering.** Every canonical `event_store` writer locks the
+  corresponding `agent_event_heads` row before allocating sequence values and
+  advances its committed watermark in the same transaction. Same-agent batches
+  cannot expose a higher committed cursor while a lower sequence is still
+  uncommitted; different agents remain independent.
 
 ## Consequences
 
 - SSE, trigger chaining, and webhook enqueue all read one ordered, durable
   stream; reconnect replay from a seq is exact.
+- Conversation snapshots rewind before the earliest open turn's first run
+  frame, then expand that cut to a fixed point over every turn interval that
+  crosses it. They omit open-turn projections and every projection whose frame
+  interval starts at or after the final cut. Interactive user prompts are
+  omitted with their turn; background prompts remain projected because
+  background turns intentionally publish no `user.message` frames. Snapshot
+  hydration plus replay therefore reconstructs text and tool state exactly once
+  in either direction of interleaved turn completion.
+- Startup reconciliation republishes a missing interactive `user.message`
+  triplet before redispatching a queued turn. This closes the crash window
+  between creating the message/turn rows and the original canonical publish;
+  durable provenance makes repeated recovery idempotent.
+- Startup repair is cross-replica safe. A renewable
+  `turn_reconciliation_leases` row elects one owner, and a live-lease
+  authorization check fences redispatch immediately before side effects. The
+  turn remains queued until the normal delivery boundary marks it running, so
+  owner death after authorization is takeover-retryable. Lease loss or expiry
+  aborts an in-flight session delivery. Pending/timed-out HITL interrupts and
+  pending, in-progress, or failed durable resume attempts take precedence at
+  both claim and authorization; the resume worker can therefore start in
+  Fastify's `onReady` hook without racing general turn reconciliation.
+- The migration that introduces `agent_event_heads` requires an atomic
+  orchestrator rollout (stop old writers before starting the new binary).
+  Mixed-version rolling operation is unsupported because an old writer does not
+  advance the committed watermark.
 - The canonical frame set is the contract for every AG-UI client; a new
   orchestrator signal must map to an existing type or a `ctxmill.*` CUSTOM frame.
 - The `?wire=legacy` transition mechanism this ADR originally staged — dual

@@ -2,6 +2,8 @@ import { resolve, normalize } from 'node:path';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import type { Message } from '@ctxmill/sandbox-daemon';
 import type { DatabaseRepository } from '../../database/repository.js';
+import type { MessageSelect } from '../../database/types.js';
+import type { ApiMessage } from '@ctxmill/shared';
 import { getConversationWorkspacePath } from '../../workspace/session-workspace.js';
 
 /** Patterns that should never be exposed via the file browsing API. */
@@ -17,11 +19,33 @@ interface RawTranscriptMessage {
   createdAt: string | number | Date;
 }
 
+/** Explicit public projection: never leak internal publication watermarks. */
+export function toApiMessage(message: MessageSelect): ApiMessage {
+  return {
+    id: message.id,
+    conversationId: message.conversationId,
+    ...(message.agentId ? { agentId: message.agentId } : {}),
+    ...(message.turnId ? { turnId: message.turnId } : {}),
+    ...(message.messageSeq != null ? { messageSeq: message.messageSeq } : {}),
+    messageRevision: message.messageRevision,
+    role: message.role as ApiMessage['role'],
+    content: message.content,
+    ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+    ...(Array.isArray(message.toolCalls)
+      ? { toolCalls: message.toolCalls as ApiMessage['toolCalls'] }
+      : {}),
+    ...(Array.isArray(message.parts)
+      ? { parts: message.parts as ApiMessage['parts'] }
+      : {}),
+    createdAt: message.createdAt,
+  };
+}
+
 type InternalToolCall = NonNullable<Message['toolCalls']>[number];
 
 type WorkspaceTargetRequest = FastifyRequest<{
   Params: { id: string };
-  Querystring: { sessionId?: string };
+  Querystring: { conversationId?: string };
 }>;
 type WorkspaceTargetAgent = { id: string; workspaceDir?: string | null };
 
@@ -79,20 +103,23 @@ export function validateSandboxPath(
 export async function resolveWorkspaceTarget(
   request: WorkspaceTargetRequest,
   reply: FastifyReply,
-  deps: { db: Pick<DatabaseRepository, 'getTurn'>; dataDir?: string },
+  deps: { db: Pick<DatabaseRepository, 'getConversation'>; dataDir?: string },
   filePath: string,
 ): Promise<{ baseDir: string; target: string } | null> {
   const { id } = request.params;
-  const query = request.query as { sessionId?: string };
+  const query = request.query as { conversationId?: string };
   let conversationId: string | null | undefined;
 
-  if (query.sessionId) {
-    const run = await deps.db.getTurn(query.sessionId);
-    if (!run || run.agentId !== id) {
-      await reply.status(404).send({ error: 'Session not found', sessionId: query.sessionId });
+  if (query.conversationId) {
+    const conversation = await deps.db.getConversation(query.conversationId);
+    if (!conversation || conversation.agentId !== id) {
+      await reply.status(404).send({
+        error: 'Conversation not found',
+        conversationId: query.conversationId,
+      });
       return null;
     }
-    conversationId = run.conversationId;
+    conversationId = conversation.id;
   }
 
   const agent = (request as WorkspaceTargetRequest & { agent: WorkspaceTargetAgent }).agent;

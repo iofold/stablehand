@@ -16,6 +16,7 @@ import {
   type PersistEventFn,
 } from '../../packages/ctxmill/src/events/bus.js';
 import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
+import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 
 // ── Test Bus Factory ────────────────────────────────────────────
 
@@ -86,11 +87,16 @@ export function waitForEmit<K extends EventName>(
  * captured as the wire. Persist is async — call flushWire() after emits
  * before asserting.
  */
-export function createCanonicalWireHarness() {
+export function createCanonicalWireHarness(options?: {
+  db?: DatabaseRepository;
+  messageEventsOnly?: boolean;
+}) {
   let seq = 0;
   const log = new CanonicalLog({
-    db: {
+    db: options?.db ?? {
       saveEventBatch: async (frames: unknown[]) => frames.map(() => ++seq),
+      saveMessageEventBatch: async (frames: unknown[]) => frames.map(() => ++seq),
+      saveTerminalEventBatch: async (frames: unknown[]) => frames.map(() => ++seq),
       getFramesSince: async () => [],
       getTurnFrames: async () => [],
     } as never,
@@ -105,7 +111,15 @@ export function createCanonicalWireHarness() {
   });
   const bus = createTestBus({
     persistEvent: async (type, _agentId, _payload, parsed) => {
-      await log.ingest(type, parsed ?? {});
+      if (
+        options?.messageEventsOnly
+        && type !== 'message.committed'
+        && type !== 'message.updated'
+      ) {
+        return;
+      }
+      const persisted = await log.ingest(type, parsed ?? {});
+      return persisted.length > 0;
     },
   });
   return { bus, log, wire };
@@ -125,6 +139,28 @@ export function createMockSSEManager() {
 }
 
 export function createMockDatabase() {
+  let nextMessageSeq = 0;
+  const canonicalMessages = new Map<string, Record<string, unknown>>();
+  const addCanonicalMessage = vi.fn().mockImplementation(async (
+    data: Record<string, unknown>,
+  ) => {
+    const id = typeof data.id === 'string'
+      ? data.id
+      : `canonical-message-${nextMessageSeq}`;
+    const existing = canonicalMessages.get(id);
+    if (existing) return existing;
+    const message = {
+      ...data,
+      id,
+      messageSeq: nextMessageSeq++,
+      messageRevision: 0,
+      publishedRevision: -1,
+      createdAt: Date.now(),
+    };
+    canonicalMessages.set(id, message);
+    return message;
+  });
+
   return {
     createAgent: vi.fn(),
     getAgent: vi.fn(),
@@ -135,25 +171,45 @@ export function createMockDatabase() {
     getConversation: vi.fn(),
     listConversations: vi.fn(),
     addMessage: vi.fn(),
+    addCanonicalMessage,
+    getMessage: vi.fn().mockImplementation(
+      async (id: string) => canonicalMessages.get(id),
+    ),
     getMessages: vi.fn(),
-    createRun: vi.fn(),
-    getRun: vi.fn(),
-    updateRun: vi.fn(),
+    getMessagesPendingCanonicalPublish: vi.fn().mockResolvedValue([]),
+    stageAssistantMessageUpdate: vi.fn().mockImplementation(async (
+      id: string,
+      toolCalls: unknown[],
+      parts: unknown[],
+    ) => {
+      const previous = canonicalMessages.get(id);
+      if (!previous) return undefined;
+      const updated = {
+        ...previous,
+        toolCalls,
+        parts,
+        messageRevision: Number(previous.messageRevision) + 1,
+      };
+      canonicalMessages.set(id, updated);
+      return updated;
+    }),
     createTurn: vi.fn(),
+    getTurn: vi.fn(),
     updateTurn: vi.fn(),
-    listRuns: vi.fn(),
+    finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
+    listTurns: vi.fn(),
     persistEvent: vi.fn(),
   };
 }
 
 // ── Event Data Builders ─────────────────────────────────────────
 
-export function makeRunStartedEvent(
+export function makeTurnStartedEvent(
   overrides?: Partial<EventMap['turn.started']>,
 ): EventMap['turn.started'] {
   return {
-    turnId: 'run-test-1',
-    sessionId: 'run-test-1',
+    turnId: 'turn-test-1',
+    sandboxSessionId: 'sandbox-test-1',
     agentId: 'agent-test-1',
     conversationId: 'conv-test-1',
     mode: 'interactive',
@@ -163,12 +219,12 @@ export function makeRunStartedEvent(
   };
 }
 
-export function makeRunCompletedEvent(
+export function makeTurnCompletedEvent(
   overrides?: Partial<EventMap['turn.completed']>,
 ): EventMap['turn.completed'] {
   return {
-    turnId: 'run-test-1',
-    sessionId: 'run-test-1',
+    turnId: 'turn-test-1',
+    sandboxSessionId: 'sandbox-test-1',
     agentId: 'agent-test-1',
     conversationId: 'conv-test-1',
     status: 'completed',
@@ -178,41 +234,44 @@ export function makeRunCompletedEvent(
   };
 }
 
-export function makeTextChunkEvent(
-  overrides?: Partial<EventMap['run.text_chunk']>,
-): EventMap['run.text_chunk'] {
+export function makeMessageDeltaEvent(
+  overrides?: Partial<EventMap['message.delta']>,
+): EventMap['message.delta'] {
   return {
-    turnId: 'run-test-1',
+    turnId: 'turn-test-1',
     agentId: 'agent-test-1',
+    conversationId: 'conv-test-1',
     messageId: 'msg-test-1',
-    content: 'Hello world',
+    delta: 'Hello world',
     timestamp: Date.now(),
     ...overrides,
   };
 }
 
-export function makeToolStartedEvent(
-  overrides?: Partial<EventMap['run.tool_started']>,
-): EventMap['run.tool_started'] {
+export function makeToolCallStartedEvent(
+  overrides?: Partial<EventMap['tool_call.started']>,
+): EventMap['tool_call.started'] {
   return {
-    turnId: 'run-test-1',
+    turnId: 'turn-test-1',
     agentId: 'agent-test-1',
+    conversationId: 'conv-test-1',
     toolCallId: 'tc-test-1',
-    toolName: 'read_file',
+    toolCallName: 'read_file',
     args: { path: './test.md' },
     timestamp: Date.now(),
     ...overrides,
   };
 }
 
-export function makeToolResultEvent(
-  overrides?: Partial<EventMap['run.tool_result']>,
-): EventMap['run.tool_result'] {
+export function makeToolCallCompletedEvent(
+  overrides?: Partial<EventMap['tool_call.completed']>,
+): EventMap['tool_call.completed'] {
   return {
-    turnId: 'run-test-1',
+    turnId: 'turn-test-1',
     agentId: 'agent-test-1',
+    conversationId: 'conv-test-1',
     toolCallId: 'tc-test-1',
-    toolName: 'read_file',
+    toolCallName: 'read_file',
     result: 'file contents here',
     durationMs: 50,
     timestamp: Date.now(),
@@ -225,7 +284,7 @@ export function makeFeedbackReceivedEvent(
 ): EventMap['feedback.received'] {
   return {
     feedbackId: 'fb-test-1',
-    turnId: 'run-test-1',
+    turnId: 'turn-test-1',
     agentId: 'agent-test-1',
     type: 'thumbs_up',
     timestamp: Date.now(),
@@ -237,6 +296,7 @@ export function makeAgentCreatedEvent(
   overrides?: Partial<EventMap['agent.created']>,
 ): EventMap['agent.created'] {
   return {
+    turnId: 'turn-test-1',
     agentId: 'agent-test-1',
     name: 'Test Agent',
     timestamp: Date.now(),
@@ -248,7 +308,7 @@ export function makeTurnPendingEvent(
   overrides?: Partial<EventMap['turn.pending']>,
 ): EventMap['turn.pending'] {
   return {
-    turnId: 'run-test-1',
+    turnId: 'turn-test-1',
     agentId: 'agent-test-1',
     conversationId: 'conv-test-1',
     mode: 'interactive',
@@ -258,12 +318,13 @@ export function makeTurnPendingEvent(
 }
 
 export function makeAgUiEventPayload(
-  overrides?: Partial<EventMap['run.ag_ui_event']>,
-): EventMap['run.ag_ui_event'] {
+  overrides?: Partial<EventMap['ag_ui.event']>,
+): EventMap['ag_ui.event'] {
   return {
-    turnId: 'run-test-1',
+    turnId: 'turn-test-1',
     agentId: 'agent-test-1',
-    event: { type: 'CUSTOM', timestamp: Date.now(), runId: 'run-test-1' },
+    conversationId: 'conv-test-1',
+    event: { type: 'CUSTOM', timestamp: Date.now(), runId: 'turn-test-1' },
     timestamp: Date.now(),
     ...overrides,
   };
@@ -273,6 +334,7 @@ export function makeUserMessageEvent(
   overrides?: Partial<EventMap['user.message']>,
 ): EventMap['user.message'] {
   return {
+    turnId: 'turn-test-1',
     agentId: 'agent-test-1',
     conversationId: 'conv-test-1',
     messageId: 'msg-test-1',

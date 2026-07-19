@@ -6,11 +6,11 @@ import {
   sendInterrupt,
   createSSEConnection,
   startBackgroundRun,
-  cancelRun,
-  fetchSessions,
-  fetchAllActiveSessions,
+  cancelTurn,
+  fetchAgentTurns,
+  fetchActiveSandboxSessions,
   fetchConversations,
-  fetchMessages,
+  fetchConversationSnapshot,
   fetchEvents,
   fetchAllArtifacts,
   listFiles,
@@ -86,17 +86,18 @@ describe('fetchAgent', () => {
   });
 });
 
-describe('fetchSessions', () => {
-  it('calls GET /api/agents/:id/sessions', async () => {
-    await fetchSessions('a1');
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/sessions', undefined);
+describe('fetchAgentTurns', () => {
+  it('calls and unwraps GET /api/agents/:id/turns', async () => {
+    mockJson.mockResolvedValue({ turns: [] });
+    await fetchAgentTurns('a1');
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/turns', undefined);
   });
 });
 
-describe('fetchAllActiveSessions', () => {
-  it('calls GET /api/sessions with sandbox format', async () => {
-    await fetchAllActiveSessions();
-    expect(mockFetch).toHaveBeenCalledWith('/api/sessions?format=sandbox', undefined);
+describe('fetchActiveSandboxSessions', () => {
+  it('calls the explicit active sandbox-session endpoint', async () => {
+    await fetchActiveSandboxSessions();
+    expect(mockFetch).toHaveBeenCalledWith('/api/sandbox-sessions?status=active', undefined);
   });
 });
 
@@ -131,11 +132,12 @@ describe('sendInterrupt', () => {
 describe('fetchInterrupts', () => {
   it('unwraps GET /api/agents/:id/interrupts response', async () => {
     const interrupts = [{
-      id: 'turn-1',
-      sessionId: 'turn-1',
+      interruptId: 'interrupt-1',
+      turnId: 'turn-1',
+      sandboxSessionId: 'sandbox-1',
       agentId: 'a1',
       toolCallId: 'tc-1',
-      toolName: 'approve',
+      toolCallName: 'approve',
       args: { ok: true },
       status: 'pending',
       createdAt: 1,
@@ -150,22 +152,22 @@ describe('fetchInterrupts', () => {
 });
 
 describe('startBackgroundRun', () => {
-  it('calls POST with task and background mode', async () => {
+  it('calls POST with a task', async () => {
     await startBackgroundRun('a1', 'do stuff');
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/session', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/turns', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task: 'do stuff', mode: 'background' }),
+      body: JSON.stringify({ task: 'do stuff' }),
     });
   });
 });
 
-describe('cancelRun', () => {
-  it('calls POST /api/agents/:id/sessions/:sessionId/cancel', async () => {
-    await cancelRun('a1', 'r1');
+describe('cancelTurn', () => {
+  it('calls POST /api/agents/:id/turns/:turnId/cancel', async () => {
+    await cancelTurn('a1', 'r1');
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/sessions/r1/cancel', {
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/turns/r1/cancel', {
       method: 'POST',
       headers: undefined,
       body: undefined,
@@ -191,19 +193,23 @@ describe('fetchConversations', () => {
   });
 });
 
-describe('fetchMessages', () => {
+describe('fetchConversationSnapshot', () => {
   it('returns data on success', async () => {
-    const msgs = [{ id: 'm1', content: 'hi' }];
-    mockJson.mockResolvedValue(msgs);
+    const snapshot = {
+      conversationId: 'c1',
+      eventCursor: '000000000042',
+      messages: [{ id: 'm1', content: 'hi' }],
+    };
+    mockJson.mockResolvedValue(snapshot);
 
-    const result = await fetchMessages('a1', 'c1');
-    expect(result).toEqual(msgs);
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/conversations/c1/messages', undefined);
+    const result = await fetchConversationSnapshot('a1', 'c1');
+    expect(result).toEqual(snapshot);
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/conversations/c1/snapshot', undefined);
   });
 
   it('throws on failure', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 404, json: mockJson });
-    await expect(fetchMessages('a1', 'c1')).rejects.toThrow('API GET /api/agents/a1/conversations/c1/messages failed: 404');
+    await expect(fetchConversationSnapshot('a1', 'c1')).rejects.toThrow('API GET /api/agents/a1/conversations/c1/snapshot failed: 404');
   });
 });
 
@@ -243,12 +249,12 @@ describe('listFiles', () => {
     expect(result).toEqual({ entries });
   });
 
-  it('includes sessionId when provided', async () => {
+  it('includes conversationId when provided', async () => {
     await listFiles('a1', 'data', 'xyz');
 
     const calledUrl = (mockFetch.mock.calls[0] as string[])[0];
     expect(calledUrl).toContain('path=data');
-    expect(calledUrl).toContain('&sessionId=xyz');
+    expect(calledUrl).toContain('&conversationId=xyz');
   });
 
   it('throws on non-200 response', async () => {
@@ -277,12 +283,12 @@ describe('readFile', () => {
     expect(result).toEqual(fileData);
   });
 
-  it('includes sessionId when provided', async () => {
+  it('includes conversationId when provided', async () => {
     await readFile('a1', '/file.txt', 'xyz');
 
     const calledUrl = (mockFetch.mock.calls[0] as string[])[0];
     expect(calledUrl).toContain('path=%2Ffile.txt');
-    expect(calledUrl).toContain('&sessionId=xyz');
+    expect(calledUrl).toContain('&conversationId=xyz');
   });
 
   it('throws on 403 response (blocked file)', async () => {
@@ -321,6 +327,18 @@ describe('createSSEConnection', () => {
 
     expect(MockEventSource).toHaveBeenCalledWith('/api/agents/a1/stream?access_token=secret+token');
   });
+
+  it('starts replay strictly after a conversation snapshot cursor', () => {
+    const MockEventSource = vi.fn();
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    useApiAuthStore.getState().setToken('secret token');
+
+    createSSEConnection('a1', '000000000042');
+
+    expect(MockEventSource).toHaveBeenCalledWith(
+      '/api/agents/a1/stream?cursor=000000000042&access_token=secret+token',
+    );
+  });
 });
 
 
@@ -353,14 +371,14 @@ describe('uploadWorkspaceTarball', () => {
 
 describe('file mutations', () => {
   it('builds update and delete queries through the shared query encoder', async () => {
-    await updateFile('a1', 'notes/a file.txt', 'updated', 'session 1');
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/files?sessionId=session+1', expect.objectContaining({
+    await updateFile('a1', 'notes/a file.txt', 'updated', 'conversation 1');
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/files?conversationId=conversation+1', expect.objectContaining({
       method: 'PUT',
       body: JSON.stringify({ path: 'notes/a file.txt', content: 'updated' }),
     }));
 
-    await deleteFile('a1', 'notes/a file.txt', 'session 1');
-    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/files?path=notes%2Fa+file.txt&sessionId=session+1', {
+    await deleteFile('a1', 'notes/a file.txt', 'conversation 1');
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/files?path=notes%2Fa+file.txt&conversationId=conversation+1', {
       method: 'DELETE',
     });
   });

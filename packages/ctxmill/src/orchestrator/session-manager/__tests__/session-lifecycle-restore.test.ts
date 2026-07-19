@@ -44,7 +44,7 @@ function makeRecord(row = makeRow()): SessionRecord {
     sessionId: row.id,
     conversationId: row.conversationId,
     agentId: row.agentId,
-    containerName: 'ctxmill-run-sandbox-1',
+    containerName: 'ctxmill-sandbox-sandbox-1',
     containerId: 'container-1',
     status: 'ACTIVE',
     harnessName: row.harnessName,
@@ -129,7 +129,7 @@ describe('SessionLifecycleService.restoreSession', () => {
       row.agentId,
       { background: true },
     ))
-      .resolves.toEqual({ sessionId: row.id, status: 'RESTORING', restoreAttempts: 0 });
+      .resolves.toEqual({ sandboxSessionId: row.id, status: 'RESTORING', restoreAttempts: 0 });
 
     expect(harness.transition).toHaveBeenCalledWith({
       sessionId: row.id,
@@ -156,7 +156,7 @@ describe('SessionLifecycleService.restoreSession', () => {
       harness.agentDef,
       row.agentId,
       { background: true },
-    )).resolves.toEqual({ sessionId: row.id, status: 'RESTORING', restoreAttempts: 0 });
+    )).resolves.toEqual({ sandboxSessionId: row.id, status: 'RESTORING', restoreAttempts: 0 });
     await vi.waitFor(() => {
       expect(harness.logger.warn).toHaveBeenCalledWith(
         `[SandboxSessionManager] background restore failed for session ${row.id}:`,

@@ -87,7 +87,7 @@ const goldenFixtures = [
     eventType: 'turn.started',
     payload: {
       turnId: 'turn-1',
-      sessionId: 'session-1',
+      sandboxSessionId: 'sandbox-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       mode: 'background',
@@ -96,20 +96,20 @@ const goldenFixtures = [
     },
     expected: {
       turnId: 'turn-1',
-      sessionId: 'session-1',
+      sandboxSessionId: 'sandbox-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       mode: 'background',
       taskDescription: 'Run Pilot sync',
       timestamp: 100,
     },
-    expectedJson: '{"turnId":"turn-1","sessionId":"session-1","agentId":"agent-1","conversationId":"conv-1","mode":"background","taskDescription":"Run Pilot sync","timestamp":100}',
+    expectedJson: '{"turnId":"turn-1","sandboxSessionId":"sandbox-1","agentId":"agent-1","conversationId":"conv-1","mode":"background","taskDescription":"Run Pilot sync","timestamp":100}',
   },
   {
     eventType: 'turn.completed',
     payload: {
       turnId: 'turn-1',
-      sessionId: 'session-1',
+      sandboxSessionId: 'sandbox-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       status: 'completed',
@@ -118,7 +118,7 @@ const goldenFixtures = [
     },
     expected: {
       turnId: 'turn-1',
-      sessionId: 'session-1',
+      sandboxSessionId: 'sandbox-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       status: 'completed',
@@ -126,16 +126,16 @@ const goldenFixtures = [
       durationMs: 400,
       timestamp: 200,
     },
-    expectedJson: '{"turnId":"turn-1","sessionId":"session-1","agentId":"agent-1","conversationId":"conv-1","status":"completed","durationMs":400,"timestamp":200}',
+    expectedJson: '{"turnId":"turn-1","sandboxSessionId":"sandbox-1","agentId":"agent-1","conversationId":"conv-1","status":"completed","durationMs":400,"timestamp":200}',
   },
   {
-    eventType: 'run.tool_started',
+    eventType: 'tool_call.started',
     payload: {
       turnId: 'turn-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       toolCallId: 'tool-1',
-      toolName: 'search',
+      toolCallName: 'search',
       args: { query: 'ctxmill' },
       timestamp: 300,
     },
@@ -144,45 +144,46 @@ const goldenFixtures = [
       agentId: 'agent-1',
       conversationId: 'conv-1',
       toolCallId: 'tool-1',
-      toolName: 'search',
+      toolCallName: 'search',
       args: { query: 'ctxmill' },
       requiresApproval: undefined,
       timestamp: 300,
     },
-    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","toolCallId":"tool-1","toolName":"search","args":{"query":"ctxmill"},"timestamp":300}',
+    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","toolCallId":"tool-1","toolCallName":"search","args":{"query":"ctxmill"},"timestamp":300}',
   },
   {
-    eventType: 'run.interrupted',
+    eventType: 'interrupt.requested',
     payload: {
       turnId: 'turn-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       toolCallId: 'tool-2',
-      toolName: 'approve',
+      toolCallName: 'approve',
       args: { amount: 5 },
       interruptId: 'interrupt-1',
       timestamp: 400,
     },
     expected: {
       turnId: 'turn-1',
+      sandboxSessionId: undefined,
       agentId: 'agent-1',
       conversationId: 'conv-1',
       toolCallId: 'tool-2',
-      toolName: 'approve',
+      toolCallName: 'approve',
       args: { amount: 5 },
       interruptId: 'interrupt-1',
       timestamp: 400,
     },
-    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","toolCallId":"tool-2","toolName":"approve","args":{"amount":5},"interruptId":"interrupt-1","timestamp":400}',
+    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","toolCallId":"tool-2","toolCallName":"approve","args":{"amount":5},"interruptId":"interrupt-1","timestamp":400}',
   },
   {
-    eventType: 'run.tool_result',
+    eventType: 'tool_call.completed',
     payload: {
       turnId: 'turn-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       toolCallId: 'tool-1',
-      toolName: 'search',
+      toolCallName: 'search',
       result: '{"ok":true}',
       durationMs: 12,
       timestamp: 500,
@@ -192,16 +193,16 @@ const goldenFixtures = [
       agentId: 'agent-1',
       conversationId: 'conv-1',
       toolCallId: 'tool-1',
-      toolName: 'search',
+      toolCallName: 'search',
       result: '{"ok":true}',
       durationMs: 12,
       error: undefined,
       timestamp: 500,
     },
-    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","toolCallId":"tool-1","toolName":"search","result":"{\\"ok\\":true}","durationMs":12,"timestamp":500}',
+    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","toolCallId":"tool-1","toolCallName":"search","result":"{\\"ok\\":true}","durationMs":12,"timestamp":500}',
   },
   {
-    eventType: 'run.interrupt_resolved',
+    eventType: 'interrupt.resolved',
     payload: {
       turnId: 'turn-1',
       agentId: 'agent-1',
@@ -212,6 +213,7 @@ const goldenFixtures = [
     },
     expected: {
       turnId: 'turn-1',
+      sandboxSessionId: undefined,
       agentId: 'agent-1',
       conversationId: 'conv-1',
       interruptId: 'interrupt-1',
@@ -249,6 +251,42 @@ const goldenFixtures = [
       timestamp: 700,
     },
     expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","messageId":"msg-1","messageSeq":2,"role":"assistant","content":"done","parts":[{"type":"text","text":"done"}],"toolCalls":[{"id":"tool-1","name":"search","args":"{}","status":"done"}],"toolCallId":"tool-1","timestamp":700}',
+  },
+  {
+    eventType: 'message.updated',
+    payload: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      messageSeq: 2,
+      messageRevision: 1,
+      role: 'assistant',
+      content: 'checking',
+      parts: [
+        { type: 'text', text: 'checking' },
+        { type: 'tool_call', id: 'tool-1', name: 'search', args: '{}', result: 'done', status: 'complete' },
+      ],
+      toolCalls: [{ id: 'tool-1', name: 'search', args: '{}', status: 'complete' }],
+      timestamp: 750,
+    },
+    expected: {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      messageSeq: 2,
+      messageRevision: 1,
+      role: 'assistant',
+      content: 'checking',
+      parts: [
+        { type: 'text', text: 'checking' },
+        { type: 'tool_call', id: 'tool-1', name: 'search', args: '{}', result: 'done', status: 'complete' },
+      ],
+      toolCalls: [{ id: 'tool-1', name: 'search', args: '{}', status: 'complete' }],
+      timestamp: 750,
+    },
+    expectedJson: '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conv-1","messageId":"msg-1","messageSeq":2,"messageRevision":1,"role":"assistant","content":"checking","parts":[{"type":"text","text":"checking"},{"type":"tool_call","id":"tool-1","name":"search","args":"{}","result":"done","status":"complete"}],"toolCalls":[{"id":"tool-1","name":"search","args":"{}","status":"complete"}],"timestamp":750}',
   },
   {
     eventType: 'feedback.received',
@@ -289,17 +327,17 @@ describe('WebhookRelay', () => {
   it('enqueues only subscribed webhooks with the source event seq', async () => {
     const dispatcher = createDispatcher();
     const { db } = createRelayDb([
-      webhook('hook-tool', 'run.tool_started'),
+      webhook('hook-tool', 'tool_call.started'),
       webhook('hook-completed', 'turn.completed'),
     ]);
     const consumer = createWebhookRelaySpineConsumer({ db, callbackDispatcher: dispatcher });
 
-    await consumer.handle(rawEvent(42, 'run.tool_started', {
+    await consumer.handle(rawEvent(42, 'tool_call.started', {
       turnId: 'turn-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       toolCallId: 'tool-1',
-      toolName: 'search',
+      toolCallName: 'search',
       args: { query: 'ctxmill' },
       timestamp: 300,
     }));
@@ -308,16 +346,17 @@ describe('WebhookRelay', () => {
     expect(dispatcher.enqueue).toHaveBeenCalledTimes(1);
     expect(dispatcher.enqueue).toHaveBeenCalledWith({
       agentId: 'agent-1',
-      sessionId: 'turn-1',
-      callbackUrl: 'https://hooks.example/run.tool_started',
-      eventType: 'run.tool_started',
+      turnId: 'turn-1',
+      webhookId: 'hook-tool',
+      callbackUrl: 'https://hooks.example/tool_call.started',
+      eventType: 'tool_call.started',
       eventSeq: 42,
       payload: {
         turnId: 'turn-1',
         agentId: 'agent-1',
         conversationId: 'conv-1',
         toolCallId: 'tool-1',
-        toolName: 'search',
+        toolCallName: 'search',
         args: { query: 'ctxmill' },
         requiresApproval: undefined,
         timestamp: 300,
@@ -328,7 +367,7 @@ describe('WebhookRelay', () => {
   it('catches up missed spine events and advances after enqueue succeeds', async () => {
     const payload = {
       turnId: 'turn-1',
-      sessionId: 'turn-1',
+      sandboxSessionId: 'sandbox-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       status: 'completed',
@@ -366,7 +405,7 @@ describe('WebhookRelay', () => {
   it('keeps the cursor behind a missed spine event when enqueue fails', async () => {
     const payload = {
       turnId: 'turn-1',
-      sessionId: 'turn-1',
+      sandboxSessionId: 'sandbox-1',
       agentId: 'agent-1',
       conversationId: 'conv-1',
       status: 'completed',

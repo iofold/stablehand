@@ -50,7 +50,7 @@ function createMockContainerManager(): ContainerManager {
   return {
     createContainer: vi.fn().mockResolvedValue({
       containerId: 'c-1',
-      containerName: 'ctxmill-run-sess-1',
+      containerName: 'ctxmill-sandbox-sess-1',
     }),
     startContainer: vi.fn().mockResolvedValue(undefined),
     stopContainer: vi.fn().mockResolvedValue(undefined),
@@ -154,7 +154,7 @@ function createDbSession(status: SandboxSessionRow['status']): SandboxSessionRow
     id: 'sess-1',
     conversationId: 'conv-1',
     agentId: 'agent-1',
-    containerName: 'ctxmill-run-sess-1',
+    containerName: 'ctxmill-sandbox-sess-1',
     containerId: 'c-1',
     status,
     harnessName: 'langgraph',
@@ -278,7 +278,7 @@ describe('SandboxSessionManager session recovery', () => {
     it('ACTIVE + reconnect fails + checkpoint exists → restores from checkpoint', async () => {
       vi.useFakeTimers();
       const failingClient = createMockGrpcClient();
-      failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+      failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'));
       connectMocks.createClientMock
         .mockReturnValueOnce(failingClient)
         .mockReturnValue(grpcClient);
@@ -392,7 +392,7 @@ describe('SandboxSessionManager session recovery', () => {
     it('ACTIVE + reconnect fails + no checkpoint → creates fresh session', async () => {
       vi.useFakeTimers();
       const failingClient = createMockGrpcClient();
-      failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+      failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'));
       connectMocks.createClientMock
         .mockReturnValueOnce(failingClient)
         .mockReturnValue(grpcClient);
@@ -458,10 +458,10 @@ describe('SandboxSessionManager session recovery', () => {
       expect(updateTurn).toHaveBeenCalledWith(
         'turn-1',
         expect.objectContaining({
-          sessionId: expect.any(String),
+          sandboxSessionId: expect.any(String),
         }),
       );
-      const reboundSessionId = updateTurn.mock.calls.at(-1)?.[1]?.sessionId;
+      const reboundSessionId = updateTurn.mock.calls.at(-1)?.[1]?.sandboxSessionId;
       expect(reboundSessionId).not.toBe(session.sessionId);
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
         session.sessionId,
@@ -496,7 +496,7 @@ describe('SandboxSessionManager session recovery', () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
       grpcClient.deliverTurn
         .mockImplementationOnce(() => {
-          throw new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1');
+          throw new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1');
         })
         .mockImplementationOnce(() =>
           streamProtoEvents(protoCommittedEvent('retried after dns failure'), protoTurnCompletedEvent('turn-1')),
@@ -545,7 +545,7 @@ describe('SandboxSessionManager session recovery', () => {
         sessionId: 'sess-1',
         conversationId: 'conv-1',
         agentId: 'agent-1',
-        containerName: 'ctxmill-run-sess-1',
+        containerName: 'ctxmill-sandbox-sess-1',
         containerId: 'c-1',
         status: 'ACTIVE',
         harnessName: 'langgraph',
@@ -597,7 +597,7 @@ describe('SandboxSessionManager session recovery', () => {
         reason: 'idle-checkpoint',
       }));
       expect(db.createCheckpointV2).toHaveBeenCalledWith(expect.objectContaining({
-        sessionId: session.sessionId,
+        sandboxSessionId: session.sessionId,
         suspendReason: 'idle-checkpoint',
       }));
       expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(

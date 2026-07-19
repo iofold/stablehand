@@ -135,7 +135,7 @@ Proto SessionEvent (sandbox.proto)              ← NO FIELD FOR IT
   │
   ▼
 AG-UI event types (shared/events.ts)            ← NO FIELD FOR IT
-  │  AGUIEvent, MessageCommittedEvent
+  │  AgentSessionEvent, MessageCommittedEvent
   │  No source or subagent fields
   │
   ▼

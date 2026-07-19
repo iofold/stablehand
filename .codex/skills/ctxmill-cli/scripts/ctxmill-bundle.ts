@@ -26,7 +26,7 @@ try {
 
 async function createBundle(flags: Flags): Promise<string> {
   const agentId = flagString(flags, 'agent', 'agent-id') ?? args.positionals[0];
-  const sessionId = flagString(flags, 'session', 'session-id') ?? args.positionals[1];
+  const turnId = flagString(flags, 'turn', 'turn-id') ?? args.positionals[1];
   let conversationId = flagString(flags, 'conversation', 'conversation-id') ?? args.positionals[2];
   requireArg(agentId, 'agentId via --agent or positional arg');
 
@@ -37,7 +37,7 @@ async function createBundle(flags: Flags): Promise<string> {
     generatedAt: new Date().toISOString(),
     baseUrl: getBaseUrl(flags),
     agentId,
-    sessionId,
+    turnId,
     conversationId,
     warnings: [],
     files: [],
@@ -48,18 +48,18 @@ async function createBundle(flags: Flags): Promise<string> {
   await collect(results, 'config', '/api/config');
   await collect(results, 'sandbox-metrics', '/api/sandbox/metrics');
   await collect(results, 'agent', `/api/agents/${encodeURIComponent(agentId)}`);
-  await collect(results, 'sessions', `/api/agents/${encodeURIComponent(agentId)}/sessions`);
+  await collect(results, 'turns', `/api/agents/${encodeURIComponent(agentId)}/turns`);
   await collect(results, 'conversations', `/api/agents/${encodeURIComponent(agentId)}/conversations/summary`);
   await collect(results, 'interrupts', `/api/agents/${encodeURIComponent(agentId)}/interrupts?include_resolved=true`);
   await collect(results, 'events', `/api/events?agentId=${encodeURIComponent(agentId)}&limit=${encodeURIComponent(flagString(flags, 'events-limit') ?? '200')}${sinceQuery(flags)}`);
 
-  if (sessionId) {
-    const session = await collect(results, 'session', `/api/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}`);
-    if (!conversationId && isRecord(session.data) && isRecord(session.data.session) && typeof session.data.session.conversationId === 'string') {
-      conversationId = session.data.session.conversationId;
+  if (turnId) {
+    const turn = await collect(results, 'turn', `/api/agents/${encodeURIComponent(agentId)}/turns/${encodeURIComponent(turnId)}`);
+    if (!conversationId && isRecord(turn.data) && isRecord(turn.data.turn) && typeof turn.data.turn.conversationId === 'string') {
+      conversationId = turn.data.turn.conversationId;
       manifest.conversationId = conversationId;
     }
-    await collect(results, 'artifacts', `/api/artifacts?sessionId=${encodeURIComponent(sessionId)}`);
+    await collect(results, 'artifacts', `/api/artifacts?turnId=${encodeURIComponent(turnId)}`);
   } else {
     await collect(results, 'artifacts', `/api/artifacts?agentId=${encodeURIComponent(agentId)}&limit=100&offset=0`);
   }
@@ -75,9 +75,9 @@ async function createBundle(flags: Flags): Promise<string> {
   }
 
   if (conversationId) {
-    await collect(results, 'messages', `/api/agents/${encodeURIComponent(agentId)}/conversations/${encodeURIComponent(conversationId)}/messages`);
+    await collect(results, 'snapshot', `/api/agents/${encodeURIComponent(agentId)}/conversations/${encodeURIComponent(conversationId)}/snapshot`);
   } else {
-    (manifest.warnings as string[]).push('No conversationId discovered; messages/toolcalls omitted.');
+    (manifest.warnings as string[]).push('No conversationId discovered; snapshot/toolcalls omitted.');
   }
 
   const redactedResults = results.map((result) => ({ ...result, data: shouldRedact(flags) ? redact(result.data) : result.data }));
@@ -87,14 +87,15 @@ async function createBundle(flags: Flags): Promise<string> {
     if (!result.ok) (manifest.warnings as string[]).push(`${result.name}: ${result.error ?? 'failed'}`);
   }
 
-  const messages = results.find((result) => result.name === 'messages')?.data;
+  const snapshot = results.find((result) => result.name === 'snapshot')?.data;
+  const messages = isRecord(snapshot) && Array.isArray(snapshot.messages) ? snapshot.messages : [];
   const events = results.find((result) => result.name === 'events')?.data;
-  const toolcalls = extractToolCalls(Array.isArray(messages) ? messages : [], eventArray(events));
+  const toolcalls = extractToolCalls(messages, eventArray(events));
   const toolcallsData = shouldRedact(flags) ? redact(toolcalls) : toolcalls;
-  await writeJson(outDir, 'toolcalls.json', { agentId, sessionId, conversationId, toolCalls: toolcallsData });
+  await writeJson(outDir, 'toolcalls.json', { agentId, turnId, conversationId, toolCalls: toolcallsData });
   (manifest.files as string[]).push('toolcalls.json');
 
-  await writeFile(join(outDir, 'summary.md'), buildSummary({ agentId, sessionId, conversationId, results: redactedResults, toolcalls }));
+  await writeFile(join(outDir, 'summary.md'), buildSummary({ agentId, turnId, conversationId, results: redactedResults, toolcalls }));
   (manifest.files as string[]).push('summary.md');
   await writeJson(outDir, 'manifest.json', manifest);
   return outDir;
@@ -113,17 +114,18 @@ async function collect(results: FetchResult[], name: string, endpoint: string): 
   }
 }
 
-function buildSummary(input: { agentId: string; sessionId?: string; conversationId?: string; results: FetchResult[]; toolcalls: JsonRecord[] }): string {
+function buildSummary(input: { agentId: string; turnId?: string; conversationId?: string; results: FetchResult[]; toolcalls: JsonRecord[] }): string {
   const agent = input.results.find((result) => result.name === 'agent')?.data;
-  const sessionData = input.results.find((result) => result.name === 'session')?.data;
+  const turnData = input.results.find((result) => result.name === 'turn')?.data;
   const interrupts = input.results.find((result) => result.name === 'interrupts')?.data;
   const events = eventArray(input.results.find((result) => result.name === 'events')?.data);
-  const messages = input.results.find((result) => result.name === 'messages')?.data;
+  const snapshot = input.results.find((result) => result.name === 'snapshot')?.data;
+  const messages = isRecord(snapshot) && Array.isArray(snapshot.messages) ? snapshot.messages : [];
   const failed = input.results.filter((result) => !result.ok);
   const pendingInterrupts = isRecord(interrupts) && Array.isArray(interrupts.interrupts)
     ? interrupts.interrupts.filter((item) => isRecord(item) && item.status === 'pending')
     : [];
-  const session = isRecord(sessionData) && isRecord(sessionData.session) ? sessionData.session : undefined;
+  const turn = isRecord(turnData) && isRecord(turnData.turn) ? turnData.turn : undefined;
   const errorCalls = input.toolcalls.filter((call) => stringValue(call.status).toLowerCase() === 'error' || stringValue(call.error));
 
   return `# ctxmill Debug Bundle\n\n` +
@@ -131,13 +133,15 @@ function buildSummary(input: { agentId: string; sessionId?: string; conversation
     `## Identity\n\n` +
     `- Agent: ${stringValue(isRecord(agent) ? agent.name : '')} (${input.agentId})\n` +
     `- Harness: ${stringValue(isRecord(agent) ? agent.harness : '')}\n` +
-    `- Session: ${input.sessionId ?? ''}\n` +
+    `- Turn: ${input.turnId ?? ''}\n` +
     `- Conversation: ${input.conversationId ?? ''}\n\n` +
-    `## Session\n\n` +
-    `- Started: ${stringValue(isRecord(session) ? session.startedAt : '')}\n` +
-    `- Completed: ${stringValue(isRecord(session) ? session.completedAt : '')}\n` +
-    `- Error: ${stringValue(isRecord(session) ? session.error : '')}\n` +
-    `- Messages: ${Array.isArray(messages) ? messages.length : 0}\n\n` +
+    `- Event cursor: ${stringValue(isRecord(snapshot) ? snapshot.eventCursor : '')}\n\n` +
+    `## Turn\n\n` +
+    `- Sandbox session: ${stringValue(isRecord(turn) ? turn.sandboxSessionId : '')}\n` +
+    `- Started: ${stringValue(isRecord(turn) ? turn.startedAt : '')}\n` +
+    `- Completed: ${stringValue(isRecord(turn) ? turn.completedAt : '')}\n` +
+    `- Error: ${stringValue(isRecord(turn) ? turn.error : '')}\n` +
+    `- Messages: ${messages.length}\n\n` +
     `## Signals\n\n` +
     `- Tool calls: ${input.toolcalls.length}\n` +
     `- Tool errors: ${errorCalls.length}\n` +
@@ -202,4 +206,4 @@ function parseMaybeJson(text: string): unknown { if (!text) return null; try { r
 function eventArray(value: unknown): JsonRecord[] { return isRecord(value) && Array.isArray(value.events) ? value.events.filter(isRecord) : []; }
 function sinceQuery(flags: Flags): string { const since = flagString(flags, 'since'); if (!since) return ''; if (/^\d+$/.test(since)) return `&since=${encodeURIComponent(since)}`; const parsed = Date.parse(since); return Number.isFinite(parsed) ? `&since=${encodeURIComponent(String(parsed))}` : ''; }
 function redact(value: unknown, seen = new WeakSet<object>()): unknown { if (Array.isArray(value)) return value.map((item) => redact(item, seen)); if (!isRecord(value)) return value; if (seen.has(value)) return '[Circular]'; seen.add(value); const out: JsonRecord = {}; for (const [key, child] of Object.entries(value)) out[key] = SECRET_KEY_RE.test(key) ? '[REDACTED]' : redact(child, seen); return out; }
-function helpText(): string { return `ctxmill-bundle.ts — collect a ctxmill debug bundle\n\nUsage:\n  bun scripts/ctxmill-bundle.ts --agent <agentId> [--session <sessionId>] [--conversation <conversationId>] [--out <dir>]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --agent <agentId>      Agent id\n  --session <sessionId>  Turn/run id\n  --conversation <id>    Conversation id\n  --events-limit <n>     Number of recent events (default 200)\n  --out <dir>            Output directory (default .ctxmill/debug/<timestamp>)\n  --no-redact            Disable secret redaction\n`; }
+function helpText(): string { return `ctxmill-bundle.ts — collect a ctxmill debug bundle\n\nUsage:\n  bun scripts/ctxmill-bundle.ts --agent <agentId> [--turn <turnId>] [--conversation <conversationId>] [--out <dir>]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --agent <agentId>      Agent id\n  --turn <turnId>        Execution turn id\n  --conversation <id>    Conversation id\n  --events-limit <n>     Number of recent events (default 200)\n  --out <dir>            Output directory (default .ctxmill/debug/<timestamp>)\n  --no-redact            Disable secret redaction\n`; }

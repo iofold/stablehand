@@ -149,12 +149,12 @@ async function getRuns(
   request: any,
   agentId: string,
 ): Promise<Array<{ id: string; taskDescription?: string }>> {
-  const res = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
+  const res = await request.get(`${API_BASE}/api/agents/${agentId}/turns`);
   expect(res.ok()).toBeTruthy();
   const body = (await res.json()) as {
-    sessions?: Array<{ id: string; taskDescription?: string }>;
+    turns?: Array<{ id: string; taskDescription?: string }>;
   };
-  return body.sessions ?? [];
+  return body.turns ?? [];
 }
 
 // ── Tests ────────────────────────────────────────────────────
@@ -273,21 +273,21 @@ test.describe('Kitchen Sink — Multi-Agent Chain @extended', () => {
     const body = (await response.json()) as {
       messageId: string;
       conversationId: string;
-      sessionId: string;
+      turnId: string;
     };
     expect(body.messageId).toBeTruthy();
     expect(body.conversationId).toBeTruthy();
-    expect(body.sessionId).toBeTruthy();
+    expect(body.turnId).toBeTruthy();
 
     await expect
       .poll(
         async () => {
           const res = await request.get(
-            `${API_BASE}/api/agents/${analyst!.id}/conversations/${body.conversationId}/messages`,
+            `${API_BASE}/api/agents/${analyst!.id}/conversations/${body.conversationId}/snapshot`,
           );
           expect(res.ok()).toBeTruthy();
-          const messages = await res.json();
-          return messages.some(
+          const snapshot = await res.json();
+          return snapshot.messages.some(
             (message: { role: string; content: string }) =>
               message.role === 'user' && message.content === userPrompt,
           );
@@ -300,7 +300,7 @@ test.describe('Kitchen Sink — Multi-Agent Chain @extended', () => {
       .poll(
         async () => {
           const res = await request.get(
-            `${API_BASE}/api/agents/${analyst!.id}/sessions/${body.sessionId}`,
+            `${API_BASE}/api/agents/${analyst!.id}/turns/${body.turnId}`,
           );
           return res.ok();
         },
@@ -349,7 +349,7 @@ test.describe('Kitchen Sink — Multi-Agent Chain @extended', () => {
     );
     expect(matchingRun).toBeTruthy();
     if (matchingRun) {
-      const detailRes = await request.get(`${API_BASE}/api/agents/${reviewer!.id}/sessions/${matchingRun.id}`);
+      const detailRes = await request.get(`${API_BASE}/api/agents/${reviewer!.id}/turns/${matchingRun.id}`);
       expect(detailRes.ok()).toBeTruthy();
     }
   });

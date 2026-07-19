@@ -65,7 +65,7 @@ export function runtimeLabelsToContainerInfo(input: RuntimeContainerInfoInput): 
   return {
     containerId: input.containerId,
     containerName: input.containerName,
-    sessionId: input.labels['ctxmill.session-id'] ?? '',
+    sessionId: input.labels['ctxmill.sandbox-session-id'] ?? '',
     agentId: input.labels['ctxmill.agent-id'] ?? '',
     harnessName: input.labels['ctxmill.harness'] ?? '',
     status: input.status,
@@ -251,7 +251,7 @@ function commonRuntimeLabels(
   return {
     'ctxmill.managed': 'true',
     [CONTAINER_SCOPE_LABEL]: scopeId,
-    'ctxmill.session-id': options.sessionId,
+    'ctxmill.sandbox-session-id': options.sessionId,
     ...(options.conversationId ? { 'ctxmill.conversation-id': options.conversationId } : {}),
     'ctxmill.agent-id': options.agentId,
     'ctxmill.harness': options.harnessName,
@@ -298,7 +298,7 @@ function kubernetesEnv(entries: string[]): Array<{ name: string; value: string }
 
 export function buildDockerContainerSpec(input: DockerContainerSpecInput): DockerContainerSpec {
   const resources = resolveResources(input.options, input.defaults);
-  const containerName = `ctxmill-run-${input.options.sessionId}`;
+  const containerName = `ctxmill-sandbox-${input.options.sessionId}`;
   const dataRoot = input.dataRoot ?? '/app/project/.ctxmill';
   const binds: string[] = [];
   const volumeMounts: unknown[] = [];
@@ -353,7 +353,7 @@ export function buildDockerContainerSpec(input: DockerContainerSpecInput): Docke
 
 export function buildKubernetesJobSpec(input: KubernetesJobSpecInput): KubernetesJobSpec {
   const resources = resolveResources(input.options, input.defaults);
-  const jobName = `ctxmill-run-${sanitizeKubernetesName(input.options.sessionId)}`;
+  const jobName = `ctxmill-sandbox-${sanitizeKubernetesName(input.options.sessionId)}`;
   const labels = {
     'app.kubernetes.io/name': 'ctxmill-sandbox',
     'app.kubernetes.io/part-of': 'ctxmill',

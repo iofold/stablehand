@@ -199,11 +199,11 @@ function extractSummary(type: string, payload: unknown): string {
       if (name === 'ctxmill.message.committed') {
         return summarizeMessageCommit(parsed);
       }
-      if (name === 'ctxmill.hitl.requested') {
-        const toolName = stringField(parsed, 'toolName') ?? stringField(parsed, 'toolCallName') ?? 'tool';
+      if (name === 'ctxmill.interrupt.requested') {
+        const toolName = stringField(parsed, 'toolCallName') ?? 'tool';
         return truncateSummary(`Approval requested: ${toolName}`);
       }
-      if (name === 'ctxmill.hitl.resolved') {
+      if (name === 'ctxmill.interrupt.resolved') {
         const approved = parsed.approved === true ? 'approved' : parsed.approved === false ? 'rejected' : 'resolved';
         return truncateSummary(`Approval ${approved}`);
       }
@@ -232,7 +232,7 @@ function formatEventPayload(payload: unknown): string {
   }
 }
 
-/** Canonical run-channel frame types (ADR-015) group with run.* events. */
+/** Canonical AG-UI run-channel frame types (ADR-015). */
 function isRunFrameType(type: string): boolean {
   return type.startsWith('RUN_')
     || type.startsWith('TEXT_MESSAGE_')
@@ -242,9 +242,14 @@ function isRunFrameType(type: string): boolean {
     || type === 'MESSAGES_SNAPSHOT';
 }
 
+function isExecutionEventType(type: string): boolean {
+  return ['turn.', 'message.', 'tool_call.', 'interrupt.', 'ag_ui.', 'user.']
+    .some((prefix) => type.startsWith(prefix));
+}
+
 /** Category color mapping based on event type prefix. */
 function typeColor(type: string): string {
-  if (type.startsWith('run.') || isRunFrameType(type)) return 'text-blue-400';
+  if (isExecutionEventType(type) || isRunFrameType(type)) return 'text-blue-400';
   if (type.startsWith('agent.')) return 'text-green-400';
   if (type.startsWith('feedback.')) return 'text-purple-400';
   if (type.startsWith('client.')) return 'text-cyan-400';
@@ -252,7 +257,7 @@ function typeColor(type: string): string {
 }
 
 function typeBadgeBg(type: string): string {
-  if (type.startsWith('run.') || isRunFrameType(type)) return 'bg-blue-500/10 border-blue-500/20';
+  if (isExecutionEventType(type) || isRunFrameType(type)) return 'bg-blue-500/10 border-blue-500/20';
   if (type.startsWith('agent.')) return 'bg-green-500/10 border-green-500/20';
   if (type.startsWith('feedback.')) return 'bg-purple-500/10 border-purple-500/20';
   if (type.startsWith('client.')) return 'bg-cyan-500/10 border-cyan-500/20';

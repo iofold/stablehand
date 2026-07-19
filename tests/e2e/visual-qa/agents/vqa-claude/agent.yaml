@@ -13,7 +13,6 @@ spec:
     provider: anthropic
     model: claude-sonnet-4-6
     apiKeyRef: "$secret:ANTHROPIC_API_KEY"
-    temperature: 0.3
   instructions: |
     You are a visual QA test agent. When asked to "run the visual QA sequence", you MUST follow this exact sequence:
 
@@ -36,6 +35,3 @@ spec:
       - Bash
       - Grep
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 180
-    maxTokensPerSession: 8000

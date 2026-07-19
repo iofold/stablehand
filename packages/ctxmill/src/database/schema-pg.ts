@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, text, bigint, boolean, serial, integer, index, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, bigint, boolean, serial, integer, index, jsonb, uniqueIndex, doublePrecision } from 'drizzle-orm/pg-core';
 import { randomUUID } from 'node:crypto';
 
 export type TurnStatus = 'queued' | 'running' | 'completed' | 'error' | 'cancelled';
@@ -21,9 +21,21 @@ export const agents = pgTable('agents', {
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 });
 
+export const agentWorkspaceState = pgTable('agent_workspace_state', {
+  agentId: text('agent_id').primaryKey().references(() => agents.id, { onDelete: 'cascade' }),
+  revision: bigint('revision', { mode: 'number' }).notNull().default(1),
+  sha256: text('sha256').notNull(),
+  fileCount: integer('file_count').notNull(),
+  totalBytes: bigint('total_bytes', { mode: 'number' }).notNull(),
+  appliedAt: bigint('applied_at', { mode: 'number' }).notNull(),
+});
+
 export const conversations = pgTable('conversations', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   agentId: text('agent_id').notNull().references(() => agents.id),
+  // Budget-attribution tags, fixed at conversation creation (caller tags +
+  // agent defaults). Immutable for the life of the conversation.
+  tags: jsonb('tags').$type<Record<string, string>>(),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
@@ -34,6 +46,16 @@ export const messages = pgTable('messages', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   conversationId: text('conversation_id').notNull().references(() => conversations.id),
   agentId: text('agent_id'),
+  // Canonical assistant/tool identity. Legacy and user-authored rows may be
+  // null; all newly emitted assistant/tool rows are turn-owned and sequenced.
+  turnId: text('turn_id'),
+  messageSeq: bigint('message_seq', { mode: 'number' }),
+  // Public full-replacement revision. Revision 0 is the committed baseline.
+  messageRevision: bigint('message_revision', { mode: 'number' }).notNull().default(0),
+  // Internal durability watermark:
+  // -1 = no message.committed frame, 0 = baseline published,
+  // N > 0 = latest durably published message.updated revision.
+  publishedRevision: bigint('published_revision', { mode: 'number' }).notNull().default(0),
   role: text('role').notNull(),
   content: text('content').notNull(),
   toolCallId: text('tool_call_id'),
@@ -42,11 +64,14 @@ export const messages = pgTable('messages', {
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
   conversationCreatedIdx: index('idx_messages_conversation_created').on(table.conversationId, table.createdAt),
+  turnSeqIdx: uniqueIndex('idx_messages_turn_seq')
+    .on(table.turnId, table.messageSeq)
+    .where(sql`${table.turnId} IS NOT NULL AND ${table.messageSeq} IS NOT NULL`),
 }));
 
 export const turns = pgTable('turns', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
-  sessionId: text('session_id').references(() => sandboxSessions.id),
+  sandboxSessionId: text('sandbox_session_id').references(() => sandboxSessions.id),
   agentId: text('agent_id').notNull().references(() => agents.id),
   conversationId: text('conversation_id').references(() => conversations.id),
   mode: text('mode').notNull().default('interactive'),
@@ -56,10 +81,66 @@ export const turns = pgTable('turns', {
   startedAt: bigint('started_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   completedAt: bigint('completed_at', { mode: 'number' }),
   error: text('error'),
+  // Token usage reported by the harness at turn completion; null when the
+  // harness did not report usage (distinct from a real zero).
+  inputTokens: bigint('input_tokens', { mode: 'number' }),
+  outputTokens: bigint('output_tokens', { mode: 'number' }),
+  totalTokens: bigint('total_tokens', { mode: 'number' }),
+  costUsd: doublePrecision('cost_usd'),
+  // Durable allocator for canonical assistant/tool message ordering.
+  nextMessageSeq: bigint('next_message_seq', { mode: 'number' }).notNull().default(0),
+  // Highest seq of the atomically persisted terminal frame batch. Null means
+  // the row is open or terminal publication still needs runtime/startup repair.
+  terminalPublishedSeq: bigint('terminal_published_seq', { mode: 'number' }),
+  // Denormalized budget-attribution tags: conversation tags + system tags
+  // (agent/harness/mode), stamped at turn creation for spend aggregation.
+  tags: jsonb('tags').notNull().$type<Record<string, string>>().default({}),
 }, (table) => ({
   agentStartedIdx: index('idx_turns_agent_started').on(table.agentId, table.startedAt),
-  sessionIdx: index('idx_turns_session').on(table.sessionId),
+  sandboxSessionIdx: index('idx_turns_sandbox_session').on(table.sandboxSessionId),
   statusOpenIdx: index('idx_turns_status_open').on(table.status).where(sql`${table.completedAt} IS NULL`),
+  tagsGinIdx: index('idx_turns_tags_gin').using('gin', table.tags),
+}));
+
+export type TurnStartRequestStatus = 'preparing' | 'prepared';
+
+/**
+ * Durable API idempotency ledger for turn creation. Identifiers are allocated
+ * before conversation/message/turn writes and the response is persisted before
+ * sandbox execution is launched.
+ */
+export const turnStartRequests = pgTable('turn_start_requests', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+  idempotencyKey: text('idempotency_key').notNull(),
+  requestHash: text('request_hash').notNull(),
+  status: text('status').$type<TurnStartRequestStatus>().notNull().default('preparing'),
+  turnId: text('turn_id').notNull(),
+  conversationId: text('conversation_id').notNull(),
+  response: jsonb('response').$type<Record<string, unknown>>(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+}, (table) => ({
+  agentKeyUnique: uniqueIndex('idx_turn_start_requests_agent_key').on(
+    table.agentId,
+    table.idempotencyKey,
+  ),
+}));
+
+/**
+ * Cross-process ownership for startup repair of one open turn.
+ *
+ * A short renewable lease prevents two orchestrator replicas from failing or
+ * redispatching the same stranded turn. Expired rows are takeover-safe after a
+ * process crash; terminal turn deletion cascades the lease.
+ */
+export const turnReconciliationLeases = pgTable('turn_reconciliation_leases', {
+  turnId: text('turn_id').primaryKey().references(() => turns.id, { onDelete: 'cascade' }),
+  ownerId: text('owner_id').notNull(),
+  leaseExpiresAt: bigint('lease_expires_at', { mode: 'number' }).notNull(),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
+}, (table) => ({
+  expiresIdx: index('idx_turn_reconciliation_leases_expires').on(table.leaseExpiresAt),
 }));
 
 export const eventStore = pgTable('event_store', {
@@ -80,6 +161,19 @@ export const eventStore = pgTable('event_store', {
   agentChannelSeqIdx: index('idx_event_store_agent_channel_seq').on(table.agentId, table.channel, table.seq),
 }));
 
+/**
+ * Per-agent committed event watermark and writer mutex.
+ *
+ * Event writers lock this row before allocating event_store sequences, then
+ * advance committedSeq in the same transaction. Unlike PostgreSQL sequences,
+ * this watermark is commit ordered and therefore safe as an SSE replay cursor.
+ */
+export const agentEventHeads = pgTable('agent_event_heads', {
+  agentId: text('agent_id').primaryKey().references(() => agents.id, { onDelete: 'cascade' }),
+  committedSeq: bigint('committed_seq', { mode: 'number' }).notNull().default(0),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+});
+
 export const spineCursors = pgTable('spine_cursors', {
   consumer: text('consumer').primaryKey(),
   lastSeq: bigint('last_seq', { mode: 'number' }).notNull().default(0),
@@ -88,7 +182,7 @@ export const spineCursors = pgTable('spine_cursors', {
 
 export const suspendedSessions = pgTable('suspended_sessions', {
   id: text('id').primaryKey(),
-  agentSessionId: text('agent_session_id').notNull(),
+  turnId: text('turn_id').notNull(),
   agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
   waitEventType: text('wait_event_type').notNull(),
   waitSelector: text('wait_selector').notNull(),
@@ -140,9 +234,9 @@ export const agentVersions = pgTable('agent_versions', {
 
 export const pendingInterrupts = pgTable('pending_interrupts', {
   id: text('id').primaryKey(),
-  agentSessionId: text('agent_session_id').notNull().references(() => turns.id, { onDelete: 'cascade' }),
+  turnId: text('turn_id').notNull().references(() => turns.id, { onDelete: 'cascade' }),
   agentId: text('agent_id').notNull().references(() => agents.id),
-  sessionId: text('session_id'),
+  sandboxSessionId: text('sandbox_session_id'),
   toolCallId: text('tool_call_id').notNull(),
   toolName: text('tool_name').notNull(),
   args: jsonb('args').notNull().$type<Record<string, unknown>>().default({}),
@@ -154,7 +248,7 @@ export const pendingInterrupts = pgTable('pending_interrupts', {
   resolvedData: jsonb('resolved_data').$type<unknown>(),
   status: text('status').notNull().default('pending'),
 }, (table) => ({
-  agentSessionIdx: index('idx_interrupts_agent_session').on(table.agentSessionId),
+  turnIdx: index('idx_interrupts_turn').on(table.turnId),
   agentIdx: index('idx_interrupts_agent').on(table.agentId),
   statusExpiresIdx: index('idx_interrupts_status').on(table.status, table.expiresAt),
 }));
@@ -162,8 +256,8 @@ export const pendingInterrupts = pgTable('pending_interrupts', {
 export const interruptResumeAttempts = pgTable('interrupt_resume_attempts', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   interruptId: text('interrupt_id').notNull().references(() => pendingInterrupts.id, { onDelete: 'cascade' }),
-  agentSessionId: text('agent_session_id').notNull().references(() => turns.id, { onDelete: 'cascade' }),
-  sessionId: text('session_id'),
+  turnId: text('turn_id').notNull().references(() => turns.id, { onDelete: 'cascade' }),
+  sandboxSessionId: text('sandbox_session_id'),
   agentId: text('agent_id').notNull().references(() => agents.id),
   status: text('status').notNull().default('pending'),
   attempts: integer('attempts').notNull().default(0),
@@ -174,7 +268,7 @@ export const interruptResumeAttempts = pgTable('interrupt_resume_attempts', {
 }, (table) => ({
   interruptUniqueIdx: uniqueIndex('idx_interrupt_resume_attempts_interrupt').on(table.interruptId),
   agentStatusIdx: index('idx_interrupt_resume_attempts_agent_status').on(table.agentId, table.status),
-  sessionIdx: index('idx_interrupt_resume_attempts_session').on(table.sessionId),
+  sandboxSessionIdx: index('idx_interrupt_resume_attempts_sandbox_session').on(table.sandboxSessionId),
 }));
 
 export const sandboxSessions = pgTable('sandbox_sessions', {
@@ -200,7 +294,7 @@ export const sandboxSessions = pgTable('sandbox_sessions', {
 
 export const agentCheckpoints = pgTable('agent_checkpoints', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
-  sessionId: text('session_id').notNull().references(() => sandboxSessions.id, { onDelete: 'cascade' }),
+  sandboxSessionId: text('sandbox_session_id').notNull().references(() => sandboxSessions.id, { onDelete: 'cascade' }),
   agentId: text('agent_id').notNull(),
   checkpointVersion: integer('checkpoint_version').notNull().default(2),
   checkpointData: jsonb('checkpoint_data').notNull().$type<Record<string, unknown>>(),
@@ -209,14 +303,15 @@ export const agentCheckpoints = pgTable('agent_checkpoints', {
   suspendReason: text('suspend_reason'),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
-  sessionIdx: index('idx_checkpoints_session_id').on(table.sessionId),
+  sandboxSessionIdx: index('idx_checkpoints_sandbox_session_id').on(table.sandboxSessionId),
   agentIdx: index('idx_checkpoints_agent_id').on(table.agentId),
 }));
 
 export const callbackOutbox = pgTable('callback_outbox', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   agentId: text('agent_id').notNull().references(() => agents.id),
-  sessionId: text('session_id').references(() => turns.id),
+  turnId: text('turn_id').references(() => turns.id),
+  webhookId: text('webhook_id').references(() => webhooks.id, { onDelete: 'set null' }),
   callbackUrl: text('callback_url').notNull(),
   eventType: text('event_type').notNull(),
   eventSeq: bigint('event_seq', { mode: 'number' }),
@@ -259,10 +354,23 @@ export const systemSettings = pgTable('system_settings', {
   updatedAt: text('updated_at').notNull().$defaultFn(() => new Date().toISOString()),
 });
 
+/**
+ * Declarative tag-based budget policies (2026-07-15 proposal). `doc` holds
+ * the validated policy document: selector, groupBy, window, limits, actions.
+ */
+export const budgetPolicies = pgTable('budget_policies', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  name: text('name').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  doc: jsonb('doc').notNull().$type<Record<string, unknown>>(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+});
+
 export const artifacts = pgTable('artifacts', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   agentId: text('agent_id').references(() => agents.id, { onDelete: 'set null' }),
-  sessionId: text('session_id').references(() => turns.id, { onDelete: 'set null' }),
+  turnId: text('turn_id').references(() => turns.id, { onDelete: 'set null' }),
   conversationId: text('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   mimeType: text('mime_type').notNull(),
@@ -276,13 +384,13 @@ export const artifacts = pgTable('artifacts', {
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
   agentCreatedIdx: index('idx_artifacts_agent_created').on(table.agentId, table.createdAt),
-  sessionIdx: index('idx_artifacts_session').on(table.sessionId),
+  turnIdx: index('idx_artifacts_turn').on(table.turnId),
   statusIdx: index('idx_artifacts_status').on(table.status),
 }));
 
 export const toolRequestDedup = pgTable('tool_request_dedup', {
   requestId: text('request_id').primaryKey(),
-  sessionId: text('session_id').notNull(),
+  turnId: text('turn_id').notNull(),
   toolName: text('tool_name').notNull(),
   status: text('status').notNull().default('in_progress'),
   result: text('result'),

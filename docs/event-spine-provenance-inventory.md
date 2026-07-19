@@ -11,11 +11,11 @@ for a single bus event.
 | EventMap name | Channel | Baseline projected frames | Notes |
 |---|---:|---:|---|
 | `turn.started` | `run` | 1 | `RUN_STARTED`. |
-| `run.text_chunk` | `run` | 2 | First chunk opens text: `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`; later chunks in the same open message emit 1 content frame. |
-| `run.tool_started` | `run` | 2 | `TOOL_CALL_START`, `TOOL_CALL_ARGS`; emits an additional `TEXT_MESSAGE_END` if assistant text is open. |
-| `run.tool_result` | `run` | 2 | `TOOL_CALL_END`, `TOOL_CALL_RESULT`; successful `a2ui-render` results add one replayable `CUSTOM` frame. |
-| `run.interrupted` | `run` | 1 | `CUSTOM name: ctxmill.hitl.requested`. |
-| `run.interrupt_resolved` | `run` | 1 | `CUSTOM name: ctxmill.hitl.resolved`. |
+| `message.delta` | `run` | 2 | First chunk opens text: `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`; later chunks in the same open message emit 1 content frame. |
+| `tool_call.started` | `run` | 2 | `TOOL_CALL_START`, `TOOL_CALL_ARGS`; emits an additional `TEXT_MESSAGE_END` if assistant text is open. |
+| `tool_call.completed` | `run` | 2 | `TOOL_CALL_END`, `TOOL_CALL_RESULT`; successful `a2ui-render` results add one replayable `CUSTOM` frame. |
+| `interrupt.requested` | `run` | 1 | `CUSTOM name: ctxmill.interrupt.requested`. |
+| `interrupt.resolved` | `run` | 1 | `CUSTOM name: ctxmill.interrupt.resolved`. |
 | `turn.completed` | `run` | 1 | `RUN_FINISHED`; error/cancelled turns also emit `RUN_ERROR`, and open text adds `TEXT_MESSAGE_END`. |
 | `feedback.received` | `system` | 1 | Verbatim typed bus payload. |
 | `agent.created` | `system` | 1 | Verbatim typed bus payload. |
@@ -25,7 +25,7 @@ for a single bus event.
 | `trigger.fired` | `system` | 1 | Verbatim typed bus payload. |
 | `message.committed` | `run` | 1 | `CUSTOM name: ctxmill.message.committed`. |
 | `turn.pending` | `run` | 1 | `CUSTOM name: ctxmill.turn.pending`. |
-| `run.ag_ui_event` | `run` | 1 | Passthrough AG-UI frame type from `payload.event.type`, defaulting to `CUSTOM`. |
+| `ag_ui.event` | `run` | 1 | Passthrough AG-UI frame type from `payload.event.type`, defaulting to `CUSTOM`. |
 | `user.message` | `run` | 3 | User echo triplet: start, content, end. |
 | `custom` | `system` | 1 | Verbatim typed `custom` bus payload. User-defined custom event names outside `EventMap` persist as `custom` channel rows. |
 

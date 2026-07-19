@@ -47,10 +47,6 @@ export const ENV_KEYS: Record<SettingsKey, string> = {
   defaultTimeoutSec:         'CTXMILL_DEFAULT_TIMEOUT_SEC',
 };
 
-const LEGACY_ENV_ALIASES: Partial<Record<SettingsKey, string>> = {
-  maxGlobalContainers: 'CTXMILL_MAX_CONTAINERS',
-};
-
 export interface SystemSettings {
   maxWorkspaceTarBytes:        number;
   maxTarUploadBytes:           number;
@@ -160,23 +156,8 @@ function parseFloatSetting(raw: string | undefined, defaultValue: number): numbe
 
 /** Read env var as positive integer, or fall back to hardcoded default. */
 function envInt(key: SettingsKey, hardDefault: number): number {
-  const canonicalKey = ENV_KEYS[key];
-  const legacyKey = LEGACY_ENV_ALIASES[key];
-  const canonicalVal = process.env[canonicalKey];
-  const legacyVal = legacyKey ? process.env[legacyKey] : undefined;
-
-  let sourceKey = canonicalKey;
-  let val = canonicalVal;
-
-  if (legacyKey && legacyVal !== undefined && legacyVal !== '') {
-    if (canonicalVal !== undefined && canonicalVal !== '') {
-      console.warn(`[SystemSettings] ${legacyKey} is deprecated and ignored because ${canonicalKey} is set`);
-    } else {
-      console.warn(`[SystemSettings] ${legacyKey} is deprecated; use ${canonicalKey} instead`);
-      sourceKey = legacyKey;
-      val = legacyVal;
-    }
-  }
+  const sourceKey = ENV_KEYS[key];
+  const val = process.env[sourceKey];
 
   if (val === undefined || val === '') return hardDefault;
   const parsed = parseInt(val, 10);

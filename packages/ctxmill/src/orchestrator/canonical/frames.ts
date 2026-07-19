@@ -24,9 +24,11 @@ export type CanonicalFrameType = typeof CANONICAL_FRAME_TYPES[number];
 
 export const CTXMILL_CUSTOM_NAMES = [
   'ctxmill.turn.pending',
-  'ctxmill.hitl.requested',
-  'ctxmill.hitl.resolved',
+  'ctxmill.interrupt.requested',
+  'ctxmill.interrupt.resolved',
+  'ctxmill.sandbox_session.snapshot',
   'ctxmill.message.committed',
+  'ctxmill.message.updated',
   'ctxmill.a2ui.render',
 ] as const;
 
@@ -59,26 +61,28 @@ export interface PersistedFrame extends CanonicalFrame {
 export const RUN_CHANNEL_EVENTS: readonly EventName[] = [
   'turn.pending',
   'turn.started',
-  'run.text_chunk',
-  'run.tool_started',
-  'run.tool_result',
-  'run.interrupted',
-  'run.interrupt_resolved',
-  'run.ag_ui_event',
+  'message.delta',
+  'tool_call.started',
+  'tool_call.completed',
+  'interrupt.requested',
+  'interrupt.resolved',
+  'ag_ui.event',
   'turn.completed',
   'user.message',
   'message.committed',
+  'message.updated',
 ];
 
 /** Every EventMap name — used to split system events from user-defined custom types. */
 export const KNOWN_BUS_EVENT_NAMES: readonly string[] = [
   'turn.started',
-  'run.text_chunk',
-  'run.tool_started',
-  'run.tool_result',
-  'run.interrupted',
-  'run.interrupt_resolved',
+  'message.delta',
+  'tool_call.started',
+  'tool_call.completed',
+  'interrupt.requested',
+  'interrupt.resolved',
   'turn.completed',
+  'budget.threshold',
   'feedback.received',
   'agent.created',
   'agent.deleted',
@@ -86,8 +90,9 @@ export const KNOWN_BUS_EVENT_NAMES: readonly string[] = [
   'client.disconnected',
   'trigger.fired',
   'message.committed',
+  'message.updated',
   'turn.pending',
-  'run.ag_ui_event',
+  'ag_ui.event',
   'user.message',
   'custom',
 ];

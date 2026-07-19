@@ -1,11 +1,16 @@
 import { join } from 'node:path';
 import { chown, readdir, stat } from 'node:fs/promises';
 import type { FastifyRequest } from 'fastify';
-import { projectSessionStatus } from '@ctxmill/shared';
+import { projectTurnStatus } from '@ctxmill/shared';
+import { AgentSchema, type Agent } from '@ctxmill/contracts';
 
 import type { HarnessConfigSchemas } from '@ctxmill/sandbox-daemon/harness/schemas';
 import { ensureAgentWorkspace as ensureAgentWorkspaceShared } from '../../../workspace/ensure.js';
-import { parseStoredHarnessConfig, resolveResourceLimits } from '../../agent-definition.js';
+import {
+  extractManifestRuntimeFields,
+  parseStoredHarnessConfig,
+  resolveResourceLimits,
+} from '../../agent-definition.js';
 import { validateAgentHttpToolsConfig } from '../../http-tools.js';
 import type { AgentHttpToolDefinition, AgentRouteOptions, StoredAgent } from './types.js';
 
@@ -103,43 +108,37 @@ export function ensureAgentWorkspace(
   return ensureAgentWorkspaceShared(opts.dataDir, agentId);
 }
 
-export function extractManifestFields(agent: { manifest?: Record<string, unknown> | null; metadata?: Record<string, unknown> | null }) {
-  const spec = (agent.manifest as Record<string, unknown> | null)?.spec as Record<string, unknown> | undefined;
-  const meta = (agent.metadata ?? {}) as Record<string, unknown>;
-  return {
-    nativeTools: ('nativeTools' in meta ? meta.nativeTools : spec?.nativeTools ?? null) as Record<string, unknown> | null,
-    workspaceContent: ((spec?.workspace as Record<string, unknown> | undefined)?.content ?? null) as Record<string, unknown> | null,
-  };
-}
-
-export function toAgentResponse(agent: StoredAgent): Record<string, unknown> {
-  return {
+export function toAgentResponse(agent: StoredAgent): Agent {
+  const { nativeTools, workspaceContent, mode } = extractManifestRuntimeFields(agent);
+  return AgentSchema.parse({
     ...agent,
     harnessConfig: parseStoredHarnessConfig(agent.harnessConfig),
-    ...extractManifestFields(agent),
-    // Canonical resolution (metadata ?? manifest ?? spec.resources) so the API
+    nativeTools: nativeTools ?? null,
+    workspaceContent: workspaceContent ?? null,
+    mode: mode ?? null,
+    // Canonical resolution (metadata override ?? manifest spec.resources.sandbox) so the API
     // reports the limits the runtime actually enforces.
     resourceLimits: resolveResourceLimits(agent) ?? null,
-  };
+  });
 }
 
-export function toApiAgentSession(
-  turn: { id: string; agentId: string; conversationId: string | null; sessionId: string | null; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null },
+export function toApiAgentTurn(
+  turn: { id: string; agentId: string; conversationId: string | null; sandboxSessionId: string | null; status: string; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null },
   sandboxSession?: {
     status: string;
     restoreAttempts?: number | null;
     lastRestoreError?: string | null;
     updatedAt?: number;
   } | null,
-  messageCount?: number,
+  conversationMessageCount?: number,
 ) {
-  const status = projectSessionStatus(turn, sandboxSession?.status, 'ACTIVE');
+  const status = projectTurnStatus(turn);
 
   return {
     id: turn.id,
     agentId: turn.agentId,
     conversationId: turn.conversationId ?? '',
-    ...(turn.sessionId ? { sandboxSessionId: turn.sessionId } : {}),
+    ...(turn.sandboxSessionId ? { sandboxSessionId: turn.sandboxSessionId } : {}),
     ...(sandboxSession?.status ? { sandboxStatus: sandboxSession.status } : {}),
     status,
     mode: turn.mode || 'interactive',
@@ -147,11 +146,21 @@ export function toApiAgentSession(
     ...(turn.completedAt != null ? { completedAt: turn.completedAt } : {}),
     ...(turn.error ? { error: turn.error } : {}),
     ...(turn.taskDescription ? { taskDescription: turn.taskDescription } : {}),
-    ...(messageCount !== undefined ? { messageCount } : {}),
+    ...(conversationMessageCount !== undefined ? { conversationMessageCount } : {}),
     ...(sandboxSession?.restoreAttempts !== undefined ? { restoreAttempts: sandboxSession.restoreAttempts } : {}),
     ...(sandboxSession?.lastRestoreError ? { lastRestoreError: sandboxSession.lastRestoreError } : {}),
     ...(sandboxSession?.status === 'CHECKPOINTED' && typeof sandboxSession.updatedAt === 'number'
       ? { checkpointAt: sandboxSession.updatedAt }
+      : {}),
+    ...(turn.totalTokens != null
+      ? {
+        usage: {
+          inputTokens: turn.inputTokens ?? 0,
+          outputTokens: turn.outputTokens ?? 0,
+          totalTokens: turn.totalTokens,
+          ...(turn.costUsd != null ? { costUsd: turn.costUsd } : {}),
+        },
+      }
       : {}),
   };
 }

@@ -74,10 +74,28 @@ describe('conversation store', () => {
     expect(messages[1].content).toBe('second');
   });
 
+  it('discards only the rejected optimistic user message', () => {
+    const firstId = getStore().addUserMessage('first');
+    const rejectedId = getStore().addUserMessage('rejected');
+
+    getStore().discardOptimisticUserMessage(rejectedId);
+
+    expect(getStore().messages.map(({ id, content }) => ({ id, content }))).toEqual([
+      { id: firstId, content: 'first' },
+    ]);
+    expect(getStore().optimisticUserMessageIds).toEqual([firstId]);
+  });
+
   it('loadMessages replaces all messages and resets state', () => {
     getStore().addUserMessage('existing');
     const loaded = [
-      { id: 'x1', role: 'assistant' as const, content: 'loaded', createdAt: '2026-01-01T00:00:00Z' },
+      {
+        id: 'x1',
+        messageRevision: 0,
+        role: 'assistant' as const,
+        content: 'loaded',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
     ];
     getStore().loadMessages(loaded);
 
@@ -85,6 +103,7 @@ describe('conversation store', () => {
     expect(state.messages).toEqual([
       {
         id: 'x1',
+        messageRevision: 0,
         role: 'assistant',
         content: 'loaded',
         parts: [{ type: 'text', content: 'loaded' }],
@@ -96,6 +115,38 @@ describe('conversation store', () => {
     expect(state.isStreaming).toBe(false);
     expect(state.streamingContent).toBe('');
     expect(state.committedMessageCount).toBe(0);
+  });
+
+  it('merges REST revision baselines during streaming and ignores a replayed commit', () => {
+    const { handleSSEEvent, loadMessages, reset } = getStore();
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+
+    loadMessages([{
+      id: 'persisted-1',
+      messageRevision: 2,
+      role: 'assistant',
+      content: 'Authoritative REST projection',
+      parts: [{ type: 'text', content: 'Authoritative REST projection' }],
+      createdAt: new Date().toISOString(),
+    }]);
+    expect(getStore().messageRevisions.get('persisted-1')).toBe(2);
+
+    handleSSEEvent(makeEvent('CUSTOM', {
+      name: 'ctxmill.message.committed',
+      messageId: 'persisted-1',
+      messageSeq: 0,
+      role: 'assistant',
+      content: 'Older baseline',
+      parts: [{ type: 'text', content: 'Older baseline' }],
+      turnId: 'r1',
+    }));
+
+    expect(getStore().messages).toHaveLength(1);
+    expect(getStore().messages[0].content).toBe('Authoritative REST projection');
+
+    reset();
+    expect(getStore().messages).toEqual([]);
+    expect(getStore().messageRevisions.size).toBe(0);
   });
 
   it('reset clears all state', () => {
@@ -154,8 +205,8 @@ describe('conversation store', () => {
     expect(getStore().streamingContent).toBe('fresh');
   });
 
-  it('sets streaming state on TURN_PENDING', () => {
-    getStore().handleSSEEvent(makeEvent('TURN_PENDING', { runId: 'turn-1', timestamp: Date.now() }));
+  it('sets streaming state on ctxmill.turn.pending', () => {
+    getStore().handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.turn.pending', turnId: 'turn-1', timestamp: Date.now() }));
 
     expect(getStore().isStreaming).toBe(true);
     expect(getStore().currentTurnId).toBe('turn-1');
@@ -170,14 +221,14 @@ describe('conversation store', () => {
     expect(state.currentTurnId).toBe('run-1');
   });
 
-  it('state_snapshot restores streaming state using the active turn id instead of sandbox session id', () => {
+  it('sandbox session snapshot restores streaming state using the active turn id instead of sandbox session id', () => {
     const { setActiveConversation, handleSSEEvent } = getStore();
 
     setActiveConversation('conv-1');
     handleSSEEvent(makeEvent('CUSTOM', {
-      subtype: 'state_snapshot',
+      name: 'ctxmill.sandbox_session.snapshot',
       conversationId: 'conv-1',
-      sessionId: 'sandbox-session-1',
+      sandboxSessionId: 'sandbox-session-1',
       activeTurnId: 'turn-1',
       status: 'ACTIVE',
     }));
@@ -187,14 +238,14 @@ describe('conversation store', () => {
     expect(state.currentTurnId).toBe('turn-1');
   });
 
-  it('state_snapshot does not mark an idle active container as streaming', () => {
+  it('sandbox session snapshot does not mark an idle active container as streaming', () => {
     const { setActiveConversation, handleSSEEvent } = getStore();
 
     setActiveConversation('conv-1');
     handleSSEEvent(makeEvent('CUSTOM', {
-      subtype: 'state_snapshot',
+      name: 'ctxmill.sandbox_session.snapshot',
       conversationId: 'conv-1',
-      sessionId: 'sandbox-session-1',
+      sandboxSessionId: 'sandbox-session-1',
       activeTurnId: null,
       status: 'ACTIVE',
     }));
@@ -204,25 +255,27 @@ describe('conversation store', () => {
     expect(state.currentTurnId).toBeNull();
   });
 
-  it('HITL_PAUSE forwards the pending interrupt payload to the interrupt store', () => {
-    getStore().handleSSEEvent(makeEvent('HITL_PAUSE', {
+  it('ctxmill.interrupt.requested forwards the pending interrupt payload to the interrupt store', () => {
+    getStore().handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.interrupt.requested',
       agentId: 'agent-1',
-      runId: 'turn-1',
-      toolName: 'search',
+      turnId: 'turn-1',
+      interruptId: 'interrupt-1',
+      toolCallName: 'search',
       toolCallId: 'tc-1',
       args: { q: 'ctxmill' },
     }));
 
     expect(useInterruptStore.getState().pending).toEqual({
       agentId: 'agent-1',
-      sessionId: 'turn-1',
-      toolName: 'search',
+      interruptId: 'interrupt-1',
+      turnId: 'turn-1',
+      toolCallName: 'search',
       toolCallId: 'tc-1',
       args: { q: 'ctxmill' },
     });
   });
 
-  it('MESSAGE_COMMITTED creates a message with text content', async () => {
+  it('ctxmill.message.committed creates a message with text content', async () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
@@ -240,7 +293,7 @@ describe('conversation store', () => {
     expect(getStore().streamingContent).toBe('Hello world');
     expect(getStore().messages).toHaveLength(0);
 
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
       role: 'assistant',
       content: 'Hello world',
       messageSeq: 1,
@@ -258,16 +311,64 @@ describe('conversation store', () => {
     expect(state.committedMessageCount).toBe(1);
   });
 
-  it('skips user message echoes', () => {
+  it('reconstructs a canonical user message from replayed echo frames', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'user' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { delta: 'echo' }));
-    handleSSEEvent(makeEvent('TEXT_MESSAGE_END'));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', {
+      messageId: 'canonical-user-1',
+      role: 'user',
+    }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', {
+      messageId: 'canonical-user-1',
+      delta: 'echo',
+    }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_END', {
+      messageId: 'canonical-user-1',
+    }));
 
-    expect(getStore().messages).toHaveLength(0);
+    expect(getStore().messages).toEqual([
+      expect.objectContaining({
+        id: 'canonical-user-1',
+        role: 'user',
+        content: 'echo',
+      }),
+    ]);
     expect(getStore().streamingContent).toBe('');
+  });
+
+  it('reconciles an optimistic user message without start-frame flicker or duplication', () => {
+    const { addUserMessage, handleSSEEvent } = getStore();
+    addUserMessage('keep this visible');
+
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', {
+      messageId: 'canonical-user-1',
+      role: 'user',
+    }));
+
+    expect(getStore().messages).toEqual([
+      expect.objectContaining({
+        id: 'canonical-user-1',
+        role: 'user',
+        content: 'keep this visible',
+      }),
+    ]);
+
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', {
+      messageId: 'canonical-user-1',
+      delta: 'keep this visible',
+    }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_END', {
+      messageId: 'canonical-user-1',
+    }));
+
+    expect(getStore().messages).toEqual([
+      expect.objectContaining({
+        id: 'canonical-user-1',
+        role: 'user',
+        content: 'keep this visible',
+      }),
+    ]);
   });
 
   it('streaming tool events update preview state only', () => {
@@ -276,9 +377,9 @@ describe('conversation store', () => {
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
     handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"test"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"test"}' }));
     handleSSEEvent(makeEvent('TOOL_CALL_END', { toolCallId: 'tc1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'found it' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'found it' }));
 
     const state = getStore();
     expect(state.messages).toHaveLength(0);
@@ -293,14 +394,15 @@ describe('conversation store', () => {
     });
   });
 
-  it('MESSAGE_COMMITTED creates a message with tool calls merged from preview state', () => {
+  it('ctxmill.message.committed creates a message with tool calls merged from preview state', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'done' }));
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"ctxmill"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
+      messageId: 'message-tool-preview',
       role: 'assistant',
       content: '',
       toolCalls: [
@@ -330,8 +432,9 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"ctxmill"}' }));
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
+      messageId: 'message-late-result',
       role: 'assistant',
       content: '',
       toolCalls: [
@@ -343,7 +446,7 @@ describe('conversation store', () => {
 
     expect(getStore().toolCalls.size).toBe(0);
 
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'done' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
     handleSSEEvent(makeEvent('RUN_FINISHED'));
 
     const committed = getStore().messages[0];
@@ -375,13 +478,14 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"test"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"test"}' }));
     handleSSEEvent(makeEvent('TOOL_CALL_END', { toolCallId: 'tc1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'found it' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'found it' }));
 
     expect(getStore().messages).toHaveLength(0);
 
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
+      messageId: 'message-tool-flow',
       role: 'assistant',
       content: '',
       toolCalls: [
@@ -420,7 +524,8 @@ describe('conversation store', () => {
     expect(getStore().messages).toHaveLength(0);
     expect(getStore().streamingContent).toBe('partial');
 
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
+      messageId: 'message-text-flow',
       role: 'assistant',
       content: 'partial',
       messageSeq: 1,
@@ -441,9 +546,10 @@ describe('conversation store', () => {
     await flushStreamingContent();
 
     handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'result payload' }));
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"ctxmill"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'result payload' }));
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
+      messageId: 'message-mixed-flow',
       role: 'assistant',
       content: 'Using a tool',
       parts: [
@@ -472,11 +578,167 @@ describe('conversation store', () => {
     ]);
   });
 
+  it('preserves authoritative ordered message updates through RUN_FINISHED', async () => {
+    const { handleSSEEvent } = getStore();
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'first result' }));
+    const baselineCommit = makeEvent('CUSTOM', {
+      name: 'ctxmill.message.committed',
+      messageId: 'message-tools',
+      role: 'assistant',
+      content: '',
+      messageSeq: 0,
+      turnId: 'r1',
+      parts: [
+        { type: 'tool_call', id: 'tc1', name: 'search', args: '', result: 'first result', status: 'complete' },
+      ],
+      toolCalls: [
+        { id: 'tc1', name: 'search', args: '', status: 'complete' },
+      ],
+    });
+    handleSSEEvent(baselineCommit);
+    handleSSEEvent(baselineCommit);
+
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant', messageId: 'stream-2' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { messageId: 'stream-2', delta: 'Need one more check.' }));
+    await flushStreamingContent();
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_END', { messageId: 'stream-2' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc2', toolCallName: 'lookup' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc2', result: 'second result' }));
+
+    const revisionOne = makeEvent('CUSTOM', {
+      name: 'ctxmill.message.updated',
+      messageId: 'message-tools',
+      messageRevision: 1,
+      role: 'assistant',
+      content: '',
+      messageSeq: 0,
+      turnId: 'r1',
+      parts: [
+        { type: 'tool_call', id: 'tc1', name: 'search', args: '', result: 'first result', status: 'complete' },
+        { type: 'text', content: 'Need one more check.' },
+        { type: 'tool_call', id: 'tc2', name: 'lookup', args: '', result: 'second result', status: 'complete' },
+      ],
+      toolCalls: [
+        { id: 'tc1', name: 'search', args: '', status: 'complete' },
+        { id: 'tc2', name: 'lookup', args: '', status: 'complete' },
+      ],
+    });
+    handleSSEEvent(revisionOne);
+
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant', messageId: 'stream-3' }));
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { messageId: 'stream-3', delta: 'Final check.' }));
+    await flushStreamingContent();
+    handleSSEEvent(makeEvent('TEXT_MESSAGE_END', { messageId: 'stream-3' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc3', toolCallName: 'read' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc3', result: 'third result' }));
+    handleSSEEvent(makeEvent('CUSTOM', {
+      name: 'ctxmill.message.updated',
+      messageId: 'message-tools',
+      messageRevision: 2,
+      role: 'assistant',
+      content: '',
+      messageSeq: 0,
+      turnId: 'r1',
+      parts: [
+        { type: 'tool_call', id: 'tc1', name: 'search', args: '', result: 'first result', status: 'complete' },
+        { type: 'text', content: 'Need one more check.' },
+        { type: 'tool_call', id: 'tc2', name: 'lookup', args: '', result: 'second result', status: 'complete' },
+        { type: 'text', content: 'Final check.' },
+        { type: 'tool_call', id: 'tc3', name: 'read', args: '', result: 'third result', status: 'complete' },
+      ],
+      toolCalls: [
+        { id: 'tc1', name: 'search', args: '', status: 'complete' },
+        { id: 'tc2', name: 'lookup', args: '', status: 'complete' },
+        { id: 'tc3', name: 'read', args: '', status: 'complete' },
+      ],
+    }));
+    handleSSEEvent(revisionOne);
+    const finalCommit = makeEvent('CUSTOM', {
+      name: 'ctxmill.message.committed',
+      messageId: 'message-final',
+      role: 'assistant',
+      content: 'Done.',
+      messageSeq: 1,
+      turnId: 'r1',
+      parts: [{ type: 'text', content: 'Done.' }],
+    });
+    handleSSEEvent(finalCommit);
+    handleSSEEvent(finalCommit);
+    handleSSEEvent(makeEvent('RUN_FINISHED', { runId: 'r1' }));
+
+    const state = getStore();
+    expect(state.messages.map((message) => message.id)).toEqual(['message-tools', 'message-final']);
+    expect(state.messages[0].parts).toEqual([
+      {
+        type: 'tool_call',
+        id: 'tc1',
+        name: 'search',
+        args: '',
+        result: 'first result',
+        error: undefined,
+        status: 'complete',
+      },
+      { type: 'text', content: 'Need one more check.' },
+      {
+        type: 'tool_call',
+        id: 'tc2',
+        name: 'lookup',
+        args: '',
+        result: 'second result',
+        error: undefined,
+        status: 'complete',
+      },
+      { type: 'text', content: 'Final check.' },
+      {
+        type: 'tool_call',
+        id: 'tc3',
+        name: 'read',
+        args: '',
+        result: 'third result',
+        error: undefined,
+        status: 'complete',
+      },
+    ]);
+    expect(state.messages[0].toolCalls).toEqual([
+      {
+        id: 'tc1',
+        name: 'search',
+        args: '',
+        result: 'first result',
+        error: undefined,
+        status: 'complete',
+      },
+      {
+        id: 'tc2',
+        name: 'lookup',
+        args: '',
+        result: 'second result',
+        error: undefined,
+        status: 'complete',
+      },
+      {
+        id: 'tc3',
+        name: 'read',
+        args: '',
+        result: 'third result',
+        error: undefined,
+        status: 'complete',
+      },
+    ]);
+    expect(state.messageRevisions.get('message-tools')).toBe(2);
+    expect(state.streamingContent).toBe('');
+    expect(state.toolCalls.size).toBe(0);
+  });
+
   it('supports multiple committed messages in one turn without duplicates', async () => {
     const { handleSSEEvent } = getStore();
 
-    handleSSEEvent(makeEvent('TURN_PENDING', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.turn.pending', turnId: 'r1' }));
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
+      messageId: 'message-first',
       role: 'assistant',
       content: 'first',
       messageSeq: 1,
@@ -489,7 +751,8 @@ describe('conversation store', () => {
     await flushStreamingContent();
 
     handleSSEEvent(makeEvent('TEXT_MESSAGE_END'));
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
+      messageId: 'message-second',
       role: 'assistant',
       content: 'second',
       messageSeq: 2,
@@ -502,7 +765,7 @@ describe('conversation store', () => {
     expect(state.committedMessageCount).toBe(2);
   });
 
-  it('RUN_FINISHED clears preview state when MESSAGE_COMMITTED never arrives', async () => {
+  it('RUN_FINISHED clears preview state when ctxmill.message.committed never arrives', async () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
@@ -525,8 +788,8 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', args: '{"q":"ctxmill"}' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: 'done' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"ctxmill"}' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
 
     handleSSEEvent(makeEvent('RUN_FINISHED'));
 
@@ -541,7 +804,8 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
+      messageId: 'message-finished',
       role: 'assistant',
       content: 'done',
       messageSeq: 1,
@@ -560,7 +824,7 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'fail' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', content: '', error: 'boom' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: '', error: 'boom' }));
 
     expect(getStore().messages).toHaveLength(0);
     expect(getStore().toolCalls.get('tc1')).toEqual({
@@ -572,7 +836,8 @@ describe('conversation store', () => {
       status: 'error',
     });
 
-    handleSSEEvent(makeEvent('MESSAGE_COMMITTED', {
+    handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
+      messageId: 'message-tool-error',
       role: 'assistant',
       content: '',
       toolCalls: [
@@ -614,7 +879,7 @@ describe('conversation store', () => {
         },
         {
           id: 'tc-2',
-          toolName: 'write_file',
+          name: 'write_file',
           argumentsJson: '{"path":"/tmp/out.txt"}',
           error: 'permission denied',
           status: 'failed',

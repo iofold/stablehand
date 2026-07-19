@@ -55,6 +55,13 @@ export function formatRelativeTime(timestamp: number | undefined): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+export function formatCompactNumber(value: number): string {
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
 export function formatBytes(bytes: number, decimals = 2): string {
   if (!+bytes) return '0 Bytes';
   const base = 1024;

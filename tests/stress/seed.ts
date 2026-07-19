@@ -1,64 +1,12 @@
-declare const process: {
-  env: Record<string, string | undefined>;
-  argv: string[];
-};
+import { readdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
-type DirectoryEntry = {
-  name: string;
-  isDirectory(): boolean;
-};
+import {
+  loadManifestProject,
+  type LoadedManifestProject,
+} from '@ctxmill/manifest/node';
 
-type FsPromises = {
-  readdir(path: string | URL, options: { withFileTypes: true }): Promise<DirectoryEntry[]>;
-  readFile(path: string | URL, encoding: 'utf8'): Promise<string>;
-};
-
-type YamlModule = {
-  parse(source: string): unknown;
-};
-
-type ManifestModel = {
-  provider?: unknown;
-  id?: unknown;
-  apiKeyRef?: unknown;
-};
-
-type ManifestToolRef = {
-  ref?: unknown;
-};
-
-type ManifestMetadata = {
-  name?: unknown;
-  displayName?: unknown;
-  description?: unknown;
-  labels?: unknown;
-};
-
-type ManifestSpec = {
-  harness?: unknown;
-  harnessConfig?: unknown;
-  model?: unknown;
-  instructions?: unknown;
-  tools?: unknown;
-  nativeTools?: unknown;
-  resources?: unknown;
-};
-
-type ParsedManifest = {
-  metadata?: unknown;
-  spec?: unknown;
-};
-
-type AgentPayload = {
-  name: string;
-  harness: string;
-  harnessConfig: Record<string, unknown>;
-  systemPrompt: string;
-  tools: string[];
-  description?: string;
-  metadata?: Record<string, unknown>;
-  resourceLimits?: Record<string, unknown>;
-};
+type AgentPayload = LoadedManifestProject['agentCreateInput'];
 
 type SeedResult = {
   name: string;
@@ -80,11 +28,6 @@ type TriggerPayload = {
   enabled: boolean;
 };
 
-const loadFsPromises = new Function('return import("node:fs/promises")') as () => Promise<FsPromises>;
-const loadYaml = new Function('return import("yaml")') as () => Promise<YamlModule>;
-const { readdir, readFile } = await loadFsPromises();
-const { parse: parseYaml } = await loadYaml();
-
 const API_BASE = process.env.API_BASE ?? 'http://localhost:3002';
 const AGENTS_DIR = new URL('./agents/', import.meta.url);
 const CLEAN_FLAG = '--clean';
@@ -92,95 +35,6 @@ const API_TOKEN = process.env.CTXMILL_API_TOKEN;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function pickString(value: unknown, fieldName: string): string {
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`Manifest field ${fieldName} must be a non-empty string.`);
-  }
-  return value;
-}
-
-function toObject(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error('Expected object in manifest.');
-  }
-  return value;
-}
-
-function toHarnessConfig(spec: ManifestSpec): Record<string, unknown> {
-  if (isRecord(spec.harnessConfig)) {
-    return { ...spec.harnessConfig };
-  }
-
-  const model = spec.model as ManifestModel | undefined;
-  if (!isRecord(model)) {
-    throw new Error('Manifest spec.harnessConfig or spec.model is required.');
-  }
-
-  const provider = pickString(model.provider, 'spec.model.provider');
-  const modelId = pickString(model.id, 'spec.model.id');
-  const harnessConfig: Record<string, unknown> = {
-    provider,
-    model: modelId,
-  };
-
-  if (typeof model.apiKeyRef === 'string' && model.apiKeyRef.trim() !== '') {
-    harnessConfig.apiKeyRef = model.apiKeyRef;
-  }
-
-  return harnessConfig;
-}
-
-function toToolRefs(rawTools: unknown): string[] {
-  if (!Array.isArray(rawTools)) {
-    return [];
-  }
-
-  return rawTools
-    .map((tool) => (isRecord(tool) ? (tool as ManifestToolRef).ref : undefined))
-    .filter((toolRef): toolRef is string => typeof toolRef === 'string' && toolRef.trim() !== '');
-}
-
-function parseManifestToPayload(manifestYaml: string): AgentPayload {
-  const parsed = parseYaml(manifestYaml) as ParsedManifest;
-  const metadata = toObject(parsed.metadata);
-  const spec = toObject(parsed.spec) as ManifestSpec;
-
-  const payloadMetadata: Record<string, unknown> = {};
-  if (typeof (metadata as ManifestMetadata).displayName === 'string') {
-    payloadMetadata.displayName = (metadata as ManifestMetadata).displayName;
-  }
-  if (isRecord((metadata as ManifestMetadata).labels)) {
-    payloadMetadata.labels = (metadata as ManifestMetadata).labels as Record<string, unknown>;
-  }
-  if (isRecord(spec.nativeTools)) {
-    payloadMetadata.nativeTools = spec.nativeTools;
-  }
-  if (isRecord(spec.resources)) {
-    payloadMetadata.resourceLimits = spec.resources;
-  }
-
-  const payload: AgentPayload = {
-    name: pickString((metadata as ManifestMetadata).name, 'metadata.name'),
-    harness: pickString(spec.harness, 'spec.harness'),
-    harnessConfig: toHarnessConfig(spec),
-    systemPrompt: pickString(spec.instructions, 'spec.instructions'),
-    tools: toToolRefs(spec.tools),
-  };
-
-  const description = (metadata as ManifestMetadata).description;
-  if (typeof description === 'string' && description.trim() !== '') {
-    payload.description = description;
-  }
-  if (isRecord(spec.resources)) {
-    payload.resourceLimits = spec.resources;
-  }
-  if (Object.keys(payloadMetadata).length > 0) {
-    payload.metadata = payloadMetadata;
-  }
-
-  return payload;
 }
 
 async function parseJson(res: Response): Promise<unknown> {
@@ -206,7 +60,10 @@ function jsonHeaders(): Record<string, string> {
 
 async function listAgentDirs(): Promise<string[]> {
   const entries = await readdir(AGENTS_DIR, { withFileTypes: true });
-  return entries.filter((entry) => entry.isDirectory()).map((entry) => new URL(`${entry.name}/`, AGENTS_DIR).pathname).sort();
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => fileURLToPath(new URL(`${entry.name}/`, AGENTS_DIR)))
+    .sort();
 }
 
 async function listManifestPaths(): Promise<string[]> {
@@ -345,8 +202,7 @@ async function seedAllAgents(): Promise<SeedResult[]> {
   const results: SeedResult[] = [];
 
   for (const manifestPath of manifestPaths) {
-    const manifestYaml = await readFile(manifestPath, 'utf8');
-    const payload = parseManifestToPayload(manifestYaml);
+    const payload = (await loadManifestProject(manifestPath)).agentCreateInput;
     const existingAgent = existingByName.get(payload.name);
     const result = await upsertAgent(manifestPath.replace(/\/agent\.yaml$/, ''), payload, existingAgent?.id);
     if (!result.ok) {

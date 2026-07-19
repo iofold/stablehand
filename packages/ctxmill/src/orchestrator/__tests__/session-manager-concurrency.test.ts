@@ -193,7 +193,7 @@ function seedSession(
     sessionId: overrides?.sessionId ?? 'sess-1',
     conversationId: overrides?.conversationId ?? 'conv-1',
     agentId: overrides?.agentId ?? 'agent-1',
-    containerName: overrides?.containerName ?? 'ctxmill-run-sess-1',
+    containerName: overrides?.containerName ?? 'ctxmill-sandbox-sess-1',
     containerId: overrides?.containerId ?? 'c-1',
     status: overrides?.status ?? 'ACTIVE',
     harnessName: overrides?.harnessName ?? 'langgraph',

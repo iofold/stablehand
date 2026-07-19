@@ -44,7 +44,7 @@ describe('artifact handlers', () => {
     const handlers = createArtifactHandlers({
       artifactStore,
       orchestratorClient,
-      sessionId: 'session-1',
+      turnId: 'turn-1',
       agentId: 'agent-1',
       workspaceDir,
       logger: {

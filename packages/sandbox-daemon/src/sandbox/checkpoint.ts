@@ -48,6 +48,7 @@ export interface SessionCheckpoint {
 
 const SIZE_WARN_BYTES = 1 * 1024 * 1024;
 const SIZE_REJECT_BYTES = 5 * 1024 * 1024;
+const MAX_COMPLETED_TURN_IDS = 1_024;
 
 /* -------------------------------------------------------------------------- */
 /*  SessionStateCollector                                                      */
@@ -55,11 +56,28 @@ const SIZE_REJECT_BYTES = 5 * 1024 * 1024;
 
 export class SessionStateCollector {
   private messageSeq = 0;
+
   private currentTurnId?: string;
+
+  private lastCompletedTurnId?: string;
+
+  private readonly completedTurnIds = new Set<string>();
+
   private pendingRequests: PendingRequest[] = [];
+
+  constructor(lastCompletedTurnId?: string) {
+    if (lastCompletedTurnId) {
+      this.lastCompletedTurnId = lastCompletedTurnId;
+      this.rememberCompletedTurn(lastCompletedTurnId);
+    }
+  }
 
   startTurn(turnId: string): void {
     this.currentTurnId = turnId;
+  }
+
+  hasCompletedTurn(turnId: string): boolean {
+    return this.completedTurnIds.has(turnId);
   }
 
   processTurnEvent(event: AgentEvent): void {
@@ -100,7 +118,11 @@ export class SessionStateCollector {
     }
   }
 
-  endTurn(): void {
+  endTurn(completed = false): void {
+    if (completed && this.currentTurnId) {
+      this.lastCompletedTurnId = this.currentTurnId;
+      this.rememberCompletedTurn(this.currentTurnId);
+    }
     this.currentTurnId = undefined;
   }
 
@@ -119,7 +141,7 @@ export class SessionStateCollector {
       harnessName,
       cursor: {
         nextMessageSeq: this.messageSeq,
-        lastCompletedTurnId: this.currentTurnId,
+        lastCompletedTurnId: this.lastCompletedTurnId,
       },
       runnerState: {
         status: hasPending ? 'WAITING_INPUT' : 'IDLE',
@@ -128,6 +150,17 @@ export class SessionStateCollector {
       workspaceRef,
       harnessState,
     };
+  }
+
+  private rememberCompletedTurn(turnId: string): void {
+    this.completedTurnIds.add(turnId);
+    if (this.completedTurnIds.size <= MAX_COMPLETED_TURN_IDS) {
+      return;
+    }
+    const oldest = this.completedTurnIds.values().next().value;
+    if (oldest !== undefined) {
+      this.completedTurnIds.delete(oldest);
+    }
   }
 }
 

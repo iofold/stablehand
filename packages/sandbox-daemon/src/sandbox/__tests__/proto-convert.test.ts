@@ -4,6 +4,7 @@ import {
   DeliverTurnRequestSchema,
   FreshBootstrapSchema,
   MessageSchema,
+  NativeToolConfigSchema,
   PendingRequestSchema,
   RestoreBootstrapSchema,
   RunnerStateSchema,
@@ -177,11 +178,11 @@ function getZodInput(definition: ToolDefinition): ZodLike {
   return candidate as ZodLike;
 }
 
-function getAgUiPayload(
+function getAgentEventPayload(
   sessionEvent: ReturnType<typeof agentEventToSessionEvent>,
 ): ProtoAgentEvent {
-  if (sessionEvent.payload.case !== 'agUiEvent') {
-    throw new Error('Expected agUiEvent payload');
+  if (sessionEvent.payload.case !== 'agentEvent') {
+    throw new Error('Expected agentEvent payload');
   }
 
   return sessionEvent.payload.value;
@@ -222,6 +223,24 @@ describe('protoFreshBootstrapToSessionConfig', () => {
 
     expect(config.workspaceDir).toBe('/workspace');
     expect(config.harnessConfigJson).toBe('');
+  });
+
+  it('preserves the canonical native-tool policy', () => {
+    const config = protoFreshBootstrapToSessionConfig(
+      makeFreshBootstrap({
+        nativeTools: create(NativeToolConfigSchema, {
+          allowlist: ['Read', 'Glob'],
+          blocklist: ['Bash'],
+        }),
+      }),
+      [],
+      {},
+    );
+
+    expect(config.nativeTools).toEqual({
+      allowlist: ['Read', 'Glob'],
+      blocklist: ['Bash'],
+    });
   });
 });
 
@@ -346,7 +365,7 @@ describe('protoDeliverTurnToInput', () => {
 });
 
 describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
-  it('encodes every agUiEvent variant with the expected nested payload', () => {
+  it('encodes every agentEvent variant with the expected nested payload', () => {
     const events: Array<{
       event: AgentEvent;
       expectedCase: string | undefined;
@@ -482,7 +501,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
             inputTokens: 100,
             outputTokens: 55,
             totalTokens: 155,
-            cost: 0.0045,
+            costUsd: 0.0045,
           },
         },
         expectedCase: 'done',
@@ -496,7 +515,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
             inputTokens: 100n,
             outputTokens: 55n,
             totalTokens: 155n,
-            cost: 0.0045,
+            costUsd: 0.0045,
           });
         },
       },
@@ -517,7 +536,7 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
 
     for (const entry of events) {
       const converted = agentEventToSessionEvent(entry.event);
-      const payload = getAgUiPayload(converted);
+      const payload = getAgentEventPayload(converted);
       expect(payload.event.case).toBe(entry.expectedCase);
       entry.assert(payload);
     }
@@ -606,8 +625,8 @@ describe('agentEventToSessionEvent and messageToCommittedEvent', () => {
       }),
     );
 
-    const toolPayload = getAgUiPayload(toolEvent);
-    const approvalPayload = getAgUiPayload(approvalEvent);
+    const toolPayload = getAgentEventPayload(toolEvent);
+    const approvalPayload = getAgentEventPayload(approvalEvent);
 
     expect(toolPayload.event.case).toBe('toolCallStart');
     if (toolPayload.event.case !== 'toolCallStart') {
@@ -789,7 +808,7 @@ describe('protoToToolDefs', () => {
       ],
       {
         orchestratorClient: client,
-        sessionId: 'run-123',
+        turnId: 'run-123',
         agentId: 'agent-123',
       },
     );
@@ -801,7 +820,7 @@ describe('protoToToolDefs', () => {
 
     const [request] = requestTool.mock.calls[0] ?? [];
     expect(request).toMatchObject({
-      sessionId: 'run-123',
+      turnId: 'run-123',
       agentId: 'agent-123',
       toolName: 'emit-event',
       argsJson: '{"name":"turn.completed"}',

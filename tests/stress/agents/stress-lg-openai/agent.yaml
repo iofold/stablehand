@@ -10,9 +10,9 @@ metadata:
     harness: langgraph
 spec:
   harness: langgraph
-  model:
+  harnessConfig:
     provider: openai
-    id: gpt-5.4
+    model: gpt-5.4
     apiKeyRef: "$secret:OPENAI_API_KEY"
   instructions: |
     You are a stress test agent running on LangGraph with GPT-5.4.
@@ -28,6 +28,3 @@ spec:
     blocklist:
       - execute
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 120
-    maxTokensPerSession: 8000

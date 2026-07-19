@@ -56,7 +56,7 @@ function agentEventToProto(event: AgentEvent, seq: number, runId: string) {
       seconds: BigInt(Math.floor(Date.now() / 1000)),
       nanos: 0,
     },
-    event: sessionEvent.payload.case === 'agUiEvent' ? sessionEvent.payload.value : undefined,
+    event: sessionEvent.payload.case === 'agentEvent' ? sessionEvent.payload.value : undefined,
   };
 }
 
@@ -266,7 +266,7 @@ describe('Harness-Native Sub-Agents', () => {
 
     it('should apply a single set of resource limits to the container (no per-sub-agent splitting)', async () => {
       const info = await manager.createContainer({
-        sessionId: 'run-subagent-001',
+        sessionId: 'sandbox-subagent-001',
         agentId: 'multi-agent',
         harnessName: 'claude-agents',
         cpus: 2.0,
@@ -293,7 +293,7 @@ describe('Harness-Native Sub-Agents', () => {
       // a single set of resource fields (cpus, memoryMb, pidsLimit).
       // Verify there's no sub-agent resource field.
       const opts = {
-        sessionId: 'run-1',
+        sessionId: 'sandbox-1',
         agentId: 'a1',
         harnessName: 'claude-agents',
         cpus: 1.0,
@@ -314,7 +314,7 @@ describe('Harness-Native Sub-Agents', () => {
 
     it('should set NODE_OPTIONS heap size for combined workload', async () => {
       await manager.createContainer({
-        sessionId: 'run-heap-test',
+        sessionId: 'sandbox-heap-test',
         agentId: 'agent-heap',
         harnessName: 'pi-agent',
         memoryMb: 2048,

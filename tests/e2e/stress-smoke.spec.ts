@@ -9,13 +9,13 @@ import {
   resolveInterrupt,
   getEvents,
   getConversationMessages,
-  cancelSession,
+  cancelTurn,
   releaseAgentSandboxes,
   type TestAgent,
 } from './support';
 import {
   assertStressComplete,
-  fetchStressEventsForSession,
+  fetchStressEventsForTurn,
 } from './helpers/stress-event';
 
 const STRESS_AGENT_DIRS = [
@@ -32,9 +32,9 @@ type TestRun = { id: string; status: string; conversationId: string };
 
 const trackedRuns = new Map<string, Set<string>>();
 
-function trackRun(agentKey: string, sessionId: string): void {
+function trackRun(agentKey: string, turnId: string): void {
   const runs = trackedRuns.get(agentKey) ?? new Set<string>();
-  runs.add(sessionId);
+  runs.add(turnId);
   trackedRuns.set(agentKey, runs);
 }
 
@@ -42,10 +42,10 @@ async function listRuns(
   request: APIRequestContext,
   agentId: string,
 ): Promise<TestRun[]> {
-  const response = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
+  const response = await request.get(`${API_BASE}/api/agents/${agentId}/turns`);
   expect(response.ok()).toBeTruthy();
-  const body = (await response.json()) as { sessions?: TestRun[] };
-  return body.sessions ?? [];
+  const body = (await response.json()) as { turns?: TestRun[] };
+  return body.turns ?? [];
 }
 
 type PersistedMessage = {
@@ -61,10 +61,11 @@ async function assertRegistryToolExecution(
   conversationId: string,
 ): Promise<void> {
   const response = await request.get(
-    `${API_BASE}/api/agents/${agentId}/conversations/${conversationId}/messages`,
+    `${API_BASE}/api/agents/${agentId}/conversations/${conversationId}/snapshot`,
   );
   expect(response.ok()).toBeTruthy();
-  const messages = (await response.json()) as PersistedMessage[];
+  const snapshot = (await response.json()) as { messages: PersistedMessage[] };
+  const messages = snapshot.messages;
 
   const toolResults = messages
     .filter((message) => message.role === 'tool')
@@ -132,14 +133,14 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
   });
 
   test.afterAll(async ({ request }) => {
-    for (const [agentKey, sessionIds] of trackedRuns.entries()) {
+    for (const [agentKey, turnIds] of trackedRuns.entries()) {
       const agent = agents[agentKey];
       if (!agent) {
         continue;
       }
 
-      for (const sessionId of sessionIds) {
-        await cancelSession(request, agent.id, sessionId);
+      for (const turnId of turnIds) {
+        await cancelTurn(request, agent.id, turnId);
       }
     }
 
@@ -154,17 +155,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-lg-openai'];
     expect(agent).toBeTruthy();
 
-    const { sessionId, conversationId } = await startBackgroundRun(
+    const { turnId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Run the stress test now, including the calculator step. Confirm you are operational and emit stress.tools.complete.',
     );
-    trackRun('stress-lg-openai', sessionId);
+    trackRun('stress-lg-openai', turnId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      sessionId,
+      turnId,
       ['completed', 'error'],
       100_000,
     );
@@ -179,7 +180,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
 
     await assertStressComplete(
       request,
-      sessionId,
+      turnId,
       'stress.tools.complete',
       'stress-lg-openai',
       { agentId: agent.id },
@@ -194,17 +195,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-lg-gemini'];
     expect(agent).toBeTruthy();
 
-    const { sessionId, conversationId } = await startBackgroundRun(
+    const { turnId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Run the stress test now. Confirm you are operational and emit stress.gemini.complete.',
     );
-    trackRun('stress-lg-gemini', sessionId);
+    trackRun('stress-lg-gemini', turnId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      sessionId,
+      turnId,
       ['completed', 'error'],
       100_000,
     );
@@ -214,15 +215,15 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const messages = await getConversationMessages(request, agent.id, conversationId);
     expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    const matches = await fetchStressEventsForSession(
+    const matches = await fetchStressEventsForTurn(
       request,
       'stress.gemini.complete',
-      sessionId,
+      turnId,
       { agentId: agent.id },
     );
     expect(
       matches.length,
-      `[ADR-012] expected exactly one stress.gemini.complete event for session ${sessionId}, got ${matches.length}`,
+      `[ADR-012] expected exactly one stress.gemini.complete event for turn ${turnId}, got ${matches.length}`,
     ).toBe(1);
   });
 
@@ -232,17 +233,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-pi-openai'];
     expect(agent).toBeTruthy();
 
-    const { sessionId, conversationId } = await startBackgroundRun(
+    const { turnId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Run the stress test now, including the calculator step. Confirm you are operational and emit exactly one stress.pi.complete event with payload {"schemaVersion":1,"harness":"stress-pi-openai","agent":"stress-pi-openai","model":"gpt-5.4","status":"ok"}.',
     );
-    trackRun('stress-pi-openai', sessionId);
+    trackRun('stress-pi-openai', turnId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      sessionId,
+      turnId,
       ['completed', 'error'],
       100_000,
     );
@@ -257,7 +258,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
 
     await assertStressComplete(
       request,
-      sessionId,
+      turnId,
       'stress.pi.complete',
       'stress-pi-openai',
       { agentId: agent.id },
@@ -272,17 +273,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-pi-gemini'];
     expect(agent).toBeTruthy();
 
-    const { sessionId, conversationId } = await startBackgroundRun(
+    const { turnId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Run the stress test now. Confirm you are operational and emit exactly one stress.pi-gemini.complete event with payload {"schemaVersion":1,"harness":"stress-pi-gemini","agent":"stress-pi-gemini","model":"gemini-2.5-flash","status":"ok"}.',
     );
-    trackRun('stress-pi-gemini', sessionId);
+    trackRun('stress-pi-gemini', turnId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      sessionId,
+      turnId,
       ['completed', 'error'],
       100_000,
     );
@@ -292,15 +293,15 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const messages = await getConversationMessages(request, agent.id, conversationId);
     expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    const matches = await fetchStressEventsForSession(
+    const matches = await fetchStressEventsForTurn(
       request,
       'stress.pi-gemini.complete',
-      sessionId,
+      turnId,
       { agentId: agent.id },
     );
     expect(
       matches.length,
-      `[ADR-012] expected exactly one stress.pi-gemini.complete event for session ${sessionId}, got ${matches.length}`,
+      `[ADR-012] expected exactly one stress.pi-gemini.complete event for turn ${turnId}, got ${matches.length}`,
     ).toBe(1);
   });
 
@@ -310,17 +311,17 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-claude-sonnet'];
     expect(agent).toBeTruthy();
 
-    const { sessionId, conversationId } = await startBackgroundRun(
+    const { turnId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Write a Python file at /workspace/stress_test.py that computes the first 10 Fibonacci numbers and prints them as a JSON array. Then execute it with Bash, verify the output is correct, and read the file back to confirm it exists. Then use the calculator tool exactly once to multiply 42 by 17. Finally emit exactly one stress.claude.complete event with payload {"schemaVersion":1,"harness":"stress-claude-sonnet","agent":"stress-claude-sonnet","model":"claude-sonnet-4-6","status":"ok"}.',
     );
-    trackRun('stress-claude-sonnet', sessionId);
+    trackRun('stress-claude-sonnet', turnId);
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      sessionId,
+      turnId,
       ['completed', 'error'],
       100_000,
     );
@@ -335,7 +336,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
 
     await assertStressComplete(
       request,
-      sessionId,
+      turnId,
       'stress.claude.complete',
       'stress-claude-sonnet',
       { agentId: agent.id },
@@ -397,7 +398,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     );
     expect(messages.some((message) => message.role === 'assistant')).toBe(true);
 
-    const matches = await fetchStressEventsForSession(
+    const matches = await fetchStressEventsForTurn(
       request,
       'stress.chain.done',
       triggeredRun!.id,
@@ -415,24 +416,24 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
     const agent = agents['stress-hitl'];
     expect(agent).toBeTruthy();
 
-    const { sessionId, conversationId } = await startBackgroundRun(
+    const { turnId, conversationId } = await startBackgroundRun(
       request,
       agent.id,
       'Request approval for writing stress test results, then emit stress.hitl.complete.',
     );
-    trackRun('stress-hitl', sessionId);
+    trackRun('stress-hitl', turnId);
 
     let interrupt = null as Awaited<ReturnType<typeof getInterrupts>>[number] | null;
 
     const hitlDeadline = Date.now() + 60_000;
     while (Date.now() < hitlDeadline) {
       const interrupts = await getInterrupts(request, agent.id);
-      interrupt = interrupts.find((entry) => entry.runId === sessionId) ?? null;
+      interrupt = interrupts.find((entry) => entry.turnId === turnId) ?? null;
       if (interrupt) break;
 
       const runs = await listRuns(request, agent.id);
       const terminal = runs.find((entry) =>
-        entry.id === sessionId &&
+        entry.id === turnId &&
         ['completed', 'error'].includes(entry.status.toLowerCase()),
       );
       if (terminal) break;
@@ -442,16 +443,16 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
 
     expect(
       interrupt,
-      `[ADR-011] HITL extended test requires an interrupt to occur for session ${sessionId}`,
+      `[ADR-011] HITL extended test requires an interrupt to occur for turn ${turnId}`,
     ).toBeTruthy();
 
-    const resolution = await resolveInterrupt(request, agent.id, sessionId, 'approve');
+    const resolution = await resolveInterrupt(request, agent.id, interrupt!.interruptId, 'approve');
     expect(resolution).toEqual({ resolved: true, action: 'approve' });
 
     const finalRun = await waitForRunStatus(
       request,
       agent.id,
-      sessionId,
+      turnId,
       ['completed', 'error'],
       100_000,
     );
@@ -466,10 +467,10 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
       agentId: agent.id,
       limit: 50,
     });
-    const sessionMatches = matches.filter((event) => (event.payload ?? '').includes(sessionId));
+    const turnMatches = matches.filter((event) => (event.payload ?? '').includes(turnId));
     expect(
-      sessionMatches.length,
-      `[ADR-012] expected exactly one stress.hitl.complete event for session ${sessionId}, got ${sessionMatches.length}`,
+      turnMatches.length,
+      `[ADR-012] expected exactly one stress.hitl.complete event for turn ${turnId}, got ${turnMatches.length}`,
     ).toBe(1);
   });
 });

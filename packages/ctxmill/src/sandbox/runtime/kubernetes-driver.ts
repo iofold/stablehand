@@ -265,9 +265,9 @@ export class KubernetesContainerDriver {
   }
 
   async getContainer(sessionId: string): Promise<ContainerInfo | null> {
-    const pod = await this.findPodBySelector(`ctxmill.session-id=${sessionId},${CONTAINER_SCOPE_LABEL}=${this.scopeId}`)
-      ?? await this.findPodBySelector(`ctxmill.session-id=${sessionId}`);
-    return pod ? this.podToContainerInfo(this.jobNameFromPod(pod) ?? `ctxmill-run-${sanitizeKubernetesName(sessionId)}`, pod) : null;
+    const pod = await this.findPodBySelector(`ctxmill.sandbox-session-id=${sessionId},${CONTAINER_SCOPE_LABEL}=${this.scopeId}`)
+      ?? await this.findPodBySelector(`ctxmill.sandbox-session-id=${sessionId}`);
+    return pod ? this.podToContainerInfo(this.jobNameFromPod(pod) ?? `ctxmill-sandbox-${sanitizeKubernetesName(sessionId)}`, pod) : null;
   }
 
   async listManagedContainers(): Promise<ContainerInfo[]> {
@@ -462,7 +462,7 @@ export class KubernetesContainerDriver {
 
     const pod = await this.findPod(containerId);
     const labels = pod?.metadata?.labels;
-    const sessionId = labels?.['ctxmill.session-id'];
+    const sessionId = labels?.['ctxmill.sandbox-session-id'];
     const conversationId = labels?.['ctxmill.conversation-id'];
     const agentId = labels?.['ctxmill.agent-id'];
     if (!sessionId) return undefined;

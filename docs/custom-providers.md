@@ -116,6 +116,21 @@ harnessConfig:
 
 This is a single endpoint that accepts OpenAI format and routes to any provider. Model format is `provider/model`. The provider key is passed in the standard auth header.
 
+### Workers AI (Cloudflare-hosted models, e.g. GLM-5.2)
+
+Workers AI models (`@cf/...`) are hosted by Cloudflare itself, so no upstream provider key is needed. The API key is a Cloudflare API token with Workers AI permission. Through the unified endpoint the model string is `workers-ai/@cf/<org>/<model>`:
+
+```yaml
+harnessConfig:
+  provider: openai
+  model: workers-ai/@cf/zai-org/glm-5.2
+  baseUrl: https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/YOUR_GATEWAY_ID/compat
+  apiKeyRef: "$secret:CF_AI_GATEWAY_TOKEN"   # Cloudflare API token with Workers AI permission
+  maxTokens: 8192   # reasoning models spend output budget on reasoning_content
+```
+
+Works on the LangGraph and PI Agent harnesses (OpenAI-compatible path); verified with `@cf/zai-org/glm-5.2` including tool calling and streaming. The Claude Agents harness requires the Anthropic Messages schema, which Workers AI `@cf/` models do not serve — use LangGraph or PI Agent for these models. Other notable catalog entries: `@cf/zai-org/glm-4.7-flash` (cheap, 131K context) and `@cf/moonshotai/kimi-k2.7-code` (262K context, vision).
+
 ### Authenticated Gateways caveat
 
 If your Cloudflare gateway has authentication enabled, it requires a `cf-aig-authorization` header. CTXMill agent manifests don't currently support custom headers, so either:
@@ -195,6 +210,7 @@ That means:
 | OpenRouter (Anthropic compat) | Claude Agents | `anthropic` | `https://openrouter.ai/api` | `anthropic/model` or just `model` | OpenRouter key as `ANTHROPIC_API_KEY` |
 | CF AI Gateway (native) | Any | Match provider | `https://gateway.ai.cloudflare.com/v1/{acct}/{gw}/{provider}` | Provider's native format | Actual provider key |
 | CF AI Gateway (unified) | LangGraph / PI Agent | `openai` | `https://gateway.ai.cloudflare.com/v1/{acct}/{gw}/compat` | `provider/model` | Actual provider key |
+| CF Workers AI (via gateway) | LangGraph / PI Agent | `openai` | `https://gateway.ai.cloudflare.com/v1/{acct}/{gw}/compat` | `workers-ai/@cf/{org}/{model}` | Cloudflare API token with Workers AI permission |
 | vLLM / Ollama / LiteLLM | LangGraph / PI Agent | `openai` | Your endpoint URL | Model name | Your auth token as `OPENAI_API_KEY` |
 
 Use only canonical provider values in persisted examples: `openai`, `anthropic`, or `google`. `gemini` remains accepted as an input alias for `google`.

@@ -4,7 +4,10 @@ import { createMockToolContext } from '../utils/event-bus-test-helpers.js';
 import type { HttpEndpointConfig } from '../../packages/ctxmill/src/tool/providers/http.js';
 import type { ToolContext } from '@ctxmill/sandbox-daemon';
 
-const mockCtx = createMockToolContext();
+const mockCtx: ToolContext = createMockToolContext({
+  turnId: 'turn-123',
+  sandboxSessionId: 'sandbox-456',
+});
 
 function makeEndpoint(overrides?: Partial<HttpEndpointConfig>): HttpEndpointConfig {
   return {
@@ -148,28 +151,31 @@ describe('HTTPToolProvider – request building', () => {
           'Content-Type': 'application/json',
           'X-Agent-Id': 'test-agent',
           'X-Conversation-Id': 'test-conv',
-          'X-Instance-Id': 'run-123',
+          'X-Turn-Id': 'turn-123',
+          'X-Sandbox-Session-Id': 'sandbox-456',
         }),
       }),
     );
   });
 
-  it('should not include X-Instance-Id when instanceId is missing', async () => {
+  it('should omit execution identity headers when their identifiers are missing', async () => {
     const fetchFn = mockFetch();
     const provider = new HTTPToolProvider([makeEndpoint()], { fetchFn });
 
-    const ctxNoInstance: ToolContext = {
+    const ctxWithoutExecutionIdentity: ToolContext = {
       ...mockCtx,
-      instanceId: undefined,
+      turnId: undefined,
+      sandboxSessionId: undefined,
     };
 
-    await provider.execute('test-tool', {}, ctxNoInstance);
+    await provider.execute('test-tool', {}, ctxWithoutExecutionIdentity);
 
     expect(fetchFn).toHaveBeenCalledWith(
       'https://api.example.com/action',
       expect.objectContaining({
         headers: expect.not.objectContaining({
-          'X-Instance-Id': expect.anything(),
+          'X-Turn-Id': expect.anything(),
+          'X-Sandbox-Session-Id': expect.anything(),
         }),
       }),
     );

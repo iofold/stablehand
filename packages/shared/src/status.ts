@@ -1,23 +1,34 @@
-import type { ApiSessionStatus, SandboxSessionStatus } from './api.js';
+import type {
+  ApiConversationStatus,
+  ApiTurnStatus,
+  SandboxSessionStatus,
+} from './api.js';
 
-export const SESSION_CANCELLED_MESSAGE = 'Session cancelled';
+export const TURN_CANCELLED_MESSAGE = 'Turn cancelled';
 
-export function isSessionCancelled(error: string | null | undefined): boolean {
-  return error === SESSION_CANCELLED_MESSAGE;
+export function isTurnCancelled(error: string | null | undefined): boolean {
+  return error === TURN_CANCELLED_MESSAGE;
 }
 
-/**
- * The one session-status projection (ctx-bl4): CANCELLED → ERROR → COMPLETED →
- * live sandbox status → fallback. TERMINATED is not a live status — a reaped
- * sandbox falls through to the caller's fallback (ACTIVE for per-turn session
- * views, IDLE for conversation summaries).
- */
-export function projectSessionStatus(
+export function projectTurnStatus(
+  turn: {
+    status: string;
+    completedAt: number | null;
+    error: string | null;
+  },
+): ApiTurnStatus {
+  if (isTurnCancelled(turn.error)) return 'CANCELLED';
+  if (turn.error || turn.status === 'failed') return 'ERROR';
+  if (turn.completedAt != null || turn.status === 'completed') return 'COMPLETED';
+  return turn.status === 'queued' ? 'QUEUED' : 'RUNNING';
+}
+
+/** Project the latest turn plus its sandbox lifecycle into conversation state. */
+export function projectConversationStatus(
   turn: { completedAt: number | null; error: string | null } | null | undefined,
   sandboxStatus: string | null | undefined,
-  fallback: ApiSessionStatus,
-): ApiSessionStatus {
-  if (turn && isSessionCancelled(turn.error)) {
+): ApiConversationStatus {
+  if (turn && isTurnCancelled(turn.error)) {
     return 'CANCELLED';
   }
   if (turn?.error) {
@@ -26,8 +37,12 @@ export function projectSessionStatus(
   if (turn && turn.completedAt != null) {
     return 'COMPLETED';
   }
-  if (sandboxStatus && sandboxStatus !== 'TERMINATED') {
-    return sandboxStatus as SandboxSessionStatus;
+  if (
+    sandboxStatus === 'ACTIVE'
+    || sandboxStatus === 'CHECKPOINTED'
+    || sandboxStatus === 'RESTORING'
+  ) {
+    return sandboxStatus as Exclude<SandboxSessionStatus, 'TERMINATED'>;
   }
-  return fallback;
+  return 'IDLE';
 }

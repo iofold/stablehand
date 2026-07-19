@@ -1,0 +1,41 @@
+{
+  "name": "@ctxmill/manifest",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Strict browser-light and Node agent manifest contracts for CTXMill",
+  "sideEffects": false,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./node": {
+      "import": "./dist/node.js",
+      "types": "./dist/node.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@ctxmill/contracts": "workspace:*",
+    "tar-stream": "^3.1.8",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.4"
+  }
+}

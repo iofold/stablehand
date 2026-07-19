@@ -34,7 +34,7 @@ for (const harness of HARNESSES) {
     test.skip(!hasHarnessKey(harness), `Skipping: ${harness} API key not available`);
 
     let agentId = '';
-    let sessionId = '';
+    let turnId = '';
     let conversationId = '';
 
     test.beforeEach(async ({ request }) => {
@@ -51,11 +51,11 @@ for (const harness of HARNESSES) {
 
       // Start background run and wait for completion
       const run = await startBackgroundRun(request, agentId, 'Run the visual QA sequence');
-      sessionId = run.sessionId;
+      turnId = run.turnId;
       conversationId = run.conversationId;
 
       // Wait for run to complete (120s timeout for safety)
-      await waitForRunStatus(request, agentId, sessionId, ['completed', 'error'], 120_000);
+      await waitForRunStatus(request, agentId, turnId, ['completed', 'error'], 120_000);
     });
 
     test.afterEach(async ({ request }) => {

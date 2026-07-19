@@ -181,7 +181,8 @@ function resolveSecret(
  *
  * Automatic headers injected on every request:
  *  - `X-Agent-Id` — the executing agent's identifier
- *  - `X-Instance-Id` — the run/instance identifier
+ *  - `X-Turn-Id` — the executing turn identifier
+ *  - `X-Sandbox-Session-Id` — the persistent sandbox identifier, when present
  *  - `X-Conversation-Id` — the conversation identifier
  */
 export class HTTPToolProvider implements ToolProvider {
@@ -263,7 +264,8 @@ export class HTTPToolProvider implements ToolProvider {
       'Content-Type': 'application/json',
       'X-Agent-Id': ctx.agentId,
       'X-Conversation-Id': ctx.conversationId,
-      ...(ctx.instanceId ? { 'X-Instance-Id': ctx.instanceId } : {}),
+      ...(ctx.turnId ? { 'X-Turn-Id': ctx.turnId } : {}),
+      ...(ctx.sandboxSessionId ? { 'X-Sandbox-Session-Id': ctx.sandboxSessionId } : {}),
       ...(ep.headers ?? {}),
     };
 

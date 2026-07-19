@@ -51,20 +51,24 @@ function createDurableTriggerHarness() {
   const cursors = new Map<string, number>();
   const triggerFirings = new Set<string>();
   let seq = 0;
+  const persistFrames = async (
+    frames: Array<Omit<EventFrameRow, 'seq' | 'createdAt'>>,
+  ) => frames.map((frame) => {
+    seq += 1;
+    rows.push({
+      ...frame,
+      seq,
+      createdAt: 1_000 + seq,
+      turnId: frame.turnId ?? null,
+      conversationId: frame.conversationId ?? null,
+      sourceType: frame.sourceType ?? null,
+      sourcePayload: frame.sourcePayload ?? null,
+    });
+    return seq;
+  });
   const db = {
-    saveEventBatch: vi.fn(async (frames: Array<Omit<EventFrameRow, 'seq' | 'createdAt'>>) => frames.map((frame) => {
-      seq += 1;
-      rows.push({
-        ...frame,
-        seq,
-        createdAt: 1_000 + seq,
-        turnId: frame.turnId ?? null,
-        conversationId: frame.conversationId ?? null,
-        sourceType: frame.sourceType ?? null,
-        sourcePayload: frame.sourcePayload ?? null,
-      });
-      return seq;
-    })),
+    saveEventBatch: vi.fn(persistFrames),
+    saveTerminalEventBatch: vi.fn(persistFrames),
     getFramesSince: vi.fn(async () => []),
     getTurnFrames: vi.fn(async () => []),
     getSourceEventsSince: vi.fn(async (afterSeq: number, limit = 1_000) =>
@@ -95,7 +99,11 @@ function createDurableTriggerHarness() {
   const canonicalLog = new CanonicalLog({ db: db as never, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
   const eventBus = new TypedEventBus({
     persistEvent: async (type, _agentId, payload, parsedPayload) => {
-      await canonicalLog.ingest(type, parsedPayload ?? JSON.parse(payload) as Record<string, unknown>);
+      const persisted = await canonicalLog.ingest(
+        type,
+        parsedPayload ?? JSON.parse(payload) as Record<string, unknown>,
+      );
+      return persisted.length > 0;
     },
   });
   const onFire = vi.fn().mockResolvedValue(undefined);

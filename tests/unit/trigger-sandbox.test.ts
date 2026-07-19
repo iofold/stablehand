@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventTriggerManager, MAX_TRIGGER_DEPTH } from '../../packages/ctxmill/src/events/trigger-manager.js';
-import { AgentSessionService } from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
-import type { AgentSessionServiceDeps } from '../../packages/ctxmill/src/orchestrator/agent-session-service.js';
-import { createTestBus, createMockTriggerDb } from '../utils/event-bus-test-helpers.js';
+import { AgentTurnService } from '../../packages/ctxmill/src/orchestrator/agent-turn-service.js';
+import type { AgentTurnServiceDeps } from '../../packages/ctxmill/src/orchestrator/agent-turn-service.js';
+import {
+  createMockDatabase,
+  createMockTriggerDb,
+  createTestBus,
+} from '../utils/event-bus-test-helpers.js';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 import type { AgentDefinition } from '../../packages/sandbox-daemon/src/types.js';
 import type { SessionTurnExecutor } from '../../packages/ctxmill/src/orchestrator/session-turn-service.js';
@@ -22,7 +26,7 @@ type MockSessionTurnService = SessionTurnExecutor & {
 function makeMockSessionTurnService(): MockSessionTurnService {
   return {
     executeSessionTurn: vi.fn().mockReturnValue(mockEventStream([
-      { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), messageId: 'msg-1', content: 'sandbox response' },
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), messageId: 'msg-1', delta: 'sandbox response' },
     ])),
   } as MockSessionTurnService;
 }
@@ -39,19 +43,16 @@ function buildAgentRunService(sessionTurnService: SessionTurnExecutor) {
     startTurn: vi.fn().mockReturnValue(undefined),
     completeTurn: vi.fn().mockResolvedValue(undefined),
   };
-  const deps: AgentSessionServiceDeps = {
-    db: {
-      addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
-      updateTurn: vi.fn().mockResolvedValue(undefined),
-      finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
-    } as unknown as AgentSessionServiceDeps['db'],
-    sessionManager: sessionManager as unknown as AgentSessionServiceDeps['sessionManager'],
+  const db = createMockDatabase();
+  const deps: AgentTurnServiceDeps = {
+    db: db as unknown as AgentTurnServiceDeps['db'],
+    sessionManager: sessionManager as unknown as AgentTurnServiceDeps['sessionManager'],
     sessionTurnService,
     eventBus: createTestBus(),
   };
 
   return {
-    agentRunService: new AgentSessionService(deps),
+    agentTurnService: new AgentTurnService(deps),
     sessionManager,
     sessionTurnService,
   };
@@ -67,7 +68,7 @@ describe('EventTriggerManager sandbox mode', () => {
 
   describe('sandbox routing via AgentRunService', () => {
     it('routes triggered run to SandboxRunService', async () => {
-      const { agentRunService, sessionTurnService } = makeAgentRunService();
+      const { agentTurnService, sessionTurnService } = makeAgentRunService();
 
       const agentDef: AgentDefinition = {
         name: 'triggered-agent',
@@ -77,12 +78,12 @@ describe('EventTriggerManager sandbox mode', () => {
         systemPrompt: 'You are a triggered agent.',
       };
 
-      await agentRunService.executeSession({
+      await agentTurnService.executeTurn({
         agentDef,
         messages: [{ id: 'msg-1', agentId: 'triggered-agent', role: 'user', content: 'triggered task', createdAt: new Date() }],
         agentId: 'triggered-agent',
         conversationId: 'conv-1',
-        sessionId: 'run-1',
+        turnId: 'run-1',
         mode: 'background',
         taskDescription: 'triggered task',
       });
@@ -93,7 +94,7 @@ describe('EventTriggerManager sandbox mode', () => {
 
   describe('triggered run secret isolation', () => {
     it('sandbox executeSessionTurn receives the triggered agent name (not triggering agent)', async () => {
-      const { agentRunService, sessionTurnService } = makeAgentRunService();
+      const { agentTurnService, sessionTurnService } = makeAgentRunService();
 
       const triggeredAgentDef: AgentDefinition = {
         name: 'agent-B',
@@ -103,12 +104,12 @@ describe('EventTriggerManager sandbox mode', () => {
         systemPrompt: 'I am agent B.',
       };
 
-      await agentRunService.executeSession({
+      await agentTurnService.executeTurn({
         agentDef: triggeredAgentDef,
         messages: [{ id: 'msg-1', agentId: 'agent-B', role: 'user', content: 'event payload', createdAt: new Date() }],
         agentId: 'agent-B',
         conversationId: 'conv-B',
-        sessionId: 'run-B',
+        turnId: 'run-B',
         mode: 'background',
         taskDescription: 'event payload',
       });
@@ -206,15 +207,15 @@ describe('EventTriggerManager sandbox mode', () => {
       const failingSandbox = {
         executeSessionTurn: vi.fn().mockImplementation(async function* () {
           if (Date.now() < 0) {
-            yield { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), content: '' };
+            yield { type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), delta: '' };
           }
           throw new Error('container failed to start');
         }),
       } as unknown as SessionTurnExecutor;
 
-      const { agentRunService, sessionManager } = makeAgentRunService(failingSandbox);
+      const { agentTurnService, sessionManager } = makeAgentRunService(failingSandbox);
 
-      await agentRunService.executeSession({
+      await agentTurnService.executeTurn({
         agentDef: {
           name: 'failing-agent',
           harness: 'claude-agents',
@@ -225,12 +226,12 @@ describe('EventTriggerManager sandbox mode', () => {
         messages: [],
         agentId: 'failing-agent',
         conversationId: 'conv-1',
-        sessionId: 'run-fail',
+        turnId: 'run-fail',
         mode: 'background',
         taskDescription: 'will fail',
       });
 
-      expect(sessionManager.completeTurn).toHaveBeenCalledWith('sandbox-1', 'run-fail', 'failing-agent', 'conv-1', 'error', expect.any(Number), expect.stringContaining('container failed'));
+      expect(sessionManager.completeTurn).toHaveBeenCalledWith('sandbox-1', 'run-fail', 'failing-agent', 'conv-1', 'error', expect.any(Number), expect.stringContaining('container failed'), undefined);
     });
 
     it('onFire callback is fire-and-forget — errors are isolated', async () => {

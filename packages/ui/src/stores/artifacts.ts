@@ -13,7 +13,7 @@ interface ArtifactsStore {
   selectedArtifact: Artifact | null;
   loading: boolean;
   error: string | null;
-  fetchArtifacts: (agentId: string, sessionId?: string) => Promise<void>;
+  fetchArtifacts: (agentId: string, turnId?: string) => Promise<void>;
   fetchAllArtifacts: (options?: { limit?: number; offset?: number; search?: string }) => Promise<void>;
   deleteArtifact: (id: string) => Promise<void>;
   uploadArtifact: (file: File, agentId: string) => Promise<void>;
@@ -28,7 +28,7 @@ export const useArtifactsStore = create<ArtifactsStore>((set, _get) => ({
   loading: false,
   error: null,
 
-  fetchArtifacts: async (agentId: string, sessionId?: string) => {
+  fetchArtifacts: async (agentId: string, turnId?: string) => {
     if (!agentId) {
       set({ artifacts: [], total: 0, loading: false, error: null });
       return;
@@ -36,7 +36,7 @@ export const useArtifactsStore = create<ArtifactsStore>((set, _get) => ({
 
     set({ loading: true, error: null });
     try {
-      const data = await apiFetchArtifacts(agentId, sessionId);
+      const data = await apiFetchArtifacts(agentId, turnId);
       const artifacts = data.artifacts || [];
       set({ artifacts, total: artifacts.length, loading: false });
     } catch (err) {

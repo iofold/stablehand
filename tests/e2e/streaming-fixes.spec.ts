@@ -9,7 +9,7 @@ import {
 } from './support';
 
 // This suite locks the route/SSE identity contract in docs/contracts/session-identity.md.
-const SESSION_STATUSES = new Set(['ACTIVE', 'CHECKPOINTED', 'RESTORING', 'TERMINATED', 'COMPLETED', 'ERROR', 'CANCELLED', 'IDLE']);
+const TURN_STATUSES = new Set(['ACTIVE', 'CHECKPOINTED', 'RESTORING', 'TERMINATED', 'COMPLETED', 'ERROR', 'CANCELLED', 'IDLE']);
 
 test.describe('Streaming fixes @extended', () => {
   let agentId = '';
@@ -29,47 +29,34 @@ test.describe('Streaming fixes @extended', () => {
     }
   });
 
-  test('sessions and turns endpoints expose sandbox session shape', async ({ request }) => {
-    const { conversationId, sessionId } = await sendAgentMessage(
+  test('turns endpoint exposes distinct turn and sandbox identities', async ({ request }) => {
+    const { conversationId, turnId } = await sendAgentMessage(
       request,
       agentId,
       'Reply with one short greeting.',
     );
-    await waitForRunStatus(request, agentId, sessionId, ['completed', 'error'], 90_000);
-
-    const sessionsResponse = await request.get(`${API_BASE}/api/agents/${agentId}/sessions`);
-    expect(sessionsResponse.ok()).toBeTruthy();
-    const sessionsBody = await sessionsResponse.json();
-
-    const sessions = (sessionsBody as { sessions?: Record<string, unknown>[] }).sessions ?? [];
-
-    expect(Array.isArray(sessions)).toBe(true);
-    expect(sessions.length).toBeGreaterThan(0);
-
-    const session = sessions.find((candidate: Record<string, unknown>) =>
-      candidate.conversationId === conversationId || candidate.id === sessionId,
-    ) as Record<string, unknown> | undefined;
-
-    expect(session).toBeTruthy();
-    expect(typeof session?.status).toBe('string');
-    expect(SESSION_STATUSES.has(String(session?.status))).toBe(true);
-    expect(session?.conversationId).toBe(conversationId);
-    expect(session?.agentId).toBe(agentId);
-    expect(typeof session?.mode).toBe('string');
-    expect(session).not.toHaveProperty('sandboxSessionStatus');
+    await waitForRunStatus(request, agentId, turnId, ['completed', 'error'], 90_000);
 
     const turnsResponse = await request.get(`${API_BASE}/api/agents/${agentId}/turns`);
     expect(turnsResponse.ok()).toBeTruthy();
     const turnsBody = await turnsResponse.json();
 
-    expect(Array.isArray(turnsBody)).toBe(true);
-    expect(turnsBody.length).toBeGreaterThan(0);
+    const turns = (turnsBody as { turns?: Record<string, unknown>[] }).turns ?? [];
+    expect(Array.isArray(turns)).toBe(true);
+    expect(turns.length).toBeGreaterThan(0);
 
-    const turn = turnsBody.find((candidate: Record<string, unknown>) =>
-      candidate.id === sessionId || candidate.conversationId === conversationId,
+    const turn = turns.find((candidate: Record<string, unknown>) =>
+      candidate.id === turnId,
     ) as Record<string, unknown> | undefined;
 
     expect(turn).toBeTruthy();
+    expect(turn?.conversationId).toBe(conversationId);
+    expect(turn?.agentId).toBe(agentId);
+    expect(typeof turn?.status).toBe('string');
+    expect(TURN_STATUSES.has(String(turn?.status))).toBe(true);
+    expect(typeof turn?.mode).toBe('string');
+    expect(turn).not.toHaveProperty('sessionId');
+    expect(turn).not.toHaveProperty('sandboxSessionStatus');
     expect(turn?.startedAt).not.toBeNull();
     expect(turn?.startedAt).not.toBeUndefined();
     expect(Boolean(turn?.completedAt) || Boolean(turn?.error)).toBe(true);
@@ -106,9 +93,9 @@ test.describe('Streaming fixes @extended', () => {
 
   test('completed conversation reload shows persisted messages', async ({ page, request }) => {
     const prompt = 'Say hello and mention reload works.';
-    const { conversationId, sessionId } = await sendAgentMessage(request, agentId, prompt);
+    const { conversationId, turnId } = await sendAgentMessage(request, agentId, prompt);
 
-    await waitForRunStatus(request, agentId, sessionId, ['completed', 'error'], 90_000);
+    await waitForRunStatus(request, agentId, turnId, ['completed', 'error'], 90_000);
     await page.goto(`/agents/${agentId}/conversations/${conversationId}`);
     await page.waitForLoadState('domcontentloaded');
 
@@ -126,28 +113,29 @@ test.describe('Streaming fixes @extended', () => {
     expect(await page.getByTestId('message-bubble-assistant').count()).toBeGreaterThan(0);
   });
 
-  test('conversation messages endpoint keeps a consistent conversationId', async ({ request }) => {
-    const { conversationId, sessionId } = await sendAgentMessage(
+  test('conversation snapshot keeps a consistent conversationId and replay boundary', async ({ request }) => {
+    const { conversationId, turnId } = await sendAgentMessage(
       request,
       agentId,
       'Respond in one sentence about streaming.',
     );
 
-    await waitForRunStatus(request, agentId, sessionId, ['completed', 'error'], 90_000);
+    await waitForRunStatus(request, agentId, turnId, ['completed', 'error'], 90_000);
 
     const helperMessages = await getConversationMessages(request, agentId, conversationId);
     expect(helperMessages.length).toBeGreaterThan(0);
 
     const response = await request.get(
-      `${API_BASE}/api/agents/${agentId}/conversations/${conversationId}/messages`,
+      `${API_BASE}/api/agents/${agentId}/conversations/${conversationId}/snapshot`,
     );
     expect(response.ok()).toBeTruthy();
 
     const body = await response.json();
-    expect(Array.isArray(body)).toBe(true);
-    expect(body.length).toBeGreaterThan(0);
+    expect(body.conversationId).toBe(conversationId);
+    expect(body.eventCursor).toMatch(/^\d{12,15}$/);
+    expect(body.messages.length).toBeGreaterThan(0);
 
-    for (const message of body as Array<Record<string, unknown>>) {
+    for (const message of body.messages as Array<Record<string, unknown>>) {
       expect(message.conversationId).toBe(conversationId);
     }
   });

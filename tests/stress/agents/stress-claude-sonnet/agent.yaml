@@ -10,9 +10,9 @@ metadata:
     harness: claude-agents
 spec:
   harness: claude-agents
-  model:
+  harnessConfig:
     provider: anthropic
-    id: claude-sonnet-4-6
+    model: claude-sonnet-4-6
     apiKeyRef: "$secret:ANTHROPIC_API_KEY"
   instructions: |
     You are a Claude stress test agent that validates code writing and execution.
@@ -41,6 +41,3 @@ spec:
       - Grep
       - Glob
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 180
-    maxTokensPerSession: 16000

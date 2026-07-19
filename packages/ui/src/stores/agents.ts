@@ -1,19 +1,19 @@
 import { create } from 'zustand';
-import type { ApiAgent, ApiAgentSession } from '@ctxmill/shared';
+import type { ApiAgent, ApiAgentTurn } from '@ctxmill/shared';
 import {
   fetchAgents as apiFetchAgents,
   startBackgroundRun as apiStartRun,
-  cancelRun as apiCancelRun,
-  fetchSessions as apiFetchSessions,
+  cancelTurn as apiCancelTurn,
+  fetchAgentTurns as apiFetchAgentTurns,
   createAgent as apiCreateAgent,
   updateAgent as apiUpdateAgent,
   deleteAgent as apiDeleteAgent,
   type AgentUpsertInput,
 } from '@/lib/api';
 import type { HttpToolDefinition } from '@ctxmill/shared';
-import { normalizeSessionStatusCounts } from '@/lib/session-status';
+import { normalizeSandboxSessionStatusCounts } from '@/lib/lifecycle-status';
 
-export type AgentSession = ApiAgentSession;
+export type AgentTurn = ApiAgentTurn;
 
 export interface Agent extends ApiAgent {
   httpTools?: HttpToolDefinition[];
@@ -33,8 +33,8 @@ interface AgentsStore {
   deleteAgent: (id: string) => Promise<void>;
   startPolling: () => () => void;
   startBackgroundRun: (agentId: string, task: string) => Promise<void>;
-  cancelRun: (agentId: string, sessionId: string) => Promise<void>;
-  fetchSessions: (agentId: string) => Promise<AgentSession[]>;
+  cancelTurn: (agentId: string, turnId: string) => Promise<void>;
+  fetchTurns: (agentId: string) => Promise<AgentTurn[]>;
 }
 
 export const useAgentsStore = create<AgentsStore>((set, get) => ({
@@ -48,7 +48,7 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
       const data = await apiFetchAgents();
       const agents = data.map((agent) => ({
         ...agent,
-        sessionsByStatus: normalizeSessionStatusCounts(agent.sessionsByStatus) ?? undefined,
+        sandboxSessionsByStatus: normalizeSandboxSessionStatusCounts(agent.sandboxSessionsByStatus) ?? undefined,
       }));
       set({ agents, loading: false, error: null });
     } catch (err) {
@@ -104,22 +104,20 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
       throw err;
     }
   },
-  cancelRun: async (agentId, sessionId) => {
+  cancelTurn: async (agentId, turnId) => {
     try {
-      await apiCancelRun(agentId, sessionId);
+      await apiCancelTurn(agentId, turnId);
       await get().fetchAgents();
     } catch (err) {
-      console.error('[agents] cancelRun failed:', err);
+      console.error('[agents] cancelTurn failed:', err);
       throw err;
     }
   },
-  fetchSessions: async (agentId) => {
+  fetchTurns: async (agentId) => {
     try {
-      const data = await apiFetchSessions(agentId);
-      const sessions = (data as { sessions?: AgentSession[] }).sessions;
-      return Array.isArray(sessions) ? sessions : [];
+      return await apiFetchAgentTurns(agentId);
     } catch (err) {
-      console.error('[agents] fetchSessions failed:', err);
+      console.error('[agents] fetchTurns failed:', err);
       throw err;
     }
   },

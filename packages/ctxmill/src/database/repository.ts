@@ -1,14 +1,20 @@
 import { eq, sql, gt, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike, type SQL } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
 import { isUniqueConstraintViolation } from './errors.js';
-import { projectSessionStatus, type ApiSessionStatusCounts, type SandboxSessionStatus } from '@ctxmill/shared';
+import {
+  projectConversationStatus,
+  type ApiSandboxSessionStatusCounts,
+  type SandboxSessionStatus,
+} from '@ctxmill/shared';
 
 import type {
   AgentInsert,
   AgentSelect,
+  AgentWorkspaceStateRow,
   ArtifactInsert,
   ArtifactRow,
   CallbackOutboxInsert,
@@ -31,14 +37,19 @@ import type {
   TriggerInsert,
   TriggerSelect,
   TurnInsert,
+  TurnReconciliationLeaseRow,
   TurnSelect,
+  TurnStartRequestInsert,
+  TurnStartRequestRow,
   TurnStatus,
   VersionSelect,
   WebhookInsert,
   WebhookRow,
+  BudgetPolicyRow,
 } from './types.js';
 
 export type {
+  AgentWorkspaceStateRow,
   CallbackOutboxRow,
   CheckpointV2,
   ConversationSummaryRow,
@@ -49,6 +60,8 @@ export type {
   SandboxSessionRow,
   SpineCursorRow,
   SystemSettingRow,
+  TurnStartRequestRow,
+  TurnReconciliationLeaseRow,
   TriggerFiringRow,
   WebhookRow,
 } from './types.js';
@@ -59,14 +72,24 @@ const CALLBACK_EVENT_SEQ_DEDUPE_INDEX = 'idx_outbox_callback_event_seq';
 type InterruptResumeAttemptUpdate = Omit<Partial<InterruptResumeAttemptInsert>, 'attempts'> & {
   attempts?: number | SQL<unknown>;
 };
+export type ResolveInterruptWithResumeAttemptResult =
+  | {
+      kind: 'ready';
+      interrupt: InterruptRow;
+      resumeAttempt?: InterruptResumeAttemptRow;
+    }
+  | {
+      kind: 'conflict';
+      interrupt: InterruptRow;
+    };
 
 export class SandboxSessionStatusConflictError extends Error {
   constructor(
-    readonly sessionId: string,
+    readonly sandboxSessionId: string,
     readonly expectedFrom: string,
     readonly toStatus: string,
   ) {
-    super(`Sandbox session ${sessionId} status was not ${expectedFrom}; could not transition to ${toStatus}`);
+    super(`Sandbox session ${sandboxSessionId} status was not ${expectedFrom}; could not transition to ${toStatus}`);
     this.name = 'SandboxSessionStatusConflictError';
   }
 }
@@ -75,6 +98,14 @@ const sanitizeOptionalDbText = <T extends string | null | undefined>(value: T, c
   if (value == null) return value;
   return sanitizeDbText(value, context) as T;
 };
+
+function eventBatchAgentId(frames: EventFrameInsert[]): string {
+  const agentIds = new Set(frames.map((frame) => frame.agentId));
+  if (agentIds.size !== 1) {
+    throw new Error('Canonical event batches must contain exactly one agent');
+  }
+  return sanitizeDbText(frames[0]!.agentId, 'eventStore.agentId');
+}
 
 function normalizeTriggerSelector(value: unknown): unknown {
   if (value === null || value === undefined) return null;
@@ -134,6 +165,44 @@ export class DatabaseRepository {
     });
   }
 
+  async getAgentWorkspaceState(agentId: string): Promise<AgentWorkspaceStateRow | undefined> {
+    return this.db.query.agentWorkspaceState.findFirst({
+      where: eq(this.schema.agentWorkspaceState.agentId, agentId),
+    });
+  }
+
+  async recordAgentWorkspaceRevision(
+    agentId: string,
+    state: {
+      sha256: string;
+      fileCount: number;
+      totalBytes: number;
+      appliedAt: number;
+    },
+  ): Promise<AgentWorkspaceStateRow> {
+    const sanitizedAgentId = sanitizeDbText(agentId, 'agentWorkspaceState.agentId');
+    const sanitizedState = sanitizeTypedDbValue(state, 'agentWorkspaceState.upsert');
+    const [row] = await this.db
+      .insert(this.schema.agentWorkspaceState)
+      .values({
+        agentId: sanitizedAgentId,
+        revision: 1,
+        ...sanitizedState,
+      })
+      .onConflictDoUpdate({
+        target: this.schema.agentWorkspaceState.agentId,
+        set: {
+          revision: sql<number>`${this.schema.agentWorkspaceState.revision} + 1`,
+          ...sanitizedState,
+        },
+      })
+      .returning();
+    if (!row) {
+      throw new Error('Expected workspace revision upsert to return a row but got undefined');
+    }
+    return row;
+  }
+
   async listAgents(): Promise<AgentSelect[]> {
     return this.db.query.agents.findMany();
   }
@@ -163,17 +232,17 @@ export class DatabaseRepository {
         .from(this.schema.conversations)
         .where(eq(this.schema.conversations.agentId, agentId));
       const conversationIds = conversations.map((c) => c.id);
-      const sandboxSessions = await tx
-        .select({ id: this.schema.sandboxSessions.id })
-        .from(this.schema.sandboxSessions)
-        .where(eq(this.schema.sandboxSessions.agentId, agentId));
-      const sandboxSessionIds = sandboxSessions.map((session) => session.id);
+      const turns = await tx
+        .select({ id: this.schema.turns.id })
+        .from(this.schema.turns)
+        .where(eq(this.schema.turns.agentId, agentId));
+      const turnIds = turns.map((turn) => turn.id);
       if (conversationIds.length > 0) {
         await tx.delete(this.schema.messages).where(inArray(this.schema.messages.conversationId, conversationIds));
       }
       await tx.delete(this.schema.pendingInterrupts).where(eq(this.schema.pendingInterrupts.agentId, agentId));
-      if (sandboxSessionIds.length > 0) {
-        await tx.delete(this.schema.toolRequestDedup).where(inArray(this.schema.toolRequestDedup.sessionId, sandboxSessionIds));
+      if (turnIds.length > 0) {
+        await tx.delete(this.schema.toolRequestDedup).where(inArray(this.schema.toolRequestDedup.turnId, turnIds));
       }
       await tx.execute(sql`DELETE FROM secrets WHERE agent_id = ${agentId}`);
       await tx.delete(this.schema.agentCheckpoints).where(eq(this.schema.agentCheckpoints.agentId, agentId));
@@ -189,15 +258,17 @@ export class DatabaseRepository {
 
   // ── Conversations ───────────────────────────────────────
 
-  async createConversation(agentId: string, id?: string): Promise<ConversationSelect> {
+  async createConversation(agentId: string, id?: string, tags?: Record<string, string>): Promise<ConversationSelect> {
     const sanitizedAgentId = sanitizeDbText(agentId, 'conversations.agentId');
     const sanitizedId = id ? sanitizeDbText(id, 'conversations.id') : undefined;
+    const sanitizedTags = tags ? sanitizeDbJsonValue(tags, 'conversations.tags') as Record<string, string> : undefined;
     return this.insertOne(
       this.db
         .insert(this.schema.conversations)
         .values({
           ...(sanitizedId ? { id: sanitizedId } : {}),
           agentId: sanitizedAgentId,
+          ...(sanitizedTags ? { tags: sanitizedTags } : {}),
         })
         .returning(),
       'conversation',
@@ -239,18 +310,166 @@ export class DatabaseRepository {
     });
   }
 
-  /** Repair both persisted tool-call projections of a message in one write (ctx-nm3o). */
-  async updateMessageToolCallsAndParts(
+  /**
+   * Persist a canonical assistant/tool message with a durable turn-local
+   * sequence. The row starts unpublished (-1); CanonicalLog advances the
+   * publication watermark in the same transaction as its committed frame.
+   */
+  async addCanonicalMessage(
+    data: Omit<MessageInsert, 'messageSeq' | 'messageRevision' | 'publishedRevision'> & {
+      turnId: string;
+      role: 'assistant' | 'tool';
+    },
+  ): Promise<MessageSelect> {
+    const sanitizedData: MessageInsert = {
+      ...data,
+      content: sanitizeDbText(data.content, 'messages.content'),
+      parts: sanitizeTypedDbValue(data.parts, 'messages.parts'),
+      toolCalls: sanitizeTypedDbValue(data.toolCalls, 'messages.toolCalls'),
+      toolCallId: sanitizeOptionalDbText(data.toolCallId, 'messages.toolCallId'),
+      messageRevision: 0,
+      publishedRevision: -1,
+    };
+
+    return this.db.transaction(async (tx) => {
+      // Serialize allocation per turn. When a caller supplies a stable id,
+      // checking for an existing row while holding this lock makes retries
+      // idempotent without consuming another turn-local sequence.
+      const [turn] = await tx
+        .select({
+          nextMessageSeq: this.schema.turns.nextMessageSeq,
+          completedAt: this.schema.turns.completedAt,
+        })
+        .from(this.schema.turns)
+        .where(eq(this.schema.turns.id, data.turnId))
+        .for('update');
+      if (!turn) {
+        throw new Error(`Cannot allocate message sequence for missing turn ${data.turnId}`);
+      }
+
+      if (sanitizedData.id) {
+        const [existing] = await tx
+          .select()
+          .from(this.schema.messages)
+          .where(eq(this.schema.messages.id, sanitizedData.id));
+        if (existing) {
+          if (
+            existing.turnId !== data.turnId
+            || existing.conversationId !== data.conversationId
+            || existing.agentId !== data.agentId
+            || existing.role !== data.role
+            || existing.content !== sanitizedData.content
+            || existing.toolCallId !== (sanitizedData.toolCallId ?? null)
+            || !isDeepStrictEqual(existing.toolCalls, sanitizedData.toolCalls ?? null)
+            || !isDeepStrictEqual(existing.parts, sanitizedData.parts ?? null)
+          ) {
+            throw new Error(
+              `Canonical message idempotency conflict for ${sanitizedData.id}`,
+            );
+          }
+          return existing;
+        }
+      }
+      if (turn.completedAt != null) {
+        throw new Error(`Cannot add canonical message to terminal turn ${data.turnId}`);
+      }
+
+      const [message] = await tx
+        .insert(this.schema.messages)
+        .values({
+          ...sanitizedData,
+          messageSeq: turn.nextMessageSeq,
+        })
+        .returning();
+      if (!message) {
+        throw new Error('Expected canonical message insert to return a row but got undefined');
+      }
+      await tx
+        .update(this.schema.turns)
+        .set({
+          nextMessageSeq: sql<number>`${this.schema.turns.nextMessageSeq} + 1`,
+        })
+        .where(eq(this.schema.turns.id, data.turnId));
+      await tx.update(this.schema.conversations)
+        .set({ updatedAt: Date.now() })
+        .where(eq(this.schema.conversations.id, data.conversationId));
+      return message;
+    });
+  }
+
+  async getMessage(id: string): Promise<MessageSelect | undefined> {
+    return this.db.query.messages.findFirst({
+      where: eq(this.schema.messages.id, id),
+    });
+  }
+
+  /**
+   * Full assistant projection replacement. The public revision and row state
+   * advance together while publishedRevision remains behind until CanonicalLog
+   * durably records the matching message.updated frame.
+   */
+  async stageAssistantMessageUpdate(
     id: string,
     toolCalls: unknown[] | null,
     parts: unknown[] | null,
-  ): Promise<void> {
-    await this.db.update(this.schema.messages)
-      .set({
-        ...(toolCalls ? { toolCalls: sanitizeTypedDbValue(toolCalls, 'messages.toolCalls') } : {}),
-        ...(parts ? { parts: sanitizeTypedDbValue(parts, 'messages.parts') } : {}),
-      })
-      .where(eq(this.schema.messages.id, id));
+  ): Promise<MessageSelect | undefined> {
+    return this.db.transaction(async (tx) => {
+      const [message] = await tx
+        .select({ turnId: this.schema.messages.turnId })
+        .from(this.schema.messages)
+        .where(and(
+          eq(this.schema.messages.id, id),
+          eq(this.schema.messages.role, 'assistant'),
+        ));
+      if (!message) {
+        return undefined;
+      }
+      if (message.turnId) {
+        const [turn] = await tx
+          .select({ completedAt: this.schema.turns.completedAt })
+          .from(this.schema.turns)
+          .where(eq(this.schema.turns.id, message.turnId))
+          .for('update');
+        if (!turn) {
+          throw new Error(`Cannot update assistant message ${id}; turn ${message.turnId} is missing`);
+        }
+        if (turn.completedAt != null) {
+          throw new Error(`Cannot update assistant message ${id} on terminal turn ${message.turnId}`);
+        }
+      }
+
+      const [updated] = await tx.update(this.schema.messages)
+        .set({
+          ...(toolCalls ? { toolCalls: sanitizeTypedDbValue(toolCalls, 'messages.toolCalls') } : {}),
+          ...(parts ? { parts: sanitizeTypedDbValue(parts, 'messages.parts') } : {}),
+          messageRevision: sql<number>`${this.schema.messages.messageRevision} + 1`,
+        })
+        .where(and(
+          eq(this.schema.messages.id, id),
+          eq(this.schema.messages.role, 'assistant'),
+        ))
+        .returning();
+      return updated;
+    });
+  }
+
+  /** Rows whose REST projection is newer than their durable canonical frame. */
+  async getMessagesPendingCanonicalPublish(): Promise<MessageSelect[]> {
+    return this.db
+      .select()
+      .from(this.schema.messages)
+      .where(and(
+        isNotNull(this.schema.messages.turnId),
+        isNotNull(this.schema.messages.messageSeq),
+        inArray(this.schema.messages.role, ['assistant', 'tool']),
+        lt(this.schema.messages.publishedRevision, this.schema.messages.messageRevision),
+      ))
+      .orderBy(
+        asc(this.schema.messages.turnId),
+        asc(this.schema.messages.messageSeq),
+        asc(this.schema.messages.createdAt),
+        asc(this.schema.messages.id),
+      );
   }
 
   async deleteMessage(id: string): Promise<void> {
@@ -261,6 +480,124 @@ export class DatabaseRepository {
     return this.db.query.messages.findMany({
       where: eq(this.schema.messages.conversationId, conversationId),
       orderBy: (messages) => [asc(messages.createdAt), asc(messages.id)],
+    });
+  }
+
+  /**
+   * Read a replay-coherent conversation projection and cursor from one
+   * repeatable snapshot. An idle conversation uses the agent's committed event
+   * watermark. If a turn is open, the cursor rewinds before its first durable
+   * run frame. Open-turn projections, plus projections for any later turn whose
+   * full frame range will replay, are omitted so hydration and replay reconstruct
+   * each lifecycle exactly once. Interactive user messages are linked through
+   * turns.userMessageId rather than messages.turnId; background prompts remain
+   * projected because background turns intentionally emit no user.message frame.
+   */
+  async getConversationSnapshot(
+    conversationId: string,
+    agentId: string,
+  ): Promise<{ messages: MessageSelect[]; eventCursorSeq: number }> {
+    return this.db.transaction(async (tx) => {
+      const messages = await tx.query.messages.findMany({
+        where: eq(this.schema.messages.conversationId, conversationId),
+        orderBy: (table) => [asc(table.createdAt), asc(table.id)],
+      });
+      const [head] = await tx
+        .select({ committedSeq: this.schema.agentEventHeads.committedSeq })
+        .from(this.schema.agentEventHeads)
+        .where(eq(this.schema.agentEventHeads.agentId, agentId));
+      const turnBoundaries = await tx
+        .select({
+          turnId: this.schema.turns.id,
+          userMessageId: this.schema.turns.userMessageId,
+          mode: this.schema.turns.mode,
+          completedAt: this.schema.turns.completedAt,
+          firstSeq: sql<number | null>`min(${this.schema.eventStore.seq})`,
+          lastSeq: sql<number | null>`max(${this.schema.eventStore.seq})`,
+        })
+        .from(this.schema.turns)
+        .leftJoin(
+          this.schema.eventStore,
+          and(
+            eq(this.schema.eventStore.turnId, this.schema.turns.id),
+            eq(this.schema.eventStore.agentId, agentId),
+            eq(this.schema.eventStore.channel, 'run'),
+          ),
+        )
+        .where(and(
+          eq(this.schema.turns.agentId, agentId),
+          eq(this.schema.turns.conversationId, conversationId),
+        ))
+        .groupBy(
+          this.schema.turns.id,
+          this.schema.turns.userMessageId,
+          this.schema.turns.mode,
+          this.schema.turns.completedAt,
+        );
+      const firstOpenTurnSeq = turnBoundaries.reduce<number | null>(
+        (earliest, { completedAt, firstSeq }) => {
+          if (completedAt !== null) return earliest;
+          if (firstSeq === null) return earliest;
+          return earliest === null || firstSeq < earliest ? firstSeq : earliest;
+        },
+        null,
+      );
+      let replayStartSeq = firstOpenTurnSeq;
+      if (replayStartSeq !== null) {
+        // If a completed turn began before the tentative cut but emitted a
+        // later frame after it, keeping that projection while replaying its
+        // tail would duplicate or corrupt state. Rewind to that turn's start,
+        // then repeat because the wider interval can overlap another turn.
+        while (true) {
+          const currentStartSeq: number = replayStartSeq;
+          const expandedStartSeq: number = turnBoundaries.reduce<number>(
+            (earliest, { firstSeq, lastSeq }) => {
+              if (
+                firstSeq === null
+                || lastSeq === null
+                || firstSeq >= earliest
+                || lastSeq < earliest
+              ) {
+                return earliest;
+              }
+              return firstSeq;
+            },
+            currentStartSeq,
+          );
+          if (expandedStartSeq === replayStartSeq) {
+            break;
+          }
+          replayStartSeq = expandedStartSeq;
+        }
+      }
+      const eventCursorSeq = replayStartSeq === null
+        ? head?.committedSeq ?? 0
+        : Math.max(0, replayStartSeq - 1);
+      const replayedTurnBoundaries = turnBoundaries.filter(({ completedAt, firstSeq }) =>
+        completedAt === null
+        || (
+          replayStartSeq !== null
+          && firstSeq !== null
+          && firstSeq >= replayStartSeq
+        ));
+      const replayedTurnIds = new Set(
+        replayedTurnBoundaries.map(({ turnId }) => turnId),
+      );
+      const replayedUserMessageIds = new Set(
+        replayedTurnBoundaries.flatMap(({ userMessageId, mode }) =>
+          userMessageId === null || mode === 'background' ? [] : [userMessageId]),
+      );
+      return {
+        messages: replayedTurnIds.size === 0
+          ? messages
+          : messages.filter((message) =>
+              !replayedUserMessageIds.has(message.id)
+              && (message.turnId === null || !replayedTurnIds.has(message.turnId))),
+        eventCursorSeq,
+      };
+    }, {
+      isolationLevel: 'repeatable read',
+      accessMode: 'read only',
     });
   }
 
@@ -307,13 +644,191 @@ export class DatabaseRepository {
   }
 
   /**
+   * Atomically claim startup reconciliation ownership for one open turn.
+   *
+   * Pending/timed-out approvals and durable resume attempts retain ownership of
+   * HITL turns. A competing reconciler may take over only after lease expiry.
+   */
+  async claimTurnReconciliationLease(input: {
+    turnId: string;
+    ownerId: string;
+    claimedAt: number;
+    leaseExpiresAt: number;
+  }): Promise<TurnReconciliationLeaseRow | undefined> {
+    const turnId = sanitizeDbText(input.turnId, 'turnReconciliationLeases.turnId');
+    const ownerId = sanitizeDbText(input.ownerId, 'turnReconciliationLeases.ownerId');
+    if (input.leaseExpiresAt <= input.claimedAt) {
+      throw new Error('Turn reconciliation lease expiry must be after its claim time');
+    }
+
+    const eligibleTurn = this.db
+      .select({
+        turnId: this.schema.turns.id,
+        ownerId: sql<string>`${ownerId}`.as('owner_id'),
+        leaseExpiresAt: sql<number>`${input.leaseExpiresAt}::bigint`.as('lease_expires_at'),
+        updatedAt: sql<number>`${input.claimedAt}::bigint`.as('updated_at'),
+      })
+      .from(this.schema.turns)
+      .where(and(
+        eq(this.schema.turns.id, turnId),
+        isNull(this.schema.turns.completedAt),
+        sql<boolean>`NOT EXISTS (
+          SELECT 1
+          FROM ${this.schema.pendingInterrupts}
+          LEFT JOIN ${this.schema.interruptResumeAttempts}
+            ON ${this.schema.interruptResumeAttempts.interruptId} = ${this.schema.pendingInterrupts.id}
+          WHERE ${this.schema.pendingInterrupts.turnId} = ${this.schema.turns.id}
+            AND (
+              ${this.schema.pendingInterrupts.status} IN ('pending', 'timed_out')
+              OR ${this.schema.interruptResumeAttempts.status} IN ('pending', 'in_progress', 'failed')
+            )
+        )`,
+      ));
+    const [claimed] = await this.db
+      .insert(this.schema.turnReconciliationLeases)
+      .select(eligibleTurn)
+      .onConflictDoUpdate({
+        target: this.schema.turnReconciliationLeases.turnId,
+        set: {
+          ownerId,
+          leaseExpiresAt: input.leaseExpiresAt,
+          updatedAt: input.claimedAt,
+        },
+        setWhere: or(
+          lte(this.schema.turnReconciliationLeases.leaseExpiresAt, input.claimedAt),
+          eq(this.schema.turnReconciliationLeases.ownerId, ownerId),
+        ),
+      })
+      .returning();
+    return claimed;
+  }
+
+  async renewTurnReconciliationLease(
+    turnId: string,
+    ownerId: string,
+    renewedAt: number,
+    leaseExpiresAt: number,
+  ): Promise<TurnReconciliationLeaseRow | undefined> {
+    if (leaseExpiresAt <= renewedAt) {
+      throw new Error('Renewed turn reconciliation lease expiry must be after its renewal time');
+    }
+    const [renewed] = await this.db
+      .update(this.schema.turnReconciliationLeases)
+      .set({ leaseExpiresAt, updatedAt: renewedAt })
+      .where(and(
+        eq(
+          this.schema.turnReconciliationLeases.turnId,
+          sanitizeDbText(turnId, 'turnReconciliationLeases.renew.turnId'),
+        ),
+        eq(
+          this.schema.turnReconciliationLeases.ownerId,
+          sanitizeDbText(ownerId, 'turnReconciliationLeases.renew.ownerId'),
+        ),
+        gt(this.schema.turnReconciliationLeases.leaseExpiresAt, renewedAt),
+      ))
+      .returning();
+    return renewed;
+  }
+
+  /**
+   * Authorize recovery dispatch while preserving queued crash-retry state.
+   *
+   * Only the owner of a still-live reconciliation lease may pass this fence,
+   * and a HITL resume workflow that appeared after the original claim wins.
+   * The normal delivery boundary changes the turn to running; if this owner
+   * dies before then, the queued turn remains eligible for lease takeover.
+   */
+  async authorizeQueuedTurnRedispatch(
+    turnId: string,
+    ownerId: string,
+    checkedAt: number,
+  ): Promise<boolean> {
+    const sanitizedTurnId = sanitizeDbText(
+      turnId,
+      'turnReconciliationLeases.authorize.turnId',
+    );
+    const sanitizedOwnerId = sanitizeDbText(
+      ownerId,
+      'turnReconciliationLeases.authorize.ownerId',
+    );
+    const [authorized] = await this.db
+      .select({ turnId: this.schema.turns.id })
+      .from(this.schema.turns)
+      .where(and(
+        eq(this.schema.turns.id, sanitizedTurnId),
+        eq(this.schema.turns.status, 'queued'),
+        isNull(this.schema.turns.completedAt),
+        sql<boolean>`EXISTS (
+          SELECT 1
+          FROM ${this.schema.turnReconciliationLeases}
+          WHERE ${this.schema.turnReconciliationLeases.turnId} = ${this.schema.turns.id}
+            AND ${this.schema.turnReconciliationLeases.ownerId} = ${sanitizedOwnerId}
+            AND ${this.schema.turnReconciliationLeases.leaseExpiresAt} > ${checkedAt}
+        )`,
+        sql<boolean>`NOT EXISTS (
+          SELECT 1
+          FROM ${this.schema.pendingInterrupts}
+          LEFT JOIN ${this.schema.interruptResumeAttempts}
+            ON ${this.schema.interruptResumeAttempts.interruptId} = ${this.schema.pendingInterrupts.id}
+          WHERE ${this.schema.pendingInterrupts.turnId} = ${this.schema.turns.id}
+            AND (
+              ${this.schema.pendingInterrupts.status} IN ('pending', 'timed_out')
+              OR ${this.schema.interruptResumeAttempts.status} IN ('pending', 'in_progress', 'failed')
+          )
+        )`,
+      ))
+      .limit(1);
+    return authorized !== undefined;
+  }
+
+  async releaseTurnReconciliationLease(
+    turnId: string,
+    ownerId: string,
+  ): Promise<boolean> {
+    const released = await this.db
+      .delete(this.schema.turnReconciliationLeases)
+      .where(and(
+        eq(
+          this.schema.turnReconciliationLeases.turnId,
+          sanitizeDbText(turnId, 'turnReconciliationLeases.release.turnId'),
+        ),
+        eq(
+          this.schema.turnReconciliationLeases.ownerId,
+          sanitizeDbText(ownerId, 'turnReconciliationLeases.release.ownerId'),
+        ),
+      ))
+      .returning({ turnId: this.schema.turnReconciliationLeases.turnId });
+    return released.length > 0;
+  }
+
+  /** Terminal rows whose canonical RUN_ERROR/RUN_FINISHED batch is not durable yet. */
+  async getTurnsPendingCanonicalTerminalPublish(): Promise<TurnSelect[]> {
+    return this.db.query.turns.findMany({
+      where: and(
+        isNotNull(this.schema.turns.completedAt),
+        isNull(this.schema.turns.terminalPublishedSeq),
+      ),
+      orderBy: (turns) => [asc(turns.completedAt), asc(turns.startedAt), asc(turns.id)],
+    });
+  }
+
+  /**
    * Terminal-state write guarded at the database: only an open turn is
    * updated. Returns false when the turn was already terminal or missing —
    * the primitive TurnFinalizer builds on (ADR-014).
    */
   async finalizeTurnIfOpen(
     id: string,
-    updates: { sessionId?: string; completedAt: number; error: string | null; status: Exclude<TurnStatus, 'queued' | 'running'> },
+    updates: {
+      sandboxSessionId?: string;
+      completedAt: number;
+      error: string | null;
+      status: Exclude<TurnStatus, 'queued' | 'running'>;
+      inputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+      costUsd?: number;
+    },
   ): Promise<boolean> {
     const sanitizedUpdates = sanitizeTypedDbValue(updates, 'turns.finalize');
     const updated = await this.db
@@ -328,6 +843,86 @@ export class DatabaseRepository {
     return this.db.query.turns.findFirst({
       where: eq(this.schema.turns.id, id),
     });
+  }
+
+  /**
+   * Atomically claims an agent-scoped idempotency key. A conflict returns the
+   * durable original row so the caller can replay it or reject a hash mismatch.
+   */
+  async claimTurnStartRequest(
+    data: TurnStartRequestInsert,
+  ): Promise<{ claimed: boolean; request: TurnStartRequestRow }> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'turnStartRequests.insert');
+    const [inserted] = await this.db
+      .insert(this.schema.turnStartRequests)
+      .values(sanitizedData)
+      .onConflictDoNothing({
+        target: [
+          this.schema.turnStartRequests.agentId,
+          this.schema.turnStartRequests.idempotencyKey,
+        ],
+      })
+      .returning();
+    if (inserted) {
+      return { claimed: true, request: inserted };
+    }
+
+    const existing = await this.db.query.turnStartRequests.findFirst({
+      where: and(
+        eq(this.schema.turnStartRequests.agentId, sanitizedData.agentId),
+        eq(this.schema.turnStartRequests.idempotencyKey, sanitizedData.idempotencyKey),
+      ),
+    });
+    if (!existing) {
+      throw new Error('Idempotency key conflict did not resolve to a turn start request');
+    }
+    return { claimed: false, request: existing };
+  }
+
+  async getTurnStartRequest(
+    agentId: string,
+    idempotencyKey: string,
+  ): Promise<TurnStartRequestRow | undefined> {
+    return this.db.query.turnStartRequests.findFirst({
+      where: and(
+        eq(this.schema.turnStartRequests.agentId, agentId),
+        eq(this.schema.turnStartRequests.idempotencyKey, idempotencyKey),
+      ),
+    });
+  }
+
+  async completeTurnStartRequest(
+    id: string,
+    requestHash: string,
+    response: Record<string, unknown>,
+  ): Promise<TurnStartRequestRow> {
+    const [updated] = await this.db
+      .update(this.schema.turnStartRequests)
+      .set({
+        status: 'prepared',
+        response: sanitizeDbJsonValue(response, 'turnStartRequests.response') as Record<string, unknown>,
+        updatedAt: Date.now(),
+      })
+      .where(and(
+        eq(this.schema.turnStartRequests.id, id),
+        eq(this.schema.turnStartRequests.requestHash, requestHash),
+        eq(this.schema.turnStartRequests.status, 'preparing'),
+      ))
+      .returning();
+    if (!updated) {
+      throw new Error(`Turn start request ${id} could not transition to prepared`);
+    }
+    return updated;
+  }
+
+  async abandonTurnStartRequest(id: string, requestHash: string): Promise<void> {
+    await this.db
+      .delete(this.schema.turnStartRequests)
+      .where(and(
+        eq(this.schema.turnStartRequests.id, id),
+        eq(this.schema.turnStartRequests.requestHash, requestHash),
+        eq(this.schema.turnStartRequests.status, 'preparing'),
+      ));
   }
 
   async getActiveTurnsForAgent(agentId: string): Promise<TurnSelect[]> {
@@ -354,30 +949,252 @@ export class DatabaseRepository {
     if (frames.length === 0) {
       return [];
     }
-    const now = Date.now();
-    const rows = await this.db
-      .insert(this.schema.eventStore)
-      .values(frames.map((frame) => ({
-        type: sanitizeDbText(frame.type, 'eventStore.type'),
-        agentId: frame.agentId,
-        payload: sanitizeDbText(frame.payload, 'eventStore.payload'),
-        createdAt: now,
-        turnId: frame.turnId ?? null,
-        conversationId: frame.conversationId ?? null,
-        channel: frame.channel ?? 'system',
-        sourceType: sanitizeOptionalDbText(frame.sourceType ?? null, 'eventStore.sourceType'),
-        sourcePayload: sanitizeOptionalDbText(frame.sourcePayload ?? null, 'eventStore.sourcePayload'),
-      })))
-      .returning({ seq: this.schema.eventStore.seq });
-    return rows.map((row) => row.seq);
+    const agentId = eventBatchAgentId(frames);
+    return this.db.transaction(async (tx) => {
+      const now = Date.now();
+      await tx
+        .insert(this.schema.agentEventHeads)
+        .values({ agentId, committedSeq: 0, updatedAt: now })
+        .onConflictDoNothing();
+      const [lockedHead] = await tx
+        .select({ agentId: this.schema.agentEventHeads.agentId })
+        .from(this.schema.agentEventHeads)
+        .where(eq(this.schema.agentEventHeads.agentId, agentId))
+        .for('update');
+      if (!lockedHead) {
+        throw new Error(`Cannot lock canonical event head for agent ${agentId}`);
+      }
+      const rows = await tx
+        .insert(this.schema.eventStore)
+        .values(frames.map((frame) => ({
+          type: sanitizeDbText(frame.type, 'eventStore.type'),
+          agentId,
+          payload: sanitizeDbText(frame.payload, 'eventStore.payload'),
+          createdAt: now,
+          turnId: frame.turnId ?? null,
+          conversationId: frame.conversationId ?? null,
+          channel: frame.channel ?? 'system',
+          sourceType: sanitizeOptionalDbText(frame.sourceType ?? null, 'eventStore.sourceType'),
+          sourcePayload: sanitizeOptionalDbText(frame.sourcePayload ?? null, 'eventStore.sourcePayload'),
+        })))
+        .returning({ seq: this.schema.eventStore.seq });
+      const committedSeq = rows.at(-1)?.seq;
+      if (committedSeq == null) {
+        throw new Error(`Canonical event insert for agent ${agentId} returned no sequence`);
+      }
+      await tx
+        .update(this.schema.agentEventHeads)
+        .set({ committedSeq, updatedAt: Date.now() })
+        .where(eq(this.schema.agentEventHeads.agentId, agentId));
+      return rows.map((row) => row.seq);
+    });
   }
 
-  /** Latest assigned frame seq for an agent (0 when none) — CONNECTED.latestSeq. */
+  /**
+   * Atomically persist a canonical message frame and its publication
+   * watermark. A frame insert failure leaves the row pending for startup
+   * recovery; the watermark can never get ahead of event_store.
+   */
+  async saveMessageEventBatch(
+    frames: EventFrameInsert[],
+    publication: { messageId: string; targetRevision: number },
+  ): Promise<number[]> {
+    if (frames.length === 0) {
+      throw new Error('Canonical message publication requires at least one frame');
+    }
+    const agentId = eventBatchAgentId(frames);
+
+    return this.db.transaction(async (tx) => {
+      const lockTimestamp = Date.now();
+      await tx
+        .insert(this.schema.agentEventHeads)
+        .values({ agentId, committedSeq: 0, updatedAt: lockTimestamp })
+        .onConflictDoNothing();
+      const [lockedHead] = await tx
+        .select({ agentId: this.schema.agentEventHeads.agentId })
+        .from(this.schema.agentEventHeads)
+        .where(eq(this.schema.agentEventHeads.agentId, agentId))
+        .for('update');
+      if (!lockedHead) {
+        throw new Error(`Cannot lock canonical event head for agent ${agentId}`);
+      }
+      const [message] = await tx
+        .select({
+          messageRevision: this.schema.messages.messageRevision,
+          publishedRevision: this.schema.messages.publishedRevision,
+        })
+        .from(this.schema.messages)
+        .where(eq(this.schema.messages.id, publication.messageId))
+        .for('update');
+      if (!message) {
+        throw new Error(`Cannot publish canonical frame for missing message ${publication.messageId}`);
+      }
+      if (publication.targetRevision > message.messageRevision) {
+        throw new Error(
+          `Cannot publish message ${publication.messageId} revision ${publication.targetRevision}; ` +
+          `durable revision is ${message.messageRevision}`,
+        );
+      }
+      if (publication.targetRevision <= message.publishedRevision) {
+        throw new Error(
+          `Message ${publication.messageId} revision ${publication.targetRevision} is already published`,
+        );
+      }
+
+      const now = Date.now();
+      const rows = await tx
+        .insert(this.schema.eventStore)
+        .values(frames.map((frame) => ({
+          type: sanitizeDbText(frame.type, 'eventStore.type'),
+          agentId,
+          payload: sanitizeDbText(frame.payload, 'eventStore.payload'),
+          createdAt: now,
+          turnId: frame.turnId ?? null,
+          conversationId: frame.conversationId ?? null,
+          channel: frame.channel ?? 'system',
+          sourceType: sanitizeOptionalDbText(frame.sourceType ?? null, 'eventStore.sourceType'),
+          sourcePayload: sanitizeOptionalDbText(frame.sourcePayload ?? null, 'eventStore.sourcePayload'),
+        })))
+        .returning({ seq: this.schema.eventStore.seq });
+
+      await tx
+        .update(this.schema.messages)
+        .set({ publishedRevision: publication.targetRevision })
+        .where(eq(this.schema.messages.id, publication.messageId));
+      const committedSeq = rows.at(-1)?.seq;
+      if (committedSeq == null) {
+        throw new Error(`Canonical message event insert for agent ${agentId} returned no sequence`);
+      }
+      await tx
+        .update(this.schema.agentEventHeads)
+        .set({ committedSeq, updatedAt: Date.now() })
+        .where(eq(this.schema.agentEventHeads.agentId, agentId));
+      return rows.map((row) => row.seq);
+    });
+  }
+
+  /**
+   * Atomically persist the terminal canonical frame batch and advance the
+   * turn's terminal publication watermark. The turn lock serializes this
+   * boundary with terminal retries; a concurrent/replayed publisher returns
+   * an empty batch and therefore cannot duplicate frames or downstream emit.
+   */
+  async saveTerminalEventBatch(
+    frames: EventFrameInsert[],
+    publication: { turnId: string },
+  ): Promise<number[]> {
+    if (frames.length === 0) {
+      throw new Error('Canonical terminal publication requires at least one frame');
+    }
+    if (frames.some((frame) => frame.turnId !== publication.turnId)) {
+      throw new Error(
+        `Canonical terminal publication for ${publication.turnId} contains a frame for another turn`,
+      );
+    }
+    const agentId = eventBatchAgentId(frames);
+
+    return this.db.transaction(async (tx) => {
+      const lockTimestamp = Date.now();
+      await tx
+        .insert(this.schema.agentEventHeads)
+        .values({ agentId, committedSeq: 0, updatedAt: lockTimestamp })
+        .onConflictDoNothing();
+      const [lockedHead] = await tx
+        .select({ agentId: this.schema.agentEventHeads.agentId })
+        .from(this.schema.agentEventHeads)
+        .where(eq(this.schema.agentEventHeads.agentId, agentId))
+        .for('update');
+      if (!lockedHead) {
+        throw new Error(`Cannot lock canonical event head for agent ${agentId}`);
+      }
+      const [turn] = await tx
+        .select({
+          completedAt: this.schema.turns.completedAt,
+          status: this.schema.turns.status,
+          terminalPublishedSeq: this.schema.turns.terminalPublishedSeq,
+        })
+        .from(this.schema.turns)
+        .where(eq(this.schema.turns.id, publication.turnId))
+        .for('update');
+      if (!turn) {
+        throw new Error(`Cannot publish canonical terminal for missing turn ${publication.turnId}`);
+      }
+      if (turn.completedAt == null || turn.status === 'queued' || turn.status === 'running') {
+        throw new Error(`Cannot publish canonical terminal for open turn ${publication.turnId}`);
+      }
+      if (turn.terminalPublishedSeq != null) {
+        return [];
+      }
+
+      const frameTypes = new Set(frames.map((frame) => frame.type));
+      if (!frameTypes.has('RUN_FINISHED')) {
+        throw new Error(
+          `Canonical terminal publication for ${publication.turnId} requires RUN_FINISHED`,
+        );
+      }
+      if (
+        (turn.status === 'error' || turn.status === 'cancelled')
+        && !frameTypes.has('RUN_ERROR')
+      ) {
+        throw new Error(
+          `Canonical ${turn.status} terminal publication for ${publication.turnId} requires RUN_ERROR`,
+        );
+      }
+
+      const [pendingMessage] = await tx
+        .select({ id: this.schema.messages.id })
+        .from(this.schema.messages)
+        .where(and(
+          eq(this.schema.messages.turnId, publication.turnId),
+          inArray(this.schema.messages.role, ['assistant', 'tool']),
+          lt(this.schema.messages.publishedRevision, this.schema.messages.messageRevision),
+        ))
+        .limit(1);
+      if (pendingMessage) {
+        throw new Error(
+          `Cannot publish canonical terminal for ${publication.turnId}; ` +
+          `pending canonical message ${pendingMessage.id} must publish first`,
+        );
+      }
+
+      const now = Date.now();
+      const rows = await tx
+        .insert(this.schema.eventStore)
+        .values(frames.map((frame) => ({
+          type: sanitizeDbText(frame.type, 'eventStore.type'),
+          agentId,
+          payload: sanitizeDbText(frame.payload, 'eventStore.payload'),
+          createdAt: now,
+          turnId: frame.turnId ?? null,
+          conversationId: frame.conversationId ?? null,
+          channel: frame.channel ?? 'system',
+          sourceType: sanitizeOptionalDbText(frame.sourceType ?? null, 'eventStore.sourceType'),
+          sourcePayload: sanitizeOptionalDbText(frame.sourcePayload ?? null, 'eventStore.sourcePayload'),
+        })))
+        .returning({ seq: this.schema.eventStore.seq });
+      const lastSeq = rows.at(-1)?.seq;
+      if (lastSeq == null) {
+        throw new Error(`Canonical terminal insert for ${publication.turnId} returned no sequence`);
+      }
+
+      await tx
+        .update(this.schema.turns)
+        .set({ terminalPublishedSeq: lastSeq })
+        .where(eq(this.schema.turns.id, publication.turnId));
+      await tx
+        .update(this.schema.agentEventHeads)
+        .set({ committedSeq: lastSeq, updatedAt: Date.now() })
+        .where(eq(this.schema.agentEventHeads.agentId, agentId));
+      return rows.map((row) => row.seq);
+    });
+  }
+
+  /** Latest commit-ordered frame seq for an agent (0 when none). */
   async getLatestEventSeq(agentId: string): Promise<number> {
     const [row] = await this.db
-      .select({ seq: sql<number>`coalesce(max(${this.schema.eventStore.seq}), 0)` })
-      .from(this.schema.eventStore)
-      .where(eq(this.schema.eventStore.agentId, agentId));
+      .select({ seq: this.schema.agentEventHeads.committedSeq })
+      .from(this.schema.agentEventHeads)
+      .where(eq(this.schema.agentEventHeads.agentId, agentId));
     return row?.seq ?? 0;
   }
 
@@ -385,7 +1202,7 @@ export class DatabaseRepository {
   async getFramesSince(
     agentId: string,
     afterSeq: number,
-    options: { channels?: string[]; limit?: number } = {},
+    options: { channels?: string[]; limit?: number; throughSeq?: number } = {},
   ): Promise<EventFrameRow[]> {
     const conditions = [
       eq(this.schema.eventStore.agentId, agentId),
@@ -393,6 +1210,9 @@ export class DatabaseRepository {
     ];
     if (options.channels && options.channels.length > 0) {
       conditions.push(inArray(this.schema.eventStore.channel, options.channels));
+    }
+    if (options.throughSeq !== undefined) {
+      conditions.push(lte(this.schema.eventStore.seq, options.throughSeq));
     }
     return this.db.query.eventStore.findMany({
       where: and(...conditions),
@@ -657,9 +1477,9 @@ export class DatabaseRepository {
       .onConflictDoUpdate({
         target: this.schema.pendingInterrupts.id,
         set: {
-          agentSessionId: sanitizedData.agentSessionId,
+          turnId: sanitizedData.turnId,
           agentId: sanitizedData.agentId,
-          sessionId: sanitizedData.sessionId ?? null,
+          sandboxSessionId: sanitizedData.sandboxSessionId ?? null,
           toolCallId: sanitizedData.toolCallId,
           toolName: sanitizedData.toolName,
           args: sanitizedData.args,
@@ -682,6 +1502,16 @@ export class DatabaseRepository {
   async getPendingInterrupt(id: string): Promise<InterruptRow | undefined> {
     return this.db.query.pendingInterrupts.findFirst({
       where: eq(this.schema.pendingInterrupts.id, id),
+    });
+  }
+
+  async getPendingInterruptForTurn(turnId: string): Promise<InterruptRow | undefined> {
+    return this.db.query.pendingInterrupts.findFirst({
+      where: and(
+        eq(this.schema.pendingInterrupts.turnId, turnId),
+        inArray(this.schema.pendingInterrupts.status, ['pending', 'timed_out']),
+      ),
+      orderBy: (row, { desc }) => [desc(row.createdAt)],
     });
   }
 
@@ -756,6 +1586,92 @@ export class DatabaseRepository {
     return updated;
   }
 
+  /**
+   * Resolve a durable interrupt and create its continuation attempt in the
+   * same transaction. Repeating the same decision repairs a historical
+   * resolved-without-attempt row without changing the persisted resolution.
+   */
+  async resolveInterruptWithResumeAttempt(
+    id: string,
+    action: string,
+    data?: unknown,
+  ): Promise<ResolveInterruptWithResumeAttemptResult | undefined> {
+    const sanitizedId = sanitizeDbText(id, 'pendingInterrupts.resumeResolution.id');
+    const sanitizedAction = sanitizeDbText(action, 'pendingInterrupts.resolvedAction');
+    const sanitizedData = sanitizeTypedDbValue(data ?? null, 'pendingInterrupts.resolvedData');
+
+    return this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(this.schema.pendingInterrupts)
+        .where(eq(this.schema.pendingInterrupts.id, sanitizedId))
+        .for('update');
+      if (!current) {
+        return undefined;
+      }
+
+      let interrupt = current;
+      if (current.status === 'resolved') {
+        if (current.resolvedAction !== sanitizedAction) {
+          return { kind: 'conflict', interrupt: current };
+        }
+      } else if (current.status === 'pending' || current.status === 'timed_out') {
+        const [resolved] = await tx
+          .update(this.schema.pendingInterrupts)
+          .set({
+            status: 'resolved',
+            resolvedAt: Date.now(),
+            resolvedAction: sanitizedAction,
+            resolvedData: sanitizedData,
+          })
+          .where(and(
+            eq(this.schema.pendingInterrupts.id, sanitizedId),
+            inArray(this.schema.pendingInterrupts.status, ['pending', 'timed_out']),
+          ))
+          .returning();
+        if (!resolved) {
+          return undefined;
+        }
+        interrupt = resolved;
+      } else {
+        return undefined;
+      }
+
+      if (!interrupt.sandboxSessionId) {
+        return { kind: 'ready', interrupt };
+      }
+
+      const now = Date.now();
+      const [created] = await tx
+        .insert(this.schema.interruptResumeAttempts)
+        .values({
+          interruptId: interrupt.id,
+          turnId: interrupt.turnId,
+          sandboxSessionId: interrupt.sandboxSessionId,
+          agentId: interrupt.agentId,
+          status: 'pending',
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoNothing({
+          target: this.schema.interruptResumeAttempts.interruptId,
+        })
+        .returning();
+      const resumeAttempt = created ?? (
+        await tx
+          .select()
+          .from(this.schema.interruptResumeAttempts)
+          .where(eq(this.schema.interruptResumeAttempts.interruptId, interrupt.id))
+      )[0];
+      if (!resumeAttempt) {
+        throw new Error(
+          `Expected interrupt resume attempt for resolved interrupt ${interrupt.id}`,
+        );
+      }
+      return { kind: 'ready', interrupt, resumeAttempt };
+    });
+  }
+
   async markInterruptTimedOut(id: string, data?: unknown): Promise<InterruptRow | undefined> {
     const sanitizedData = sanitizeTypedDbValue(data ?? 'Approval expired', 'pendingInterrupts.resolvedData');
     const [updated] = await this.db
@@ -795,44 +1711,13 @@ export class DatabaseRepository {
     return updated.length;
   }
 
-  async getResolvedInterruptsForSession(sessionId: string): Promise<InterruptRow[]> {
+  async getResolvedInterruptsForSandboxSession(sandboxSessionId: string): Promise<InterruptRow[]> {
     return this.db.query.pendingInterrupts.findMany({
       where: and(
-        eq(this.schema.pendingInterrupts.sessionId, sessionId),
+        eq(this.schema.pendingInterrupts.sandboxSessionId, sandboxSessionId),
         eq(this.schema.pendingInterrupts.status, 'resolved'),
       ),
     });
-  }
-
-  async upsertInterruptResumeAttempt(
-    data: InterruptResumeAttemptInsert,
-  ): Promise<InterruptResumeAttemptRow> {
-    const now = Date.now();
-    const sanitizedData = sanitizeTypedDbValue(data, 'interruptResumeAttempts.upsert');
-    const [row] = await this.db
-      .insert(this.schema.interruptResumeAttempts)
-      .values({
-        ...sanitizedData,
-        createdAt: sanitizedData.createdAt ?? now,
-        updatedAt: sanitizedData.updatedAt ?? now,
-      })
-      .onConflictDoUpdate({
-        target: this.schema.interruptResumeAttempts.interruptId,
-        set: {
-          status: 'pending',
-          sessionId: sanitizedData.sessionId ?? null,
-          agentSessionId: sanitizedData.agentSessionId,
-          agentId: sanitizedData.agentId,
-          updatedAt: now,
-          lastError: null,
-          completedAt: null,
-        },
-      })
-      .returning();
-    if (!row) {
-      throw new Error('Expected interrupt resume attempt upsert to return a row but got undefined');
-    }
-    return row;
   }
 
   async getInterruptResumeAttemptForInterrupt(interruptId: string): Promise<InterruptResumeAttemptRow | undefined> {
@@ -841,41 +1726,162 @@ export class DatabaseRepository {
     });
   }
 
-  async markInterruptResumeAttemptInProgress(id: string): Promise<InterruptResumeAttemptRow | undefined> {
-    return this.updateInterruptResumeAttempt(id, {
-      status: 'in_progress',
-      attempts: sql`${this.schema.interruptResumeAttempts.attempts} + 1`,
-      updatedAt: Date.now(),
-      lastError: null,
+  async getRecoverableInterruptResumeAttempts(
+    staleBefore: number,
+    limit = 50,
+  ): Promise<InterruptResumeAttemptRow[]> {
+    return this.db.query.interruptResumeAttempts.findMany({
+      where: or(
+        eq(this.schema.interruptResumeAttempts.status, 'pending'),
+        and(
+          eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
+          lte(this.schema.interruptResumeAttempts.updatedAt, staleBefore),
+        ),
+      ),
+      orderBy: (attempts) => [asc(attempts.updatedAt), asc(attempts.id)],
+      limit: Math.max(1, Math.min(Math.trunc(limit), 500)),
     });
   }
 
-  async markInterruptResumeAttemptCompleted(id: string): Promise<InterruptResumeAttemptRow | undefined> {
-    const now = Date.now();
-    return this.updateInterruptResumeAttempt(id, {
-      status: 'completed',
-      updatedAt: now,
-      completedAt: now,
-      lastError: null,
-    });
+  async claimInterruptResumeAttempt(input: {
+    id: string;
+    expectedUpdatedAt: number;
+    staleBefore: number;
+    claimedAt: number;
+  }): Promise<InterruptResumeAttemptRow | undefined> {
+    const id = sanitizeDbText(input.id, 'interruptResumeAttempts.claim.id');
+    const [claimed] = await this.db
+      .update(this.schema.interruptResumeAttempts)
+      .set({
+        status: 'in_progress',
+        attempts: sql`${this.schema.interruptResumeAttempts.attempts} + 1`,
+        updatedAt: input.claimedAt,
+        lastError: null,
+        completedAt: null,
+      })
+      .where(and(
+        eq(this.schema.interruptResumeAttempts.id, id),
+        eq(this.schema.interruptResumeAttempts.updatedAt, input.expectedUpdatedAt),
+        or(
+          eq(this.schema.interruptResumeAttempts.status, 'pending'),
+          and(
+            eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
+            lte(this.schema.interruptResumeAttempts.updatedAt, input.staleBefore),
+          ),
+        ),
+      ))
+      .returning();
+    return claimed;
   }
 
-  async markInterruptResumeAttemptFailed(id: string, error: string): Promise<InterruptResumeAttemptRow | undefined> {
-    return this.updateInterruptResumeAttempt(id, {
-      status: 'failed',
-      updatedAt: Date.now(),
-      lastError: sanitizeDbText(error, 'interruptResumeAttempts.lastError'),
-    });
-  }
-
-  private async updateInterruptResumeAttempt(
+  async renewInterruptResumeAttemptLease(
     id: string,
+    expectedUpdatedAt: number,
+    renewedAt: number,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    return this.updateOwnedInterruptResumeAttempt(
+      id,
+      expectedUpdatedAt,
+      { updatedAt: renewedAt },
+    );
+  }
+
+  async retryFailedInterruptResumeAttempt(
+    id: string,
+    expectedUpdatedAt: number,
+    retriedAt: number,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    const sanitizedId = sanitizeDbText(id, 'interruptResumeAttempts.retry.id');
+    const [row] = await this.db
+      .update(this.schema.interruptResumeAttempts)
+      .set({
+        status: 'pending',
+        updatedAt: retriedAt,
+        completedAt: null,
+        lastError: null,
+      })
+      .where(and(
+        eq(this.schema.interruptResumeAttempts.id, sanitizedId),
+        eq(this.schema.interruptResumeAttempts.status, 'failed'),
+        eq(this.schema.interruptResumeAttempts.updatedAt, expectedUpdatedAt),
+      ))
+      .returning();
+    return row;
+  }
+
+  async completeInterruptResumeAttempt(
+    id: string,
+    expectedUpdatedAt: number,
+    completedAt: number,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    return this.updateOwnedInterruptResumeAttempt(
+      id,
+      expectedUpdatedAt,
+      {
+        status: 'completed',
+        updatedAt: completedAt,
+        completedAt,
+        lastError: null,
+      },
+    );
+  }
+
+  async failInterruptResumeAttempt(
+    id: string,
+    expectedUpdatedAt: number,
+    failedAt: number,
+    error: string,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    return this.updateOwnedInterruptResumeAttempt(
+      id,
+      expectedUpdatedAt,
+      {
+        status: 'failed',
+        updatedAt: failedAt,
+        completedAt: null,
+        lastError: sanitizeDbText(error, 'interruptResumeAttempts.lastError'),
+      },
+    );
+  }
+
+  async failPendingInterruptResumeAttempt(
+    id: string,
+    expectedUpdatedAt: number,
+    failedAt: number,
+    error: string,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    const sanitizedId = sanitizeDbText(id, 'interruptResumeAttempts.pendingFailure.id');
+    const [row] = await this.db
+      .update(this.schema.interruptResumeAttempts)
+      .set({
+        status: 'failed',
+        updatedAt: failedAt,
+        completedAt: null,
+        lastError: sanitizeDbText(error, 'interruptResumeAttempts.lastError'),
+      })
+      .where(and(
+        eq(this.schema.interruptResumeAttempts.id, sanitizedId),
+        eq(this.schema.interruptResumeAttempts.status, 'pending'),
+        eq(this.schema.interruptResumeAttempts.updatedAt, expectedUpdatedAt),
+      ))
+      .returning();
+    return row;
+  }
+
+  private async updateOwnedInterruptResumeAttempt(
+    id: string,
+    expectedUpdatedAt: number,
     set: InterruptResumeAttemptUpdate,
   ): Promise<InterruptResumeAttemptRow | undefined> {
+    const sanitizedId = sanitizeDbText(id, 'interruptResumeAttempts.ownedUpdate.id');
     const [row] = await this.db
       .update(this.schema.interruptResumeAttempts)
       .set(set)
-      .where(eq(this.schema.interruptResumeAttempts.id, id))
+      .where(and(
+        eq(this.schema.interruptResumeAttempts.id, sanitizedId),
+        eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
+        eq(this.schema.interruptResumeAttempts.updatedAt, expectedUpdatedAt),
+      ))
       .returning();
     return row;
   }
@@ -1020,6 +2026,18 @@ export class DatabaseRepository {
       .where(and(eq(this.schema.webhooks.agentId, agentId), eq(this.schema.webhooks.active, true)));
   }
 
+  async getWebhookForAgent(id: string, agentId: string): Promise<WebhookRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(this.schema.webhooks)
+      .where(and(
+        eq(this.schema.webhooks.id, id),
+        eq(this.schema.webhooks.agentId, agentId),
+        eq(this.schema.webhooks.active, true),
+      ));
+    return row;
+  }
+
   async deleteWebhookForAgent(id: string, agentId?: string): Promise<boolean> {
     const conditions = [eq(this.schema.webhooks.id, id)];
     if (agentId) {
@@ -1049,6 +2067,114 @@ export class DatabaseRepository {
       .where(and(eq(this.schema.webhooks.id, id), eq(this.schema.webhooks.agentId, agentId)))
       .returning();
     return row;
+  }
+
+  // ── Budget Policies ────────────────────────────────────────
+
+  async listBudgetPolicies(): Promise<BudgetPolicyRow[]> {
+    return this.db.select().from(this.schema.budgetPolicies).orderBy(asc(this.schema.budgetPolicies.createdAt));
+  }
+
+  async getBudgetPolicy(id: string): Promise<BudgetPolicyRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(this.schema.budgetPolicies)
+      .where(eq(this.schema.budgetPolicies.id, id));
+    return row;
+  }
+
+  async createBudgetPolicy(data: { name: string; enabled?: boolean; doc: Record<string, unknown> }): Promise<BudgetPolicyRow> {
+    const sanitized = sanitizeTypedDbValue(data, 'budget_policies.insert');
+    return this.insertOne(
+      this.db.insert(this.schema.budgetPolicies).values(sanitized).returning(),
+      'budget policy',
+    );
+  }
+
+  async updateBudgetPolicy(
+    id: string,
+    updates: Partial<{ name: string; enabled: boolean; doc: Record<string, unknown> }>,
+  ): Promise<BudgetPolicyRow | undefined> {
+    const sanitized = sanitizeTypedDbValue(updates, 'budget_policies.update');
+    const [row] = await this.db
+      .update(this.schema.budgetPolicies)
+      .set({ ...sanitized, updatedAt: Date.now() })
+      .where(eq(this.schema.budgetPolicies.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteBudgetPolicy(id: string): Promise<boolean> {
+    const deleted = await this.db
+      .delete(this.schema.budgetPolicies)
+      .where(eq(this.schema.budgetPolicies.id, id))
+      .returning({ id: this.schema.budgetPolicies.id });
+    return deleted.length > 0;
+  }
+
+  /**
+   * Spend for one budget bucket: turns whose tags contain `selector` (plus
+   * the groupBy pair when `bucket.value` is set; tag-key-absent when
+   * `bucket.value` is null), started at/after `sinceMs`. Open turns count
+   * toward `turns` with zero tokens until they finalize.
+   */
+  async getBudgetSpend(
+    selector: Record<string, string>,
+    sinceMs: number,
+    bucket?: { key: string; value: string | null },
+  ): Promise<{ totalTokens: number; costUsd: number; turns: number }> {
+    const containment: Record<string, string> = { ...selector };
+    const conditions: SQL[] = [
+      sql`${this.schema.turns.startedAt} >= ${sinceMs}`,
+    ];
+    if (bucket) {
+      if (bucket.value !== null) {
+        containment[bucket.key] = bucket.value;
+      } else {
+        conditions.push(sql`NOT (${this.schema.turns.tags} ? ${bucket.key})`);
+      }
+    }
+    if (Object.keys(containment).length > 0) {
+      conditions.push(sql`${this.schema.turns.tags} @> ${JSON.stringify(containment)}::jsonb`);
+    }
+
+    const [row] = await this.db
+      .select({
+        totalTokens: sql<number>`coalesce(sum(${this.schema.turns.totalTokens}), 0)::float8`,
+        costUsd: sql<number>`coalesce(sum(${this.schema.turns.costUsd}), 0)::float8`,
+        turns: sql<number>`count(*)::int`,
+      })
+      .from(this.schema.turns)
+      .where(and(...conditions));
+    return row ?? { totalTokens: 0, costUsd: 0, turns: 0 };
+  }
+
+  /** Spend grouped by a tag key; bucket is null for turns missing the key. */
+  async getBudgetSpendBuckets(
+    selector: Record<string, string>,
+    sinceMs: number,
+    groupByKey: string,
+  ): Promise<Array<{ bucket: string | null; totalTokens: number; costUsd: number; turns: number }>> {
+    const conditions: SQL[] = [
+      sql`${this.schema.turns.startedAt} >= ${sinceMs}`,
+    ];
+    if (Object.keys(selector).length > 0) {
+      conditions.push(sql`${this.schema.turns.tags} @> ${JSON.stringify(selector)}::jsonb`);
+    }
+
+    return this.db
+      .select({
+        bucket: sql<string | null>`${this.schema.turns.tags} ->> ${groupByKey}`.as('bucket'),
+        totalTokens: sql<number>`coalesce(sum(${this.schema.turns.totalTokens}), 0)::float8`,
+        costUsd: sql<number>`coalesce(sum(${this.schema.turns.costUsd}), 0)::float8`,
+        turns: sql<number>`count(*)::int`,
+      })
+      .from(this.schema.turns)
+      .where(and(...conditions))
+      // Group by the output alias: repeating the `tags ->> key` fragment
+      // would bind the key as two distinct parameters, which Postgres then
+      // rejects as select-expression-not-in-GROUP-BY.
+      .groupBy(sql`bucket`);
   }
 
   // ── Sandbox Sessions ───────────────────────────────────────
@@ -1187,7 +2313,7 @@ export class DatabaseRepository {
       .where(eq(this.schema.sandboxSessions.agentId, agentId));
   }
 
-  async getSessionStatusCountsByAgent(): Promise<Map<string, ApiSessionStatusCounts>> {
+  async getSandboxSessionStatusCountsByAgent(): Promise<Map<string, ApiSandboxSessionStatusCounts>> {
     const rows = await this.db
       .select({
         agentId: this.schema.sandboxSessions.agentId,
@@ -1197,14 +2323,14 @@ export class DatabaseRepository {
       .from(this.schema.sandboxSessions)
       .groupBy(this.schema.sandboxSessions.agentId, this.schema.sandboxSessions.status);
 
-    const emptyCounts = (): ApiSessionStatusCounts => ({
+    const emptyCounts = (): ApiSandboxSessionStatusCounts => ({
       ACTIVE: 0,
       CHECKPOINTED: 0,
       RESTORING: 0,
       TERMINATED: 0,
     });
 
-    const result = new Map<string, ApiSessionStatusCounts>();
+    const result = new Map<string, ApiSandboxSessionStatusCounts>();
     for (const row of rows) {
       if (!result.has(row.agentId)) {
         result.set(row.agentId, emptyCounts());
@@ -1228,6 +2354,7 @@ export class DatabaseRepository {
         // ::float8 so postgres.js decodes the bigint aggregate as a number (exact below 2^53).
         startedAt: sql<number | null>`min(${this.schema.turns.startedAt})::float8`.as('started_at'),
         turnCount: sql<number>`count(*)::int`.as('turn_count'),
+        totalTokens: sql<number | null>`sum(${this.schema.turns.totalTokens})::float8`.as('total_tokens'),
       })
       .from(this.schema.turns)
       .where(isNotNull(this.schema.turns.conversationId))
@@ -1296,6 +2423,7 @@ export class DatabaseRepository {
       error: string | null;
       sandboxSessionId: string | null;
       sandboxStatus: string | null;
+      totalTokens: number | null;
     }> = await this.db
       .select({
         id: this.schema.conversations.id,
@@ -1304,6 +2432,7 @@ export class DatabaseRepository {
         conversationCreatedAt: this.schema.conversations.createdAt,
         startedAt: turnStats.startedAt,
         turnCount: turnStats.turnCount,
+        totalTokens: turnStats.totalTokens,
         messageCount: messageCounts.messageCount,
         latestTurnId: latestTurnCandidates.latestTurnId,
         mode: latestTurnCandidates.mode,
@@ -1340,10 +2469,9 @@ export class DatabaseRepository {
       .orderBy(desc(this.schema.conversations.updatedAt));
 
     return rows.map((row): ConversationSummaryRow => {
-      const status = projectSessionStatus(
+      const status = projectConversationStatus(
         { completedAt: row.completedAt, error: row.error },
         row.sandboxStatus,
-        'IDLE',
       );
 
       return {
@@ -1359,14 +2487,15 @@ export class DatabaseRepository {
         updatedAt: row.updatedAt,
         latestTurnId: row.latestTurnId ?? null,
         sandboxSessionId: row.sandboxSessionId ?? null,
+        totalTokens: row.totalTokens ?? null,
       };
     });
   }
 
-  // ── Checkpoints v2 (Session-based) ────────────────────────
+  // ── Checkpoints v2 (sandbox-session based) ────────────────
 
   async createCheckpointV2(checkpoint: {
-    sessionId: string;
+    sandboxSessionId: string;
     agentId: string;
     checkpointVersion?: number;
     checkpointData: Record<string, unknown>;
@@ -1375,7 +2504,7 @@ export class DatabaseRepository {
     suspendReason?: string;
   }): Promise<{ id: string }> {
     const sanitizedCheckpoint = sanitizeTypedDbValue({
-      sessionId: checkpoint.sessionId,
+      sandboxSessionId: checkpoint.sandboxSessionId,
       agentId: checkpoint.agentId,
       checkpointVersion: checkpoint.checkpointVersion,
       workspaceRef: checkpoint.workspaceRef,
@@ -1391,7 +2520,7 @@ export class DatabaseRepository {
     const [row] = await this.db
       .insert(this.schema.agentCheckpoints)
       .values({
-        sessionId: sanitizedCheckpoint.sessionId,
+        sandboxSessionId: sanitizedCheckpoint.sandboxSessionId,
         agentId: sanitizedCheckpoint.agentId,
         checkpointVersion: sanitizedCheckpoint.checkpointVersion ?? 2,
         checkpointData,
@@ -1404,11 +2533,11 @@ export class DatabaseRepository {
     return row;
   }
 
-  async getCheckpointV2(sessionId: string): Promise<CheckpointV2 | null> {
+  async getCheckpointV2(sandboxSessionId: string): Promise<CheckpointV2 | null> {
     const rows = await this.db
       .select()
       .from(this.schema.agentCheckpoints)
-      .where(eq(this.schema.agentCheckpoints.sessionId, sessionId))
+      .where(eq(this.schema.agentCheckpoints.sandboxSessionId, sandboxSessionId))
       .orderBy(desc(this.schema.agentCheckpoints.createdAt))
       .limit(1);
 
@@ -1417,10 +2546,10 @@ export class DatabaseRepository {
     return row;
   }
 
-  async deleteCheckpointsForSession(sessionId: string): Promise<number> {
+  async deleteCheckpointsForSandboxSession(sandboxSessionId: string): Promise<number> {
     const deleted = await this.db
       .delete(this.schema.agentCheckpoints)
-      .where(eq(this.schema.agentCheckpoints.sessionId, sessionId))
+      .where(eq(this.schema.agentCheckpoints.sandboxSessionId, sandboxSessionId))
       .returning({ id: this.schema.agentCheckpoints.id });
     return deleted.length;
   }
@@ -1442,10 +2571,10 @@ export class DatabaseRepository {
     return Object.fromEntries(rows.map((r: SystemSettingRow) => [r.key, r.value]));
   }
 
-  async tryInsertToolDedup(requestId: string, sessionId: string, toolName: string): Promise<boolean> {
+  async tryInsertToolDedup(requestId: string, turnId: string, toolName: string): Promise<boolean> {
     try {
       await this.db.insert(this.schema.toolRequestDedup).values(
-        sanitizeTypedDbValue({ requestId, sessionId, toolName, status: 'in_progress' }, 'toolRequestDedup.insert'),
+        sanitizeTypedDbValue({ requestId, turnId, toolName, status: 'in_progress' }, 'toolRequestDedup.insert'),
       );
       return true;
     } catch (err: unknown) {
@@ -1458,7 +2587,7 @@ export class DatabaseRepository {
 
   async getToolDedup(requestId: string): Promise<{
     requestId: string;
-    sessionId: string;
+    turnId: string;
     toolName: string;
     status: string;
     result: string | null;
@@ -1589,10 +2718,10 @@ export class DatabaseRepository {
     });
   }
 
-  async listArtifactsForSession(sessionId: string): Promise<ArtifactRow[]> {
+  async listArtifactsForTurn(turnId: string): Promise<ArtifactRow[]> {
     return this.db.query.artifacts.findMany({
       where: and(
-        eq(this.schema.artifacts.sessionId, sessionId),
+        eq(this.schema.artifacts.turnId, turnId),
         eq(this.schema.artifacts.status, 'active'),
       ),
       orderBy: [desc(this.schema.artifacts.createdAt)],

@@ -105,8 +105,8 @@ test.describe('Five-Minute Journey (E2E-01) @extended', () => {
     // ---------------------------------------------------------------
     expect(typeof sendBody.conversationId).toBe('string');
     expect(sendBody.conversationId.length).toBeGreaterThan(0);
-    expect(typeof sendBody.sessionId).toBe('string');
-    expect(sendBody.sessionId.length).toBeGreaterThan(0);
+    expect(typeof sendBody.turnId).toBe('string');
+    expect(sendBody.turnId.length).toBeGreaterThan(0);
 
     // Tool call cards are optional — verify if present
     const toolCards = page.getByTestId('tool-call-card');
@@ -139,7 +139,7 @@ test.describe('Five-Minute Journey (E2E-01) @extended', () => {
     await page.goto(`/agents/${agentId}`);
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByTestId('sessions-tab')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('turns-tab')).toBeVisible({ timeout: 10_000 });
 
     // ---------------------------------------------------------------
     // Wall-clock timing assertion

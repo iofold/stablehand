@@ -129,14 +129,12 @@ describe('Agent tool management integration', () => {
     });
   });
 
-  describe('nativeTools metadata behavior', () => {
+  describe('nativeTools contract behavior', () => {
     it('saves nativeTools allowlist and GET returns it', async () => {
       const createRes = await createAgent({
         name: 'native-tools-allowlist',
-        metadata: {
-          nativeTools: {
-            allowlist: ['Bash', 'Read', 'Write'],
-          },
+        nativeTools: {
+          allowlist: ['Bash', 'Read', 'Write'],
         },
       });
 
@@ -153,17 +151,16 @@ describe('Agent tool management integration', () => {
     it('clears nativeTools when updated back to default metadata', async () => {
       const createRes = await createAgent({
         name: 'native-tools-clear',
-        metadata: {
-          nativeTools: {
-            allowlist: ['Bash'],
-          },
+        nativeTools: {
+          allowlist: ['Bash'],
         },
       });
+      expect(createRes.statusCode).toBe(201);
       const agentId = createRes.json().id;
 
-      const updateRes = await updateAgent(agentId, { metadata: {} });
+      const updateRes = await updateAgent(agentId, { nativeTools: null });
       expect(updateRes.statusCode).toBe(200);
-      expect(updateRes.json().metadata).toBeNull();
+      expect(updateRes.json().nativeTools).toBeNull();
 
       const getRes = await getAgent(agentId);
       expect(getRes.statusCode).toBe(200);

@@ -8,7 +8,7 @@ export type NormalizedApprovalResult =
 
 export async function requestToolApproval(options: {
   id: string;
-  runId: string;
+  turnId: string;
   toolName: string;
   args: Record<string, unknown>;
   onApprovalNeeded: ApprovalCallback;
@@ -23,7 +23,7 @@ export async function requestToolApproval(options: {
 
   const response = await options.onApprovalNeeded({
     id: options.id,
-    runId: options.runId,
+    turnId: options.turnId,
     toolName: options.toolName,
     args: options.args,
   });

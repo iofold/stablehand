@@ -199,7 +199,7 @@ describe('Suspend at after_llm phase', () => {
     expect(retrieved.sessionId).toBe('run-db');
     expect(retrieved.harnessName).toBe('pi-agent');
     expect(payload.accumulatedText).toBe('World');
-    expect(retrieved.cursor.lastCompletedTurnId).toBe('turn-db');
+    expect(retrieved.cursor.lastCompletedTurnId).toBeUndefined();
   });
 });
 
@@ -289,7 +289,7 @@ describe('Suspend at after_tool phase', () => {
     expect(checkpoint.runnerState.pendingRequests).toBeUndefined();
     expect(checkpoint.runnerState.status).toBe('IDLE');
     expect(checkpoint.cursor.nextMessageSeq).toBe(1);
-    expect(checkpoint.cursor.lastCompletedTurnId).toBe('turn-tool');
+    expect(checkpoint.cursor.lastCompletedTurnId).toBeUndefined();
   });
 });
 

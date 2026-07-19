@@ -1,49 +1,48 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+import {
+  WebhookSchema,
+  WebhookUpsertInputSchema,
+  type Webhook,
+  type WebhookUpsertInput,
+} from '@ctxmill/contracts';
 
-import { VALID_WEBHOOK_EVENTS, isValidWebhookEvent } from '../../webhook-events.js';
+import type { WebhookRow } from '../../../database/repository.js';
 import type { AgentSubRouteOptions } from './types.js';
 
-type WebhookBody = {
-  url?: string;
-  events?: string[];
-  secret?: string | null;
-};
-
-type ValidatedWebhookBody = {
-  url: string;
-  events: string[];
-  secret?: string | null;
-};
-
 type WebhookValidationResult =
-  | { ok: true; body: ValidatedWebhookBody }
-  | { ok: false; error: { error: string; validEvents?: typeof VALID_WEBHOOK_EVENTS } };
-
-function validateWebhookBody(body: WebhookBody | undefined): WebhookValidationResult {
-  if (!body?.url || !body?.events?.length) {
-    return { ok: false, error: { error: 'url and events are required' } };
-  }
-
-  const invalidEvents = body.events.filter((eventType) => !isValidWebhookEvent(eventType));
-  if (invalidEvents.length > 0) {
-    return {
-      ok: false,
+  | { ok: true; body: WebhookUpsertInput }
+  | {
+      ok: false;
       error: {
-        error: `Invalid event types: ${invalidEvents.join(', ')}`,
-        validEvents: VALID_WEBHOOK_EVENTS,
-      },
+        error: 'Invalid webhook definition';
+        issues: Array<{ path: string; message: string }>;
+      };
     };
-  }
 
+function validateWebhookBody(body: unknown): WebhookValidationResult {
+  const result = WebhookUpsertInputSchema.safeParse(body);
+  if (result.success) {
+    return { ok: true, body: result.data };
+  }
   return {
-    ok: true,
-    body: {
-      url: body.url,
-      events: body.events,
-      secret: body.secret,
+    ok: false,
+    error: {
+      error: 'Invalid webhook definition',
+      issues: result.error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
     },
   };
+}
+
+function toApiWebhook(webhook: WebhookRow): Webhook {
+  const { secret, ...safeWebhook } = webhook;
+  return WebhookSchema.parse({
+    ...safeWebhook,
+    hasSecret: typeof secret === 'string' && secret.length > 0,
+  });
 }
 
 export async function webhookRoutes(
@@ -54,7 +53,7 @@ export async function webhookRoutes(
 
   app.post('/:id/webhooks', { preHandler: [loadAgent] }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const validated = validateWebhookBody(request.body as WebhookBody | undefined);
+    const validated = validateWebhookBody(request.body);
     if (!validated.ok) {
       return reply.status(400).send(validated.error);
     }
@@ -66,17 +65,17 @@ export async function webhookRoutes(
       agentId: id,
       url: body.url,
       events: body.events,
-      secret: body.secret ?? null,
+      secret: body.secret,
       createdAt: now,
       updatedAt: now,
     });
 
-    return reply.status(201).send(webhook);
+    return reply.status(201).send(toApiWebhook(webhook));
   });
 
   app.put('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {
     const { id, webhookId } = request.params as { id: string; webhookId: string };
-    const validated = validateWebhookBody(request.body as WebhookBody | undefined);
+    const validated = validateWebhookBody(request.body);
     if (!validated.ok) {
       return reply.status(400).send(validated.error);
     }
@@ -85,19 +84,19 @@ export async function webhookRoutes(
     const updated = await db.updateWebhookForAgent(webhookId, id, {
       url: body.url,
       events: body.events,
-      secret: body.secret ?? null,
+      secret: body.secret,
     });
     if (!updated) {
       return reply.status(404).send({ error: 'Webhook not found' });
     }
 
-    return reply.send(updated);
+    return reply.send(toApiWebhook(updated));
   });
 
   app.get('/:id/webhooks', { preHandler: [loadAgent] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const hooks = await db.listWebhooks(id);
-    return reply.send(hooks);
+    return reply.send(hooks.map(toApiWebhook));
   });
 
   app.delete('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {

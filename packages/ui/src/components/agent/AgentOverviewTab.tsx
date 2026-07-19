@@ -3,10 +3,11 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
+import { TurnStatusBadge } from './TurnStatusBadge';
 import { cn } from '@/lib/utils';
-import type { AgentSession } from '@/stores/agents';
-import { formatTimestamp } from '@/lib/format';
+import type { AgentTurn } from '@/stores/agents';
+import { RelativeTime } from '@/components/ui/RelativeTime';
+import { formatCompactNumber } from '@/lib/format';
 
 /* ------------------------------------------------------------------ */
 /*  StatCard                                                           */
@@ -15,14 +16,16 @@ import { formatTimestamp } from '@/lib/format';
 function StatCard({
   label,
   value,
+  title,
 }: {
   label: string;
-  value: number;
+  value: number | string;
+  title?: string;
 }) {
   return (
     <div className="flex flex-col px-6 py-4 min-w-0">
       <span className="text-label mb-1 truncate">{label}</span>
-      <span className="tabular-nums text-2xl font-semibold text-surface-100 truncate">
+      <span className="tabular-nums text-2xl font-semibold text-surface-100 truncate" title={title}>
         {value ?? 0}
       </span>
     </div>
@@ -47,8 +50,10 @@ export interface AgentOverviewTabProps {
   conversationCount: number;
   activeSandboxSessions: number;
   toolsCount: number;
-  recentSessions: AgentSession[];
-  onContinueSession: (conversationId: string) => void;
+  tokensLast24h?: number;
+  tokensTotal?: number;
+  recentTurns: AgentTurn[];
+  onContinueConversation: (conversationId: string) => void;
 }
 
 export function AgentOverviewTab({
@@ -56,8 +61,10 @@ export function AgentOverviewTab({
   conversationCount,
   activeSandboxSessions,
   toolsCount,
-  recentSessions,
-  onContinueSession,
+  tokensLast24h,
+  tokensTotal,
+  recentTurns,
+  onContinueConversation,
 }: AgentOverviewTabProps) {
   const [promptExpanded, setPromptExpanded] = useState(false);
   const parsedHarnessConfig = agent.harnessConfig;
@@ -80,49 +87,57 @@ export function AgentOverviewTab({
         <div className="flex-1 min-w-0"><StatCard label="Conversations" value={conversationCount} /></div>
         <div className="flex-1 min-w-0"><StatCard label="Active Sandboxes" value={activeSandboxSessions} /></div>
         <div className="flex-1 min-w-0"><StatCard label="Tools Count" value={toolsCount} /></div>
+        <div className="flex-1 min-w-0">
+          <StatCard
+            label="Tokens (24h)"
+            value={formatCompactNumber(tokensLast24h ?? 0)}
+            title={`${(tokensTotal ?? 0).toLocaleString()} tokens total`}
+          />
+        </div>
       </div>
 
       <div className="rounded-lg border border-surface-700 bg-surface-800 p-6">
         <h3 className="text-label mb-4">
-          Recent Sessions
+          Recent Turns
         </h3>
-        {recentSessions.length === 0 ? (
-          <p className="text-sm text-surface-400">No sessions yet.</p>
+        {recentTurns.length === 0 ? (
+          <p className="text-sm text-surface-400">No turns yet.</p>
         ) : (
           <>
             <div className="overflow-y-auto max-h-48 flex flex-col">
-              {recentSessions.map((run, idx) => (
+              {recentTurns.map((turn, index) => (
                 <button
-                  key={run.id}
+                  key={turn.id}
                   type="button"
-                   onClick={() => onContinueSession(run.conversationId ?? run.id)}
+                  onClick={() => onContinueConversation(turn.conversationId ?? turn.id)}
                   className={cn(
                     'flex w-full items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-surface-700/60 cursor-pointer text-left px-4 -mx-4 rounded-lg',
-                    idx !== recentSessions.length - 1 && 'border-b border-surface-700/50'
+                    index !== recentTurns.length - 1 && 'border-b border-surface-700/50'
                   )}
                 >
-                  <RunStatusBadge status={run.status} />
-                  <span className="flex-shrink-0 font-mono text-surface-400 text-xs" title={run.id}>
-                    {run.conversationId ? run.conversationId.slice(0, 8) : run.id.slice(0, 8)}&hellip;
+                  <TurnStatusBadge status={turn.status} />
+                  <span className="flex-shrink-0 font-mono text-surface-400 text-xs" title={turn.id}>
+                    {turn.conversationId ? turn.conversationId.slice(0, 8) : turn.id.slice(0, 8)}&hellip;
                   </span>
                   <span className="flex-1 min-w-0 truncate text-surface-300">
-                    {run.taskDescription || 'No description'}
+                    {turn.taskDescription || 'No description'}
                   </span>
-                  <span className="flex-shrink-0 text-[11px] font-mono text-surface-400 tabular-nums">
-                    {formatTimestamp(run.startedAt)}
-                  </span>
+                  <RelativeTime
+                    timestamp={turn.completedAt ?? turn.startedAt}
+                    className="flex-shrink-0 text-[11px] font-mono text-surface-400 tabular-nums"
+                  />
                   <ChevronRight className="h-4 w-4 text-surface-400" />
                 </button>
               ))}
             </div>
-            {recentSessions.length > 3 && (
+            {recentTurns.length > 3 && (
               <div className="mt-3 pt-3 border-t border-surface-700/50 text-center">
                 <button
                   type="button"
-                   onClick={() => onContinueSession('')}
+                  onClick={() => onContinueConversation('')}
                   className="text-xs font-medium text-accent-400 hover:text-accent-300 transition-colors"
                 >
-                  View All Sessions
+                  View All Turns
                 </button>
               </div>
             )}

@@ -10,7 +10,6 @@ import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
 
 import {
-  createTestBus,
   collectEvents,
   createCanonicalWireHarness,
   flushWire,
@@ -35,16 +34,16 @@ describe('HITL Interrupt Lifecycle', () => {
   // ── Full approval flow ─────────────────────────────────────────
 
   describe('Full approval flow', () => {
-    it('waitForApproval emits run.interrupted, resolve with approve resolves promise and emits run.interrupt_resolved', async () => {
-      const interruptedEvents = collectEvents(bus, 'run.interrupted');
-      const resolvedEvents = collectEvents(bus, 'run.interrupt_resolved');
+    it('waitForApproval emits interrupt.requested, resolve with approve resolves promise and emits interrupt.resolved', async () => {
+      const interruptedEvents = collectEvents(bus, 'interrupt.requested');
+      const resolvedEvents = collectEvents(bus, 'interrupt.resolved');
 
       const promise = interrupts.waitForApproval(
         'run-1', 'agent-1', 'tc-1', 'send_email',
         { to: 'user@example.com', body: 'Hello' },
       );
 
-       // Verify run.interrupted was emitted (persist hook defers dispatch by a tick)
+       // Verify interrupt.requested was emitted (persist hook defers dispatch by a tick)
        await flushWire();
        expect(interruptedEvents.events).toHaveLength(1);
        expect(interruptedEvents.events[0]).toEqual(
@@ -52,35 +51,37 @@ describe('HITL Interrupt Lifecycle', () => {
            turnId: 'run-1',
            agentId: 'agent-1',
            toolCallId: 'tc-1',
-           toolName: 'send_email',
+           toolCallName: 'send_email',
            args: { to: 'user@example.com', body: 'Hello' },
-           interruptId: 'run-1',
+           interruptId: expect.any(String),
          }),
        );
+       const interruptId = interruptedEvents.events[0].interruptId;
+       expect(interruptId).not.toBe('run-1');
 
-      // Verify the canonical wire carried it as CUSTOM{name:'ctxmill.hitl.requested'}
+      // Verify the canonical wire carried it as CUSTOM{name:'ctxmill.interrupt.requested'}
       await flushWire();
       expect(harness.wire).toHaveLength(1);
       expect(harness.wire[0]).toEqual({
         agentId: 'agent-1',
-        event: expect.objectContaining({ type: 'CUSTOM', name: 'ctxmill.hitl.requested', toolCallId: 'tc-1' }),
+        event: expect.objectContaining({ type: 'CUSTOM', name: 'ctxmill.interrupt.requested', toolCallId: 'tc-1' }),
       });
 
       // Resolve with approve
-      const resolved = await interrupts.resolve('run-1', 'approve', { reason: 'ok' }, 'agent-1');
+      const resolved = await interrupts.resolveForTurn('run-1', 'approve', { reason: 'ok' }, 'agent-1');
       expect(resolved).toBe(true);
 
       // Verify the promise resolves correctly
       const result = await promise;
       expect(result).toEqual({ action: 'approve', data: { reason: 'ok' } });
 
-       // Verify run.interrupt_resolved event was emitted
+       // Verify interrupt.resolved event was emitted
        expect(resolvedEvents.events).toHaveLength(1);
        expect(resolvedEvents.events[0]).toEqual(
          expect.objectContaining({
            turnId: 'run-1',
            agentId: 'agent-1',
-           interruptId: 'run-1',
+           interruptId,
            action: 'approve',
          }),
        );
@@ -89,7 +90,7 @@ describe('HITL Interrupt Lifecycle', () => {
       await flushWire();
       expect(harness.wire.some((entry) =>
         entry.event.type === 'CUSTOM'
-        && entry.event.name === 'ctxmill.hitl.resolved'
+        && entry.event.name === 'ctxmill.interrupt.resolved'
         && entry.event.action === 'approve')).toBe(true);
 
       interruptedEvents.unsubscribe();
@@ -101,14 +102,14 @@ describe('HITL Interrupt Lifecycle', () => {
 
   describe('Rejection flow', () => {
     it('resolve with reject resolves promise with reject action', async () => {
-      const resolvedEvents = collectEvents(bus, 'run.interrupt_resolved');
+      const resolvedEvents = collectEvents(bus, 'interrupt.resolved');
 
       const promise = interrupts.waitForApproval(
         'run-rej', 'agent-rej', 'tc-rej', 'delete_file',
         { path: '/important.txt' },
       );
 
-      const resolved = await interrupts.resolve('run-rej', 'reject', { reason: 'too dangerous' }, 'agent-rej');
+      const resolved = await interrupts.resolveForTurn('run-rej', 'reject', { reason: 'too dangerous' }, 'agent-rej');
       expect(resolved).toBe(true);
 
       const result = await promise;
@@ -133,7 +134,7 @@ describe('HITL Interrupt Lifecycle', () => {
     it('waitForApproval with short timeout resolves with suspend action after timer fires', async () => {
       vi.useFakeTimers();
 
-      const resolvedEvents = collectEvents(bus, 'run.interrupt_resolved');
+      const resolvedEvents = collectEvents(bus, 'interrupt.resolved');
 
       const promise = interrupts.waitForApproval(
         'run-to', 'agent-to', 'tc-to', 'risky_op',
@@ -142,7 +143,7 @@ describe('HITL Interrupt Lifecycle', () => {
       );
 
       // Not yet resolved
-      expect(interrupts.hasPending('run-to')).toBe(true);
+      expect(interrupts.hasPendingForTurn('run-to')).toBe(true);
 
       // Advance past the timeout
       vi.advanceTimersByTime(100);
@@ -150,7 +151,7 @@ describe('HITL Interrupt Lifecycle', () => {
       const result = await promise;
       expect(result.action).toBe('suspend');
 
-      expect(interrupts.hasPending('run-to')).toBe(false);
+      expect(interrupts.hasPendingForTurn('run-to')).toBe(false);
 
        expect(resolvedEvents.events).toHaveLength(1);
        expect(resolvedEvents.events[0]).toEqual(
@@ -170,8 +171,8 @@ describe('HITL Interrupt Lifecycle', () => {
 
   describe('Concurrent runs isolation', () => {
     it('two different runIds get independent resolutions and events', async () => {
-      const interruptedEvents = collectEvents(bus, 'run.interrupted');
-      const resolvedEvents = collectEvents(bus, 'run.interrupt_resolved');
+      const interruptedEvents = collectEvents(bus, 'interrupt.requested');
+      const resolvedEvents = collectEvents(bus, 'interrupt.resolved');
 
       const promise1 = interrupts.waitForApproval(
         'run-c1', 'agent-shared', 'tc-c1', 'tool_a', { x: 1 },
@@ -187,8 +188,8 @@ describe('HITL Interrupt Lifecycle', () => {
        expect(interruptedEvents.events[1].turnId).toBe('run-c2');
 
        // Resolve run-1 with approve, run-2 with reject
-       await interrupts.resolve('run-c1', 'approve', { ok: true }, 'agent-shared');
-       await interrupts.resolve('run-c2', 'reject', { reason: 'no' }, 'agent-shared');
+       await interrupts.resolveForTurn('run-c1', 'approve', { ok: true }, 'agent-shared');
+       await interrupts.resolveForTurn('run-c2', 'reject', { reason: 'no' }, 'agent-shared');
 
        const result1 = await promise1;
        const result2 = await promise2;
@@ -212,7 +213,7 @@ describe('HITL Interrupt Lifecycle', () => {
 
   describe('Supersede behavior', () => {
     it('second waitForApproval for same runId supersedes first (first resolves with reject)', async () => {
-      const interruptedEvents = collectEvents(bus, 'run.interrupted');
+      const interruptedEvents = collectEvents(bus, 'interrupt.requested');
 
       const promise1 = interrupts.waitForApproval(
         'run-sup', 'agent-sup', 'tc-sup-1', 'tool_old', { v: 1 },
@@ -232,7 +233,7 @@ describe('HITL Interrupt Lifecycle', () => {
       expect(interruptedEvents.events[1].toolCallId).toBe('tc-sup-2');
 
       // Resolve the second interrupt with approve
-      await interrupts.resolve('run-sup', 'approve', { good: true }, 'agent-sup');
+      await interrupts.resolveForTurn('run-sup', 'approve', { good: true }, 'agent-sup');
 
       const result2 = await promise2;
       expect(result2).toEqual({ action: 'approve', data: { good: true } });
@@ -245,14 +246,14 @@ describe('HITL Interrupt Lifecycle', () => {
 
   describe('Resolve non-existent interrupt', () => {
     it('resolve() with unknown runId returns false', async () => {
-      const result = await interrupts.resolve('run-nonexistent', 'approve', undefined, 'agent-x');
+      const result = await interrupts.resolveForTurn('run-nonexistent', 'approve', undefined, 'agent-x');
       expect(result).toBe(false);
     });
 
     it('resolve() with unknown runId does not emit any events', async () => {
-      const resolvedEvents = collectEvents(bus, 'run.interrupt_resolved');
+      const resolvedEvents = collectEvents(bus, 'interrupt.resolved');
 
-      await interrupts.resolve('run-ghost', 'approve', undefined, 'agent-y');
+      await interrupts.resolveForTurn('run-ghost', 'approve', undefined, 'agent-y');
 
       expect(resolvedEvents.events).toHaveLength(0);
 

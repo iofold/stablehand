@@ -64,7 +64,7 @@ export const myTool = defineTool({
     // input is automatically validated and typed based on the Zod schema
     const { userId, includePrivate } = input as { userId: string; includePrivate: boolean };
     
-    // ctx provides access to agentId, conversationId, and workspaceDir
+    // ctx provides explicit agent, conversation, turn, sandbox, and workspace context
     const data = await db.users.find(userId);
     return JSON.stringify(data);
   },
@@ -76,10 +76,11 @@ export const myTool = defineTool({
 The `ToolContext` provides essential metadata and services to your tool handler:
 
 *   `agentId`: The unique identifier of the agent calling the tool.
-*   `conversationId`: The current conversation ID.
-*   `instanceId`: The specific run/instance ID.
+*   `conversationId`: The durable conversation/thread ID.
+*   `turnId`: The current execution ID, when the tool call belongs to a turn.
+*   `sandboxSessionId`: The sandbox container lifecycle ID, when available.
 *   `requestId`: The tool request ID when available.
-*   `workspaceDir`: The absolute path to the session-scoped workspace directory.
+*   `workspaceDir`: The absolute path to the conversation workspace directory.
 *   `eventBus`: An interface to emit events back to the orchestrator.
 
 ### Tool Locations

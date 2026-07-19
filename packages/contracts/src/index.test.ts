@@ -1,0 +1,566 @@
+import { readFileSync } from 'node:fs';
+
+import { describe, expect, it } from 'vitest';
+
+import * as contracts from './index.js';
+
+describe('@ctxmill/contracts', () => {
+  it('defines a strict conversation snapshot boundary for SSE replay', () => {
+    const snapshot = {
+      conversationId: 'conversation-1',
+      eventCursor: '000000000042',
+      messages: [{
+        id: 'message-1',
+        conversationId: 'conversation-1',
+        agentId: 'agent-1',
+        turnId: 'turn-1',
+        messageSeq: 0,
+        messageRevision: 2,
+        role: 'assistant',
+        content: 'Complete',
+        createdAt: 1,
+      }],
+    };
+
+    expect(contracts.ConversationSnapshotResponseSchema.parse(snapshot))
+      .toEqual(snapshot);
+    expect(() => contracts.ConversationSnapshotResponseSchema.parse(
+      snapshot.messages,
+    )).toThrow();
+    expect(() => contracts.ConversationSnapshotResponseSchema.parse({
+      ...snapshot,
+      eventCursor: 'legacy-cursor',
+    })).toThrow();
+  });
+
+  it('validates the complete server-emitted canonical fixture', () => {
+    const fixture = JSON.parse(readFileSync(
+      new URL('../test-fixtures/canonical-stream-events.json', import.meta.url),
+      'utf8',
+    )) as unknown[];
+
+    expect(fixture.map((event) => contracts.CanonicalStreamEventSchema.parse(event)))
+      .toHaveLength(19);
+  });
+
+  it('strictly validates canonical agent inputs without legacy model fields', () => {
+    const valid = {
+      name: 'bank-reconciliation',
+      harness: 'claude-agents',
+      harnessConfig: { model: 'claude-sonnet-4-20250514' },
+      systemPrompt: 'Reconcile the account.',
+      tools: ['artifact_upload'],
+      nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+      workspaceContent: {
+        files: [{ src: 'skills', dest: '.claude/skills' }],
+      },
+      mode: 'background',
+      manifest: {
+        apiVersion: 'ctxmill.io/v1',
+        kind: 'Agent',
+      },
+    };
+
+    expect(contracts.AgentCreateInputSchema.parse(valid)).toEqual(valid);
+    expect(contracts.AgentUpdateInputSchema.parse({
+      nativeTools: null,
+      workspaceContent: null,
+      mode: null,
+      manifest: null,
+    })).toEqual({
+      nativeTools: null,
+      workspaceContent: null,
+      mode: null,
+      manifest: null,
+    });
+    expect(() => contracts.AgentCreateInputSchema.parse({
+      ...valid,
+      model: 'legacy-model',
+    })).toThrow();
+  });
+
+  it('owns strict canonical config schemas for every shipped harness', () => {
+    expect(contracts.LangGraphConfigSchema.parse({
+      model: 'gpt-5',
+      subagents: [{
+        name: 'reviewer',
+        description: 'Review close output',
+        systemPrompt: 'Review carefully.',
+      }],
+    })).toMatchObject({ provider: 'openai', model: 'gpt-5' });
+    expect(contracts.ClaudeAgentsConfigSchema.parse({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-20250514',
+      maxTurns: 20,
+    })).toMatchObject({ provider: 'anthropic' });
+    expect(contracts.PIAgentConfigSchema.parse({
+      provider: 'google',
+      model: 'gemini-2.5-pro',
+    })).toMatchObject({ provider: 'google' });
+    expect(Object.keys(contracts.HARNESS_CONFIG_SCHEMAS).sort()).toEqual([
+      'claude-agents',
+      'langgraph',
+      'pi-agent',
+    ]);
+
+    expect(() => contracts.ClaudeAgentsConfigSchema.parse({
+      model: 'claude-sonnet-4-20250514',
+      nativeTools: { allowlist: ['Read'] },
+    })).toThrow();
+    expect(() => contracts.PIAgentConfigSchema.parse({
+      provider: 'gemini',
+      model: 'gemini-2.5-pro',
+    })).toThrow();
+    expect(() => contracts.LangGraphConfigSchema.parse({
+      model: 'gpt-5',
+      unknownOption: true,
+    })).toThrow();
+    expect(() => contracts.ClaudeAgentsConfigSchema.parse({
+      model: 'claude-sonnet-4-20250514',
+      setup: {
+        symlinks: [{ src: '../host-secrets', dest: '.claude/skills' }],
+      },
+    })).toThrow();
+    expect(() => contracts.PIAgentConfigSchema.parse({
+      model: 'gpt-5',
+      extensions: ['/host/extension.ts'],
+    })).toThrow();
+    expect(() => contracts.AgentNativeToolsSchema.parse({
+      allowlist: ['Bash', 'Bash'],
+    })).toThrow();
+    expect(() => contracts.AgentNativeToolsSchema.parse({
+      allowlist: ['Bash'],
+      blocklist: ['Bash'],
+    })).toThrow();
+  });
+
+  it('validates the Pilot control-plane response surface', () => {
+    expect(contracts.AgentListResponseSchema.parse([{
+      id: 'agent-1',
+      name: 'bank-reconciliation',
+      harness: 'claude-agents',
+      harnessConfig: { model: 'claude-sonnet-4-20250514' },
+      systemPrompt: 'Reconcile the account.',
+      tools: [],
+      description: null,
+      workspaceDir: '/data/agents/agent-1',
+      status: 'idle',
+      manifest: null,
+      version: 1,
+      metadata: null,
+      createdAt: 1,
+      updatedAt: 2,
+      nativeTools: null,
+      workspaceContent: null,
+      mode: null,
+      resourceLimits: null,
+      sseClients: 0,
+      hasPendingInterrupt: false,
+      conversationCount: 1,
+      turnCount: 2,
+      completedTurnCount: 2,
+      failedTurnCount: 0,
+      activeTurnCount: 0,
+      tokensTotal: 100,
+      tokensLast24h: 100,
+      recentTurns: [],
+      sandboxSessionsByStatus: {
+        ACTIVE: 0,
+        CHECKPOINTED: 1,
+        RESTORING: 0,
+        TERMINATED: 0,
+      },
+      lastActivity: null,
+    }])).toHaveLength(1);
+
+    expect(contracts.SecretListResponseSchema.parse({ keys: ['ANTHROPIC_API_KEY'] }))
+      .toEqual({ keys: ['ANTHROPIC_API_KEY'] });
+    expect(() => contracts.SecretListResponseSchema.parse({
+      keys: ['ANTHROPIC_API_KEY'],
+      values: { ANTHROPIC_API_KEY: 'must-not-leak' },
+    })).toThrow();
+  });
+
+  it('uses an explicit immutable workspace revision contract', () => {
+    const revision = {
+      revision: 3,
+      sha256: '8d7df0f0',
+      fileCount: 12,
+      totalBytes: 4096,
+      appliedAt: 42,
+    };
+
+    expect(contracts.WorkspaceRevisionResponseSchema.parse(revision)).toEqual(revision);
+    expect(contracts.WorkspaceReplaceResponseSchema.parse(revision)).toEqual(revision);
+    expect(() => contracts.WorkspaceRevisionResponseSchema.parse({
+      revision: '3',
+      digest: '8d7df0f0',
+      files: 12,
+      totalBytes: 4096,
+    })).toThrow();
+  });
+
+  it('accepts every canonical AG-UI frame and rejects compatibility fields', () => {
+    expect(contracts.CanonicalStreamEventSchema.parse({
+      type: 'TEXT_MESSAGE_CONTENT',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      messageId: 'message-1',
+      delta: 'hello',
+      timestamp: 1,
+    })).toMatchObject({ delta: 'hello' });
+
+    expect(contracts.CanonicalStreamEventSchema.parse({
+      type: 'TEXT_MESSAGE_START',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      messageId: 'message-user-1',
+      role: 'user',
+      timestamp: 1,
+    })).toMatchObject({ role: 'user' });
+
+    expect(contracts.CanonicalStreamEventSchema.parse({
+      type: 'CUSTOM',
+      name: 'ctxmill.interrupt.requested',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      interruptId: 'interrupt-1',
+      toolCallId: 'tool-call-1',
+      toolCallName: 'request-approval',
+      args: { reason: 'publish' },
+      timestamp: 1,
+    })).toMatchObject({ name: 'ctxmill.interrupt.requested' });
+
+    expect(contracts.CanonicalStreamEventSchema.parse({
+      type: 'CUSTOM',
+      name: 'ctxmill.turn.pending',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      mode: 'background',
+      taskDescription: 'Close April',
+      timestamp: 1,
+    })).toMatchObject({ mode: 'background' });
+
+    expect(contracts.CanonicalStreamEventSchema.parse({
+      type: 'CUSTOM',
+      name: 'ctxmill.message.committed',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      messageSeq: 1,
+      role: 'assistant',
+      content: 'Complete',
+      parts: [{ type: 'text', content: 'Complete' }],
+      toolCalls: [],
+      timestamp: 1,
+    })).toMatchObject({ messageId: 'message-1' });
+
+    expect(() => contracts.CanonicalStreamEventSchema.parse({
+      type: 'TEXT_MESSAGE_CONTENT',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      messageId: 'message-1',
+      content: 'legacy alias',
+      timestamp: 1,
+    })).toThrow();
+
+    expect(() => contracts.CanonicalStreamEventSchema.parse({
+      type: 'CUSTOM',
+      name: 'ctxmill.interrupt.requested',
+      subtype: 'hitl_pause',
+      runId: 'turn-1',
+      interruptId: 'interrupt-1',
+      toolCallId: 'tool-call-1',
+      toolName: 'legacy alias',
+      args: {},
+      timestamp: 1,
+    })).toThrow();
+  });
+
+  it('requires the canonical named sandbox-session snapshot', () => {
+    expect(contracts.AgentStreamEventSchema.parse({
+      type: 'CUSTOM',
+      name: 'ctxmill.sandbox_session.snapshot',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      sandboxSessionId: 'sandbox-1',
+      activeTurnId: null,
+      status: 'ACTIVE',
+      harnessName: 'claude-agents',
+      containerName: 'ctxmill-sandbox-1',
+      timestamp: 1,
+    })).toMatchObject({ sandboxSessionId: 'sandbox-1' });
+
+    expect(() => contracts.AgentStreamEventSchema.parse({
+      type: 'CUSTOM',
+      subtype: 'state_snapshot',
+      agentId: 'agent-1',
+      sandboxSessionId: 'sandbox-1',
+      timestamp: 1,
+    })).toThrow();
+  });
+
+  it('strictly validates webhook payload identities', () => {
+    expect(contracts.InterruptRequestedWebhookPayloadSchema.parse({
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      interruptId: 'interrupt-1',
+      timestamp: 1,
+      toolCallId: 'tool-call-1',
+      toolCallName: 'request-approval',
+      args: {},
+    })).toMatchObject({ interruptId: 'interrupt-1' });
+
+    expect(() => contracts.InterruptRequestedWebhookPayloadSchema.parse({
+      event: 'interrupt.requested',
+      deliveryId: 'delivery-1',
+      agentId: 'agent-1',
+      timestamp: 1,
+      data: {},
+    })).toThrow();
+    expect(() => contracts.WebhookEventNameSchema.parse('message.delta')).toThrow();
+    expect(() => contracts.WebhookEventNameSchema.parse('ag_ui.event')).toThrow();
+  });
+
+  it('validates all ten event-specific flat webhook body contracts', () => {
+    const identities = {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+    };
+    const fixtures = {
+      'turn.started': {
+        ...identities,
+        sandboxSessionId: 'sandbox-1',
+        mode: 'interactive',
+        taskDescription: 'Close April',
+        timestamp: 1,
+      },
+      'turn.completed': {
+        ...identities,
+        status: 'completed',
+        durationMs: 10,
+        timestamp: 2,
+      },
+      'tool_call.started': {
+        ...identities,
+        toolCallId: 'tool-call-1',
+        toolCallName: 'search',
+        args: { query: 'April' },
+        timestamp: 3,
+      },
+      'tool_call.completed': {
+        ...identities,
+        toolCallId: 'tool-call-1',
+        toolCallName: 'search',
+        result: '{"ok":true}',
+        durationMs: 12,
+        timestamp: 4,
+      },
+      'interrupt.requested': {
+        ...identities,
+        interruptId: 'interrupt-1',
+        toolCallId: 'tool-call-2',
+        toolCallName: 'approve',
+        args: {},
+        timestamp: 5,
+      },
+      'interrupt.resolved': {
+        ...identities,
+        interruptId: 'interrupt-1',
+        action: 'approve',
+        timestamp: 6,
+      },
+      'message.committed': {
+        ...identities,
+        messageId: 'message-1',
+        messageSeq: 1,
+        role: 'assistant',
+        content: 'Done',
+        parts: [{ type: 'text', text: 'Done' }],
+        toolCalls: [{
+          id: 'tool-call-1',
+          name: 'search',
+          args: '{}',
+          status: 'done',
+        }],
+        timestamp: 7,
+      },
+      'message.updated': {
+        ...identities,
+        messageId: 'message-1',
+        messageSeq: 1,
+        messageRevision: 1,
+        role: 'assistant',
+        content: 'Updated',
+        parts: [{ type: 'text', text: 'Updated' }],
+        toolCalls: [{
+          id: 'tool-call-1',
+          name: 'search',
+          args: '{}',
+          status: 'done',
+        }],
+        timestamp: 8,
+      },
+      'feedback.received': {
+        feedbackId: 'feedback-1',
+        turnId: 'turn-1',
+        agentId: 'agent-1',
+        type: 'thumbs_up',
+        messageId: 'message-1',
+        timestamp: 9,
+      },
+      'budget.threshold': {
+        policyId: 'policy-1',
+        policyName: 'Monthly budget',
+        action: 'warn',
+        threshold: 0.8,
+        metric: 'costUsd',
+        spent: 80,
+        limit: 100,
+        agentId: 'agent-1',
+        timestamp: 10,
+      },
+    } as const;
+
+    expect(contracts.WebhookEventNameSchema.options).toContain('message.updated');
+    for (const eventName of contracts.WebhookEventNameSchema.options) {
+      expect(contracts.WEBHOOK_PAYLOAD_SCHEMAS[eventName].parse(fixtures[eventName]))
+        .toEqual(fixtures[eventName]);
+    }
+    expect(() => contracts.TurnCompletedWebhookPayloadSchema.parse({
+      ...fixtures['turn.completed'],
+      event: 'turn.completed',
+    })).toThrow();
+  });
+
+  it('never exposes a stored webhook signing secret on readback', () => {
+    expect(() => contracts.WebhookUpsertInputSchema.parse({
+      url: 'https://pilot.test/hooks/ctxmill',
+      events: ['turn.completed'],
+    })).toThrow();
+    expect(contracts.WebhookUpsertInputSchema.parse({
+      url: 'https://pilot.test/hooks/ctxmill',
+      events: ['turn.completed'],
+      secret: 'rotation-key',
+    })).toEqual({
+      url: 'https://pilot.test/hooks/ctxmill',
+      events: ['turn.completed'],
+      secret: 'rotation-key',
+    });
+
+    const webhook = {
+      id: 'webhook-1',
+      agentId: 'agent-1',
+      url: 'https://pilot.test/hooks/ctxmill',
+      events: ['turn.completed'],
+      active: true,
+      hasSecret: true,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+
+    expect(contracts.WebhookSchema.parse(webhook)).toEqual(webhook);
+    expect(() => contracts.WebhookSchema.parse({
+      ...webhook,
+      secret: 'must-not-leak',
+    })).toThrow();
+  });
+
+  it('verifies the fixed v1 webhook signature fixture and rotated keys', async () => {
+    const fixture = JSON.parse(readFileSync(
+      new URL('../test-fixtures/webhook-signature-v1.json', import.meta.url),
+      'utf8',
+    )) as {
+      timestamp: string;
+      rawBody: string;
+      currentSecret: string;
+      previousSecret: string;
+      currentSignature: string;
+      previousSignature: string;
+      headers: Record<string, string>;
+    };
+
+    expect(contracts.CtxmillWebhookHeadersSchema.parse(fixture.headers))
+      .toEqual(fixture.headers);
+    await expect(contracts.createCtxmillWebhookSignature({
+      secret: fixture.currentSecret,
+      timestamp: fixture.timestamp,
+      rawBody: fixture.rawBody,
+    })).resolves.toBe(fixture.currentSignature);
+
+    await expect(contracts.verifyCtxmillWebhook({
+      headers: fixture.headers,
+      rawBody: fixture.rawBody,
+      secrets: [fixture.previousSecret, fixture.currentSecret],
+      nowSeconds: Number(fixture.timestamp),
+    })).resolves.toMatchObject({
+      valid: true,
+      payload: {
+        status: 'completed',
+        turnId: 'turn-fixture-1',
+      },
+    });
+
+    await expect(contracts.verifyCtxmillWebhook({
+      headers: {
+        ...fixture.headers,
+        'X-Webhook-Signature': fixture.previousSignature,
+      },
+      rawBody: fixture.rawBody,
+      secrets: [fixture.currentSecret, fixture.previousSecret],
+      nowSeconds: Number(fixture.timestamp),
+    })).resolves.toMatchObject({ valid: true });
+  });
+
+  it('rejects stale, tampered, and identity-mismatched signed webhooks', async () => {
+    const fixture = JSON.parse(readFileSync(
+      new URL('../test-fixtures/webhook-signature-v1.json', import.meta.url),
+      'utf8',
+    )) as {
+      timestamp: string;
+      rawBody: string;
+      currentSecret: string;
+      headers: Record<string, string>;
+    };
+
+    await expect(contracts.verifyCtxmillWebhook({
+      headers: fixture.headers,
+      rawBody: fixture.rawBody,
+      secrets: fixture.currentSecret,
+      nowSeconds: Number(fixture.timestamp) + 301,
+      toleranceSeconds: 300,
+    })).resolves.toEqual({
+      valid: false,
+      reason: 'timestamp_outside_tolerance',
+    });
+
+    await expect(contracts.verifyCtxmillWebhook({
+      headers: fixture.headers,
+      rawBody: `${fixture.rawBody} `,
+      secrets: fixture.currentSecret,
+      nowSeconds: Number(fixture.timestamp),
+    })).resolves.toEqual({
+      valid: false,
+      reason: 'invalid_signature',
+    });
+
+    const mismatchedHeaders = {
+      ...fixture.headers,
+      'X-Agent-Id': 'agent-other',
+    };
+    await expect(contracts.verifyCtxmillWebhook({
+      headers: mismatchedHeaders,
+      rawBody: fixture.rawBody,
+      secrets: fixture.currentSecret,
+      nowSeconds: Number(fixture.timestamp),
+    })).resolves.toEqual({
+      valid: false,
+      reason: 'header_body_mismatch',
+    });
+  });
+});

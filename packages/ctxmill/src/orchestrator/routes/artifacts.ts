@@ -42,16 +42,16 @@ export async function artifactRoutes(
   };
 
   app.get('/', async (req, reply) => {
-    const { agentId, sessionId, limit, offset, search } = req.query as {
+    const { agentId, turnId, limit, offset, search } = req.query as {
       agentId?: string;
-      sessionId?: string;
+      turnId?: string;
       limit?: string;
       offset?: string;
       search?: string;
     };
 
-    if (sessionId) {
-      const artifacts = await repository.listArtifactsForSession(sessionId);
+    if (turnId) {
+      const artifacts = await repository.listArtifactsForTurn(turnId);
       return reply.send({ artifacts });
     }
 

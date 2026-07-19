@@ -35,8 +35,8 @@ export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRoute
 
   const makeToolContext = (grpcCtx: ToolHandlerContext): ToolContext => ({
     agentId: grpcCtx.agentId,
-    conversationId: '',
-    instanceId: grpcCtx.sessionId,
+    conversationId: grpcCtx.conversationId ?? '',
+    turnId: grpcCtx.turnId,
     requestId: grpcCtx.requestId,
     workspaceDir: '/workspace',
     eventBus,

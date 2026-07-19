@@ -12,8 +12,10 @@ describe('interrupt store', () => {
 
   it('setPending sets the interrupt payload', () => {
     const payload = {
+      interruptId: 'interrupt-1',
+      turnId: 'turn-1',
       agentId: 'a1',
-      toolName: 'shell',
+      toolCallName: 'shell',
       args: { cmd: 'ls' },
       toolCallId: 'tc1',
     };
@@ -25,8 +27,10 @@ describe('interrupt store', () => {
 
   it('clear removes the pending interrupt', () => {
     useInterruptStore.getState().setPending({
+      interruptId: 'interrupt-1',
+      turnId: 'turn-1',
       agentId: 'a1',
-      toolName: 'shell',
+      toolCallName: 'shell',
       args: {},
       toolCallId: 'tc1',
     });
@@ -38,8 +42,10 @@ describe('interrupt store', () => {
 
   it('setPending(null) also clears the interrupt', () => {
     useInterruptStore.getState().setPending({
+      interruptId: 'interrupt-1',
+      turnId: 'turn-1',
       agentId: 'a1',
-      toolName: 'shell',
+      toolCallName: 'shell',
       args: {},
       toolCallId: 'tc1',
     });

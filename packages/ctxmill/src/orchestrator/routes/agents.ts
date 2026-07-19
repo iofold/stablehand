@@ -7,28 +7,32 @@ import { fileRoutes } from './agents/files.js';
 import { interruptRoutes } from './agents/interrupts.js';
 import { feedbackRoutes } from './agents/feedback.js';
 import { secretRoutes } from './agents/secrets.js';
-import { sessionRoutes } from './agents/sessions.js';
+import { turnRoutes } from './agents/turns.js';
 import { streamRoutes } from './agents/stream.js';
 import type { AgentRouteOptions, AgentSubRouteOptions } from './agents/types.js';
 import { versionRoutes } from './agents/versions.js';
 import { webhookRoutes } from './agents/webhooks.js';
 
-export type { AgentRouteOptions, SessionsRouteOptions } from './agents/types.js';
-export { globalSessionsRoutes as sessionsRoutes } from './agents/global-sessions.js';
+export type { ActiveLifecycleRouteOptions, AgentRouteOptions } from './agents/types.js';
+export {
+  activeConversationRoutes,
+  activeSandboxSessionRoutes,
+} from './agents/active-lifecycle.js';
 
 export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions): Promise<void> {
   const loadAgent = requireAgent(opts.db);
   // Spread, don't enumerate: new AgentRouteOptions fields must reach the
   // subroutes. Fastify's own `prefix` must NOT ride along or every subroute
   // would be double-prefixed.
-  const { prefix: _prefix, ...routeOpts } = opts as AgentRouteOptions & { prefix?: string };
+  const routeOpts = { ...opts } as AgentRouteOptions & { prefix?: string };
+  delete routeOpts.prefix;
   const subOpts: AgentSubRouteOptions = {
     ...routeOpts,
     loadAgent,
   };
 
   await app.register(crudRoutes, subOpts);
-  await app.register(sessionRoutes, subOpts);
+  await app.register(turnRoutes, subOpts);
   await app.register(conversationRoutes, subOpts);
   await app.register(streamRoutes, subOpts);
   await app.register(interruptRoutes, subOpts);

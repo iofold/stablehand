@@ -113,7 +113,7 @@ describe('harness adapter kit', () => {
 
     const result = await requestToolApproval({
       id: 'approval-1',
-      runId: 'turn-1',
+      turnId: 'turn-1',
       toolName: 'guarded_search',
       args: { query: 'ctxmill' },
       onApprovalNeeded: vi.fn(async () => ({ action: 'approve' as const })),
@@ -132,7 +132,7 @@ describe('harness adapter kit', () => {
 
     const result = await requestToolApproval({
       id: 'approval-1',
-      runId: 'turn-1',
+      turnId: 'turn-1',
       toolName: 'guarded_search',
       args: { query: 'blocked' },
       onApprovalNeeded: vi.fn(async () => ({ action: 'reject' as const })),
@@ -183,7 +183,7 @@ describe('harness adapter kit', () => {
       inputTokens: 2,
       outputTokens: 3,
       totalTokens: 5,
-      cost: 0.25,
+      costUsd: 0.25,
     });
     expect(normalizeTokenUsage({ input_tokens: 4, output_tokens: 6 })).toEqual({
       inputTokens: 4,

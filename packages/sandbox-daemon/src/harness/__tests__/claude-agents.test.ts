@@ -71,7 +71,7 @@ vi.mock('langsmith/experimental/anthropic', () => ({
   wrapClaudeAgentSDK: mockWrapClaudeAgentSDK,
 }));
 
-import { ClaudeAgentsHarness } from '../claude-agents.js';
+import { ClaudeAgentsHarness, toSdkSessionId } from '../claude-agents.js';
 import type { AgentEvent, HarnessSessionConfig } from '../types.js';
 import type { Message } from '../../types.js';
 import type { ToolDefinition } from '../../tool/types.js';
@@ -100,7 +100,7 @@ function makeConfig(overrides: Partial<HarnessSessionConfig> = {}): HarnessSessi
     tools: [],
     secrets: { anthropic: 'test-key' },
     agentId: 'agent-1',
-    conversationId: 'conversation-1',
+    conversationId: '11111111-1111-4111-8111-111111111111',
     workspaceDir: '/tmp/workspace',
     harnessConfigJson: JSON.stringify({ model: 'claude-sonnet-4-6', apiKeyRef: 'anthropic' }),
     ...overrides,
@@ -152,12 +152,12 @@ describe('ClaudeSession JSONL persistence', () => {
       stateVersion: '2',
       payload: {
         transcript: [expect.objectContaining({ role: 'user', content: 'Hello' })],
-        sessionId: 'conversation-1',
+        sessionId: '11111111-1111-4111-8111-111111111111',
         sessionJSONL: '{"type":"user"}\n',
       },
     });
     expect(mockReadFile).toHaveBeenCalledWith(
-      '/home/test/.claude/projects/-tmp-workspace/sessions/conversation-1.jsonl',
+      '/home/test/.claude/projects/-tmp-workspace/sessions/11111111-1111-4111-8111-111111111111.jsonl',
       'utf-8',
     );
 
@@ -198,7 +198,7 @@ describe('ClaudeSession JSONL persistence', () => {
       { recursive: true },
     );
     expect(mockWriteFile).toHaveBeenCalledWith(
-      '/home/test/.claude/projects/-tmp-workspace/sessions/conversation-1.jsonl',
+      '/home/test/.claude/projects/-tmp-workspace/sessions/11111111-1111-4111-8111-111111111111.jsonl',
       '{"type":"assistant"}\n',
       'utf-8',
     );
@@ -211,7 +211,7 @@ describe('ClaudeSession JSONL persistence', () => {
     );
 
     const queryCall = mockQuery.mock.calls[0]?.[0];
-    expect(queryCall?.options.resume).toBe('conversation-1');
+    expect(queryCall?.options.resume).toBe('11111111-1111-4111-8111-111111111111');
     expect(queryCall?.options.sessionId).toBeUndefined();
 
     await session.close();
@@ -304,12 +304,12 @@ describe('ClaudeSession JSONL persistence', () => {
       { recursive: true },
     );
     expect(mockWriteFile).toHaveBeenCalledWith(
-      `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions/conversation-1.jsonl`,
+      `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions/11111111-1111-4111-8111-111111111111.jsonl`,
       '{"type":"assistant"}\n',
       'utf-8',
     );
     expect(mockWriteFile).toHaveBeenCalledWith(
-      `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions/conversation-1.jsonl`,
+      `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions/11111111-1111-4111-8111-111111111111.jsonl`,
       '{"type":"assistant"}\n',
       'utf-8',
     );
@@ -337,12 +337,12 @@ describe('ClaudeSession JSONL persistence', () => {
       },
     ]));
     mockReadFile.mockImplementation(async (filePath: string) => {
-      if (filePath === `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions/conversation-1.jsonl`) {
+      if (filePath === `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions/11111111-1111-4111-8111-111111111111.jsonl`) {
         const error = new Error('missing') as NodeJS.ErrnoException;
         error.code = 'ENOENT';
         throw error;
       }
-      if (filePath === `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions/conversation-1.jsonl`) {
+      if (filePath === `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions/11111111-1111-4111-8111-111111111111.jsonl`) {
         return '{"type":"assistant","ok":true}\n';
       }
       throw new Error(`unexpected read path: ${filePath}`);
@@ -358,11 +358,11 @@ describe('ClaudeSession JSONL persistence', () => {
       },
     });
     expect(mockReadFile).toHaveBeenCalledWith(
-      `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions/conversation-1.jsonl`,
+      `/tmp/claude-config/projects/${sanitizedWorkspaceDir}/sessions/11111111-1111-4111-8111-111111111111.jsonl`,
       'utf-8',
     );
     expect(mockReadFile).toHaveBeenCalledWith(
-      `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions/conversation-1.jsonl`,
+      `/tmp/claude-config/projects/${hashedWorkspaceDir}/sessions/11111111-1111-4111-8111-111111111111.jsonl`,
       'utf-8',
     );
 
@@ -374,6 +374,47 @@ describe('ClaudeSession JSONL persistence', () => {
 describe('ClaudeAgentsHarness stream mapping fallbacks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('streams text deltas without re-emitting them from the complete assistant message', () => {
+    const harness = new ClaudeAgentsHarness();
+    const toolStartTimes = new Map<string, number>();
+    const streamState = harness.createStreamMappingState();
+
+    const deltaEvents = ['Hello', ' world'].flatMap((text) => [...harness.mapSDKMessage({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text },
+      },
+    } as never, toolStartTimes, streamState)]);
+
+    expect(deltaEvents).toEqual([
+      { type: 'text_delta', content: 'Hello' },
+      { type: 'text_delta', content: ' world' },
+    ]);
+
+    const assistantEvents = [...harness.mapSDKMessage({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'Hello world' }],
+      },
+    } as never, toolStartTimes, streamState)];
+
+    expect(assistantEvents).toEqual([]);
+
+    // A later assistant message with no preceding deltas still emits its text.
+    const unstreamedEvents = [...harness.mapSDKMessage({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'Unstreamed reply' }],
+      },
+    } as never, toolStartTimes, streamState)];
+
+    expect(unstreamedEvents).toEqual([
+      { type: 'text_delta', content: 'Unstreamed reply' },
+    ]);
   });
 
   it('surfaces malformed streamed tool arguments as degraded args instead of an empty object', () => {
@@ -983,5 +1024,29 @@ describe('buildClaudeEnv secret redaction (mr-9486.57)', () => {
       delete process.env.OPENAI_API_KEY;
       delete process.env.LANGSMITH_API_KEY;
     }
+  });
+});
+
+describe('toSdkSessionId (ctx-0u1b: SDK requires UUID sessionId)', () => {
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  it('passes bare UUIDs through unchanged', () => {
+    const id = '5ec974fd-26b1-480d-9229-88447fbb144c';
+    expect(toSdkSessionId(id)).toBe(id);
+  });
+
+  it('extracts the UUID embedded in AG-UI thread ids', () => {
+    // createCtxmillId("thread") produces thread-<uuid>; the SDK rejects the
+    // prefixed form and crashes the child process.
+    expect(toSdkSessionId('thread-fb20a343-0206-4ba0-8eb5-3c9d0dcc9ebe'))
+      .toBe('fb20a343-0206-4ba0-8eb5-3c9d0dcc9ebe');
+  });
+
+  it('derives a stable UUID for ids with no embedded UUID', () => {
+    const a = toSdkSessionId('legacy-conversation-key');
+    const b = toSdkSessionId('legacy-conversation-key');
+    expect(a).toMatch(UUID_RE);
+    expect(a).toBe(b); // stable so cross-turn resume aligns
+    expect(toSdkSessionId('different-key')).not.toBe(a);
   });
 });

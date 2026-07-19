@@ -37,6 +37,3 @@ spec:
       - edit
       - write
   mode: interactive
-  resources:
-    maxSessionDurationSeconds: 60
-    maxTokensPerSession: 4000

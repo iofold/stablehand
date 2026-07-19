@@ -219,7 +219,10 @@ describe('HTTP tool CRUD via agent API', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain('HTTP tool requires name, description, and endpoint');
+    expect(response.json()).toMatchObject({
+      error: 'Invalid agent definition',
+      details: [expect.objectContaining({ path: ['httpTools', 0, 'name'] })],
+    });
   });
 
   it('rejects httpTool with missing description', async () => {
@@ -229,7 +232,10 @@ describe('HTTP tool CRUD via agent API', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain('HTTP tool requires name, description, and endpoint');
+    expect(response.json()).toMatchObject({
+      error: 'Invalid agent definition',
+      details: [expect.objectContaining({ path: ['httpTools', 0, 'description'] })],
+    });
   });
 
   it('rejects httpTool with missing endpoint', async () => {
@@ -239,7 +245,10 @@ describe('HTTP tool CRUD via agent API', () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain('HTTP tool requires name, description, and endpoint');
+    expect(response.json()).toMatchObject({
+      error: 'Invalid agent definition',
+      details: [expect.objectContaining({ path: ['httpTools', 0, 'endpoint'] })],
+    });
   });
 
   it('DELETE /api/agents/:id cleans up the agent and its HTTP tools', async () => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
-import { TestSessionRegistry } from '../utils/test-session-registry.js';
+import { TestTurnRegistry } from '../utils/test-turn-registry.js';
 import type {
   InterruptRow,
 } from '../../packages/ctxmill/src/database/repository.js';
@@ -20,9 +20,9 @@ function createMockInterruptDb(): {
 
   const toRow = (data: InterruptInsert): InterruptRow => ({
     id: data.id,
-    agentSessionId: data.agentSessionId,
+    turnId: data.turnId,
     agentId: data.agentId,
-    sessionId: data.sessionId ?? null,
+    sandboxSessionId: data.sandboxSessionId ?? null,
     toolCallId: data.toolCallId ?? '',
     toolName: data.toolName ?? '',
     args: data.args ?? {},
@@ -100,11 +100,11 @@ describe('HITL lifecycle boundary conditions', () => {
   });
 
   describe('HITL wait state transitions', () => {
-    it('keeps the session ACTIVE while waiting for approval', async () => {
-      const registry = new TestSessionRegistry(undefined, createTestBus());
+    it('keeps the turn running while waiting for approval', async () => {
+      const registry = new TestTurnRegistry(createTestBus());
       const onTimeout = vi.fn().mockResolvedValue(undefined);
       const manager = new InterruptManager(createTestBus(), undefined, onTimeout);
-      const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
+      const turn = await registry.startTurn('agent-1', 'conv-1', 'interactive');
 
       const approval = manager.waitForApproval(
         'run-1',
@@ -113,26 +113,29 @@ describe('HITL lifecycle boundary conditions', () => {
         'send_email',
         { to: 'user@example.com' },
         1_000,
-        run.id,
+        turn.sandboxSessionId,
       );
 
       await vi.advanceTimersByTimeAsync(500);
 
-      expect(registry.getRun(run.id)?.status).toBe('running');
+      expect(registry.getTurn(turn.turnId)?.status).toBe('running');
       expect(onTimeout).not.toHaveBeenCalled();
 
-      await expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
+      await expect(manager.resolveForTurn('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
       await expect(approval).resolves.toEqual({ action: 'approve', data: { ok: true } });
-      expect(registry.getRun(run.id)?.status).toBe('running');
+      expect(registry.getTurn(turn.turnId)?.status).toBe('running');
 
       manager.shutdown();
     });
 
-    it('on timeout fires onTimeout and suspends the session', async () => {
-      const registry = new TestSessionRegistry(undefined, createTestBus());
-      const run = await registry.startRun('agent-1', 'conv-1', 'interactive');
-      const onTimeout = vi.fn(async (sessionId: string) => {
-        await registry.suspendSession(sessionId, 'hitl_timeout');
+    it('on timeout fires onTimeout for the sandbox and suspends its active turn', async () => {
+      const registry = new TestTurnRegistry(createTestBus());
+      const turn = await registry.startTurn('agent-1', 'conv-1', 'interactive');
+      const onTimeout = vi.fn(async (sandboxSessionId: string) => {
+        const activeTurn = registry.getTurnBySandboxSessionId(sandboxSessionId);
+        if (activeTurn) {
+          await registry.suspendTurn(activeTurn.turnId, 'hitl_timeout');
+        }
       });
       const manager = new InterruptManager(createTestBus(), undefined, onTimeout);
 
@@ -143,16 +146,16 @@ describe('HITL lifecycle boundary conditions', () => {
         'bash',
         { cmd: 'ls' },
         1_000,
-        run.id,
+        turn.sandboxSessionId,
       );
 
       await vi.advanceTimersByTimeAsync(1_000);
       await Promise.resolve();
 
       await expect(approval).resolves.toMatchObject({ action: 'suspend' });
-      expect(onTimeout).toHaveBeenCalledWith(run.id);
-      expect(registry.getRun(run.id)?.status).toBe('suspended');
-      expect(registry.getRun(run.id)?.suspendReason).toBe('hitl_timeout');
+      expect(onTimeout).toHaveBeenCalledWith(turn.sandboxSessionId);
+      expect(registry.getTurn(turn.turnId)?.status).toBe('suspended');
+      expect(registry.getTurn(turn.turnId)?.suspendReason).toBe('hitl_timeout');
 
       manager.shutdown();
     });
@@ -161,7 +164,7 @@ describe('HITL lifecycle boundary conditions', () => {
   describe('InterruptManager lifecycle', () => {
     it('waitForApproval creates pending interrupt, resolve delivers approval', async () => {
       const bus = createTestBus();
-      const interruptedEvents = collectEvents(bus, 'run.interrupted');
+      const interruptedEvents = collectEvents(bus, 'interrupt.requested');
       const manager = new InterruptManager(bus);
 
       const approval = manager.waitForApproval(
@@ -172,12 +175,12 @@ describe('HITL lifecycle boundary conditions', () => {
         { to: 'user@example.com' },
       );
 
-      expect(manager.hasPending('run-1')).toBe(true);
+      expect(manager.hasPendingForTurn('run-1')).toBe(true);
       expect(interruptedEvents.events).toHaveLength(1);
 
-      await expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
+      await expect(manager.resolveForTurn('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
       await expect(approval).resolves.toEqual({ action: 'approve', data: { ok: true } });
-      expect(manager.hasPending('run-1')).toBe(false);
+      expect(manager.hasPendingForTurn('run-1')).toBe(false);
 
       interruptedEvents.unsubscribe();
       manager.shutdown();
@@ -190,7 +193,7 @@ describe('HITL lifecycle boundary conditions', () => {
       await vi.advanceTimersByTimeAsync(1_000);
 
       await expect(approval).resolves.toMatchObject({ action: 'suspend' });
-      expect(manager.hasPending('run-1')).toBe(false);
+      expect(manager.hasPendingForTurn('run-1')).toBe(false);
 
       manager.shutdown();
     });
@@ -198,7 +201,7 @@ describe('HITL lifecycle boundary conditions', () => {
     it('resolve on unknown runId returns false', async () => {
       const manager = new InterruptManager(createTestBus());
 
-      await expect(manager.resolve('missing-run', 'approve')).resolves.toBe(false);
+      await expect(manager.resolveForTurn('missing-run', 'approve')).resolves.toBe(false);
 
       manager.shutdown();
     });
@@ -214,7 +217,7 @@ describe('HITL lifecycle boundary conditions', () => {
         data: 'Superseded by new interrupt',
       });
 
-      await expect(manager.resolve('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
+      await expect(manager.resolveForTurn('run-1', 'approve', { ok: true }, 'agent-1')).resolves.toBe(true);
       await expect(second).resolves.toEqual({ action: 'approve', data: { ok: true } });
 
       manager.shutdown();
@@ -226,7 +229,7 @@ describe('HITL lifecycle boundary conditions', () => {
     it('loadFromDb reloads non-expired pending interrupts', async () => {
       vi.setSystemTime(new Date('2026-03-25T12:00:00.000Z'));
 
-      const { db } = createMockInterruptDb();
+      const { db, rows } = createMockInterruptDb();
       const firstManager = new InterruptManager(undefined, db);
       firstManager.waitForApproval('run-1', 'agent-1', 'tc-1', 'bash', { cmd: 'ls' }, 60_000);
       await Promise.resolve();
@@ -235,9 +238,10 @@ describe('HITL lifecycle boundary conditions', () => {
       const restartedManager = new InterruptManager(undefined, db);
       await restartedManager.loadFromDb();
 
-      expect(restartedManager.hasPending('run-1')).toBe(true);
-      await expect(restartedManager.resolve('run-1', 'approve', 'approved', 'agent-1')).resolves.toBe(true);
-      expect(db.resolveInterrupt).toHaveBeenCalledWith('run-1', 'approve', 'approved');
+      expect(restartedManager.hasPendingForTurn('run-1')).toBe(true);
+      const persistedInterrupt = Array.from(rows.values())[0]!;
+      await expect(restartedManager.resolveForTurn('run-1', 'approve', 'approved', 'agent-1')).resolves.toBe(true);
+      expect(db.resolveInterrupt).toHaveBeenCalledWith(persistedInterrupt.id, 'approve', 'approved');
 
       firstManager.shutdown();
       restartedManager.shutdown();
@@ -257,9 +261,9 @@ describe('HITL lifecycle boundary conditions', () => {
       const restartedManager = new InterruptManager(undefined, db);
       await restartedManager.loadFromDb();
 
-      expect(rows.has('run-1')).toBe(false);
-      expect(restartedManager.hasPending('run-1')).toBe(false);
-      await expect(restartedManager.resolve('run-1', 'approve')).resolves.toBe(false);
+      expect(Array.from(rows.values()).some((row) => row.turnId === 'run-1')).toBe(false);
+      expect(restartedManager.hasPendingForTurn('run-1')).toBe(false);
+      await expect(restartedManager.resolveForTurn('run-1', 'approve')).resolves.toBe(false);
 
       firstManager.shutdown();
       restartedManager.shutdown();

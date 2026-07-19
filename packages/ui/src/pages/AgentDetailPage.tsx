@@ -7,16 +7,16 @@ import {
 } from 'lucide-react';
 import { useAgentsStore } from '@/stores/agents';
 import { cn } from '@/lib/utils';
-import { countActiveSessions } from '@/lib/session-status';
+import { countActiveSandboxSessions } from '@/lib/lifecycle-status';
 import { AgentStatusBadge } from '@/components/dashboard/AgentStatusBadge';
 import { AgentFormModal } from '@/components/agents/AgentFormModal';
 
 import { useAgentDetail } from '@/hooks/useAgentDetail';
-import { useAgentSessions } from '@/hooks/useAgentSessions';
+import { useAgentTurns } from '@/hooks/useAgentTurns';
 
 import {
   AgentOverviewTab,
-  AgentSessionsTab,
+  AgentTurnsTab,
   AgentToolsTab,
   AgentFilesTab,
   AgentArtifactsTab,
@@ -30,7 +30,7 @@ import type { TabId } from '@/components/agent';
 
 const TABS: { id: TabId; label: string; testId?: string }[] = [
   { id: 'overview', label: 'Overview' },
-  { id: 'sessions', label: 'Sessions', testId: 'sessions-tab' },
+  { id: 'turns', label: 'Turns', testId: 'turns-tab' },
   { id: 'tools', label: 'Tools', testId: 'tools-tab' },
   { id: 'files', label: 'Files', testId: 'files-tab' },
   { id: 'artifacts', label: 'Artifacts', testId: 'artifacts-tab' },
@@ -54,31 +54,31 @@ export function AgentDetailPage() {
   const [runTask, setRunTask] = useState('');
   const [submittingRun, setSubmittingRun] = useState(false);
 
-  const [sessionsFilter, setSessionsFilter] = useState<string>('all');
+  const [turnFilter, setTurnFilter] = useState<string>('all');
 
-  // Session-scoped file viewing: when set, Files tab shows session workspace
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  // Conversation-scoped file viewing: when set, Files shows the durable workspace.
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
 
   // Custom hooks
   const {
     agent,
     loading,
     agents,
-    allSessions,
-    sessionsLoading,
+    allTurns,
+    turnsLoading,
     error: agentDetailError,
-    loadSessions,
+    loadTurns,
   } = useAgentDetail(id, activeTab);
 
-  const { filteredSessions } = useAgentSessions(allSessions, sessionsFilter);
+  const { filteredTurns } = useAgentTurns(allTurns, turnFilter);
   const conversationCount = agent?.conversationCount ?? 0;
-  const activeSandboxSessionCount = countActiveSessions(agent?.sessionsByStatus);
+  const activeSandboxSessionCount = countActiveSandboxSessions(agent?.sandboxSessionsByStatus);
 
-  const recentSessions = useMemo(() => {
-    return [...allSessions]
+  const recentTurns = useMemo(() => {
+    return [...allTurns]
       .sort((a, b) => b.startedAt - a.startedAt)
       .slice(0, 10);
-  }, [allSessions]);
+  }, [allTurns]);
 
   const toolsCount = agent?.tools?.length ?? 0;
 
@@ -90,7 +90,7 @@ export function AgentDetailPage() {
       await startBackgroundRun(id, runTask.trim());
       setRunTask('');
       setShowRunForm(false);
-      loadSessions();
+      loadTurns();
     } finally {
       setSubmittingRun(false);
     }
@@ -205,12 +205,12 @@ export function AgentDetailPage() {
               </button>
               <button
                 type="button"
-                data-testid="start-session-button"
+                data-testid="start-turn-button"
                 onClick={() => setShowRunForm((v) => !v)}
                 className="btn-primary"
               >
                 <Play className="h-4 w-4" />
-                Start Session
+                Start Turn
               </button>
             </div>
           </div>
@@ -276,31 +276,33 @@ export function AgentDetailPage() {
             conversationCount={conversationCount}
             activeSandboxSessions={activeSandboxSessionCount}
             toolsCount={toolsCount}
-            recentSessions={recentSessions}
-            onContinueSession={(conversationId) => {
+            tokensLast24h={agent?.tokensLast24h}
+            tokensTotal={agent?.tokensTotal}
+            recentTurns={recentTurns}
+            onContinueConversation={(conversationId) => {
               if (conversationId) {
                 navigate(`/agents/${id}/conversations/${conversationId}`);
               } else {
-                setActiveTab('sessions');
+                setActiveTab('turns');
               }
             }}
           />
         )}
 
-        {activeTab === 'sessions' && (
-          <AgentSessionsTab
-            sessions={filteredSessions}
-            loading={sessionsLoading}
+        {activeTab === 'turns' && (
+          <AgentTurnsTab
+            turns={filteredTurns}
+            loading={turnsLoading}
             error={agentDetailError}
-            filter={sessionsFilter}
-            onFilterChange={setSessionsFilter}
+            filter={turnFilter}
+            onFilterChange={setTurnFilter}
             agentId={id!}
-            onViewSessionFiles={(sessionId) => {
-              setSelectedSessionId(sessionId);
+            onViewConversationFiles={(conversationId) => {
+              setSelectedConversationId(conversationId);
               setActiveTab('files');
             }}
-            onContinueSession={(conversationId) => navigate(`/agents/${id}/conversations/${conversationId}`)}
-            onRetry={() => { void loadSessions(); }}
+            onContinueConversation={(conversationId) => navigate(`/agents/${id}/conversations/${conversationId}`)}
+            onRetry={() => { void loadTurns(); }}
           />
         )}
 
@@ -310,21 +312,21 @@ export function AgentDetailPage() {
 
         {activeTab === 'files' && id && (
           <div className="space-y-3">
-            {selectedSessionId && (
+            {selectedConversationId && (
               <div className="flex items-center gap-3 rounded-lg border border-accent-700/30 bg-accent-900/20 px-4 py-2.5">
                 <span className="text-sm text-accent-300">
-                  Viewing session workspace ({selectedSessionId.slice(0, 8)})
+                  Viewing conversation workspace ({selectedConversationId.slice(0, 8)})
                 </span>
                 <button
                   type="button"
-                  onClick={() => setSelectedSessionId(null)}
+                  onClick={() => setSelectedConversationId(null)}
                   className="text-xs text-accent-400 hover:text-accent-200 underline underline-offset-2 transition-colors"
                 >
                   Switch to base workspace
                 </button>
               </div>
             )}
-            <AgentFilesTab agentId={id} sessionId={selectedSessionId ?? undefined} />
+            <AgentFilesTab agentId={id} conversationId={selectedConversationId ?? undefined} />
           </div>
         )}
 

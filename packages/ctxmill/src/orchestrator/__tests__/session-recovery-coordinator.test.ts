@@ -50,7 +50,7 @@ function createMockContainerManager(): ContainerManager {
   return {
     createContainer: vi.fn().mockResolvedValue({
       containerId: 'c-2',
-      containerName: 'ctxmill-run-sess-2',
+      containerName: 'ctxmill-sandbox-sess-2',
     }),
     startContainer: vi.fn().mockResolvedValue(undefined),
     stopContainer: vi.fn().mockResolvedValue(undefined),
@@ -144,6 +144,10 @@ function createAgentDef(): AgentDefinition {
     systemPrompt: 'test system prompt',
     tools: [],
     harnessConfig: {},
+    nativeTools: {
+      allowlist: ['Read'],
+      blocklist: ['Bash'],
+    },
   } as unknown as AgentDefinition;
 }
 
@@ -162,7 +166,7 @@ function createDbSession(
     id: 'sess-1',
     conversationId: 'conv-1',
     agentId: 'agent-1',
-    containerName: 'ctxmill-run-sess-1',
+    containerName: 'ctxmill-sandbox-sess-1',
     containerId: 'c-1',
     status,
     harnessName: 'langgraph',
@@ -318,7 +322,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     vi.useFakeTimers();
     const { manager, containerManager, db, grpcClient } = createManager();
     const failingClient = createMockGrpcClient();
-    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'));
 
     connectMocks.createClientMock
       .mockReturnValueOnce(failingClient)
@@ -339,6 +343,10 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
           agentId: 'agent-1',
           harnessConfigJson: '{}',
           systemPrompt: 'test system prompt',
+          nativeTools: expect.objectContaining({
+            allowlist: ['Read'],
+            blocklist: ['Bash'],
+          }),
           sessionCheckpoint: expect.objectContaining({
             sessionId: 'sess-1',
             conversationId: 'conv-1',
@@ -351,7 +359,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
       sessionId: 'sess-1',
       conversationId: 'conv-1',
       containerId: 'c-2',
-      containerName: 'ctxmill-run-sess-2',
+      containerName: 'ctxmill-sandbox-sess-2',
       status: 'ACTIVE',
     }));
     expect(manager.findSessionById('sess-1')).toBe(session);
@@ -368,7 +376,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
       .mockRejectedValue(new Error('workspace restore failed'));
     const { manager, containerManager, db, grpcClient } = createManager();
     const failingClient = createMockGrpcClient();
-    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'));
 
     connectMocks.createClientMock
       .mockReturnValueOnce(failingClient)
@@ -420,7 +428,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     const { manager, containerManager, db, grpcClient } = createManager();
     vi.spyOn(manager, 'getExistingConversationWorkspaceDir').mockResolvedValue('/tmp/data/conversations/conv-1/workspace');
     const failingClient = createMockGrpcClient();
-    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'));
 
     connectMocks.createClientMock
       .mockReturnValueOnce(failingClient)
@@ -446,7 +454,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     const { manager, containerManager, db, grpcClient } = createManager();
     vi.spyOn(manager, 'getExistingConversationWorkspaceDir').mockResolvedValue(undefined);
     const failingClient = createMockGrpcClient();
-    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'));
 
     connectMocks.createClientMock
       .mockReturnValueOnce(failingClient)
@@ -485,7 +493,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     vi.useFakeTimers();
     const { manager, containerManager, db, grpcClient } = createManager();
     const failingClient = createMockGrpcClient();
-    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'));
 
     connectMocks.createClientMock
       .mockReturnValueOnce(failingClient)
@@ -513,7 +521,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     }));
     expect(session.sessionId).not.toBe('sess-1');
     expect(session.containerId).toBe('c-2');
-    expect(session.containerName).toBe('ctxmill-run-sess-2');
+    expect(session.containerName).toBe('ctxmill-sandbox-sess-2');
     expect(session.status).toBe('ACTIVE');
   });
 
@@ -521,7 +529,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
     vi.useFakeTimers();
     const { manager, containerManager, db, grpcClient } = createManager();
     const failingClient = createMockGrpcClient();
-    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-run-sess-1'));
+    failingClient.killSession.mockRejectedValue(new Error('getaddrinfo ENOTFOUND ctxmill-sandbox-sess-1'));
 
     connectMocks.createClientMock
       .mockReturnValueOnce(failingClient)
@@ -566,7 +574,7 @@ describe('SandboxSessionManager recovery coordinator characterization', () => {
           conversationId,
           agentId: agentId ?? agentDef.name,
           containerId: 'c-locked',
-          containerName: 'ctxmill-run-sess-locked',
+          containerName: 'ctxmill-sandbox-sess-locked',
           status: 'ACTIVE',
           harnessName: agentDef.harness,
           grpcClient: grpcClient as SessionRecord['grpcClient'],

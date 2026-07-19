@@ -1,14 +1,18 @@
 import * as pgSchema from './schema-pg.js';
-import type { ApiSessionStatus } from '@ctxmill/shared';
+import type { ApiConversationStatus } from '@ctxmill/shared';
 
 export type AgentInsert = typeof pgSchema.agents.$inferInsert;
 export type AgentSelect = typeof pgSchema.agents.$inferSelect;
+export type AgentWorkspaceStateRow = typeof pgSchema.agentWorkspaceState.$inferSelect;
 export type ConversationSelect = typeof pgSchema.conversations.$inferSelect;
 export type MessageInsert = typeof pgSchema.messages.$inferInsert;
 export type MessageSelect = typeof pgSchema.messages.$inferSelect;
 export type TurnStatus = pgSchema.TurnStatus;
 export type TurnInsert = typeof pgSchema.turns.$inferInsert;
 export type TurnSelect = typeof pgSchema.turns.$inferSelect;
+export type TurnStartRequestInsert = typeof pgSchema.turnStartRequests.$inferInsert;
+export type TurnStartRequestRow = typeof pgSchema.turnStartRequests.$inferSelect;
+export type TurnReconciliationLeaseRow = typeof pgSchema.turnReconciliationLeases.$inferSelect;
 type TriggerInsertBase = typeof pgSchema.eventTriggers.$inferInsert;
 export type TriggerInsert = Omit<TriggerInsertBase, 'selectorHash'> & { selectorHash?: string };
 export type TriggerSelect = typeof pgSchema.eventTriggers.$inferSelect;
@@ -23,6 +27,8 @@ export type CallbackOutboxInsert = typeof pgSchema.callbackOutbox.$inferInsert;
 export type CallbackOutboxRow = typeof pgSchema.callbackOutbox.$inferSelect;
 export type WebhookInsert = typeof pgSchema.webhooks.$inferInsert;
 export type WebhookRow = typeof pgSchema.webhooks.$inferSelect;
+export type BudgetPolicyInsert = typeof pgSchema.budgetPolicies.$inferInsert;
+export type BudgetPolicyRow = typeof pgSchema.budgetPolicies.$inferSelect;
 export type SandboxSessionRow = Omit<
   typeof pgSchema.sandboxSessions.$inferSelect,
   'restoreAttempts' | 'lastRestoreError'
@@ -51,7 +57,7 @@ export type CheckpointV2 = typeof pgSchema.agentCheckpoints.$inferSelect;
 export interface ConversationSummaryRow {
   id: string;
   agentId: string;
-  status: ApiSessionStatus;
+  status: ApiConversationStatus;
   mode: string;
   turnCount: number;
   messageCount: number;
@@ -61,4 +67,6 @@ export interface ConversationSummaryRow {
   updatedAt: number;
   latestTurnId: string | null;
   sandboxSessionId: string | null;
+  /** Sum of harness-reported tokens across the conversation's turns; null when none reported. */
+  totalTokens: number | null;
 }

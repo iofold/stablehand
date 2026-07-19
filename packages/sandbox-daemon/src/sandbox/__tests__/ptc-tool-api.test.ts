@@ -47,7 +47,7 @@ function makeContext(): ToolContext {
   return {
     agentId: 'agent-1',
     conversationId: 'conversation-1',
-    instanceId: 'session-1',
+    sandboxSessionId: 'sandbox-session-1',
     workspaceDir: '/workspace/session',
   };
 }
@@ -194,7 +194,7 @@ describe('startToolApi', () => {
       expect.objectContaining({
         agentId: 'agent-1',
         conversationId: 'conversation-1',
-        instanceId: 'session-1',
+        sandboxSessionId: 'sandbox-session-1',
         workspaceDir: '/workspace/session',
       }),
     );

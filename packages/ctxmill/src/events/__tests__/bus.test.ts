@@ -53,7 +53,7 @@ describe('TypedEventBus', () => {
       const before = Date.now();
       bus.emit('turn.started', {
         turnId: 'r1',
-        sessionId: 'r1',
+        sandboxSessionId: 'sandbox-1',
         agentId: 'a1',
         conversationId: 'c1',
         mode: 'interactive',

@@ -84,14 +84,14 @@ describe('AgentFilesTab workspace upload', () => {
     expect(container.textContent).toContain('Uploaded workspace archive: 1 files, 12 bytes.');
   });
 
-  it('disables base workspace archive uploads in session view', () => {
+  it('disables base workspace archive uploads in conversation view', () => {
     act(() => {
-      root.render(<AgentFilesTab agentId="agent-1" sessionId="session-1" />);
+      root.render(<AgentFilesTab agentId="agent-1" conversationId="conversation-1" />);
     });
 
     const button = container.querySelector('button[data-testid="workspace-upload-button"]') as HTMLButtonElement;
     expect(button.disabled).toBe(true);
-    expect(container.textContent).toContain('Base workspace uploads are disabled in session view.');
+    expect(container.textContent).toContain('Base workspace uploads are disabled in conversation view.');
   });
 
   it('rejects non-tar.gz files before uploading', async () => {

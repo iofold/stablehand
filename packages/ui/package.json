@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ctxmill/contracts": "workspace:*",
     "@ctxmill/shared": "workspace:*",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",

@@ -3,12 +3,18 @@ import { MessageSquare, Settings, AlertCircle, Activity, Clock, Pencil } from 'l
 import { cn } from '@/lib/utils';
 import { getAgentStatusConfig } from '@/lib/agent-status';
 import { agentNewConversationPath } from '@/lib/routes';
-import { countActiveSessions, countAllSessions, describeSessionCounts } from '@/lib/session-status';
+import {
+  countActiveSandboxSessions,
+  countAllSandboxSessions,
+  describeSandboxSessionCounts,
+} from '@/lib/lifecycle-status';
+import { statusTheme } from '@/lib/status-theme';
 import type { Agent } from '@/stores/agents';
 import { AgentAvatar } from './illustrations/AgentAvatar';
 import { StatusPulse } from './illustrations/StatusPulse';
 import { AnimatedCounter } from './MicroInteractions';
-import { formatRelativeTime } from '@/lib/format';
+import { RelativeTime } from '@/components/ui/RelativeTime';
+import { formatCompactNumber } from '@/lib/format';
 
 interface AgentCardProps {
   agent: Agent;
@@ -34,7 +40,7 @@ function formatAgentStatusLabel(status: DashboardStatus): string {
 export function AgentCard({ agent, onEdit }: AgentCardProps) {
   const navigate = useNavigate();
 
-  const activeSessionCount = countActiveSessions(agent.sessionsByStatus);
+  const activeSessionCount = countActiveSandboxSessions(agent.sandboxSessionsByStatus);
   const dashboardStatus = getDashboardStatus(agent, activeSessionCount);
   const statusConfig = getAgentStatusConfig(dashboardStatus);
   const statusLabel = formatAgentStatusLabel(dashboardStatus);
@@ -42,38 +48,45 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
   const totalTools = agent.tools.length + (agent.nativeTools?.allowlist?.length ?? agent.nativeTools?.blocklist?.length ?? 0);
 
   const renderSessions = () => {
-    const stats = agent.sessionsByStatus;
-    const total = countAllSessions(stats);
+    const stats = agent.sandboxSessionsByStatus;
+    const total = countAllSandboxSessions(stats);
     if (!stats || total === 0) {
       return <span className="tabular-nums font-medium text-surface-200">0</span>;
     }
 
-    const title = describeSessionCounts(stats);
+    // Live vocabulary only: running (active + restoring) and resumable
+    // (checkpointed). Ended sandboxes are history — tooltip, not dots.
+    const running = (stats.ACTIVE ?? 0) + (stats.RESTORING ?? 0);
+    const resumable = stats.CHECKPOINTED ?? 0;
+    const title = describeSandboxSessionCounts(stats);
+
+    if (running === 0 && resumable === 0) {
+      return (
+        <span
+          role="status"
+          aria-label={`${total} sandbox sessions: ${title}`}
+          title={title}
+          className="tabular-nums font-medium text-surface-400"
+        >
+          0
+        </span>
+      );
+    }
 
     return (
-      <div role="status" aria-label={`${total} sandbox sessions: ${title}`} className="flex items-center gap-2 tabular-nums font-medium text-surface-200" title={title}>
-        {stats.ACTIVE > 0 && (
+      <div role="status" aria-label={`${total} sandbox sessions: ${title}`} className="flex items-center gap-2.5 tabular-nums font-medium text-surface-200" title={title}>
+        {running > 0 && (
           <span className="inline-flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-            {stats.ACTIVE}
+            <span className={cn('w-1.5 h-1.5 rounded-full', statusTheme('ACTIVE').dot)}></span>
+            {running}
+            <span className="text-[10px] font-normal text-surface-400">running</span>
           </span>
         )}
-        {stats.RESTORING > 0 && (
+        {resumable > 0 && (
           <span className="inline-flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
-            {stats.RESTORING}
-          </span>
-        )}
-        {stats.CHECKPOINTED > 0 && (
-          <span className="inline-flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-            {stats.CHECKPOINTED}
-          </span>
-        )}
-        {stats.TERMINATED > 0 && (
-          <span className="inline-flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span>
-            {stats.TERMINATED}
+            <span className={cn('w-1.5 h-1.5 rounded-full', statusTheme('CHECKPOINTED').dot)}></span>
+            {resumable}
+            <span className="text-[10px] font-normal text-surface-400">resumable</span>
           </span>
         )}
       </div>
@@ -131,18 +144,27 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
             </p>
           </div>
           <p className="text-[11px] text-surface-500 mt-0.5">
-            Created {formatRelativeTime(agent.createdAt)}
+            Created <RelativeTime timestamp={agent.createdAt} />
           </p>
         </div>
 
         <div className="flex flex-wrap md:flex-nowrap items-center gap-6 text-sm text-surface-300 md:px-6 md:border-x md:border-surface-700/50">
           <div className="flex flex-col min-w-[70px]">
-            <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Sandboxes</span>
+            <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Sessions</span>
             {renderSessions()}
           </div>
           <div className="flex flex-col min-w-[70px]">
             <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Tools</span>
             <AnimatedCounter value={totalTools} className="tabular-nums font-medium text-surface-200" />
+          </div>
+          <div className="flex flex-col min-w-[70px]">
+            <span className="text-[10px] text-surface-500 uppercase tracking-wider font-medium mb-0.5">Tokens 24h</span>
+            <span
+              className="tabular-nums font-medium text-surface-200"
+              title={`${(agent.tokensTotal ?? 0).toLocaleString()} tokens total`}
+            >
+              {formatCompactNumber(agent.tokensLast24h ?? 0)}
+            </span>
           </div>
         </div>
 
@@ -173,7 +195,7 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
             )}
             <span className="inline-flex items-center gap-1 text-[11px] text-surface-400">
               <Clock className="h-3 w-3" />
-              {formatRelativeTime(agent.lastActivity)}
+              <RelativeTime timestamp={agent.lastActivity} />
             </span>
           </div>
 

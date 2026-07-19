@@ -6,12 +6,12 @@
  * separate container.
  *
  * Tests wire together real EventBus, real EventTriggerManager, and real
- * AgentRunService with mocked Docker (ContainerManager) and gRPC transport.
+ * AgentTurnService with mocked Docker (ContainerManager) and gRPC transport.
  *
  * Flow under test:
- *   Agent A runs -> emits event via tool -> EventBus -> EventTriggerManager
- *   -> matches trigger for Agent B -> AgentRunService.executeRun()
- *   -> SandboxRunService -> new container -> Agent B completes
+ *   Agent A executes a turn -> emits event via tool -> EventBus -> EventTriggerManager
+ *   -> matches trigger for Agent B -> AgentTurnService.executeTurn()
+ *   -> SandboxTurnService -> new container -> Agent B completes
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -27,63 +27,63 @@ import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/
 import type { ContainerManager, ContainerInfo, ContainerMetrics } from '../../packages/ctxmill/src/sandbox/container-manager.js';
 import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import type { AGUIEvent } from '../../packages/ctxmill/src/events/types.js';
+import type { AgentSessionEvent } from '../../packages/ctxmill/src/events/types.js';
 import { settle } from '../utils/event-bus-test-helpers.js';
 
-type SandboxRunService = {
+type SandboxTurnService = {
   executeSessionTurn(
     agentDef: AgentDefinition,
     conversationId: string,
     messages: Message[],
     turnId: string,
     signal?: AbortSignal,
-  ): AsyncGenerator<AGUIEvent>;
+  ): AsyncGenerator<AgentSessionEvent>;
 };
 
-class AgentRunService {
+class AgentTurnService {
   constructor(
     private readonly deps: {
       sse: { broadcast(agentId: string, event: Record<string, unknown>): void };
-      runRegistry: { completeRun(runId: string, error?: string): Promise<void> };
-      sandboxRunService: SandboxRunService;
+      turnRegistry: { completeTurn(turnId: string, error?: string): Promise<void> };
+      sandboxTurnService: SandboxTurnService;
       [key: string]: unknown;
     },
   ) {}
 
-  async executeRun(input: {
+  async executeTurn(input: {
     agentDef: AgentDefinition;
     messages: Message[];
     agentId: string;
     conversationId: string;
-    runId: string;
+    turnId: string;
     taskDescription: string;
   }): Promise<void> {
-    let runError: string | undefined;
+    let turnError: string | undefined;
 
     try {
-      const stream = this.deps.sandboxRunService.executeSessionTurn(
+      const stream = this.deps.sandboxTurnService.executeSessionTurn(
         input.agentDef,
         input.conversationId,
         input.messages,
-        input.runId,
+        input.turnId,
       );
 
       for await (const event of stream) {
         this.deps.sse.broadcast(input.agentId, event as unknown as Record<string, unknown>);
         if (event.type === 'RUN_ERROR' && 'error' in event && typeof event.error === 'string') {
-          runError = event.error;
+          turnError = event.error;
         }
       }
     } catch (error: unknown) {
-      runError = error instanceof Error ? error.message : String(error);
+      turnError = error instanceof Error ? error.message : String(error);
     }
 
-    if (runError === undefined) {
-      await this.deps.runRegistry.completeRun(input.runId);
+    if (turnError === undefined) {
+      await this.deps.turnRegistry.completeTurn(input.turnId);
       return;
     }
 
-    await this.deps.runRegistry.completeRun(input.runId, runError);
+    await this.deps.turnRegistry.completeTurn(input.turnId, turnError);
   }
 }
 
@@ -92,56 +92,56 @@ class AgentRunService {
 /* -------------------------------------------------------------------------- */
 
 /** Create simple completion event stream for a triggered agent. */
-async function* mockTriggeredStream(runId: string): AsyncGenerator<AGUIEvent> {
+async function* mockTriggeredStream(turnId: string): AsyncGenerator<AgentSessionEvent> {
   yield {
     type: 'RUN_STARTED',
     timestamp: Date.now(),
-    runId,
-  } as unknown as AGUIEvent;
+    runId: turnId,
+  } as unknown as AgentSessionEvent;
   yield {
     type: 'TEXT_MESSAGE_START',
     timestamp: Date.now(),
-    runId,
-    messageId: `msg-${runId}`,
-  } as unknown as AGUIEvent;
+    runId: turnId,
+    messageId: `msg-${turnId}`,
+  } as unknown as AgentSessionEvent;
   yield {
     type: 'TEXT_MESSAGE_CONTENT',
     timestamp: Date.now(),
-    runId,
-    messageId: `msg-${runId}`,
-    content: `Triggered agent ${runId} response`,
-  } as unknown as AGUIEvent;
+    runId: turnId,
+    messageId: `msg-${turnId}`,
+    delta: `Triggered agent ${turnId} response`,
+  } as unknown as AgentSessionEvent;
   yield {
     type: 'TEXT_MESSAGE_END',
     timestamp: Date.now(),
-    runId,
-    messageId: `msg-${runId}`,
-  } as unknown as AGUIEvent;
+    runId: turnId,
+    messageId: `msg-${turnId}`,
+  } as unknown as AgentSessionEvent;
   yield {
     type: 'RUN_FINISHED',
     timestamp: Date.now(),
-    runId,
-  } as unknown as AGUIEvent;
+    runId: turnId,
+  } as unknown as AgentSessionEvent;
 }
 
 /** Create a failing event stream. */
-async function* mockFailingStream(runId: string): AsyncGenerator<AGUIEvent> {
+async function* mockFailingStream(turnId: string): AsyncGenerator<AgentSessionEvent> {
   yield {
     type: 'RUN_STARTED',
     timestamp: Date.now(),
-    runId,
-  } as unknown as AGUIEvent;
+    runId: turnId,
+  } as unknown as AgentSessionEvent;
   yield {
     type: 'RUN_ERROR',
     timestamp: Date.now(),
-    runId,
+    runId: turnId,
     error: 'Agent B encountered a fatal error',
-  } as unknown as AGUIEvent;
+  } as unknown as AgentSessionEvent;
   yield {
     type: 'RUN_FAILED',
     timestamp: Date.now(),
-    runId,
-  } as unknown as AGUIEvent;
+    runId: turnId,
+  } as unknown as AgentSessionEvent;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -196,7 +196,7 @@ function makeChainAgentRow(name: string, overrides: Record<string, unknown> = {}
 function makeMockContainerManager(counters: { containerCounter: number }): ContainerManager & {
   _createdContainers: Array<{
     containerId: string;
-    runId: string;
+    sandboxSessionId: string;
     agentId: string;
     harnessName: string;
     secrets: Record<string, string>;
@@ -206,7 +206,7 @@ function makeMockContainerManager(counters: { containerCounter: number }): Conta
 } {
   const createdContainers: Array<{
     containerId: string;
-    runId: string;
+    sandboxSessionId: string;
     agentId: string;
     harnessName: string;
     secrets: Record<string, string>;
@@ -231,15 +231,15 @@ function makeMockContainerManager(counters: { containerCounter: number }): Conta
       const containerId = `container-${counters.containerCounter}`;
       const info: ContainerInfo = {
         containerId,
-        containerName: `ctxmill-run-${opts.runId}`,
-        sessionId: opts.runId,
+        containerName: `ctxmill-sandbox-${opts.sessionId}`,
+        sessionId: opts.sessionId,
         agentId: opts.agentId,
         harnessName: opts.harnessName,
         status: 'created',
       };
       createdContainers.push({
         containerId,
-        runId: opts.runId,
+        sandboxSessionId: opts.sessionId,
         agentId: opts.agentId,
         harnessName: opts.harnessName,
         secrets: { ...(opts.secrets ?? {}) },
@@ -273,7 +273,7 @@ function makeMockContainerManager(counters: { containerCounter: number }): Conta
 
 function makeMockDb(
   agentRows: Record<string, any> = {},
-  counters: { runCounter: number },
+  counters: { turnCounter: number },
 ): DatabaseRepository {
   const triggerFirings = new Set<string>();
   return {
@@ -293,32 +293,32 @@ function makeMockDb(
     }),
     getAgent: vi.fn(async (agentId: string) => agentRows[agentId] ?? null),
     createConversation: vi.fn(async (agentId: string) => ({
-      id: `conv-triggered-${agentId}-${++counters.runCounter}`,
+      id: `conv-triggered-${agentId}-${++counters.turnCounter}`,
     })),
-    addMessage: vi.fn().mockResolvedValue({ id: `msg-${++counters.runCounter}` }),
+    addMessage: vi.fn().mockResolvedValue({ id: `msg-${++counters.turnCounter}` }),
     getMessages: vi.fn(async (_convId: string) => []),
     saveEvent: vi.fn(),
-    getActiveRuns: vi.fn(async () => []),
-    updateRun: vi.fn(),
+    getActiveTurns: vi.fn(async () => []),
+    updateTurn: vi.fn(),
   } as unknown as DatabaseRepository;
 }
 
-function makeMockRunRegistry(counters: { runCounter: number }) {
-  const runs = new Map<string, { id: string; agentId: string; error?: string }>();
+function makeMockTurnRegistry(counters: { turnCounter: number }) {
+  const turns = new Map<string, { id: string; agentId: string; error?: string }>();
   return {
-    startRun: vi.fn(async (agentId: string, _convId: string, _mode: string, _task: string) => {
-      const id = `run-${agentId}-${++counters.runCounter}`;
-      runs.set(id, { id, agentId });
+    startTurn: vi.fn(async (agentId: string, _convId: string, _mode: string, _task: string) => {
+      const id = `turn-${agentId}-${++counters.turnCounter}`;
+      turns.set(id, { id, agentId });
       return { id, agentId };
     }),
-    completeRun: vi.fn(async (runId: string, error?: string) => {
-      const run = runs.get(runId);
-      if (run) run.error = error;
+    completeTurn: vi.fn(async (turnId: string, error?: string) => {
+      const turn = turns.get(turnId);
+      if (turn) turn.error = error;
     }),
     getAbortSignal: vi.fn().mockReturnValue(undefined),
-    pauseRun: vi.fn(),
-    resumeRun: vi.fn(),
-    _runs: runs,
+    pauseTurn: vi.fn(),
+    resumeTurn: vi.fn(),
+    _turns: turns,
   };
 }
 
@@ -339,15 +339,15 @@ function makeMockSse() {
 describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
   let eventBus: TypedEventBus;
   let db: ReturnType<typeof makeMockDb>;
-  let sessionRegistry: ReturnType<typeof makeMockRunRegistry>;
+  let turnRegistry: ReturnType<typeof makeMockTurnRegistry>;
   let sse: ReturnType<typeof makeMockSse>;
   let containerManager: ReturnType<typeof makeMockContainerManager>;
-  let sandboxRunService: SandboxRunService;
-  let agentRunService: AgentRunService;
+  let sandboxTurnService: SandboxTurnService;
+  let agentTurnService: AgentTurnService;
   let triggerManager: EventTriggerManager;
   let spineRunner: SpineConsumerRunner | null;
   let unsubscribeWire: (() => void) | null;
-  let testCounters: { containerCounter: number; runCounter: number };
+  let testCounters: { containerCounter: number; turnCounter: number };
 
   function agentRowToDefinition(agent: Record<string, any>): AgentDefinition {
     const manifest = agent.manifest as Record<string, unknown> | null;
@@ -372,10 +372,10 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     };
   }
 
-  async function startTriggeredRun(input: {
+  async function startTriggeredTurn(input: {
     agentId: string;
     task: string;
-    agentRunServiceRef: AgentRunService | null;
+    agentTurnServiceRef: AgentTurnService | null;
     missingAgentMessage?: string;
     persistUserMessage?: boolean;
     messageIdPrefix?: string;
@@ -388,7 +388,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     }
 
     const conv = await db.createConversation(input.agentId);
-    const run = await sessionRegistry.startRun(input.agentId, conv.id, 'background', input.task);
+    const turn = await turnRegistry.startTurn(input.agentId, conv.id, 'background', input.task);
     if (input.persistUserMessage) {
       await db.addMessage({
         agentId: input.agentId,
@@ -398,26 +398,26 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       });
     }
 
-    void input.agentRunServiceRef!.executeRun({
+    void input.agentTurnServiceRef!.executeTurn({
       agentDef: agentRowToDefinition(agent),
       messages: input.messages ?? [
-        makeTriggerMessage(input.agentId, input.task, `${input.messageIdPrefix ?? 'msg'}-${run.id}`),
+        makeTriggerMessage(input.agentId, input.task, `${input.messageIdPrefix ?? 'msg'}-${turn.id}`),
       ],
       agentId: input.agentId,
       conversationId: conv.id,
-      runId: run.id,
+      turnId: turn.id,
       taskDescription: input.task,
     }).catch((err) => {
-      console.error('[Test] triggered run error:', err);
+      console.error('[Test] triggered turn error:', err);
     });
 
-    return run;
+    return turn;
   }
 
   beforeEach(() => {
     unsubscribeWire = null;
     spineRunner = null;
-    testCounters = { containerCounter: 0, runCounter: 0 };
+    testCounters = { containerCounter: 0, turnCounter: 0 };
     vi.restoreAllMocks();
   });
 
@@ -433,7 +433,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
    */
   async function wireComponents(opts: {
     agentRows: Record<string, any>;
-    sandboxExecuteSessionTurn?: (...args: any[]) => AsyncGenerator<AGUIEvent>;
+    sandboxExecuteSessionTurn?: (...args: any[]) => AsyncGenerator<AgentSessionEvent>;
   }) {
     // Canonical wire (ADR-015): bus persist → CanonicalLog → run-channel frames to SSE.
     let frameSeq = 0;
@@ -450,24 +450,27 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       sourcePayload: string | null;
     }> = [];
     const spineCursors = new Map<string, number>();
+    const persistFrames = async (frames: Array<Record<string, unknown>>) =>
+      frames.map((frame) => {
+        frameSeq += 1;
+        frameRows.push({
+          seq: frameSeq,
+          type: String(frame.type ?? ''),
+          agentId: String(frame.agentId ?? ''),
+          payload: String(frame.payload ?? '{}'),
+          createdAt: Date.now(),
+          turnId: typeof frame.turnId === 'string' ? frame.turnId : null,
+          conversationId: typeof frame.conversationId === 'string' ? frame.conversationId : null,
+          channel: String(frame.channel ?? 'custom'),
+          sourceType: typeof frame.sourceType === 'string' ? frame.sourceType : null,
+          sourcePayload: typeof frame.sourcePayload === 'string' ? frame.sourcePayload : null,
+        });
+        return frameSeq;
+      });
     const canonicalLog = new CanonicalLog({
       db: {
-        saveEventBatch: async (frames: Array<Record<string, unknown>>) => frames.map((frame) => {
-          frameSeq += 1;
-          frameRows.push({
-            seq: frameSeq,
-            type: String(frame.type ?? ''),
-            agentId: String(frame.agentId ?? ''),
-            payload: String(frame.payload ?? '{}'),
-            createdAt: Date.now(),
-            turnId: typeof frame.turnId === 'string' ? frame.turnId : null,
-            conversationId: typeof frame.conversationId === 'string' ? frame.conversationId : null,
-            channel: String(frame.channel ?? 'custom'),
-            sourceType: typeof frame.sourceType === 'string' ? frame.sourceType : null,
-            sourcePayload: typeof frame.sourcePayload === 'string' ? frame.sourcePayload : null,
-          });
-          return frameSeq;
-        }),
+        saveEventBatch: persistFrames,
+        saveTerminalEventBatch: persistFrames,
         getFramesSince: async () => [],
         getTurnFrames: async () => [],
       } as never,
@@ -475,7 +478,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
     eventBus = new TypedEventBus({
       persistEvent: async (type, _agentId, _payload, parsed) => {
-        await canonicalLog.ingest(type, parsed ?? {});
+        const persisted = await canonicalLog.ingest(type, parsed ?? {});
+        return persisted.length > 0;
       },
     });
     db = makeMockDb(opts.agentRows, testCounters);
@@ -491,7 +495,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         return { consumer, lastSeq: nextSeq, updatedAt: Date.now() };
       }),
     });
-    sessionRegistry = makeMockRunRegistry(testCounters);
+    turnRegistry = makeMockTurnRegistry(testCounters);
     sse = makeMockSse();
     unsubscribeWire = canonicalLog.subscribe((frames) => {
       for (const frame of frames) {
@@ -501,23 +505,23 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
     containerManager = makeMockContainerManager(testCounters);
 
-    // Mock SandboxRunService that tracks which agents it ran
-    const executedRuns: Array<{ agentName: string; runId: string }> = [];
-    sandboxRunService = {
+    // Mock SandboxTurnService that tracks which agents it ran
+    const executedTurns: Array<{ agentName: string; turnId: string }> = [];
+    sandboxTurnService = {
       executeSessionTurn: vi.fn(
         (agentDef: AgentDefinition, _conversationId: string, _messages: Message[], turnId: string, _signal?: AbortSignal) => {
-          executedRuns.push({ agentName: agentDef.name, runId: turnId });
+          executedTurns.push({ agentName: agentDef.name, turnId });
           if (opts.sandboxExecuteSessionTurn) {
             return opts.sandboxExecuteSessionTurn(agentDef, turnId);
           }
           return mockTriggeredStream(turnId);
         },
       ),
-      _executedRuns: executedRuns,
-    } as unknown as SandboxRunService & { _executedRuns: typeof executedRuns };
+      _executedTurns: executedTurns,
+    } as unknown as SandboxTurnService & { _executedTurns: typeof executedTurns };
 
     // Lazy ref pattern from container.ts
-    let agentRunServiceRef: AgentRunService | null = null;
+    let agentTurnServiceRef: AgentTurnService | null = null;
 
     // EventTriggerManager with real EventBus, using onFire callback
     // that mirrors container.ts logic
@@ -525,10 +529,10 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       eventBus,
       db,
       async (agentId, task, triggerId, _triggerDepth) => {
-        await startTriggeredRun({
+        await startTriggeredTurn({
           agentId,
           task,
-          agentRunServiceRef,
+          agentTurnServiceRef,
           missingAgentMessage: `[Test] agent ${agentId} not found for trigger ${triggerId}`,
           persistUserMessage: true,
           messageIdPrefix: 'msg-trigger',
@@ -536,15 +540,15 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       },
     );
 
-    agentRunService = new AgentRunService({
+    agentTurnService = new AgentTurnService({
       sse: sse as any,
       db: db as any,
-      runRegistry: sessionRegistry as any,
-      sandboxRunService,
+      turnRegistry: turnRegistry as any,
+      sandboxTurnService,
       toolExecutor: { list: vi.fn().mockReturnValue([]) } as any,
       eventBus,
     });
-    agentRunServiceRef = agentRunService;
+    agentTurnServiceRef = agentTurnService;
     spineRunner = new SpineConsumerRunner({
       canonicalLog,
       db,
@@ -557,11 +561,11 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     return {
       eventBus,
       db,
-      runRegistry: sessionRegistry,
+      turnRegistry: turnRegistry,
       sse,
       containerManager,
-      sandboxRunService: sandboxRunService as SandboxRunService & { _executedRuns: typeof executedRuns },
-      agentRunService,
+      sandboxTurnService: sandboxTurnService as SandboxTurnService & { _executedTurns: typeof executedTurns },
+      agentTurnService,
       triggerManager,
     };
   }
@@ -598,8 +602,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       // Wait for the async fire-and-forget chain
       await settle(50);
-      expect(components.sandboxRunService._executedRuns.some((run) => run.agentName === 'agent-B')).toBe(true);
-      expect(components.runRegistry.startRun).toHaveBeenCalledWith(
+      expect(components.sandboxTurnService._executedTurns.some((turn) => turn.agentName === 'agent-B')).toBe(true);
+      expect(components.turnRegistry.startTurn).toHaveBeenCalledWith(
         'agent-B',
         expect.any(String), // conv id
         'background',
@@ -609,11 +613,11 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         (e) => e.agentId === 'agent-B',
       );
       expect(agentBEvents.length).toBeGreaterThan(0);
-      expect(components.runRegistry.completeRun).toHaveBeenCalled();
+      expect(components.turnRegistry.completeTurn).toHaveBeenCalled();
     });
 
     it('Agent A completes independently of Agent B (fire-and-forget)', async () => {
-      // Track run execution order
+      // Track turn execution order
       const executionLog: string[] = [];
       let triggerBResolve: (() => void) | null = null;
       const triggerBStarted = new Promise<void>((r) => { triggerBResolve = r; });
@@ -625,17 +629,17 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
             systemPrompt: 'You are agent B.',
           }),
         },
-        sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, runId: string) {
+        sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, turnId: string) {
           if (agentDef.name === 'agent-B') {
-            executionLog.push(`B-start:${runId}`);
+            executionLog.push(`B-start:${turnId}`);
             triggerBResolve?.();
             // Simulate some processing delay
             await settle(20);
-            yield* mockTriggeredStream(runId);
-            executionLog.push(`B-end:${runId}`);
+            yield* mockTriggeredStream(turnId);
+            executionLog.push(`B-end:${turnId}`);
           } else {
-            // Agent A just runs through quickly
-            yield* mockTriggeredStream(runId);
+            // Agent A just executes its turn quickly
+            yield* mockTriggeredStream(turnId);
           }
         },
       });
@@ -647,14 +651,14 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         enabled: true,
       });
 
-      // Execute Agent A's run directly (simulating the main run)
+      // Execute Agent A's turn directly.
       executionLog.push('A-start');
-      await components.agentRunService.executeRun({
+      await components.agentTurnService.executeTurn({
         agentDef: makeAgentDef('agent-A', { systemPrompt: 'You are agent A.' }),
         messages: [{ id: 'msg-1', agentId: 'agent-A', role: 'user', content: 'Start analysis', createdAt: new Date() }],
         agentId: 'agent-A',
         conversationId: 'conv-A',
-        runId: 'run-A',
+        turnId: 'turn-A',
         taskDescription: 'Start analysis',
       });
       executionLog.push('A-end');
@@ -677,7 +681,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       expect(executionLog.some((e) => e.startsWith('B-end:'))).toBe(true);
     });
 
-    it('both Agent A and Agent B produce AGUIEvents via SSE', async () => {
+    it('both Agent A and Agent B produce AgentSessionEvents via SSE', async () => {
       const components = await wireComponents({
         agentRows: {
           'agent-B': makeChainAgentRow('agent-B', {
@@ -694,12 +698,12 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       });
 
       // Execute Agent A directly
-      await components.agentRunService.executeRun({
+      await components.agentTurnService.executeTurn({
         agentDef: makeAgentDef('agent-A', { systemPrompt: 'Agent A' }),
         messages: [{ id: 'msg-1', agentId: 'agent-A', role: 'user', content: 'Run', createdAt: new Date() }],
         agentId: 'agent-A',
         conversationId: 'conv-A',
-        runId: 'run-A',
+        turnId: 'turn-A',
         taskDescription: 'Run',
       });
 
@@ -733,10 +737,10 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
           systemPrompt: 'Agent C',
         }),
       }, testCounters);
-      sessionRegistry = makeMockRunRegistry(testCounters);
+      turnRegistry = makeMockTurnRegistry(testCounters);
       sse = makeMockSse();
 
-      let agentRunServiceRef: AgentRunService | null = null;
+      let agentTurnServiceRef: AgentTurnService | null = null;
 
       triggerManager = new EventTriggerManager(
         eventBus,
@@ -744,19 +748,19 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         async (agentId, task, ...rest) => {
           const triggerDepth = rest[1];
           triggerDepths.push({ agentId, depth: triggerDepth ?? 0 });
-          await startTriggeredRun({
+          await startTriggeredTurn({
             agentId,
             task,
-            agentRunServiceRef,
+            agentTurnServiceRef,
           });
         },
       );
 
-      // SandboxRunService that emits chain events for Agent B
+      // SandboxTurnService that emits chain events for Agent B
       const sandboxExecuteSessionTurn = vi.fn(
-        (agentDef: AgentDefinition, runId: string) => {
+        (agentDef: AgentDefinition, turnId: string) => {
           if (agentDef.name === 'agent-B') {
-            // When Agent B runs, it emits an event that triggers Agent C
+            // When Agent B executes, it emits an event that triggers Agent C.
             setTimeout(() => {
               triggerManager.emitCustomEvent(
                 'custom.step_2_complete',
@@ -765,25 +769,25 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
               );
             }, 10);
           }
-          return mockTriggeredStream(runId);
+          return mockTriggeredStream(turnId);
         },
       );
 
-      sandboxRunService = {
+      sandboxTurnService = {
         executeSessionTurn: vi.fn((_agentDef: AgentDefinition, _conversationId: string, _messages: Message[], turnId: string) =>
           sandboxExecuteSessionTurn(_agentDef, turnId),
         ),
-      } as unknown as SandboxRunService;
+      } as unknown as SandboxTurnService;
 
-      agentRunService = new AgentRunService({
+      agentTurnService = new AgentTurnService({
         sse: sse as any,
         db: db as any,
-        runRegistry: sessionRegistry as any,
-        sandboxRunService,
+        turnRegistry: turnRegistry as any,
+        sandboxTurnService,
         toolExecutor: { list: vi.fn().mockReturnValue([]) } as any,
         eventBus,
       });
-      agentRunServiceRef = agentRunService;
+      agentTurnServiceRef = agentTurnService;
 
       // Register trigger: custom.step_1_complete -> agent-B
       await triggerManager.register({
@@ -829,40 +833,40 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
           systemPrompt: 'Deep agent',
         }),
       }, testCounters);
-      sessionRegistry = makeMockRunRegistry(testCounters);
+      turnRegistry = makeMockTurnRegistry(testCounters);
       sse = makeMockSse();
 
-      let agentRunServiceRef: AgentRunService | null = null;
+      let agentTurnServiceRef: AgentTurnService | null = null;
 
       triggerManager = new EventTriggerManager(
         eventBus,
         db,
         async (agentId, _task, _triggerId, _triggerDepth) => {
           firedAgents.push(`${agentId}@depth=${_triggerDepth}`);
-          await startTriggeredRun({
+          await startTriggeredTurn({
             agentId,
             task: 'task',
-            agentRunServiceRef,
+            agentTurnServiceRef,
             messages: [],
           });
         },
       );
 
-      sandboxRunService = {
+      sandboxTurnService = {
         executeSessionTurn: vi.fn((_agentDef: AgentDefinition, _conversationId: string, _messages: Message[], turnId: string) =>
-          mockTriggeredStream(turnId || 'run-deep'),
+          mockTriggeredStream(turnId || 'turn-deep'),
         ),
-      } as unknown as SandboxRunService;
+      } as unknown as SandboxTurnService;
 
-      agentRunService = new AgentRunService({
+      agentTurnService = new AgentTurnService({
         sse: sse as any,
         db: db as any,
-        runRegistry: sessionRegistry as any,
-        sandboxRunService,
+        turnRegistry: turnRegistry as any,
+        sandboxTurnService,
         toolExecutor: { list: vi.fn().mockReturnValue([]) } as any,
         eventBus,
       });
-      agentRunServiceRef = agentRunService;
+      agentTurnServiceRef = agentTurnService;
 
       await triggerManager.register({
         agentId: 'agent-deep',
@@ -889,7 +893,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
 
     it('the 6th trigger in a chain is blocked but earlier agents complete', async () => {
-      const completedRuns: string[] = [];
+      const completedTurns: string[] = [];
 
       eventBus = new TypedEventBus();
       db = makeMockDb({
@@ -897,41 +901,41 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
           systemPrompt: 'Chain',
         }),
       }, testCounters);
-      sessionRegistry = makeMockRunRegistry(testCounters);
+      turnRegistry = makeMockTurnRegistry(testCounters);
       sse = makeMockSse();
 
-      let agentRunServiceRef: AgentRunService | null = null;
+      let agentTurnServiceRef: AgentTurnService | null = null;
 
       triggerManager = new EventTriggerManager(
         eventBus,
         db,
         async (agentId, _task, _triggerId, _triggerDepth) => {
-          const run = await startTriggeredRun({
+          const turn = await startTriggeredTurn({
             agentId,
             task: 'task',
-            agentRunServiceRef,
+            agentTurnServiceRef,
             messages: [],
           });
-          if (!run) return;
-          completedRuns.push(run.id);
+          if (!turn) return;
+          completedTurns.push(turn.id);
         },
       );
 
-      sandboxRunService = {
+      sandboxTurnService = {
         executeSessionTurn: vi.fn((_agentDef: AgentDefinition, _conversationId: string, _messages: Message[], turnId: string) =>
-          mockTriggeredStream(turnId || `run-chain-${++testCounters.runCounter}`),
+          mockTriggeredStream(turnId || `turn-chain-${++testCounters.turnCounter}`),
         ),
-      } as unknown as SandboxRunService;
+      } as unknown as SandboxTurnService;
 
-      agentRunService = new AgentRunService({
+      agentTurnService = new AgentTurnService({
         sse: sse as any,
         db: db as any,
-        runRegistry: sessionRegistry as any,
-        sandboxRunService,
+        turnRegistry: turnRegistry as any,
+        sandboxTurnService,
         toolExecutor: { list: vi.fn().mockReturnValue([]) } as any,
         eventBus,
       });
-      agentRunServiceRef = agentRunService;
+      agentTurnServiceRef = agentTurnService;
 
       await triggerManager.register({
         agentId: 'chain-agent',
@@ -943,16 +947,16 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       // Simulate a chain starting at depth 4 (should succeed)
       triggerManager.emitCustomEvent('custom.recursive_chain', 'sender', { _triggerDepth: 4 });
       await settle(30);
-      expect(new Set(completedRuns).size).toBeGreaterThanOrEqual(1);
+      expect(new Set(completedTurns).size).toBeGreaterThanOrEqual(1);
 
       // Simulate at depth 5 (should be blocked)
-      completedRuns.length = 0;
+      completedTurns.length = 0;
       triggerManager.emitCustomEvent('custom.recursive_chain', 'sender', { _triggerDepth: 5 });
       await settle(30);
-      expect(completedRuns).toHaveLength(0); // Blocked
+      expect(completedTurns).toHaveLength(0); // Blocked
 
-      // Runs that did fire should have completed
-      expect(sessionRegistry.completeRun).toHaveBeenCalled();
+      // Turns that did fire should have completed.
+      expect(turnRegistry.completeTurn).toHaveBeenCalled();
     });
   });
 
@@ -962,7 +966,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       // Create two containers for different agents
       const containerA = await cm.createContainer({
-        runId: 'run-A',
+        sessionId: 'sandbox-A',
         agentId: 'agent-A',
         harnessName: 'langgraph',
         workspaceDir: '/workspace/agent-A',
@@ -970,10 +974,10 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
           OPENAI_API_KEY: 'sk-agent-A-key',
           AGENT_NAME: 'agent-A',
         },
-      } as any);
+      });
 
       const containerB = await cm.createContainer({
-        runId: 'run-B',
+        sessionId: 'sandbox-B',
         agentId: 'agent-B',
         harnessName: 'claude-agents',
         workspaceDir: '/workspace/agent-B',
@@ -981,11 +985,11 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
           OPENAI_API_KEY: 'sk-agent-B-key',
           AGENT_NAME: 'agent-B',
         },
-      } as any);
+      });
       expect(containerA.containerId).not.toBe(containerB.containerId);
       expect(containerA.containerName).not.toBe(containerB.containerName);
-      expect(containerA.containerName).toContain('run-A');
-      expect(containerB.containerName).toContain('run-B');
+      expect(containerA.containerName).toContain('sandbox-A');
+      expect(containerB.containerName).toContain('sandbox-B');
       expect(containerA.agentId).toBe('agent-A');
       expect(containerB.agentId).toBe('agent-B');
       expect(containerA.harnessName).toBe('langgraph');
@@ -1007,29 +1011,29 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       // Create and remove container A
       const containerA = await cm.createContainer({
-        runId: 'run-A',
+        sessionId: 'sandbox-A',
         agentId: 'agent-A',
         harnessName: 'langgraph',
-      } as any);
+      });
       await cm.removeContainer(containerA.containerId);
 
       // Create container B
       const containerB = await cm.createContainer({
-        runId: 'run-B',
+        sessionId: 'sandbox-B',
         agentId: 'agent-B',
         harnessName: 'claude-agents',
-      } as any);
+      });
 
       // Container B should not have any of Container A's data
       const entryB = cm._createdContainers.find((c) => c.containerId === containerB.containerId)!;
       expect(entryB.agentId).toBe('agent-B');
       expect(entryB.secrets).toEqual({}); // No secrets leaked from A
-      expect(entryB.runId).toBe('run-B');
+      expect(entryB.sandboxSessionId).toBe('sandbox-B');
     });
   });
 
   describe('concurrency limit interaction', () => {
-    it('triggered run is queued when max containers reached, proceeds when slot opens', async () => {
+    it('triggered turn is queued when max containers reached, proceeds when slot opens', async () => {
       const executionOrder: string[] = [];
 
       const components = await wireComponents({
@@ -1038,10 +1042,10 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
             systemPrompt: 'Queued agent',
           }),
         },
-        sandboxExecuteSessionTurn: async function* (_agentDef: AgentDefinition, runId: string) {
-          executionOrder.push(`start:${runId}`);
-          yield* mockTriggeredStream(runId);
-          executionOrder.push(`end:${runId}`);
+        sandboxExecuteSessionTurn: async function* (_agentDef: AgentDefinition, turnId: string) {
+          executionOrder.push(`start:${turnId}`);
+          yield* mockTriggeredStream(turnId);
+          executionOrder.push(`end:${turnId}`);
         },
       });
 
@@ -1052,25 +1056,25 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         enabled: true,
       });
 
-      // Simulate that SandboxRunService internally checks concurrency
+      // Simulate that SandboxTurnService internally checks concurrency
       // by having the mock resolve immediately (the real ContainerManager
       // would queue via semaphore)
       components.triggerManager.emitCustomEvent('custom.queued_trigger', 'sender', {});
       await settle(50);
 
-      // The run should have been started and completed
+      // The turn should have been started and completed.
       expect(executionOrder.filter((entry) => entry.startsWith('start:')).length).toBeGreaterThanOrEqual(1);
       expect(executionOrder.filter((entry) => entry.startsWith('end:')).length).toBeGreaterThanOrEqual(1);
 
-      // Verify run was completed successfully
-      expect(components.runRegistry.completeRun).toHaveBeenCalledWith(
+      // Verify the turn completed successfully.
+      expect(components.turnRegistry.completeTurn).toHaveBeenCalledWith(
         expect.any(String),
         // No error argument means success
       );
     });
 
     it('multiple concurrent triggers queue and all eventually complete', async () => {
-      const completedRuns = new Set<string>();
+      const completedTurns = new Set<string>();
 
       const components = await wireComponents({
         agentRows: {
@@ -1078,9 +1082,9 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
             systemPrompt: 'Concurrent',
           }),
         },
-        sandboxExecuteSessionTurn: async function* (_agentDef: AgentDefinition, runId: string) {
-          yield* mockTriggeredStream(runId);
-          completedRuns.add(runId);
+        sandboxExecuteSessionTurn: async function* (_agentDef: AgentDefinition, turnId: string) {
+          yield* mockTriggeredStream(turnId);
+          completedTurns.add(turnId);
         },
       });
 
@@ -1099,8 +1103,8 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       await settle(200);
 
       // All 3 should have completed
-      expect(completedRuns.size).toBeGreaterThanOrEqual(3);
-      expect(components.runRegistry.completeRun.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(completedTurns.size).toBeGreaterThanOrEqual(3);
+      expect(components.turnRegistry.completeTurn.mock.calls.length).toBeGreaterThanOrEqual(3);
     });
   });
 
@@ -1112,12 +1116,12 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
             systemPrompt: 'Failing agent',
           }),
         },
-        sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, runId: string) {
+        sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, turnId: string) {
           if (agentDef.name === 'agent-fail-B') {
-            yield* mockFailingStream(runId);
+            yield* mockFailingStream(turnId);
           } else {
             // Agent A succeeds normally
-            yield* mockTriggeredStream(runId);
+            yield* mockTriggeredStream(turnId);
           }
         },
       });
@@ -1130,7 +1134,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       });
 
       // Execute Agent A first — this should succeed
-      await components.agentRunService.executeRun({
+      await components.agentTurnService.executeTurn({
         agentDef: makeAgentDef('agent-A', { systemPrompt: 'Agent A' }),
         messages: [{
           id: 'msg-1',
@@ -1141,21 +1145,21 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         }],
         agentId: 'agent-A',
         conversationId: 'conv-A',
-        runId: 'run-A',
+        turnId: 'turn-A',
         taskDescription: 'Do something',
       });
 
       // Agent A completed successfully (no error arg)
-      expect(components.runRegistry.completeRun).toHaveBeenCalledWith('run-A');
+      expect(components.turnRegistry.completeTurn).toHaveBeenCalledWith('turn-A');
 
       // Now trigger Agent B (which will fail)
       components.triggerManager.emitCustomEvent('custom.fail_trigger', 'agent-A', {});
       await settle(100);
 
       // Agent B should have been marked as failed (completed with error)
-      const completeCalls = components.runRegistry.completeRun.mock.calls;
+      const completeCalls = components.turnRegistry.completeTurn.mock.calls;
       const failedCall = completeCalls.find(
-        (call: any[]) => call[0] !== 'run-A' && call[1],
+        (call: any[]) => call[0] !== 'turn-A' && call[1],
       );
       expect(failedCall).toBeDefined();
       expect(failedCall![1]).toContain('fatal error');
@@ -1175,12 +1179,12 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
             systemPrompt: 'Throwing agent',
           }),
         },
-        sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, runId: string) {
+        sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, turnId: string) {
           if (agentDef.name === 'agent-throw-B') {
             throw new Error('Container failed to start');
           }
           // Agent A completes normally
-          yield* mockTriggeredStream(runId);
+          yield* mockTriggeredStream(turnId);
         },
       });
 
@@ -1192,7 +1196,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       });
 
       // Execute Agent A
-      await components.agentRunService.executeRun({
+      await components.agentTurnService.executeTurn({
         agentDef: makeAgentDef('agent-A', { systemPrompt: 'Agent A' }),
         messages: [{
           id: 'msg-1',
@@ -1203,20 +1207,20 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         }],
         agentId: 'agent-A',
         conversationId: 'conv-A',
-        runId: 'run-A',
+        turnId: 'turn-A',
         taskDescription: 'Start',
       });
 
       // Agent A should be completed successfully
-      expect(components.runRegistry.completeRun).toHaveBeenCalledWith('run-A');
+      expect(components.turnRegistry.completeTurn).toHaveBeenCalledWith('turn-A');
 
       // Trigger the failing Agent B after A completes
       components.triggerManager.emitCustomEvent('custom.throw_trigger', 'agent-A', {});
       await settle(100);
 
       // Agent B's error should have been caught (fire-and-forget pattern)
-      const completedWithError = components.runRegistry.completeRun.mock.calls.find(
-        (call: any[]) => call[0] !== 'run-A' && typeof call[1] === 'string',
+      const completedWithError = components.turnRegistry.completeTurn.mock.calls.find(
+        (call: any[]) => call[0] !== 'turn-A' && typeof call[1] === 'string',
       );
       expect(completedWithError).toBeDefined();
       expect(completedWithError![1]).toContain('Container failed to start');
@@ -1235,12 +1239,12 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         },
       });
 
-      // Intercept the task that gets sent to the triggered run
-      const origStartRun = components.runRegistry.startRun;
-      components.runRegistry.startRun = vi.fn(
+      // Intercept the task sent to the triggered turn.
+      const origStartTurn = components.turnRegistry.startTurn;
+      components.turnRegistry.startTurn = vi.fn(
         async (agentId: string, convId: string, mode: string, task: string) => {
           if (agentId === 'agent-payload-B') receivedTask = task;
-          return origStartRun(agentId, convId, mode, task);
+          return origStartTurn(agentId, convId, mode, task);
         },
       );
 
@@ -1272,11 +1276,11 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         },
       });
 
-      const origStartRun = components.runRegistry.startRun;
-      components.runRegistry.startRun = vi.fn(
+      const origStartTurn = components.turnRegistry.startTurn;
+      components.turnRegistry.startTurn = vi.fn(
         async (agentId: string, convId: string, mode: string, task: string) => {
           if (agentId === 'agent-complex-B') capturedTask = task;
-          return origStartRun(agentId, convId, mode, task);
+          return origStartTurn(agentId, convId, mode, task);
         },
       );
 
@@ -1308,22 +1312,22 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       // Simulate creating containers for a 3-agent chain
       await cm.createContainer({
-        runId: 'run-A',
+        sessionId: 'sandbox-A',
         agentId: 'agent-A',
         harnessName: 'langgraph',
-      } as any);
+      });
 
       await cm.createContainer({
-        runId: 'run-B',
+        sessionId: 'sandbox-B',
         agentId: 'agent-B',
         harnessName: 'claude-agents',
-      } as any);
+      });
 
       await cm.createContainer({
-        runId: 'run-C',
+        sessionId: 'sandbox-C',
         agentId: 'agent-C',
         harnessName: 'pi-agent',
-      } as any);
+      });
 
       const metrics = cm.getMetrics();
       expect(metrics.totalCreated).toBe(3);
@@ -1340,16 +1344,16 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       const cm = makeMockContainerManager(testCounters);
 
       const containerA = await cm.createContainer({
-        runId: 'run-A',
+        sessionId: 'sandbox-A',
         agentId: 'agent-A',
         harnessName: 'langgraph',
-      } as any);
+      });
 
       const containerB = await cm.createContainer({
-        runId: 'run-B',
+        sessionId: 'sandbox-B',
         agentId: 'agent-B',
         harnessName: 'claude-agents',
-      } as any);
+      });
 
       // Both active
       expect(cm.getMetrics().active).toBe(2);
@@ -1371,22 +1375,22 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       const cm = makeMockContainerManager(testCounters);
 
       await cm.createContainer({
-        runId: 'run-1',
+        sessionId: 'sandbox-1',
         agentId: 'agent-1',
         harnessName: 'claude-agents',
-      } as any);
+      });
 
       await cm.createContainer({
-        runId: 'run-2',
+        sessionId: 'sandbox-2',
         agentId: 'agent-2',
         harnessName: 'claude-agents',
-      } as any);
+      });
 
       await cm.createContainer({
-        runId: 'run-3',
+        sessionId: 'sandbox-3',
         agentId: 'agent-3',
         harnessName: 'langgraph',
-      } as any);
+      });
 
       const metrics = cm.getMetrics();
       expect(metrics.byHarness['claude-agents']).toBe(2);
@@ -1396,7 +1400,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
   });
 
   describe('end-to-end emit-event to trigger flow', () => {
-    it('full flow: emit-event tool result -> emitCustom -> TriggerManager -> sandbox run', async () => {
+    it('full flow: emit-event tool result -> emitCustom -> TriggerManager -> sandbox turn', async () => {
       const components = await wireComponents({
         agentRows: {
           'agent-listener': makeChainAgentRow('agent-listener', {
@@ -1422,13 +1426,13 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
 
       // Wait for the trigger spine consumer to handle the persisted source row.
       await settle(100);
-      expect(components.runRegistry.startRun).toHaveBeenCalledWith(
+      expect(components.turnRegistry.startTurn).toHaveBeenCalledWith(
         'agent-listener',
         expect.any(String),
         'background',
         expect.stringContaining('Handle classified email: category=billing'),
       );
-      expect(components.sandboxRunService.executeSessionTurn).toHaveBeenCalledTimes(1);
+      expect(components.sandboxTurnService.executeSessionTurn).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1446,7 +1450,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
           systemPrompt: 'Support',
         }),
       }, testCounters);
-      sessionRegistry = makeMockRunRegistry(testCounters);
+      turnRegistry = makeMockTurnRegistry(testCounters);
       sse = makeMockSse();
 
       triggerManager = new EventTriggerManager(
@@ -1454,7 +1458,7 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
         db,
         async (agentId) => {
           firedAgents.push(agentId);
-          // Don't actually execute runs — just track which agents were triggered
+          // Do not execute turns; track which agents were triggered.
         },
       );
 
@@ -1519,9 +1523,9 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
     });
   });
 
-  describe('SandboxRunService receives correct agentDef with run isolation', () => {
-    it('each triggered run gets its own runId, conversationId, and agentDef', async () => {
-      const capturedCalls: Array<{ name: string; runId: string }> = [];
+  describe('SandboxTurnService receives correct agentDef with turn isolation', () => {
+    it('each triggered turn gets its own turnId, conversationId, and agentDef', async () => {
+      const capturedCalls: Array<{ name: string; turnId: string }> = [];
 
       const components = await wireComponents({
         agentRows: {
@@ -1539,9 +1543,9 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
             tools: ['search'],
           }),
         },
-        sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, runId: string) {
-          capturedCalls.push({ name: agentDef.name, runId });
-          yield* mockTriggeredStream(runId);
+        sandboxExecuteSessionTurn: async function* (agentDef: AgentDefinition, turnId: string) {
+          capturedCalls.push({ name: agentDef.name, turnId });
+          yield* mockTriggeredStream(turnId);
         },
       });
 
@@ -1568,10 +1572,10 @@ describe('P3-5: Kitchen-Sink Chain Integration (Sandbox Mode)', () => {
       const alphaCall = capturedCalls.find((c) => c.name === 'agent-alpha')!;
       const betaCall = capturedCalls.find((c) => c.name === 'agent-beta')!;
 
-      // Each run has a unique runId
-      expect(alphaCall.runId).not.toBe(betaCall.runId);
+      // Each turn has a unique turnId.
+      expect(alphaCall.turnId).not.toBe(betaCall.turnId);
 
-      const execCalls = (components.sandboxRunService.executeSessionTurn as any).mock.calls;
+      const execCalls = (components.sandboxTurnService.executeSessionTurn as any).mock.calls;
       const alphaExec = execCalls.find((c: any[]) => c[0].name === 'agent-alpha');
       const betaExec = execCalls.find((c: any[]) => c[0].name === 'agent-beta');
 

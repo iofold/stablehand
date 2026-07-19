@@ -1,10 +1,9 @@
 import type { ApiToolCallState, ApiMessagePart } from './api.js';
 
-export type AGUIEventType =
+export type AgentSessionEventType =
   | 'RUN_STARTED'
   | 'RUN_FINISHED'
   | 'RUN_ERROR'
-  | 'TURN_PENDING'
   | 'TEXT_MESSAGE_START'
   | 'TEXT_MESSAGE_CONTENT'
   | 'TEXT_MESSAGE_END'
@@ -13,19 +12,20 @@ export type AGUIEventType =
   | 'TOOL_CALL_END'
   | 'TOOL_CALL_RESULT'
   | 'STATE_DELTA'
-  | 'HITL_PAUSE'
+  | 'MESSAGES_SNAPSHOT'
+  | 'INTERRUPT_REQUESTED'
   | 'MESSAGE_COMMITTED'
   | 'CUSTOM';
 
-export interface AGUIEvent {
-  type: AGUIEventType;
+export interface AgentSessionEvent {
+  type: AgentSessionEventType;
   timestamp: number;
   runId: string;
   [key: string]: unknown;
 }
 
-/** Emitted by the sandbox when a complete message has been finalized. */
-export interface MessageCommittedEvent extends AGUIEvent {
+/** Internal agent-session event emitted when the sandbox finalizes a message. */
+export interface MessageCommittedEvent extends AgentSessionEvent {
   type: 'MESSAGE_COMMITTED';
   role: 'assistant' | 'tool';
   content: string;

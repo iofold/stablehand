@@ -93,12 +93,12 @@ The TypedEventBus emits the following events:
 - `turn.completed` — Turn finished (completed, error, or cancelled)
 - `user.message` — Canonical user-message append for live SSE bootstrap
 - `message.committed` — Canonical assistant/tool message commit
-- `run.ag_ui_event` — Forwarded AG-UI events not handled individually
-- `run.text_chunk` — Streaming text delta from harness
-- `run.tool_started` — Tool call initiated
-- `run.tool_result` — Tool call completed
-- `run.interrupted` — HITL approval needed
-- `run.interrupt_resolved` — HITL approval/rejection received
+- `ag_ui.event` — Forwarded AG-UI events not handled individually
+- `message.delta` — Streaming text delta from harness
+- `tool_call.started` — Tool call initiated
+- `tool_call.completed` — Tool call completed
+- `interrupt.requested` — HITL approval needed
+- `interrupt.resolved` — HITL approval/rejection received
 - `feedback.received` — User thumbs up/down signal for external consumers
 - `agent.created` — New agent registered
 - `agent.deleted` — Agent removed
@@ -179,7 +179,7 @@ Models are configured per agent/harness. Core CTXMill does not own a global LLM 
 
 Relevant code:
 
-- [manifest/index.ts](/path/to/stablehand/packages/ctxmill/src/manifest/index.ts)
+- [manifest/index.ts](/path/to/stablehand/packages/manifest/src/index.ts)
 - [harness/index.ts](/path/to/stablehand/packages/ctxmill/src/harness/index.ts)
 
 ### 11. Configuration and DI

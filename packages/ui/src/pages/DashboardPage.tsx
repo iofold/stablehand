@@ -3,10 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { useAgentsStore } from '@/stores/agents';
 import { Dashboard } from '@/components/dashboard/Dashboard';
-import { RunStatusBadge } from '@/components/dashboard/RunStatusBadge';
+import { StatusBadge } from '@/components/dashboard/StatusBadge';
 import { fetchActiveConversations, fetchConversationSummaries } from '@/lib/api';
 import { useApiAuthStore } from '@/lib/auth';
-import { countActiveSessions, isTerminalSessionStatus } from '@/lib/session-status';
+import {
+  countActiveSandboxSessions,
+  isTerminalConversationStatus,
+} from '@/lib/lifecycle-status';
 import type { ApiConversationSummary } from '@ctxmill/shared';
 import { PageShell } from '@/components/ui/PageShell';
 import { StatsRow } from '@/components/ui/StatsRow';
@@ -16,7 +19,7 @@ export function DashboardPage() {
   const agents = useAgentsStore((s) => s.agents);
   const loading = useAgentsStore((s) => s.loading);
   const fetchAgents = useAgentsStore((s) => s.fetchAgents);
-  const cancelRun = useAgentsStore((s) => s.cancelRun);
+  const cancelTurn = useAgentsStore((s) => s.cancelTurn);
   const agentLoadError = useAgentsStore((s) => s.error);
   const authRequired = useApiAuthStore((s) => s.authRequired);
   const displayLoading = authRequired || loading;
@@ -73,7 +76,7 @@ export function DashboardPage() {
   const stats = useMemo(() => {
     const totalTools = agents.reduce((sum, a) => sum + a.tools.length, 0);
     const activeAgents = agents.filter(
-      (a) => countActiveSessions(a.sessionsByStatus) > 0 || a.status === 'running',
+      (a) => countActiveSandboxSessions(a.sandboxSessionsByStatus) > 0 || a.status === 'running',
     ).length;
     return { totalTools, activeAgents };
   }, [agents]);
@@ -86,7 +89,7 @@ export function DashboardPage() {
 
   const handleCancelRun = async (conv: ApiConversationSummary) => {
     if (conv.latestTurnId) {
-      await cancelRun(conv.agentId, conv.latestTurnId);
+      await cancelTurn(conv.agentId, conv.latestTurnId);
     }
     setActiveConversations((prev) => prev.filter((entry) => entry.id !== conv.id));
   };
@@ -144,7 +147,7 @@ export function DashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-surface-700/50">
                   {activeConversations.map((conv) => {
-                    const terminal = isTerminalSessionStatus(conv.status);
+                    const terminal = isTerminalConversationStatus(conv.status);
                     return (
                       <tr
                         key={conv.id}
@@ -155,7 +158,7 @@ export function DashboardPage() {
                           {agentNameMap[conv.agentId] || conv.agentId}
                         </td>
                         <td className="px-4 py-3">
-                          <RunStatusBadge status={conv.status} />
+                          <StatusBadge status={conv.status} subject="Conversation" />
                         </td>
                         <td className="px-4 py-3 text-sm text-surface-400">
                           <div className="max-w-[200px] sm:max-w-xs md:max-w-md truncate">

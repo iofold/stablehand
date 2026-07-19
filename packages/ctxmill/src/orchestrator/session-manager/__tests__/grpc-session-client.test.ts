@@ -41,7 +41,7 @@ describe('grpc-session-client.waitForContainerReady', () => {
     };
     connectMocks.createClientMock.mockReturnValue(grpcClient);
 
-    const readyPromise = waitForContainerReady('http://ctxmill-run-sess-1:50051', 5_000);
+    const readyPromise = waitForContainerReady('http://ctxmill-sandbox-sess-1:50051', 5_000);
     await vi.advanceTimersByTimeAsync(1_000);
     const ready = await readyPromise;
 
@@ -58,7 +58,7 @@ describe('grpc-session-client.waitForContainerReady', () => {
     };
     connectMocks.createClientMock.mockReturnValue(grpcClient);
 
-    const ready = await waitForContainerReady('http://ctxmill-run-sess-1:50051', 5_000);
+    const ready = await waitForContainerReady('http://ctxmill-sandbox-sess-1:50051', 5_000);
 
     expect(grpcClient.killSession).toHaveBeenCalledTimes(1);
     expect(ready).toEqual({

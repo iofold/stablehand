@@ -59,66 +59,53 @@ describe('Failure injection — rollback and cleanup', () => {
     await testApp?.close();
   });
 
-  // ── 1. Wrong-agent sessionId returns 404 for file operations ──
+  // ── 1. Wrong-agent conversationId returns 404 for file operations ──
 
-  it('returns 404 when sessionId belongs to a different agent', async () => {
-    // Create a conversation and run for agent A
+  it('returns 404 when conversationId belongs to a different agent', async () => {
     const conv = await container.db.createConversation(agentAId);
-    const run = await container.db.createTurn({
-      agentId: agentAId,
-      conversationId: conv.id,
-      mode: 'background',
-      taskDescription: 'test',
-    });
 
-    // Try listing files on agent B using agent A's sessionId
+    // Try listing files on agent B using agent A's conversationId
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentBId}/files?sessionId=${run.id}`,
+      url: `/api/agents/${agentBId}/files?conversationId=${conv.id}`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Session not found');
+    expect(res.json().error).toContain('Conversation not found');
   });
 
-  it('returns 404 when sessionId belongs to a different agent (read endpoint)', async () => {
+  it('returns 404 when conversationId belongs to a different agent (read endpoint)', async () => {
     const conv = await container.db.createConversation(agentAId);
-    const run = await container.db.createTurn({
-      agentId: agentAId,
-      conversationId: conv.id,
-      mode: 'background',
-      taskDescription: 'test',
-    });
 
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentBId}/files/read?path=foo.txt&sessionId=${run.id}`,
+      url: `/api/agents/${agentBId}/files/read?path=foo.txt&conversationId=${conv.id}`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Session not found');
+    expect(res.json().error).toContain('Conversation not found');
   });
 
-  // ── 2. Non-existent sessionId returns 404 for file operations ──
+  // ── 2. Non-existent conversationId returns 404 for file operations ──
 
-  it('returns 404 for completely non-existent sessionId on file list', async () => {
+  it('returns 404 for completely non-existent conversationId on file list', async () => {
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentAId}/files?sessionId=nonexistent-run-id`,
+      url: `/api/agents/${agentAId}/files?conversationId=nonexistent-conversation-id`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Session not found');
+    expect(res.json().error).toContain('Conversation not found');
   });
 
-  it('returns 404 for completely non-existent sessionId on file read', async () => {
+  it('returns 404 for completely non-existent conversationId on file read', async () => {
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentAId}/files/read?path=foo.txt&sessionId=nonexistent-run-id`,
+      url: `/api/agents/${agentAId}/files/read?path=foo.txt&conversationId=nonexistent-conversation-id`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Session not found');
+    expect(res.json().error).toContain('Conversation not found');
   });
 
   // ── 3. Agent with no workspaceDir returns 500 for file operations ──
@@ -160,48 +147,46 @@ describe('Failure injection — rollback and cleanup', () => {
     expect(res.json().error).toContain('Agent has no workspace configured');
   });
 
-  it('returns 404 for stale session dir with no matching run in registry', async () => {
-    const staleRunId = 'stale-fake-run-id-12345';
+  it('returns 404 for stale conversation dir with no matching conversation', async () => {
+    const staleConversationId = 'stale-fake-conversation-id-12345';
 
-    // Create fake session directory on disk
-    const sessionMergedDir = join(dataDir, 'agents', agentAId, 'sessions', staleRunId, 'merged');
-    mkdirSync(sessionMergedDir, { recursive: true });
-    writeFileSync(join(sessionMergedDir, 'stale-file.txt'), 'should not be accessible');
-
-    // Request with the stale sessionId — should be rejected at the registry check
-    const res = await app.inject({
-      method: 'GET',
-      url: `/api/agents/${agentAId}/files?sessionId=${staleRunId}`,
-    });
-
-    expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Session not found');
-  });
-
-  it('returns 404 for stale session dir on file read', async () => {
-    const staleRunId = 'stale-fake-run-id-67890';
-
-    const sessionMergedDir = join(dataDir, 'agents', agentAId, 'sessions', staleRunId, 'merged');
-    mkdirSync(sessionMergedDir, { recursive: true });
-    writeFileSync(join(sessionMergedDir, 'stale-secret.txt'), 'should not be readable');
+    const staleWorkspaceDir = join(dataDir, 'agents', agentAId, 'conversations', staleConversationId);
+    mkdirSync(staleWorkspaceDir, { recursive: true });
+    writeFileSync(join(staleWorkspaceDir, 'stale-file.txt'), 'should not be accessible');
 
     const res = await app.inject({
       method: 'GET',
-      url: `/api/agents/${agentAId}/files/read?path=stale-secret.txt&sessionId=${staleRunId}`,
+      url: `/api/agents/${agentAId}/files?conversationId=${staleConversationId}`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Session not found');
+    expect(res.json().error).toContain('Conversation not found');
   });
 
-  it('returns 404 when cancelling a non-existent session', async () => {
+  it('returns 404 for stale conversation dir on file read', async () => {
+    const staleConversationId = 'stale-fake-conversation-id-67890';
+
+    const staleWorkspaceDir = join(dataDir, 'agents', agentAId, 'conversations', staleConversationId);
+    mkdirSync(staleWorkspaceDir, { recursive: true });
+    writeFileSync(join(staleWorkspaceDir, 'stale-secret.txt'), 'should not be readable');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/agents/${agentAId}/files/read?path=stale-secret.txt&conversationId=${staleConversationId}`,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toContain('Conversation not found');
+  });
+
+  it('returns 404 when cancelling a non-existent turn', async () => {
     const res = await app.inject({
       method: 'POST',
-      url: `/api/agents/${agentAId}/sessions/nonexistent-run/cancel`,
+      url: `/api/agents/${agentAId}/turns/nonexistent-turn/cancel`,
     });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json().error).toContain('Session not found');
+    expect(res.json().error).toContain('Turn not found');
   });
 
   it('delete cascade removes agent, conversations, and completed runs', async () => {

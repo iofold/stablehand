@@ -119,6 +119,11 @@ export async function validateAndExtractTarball(
 
           if (header.type === 'directory') {
             await fs.mkdir(fullPath, { recursive: true });
+            if (typeof header.mode === 'number') {
+              // mkdir applies the process umask, which would make the same
+              // canonical bundle hash differently across environments.
+              await fs.chmod(fullPath, header.mode & 0o7777);
+            }
             entryStream.resume();
             next();
             return;

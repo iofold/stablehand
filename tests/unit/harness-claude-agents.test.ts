@@ -52,7 +52,7 @@ function makeConfig(overrides: Partial<HarnessSessionConfig> = {}): HarnessSessi
     tools: [],
     secrets: { anthropic: 'test-key' },
     agentId: 'agent-1',
-    conversationId: 'conversation-1',
+    conversationId: '11111111-1111-4111-8111-111111111111',
     workspaceDir: '/tmp/workspace',
     harnessConfigJson: JSON.stringify({ model: 'claude-sonnet-4-6', apiKeyRef: 'anthropic' }),
     ...overrides,
@@ -186,7 +186,7 @@ describe('ClaudeAgentsHarness', () => {
         { val: 'hello' },
         expect.objectContaining({
           agentId: 'agent-1',
-          conversationId: 'conversation-1',
+          conversationId: '11111111-1111-4111-8111-111111111111',
           workspaceDir: '/tmp/workspace',
         }),
       );
@@ -625,7 +625,7 @@ describe('ClaudeAgentsHarness', () => {
             inputTokens: 100,
             outputTokens: 50,
             totalTokens: 150,
-            cost: 0.005,
+            costUsd: 0.005,
           },
         },
       ]);
@@ -648,12 +648,10 @@ describe('ClaudeAgentsHarness', () => {
       };
       const config = makeConfig({
         tools: [customTool],
-        nativeTools: [
-          {
+        nativeTools: {
           allowlist: ['native-read', 'native-bash'],
           blocklist: ['native-bash'],
-          },
-        ],
+        },
         harnessConfigJson: JSON.stringify({ model: 'claude-sonnet-4-6', apiKeyRef: 'anthropic', maxTurns: 4 }),
       });
 
@@ -696,7 +694,7 @@ describe('ClaudeAgentsHarness', () => {
       expect(queryCall?.options.settingSources).toEqual(['project']);
       expect(queryCall?.options.permissionMode).toBe('bypassPermissions');
       expect(queryCall?.options.includeHookEvents).toBe(true);
-      expect(queryCall?.options.includePartialMessages).toBe(false);
+      expect(queryCall?.options.includePartialMessages).toBe(true);
       expect(queryCall?.options.maxTurns).toBe(4);
     });
 
@@ -960,7 +958,7 @@ describe('ClaudeAgentsHarness', () => {
         stateVersion: '2',
         payload: {
           transcript: [restoredMessage, userMessage],
-          sessionId: 'conversation-1',
+          sessionId: '11111111-1111-4111-8111-111111111111',
         },
       });
 
@@ -1018,7 +1016,7 @@ describe('ClaudeAgentsHarness', () => {
         ),
       );
 
-      expect(capturedQuery?.options).toMatchObject({ sessionId: 'conversation-1' });
+      expect(capturedQuery?.options).toMatchObject({ sessionId: '11111111-1111-4111-8111-111111111111' });
       expect((capturedQuery?.options as Record<string, unknown>).resume).toBeUndefined();
       expect(capturedPrompt).toEqual([
         {
@@ -1093,7 +1091,7 @@ describe('ClaudeAgentsHarness', () => {
         ),
       );
 
-      expect(capturedQuery?.options).toMatchObject({ resume: 'conversation-1' });
+      expect(capturedQuery?.options).toMatchObject({ resume: '11111111-1111-4111-8111-111111111111' });
       expect((capturedQuery?.options as Record<string, unknown>).sessionId).toBeUndefined();
       expect(capturedPrompt).toEqual([
         {
@@ -1138,7 +1136,7 @@ describe('ClaudeAgentsHarness', () => {
       );
 
       const firstQueryCall = mockQuery.mock.calls[0]?.[0];
-      expect(firstQueryCall?.options.sessionId).toBe('conversation-1');
+      expect(firstQueryCall?.options.sessionId).toBe('11111111-1111-4111-8111-111111111111');
       expect(firstQueryCall?.options.resume).toBeUndefined();
 
       await collectEvents(
@@ -1149,7 +1147,7 @@ describe('ClaudeAgentsHarness', () => {
       );
 
       const secondQueryCall = mockQuery.mock.calls[1]?.[0];
-      expect(secondQueryCall?.options.resume).toBe('conversation-1');
+      expect(secondQueryCall?.options.resume).toBe('11111111-1111-4111-8111-111111111111');
       expect(secondQueryCall?.options.sessionId).toBeUndefined();
 
       await session.close();

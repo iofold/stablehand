@@ -39,7 +39,7 @@ The current runtime does not persist a pause-like sandbox session state.
 
 *   **`CHECKPOINTED`:** The sandbox session runtime has been removed after checkpoint capture and can be restored later.
 *   There is **no separate persisted pause-like or frozen state** in the current runtime.
-*   Human-in-the-loop (HITL) approval is modeled through durable interrupt records plus `run.interrupted` / `run.interrupt_resolved` events, not through a separate sandbox-session status.
+*   Human-in-the-loop (HITL) approval is modeled through durable interrupt records plus `interrupt.requested` / `interrupt.resolved` events, not through a separate sandbox-session status.
 *   The `freeze` / `unfreeze` endpoints were removed in Phase 0 dead-code cleanup.
 
 ### 5. Soft-delete sandbox sessions (`TERMINATED` state)
@@ -52,7 +52,7 @@ These events fire per turn (per user message), not per session. We renamed them 
 
 *   `turn.pending` is the pre-start UI/event-bus signal
 *   `turn.started` and `turn.completed` are the canonical per-turn lifecycle events
-*   `run.interrupted` and `run.interrupt_resolved` cover HITL
+*   `interrupt.requested` and `interrupt.resolved` cover HITL
 
 This remains a clean break for webhook subscribers; no backward compatibility layer was added.
 
@@ -83,7 +83,7 @@ CHECKPOINTED -> TERMINATED
 | `n/a` | `turn.pending` | Turn (pre-start) |
 | `session.started` | `turn.started` | Turn |
 | `session.completed` | `turn.completed` | Turn |
-| `n/a` | `run.interrupted` / `run.interrupt_resolved` | Turn / HITL |
+| `n/a` | `interrupt.requested` / `interrupt.resolved` | Turn / HITL |
 
 ## Consequences
 

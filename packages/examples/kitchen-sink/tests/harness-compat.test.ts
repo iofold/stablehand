@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import {
   parseManifestString,
   validateManifest,
-  manifestToDefinition,
-} from 'ctxmill';
-import type { AgentManifest } from 'ctxmill';
+  manifestToAgentCreateInput,
+} from '@ctxmill/manifest';
+import type { AgentManifest } from '@ctxmill/manifest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const agentsDir = join(__dirname, '..', 'agents');
@@ -25,11 +25,11 @@ async function loadManifest(dir: string): Promise<AgentManifest> {
 }
 
 describe('cross-harness compatibility', () => {
-  it('all 3 agents produce valid AgentDefinition shapes', async () => {
+  it('all 3 agents produce valid canonical create inputs', async () => {
     const definitions = await Promise.all(
       agentDirs.map(async (dir) => {
         const manifest = await loadManifest(dir);
-        return manifestToDefinition(manifest);
+        return manifestToAgentCreateInput(manifest);
       }),
     );
 
@@ -40,7 +40,7 @@ describe('cross-harness compatibility', () => {
         model?: string;
       };
 
-      // Every AgentDefinition must have these required fields
+      // Every canonical create input must have these required fields.
       expect(def.name).toEqual(expect.any(String));
       expect(harnessConfig).toEqual(expect.any(Object));
       expect(def.systemPrompt).toEqual(expect.any(String));
@@ -52,7 +52,7 @@ describe('cross-harness compatibility', () => {
   it('all agents include emit-event tool for chaining', async () => {
     for (const dir of agentDirs) {
       const manifest = await loadManifest(dir);
-      const def = manifestToDefinition(manifest);
+      const def = manifestToAgentCreateInput(manifest);
       expect(def.tools).toContain('emit-event');
     }
   });
@@ -72,7 +72,7 @@ describe('cross-harness compatibility', () => {
   it('harness configs are valid for their respective harnesses', async () => {
     for (const dir of agentDirs) {
       const manifest = await loadManifest(dir);
-      const def = manifestToDefinition(manifest);
+      const def = manifestToAgentCreateInput(manifest);
       const harnessConfig = (def.harnessConfig ?? {}) as {
         provider?: string;
         model?: string;

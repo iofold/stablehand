@@ -73,7 +73,7 @@ describe('createAgentEventLangSmithTracer', () => {
           arguments: { query: 'ctxmill' },
         }],
       },
-      { type: 'done', usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5, cost: 0.01 } },
+      { type: 'done', usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5, costUsd: 0.01 } },
     ];
 
     for (const event of events) {

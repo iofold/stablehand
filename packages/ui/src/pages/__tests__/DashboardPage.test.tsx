@@ -56,7 +56,7 @@ describe('DashboardPage', () => {
       loading: false,
       error: null,
       fetchAgents: vi.fn().mockResolvedValue(undefined),
-      cancelRun: cancelRunMock,
+      cancelTurn: cancelRunMock,
     }));
     useApiAuthStore.setState({ token: '', authRequired: false });
 

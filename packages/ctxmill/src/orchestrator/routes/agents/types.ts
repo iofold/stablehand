@@ -8,10 +8,8 @@ import type { SecretProvider } from '../../../secrets/types.js';
 import type { SystemSettingsService } from '../../../settings/service.js';
 import type { SandboxContainerManager } from '../../../sandbox/container-manager.js';
 import type { DefaultToolRegistry } from '../../../tool/registry.js';
-import type { AgentResourceLimits } from '@ctxmill/sandbox-daemon';
-import type { AgentSessionService } from '../../agent-session-service.js';
 import type { InterruptManager } from '../../interrupt.js';
-import type { RunStartupService } from '../../run-startup-service.js';
+import type { TurnStartupService } from '../../turn-startup-service.js';
 import type { SandboxSessionManager } from '../../sandbox-session-manager.js';
 import type { SSEManager } from '../../sse.js';
 import type { ContainerLifecyclePolicy } from '../../container-lifecycle-policy.js';
@@ -26,7 +24,6 @@ export interface AgentRouteOptions {
   sse: SSEManager;
   interrupts: InterruptManager;
   harnessSchemas: HarnessConfigSchemas;
-  agentSessionService: AgentSessionService;
   eventBus?: TypedEventBus;
   dataDir?: string;
   secretProvider?: SecretProvider;
@@ -34,7 +31,7 @@ export interface AgentRouteOptions {
   containerManager?: Pick<SandboxContainerManager, 'listManagedContainersWithLabels' | 'removeContainer' | 'stopContainer'>;
   sessionManager?: SandboxSessionManager;
   settingsService?: SystemSettingsService;
-  runStartupService: RunStartupService;
+  turnStartupService: TurnStartupService;
   /** Durable canonical event spine; present when the container wired one (ADR-015). */
   canonicalLog?: CanonicalLog;
 }
@@ -46,20 +43,8 @@ export interface AgentSubRouteOptions extends AgentRouteOptions {
   ) => Promise<void>;
 }
 
-export interface SessionsRouteOptions {
+export interface ActiveLifecycleRouteOptions {
   db: DatabaseRepository;
   lifecyclePolicy?: Pick<ContainerLifecyclePolicy, 'getActiveSandboxSessionsForReadback'>;
   sessionManager?: Pick<SandboxSessionManager, 'getActiveTurnId'>;
 }
-
-export type AgentRouteBody = {
-  name?: string;
-  harness?: string;
-  harnessConfig?: Record<string, unknown>;
-  systemPrompt?: string;
-  tools?: string[];
-  httpTools?: AgentHttpToolDefinition[];
-  description?: string;
-  metadata?: Record<string, unknown>;
-  resourceLimits?: AgentResourceLimits | null;
-};

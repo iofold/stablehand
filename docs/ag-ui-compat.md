@@ -129,7 +129,7 @@ The stream emits strict AG-UI protocol events:
 | `RUN_FINISHED` | Agent turn complete | `runId`, `status` |
 | `RUN_ERROR` | Agent turn failed | `runId`, `error` |
 | `CUSTOM` | A2UI render blocks | `name: 'ctxmill.a2ui.render'`, `block: { id, component, props }` |
-| `CUSTOM` | HITL events | `name: 'ctxmill.hitl.requested'` or `name: 'ctxmill.hitl.resolved'` |
+| `CUSTOM` | HITL events | `name: 'ctxmill.interrupt.requested'` or `name: 'ctxmill.interrupt.resolved'` |
 
 ### Event Sequence Example
 
@@ -182,16 +182,15 @@ Durable HITL pauses use the same AG-UI custom-event mechanism:
 ```json
 {
   "type": "CUSTOM",
-  "name": "ctxmill.hitl.requested",
-  "subtype": "hitl_pause",
+  "name": "ctxmill.interrupt.requested",
   "interruptId": "interrupt-id",
   "toolCallId": "tool-call-id",
-  "toolName": "request-approval",
+  "toolCallName": "request-approval",
   "args": { "reason": "Approve the deployment?" }
 }
 ```
 
-The companion resolution marker is `name: 'ctxmill.hitl.resolved'`.
+The companion resolution marker is `name: 'ctxmill.interrupt.resolved'`.
 
 ## What's Different from ctxmill's Native SSE
 

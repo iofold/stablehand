@@ -3,54 +3,56 @@ import { EventEmitter } from 'node:events';
 export type EventMap = {
   'turn.started': {
     turnId: string;
-    sessionId: string;
+    sandboxSessionId: string;
     agentId: string;
     conversationId: string;
     mode: 'interactive' | 'background';
     taskDescription: string;
     timestamp: number;
   };
-  'run.text_chunk': {
+  'message.delta': {
     turnId: string;
     agentId: string;
     conversationId: string;
     messageId: string;
-    content: string;
+    delta: string;
     timestamp: number;
   };
-  'run.tool_started': {
+  'tool_call.started': {
     turnId: string;
     agentId: string;
     conversationId: string;
     toolCallId: string;
-    toolName: string;
+    toolCallName: string;
     args: Record<string, unknown>;
     requiresApproval?: boolean;
     timestamp: number;
   };
-  'run.tool_result': {
+  'tool_call.completed': {
     turnId: string;
     agentId: string;
     conversationId: string;
     toolCallId: string;
-    toolName: string;
+    toolCallName: string;
     result: string;
     durationMs: number;
     error?: string;
     timestamp: number;
   };
-  'run.interrupted': {
+  'interrupt.requested': {
     turnId: string;
+    sandboxSessionId?: string;
     agentId: string;
     conversationId: string;
     toolCallId: string;
-    toolName: string;
+    toolCallName: string;
     args: Record<string, unknown>;
     interruptId: string;
     timestamp: number;
   };
-  'run.interrupt_resolved': {
+  'interrupt.resolved': {
     turnId: string;
+    sandboxSessionId?: string;
     agentId: string;
     conversationId: string;
     interruptId: string;
@@ -59,12 +61,27 @@ export type EventMap = {
   };
   'turn.completed': {
     turnId: string;
-    sessionId: string;
+    sandboxSessionId?: string;
     agentId: string;
     conversationId: string;
     status: 'completed' | 'error' | 'cancelled';
     error?: string;
     durationMs: number;
+    /** Harness-reported token usage for the turn, when available. */
+    usage?: { inputTokens: number; outputTokens: number; totalTokens: number; costUsd?: number };
+    timestamp: number;
+  };
+  'budget.threshold': {
+    policyId: string;
+    policyName: string;
+    /** e.g. "user=alice@acme.com" or "(untagged)"; absent for ungrouped policies. */
+    bucket?: string;
+    action: 'warn' | 'block';
+    threshold: number;
+    metric: 'totalTokens' | 'costUsd' | 'turns';
+    spent: number;
+    limit: number;
+    agentId: string;
     timestamp: number;
   };
   'feedback.received': {
@@ -106,13 +123,26 @@ export type EventMap = {
     turnId: string;
     agentId: string;
     conversationId: string;
-    messageId?: string;
+    messageId: string;
     messageSeq: number;
     role: 'assistant' | 'tool';
     content: string;
     parts?: Array<{ type: string; [key: string]: unknown }>;
     toolCalls?: Array<{ id: string; name: string; args: string; status: string }>;
     toolCallId?: string;
+    timestamp: number;
+  };
+  'message.updated': {
+    turnId: string;
+    agentId: string;
+    conversationId: string;
+    messageId: string;
+    messageSeq: number;
+    messageRevision: number;
+    role: 'assistant';
+    content: string;
+    parts?: Array<{ type: string; [key: string]: unknown }>;
+    toolCalls?: Array<{ id: string; name: string; args: string; status: string }>;
     timestamp: number;
   };
   'turn.pending': {
@@ -123,7 +153,7 @@ export type EventMap = {
     taskDescription?: string;
     timestamp: number;
   };
-  'run.ag_ui_event': {
+  'ag_ui.event': {
     turnId: string;
     agentId: string;
     conversationId?: string;
@@ -131,6 +161,7 @@ export type EventMap = {
     timestamp: number;
   };
   'user.message': {
+    turnId: string;
     agentId: string;
     conversationId: string;
     messageId: string;
@@ -169,7 +200,7 @@ export type PersistEventFn = (
   payload: string,
   /** The payload object that produced `payload` — lets persistence layers avoid a hot-path re-parse (ADR-015). */
   parsedPayload?: Record<string, unknown>,
-) => void | Promise<void>;
+) => void | boolean | Promise<void | boolean>;
 
 export class TypedEventBus {
   private emitter = new EventEmitter();
@@ -195,12 +226,19 @@ export class TypedEventBus {
     const agentId = 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
     try {
       const persisted = this.persistEvent(event, agentId, JSON.stringify(payload), payload as Record<string, unknown>);
-      if (persisted && typeof persisted.then === 'function') {
+      if (persisted && typeof persisted !== 'boolean') {
         persisted
-          .then(() => this.dispatchListeners(event, payload))
+          .then((didPersist) => {
+            if (didPersist !== false) {
+              this.dispatchListeners(event, payload);
+            }
+          })
           .catch((err: unknown) => {
             this.reportBusError('persist', event, err, `[EventBus] persist error for ${event}:`);
           });
+        return;
+      }
+      if (persisted === false) {
         return;
       }
     } catch (err) {
@@ -234,7 +272,15 @@ export class TypedEventBus {
     if (this.persistEvent) {
       const agentId = 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
       try {
-        await this.persistEvent(event, agentId, JSON.stringify(payload), payload as Record<string, unknown>);
+        const didPersist = await this.persistEvent(
+          event,
+          agentId,
+          JSON.stringify(payload),
+          payload as Record<string, unknown>,
+        );
+        if (didPersist === false) {
+          return;
+        }
       } catch (err) {
         this.reportBusError('persist', event, err, `[EventBus] persist error for ${event}:`);
         if (options.rejectOnPersistFailure) {
@@ -292,12 +338,19 @@ export class TypedEventBus {
 
     try {
       const persisted = this.persistEvent(eventType, agentId, JSON.stringify(fullPayload), fullPayload);
-      if (persisted && typeof persisted.then === 'function') {
+      if (persisted && typeof persisted !== 'boolean') {
         persisted
-          .then(() => this.dispatchListeners(eventType, fullPayload))
+          .then((didPersist) => {
+            if (didPersist !== false) {
+              this.dispatchListeners(eventType, fullPayload);
+            }
+          })
           .catch((err: unknown) => {
             this.reportBusError('persist', eventType, err, `[EventBus] persist error for custom ${eventType}:`);
           });
+        return;
+      }
+      if (persisted === false) {
         return;
       }
     } catch (err) {
@@ -322,7 +375,10 @@ export class TypedEventBus {
 
     if (this.persistEvent) {
       try {
-        await this.persistEvent(eventType, agentId, JSON.stringify(fullPayload), fullPayload);
+        const didPersist = await this.persistEvent(eventType, agentId, JSON.stringify(fullPayload), fullPayload);
+        if (didPersist === false) {
+          return;
+        }
       } catch (err) {
         this.reportBusError('persist', eventType, err, `[EventBus] persist error for custom ${eventType}:`);
         if (options.rejectOnPersistFailure) {

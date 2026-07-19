@@ -126,7 +126,7 @@ class LangGraphSession implements HarnessSession {
       const ctx = {
         agentId,
         conversationId,
-        instanceId: input.turnId,
+        turnId: input.turnId,
         workspaceDir: workspaceDir ?? process.cwd(),
       };
 
@@ -143,7 +143,7 @@ class LangGraphSession implements HarnessSession {
         inheritEnv: true,
       });
 
-      const allBlocklisted = this.config.nativeTools?.flatMap((c) => c.blocklist ?? []) ?? [];
+      const allBlocklisted = this.config.nativeTools?.blocklist ?? [];
       // Load workspace middleware once — used for both main agent and subagent propagation
       const workspaceMiddleware: Record<string, unknown>[] = [];
       for (const mwPath of (this.harnessConfig.middleware ?? [])) {
@@ -540,7 +540,7 @@ class LangGraphSession implements HarnessSession {
     ctx: {
       agentId: string;
       conversationId: string;
-      instanceId?: string;
+      turnId?: string;
       workspaceDir: string;
     },
     turnId: string,
@@ -556,7 +556,7 @@ class LangGraphSession implements HarnessSession {
             if (onApprovalNeeded) {
               const approval = await requestToolApproval({
                 id: randomUUID(),
-                runId: turnId,
+                turnId,
                 toolName: def.name,
                 args: args as Record<string, unknown>,
                 onApprovalNeeded,

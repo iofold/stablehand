@@ -19,13 +19,15 @@ export {
   type CtxmillChatMessage,
   type CtxmillChatPart,
   type CtxmillChatState,
+  type CtxmillPersistedMessage,
+  type CtxmillRunPhase,
   type CtxmillTextPart,
   type CtxmillToolCallPart,
 } from './state.js';
 
 export type {
   CtxmillA2UIBlock,
-  CtxmillHitlRequest,
+  CtxmillInterruptRequest,
   CtxmillMessage,
   CtxmillStreamEvent,
 } from '@ctxmill/client';

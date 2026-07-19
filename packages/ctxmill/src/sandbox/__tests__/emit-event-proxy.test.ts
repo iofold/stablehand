@@ -82,6 +82,10 @@ describe('emit-event builtin registration', () => {
     expect(emitEventTool.location).toBe('orchestrator');
   });
 
+  it('is available through the canonical programmatic tool wrapper', () => {
+    expect(emitEventTool.programmatic).toBe(true);
+  });
+
   it('is included in the builtinTools array', () => {
     const found = builtinTools.find((t) => t.name === 'emit-event');
     expect(found).toBeDefined();
@@ -136,7 +140,7 @@ describe('emit-event through sandbox tool proxy', () => {
     );
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
       retryDelays: [],
     });
 
@@ -151,7 +155,7 @@ describe('emit-event through sandbox tool proxy', () => {
 
     // Verify the RPC was called with correct serialization
     const callArgs = requestTool.mock.calls[0][0];
-    expect(callArgs.sessionId).toBe('run-1');
+    expect(callArgs.turnId).toBe('turn-1');
     expect(callArgs.agentId).toBe('agent-1');
     expect(callArgs.toolName).toBe('emit-event');
     const sentArgs = JSON.parse(callArgs.argsJson);
@@ -175,7 +179,7 @@ describe('emit-event through sandbox tool proxy', () => {
     });
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
       retryDelays: [],
     });
 
@@ -199,7 +203,7 @@ describe('emit-event through sandbox tool proxy', () => {
     );
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
       retryDelays: [],
     });
 
@@ -218,7 +222,7 @@ describe('emit-event through sandbox tool proxy', () => {
 
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
       retryDelays: [1], // Single fast retry for testing
     });
 
@@ -244,7 +248,7 @@ describe('protoToToolDefs wires emit-event proxy', () => {
 
     const defs = protoToToolDefs(tools, {
       orchestratorClient: client,
-      sessionId: 'run-1',
+      turnId: 'turn-1',
       agentId: 'agent-1',
     });
 
@@ -270,7 +274,7 @@ describe('protoToToolDefs wires emit-event proxy', () => {
     const tools = [makeEmitEventProtoMetadata()];
     const defs = protoToToolDefs(tools, {
       orchestratorClient: makeMockClient(),
-      sessionId: 'run-1',
+      turnId: 'turn-1',
       agentId: 'agent-1',
     });
 
@@ -304,7 +308,7 @@ describe('orchestrator emit-event handler', () => {
 
     const result = await handler(
       { type: 'email.classified', payload: { category: 'support' } },
-      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { turnId: 'turn-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
     const parsed = JSON.parse(result);
@@ -314,7 +318,7 @@ describe('orchestrator emit-event handler', () => {
     expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'email.classified',
       'agent-1',
-      expect.objectContaining({ category: 'support', runId: 'run-1', agentId: 'agent-1' }),
+      expect.objectContaining({ category: 'support', turnId: 'turn-1', agentId: 'agent-1' }),
     );
   });
 
@@ -323,7 +327,7 @@ describe('orchestrator emit-event handler', () => {
 
     const result = await handler(
       { payload: { data: 'test' } },
-      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { turnId: 'turn-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
     expect(result).toBe('Error: emit-event requires a non-empty string "type"');
@@ -335,7 +339,7 @@ describe('orchestrator emit-event handler', () => {
 
     const result = await handler(
       { type: 'empty.event' },
-      { sessionId: 'run-1', agentId: 'agent-1', requestId: 'req-1' },
+      { turnId: 'turn-1', agentId: 'agent-1', requestId: 'req-1' },
     );
 
     const parsed = JSON.parse(result);
@@ -344,16 +348,16 @@ describe('orchestrator emit-event handler', () => {
     expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
       'empty.event',
       'agent-1',
-      expect.objectContaining({ runId: 'run-1', agentId: 'agent-1' }),
+      expect.objectContaining({ turnId: 'turn-1', agentId: 'agent-1' }),
     );
   });
 
-  it('injects runId and agentId into the payload', async () => {
+  it('injects turnId and agentId into the payload', async () => {
     const handler = registry.get('emit-event')!;
 
     await handler(
       { type: 'inject.test', payload: { original: true } },
-      { sessionId: 'run-99', agentId: 'agent-X', requestId: 'req-1' },
+      { turnId: 'turn-99', agentId: 'agent-X', requestId: 'req-1' },
     );
 
     expect(eventBus.emitCustomAsync).toHaveBeenCalledWith(
@@ -361,7 +365,7 @@ describe('orchestrator emit-event handler', () => {
       'agent-X',
       expect.objectContaining({
         original: true,
-        runId: 'run-99',
+        turnId: 'turn-99',
         agentId: 'agent-X',
       }),
     );
@@ -386,7 +390,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     });
 
     // 3. Create the sandbox-side proxy handler
-    const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
       retryDelays: [],
     });
 
@@ -409,7 +413,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
       expect.objectContaining({
         category: 'billing',
         confidence: 0.87,
-        runId: 'run-1',
+        turnId: 'turn-1',
         agentId: 'agent-1',
       }),
     );
@@ -430,7 +434,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
       requestTool: async (req) => svcImpl.requestTool(req as any),
     });
 
-    const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
       retryDelays: [],
     });
 
@@ -450,7 +454,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
       requestTool: async (req) => svcImpl.requestTool(req as any),
     });
 
-    const handler = createToolProxy('emit-event', client, 'run-42', 'data-agent', {
+    const handler = createToolProxy('emit-event', client, 'turn-42', 'data-agent', {
       retryDelays: [],
     });
 
@@ -482,7 +486,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     expect(payload.metadata.nested.deep).toBe(true);
     expect(payload.count).toBe(2);
     // Injected fields
-    expect(payload.runId).toBe('run-42');
+    expect(payload.turnId).toBe('turn-42');
     expect(payload.agentId).toBe('data-agent');
   });
 
@@ -502,7 +506,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     const protoTools = [makeEmitEventProtoMetadata()];
     const toolDefs = protoToToolDefs(protoTools, {
       orchestratorClient: client,
-      sessionId: 'run-proto',
+      turnId: 'turn-proto',
       agentId: 'proto-agent',
     });
 
@@ -525,7 +529,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
       'proto-agent',
       expect.objectContaining({
         source: 'sandbox',
-        runId: 'run-proto',
+        turnId: 'turn-proto',
         agentId: 'proto-agent',
       }),
     );

@@ -1,7 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import type { DatabaseRepository } from '../database/repository.js';
-import type { TurnSelect } from '../database/types.js';
+import type { EventFrameRow, TurnSelect } from '../database/types.js';
+import type { EventMap, TypedEventBus } from '../events/bus.js';
+import { unrefTimer } from '../util/timing.js';
+import {
+  publishMessageCanonicalState,
+} from './message-publisher.js';
 import { mapMessagesToInternal } from './routes/agent-helpers.js';
-import type { RedispatchQueuedRunParams } from './run-startup-service.js';
+import type { RedispatchQueuedTurnParams } from './turn-startup-service.js';
 import {
   TOOL_CALL_INTERRUPTED_ERROR,
   TURN_ERROR_ORCHESTRATOR_RESTART,
@@ -17,11 +23,23 @@ interface Logger {
 interface TurnReconcilerDeps {
   db: Pick<
     DatabaseRepository,
-    'getOpenTurnsStartedBefore' | 'getPendingInterrupt' | 'getMessages' | 'getTurnFrames' | 'updateMessageToolCallsAndParts'
+    | 'getOpenTurnsStartedBefore'
+    | 'getPendingInterruptForTurn'
+    | 'getMessages'
+    | 'getTurnFrames'
+    | 'stageAssistantMessageUpdate'
+    | 'claimTurnReconciliationLease'
+    | 'renewTurnReconciliationLease'
+    | 'authorizeQueuedTurnRedispatch'
+    | 'releaseTurnReconciliationLease'
   >;
+  eventBus: Pick<TypedEventBus, 'emitAsync'>;
   finalizer: TurnFinalizer;
   logger: Logger;
-  redispatchQueuedTurn?: (params: RedispatchQueuedRunParams) => Promise<void>;
+  redispatchQueuedTurn?: (
+    params: RedispatchQueuedTurnParams,
+    signal: AbortSignal,
+  ) => Promise<void>;
   resetStrandedSession?: (sessionId: string) => Promise<void>;
 }
 
@@ -32,23 +50,58 @@ interface TurnReconciliationResult {
   redispatchComplete: Promise<void>;
 }
 
+interface TurnReconciliationOptions {
+  leaseMs?: number;
+  heartbeatMs?: number;
+  ownerId?: string;
+  now?: () => number;
+}
+
+interface TurnLeaseContext {
+  leaseMs: number;
+  heartbeatMs: number;
+  ownerId: string;
+  now: () => number;
+}
+
 export interface ConversationToolCallRepairDeps {
-  db: Pick<DatabaseRepository, 'getMessages' | 'updateMessageToolCallsAndParts'>;
+  db: Pick<DatabaseRepository, 'getMessages' | 'stageAssistantMessageUpdate'>;
+  eventBus: Pick<TypedEventBus, 'emitAsync'>;
   logger: Logger;
 }
 
 const TAG = '[TurnReconciler]';
+const DEFAULT_RECONCILIATION_LEASE_MS = 60_000;
+const DEFAULT_RECONCILIATION_HEARTBEAT_MS = 20_000;
 
 type ToolCallish = { status?: unknown; error?: unknown; type?: unknown };
 
 interface QueuedRedispatchCandidate {
   turn: TurnSelect;
-  params: RedispatchQueuedRunParams;
+  params: RedispatchQueuedTurnParams;
+  republishUserMessage: EventMap['user.message'] | null;
   order: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function hasDurableUserMessage(frames: EventFrameRow[], messageId: string): boolean {
+  return frames.some((frame) => {
+    if (frame.sourceType === 'user.message') {
+      return true;
+    }
+    if (frame.type !== 'TEXT_MESSAGE_START') {
+      return false;
+    }
+    try {
+      const payload = JSON.parse(frame.payload) as unknown;
+      return isRecord(payload) && payload.role === 'user' && payload.messageId === messageId;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Mark still-running tool-call entries as errored; returns the repaired array or null when untouched. */
@@ -80,7 +133,21 @@ export function repairRunningEntries(entries: unknown[] | null | undefined, part
 export async function reconcileStrandedTurnsOnStartup(
   deps: TurnReconcilerDeps,
   bootTimeMs: number,
+  options: TurnReconciliationOptions = {},
 ): Promise<TurnReconciliationResult> {
+  const leaseContext: TurnLeaseContext = {
+    leaseMs: options.leaseMs ?? DEFAULT_RECONCILIATION_LEASE_MS,
+    heartbeatMs: options.heartbeatMs ?? DEFAULT_RECONCILIATION_HEARTBEAT_MS,
+    ownerId: options.ownerId ?? randomUUID(),
+    now: options.now ?? Date.now,
+  };
+  if (leaseContext.leaseMs <= 0 || leaseContext.heartbeatMs <= 0) {
+    throw new Error('Turn reconciliation lease and heartbeat durations must be positive');
+  }
+  if (leaseContext.heartbeatMs >= leaseContext.leaseMs) {
+    throw new Error('Turn reconciliation heartbeat must be shorter than its lease');
+  }
+
   const openTurns = await deps.db.getOpenTurnsStartedBefore(bootTimeMs);
   let failed = 0;
   let skippedHitlParked = 0;
@@ -91,7 +158,7 @@ export async function reconcileStrandedTurnsOnStartup(
 
   for (const turn of openTurns) {
     try {
-      const interrupt = await deps.db.getPendingInterrupt(turn.id);
+      const interrupt = await deps.db.getPendingInterruptForTurn(turn.id);
       if (interrupt && (interrupt.status === 'pending' || interrupt.status === 'timed_out')) {
         skippedHitlParked++;
         deps.logger.info(`${TAG} turn ${turn.id} is parked on a durable HITL interrupt; leaving open for resume`);
@@ -114,12 +181,22 @@ export async function reconcileStrandedTurnsOnStartup(
 
   for (const turn of strandedTurns) {
     try {
-      const finalized = await failStrandedTurn(deps, turn);
-      if (finalized) {
+      const outcome = await withTurnReconciliationLease(
+        deps,
+        turn.id,
+        leaseContext,
+        async () => {
+          const finalized = await failStrandedTurn(deps, turn);
+          if (finalized && turn.status !== 'queued' && turn.sandboxSessionId) {
+            strandedSessionIds.add(turn.sandboxSessionId);
+          }
+          return finalized;
+        },
+      );
+      if (outcome.claimed && outcome.value) {
         failed++;
-        if (turn.status !== 'queued' && turn.sessionId) {
-          strandedSessionIds.add(turn.sessionId);
-        }
+      } else if (!outcome.claimed) {
+        deps.logger.info(`${TAG} turn ${turn.id} is owned by another reconciler or HITL recovery`);
       }
     } catch (err) {
       deps.logger.error(`${TAG} failed to finalize stranded turn ${turn.id}:`, err);
@@ -128,7 +205,7 @@ export async function reconcileStrandedTurnsOnStartup(
 
   await resetStrandedSessions(deps, strandedSessionIds);
 
-  const redispatchComplete = processQueuedRedispatches(deps, queuedCandidates, {
+  const redispatchComplete = processQueuedRedispatches(deps, queuedCandidates, leaseContext, {
     onRedispatched: () => {
       redispatched++;
     },
@@ -159,7 +236,15 @@ export async function repairConversationRunningToolCalls(
     const repairedToolCalls = repairRunningEntries(message.toolCalls, false);
     const repairedParts = repairRunningEntries(message.parts, true);
     if (repairedToolCalls || repairedParts) {
-      await deps.db.updateMessageToolCallsAndParts(message.id, repairedToolCalls, repairedParts);
+      const updated = await deps.db.stageAssistantMessageUpdate(
+        message.id,
+        repairedToolCalls,
+        repairedParts,
+      );
+      if (!updated) {
+        throw new Error(`Assistant message ${message.id} disappeared during tool-state repair`);
+      }
+      await publishMessageCanonicalState(deps, updated);
     }
   }
 }
@@ -180,13 +265,25 @@ async function buildQueuedRedispatchCandidate(
     return null;
   }
 
+  const userMessage = messages[userMessageIndex]!;
   const frames = await deps.db.getTurnFrames(turn.id);
   const emitTurnStarted = !frames.some((frame) => frame.type === 'RUN_STARTED');
   const messagesForTurn = messages.slice(0, userMessageIndex + 1);
+  const republishUserMessage = turn.mode !== 'background' && !hasDurableUserMessage(frames, turn.userMessageId)
+    ? {
+        turnId: turn.id,
+        agentId: turn.agentId,
+        conversationId: turn.conversationId,
+        messageId: turn.userMessageId,
+        content: userMessage.content,
+        timestamp: userMessage.createdAt,
+      }
+    : null;
 
   return {
     turn,
     order: userMessageIndex,
+    republishUserMessage,
     params: {
       turnId: turn.id,
       agentId: turn.agentId,
@@ -213,7 +310,7 @@ async function failStrandedTurn(
     turnId: turn.id,
     agentId: turn.agentId,
     conversationId: turn.conversationId ?? '',
-    ...(turn.sessionId ? { sessionId: turn.sessionId } : {}),
+    ...(turn.sandboxSessionId ? { sandboxSessionId: turn.sandboxSessionId } : {}),
     status: 'error',
     error,
     durationMs: Date.now() - turn.startedAt,
@@ -241,6 +338,7 @@ async function resetStrandedSessions(
 async function processQueuedRedispatches(
   deps: TurnReconcilerDeps,
   queuedCandidates: QueuedRedispatchCandidate[],
+  leaseContext: TurnLeaseContext,
   callbacks: { onRedispatched: () => void; onFailed: () => void },
 ): Promise<void> {
   if (!deps.redispatchQueuedTurn || queuedCandidates.length === 0) {
@@ -263,18 +361,177 @@ async function processQueuedRedispatches(
       return a.order - b.order || a.turn.startedAt - b.turn.startedAt || a.turn.id.localeCompare(b.turn.id);
     });
 
+    const conversationsOwnedElsewhere = new Set<string>();
     for (const candidate of agentCandidates) {
+      const conversationId = candidate.turn.conversationId ?? '';
+      if (conversationsOwnedElsewhere.has(conversationId)) {
+        continue;
+      }
       try {
-        await deps.redispatchQueuedTurn!(candidate.params);
-        callbacks.onRedispatched();
-      } catch (err) {
-        deps.logger.error(`${TAG} queued turn ${candidate.turn.id} redispatch failed:`, err);
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        const finalized = await failStrandedTurn(deps, candidate.turn, errorMessage);
-        if (finalized) {
-          callbacks.onFailed();
+        const outcome = await withTurnReconciliationLease(
+          deps,
+          candidate.turn.id,
+          leaseContext,
+          async (signal) => {
+            const authorized = await deps.db.authorizeQueuedTurnRedispatch(
+              candidate.turn.id,
+              leaseContext.ownerId,
+              leaseContext.now(),
+            );
+            if (!authorized) {
+              deps.logger.info(
+                `${TAG} queued turn ${candidate.turn.id} lost fenced redispatch authorization`,
+              );
+              return false;
+            }
+            try {
+              signal.throwIfAborted();
+              if (candidate.republishUserMessage) {
+                await deps.eventBus.emitAsync('user.message', candidate.republishUserMessage);
+              }
+              signal.throwIfAborted();
+              await deps.redispatchQueuedTurn!(candidate.params, signal);
+              signal.throwIfAborted();
+              callbacks.onRedispatched();
+              return true;
+            } catch (err) {
+              if (signal.aborted) {
+                deps.logger.warn(
+                  `${TAG} queued turn ${candidate.turn.id} redispatch stopped after lease loss`,
+                );
+                return false;
+              }
+              deps.logger.error(`${TAG} queued turn ${candidate.turn.id} redispatch failed:`, err);
+              const errorMessage = err instanceof Error ? err.message : String(err);
+              const finalized = await failStrandedTurn(deps, candidate.turn, errorMessage);
+              if (finalized) {
+                callbacks.onFailed();
+              }
+              return true;
+            }
+          },
+        );
+        if (!outcome.claimed || !outcome.value) {
+          conversationsOwnedElsewhere.add(conversationId);
+          if (!outcome.claimed) {
+            deps.logger.info(
+              `${TAG} queued turn ${candidate.turn.id} is owned by another reconciler or HITL recovery`,
+            );
+          }
         }
+      } catch (err) {
+        conversationsOwnedElsewhere.add(conversationId);
+        deps.logger.error(`${TAG} failed to claim queued turn ${candidate.turn.id} for redispatch:`, err);
       }
     }
   }));
+}
+
+async function withTurnReconciliationLease<T>(
+  deps: TurnReconcilerDeps,
+  turnId: string,
+  context: TurnLeaseContext,
+  action: (signal: AbortSignal) => Promise<T>,
+): Promise<{ claimed: false } | { claimed: true; value: T }> {
+  const claimedAt = context.now();
+  const claimed = await deps.db.claimTurnReconciliationLease({
+    turnId,
+    ownerId: context.ownerId,
+    claimedAt,
+    leaseExpiresAt: claimedAt + context.leaseMs,
+  });
+  if (!claimed) {
+    return { claimed: false };
+  }
+
+  const leaseAbortController = new AbortController();
+  let leaseExpiresAt = claimed.leaseExpiresAt;
+  let stopped = false;
+  let renewalInFlight = false;
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const loseLease = (message: string, cause?: unknown) => {
+    if (leaseAbortController.signal.aborted) {
+      return;
+    }
+    const error = new Error(message, cause === undefined ? undefined : { cause });
+    leaseAbortController.abort(error);
+    deps.logger.warn(`${TAG} ${message}`);
+  };
+
+  const armExpiryWatchdog = () => {
+    if (stopped || leaseAbortController.signal.aborted) {
+      return;
+    }
+    if (expiryTimer) {
+      clearTimeout(expiryTimer);
+    }
+    const remainingMs = leaseExpiresAt - context.now();
+    if (remainingMs <= 0) {
+      loseLease(`reconciliation lease expired for turn ${turnId}`);
+      return;
+    }
+    expiryTimer = setTimeout(() => {
+      expiryTimer = undefined;
+      if (context.now() >= leaseExpiresAt) {
+        loseLease(`reconciliation lease expired for turn ${turnId}`);
+        return;
+      }
+      armExpiryWatchdog();
+    }, remainingMs);
+    unrefTimer(expiryTimer);
+  };
+
+  armExpiryWatchdog();
+  const heartbeat = setInterval(() => {
+    if (stopped || renewalInFlight || leaseAbortController.signal.aborted) {
+      return;
+    }
+    renewalInFlight = true;
+    const renewedAt = context.now();
+    void deps.db.renewTurnReconciliationLease(
+      turnId,
+      context.ownerId,
+      renewedAt,
+      renewedAt + context.leaseMs,
+    ).then((renewed) => {
+      if (!renewed && !stopped) {
+        loseLease(`lost reconciliation lease for turn ${turnId}`);
+        return;
+      }
+      if (renewed) {
+        leaseExpiresAt = renewed.leaseExpiresAt;
+        armExpiryWatchdog();
+      }
+    }).catch((err: unknown) => {
+      if (!stopped) {
+        deps.logger.warn(`${TAG} failed to renew reconciliation lease for turn ${turnId}:`, err);
+        if (context.now() >= leaseExpiresAt) {
+          loseLease(`reconciliation lease expired for turn ${turnId}`, err);
+        }
+      }
+    }).finally(() => {
+      renewalInFlight = false;
+    });
+  }, context.heartbeatMs);
+  unrefTimer(heartbeat);
+
+  try {
+    return { claimed: true, value: await action(leaseAbortController.signal) };
+  } finally {
+    stopped = true;
+    clearInterval(heartbeat);
+    if (expiryTimer) {
+      clearTimeout(expiryTimer);
+      expiryTimer = undefined;
+    }
+    try {
+      await deps.db.releaseTurnReconciliationLease(turnId, context.ownerId);
+    } catch (err) {
+      deps.logger.warn(
+        `${TAG} failed to release reconciliation lease for turn ${turnId}; it will expire:`,
+        err,
+      );
+    }
+  }
 }

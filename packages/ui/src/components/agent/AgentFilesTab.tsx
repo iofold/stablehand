@@ -7,11 +7,11 @@ import { validateWorkspaceArchive, DEFAULT_MAX_TAR_UPLOAD_BYTES } from '@/lib/wo
 
 export interface AgentFilesTabProps {
   agentId: string;
-  /** When provided, shows session overlay files instead of base workspace */
-  sessionId?: string;
+  /** When provided, shows conversation workspace files instead of base workspace */
+  conversationId?: string;
 }
 
-export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
+export function AgentFilesTab({ agentId, conversationId }: AgentFilesTabProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [explorerKey, setExplorerKey] = useState(0);
   const [uploading, setUploading] = useState(false);
@@ -46,7 +46,7 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
   }, [refreshExplorer]);
 
   const handleUpload = useCallback(async (file: File | undefined) => {
-    if (!file || sessionId) return;
+    if (!file || conversationId) return;
 
     // Client-side pre-validation per ADR 010: tar.gz only, archive size limit.
     const validation = validateWorkspaceArchive(file, { maxBytes: maxArchiveBytes });
@@ -71,9 +71,9 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
       setUploading(false);
       if (inputRef.current) inputRef.current.value = '';
     }
-  }, [agentId, maxArchiveBytes, refreshExplorer, sessionId]);
+  }, [agentId, maxArchiveBytes, refreshExplorer, conversationId]);
 
-  const uploadDisabled = uploading || Boolean(sessionId);
+  const uploadDisabled = uploading || Boolean(conversationId);
 
   const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     if (uploadDisabled) return;
@@ -102,11 +102,11 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-surface-200">
-            {sessionId ? `Session Workspace (run ${sessionId.slice(0, 8)})` : 'Agent Base Workspace'}
+            {conversationId ? `Conversation Workspace (${conversationId.slice(0, 8)})` : 'Agent Base Workspace'}
           </h3>
           <p className="text-xs text-surface-400 mt-0.5">
-            {sessionId
-              ? 'Files and edits scoped to this run overlay. Uploads replace the base workspace only.'
+            {conversationId
+              ? 'Files and edits scoped to this durable conversation workspace. Uploads replace the base workspace only.'
               : 'Base workspace directory for this agent. Upload accepts a workspace .tar.gz archive, not an artifact.'}
           </p>
         </div>
@@ -126,12 +126,12 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
             onClick={() => inputRef.current?.click()}
             disabled={uploadDisabled}
             className="inline-flex items-center gap-1.5 rounded-md border border-surface-600 px-3 py-1.5 text-sm text-surface-300 transition-colors hover:bg-surface-800 hover:text-surface-200 disabled:cursor-not-allowed disabled:opacity-50"
-            title={sessionId ? 'Switch to base workspace to upload a workspace archive' : 'Upload workspace .tar.gz'}
+            title={conversationId ? 'Switch to base workspace to upload a workspace archive' : 'Upload workspace .tar.gz'}
           >
             <Upload className="h-4 w-4" />
             {uploading ? 'Uploading…' : 'Upload Workspace'}
           </button>
-          {sessionId && <p className="text-[11px] text-surface-500">Base workspace uploads are disabled in session view.</p>}
+          {conversationId && <p className="text-[11px] text-surface-500">Base workspace uploads are disabled in conversation view.</p>}
         </div>
       </div>
 
@@ -159,7 +159,7 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
             agentId={agentId}
             onFileSelect={setSelectedFile}
             selectedFile={selectedFile}
-            sessionId={sessionId}
+            conversationId={conversationId}
             onFileCreated={refreshExplorer}
           />
         </div>
@@ -170,7 +170,7 @@ export function AgentFilesTab({ agentId, sessionId }: AgentFilesTabProps) {
               agentId={agentId}
               filePath={selectedFile}
               onClose={() => setSelectedFile(null)}
-              sessionId={sessionId}
+              conversationId={conversationId}
               onFileDeleted={handleFileDeleted}
               onFileSaved={refreshExplorer}
             />
