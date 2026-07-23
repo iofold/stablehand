@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { create } from '@bufbuild/protobuf';
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
+import { TurnDeliveryCapabilitySchema } from '@ctxmill/proto/sandbox/v1';
+import type { BashToolOptions } from '@mariozechner/pi-coding-agent';
 
 const mockCreateAgentSession = vi.fn();
 const mockSetRuntimeApiKey = vi.fn();
+const mockCreateCodingTools = vi.fn((
+  cwd: string,
+  _options?: { bash?: BashToolOptions },
+) => [{ name: 'coding-tools', cwd }]);
 const mockLangSmith = vi.hoisted(() => {
   class FakeClient {
     awaitPendingTraceBatches = vi.fn(async () => undefined);
@@ -47,7 +54,7 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
   ModelRegistry: vi.fn(function MockModelRegistry() {
     return { type: 'model-registry' };
   }),
-  createCodingTools: vi.fn((cwd: string) => [{ name: 'coding-tools', cwd }]),
+  createCodingTools: mockCreateCodingTools,
   createReadTool: vi.fn((cwd: string) => ({ name: 'read', cwd })),
   createBashTool: vi.fn((cwd: string) => ({ name: 'bash', cwd })),
   createEditTool: vi.fn((cwd: string) => ({ name: 'edit', cwd })),
@@ -59,12 +66,17 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
 
 vi.mock('@mariozechner/pi-ai', async () => {
   const { Type } = await import('@sinclair/typebox');
+  const apiByProvider: Record<string, string> = {
+    openai: 'openai-completions',
+    anthropic: 'anthropic-messages',
+    google: 'google-generative-ai',
+  };
   return {
     Type,
     getModel: vi.fn((provider: string, model: string) => ({
       provider,
       id: model,
-      api: provider === 'google' ? 'google-generative-ai' : `${provider}-api`,
+      api: apiByProvider[provider],
     })),
   };
 });
@@ -74,10 +86,14 @@ vi.mock('langsmith', () => ({
   RunTree: mockLangSmith.FakeRunTree,
 }));
 
-import { convertTools, PIAgentHarness } from '../pi-agent.js';
+import { _piUpdateUsage, convertTools, PIAgentHarness } from '../pi-agent.js';
 import type { AgentEvent, HarnessSessionConfig } from '../types.js';
 import type { Message } from '../../types.js';
 import type { ToolDefinition } from '../../tool/types.js';
+import {
+  runWithTurnDeliveryContext,
+  type TurnDeliveryContext,
+} from '../../sandbox/turn-delivery-context.js';
 import {
   assertAbortContract,
   assertApprovalFlowContract,
@@ -115,6 +131,60 @@ function makeMessage(
     ...extras,
   };
 }
+
+describe('PI usage normalization', () => {
+  it('does not present unknown catalog pricing as free', () => {
+    const usage = _piUpdateUsage(undefined, {
+      type: 'turn_end',
+      message: {
+        usage: {
+          input: 10,
+          output: 5,
+          totalTokens: 15,
+          cost: { total: 0 },
+        },
+      },
+    }, false);
+
+    expect(usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    });
+  });
+
+  it('sums known catalog costs across model turns exactly once', () => {
+    const first = _piUpdateUsage(undefined, {
+      type: 'turn_end',
+      message: {
+        usage: {
+          input: 10,
+          output: 5,
+          totalTokens: 15,
+          cost: { total: 0.01 },
+        },
+      },
+    }, true);
+    const second = _piUpdateUsage(first, {
+      type: 'turn_end',
+      message: {
+        usage: {
+          input: 20,
+          output: 10,
+          totalTokens: 30,
+          cost: { total: 0.02 },
+        },
+      },
+    }, true);
+
+    expect(second).toEqual({
+      inputTokens: 30,
+      outputTokens: 15,
+      totalTokens: 45,
+      costUsd: 0.03,
+    });
+  });
+});
 
 async function collectEvents(stream: AsyncGenerator<AgentEvent>): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];
@@ -175,6 +245,7 @@ describe('PIAgentHarness transcript syncing', () => {
         turnId,
         exportedState,
         expectedContent: 'PI contract reply',
+        requireDoneUsage: false,
       });
     } finally {
       await session.close();
@@ -210,6 +281,125 @@ describe('PIAgentHarness transcript syncing', () => {
 
     await session.close();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['openai', 'gpt-5.4-mini', 'openai-completions'],
+    ['anthropic', 'claude-sonnet-4-6', 'anthropic-messages'],
+    ['google', 'gemini-2.5-flash', 'google-generative-ai'],
+  ] as const)(
+    'keeps the %s protocol when applying a custom base URL',
+    async (provider, model, api) => {
+      mockCreateAgentSession.mockResolvedValue({
+        session: {
+          subscribe: vi.fn(() => vi.fn()),
+          prompt: vi.fn(),
+          abort: vi.fn(async () => undefined),
+          dispose: vi.fn(),
+          agent: {
+            replaceMessages: vi.fn(),
+          },
+        },
+      });
+
+      const session = await new PIAgentHarness().openSession(makeConfig({
+        secrets: { providerKey: 'test-provider-key' },
+        harnessConfigJson: JSON.stringify({
+          provider,
+          model,
+          apiKeyRef: 'providerKey',
+          baseUrl: 'https://gateway.example.test/v1',
+        }),
+      }));
+
+      try {
+        expect(mockCreateAgentSession.mock.calls[0]?.[0]).toMatchObject({
+          model: {
+            provider,
+            id: model,
+            api,
+            baseUrl: 'https://gateway.example.test/v1',
+            apiKey: 'test-provider-key',
+          },
+        });
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
+  it('uses deployment gateway access and rotates opaque correlation headers per turn', async () => {
+    const setModel = vi.fn();
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    const prompt = vi.fn(async () => {
+      listener?.({ type: 'agent_end', messages: [] });
+    });
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt,
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+          setModel,
+        },
+      },
+    });
+
+    const session = await new PIAgentHarness().openSession(makeConfig({
+      secrets: {
+        OPENAI_API_KEY: 'upstream-key-must-not-win',
+        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
+        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+      },
+      harnessConfigJson: JSON.stringify({
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+      }),
+    }));
+
+    try {
+      expect(mockCreateAgentSession.mock.calls[0]?.[0]).toMatchObject({
+        model: {
+          provider: 'openai',
+          id: 'gpt-4o-mini',
+          api: 'openai-completions',
+          baseUrl: 'http://litellm:4000/v1',
+          apiKey: 'runtime-key',
+        },
+      });
+      expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('openai', 'runtime-key');
+      expect(mockSetRuntimeApiKey).not.toHaveBeenCalledWith(
+        'openai',
+        'upstream-key-must-not-win',
+      );
+
+      const rawTurnId = 'sensitive-customer-turn';
+      await collectEvents(session.deliverTurn({
+        turnId: rawTurnId,
+        messages: [makeMessage('user', 'Hello', '2026-04-05T10:00:00.000Z')],
+      }, {}));
+
+      expect(setModel).toHaveBeenCalledOnce();
+      const correlatedModel = setModel.mock.calls[0]?.[0] as {
+        headers?: Record<string, string>;
+      };
+      expect(correlatedModel.headers).toEqual({
+        'x-litellm-trace-id': expect.stringMatching(/^ct_[a-f0-9]{32}$/),
+        'x-litellm-spend-logs-metadata': expect.any(String),
+      });
+      expect(JSON.stringify(correlatedModel.headers)).not.toContain(rawTurnId);
+    } finally {
+      await session.close();
+    }
   });
 
   it('falls back to environment secrets for Google runtime auth', async () => {
@@ -268,6 +458,69 @@ describe('PIAgentHarness transcript syncing', () => {
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google-generative-ai', 'default-google-key');
 
     await session.close();
+  });
+
+  it('passes the current turn secrets only to native child processes', async () => {
+    const tokenKey = 'PILOT_TURN_OWNERSHIP_TOKEN';
+    const previousToken = process.env[tokenKey];
+    process.env[tokenKey] = 'stable-token';
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: vi.fn(() => vi.fn()),
+        prompt: vi.fn(),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        agent: {
+          replaceMessages: vi.fn(),
+        },
+      },
+    });
+
+    const session = await new PIAgentHarness().openSession(makeConfig());
+    try {
+      const toolOptions = mockCreateCodingTools.mock.calls[0]?.[1] as
+        | { bash?: BashToolOptions }
+        | undefined;
+      const spawnHook = toolOptions?.bash?.spawnHook;
+      expect(spawnHook).toBeTypeOf('function');
+
+      const deliveryContext: TurnDeliveryContext = {
+        identity: {
+          turnId: 'turn-secret-a',
+          sandboxSessionId: 'sandbox-session-a',
+          agentId: 'test-agent',
+          ownerId: 'owner-a',
+          fenceToken: 1,
+          restoreFenceToken: 1,
+        },
+        abortController: new AbortController(),
+        turnSecrets: Object.freeze({ [tokenKey]: 'turn-token-a' }),
+        capability: create(TurnDeliveryCapabilitySchema, {
+          ownerId: 'owner-a',
+          fenceToken: 1n,
+          restoreFenceToken: 1n,
+          leaseExpiresAtMs: BigInt(Date.now() + 60_000),
+          agentId: 'test-agent',
+          signature: 'ctxmill-open-turn-delivery-capability-v1',
+        }),
+        leaseExpiresAtMs: Date.now() + 60_000,
+      };
+      const spawnContext = runWithTurnDeliveryContext(deliveryContext, () => spawnHook?.({
+        command: 'echo ok',
+        cwd: '/tmp/workspace',
+        env: { [tokenKey]: 'stable-token' },
+      }));
+
+      expect(spawnContext?.env[tokenKey]).toBe('turn-token-a');
+      expect(process.env[tokenKey]).toBe('stable-token');
+    } finally {
+      await session.close();
+      if (previousToken === undefined) {
+        delete process.env[tokenKey];
+      } else {
+        process.env[tokenKey] = previousToken;
+      }
+    }
   });
 
   it('replaces native session history before prompting with the latest user message', async () => {
@@ -336,7 +589,6 @@ describe('PIAgentHarness transcript syncing', () => {
     expect(replaceMessages.mock.invocationCallOrder[0]).toBeLessThan(prompt.mock.invocationCallOrder[0]!);
     expect(events.at(-1)).toEqual({
       type: 'done',
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     });
 
     await session.close();

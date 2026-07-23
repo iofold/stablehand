@@ -8,9 +8,10 @@ import type { SessionStatus } from './types.js';
  *   RESTORING    → ACTIVE, CHECKPOINTED, TERMINATED
  *   TERMINATED   → (terminal)
  *
- * SessionLifecycleService is the sole owner of these transitions; route
- * handlers MUST delegate rather than calling `updateSandboxSessionStatus`
- * directly.
+ * SessionLifecycleService owns destructive transitions out of ACTIVE.
+ * SessionRecoveryCoordinator owns transitions into and out of RESTORING via
+ * the restore-fenced repository methods. Route handlers MUST delegate to
+ * those owners rather than writing status directly.
  */
 const VALID_TRANSITIONS: ReadonlyMap<SessionStatus, readonly SessionStatus[]> = new Map([
   ['ACTIVE', ['CHECKPOINTED', 'TERMINATED']],

@@ -15,6 +15,14 @@
       "types": "./dist/api.d.ts",
       "import": "./dist/api.js"
     },
+    "./analytics": {
+      "types": "./dist/analytics.d.ts",
+      "import": "./dist/analytics.js"
+    },
+    "./budgets": {
+      "types": "./dist/budgets.d.ts",
+      "import": "./dist/budgets.js"
+    },
     "./events": {
       "types": "./dist/events.d.ts",
       "import": "./dist/events.js"
@@ -22,6 +30,10 @@
     "./harness": {
       "types": "./dist/harness.d.ts",
       "import": "./dist/harness.js"
+    },
+    "./usage": {
+      "types": "./dist/usage.d.ts",
+      "import": "./dist/usage.js"
     },
     "./webhooks": {
       "types": "./dist/webhooks.d.ts",

@@ -3,9 +3,9 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { TurnStatusBadge } from './TurnStatusBadge';
+import type { Agent, ConversationSummary } from '@ctxmill/contracts';
+import { StatusBadge } from '@/components/dashboard/StatusBadge';
 import { cn } from '@/lib/utils';
-import type { AgentTurn } from '@/stores/agents';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { formatCompactNumber } from '@/lib/format';
 
@@ -37,23 +37,18 @@ function StatCard({
 /* ------------------------------------------------------------------ */
 
 export interface AgentOverviewTabProps {
-  agent: {
-    name?: string;
-    systemPrompt?: string;
-    harness: string;
-    harnessConfig: Record<string, unknown>;
-    description?: string;
-    workspaceDir?: string | null;
-    tools?: string[];
-    metadata?: Record<string, unknown> | null;
-  };
+  agent: Agent;
   conversationCount: number;
   activeSandboxSessions: number;
   toolsCount: number;
   tokensLast24h?: number;
   tokensTotal?: number;
-  recentTurns: AgentTurn[];
-  onContinueConversation: (conversationId: string) => void;
+  recentConversations: ConversationSummary[];
+  conversationsLoading: boolean;
+  conversationsError: string | null;
+  onOpenConversation: (conversationId: string) => void;
+  onViewAllConversations: () => void;
+  onRetryConversations?: () => void;
 }
 
 export function AgentOverviewTab({
@@ -63,22 +58,16 @@ export function AgentOverviewTab({
   toolsCount,
   tokensLast24h,
   tokensTotal,
-  recentTurns,
-  onContinueConversation,
+  recentConversations,
+  conversationsLoading,
+  conversationsError,
+  onOpenConversation,
+  onViewAllConversations,
+  onRetryConversations,
 }: AgentOverviewTabProps) {
   const [promptExpanded, setPromptExpanded] = useState(false);
   const parsedHarnessConfig = agent.harnessConfig;
-  const exactConfig = {
-    name: agent.name,
-    harness: agent.harness,
-    harnessConfig: parsedHarnessConfig,
-    description: agent.description,
-    tools: agent.tools ?? [],
-    workspaceDir: agent.workspaceDir ?? undefined,
-    metadata: agent.metadata ?? {},
-    systemPrompt: agent.systemPrompt ?? '',
-  };
-  const exactConfigText = JSON.stringify(exactConfig, null, 2);
+  const canonicalResponseText = JSON.stringify(agent, null, 2);
 
   return (
     <div className="space-y-6">
@@ -98,46 +87,66 @@ export function AgentOverviewTab({
 
       <div className="rounded-lg border border-surface-700 bg-surface-800 p-6">
         <h3 className="text-label mb-4">
-          Recent Turns
+          Recent Conversations
         </h3>
-        {recentTurns.length === 0 ? (
-          <p className="text-sm text-surface-400">No turns yet.</p>
+        {conversationsLoading ? (
+          <p className="py-5 text-sm text-surface-400">Loading conversations…</p>
+        ) : conversationsError ? (
+          <div
+            role="alert"
+            className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-4"
+          >
+            <p className="text-sm font-medium text-red-200">Failed to load conversations</p>
+            <p className="mt-1 text-sm text-red-200/70">{conversationsError}</p>
+            {onRetryConversations && (
+              <button
+                type="button"
+                onClick={onRetryConversations}
+                className="btn-secondary mt-3"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        ) : recentConversations.length === 0 ? (
+          <p className="text-sm text-surface-400">No conversations yet.</p>
         ) : (
           <>
-            <div className="overflow-y-auto max-h-48 flex flex-col">
-              {recentTurns.map((turn, index) => (
+            <div className="flex flex-col">
+              {recentConversations.map((conversation, index) => (
                 <button
-                  key={turn.id}
+                  key={conversation.id}
                   type="button"
-                  onClick={() => onContinueConversation(turn.conversationId ?? turn.id)}
+                  data-testid="recent-conversation-row"
+                  onClick={() => onOpenConversation(conversation.id)}
                   className={cn(
-                    'flex w-full items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-surface-700/60 cursor-pointer text-left px-4 -mx-4 rounded-lg',
-                    index !== recentTurns.length - 1 && 'border-b border-surface-700/50'
+                    'grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2 rounded-lg px-4 py-3 text-left text-sm transition-colors duration-150 hover:bg-surface-700/60 sm:grid-cols-[8.5rem_minmax(0,1fr)_auto_auto] sm:items-center',
+                    index !== recentConversations.length - 1 && 'border-b border-surface-700/50',
                   )}
                 >
-                  <TurnStatusBadge status={turn.status} />
-                  <span className="flex-shrink-0 font-mono text-surface-400 text-xs" title={turn.id}>
-                    {turn.conversationId ? turn.conversationId.slice(0, 8) : turn.id.slice(0, 8)}&hellip;
+                  <StatusBadge status={conversation.status} subject="Conversation" />
+                  <span className="min-w-0 truncate text-surface-300">
+                    {conversation.taskDescription || 'No description'}
                   </span>
-                  <span className="flex-1 min-w-0 truncate text-surface-300">
-                    {turn.taskDescription || 'No description'}
+                  <span className="col-span-2 flex items-center gap-3 text-xs text-surface-400 sm:col-span-1">
+                    <span>{conversation.turnCount} {conversation.turnCount === 1 ? 'turn' : 'turns'}</span>
+                    <span>{conversation.messageCount} {conversation.messageCount === 1 ? 'message' : 'messages'}</span>
                   </span>
                   <RelativeTime
-                    timestamp={turn.completedAt ?? turn.startedAt}
-                    className="flex-shrink-0 text-[11px] font-mono text-surface-400 tabular-nums"
+                    timestamp={conversation.updatedAt}
+                    className="text-right text-[11px] font-mono text-surface-400 tabular-nums"
                   />
-                  <ChevronRight className="h-4 w-4 text-surface-400" />
                 </button>
               ))}
             </div>
-            {recentTurns.length > 3 && (
+            {conversationCount > recentConversations.length && (
               <div className="mt-3 pt-3 border-t border-surface-700/50 text-center">
                 <button
                   type="button"
-                  onClick={() => onContinueConversation('')}
+                  onClick={onViewAllConversations}
                   className="text-xs font-medium text-accent-400 hover:text-accent-300 transition-colors"
                 >
-                  View All Turns
+                  View All Conversations
                 </button>
               </div>
             )}
@@ -222,10 +231,10 @@ export function AgentOverviewTab({
 
             <div>
               <p className="text-label mb-2">
-                Exact Config
+                Canonical API Response
               </p>
               <pre className="whitespace-pre-wrap break-words font-mono text-sm text-surface-300 bg-surface-900 rounded-lg p-4 border border-surface-700 overflow-x-auto">
-                {exactConfigText}
+                {canonicalResponseText}
               </pre>
             </div>
           </div>

@@ -1,7 +1,9 @@
 import {
   AgentResourceLimitsSchema,
+  BuiltinToolPolicySchema,
   ClaudeAgentsConfigSchema,
   LangGraphConfigSchema,
+  NativeToolPolicySchema,
   PIAgentConfigSchema,
 } from '@ctxmill/contracts';
 import { z } from 'zod';
@@ -91,33 +93,6 @@ const manifestHITLSchema = z.strictObject({
   approvals: z.array(manifestApprovalSchema).optional(),
 });
 
-const manifestNativeToolsSchema = z.strictObject({
-  allowlist: z.array(nonEmptyNameSchema).optional(),
-  blocklist: z.array(nonEmptyNameSchema).optional(),
-}).superRefine((value, context) => {
-  for (const field of ['allowlist', 'blocklist'] as const) {
-    const entries = value[field] ?? [];
-    if (new Set(entries).size !== entries.length) {
-      context.addIssue({
-        code: 'custom',
-        path: [field],
-        message: `${field} must not contain duplicate tool names`,
-      });
-    }
-  }
-
-  const blocked = new Set(value.blocklist ?? []);
-  for (const name of value.allowlist ?? []) {
-    if (blocked.has(name)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['blocklist'],
-        message: `Tool "${name}" cannot appear in both allowlist and blocklist`,
-      });
-    }
-  }
-});
-
 const manifestFileCopySchema = z.strictObject({
   src: canonicalRelativePathSchema,
   dest: canonicalRelativePathSchema,
@@ -145,7 +120,8 @@ const manifestMetadataSchema = z.strictObject({
 const manifestSpecCommon = {
   instructions: z.string().min(1),
   tools: z.array(manifestToolRefSchema).optional(),
-  nativeTools: manifestNativeToolsSchema.optional(),
+  builtinToolPolicy: BuiltinToolPolicySchema.optional(),
+  nativeToolPolicy: NativeToolPolicySchema.optional(),
   triggers: z.array(manifestTriggerSchema).optional(),
   emits: z.array(manifestEmitSchema).optional(),
   hitl: manifestHITLSchema.optional(),

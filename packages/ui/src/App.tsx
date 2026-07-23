@@ -8,6 +8,7 @@ import { AgentFlowPage } from './pages/AgentFlowPage';
 import { TriggersPage } from './pages/TriggersPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ArtifactsPage } from './pages/ArtifactsPage';
+import { AnalyticsPage } from './pages/AnalyticsPage';
 import { Sidebar } from './components/ui/Sidebar';
 import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { TokenGate } from './components/ui/TokenGate';
@@ -34,6 +35,7 @@ export function App() {
             <Route path="/flow" element={<AgentFlowPage />} />
             <Route path="/triggers" element={<TriggersPage />} />
             <Route path="/artifacts" element={<ArtifactsPage />} />
+            <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path={NEW_CONVERSATION_ROUTE} element={<SessionPage />} />
             <Route path={CONVERSATION_ROUTE} element={<SessionPage />} />

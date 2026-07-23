@@ -85,6 +85,39 @@ describe('harness config schemas', () => {
         temperature: 3,
       })).toThrow();
     });
+
+    it.each(['anthropic', 'google'] as const)(
+      'rejects OpenAI reasoning controls for the %s provider',
+      (provider) => {
+        expect(() => LangGraphConfigSchema.parse({
+          provider,
+          model: 'model-id',
+          reasoning: 'high',
+        })).toThrow();
+      },
+    );
+
+    it('rejects a custom base URL for the Google provider', () => {
+      expect(() => LangGraphConfigSchema.parse({
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+        baseUrl: 'https://google-proxy.example.test',
+      })).toThrow();
+    });
+
+    it('rejects a cross-provider subagent when the parent has one protocol-specific base URL', () => {
+      expect(() => LangGraphConfigSchema.parse({
+        provider: 'openai',
+        model: 'gpt-5.4-mini',
+        baseUrl: 'https://openai-proxy.example.test/v1',
+        subagents: [{
+          name: 'researcher',
+          description: 'Researches topics',
+          systemPrompt: 'Research.',
+          provider: 'anthropic',
+        }],
+      })).toThrow();
+    });
   });
 
   describe('ClaudeAgentsConfigSchema', () => {
@@ -110,6 +143,23 @@ describe('harness config schemas', () => {
         provider: 'gemini',
         model: 'claude-sonnet-4-6',
       })).toThrow();
+    });
+
+    it('accepts only the Anthropic provider used by the Claude SDK protocol', () => {
+      expect(ClaudeAgentsConfigSchema.parse({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+      })).toEqual({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+      });
+
+      for (const provider of ['openai', 'google'] as const) {
+        expect(() => ClaudeAgentsConfigSchema.parse({
+          provider,
+          model: 'claude-sonnet-4-6',
+        })).toThrow();
+      }
     });
 
     it('rejects negative maxTurns', () => {

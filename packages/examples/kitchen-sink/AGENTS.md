@@ -77,9 +77,9 @@ spec:
     System prompt
   tools:
     - ref: tool-name
-  nativeTools:
-    allowlist: [Read, Write, Edit, Bash]
-    blocklist: [execute]
+  nativeToolPolicy:
+    policy: allow # all | allow | deny | none
+    names: [Read, Write, Edit, Bash] # required only for allow or deny
   mode: interactive
 ```
 

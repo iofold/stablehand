@@ -13,6 +13,11 @@ import { catalogRoutes } from './routes/catalogs.js';
 import { eventRoutes } from './routes/events.js';
 import { settingsRoutes } from './routes/settings.js';
 import { budgetRoutes } from './routes/budgets.js';
+import { analyticsRoutes } from './routes/analytics.js';
+import {
+  modelGatewayRoutes,
+  type ModelGatewayStatusConfig,
+} from './routes/model-gateway.js';
 import { triggerRoutes } from './routes/triggers.js';
 import { sandboxRoutes } from './routes/sandbox.js';
 import type { EventTriggerManager } from '../events/trigger-manager.js';
@@ -76,6 +81,8 @@ export interface ServerOptions {
   lifecyclePolicy?: ContainerLifecyclePolicy;
   /** Durable canonical event spine (ADR-015). */
   canonicalLog?: CanonicalLog;
+  /** Non-secret optional gateway deployment status configuration. */
+  modelGateway?: ModelGatewayStatusConfig;
 }
 
 /**
@@ -153,9 +160,9 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   // into the orchestrator for tool execution and event emission.
   // REST routes coexist on the same port — ConnectRPC only handles
   // its own paths (e.g. /ctxmill.sandbox.v1.OrchestratorService/*).
-  const callbackAuthInterceptor = createGrpcCallbackAuthInterceptor(
-    resolveGrpcCallbackAuthConfig(),
-  );
+  const callbackAuthConfig = resolveGrpcCallbackAuthConfig();
+  const callbackAuthInterceptor =
+    createGrpcCallbackAuthInterceptor(callbackAuthConfig);
   await app.register(fastifyConnectPlugin, {
     routes: createGrpcRoutes({
       eventBus,
@@ -164,6 +171,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
       toolExecutor: opts.toolExecutor,
       toolDefinitionRegistry,
       repository: db,
+      callbackAuthConfig,
     }),
     interceptors: callbackAuthInterceptor ? [callbackAuthInterceptor] : [],
   });
@@ -250,6 +258,12 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
   await app.register(eventRoutes, { prefix: '/api/events', db });
   await app.register(budgetRoutes, { prefix: '/api/budgets', db });
+  await app.register(analyticsRoutes, { prefix: '/api/analytics', db });
+  await app.register(modelGatewayRoutes, {
+    prefix: '/api/model-gateway',
+    db,
+    config: opts.modelGateway ?? { enabled: false },
+  });
   if (triggerManager) {
     await app.register(triggerRoutes, { prefix: '/api/triggers', triggerManager, db });
   }

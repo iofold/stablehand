@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SYSTEM_SETTING_BOUNDS, SYSTEM_SETTING_FIELDS } from '@ctxmill/shared';
 
 import { settingsRoutes } from '../settings.js';
 import type { SystemSettings } from '../../../settings/service.js';
@@ -77,5 +78,37 @@ describe('settings routes', () => {
     expect(response.json()).toEqual(updatedSettings);
     expect(settingsService.set).toHaveBeenCalledWith('idleTimeoutMs', 10_000);
     expect(onSettingsUpdated).toHaveBeenCalledWith(updatedSettings);
+  });
+
+  it.each(SYSTEM_SETTING_FIELDS)('enforces the canonical %s bounds', async (field) => {
+    const settingsService = {
+      getAll: vi.fn().mockResolvedValue(baseSettings),
+      set: vi.fn().mockResolvedValue(undefined),
+    };
+    const app = await createApp(settingsService, vi.fn());
+    apps.push(app);
+    const bounds = SYSTEM_SETTING_BOUNDS[field];
+    const increment = bounds.integer ? 1 : 0.1;
+
+    const below = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { [field]: bounds.min - increment },
+    });
+    const above = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { [field]: bounds.max + increment },
+    });
+    const boundary = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { [field]: bounds.max },
+    });
+
+    expect(below.statusCode).toBe(400);
+    expect(above.statusCode).toBe(400);
+    expect(boundary.statusCode).toBe(200);
+    expect(settingsService.set).toHaveBeenLastCalledWith(field, bounds.max);
   });
 });

@@ -1,5 +1,18 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  AgentCreateInputSchema,
+  AgentPatchInputSchema,
+  BackgroundTurnStartInputSchema,
+  ConversationTurnStartInputSchema,
+  FileWriteInputSchema,
+  InterruptResolveInputSchema,
+  SecretPutInputSchema,
+  WebhookCreateInputSchema,
+  WebhookPatchInputSchema,
+} from '@ctxmill/contracts';
+import type { ZodType } from 'zod';
+import { redactSensitiveFields as redact } from './redaction.js';
 
 type JsonRecord = Record<string, unknown>;
 type Flags = Record<string, string | boolean>;
@@ -23,10 +36,14 @@ interface CommandResult {
   pretty: (data: unknown) => string;
 }
 
+interface RunOpsCliOptions {
+  invocation?: string;
+}
+
 class UsageError extends Error {
   exitCode = 2;
   code = 'usage_error';
-  hint = 'Run `ctxmill ops help` to inspect commands and required arguments.';
+  hint?: string;
   retryable = false;
 }
 
@@ -44,17 +61,21 @@ class ApiError extends Error {
   }
 }
 
-const SECRET_KEY_RE = /(secret|token|password|authorization|api[_-]?key|credential|private[_-]?key)/i;
+const DEFAULT_INVOCATION = 'ctxmill ops';
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'ERROR', 'CANCELLED', 'TERMINATED', 'completed', 'error', 'cancelled']);
 
-export async function runOpsCli(argv: string[]): Promise<number> {
+export async function runOpsCli(
+  argv: string[],
+  options: RunOpsCliOptions = {},
+): Promise<number> {
+  const invocation = options.invocation?.trim() || DEFAULT_INVOCATION;
   const parsed = parseArgs(argv);
   try {
-    const result = await executeCommand(parsed);
+    const result = await executeCommand(parsed, invocation);
     await emitResult(result, parsed.flags);
     return 0;
   } catch (error) {
-    return emitError(error, parsed.flags);
+    return emitError(error, parsed.flags, invocation);
   }
 }
 
@@ -88,10 +109,17 @@ function parseArgs(argv: string[]): ParsedArgs {
   return { positionals, flags };
 }
 
-async function executeCommand(args: ParsedArgs): Promise<CommandResult> {
+async function executeCommand(
+  args: ParsedArgs,
+  invocation: string,
+): Promise<CommandResult> {
   const [group, action, third, fourth] = args.positionals;
   if (!group || group === 'help' || hasFlag(args.flags, 'help', 'h')) {
-    return localResult('help', helpText(), () => helpText());
+    return localResult(
+      'help',
+      helpText(invocation),
+      () => helpText(invocation),
+    );
   }
 
   switch (group) {
@@ -128,12 +156,8 @@ async function executeCommand(args: ParsedArgs): Promise<CommandResult> {
       return settingsCommand(action, args.flags);
     case 'feedback':
       return feedbackCommand(action, third, args.flags);
-    case 'traces':
-      return traceCommand(action, third, args.flags);
     case 'webhooks':
       return webhookCommand(action, third, fourth, args.flags);
-    case 'knowledge':
-      return knowledgeCommand(action, third, fourth, args.flags);
     case 'stream':
       return streamCommand(action, args.flags);
     case 'ag-ui':
@@ -145,7 +169,9 @@ async function executeCommand(args: ParsedArgs): Promise<CommandResult> {
       break;
   }
 
-  throw new UsageError(`Unknown command: ${args.positionals.join(' ') || '<none>'}\n\n${helpText()}`);
+  throw new UsageError(
+    `Unknown command: ${args.positionals.join(' ') || '<none>'}\n\n${helpText(invocation)}`,
+  );
 }
 
 async function agentCommand(action: string | undefined, id: string | undefined, flags: Flags): Promise<CommandResult> {
@@ -156,17 +182,14 @@ async function agentCommand(action: string | undefined, id: string | undefined, 
     case 'get':
       requireArg(id, 'agentId');
       return getCommand('agents get', 'GET', `/api/agents/${encodeURIComponent(id)}`, formatAgent, flags);
-    case 'versions':
-      requireArg(id, 'agentId');
-      return getCommand('agents versions', 'GET', `/api/agents/${encodeURIComponent(id)}/versions`, formatJsonSummary, flags);
     case 'create': {
       const body = await loadBody(flags, { required: true, hint: 'agent definition (name, harness, harnessConfig, systemPrompt, tools, ...)' });
-      return requestCommand('agents create', 'POST', '/api/agents', body, formatJsonSummary, flags);
+      return requestCommand('agents create', 'POST', '/api/agents', body, formatJsonSummary, flags, AgentCreateInputSchema);
     }
     case 'update': {
       requireArg(id, 'agentId');
       const body = await loadBody(flags, { required: true, hint: 'partial agent definition' });
-      return requestCommand('agents update', 'PUT', `/api/agents/${encodeURIComponent(id)}`, body, formatJsonSummary, flags);
+      return requestCommand('agents update', 'PATCH', `/api/agents/${encodeURIComponent(id)}`, body, formatJsonSummary, flags, AgentPatchInputSchema);
     }
     case 'delete':
       requireArg(id, 'agentId');
@@ -199,7 +222,7 @@ async function turnCommand(action: string | undefined, agentId: string | undefin
       const body: JsonRecord = { content };
       const conversationId = flagString(flags, 'conversation', 'conversation-id');
       if (conversationId) body.conversationId = conversationId;
-      const result = await requestCommand('turns message', 'POST', `/api/agents/${encodeURIComponent(agentId)}/message`, body, formatJsonSummary, flags);
+      const result = await requestCommand('turns message', 'POST', `/api/agents/${encodeURIComponent(agentId)}/message`, body, formatJsonSummary, flags, ConversationTurnStartInputSchema);
       return maybeWaitForTurn(agentId, result, flags);
     }
     case 'start': {
@@ -209,7 +232,7 @@ async function turnCommand(action: string | undefined, agentId: string | undefin
       const body: JsonRecord = { task };
       const secrets = flagString(flags, 'sandbox-secrets');
       if (secrets) body.sandboxSecrets = parseJsonFlag(secrets, '--sandbox-secrets');
-      const result = await requestCommand('turns start', 'POST', `/api/agents/${encodeURIComponent(agentId)}/turns`, body, formatJsonSummary, flags);
+      const result = await requestCommand('turns start', 'POST', `/api/agents/${encodeURIComponent(agentId)}/turns`, body, formatJsonSummary, flags, BackgroundTurnStartInputSchema);
       return maybeWaitForTurn(agentId, result, flags);
     }
     default:
@@ -291,7 +314,7 @@ async function interruptCommand(action: string | undefined, agentId: string | un
       const body: JsonRecord = { action: actionValue, interruptId };
       const data = flagString(flags, 'data');
       if (data !== undefined) body.data = parseJsonFlag(data, '--data');
-      return requestCommand('interrupts resolve', 'POST', `/api/agents/${encodeURIComponent(agentId)}/interrupt`, body, formatJsonSummary, flags);
+      return requestCommand('interrupts resolve', 'POST', `/api/agents/${encodeURIComponent(agentId)}/interrupt`, body, formatJsonSummary, flags, InterruptResolveInputSchema);
     }
     default:
       throw new UsageError(`Unknown interrupts command: ${action}`);
@@ -420,7 +443,7 @@ async function fileCommand(action: string | undefined, agentId: string | undefin
       const body: JsonRecord = { path: pathFlag, content };
       const method = action === 'write' ? 'POST' : 'PUT';
       const query = buildQuery({ conversationId });
-      return requestCommand(`files ${action}`, method, `/api/agents/${encodeURIComponent(agentId)}/files${query}`, body, formatJsonSummary, flags);
+      return requestCommand(`files ${action}`, method, `/api/agents/${encodeURIComponent(agentId)}/files${query}`, body, formatJsonSummary, flags, FileWriteInputSchema);
     }
     case 'delete': {
       if (!pathFlag) throw new UsageError('files delete requires --path <path>');
@@ -483,7 +506,7 @@ async function secretCommand(action: string | undefined, agentId: string | undef
       const value = flagString(flags, 'value');
       requireArg(k, 'key via --key');
       requireArg(value, 'value via --value');
-      return requestCommand('secrets set', 'POST', base, { key: k, value }, formatJsonSummary, flags);
+      return requestCommand('secrets set', 'POST', base, { key: k, value }, formatJsonSummary, flags, SecretPutInputSchema);
     }
     case 'delete':
       requireArg(key, 'secret key');
@@ -526,25 +549,8 @@ async function feedbackCommand(action: string | undefined, agentId: string | und
       if (comment) body.comment = comment;
       return requestCommand('feedback submit', 'POST', `/api/agents/${encodeURIComponent(agentId)}/feedback`, body, formatJsonSummary, flags);
     }
-    case 'stats':
-      return getCommand('feedback stats', 'GET', `/api/agents/${encodeURIComponent(agentId)}/feedback/stats`, formatJsonSummary, flags);
     default:
       throw new UsageError(`Unknown feedback command: ${action}`);
-  }
-}
-
-async function traceCommand(action: string | undefined, agentId: string | undefined, flags: Flags): Promise<CommandResult> {
-  requireArg(agentId, 'agentId');
-  switch (action) {
-    case 'list':
-    case undefined: {
-      const query = buildQuery({ limit: flagString(flags, 'limit') });
-      return getCommand('traces list', 'GET', `/api/agents/${encodeURIComponent(agentId)}/traces${query}`, formatJsonSummary, flags);
-    }
-    case 'stats':
-      return getCommand('traces stats', 'GET', `/api/agents/${encodeURIComponent(agentId)}/traces/stats`, formatJsonSummary, flags);
-    default:
-      throw new UsageError(`Unknown traces command: ${action}`);
   }
 }
 
@@ -563,13 +569,14 @@ async function webhookCommand(action: string | undefined, agentId: string | unde
       requireArg(events, 'events via --events (comma-separated)');
       const body: JsonRecord = { url, events: events.split(',').map((e) => e.trim()).filter(Boolean) };
       const secret = flagString(flags, 'secret');
-      if (secret) body.secret = secret;
-      return requestCommand('webhooks add', 'POST', base, body, formatJsonSummary, flags);
+      requireArg(secret, 'secret via --secret');
+      body.secret = secret;
+      return requestCommand('webhooks add', 'POST', base, body, formatJsonSummary, flags, WebhookCreateInputSchema);
     }
     case 'update': {
       requireArg(webhookId, 'webhookId');
       const body = await loadBody(flags, { required: true, hint: 'partial webhook (url, events, secret)' });
-      return requestCommand('webhooks update', 'PUT', `${base}/${encodeURIComponent(webhookId)}`, body, formatJsonSummary, flags);
+      return requestCommand('webhooks update', 'PATCH', `${base}/${encodeURIComponent(webhookId)}`, body, formatJsonSummary, flags, WebhookPatchInputSchema);
     }
     case 'delete':
       requireArg(webhookId, 'webhookId');
@@ -580,75 +587,6 @@ async function webhookCommand(action: string | undefined, agentId: string | unde
   }
 }
 
-async function knowledgeCommand(action: string | undefined, third: string | undefined, fourth: string | undefined, flags: Flags): Promise<CommandResult> {
-  switch (action) {
-    case 'search': {
-      requireArg(third, 'agentId');
-      const query = buildQuery({
-        q: flagString(flags, 'q', 'query'),
-        category: flagString(flags, 'category'),
-        limit: flagString(flags, 'limit'),
-        offset: flagString(flags, 'offset'),
-      });
-      return getCommand('knowledge search', 'GET', `/api/agents/${encodeURIComponent(third)}/knowledge${query}`, formatJsonSummary, flags);
-    }
-    case 'stats':
-      requireArg(third, 'agentId');
-      return getCommand('knowledge stats', 'GET', `/api/agents/${encodeURIComponent(third)}/knowledge/stats`, formatJsonSummary, flags);
-    case 'get':
-      requireArg(third, 'agentId');
-      requireArg(fourth, 'itemId');
-      return getCommand('knowledge get', 'GET', `/api/agents/${encodeURIComponent(third)}/knowledge/${encodeURIComponent(fourth)}`, formatJsonSummary, flags);
-    case 'cross-search': {
-      const query = buildQuery({
-        q: flagString(flags, 'q', 'query'),
-        category: flagString(flags, 'category'),
-        limit: flagString(flags, 'limit'),
-        offset: flagString(flags, 'offset'),
-      });
-      return getCommand('knowledge cross-search', 'GET', `/api/knowledge/search${query}`, formatJsonSummary, flags);
-    }
-    case 'shared':
-      return knowledgeSharedCommand(third, fourth, flags);
-    default:
-      throw new UsageError(`Unknown knowledge command: ${action}`);
-  }
-}
-
-async function knowledgeSharedCommand(action: string | undefined, itemId: string | undefined, flags: Flags): Promise<CommandResult> {
-  switch (action) {
-    case 'list':
-    case undefined: {
-      const query = buildQuery({
-        q: flagString(flags, 'q', 'query'),
-        category: flagString(flags, 'category'),
-        limit: flagString(flags, 'limit'),
-        offset: flagString(flags, 'offset'),
-      });
-      return getCommand('knowledge shared list', 'GET', `/api/knowledge/shared${query}`, formatJsonSummary, flags);
-    }
-    case 'stats':
-      return getCommand('knowledge shared stats', 'GET', '/api/knowledge/shared/stats', formatJsonSummary, flags);
-    case 'add': {
-      const content = flagString(flags, 'content');
-      requireArg(content, 'content via --content');
-      const body: JsonRecord = { content };
-      const category = flagString(flags, 'category');
-      if (category) body.category = category;
-      const source = flagString(flags, 'source');
-      if (source) body.source = source;
-      const effectiveness = flagString(flags, 'effectiveness');
-      if (effectiveness) body.effectiveness = Number(effectiveness);
-      return requestCommand('knowledge shared add', 'POST', '/api/knowledge/shared', body, formatJsonSummary, flags);
-    }
-    case 'delete':
-      requireArg(itemId, 'itemId');
-      confirmDestructive(`knowledge shared delete ${itemId}`, flags);
-      return requestCommand('knowledge shared delete', 'DELETE', `/api/knowledge/shared/${encodeURIComponent(itemId)}`, undefined, formatJsonSummary, flags);
-    default:
-      throw new UsageError(`Unknown knowledge shared command: ${action}`);
-  }
-}
 
 async function streamCommand(agentId: string | undefined, flags: Flags): Promise<CommandResult> {
   const id = agentId ?? flagString(flags, 'agent', 'agent-id');
@@ -903,17 +841,40 @@ async function getCommand(command: string, method: string, endpoint: string, pre
   return requestCommand(command, method, endpoint, undefined, pretty, flags);
 }
 
-async function requestCommand(command: string, method: string, endpoint: string, body: unknown, pretty: (data: unknown) => string, flags: Flags): Promise<CommandResult> {
+async function requestCommand(
+  command: string,
+  method: string,
+  endpoint: string,
+  body: unknown,
+  pretty: (data: unknown) => string,
+  flags: Flags,
+  dryRunSchema?: ZodType,
+): Promise<CommandResult> {
   if (method !== 'GET' && hasFlag(flags, 'dry-run')) {
+    const validatedBody = dryRunSchema
+      ? parseCanonicalDryRunBody(command, body, dryRunSchema)
+      : body;
     return localResult(`${command} (dry-run)`, {
       dryRun: true,
       method,
       endpoint,
-      ...(body === undefined ? {} : { body }),
+      ...(validatedBody === undefined ? {} : { body: validatedBody }),
     }, formatJsonSummary);
   }
   const { data, meta } = await requestJson(endpoint, { method, body }, flags);
   return { command, meta, data, warnings: [], pretty };
+}
+
+function parseCanonicalDryRunBody(command: string, body: unknown, schema: ZodType): unknown {
+  const parsed = schema.safeParse(body);
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  const details = parsed.error.issues
+    .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+    .join('; ');
+  throw new UsageError(`Invalid canonical request for ${command}: ${details}`);
 }
 
 function localResult(command: string, data: unknown, pretty: (data: unknown) => string): CommandResult {
@@ -1030,7 +991,11 @@ async function emitResult(result: CommandResult, flags: Flags): Promise<void> {
   console.log(result.pretty(redacted));
 }
 
-function emitError(error: unknown, flags: Flags): number {
+function emitError(
+  error: unknown,
+  flags: Flags,
+  invocation: string,
+): number {
   const exitCode = getExitCode(error);
   const code = error instanceof ApiError
     ? error.code
@@ -1041,11 +1006,15 @@ function emitError(error: unknown, flags: Flags): number {
   const payload = {
     error: code,
     message,
-    hint: error instanceof UsageError || error instanceof TimeoutError
+    hint: error instanceof UnsafeOperationError
       ? error.hint
-      : error instanceof ApiError
-        ? 'Inspect the status and redacted response data, correct the request, then retry only when safe.'
-        : 'Inspect the runtime error and retry after correcting its cause.',
+      : error instanceof UsageError
+        ? `Run \`${invocation} help\` to inspect commands and required arguments.`
+        : error instanceof TimeoutError
+          ? error.hint
+          : error instanceof ApiError
+            ? 'Inspect the status and redacted response data, correct the request, then retry only when safe.'
+            : 'Inspect the runtime error and retry after correcting its cause.',
     retryable: error instanceof TimeoutError || (
       error instanceof ApiError && (error.status === 408 || error.status === 429 || error.status >= 500)
     ),
@@ -1187,18 +1156,6 @@ function normalizeSince(value: string | undefined): string | undefined {
   throw new UsageError('--since must be epoch ms, ISO datetime, or now-<n>s|m|h|d');
 }
 
-function redact(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (Array.isArray(value)) return value.map((item) => redact(item, seen));
-  if (!isRecord(value)) return value;
-  if (seen.has(value)) return '[Circular]';
-  seen.add(value);
-  const out: JsonRecord = {};
-  for (const [key, child] of Object.entries(value)) {
-    out[key] = SECRET_KEY_RE.test(key) ? '[REDACTED]' : redact(child, seen);
-  }
-  return out;
-}
-
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -1290,7 +1247,6 @@ function formatAgent(data: unknown): string {
     `${String(data.name ?? '<unnamed>')} (${String(data.id ?? 'no-id')})`,
     `status: ${String(data.status ?? 'unknown')}`,
     `harness: ${String(data.harness ?? 'unknown')}`,
-    `version: ${String(data.version ?? 'unknown')}`,
     `workspace: ${String(data.workspaceDir ?? '')}`,
     `tools: ${tools}`,
     `pending_interrupt: ${String(data.hasPendingInterrupt ?? false)}`,
@@ -1498,11 +1454,11 @@ function formatTriggers(data: unknown): string {
   return table(rows, [['id', 'ID', 12], ['agent', 'AGENT', 12], ['type', 'EVENT_TYPE', 28], ['enabled', 'EN', 4], ['selector', 'SELECTOR', 40], ['task', 'TASK', 60]]);
 }
 
-function helpText(): string {
+function helpText(invocation = DEFAULT_INVOCATION): string {
   return `ctxmill — agent-friendly ctxmill API CLI
 
 Usage:
-  ctxmill ops <command> [args] [flags]
+  ${invocation} <command> [args] [flags]
 
 Global flags:
   --base-url <url>       ctxmill API root (default: CTXMILL_API_URL, API_BASE, or http://localhost:3002)
@@ -1532,8 +1488,6 @@ Read commands:
 
   agents list
   agents get <agentId>
-  agents versions <agentId>
-
   turns list <agentId>
   turns get <agentId> <turnId>
 
@@ -1547,10 +1501,7 @@ Read commands:
   artifacts list|get|download-url ...
   files ls|cat ...
   secrets list <agentId>
-  feedback stats <agentId>
-  traces list|stats <agentId>
   webhooks list <agentId>
-  knowledge search|stats|get|cross-search|shared list|shared stats ...
   triggers list|get ...
 
 Mutation commands:
@@ -1585,12 +1536,9 @@ Mutation commands:
 
   feedback submit <agentId> --conversation <cid> --message <mid> --type thumbs_up|thumbs_down [--comment <t>]
 
-  webhooks add <agentId> --url <u> --events <csv> [--secret <s>]
+  webhooks add <agentId> --url <u> --events <csv> --secret <s>
   webhooks update <agentId> <webhookId> --from-file <path>
   webhooks delete <agentId> <webhookId>                [--yes]
-
-  knowledge shared add --content <t> [--category <c>] [--source <s>] [--effectiveness <n>]
-  knowledge shared delete <itemId>                     [--yes]
 
   triggers create --from-file <path>
   triggers update <triggerId> --from-file <path>
@@ -1601,17 +1549,17 @@ Streaming commands:
   stream <agentId> [--limit N] [--timeout ms] [--until-type <t>] [--json]
   ag-ui run <agentId> --task "<text>" [--no-stream] [--data '<ag-ui body>']
 
-Exit codes: 0=ok 1=api/runtime 2=usage 3=timeout 4=unsafe-blocked 5=unexpected-shape
+Exit codes: 0=ok 1=api/runtime 2=usage 3=timeout 4=unsafe-blocked
 
 Examples:
-  ctxmill ops health --json
-  ctxmill ops agents create --from-file agent.json --dry-run --json
-  ctxmill ops turns start agent_123 --task "Summarize repo" --wait-for terminal --timeout 600000
-  ctxmill ops ag-ui run agent_123 --task "Hello"
-  ctxmill ops stream agent_123 --limit 20
-  ctxmill ops artifacts upload --agent agent_123 --file ./report.pdf
-  ctxmill ops workspace upload agent_123 --file ./ws.tar.gz
-  ctxmill ops agents delete agent_123 --yes
-  ctxmill ops settings set --data '{"turnTimeoutMs":600000}'
+  ${invocation} health --json
+  ${invocation} agents create --from-file agent.json --dry-run --json
+  ${invocation} turns start agent_123 --task "Summarize repo" --wait-for terminal --timeout 600000
+  ${invocation} ag-ui run agent_123 --task "Hello"
+  ${invocation} stream agent_123 --limit 20
+  ${invocation} artifacts upload --agent agent_123 --file ./report.pdf
+  ${invocation} workspace upload agent_123 --file ./ws.tar.gz
+  ${invocation} agents delete agent_123 --yes
+  ${invocation} settings set --data '{"turnTimeoutMs":600000}'
 `;
 }

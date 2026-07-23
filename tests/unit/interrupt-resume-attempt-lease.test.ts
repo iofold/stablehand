@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
-import { createTestDb, type TestDb } from '../utils/test-db.js';
+import { createDatabase } from '../../packages/ctxmill/src/database/connection.js';
+import { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
+import {
+  createTestDb,
+  resolveTestDatabaseUrl,
+  type TestDb,
+} from '../utils/test-db.js';
 
 describe('interrupt resume attempt leases', () => {
   let testDb: TestDb;
@@ -16,7 +21,7 @@ describe('interrupt resume attempt leases', () => {
     await testDb?.close();
   });
 
-  it('claims and reclaims with status-plus-updatedAt compare-and-set ownership', async () => {
+  it('claims and reclaims the original turn with a DB-fenced delivery across replicas', async () => {
     const agent = await repo.createAgent({
       name: 'Interrupt lease agent',
       harness: 'langgraph',
@@ -36,6 +41,21 @@ describe('interrupt resume attempt leases', () => {
       conversationId: conversation.id,
       mode: 'interactive',
     });
+    const originalDelivery = await repo.claimTurnDeliveryLease({
+      turnId: turn.id,
+      ownerId: 'original-owner',
+      leaseDurationMs: 60_000,
+    });
+    expect(await repo.activateTurnDelivery({
+      turnId: turn.id,
+      sandboxSessionId: sandboxSession.id,
+      ownerId: originalDelivery!.ownerId,
+      fenceToken: originalDelivery!.fenceToken,
+      expectedActiveGeneration: {
+        restoreFenceToken: sandboxSession.restoreFenceToken,
+        containerId: sandboxSession.containerId,
+      },
+    })).toBe(true);
     await repo.savePendingInterrupt({
       id: 'interrupt-lease-1',
       turnId: turn.id,
@@ -55,87 +75,130 @@ describe('interrupt resume attempt leases', () => {
     const pending = resolution?.kind === 'ready' ? resolution.resumeAttempt : undefined;
     expect(pending).toBeDefined();
 
-    expect(await repo.getRecoverableInterruptResumeAttempts(pending!.updatedAt - 1, 10))
+    expect(await repo.getRecoverableInterruptResumeAttempts(10))
       .toEqual([expect.objectContaining({ id: pending!.id, status: 'pending' })]);
 
-    const competingClaims = await Promise.all([
-      repo.claimInterruptResumeAttempt({
-        id: pending!.id,
-        expectedUpdatedAt: pending!.updatedAt,
-        staleBefore: pending!.updatedAt - 1,
-        claimedAt: pending!.updatedAt + 1,
-      }),
-      repo.claimInterruptResumeAttempt({
-        id: pending!.id,
-        expectedUpdatedAt: pending!.updatedAt,
-        staleBefore: pending!.updatedAt - 1,
-        claimedAt: pending!.updatedAt + 2,
-      }),
-    ]);
-    const firstOwner = competingClaims.find((row) => row !== undefined);
-    expect(competingClaims.filter((row) => row !== undefined)).toHaveLength(1);
-    expect(firstOwner).toMatchObject({ status: 'in_progress', attempts: 1 });
-    expect(await repo.getRecoverableInterruptResumeAttempts(firstOwner!.updatedAt - 1, 10))
-      .toEqual([]);
-
-    const wrongRenewal = await repo.renewInterruptResumeAttemptLease(
-      pending!.id,
-      pending!.updatedAt,
-      firstOwner!.updatedAt + 1,
-    );
-    expect(wrongRenewal).toBeUndefined();
-
-    const renewed = await repo.renewInterruptResumeAttemptLease(
-      pending!.id,
-      firstOwner!.updatedAt,
-      firstOwner!.updatedAt + 1,
-    );
-    expect(renewed).toMatchObject({
-      status: 'in_progress',
-      updatedAt: firstOwner!.updatedAt + 1,
+    // This test needs a non-live source session while retaining the original
+    // running turn. Canonical lifecycle admission intentionally rejects that
+    // synthetic combination, so establish the fixture directly.
+    await testDb.conn.pgClient`
+      UPDATE sandbox_sessions
+      SET status = 'CHECKPOINTED',
+          container_id = NULL,
+          container_name = NULL
+      WHERE id = ${sandboxSession.id}
+    `;
+    await testDb.conn.pgClient`
+      UPDATE turn_delivery_leases
+      SET lease_expires_at =
+        floor(extract(epoch from clock_timestamp()) * 1000)::bigint - 1
+      WHERE turn_id = ${turn.id}
+    `;
+    const targetSession = await repo.createSandboxSession({
+      conversationId: conversation.id,
+      agentId: agent.id,
+      harnessName: 'langgraph',
     });
+    const secondConnection = await createDatabase(resolveTestDatabaseUrl());
+    const secondRepository = new DatabaseRepository(secondConnection.db);
+    try {
+      const competingClaims = await Promise.all([
+        repo.claimInterruptResumeDelivery({
+          attemptId: pending!.id,
+          sandboxSessionId: targetSession.id,
+          ownerId: 'resume-owner-a',
+          leaseDurationMs: 60_000,
+        }),
+        secondRepository.claimInterruptResumeDelivery({
+          attemptId: pending!.id,
+          sandboxSessionId: targetSession.id,
+          ownerId: 'resume-owner-b',
+          leaseDurationMs: 60_000,
+        }),
+      ]);
+      const firstOwner = competingClaims.find(
+        (claim) => claim !== undefined,
+      )!;
+      expect(competingClaims.filter(Boolean)).toHaveLength(1);
+      expect(firstOwner.attempt).toMatchObject({
+        status: 'in_progress',
+        attempts: 1,
+        sandboxSessionId: targetSession.id,
+      });
+      expect(firstOwner.lease.fenceToken).toBe(
+        originalDelivery!.fenceToken + 1,
+      );
+      expect(await repo.getRecoverableInterruptResumeAttempts(10)).toEqual([]);
 
-    const tooFreshToReclaim = await repo.claimInterruptResumeAttempt({
-      id: pending!.id,
-      expectedUpdatedAt: renewed!.updatedAt,
-      staleBefore: renewed!.updatedAt - 1,
-      claimedAt: renewed!.updatedAt + 1,
-    });
-    expect(tooFreshToReclaim).toBeUndefined();
+      const idempotentClaim = await repo.claimInterruptResumeDelivery({
+        attemptId: pending!.id,
+        sandboxSessionId: targetSession.id,
+        ownerId: firstOwner.lease.ownerId,
+        leaseDurationMs: 60_000,
+      });
+      expect(idempotentClaim).toMatchObject({
+        attempt: { attempts: 1 },
+        lease: { fenceToken: firstOwner.lease.fenceToken },
+      });
 
-    const recoveredAfterCrash = await repo.claimInterruptResumeAttempt({
-      id: pending!.id,
-      expectedUpdatedAt: renewed!.updatedAt,
-      staleBefore: renewed!.updatedAt,
-      claimedAt: renewed!.updatedAt + 2,
-    });
-    expect(recoveredAfterCrash).toMatchObject({
-      status: 'in_progress',
-      attempts: 2,
-      updatedAt: renewed!.updatedAt + 2,
-    });
+      await testDb.conn.pgClient`
+        UPDATE turn_delivery_leases
+        SET lease_expires_at =
+          floor(extract(epoch from clock_timestamp()) * 1000)::bigint - 1
+        WHERE turn_id = ${turn.id}
+      `;
+      expect(await repo.getRecoverableInterruptResumeAttempts(10))
+        .toEqual([expect.objectContaining({
+          id: pending!.id,
+          status: 'in_progress',
+        })]);
 
-    const staleOwnerCompletion = await repo.completeInterruptResumeAttempt(
-      pending!.id,
-      renewed!.updatedAt,
-      recoveredAfterCrash!.updatedAt + 1,
-    );
-    expect(staleOwnerCompletion).toBeUndefined();
+      const takeoverOwner = firstOwner.lease.ownerId === 'resume-owner-a'
+        ? 'resume-owner-b'
+        : 'resume-owner-a';
+      const takeover = await secondRepository.claimInterruptResumeDelivery({
+        attemptId: pending!.id,
+        sandboxSessionId: targetSession.id,
+        ownerId: takeoverOwner,
+        leaseDurationMs: 60_000,
+      });
+      expect(takeover).toMatchObject({
+        attempt: { status: 'in_progress', attempts: 2 },
+        lease: {
+          ownerId: takeoverOwner,
+          fenceToken: firstOwner.lease.fenceToken + 1,
+        },
+      });
+      expect(await repo.completeInterruptResumeDelivery(
+        pending!.id,
+        {
+          ownerId: firstOwner.lease.ownerId,
+          fenceToken: firstOwner.lease.fenceToken,
+        },
+      )).toBeUndefined();
 
-    const completed = await repo.completeInterruptResumeAttempt(
-      pending!.id,
-      recoveredAfterCrash!.updatedAt,
-      recoveredAfterCrash!.updatedAt + 1,
-    );
-    expect(completed).toMatchObject({
-      status: 'completed',
-      completedAt: recoveredAfterCrash!.updatedAt + 1,
-      updatedAt: recoveredAfterCrash!.updatedAt + 1,
-    });
-    expect(await repo.getRecoverableInterruptResumeAttempts(
-      recoveredAfterCrash!.updatedAt + 2,
-      10,
-    )).toEqual([]);
+      expect(await repo.finalizeTurnIfOpen(turn.id, {
+        status: 'completed',
+        completedAt: Date.now(),
+        error: null,
+      }, {
+        ownerId: takeover!.lease.ownerId,
+        fenceToken: takeover!.lease.fenceToken,
+      })).toBe(true);
+      expect(await repo.completeInterruptResumeDelivery(
+        pending!.id,
+        {
+          ownerId: takeover!.lease.ownerId,
+          fenceToken: takeover!.lease.fenceToken,
+        },
+      )).toMatchObject({
+        status: 'completed',
+        completedAt: expect.any(Number),
+      });
+      expect(await repo.getRecoverableInterruptResumeAttempts(10)).toEqual([]);
+    } finally {
+      await secondConnection.close();
+    }
   });
 
   it('atomically resolves an interrupt and creates exactly one resume attempt', async () => {
@@ -259,7 +322,7 @@ describe('interrupt resume attempt leases', () => {
       `);
     }
 
-    expect(await repo.getPendingInterrupt('interrupt-atomic-rollback'))
+    expect(await repo.getInterruptById('interrupt-atomic-rollback'))
       .toMatchObject({
         status: 'pending',
         resolvedAction: null,
@@ -270,7 +333,64 @@ describe('interrupt resume attempt leases', () => {
     ).toBeUndefined();
   });
 
-  it('uses failed-to-pending CAS so a concurrent retry cannot reset an active lease', async () => {
+  it('repairs a crash gap only after the original turn is terminal', async () => {
+    const agent = await repo.createAgent({
+      name: 'Terminal repair agent',
+      harness: 'langgraph',
+      harnessConfig: '{}',
+      systemPrompt: 'test',
+      tools: [],
+    });
+    const conversation = await repo.createConversation(agent.id);
+    const sandboxSession = await repo.createSandboxSession({
+      conversationId: conversation.id,
+      agentId: agent.id,
+      harnessName: 'langgraph',
+    });
+    const turn = await repo.createTurn({
+      sandboxSessionId: sandboxSession.id,
+      agentId: agent.id,
+      conversationId: conversation.id,
+      mode: 'interactive',
+    });
+    await repo.savePendingInterrupt({
+      id: 'interrupt-terminal-repair',
+      turnId: turn.id,
+      agentId: agent.id,
+      sandboxSessionId: sandboxSession.id,
+      toolCallId: 'approval-terminal-repair',
+      toolName: 'request-approval',
+      args: {},
+      timeoutMs: 60_000,
+      createdAt: 1_700,
+      expiresAt: 61_700,
+    });
+    const resolution = await repo.resolveInterruptWithResumeAttempt(
+      'interrupt-terminal-repair',
+      'approve',
+    );
+    const pending = resolution?.kind === 'ready'
+      ? resolution.resumeAttempt
+      : undefined;
+    expect(pending).toBeDefined();
+    expect(
+      await repo.completeTerminalInterruptResumeAttempt(pending!.id),
+    ).toBeUndefined();
+
+    await repo.finalizeTurnIfOpen(turn.id, {
+      status: 'completed',
+      completedAt: Date.now(),
+      error: null,
+    });
+    expect(
+      await repo.completeTerminalInterruptResumeAttempt(pending!.id),
+    ).toMatchObject({
+      status: 'completed',
+      completedAt: expect.any(Number),
+    });
+  });
+
+  it('uses failed-to-pending CAS so a concurrent retry cannot reset an active delivery', async () => {
     const agent = await repo.createAgent({
       name: 'Concurrent retry agent',
       harness: 'langgraph',
@@ -290,6 +410,21 @@ describe('interrupt resume attempt leases', () => {
       conversationId: conversation.id,
       mode: 'interactive',
     });
+    const originalDelivery = await repo.claimTurnDeliveryLease({
+      turnId: turn.id,
+      ownerId: 'retry-original-owner',
+      leaseDurationMs: 60_000,
+    });
+    expect(await repo.activateTurnDelivery({
+      turnId: turn.id,
+      sandboxSessionId: sandboxSession.id,
+      ownerId: originalDelivery!.ownerId,
+      fenceToken: originalDelivery!.fenceToken,
+      expectedActiveGeneration: {
+        restoreFenceToken: sandboxSession.restoreFenceToken,
+        containerId: sandboxSession.containerId,
+      },
+    })).toBe(true);
     await repo.savePendingInterrupt({
       id: 'interrupt-concurrent-retry',
       turnId: turn.id,
@@ -308,55 +443,53 @@ describe('interrupt resume attempt leases', () => {
     );
     const pending = resolution?.kind === 'ready' ? resolution.resumeAttempt : undefined;
     expect(pending).toBeDefined();
-    const claimed = await repo.claimInterruptResumeAttempt({
-      id: pending!.id,
-      expectedUpdatedAt: pending!.updatedAt,
-      staleBefore: pending!.updatedAt - 1,
-      claimedAt: pending!.updatedAt + 1,
-    });
-    const failed = await repo.failInterruptResumeAttempt(
+    const failed = await repo.failUnclaimedInterruptResumeAttempt(
       pending!.id,
-      claimed!.updatedAt,
-      claimed!.updatedAt + 1,
       'restore failed',
     );
     expect(failed?.status).toBe('failed');
 
-    const retries = await Promise.all([
-      repo.retryFailedInterruptResumeAttempt(
-        failed!.id,
-        failed!.updatedAt,
-        failed!.updatedAt + 1,
-      ),
-      repo.retryFailedInterruptResumeAttempt(
-        failed!.id,
-        failed!.updatedAt,
-        failed!.updatedAt + 2,
-      ),
-    ]);
-    const retryOwner = retries.find((row) => row !== undefined);
-    expect(retries.filter((row) => row !== undefined)).toHaveLength(1);
-    expect(retryOwner?.status).toBe('pending');
+    const secondConnection = await createDatabase(resolveTestDatabaseUrl());
+    const secondRepository = new DatabaseRepository(secondConnection.db);
+    try {
+      const retries = await Promise.all([
+        repo.retryFailedInterruptResumeAttempt(failed!.id),
+        secondRepository.retryFailedInterruptResumeAttempt(failed!.id),
+      ]);
+      const retryOwner = retries.find((row) => row !== undefined);
+      expect(retries.filter(Boolean)).toHaveLength(1);
+      expect(retryOwner?.status).toBe('pending');
 
-    const active = await repo.claimInterruptResumeAttempt({
-      id: retryOwner!.id,
-      expectedUpdatedAt: retryOwner!.updatedAt,
-      staleBefore: retryOwner!.updatedAt - 1,
-      claimedAt: retryOwner!.updatedAt + 1,
-    });
-    expect(active?.status).toBe('in_progress');
-
-    const staleRetry = await repo.retryFailedInterruptResumeAttempt(
-      failed!.id,
-      failed!.updatedAt,
-      active!.updatedAt + 1,
-    );
-    expect(staleRetry).toBeUndefined();
-    expect(await repo.getInterruptResumeAttemptForInterrupt('interrupt-concurrent-retry'))
-      .toMatchObject({
-        id: active!.id,
-        status: 'in_progress',
-        updatedAt: active!.updatedAt,
+      await testDb.conn.pgClient`
+        UPDATE turn_delivery_leases
+        SET lease_expires_at =
+          floor(extract(epoch from clock_timestamp()) * 1000)::bigint - 1
+        WHERE turn_id = ${turn.id}
+      `;
+      const active = await repo.claimInterruptResumeDelivery({
+        attemptId: retryOwner!.id,
+        sandboxSessionId: sandboxSession.id,
+        ownerId: 'retry-resume-owner',
+        leaseDurationMs: 60_000,
       });
+      expect(active).toMatchObject({
+        attempt: { status: 'in_progress', attempts: 1 },
+      });
+
+      expect(
+        await secondRepository.retryFailedInterruptResumeAttempt(failed!.id),
+      ).toBeUndefined();
+      expect(
+        await repo.getInterruptResumeAttemptForInterrupt(
+          'interrupt-concurrent-retry',
+        ),
+      ).toMatchObject({
+        id: active!.attempt.id,
+        status: 'in_progress',
+        attempts: 1,
+      });
+    } finally {
+      await secondConnection.close();
+    }
   });
 });

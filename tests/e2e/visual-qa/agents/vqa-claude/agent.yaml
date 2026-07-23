@@ -29,8 +29,9 @@ spec:
     Always follow this EXACT sequence. Never skip steps. Be verbose in text responses.
   tools:
     - ref: emit-event
-  nativeTools:
-    allowlist:
+  nativeToolPolicy:
+    policy: allow
+    names:
       - Read
       - Bash
       - Grep

@@ -1,47 +1,34 @@
+import {
+  BudgetPolicyDocSchema,
+  BudgetWindowSchema,
+  type BudgetAction,
+  type BudgetLimits,
+  type BudgetMetricStatus,
+  type BudgetPolicyDoc,
+  type BudgetWindow,
+} from '@ctxmill/contracts';
+
 /**
- * Declarative tag-based budget policies (docs/plans/proposals/
- * 2026-07-15-tag-based-budget-policies.md).
- *
- * A policy is a stored document: which runs count (tag selector), how they
- * bucket (groupBy tag), the accounting window (UTC for calendar windows),
- * the limits, and the threshold actions. Runs count against every matching
- * policy; admission is denied when ANY matching bucket is exhausted.
+ * Declarative tag-based budget policy behavior. All data validation and public
+ * types live in @ctxmill/contracts; this module only owns runtime evaluation.
  */
 
-export const BUDGET_WINDOWS = [
-  'rolling-1h',
-  'rolling-24h',
-  'rolling-7d',
-  'rolling-30d',
-  'month-to-date',
-] as const;
-export type BudgetWindow = typeof BUDGET_WINDOWS[number];
+export const BUDGET_WINDOWS = BudgetWindowSchema.options;
+export type {
+  BudgetAction,
+  BudgetLimits,
+  BudgetPolicyDoc,
+  BudgetWindow,
+};
 
-export interface BudgetLimits {
-  totalTokens?: number;
-  costUsd?: number;
-  turns?: number;
-}
-
-export interface BudgetAction {
-  /** Fraction of the limit (0 < threshold <= 1). */
-  threshold: number;
-  action: 'warn' | 'block';
-}
-
-export interface BudgetPolicyDoc {
-  /** Exact-match AND across keys; empty object matches every run. */
-  selector: Record<string, string>;
-  /** One bucket per distinct value of this tag, each with the full limits. */
-  groupBy?: string;
-  window: BudgetWindow;
-  limits: BudgetLimits;
-  actions: BudgetAction[];
-}
+export type EvaluatedBudgetMetricStatus = Omit<BudgetMetricStatus, 'spent' | 'ratio'> & {
+  spent: number;
+  ratio: number;
+};
 
 export interface BudgetSpend {
-  totalTokens: number;
-  costUsd: number;
+  totalTokens: number | null;
+  costUsd: number | null;
   turns: number;
 }
 
@@ -81,86 +68,61 @@ const LIMIT_KEYS = ['totalTokens', 'costUsd', 'turns'] as const;
 
 /** Validate an untrusted policy document. Returns the typed doc or an error message. */
 export function parseBudgetPolicyDoc(doc: unknown): { doc: BudgetPolicyDoc } | { error: string } {
-  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) {
-    return { error: 'policy doc must be an object' };
-  }
-  const d = doc as Record<string, unknown>;
-
-  if (!isStringMap(d.selector)) {
-    return { error: 'selector must be a string→string map (use {} to match all runs)' };
-  }
-  if (d.groupBy !== undefined && (typeof d.groupBy !== 'string' || d.groupBy.length === 0)) {
-    return { error: 'groupBy must be a non-empty tag key' };
-  }
-  if (typeof d.window !== 'string' || !BUDGET_WINDOWS.includes(d.window as BudgetWindow)) {
-    return { error: `window must be one of: ${BUDGET_WINDOWS.join(', ')}` };
-  }
-  if (typeof d.limits !== 'object' || d.limits === null || Array.isArray(d.limits)) {
-    return { error: 'limits must be an object' };
-  }
-  const limits = d.limits as Record<string, unknown>;
-  const parsedLimits: BudgetLimits = {};
-  for (const key of LIMIT_KEYS) {
-    const value = limits[key];
-    if (value === undefined) continue;
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-      return { error: `limits.${key} must be a positive number` };
-    }
-    parsedLimits[key] = value;
-  }
-  if (Object.keys(parsedLimits).length === 0) {
-    return { error: `limits must set at least one of: ${LIMIT_KEYS.join(', ')}` };
-  }
-  if (!Array.isArray(d.actions) || d.actions.length === 0) {
-    return { error: 'actions must be a non-empty array of { threshold, action }' };
-  }
-  const actions: BudgetAction[] = [];
-  for (const entry of d.actions) {
-    if (typeof entry !== 'object' || entry === null) {
-      return { error: 'each action must be an object { threshold, action }' };
-    }
-    const a = entry as Record<string, unknown>;
-    if (typeof a.threshold !== 'number' || !(a.threshold > 0) || a.threshold > 1) {
-      return { error: 'action.threshold must be in (0, 1]' };
-    }
-    if (a.action !== 'warn' && a.action !== 'block') {
-      return { error: 'action.action must be "warn" or "block"' };
-    }
-    actions.push({ threshold: a.threshold, action: a.action });
-  }
-
-  return {
-    doc: {
-      selector: d.selector,
-      ...(d.groupBy !== undefined ? { groupBy: d.groupBy as string } : {}),
-      window: d.window as BudgetWindow,
-      limits: parsedLimits,
-      actions,
-    },
-  };
-}
-
-export interface BudgetMetricStatus {
-  metric: keyof BudgetLimits;
-  spent: number;
-  limit: number;
-  /** spent / limit, uncapped. */
-  ratio: number;
+  const parsed = BudgetPolicyDocSchema.safeParse(doc);
+  if (parsed.success) return { doc: parsed.data };
+  const issue = parsed.error.issues[0];
+  const path = issue?.path.length ? `${issue.path.join('.')}: ` : '';
+  return { error: `${path}${issue?.message ?? 'invalid policy document'}` };
 }
 
 /** Per-metric status for a bucket's spend against a policy's limits. */
-export function metricStatuses(limits: BudgetLimits, spend: BudgetSpend): BudgetMetricStatus[] {
-  const spentByMetric: Record<keyof BudgetLimits, number> = {
+export function metricStatuses(
+  limits: BudgetLimits,
+  spend: BudgetSpend,
+  actions: BudgetAction[] = [],
+): BudgetMetricStatus[] {
+  const spentByMetric: Record<keyof BudgetLimits, number | null> = {
     totalTokens: spend.totalTokens,
     costUsd: spend.costUsd,
     turns: spend.turns,
   };
-  return LIMIT_KEYS.flatMap((metric) => {
+  const statuses: BudgetMetricStatus[] = [];
+  for (const metric of LIMIT_KEYS) {
     const limit = limits[metric];
-    if (limit === undefined) return [];
+    if (limit === undefined) continue;
     const spent = spentByMetric[metric];
-    return [{ metric, spent, limit, ratio: spent / limit }];
-  });
+    if (spent === null) {
+      statuses.push({
+        metric,
+        spent: null,
+        limit,
+        ratio: null,
+        state: 'ok',
+        action: null,
+      });
+      continue;
+    }
+    const ratio = spent / limit;
+    const crossed = actions
+      .filter((action) => ratio >= action.threshold)
+      .sort((a, b) => {
+        if (a.action !== b.action) return a.action === 'block' ? -1 : 1;
+        return b.threshold - a.threshold;
+      })[0] ?? null;
+    statuses.push({
+      metric,
+      spent,
+      limit,
+      ratio,
+      state: crossed?.action === 'block'
+        ? 'blocked'
+        : crossed?.action === 'warn'
+          ? 'warning'
+          : 'ok',
+      action: crossed,
+    });
+  }
+  return statuses;
 }
 
 /**
@@ -170,11 +132,20 @@ export function metricStatuses(limits: BudgetLimits, spend: BudgetSpend): Budget
 export function trippedAction(
   doc: BudgetPolicyDoc,
   spend: BudgetSpend,
-): { action: BudgetAction; status: BudgetMetricStatus } | undefined {
-  const statuses = metricStatuses(doc.limits, spend);
-  const sorted = [...doc.actions].sort((a, b) => b.threshold - a.threshold);
+): { action: BudgetAction; status: EvaluatedBudgetMetricStatus } | undefined {
+  const statuses = metricStatuses(doc.limits, spend, doc.actions);
+  const sorted = [...doc.actions].sort((a, b) => {
+    if (a.action !== b.action) return a.action === 'block' ? -1 : 1;
+    return b.threshold - a.threshold;
+  });
   for (const action of sorted) {
-    const status = statuses.find((s) => s.ratio >= action.threshold);
+    const status = statuses.find(
+      (candidate): candidate is EvaluatedBudgetMetricStatus => (
+        candidate.ratio !== null
+        && candidate.spent !== null
+        && candidate.ratio >= action.threshold
+      ),
+    );
     if (status) return { action, status };
   }
   return undefined;
@@ -189,7 +160,7 @@ export class BudgetExceededError extends Error {
     readonly policyId: string,
     readonly policyName: string,
     readonly bucket: string | undefined,
-    readonly status: BudgetMetricStatus,
+    readonly status: EvaluatedBudgetMetricStatus,
   ) {
     super(
       `Budget "${policyName}" exhausted${bucket ? ` for ${bucket}` : ''}: `

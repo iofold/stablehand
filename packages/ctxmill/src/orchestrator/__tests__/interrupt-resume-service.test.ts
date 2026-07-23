@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildAgentDefinition } from '../agent-definition.js';
-import {
-  SandboxSessionManager,
-  type SessionRecord,
-} from '../sandbox-session-manager.js';
-import type { SessionEvent } from '../session-turn-service.js';
+import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import type {
   CheckpointV2,
   DatabaseRepository,
@@ -14,80 +9,24 @@ import type {
 } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
-import type { ContainerManager } from '../../sandbox/container-manager.js';
-import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
-import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
+import {
+  SandboxSessionManager,
+  type SessionRecord,
+} from '../sandbox-session-manager.js';
 import { SessionStateStore } from '../session-manager/session-state-store.js';
 import { SessionStatusCoordinator } from '../session-manager/session-status-coordinator.js';
+import type { TurnDeliveryFence } from '../turn-delivery-fence.js';
+import type { ContainerManager } from '../../sandbox/container-manager.js';
+import { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
 
-type SandboxSessionManagerInternals = {
-  stateStore: {
-    agentDefs: Map<string, AgentDefinition>;
-  };
+const FENCE: TurnDeliveryFence = {
+  ownerId: 'resume-worker',
+  fenceToken: 6,
 };
 
-function createMockContainerManager(): ContainerManager {
-  return {
-    extractWorkspaceDiff: vi.fn().mockResolvedValue(null),
-  } as unknown as ContainerManager;
-}
-
-function createMockDb(): DatabaseRepository {
-  let nextMessageSeq = 0;
-  const canonicalMessages = new Map<string, Record<string, unknown>>();
-
-  return {
-    getAgent: vi.fn().mockResolvedValue(null),
-    getTurn: vi.fn().mockResolvedValue({ status: 'running' }),
-    getSandboxSession: vi.fn().mockResolvedValue(null),
-    getResolvedInterruptsForSandboxSession: vi.fn().mockResolvedValue([]),
-    getCheckpointV2: vi.fn().mockResolvedValue(null),
-    finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
-    addCanonicalMessage: vi.fn().mockImplementation(async (data: Record<string, unknown>) => {
-      const id = typeof data.id === 'string' ? data.id : crypto.randomUUID();
-      const existing = canonicalMessages.get(id);
-      if (existing) {
-        return existing;
-      }
-
-      const message = {
-        id,
-        createdAt: Date.now(),
-        messageSeq: nextMessageSeq++,
-        messageRevision: 0,
-        publishedRevision: -1,
-        ...data,
-      };
-      canonicalMessages.set(id, message);
-      return message;
-    }),
-  } as unknown as DatabaseRepository;
-}
-
-function createMockEventBus(): Pick<TypedEventBus, 'emit' | 'emitAsync'> {
-  return {
-    emit: vi.fn(),
-    emitAsync: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
-function createMockLifecyclePolicy(): ContainerLifecyclePolicy {
-  return {
-    cancelIdleTimeout: vi.fn().mockResolvedValue(undefined),
-    scheduleIdleTimeout: vi.fn(),
-  } as unknown as ContainerLifecyclePolicy;
-}
-
-function createLogger() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
-
-function createAgentDef(overrides?: Partial<AgentDefinition>): AgentDefinition {
+function createAgentDef(
+  overrides: Partial<AgentDefinition> = {},
+): AgentDefinition {
   return {
     name: 'test-agent',
     harness: 'langgraph',
@@ -95,31 +34,36 @@ function createAgentDef(overrides?: Partial<AgentDefinition>): AgentDefinition {
     tools: ['search-docs'],
     systemPrompt: 'follow the system prompt',
     ...overrides,
-  } as unknown as AgentDefinition;
+  };
 }
 
-function createDbSession(overrides?: Partial<SandboxSessionRow>): SandboxSessionRow {
+function createDbSession(
+  overrides: Partial<SandboxSessionRow> = {},
+): SandboxSessionRow {
   return {
-    id: 'sess-1',
-    conversationId: 'conv-1',
+    id: 'sandbox-old',
+    conversationId: 'conversation-1',
     agentId: 'agent-1',
-    containerName: 'ctxmill-sandbox-sess-1',
-    containerId: 'c-1',
+    containerName: 'sandbox-old',
+    containerId: 'container-old',
     status: 'CHECKPOINTED',
     harnessName: 'langgraph',
-    checkpointRef: null,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    lastActivityAt: Date.now(),
+    checkpointRef: 'checkpoint-1',
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    lastActivityAt: 1_000,
     ...overrides,
   };
 }
 
-function createResolvedInterrupt(overrides?: Partial<InterruptRow>): InterruptRow {
+function createResolvedInterrupt(
+  overrides: Partial<InterruptRow> = {},
+): InterruptRow {
   return {
     id: 'interrupt-1',
     turnId: 'turn-1',
     agentId: 'agent-1',
+    sandboxSessionId: 'sandbox-old',
     toolCallId: 'approval-1',
     toolName: 'request-approval',
     args: {
@@ -127,776 +71,484 @@ function createResolvedInterrupt(overrides?: Partial<InterruptRow>): InterruptRo
       args: { to: 'person@example.com', body: 'hello' },
     },
     timeoutMs: 300_000,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + 300_000,
-    status: 'resolved',
+    createdAt: 1_000,
+    expiresAt: 301_000,
+    resolvedAt: 2_000,
     resolvedAction: 'approve',
     resolvedData: { reason: 'ok' },
-    sandboxSessionId: 'sess-1',
+    status: 'resolved',
     ...overrides,
-  } as InterruptRow;
+  };
 }
 
-function createCheckpoint(checkpointData?: Record<string, unknown>): CheckpointV2 {
+function createCheckpoint(
+  pendingRequests: Array<Record<string, unknown>> = [],
+  overrides: Record<string, unknown> = {},
+): CheckpointV2 {
   return {
-    id: 'ckpt-1',
-    sessionId: 'sess-1',
+    id: 'checkpoint-1',
+    sandboxSessionId: 'sandbox-old',
     agentId: 'agent-1',
     checkpointVersion: 2,
-    checkpointData: checkpointData ?? {},
+    checkpointData: {
+      runnerState: { pendingRequests },
+      ...overrides,
+    },
     harnessState: {},
     workspaceRef: null,
     suspendReason: 'hitl-wait',
-    createdAt: Date.now(),
+    createdAt: 1_000,
   };
 }
 
-function createCheckpointWithPendingRequests(
-  pendingRequests: Array<Record<string, unknown>>,
-): CheckpointV2 {
-  return createCheckpoint({
-    runnerState: {
-      pendingRequests,
-    },
-  });
-}
-
-function createPendingApproval(
-  id: string,
-  payload?: { tool?: unknown; args?: unknown },
+function createApproval(
+  overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
     type: 'approval',
-    id,
-    payload: payload ?? {
+    id: 'approval-1',
+    payload: {
       tool: 'send_email',
       args: { to: 'person@example.com', body: 'hello' },
     },
-  };
-}
-
-function createSessionRecord(overrides?: Partial<SessionRecord>): SessionRecord {
-  return {
-    sessionId: 'sess-1',
-    conversationId: 'conv-1',
-    agentId: 'agent-1',
-    containerName: 'ctxmill-sandbox-sess-1',
-    containerId: 'c-1',
-    status: 'ACTIVE',
-    harnessName: 'langgraph',
     ...overrides,
   };
 }
 
-async function* streamSessionEvents(...events: SessionEvent[]): AsyncGenerator<SessionEvent> {
-  for (const event of events) {
-    yield event;
+function createSessionRecord(): SessionRecord {
+  return {
+    sessionId: 'sandbox-restored',
+    conversationId: 'conversation-1',
+    agentId: 'agent-1',
+    containerName: 'sandbox-restored',
+    containerId: 'container-restored',
+    status: 'ACTIVE',
+    harnessName: 'langgraph',
+  };
+}
+
+function createHarness(options: {
+  terminal?: boolean;
+  interrupt?: InterruptRow;
+  session?: SandboxSessionRow;
+  checkpoint?: CheckpointV2 | null;
+  loseFenceOnMessage?: boolean;
+  cachedAgentDef?: AgentDefinition;
+  agentRow?: Record<string, unknown> | null;
+} = {}) {
+  let messageSeq = 0;
+  const messages = new Map<string, Record<string, unknown>>();
+  const db = {
+    getAgent: vi.fn().mockResolvedValue(options.agentRow ?? null),
+    getTurn: vi.fn().mockResolvedValue({
+      id: 'turn-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+      status: options.terminal ? 'completed' : 'running',
+      completedAt: options.terminal ? 3_000 : null,
+      mode: 'interactive',
+      taskDescription: 'original task',
+    }),
+    getSandboxSession: vi.fn().mockResolvedValue(
+      options.session ?? createDbSession(),
+    ),
+    getInterruptById: vi.fn().mockResolvedValue(
+      options.interrupt ?? createResolvedInterrupt(),
+    ),
+    getCheckpointV2: vi.fn().mockResolvedValue(
+      options.checkpoint === undefined
+        ? createCheckpoint([createApproval()])
+        : options.checkpoint,
+    ),
+    isTurnDeliveryFenceCurrent: vi.fn().mockResolvedValue(true),
+    addCanonicalMessage: vi.fn().mockImplementation(async (
+      input: Record<string, unknown>,
+    ) => {
+      if (options.loseFenceOnMessage) {
+        return undefined;
+      }
+      const id = String(input.id);
+      const existing = messages.get(id);
+      if (existing) {
+        return existing;
+      }
+      const row = {
+        ...input,
+        id,
+        messageSeq: messageSeq++,
+        messageRevision: 0,
+        publishedRevision: -1,
+        createdAt: 2_000,
+      };
+      messages.set(id, row);
+      return row;
+    }),
+  };
+  const eventBus = {
+    emit: vi.fn(),
+    emitAsync: vi.fn().mockResolvedValue(undefined),
+  };
+  const executeInterruptContinuation = vi.fn().mockResolvedValue(undefined);
+  const containerManager = {
+    extractWorkspaceDiff: vi.fn().mockResolvedValue(null),
+  } as unknown as ContainerManager;
+  const logger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+  const stateStore = new SessionStateStore();
+  if (options.cachedAgentDef) {
+    stateStore.setAgentDef('conversation-1', options.cachedAgentDef);
   }
-}
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
-describe('SandboxSessionManager interrupt resume characterization', () => {
-  let containerManager: ContainerManager;
-  let db: DatabaseRepository;
-  let lifecyclePolicy: ContainerLifecyclePolicy;
-  let logger: ReturnType<typeof createLogger>;
-  let eventBus: ReturnType<typeof createMockEventBus>;
-  let manager: SandboxSessionManager;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    containerManager = createMockContainerManager();
-    db = createMockDb();
-    lifecyclePolicy = createMockLifecyclePolicy();
-    logger = createLogger();
-    eventBus = createMockEventBus();
-    const stateStore = new SessionStateStore();
-    const statusCoordinator = new SessionStatusCoordinator({ db, logger, stateStore });
-
-    manager = new SandboxSessionManager({
-      containerManager,
-      db,
-      lifecyclePolicy,
-      stateStore,
-      statusCoordinator,
-      eventBus: eventBus as TypedEventBus,
-      workspaceDiffService: new WorkspaceDiffService({ containerManager }),
-      buildSandboxSecrets: async () => ({}),
+  const manager = new SandboxSessionManager({
+    containerManager,
+    db: db as unknown as DatabaseRepository,
+    lifecyclePolicy: {
+      cancelIdleTimeout: vi.fn().mockResolvedValue(undefined),
+      scheduleIdleTimeout: vi.fn(),
+    } as unknown as ContainerLifecyclePolicy,
+    stateStore,
+    statusCoordinator: new SessionStatusCoordinator({
+      db: db as unknown as DatabaseRepository,
       logger,
-      config: {
-        idleTimeoutMs: 60_000,
-        maxQueuedMessages: 10,
-      },
-    });
+      stateStore,
+    }),
+    eventBus: eventBus as unknown as TypedEventBus,
+    workspaceDiffService: new WorkspaceDiffService({ containerManager }),
+    buildSandboxSecrets: async () => ({}),
+    resolveTurnSecrets: async () => ({}),
+    executeInterruptContinuation,
+    logger,
+    config: {
+      idleTimeoutMs: 60_000,
+      maxQueuedMessages: 10,
+    },
   });
+  const ensureSession = vi.spyOn(manager, 'ensureSession')
+    .mockResolvedValue(createSessionRecord());
 
-  it('scenario 1: resumes with checkpoint-backed pending approvals', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    const agentDef = createAgentDef();
-    internals.stateStore.agentDefs.set('conv-1', agentDef);
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt(),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-
-    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents(),
-    );
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    expect(ensureSessionSpy).toHaveBeenCalledWith('conv-1', agentDef, 'agent-1');
-    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      id: 'hitl-assistant-c5e9836414e46aa056f5d09c',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      turnId: 'turn-1',
-      role: 'assistant',
-      content: '',
-      toolCalls: [expect.objectContaining({
-        id: 'approval-1',
-        name: 'request-approval',
-        args: JSON.stringify({
-          tool: 'send_email',
-          args: { to: 'person@example.com', body: 'hello' },
-        }),
-        status: 'complete',
-      })],
-    }));
-    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      id: 'hitl-tool-dec742707c485e12fd0900dd',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      turnId: 'turn-1',
-      role: 'tool',
-      content: 'APPROVED',
-      toolCallId: 'approval-1',
-    }));
-    expect(eventBus.emitAsync).toHaveBeenNthCalledWith(
-      1,
-      'message.committed',
-      expect.objectContaining({
-        messageId: 'hitl-assistant-c5e9836414e46aa056f5d09c',
-        messageSeq: 0,
-        role: 'assistant',
-      }),
-    );
-    expect(eventBus.emitAsync).toHaveBeenNthCalledWith(
-      2,
-      'message.committed',
-      expect.objectContaining({
-        messageId: 'hitl-tool-dec742707c485e12fd0900dd',
-        messageSeq: 1,
-        role: 'tool',
-      }),
-    );
-
-    expect(deliverTurnSpy).toHaveBeenCalledTimes(1);
-    const [sessionId, continuationMessages, continuationTurnId] = deliverTurnSpy.mock.calls[0] ?? [];
-    expect(sessionId).toBe('sess-1');
-    expect(continuationTurnId).toBe('hitl-resume-d718a80a945f45badc81fb3dc779eb89');
-    expect(continuationMessages).toEqual([
-      expect.objectContaining({
-        agentId: 'agent-1',
-        role: 'assistant',
-        content: '',
-        toolCalls: [expect.objectContaining({
-          id: 'approval-1',
-          name: 'request-approval',
-          arguments: {
-            tool: 'send_email',
-            args: { to: 'person@example.com', body: 'hello' },
-          },
-        })],
-      }),
-      expect.objectContaining({
-        agentId: 'agent-1',
-        role: 'tool',
-        content: 'APPROVED',
-        toolCallId: 'approval-1',
-      }),
-    ]);
-  });
-
-  it('scenario 2: fails the attempt when its exact resolved interrupt is unavailable', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt({ turnId: 'different-turn' }),
-    ]);
-
-    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents(),
-    );
-
-    await expect(
-      manager.resumeWithInterruptResolution(
-        'sess-1',
-        'turn-1',
-        'agent-1',
-        'interrupt-1',
-      ),
-    ).rejects.toThrow(/Resolved interrupt interrupt-1 does not match continuation ownership/);
-
-    expect(db.addCanonicalMessage).not.toHaveBeenCalled();
-    expect(deliverTurnSpy).not.toHaveBeenCalled();
-  });
-
-  it('selects the claimed interrupt exactly when a turn has multiple resolutions', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt({
-        id: 'interrupt-wrong',
-        resolvedAction: 'reject',
-        toolCallId: 'wrong-tool-call',
-      }),
-      createResolvedInterrupt({
-        id: 'interrupt-1',
-        resolvedAction: 'approve',
-        toolCallId: 'approval-1',
-      }),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-
-    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents(),
-    );
-
-    await manager.resumeWithInterruptResolution(
-      'sess-1',
+  const prepareAndExecute = async (
+    attemptId = 'attempt-1',
+    signal?: AbortSignal,
+  ) => {
+    const prepared = await manager.prepareInterruptContinuation(
+      'sandbox-old',
       'turn-1',
       'agent-1',
       'interrupt-1',
     );
+    if (prepared.kind === 'ready') {
+      await manager.executeInterruptContinuation(
+        prepared,
+        attemptId,
+        FENCE,
+        signal,
+      );
+    }
+    return prepared;
+  };
 
-    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      content: 'APPROVED',
-      toolCallId: 'approval-1',
-    }));
-    expect(deliverTurnSpy).toHaveBeenCalledWith(
-      'sess-1',
-      expect.any(Array),
-      'hitl-resume-d718a80a945f45badc81fb3dc779eb89',
+  return {
+    db,
+    eventBus,
+    executeInterruptContinuation,
+    ensureSession,
+    manager,
+    prepareAndExecute,
+  };
+}
+
+describe('SandboxSessionManager interrupt continuation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('restores first, then delivers checkpoint-backed approval on the original turn and fence', async () => {
+    const agentDef = createAgentDef();
+    const {
+      db,
+      ensureSession,
+      executeInterruptContinuation,
+      prepareAndExecute,
+    } = createHarness({ cachedAgentDef: agentDef });
+
+    const prepared = await prepareAndExecute();
+
+    expect(prepared).toMatchObject({
+      kind: 'ready',
+      sandboxSessionId: 'sandbox-restored',
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+    });
+    expect(ensureSession).toHaveBeenCalledWith(
+      'conversation-1',
+      agentDef,
+      'agent-1',
+      undefined,
+    );
+    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        turnId: 'turn-1',
+        role: 'assistant',
+      }),
+      FENCE,
+    );
+    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        turnId: 'turn-1',
+        role: 'tool',
+        content: 'APPROVED',
+      }),
+      FENCE,
+    );
+    expect(executeInterruptContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnId: 'turn-1',
+        sandboxSessionId: 'sandbox-restored',
+        continuationAttemptId: 'attempt-1',
+        deliveryContext: { fence: FENCE },
+      }),
+    );
+  });
+
+  it('returns terminal without restoring or executing', async () => {
+    const {
+      ensureSession,
+      executeInterruptContinuation,
+      prepareAndExecute,
+    } = createHarness({ terminal: true, cachedAgentDef: createAgentDef() });
+
+    await expect(prepareAndExecute()).resolves.toEqual({
+      kind: 'terminal',
+      turnId: 'turn-1',
+    });
+    expect(ensureSession).not.toHaveBeenCalled();
+    expect(executeInterruptContinuation).not.toHaveBeenCalled();
+  });
+
+  it('forwards exact resume recovery authority through the manager adapter', async () => {
+    const agentDef = createAgentDef();
+    const { ensureSession, manager } = createHarness({
+      cachedAgentDef: agentDef,
+    });
+
+    await manager.prepareInterruptContinuation(
+      'sandbox-old',
+      'turn-1',
+      'agent-1',
+      'interrupt-1',
+      {
+        attemptId: 'attempt-1',
+        fence: FENCE,
+      },
+    );
+
+    expect(ensureSession).toHaveBeenCalledWith(
+      'conversation-1',
+      agentDef,
+      'agent-1',
+      {
+        recoveryAuthority: {
+          attemptId: 'attempt-1',
+          turnId: 'turn-1',
+          fence: FENCE,
+        },
+      },
+    );
+  });
+
+  it('requires the exact resolved interrupt ownership tuple', async () => {
+    const { manager } = createHarness({
+      cachedAgentDef: createAgentDef(),
+      interrupt: createResolvedInterrupt({ turnId: 'other-turn' }),
+    });
+
+    await expect(manager.prepareInterruptContinuation(
+      'sandbox-old',
+      'turn-1',
+      'agent-1',
+      'interrupt-1',
+    )).rejects.toThrow(/does not match continuation ownership/);
+  });
+
+  it('uses immutable interrupt provenance after the execution session is replaced', async () => {
+    const { db, manager } = createHarness({
+      cachedAgentDef: createAgentDef(),
+      session: createDbSession({
+        id: 'sandbox-restored',
+        status: 'ACTIVE',
+        containerId: 'container-restored',
+        containerName: 'sandbox-restored',
+      }),
+      interrupt: createResolvedInterrupt({
+        sandboxSessionId: 'sandbox-old',
+      }),
+    });
+
+    await expect(manager.prepareInterruptContinuation(
+      'sandbox-restored',
+      'turn-1',
+      'agent-1',
+      'interrupt-1',
+    )).resolves.toMatchObject({
+      kind: 'ready',
+      sandboxSessionId: 'sandbox-restored',
+      interruptId: 'interrupt-1',
+    });
+    expect(db.getInterruptById).toHaveBeenCalledWith('interrupt-1');
+  });
+
+  it('uses deterministic canonical approval rows across retries', async () => {
+    const { db, prepareAndExecute } = createHarness({
+      cachedAgentDef: createAgentDef(),
+    });
+
+    await prepareAndExecute('attempt-1');
+    await prepareAndExecute('attempt-1');
+
+    const messageIds = db.addCanonicalMessage.mock.calls.map(
+      ([input]) => input.id,
+    );
+    expect(messageIds.slice(0, 2)).toEqual(messageIds.slice(2));
+  });
+
+  it('falls back to the resolved interrupt when checkpoint requests are absent', async () => {
+    const { executeInterruptContinuation, prepareAndExecute } = createHarness({
+      cachedAgentDef: createAgentDef(),
+      checkpoint: createCheckpoint([]),
+    });
+
+    await prepareAndExecute();
+
+    expect(executeInterruptContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({
+            role: 'assistant',
+            toolCalls: [
+              expect.objectContaining({
+                id: 'approval-1',
+                arguments: {
+                  tool: 'send_email',
+                  args: { to: 'person@example.com', body: 'hello' },
+                },
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            role: 'tool',
+            toolCallId: 'approval-1',
+            content: 'APPROVED',
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('persists REJECTED for a rejected resolution', async () => {
+    const { db, prepareAndExecute } = createHarness({
+      cachedAgentDef: createAgentDef(),
+      interrupt: createResolvedInterrupt({ resolvedAction: 'reject' }),
+    });
+
+    await prepareAndExecute();
+
+    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ role: 'tool', content: 'REJECTED' }),
+      FENCE,
+    );
+  });
+
+  it('rejects malformed checkpoint approval payloads before restoring', async () => {
+    const { ensureSession, manager } = createHarness({
+      cachedAgentDef: createAgentDef(),
+      checkpoint: createCheckpoint([
+        createApproval({ payload: '{not-json' }),
+      ]),
+    });
+
+    await expect(manager.prepareInterruptContinuation(
+      'sandbox-old',
+      'turn-1',
+      'agent-1',
+      'interrupt-1',
+    )).rejects.toThrow(/Malformed HITL checkpoint pending request payload JSON/);
+    expect(ensureSession).not.toHaveBeenCalled();
+  });
+
+  it('resolves the canonical agent definition from the database on cache miss', async () => {
+    const agentRow = {
+      id: 'agent-1',
+      name: 'database-agent',
+      harness: 'langgraph',
+      harnessConfig: '{}',
+      tools: ['search-docs'],
+      systemPrompt: 'database prompt',
+      description: null,
+      metadata: {},
+      manifest: null,
+      workspaceDir: null,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    };
+    const { ensureSession, prepareAndExecute } = createHarness({ agentRow });
+
+    await prepareAndExecute();
+
+    expect(ensureSession).toHaveBeenCalledWith(
+      'conversation-1',
+      expect.objectContaining({
+        name: 'database-agent',
+        systemPrompt: 'database prompt',
+      }),
+      'agent-1',
       undefined,
     );
   });
 
-  it('uses the same interrupt-derived continuation turn and message identities on every retry', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt(),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-
-    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents(),
-    );
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    expect(deliverTurnSpy).toHaveBeenCalledTimes(2);
-    expect(deliverTurnSpy.mock.calls.map((call) => call[2])).toEqual([
-      'hitl-resume-d718a80a945f45badc81fb3dc779eb89',
-      'hitl-resume-d718a80a945f45badc81fb3dc779eb89',
-    ]);
-    expect(deliverTurnSpy.mock.calls.map((call) => call[1].map((message) => message.id))).toEqual([
-      [
-        'hitl-assistant-c5e9836414e46aa056f5d09c',
-        'hitl-tool-dec742707c485e12fd0900dd',
-      ],
-      [
-        'hitl-assistant-c5e9836414e46aa056f5d09c',
-        'hitl-tool-dec742707c485e12fd0900dd',
-      ],
-    ]);
-  });
-
-  it('returns without restoring or redelivering when the original turn is already terminal', async () => {
-    (db.getTurn as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: 'completed',
-      completedAt: Date.now(),
+  it('preserves runtime-enforced fields from a checkpoint definition fallback', async () => {
+    const checkpointAgentDef = createAgentDef({
+      resourceLimits: { memoryMb: 512 },
+      nativeToolPolicy: { policy: 'deny', names: ['bash'] },
+      workspaceContent: { files: { 'README.md': 'seed' } },
     });
-    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession');
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn');
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    expect(db.getSandboxSession).not.toHaveBeenCalled();
-    expect(db.getResolvedInterruptsForSandboxSession).not.toHaveBeenCalled();
-    expect(db.addCanonicalMessage).not.toHaveBeenCalled();
-    expect(ensureSessionSpy).not.toHaveBeenCalled();
-    expect(deliverTurnSpy).not.toHaveBeenCalled();
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining('turn turn-1 is already terminal'),
-    );
-  });
-
-  it('does not finalize the original turn when the continuation delivery reports failure', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt(),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents({
-        type: 'turn_failed',
-        turnId: 'hitl-resume-d718a80a945f45badc81fb3dc779eb89',
-        errorMessage: 'duplicate delivery is still active',
+    const { ensureSession, prepareAndExecute } = createHarness({
+      checkpoint: createCheckpoint([], {
+        agentDefinition: checkpointAgentDef,
       }),
-    );
-
-    await expect(
-      manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1'),
-    ).rejects.toThrow('duplicate delivery is still active');
-
-    expect(db.finalizeTurnIfOpen).not.toHaveBeenCalled();
-  });
-
-  it('scenario 3: falls back when checkpoint requests do not yield approval continuations', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt({
-        toolCallId: 'interrupt-tool-call',
-        args: { tool: 'delete_file', args: { path: '/tmp/demo.txt' } },
-      }),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([
-        {
-          type: 'needs-review',
-          id: 'different-tool-call',
-          payload: {
-            tool: 'delete_file',
-            args: { path: '/tmp/ignored.txt' },
-          },
-        },
-      ]),
-    );
-
-    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents(),
-    );
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      role: 'assistant',
-      toolCalls: [expect.objectContaining({
-        id: 'interrupt-tool-call',
-        args: JSON.stringify({
-          tool: 'delete_file',
-          args: { path: '/tmp/demo.txt' },
-        }),
-      })],
-    }));
-    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      role: 'tool',
-      content: 'APPROVED',
-      toolCallId: 'interrupt-tool-call',
-    }));
-
-    expect(deliverTurnSpy).toHaveBeenCalledTimes(1);
-    const continuationMessages = deliverTurnSpy.mock.calls[0]?.[1];
-    expect(continuationMessages).toEqual([
-      expect.objectContaining({
-        role: 'assistant',
-        toolCalls: [expect.objectContaining({
-          id: 'interrupt-tool-call',
-          arguments: {
-            tool: 'delete_file',
-            args: { path: '/tmp/demo.txt' },
-          },
-        })],
-      }),
-      expect.objectContaining({
-        role: 'tool',
-        content: 'APPROVED',
-        toolCallId: 'interrupt-tool-call',
-      }),
-    ]);
-  });
-
-  it('scenario 4: falls back when checkpoint is stale and has no pending approval requests', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt({
-        toolCallId: 'stale-tool-call',
-        args: { tool: 'send_email', args: { to: 'fallback@example.com' } },
-      }),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpoint({ runnerState: { status: 'HITL_WAIT' } }),
-    );
-
-    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents(),
-    );
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      role: 'assistant',
-      toolCalls: [expect.objectContaining({ id: 'stale-tool-call' })],
-    }));
-    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      role: 'tool',
-      content: 'APPROVED',
-      toolCallId: 'stale-tool-call',
-    }));
-
-    const continuationMessages = deliverTurnSpy.mock.calls[0]?.[1];
-    expect(continuationMessages).toEqual([
-      expect.objectContaining({
-        role: 'assistant',
-        toolCalls: [expect.objectContaining({ id: 'stale-tool-call' })],
-      }),
-      expect.objectContaining({
-        role: 'tool',
-        content: 'APPROVED',
-        toolCallId: 'stale-tool-call',
-      }),
-    ]);
-  });
-
-  it('fails visibly when a checkpoint pending request payload is malformed', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt(),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([
-        {
-          type: 'approval',
-          id: 'approval-1',
-          payload: '{"tool":',
-        },
-      ]),
-    );
-
-    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents(),
-    );
-
-    await expect(
-      manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1'),
-    ).rejects.toThrow(/Malformed HITL checkpoint pending request payload JSON/);
-
-    expect(ensureSessionSpy).not.toHaveBeenCalled();
-    expect(db.addCanonicalMessage).not.toHaveBeenCalled();
-    expect(deliverTurnSpy).not.toHaveBeenCalled();
-  });
-
-  it('fails visibly instead of using a degraded stub when an agent definition cannot be resolved', async () => {
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getAgent as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt(),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-
-    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents(),
-    );
-
-    await expect(
-      manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1'),
-    ).rejects.toThrow(/missing agent definition/);
-
-    expect(ensureSessionSpy).not.toHaveBeenCalled();
-    expect(db.addCanonicalMessage).not.toHaveBeenCalled();
-    expect(deliverTurnSpy).not.toHaveBeenCalled();
-  });
-
-  it('scenario 5: resolves agent definition from the database on cache miss', async () => {
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createDbSession({ harnessName: 'claude' }),
-    );
-    (db.getAgent as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: 'agent-1',
-      name: 'db-agent',
-      harness: 'claude',
-      harnessConfig: JSON.stringify({ provider: 'anthropic', model: 'claude-sonnet-4-6' }),
-      tools: ['search-docs', 'send-email'],
-      systemPrompt: 'db-backed system prompt',
-      description: 'db description',
-      metadata: { team: 'ops' },
-      workspaceDir: '/tmp/agents/agent-1/workspace',
-      manifest: null,
-    });
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt({ resolvedAction: 'approve' }),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-
-    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    vi.spyOn(manager, 'deliverTurn').mockImplementation(() => streamSessionEvents());
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    const resolvedAgentDef = ensureSessionSpy.mock.calls[0]?.[1];
-    expect(db.getAgent).toHaveBeenCalledWith('agent-1');
-    expect(resolvedAgentDef).toMatchObject({
-      name: 'db-agent',
-      harness: 'claude',
-      harnessConfig: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
-      tools: ['search-docs', 'send-email'],
-      systemPrompt: 'db-backed system prompt',
-      description: 'db description',
-      metadata: { team: 'ops' },
-      workspaceDir: '/tmp/agents/agent-1/workspace',
-      projectDir: '/tmp/agents/agent-1',
     });
 
-    expect(resolvedAgentDef?.tools).toEqual(['search-docs', 'send-email']);
-    expect(resolvedAgentDef?.systemPrompt).toBe('db-backed system prompt');
+    await prepareAndExecute();
 
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    expect(internals.stateStore.agentDefs.get('conv-1')).toMatchObject({
-      name: 'db-agent',
-      harness: 'claude',
-      tools: ['search-docs', 'send-email'],
-      systemPrompt: 'db-backed system prompt',
-    });
-  });
-
-  it('scenario 6: writes REJECTED tool responses for rejection resolutions', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt({ resolvedAction: 'reject' }),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-
-    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    const deliverTurnSpy = vi.spyOn(manager, 'deliverTurn').mockImplementation(() =>
-      streamSessionEvents(),
-    );
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    expect(db.addCanonicalMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      role: 'tool',
-      content: 'REJECTED',
-      toolCallId: 'approval-1',
-    }));
-    expect(deliverTurnSpy.mock.calls[0]?.[1]).toEqual([
+    expect(ensureSession).toHaveBeenCalledWith(
+      'conversation-1',
       expect.objectContaining({
-        role: 'assistant',
-        toolCalls: [expect.objectContaining({ id: 'approval-1' })],
+        resourceLimits: { memoryMb: 512 },
+        nativeToolPolicy: { policy: 'deny', names: ['bash'] },
+        workspaceContent: { files: { 'README.md': 'seed' } },
       }),
-      expect.objectContaining({
-        role: 'tool',
-        content: 'REJECTED',
-        toolCallId: 'approval-1',
-      }),
-    ]);
-  });
-
-  it('resume parity: DB-resolved definition deep-equals the canonical shaper output (ctx-8l4)', async () => {
-    const storedAgent = {
-      id: 'agent-1',
-      name: 'test-agent',
-      harness: 'langgraph',
-      harnessConfig: '{"model":"gpt-5.4-mini"}',
-      systemPrompt: 'follow the system prompt',
-      tools: ['search-docs'],
-      description: 'desc',
-      workspaceDir: '/data/agents/agent-1',
-      status: 'created',
-      manifest: {
-        resourceLimits: { cpus: 2, memoryMb: 1024 },
-        spec: {
-          nativeTools: { allowlist: ['bash'] },
-          workspace: { content: { files: [{ src: 'seed.md', dest: 'seed.md' }] } },
-        },
-      },
-      version: 1,
-      metadata: null,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    (db.getAgent as ReturnType<typeof vi.fn>).mockResolvedValue(storedAgent);
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt(),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-
-    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    vi.spyOn(manager, 'deliverTurn').mockImplementation(() => streamSessionEvents());
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    // Continuation ≡ fresh start: the resume path must produce exactly what the
-    // startup path would build for the same stored row.
-    expect(ensureSessionSpy.mock.calls[0]?.[1]).toEqual(
-      buildAgentDefinition(storedAgent as Parameters<typeof buildAgentDefinition>[0]),
-    );
-  });
-
-  it('checkpoint fallback preserves resourceLimits, nativeTools, and workspaceContent', async () => {
-    (db.getAgent as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt(),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint({
-      agentDefinition: {
-        name: 'test-agent',
-        harness: 'langgraph',
-        harnessConfig: { model: 'gpt-5.4-mini' },
-        tools: ['search-docs'],
-        systemPrompt: 'follow the system prompt',
-        resourceLimits: { cpus: 1.5, memoryMb: 512 },
-        nativeTools: { blocklist: ['bash'] },
-        workspaceContent: { files: [{ src: 'a.txt', dest: 'b.txt' }] },
-      },
-      runnerState: { pendingRequests: [createPendingApproval('approval-1')] },
-    }));
-
-    const ensureSessionSpy = vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    vi.spyOn(manager, 'deliverTurn').mockImplementation(() => streamSessionEvents());
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    expect(ensureSessionSpy.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
-      resourceLimits: { cpus: 1.5, memoryMb: 512 },
-      nativeTools: { blocklist: ['bash'] },
-      workspaceContent: { files: [{ src: 'a.txt', dest: 'b.txt' }] },
-    }));
-  });
-
-  it('terminalizes the original turn after a successful durable continuation (ctx-8nnu)', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt(),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-    const finalizeTurnIfOpen = vi.fn().mockResolvedValue(true);
-    (db as unknown as Record<string, unknown>).finalizeTurnIfOpen = finalizeTurnIfOpen;
-
-    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-    vi.spyOn(manager, 'deliverTurn').mockImplementation(() => streamSessionEvents());
-
-    await manager.resumeWithInterruptResolution('sess-1', 'turn-1', 'agent-1', 'interrupt-1');
-
-    expect(finalizeTurnIfOpen).toHaveBeenCalledWith('turn-1', expect.objectContaining({
-      completedAt: expect.any(Number),
-      error: null,
-    }));
-  });
-
-  it('propagates lease cancellation into continuation delivery without finalizing the original turn', async () => {
-    const internals = manager as unknown as SandboxSessionManagerInternals;
-    internals.stateStore.agentDefs.set('conv-1', createAgentDef());
-
-    (db.getSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession());
-    (db.getResolvedInterruptsForSandboxSession as ReturnType<typeof vi.fn>).mockResolvedValue([
-      createResolvedInterrupt(),
-    ]);
-    (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(
-      createCheckpointWithPendingRequests([createPendingApproval('approval-1')]),
-    );
-    vi.spyOn(manager, 'ensureSession').mockResolvedValue(createSessionRecord());
-
-    const deliveryStarted = createDeferred();
-    let deliveredSignal: AbortSignal | undefined;
-    vi.spyOn(manager, 'deliverTurn').mockImplementation(async function* (
-      _sessionId: string,
-      _messages: Message[],
-      _turnId: string,
-      signal?: AbortSignal,
-    ) {
-      deliveredSignal = signal;
-      deliveryStarted.resolve();
-      if (!signal) {
-        return;
-      }
-      await new Promise<void>((resolve) => {
-        if (signal.aborted) {
-          resolve();
-          return;
-        }
-        signal.addEventListener('abort', () => resolve(), { once: true });
-      });
-      yield* streamSessionEvents();
-    });
-
-    const controller = new AbortController();
-    const resume = manager.resumeWithInterruptResolution(
-      'sess-1',
-      'turn-1',
       'agent-1',
-      'interrupt-1',
-      controller.signal,
+      undefined,
     );
-    await deliveryStarted.promise;
-    controller.abort(new Error('interrupt resume lease lost'));
+  });
 
-    await expect(resume).rejects.toThrow('interrupt resume lease lost');
-    expect(deliveredSignal).toBe(controller.signal);
-    expect(db.finalizeTurnIfOpen).not.toHaveBeenCalled();
+  it('rejects a stale owner before publication or execution', async () => {
+    const {
+      eventBus,
+      executeInterruptContinuation,
+      prepareAndExecute,
+    } = createHarness({
+      cachedAgentDef: createAgentDef(),
+      loseFenceOnMessage: true,
+    });
+
+    await expect(prepareAndExecute()).rejects.toThrow(/lost delivery ownership/);
+    expect(eventBus.emitAsync).not.toHaveBeenCalled();
+    expect(executeInterruptContinuation).not.toHaveBeenCalled();
   });
 });

@@ -59,7 +59,7 @@ The LangGraph harness uses the `deepagents` SDK, which is a pure TypeScript wrap
     -   **Tool Schema Invalid**: LangChain requires valid Zod schemas for tools. If a tool definition has an invalid `input` schema, the agent will fail to initialize.
     -   **Workspace asset failure**: If copied workspace files, symlinks, or SDK-native skill directories are invalid, harness setup can fail before the first model call.
 -   **Debug Output**: The harness logs `[langgraph] deliverTurn error:` to `stderr` on failure.
--   **Middleware Errors**: If `nativeTools` blocklisting is used, check for `ctxmill-tool-blocklist` logs if tools are unexpectedly denied.
+-   **Middleware Errors**: If `nativeToolPolicy` restricts native tools, inspect `ctxmill-native-tool-policy` denials and verify the policy names match LangGraph's native tool names.
 
 ### Claude Agents (@anthropic-ai/claude-agent-sdk)
 The Claude harness is unique because the SDK spawns a Node.js subprocess (`node cli.js`) to execute the agent.

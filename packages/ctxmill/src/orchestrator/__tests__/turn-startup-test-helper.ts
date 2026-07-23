@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 
 import { TurnStartupService } from '../turn-startup-service.js';
+import { TurnSecretEnvelopeCodec } from '../turn-secret-envelope.js';
 
 type ExecutionDeps = Parameters<TurnStartupService['configureExecution']>[0];
 
@@ -10,7 +11,11 @@ type ExecutionDeps = Parameters<TurnStartupService['configureExecution']>[0];
  * so route tests exercise the same startup contract the server does.
  */
 export function createTestTurnStartupService(overrides: Partial<ExecutionDeps> = {}): TurnStartupService {
-  const service = new TurnStartupService({ logger: console });
+  const codec = new TurnSecretEnvelopeCodec(Buffer.alloc(32, 5));
+  const service = new TurnStartupService({
+    logger: console,
+    turnSecretEnvelopeCodec: codec,
+  });
 
   const db = overrides.db ?? ({
     addMessage: vi.fn(async (input: { agentId: string; conversationId: string }) => ({
@@ -21,12 +26,17 @@ export function createTestTurnStartupService(overrides: Partial<ExecutionDeps> =
       id: id ?? `conv-${Math.random().toString(36).slice(2, 10)}`,
       agentId,
     })),
-    createTurn: vi.fn(async (input: { id?: string }) => ({
+    createTurnWithSecretEnvelope: vi.fn(async (input: { id?: string }) => ({
       id: input.id ?? `turn-${Math.random().toString(36).slice(2, 10)}`,
     })),
     deleteMessage: vi.fn(async () => undefined),
     getConversation: vi.fn(async () => undefined),
     getMessages: vi.fn(async () => []),
+    getTurnSecretEnvelope: vi.fn(async (turnId: string) => ({
+      turnId,
+      ...codec.seal(turnId, {}),
+      createdAt: Date.now(),
+    })),
     getTurn: vi.fn(async () => undefined),
     updateTurn: vi.fn(async () => undefined),
     finalizeTurnIfOpen: vi.fn(async () => true),

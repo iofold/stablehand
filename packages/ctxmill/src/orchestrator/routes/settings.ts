@@ -1,4 +1,9 @@
 import type { FastifyInstance } from 'fastify';
+import {
+  SYSTEM_SETTING_BOUNDS,
+  validateSystemSettingValue,
+  type SystemSettingBounds,
+} from '@ctxmill/shared';
 import type { SettingsKey, SystemSettings, SystemSettingsService } from '../../settings/service.js';
 import { SETTINGS_KEYS } from '../../settings/service.js';
 
@@ -7,32 +12,9 @@ export interface SettingsRouteOptions {
   onSettingsUpdated?: (settings: SystemSettings) => void | Promise<void>;
 }
 
-const MB = 1024 * 1024;
-
-interface FieldValidator {
-  min: number;
-  max: number;
-  isFloat?: boolean;
-}
-
 type SettingsField = keyof SystemSettings;
 
-const FIELD_VALIDATORS = {
-  maxWorkspaceTarBytes:        { min: 1 * MB,    max: 1024 * MB },
-  maxTarUploadBytes:           { min: 1 * MB,    max: 1024 * MB },
-  idleTimeoutMs:               { min: 10_000,    max: 3_600_000 },
-  turnTimeoutMs:               { min: 30_000,    max: 7_200_000 },
-  reconciliationIntervalMs:    { min: 10_000,    max: 3_600_000 },
-  maxGlobalContainers:         { min: 1,         max: 100 },
-  queueTimeoutMs:              { min: 5_000,     max: 1_800_000 },
-  maxConcurrentSessionsPerAgent:   { min: 1,         max: 20 },
-  maxTriggerDepth:             { min: 1,         max: 20 },
-  defaultCpus:                 { min: 0.1,       max: 16.0, isFloat: true },
-  defaultMemoryMb:             { min: 128,       max: 32_768 },
-  defaultPidsLimit:            { min: 32,        max: 2_048 },
-  defaultTimeoutSec:           { min: 60,        max: 43_200 },
-} satisfies Record<SettingsField, FieldValidator>;
-
+const FIELD_VALIDATORS = SYSTEM_SETTING_BOUNDS satisfies Record<SettingsField, SystemSettingBounds>;
 const SETTINGS_FIELDS = Object.keys(FIELD_VALIDATORS) as SettingsField[];
 
 function serializeSettings(settings: SystemSettings): SystemSettings {
@@ -62,27 +44,15 @@ export async function settingsRoutes(
     const updates: Array<{ key: SettingsKey; value: number }> = [];
 
     for (const fieldKey of SETTINGS_FIELDS) {
-      const validator: FieldValidator = FIELD_VALIDATORS[fieldKey];
       const raw = body[fieldKey];
       if (raw === undefined) continue;
 
-      if (validator.isFloat) {
-        if (typeof raw !== 'number' || !Number.isFinite(raw)) {
-          return reply.status(400).send({ error: `${fieldKey} must be a finite number` });
-        }
-      } else {
-        if (typeof raw !== 'number' || !Number.isInteger(raw)) {
-          return reply.status(400).send({ error: `${fieldKey} must be an integer` });
-        }
+      const validationError = validateSystemSettingValue(fieldKey, raw);
+      if (validationError) {
+        return reply.status(400).send({ error: validationError });
       }
 
-      if (raw < validator.min || raw > validator.max) {
-        return reply.status(400).send({
-          error: `${fieldKey} must be between ${validator.min} and ${validator.max}`,
-        });
-      }
-
-      updates.push({ key: SETTINGS_KEYS[fieldKey], value: raw });
+      updates.push({ key: SETTINGS_KEYS[fieldKey], value: raw as number });
     }
 
     if (updates.length === 0) {

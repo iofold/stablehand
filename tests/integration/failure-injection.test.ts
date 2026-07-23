@@ -207,11 +207,14 @@ describe('Failure injection — rollback and cleanup', () => {
 
     // Create conversation and run, then complete the run so FK order doesn't block
     const conv = await container.db.createConversation(cascadeAgentId);
-    await container.db.createTurn({
+    const cascadeTurn = await container.db.createTurn({
       agentId: cascadeAgentId,
       conversationId: conv.id,
       mode: 'background',
       taskDescription: 'cascade test',
+    });
+    await container.db.finalizeTurnIfOpen(cascadeTurn.id, {
+      status: 'completed',
       completedAt: Date.now(),
       error: null,
     });

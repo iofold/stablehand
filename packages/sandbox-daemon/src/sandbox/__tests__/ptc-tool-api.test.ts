@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { create } from '@bufbuild/protobuf';
+import { TurnDeliveryCapabilitySchema } from '@ctxmill/proto/sandbox/v1';
 import { z } from 'zod';
 
 import type { ToolContext, ToolDefinition } from '../../tool/types.js';
 import { getSessionTools, getToolApiToken, setSessionTools, startToolApi } from '../daemon.js';
+import {
+  getTurnDeliveryContext,
+  registerPtcTurnDeliveryContext,
+  revokePtcTurnDeliveryContext,
+  type TurnDeliveryContext,
+} from '../turn-delivery-context.js';
 
 interface MockBunServeOptions {
   hostname?: string;
@@ -36,9 +44,42 @@ function authHeaders(): Record<string, string> {
   };
 }
 
-function jsonHeaders(): Record<string, string> {
+let activePtcContext: TurnDeliveryContext;
+let activePtcToken: string;
+
+function makeDeliveryContext(
+  turnId = 'turn-1',
+  ownerId = 'owner-1',
+  fenceToken = 1,
+): TurnDeliveryContext {
+  const leaseExpiresAtMs = Date.now() + 60_000;
   return {
-    ...authHeaders(),
+    identity: {
+      turnId,
+      sandboxSessionId: 'sandbox-session-1',
+      agentId: 'agent-1',
+      ownerId,
+      fenceToken,
+      restoreFenceToken: 0,
+      containerId: 'container-1',
+    },
+    capability: create(TurnDeliveryCapabilitySchema, {
+      ownerId,
+      fenceToken: BigInt(fenceToken),
+      leaseExpiresAtMs: BigInt(leaseExpiresAtMs),
+      restoreFenceToken: 0n,
+      containerId: 'container-1',
+      agentId: 'agent-1',
+      signature: 'ctxmill-open-turn-delivery-capability-v1',
+    }),
+    leaseExpiresAtMs,
+    abortController: new AbortController(),
+  };
+}
+
+function jsonHeaders(token = activePtcToken): Record<string, string> {
+  return {
+    authorization: `Bearer ${token}`,
     'content-type': 'application/json',
   };
 }
@@ -83,9 +124,12 @@ beforeEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   setSessionTools([]);
+  activePtcContext = makeDeliveryContext();
+  activePtcToken = registerPtcTurnDeliveryContext(activePtcContext);
 });
 
 afterEach(() => {
+  revokePtcTurnDeliveryContext(activePtcContext);
   vi.unstubAllGlobals();
   setSessionTools([]);
 });
@@ -211,6 +255,77 @@ describe('startToolApi', () => {
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+  });
+
+  it('rejects the session-static bearer token for POST requests', async () => {
+    const mockBun = installMockBun();
+    setSessionTools([makeTool('search', async () => JSON.stringify({ ok: true }))]);
+    startToolApi(8080, getSessionTools);
+
+    const response = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ query: 'must-not-run' }),
+    }));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+  });
+
+  it('keeps an already-admitted A request bound to A when B becomes current', async () => {
+    const mockBun = installMockBun();
+    let releaseHandler!: () => void;
+    const handlerMayFinish = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    let handlerStarted!: () => void;
+    const handlerDidStart = new Promise<void>((resolve) => {
+      handlerStarted = resolve;
+    });
+    const observedTurnIds: string[] = [];
+    setSessionTools([
+      makeTool('search', async () => {
+        handlerStarted();
+        await handlerMayFinish;
+        observedTurnIds.push(getTurnDeliveryContext()?.identity.turnId ?? 'missing');
+        return JSON.stringify({ ok: true });
+      }),
+    ]);
+    startToolApi(8080, getSessionTools);
+
+    const requestA = mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
+      method: 'POST',
+      headers: jsonHeaders(activePtcToken),
+      body: JSON.stringify({ query: 'from-a' }),
+    }));
+    await handlerDidStart;
+
+    const contextB = makeDeliveryContext('turn-2', 'owner-2', 2);
+    const tokenB = registerPtcTurnDeliveryContext(contextB);
+    releaseHandler();
+    const responseA = await requestA;
+
+    expect(responseA.status).toBe(200);
+    expect(observedTurnIds).toEqual(['turn-1']);
+
+    revokePtcTurnDeliveryContext(activePtcContext);
+    const staleA = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
+      method: 'POST',
+      headers: jsonHeaders(activePtcToken),
+      body: JSON.stringify({ query: 'late-a' }),
+    }));
+    expect(staleA.status).toBe(401);
+
+    const liveB = await mockBun.dispatch(new Request('http://localhost:8080/tools/search', {
+      method: 'POST',
+      headers: jsonHeaders(tokenB),
+      body: JSON.stringify({ query: 'from-b' }),
+    }));
+    expect(liveB.status).toBe(200);
+    revokePtcTurnDeliveryContext(contextB);
   });
 
   it('validates tool input before calling the handler', async () => {

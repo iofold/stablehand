@@ -35,6 +35,7 @@ export interface CtxmillChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   parts: CtxmillChatPart[];
+  toolCallId?: string;
   createdAt: string;
 }
 
@@ -59,8 +60,9 @@ export interface CtxmillChatState {
   reconciledUserMessageIds: string[];
 }
 
-export type CtxmillPersistedMessage = CtxmillMessage & {
+export type CtxmillPersistedMessage = Omit<CtxmillMessage, 'createdAt'> & {
   messageRevision: number;
+  createdAt?: number | string;
 };
 
 export type CtxmillChatAction =
@@ -75,6 +77,12 @@ export type CtxmillChatAction =
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function canonicalCreatedAt(value: number | string | undefined): string {
+  if (value === undefined) return nowIso();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? nowIso() : parsed.toISOString();
 }
 
 export function createInitialChatState(threadId?: string): CtxmillChatState {
@@ -100,6 +108,7 @@ export function toCtxmillMessages(messages: CtxmillChatMessage[]): CtxmillMessag
       role: message.role,
       content: message.content,
       parts: message.parts.flatMap((part) => part.type === 'a2ui' ? [] : [part]),
+      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
     }));
 }
 
@@ -109,7 +118,11 @@ function normalizeToolStatus(
   return status === 'pending' ? 'running' : status;
 }
 
-function normalizeMessage(message: CtxmillMessage): CtxmillChatMessage {
+function normalizeMessage(
+  message: Omit<CtxmillMessage, 'createdAt'> & {
+    createdAt?: number | string;
+  },
+): CtxmillChatMessage {
   const content = message.content ?? '';
   const parts: CtxmillChatPart[] = [];
   const partToolCallIds = new Set<string>();
@@ -153,7 +166,8 @@ function normalizeMessage(message: CtxmillMessage): CtxmillChatMessage {
     role: message.role === 'developer' ? 'system' : message.role,
     content,
     parts,
-    createdAt: nowIso(),
+    ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+    createdAt: canonicalCreatedAt(message.createdAt),
   };
 }
 
@@ -211,6 +225,7 @@ function canonicalMessageFromEvent(
     id: event.messageId,
     role: event.role,
     content: 'content' in event && typeof event.content === 'string' ? event.content : '',
+    createdAt: event.timestamp,
     ...('parts' in event && Array.isArray(event.parts) ? { parts: event.parts } : {}),
     ...('toolCalls' in event && Array.isArray(event.toolCalls) ? { toolCalls: event.toolCalls } : {}),
     ...('toolCallId' in event && typeof event.toolCallId === 'string'
@@ -274,6 +289,7 @@ function updateMessage(
   id: string,
   update: (message: CtxmillChatMessage) => CtxmillChatMessage,
   role: CtxmillChatMessage['role'] = 'assistant',
+  createdAt = nowIso(),
 ): CtxmillChatMessage[] {
   let found = false;
   const next = messages.map((message) => {
@@ -289,7 +305,7 @@ function updateMessage(
       role,
       content: '',
       parts: [],
-      createdAt: nowIso(),
+      createdAt,
     }),
   ];
 }
@@ -447,6 +463,7 @@ export function reduceCtxmillChatState(
                     ...message,
                     id: event.messageId,
                     role: 'user' as const,
+                    createdAt: canonicalCreatedAt(event.timestamp),
                   }
                 : message)
           : updateMessage(
@@ -459,6 +476,7 @@ export function reduceCtxmillChatState(
                 parts: [],
               }),
               event.role,
+              canonicalCreatedAt(event.timestamp),
             );
         return {
           ...state,
@@ -555,16 +573,25 @@ export function reduceCtxmillChatState(
         const result = typeof event.result === 'string'
           ? event.result
           : JSON.stringify(event.result ?? '');
+        // Durable message revisions are authoritative. A later raw AG-UI
+        // frame may carry a bounded preview of the same tool outcome.
+        const hasCanonicalOutcome =
+          state.messageRevisions.has(messageId);
         return {
           ...state,
           runPhase: state.isRunning ? 'thinking' : state.runPhase,
           activeAssistantMessageId: messageId,
           messages: updateMessage(state.messages, messageId, (message) =>
-            updateToolPart(message, event.toolCallId, (part) => ({
-              ...part,
-              result,
-              status: event.error ? 'error' : 'complete',
-            })),
+            updateToolPart(message, event.toolCallId, (part) =>
+              hasCanonicalOutcome && part.result !== undefined
+                ? part
+                : {
+                    ...part,
+                    result,
+                    status: event.error || part.status === 'error'
+                      ? 'error'
+                      : 'complete',
+                  }),
           ),
         };
       }
@@ -584,13 +611,16 @@ export function reduceCtxmillChatState(
 
           const message = canonicalMessageFromEvent(event, existing);
           if (!message) return state;
+          const canonicalAssistant = message.role === 'assistant';
           return {
             ...state,
-            activeAssistantMessageId: message.id,
+            activeAssistantMessageId: canonicalAssistant
+              ? message.id
+              : state.activeAssistantMessageId,
             messages: upsertCanonicalMessage(
               state.messages,
               message,
-              state.activeAssistantMessageId,
+              canonicalAssistant ? state.activeAssistantMessageId : null,
               canonicalToolCallIds(event),
             ),
             messageRevisions: new Map(state.messageRevisions).set(message.id, 0),

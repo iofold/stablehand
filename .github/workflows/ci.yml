@@ -132,8 +132,8 @@ jobs:
     #   - secrets.DEV2_KUBECONFIG        — kubeconfig file content for dev2 k3s
     #   - secrets.DEV2_SSH_PRIVATE_KEY   — key authorized on ubuntu@dev2 (image import)
     #   - secrets.TS_OAUTH_CLIENT_ID / TS_OAUTH_SECRET — Tailscale OAuth for an
-    #     ephemeral runner node; dev2 ([redacted-ip]) is reachable only on the
-    #     tailnet
+    #     ephemeral runner node; dev2 is reachable only on the tailnet
+    #   - vars.DEV2_SSH_HOST             — tailnet address of the dev2 host
     #   - secrets.OPENAI_API_KEY / ANTHROPIC_API_KEY — provider keys for the
     #     three live-harness smoke cases
     # Operators run deploy/k3s/dev2/deploy-dev2.sh manually until then (see
@@ -160,12 +160,13 @@ jobs:
           install -m 0700 -d ~/.ssh
           printf '%s\n' "${{ secrets.DEV2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 0600 ~/.ssh/id_ed25519
-          ssh-keyscan -H [redacted-ip] >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "${{ vars.DEV2_SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
           printf '%s\n' "${{ secrets.DEV2_KUBECONFIG }}" > "$RUNNER_TEMP/dev2-kubeconfig.yaml"
       - name: Build, import, and roll out to dev2
         run: deploy/k3s/dev2/deploy-dev2.sh
         env:
           KUBECONFIG: ${{ runner.temp }}/dev2-kubeconfig.yaml
+          K3S_IMPORT_HOST: ubuntu@${{ vars.DEV2_SSH_HOST }}
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
       - name: Run required smoke against dev2

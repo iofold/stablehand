@@ -124,9 +124,10 @@ const goldenFixtures = [
       status: 'completed',
       error: undefined,
       durationMs: 400,
+      usage: null,
       timestamp: 200,
     },
-    expectedJson: '{"turnId":"turn-1","sandboxSessionId":"sandbox-1","agentId":"agent-1","conversationId":"conv-1","status":"completed","durationMs":400,"timestamp":200}',
+    expectedJson: '{"turnId":"turn-1","sandboxSessionId":"sandbox-1","agentId":"agent-1","conversationId":"conv-1","status":"completed","durationMs":400,"usage":null,"timestamp":200}',
   },
   {
     eventType: 'tool_call.started',
@@ -316,7 +317,7 @@ const goldenFixtures = [
 }>;
 
 describe('WebhookRelay', () => {
-  it('keeps golden payload shapes byte-compatible with the former bus handlers', () => {
+  it('emits the canonical flat webhook payload shapes', () => {
     for (const fixture of goldenFixtures) {
       const actual = buildWebhookPayload(fixture.eventType, fixture.payload);
       expect(actual, fixture.eventType).toEqual(fixture.expected);

@@ -11,7 +11,7 @@ import type { JsonObject, Message as Message$1 } from "@bufbuild/protobuf";
  * Describes the file ctxmill/sandbox/v1/sandbox.proto.
  */
 export const file_ctxmill_sandbox_v1_sandbox: GenFile = /*@__PURE__*/
-  fileDesc("CiBjdHhtaWxsL3NhbmRib3gvdjEvc2FuZGJveC5wcm90bxISY3R4bWlsbC5zYW5kYm94LnYxIo8BChJPcGVuU2Vzc2lvblJlcXVlc3QSMwoFZnJlc2gYASABKAsyIi5jdHhtaWxsLnNhbmRib3gudjEuRnJlc2hCb290c3RyYXBIABI3CgdyZXN0b3JlGAIgASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLlJlc3RvcmVCb290c3RyYXBIAEILCglib290c3RyYXAiowIKDkZyZXNoQm9vdHN0cmFwEhAKCGFnZW50X2lkGAEgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgCIAEoCRIUCgxoYXJuZXNzX25hbWUYAyABKAkSGwoTaGFybmVzc19jb25maWdfanNvbhgEIAEoCRIVCg1zeXN0ZW1fcHJvbXB0GAYgASgJEi8KBXRvb2xzGAcgAygLMiAuY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xNZXRhZGF0YRIVCg13b3Jrc3BhY2VfZGlyGAggASgJEhIKCnNlc3Npb25faWQYCSABKAkSOgoMbmF0aXZlX3Rvb2xzGAogASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLk5hdGl2ZVRvb2xDb25maWdKBAgFEAYiiAIKEFJlc3RvcmVCb290c3RyYXASQQoSc2Vzc2lvbl9jaGVja3BvaW50GAEgASgLMiUuY3R4bWlsbC5zYW5kYm94LnYxLlNlc3Npb25DaGVja3BvaW50Ei8KBXRvb2xzGAIgAygLMiAuY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xNZXRhZGF0YRIQCghhZ2VudF9pZBgDIAEoCRIbChNoYXJuZXNzX2NvbmZpZ19qc29uGAQgASgJEhUKDXN5c3RlbV9wcm9tcHQYBSABKAkSOgoMbmF0aXZlX3Rvb2xzGAYgASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLk5hdGl2ZVRvb2xDb25maWciOQoTT3BlblNlc3Npb25SZXNwb25zZRISCgpzZXNzaW9uX2lkGAEgASgJEg4KBnN0YXR1cxgCIAEoCSJoChJEZWxpdmVyVHVyblJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRItCghtZXNzYWdlcxgCIAMoCzIbLmN0eG1pbGwuc2FuZGJveC52MS5NZXNzYWdlEg8KB3R1cm5faWQYAyABKAkihwIKDFNlc3Npb25FdmVudBI1CgthZ2VudF9ldmVudBgBIAEoCzIeLmN0eG1pbGwuc2FuZGJveC52MS5BZ2VudEV2ZW50SAASQQoRbWVzc2FnZV9jb21taXR0ZWQYAiABKAsyJC5jdHhtaWxsLnNhbmRib3gudjEuTWVzc2FnZUNvbW1pdHRlZEgAEjsKDnR1cm5fY29tcGxldGVkGAMgASgLMiEuY3R4bWlsbC5zYW5kYm94LnYxLlR1cm5Db21wbGV0ZWRIABI1Cgt0dXJuX2ZhaWxlZBgEIAEoCzIeLmN0eG1pbGwuc2FuZGJveC52MS5UdXJuRmFpbGVkSABCCQoHcGF5bG9hZCK1AQoQTWVzc2FnZUNvbW1pdHRlZBIMCgRyb2xlGAEgASgJEg8KB2NvbnRlbnQYAiABKAkSMAoKdG9vbF9jYWxscxgDIAMoCzIcLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sQ2FsbBIZCgx0b29sX2NhbGxfaWQYBCABKAlIAIgBARIPCgd0dXJuX2lkGAUgASgJEhMKC21lc3NhZ2Vfc2VxGAYgASgEQg8KDV90b29sX2NhbGxfaWQiIAoNVHVybkNvbXBsZXRlZBIPCgd0dXJuX2lkGAEgASgJIjQKClR1cm5GYWlsZWQSDwoHdHVybl9pZBgBIAEoCRIVCg1lcnJvcl9tZXNzYWdlGAIgASgJIjsKFVN1c3BlbmRTZXNzaW9uUmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSJbChZTdXNwZW5kU2Vzc2lvblJlc3BvbnNlEkEKEnNlc3Npb25fY2hlY2twb2ludBgBIAEoCzIlLmN0eG1pbGwuc2FuZGJveC52MS5TZXNzaW9uQ2hlY2twb2ludCJiCgZDdXJzb3ISGAoQbmV4dF9tZXNzYWdlX3NlcRgBIAEoBBIjChZsYXN0X2NvbXBsZXRlZF90dXJuX2lkGAIgASgJSACIAQFCGQoXX2xhc3RfY29tcGxldGVkX3R1cm5faWQiWwoLUnVubmVyU3RhdGUSDgoGc3RhdHVzGAEgASgJEjwKEHBlbmRpbmdfcmVxdWVzdHMYAiADKAsyIi5jdHhtaWxsLnNhbmRib3gudjEuUGVuZGluZ1JlcXVlc3QiQAoOUGVuZGluZ1JlcXVlc3QSDAoEdHlwZRgBIAEoCRIKCgJpZBgCIAEoCRIUCgxwYXlsb2FkX2pzb24YAyABKAkiMwoMV29ya3NwYWNlUmVmEhAKCHN0cmF0ZWd5GAEgASgJEhEKCXJlZmVyZW5jZRgCIAEoCSK+AgoRU2Vzc2lvbkNoZWNrcG9pbnQSGgoSY2hlY2twb2ludF92ZXJzaW9uGAEgASgFEhIKCnNlc3Npb25faWQYAiABKAkSFwoPY29udmVyc2F0aW9uX2lkGAMgASgJEhQKDGhhcm5lc3NfbmFtZRgEIAEoCRIqCgZjdXJzb3IYBSABKAsyGi5jdHhtaWxsLnNhbmRib3gudjEuQ3Vyc29yEjUKDHJ1bm5lcl9zdGF0ZRgGIAEoCzIfLmN0eG1pbGwuc2FuZGJveC52MS5SdW5uZXJTdGF0ZRI3Cg13b3Jrc3BhY2VfcmVmGAcgASgLMiAuY3R4bWlsbC5zYW5kYm94LnYxLldvcmtzcGFjZVJlZhIuCg1oYXJuZXNzX3N0YXRlGAggASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdCI4ChJLaWxsU2Vzc2lvblJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkiKwoTS2lsbFNlc3Npb25SZXNwb25zZRIUCgxmaW5hbF9zdGF0dXMYASABKAkicQoSUmVxdWVzdFRvb2xSZXF1ZXN0Eg8KB3R1cm5faWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSEQoJdG9vbF9uYW1lGAMgASgJEhEKCWFyZ3NfanNvbhgEIAEoCRISCgpyZXF1ZXN0X2lkGAUgASgJIlcKE1JlcXVlc3RUb29sUmVzcG9uc2USEgoKcmVxdWVzdF9pZBgBIAEoCRIOCgZyZXN1bHQYAiABKAkSEgoFZXJyb3IYAyABKAlIAIgBAUIICgZfZXJyb3IiTQoQRW1pdEV2ZW50UmVxdWVzdBIPCgd0dXJuX2lkGAEgASgJEhIKCmV2ZW50X3R5cGUYAiABKAkSFAoMcGF5bG9hZF9qc29uGAMgASgJIhMKEUVtaXRFdmVudFJlc3BvbnNlIjgKEE5hdGl2ZVRvb2xDb25maWcSEQoJYWxsb3dsaXN0GAEgAygJEhEKCWJsb2NrbGlzdBgCIAMoCSKuAQoHTWVzc2FnZRIKCgJpZBgBIAEoCRIMCgRyb2xlGAIgASgJEg8KB2NvbnRlbnQYAyABKAkSMAoKdG9vbF9jYWxscxgEIAMoCzIcLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sQ2FsbBIZCgx0b29sX2NhbGxfaWQYBSABKAlIAIgBARIRCgRuYW1lGAYgASgJSAGIAQFCDwoNX3Rvb2xfY2FsbF9pZEIHCgVfbmFtZSI8CghUb29sQ2FsbBIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhYKDmFyZ3VtZW50c19qc29uGAMgASgJIpYBCgxUb29sTWV0YWRhdGESDAoEbmFtZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCRIZChFpbnB1dF9zY2hlbWFfanNvbhgDIAEoCRIyCghsb2NhdGlvbhgEIAEoDjIgLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sTG9jYXRpb24SFAoMcHJvZ3JhbW1hdGljGAUgASgIItwDCgpBZ2VudEV2ZW50EjMKCnRleHRfZGVsdGEYASABKAsyHS5jdHhtaWxsLnNhbmRib3gudjEuVGV4dERlbHRhSAASPAoPdG9vbF9jYWxsX3N0YXJ0GAIgASgLMiEuY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xDYWxsU3RhcnRIABI4Cg10b29sX2NhbGxfZW5kGAMgASgLMh8uY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xDYWxsRW5kSAASPQoPYXBwcm92YWxfbmVlZGVkGAQgASgLMiIuY3R4bWlsbC5zYW5kYm94LnYxLkFwcHJvdmFsTmVlZGVkSAASQQoRYXBwcm92YWxfcmVzb2x2ZWQYBSABKAsyJC5jdHhtaWxsLnNhbmRib3gudjEuQXBwcm92YWxSZXNvbHZlZEgAEi8KBWVycm9yGAYgASgLMh4uY3R4bWlsbC5zYW5kYm94LnYxLkVycm9yRXZlbnRIABItCgRkb25lGAcgASgLMh0uY3R4bWlsbC5zYW5kYm94LnYxLkRvbmVFdmVudEgAEjYKBmN1c3RvbRgIIAEoCzIkLmN0eG1pbGwuc2FuZGJveC52MS5DdXN0b21BZ2VudEV2ZW50SABCBwoFZXZlbnQiOQoQQ3VzdG9tQWdlbnRFdmVudBIPCgdzdWJ0eXBlGAEgASgJEhQKDHBheWxvYWRfanNvbhgCIAEoCSIcCglUZXh0RGVsdGESDwoHY29udGVudBgBIAEoCSI8Cg1Ub29sQ2FsbFN0YXJ0EgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSEQoJYXJnc19qc29uGAMgASgJIlwKC1Rvb2xDYWxsRW5kEgoKAmlkGAEgASgJEg4KBnJlc3VsdBgCIAEoCRISCgVlcnJvchgDIAEoCUgAiAEBEhMKC2R1cmF0aW9uX21zGAQgASgDQggKBl9lcnJvciJCCg5BcHByb3ZhbE5lZWRlZBIKCgJpZBgBIAEoCRIRCgl0b29sX25hbWUYAiABKAkSEQoJYXJnc19qc29uGAMgASgJIi4KEEFwcHJvdmFsUmVzb2x2ZWQSCgoCaWQYASABKAkSDgoGYWN0aW9uGAIgASgJIlkKCkVycm9yRXZlbnQSDwoHbWVzc2FnZRgBIAEoCRIYCgtzdGFja190cmFjZRgCIAEoCUgAiAEBEhAKCGNhdGVnb3J5GAMgASgJQg4KDF9zdGFja190cmFjZSJ+CglEb25lRXZlbnQSEwoGcmVzdWx0GAEgASgJSACIAQESMgoFdXNhZ2UYAiABKAsyHi5jdHhtaWxsLnNhbmRib3gudjEuVG9rZW5Vc2FnZUgBiAEBEhMKC2ludGVycnVwdGVkGAMgASgIQgkKB19yZXN1bHRCCAoGX3VzYWdlInMKClRva2VuVXNhZ2USFAoMaW5wdXRfdG9rZW5zGAEgASgDEhUKDW91dHB1dF90b2tlbnMYAiABKAMSFAoMdG90YWxfdG9rZW5zGAMgASgDEhUKCGNvc3RfdXNkGAQgASgBSACIAQFCCwoJX2Nvc3RfdXNkIsIBCgxBcnRpZmFjdE1ldGESCgoCaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkSDwoHdHVybl9pZBgDIAEoCRIMCgRuYW1lGAQgASgJEhEKCW1pbWVfdHlwZRgFIAEoCRISCgpzaXplX2J5dGVzGAYgASgDEhMKC3N0b3JhZ2Vfa2V5GAcgASgJEg4KBmJ1Y2tldBgIIAEoCRIVCg1tZXRhZGF0YV9qc29uGAkgASgJEhIKCmNyZWF0ZWRfYXQYCiABKAMicAoXUmVnaXN0ZXJBcnRpZmFjdFJlcXVlc3QSDwoHdHVybl9pZBgBIAEoCRIQCghhZ2VudF9pZBgCIAEoCRIyCghhcnRpZmFjdBgDIAEoCzIgLmN0eG1pbGwuc2FuZGJveC52MS5BcnRpZmFjdE1ldGEiPgoYUmVnaXN0ZXJBcnRpZmFjdFJlc3BvbnNlEhMKC2FydGlmYWN0X2lkGAEgASgJEg0KBWVycm9yGAIgASgJIj8KFlJlc29sdmVBcnRpZmFjdFJlcXVlc3QSEwoLYXJ0aWZhY3RfaWQYASABKAkSEAoIYWdlbnRfaWQYAiABKAkiXAoXUmVzb2x2ZUFydGlmYWN0UmVzcG9uc2USMgoIYXJ0aWZhY3QYASABKAsyIC5jdHhtaWxsLnNhbmRib3gudjEuQXJ0aWZhY3RNZXRhEg0KBWVycm9yGAIgASgJKoIBCgxUb29sTG9jYXRpb24SHQoZVE9PTF9MT0NBVElPTl9VTlNQRUNJRklFRBAAEhkKFVRPT0xfTE9DQVRJT05fU0FOREJPWBABEh4KGlRPT0xfTE9DQVRJT05fT1JDSEVTVFJBVE9SEAISGAoUVE9PTF9MT0NBVElPTl9EQUVNT04QAzKUAwoOSGFybmVzc1NlcnZpY2USXgoLT3BlblNlc3Npb24SJi5jdHhtaWxsLnNhbmRib3gudjEuT3BlblNlc3Npb25SZXF1ZXN0GicuY3R4bWlsbC5zYW5kYm94LnYxLk9wZW5TZXNzaW9uUmVzcG9uc2USWQoLRGVsaXZlclR1cm4SJi5jdHhtaWxsLnNhbmRib3gudjEuRGVsaXZlclR1cm5SZXF1ZXN0GiAuY3R4bWlsbC5zYW5kYm94LnYxLlNlc3Npb25FdmVudDABEmcKDlN1c3BlbmRTZXNzaW9uEikuY3R4bWlsbC5zYW5kYm94LnYxLlN1c3BlbmRTZXNzaW9uUmVxdWVzdBoqLmN0eG1pbGwuc2FuZGJveC52MS5TdXNwZW5kU2Vzc2lvblJlc3BvbnNlEl4KC0tpbGxTZXNzaW9uEiYuY3R4bWlsbC5zYW5kYm94LnYxLktpbGxTZXNzaW9uUmVxdWVzdBonLmN0eG1pbGwuc2FuZGJveC52MS5LaWxsU2Vzc2lvblJlc3BvbnNlMqoDChNPcmNoZXN0cmF0b3JTZXJ2aWNlEl4KC1JlcXVlc3RUb29sEiYuY3R4bWlsbC5zYW5kYm94LnYxLlJlcXVlc3RUb29sUmVxdWVzdBonLmN0eG1pbGwuc2FuZGJveC52MS5SZXF1ZXN0VG9vbFJlc3BvbnNlElgKCUVtaXRFdmVudBIkLmN0eG1pbGwuc2FuZGJveC52MS5FbWl0RXZlbnRSZXF1ZXN0GiUuY3R4bWlsbC5zYW5kYm94LnYxLkVtaXRFdmVudFJlc3BvbnNlEm0KEFJlZ2lzdGVyQXJ0aWZhY3QSKy5jdHhtaWxsLnNhbmRib3gudjEuUmVnaXN0ZXJBcnRpZmFjdFJlcXVlc3QaLC5jdHhtaWxsLnNhbmRib3gudjEuUmVnaXN0ZXJBcnRpZmFjdFJlc3BvbnNlEmoKD1Jlc29sdmVBcnRpZmFjdBIqLmN0eG1pbGwuc2FuZGJveC52MS5SZXNvbHZlQXJ0aWZhY3RSZXF1ZXN0GisuY3R4bWlsbC5zYW5kYm94LnYxLlJlc29sdmVBcnRpZmFjdFJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_struct]);
+  fileDesc("CiBjdHhtaWxsL3NhbmRib3gvdjEvc2FuZGJveC5wcm90bxISY3R4bWlsbC5zYW5kYm94LnYxIo8BChJPcGVuU2Vzc2lvblJlcXVlc3QSMwoFZnJlc2gYASABKAsyIi5jdHhtaWxsLnNhbmRib3gudjEuRnJlc2hCb290c3RyYXBIABI3CgdyZXN0b3JlGAIgASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLlJlc3RvcmVCb290c3RyYXBIAEILCglib290c3RyYXAirwIKDkZyZXNoQm9vdHN0cmFwEhAKCGFnZW50X2lkGAEgASgJEhcKD2NvbnZlcnNhdGlvbl9pZBgCIAEoCRIUCgxoYXJuZXNzX25hbWUYAyABKAkSGwoTaGFybmVzc19jb25maWdfanNvbhgEIAEoCRIVCg1zeXN0ZW1fcHJvbXB0GAYgASgJEi8KBXRvb2xzGAcgAygLMiAuY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xNZXRhZGF0YRIVCg13b3Jrc3BhY2VfZGlyGAggASgJEhIKCnNlc3Npb25faWQYCSABKAkSRgoSbmF0aXZlX3Rvb2xfcG9saWN5GAogASgLMiouY3R4bWlsbC5zYW5kYm94LnYxLk5hdGl2ZVRvb2xQb2xpY3lDb25maWdKBAgFEAYilAIKEFJlc3RvcmVCb290c3RyYXASQQoSc2Vzc2lvbl9jaGVja3BvaW50GAEgASgLMiUuY3R4bWlsbC5zYW5kYm94LnYxLlNlc3Npb25DaGVja3BvaW50Ei8KBXRvb2xzGAIgAygLMiAuY3R4bWlsbC5zYW5kYm94LnYxLlRvb2xNZXRhZGF0YRIQCghhZ2VudF9pZBgDIAEoCRIbChNoYXJuZXNzX2NvbmZpZ19qc29uGAQgASgJEhUKDXN5c3RlbV9wcm9tcHQYBSABKAkSRgoSbmF0aXZlX3Rvb2xfcG9saWN5GAYgASgLMiouY3R4bWlsbC5zYW5kYm94LnYxLk5hdGl2ZVRvb2xQb2xpY3lDb25maWciOQoTT3BlblNlc3Npb25SZXNwb25zZRISCgpzZXNzaW9uX2lkGAEgASgJEg4KBnN0YXR1cxgCIAEoCSK0AgoSRGVsaXZlclR1cm5SZXF1ZXN0EhIKCnNlc3Npb25faWQYASABKAkSLQoIbWVzc2FnZXMYAiADKAsyGy5jdHhtaWxsLnNhbmRib3gudjEuTWVzc2FnZRIPCgd0dXJuX2lkGAMgASgJEkcKE2RlbGl2ZXJ5X2NhcGFiaWxpdHkYBCABKAsyKi5jdHhtaWxsLnNhbmRib3gudjEuVHVybkRlbGl2ZXJ5Q2FwYWJpbGl0eRJNCgx0dXJuX3NlY3JldHMYBSADKAsyNy5jdHhtaWxsLnNhbmRib3gudjEuRGVsaXZlclR1cm5SZXF1ZXN0LlR1cm5TZWNyZXRzRW50cnkaMgoQVHVyblNlY3JldHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIsoBChZUdXJuRGVsaXZlcnlDYXBhYmlsaXR5EhAKCG93bmVyX2lkGAEgASgJEhMKC2ZlbmNlX3Rva2VuGAIgASgEEhsKE2xlYXNlX2V4cGlyZXNfYXRfbXMYAyABKAMSGwoTcmVzdG9yZV9mZW5jZV90b2tlbhgEIAEoBBIZCgxjb250YWluZXJfaWQYBSABKAlIAIgBARIQCghhZ2VudF9pZBgGIAEoCRIRCglzaWduYXR1cmUYByABKAlCDwoNX2NvbnRhaW5lcl9pZCKSAQoiUmVuZXdUdXJuRGVsaXZlcnlDYXBhYmlsaXR5UmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEg8KB3R1cm5faWQYAiABKAkSRwoTZGVsaXZlcnlfY2FwYWJpbGl0eRgDIAEoCzIqLmN0eG1pbGwuc2FuZGJveC52MS5UdXJuRGVsaXZlcnlDYXBhYmlsaXR5IjYKI1JlbmV3VHVybkRlbGl2ZXJ5Q2FwYWJpbGl0eVJlc3BvbnNlEg8KB3JlbmV3ZWQYASABKAgihwIKDFNlc3Npb25FdmVudBI1CgthZ2VudF9ldmVudBgBIAEoCzIeLmN0eG1pbGwuc2FuZGJveC52MS5BZ2VudEV2ZW50SAASQQoRbWVzc2FnZV9jb21taXR0ZWQYAiABKAsyJC5jdHhtaWxsLnNhbmRib3gudjEuTWVzc2FnZUNvbW1pdHRlZEgAEjsKDnR1cm5fY29tcGxldGVkGAMgASgLMiEuY3R4bWlsbC5zYW5kYm94LnYxLlR1cm5Db21wbGV0ZWRIABI1Cgt0dXJuX2ZhaWxlZBgEIAEoCzIeLmN0eG1pbGwuc2FuZGJveC52MS5UdXJuRmFpbGVkSABCCQoHcGF5bG9hZCK1AQoQTWVzc2FnZUNvbW1pdHRlZBIMCgRyb2xlGAEgASgJEg8KB2NvbnRlbnQYAiABKAkSMAoKdG9vbF9jYWxscxgDIAMoCzIcLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sQ2FsbBIZCgx0b29sX2NhbGxfaWQYBCABKAlIAIgBARIPCgd0dXJuX2lkGAUgASgJEhMKC21lc3NhZ2Vfc2VxGAYgASgEQg8KDV90b29sX2NhbGxfaWQiIAoNVHVybkNvbXBsZXRlZBIPCgd0dXJuX2lkGAEgASgJIjQKClR1cm5GYWlsZWQSDwoHdHVybl9pZBgBIAEoCRIVCg1lcnJvcl9tZXNzYWdlGAIgASgJIjsKFVN1c3BlbmRTZXNzaW9uUmVxdWVzdBISCgpzZXNzaW9uX2lkGAEgASgJEg4KBnJlYXNvbhgCIAEoCSJbChZTdXNwZW5kU2Vzc2lvblJlc3BvbnNlEkEKEnNlc3Npb25fY2hlY2twb2ludBgBIAEoCzIlLmN0eG1pbGwuc2FuZGJveC52MS5TZXNzaW9uQ2hlY2twb2ludCJiCgZDdXJzb3ISGAoQbmV4dF9tZXNzYWdlX3NlcRgBIAEoBBIjChZsYXN0X2NvbXBsZXRlZF90dXJuX2lkGAIgASgJSACIAQFCGQoXX2xhc3RfY29tcGxldGVkX3R1cm5faWQiWwoLUnVubmVyU3RhdGUSDgoGc3RhdHVzGAEgASgJEjwKEHBlbmRpbmdfcmVxdWVzdHMYAiADKAsyIi5jdHhtaWxsLnNhbmRib3gudjEuUGVuZGluZ1JlcXVlc3QiQAoOUGVuZGluZ1JlcXVlc3QSDAoEdHlwZRgBIAEoCRIKCgJpZBgCIAEoCRIUCgxwYXlsb2FkX2pzb24YAyABKAkiMwoMV29ya3NwYWNlUmVmEhAKCHN0cmF0ZWd5GAEgASgJEhEKCXJlZmVyZW5jZRgCIAEoCSK+AgoRU2Vzc2lvbkNoZWNrcG9pbnQSGgoSY2hlY2twb2ludF92ZXJzaW9uGAEgASgFEhIKCnNlc3Npb25faWQYAiABKAkSFwoPY29udmVyc2F0aW9uX2lkGAMgASgJEhQKDGhhcm5lc3NfbmFtZRgEIAEoCRIqCgZjdXJzb3IYBSABKAsyGi5jdHhtaWxsLnNhbmRib3gudjEuQ3Vyc29yEjUKDHJ1bm5lcl9zdGF0ZRgGIAEoCzIfLmN0eG1pbGwuc2FuZGJveC52MS5SdW5uZXJTdGF0ZRI3Cg13b3Jrc3BhY2VfcmVmGAcgASgLMiAuY3R4bWlsbC5zYW5kYm94LnYxLldvcmtzcGFjZVJlZhIuCg1oYXJuZXNzX3N0YXRlGAggASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdCI4ChJLaWxsU2Vzc2lvblJlcXVlc3QSEgoKc2Vzc2lvbl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkiKwoTS2lsbFNlc3Npb25SZXNwb25zZRIUCgxmaW5hbF9zdGF0dXMYASABKAki1gEKElJlcXVlc3RUb29sUmVxdWVzdBIPCgd0dXJuX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEhEKCXRvb2xfbmFtZRgDIAEoCRIRCglhcmdzX2pzb24YBCABKAkSEgoKcmVxdWVzdF9pZBgFIAEoCRIaChJzYW5kYm94X3Nlc3Npb25faWQYBiABKAkSRwoTZGVsaXZlcnlfY2FwYWJpbGl0eRgHIAEoCzIqLmN0eG1pbGwuc2FuZGJveC52MS5UdXJuRGVsaXZlcnlDYXBhYmlsaXR5IlcKE1JlcXVlc3RUb29sUmVzcG9uc2USEgoKcmVxdWVzdF9pZBgBIAEoCRIOCgZyZXN1bHQYAiABKAkSEgoFZXJyb3IYAyABKAlIAIgBAUIICgZfZXJyb3IixAEKEEVtaXRFdmVudFJlcXVlc3QSDwoHdHVybl9pZBgBIAEoCRISCgpldmVudF90eXBlGAIgASgJEhQKDHBheWxvYWRfanNvbhgDIAEoCRIaChJzYW5kYm94X3Nlc3Npb25faWQYBCABKAkSEAoIYWdlbnRfaWQYBSABKAkSRwoTZGVsaXZlcnlfY2FwYWJpbGl0eRgGIAEoCzIqLmN0eG1pbGwuc2FuZGJveC52MS5UdXJuRGVsaXZlcnlDYXBhYmlsaXR5IhMKEUVtaXRFdmVudFJlc3BvbnNlIl0KFk5hdGl2ZVRvb2xQb2xpY3lDb25maWcSNAoGcG9saWN5GAEgASgOMiQuY3R4bWlsbC5zYW5kYm94LnYxLk5hdGl2ZVRvb2xQb2xpY3kSDQoFbmFtZXMYAiADKAkirgEKB01lc3NhZ2USCgoCaWQYASABKAkSDAoEcm9sZRgCIAEoCRIPCgdjb250ZW50GAMgASgJEjAKCnRvb2xfY2FsbHMYBCADKAsyHC5jdHhtaWxsLnNhbmRib3gudjEuVG9vbENhbGwSGQoMdG9vbF9jYWxsX2lkGAUgASgJSACIAQESEQoEbmFtZRgGIAEoCUgBiAEBQg8KDV90b29sX2NhbGxfaWRCBwoFX25hbWUiPAoIVG9vbENhbGwSCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIWCg5hcmd1bWVudHNfanNvbhgDIAEoCSKWAQoMVG9vbE1ldGFkYXRhEgwKBG5hbWUYASABKAkSEwoLZGVzY3JpcHRpb24YAiABKAkSGQoRaW5wdXRfc2NoZW1hX2pzb24YAyABKAkSMgoIbG9jYXRpb24YBCABKA4yIC5jdHhtaWxsLnNhbmRib3gudjEuVG9vbExvY2F0aW9uEhQKDHByb2dyYW1tYXRpYxgFIAEoCCLcAwoKQWdlbnRFdmVudBIzCgp0ZXh0X2RlbHRhGAEgASgLMh0uY3R4bWlsbC5zYW5kYm94LnYxLlRleHREZWx0YUgAEjwKD3Rvb2xfY2FsbF9zdGFydBgCIAEoCzIhLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sQ2FsbFN0YXJ0SAASOAoNdG9vbF9jYWxsX2VuZBgDIAEoCzIfLmN0eG1pbGwuc2FuZGJveC52MS5Ub29sQ2FsbEVuZEgAEj0KD2FwcHJvdmFsX25lZWRlZBgEIAEoCzIiLmN0eG1pbGwuc2FuZGJveC52MS5BcHByb3ZhbE5lZWRlZEgAEkEKEWFwcHJvdmFsX3Jlc29sdmVkGAUgASgLMiQuY3R4bWlsbC5zYW5kYm94LnYxLkFwcHJvdmFsUmVzb2x2ZWRIABIvCgVlcnJvchgGIAEoCzIeLmN0eG1pbGwuc2FuZGJveC52MS5FcnJvckV2ZW50SAASLQoEZG9uZRgHIAEoCzIdLmN0eG1pbGwuc2FuZGJveC52MS5Eb25lRXZlbnRIABI2CgZjdXN0b20YCCABKAsyJC5jdHhtaWxsLnNhbmRib3gudjEuQ3VzdG9tQWdlbnRFdmVudEgAQgcKBWV2ZW50IjkKEEN1c3RvbUFnZW50RXZlbnQSDwoHc3VidHlwZRgBIAEoCRIUCgxwYXlsb2FkX2pzb24YAiABKAkiHAoJVGV4dERlbHRhEg8KB2NvbnRlbnQYASABKAkiPAoNVG9vbENhbGxTdGFydBIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhEKCWFyZ3NfanNvbhgDIAEoCSJcCgtUb29sQ2FsbEVuZBIKCgJpZBgBIAEoCRIOCgZyZXN1bHQYAiABKAkSEgoFZXJyb3IYAyABKAlIAIgBARITCgtkdXJhdGlvbl9tcxgEIAEoA0IICgZfZXJyb3IiQgoOQXBwcm92YWxOZWVkZWQSCgoCaWQYASABKAkSEQoJdG9vbF9uYW1lGAIgASgJEhEKCWFyZ3NfanNvbhgDIAEoCSIuChBBcHByb3ZhbFJlc29sdmVkEgoKAmlkGAEgASgJEg4KBmFjdGlvbhgCIAEoCSJZCgpFcnJvckV2ZW50Eg8KB21lc3NhZ2UYASABKAkSGAoLc3RhY2tfdHJhY2UYAiABKAlIAIgBARIQCghjYXRlZ29yeRgDIAEoCUIOCgxfc3RhY2tfdHJhY2UifgoJRG9uZUV2ZW50EhMKBnJlc3VsdBgBIAEoCUgAiAEBEjIKBXVzYWdlGAIgASgLMh4uY3R4bWlsbC5zYW5kYm94LnYxLlRva2VuVXNhZ2VIAYgBARITCgtpbnRlcnJ1cHRlZBgDIAEoCEIJCgdfcmVzdWx0QggKBl91c2FnZSJzCgpUb2tlblVzYWdlEhQKDGlucHV0X3Rva2VucxgBIAEoAxIVCg1vdXRwdXRfdG9rZW5zGAIgASgDEhQKDHRvdGFsX3Rva2VucxgDIAEoAxIVCghjb3N0X3VzZBgEIAEoAUgAiAEBQgsKCV9jb3N0X3VzZCLCAQoMQXJ0aWZhY3RNZXRhEgoKAmlkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEg8KB3R1cm5faWQYAyABKAkSDAoEbmFtZRgEIAEoCRIRCgltaW1lX3R5cGUYBSABKAkSEgoKc2l6ZV9ieXRlcxgGIAEoAxITCgtzdG9yYWdlX2tleRgHIAEoCRIOCgZidWNrZXQYCCABKAkSFQoNbWV0YWRhdGFfanNvbhgJIAEoCRISCgpjcmVhdGVkX2F0GAogASgDItUBChdSZWdpc3RlckFydGlmYWN0UmVxdWVzdBIPCgd0dXJuX2lkGAEgASgJEhAKCGFnZW50X2lkGAIgASgJEjIKCGFydGlmYWN0GAMgASgLMiAuY3R4bWlsbC5zYW5kYm94LnYxLkFydGlmYWN0TWV0YRIaChJzYW5kYm94X3Nlc3Npb25faWQYBCABKAkSRwoTZGVsaXZlcnlfY2FwYWJpbGl0eRgFIAEoCzIqLmN0eG1pbGwuc2FuZGJveC52MS5UdXJuRGVsaXZlcnlDYXBhYmlsaXR5Ij4KGFJlZ2lzdGVyQXJ0aWZhY3RSZXNwb25zZRITCgthcnRpZmFjdF9pZBgBIAEoCRINCgVlcnJvchgCIAEoCSK1AQoWUmVzb2x2ZUFydGlmYWN0UmVxdWVzdBITCgthcnRpZmFjdF9pZBgBIAEoCRIQCghhZ2VudF9pZBgCIAEoCRIPCgd0dXJuX2lkGAMgASgJEhoKEnNhbmRib3hfc2Vzc2lvbl9pZBgEIAEoCRJHChNkZWxpdmVyeV9jYXBhYmlsaXR5GAUgASgLMiouY3R4bWlsbC5zYW5kYm94LnYxLlR1cm5EZWxpdmVyeUNhcGFiaWxpdHkiXAoXUmVzb2x2ZUFydGlmYWN0UmVzcG9uc2USMgoIYXJ0aWZhY3QYASABKAsyIC5jdHhtaWxsLnNhbmRib3gudjEuQXJ0aWZhY3RNZXRhEg0KBWVycm9yGAIgASgJKqoBChBOYXRpdmVUb29sUG9saWN5EiIKHk5BVElWRV9UT09MX1BPTElDWV9VTlNQRUNJRklFRBAAEhoKFk5BVElWRV9UT09MX1BPTElDWV9BTEwQARIcChhOQVRJVkVfVE9PTF9QT0xJQ1lfQUxMT1cQAhIbChdOQVRJVkVfVE9PTF9QT0xJQ1lfREVOWRADEhsKF05BVElWRV9UT09MX1BPTElDWV9OT05FEAQqggEKDFRvb2xMb2NhdGlvbhIdChlUT09MX0xPQ0FUSU9OX1VOU1BFQ0lGSUVEEAASGQoVVE9PTF9MT0NBVElPTl9TQU5EQk9YEAESHgoaVE9PTF9MT0NBVElPTl9PUkNIRVNUUkFUT1IQAhIYChRUT09MX0xPQ0FUSU9OX0RBRU1PThADMqUECg5IYXJuZXNzU2VydmljZRJeCgtPcGVuU2Vzc2lvbhImLmN0eG1pbGwuc2FuZGJveC52MS5PcGVuU2Vzc2lvblJlcXVlc3QaJy5jdHhtaWxsLnNhbmRib3gudjEuT3BlblNlc3Npb25SZXNwb25zZRJZCgtEZWxpdmVyVHVybhImLmN0eG1pbGwuc2FuZGJveC52MS5EZWxpdmVyVHVyblJlcXVlc3QaIC5jdHhtaWxsLnNhbmRib3gudjEuU2Vzc2lvbkV2ZW50MAESjgEKG1JlbmV3VHVybkRlbGl2ZXJ5Q2FwYWJpbGl0eRI2LmN0eG1pbGwuc2FuZGJveC52MS5SZW5ld1R1cm5EZWxpdmVyeUNhcGFiaWxpdHlSZXF1ZXN0GjcuY3R4bWlsbC5zYW5kYm94LnYxLlJlbmV3VHVybkRlbGl2ZXJ5Q2FwYWJpbGl0eVJlc3BvbnNlEmcKDlN1c3BlbmRTZXNzaW9uEikuY3R4bWlsbC5zYW5kYm94LnYxLlN1c3BlbmRTZXNzaW9uUmVxdWVzdBoqLmN0eG1pbGwuc2FuZGJveC52MS5TdXNwZW5kU2Vzc2lvblJlc3BvbnNlEl4KC0tpbGxTZXNzaW9uEiYuY3R4bWlsbC5zYW5kYm94LnYxLktpbGxTZXNzaW9uUmVxdWVzdBonLmN0eG1pbGwuc2FuZGJveC52MS5LaWxsU2Vzc2lvblJlc3BvbnNlMqoDChNPcmNoZXN0cmF0b3JTZXJ2aWNlEl4KC1JlcXVlc3RUb29sEiYuY3R4bWlsbC5zYW5kYm94LnYxLlJlcXVlc3RUb29sUmVxdWVzdBonLmN0eG1pbGwuc2FuZGJveC52MS5SZXF1ZXN0VG9vbFJlc3BvbnNlElgKCUVtaXRFdmVudBIkLmN0eG1pbGwuc2FuZGJveC52MS5FbWl0RXZlbnRSZXF1ZXN0GiUuY3R4bWlsbC5zYW5kYm94LnYxLkVtaXRFdmVudFJlc3BvbnNlEm0KEFJlZ2lzdGVyQXJ0aWZhY3QSKy5jdHhtaWxsLnNhbmRib3gudjEuUmVnaXN0ZXJBcnRpZmFjdFJlcXVlc3QaLC5jdHhtaWxsLnNhbmRib3gudjEuUmVnaXN0ZXJBcnRpZmFjdFJlc3BvbnNlEmoKD1Jlc29sdmVBcnRpZmFjdBIqLmN0eG1pbGwuc2FuZGJveC52MS5SZXNvbHZlQXJ0aWZhY3RSZXF1ZXN0GisuY3R4bWlsbC5zYW5kYm94LnYxLlJlc29sdmVBcnRpZmFjdFJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_struct]);
 
 /**
  * @generated from message ctxmill.sandbox.v1.OpenSessionRequest
@@ -87,9 +87,9 @@ export type FreshBootstrap = Message$1<"ctxmill.sandbox.v1.FreshBootstrap"> & {
   sessionId: string;
 
   /**
-   * @generated from field: ctxmill.sandbox.v1.NativeToolConfig native_tools = 10;
+   * @generated from field: ctxmill.sandbox.v1.NativeToolPolicyConfig native_tool_policy = 10;
    */
-  nativeTools?: NativeToolConfig;
+  nativeToolPolicy?: NativeToolPolicyConfig;
 };
 
 /**
@@ -129,9 +129,9 @@ export type RestoreBootstrap = Message$1<"ctxmill.sandbox.v1.RestoreBootstrap"> 
   systemPrompt: string;
 
   /**
-   * @generated from field: ctxmill.sandbox.v1.NativeToolConfig native_tools = 6;
+   * @generated from field: ctxmill.sandbox.v1.NativeToolPolicyConfig native_tool_policy = 6;
    */
-  nativeTools?: NativeToolConfig;
+  nativeToolPolicy?: NativeToolPolicyConfig;
 };
 
 /**
@@ -181,6 +181,16 @@ export type DeliverTurnRequest = Message$1<"ctxmill.sandbox.v1.DeliverTurnReques
    * @generated from field: string turn_id = 3;
    */
   turnId: string;
+
+  /**
+   * @generated from field: ctxmill.sandbox.v1.TurnDeliveryCapability delivery_capability = 4;
+   */
+  deliveryCapability?: TurnDeliveryCapability;
+
+  /**
+   * @generated from field: map<string, string> turn_secrets = 5;
+   */
+  turnSecrets: { [key: string]: string };
 };
 
 /**
@@ -189,6 +199,97 @@ export type DeliverTurnRequest = Message$1<"ctxmill.sandbox.v1.DeliverTurnReques
  */
 export const DeliverTurnRequestSchema: GenMessage<DeliverTurnRequest> = /*@__PURE__*/
   messageDesc(file_ctxmill_sandbox_v1_sandbox, 4);
+
+/**
+ * @generated from message ctxmill.sandbox.v1.TurnDeliveryCapability
+ */
+export type TurnDeliveryCapability = Message$1<"ctxmill.sandbox.v1.TurnDeliveryCapability"> & {
+  /**
+   * @generated from field: string owner_id = 1;
+   */
+  ownerId: string;
+
+  /**
+   * @generated from field: uint64 fence_token = 2;
+   */
+  fenceToken: bigint;
+
+  /**
+   * @generated from field: int64 lease_expires_at_ms = 3;
+   */
+  leaseExpiresAtMs: bigint;
+
+  /**
+   * @generated from field: uint64 restore_fence_token = 4;
+   */
+  restoreFenceToken: bigint;
+
+  /**
+   * @generated from field: optional string container_id = 5;
+   */
+  containerId?: string;
+
+  /**
+   * @generated from field: string agent_id = 6;
+   */
+  agentId: string;
+
+  /**
+   * @generated from field: string signature = 7;
+   */
+  signature: string;
+};
+
+/**
+ * Describes the message ctxmill.sandbox.v1.TurnDeliveryCapability.
+ * Use `create(TurnDeliveryCapabilitySchema)` to create a new message.
+ */
+export const TurnDeliveryCapabilitySchema: GenMessage<TurnDeliveryCapability> = /*@__PURE__*/
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 5);
+
+/**
+ * @generated from message ctxmill.sandbox.v1.RenewTurnDeliveryCapabilityRequest
+ */
+export type RenewTurnDeliveryCapabilityRequest = Message$1<"ctxmill.sandbox.v1.RenewTurnDeliveryCapabilityRequest"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string turn_id = 2;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: ctxmill.sandbox.v1.TurnDeliveryCapability delivery_capability = 3;
+   */
+  deliveryCapability?: TurnDeliveryCapability;
+};
+
+/**
+ * Describes the message ctxmill.sandbox.v1.RenewTurnDeliveryCapabilityRequest.
+ * Use `create(RenewTurnDeliveryCapabilityRequestSchema)` to create a new message.
+ */
+export const RenewTurnDeliveryCapabilityRequestSchema: GenMessage<RenewTurnDeliveryCapabilityRequest> = /*@__PURE__*/
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 6);
+
+/**
+ * @generated from message ctxmill.sandbox.v1.RenewTurnDeliveryCapabilityResponse
+ */
+export type RenewTurnDeliveryCapabilityResponse = Message$1<"ctxmill.sandbox.v1.RenewTurnDeliveryCapabilityResponse"> & {
+  /**
+   * @generated from field: bool renewed = 1;
+   */
+  renewed: boolean;
+};
+
+/**
+ * Describes the message ctxmill.sandbox.v1.RenewTurnDeliveryCapabilityResponse.
+ * Use `create(RenewTurnDeliveryCapabilityResponseSchema)` to create a new message.
+ */
+export const RenewTurnDeliveryCapabilityResponseSchema: GenMessage<RenewTurnDeliveryCapabilityResponse> = /*@__PURE__*/
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 7);
 
 /**
  * @generated from message ctxmill.sandbox.v1.SessionEvent
@@ -229,7 +330,7 @@ export type SessionEvent = Message$1<"ctxmill.sandbox.v1.SessionEvent"> & {
  * Use `create(SessionEventSchema)` to create a new message.
  */
 export const SessionEventSchema: GenMessage<SessionEvent> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 5);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 8);
 
 /**
  * @generated from message ctxmill.sandbox.v1.MessageCommitted
@@ -271,7 +372,7 @@ export type MessageCommitted = Message$1<"ctxmill.sandbox.v1.MessageCommitted"> 
  * Use `create(MessageCommittedSchema)` to create a new message.
  */
 export const MessageCommittedSchema: GenMessage<MessageCommitted> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 6);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 9);
 
 /**
  * @generated from message ctxmill.sandbox.v1.TurnCompleted
@@ -288,7 +389,7 @@ export type TurnCompleted = Message$1<"ctxmill.sandbox.v1.TurnCompleted"> & {
  * Use `create(TurnCompletedSchema)` to create a new message.
  */
 export const TurnCompletedSchema: GenMessage<TurnCompleted> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 7);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 10);
 
 /**
  * @generated from message ctxmill.sandbox.v1.TurnFailed
@@ -310,7 +411,7 @@ export type TurnFailed = Message$1<"ctxmill.sandbox.v1.TurnFailed"> & {
  * Use `create(TurnFailedSchema)` to create a new message.
  */
 export const TurnFailedSchema: GenMessage<TurnFailed> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 8);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 11);
 
 /**
  * @generated from message ctxmill.sandbox.v1.SuspendSessionRequest
@@ -332,7 +433,7 @@ export type SuspendSessionRequest = Message$1<"ctxmill.sandbox.v1.SuspendSession
  * Use `create(SuspendSessionRequestSchema)` to create a new message.
  */
 export const SuspendSessionRequestSchema: GenMessage<SuspendSessionRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 9);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 12);
 
 /**
  * @generated from message ctxmill.sandbox.v1.SuspendSessionResponse
@@ -349,7 +450,7 @@ export type SuspendSessionResponse = Message$1<"ctxmill.sandbox.v1.SuspendSessio
  * Use `create(SuspendSessionResponseSchema)` to create a new message.
  */
 export const SuspendSessionResponseSchema: GenMessage<SuspendSessionResponse> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 10);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 13);
 
 /**
  * @generated from message ctxmill.sandbox.v1.Cursor
@@ -371,7 +472,7 @@ export type Cursor = Message$1<"ctxmill.sandbox.v1.Cursor"> & {
  * Use `create(CursorSchema)` to create a new message.
  */
 export const CursorSchema: GenMessage<Cursor> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 11);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 14);
 
 /**
  * @generated from message ctxmill.sandbox.v1.RunnerState
@@ -393,7 +494,7 @@ export type RunnerState = Message$1<"ctxmill.sandbox.v1.RunnerState"> & {
  * Use `create(RunnerStateSchema)` to create a new message.
  */
 export const RunnerStateSchema: GenMessage<RunnerState> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 12);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 15);
 
 /**
  * @generated from message ctxmill.sandbox.v1.PendingRequest
@@ -420,7 +521,7 @@ export type PendingRequest = Message$1<"ctxmill.sandbox.v1.PendingRequest"> & {
  * Use `create(PendingRequestSchema)` to create a new message.
  */
 export const PendingRequestSchema: GenMessage<PendingRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 13);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 16);
 
 /**
  * @generated from message ctxmill.sandbox.v1.WorkspaceRef
@@ -442,7 +543,7 @@ export type WorkspaceRef = Message$1<"ctxmill.sandbox.v1.WorkspaceRef"> & {
  * Use `create(WorkspaceRefSchema)` to create a new message.
  */
 export const WorkspaceRefSchema: GenMessage<WorkspaceRef> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 14);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 17);
 
 /**
  * @generated from message ctxmill.sandbox.v1.SessionCheckpoint
@@ -494,7 +595,7 @@ export type SessionCheckpoint = Message$1<"ctxmill.sandbox.v1.SessionCheckpoint"
  * Use `create(SessionCheckpointSchema)` to create a new message.
  */
 export const SessionCheckpointSchema: GenMessage<SessionCheckpoint> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 15);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 18);
 
 /**
  * @generated from message ctxmill.sandbox.v1.KillSessionRequest
@@ -516,7 +617,7 @@ export type KillSessionRequest = Message$1<"ctxmill.sandbox.v1.KillSessionReques
  * Use `create(KillSessionRequestSchema)` to create a new message.
  */
 export const KillSessionRequestSchema: GenMessage<KillSessionRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 16);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 19);
 
 /**
  * @generated from message ctxmill.sandbox.v1.KillSessionResponse
@@ -533,7 +634,7 @@ export type KillSessionResponse = Message$1<"ctxmill.sandbox.v1.KillSessionRespo
  * Use `create(KillSessionResponseSchema)` to create a new message.
  */
 export const KillSessionResponseSchema: GenMessage<KillSessionResponse> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 17);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 20);
 
 /**
  * @generated from message ctxmill.sandbox.v1.RequestToolRequest
@@ -563,6 +664,16 @@ export type RequestToolRequest = Message$1<"ctxmill.sandbox.v1.RequestToolReques
    * @generated from field: string request_id = 5;
    */
   requestId: string;
+
+  /**
+   * @generated from field: string sandbox_session_id = 6;
+   */
+  sandboxSessionId: string;
+
+  /**
+   * @generated from field: ctxmill.sandbox.v1.TurnDeliveryCapability delivery_capability = 7;
+   */
+  deliveryCapability?: TurnDeliveryCapability;
 };
 
 /**
@@ -570,7 +681,7 @@ export type RequestToolRequest = Message$1<"ctxmill.sandbox.v1.RequestToolReques
  * Use `create(RequestToolRequestSchema)` to create a new message.
  */
 export const RequestToolRequestSchema: GenMessage<RequestToolRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 18);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 21);
 
 /**
  * @generated from message ctxmill.sandbox.v1.RequestToolResponse
@@ -597,7 +708,7 @@ export type RequestToolResponse = Message$1<"ctxmill.sandbox.v1.RequestToolRespo
  * Use `create(RequestToolResponseSchema)` to create a new message.
  */
 export const RequestToolResponseSchema: GenMessage<RequestToolResponse> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 19);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 22);
 
 /**
  * @generated from message ctxmill.sandbox.v1.EmitEventRequest
@@ -617,6 +728,21 @@ export type EmitEventRequest = Message$1<"ctxmill.sandbox.v1.EmitEventRequest"> 
    * @generated from field: string payload_json = 3;
    */
   payloadJson: string;
+
+  /**
+   * @generated from field: string sandbox_session_id = 4;
+   */
+  sandboxSessionId: string;
+
+  /**
+   * @generated from field: string agent_id = 5;
+   */
+  agentId: string;
+
+  /**
+   * @generated from field: ctxmill.sandbox.v1.TurnDeliveryCapability delivery_capability = 6;
+   */
+  deliveryCapability?: TurnDeliveryCapability;
 };
 
 /**
@@ -624,7 +750,7 @@ export type EmitEventRequest = Message$1<"ctxmill.sandbox.v1.EmitEventRequest"> 
  * Use `create(EmitEventRequestSchema)` to create a new message.
  */
 export const EmitEventRequestSchema: GenMessage<EmitEventRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 20);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 23);
 
 /**
  * @generated from message ctxmill.sandbox.v1.EmitEventResponse
@@ -637,29 +763,29 @@ export type EmitEventResponse = Message$1<"ctxmill.sandbox.v1.EmitEventResponse"
  * Use `create(EmitEventResponseSchema)` to create a new message.
  */
 export const EmitEventResponseSchema: GenMessage<EmitEventResponse> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 21);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 24);
 
 /**
- * @generated from message ctxmill.sandbox.v1.NativeToolConfig
+ * @generated from message ctxmill.sandbox.v1.NativeToolPolicyConfig
  */
-export type NativeToolConfig = Message$1<"ctxmill.sandbox.v1.NativeToolConfig"> & {
+export type NativeToolPolicyConfig = Message$1<"ctxmill.sandbox.v1.NativeToolPolicyConfig"> & {
   /**
-   * @generated from field: repeated string allowlist = 1;
+   * @generated from field: ctxmill.sandbox.v1.NativeToolPolicy policy = 1;
    */
-  allowlist: string[];
+  policy: NativeToolPolicy;
 
   /**
-   * @generated from field: repeated string blocklist = 2;
+   * @generated from field: repeated string names = 2;
    */
-  blocklist: string[];
+  names: string[];
 };
 
 /**
- * Describes the message ctxmill.sandbox.v1.NativeToolConfig.
- * Use `create(NativeToolConfigSchema)` to create a new message.
+ * Describes the message ctxmill.sandbox.v1.NativeToolPolicyConfig.
+ * Use `create(NativeToolPolicyConfigSchema)` to create a new message.
  */
-export const NativeToolConfigSchema: GenMessage<NativeToolConfig> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 22);
+export const NativeToolPolicyConfigSchema: GenMessage<NativeToolPolicyConfig> = /*@__PURE__*/
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 25);
 
 /**
  * @generated from message ctxmill.sandbox.v1.Message
@@ -701,7 +827,7 @@ export type Message = Message$1<"ctxmill.sandbox.v1.Message"> & {
  * Use `create(MessageSchema)` to create a new message.
  */
 export const MessageSchema: GenMessage<Message> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 23);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 26);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ToolCall
@@ -728,7 +854,7 @@ export type ToolCall = Message$1<"ctxmill.sandbox.v1.ToolCall"> & {
  * Use `create(ToolCallSchema)` to create a new message.
  */
 export const ToolCallSchema: GenMessage<ToolCall> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 24);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 27);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ToolMetadata
@@ -765,7 +891,7 @@ export type ToolMetadata = Message$1<"ctxmill.sandbox.v1.ToolMetadata"> & {
  * Use `create(ToolMetadataSchema)` to create a new message.
  */
 export const ToolMetadataSchema: GenMessage<ToolMetadata> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 25);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 28);
 
 /**
  * @generated from message ctxmill.sandbox.v1.AgentEvent
@@ -830,7 +956,7 @@ export type AgentEvent = Message$1<"ctxmill.sandbox.v1.AgentEvent"> & {
  * Use `create(AgentEventSchema)` to create a new message.
  */
 export const AgentEventSchema: GenMessage<AgentEvent> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 26);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 29);
 
 /**
  * @generated from message ctxmill.sandbox.v1.CustomAgentEvent
@@ -852,7 +978,7 @@ export type CustomAgentEvent = Message$1<"ctxmill.sandbox.v1.CustomAgentEvent"> 
  * Use `create(CustomAgentEventSchema)` to create a new message.
  */
 export const CustomAgentEventSchema: GenMessage<CustomAgentEvent> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 27);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 30);
 
 /**
  * @generated from message ctxmill.sandbox.v1.TextDelta
@@ -869,7 +995,7 @@ export type TextDelta = Message$1<"ctxmill.sandbox.v1.TextDelta"> & {
  * Use `create(TextDeltaSchema)` to create a new message.
  */
 export const TextDeltaSchema: GenMessage<TextDelta> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 28);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 31);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ToolCallStart
@@ -896,7 +1022,7 @@ export type ToolCallStart = Message$1<"ctxmill.sandbox.v1.ToolCallStart"> & {
  * Use `create(ToolCallStartSchema)` to create a new message.
  */
 export const ToolCallStartSchema: GenMessage<ToolCallStart> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 29);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 32);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ToolCallEnd
@@ -928,7 +1054,7 @@ export type ToolCallEnd = Message$1<"ctxmill.sandbox.v1.ToolCallEnd"> & {
  * Use `create(ToolCallEndSchema)` to create a new message.
  */
 export const ToolCallEndSchema: GenMessage<ToolCallEnd> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 30);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 33);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ApprovalNeeded
@@ -955,7 +1081,7 @@ export type ApprovalNeeded = Message$1<"ctxmill.sandbox.v1.ApprovalNeeded"> & {
  * Use `create(ApprovalNeededSchema)` to create a new message.
  */
 export const ApprovalNeededSchema: GenMessage<ApprovalNeeded> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 31);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 34);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ApprovalResolved
@@ -977,7 +1103,7 @@ export type ApprovalResolved = Message$1<"ctxmill.sandbox.v1.ApprovalResolved"> 
  * Use `create(ApprovalResolvedSchema)` to create a new message.
  */
 export const ApprovalResolvedSchema: GenMessage<ApprovalResolved> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 32);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 35);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ErrorEvent
@@ -1004,7 +1130,7 @@ export type ErrorEvent = Message$1<"ctxmill.sandbox.v1.ErrorEvent"> & {
  * Use `create(ErrorEventSchema)` to create a new message.
  */
 export const ErrorEventSchema: GenMessage<ErrorEvent> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 33);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 36);
 
 /**
  * @generated from message ctxmill.sandbox.v1.DoneEvent
@@ -1031,7 +1157,7 @@ export type DoneEvent = Message$1<"ctxmill.sandbox.v1.DoneEvent"> & {
  * Use `create(DoneEventSchema)` to create a new message.
  */
 export const DoneEventSchema: GenMessage<DoneEvent> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 34);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 37);
 
 /**
  * @generated from message ctxmill.sandbox.v1.TokenUsage
@@ -1063,7 +1189,7 @@ export type TokenUsage = Message$1<"ctxmill.sandbox.v1.TokenUsage"> & {
  * Use `create(TokenUsageSchema)` to create a new message.
  */
 export const TokenUsageSchema: GenMessage<TokenUsage> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 35);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 38);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ArtifactMeta
@@ -1125,7 +1251,7 @@ export type ArtifactMeta = Message$1<"ctxmill.sandbox.v1.ArtifactMeta"> & {
  * Use `create(ArtifactMetaSchema)` to create a new message.
  */
 export const ArtifactMetaSchema: GenMessage<ArtifactMeta> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 36);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 39);
 
 /**
  * @generated from message ctxmill.sandbox.v1.RegisterArtifactRequest
@@ -1145,6 +1271,16 @@ export type RegisterArtifactRequest = Message$1<"ctxmill.sandbox.v1.RegisterArti
    * @generated from field: ctxmill.sandbox.v1.ArtifactMeta artifact = 3;
    */
   artifact?: ArtifactMeta;
+
+  /**
+   * @generated from field: string sandbox_session_id = 4;
+   */
+  sandboxSessionId: string;
+
+  /**
+   * @generated from field: ctxmill.sandbox.v1.TurnDeliveryCapability delivery_capability = 5;
+   */
+  deliveryCapability?: TurnDeliveryCapability;
 };
 
 /**
@@ -1152,7 +1288,7 @@ export type RegisterArtifactRequest = Message$1<"ctxmill.sandbox.v1.RegisterArti
  * Use `create(RegisterArtifactRequestSchema)` to create a new message.
  */
 export const RegisterArtifactRequestSchema: GenMessage<RegisterArtifactRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 37);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 40);
 
 /**
  * @generated from message ctxmill.sandbox.v1.RegisterArtifactResponse
@@ -1174,7 +1310,7 @@ export type RegisterArtifactResponse = Message$1<"ctxmill.sandbox.v1.RegisterArt
  * Use `create(RegisterArtifactResponseSchema)` to create a new message.
  */
 export const RegisterArtifactResponseSchema: GenMessage<RegisterArtifactResponse> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 38);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 41);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ResolveArtifactRequest
@@ -1189,6 +1325,21 @@ export type ResolveArtifactRequest = Message$1<"ctxmill.sandbox.v1.ResolveArtifa
    * @generated from field: string agent_id = 2;
    */
   agentId: string;
+
+  /**
+   * @generated from field: string turn_id = 3;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: string sandbox_session_id = 4;
+   */
+  sandboxSessionId: string;
+
+  /**
+   * @generated from field: ctxmill.sandbox.v1.TurnDeliveryCapability delivery_capability = 5;
+   */
+  deliveryCapability?: TurnDeliveryCapability;
 };
 
 /**
@@ -1196,7 +1347,7 @@ export type ResolveArtifactRequest = Message$1<"ctxmill.sandbox.v1.ResolveArtifa
  * Use `create(ResolveArtifactRequestSchema)` to create a new message.
  */
 export const ResolveArtifactRequestSchema: GenMessage<ResolveArtifactRequest> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 39);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 42);
 
 /**
  * @generated from message ctxmill.sandbox.v1.ResolveArtifactResponse
@@ -1218,7 +1369,43 @@ export type ResolveArtifactResponse = Message$1<"ctxmill.sandbox.v1.ResolveArtif
  * Use `create(ResolveArtifactResponseSchema)` to create a new message.
  */
 export const ResolveArtifactResponseSchema: GenMessage<ResolveArtifactResponse> = /*@__PURE__*/
-  messageDesc(file_ctxmill_sandbox_v1_sandbox, 40);
+  messageDesc(file_ctxmill_sandbox_v1_sandbox, 43);
+
+/**
+ * @generated from enum ctxmill.sandbox.v1.NativeToolPolicy
+ */
+export enum NativeToolPolicy {
+  /**
+   * @generated from enum value: NATIVE_TOOL_POLICY_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: NATIVE_TOOL_POLICY_ALL = 1;
+   */
+  ALL = 1,
+
+  /**
+   * @generated from enum value: NATIVE_TOOL_POLICY_ALLOW = 2;
+   */
+  ALLOW = 2,
+
+  /**
+   * @generated from enum value: NATIVE_TOOL_POLICY_DENY = 3;
+   */
+  DENY = 3,
+
+  /**
+   * @generated from enum value: NATIVE_TOOL_POLICY_NONE = 4;
+   */
+  NONE = 4,
+}
+
+/**
+ * Describes the enum ctxmill.sandbox.v1.NativeToolPolicy.
+ */
+export const NativeToolPolicySchema: GenEnum<NativeToolPolicy> = /*@__PURE__*/
+  enumDesc(file_ctxmill_sandbox_v1_sandbox, 0);
 
 /**
  * @generated from enum ctxmill.sandbox.v1.ToolLocation
@@ -1249,7 +1436,7 @@ export enum ToolLocation {
  * Describes the enum ctxmill.sandbox.v1.ToolLocation.
  */
 export const ToolLocationSchema: GenEnum<ToolLocation> = /*@__PURE__*/
-  enumDesc(file_ctxmill_sandbox_v1_sandbox, 0);
+  enumDesc(file_ctxmill_sandbox_v1_sandbox, 1);
 
 /**
  * @generated from service ctxmill.sandbox.v1.HarnessService
@@ -1270,6 +1457,14 @@ export const HarnessService: GenService<{
     methodKind: "server_streaming";
     input: typeof DeliverTurnRequestSchema;
     output: typeof SessionEventSchema;
+  },
+  /**
+   * @generated from rpc ctxmill.sandbox.v1.HarnessService.RenewTurnDeliveryCapability
+   */
+  renewTurnDeliveryCapability: {
+    methodKind: "unary";
+    input: typeof RenewTurnDeliveryCapabilityRequestSchema;
+    output: typeof RenewTurnDeliveryCapabilityResponseSchema;
   },
   /**
    * @generated from rpc ctxmill.sandbox.v1.HarnessService.SuspendSession

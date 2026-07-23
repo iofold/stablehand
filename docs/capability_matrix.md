@@ -378,25 +378,20 @@ hitl:
 
 ### Native Tool Types (Harness-Specific)
 
-#### LangGraph Native Tools
-- Blocklist mode: All tools available except listed
-- Examples: execute, bash, etc.
-
-#### Claude Agents Native Tools
-- Allowlist mode: Only listed tools available
-- Examples: Read, Write, Edit, Bash, Grep, Glob
-
-#### PI Agent Native Tools
-- Allowlist mode: Only listed tools available
-- Examples: read, bash, edit, write (lowercase)
+Every harness implements the same policy modes: `all`, `allow`, `deny`, and
+`none`. Only the SDK-owned tool names differ by harness. For example, Claude
+uses names such as `Read` and `Bash`, while PI uses lowercase names such as
+`read` and `bash`. CTXMill-provided tools are outside this policy.
 
 ### Native Tool Configuration
 ```yaml
-nativeTools:
-  allowlist: [Read, Write, Edit, Bash]  # Whitelist mode
-  # OR
-  blocklist: [execute]  # Blacklist mode
+nativeToolPolicy:
+  policy: allow
+  names: [Read, Write, Edit, Bash]
 ```
+
+Use `{ policy: all }` or `{ policy: none }` without `names`. `allow` and
+`deny` require a non-empty, duplicate-free `names` list.
 
 ### Native Tool Execution
 - Executed in-process (not via gRPC)
@@ -405,7 +400,7 @@ nativeTools:
 - No approval flow (unlike custom tools)
 
 **Stress Test Coverage**:
-- Allowlist/blocklist enforcement
+- `all`/`allow`/`deny`/`none` policy enforcement
 - Native tool availability per harness
 - Workspace path validation
 - Concurrent native tool execution

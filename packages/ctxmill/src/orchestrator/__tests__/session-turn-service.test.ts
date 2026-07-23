@@ -72,6 +72,46 @@ describe('SandboxRunService', () => {
       expect(sm.ensureSession).toHaveBeenCalledWith('conv-1', agentDef, agentDef.name);
     });
 
+    it('forwards exact turn secrets without attaching them to the agent definition', async () => {
+      const messages = createTestMessages();
+      const deliverTurn = vi.fn(async function* () {
+        yield* [];
+      });
+      const sm: SessionTurnSessionManager = {
+        ensureSession: vi.fn(async () => ({ sessionId: 'unused-session' })),
+        deliverTurn: deliverTurn as SessionTurnSessionManager['deliverTurn'],
+      };
+      const service = createSessionTurnExecutor({ sessionManager: sm, logger: silentLogger });
+      const agentDef = createTestAgentDef();
+
+      await collectEvents(service.executeSessionTurn(
+        agentDef,
+        'conv-1',
+        messages,
+        'turn-secret-a',
+        {
+          existingSessionId: 'session-warm',
+          turnSecrets: {
+            PILOT_TURN_OWNERSHIP_TOKEN: 'ownership-a',
+            PILOT_API_BASE: 'http://pilot-api:3000',
+          },
+        },
+      ));
+
+      expect(sm.ensureSession).not.toHaveBeenCalled();
+      expect(deliverTurn).toHaveBeenCalledWith(
+        'session-warm',
+        messages,
+        'turn-secret-a',
+        {
+          turnSecrets: {
+            PILOT_TURN_OWNERSHIP_TOKEN: 'ownership-a',
+            PILOT_API_BASE: 'http://pilot-api:3000',
+          },
+        },
+      );
+    });
+
     it('should yield AgentSessionEvents from ag_ui_event session events', async () => {
       const aguiEvent: AgentSessionEvent = { type: 'RUN_STARTED', timestamp: 100, runId: 'turn-1' };
       const sm = createMockSessionManager([{ type: 'ag_ui_event', event: aguiEvent }]);
@@ -185,11 +225,78 @@ describe('SandboxRunService', () => {
       controller.abort();
 
       const events = await collectEvents(
-        service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1', controller.signal),
+        service.executeSessionTurn(
+          createTestAgentDef(),
+          'conv-1',
+          createTestMessages(),
+          'turn-1',
+          { signal: controller.signal },
+        ),
       );
 
       expect(events).toHaveLength(0);
       expect(deliverSpy).not.toHaveBeenCalled();
+    });
+
+    it('should abort an idle deliverTurn stream through the executor adapter', async () => {
+      const controller = new AbortController();
+      let deliveredSignal: AbortSignal | undefined;
+      let markStreamEntered!: () => void;
+      let releaseIdleStream: (() => void) | undefined;
+      const streamEntered = new Promise<void>((resolve) => {
+        markStreamEntered = resolve;
+      });
+      const sm: SessionTurnSessionManager = {
+        ensureSession: vi.fn(async () => ({ sessionId: 'session-idle' })),
+        deliverTurn: async function* (_sessionId, _messages, _turnId, options) {
+          deliveredSignal = options?.signal;
+          markStreamEntered();
+          await new Promise<void>((resolve) => {
+            if (!options?.signal) {
+              releaseIdleStream = resolve;
+              return;
+            }
+            if (options.signal.aborted) {
+              resolve();
+              return;
+            }
+            options.signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+          yield* [];
+        },
+      };
+      const service = createSessionTurnExecutor({ sessionManager: sm, logger: silentLogger });
+      const execution = collectEvents(
+        service.executeSessionTurn(
+          createTestAgentDef(),
+          'conv-1',
+          createTestMessages(),
+          'turn-idle',
+          { signal: controller.signal },
+        ),
+      );
+
+      await streamEntered;
+      controller.abort();
+
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        execution.then(() => 'completed' as const),
+        new Promise<'timed-out'>((resolve) => {
+          timeout = setTimeout(() => resolve('timed-out'), 250);
+        }),
+      ]);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+
+      try {
+        expect(outcome).toBe('completed');
+        expect(deliveredSignal).toBe(controller.signal);
+      } finally {
+        releaseIdleStream?.();
+        await execution;
+      }
     });
 
     it('should preserve session when signal fires during streaming', async () => {
@@ -209,7 +316,13 @@ describe('SandboxRunService', () => {
       const service = createSessionTurnExecutor({ sessionManager: sm, logger: silentLogger });
 
       await collectEvents(
-        service.executeSessionTurn(createTestAgentDef(), 'conv-1', createTestMessages(), 'turn-1', controller.signal),
+        service.executeSessionTurn(
+          createTestAgentDef(),
+          'conv-1',
+          createTestMessages(),
+          'turn-1',
+          { signal: controller.signal },
+        ),
       );
 
       expect(sm.killSession).not.toHaveBeenCalled();

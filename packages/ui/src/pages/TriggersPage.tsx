@@ -177,10 +177,15 @@ export function TriggersPage() {
       return;
     }
 
-    let selector: Record<string, unknown> | undefined;
+    let selector: Record<string, unknown> | null | undefined = editingTrigger ? null : undefined;
     if (form.selector.trim()) {
       try {
-        selector = JSON.parse(form.selector);
+        const parsed: unknown = JSON.parse(form.selector);
+        if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
+          setFormError('Selector must be a JSON object.');
+          return;
+        }
+        selector = parsed as Record<string, unknown>;
       } catch {
         setFormError('Selector must be valid JSON.');
         return;
@@ -204,14 +209,15 @@ export function TriggersPage() {
           agentId: form.agentId,
           eventType: form.eventType,
           taskTemplate: form.taskTemplate,
-          selector,
+          selector: selector ?? undefined,
           enabled: form.enabled,
         });
       }
       closeModal();
       await loadTriggers();
     } catch (err) {
-      setFormError(editingTrigger ? 'Failed to update trigger.' : 'Failed to create trigger.');
+      const fallback = editingTrigger ? 'Failed to update trigger.' : 'Failed to create trigger.';
+      setFormError(err instanceof Error && err.message ? err.message : fallback);
       console.debug('[Triggers] Save failed:', err);
     } finally {
       setSaving(false);

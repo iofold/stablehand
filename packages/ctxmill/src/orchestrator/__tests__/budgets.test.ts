@@ -40,6 +40,28 @@ describe('parseBudgetPolicyDoc', () => {
     })).toHaveProperty('error');
     expect(parseBudgetPolicyDoc({ ...VALID_DOC, selector: { bu: 42 } })).toHaveProperty('error');
   });
+
+  it('rejects drift-prone unknown, fractional, duplicate, and reversed values', () => {
+    expect(parseBudgetPolicyDoc({ ...VALID_DOC, unknown: true })).toHaveProperty('error');
+    expect(parseBudgetPolicyDoc({
+      ...VALID_DOC,
+      limits: { totalTokens: 1.5 },
+    })).toHaveProperty('error');
+    expect(parseBudgetPolicyDoc({
+      ...VALID_DOC,
+      actions: [
+        { threshold: 0.5, action: 'warn' },
+        { threshold: 0.7, action: 'warn' },
+      ],
+    })).toHaveProperty('error');
+    expect(parseBudgetPolicyDoc({
+      ...VALID_DOC,
+      actions: [
+        { threshold: 0.9, action: 'warn' },
+        { threshold: 0.8, action: 'block' },
+      ],
+    })).toHaveProperty('error');
+  });
 });
 
 describe('windowStartMs', () => {
@@ -123,6 +145,30 @@ describe('BudgetEnforcer.checkAdmission', () => {
 
   it('blocks when the bucket is exhausted', async () => {
     const db = makeDb({ spend: { totalTokens: 1000, costUsd: 0, turns: 3 } });
+    const enforcer = new BudgetEnforcer({ db: db as never, logger: silentLogger });
+    await expect(enforcer.checkAdmission({
+      agentId: 'a1',
+      tags: { bu: 'finance', user: 'alice@acme.com' },
+      budgetDimensions: PROVISIONED,
+    })).rejects.toThrow(BudgetExceededError);
+  });
+
+  it('blocks whenever block is crossed regardless of input action order', async () => {
+    const db = makeDb({
+      policies: [{
+        id: 'p1',
+        name: 'finance cap',
+        enabled: true,
+        doc: {
+          ...VALID_DOC,
+          actions: [
+            { threshold: 1, action: 'block' },
+            { threshold: 0.8, action: 'warn' },
+          ],
+        },
+      }],
+      spend: { totalTokens: 1000, costUsd: 0, turns: 3 },
+    });
     const enforcer = new BudgetEnforcer({ db: db as never, logger: silentLogger });
     await expect(enforcer.checkAdmission({
       agentId: 'a1',
@@ -228,7 +274,13 @@ describe('BudgetEnforcer.onTurnCompleted', () => {
     await enforcer.onTurnCompleted({
       turnId: 't1', sandboxSessionId: 's1', agentId: 'a1', conversationId: 'c1',
       status: 'completed', durationMs: 10,
-      usage: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      usage: {
+        inputTokens: 80,
+        outputTokens: 20,
+        totalTokens: 100,
+        modelCalls: { observed: 1, costKnown: 0, expected: 1 },
+        cost: { totalUsd: null, knownUsd: 0, coverage: 'unpriced' },
+      },
       timestamp: Date.now(),
     });
     expect(emit).toHaveBeenCalledWith('budget.threshold', expect.objectContaining({
@@ -244,9 +296,73 @@ describe('BudgetEnforcer.onTurnCompleted', () => {
     await enforcer.onTurnCompleted({
       turnId: 't1', sandboxSessionId: 's1', agentId: 'a1', conversationId: 'c1',
       status: 'completed', durationMs: 10,
-      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+        modelCalls: { observed: 1, costKnown: 0, expected: 1 },
+        cost: { totalUsd: null, knownUsd: 0, coverage: 'unpriced' },
+      },
       timestamp: Date.now(),
     });
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('evaluates only the late usage delta when gateway cost is reconciled', async () => {
+    const db = {
+      listBudgetPolicies: vi.fn().mockResolvedValue([{
+        id: 'p-cost',
+        name: 'gateway cost cap',
+        enabled: true,
+        doc: {
+          selector: { bu: 'finance' },
+          window: 'rolling-24h',
+          limits: { costUsd: 10 },
+          actions: [{ threshold: 0.8, action: 'warn' }],
+        },
+      }]),
+      getBudgetSpend: vi.fn().mockResolvedValue({
+        totalTokens: 500,
+        costUsd: 8.25,
+        turns: 5,
+      }),
+      getTurn: vi.fn().mockResolvedValue({
+        id: 't1',
+        tags: { bu: 'finance' },
+      }),
+    };
+    const emit = vi.fn();
+    const enforcer = new BudgetEnforcer({
+      db: db as never,
+      eventBus: { emit } as never,
+      logger: silentLogger,
+    });
+
+    await enforcer.onTurnUsageReconciled({
+      turnId: 't1',
+      agentId: 'a1',
+      previousUsage: {
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        modelCalls: { observed: 0, costKnown: 0, expected: null },
+        cost: { totalUsd: null, knownUsd: 0, coverage: 'pending' },
+      },
+      usage: {
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        modelCalls: { observed: 0, costKnown: 0, expected: null },
+        cost: { totalUsd: 0.5, knownUsd: 0.5, coverage: 'complete' },
+      },
+    });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('budget.threshold', expect.objectContaining({
+      policyId: 'p-cost',
+      metric: 'costUsd',
+      spent: 8.25,
+      limit: 10,
+    }));
   });
 });

@@ -79,8 +79,11 @@ describe('resolveGrpcCallbackAuthConfig', () => {
 });
 
 describe('getGrpcCallbackSandboxSecrets', () => {
-  it('returns no sandbox env when callback auth is open', () => {
-    expect(getGrpcCallbackSandboxSecrets('session-1', 'agent-1', { mode: 'open' })).toEqual({});
+  it('propagates non-secret callback identity when callback auth is open', () => {
+    expect(getGrpcCallbackSandboxSecrets('session-1', 'agent-1', { mode: 'open' })).toEqual({
+      [CALLBACK_SESSION_ENV]: 'session-1',
+      [CALLBACK_AGENT_ENV]: 'agent-1',
+    });
   });
 
   it('returns a session-scoped callback token env set when auth is enforced', () => {
@@ -95,18 +98,39 @@ describe('getGrpcCallbackSandboxSecrets', () => {
 describe('validateGrpcCallbackAuth', () => {
   it('accepts a valid token whose identity matches the request message', () => {
     expect(() => validateGrpcCallbackAuth(ENFORCED_CONFIG, headersFor(), {
-      sessionId: 'turn-1',
+      sandboxSessionId: 'session-1',
       agentId: 'agent-1',
       toolName: 'emit-event',
     })).not.toThrow();
   });
 
-  it('allows request session IDs to differ because RPC bodies carry turn IDs', () => {
+  it('requires the canonical request sandbox session to match authenticated headers', () => {
+    expectConnectCode(
+      () => validateGrpcCallbackAuth(ENFORCED_CONFIG, headersFor('sandbox-session-1'), {
+        sandboxSessionId: 'other-session',
+        agentId: 'agent-1',
+      }),
+      Code.PermissionDenied,
+    );
+  });
+
+  it('rejects delivery callbacks that omit the canonical sandbox session identity', () => {
+    expectConnectCode(
+      () => validateGrpcCallbackAuth(ENFORCED_CONFIG, headersFor(), {
+        turnId: 'turn-1',
+        agentId: 'agent-1',
+      }),
+      Code.PermissionDenied,
+    );
+  });
+
+  it('does not confuse turn IDs with canonical sandbox session IDs', () => {
     expect(() => validateGrpcCallbackAuth(ENFORCED_CONFIG, headersFor('sandbox-session-1'), {
-      sessionId: 'turn-1',
+      sandboxSessionId: 'sandbox-session-1',
+      turnId: 'turn-1',
       agentId: 'agent-1',
       artifact: {
-        sessionId: 'turn-1',
+        turnId: 'turn-1',
         agentId: 'agent-1',
       },
     })).not.toThrow();

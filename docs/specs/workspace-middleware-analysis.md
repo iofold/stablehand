@@ -4,7 +4,7 @@
 
 **Status:** Analysis (pre-implementation)  
 **Date:** 2026-04-07  
-**Input:** `client-repo/docs/specs/ctxmill-workspace-middleware.md`  
+**Input:** a client workspace-middleware spec (external)  
 **Scope:** All 3 harnesses (LangGraph, Claude Agents, PI Agent)  
 **Shipping status (2026-07):** Only a narrow subset shipped — `harnessConfig.middleware` (a list of middleware paths) for LangGraph and the `wrapToolCall` extension hook for PI Agent. The unified `WorkspaceMiddleware` / `defineMiddleware` design described here never shipped.
 

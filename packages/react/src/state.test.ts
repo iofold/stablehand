@@ -4,7 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 import { parseCanonicalStreamEvent } from '@ctxmill/client';
 
-import { createInitialChatState, reduceCtxmillChatState } from './state.js';
+import {
+  createInitialChatState,
+  reduceCtxmillChatState,
+  toCtxmillMessages,
+} from './state.js';
 
 describe('@ctxmill/react chat reducer', () => {
   it('reduces every server-emitted canonical fixture frame', () => {
@@ -363,6 +367,7 @@ describe('@ctxmill/react chat reducer', () => {
     expect(state.messages[0]).toMatchObject({
       id: 'canonical-user-1',
       content: 'Reconcile me once',
+      createdAt: '1970-01-01T00:00:00.001Z',
     });
     state = reduceCtxmillChatState(state, {
       type: 'stream_event',
@@ -449,6 +454,173 @@ describe('@ctxmill/react chat reducer', () => {
     });
   });
 
+  it('keeps the active assistant projection when a canonical tool message is committed', () => {
+    let state = createInitialChatState('conversation-1');
+    const emit = (raw: unknown) => {
+      state = reduceCtxmillChatState(state, {
+        type: 'stream_event',
+        event: parseCanonicalStreamEvent(raw),
+      });
+    };
+    const customIdentity = {
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+    };
+
+    emit({
+      type: 'RUN_STARTED',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      timestamp: 1,
+    });
+    emit({
+      type: 'TOOL_CALL_START',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      toolCallId: 'tool-1',
+      toolCallName: 'lookup',
+      timestamp: 2,
+    });
+    emit({
+      type: 'CUSTOM',
+      name: 'ctxmill.message.committed',
+      ...customIdentity,
+      messageId: 'assistant-canonical',
+      messageSeq: 0,
+      role: 'assistant',
+      content: '',
+      parts: [{
+        type: 'tool_call',
+        id: 'tool-1',
+        name: 'lookup',
+        args: '{}',
+        result: 'full accumulated result',
+        status: 'complete',
+      }],
+      toolCalls: [{
+        id: 'tool-1',
+        name: 'lookup',
+        args: '{}',
+        result: 'full accumulated result',
+        status: 'complete',
+      }],
+      timestamp: 3,
+    });
+    emit({
+      type: 'CUSTOM',
+      name: 'ctxmill.message.committed',
+      ...customIdentity,
+      messageId: 'tool-canonical',
+      messageSeq: 1,
+      role: 'tool',
+      content: 'full accumulated result',
+      parts: [{
+        type: 'text',
+        content: 'full accumulated result',
+      }],
+      toolCalls: [],
+      toolCallId: 'tool-1',
+      timestamp: 4,
+    });
+
+    expect(state.messages.map(({ id }) => id)).toEqual([
+      'assistant-canonical',
+      'tool-canonical',
+    ]);
+    expect(state.messages[0]?.parts).toContainEqual({
+      type: 'tool_call',
+      id: 'tool-1',
+      name: 'lookup',
+      args: '{}',
+      result: 'full accumulated result',
+      status: 'complete',
+    });
+    expect(state.messages[1]).toMatchObject({
+      id: 'tool-canonical',
+      toolCallId: 'tool-1',
+      createdAt: '1970-01-01T00:00:00.004Z',
+    });
+    expect(state.activeAssistantMessageId).toBe('assistant-canonical');
+  });
+
+  it('does not let a later raw tool result replace a canonical tool outcome', () => {
+    let state = createInitialChatState('conversation-1');
+    const emit = (raw: unknown) => {
+      state = reduceCtxmillChatState(state, {
+        type: 'stream_event',
+        event: parseCanonicalStreamEvent(raw),
+      });
+    };
+    const runIdentity = {
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+    };
+    const customIdentity = {
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+    };
+
+    emit({
+      type: 'RUN_STARTED',
+      ...runIdentity,
+      timestamp: 1,
+    });
+    emit({
+      type: 'TOOL_CALL_START',
+      ...runIdentity,
+      toolCallId: 'tool-1',
+      toolCallName: 'lookup',
+      timestamp: 2,
+    });
+    emit({
+      type: 'CUSTOM',
+      name: 'ctxmill.message.committed',
+      ...customIdentity,
+      messageId: 'assistant-canonical',
+      messageSeq: 0,
+      role: 'assistant',
+      content: '',
+      parts: [{
+        type: 'tool_call',
+        id: 'tool-1',
+        name: 'lookup',
+        args: '{}',
+        result: 'canonical result...',
+        status: 'complete',
+      }],
+      timestamp: 3,
+    });
+    emit({
+      type: 'CUSTOM',
+      name: 'ctxmill.message.committed',
+      ...customIdentity,
+      messageId: 'tool-canonical',
+      messageSeq: 1,
+      role: 'tool',
+      content: 'canonical result...',
+      toolCallId: 'tool-1',
+      timestamp: 4,
+    });
+    emit({
+      type: 'TOOL_CALL_RESULT',
+      ...runIdentity,
+      toolCallId: 'tool-1',
+      result: 'canonical result',
+      timestamp: 5,
+    });
+
+    expect(state.messages[0]?.parts).toContainEqual({
+      type: 'tool_call',
+      id: 'tool-1',
+      name: 'lookup',
+      args: '{}',
+      result: 'canonical result...',
+      status: 'complete',
+    });
+  });
+
   it('hydrates missing tool parts from REST toolCalls and ignores an older committed baseline', () => {
     let state = reduceCtxmillChatState(createInitialChatState('conversation-1'), {
       type: 'load_messages',
@@ -500,6 +672,59 @@ describe('@ctxmill/react chat reducer', () => {
     expect(state.messages).toHaveLength(1);
     expect(state.messages[0]?.content).toBe('Authoritative REST projection');
     expect(state.messageRevisions.get('message-1')).toBe(2);
+  });
+
+  it('preserves canonical persisted timestamps across transcript reloads', () => {
+    const state = reduceCtxmillChatState(
+      createInitialChatState('conversation-1'),
+      {
+        type: 'load_messages',
+        messages: [{
+          id: 'message-1',
+          messageRevision: 0,
+          role: 'assistant',
+          content: 'Persisted answer',
+          createdAt: '2026-07-20T11:28:55.222Z',
+        }],
+      },
+    );
+
+    expect(state.messages[0]?.createdAt).toBe(
+      '2026-07-20T11:28:55.222Z',
+    );
+  });
+
+  it('preserves timestamps and tool-result identity from AG-UI snapshots', () => {
+    const state = reduceCtxmillChatState(
+      createInitialChatState('conversation-1'),
+      {
+        type: 'stream_event',
+        event: parseCanonicalStreamEvent({
+          type: 'MESSAGES_SNAPSHOT',
+          runId: 'turn-1',
+          threadId: 'conversation-1',
+          messages: [{
+            id: 'tool-message-1',
+            role: 'tool',
+            content: 'APPROVED',
+            toolCallId: 'tool-call-1',
+            createdAt: 1_784_546_935_222,
+          }],
+        }),
+      },
+    );
+
+    expect(state.messages[0]).toMatchObject({
+      id: 'tool-message-1',
+      role: 'tool',
+      toolCallId: 'tool-call-1',
+      createdAt: '2026-07-20T11:28:55.222Z',
+    });
+    expect(toCtxmillMessages(state.messages)[0]).toMatchObject({
+      id: 'tool-message-1',
+      role: 'tool',
+      toolCallId: 'tool-call-1',
+    });
   });
 
   it('keeps canonical message revisions authoritative across replay and REST convergence', () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Offline master-key rotation for the secrets table.
+// Offline master-key rotation for stable secrets and open-turn envelopes.
 //
 // Usage:
 //   DATABASE_URL=postgres://... \
@@ -7,7 +7,7 @@
 //   NEW_SECRET_MASTER_KEY=... \
 //   node scripts/reencrypt-secrets.mjs
 //
-// Decrypts every secrets row with the old passphrase and re-encrypts it with
+// Decrypts every encrypted row with the old passphrase and re-encrypts it with
 // the new one inside a single transaction. Fail-closed: if any row does not
 // decrypt with the old passphrase, the whole run rolls back and the offending
 // row ids are reported — a partial rotation is never committed.
@@ -71,27 +71,42 @@ const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
 
 try {
   const rotated = await sql.begin(async (tx) => {
-    const rows = await tx`SELECT id, iv, ciphertext, auth_tag FROM secrets ORDER BY id`;
+    const secretRows = await tx`SELECT id, iv, ciphertext, auth_tag FROM secrets ORDER BY id`;
+    const turnRows = await tx`
+      SELECT turn_id, iv, ciphertext, auth_tag
+      FROM turn_secret_envelopes
+      ORDER BY turn_id
+    `;
     const undecryptable = [];
-    const reencrypted = [];
+    const reencryptedSecrets = [];
+    const reencryptedTurns = [];
 
-    for (const row of rows) {
+    for (const row of secretRows) {
       try {
         const plaintext = decrypt({ iv: row.iv, ciphertext: row.ciphertext, tag: row.auth_tag }, oldKey);
-        reencrypted.push({ id: row.id, ...encrypt(plaintext, newKey) });
+        reencryptedSecrets.push({ id: row.id, ...encrypt(plaintext, newKey) });
       } catch {
-        undecryptable.push(row.id);
+        undecryptable.push(`secret:${row.id}`);
+      }
+    }
+
+    for (const row of turnRows) {
+      try {
+        const plaintext = decrypt({ iv: row.iv, ciphertext: row.ciphertext, tag: row.auth_tag }, oldKey);
+        reencryptedTurns.push({ turnId: row.turn_id, ...encrypt(plaintext, newKey) });
+      } catch {
+        undecryptable.push(`turn:${row.turn_id}`);
       }
     }
 
     if (undecryptable.length > 0) {
       throw new Error(
-        `${undecryptable.length}/${rows.length} rows did not decrypt with OLD_SECRET_MASTER_KEY; ` +
+        `${undecryptable.length}/${secretRows.length + turnRows.length} rows did not decrypt with OLD_SECRET_MASTER_KEY; ` +
           `rolling back. Row ids: ${undecryptable.join(', ')}`,
       );
     }
 
-    for (const row of reencrypted) {
+    for (const row of reencryptedSecrets) {
       await tx`
         UPDATE secrets
         SET iv = ${row.iv}, ciphertext = ${row.ciphertext}, auth_tag = ${row.tag}, updated_at = now()
@@ -99,10 +114,24 @@ try {
       `;
     }
 
-    return reencrypted.length;
+    for (const row of reencryptedTurns) {
+      await tx`
+        UPDATE turn_secret_envelopes
+        SET iv = ${row.iv}, ciphertext = ${row.ciphertext}, auth_tag = ${row.tag}
+        WHERE turn_id = ${row.turnId}
+      `;
+    }
+
+    return {
+      secrets: reencryptedSecrets.length,
+      turns: reencryptedTurns.length,
+    };
   });
 
-  console.log(`reencrypt-secrets: rotated ${rotated} secret(s) to the new master key`);
+  console.log(
+    `reencrypt-secrets: rotated ${rotated.secrets} stable secret(s) and `
+    + `${rotated.turns} open-turn envelope(s) to the new master key`,
+  );
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 } finally {

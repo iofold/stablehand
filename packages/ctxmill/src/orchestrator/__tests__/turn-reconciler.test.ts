@@ -22,6 +22,8 @@ function createTurn(overrides: Record<string, unknown> = {}) {
     startedAt: BOOT_TIME - 60_000,
     completedAt: null,
     error: null,
+    deliveryOwnerId: null,
+    deliveryFenceToken: null,
     ...overrides,
   };
 }
@@ -37,18 +39,68 @@ function createDeps(options: {
     getPendingInterruptForTurn: vi.fn().mockResolvedValue(options.interrupt),
     getMessages: vi.fn().mockResolvedValue(options.messages ?? []),
     getTurnFrames: vi.fn().mockResolvedValue([]),
-    claimTurnReconciliationLease: vi.fn().mockImplementation(async (input: {
+    getSandboxSession: vi.fn().mockResolvedValue({
+      id: 'sess-1',
+      conversationId: 'conv-1',
+      agentId: 'agent-1',
+      containerName: 'ctxmill-sandbox-sess-1',
+      containerId: 'container-1',
+      status: 'ACTIVE',
+      harnessName: 'langgraph',
+      checkpointRef: null,
+      createdAt: 1,
+      updatedAt: 1,
+      lastActivityAt: 1,
+      restoreAttempts: 0,
+      lastRestoreError: null,
+      restoreOwnerId: null,
+      restoreFenceToken: 0,
+      restoreLeaseExpiresAt: null,
+    }),
+    claimTurnDeliveryLease: vi.fn().mockImplementation(async (input: {
       turnId: string;
       ownerId: string;
-      claimedAt: number;
-      leaseExpiresAt: number;
+      leaseDurationMs: number;
     }) => ({
-      ...input,
-      updatedAt: input.claimedAt,
+      turnId: input.turnId,
+      ownerId: input.ownerId,
+      fenceToken: 1,
+      leaseExpiresAt: Date.now() + input.leaseDurationMs,
+      updatedAt: Date.now(),
     })),
-    renewTurnReconciliationLease: vi.fn(),
-    releaseTurnReconciliationLease: vi.fn().mockResolvedValue(true),
-    authorizeQueuedTurnRedispatch: vi.fn().mockResolvedValue(true),
+    renewTurnDeliveryLease: vi.fn(),
+    releaseTurnDeliveryLease: vi.fn().mockResolvedValue(true),
+    isTurnDeliveryFenceCurrent: vi.fn().mockResolvedValue(true),
+    wasTurnFinalizedByDeliveryFence: vi.fn().mockResolvedValue(false),
+    claimSandboxSessionLifecycleOperation: vi.fn().mockImplementation(async (
+      input: {
+        sandboxSessionId: string;
+        operation: 'reset';
+        ownerId: string;
+        leaseDurationMs: number;
+        allowedTurnDelivery?: {
+          turnId: string;
+          ownerId: string;
+          fenceToken: number;
+        };
+      },
+    ) => ({
+      sandboxSessionId: input.sandboxSessionId,
+      operation: input.operation,
+      operationId: 'logical-reset-1',
+      phase: 'reserved' as const,
+      ownerId: input.ownerId,
+      fenceToken: 1,
+      allowedTurnId: input.allowedTurnDelivery?.turnId ?? null,
+      allowedDeliveryOwnerId: input.allowedTurnDelivery?.ownerId ?? null,
+      allowedDeliveryFenceToken:
+        input.allowedTurnDelivery?.fenceToken ?? null,
+      leaseExpiresAt: Date.now() + input.leaseDurationMs,
+      updatedAt: Date.now(),
+    })),
+    renewSandboxSessionLifecycleOperation: vi.fn(),
+    markSandboxSessionLifecycleOperationExecuting: vi.fn().mockResolvedValue(true),
+    cancelSandboxSessionLifecycleOperation: vi.fn().mockResolvedValue(true),
     stageAssistantMessageUpdate: vi.fn().mockImplementation(async (
       id: string,
       toolCalls: unknown[],
@@ -69,6 +121,7 @@ function createDeps(options: {
       createdAt: 1,
     })),
     finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
+    finalizeTurnAndMarkLifecycleDraining: vi.fn().mockResolvedValue(true),
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const finalizer = new TurnFinalizer({ db, eventBus, logger });
@@ -101,9 +154,13 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
 
     expect(result).toEqual(expect.objectContaining({ failed: 1, skippedHitlParked: 0, redispatched: 0 }));
     expect(deps.db.getOpenTurnsStartedBefore).toHaveBeenCalledWith(BOOT_TIME);
-    expect(deps.db.finalizeTurnIfOpen).toHaveBeenCalledWith('turn-1', expect.objectContaining({
-      error: TURN_ERROR_ORCHESTRATOR_RESTART,
-    }));
+    expect(deps.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'turn-1',
+      expect.objectContaining({
+        error: TURN_ERROR_ORCHESTRATOR_RESTART,
+      }),
+      expect.objectContaining({ fenceToken: 1 }),
+    );
     // pilot contract: turn.completed carries conversationId and a status
     // within completed|error|cancelled — never a new vocabulary value.
     expect(deps.eventBus.emitAsync).toHaveBeenCalledWith('turn.completed', expect.objectContaining({
@@ -145,6 +202,7 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
       messages: [
         {
           id: 'msg-1',
+          turnId: 'turn-1',
           toolCalls: [
             { id: 'tc-1', name: 'bash', args: '{}', status: 'running' },
             { id: 'tc-2', name: 'read', args: '{}', status: 'complete', result: 'ok' },
@@ -154,7 +212,7 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
             { type: 'tool_call', id: 'tc-1', name: 'bash', args: '{}', status: 'running' },
           ],
         },
-        { id: 'msg-2', toolCalls: null, parts: null },
+        { id: 'msg-2', turnId: 'turn-1', toolCalls: null, parts: null },
       ],
     });
 
@@ -180,6 +238,12 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
         parts,
         toolCalls,
       }),
+      {
+        deliveryFence: expect.objectContaining({
+          ownerId: expect.any(String),
+          fenceToken: 1,
+        }),
+      },
     );
   });
 
@@ -211,7 +275,11 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
       expect.stringContaining('turn-1'),
       expect.any(Error),
     );
-    expect(deps.db.finalizeTurnIfOpen).toHaveBeenCalledWith('turn-2', expect.anything());
+    expect(deps.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'turn-2',
+      expect.anything(),
+      expect.objectContaining({ fenceToken: 1 }),
+    );
   });
 
   it('redispatches queued turns from transcript through the durable user message', async () => {
@@ -231,15 +299,6 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
         { id: 'msg-3', agentId: 'agent-1', conversationId: 'conv-1', role: 'user', content: 'later prompt', createdAt: 3 },
       ],
     });
-    deps.db.getTurnFrames.mockResolvedValue([
-      {
-        type: 'TEXT_MESSAGE_START',
-        sourceType: 'user.message',
-        payload: JSON.stringify({ role: 'user', messageId: 'msg-2' }),
-      },
-      { type: 'RUN_STARTED', sourceType: 'turn.started' },
-    ]);
-
     const result = await reconcileStrandedTurnsOnStartup({
       ...deps,
       redispatchQueuedTurn,
@@ -255,7 +314,13 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
         mode: 'interactive',
         taskDescription: 'second prompt',
         userMessageId: 'msg-2',
-        emitTurnStarted: false,
+        deliveryContext: {
+          fence: expect.objectContaining({ fenceToken: 1 }),
+          userMessage: expect.objectContaining({
+            messageId: 'msg-2',
+            content: 'second prompt',
+          }),
+        },
         messages: [
           expect.objectContaining({ id: 'msg-1', content: 'first prompt' }),
           expect.objectContaining({ id: 'msg-2', content: 'second prompt' }),
@@ -266,7 +331,46 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
     expect(deps.eventBus.emitAsync).not.toHaveBeenCalledWith('user.message', expect.anything());
   });
 
-  it('republishes a missing interactive user message before crash-recovery redispatch', async () => {
+  it('counts a redispatch that finalized under its own delivery fence', async () => {
+    const redispatchQueuedTurn = vi.fn().mockResolvedValue(undefined);
+    const deps = createDeps({
+      openTurns: [
+        createTurn({
+          id: 'turn-queued',
+          status: 'queued',
+          userMessageId: 'msg-1',
+        }),
+      ],
+      messages: [
+        {
+          id: 'msg-1',
+          agentId: 'agent-1',
+          conversationId: 'conv-1',
+          role: 'user',
+          content: 'finish during redispatch',
+          createdAt: 1,
+        },
+      ],
+    });
+    deps.db.isTurnDeliveryFenceCurrent.mockResolvedValue(false);
+    deps.db.wasTurnFinalizedByDeliveryFence.mockResolvedValue(true);
+
+    const result = await reconcileStrandedTurnsOnStartup({
+      ...deps,
+      redispatchQueuedTurn,
+    }, BOOT_TIME);
+
+    expect(result.redispatched).toBe(1);
+    expect(deps.db.wasTurnFinalizedByDeliveryFence).toHaveBeenCalledWith(
+      'turn-queued',
+      expect.objectContaining({ ownerId: expect.any(String), fenceToken: 1 }),
+    );
+    expect(deps.logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('lost its fence'),
+    );
+  });
+
+  it('defers an interactive recovery user message to the fenced delivery boundary', async () => {
     const order: string[] = [];
     const redispatchQueuedTurn = vi.fn(async () => {
       order.push('redispatch');
@@ -286,27 +390,30 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
         { id: 'msg-2', agentId: 'agent-1', conversationId: 'conv-1', role: 'user', content: 'second prompt', createdAt: 2 },
       ],
     });
-    deps.eventBus.emitAsync.mockImplementation(async (eventName: string) => {
-      if (eventName === 'user.message') {
-        order.push('user.message');
-      }
-    });
-
     const result = await reconcileStrandedTurnsOnStartup({
       ...deps,
       redispatchQueuedTurn,
     }, BOOT_TIME);
 
     expect(result).toEqual(expect.objectContaining({ failed: 0, redispatched: 1 }));
-    expect(deps.eventBus.emitAsync).toHaveBeenCalledWith('user.message', {
-      turnId: 'turn-queued',
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      messageId: 'msg-2',
-      content: 'second prompt',
-      timestamp: 2,
-    });
-    expect(order).toEqual(['user.message', 'redispatch']);
+    expect(redispatchQueuedTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryContext: {
+          fence: expect.objectContaining({ fenceToken: 1 }),
+          userMessage: {
+            turnId: 'turn-queued',
+            agentId: 'agent-1',
+            conversationId: 'conv-1',
+            messageId: 'msg-2',
+            content: 'second prompt',
+            timestamp: 2,
+          },
+        },
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(deps.eventBus.emitAsync).not.toHaveBeenCalledWith('user.message', expect.anything());
+    expect(order).toEqual(['redispatch']);
   });
 
   it('does not synthesize user-message frames for queued background turns', async () => {
@@ -345,6 +452,9 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
       expect.objectContaining({
         turnId: 'turn-background',
         mode: 'background',
+        deliveryContext: {
+          fence: expect.objectContaining({ fenceToken: 1 }),
+        },
       }),
       expect.anything(),
     );
@@ -372,7 +482,7 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
         },
       ],
     });
-    deps.db.claimTurnReconciliationLease.mockResolvedValue(undefined);
+    deps.db.claimTurnDeliveryLease.mockResolvedValue(undefined);
 
     const result = await reconcileStrandedTurnsOnStartup({
       ...deps,
@@ -380,16 +490,16 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
     }, BOOT_TIME);
 
     expect(result).toEqual(expect.objectContaining({ failed: 0, redispatched: 0 }));
-    expect(deps.db.claimTurnReconciliationLease).toHaveBeenCalledWith(expect.objectContaining({
+    expect(deps.db.claimTurnDeliveryLease).toHaveBeenCalledWith(expect.objectContaining({
       turnId: 'turn-queued',
     }));
     expect(deps.eventBus.emitAsync).not.toHaveBeenCalledWith('user.message', expect.anything());
     expect(redispatchQueuedTurn).not.toHaveBeenCalled();
-    expect(deps.db.releaseTurnReconciliationLease).not.toHaveBeenCalled();
+    expect(deps.db.releaseTurnDeliveryLease).not.toHaveBeenCalled();
     expect(deps.logger.error).not.toHaveBeenCalled();
   });
 
-  it('does not redispatch when the lease no longer authorizes the queued turn', async () => {
+  it('does not count a redispatch whose fence is no longer current at completion', async () => {
     const redispatchQueuedTurn = vi.fn().mockResolvedValue(undefined);
     const deps = createDeps({
       openTurns: [
@@ -411,7 +521,7 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
         },
       ],
     });
-    deps.db.authorizeQueuedTurnRedispatch.mockResolvedValue(false);
+    deps.db.isTurnDeliveryFenceCurrent.mockResolvedValue(false);
 
     const result = await reconcileStrandedTurnsOnStartup({
       ...deps,
@@ -422,16 +532,15 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
     });
 
     expect(result).toEqual(expect.objectContaining({ failed: 0, redispatched: 0 }));
-    expect(deps.db.authorizeQueuedTurnRedispatch).toHaveBeenCalledWith(
+    expect(deps.db.isTurnDeliveryFenceCurrent).toHaveBeenCalledWith(
       'turn-queued',
-      'reconciler-a',
-      10_000,
+      { ownerId: 'reconciler-a', fenceToken: 1 },
     );
     expect(deps.eventBus.emitAsync).not.toHaveBeenCalledWith('user.message', expect.anything());
-    expect(redispatchQueuedTurn).not.toHaveBeenCalled();
+    expect(redispatchQueuedTurn).toHaveBeenCalledOnce();
   });
 
-  it('aborts a long redispatch when reconciliation lease ownership is lost', async () => {
+  it('aborts a long redispatch when delivery lease ownership is lost', async () => {
     vi.useFakeTimers();
     try {
       const deps = createDeps({
@@ -454,14 +563,7 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
           },
         ],
       });
-      deps.db.getTurnFrames.mockResolvedValue([
-        {
-          type: 'TEXT_MESSAGE_START',
-          sourceType: 'user.message',
-          payload: JSON.stringify({ role: 'user', messageId: 'msg-queued' }),
-        },
-      ]);
-      deps.db.renewTurnReconciliationLease.mockResolvedValue(undefined);
+      deps.db.renewTurnDeliveryLease.mockResolvedValue(undefined);
       let observedSignal: AbortSignal | undefined;
       const redispatchQueuedTurn = vi.fn((_params: unknown, signal: AbortSignal) => {
         observedSignal = signal;
@@ -484,15 +586,16 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
       const result = await reconciliation;
       await result.redispatchComplete;
 
-      expect(deps.db.renewTurnReconciliationLease).toHaveBeenCalledTimes(1);
+      expect(deps.db.renewTurnDeliveryLease).toHaveBeenCalledTimes(1);
       expect(observedSignal?.aborted).toBe(true);
       expect(result.redispatched).toBe(0);
       expect(deps.logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('lost reconciliation lease'),
+        expect.stringContaining('lost delivery lease'),
       );
-      expect(deps.db.releaseTurnReconciliationLease).toHaveBeenCalledWith(
+      expect(deps.db.releaseTurnDeliveryLease).toHaveBeenCalledWith(
         'turn-queued',
         'reconciler-a',
+        1,
       );
     } finally {
       vi.useRealTimers();
@@ -535,7 +638,31 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
     }, BOOT_TIME);
 
     expect(result).toEqual(expect.objectContaining({ failed: 1, skippedHitlParked: 0, redispatched: 1 }));
-    expect(resetStrandedSession).toHaveBeenCalledWith('sess-1');
+    expect(resetStrandedSession).toHaveBeenCalledWith(
+      'sess-1',
+      expect.objectContaining({
+        operation: 'reset',
+        operationId: 'logical-reset-1',
+      }),
+    );
+    expect(
+      deps.db.finalizeTurnAndMarkLifecycleDraining,
+    ).toHaveBeenCalledWith(
+      'turn-running',
+      expect.objectContaining({
+        status: 'error',
+      }),
+      expect.objectContaining({
+        fenceToken: 1,
+      }),
+      expect.objectContaining({
+        sandboxSessionId: 'sess-1',
+        fenceToken: 1,
+      }),
+    );
+    expect(
+      deps.db.markSandboxSessionLifecycleOperationExecuting,
+    ).toHaveBeenCalledOnce();
     expect(order).toEqual(['reset', 'redispatch']);
   });
 
@@ -552,9 +679,13 @@ describe('startup turn reconciliation (ADR-014, ctx-nm3o)', () => {
 
     expect(result).toEqual(expect.objectContaining({ failed: 1, skippedHitlParked: 0, redispatched: 0 }));
     expect(redispatchQueuedTurn).not.toHaveBeenCalled();
-    expect(deps.db.finalizeTurnIfOpen).toHaveBeenCalledWith('turn-queued', expect.objectContaining({
-      error: TURN_ERROR_ORCHESTRATOR_RESTART,
-      status: 'error',
-    }));
+    expect(deps.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'turn-queued',
+      expect.objectContaining({
+        error: TURN_ERROR_ORCHESTRATOR_RESTART,
+        status: 'error',
+      }),
+      expect.objectContaining({ fenceToken: 1 }),
+    );
   });
 });

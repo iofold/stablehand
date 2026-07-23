@@ -15,10 +15,16 @@ import { StatusPulse } from './illustrations/StatusPulse';
 import { AnimatedCounter } from './MicroInteractions';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { formatCompactNumber } from '@/lib/format';
+import type {
+  AgentBudgetStatus,
+  ModelGatewayStatus,
+} from '@ctxmill/contracts';
 
 interface AgentCardProps {
   agent: Agent;
   onEdit?: (agent: Agent) => void;
+  budgetStatus?: AgentBudgetStatus;
+  modelGatewayStatus?: ModelGatewayStatus;
 }
 
 type DashboardStatus = 'running' | 'idle';
@@ -37,7 +43,12 @@ function formatAgentStatusLabel(status: DashboardStatus): string {
   return labels[status];
 }
 
-export function AgentCard({ agent, onEdit }: AgentCardProps) {
+export function AgentCard({
+  agent,
+  onEdit,
+  budgetStatus,
+  modelGatewayStatus,
+}: AgentCardProps) {
   const navigate = useNavigate();
 
   const activeSessionCount = countActiveSandboxSessions(agent.sandboxSessionsByStatus);
@@ -45,7 +56,9 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
   const statusConfig = getAgentStatusConfig(dashboardStatus);
   const statusLabel = formatAgentStatusLabel(dashboardStatus);
 
-  const totalTools = agent.tools.length + (agent.nativeTools?.allowlist?.length ?? agent.nativeTools?.blocklist?.length ?? 0);
+  // Native policy names are filters, not additional declared tools. Counting
+  // denied names as capabilities made this number actively misleading.
+  const totalTools = agent.tools.length;
 
   const renderSessions = () => {
     const stats = agent.sandboxSessionsByStatus;
@@ -181,6 +194,30 @@ export function AgentCard({ agent, onEdit }: AgentCardProps) {
           </div>
           
           <div className="flex items-center gap-2">
+            {budgetStatus && budgetStatus.state !== 'ok' && (
+              <span
+                data-testid="agent-budget-chip"
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                  budgetStatus.state === 'blocked'
+                    ? 'border-red-500/30 bg-red-500/15 text-red-300'
+                    : 'border-amber-500/30 bg-amber-500/15 text-amber-300',
+                )}
+              >
+                <AlertCircle className="h-3 w-3" />
+                Budget {budgetStatus.state}
+              </span>
+            )}
+            {modelGatewayStatus?.state === 'degraded' && (
+              <span
+                data-testid="agent-metering-chip"
+                title={modelGatewayStatus.lastError ?? 'Model cost reconciliation is delayed.'}
+                className="inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/15 px-2 py-0.5 text-[11px] font-medium text-violet-300"
+              >
+                <AlertCircle className="h-3 w-3" />
+                Metering degraded
+              </span>
+            )}
             {agent.hasPendingInterrupt && (
               <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/15 border border-orange-500/30 px-2 py-0.5 text-[11px] font-medium text-orange-400">
                 <AlertCircle className="h-3 w-3" />

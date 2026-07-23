@@ -38,7 +38,7 @@ describe('Agent tool management integration', () => {
 
   async function updateAgent(agentId: string, payload: Record<string, unknown>) {
     return app.inject({
-      method: 'PUT',
+      method: 'PATCH',
       url: `/api/agents/${agentId}`,
       payload,
     });
@@ -129,12 +129,12 @@ describe('Agent tool management integration', () => {
     });
   });
 
-  describe('nativeTools contract behavior', () => {
-    it('saves nativeTools allowlist and GET returns it', async () => {
+  describe('nativeToolPolicy contract behavior', () => {
+    it('saves nativeToolPolicy allowlist and GET returns it', async () => {
       const createRes = await createAgent({
         name: 'native-tools-allowlist',
-        nativeTools: {
-          allowlist: ['Bash', 'Read', 'Write'],
+        nativeToolPolicy: {
+          policy: 'allow', names: ['Bash', 'Read', 'Write'],
         },
       });
 
@@ -143,28 +143,28 @@ describe('Agent tool management integration', () => {
 
       const getRes = await getAgent(agentId);
       expect(getRes.statusCode).toBe(200);
-      expect(getRes.json().nativeTools).toEqual({
-        allowlist: ['Bash', 'Read', 'Write'],
+      expect(getRes.json().nativeToolPolicy).toEqual({
+        policy: 'allow', names: ['Bash', 'Read', 'Write'],
       });
     });
 
-    it('clears nativeTools when updated back to default metadata', async () => {
+    it('clears nativeToolPolicy when updated back to default metadata', async () => {
       const createRes = await createAgent({
         name: 'native-tools-clear',
-        nativeTools: {
-          allowlist: ['Bash'],
+        nativeToolPolicy: {
+          policy: 'allow', names: ['Bash'],
         },
       });
       expect(createRes.statusCode).toBe(201);
       const agentId = createRes.json().id;
 
-      const updateRes = await updateAgent(agentId, { nativeTools: null });
+      const updateRes = await updateAgent(agentId, { nativeToolPolicy: null });
       expect(updateRes.statusCode).toBe(200);
-      expect(updateRes.json().nativeTools).toBeNull();
+      expect(updateRes.json().nativeToolPolicy).toBeNull();
 
       const getRes = await getAgent(agentId);
       expect(getRes.statusCode).toBe(200);
-      expect(getRes.json().nativeTools).toBeNull();
+      expect(getRes.json().nativeToolPolicy).toBeNull();
     });
   });
 

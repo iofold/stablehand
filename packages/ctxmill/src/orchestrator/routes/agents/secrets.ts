@@ -1,4 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import {
+  SecretListResponseSchema,
+  SecretPutInputSchema,
+  SecretPutResponseSchema,
+} from '@ctxmill/contracts';
 
 import { safeError } from './helpers.js';
 import type { AgentSubRouteOptions } from './types.js';
@@ -18,7 +23,7 @@ export async function secretRoutes(
       }
       try {
         const keys = await secretProvider.list(request.params.id);
-        return reply.send({ keys });
+        return reply.send(SecretListResponseSchema.parse({ keys }));
       } catch (err) {
         return reply.status(500).send(safeError('Failed to list secrets', err));
       }
@@ -29,19 +34,23 @@ export async function secretRoutes(
     '/:id/secrets',
     { preHandler: [loadAgent] },
     async (
-      request: FastifyRequest<{ Params: { id: string }; Body: { key: string; value: string } }>,
+      request: FastifyRequest<{ Params: { id: string }; Body: unknown }>,
       reply: FastifyReply,
     ) => {
       if (!secretProvider) {
         return reply.status(501).send({ error: 'Secret storage not configured' });
       }
-      const { key, value } = request.body ?? ({} as Record<string, string>);
-      if (!key || typeof key !== 'string' || !value || typeof value !== 'string') {
-        return reply.status(400).send({ error: 'key and value are required strings' });
+      const parsed = SecretPutInputSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'Invalid secret',
+          details: parsed.error.issues,
+        });
       }
+      const { key, value } = parsed.data;
       try {
         await secretProvider.set(request.params.id, key, value);
-        return reply.status(201).send({ key });
+        return reply.status(201).send(SecretPutResponseSchema.parse({ key }));
       } catch (err) {
         return reply.status(500).send(safeError('Failed to set secret', err));
       }

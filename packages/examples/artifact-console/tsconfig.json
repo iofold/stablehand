@@ -15,8 +15,8 @@
     "baseUrl": ".",
     "paths": {
       "@ctxmill/client": ["../../client/src/index.ts"],
+      "@ctxmill/contracts": ["../../contracts/src/index.ts"],
       "@ctxmill/react": ["../../react/src/index.ts"],
-      "@ctxmill/shared": ["../../shared/src/index.ts"],
       "@/*": ["../../ui/src/*"]
     }
   },

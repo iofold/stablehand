@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { HttpToolDefinition } from '@ctxmill/shared';
+import type { HttpToolDefinition } from '@ctxmill/contracts';
 import type { HarnessConfigSchemas } from '@ctxmill/sandbox-daemon/harness/schemas';
 
 import type { DatabaseRepository } from '../../../database/repository.js';

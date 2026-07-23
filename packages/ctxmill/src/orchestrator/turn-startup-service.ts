@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type { TypedEventBus } from '../events/bus.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
@@ -6,10 +8,15 @@ import type { AgentTurnService } from './agent-turn-service.js';
 import { mapMessagesToInternal } from './routes/agent-helpers.js';
 import { ConcurrencyLimitError } from './session-manager/concurrency-limit-error.js';
 import type { ConcurrencyReservation } from './session-manager/session-turn-orchestrator.js';
-import { withRuntimeSandboxSecrets, type RuntimeSandboxSecrets } from './session-manager/runtime-sandbox-secrets.js';
+import type { TurnSecrets } from './session-manager/turn-secrets.js';
 import { TurnFinalizer } from './turn-finalizer.js';
 import type { BudgetEnforcer } from './budget-enforcer.js';
 import { TagConflictError, readBudgetDimensions, readDefaultTags } from './budgets.js';
+import type { TurnDeliveryContext } from './turn-delivery-fence.js';
+import type { TurnSecretEnvelopeCodec } from './turn-secret-envelope.js';
+import {
+  resolveModelGatewayTurnAttribution,
+} from '../cost-control/model-gateway-attribution.js';
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -19,15 +26,36 @@ interface Logger {
 }
 
 export interface TurnStartupServiceDeps {
+  allocateTurnId?: () => string;
   logger: Logger;
+  modelGateway?:
+    | { enabled: false }
+    | { enabled: true; profile: 'default'; revision: string };
+  turnSecretEnvelopeCodec: Pick<
+    TurnSecretEnvelopeCodec,
+    'open' | 'seal'
+  >;
 }
 
 type TurnMode = 'interactive' | 'background';
 
+export class AgentModeNotAllowedError extends Error {
+  readonly code = 'agent_mode_not_allowed';
+  readonly statusCode = 409;
+
+  constructor(
+    readonly configuredMode: Exclude<AgentDefinition['mode'], undefined>,
+    readonly requestedMode: TurnMode,
+  ) {
+    super(`Agent mode "${configuredMode}" does not allow ${requestedMode} turns`);
+    this.name = 'AgentModeNotAllowedError';
+  }
+}
+
 type ExecutionDeps = {
   db: Pick<
     DatabaseRepository,
-    'addMessage' | 'createConversation' | 'createTurn' | 'deleteMessage' | 'finalizeTurnIfOpen' | 'getAgent' | 'getConversation' | 'getMessages' | 'getTurn' | 'updateTurn'
+    'addMessage' | 'createConversation' | 'createTurnWithSecretEnvelope' | 'deleteMessage' | 'finalizeTurnIfOpen' | 'finalizeTurnAndMarkLifecycleDraining' | 'getAgent' | 'getConversation' | 'getMessages' | 'getTurn' | 'getTurnSecretEnvelope'
   >;
   eventBus?: Pick<TypedEventBus, 'emit'> & Partial<Pick<TypedEventBus, 'emitAsync'>>;
   sessionManager?: {
@@ -48,7 +76,7 @@ export interface PrepareTurnStartParams {
   requireExistingConversation?: boolean;
   createMissingConversationWithRequestedId?: boolean;
   emitUserMessageEvent?: boolean;
-  sandboxSecrets?: RuntimeSandboxSecrets;
+  turnSecrets?: TurnSecrets;
   /**
    * Budget-attribution tags. Fixed at conversation creation (merged over the
    * agent's metadata.defaultTags); conflicting tags on an existing
@@ -65,9 +93,10 @@ export interface PreparedTurnStart {
   messages: ReturnType<typeof mapMessagesToInternal>;
   mode: TurnMode;
   taskDescription: string;
-  sandboxSecrets?: RuntimeSandboxSecrets;
+  turnSecrets?: TurnSecrets;
   concurrencyReservation?: ConcurrencyReservation;
   suppressTurnStartedEvent?: boolean;
+  deliveryContext?: TurnDeliveryContext;
 }
 
 export interface RedispatchQueuedTurnParams {
@@ -78,7 +107,7 @@ export interface RedispatchQueuedTurnParams {
   taskDescription: string;
   userMessageId?: string | null;
   messages: ReturnType<typeof mapMessagesToInternal>;
-  emitTurnStarted: boolean;
+  deliveryContext: TurnDeliveryContext;
 }
 
 const REDISPATCH_CONCURRENCY_ATTEMPTS = 3;
@@ -127,11 +156,17 @@ export class TurnStartupService {
       requireExistingConversation = false,
       createMissingConversationWithRequestedId = false,
       emitUserMessageEvent = mode === 'interactive',
-      sandboxSecrets,
+      turnSecrets,
     } = params;
 
     if (!agent.harness) {
       throw new Error('Agent harness is not set');
+    }
+
+    const agentDef = buildAgentDefinition(agent);
+    const configuredMode = agentDef.mode;
+    if (configuredMode && configuredMode !== 'both' && configuredMode !== mode) {
+      throw new AgentModeNotAllowedError(configuredMode, mode);
     }
 
     // Attribution tags are sticky per conversation: fixed at creation from
@@ -181,12 +216,21 @@ export class TurnStartupService {
       conversationTags,
     );
 
+    const allocatedTurnId = requestedTurnId
+      ?? this.deps.allocateTurnId?.()
+      ?? randomUUID();
     if (requestedTurnId) {
-      const existingTurn = await executionDeps.db.getTurn(requestedTurnId);
+      const existingTurn = await executionDeps.db.getTurn(allocatedTurnId);
       if (existingTurn) {
         throw new Error(`Turn already exists for id ${requestedTurnId}`);
       }
     }
+    const gatewayAttribution = resolveModelGatewayTurnAttribution({
+      harness: agentDef.harness,
+      harnessConfig: agentDef.harnessConfig,
+      gateway: this.deps.modelGateway ?? { enabled: false },
+      turnId: allocatedTurnId,
+    });
 
     const message = await executionDeps.db.addMessage({
       agentId,
@@ -195,7 +239,9 @@ export class TurnStartupService {
       content,
     });
 
-    let turn: Awaited<ReturnType<ExecutionDeps['db']['createTurn']>>;
+    let turn: Awaited<
+      ReturnType<ExecutionDeps['db']['createTurnWithSecretEnvelope']>
+    >;
     let concurrencyReservation: ConcurrencyReservation | undefined;
     try {
       concurrencyReservation = executionDeps.sessionManager?.reserveConcurrencySlot
@@ -204,16 +250,28 @@ export class TurnStartupService {
       if (!concurrencyReservation) {
         executionDeps.sessionManager?.checkConcurrencyLimit(agentId);
       }
-      turn = await executionDeps.db.createTurn({
-        ...(requestedTurnId ? { id: requestedTurnId } : {}),
+      const secretEnvelope = this.deps.turnSecretEnvelopeCodec.seal(
+        allocatedTurnId,
+        turnSecrets ?? {},
+      );
+      turn = await executionDeps.db.createTurnWithSecretEnvelope({
+        id: allocatedTurnId,
         agentId,
         conversationId: resolvedConversationId,
         mode,
         status: 'queued',
         userMessageId: message.id,
         tags: turnTags,
+        ...(gatewayAttribution.mode !== 'direct'
+          ? {
+            gatewayCorrelationId: gatewayAttribution.correlationId,
+            gatewayProfile: gatewayAttribution.profile,
+            gatewayRevision: gatewayAttribution.revision,
+            gatewayMode: gatewayAttribution.mode,
+          }
+          : {}),
         ...(mode === 'background' ? { taskDescription: content } : {}),
-      });
+      }, secretEnvelope);
     } catch (err) {
       concurrencyReservation?.release();
       await executionDeps.db.deleteMessage(message.id).catch((deleteErr) => {
@@ -243,7 +301,6 @@ export class TurnStartupService {
         timestamp: Date.now(),
       });
 
-      const agentDef = withRuntimeSandboxSecrets(buildAgentDefinition(agent), sandboxSecrets);
       const allMessages = await executionDeps.db.getMessages(resolvedConversationId);
 
       return {
@@ -254,7 +311,7 @@ export class TurnStartupService {
         messages: mapMessagesToInternal(allMessages, agentId),
         mode,
         taskDescription: content,
-        sandboxSecrets,
+        turnSecrets,
         concurrencyReservation,
       };
     } catch (err) {
@@ -296,9 +353,10 @@ export class TurnStartupService {
       turnId: start.turnId,
       mode: start.mode,
       taskDescription: start.taskDescription,
-      ...(start.sandboxSecrets ? { sandboxSecrets: start.sandboxSecrets } : {}),
+      ...(start.turnSecrets ? { turnSecrets: start.turnSecrets } : {}),
       ...(start.concurrencyReservation ? { concurrencyReservation: start.concurrencyReservation } : {}),
       ...(start.suppressTurnStartedEvent ? { suppressTurnStartedEvent: true } : {}),
+      ...(start.deliveryContext ? { deliveryContext: start.deliveryContext } : {}),
       ...(options?.signal ? { signal: options.signal } : {}),
     };
 
@@ -316,6 +374,9 @@ export class TurnStartupService {
         conversationId: start.conversationId,
         status: 'error',
         error: err instanceof Error ? err.message : String(err),
+        ...(start.deliveryContext
+          ? { expectedDeliveryFence: start.deliveryContext.fence }
+          : {}),
       }).catch((dbErr) => {
         this.deps.logger.error(`[TurnStartupService] failed to finalize turn ${start.turnId} after session error:`, dbErr);
       });
@@ -330,6 +391,7 @@ export class TurnStartupService {
     let concurrencyReservation: ConcurrencyReservation | undefined;
 
     try {
+      signal.throwIfAborted();
       const agent = await executionDeps.db.getAgent(params.agentId);
       if (!agent) {
         throw new Error(`Agent ${params.agentId} not found for queued turn ${params.turnId}`);
@@ -339,6 +401,18 @@ export class TurnStartupService {
       }
 
       concurrencyReservation = await this.reserveRedispatchConcurrency(params.agentId);
+      const secretEnvelope = await executionDeps.db.getTurnSecretEnvelope(
+        params.turnId,
+      );
+      if (!secretEnvelope) {
+        throw new Error(
+          `Encrypted turn credentials are missing for queued turn ${params.turnId}`,
+        );
+      }
+      const turnSecrets = this.deps.turnSecretEnvelopeCodec.open(
+        params.turnId,
+        secretEnvelope,
+      );
       await this.launchPreparedTurn({
         agentDef: buildAgentDefinition(agent),
         conversationId: params.conversationId,
@@ -347,8 +421,10 @@ export class TurnStartupService {
         messages: params.messages,
         mode: params.mode,
         taskDescription: params.taskDescription,
+        turnSecrets,
         ...(concurrencyReservation ? { concurrencyReservation } : {}),
-        suppressTurnStartedEvent: !params.emitTurnStarted,
+        suppressTurnStartedEvent: true,
+        deliveryContext: params.deliveryContext,
       }, params.agentId, { signal });
     } catch (err) {
       concurrencyReservation?.release();
@@ -360,6 +436,7 @@ export class TurnStartupService {
         conversationId: params.conversationId,
         status: 'error',
         error: errorMessage,
+        expectedDeliveryFence: params.deliveryContext.fence,
       }).catch((dbErr) => {
         this.deps.logger.error(`[TurnStartupService] failed to finalize queued turn ${params.turnId} after redispatch error:`, dbErr);
       });

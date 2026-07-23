@@ -12,6 +12,7 @@ spec:
   harnessConfig:
     provider: anthropic
     model: claude-sonnet-4-6
+    apiKeyRef: "$secret:ANTHROPIC_API_KEY"
     setup:
       symlinks:
         - src: skills
@@ -39,13 +40,18 @@ spec:
 
     When asked to test subagents, delegate to one of them.
     When asked about skills, describe what skills you have loaded.
-  nativeTools:
-    allowlist:
+  nativeToolPolicy:
+    policy: allow
+    names:
       - Read
       - Write
       - Edit
       - Bash
       - Grep
       - Glob
-  workspace: {}
+  workspace:
+    content:
+      files:
+        - src: skills
+          dest: skills
   mode: interactive

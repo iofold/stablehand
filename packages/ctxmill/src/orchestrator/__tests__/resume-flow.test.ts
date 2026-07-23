@@ -62,7 +62,13 @@ describe('SessionTurnService (session-based)', () => {
       controller.abort();
 
       const events: unknown[] = [];
-      for await (const evt of service.executeSessionTurn(agentDef, 'conv-1', [msg('hi')], 'turn-2', controller.signal)) {
+      for await (const evt of service.executeSessionTurn(
+        agentDef,
+        'conv-1',
+        [msg('hi')],
+        'turn-2',
+        { signal: controller.signal },
+      )) {
         events.push(evt);
       }
 

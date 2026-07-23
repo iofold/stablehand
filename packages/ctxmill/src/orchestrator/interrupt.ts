@@ -6,14 +6,24 @@
  * durable interrupts that survive server restarts.
  */
 
-import type { EventMap, TypedEventBus } from '../events/bus.js';
-import type { DatabaseRepository } from '../database/repository.js';
+import type {
+  EventMap,
+  EventPersistenceContext,
+  TypedEventBus,
+} from '../events/bus.js';
+import type {
+  DatabaseRepository,
+  ExpectedSandboxCallbackDelivery,
+} from '../database/repository.js';
 import { randomUUID } from 'node:crypto';
 
 type InterruptStore = Pick<
   DatabaseRepository,
   'cleanupExpiredInterrupts' | 'getAllPendingInterrupts' | 'savePendingInterrupt' | 'resolveInterrupt' | 'markInterruptTimedOut'
->;
+> & Partial<Pick<
+  DatabaseRepository,
+  'installPendingInterruptIfSandboxCallbackCurrent' | 'deletePendingInterruptInstallation'
+>>;
 
 interface PendingEntry {
   resolve: (value: InterruptResolution) => void;
@@ -49,9 +59,13 @@ export class InterruptManager {
   private pendingInstallations = new Map<string, Promise<void>>();
   private eventBus?: TypedEventBus;
   private db?: InterruptStore;
-  private readonly onTimeout?: (sessionId: string) => Promise<void>;
+  private readonly onTimeout?: (sessionId: string, turnId: string) => Promise<void>;
 
-  constructor(eventBus?: TypedEventBus, db?: InterruptStore, onTimeout?: (sessionId: string) => Promise<void>) {
+  constructor(
+    eventBus?: TypedEventBus,
+    db?: InterruptStore,
+    onTimeout?: (sessionId: string, turnId: string) => Promise<void>,
+  ) {
     this.eventBus = eventBus;
     this.db = db;
     this.onTimeout = onTimeout;
@@ -64,12 +78,13 @@ export class InterruptManager {
     agentId?: string,
     conversationId?: string,
     sandboxSessionId?: string,
+    persistenceContext?: EventPersistenceContext,
   ): Promise<void> {
     if (!this.eventBus) {
       return;
     }
 
-    await this.eventBus.emitAsync('interrupt.resolved', {
+    const didEmit = await this.eventBus.emitAsync('interrupt.resolved', {
       turnId,
       agentId: agentId ?? turnId,
       conversationId: conversationId ?? turnId,
@@ -77,7 +92,46 @@ export class InterruptManager {
       interruptId,
       action,
       timestamp: Date.now(),
-    } as unknown as EventMap['interrupt.resolved']);
+    } as unknown as EventMap['interrupt.resolved'], persistenceContext);
+    if (!didEmit) {
+      throw new Error(
+        `Interrupt resolution event was rejected for stale turn delivery ${turnId}`,
+      );
+    }
+  }
+
+  private async emitRequestedEvent(
+    turnId: string,
+    agentId: string,
+    conversationId: string | undefined,
+    sandboxSessionId: string | undefined,
+    toolCallId: string,
+    toolCallName: string,
+    args: Record<string, unknown>,
+    interruptId: string,
+    createdAt: number,
+    persistenceContext?: EventPersistenceContext,
+  ): Promise<void> {
+    if (!this.eventBus) {
+      return;
+    }
+
+    const didEmit = await this.eventBus.emitAsync('interrupt.requested', {
+      turnId,
+      agentId,
+      conversationId: conversationId ?? turnId,
+      ...(sandboxSessionId ? { sandboxSessionId } : {}),
+      toolCallId,
+      toolCallName,
+      args,
+      interruptId,
+      timestamp: createdAt,
+    } as unknown as EventMap['interrupt.requested'], persistenceContext);
+    if (!didEmit) {
+      throw new Error(
+        `Interrupt request event was rejected for stale turn delivery ${turnId}`,
+      );
+    }
   }
 
   private createPendingPromise(
@@ -89,7 +143,6 @@ export class InterruptManager {
     args: Record<string, unknown>,
     createdAt: number,
     timeoutMs: number,
-    emitInterruptedEvent: boolean,
     sandboxSessionId: string | undefined,
     conversationId: string | undefined,
     hasLiveWaiter: boolean,
@@ -121,19 +174,6 @@ export class InterruptManager {
         hasLiveWaiter,
       });
 
-      if (emitInterruptedEvent && this.eventBus) {
-        this.eventBus.emit('interrupt.requested', {
-          turnId,
-          agentId,
-          conversationId: conversationId ?? turnId,
-          ...(sandboxSessionId ? { sandboxSessionId } : {}),
-          toolCallId,
-          toolCallName,
-          args,
-          interruptId,
-          timestamp: createdAt,
-        } as unknown as EventMap['interrupt.requested']);
-      }
     });
   }
 
@@ -170,7 +210,6 @@ export class InterruptManager {
           record.args,
           record.createdAt,
           remainingMs,
-          false,
           record.sandboxSessionId ?? undefined,
           undefined,
           false,
@@ -200,6 +239,7 @@ export class InterruptManager {
     timeoutMs: number = 300_000,
     sandboxSessionId?: string,
     conversationId?: string,
+    callbackAuthority?: ExpectedSandboxCallbackDelivery,
   ): Promise<InterruptResolution> {
     const install = () => this.installApprovalWaiter(
       turnId,
@@ -210,6 +250,7 @@ export class InterruptManager {
       timeoutMs,
       sandboxSessionId,
       conversationId,
+      callbackAuthority,
     );
     const previousInstallation = this.pendingInstallations.get(turnId);
     let settleInstallationTail!: () => void;
@@ -243,6 +284,7 @@ export class InterruptManager {
     timeoutMs: number,
     sandboxSessionId: string | undefined,
     conversationId: string | undefined,
+    callbackAuthority: ExpectedSandboxCallbackDelivery | undefined,
   ): Promise<{ approval: Promise<InterruptResolution> }> {
     // If there is already a pending interrupt for this run, reject it
     const existing = this.pending.get(turnId);
@@ -257,7 +299,63 @@ export class InterruptManager {
       }
       existing.resolve(supersededResolution);
     };
-    if (existing) {
+    if (
+      callbackAuthority
+      && (
+        callbackAuthority.turnId !== turnId
+        || callbackAuthority.agentId !== agentId
+        || callbackAuthority.sandboxSessionId !== sandboxSessionId
+      )
+    ) {
+      throw new Error('Sandbox callback authority does not match approval request identity');
+    }
+
+    const now = Date.now();
+    const expiresAt = now + timeoutMs;
+    const interruptId = randomUUID();
+    const pendingInterrupt = {
+      id: interruptId,
+      turnId,
+      agentId,
+      toolCallId,
+      toolName: toolCallName,
+      args,
+      timeoutMs,
+      createdAt: now,
+      expiresAt,
+      status: 'pending' as const,
+      sandboxSessionId,
+    };
+    const persistenceContext: EventPersistenceContext | undefined =
+      callbackAuthority
+        ? {
+          deliveryFence: callbackAuthority.expectedDeliveryFence,
+          sandboxSessionId: callbackAuthority.sandboxSessionId,
+          activeGeneration: callbackAuthority.expectedActiveGeneration,
+        }
+        : undefined;
+    const exactInstaller = callbackAuthority
+      ? this.db?.installPendingInterruptIfSandboxCallbackCurrent
+      : undefined;
+    if (callbackAuthority && (!this.db || !exactInstaller)) {
+      throw new Error(
+        'Interrupt store does not support fenced sandbox callback installation',
+      );
+    }
+
+    if (this.db && callbackAuthority && exactInstaller) {
+      const installed = await exactInstaller.call(
+        this.db,
+        pendingInterrupt,
+        callbackAuthority,
+        existing?.info.interruptId,
+      );
+      if (!installed) {
+        throw new Error(
+          `Sandbox callback delivery ownership changed before interrupt persistence for ${turnId}`,
+        );
+      }
+    } else if (existing) {
       let durableResolutionPersisted = false;
       if (this.db) {
         const persisted = await this.db.resolveInterrupt(
@@ -278,6 +376,7 @@ export class InterruptManager {
           existing.agentId,
           existing.info.conversationId,
           existing.info.sandboxSessionId,
+          persistenceContext,
         );
       } catch (error) {
         if (durableResolutionPersisted) {
@@ -288,25 +387,22 @@ export class InterruptManager {
       if (existing.timeoutId) clearTimeout(existing.timeoutId);
     }
 
-    const now = Date.now();
-    const expiresAt = now + timeoutMs;
-    const interruptId = randomUUID();
-
     try {
-      if (this.db) {
-        await this.db.savePendingInterrupt({
-          id: interruptId,
+      if (this.db && !callbackAuthority) {
+        await this.db.savePendingInterrupt(pendingInterrupt);
+      }
+
+      if (existing && callbackAuthority) {
+        await this.emitResolvedEvent(
           turnId,
-          agentId,
-          toolCallId,
-          toolName: toolCallName,
-          args,
-          timeoutMs,
-          createdAt: now,
-          expiresAt,
-          status: 'pending',
-          sandboxSessionId,
-        });
+          existing.info.interruptId,
+          'reject',
+          existing.agentId,
+          existing.info.conversationId,
+          existing.info.sandboxSessionId,
+          persistenceContext,
+        );
+        if (existing.timeoutId) clearTimeout(existing.timeoutId);
       }
 
       const replacement = this.createPendingPromise(
@@ -318,14 +414,51 @@ export class InterruptManager {
         args,
         now,
         timeoutMs,
-        true,
         sandboxSessionId,
         conversationId,
         true,
       );
+      await this.emitRequestedEvent(
+        turnId,
+        agentId,
+        conversationId,
+        sandboxSessionId,
+        toolCallId,
+        toolCallName,
+        args,
+        interruptId,
+        now,
+        persistenceContext,
+      );
       settleExisting();
       return { approval: replacement };
     } catch (error) {
+      const replacement = this.pending.get(turnId);
+      if (replacement?.info.interruptId === interruptId) {
+        if (replacement.timeoutId) clearTimeout(replacement.timeoutId);
+        this.pending.delete(turnId);
+        replacement.resolve({
+          action: 'reject',
+          data: 'Approval interrupt installation failed',
+        });
+      }
+      if (
+        callbackAuthority
+        && this.db?.deletePendingInterruptInstallation
+      ) {
+        try {
+          await this.db.deletePendingInterruptInstallation(
+            interruptId,
+            turnId,
+            toolCallId,
+          );
+        } catch (cleanupError) {
+          console.error(
+            '[InterruptManager] failed to compensate rejected interrupt installation:',
+            cleanupError,
+          );
+        }
+      }
       settleExisting();
       throw error;
     }
@@ -498,7 +631,7 @@ export class InterruptManager {
       }
 
       if (this.onTimeout && sandboxSessionId) {
-        await this.onTimeout(sandboxSessionId);
+        await this.onTimeout(sandboxSessionId, turnId);
       }
     } catch (err) {
       console.error('[InterruptManager] failed to handle timeout resolution:', err);

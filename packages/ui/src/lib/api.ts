@@ -1,32 +1,60 @@
 import { getApiToken, markAuthRequired, withApiAuth } from './auth';
 import type {
-  ApiAgent,
-  ApiBudgetPolicy,
-  ApiBudgetSpend,
-  ApiConversationSummary,
   ApiFeedbackRequest,
-  ApiAgentTurn,
   ApiSandboxRestoreSuccess,
-  HttpToolDefinition,
 } from '@ctxmill/shared';
-import type { ConversationSnapshot } from '@ctxmill/contracts';
+import {
+  ActiveConversationListResponseSchema,
+  AgentBudgetStatusListResponseSchema,
+  AgentCreateInputSchema,
+  AgentListResponseSchema,
+  AgentPatchInputSchema,
+  AgentSchema,
+  AnalyticsOverviewSchema,
+  AnalyticsWindowSchema,
+  BudgetPolicyCreateInputSchema,
+  BudgetPolicyListResponseSchema,
+  BudgetPolicyPatchInputSchema,
+  BudgetPolicySchema,
+  BudgetSpendResponseSchema,
+  ConversationListResponseSchema,
+  ConversationSnapshotResponseSchema,
+  ConversationSummaryListResponseSchema,
+  ConversationTurnStartInputSchema,
+  FileListResponseSchema,
+  FileReadResponseSchema,
+  FileWriteResponseSchema,
+  InterruptResolveInputSchema,
+  ModelGatewayStatusSchema,
+  SecretListResponseSchema,
+  SecretPutInputSchema,
+  SecretPutResponseSchema,
+  SandboxSessionListResponseSchema,
+  TurnListResponseSchema,
+  WorkspaceReplaceResponseSchema,
+  type Conversation,
+  type ConversationSnapshot,
+  type Agent,
+  type AgentCreateInput,
+  type AgentPatchInput,
+  type AgentBudgetStatus,
+  type AnalyticsOverview,
+  type AnalyticsWindow,
+  type BudgetPolicy,
+  type BudgetPolicyCreateInput,
+  type BudgetPolicyPatchInput,
+  type BudgetSpendResponse,
+  type ConversationSummary,
+  type ConversationTurnStartInput,
+  type InterruptResolveInput,
+  type ModelGatewayStatus,
+  type SandboxSession,
+  type Turn,
+} from '@ctxmill/contracts';
 
 const API_BASE = '/api';
 
 // ── Session types ────────────────────────────────────────────────────
-
-export type { HttpToolDefinition } from '@ctxmill/shared';
-
-export interface AgentUpsertInput {
-  name: string;
-  harness: string;
-  harnessConfig: Record<string, unknown>;
-  systemPrompt: string;
-  tools: string[];
-  description?: string;
-  metadata?: Record<string, unknown>;
-  httpTools?: HttpToolDefinition[];
-}
 
 // ── Internal fetch helpers ───────────────────────────────────────────
 
@@ -105,42 +133,49 @@ function withQuery(
 
 // ── Query operations (throw on failure) ─────────────────────────────
 
-export async function fetchAgents(): Promise<ApiAgent[]> {
-  return apiFetch<ApiAgent[]>(`${API_BASE}/agents`);
+export async function fetchAgents(): Promise<Agent[]> {
+  const response = await apiFetch<unknown>(`${API_BASE}/agents`);
+  return AgentListResponseSchema.parse(response);
 }
 
-export async function fetchAgent(id: string) {
-  return apiFetch(`${API_BASE}/agents/${id}`);
+export async function fetchAgent(id: string): Promise<Agent> {
+  const response = await apiFetch<unknown>(`${API_BASE}/agents/${id}`);
+  return AgentSchema.parse(response);
 }
 
-export async function fetchAgentTurns(agentId: string): Promise<ApiAgentTurn[]> {
-  const data = await apiFetch<{ turns: ApiAgentTurn[] }>(`${API_BASE}/agents/${agentId}/turns`);
-  return data.turns;
+export async function fetchAgentTurns(agentId: string): Promise<Turn[]> {
+  const response = await apiFetch<unknown>(`${API_BASE}/agents/${agentId}/turns`);
+  return TurnListResponseSchema.parse(response).turns;
 }
 
-export async function fetchActiveSandboxSessions() {
-  return apiFetch(`${API_BASE}/sandbox-sessions?status=active`);
+export async function fetchActiveSandboxSessions(): Promise<SandboxSession[]> {
+  const response = await apiFetch<unknown>(`${API_BASE}/sandbox-sessions?status=active`);
+  return SandboxSessionListResponseSchema.parse(response);
 }
 
-export async function fetchActiveConversations() {
-  return apiFetch(`${API_BASE}/conversations?status=active`);
+export async function fetchActiveConversations(): Promise<ConversationSummary[]> {
+  const response = await apiFetch<unknown>(`${API_BASE}/conversations?status=active`);
+  return ActiveConversationListResponseSchema.parse(response);
 }
 
-export async function fetchConversations(agentId: string) {
-  return apiFetch(`${API_BASE}/agents/${agentId}/conversations`);
+export async function fetchConversations(agentId: string): Promise<Conversation[]> {
+  const response = await apiFetch<unknown>(`${API_BASE}/agents/${agentId}/conversations`);
+  return ConversationListResponseSchema.parse(response);
 }
 
-export async function fetchConversationSummaries(agentId: string): Promise<{ conversations: ApiConversationSummary[] }> {
-  return apiFetch<{ conversations: ApiConversationSummary[] }>(`${API_BASE}/agents/${agentId}/conversations/summary`);
+export async function fetchConversationSummaries(agentId: string): Promise<{ conversations: ConversationSummary[] }> {
+  const response = await apiFetch<unknown>(`${API_BASE}/agents/${agentId}/conversations/summary`);
+  return ConversationSummaryListResponseSchema.parse(response);
 }
 
 export async function fetchConversationSnapshot(
   agentId: string,
   conversationId: string,
 ): Promise<ConversationSnapshot> {
-  return apiFetch(
+  const response = await apiFetch<unknown>(
     `${API_BASE}/agents/${agentId}/conversations/${conversationId}/snapshot`,
   );
+  return ConversationSnapshotResponseSchema.parse(response);
 }
 
 export async function submitFeedback(
@@ -154,18 +189,21 @@ export async function submitFeedback(
 
 export async function sendMessage(
   agentId: string,
-  content: string,
-  conversationId?: string,
+  input: ConversationTurnStartInput,
 ): Promise<{ messageId: string; conversationId: string; turnId: string }> {
   return apiMutate<{ messageId: string; conversationId: string; turnId: string }>(
     `${API_BASE}/agents/${agentId}/message`,
     'POST',
-    { content, conversationId },
+    ConversationTurnStartInputSchema.parse(input),
   );
 }
 
-export async function sendInterrupt(agentId: string, action: string, data?: unknown, interruptId?: string) {
-  return apiMutate(`${API_BASE}/agents/${agentId}/interrupt`, 'POST', { action, data, interruptId });
+export async function sendInterrupt(agentId: string, input: InterruptResolveInput) {
+  return apiMutate(
+    `${API_BASE}/agents/${agentId}/interrupt`,
+    'POST',
+    InterruptResolveInputSchema.parse(input),
+  );
 }
 
 export type PendingInterrupt = {
@@ -223,41 +261,50 @@ export async function restoreSandboxSession(agentId: string, sandboxSessionId: s
   );
 }
 
-export interface ListFilesResponse {
-  entries: Array<{ name: string; type: 'file' | 'directory'; size: number }>;
-}
-
-export interface ReadFileResponse {
-  content: string;
-  size: number;
-}
+export type ListFilesResponse = ReturnType<typeof FileListResponseSchema.parse>;
+export type ReadFileResponse = ReturnType<typeof FileReadResponseSchema.parse>;
+export type WriteFileResponse = ReturnType<typeof FileWriteResponseSchema.parse>;
 
 export async function listFiles(agentId: string, path: string, conversationId?: string): Promise<ListFilesResponse> {
-  return apiFetch<ListFilesResponse>(
+  const response = await apiFetch<unknown>(
     withQuery(`${API_BASE}/agents/${agentId}/files`, { path, conversationId }),
   );
+  return FileListResponseSchema.parse(response);
 }
 
 export async function readFile(agentId: string, path: string, conversationId?: string): Promise<ReadFileResponse> {
-  return apiFetch<ReadFileResponse>(
+  const response = await apiFetch<unknown>(
     withQuery(`${API_BASE}/agents/${agentId}/files/read`, { path, conversationId }),
   );
+  return FileReadResponseSchema.parse(response);
 }
 
-export async function createFile(agentId: string, path: string, content: string, conversationId?: string) {
-  return apiMutate<{ path: string; size: number }>(
+export async function createFile(
+  agentId: string,
+  path: string,
+  content: string,
+  conversationId?: string,
+): Promise<WriteFileResponse> {
+  const response = await apiMutate<unknown>(
     withQuery(`${API_BASE}/agents/${agentId}/files`, { conversationId }),
     'POST',
     { path, content },
   );
+  return FileWriteResponseSchema.parse(response);
 }
 
-export async function updateFile(agentId: string, path: string, content: string, conversationId?: string) {
-  return apiMutate<{ path: string; size: number }>(
+export async function updateFile(
+  agentId: string,
+  path: string,
+  content: string,
+  conversationId?: string,
+): Promise<WriteFileResponse> {
+  const response = await apiMutate<unknown>(
     withQuery(`${API_BASE}/agents/${agentId}/files`, { conversationId }),
     'PUT',
     { path, content },
   );
+  return FileWriteResponseSchema.parse(response);
 }
 
 export async function deleteFile(agentId: string, path: string, conversationId?: string): Promise<void> {
@@ -267,42 +314,56 @@ export async function deleteFile(agentId: string, path: string, conversationId?:
   );
 }
 
-export interface UploadWorkspaceResponse {
-  files: number;
-  totalBytes: number;
-}
+export type UploadWorkspaceResponse = ReturnType<typeof WorkspaceReplaceResponseSchema.parse>;
 
 export async function uploadWorkspaceTarball(
   agentId: string,
   file: File,
   options?: { force?: boolean },
 ): Promise<UploadWorkspaceResponse> {
-  return apiFetch<UploadWorkspaceResponse>(
+  const response = await apiFetch<unknown>(
     withQuery(`${API_BASE}/agents/${agentId}/workspace`, { force: options?.force ? 'true' : undefined }),
     {
       method: 'POST',
-      headers: { 'Content-Type': file.type || 'application/gzip' },
+      headers: { 'Content-Type': 'application/gzip' },
       body: file,
     },
   );
+  return WorkspaceReplaceResponseSchema.parse(response);
 }
 
-export async function createAgent(data: AgentUpsertInput) {
-  return apiMutate(`${API_BASE}/agents`, 'POST', data);
+export async function createAgent(data: AgentCreateInput): Promise<Agent> {
+  const response = await apiMutate<unknown>(
+    `${API_BASE}/agents`,
+    'POST',
+    AgentCreateInputSchema.parse(data),
+  );
+  return AgentSchema.parse(response);
 }
 
-export async function updateAgent(id: string, data: Partial<AgentUpsertInput>) {
-  return apiMutate(`${API_BASE}/agents/${id}`, 'PUT', data);
+export async function updateAgent(id: string, data: AgentPatchInput): Promise<Agent> {
+  const response = await apiMutate<unknown>(
+    `${API_BASE}/agents/${id}`,
+    'PATCH',
+    AgentPatchInputSchema.parse(data),
+  );
+  return AgentSchema.parse(response);
 }
 
 // ── Agent Secrets operations ──────────────────────────────────────────
 
 export async function fetchSecretKeys(agentId: string): Promise<{ keys: string[] }> {
-  return apiFetch<{ keys: string[] }>(`${API_BASE}/agents/${agentId}/secrets`);
+  const response = await apiFetch<unknown>(`${API_BASE}/agents/${agentId}/secrets`);
+  return SecretListResponseSchema.parse(response);
 }
 
 export async function setSecret(agentId: string, key: string, value: string): Promise<{ key: string }> {
-  return apiMutate<{ key: string }>(`${API_BASE}/agents/${agentId}/secrets`, 'POST', { key, value });
+  const response = await apiMutate<unknown>(
+    `${API_BASE}/agents/${agentId}/secrets`,
+    'POST',
+    SecretPutInputSchema.parse({ key, value }),
+  );
+  return SecretPutResponseSchema.parse(response);
 }
 
 export async function deleteSecret(agentId: string, key: string): Promise<void> {
@@ -341,7 +402,7 @@ export async function createTrigger(data: {
 
 export async function updateTrigger(id: string, data: Partial<{
   eventType: string;
-  selector: Record<string, unknown>;
+  selector: Record<string, unknown> | null;
   taskTemplate: string;
   enabled: boolean;
 }>): Promise<Trigger> {
@@ -502,8 +563,29 @@ export async function fetchArtifact(id: string): Promise<Artifact> {
   return apiFetch<Artifact>(`${API_BASE}/artifacts/${id}`);
 }
 
-export async function fetchArtifactDownloadUrl(id: string): Promise<{ url: string; expiresIn: number; name: string; mimeType: string; sizeBytes: number }> {
-  return apiFetch(`${API_BASE}/artifacts/${id}/download-url`);
+export async function downloadArtifact(id: string, name: string): Promise<void> {
+  const url = `${API_BASE}/artifacts/${id}/download`;
+  const res = await fetch(url, withApiAuth());
+  if (res.status === 401) {
+    markAuthRequired();
+  }
+  if (!res.ok) {
+    const errorDetail = await readErrorDetail(res);
+    const baseMessage = `API GET ${url} failed: ${res.status}`;
+    throw new Error(errorDetail ? `${baseMessage} - ${errorDetail}` : baseMessage);
+  }
+
+  const objectUrl = URL.createObjectURL(await res.blob());
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = name;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 export async function deleteArtifact(id: string): Promise<void> {
@@ -559,30 +641,54 @@ export async function uploadArtifactDirect(
 
 // ── Budget policies ──────────────────────────────────────────────────
 
-export async function fetchBudgetPolicies(): Promise<ApiBudgetPolicy[]> {
-  const res = await apiFetch<{ policies: ApiBudgetPolicy[] }>(`${API_BASE}/budgets`);
-  return res.policies;
+export async function fetchBudgetPolicies(): Promise<BudgetPolicy[]> {
+  const response = await apiFetch<unknown>(`${API_BASE}/budgets`);
+  return BudgetPolicyListResponseSchema.parse(response).policies;
 }
 
-export async function createBudgetPolicy(input: {
-  name: string;
-  enabled?: boolean;
-  doc: Record<string, unknown>;
-}): Promise<ApiBudgetPolicy> {
-  return apiMutate(`${API_BASE}/budgets`, 'POST', input);
+export async function createBudgetPolicy(
+  input: BudgetPolicyCreateInput,
+): Promise<BudgetPolicy> {
+  const body = BudgetPolicyCreateInputSchema.parse(input);
+  const response = await apiMutate<unknown>(`${API_BASE}/budgets`, 'POST', body);
+  return BudgetPolicySchema.parse(response);
 }
 
 export async function updateBudgetPolicy(
   id: string,
-  input: Partial<{ name: string; enabled: boolean; doc: Record<string, unknown> }>,
-): Promise<ApiBudgetPolicy> {
-  return apiMutate(`${API_BASE}/budgets/${id}`, 'PUT', input);
+  input: BudgetPolicyPatchInput,
+): Promise<BudgetPolicy> {
+  const body = BudgetPolicyPatchInputSchema.parse(input);
+  const response = await apiMutate<unknown>(`${API_BASE}/budgets/${id}`, 'PATCH', body);
+  return BudgetPolicySchema.parse(response);
 }
 
 export async function deleteBudgetPolicy(id: string): Promise<void> {
   await apiFetch(`${API_BASE}/budgets/${id}`, { method: 'DELETE' });
 }
 
-export async function fetchBudgetSpend(id: string): Promise<ApiBudgetSpend> {
-  return apiFetch(`${API_BASE}/budgets/${id}/spend`);
+export async function fetchBudgetSpend(id: string): Promise<BudgetSpendResponse> {
+  const response = await apiFetch<unknown>(`${API_BASE}/budgets/${id}/spend`);
+  return BudgetSpendResponseSchema.parse(response);
+}
+
+export async function fetchAgentBudgetStatuses(): Promise<AgentBudgetStatus[]> {
+  const response = await apiFetch<unknown>(`${API_BASE}/budgets/agents/status`);
+  return AgentBudgetStatusListResponseSchema.parse(response).statuses;
+}
+
+export async function fetchModelGatewayStatus(): Promise<ModelGatewayStatus> {
+  const response = await apiFetch<unknown>(`${API_BASE}/model-gateway/status`);
+  return ModelGatewayStatusSchema.parse(response);
+}
+
+export async function fetchAnalyticsOverview(
+  window: AnalyticsWindow = '24h',
+): Promise<AnalyticsOverview> {
+  const canonicalWindow = AnalyticsWindowSchema.parse(window);
+  const response = await apiFetch<unknown>(withQuery(
+    `${API_BASE}/analytics/overview`,
+    { window: canonicalWindow },
+  ));
+  return AnalyticsOverviewSchema.parse(response);
 }

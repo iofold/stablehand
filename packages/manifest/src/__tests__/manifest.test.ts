@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as manifestPackage from '../index.js';
 import {
   manifestToAgentCreateInput,
-  manifestToAgentUpdateInput,
+  manifestToAgentPatchInput,
 } from '../convert.js';
 import { parseManifestString, serializeManifestJSON, serializeManifestYAML } from '../parser.js';
 import type { AgentManifest } from '../types.js';
@@ -59,45 +59,56 @@ describe('strict manifest validation', () => {
     }
   });
 
-  it('rejects retired model and harness-level nativeTools fields', () => {
+  it('rejects retired model and harness-level nativeToolPolicy fields', () => {
     const model = structuredClone(minimalManifest());
     (model.spec as Record<string, unknown>).model = { provider: 'openai', id: 'gpt-5.4-mini' };
-    const nativeTools = structuredClone(minimalManifest('claude-agents'));
-    ((nativeTools.spec as Record<string, unknown>).harnessConfig as Record<string, unknown>).nativeTools = {
-      allowlist: ['Read'],
+    const nativeToolPolicy = structuredClone(minimalManifest('claude-agents'));
+    ((nativeToolPolicy.spec as Record<string, unknown>).harnessConfig as Record<string, unknown>).nativeToolPolicy = {
+      policy: 'allow',
+      names: ['Read'],
     };
 
     expect(safeValidateManifest(model).success).toBe(false);
-    expect(safeValidateManifest(nativeTools).success).toBe(false);
+    expect(safeValidateManifest(nativeToolPolicy).success).toBe(false);
   });
 
-  it('keeps nativeTools at agent level', () => {
+  it('keeps the explicit nativeToolPolicy at agent level', () => {
     const candidate = structuredClone(minimalManifest());
-    (candidate.spec as Record<string, unknown>).nativeTools = {
-      allowlist: ['Read', 'Write'],
-      blocklist: ['Bash'],
+    (candidate.spec as Record<string, unknown>).nativeToolPolicy = {
+      policy: 'allow',
+      names: ['Read', 'Write'],
     };
 
     const parsed = validateManifest(candidate);
-    expect(parsed.spec.nativeTools).toEqual({
-      allowlist: ['Read', 'Write'],
-      blocklist: ['Bash'],
+    expect(parsed.spec.nativeToolPolicy).toEqual({
+      policy: 'allow',
+      names: ['Read', 'Write'],
     });
   });
 
-  it('rejects duplicate and overlapping native tool names', () => {
+  it('rejects ambiguous native tool policy shapes', () => {
     const duplicate = structuredClone(minimalManifest());
-    (duplicate.spec as Record<string, unknown>).nativeTools = {
-      allowlist: ['Read', 'Read'],
+    (duplicate.spec as Record<string, unknown>).nativeToolPolicy = {
+      policy: 'allow',
+      names: ['Read', 'Read'],
     };
-    const overlap = structuredClone(minimalManifest());
-    (overlap.spec as Record<string, unknown>).nativeTools = {
-      allowlist: ['Read'],
-      blocklist: ['Read'],
+    const emptySelection = structuredClone(minimalManifest());
+    (emptySelection.spec as Record<string, unknown>).nativeToolPolicy = {
+      policy: 'deny',
+      names: [],
     };
+    const namesOnAll = structuredClone(minimalManifest());
+    (namesOnAll.spec as Record<string, unknown>).nativeToolPolicy = {
+      policy: 'all',
+      names: ['Read'],
+    };
+    const retired = structuredClone(minimalManifest());
+    (retired.spec as Record<string, unknown>).nativeTools = { allowlist: ['Read'] };
 
     expect(safeValidateManifest(duplicate).success).toBe(false);
-    expect(safeValidateManifest(overlap).success).toBe(false);
+    expect(safeValidateManifest(emptySelection).success).toBe(false);
+    expect(safeValidateManifest(namesOnAll).success).toBe(false);
+    expect(safeValidateManifest(retired).success).toBe(false);
   });
 
   it('accepts only enforced sandbox resources', () => {
@@ -189,10 +200,11 @@ apiVersion: ctxmill.io/v1
 });
 
 describe('canonical agent API conversion', () => {
-  it('exports exact create and update conversion functions instead of definition adapters', () => {
+  it('exports exact create and patch conversion functions instead of definition adapters', () => {
     const exports = manifestPackage as Record<string, unknown>;
     expect(exports.manifestToAgentCreateInput).toBeTypeOf('function');
-    expect(exports.manifestToAgentUpdateInput).toBeTypeOf('function');
+    expect(exports.manifestToAgentPatchInput).toBeTypeOf('function');
+    expect(exports.manifestToAgentUpdateInput).toBeUndefined();
     expect(exports.manifestToDefinition).toBeUndefined();
     expect(exports.definitionToManifest).toBeUndefined();
   });
@@ -207,7 +219,8 @@ describe('canonical agent API conversion', () => {
     };
     Object.assign(candidate.spec as Record<string, unknown>, {
       tools: [{ ref: 'calculator' }, { ref: 'artifact_upload' }],
-      nativeTools: { allowlist: ['Read'], blocklist: ['Bash'] },
+      builtinToolPolicy: { policy: 'deny', names: ['emit-event'] },
+      nativeToolPolicy: { policy: 'deny', names: ['Bash'] },
       workspace: {
         content: {
           files: [{ src: 'assets/policy.txt', dest: 'policy.txt' }],
@@ -234,7 +247,8 @@ describe('canonical agent API conversion', () => {
         displayName: 'Canonical Agent',
         labels: { domain: 'close' },
       },
-      nativeTools: { allowlist: ['Read'], blocklist: ['Bash'] },
+      builtinToolPolicy: { policy: 'deny', names: ['emit-event'] },
+      nativeToolPolicy: { policy: 'deny', names: ['Bash'] },
       workspaceContent: {
         files: [{ src: 'assets/policy.txt', dest: 'policy.txt' }],
       },
@@ -244,9 +258,9 @@ describe('canonical agent API conversion', () => {
     });
   });
 
-  it('produces an exact update input including the canonical manifest', () => {
+  it('produces an exact patch input including the canonical manifest', () => {
     const manifest = validateManifest(minimalManifest('pi-agent'));
-    expect(manifestToAgentUpdateInput(manifest)).toEqual({
+    expect(manifestToAgentPatchInput(manifest)).toEqual({
       name: 'pi-agent-test',
       harness: 'pi-agent',
       harnessConfig: {

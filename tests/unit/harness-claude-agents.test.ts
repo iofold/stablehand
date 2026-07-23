@@ -32,6 +32,7 @@ import { ClaudeAgentsHarness } from '../../packages/sandbox-daemon/src/index.ts'
 import type { AgentEvent, AgentHarness, HarnessSessionConfig } from '../../packages/sandbox-daemon/src/index.ts';
 import type { ToolDefinition } from '../../packages/sandbox-daemon/src/index.ts';
 import type { Message } from '../../packages/sandbox-daemon/src/index.ts';
+import type { NativeToolPolicy } from '@ctxmill/contracts';
 
 function makeMessage(
   role: Message['role'],
@@ -633,7 +634,7 @@ describe('ClaudeAgentsHarness', () => {
   });
 
   describe('openSession() and deliverTurn()', () => {
-    it('should pass nativeTools allowlist/blocklist and ctxmill MCP server into query()', async () => {
+    it('passes an explicit native-tool allow policy and the ctxmill MCP server into query()', async () => {
       const harness = new ClaudeAgentsHarness();
       Reflect.set(harness, 'loadSdkModule', async () => ({
         query: mockQuery,
@@ -648,9 +649,9 @@ describe('ClaudeAgentsHarness', () => {
       };
       const config = makeConfig({
         tools: [customTool],
-        nativeTools: {
-          allowlist: ['native-read', 'native-bash'],
-          blocklist: ['native-bash'],
+        nativeToolPolicy: {
+          policy: 'allow',
+          names: ['native-read'],
         },
         harnessConfigJson: JSON.stringify({ model: 'claude-sonnet-4-6', apiKeyRef: 'anthropic', maxTurns: 4 }),
       });
@@ -682,8 +683,8 @@ describe('ClaudeAgentsHarness', () => {
         name: 'ctxmill',
         tools: [expect.objectContaining({ name: 'ctx-tool' })],
       });
-      expect(queryCall?.options.allowedTools).toEqual(['native-read', 'native-bash', 'mcp__ctxmill__*']);
-      expect(queryCall?.options.disallowedTools).toEqual(['native-bash']);
+      expect(queryCall?.options.allowedTools).toEqual(['native-read', 'mcp__ctxmill__*']);
+      expect(queryCall?.options.disallowedTools).toEqual([]);
       expect(queryCall?.options.mcpServers).toEqual({
         ctxmill: {
           type: 'sdk',
@@ -696,6 +697,54 @@ describe('ClaudeAgentsHarness', () => {
       expect(queryCall?.options.includeHookEvents).toBe(true);
       expect(queryCall?.options.includePartialMessages).toBe(true);
       expect(queryCall?.options.maxTurns).toBe(4);
+    });
+
+    it.each([
+      {
+        label: 'all',
+        nativeToolPolicy: { policy: 'all' } as NativeToolPolicy,
+        allowedTools: [],
+        disallowedTools: [],
+      },
+      {
+        label: 'deny',
+        nativeToolPolicy: { policy: 'deny', names: ['Bash'] } as NativeToolPolicy,
+        allowedTools: [],
+        disallowedTools: ['Bash'],
+      },
+      {
+        label: 'none',
+        nativeToolPolicy: { policy: 'none' } as NativeToolPolicy,
+        allowedTools: ['mcp__ctxmill__*'],
+        disallowedTools: [],
+      },
+    ])('enforces the $label native-tool policy', async ({
+      nativeToolPolicy,
+      allowedTools,
+      disallowedTools,
+    }) => {
+      const harness = new ClaudeAgentsHarness();
+      Reflect.set(harness, 'loadSdkModule', async () => ({
+        query: mockQuery,
+        tool: mockSdkTool,
+        createSdkMcpServer: mockCreateSdkMcpServer,
+      }));
+      mockQuery.mockImplementation(() => sdkStream([{
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }]));
+
+      const session = await harness.openSession(makeConfig({ nativeToolPolicy }));
+      await collectEvents(session.deliverTurn(
+        { messages: [makeMessage('user', 'Hello')], turnId: 'turn-policy' },
+        {},
+      ));
+      const queryCall = mockQuery.mock.calls[0]?.[0];
+      await session.close();
+
+      expect(queryCall?.options.allowedTools).toEqual(allowedTools);
+      expect(queryCall?.options.disallowedTools).toEqual(disallowedTools);
     });
 
     it('commits a native /goal result even when Claude only returns terminal result text', async () => {
@@ -790,6 +839,7 @@ describe('ClaudeAgentsHarness', () => {
       ]));
 
       const session = await harness.openSession(makeConfig({
+        nativeToolPolicy: { policy: 'allow', names: ['Skill'] },
         harnessConfigJson: JSON.stringify({
           model: 'claude-sonnet-4-6',
           apiKeyRef: 'anthropic',
@@ -829,6 +879,7 @@ describe('ClaudeAgentsHarness', () => {
       ]));
 
       const session = await harness.openSession(makeConfig({
+        nativeToolPolicy: { policy: 'allow', names: ['Agent', 'Skill'] },
         harnessConfigJson: JSON.stringify({
           model: 'claude-sonnet-4-6',
           apiKeyRef: 'anthropic',

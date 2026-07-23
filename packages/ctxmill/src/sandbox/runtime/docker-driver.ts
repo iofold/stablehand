@@ -1,5 +1,6 @@
 import { PassThrough, Readable } from 'node:stream';
 import Dockerode from 'dockerode';
+import { RUNTIME_INSTANCE_TOKEN_ENV } from '@ctxmill/shared';
 import { isStatusCodeError } from '../../util/status-code-error.js';
 import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from '../container-scope.js';
 import {
@@ -27,6 +28,25 @@ import {
 } from './workspace-policy.js';
 
 const TAG = '[ContainerManager]';
+
+function runtimeInstanceTokenFromConfig(config: unknown): string | undefined {
+  if (
+    typeof config !== 'object'
+    || config === null
+    || !('Env' in config)
+    || !Array.isArray(config.Env)
+  ) {
+    return undefined;
+  }
+
+  const prefix = `${RUNTIME_INSTANCE_TOKEN_ENV}=`;
+  const entry = config.Env.find(
+    (value): value is string =>
+      typeof value === 'string' && value.startsWith(prefix),
+  );
+  const token = entry?.slice(prefix.length).trim();
+  return token || undefined;
+}
 
 export class DockerContainerDriver {
   private readonly docker: Dockerode;
@@ -277,6 +297,20 @@ export class DockerContainerDriver {
     const c = containers.find((container) => this.isContainerInCurrentScope(container));
     if (!c) return null;
     return this.containerItemToInfo(c);
+  }
+
+  async getRuntimeInstanceToken(
+    containerId: string,
+  ): Promise<string | undefined> {
+    try {
+      const info = await this.docker.getContainer(containerId).inspect();
+      return runtimeInstanceTokenFromConfig(info.Config);
+    } catch (err: unknown) {
+      if (isStatusCodeError(err) && err.statusCode === 404) {
+        return undefined;
+      }
+      throw err;
+    }
   }
 
   async listManagedContainers(): Promise<ContainerInfo[]> {

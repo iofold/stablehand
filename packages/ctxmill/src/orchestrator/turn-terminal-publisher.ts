@@ -1,6 +1,7 @@
 import type { DatabaseRepository } from '../database/repository.js';
 import type { TurnSelect } from '../database/types.js';
 import type { EventMap, TypedEventBus } from '../events/bus.js';
+import { materializeTurnUsage } from './usage.js';
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -23,9 +24,6 @@ export function turnCompletedPayload(turn: TurnSelect): EventMap['turn.completed
     throw new Error(`Turn ${turn.id} is not terminal`);
   }
 
-  const hasUsage = turn.inputTokens != null
-    && turn.outputTokens != null
-    && turn.totalTokens != null;
   return {
     turnId: turn.id,
     ...(turn.sandboxSessionId ? { sandboxSessionId: turn.sandboxSessionId } : {}),
@@ -34,16 +32,7 @@ export function turnCompletedPayload(turn: TurnSelect): EventMap['turn.completed
     status: turn.status,
     ...(turn.error ? { error: turn.error } : {}),
     durationMs: Math.max(0, turn.completedAt - turn.startedAt),
-    ...(hasUsage
-      ? {
-        usage: {
-          inputTokens: turn.inputTokens!,
-          outputTokens: turn.outputTokens!,
-          totalTokens: turn.totalTokens!,
-          ...(turn.costUsd != null ? { costUsd: turn.costUsd } : {}),
-        },
-      }
-      : {}),
+    usage: materializeTurnUsage(turn),
     timestamp: turn.completedAt,
   };
 }

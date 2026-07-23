@@ -9,6 +9,8 @@ import {
   fetchActiveConversations,
   fetchConversationSummaries,
 } from '@/lib/api';
+import { makeAgentFixture } from '@/test/agent-fixture';
+import { ConversationSummarySchema } from '@ctxmill/contracts';
 
 vi.mock('@/components/dashboard/Dashboard', () => ({
   Dashboard: ({ error }: { error?: string | null }) => (
@@ -32,6 +34,10 @@ vi.mock('@/lib/api', async () => {
 const fetchActiveConversationsMock = vi.mocked(fetchActiveConversations);
 const fetchConversationSummariesMock = vi.mocked(fetchConversationSummaries);
 
+function makeConversationSummary(input: unknown) {
+  return ConversationSummarySchema.parse(input);
+}
+
 async function flushEffects(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -52,7 +58,7 @@ describe('DashboardPage', () => {
 
     useAgentsStore.setState((state) => ({
       ...state,
-      agents: [{ id: 'agent-1', name: 'Agent 1', status: 'active', tools: [], harness: 'test', harnessConfig: {} }],
+      agents: [makeAgentFixture({ status: 'active', harness: 'test', harnessConfig: {} })],
       loading: false,
       error: null,
       fetchAgents: vi.fn().mockResolvedValue(undefined),
@@ -61,21 +67,23 @@ describe('DashboardPage', () => {
     useApiAuthStore.setState({ token: '', authRequired: false });
 
     fetchActiveConversationsMock.mockResolvedValue([
-      {
+      makeConversationSummary({
         id: 'conv-1',
         agentId: 'agent-1',
-        status: 'running',
+        status: 'ACTIVE',
         mode: 'interactive',
         turnCount: 1,
         messageCount: 2,
         taskDescription: 'Investigate issue',
         startedAt: Date.now() - 5_000,
+        completedAt: null,
         updatedAt: Date.now(),
         latestTurnId: 'turn-1',
         sandboxSessionId: 'sandbox-1',
-      },
+        totalTokens: null,
+      }),
     ]);
-    fetchConversationSummariesMock.mockResolvedValue({ conversations: [] } as never);
+    fetchConversationSummariesMock.mockResolvedValue({ conversations: [] });
   });
 
   afterEach(() => {
@@ -103,10 +111,28 @@ describe('DashboardPage', () => {
     expect(cancelRunMock).not.toHaveBeenCalledWith('agent-1', 'sandbox-1');
   });
 
+  it('keeps the conversation visible and reports the API detail when cancellation fails', async () => {
+    cancelRunMock.mockRejectedValueOnce(new Error('Cancellation denied by runtime'));
+    act(() => {
+      root.render(<DashboardPage />);
+    });
+    await flushEffects();
+
+    const cancelButton = container.querySelector('button[data-testid="cancel-run-button"]');
+    await act(async () => {
+      cancelButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('Cancellation denied by runtime');
+    expect(container.textContent).toContain('Investigate issue');
+    expect(container.querySelector('button[data-testid="cancel-run-button"]')).not.toBeNull();
+  });
+
   it('renders a fixed duration and no cancel action for completed conversations', async () => {
     const startedAt = Date.now() - 13 * 60_000;
     fetchActiveConversationsMock.mockResolvedValue([
-      {
+      makeConversationSummary({
         id: 'conv-done',
         agentId: 'agent-1',
         status: 'COMPLETED',
@@ -119,7 +145,8 @@ describe('DashboardPage', () => {
         updatedAt: startedAt + 4_300,
         latestTurnId: 'turn-done',
         sandboxSessionId: 'sandbox-done',
-      },
+        totalTokens: null,
+      }),
     ]);
 
     act(() => {
@@ -135,7 +162,7 @@ describe('DashboardPage', () => {
   it('renders a fixed duration from updatedAt and no cancel action for errored conversations', async () => {
     const startedAt = Date.now() - 13 * 60_000;
     fetchActiveConversationsMock.mockResolvedValue([
-      {
+      makeConversationSummary({
         id: 'conv-error',
         agentId: 'agent-1',
         status: 'ERROR',
@@ -144,10 +171,12 @@ describe('DashboardPage', () => {
         messageCount: 2,
         taskDescription: 'Failed task',
         startedAt,
+        completedAt: null,
         updatedAt: startedAt + 4_300,
         latestTurnId: 'turn-error',
         sandboxSessionId: 'sandbox-error',
-      },
+        totalTokens: null,
+      }),
     ]);
 
     act(() => {
@@ -162,7 +191,7 @@ describe('DashboardPage', () => {
 
   it('renders a live duration and cancel action for running conversations', async () => {
     fetchActiveConversationsMock.mockResolvedValue([
-      {
+      makeConversationSummary({
         id: 'conv-live',
         agentId: 'agent-1',
         status: 'ACTIVE',
@@ -171,10 +200,12 @@ describe('DashboardPage', () => {
         messageCount: 2,
         taskDescription: 'In-flight task',
         startedAt: Date.now() - 5_000,
+        completedAt: null,
         updatedAt: Date.now(),
         latestTurnId: 'turn-live',
         sandboxSessionId: 'sandbox-live',
-      },
+        totalTokens: null,
+      }),
     ]);
 
     act(() => {

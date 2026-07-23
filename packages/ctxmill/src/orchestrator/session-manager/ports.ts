@@ -1,11 +1,25 @@
 import type { CheckpointV2, SandboxSessionRow } from '../../database/repository.js';
 import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
-import type { HarnessGrpcClient, SessionRecord, TurnQueueEntry } from './types.js';
+import type {
+  HarnessGrpcClient,
+  SessionRecord,
+  SessionRecoveryAuthority,
+  TurnQueueEntry,
+} from './types.js';
+
+export interface SessionReconnectionRegistration {
+  revoke(): void | Promise<void>;
+}
 
 export interface SessionReconciler {
-  onSessionReconnected(session: SandboxSessionRow, grpcClient?: HarnessGrpcClient): void;
+  onSessionReconnected(
+    session: SandboxSessionRow,
+    grpcClient?: HarnessGrpcClient,
+  ): SessionReconnectionRegistration;
   onSessionEvicted(sessionId: string, conversationId: string): void | Promise<void>;
-  reconcileStrandedRestoring(session: SandboxSessionRow): Promise<'CHECKPOINTED' | 'TERMINATED'>;
+  reconcileExpiredSandboxSessionRestore(
+    session: SandboxSessionRow,
+  ): Promise<'CHECKPOINTED' | 'TERMINATED' | undefined>;
   recoverDeadSession?(
     session: SandboxSessionRow,
     conversationId: string,
@@ -13,6 +27,7 @@ export interface SessionReconciler {
     agentId: string | undefined,
     failedOp: string,
     err: unknown,
+    recoveryAuthority?: SessionRecoveryAuthority,
   ): Promise<SessionRecord>;
 }
 

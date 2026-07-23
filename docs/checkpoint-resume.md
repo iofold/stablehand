@@ -63,6 +63,11 @@ Secrets are handled separately from checkpoints:
 2. **Inject**: Secrets are passed into the new sandbox container as environment variables.
 3. **Destroy**: When the container is removed, those runtime environment values disappear with it.
 
+Per-turn `sandboxSecrets` remain outside checkpoints as well. For an open queued
+or HITL turn, the orchestrator recovers the exact map from a turn-bound
+authenticated encrypted envelope and sends it only with `DeliverTurn`. Terminal
+turn finalization deletes that envelope.
+
 ## HITL Flow
 
 When an agent requests human approval:

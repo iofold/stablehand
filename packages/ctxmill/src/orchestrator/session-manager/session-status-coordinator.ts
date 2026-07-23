@@ -1,6 +1,8 @@
 import {
   SandboxSessionStatusConflictError,
   type DatabaseRepository,
+  type SandboxSessionActiveGeneration,
+  type SandboxSessionLifecycleFence,
 } from '../../database/repository.js';
 import { assertTransition } from './session-status-machine.js';
 import type { SessionStatePort } from './ports.js';
@@ -14,7 +16,11 @@ interface StatusExtra {
 }
 
 export interface SessionStatusCoordinatorDeps {
-  db: Pick<DatabaseRepository, 'updateSandboxSessionStatus'>;
+  db: Pick<
+    DatabaseRepository,
+    | 'updateSandboxSessionMetadata'
+    | 'completeSandboxSessionLifecycleOperation'
+  >;
   logger: Logger;
   stateStore?: Pick<SessionStatePort, 'getSessionById'>;
 }
@@ -25,6 +31,8 @@ export interface SessionStatusTransition {
   toStatus: SessionStatus;
   extra?: StatusExtra;
   clearRuntime?: boolean;
+  lifecycleOperation?: SandboxSessionLifecycleFence;
+  expectedActiveGeneration?: SandboxSessionActiveGeneration;
 }
 
 export class StaleTransitionError extends Error {
@@ -38,6 +46,18 @@ export class StaleTransitionError extends Error {
   }
 }
 
+export class StaleLifecycleOperationError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly toStatus: SessionStatus,
+  ) {
+    super(
+      `Lost lifecycle ownership for session ${sessionId}; could not transition to ${toStatus}`,
+    );
+    this.name = 'StaleLifecycleOperationError';
+  }
+}
+
 export class SessionStatusCoordinator {
   constructor(private readonly deps: SessionStatusCoordinatorDeps) {}
 
@@ -47,12 +67,20 @@ export class SessionStatusCoordinator {
     toStatus,
     extra,
     clearRuntime = false,
+    lifecycleOperation,
+    expectedActiveGeneration,
   }: SessionStatusTransition): Promise<void> {
     const record = this.deps.stateStore?.getSessionById(sessionId);
     const currentStatus = record?.status ?? fromStatus;
 
     if (!currentStatus) {
       throw new Error(`SessionStatusCoordinator requires fromStatus when session ${sessionId} is not cached`);
+    }
+
+    if (currentStatus === 'RESTORING' || toStatus === 'RESTORING') {
+      throw new Error(
+        `Session ${sessionId} RESTORING transitions require the restore-fenced repository methods`,
+      );
     }
 
     if (currentStatus === toStatus && !extra && !clearRuntime) {
@@ -64,19 +92,40 @@ export class SessionStatusCoordinator {
 
     if (currentStatus !== toStatus) {
       assertTransition(currentStatus, toStatus);
+      if (!lifecycleOperation) {
+        throw new Error(
+          `Session ${sessionId} ${currentStatus} -> ${toStatus} requires its canonical fenced lifecycle owner`,
+        );
+      }
     }
 
     const normalizedExtra = normalizeStatusExtra(toStatus, extra, clearRuntime);
 
     try {
-      if (normalizedExtra === undefined) {
-        await this.deps.db.updateSandboxSessionStatus(sessionId, toStatus, undefined, {
-          expectedFrom: currentStatus,
+      if (lifecycleOperation) {
+        const completed = await this.deps.db.completeSandboxSessionLifecycleOperation({
+          sandboxSessionId: sessionId,
+          ownerId: lifecycleOperation.ownerId,
+          fenceToken: lifecycleOperation.fenceToken,
+          fromStatus: currentStatus,
+          toStatus,
+          ...(normalizedExtra ? { extra: normalizedExtra } : {}),
         });
-      } else {
-        await this.deps.db.updateSandboxSessionStatus(sessionId, toStatus, normalizedExtra, {
-          expectedFrom: currentStatus,
-        });
+        if (!completed) {
+          throw new StaleLifecycleOperationError(sessionId, toStatus);
+        }
+      } else if (normalizedExtra !== undefined) {
+        if (currentStatus === 'ACTIVE' && !expectedActiveGeneration) {
+          throw new Error(
+            `Session ${sessionId} ACTIVE metadata requires its expected active generation`,
+          );
+        }
+        await this.deps.db.updateSandboxSessionMetadata(
+          sessionId,
+          currentStatus,
+          normalizedExtra,
+          currentStatus === 'ACTIVE' ? expectedActiveGeneration : undefined,
+        );
       }
     } catch (error) {
       if (error instanceof SandboxSessionStatusConflictError) {

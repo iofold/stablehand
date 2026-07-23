@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { ApiAgent, ApiAgentTurn } from '@ctxmill/shared';
 import {
+  fetchAgent as apiFetchAgent,
   fetchAgents as apiFetchAgents,
   startBackgroundRun as apiStartRun,
   cancelTurn as apiCancelTurn,
@@ -8,28 +8,27 @@ import {
   createAgent as apiCreateAgent,
   updateAgent as apiUpdateAgent,
   deleteAgent as apiDeleteAgent,
-  type AgentUpsertInput,
 } from '@/lib/api';
-import type { HttpToolDefinition } from '@ctxmill/shared';
+import type {
+  Agent,
+  AgentCreateInput,
+  AgentPatchInput,
+  Turn,
+} from '@ctxmill/contracts';
 import { normalizeSandboxSessionStatusCounts } from '@/lib/lifecycle-status';
 
-export type AgentTurn = ApiAgentTurn;
-
-export interface Agent extends ApiAgent {
-  httpTools?: HttpToolDefinition[];
-  nativeTools?: { allowlist?: string[]; blocklist?: string[] } | null;
-  workspaceContent?: { files?: Array<{ src: string; dest: string }> } | null;
-  createdAt?: number;
-}
+export type AgentTurn = Turn;
+export type { Agent } from '@ctxmill/contracts';
 
 interface AgentsStore {
   agents: Agent[];
   loading: boolean;
   error: string | null;
+  fetchAgent: (id: string) => Promise<Agent>;
   fetchAgents: () => Promise<void>;
   updateAgentLocal: (id: string, updates: Partial<Agent>) => void;
-  createAgent: (data: AgentUpsertInput) => Promise<Agent>;
-  updateAgent: (id: string, data: Partial<AgentUpsertInput>) => Promise<Agent>;
+  createAgent: (data: AgentCreateInput) => Promise<Agent>;
+  updateAgent: (id: string, data: AgentPatchInput) => Promise<Agent>;
   deleteAgent: (id: string) => Promise<void>;
   startPolling: () => () => void;
   startBackgroundRun: (agentId: string, task: string) => Promise<void>;
@@ -41,6 +40,21 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
   agents: [],
   loading: false,
   error: null,
+  fetchAgent: async (id) => {
+    try {
+      const agent = await apiFetchAgent(id);
+      set((state) => ({
+        agents: state.agents.some((current) => current.id === id)
+          ? state.agents.map((current) => current.id === id ? agent : current)
+          : [...state.agents, agent],
+        error: null,
+      }));
+      return agent;
+    } catch (err) {
+      set({ error: String(err) });
+      throw err;
+    }
+  },
   fetchAgents: async () => {
     const isInitial = get().agents.length === 0;
     if (isInitial) set({ loading: true });
@@ -61,7 +75,7 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
     })),
   createAgent: async (data) => {
     try {
-      const agent = await apiCreateAgent(data) as Agent;
+      const agent = await apiCreateAgent(data);
       get().fetchAgents();
       return agent;
     } catch (err) {
@@ -71,8 +85,10 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
   },
   updateAgent: async (id, data) => {
     try {
-      const agent = await apiUpdateAgent(id, data) as Agent;
-      get().fetchAgents();
+      const agent = await apiUpdateAgent(id, data);
+      set((state) => ({
+        agents: state.agents.map((current) => current.id === id ? agent : current),
+      }));
       return agent;
     } catch (err) {
       console.error('[agents] updateAgent failed:', err);

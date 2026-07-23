@@ -3,43 +3,87 @@ import { createHash } from 'node:crypto';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
 import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
-import type { SessionEvent } from '../session-turn-service.js';
 import { publishMessageCanonicalState } from '../message-publisher.js';
+import type {
+  TurnDeliveryContext,
+  TurnDeliveryFence,
+} from '../turn-delivery-fence.js';
 import type { SessionStatePort } from './ports.js';
-import type { Logger } from './types.js';
+import type { Logger, SessionEnsureOptions } from './types.js';
+import type { TurnSecrets } from './turn-secrets.js';
 
 const TAG = '[SandboxSessionManager]';
 
-type PendingRequest = {
+export interface PendingRequest {
   type: string;
   id: string;
   payload: Record<string, unknown>;
-};
+}
 
 interface InterruptResumeServiceDeps {
   db: Pick<
     DatabaseRepository,
-    'getTurn' | 'getSandboxSession' | 'getResolvedInterruptsForSandboxSession' | 'getCheckpointV2' | 'addCanonicalMessage'
+    | 'getTurn'
+    | 'getSandboxSession'
+    | 'getInterruptById'
+    | 'getCheckpointV2'
+    | 'addCanonicalMessage'
+    | 'isTurnDeliveryFenceCurrent'
   >;
   eventBus: Pick<TypedEventBus, 'emitAsync'>;
   stateStore: Pick<SessionStatePort, 'getAgentDef' | 'setAgentDef'>;
   logger: Logger;
-  ensureSession: (conversationId: string, agentDef: AgentDefinition, agentId: string) => Promise<{ sessionId: string }>;
-  deliverTurn: (
-    sessionId: string,
-    messages: Message[],
-    turnId: string,
-    signal?: AbortSignal,
-  ) => AsyncGenerator<SessionEvent>;
+  ensureSession: (
+    conversationId: string,
+    agentDef: AgentDefinition,
+    agentId: string,
+    options?: SessionEnsureOptions,
+  ) => Promise<{ sessionId: string }>;
+  executeContinuation: (input: InterruptContinuationExecution) => Promise<void>;
+  resolveTurnSecrets: (turnId: string) => Promise<TurnSecrets>;
   resolveAgentDefinition: (agentId: string) => Promise<AgentDefinition | null>;
-  /**
-   * Terminalize the original (interrupted) turn after a successful durable
-   * continuation — the in-process generator that would have completed it is
-   * gone after a restart, so the continuation is what actually finishes the
-   * turn's lifecycle (ctx-8nnu).
-   */
-  finalizeOriginalTurn?: (turnId: string, agentId: string, conversationId: string) => Promise<void>;
 }
+
+export interface InterruptContinuationExecution {
+  agentDef: AgentDefinition;
+  messages: Message[];
+  agentId: string;
+  conversationId: string;
+  turnId: string;
+  mode: 'interactive' | 'background';
+  taskDescription: string;
+  sandboxSessionId: string;
+  continuationAttemptId: string;
+  deliveryContext: TurnDeliveryContext;
+  turnSecrets: TurnSecrets;
+  signal?: AbortSignal;
+}
+
+export interface PreparedInterruptContinuationReady {
+  kind: 'ready';
+  sandboxSessionId: string;
+  turnId: string;
+  agentId: string;
+  interruptId: string;
+  conversationId: string;
+  mode: 'interactive' | 'background';
+  taskDescription: string;
+  agentDef: AgentDefinition;
+  pendingApprovals: PendingRequest[];
+  fallbackToolCallId: string;
+  fallbackArgs: Record<string, unknown>;
+  resolutionContent: string;
+  turnSecrets: TurnSecrets;
+}
+
+export interface PreparedInterruptContinuationTerminal {
+  kind: 'terminal';
+  turnId: string;
+}
+
+export type PreparedInterruptContinuation =
+  | PreparedInterruptContinuationReady
+  | PreparedInterruptContinuationTerminal;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -98,8 +142,8 @@ function readAgentDefinitionCandidate(candidate: unknown): AgentDefinition | nul
   if (isRecord(candidate.resourceLimits)) {
     definition.resourceLimits = candidate.resourceLimits as AgentDefinition['resourceLimits'];
   }
-  if (isRecord(candidate.nativeTools)) {
-    definition.nativeTools = candidate.nativeTools as AgentDefinition['nativeTools'];
+  if (isRecord(candidate.nativeToolPolicy)) {
+    definition.nativeToolPolicy = candidate.nativeToolPolicy as AgentDefinition['nativeToolPolicy'];
   }
   if (isRecord(candidate.workspaceContent)) {
     definition.workspaceContent = candidate.workspaceContent as AgentDefinition['workspaceContent'];
@@ -110,14 +154,6 @@ function readAgentDefinitionCandidate(candidate: unknown): AgentDefinition | nul
 
 function resolutionContentForAction(action: string | null | undefined): string {
   return action === 'approve' ? 'APPROVED' : 'REJECTED';
-}
-
-function buildContinuationTurnId(interruptId: string): string {
-  const digest = createHash('sha256')
-    .update(interruptId)
-    .digest('hex')
-    .slice(0, 32);
-  return `hitl-resume-${digest}`;
 }
 
 function canonicalContinuationMessageId(input: {
@@ -172,33 +208,57 @@ function buildContinuationMessages(input: {
 export class InterruptResumeService {
   constructor(private readonly deps: InterruptResumeServiceDeps) {}
 
-  async resumeWithInterruptResolution(
+  async prepareInterruptContinuation(
     sessionId: string,
     turnId: string,
     agentId: string,
     interruptId: string,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    signal?.throwIfAborted();
+    recoveryAuthority?: {
+      attemptId: string;
+      fence: TurnDeliveryFence;
+    },
+  ): Promise<PreparedInterruptContinuation> {
     this.deps.logger.info(
-      `${TAG} resuming session ${sessionId} with interrupt resolution (turn=${turnId}, agent=${agentId})`,
+      `${TAG} preparing interrupt continuation for session ${sessionId} `
+      + `(turn=${turnId}, agent=${agentId})`,
     );
 
     const originalTurn = await this.deps.db.getTurn(turnId);
-    if (
-      originalTurn
-      && originalTurn.status !== 'queued'
+    if (!originalTurn) {
+      throw new Error(`Turn ${turnId} not found`);
+    }
+    if (originalTurn.completedAt !== null || (
+      originalTurn.status !== 'queued'
       && originalTurn.status !== 'running'
-    ) {
+    )) {
       this.deps.logger.info(
         `${TAG} turn ${turnId} is already terminal (${originalTurn.status}); completing resume without redelivery`,
       );
-      return;
+      return { kind: 'terminal', turnId };
     }
-
+    if (originalTurn.status !== 'running') {
+      throw new Error(
+        `Turn ${turnId} cannot resume interrupt ${interruptId} from status ${originalTurn.status}`,
+      );
+    }
+    if (originalTurn.agentId !== agentId) {
+      throw new Error(
+        `Turn ${turnId} belongs to agent ${originalTurn.agentId}, not ${agentId}`,
+      );
+    }
     const dbSession = await this.deps.db.getSandboxSession(sessionId);
     if (!dbSession) {
       throw new Error(`Session ${sessionId} not found in database`);
+    }
+    if (
+      dbSession.agentId !== agentId
+      || dbSession.conversationId !== originalTurn.conversationId
+    ) {
+      throw new Error(
+        `Session ${sessionId} does not own turn ${turnId} `
+        + `(expected conversation=${originalTurn.conversationId}, agent=${agentId}; `
+        + `found conversation=${dbSession.conversationId}, agent=${dbSession.agentId})`,
+      );
     }
 
     const conversationId = dbSession.conversationId;
@@ -210,11 +270,10 @@ export class InterruptResumeService {
       checkpoint?.checkpointData,
     );
 
-    const resolvedInterrupts = await this.deps.db.getResolvedInterruptsForSandboxSession(sessionId);
-    const interrupt = resolvedInterrupts.find((entry) => entry.id === interruptId);
-    if (!interrupt) {
+    const interrupt = await this.deps.db.getInterruptById(interruptId);
+    if (!interrupt || interrupt.status !== 'resolved') {
       throw new Error(
-        `Resolved interrupt ${interruptId} was not found for session ${sessionId}`,
+        `Resolved interrupt ${interruptId} was not found`,
       );
     }
     if (interrupt.turnId !== turnId || interrupt.agentId !== agentId) {
@@ -227,9 +286,57 @@ export class InterruptResumeService {
 
     const pendingApprovals = this.getPendingApprovalRequests(checkpoint?.checkpointData)
       .filter((request) => request.type === 'approval');
-    signal?.throwIfAborted();
-    const record = await this.deps.ensureSession(conversationId, agentDef, agentId);
+    const turnSecrets = await this.deps.resolveTurnSecrets(turnId);
+    const record = await this.deps.ensureSession(
+      conversationId,
+      agentDef,
+      agentId,
+      recoveryAuthority
+        ? {
+            recoveryAuthority: {
+              attemptId: recoveryAuthority.attemptId,
+              turnId,
+              fence: recoveryAuthority.fence,
+            },
+          }
+        : undefined,
+    );
     const resolutionContent = resolutionContentForAction(interrupt.resolvedAction);
+
+    return {
+      kind: 'ready',
+      sandboxSessionId: record.sessionId,
+      turnId,
+      agentId,
+      interruptId,
+      conversationId,
+      mode: originalTurn.mode === 'background' ? 'background' : 'interactive',
+      taskDescription: originalTurn.taskDescription ?? '',
+      agentDef,
+      pendingApprovals,
+      fallbackToolCallId: interrupt.toolCallId || `hitl-${turnId}`,
+      fallbackArgs: normalizeFallbackArgs(interrupt.args),
+      resolutionContent,
+      turnSecrets,
+    };
+  }
+
+  async executeInterruptContinuation(
+    prepared: PreparedInterruptContinuationReady,
+    attemptId: string,
+    fence: TurnDeliveryFence,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted();
+    const ownsDelivery = await this.deps.db.isTurnDeliveryFenceCurrent(
+      prepared.turnId,
+      fence,
+    );
+    if (!ownsDelivery) {
+      throw new Error(
+        `HITL continuation ${attemptId} lost delivery ownership before execution`,
+      );
+    }
 
     const continuationMessages: Message[] = [];
     const addContinuationMessages = async (
@@ -238,14 +345,14 @@ export class InterruptResumeService {
     ) => {
       const assistantMessage = await this.deps.db.addCanonicalMessage({
         id: canonicalContinuationMessageId({
-          turnId,
-          interruptId: interrupt.id,
+          turnId: prepared.turnId,
+          interruptId: prepared.interruptId,
           toolCallId,
           role: 'assistant',
         }),
-        agentId,
-        conversationId,
-        turnId,
+        agentId: prepared.agentId,
+        conversationId: prepared.conversationId,
+        turnId: prepared.turnId,
         role: 'assistant',
         content: '',
         toolCalls: [{
@@ -254,34 +361,55 @@ export class InterruptResumeService {
           args: JSON.stringify(toolArgs),
           status: 'complete',
         }],
-      });
-      await publishMessageCanonicalState({ eventBus: this.deps.eventBus }, assistantMessage);
+      }, fence);
+      if (!assistantMessage) {
+        throw new Error(
+          `HITL continuation ${attemptId} lost delivery ownership while persisting approval request`,
+        );
+      }
+      await publishMessageCanonicalState(
+        { eventBus: this.deps.eventBus },
+        assistantMessage,
+        { deliveryFence: fence },
+      );
+      signal?.throwIfAborted();
+
       const toolMessage = await this.deps.db.addCanonicalMessage({
         id: canonicalContinuationMessageId({
-          turnId,
-          interruptId: interrupt.id,
+          turnId: prepared.turnId,
+          interruptId: prepared.interruptId,
           toolCallId,
           role: 'tool',
         }),
-        agentId,
-        conversationId,
-        turnId,
+        agentId: prepared.agentId,
+        conversationId: prepared.conversationId,
+        turnId: prepared.turnId,
         role: 'tool',
-        content: resolutionContent,
+        content: prepared.resolutionContent,
         toolCallId,
-      });
-      await publishMessageCanonicalState({ eventBus: this.deps.eventBus }, toolMessage);
+      }, fence);
+      if (!toolMessage) {
+        throw new Error(
+          `HITL continuation ${attemptId} lost delivery ownership while persisting approval result`,
+        );
+      }
+      await publishMessageCanonicalState(
+        { eventBus: this.deps.eventBus },
+        toolMessage,
+        { deliveryFence: fence },
+      );
       continuationMessages.push(...buildContinuationMessages({
-        agentId,
+        agentId: prepared.agentId,
         assistantMessageId: assistantMessage.id,
         toolMessageId: toolMessage.id,
         toolCallId,
         toolArgs,
-        resolutionContent,
+        resolutionContent: prepared.resolutionContent,
       }));
     };
 
-    for (const approval of pendingApprovals) {
+    for (const approval of prepared.pendingApprovals) {
+      signal?.throwIfAborted();
       const toolArgs = {
         tool: approval.payload.tool,
         args: approval.payload.args,
@@ -290,37 +418,47 @@ export class InterruptResumeService {
     }
 
     if (continuationMessages.length === 0) {
-      const fallbackToolCallId = interrupt.toolCallId || `hitl-${turnId}`;
-      const fallbackArgs = normalizeFallbackArgs(interrupt.args);
-      await addContinuationMessages(fallbackToolCallId, fallbackArgs);
+      await addContinuationMessages(
+        prepared.fallbackToolCallId,
+        prepared.fallbackArgs,
+      );
     }
 
-    const continuationTurnId = buildContinuationTurnId(interrupt.id);
     signal?.throwIfAborted();
+    const stillOwnsDelivery = await this.deps.db.isTurnDeliveryFenceCurrent(
+      prepared.turnId,
+      fence,
+    );
+    if (!stillOwnsDelivery) {
+      throw new Error(
+        `HITL continuation ${attemptId} lost delivery ownership before agent execution`,
+      );
+    }
     this.deps.logger.info(
-      `${TAG} delivering continuation turn ${continuationTurnId} for session ${record.sessionId}`,
+      `${TAG} delivering interrupt continuation ${attemptId} on original turn `
+      + `${prepared.turnId} for session ${prepared.sandboxSessionId}`,
     );
 
-    for await (const event of this.deps.deliverTurn(
-      record.sessionId,
-      continuationMessages,
-      continuationTurnId,
+    await this.deps.executeContinuation({
+      agentDef: prepared.agentDef,
+      messages: continuationMessages,
+      agentId: prepared.agentId,
+      conversationId: prepared.conversationId,
+      turnId: prepared.turnId,
+      mode: prepared.mode,
+      taskDescription: prepared.taskDescription,
+      sandboxSessionId: prepared.sandboxSessionId,
+      continuationAttemptId: attemptId,
+      deliveryContext: { fence },
+      turnSecrets: prepared.turnSecrets,
       signal,
-    )) {
-      signal?.throwIfAborted();
-      if (event.type === 'turn_failed') {
-        throw new Error(
-          `HITL continuation turn ${continuationTurnId} failed: ${event.errorMessage}`,
-        );
-      }
-    }
+    });
     signal?.throwIfAborted();
 
     this.deps.logger.info(
-      `${TAG} continuation turn ${continuationTurnId} completed for session ${record.sessionId}`,
+      `${TAG} interrupt continuation ${attemptId} completed on original turn `
+      + `${prepared.turnId} for session ${prepared.sandboxSessionId}`,
     );
-
-    await this.deps.finalizeOriginalTurn?.(turnId, agentId, conversationId);
   }
 
   getPendingApprovalRequests(checkpointData: Record<string, unknown> | undefined): PendingRequest[] {

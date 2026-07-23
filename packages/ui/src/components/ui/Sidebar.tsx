@@ -1,10 +1,11 @@
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Activity, Zap, Settings, Wrench, GitBranch, Menu, X, Archive } from 'lucide-react';
+import { LayoutDashboard, Activity, Zap, Settings, Wrench, GitBranch, Menu, X, Archive, ChartNoAxesCombined } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
+  { icon: ChartNoAxesCombined, label: 'Analytics', path: '/analytics' },
   { icon: Activity, label: 'Events', path: '/events' },
   { icon: Wrench, label: 'Tools', path: '/tools' },
   { icon: GitBranch, label: 'Agent Flow', path: '/flow' },

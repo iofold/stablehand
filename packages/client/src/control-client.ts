@@ -1,11 +1,19 @@
 import {
   AgentCreateInputSchema,
+  AgentBudgetStatusListResponseSchema,
   AgentListResponseSchema,
+  AgentPatchInputSchema,
   AgentSchema,
   AgentStreamEventSchema,
-  AgentUpdateInputSchema,
+  AnalyticsOverviewSchema,
+  AnalyticsWindowSchema,
   BackgroundTurnStartInputSchema,
   BackgroundTurnStartResponseSchema,
+  BudgetPolicyCreateInputSchema,
+  BudgetPolicyListResponseSchema,
+  BudgetPolicyPatchInputSchema,
+  BudgetPolicySchema,
+  BudgetSpendResponseSchema,
   ConfigResponseSchema,
   ConversationListResponseSchema,
   ConversationSnapshotResponseSchema,
@@ -21,6 +29,7 @@ import {
   InterruptListResponseSchema,
   InterruptResolveInputSchema,
   InterruptResolveResponseSchema,
+  ModelGatewayStatusSchema,
   SandboxSessionActionResponseSchema,
   SandboxSessionListResponseSchema,
   SecretListResponseSchema,
@@ -29,16 +38,23 @@ import {
   TurnCancelResponseSchema,
   TurnDetailResponseSchema,
   TurnListResponseSchema,
+  WebhookCreateInputSchema,
   WebhookListResponseSchema,
+  WebhookPatchInputSchema,
   WebhookSchema,
-  WebhookUpsertInputSchema,
   WorkspaceReplaceResponseSchema,
   WorkspaceRevisionResponseSchema,
   type Agent,
   type AgentCreateInput,
+  type AgentPatchInput,
   type AgentStreamEvent,
-  type AgentUpdateInput,
+  type AnalyticsOverview,
+  type AnalyticsWindow,
   type BackgroundTurnStartInput,
+  type BudgetPolicy,
+  type BudgetPolicyCreateInput,
+  type BudgetPolicyPatchInput,
+  type BudgetSpendResponse,
   type Conversation,
   type ConversationSnapshot,
   type ConversationSummary,
@@ -50,7 +66,8 @@ import {
   type SandboxSession,
   type Turn,
   type Webhook,
-  type WebhookUpsertInput,
+  type WebhookCreateInput,
+  type WebhookPatchInput,
 } from '@ctxmill/contracts';
 import { z } from 'zod';
 
@@ -128,6 +145,9 @@ export class CtxmillControlClient {
   readonly files;
   readonly workspaces;
   readonly webhooks;
+  readonly budgets;
+  readonly analytics;
+  readonly modelGateway;
   readonly agentEvents;
 
   constructor(options: CtxmillClientOptions = {}) {
@@ -179,13 +199,13 @@ export class CtxmillControlClient {
         }),
       update: (
         agentId: string,
-        input: AgentUpdateInput,
+        input: AgentPatchInput,
         requestOptions: CtxmillRequestOptions = {},
       ): Promise<Agent> =>
         this.transport.request({
-          method: 'PUT',
+          method: 'PATCH',
           path: `/agents/${segment(agentId, 'agentId')}`,
-          requestSchema: AgentUpdateInputSchema,
+          requestSchema: AgentPatchInputSchema,
           responseSchema: AgentSchema,
           json: input,
           ...requestOptions,
@@ -513,13 +533,13 @@ export class CtxmillControlClient {
         }),
       create: (
         agentId: string,
-        input: WebhookUpsertInput,
+        input: WebhookCreateInput,
         requestOptions: CtxmillRequestOptions = {},
       ): Promise<Webhook> =>
         this.transport.request({
           method: 'POST',
           path: `/agents/${segment(agentId, 'agentId')}/webhooks`,
-          requestSchema: WebhookUpsertInputSchema,
+          requestSchema: WebhookCreateInputSchema,
           responseSchema: WebhookSchema,
           json: input,
           ...requestOptions,
@@ -527,13 +547,13 @@ export class CtxmillControlClient {
       update: (
         agentId: string,
         webhookId: string,
-        input: WebhookUpsertInput,
+        input: WebhookPatchInput,
         requestOptions: CtxmillRequestOptions = {},
       ): Promise<Webhook> =>
         this.transport.request({
-          method: 'PUT',
+          method: 'PATCH',
           path: `/agents/${segment(agentId, 'agentId')}/webhooks/${segment(webhookId, 'webhookId')}`,
-          requestSchema: WebhookUpsertInputSchema,
+          requestSchema: WebhookPatchInputSchema,
           responseSchema: WebhookSchema,
           json: input,
           ...requestOptions,
@@ -547,6 +567,115 @@ export class CtxmillControlClient {
           method: 'DELETE',
           path: `/agents/${segment(agentId, 'agentId')}/webhooks/${segment(webhookId, 'webhookId')}`,
           responseSchema: VoidResponseSchema,
+          ...requestOptions,
+        }),
+    };
+
+    this.budgets = {
+      list: (requestOptions: CtxmillRequestOptions = {}): Promise<{
+        policies: BudgetPolicy[];
+      }> =>
+        this.transport.request({
+          method: 'GET',
+          path: '/budgets',
+          responseSchema: BudgetPolicyListResponseSchema,
+          ...requestOptions,
+        }),
+      get: (
+        policyId: string,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<BudgetPolicy> =>
+        this.transport.request({
+          method: 'GET',
+          path: `/budgets/${segment(policyId, 'policyId')}`,
+          responseSchema: BudgetPolicySchema,
+          ...requestOptions,
+        }),
+      create: (
+        input: BudgetPolicyCreateInput,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<BudgetPolicy> =>
+        this.transport.request({
+          method: 'POST',
+          path: '/budgets',
+          requestSchema: BudgetPolicyCreateInputSchema,
+          responseSchema: BudgetPolicySchema,
+          json: input,
+          ...requestOptions,
+        }),
+      update: (
+        policyId: string,
+        input: BudgetPolicyPatchInput,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<BudgetPolicy> =>
+        this.transport.request({
+          method: 'PATCH',
+          path: `/budgets/${segment(policyId, 'policyId')}`,
+          requestSchema: BudgetPolicyPatchInputSchema,
+          responseSchema: BudgetPolicySchema,
+          json: input,
+          ...requestOptions,
+        }),
+      delete: (
+        policyId: string,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<void> =>
+        this.transport.request({
+          method: 'DELETE',
+          path: `/budgets/${segment(policyId, 'policyId')}`,
+          responseSchema: VoidResponseSchema,
+          ...requestOptions,
+        }),
+      spend: (
+        policyId: string,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<BudgetSpendResponse> =>
+        this.transport.request({
+          method: 'GET',
+          path: `/budgets/${segment(policyId, 'policyId')}/spend`,
+          responseSchema: BudgetSpendResponseSchema,
+          ...requestOptions,
+        }),
+      agentStatuses: (requestOptions: CtxmillRequestOptions = {}) =>
+        this.transport.request({
+          method: 'GET',
+          path: '/budgets/agents/status',
+          responseSchema: AgentBudgetStatusListResponseSchema,
+          ...requestOptions,
+        }),
+    };
+
+    this.analytics = {
+      overview: (
+        input: { window?: AnalyticsWindow } = {},
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<AnalyticsOverview> => {
+        const window = AnalyticsWindowSchema.safeParse(input.window);
+        if (input.window !== undefined && !window.success) {
+          throw new CtxmillContractError({
+            direction: 'request',
+            method: 'GET',
+            path: '/analytics/overview',
+            issues: window.error.issues,
+          });
+        }
+        return this.transport.request({
+          method: 'GET',
+          path: queryPath('/analytics/overview', {
+            window: input.window,
+          }),
+          responseSchema: AnalyticsOverviewSchema,
+          ...requestOptions,
+        });
+      },
+    };
+
+    this.modelGateway = {
+      status: (requestOptions: CtxmillRequestOptions = {}) =>
+        this.transport.request({
+          method: 'GET',
+          path: '/model-gateway/status',
+          responseSchema: ModelGatewayStatusSchema,
           ...requestOptions,
         }),
     };

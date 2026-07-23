@@ -1,7 +1,14 @@
 import { create } from '@bufbuild/protobuf';
-import { Code, ConnectError, createClient } from '@connectrpc/connect';
+import {
+  Code,
+  ConnectError,
+  createClient,
+  type Interceptor,
+} from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-node';
 import { HarnessService, KillSessionRequestSchema } from '@ctxmill/proto/sandbox/v1';
+import { RUNTIME_INSTANCE_TOKEN_HEADER } from '@ctxmill/shared';
+import { randomBytes } from 'node:crypto';
 import { Agent } from 'node:http';
 
 import { unrefTimer } from '../../util/timing.js';
@@ -21,11 +28,41 @@ export interface ReadyClient {
   grpcClient: HarnessGrpcClient;
 }
 
-export function createHarnessTransport(baseUrl: string): HarnessTransport {
+export interface WaitForContainerReadyOptions {
+  runtimeInstanceToken: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+export function createRuntimeInstanceToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+function createRuntimeInstanceAuthInterceptor(
+  runtimeInstanceToken: string,
+): Interceptor {
+  const token = runtimeInstanceToken.trim();
+  if (!token) {
+    throw new Error('Sandbox runtime instance token is required');
+  }
+
+  return (next) => async (request) => {
+    request.header.set(RUNTIME_INSTANCE_TOKEN_HEADER, token);
+    return await next(request);
+  };
+}
+
+export function createHarnessTransport(
+  baseUrl: string,
+  runtimeInstanceToken: string,
+): HarnessTransport {
   return createConnectTransport({
     baseUrl,
     httpVersion: '1.1',
     nodeOptions: { agent: sandboxAgent, timeout: 0 },
+    interceptors: [
+      createRuntimeInstanceAuthInterceptor(runtimeInstanceToken),
+    ],
   });
 }
 
@@ -35,16 +72,23 @@ export function createHarnessClient(transport: HarnessTransport): HarnessGrpcCli
 
 export async function waitForContainerReady(
   baseUrl: string,
-  timeoutMs = HEALTH_CHECK_TIMEOUT_MS,
+  options: WaitForContainerReadyOptions,
 ): Promise<ReadyClient> {
-  const transport = createHarnessTransport(baseUrl);
+  const timeoutMs = options.timeoutMs ?? HEALTH_CHECK_TIMEOUT_MS;
+  const signal = options.signal;
+  const transport = createHarnessTransport(
+    baseUrl,
+    options.runtimeInstanceToken,
+  );
   const grpcClient = createHarnessClient(transport);
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
+    signal?.throwIfAborted();
     try {
       await grpcClient.killSession(
         create(KillSessionRequestSchema, { sessionId: 'probe', reason: 'probe' }),
+        { signal },
       );
       return { transport, grpcClient };
     } catch (err) {
@@ -56,17 +100,17 @@ export async function waitForContainerReady(
       }
     }
 
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 500);
-      unrefTimer(timer);
-    });
+    await abortableDelay(500, signal);
   }
 
   throw new Error(`Container health check timed out after ${timeoutMs}ms at ${baseUrl}`);
 }
 
 function isAppLevelProbeError(err: unknown): err is ConnectError {
-  return err instanceof ConnectError && !isRetryableTransportProbeError(err);
+  return err instanceof ConnectError
+    && err.code !== Code.Unauthenticated
+    && err.code !== Code.PermissionDenied
+    && !isRetryableTransportProbeError(err);
 }
 
 function isRetryableTransportProbeError(err: unknown): boolean {
@@ -81,13 +125,16 @@ export async function retryGrpcCall<T>(
   fn: () => Promise<T>,
   maxRetries: number,
   delayMs: number,
+  signal?: AbortSignal,
 ): Promise<T> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    signal?.throwIfAborted();
     try {
       return await fn();
     } catch (err) {
+      signal?.throwIfAborted();
       lastError = err;
 
       const shouldRetry = err instanceof ConnectError && err.code === Code.Unavailable;
@@ -95,12 +142,30 @@ export async function retryGrpcCall<T>(
         throw err;
       }
 
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delayMs * (attempt + 1));
-        unrefTimer(timer);
-      });
+      await abortableDelay(delayMs * (attempt + 1), signal);
     }
   }
 
   throw lastError;
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const finish = (): void => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    };
+    const abort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(finish, ms);
+    unrefTimer(timer);
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }

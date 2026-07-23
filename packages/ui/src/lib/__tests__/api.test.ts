@@ -8,27 +8,63 @@ import {
   startBackgroundRun,
   cancelTurn,
   fetchAgentTurns,
+  fetchActiveConversations,
   fetchActiveSandboxSessions,
   fetchConversations,
+  fetchConversationSummaries,
   fetchConversationSnapshot,
   fetchEvents,
   fetchAllArtifacts,
+  downloadArtifact,
   listFiles,
   readFile,
+  createFile,
   updateFile,
   deleteFile,
   fetchInterrupts,
+  createAgent,
+  updateAgent,
   uploadWorkspaceTarball,
+  fetchSecretKeys,
+  setSecret,
   requestArtifactUploadUrl,
   uploadArtifactDirect,
   uploadArtifactToSignedUrl,
+  fetchAnalyticsOverview,
 } from '../api';
 import { useApiAuthStore } from '../auth';
 
 const mockJson = vi.fn();
-type MockFetchResult = { ok: boolean; status?: number; json: () => Promise<unknown> };
+type MockFetchResult = {
+  ok: boolean;
+  status?: number;
+  json: () => Promise<unknown>;
+  blob?: () => Promise<Blob>;
+};
 type MockFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<MockFetchResult>;
 const mockFetch = vi.fn<MockFetch>();
+
+const validAgent = {
+  id: 'a1',
+  name: 'Agent 1',
+  harness: 'langgraph',
+  harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
+  systemPrompt: 'Be useful.',
+  tools: [],
+  description: null,
+  workspaceDir: '/workspace',
+  status: 'idle',
+  manifest: null,
+  metadata: null,
+  createdAt: 1_700_000_000_000,
+  updatedAt: 1_700_000_000_000,
+  builtinToolPolicy: null,
+  nativeToolPolicy: null,
+  httpTools: [],
+  workspaceContent: null,
+  mode: null,
+  resourceLimits: null,
+};
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -43,7 +79,7 @@ beforeEach(() => {
 
 describe('fetchAgents', () => {
   it('calls GET /api/agents and returns data', async () => {
-    const agents = [{ id: 'a1', name: 'Agent 1' }];
+    const agents = [validAgent];
     mockJson.mockResolvedValue(agents);
 
     const result = await fetchAgents();
@@ -54,6 +90,7 @@ describe('fetchAgents', () => {
 
   it('attaches the stored bearer token when present', async () => {
     useApiAuthStore.getState().setToken('secret-token');
+    mockJson.mockResolvedValue([validAgent]);
 
     await fetchAgents();
 
@@ -72,17 +109,72 @@ describe('fetchAgents', () => {
     expect(useApiAuthStore.getState().token).toBe('');
     expect(window.localStorage.getItem('ctxmill.apiToken')).toBeNull();
   });
+
+  it('rejects stale agent response shapes at the UI boundary', async () => {
+    mockJson.mockResolvedValue([{ id: 'a1', name: 'Legacy Agent', version: 3 }]);
+
+    await expect(fetchAgents()).rejects.toThrow();
+  });
 });
 
 describe('fetchAgent', () => {
   it('calls GET /api/agents/:id', async () => {
-    const agent = { id: 'a1', name: 'Agent 1' };
+    const agent = validAgent;
     mockJson.mockResolvedValue(agent);
 
     const result = await fetchAgent('a1');
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1', undefined);
     expect(result).toEqual(agent);
+  });
+
+  it('rejects a non-canonical agent response', async () => {
+    mockJson.mockResolvedValue({ id: 'a1', name: 'Incomplete Agent' });
+
+    await expect(fetchAgent('a1')).rejects.toThrow();
+  });
+});
+
+describe('fetchAnalyticsOverview', () => {
+  it('calls the canonical windowed endpoint and validates its response', async () => {
+    const emptyMetrics = {
+      turns: 0,
+      completedTurns: 0,
+      errorTurns: 0,
+      cancelledTurns: 0,
+      activeTurns: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      tokenReportedTurns: 0,
+      knownCostUsd: 0,
+      costCoverage: {
+        complete: 0,
+        partial: 0,
+        pending: 0,
+        unpriced: 0,
+      },
+    };
+    const overview = {
+      window: '30d',
+      from: 1,
+      to: 2,
+      bucketSizeMs: 1,
+      totals: {
+        agents: 0,
+        activeAgents: 0,
+        ...emptyMetrics,
+      },
+      activity: [{ from: 1, to: 2, ...emptyMetrics }],
+      agents: [],
+    };
+    mockJson.mockResolvedValue(overview);
+
+    await expect(fetchAnalyticsOverview('30d')).resolves.toEqual(overview);
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/analytics/overview?window=30d',
+      undefined,
+    );
   });
 });
 
@@ -92,39 +184,112 @@ describe('fetchAgentTurns', () => {
     await fetchAgentTurns('a1');
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/turns', undefined);
   });
+
+  it('rejects a stale turn response at the UI boundary', async () => {
+    mockJson.mockResolvedValue({ turns: [{ id: 'legacy-turn', status: 'running' }] });
+
+    await expect(fetchAgentTurns('a1')).rejects.toThrow();
+  });
+});
+
+describe('fetchConversationSummaries', () => {
+  const summary = {
+    id: 'conversation-1',
+    agentId: 'a1',
+    status: 'COMPLETED',
+    mode: 'interactive',
+    turnCount: 2,
+    messageCount: 4,
+    taskDescription: null,
+    startedAt: 1_700_000_000_000,
+    completedAt: null,
+    updatedAt: 1_700_000_001_000,
+    latestTurnId: null,
+    sandboxSessionId: null,
+    totalTokens: null,
+  };
+
+  it('accepts the canonical nullable summary fields', async () => {
+    mockJson.mockResolvedValue({ conversations: [summary] });
+
+    await expect(fetchConversationSummaries('a1')).resolves.toEqual({ conversations: [summary] });
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/agents/a1/conversations/summary',
+      undefined,
+    );
+  });
+
+  it('rejects the stale optional-field summary shape', async () => {
+    const staleSummary: Partial<typeof summary> = { ...summary };
+    delete staleSummary.taskDescription;
+    mockJson.mockResolvedValue({ conversations: [staleSummary] });
+
+    await expect(fetchConversationSummaries('a1')).rejects.toThrow();
+  });
 });
 
 describe('fetchActiveSandboxSessions', () => {
   it('calls the explicit active sandbox-session endpoint', async () => {
+    mockJson.mockResolvedValue([]);
     await fetchActiveSandboxSessions();
     expect(mockFetch).toHaveBeenCalledWith('/api/sandbox-sessions?status=active', undefined);
+  });
+
+  it('rejects a non-canonical sandbox-session response', async () => {
+    mockJson.mockResolvedValue({ sessions: [] });
+
+    await expect(fetchActiveSandboxSessions()).rejects.toThrow();
+  });
+});
+
+describe('fetchActiveConversations', () => {
+  it('rejects a non-canonical active-conversation response', async () => {
+    mockJson.mockResolvedValue([{ id: 'incomplete-conversation' }]);
+
+    await expect(fetchActiveConversations()).rejects.toThrow();
   });
 });
 
 // ── POST endpoints ─────────────────────────────────────────────────
 
 describe('sendMessage', () => {
-  it('calls POST /api/agents/:id/message with content', async () => {
+  it('sends the canonical turn request including its stable requestedTurnId', async () => {
     mockJson.mockResolvedValue({ ok: true });
 
-    await sendMessage('a1', 'hello');
+    await sendMessage('a1', {
+      content: 'hello',
+      conversationId: 'conversation-1',
+      requestedTurnId: 'turn-request-1',
+    });
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: 'hello' }),
+      body: JSON.stringify({
+        content: 'hello',
+        conversationId: 'conversation-1',
+        requestedTurnId: 'turn-request-1',
+      }),
     });
   });
 });
 
 describe('sendInterrupt', () => {
-  it('calls POST /api/agents/:id/interrupt with action and data', async () => {
-    await sendInterrupt('a1', 'approve', { reason: 'ok' });
+  it('sends the canonical required interrupt identity and action', async () => {
+    await sendInterrupt('a1', {
+      interruptId: 'interrupt-1',
+      action: 'approve',
+      data: { reason: 'ok' },
+    });
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/interrupt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'approve', data: { reason: 'ok' } }),
+      body: JSON.stringify({
+        interruptId: 'interrupt-1',
+        action: 'approve',
+        data: { reason: 'ok' },
+      }),
     });
   });
 });
@@ -148,6 +313,94 @@ describe('fetchInterrupts', () => {
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/interrupts', undefined);
     expect(result).toEqual(interrupts);
+  });
+});
+
+describe('setSecret', () => {
+  it('normalizes only the key boundary and preserves the exact value', async () => {
+    mockJson.mockResolvedValue({ key: 'mixed.Case-Key' });
+    await setSecret('a1', ' mixed.Case-Key ', '  first line\nsecond line  ');
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/secrets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        key: 'mixed.Case-Key',
+        value: '  first line\nsecond line  ',
+      }),
+    });
+  });
+
+  it('rejects non-canonical secret responses', async () => {
+    mockJson.mockResolvedValue({ key: '' });
+
+    await expect(setSecret('a1', 'VALID_KEY', 'value')).rejects.toThrow();
+  });
+});
+
+describe('fetchSecretKeys', () => {
+  it('parses the canonical secret-key list response', async () => {
+    mockJson.mockResolvedValue({ keys: ['OPENAI_API_KEY'] });
+
+    await expect(fetchSecretKeys('a1')).resolves.toEqual({ keys: ['OPENAI_API_KEY'] });
+  });
+
+  it('rejects empty keys from the server', async () => {
+    mockJson.mockResolvedValue({ keys: [''] });
+
+    await expect(fetchSecretKeys('a1')).rejects.toThrow();
+  });
+});
+
+describe('agent mutation contracts', () => {
+  const createInput = {
+    name: 'Canonical Agent',
+    harness: 'test',
+    harnessConfig: {},
+    systemPrompt: 'Be useful.',
+    tools: [],
+  };
+
+  it('rejects patch-only null clears on create before making a request', async () => {
+    await expect(createAgent({
+      ...createInput,
+      description: null,
+    } as never)).rejects.toThrow();
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('preserves explicit nullable fields on patch', async () => {
+    mockJson.mockResolvedValue(validAgent);
+    await updateAgent('a1', {
+      description: null,
+      builtinToolPolicy: null,
+      nativeToolPolicy: null,
+    });
+
+    const [url, init] = mockFetch.mock.calls[0] ?? [];
+    expect(url).toBe('/api/agents/a1');
+    expect(init).toMatchObject({
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      description: null,
+      builtinToolPolicy: null,
+      nativeToolPolicy: null,
+    });
+  });
+
+  it('rejects a non-canonical create response', async () => {
+    mockJson.mockResolvedValue({ id: 'a1', name: 'Incomplete Agent' });
+
+    await expect(createAgent(createInput)).rejects.toThrow();
+  });
+
+  it('rejects a non-canonical update response', async () => {
+    mockJson.mockResolvedValue({ id: 'a1', name: 'Incomplete Agent' });
+
+    await expect(updateAgent('a1', { description: 'Updated' })).rejects.toThrow();
   });
 });
 
@@ -179,7 +432,13 @@ describe('cancelTurn', () => {
 
 describe('fetchConversations', () => {
   it('returns data on success', async () => {
-    const convos = [{ id: 'c1' }];
+    const convos = [{
+      id: 'c1',
+      agentId: 'a1',
+      tags: null,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_001_000,
+    }];
     mockJson.mockResolvedValue(convos);
 
     const result = await fetchConversations('a1');
@@ -191,6 +450,12 @@ describe('fetchConversations', () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500, json: mockJson });
     await expect(fetchConversations('a1')).rejects.toThrow('API GET /api/agents/a1/conversations failed: 500');
   });
+
+  it('rejects a stale conversation response', async () => {
+    mockJson.mockResolvedValue([{ id: 'c1' }]);
+
+    await expect(fetchConversations('a1')).rejects.toThrow();
+  });
 });
 
 describe('fetchConversationSnapshot', () => {
@@ -198,7 +463,13 @@ describe('fetchConversationSnapshot', () => {
     const snapshot = {
       conversationId: 'c1',
       eventCursor: '000000000042',
-      messages: [{ id: 'm1', content: 'hi' }],
+      messages: [{
+        id: 'm1',
+        messageRevision: 0,
+        role: 'assistant',
+        content: 'hi',
+        createdAt: 1_700_000_000_000,
+      }],
     };
     mockJson.mockResolvedValue(snapshot);
 
@@ -210,6 +481,12 @@ describe('fetchConversationSnapshot', () => {
   it('throws on failure', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 404, json: mockJson });
     await expect(fetchConversationSnapshot('a1', 'c1')).rejects.toThrow('API GET /api/agents/a1/conversations/c1/snapshot failed: 404');
+  });
+
+  it('rejects a stale snapshot response', async () => {
+    mockJson.mockResolvedValue({ conversationId: 'c1', messages: [] });
+
+    await expect(fetchConversationSnapshot('a1', 'c1')).rejects.toThrow();
   });
 });
 
@@ -231,6 +508,7 @@ describe('query serialization', () => {
 
 describe('listFiles', () => {
   it('calls with encoded path param', async () => {
+    mockJson.mockResolvedValue({ entries: [] });
     await listFiles('a1', '/some/path');
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/agents/a1/files?path=%2Fsome%2Fpath',
@@ -239,7 +517,10 @@ describe('listFiles', () => {
   });
 
   it('calls correct URL with path param and returns entries', async () => {
-    const entries = [{ name: 'readme.md', type: 'file' }, { name: 'src', type: 'directory' }];
+    const entries = [
+      { name: 'readme.md', type: 'file', size: 12 },
+      { name: 'src', type: 'directory', size: 0 },
+    ];
     mockJson.mockResolvedValue({ entries });
 
     const result = await listFiles('a1', 'data');
@@ -250,6 +531,7 @@ describe('listFiles', () => {
   });
 
   it('includes conversationId when provided', async () => {
+    mockJson.mockResolvedValue({ entries: [] });
     await listFiles('a1', 'data', 'xyz');
 
     const calledUrl = (mockFetch.mock.calls[0] as string[])[0];
@@ -261,10 +543,17 @@ describe('listFiles', () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500, json: mockJson });
     await expect(listFiles('a1', '/')).rejects.toThrow('API GET /api/agents/a1/files');
   });
+
+  it('rejects malformed file entries', async () => {
+    mockJson.mockResolvedValue({ entries: [{ name: 'bad.txt', type: 'file', size: -1 }] });
+
+    await expect(listFiles('a1', '/')).rejects.toThrow();
+  });
 });
 
 describe('readFile', () => {
   it('calls with encoded path param', async () => {
+    mockJson.mockResolvedValue({ path: '/file.txt', content: '', size: 0 });
     await readFile('a1', '/file.txt');
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/agents/a1/files/read?path=%2Ffile.txt',
@@ -284,6 +573,7 @@ describe('readFile', () => {
   });
 
   it('includes conversationId when provided', async () => {
+    mockJson.mockResolvedValue({ path: '/file.txt', content: '', size: 0 });
     await readFile('a1', '/file.txt', 'xyz');
 
     const calledUrl = (mockFetch.mock.calls[0] as string[])[0];
@@ -303,6 +593,12 @@ describe('readFile', () => {
     await expect(readFile('a1', '/huge.bin')).rejects.toThrow(
       'API GET /api/agents/a1/files/read?path=%2Fhuge.bin failed: 400',
     );
+  });
+
+  it('rejects responses missing the canonical path', async () => {
+    mockJson.mockResolvedValue({ content: 'hello', size: 5 });
+
+    await expect(readFile('a1', '/file.txt')).rejects.toThrow();
   });
 });
 
@@ -345,7 +641,14 @@ describe('createSSEConnection', () => {
 describe('uploadWorkspaceTarball', () => {
   it('posts a gzip tarball to the workspace upload endpoint', async () => {
     const file = new File(['bytes'], 'workspace.tar.gz', { type: 'application/gzip' });
-    mockJson.mockResolvedValue({ files: 2, totalBytes: 5 });
+    const revision = {
+      revision: 3,
+      sha256: 'abc123',
+      fileCount: 2,
+      totalBytes: 5,
+      appliedAt: 1234,
+    };
+    mockJson.mockResolvedValue(revision);
 
     const result = await uploadWorkspaceTarball('a1', file);
 
@@ -354,16 +657,24 @@ describe('uploadWorkspaceTarball', () => {
       headers: { 'Content-Type': 'application/gzip' },
       body: file,
     });
-    expect(result).toEqual({ files: 2, totalBytes: 5 });
+    expect(result).toEqual(revision);
   });
 
   it('uses the explicit force flag rather than artifact upload routes', async () => {
-    const file = new File(['bytes'], 'workspace.tgz', { type: 'application/x-gzip' });
+    const file = new File(['bytes'], 'workspace.tgz', { type: 'application/octet-stream' });
+    mockJson.mockResolvedValue({
+      revision: 1,
+      sha256: 'abc123',
+      fileCount: 1,
+      totalBytes: 5,
+      appliedAt: 1234,
+    });
 
     await uploadWorkspaceTarball('a1', file, { force: true });
 
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/workspace?force=true', expect.objectContaining({
       method: 'POST',
+      headers: { 'Content-Type': 'application/gzip' },
       body: file,
     }));
   });
@@ -371,6 +682,7 @@ describe('uploadWorkspaceTarball', () => {
 
 describe('file mutations', () => {
   it('builds update and delete queries through the shared query encoder', async () => {
+    mockJson.mockResolvedValue({ path: 'notes/a file.txt', size: 7 });
     await updateFile('a1', 'notes/a file.txt', 'updated', 'conversation 1');
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/files?conversationId=conversation+1', expect.objectContaining({
       method: 'PUT',
@@ -381,6 +693,27 @@ describe('file mutations', () => {
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/files?path=notes%2Fa+file.txt&conversationId=conversation+1', {
       method: 'DELETE',
     });
+  });
+
+  it('parses canonical create and update responses', async () => {
+    mockJson.mockResolvedValueOnce({ path: 'notes/new.txt', size: 3 });
+    await expect(createFile('a1', 'notes/new.txt', 'new')).resolves.toEqual({
+      path: 'notes/new.txt',
+      size: 3,
+    });
+
+    mockJson.mockResolvedValueOnce({ path: 'notes/new.txt', size: 7 });
+    await expect(updateFile('a1', 'notes/new.txt', 'updated')).resolves.toEqual({
+      path: 'notes/new.txt',
+      size: 7,
+    });
+  });
+
+  it('rejects malformed write responses', async () => {
+    mockJson.mockResolvedValue({ path: 'notes/new.txt', size: -1 });
+
+    await expect(createFile('a1', 'notes/new.txt', 'new')).rejects.toThrow();
+    await expect(updateFile('a1', 'notes/new.txt', 'updated')).rejects.toThrow();
   });
 });
 
@@ -439,5 +772,37 @@ describe('artifact uploads', () => {
       headers: { 'Content-Type': 'text/plain' },
       body: file,
     });
+  });
+});
+
+describe('artifact downloads', () => {
+  it('downloads through the authenticated orchestrator proxy instead of navigating to it', async () => {
+    useApiAuthStore.getState().setToken('secret-token');
+    const blob = new Blob(['artifact bytes'], { type: 'text/plain' });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: mockJson,
+      blob: async () => blob,
+    });
+    const createObjectURL = vi.fn(() => 'blob:artifact-download');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperties(URL, {
+      createObjectURL: { configurable: true, value: createObjectURL },
+      revokeObjectURL: { configurable: true, value: revokeObjectURL },
+    });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+
+    await downloadArtifact('art-1', 'report.txt');
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/artifacts/art-1/download', {
+      headers: { Authorization: 'Bearer secret-token' },
+    });
+    expect(createObjectURL).toHaveBeenCalledWith(blob);
+    expect(click).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:artifact-download');
+    expect(document.querySelector('a[download="report.txt"]')).toBeNull();
   });
 });

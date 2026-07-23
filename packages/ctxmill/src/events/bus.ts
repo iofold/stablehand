@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import type { TurnUsage } from '@ctxmill/contracts';
 
 export type EventMap = {
   'turn.started': {
@@ -67,8 +68,8 @@ export type EventMap = {
     status: 'completed' | 'error' | 'cancelled';
     error?: string;
     durationMs: number;
-    /** Harness-reported token usage for the turn, when available. */
-    usage?: { inputTokens: number; outputTokens: number; totalTokens: number; costUsd?: number };
+    /** Canonical finish-time usage. Gateway cost may still be pending. */
+    usage: TurnUsage | null;
     timestamp: number;
   };
   'budget.threshold': {
@@ -194,12 +195,35 @@ export interface BusErrorPayload {
   timestamp: number;
 }
 
+interface EventDeliveryFence {
+  ownerId: string;
+  fenceToken: number;
+}
+
+interface EventActiveSandboxGeneration {
+  restoreFenceToken: number;
+  containerId: string | null;
+}
+
+export type EventPersistenceContext =
+  | {
+      deliveryFence?: EventDeliveryFence;
+      sandboxSessionId?: never;
+      activeGeneration?: never;
+    }
+  | {
+      deliveryFence: EventDeliveryFence;
+      sandboxSessionId: string;
+      activeGeneration: EventActiveSandboxGeneration;
+    };
+
 export type PersistEventFn = (
   type: string,
   agentId: string,
   payload: string,
   /** The payload object that produced `payload` — lets persistence layers avoid a hot-path re-parse (ADR-015). */
   parsedPayload?: Record<string, unknown>,
+  context?: EventPersistenceContext,
 ) => void | boolean | Promise<void | boolean>;
 
 export class TypedEventBus {
@@ -215,7 +239,11 @@ export class TypedEventBus {
    * succeeds. Persistence failure emits bus.error and prevents listener dispatch.
    * Use emitAsync() when caller rollback/cleanup depends on persistence success.
    */
-  emit<K extends EventName>(event: K, payload: EventMap[K]): void {
+  emit<K extends EventName>(
+    event: K,
+    payload: EventMap[K],
+    context?: EventPersistenceContext,
+  ): void {
     this.ensureTimestamp(payload);
 
     if (!this.persistEvent) {
@@ -225,7 +253,13 @@ export class TypedEventBus {
 
     const agentId = 'agentId' in payload ? (payload as PayloadWithAgentId).agentId : '';
     try {
-      const persisted = this.persistEvent(event, agentId, JSON.stringify(payload), payload as Record<string, unknown>);
+      const persisted = this.persistEvent(
+        event,
+        agentId,
+        JSON.stringify(payload),
+        payload as Record<string, unknown>,
+        context,
+      );
       if (persisted && typeof persisted !== 'boolean') {
         persisted
           .then((didPersist) => {
@@ -252,8 +286,15 @@ export class TypedEventBus {
   /**
    * Awaitable durable emit for boundaries that must roll back when persistence fails.
    */
-  async emitAsync<K extends EventName>(event: K, payload: EventMap[K]): Promise<void> {
-    await this.persistThenDispatch(event, payload, { rejectOnPersistFailure: true });
+  async emitAsync<K extends EventName>(
+    event: K,
+    payload: EventMap[K],
+    context?: EventPersistenceContext,
+  ): Promise<boolean> {
+    return this.persistThenDispatch(event, payload, {
+      rejectOnPersistFailure: true,
+      ...(context ? { persistenceContext: context } : {}),
+    });
   }
 
   private ensureTimestamp(payload: EventPayloadBase): void {
@@ -265,8 +306,11 @@ export class TypedEventBus {
   private async persistThenDispatch<K extends EventName>(
     event: K,
     payload: EventMap[K],
-    options: { rejectOnPersistFailure?: boolean } = {},
-  ): Promise<void> {
+    options: {
+      rejectOnPersistFailure?: boolean;
+      persistenceContext?: EventPersistenceContext;
+    } = {},
+  ): Promise<boolean> {
     this.ensureTimestamp(payload);
 
     if (this.persistEvent) {
@@ -277,20 +321,22 @@ export class TypedEventBus {
           agentId,
           JSON.stringify(payload),
           payload as Record<string, unknown>,
+          options.persistenceContext,
         );
         if (didPersist === false) {
-          return;
+          return false;
         }
       } catch (err) {
         this.reportBusError('persist', event, err, `[EventBus] persist error for ${event}:`);
         if (options.rejectOnPersistFailure) {
           throw err;
         }
-        return;
+        return false;
       }
     }
 
     this.dispatchListeners(event, payload);
+    return true;
   }
 
   private dispatchListeners(event: string, payload: unknown): void {
@@ -328,7 +374,12 @@ export class TypedEventBus {
    * Used by the emit-event built-in tool for agent-to-agent communication.
    * Persists and dispatches to subscribers just like typed events.
    */
-  emitCustom(eventType: string, agentId: string, payload: Record<string, unknown>): void {
+  emitCustom(
+    eventType: string,
+    agentId: string,
+    payload: Record<string, unknown>,
+    context?: EventPersistenceContext,
+  ): void {
     const fullPayload = { ...payload, timestamp: payload.timestamp ?? Date.now() };
 
     if (!this.persistEvent) {
@@ -337,7 +388,13 @@ export class TypedEventBus {
     }
 
     try {
-      const persisted = this.persistEvent(eventType, agentId, JSON.stringify(fullPayload), fullPayload);
+      const persisted = this.persistEvent(
+        eventType,
+        agentId,
+        JSON.stringify(fullPayload),
+        fullPayload,
+        context,
+      );
       if (persisted && typeof persisted !== 'boolean') {
         persisted
           .then((didPersist) => {
@@ -361,35 +418,53 @@ export class TypedEventBus {
     this.dispatchListeners(eventType, fullPayload);
   }
 
-  async emitCustomAsync(eventType: string, agentId: string, payload: Record<string, unknown>): Promise<void> {
-    await this.persistThenDispatchCustom(eventType, agentId, payload, { rejectOnPersistFailure: true });
+  async emitCustomAsync(
+    eventType: string,
+    agentId: string,
+    payload: Record<string, unknown>,
+    context?: EventPersistenceContext,
+  ): Promise<boolean> {
+    return this.persistThenDispatchCustom(eventType, agentId, payload, {
+      rejectOnPersistFailure: true,
+      ...(context ? { persistenceContext: context } : {}),
+    });
   }
 
   private async persistThenDispatchCustom(
     eventType: string,
     agentId: string,
     payload: Record<string, unknown>,
-    options: { rejectOnPersistFailure?: boolean } = {},
-  ): Promise<void> {
+    options: {
+      rejectOnPersistFailure?: boolean;
+      persistenceContext?: EventPersistenceContext;
+    } = {},
+  ): Promise<boolean> {
     const fullPayload = { ...payload, timestamp: payload.timestamp ?? Date.now() };
 
     if (this.persistEvent) {
       try {
-        const didPersist = await this.persistEvent(eventType, agentId, JSON.stringify(fullPayload), fullPayload);
+        const didPersist = await this.persistEvent(
+          eventType,
+          agentId,
+          JSON.stringify(fullPayload),
+          fullPayload,
+          options.persistenceContext,
+        );
         if (didPersist === false) {
-          return;
+          return false;
         }
       } catch (err) {
         this.reportBusError('persist', eventType, err, `[EventBus] persist error for custom ${eventType}:`);
         if (options.rejectOnPersistFailure) {
           throw err;
         }
-        return;
+        return false;
       }
     }
 
     // Dispatch to subscribers (trigger manager subscribes with raw event type strings)
     this.dispatchListeners(eventType, fullPayload);
+    return true;
   }
 
   on<K extends EventName>(event: K, handler: (payload: EventMap[K]) => void | Promise<void>): void;

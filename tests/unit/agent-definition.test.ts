@@ -5,6 +5,7 @@ import {
   buildAgentDefinition,
   extractManifestRuntimeFields,
   parseStoredHarnessConfig,
+  resolveAgentToolNames,
   resolveResourceLimits,
 } from '../../packages/ctxmill/src/orchestrator/agent-definition.js';
 import { toAgentResponse } from '../../packages/ctxmill/src/orchestrator/routes/agents/helpers.js';
@@ -21,9 +22,7 @@ function createAgent(overrides: Partial<StoredAgent> = {}): StoredAgent {
     tools: ['search'],
     description: 'Agent description',
     workspaceDir: '/tmp/project/agents/assistant',
-    status: 'ready',
     manifest: null,
-    version: 1,
     metadata: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -49,7 +48,8 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
           },
         },
         metadata: {
-          nativeTools: { allowlist: ['bash'] },
+          builtinToolPolicy: { policy: 'deny', names: ['emit-event'] },
+          nativeToolPolicy: { policy: 'allow', names: ['execute'] },
           owner: 'ops',
         },
       });
@@ -62,13 +62,15 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
         systemPrompt: 'You are helpful.',
         description: 'Agent description',
         metadata: {
-          nativeTools: { allowlist: ['bash'] },
+          builtinToolPolicy: { policy: 'deny', names: ['emit-event'] },
+          nativeToolPolicy: { policy: 'allow', names: ['execute'] },
           owner: 'ops',
         },
         workspaceDir: '/tmp/project/agents/assistant',
         projectDir: '/tmp/project/agents',
         resourceLimits: { cpus: 2, memoryMb: 512 },
-        nativeTools: { allowlist: ['bash'] },
+        builtinToolPolicy: { policy: 'deny', names: ['emit-event'] },
+        nativeToolPolicy: { policy: 'allow', names: ['execute'] },
         mode: 'background',
         workspaceContent: {
           files: [{ src: 'seed/prompt.md', dest: 'prompt.md' }],
@@ -82,20 +84,39 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
       expect(buildAgentDefinition(agent).projectDir).toBe('/repo/workspaces');
     });
 
-    test('includes nativeTools from metadata before manifest spec', () => {
+    test('includes nativeToolPolicy from metadata before manifest spec', () => {
       const agent = createAgent({
         manifest: {
           spec: {
-            nativeTools: { allowlist: ['manifest-tool'] },
+            nativeToolPolicy: { policy: 'allow', names: ['manifest-tool'] },
           },
         },
         metadata: {
-          nativeTools: { blocklist: ['metadata-tool'] },
+          nativeToolPolicy: { policy: 'deny', names: ['metadata-tool'] },
         },
       });
 
-      expect(buildAgentDefinition(agent).nativeTools).toEqual({
-        blocklist: ['metadata-tool'],
+      expect(buildAgentDefinition(agent).nativeToolPolicy).toEqual({
+        policy: 'deny',
+        names: ['metadata-tool'],
+      });
+    });
+
+    test('includes builtinToolPolicy from metadata before manifest spec', () => {
+      const agent = createAgent({
+        manifest: {
+          spec: {
+            builtinToolPolicy: { policy: 'allow', names: ['artifact_upload'] },
+          },
+        },
+        metadata: {
+          builtinToolPolicy: { policy: 'deny', names: ['emit-event'] },
+        },
+      });
+
+      expect(buildAgentDefinition(agent).builtinToolPolicy).toEqual({
+        policy: 'deny',
+        names: ['emit-event'],
       });
     });
 
@@ -115,6 +136,22 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
       expect(buildAgentDefinition(agent).workspaceContent).toEqual({
         files: [{ src: 'templates/base.txt', dest: 'base.txt' }],
       });
+    });
+  });
+
+  describe('resolveAgentToolNames', () => {
+    test('combines declared and HTTP tool names without duplicates', () => {
+      const agentDef = buildAgentDefinition(createAgent({
+        tools: ['search', 'weather'],
+        metadata: {
+          httpTools: [
+            { name: 'weather', description: 'Weather', endpoint: 'https://example.test/weather' },
+            { name: 'lookup', description: 'Lookup', endpoint: 'https://example.test/lookup' },
+          ],
+        },
+      }));
+
+      expect(resolveAgentToolNames(agentDef)).toEqual(['search', 'weather', 'lookup']);
     });
   });
 
@@ -192,16 +229,25 @@ describe('canonical agent-definition module (ctx-8l4)', () => {
   });
 
   describe('extractManifestRuntimeFields', () => {
-    test('extracts nativeTools from metadata or manifest spec', () => {
+    test('extracts builtinToolPolicy and nativeToolPolicy from metadata or manifest spec', () => {
       expect(
         extractManifestRuntimeFields(
           createAgent({
-            manifest: { spec: { nativeTools: { allowlist: ['manifest-tool'] } } },
-            metadata: { nativeTools: { blocklist: ['metadata-tool'] } },
+            manifest: {
+              spec: {
+                builtinToolPolicy: { policy: 'allow', names: ['manifest-builtin'] },
+                nativeToolPolicy: { policy: 'allow', names: ['manifest-tool'] },
+              },
+            },
+            metadata: {
+              builtinToolPolicy: { policy: 'deny', names: ['metadata-builtin'] },
+              nativeToolPolicy: { policy: 'deny', names: ['metadata-tool'] },
+            },
           }),
         ),
       ).toEqual({
-        nativeTools: { blocklist: ['metadata-tool'] },
+        builtinToolPolicy: { policy: 'deny', names: ['metadata-builtin'] },
+        nativeToolPolicy: { policy: 'deny', names: ['metadata-tool'] },
       });
     });
 

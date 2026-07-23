@@ -13,6 +13,7 @@ export * from './sandbox/daemon.js';
 export * from './sandbox/runner.js';
 export {
   protoFreshBootstrapToSessionConfig,
+  protoNativeToolPolicyToInternal,
   protoRestoreBootstrapToRestorePoint,
   protoDeliverTurnToInput,
   agentEventToSessionEvent,
@@ -26,6 +27,8 @@ export {
 export type { ProtoToolDefsOptions } from './sandbox/proto-convert.js';
 export * from './sandbox/tool-proxy.js';
 export * from './sandbox/artifact-handler.js';
+export * from './sandbox/turn-delivery-capability.js';
+export * from './sandbox/turn-delivery-context.js';
 export {
   SessionStateCollector,
   serializeCheckpoint,

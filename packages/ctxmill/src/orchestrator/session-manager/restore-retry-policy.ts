@@ -9,6 +9,10 @@ import { Code, ConnectError } from '@connectrpc/connect';
  */
 export const MAX_RESTORE_ATTEMPTS = 3;
 
+/** Bound how long a request waits to join another replica's active restore. */
+export const RESTORE_JOIN_POLL_MS = 250;
+export const RESTORE_JOIN_MAX_POLLS = 120;
+
 /**
  * Backoff schedule (in milliseconds). Index 0 is the delay before attempt 1
  * (i.e. the first auto-retry after the initial failure), index 1 before

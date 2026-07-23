@@ -19,7 +19,7 @@ Default local API base: `http://localhost:3002`. Deployment URLs may already end
 | GET | `/api/agents` | List enriched agent definitions |
 | POST | `/api/agents` | Create agent |
 | GET | `/api/agents/:id` | Get agent definition |
-| PUT | `/api/agents/:id` | Update agent definition |
+| PATCH | `/api/agents/:id` | Patch mutable agent fields |
 | DELETE | `/api/agents/:id` | Delete agent and cascade owned data |
 | GET | `/api/agents/:id/versions` | Agent manifest/version history |
 

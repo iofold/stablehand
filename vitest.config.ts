@@ -10,6 +10,7 @@ export default defineConfig({
       '@ctxmill/contracts': resolve(__dirname, 'packages/contracts/src/index.ts'),
       '@ctxmill/manifest/node': resolve(__dirname, 'packages/manifest/src/node.ts'),
       '@ctxmill/manifest': resolve(__dirname, 'packages/manifest/src/index.ts'),
+      '@ctxmill/sandbox-daemon/harness/model-gateway': resolve(__dirname, 'packages/sandbox-daemon/src/harness/model-gateway.ts'),
       '@ctxmill/sandbox-daemon/harness/schemas': resolve(__dirname, 'packages/sandbox-daemon/src/harness/schemas.ts'),
       '@ctxmill/sandbox-daemon': resolve(__dirname, 'packages/sandbox-daemon/src/index.ts'),
       '@ctxmill/proto/sandbox/v1': resolve(__dirname, 'packages/proto/gen/ctxmill/sandbox/v1/sandbox_pb.ts'),

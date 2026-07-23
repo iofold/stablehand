@@ -8,8 +8,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@ctxmill/client': new URL('../../client/src/index.ts', import.meta.url).pathname,
+      '@ctxmill/contracts': new URL('../../contracts/src/index.ts', import.meta.url).pathname,
       '@ctxmill/react': new URL('../../react/src/index.ts', import.meta.url).pathname,
-      '@ctxmill/shared': new URL('../../shared/src/index.ts', import.meta.url).pathname,
       // The chart catalog lives in the ui package and imports via '@/...'.
       '@': new URL('../../ui/src', import.meta.url).pathname,
     },

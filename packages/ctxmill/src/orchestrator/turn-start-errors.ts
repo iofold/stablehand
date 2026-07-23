@@ -2,8 +2,19 @@ import type { FastifyReply } from 'fastify';
 
 import { ConcurrencyLimitError } from './session-manager/concurrency-limit-error.js';
 import { BudgetExceededError, TagConflictError, TagNotProvisionedError } from './budgets.js';
+import { AgentModeNotAllowedError } from './turn-startup-service.js';
 
 export function sendTurnStartError(reply: FastifyReply, err: unknown): boolean {
+  if (err instanceof AgentModeNotAllowedError) {
+    reply.status(err.statusCode).send({
+      error: err.message,
+      code: err.code,
+      configuredMode: err.configuredMode,
+      requestedMode: err.requestedMode,
+    });
+    return true;
+  }
+
   if (err instanceof BudgetExceededError) {
     reply.status(err.statusCode).send({
       error: err.message,

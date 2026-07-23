@@ -4,6 +4,7 @@ import { readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import {
+  createWorkspaceArchive,
   loadManifestProject,
   type LoadedManifestProject,
 } from '@ctxmill/manifest/node';
@@ -19,12 +20,23 @@ type AgentResult = {
 
 type TriggerResult = {
   id?: string;
+  taskTemplate?: string;
+  enabled?: boolean;
   error?: string;
   [key: string]: unknown;
 };
 
 const API_BASE = process.env.API_URL ?? 'http://localhost:3002';
+const API_TOKEN = process.env.CTXMILL_API_TOKEN;
 const AGENTS_DIR = new URL('./agents/', import.meta.url);
+
+function authHeaders(): Record<string, string> {
+  return API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
+}
+
+function jsonHeaders(): Record<string, string> {
+  return { ...authHeaders(), 'Content-Type': 'application/json' };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -44,14 +56,13 @@ async function parseJson(res: Response): Promise<unknown> {
 }
 
 async function fetchAgents(): Promise<Array<{ id?: string; name: string }>> {
-  const res = await fetch(`${API_BASE}/api/agents`);
-  if (!res.ok) {
-    return [];
-  }
-
+  const res = await fetch(`${API_BASE}/api/agents`, { headers: authHeaders() });
   const body = await parseJson(res);
+  if (!res.ok) {
+    throw new Error(`Agent listing failed (${res.status}): ${JSON.stringify(body)}`);
+  }
   if (!Array.isArray(body)) {
-    return [];
+    throw new Error(`Agent listing returned an invalid response: ${JSON.stringify(body)}`);
   }
 
   return body
@@ -67,17 +78,46 @@ async function upsertAgent(dir: string, payload: AgentPayload, existingId?: stri
   const method = existingId ? 'PUT' : 'POST';
   const res = await fetch(endpoint, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders(),
     body: JSON.stringify(payload),
   });
-  const data = (await parseJson(res)) as AgentResult;
-  const status = res.ok ? 'OK' : 'FAIL';
+  const body = await parseJson(res);
+  const data = isRecord(body) ? body as AgentResult : {};
   const verb = existingId ? 'updated' : 'created';
-  console.log(`  [${status}] ${dir} => ${data.name ?? data.id ?? payload.name} (${verb})`);
   if (!res.ok) {
-    console.error(`        Error: ${JSON.stringify(data)}`);
+    throw new Error(`Agent ${verb} failed for ${dir} (${res.status}): ${JSON.stringify(body)}`);
   }
+  if (typeof data.id !== 'string') {
+    throw new Error(`Agent ${verb} returned no id for ${dir}: ${JSON.stringify(body)}`);
+  }
+  console.log(`  [OK] ${dir} => ${data.name ?? data.id} (${verb})`);
   return data;
+}
+
+async function uploadWorkspace(
+  dir: string,
+  agentId: string,
+  project: LoadedManifestProject,
+): Promise<void> {
+  if (project.workspace.files.length === 0 && project.workspace.directories.length === 0) {
+    return;
+  }
+
+  const archive = await createWorkspaceArchive(project.workspace);
+  const res = await fetch(`${API_BASE}/api/agents/${encodeURIComponent(agentId)}/workspace`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders(),
+      'Content-Type': 'application/gzip',
+      'Content-Encoding': 'gzip',
+    },
+    body: new Blob([new Uint8Array(archive)]),
+  });
+  const data = await parseJson(res);
+  if (!res.ok) {
+    throw new Error(`Workspace upload failed for ${dir} (${res.status}): ${JSON.stringify(data)}`);
+  }
+  console.log(`  [OK] ${dir} workspace uploaded (${project.workspace.fileCount} files)`);
 }
 
 async function registerTrigger(
@@ -85,19 +125,42 @@ async function registerTrigger(
   eventType: string,
   taskTemplate: string,
   label: string,
-): Promise<TriggerResult | null> {
+): Promise<TriggerResult> {
   const res = await fetch(`${API_BASE}/api/triggers`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders(),
     body: JSON.stringify({ agentId, eventType, taskTemplate, enabled: true }),
   });
-  const data = (await res.json()) as TriggerResult;
-  if (res.ok) {
-    console.log(`  [OK]   ${label}: on "${eventType}" => agent ${agentId}`);
-  } else {
-    console.error(`  [FAIL] ${label}: ${JSON.stringify(data)}`);
+  const body = await parseJson(res);
+  const data = isRecord(body) ? body as TriggerResult : {};
+  if (!res.ok) {
+    throw new Error(`Trigger registration failed for ${label} (${res.status}): ${JSON.stringify(body)}`);
   }
-  return res.ok ? data : null;
+  if (typeof data.id !== 'string') {
+    throw new Error(`Trigger registration returned no id for ${label}: ${JSON.stringify(body)}`);
+  }
+
+  if (data.taskTemplate !== taskTemplate || data.enabled !== true) {
+    const updateRes = await fetch(`${API_BASE}/api/triggers/${encodeURIComponent(data.id)}`, {
+      method: 'PUT',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ taskTemplate, enabled: true }),
+    });
+    const updateBody = await parseJson(updateRes);
+    if (!updateRes.ok) {
+      throw new Error(
+        `Trigger reconciliation failed for ${label} (${updateRes.status}): ${JSON.stringify(updateBody)}`,
+      );
+    }
+    if (!isRecord(updateBody) || typeof updateBody.id !== 'string') {
+      throw new Error(`Trigger reconciliation returned no id for ${label}: ${JSON.stringify(updateBody)}`);
+    }
+    console.log(`  [OK]   ${label}: trigger reconciled`);
+    return updateBody as TriggerResult;
+  }
+
+  console.log(`  [OK]   ${label}: on "${eventType}" => agent ${agentId}`);
+  return data;
 }
 
 async function seed(): Promise<void> {
@@ -119,6 +182,7 @@ async function seed(): Promise<void> {
     const result = await upsertAgent(dir, payload, existingByName.get(payload.name));
     const agentId = typeof result.id === 'string' ? result.id : undefined;
     if (agentId) {
+      await uploadWorkspace(dir, agentId, project);
       importedAgents[dir] = agentId;
     }
   }
@@ -143,15 +207,6 @@ async function seed(): Promise<void> {
       'analysis.complete',
       'Write a polished final report based on this analysis:\n\n{{payload.analysis}}',
       'analyst -> writer',
-    );
-  }
-
-  if (piId) {
-    await registerTrigger(
-      piId,
-      'report.ready',
-      'Audit log entry: Event "report.ready" received. Payload: {{payload}}',
-      'writer -> auditor',
     );
   }
 

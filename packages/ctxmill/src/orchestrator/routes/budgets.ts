@@ -1,11 +1,21 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import {
+  AgentBudgetStatusListResponseSchema,
+  BudgetPolicyCreateInputSchema,
+  BudgetPolicyListResponseSchema,
+  BudgetPolicyPatchInputSchema,
+  BudgetPolicySchema,
+  BudgetSpendResponseSchema,
+  type BudgetBucket,
+  type BudgetPolicy,
+  type BudgetUsageAggregate,
+} from '@ctxmill/contracts';
 
 import type { DatabaseRepository } from '../../database/repository.js';
 import {
-  UNTAGGED_BUCKET,
   metricStatuses,
-  parseBudgetPolicyDoc,
   readBudgetDimensions,
+  readDefaultTags,
   windowStartMs,
 } from '../budgets.js';
 
@@ -23,47 +33,58 @@ export interface BudgetRouteOptions {
   >;
 }
 
-interface PolicyBody {
-  name?: unknown;
-  enabled?: unknown;
-  doc?: unknown;
+interface BudgetSpendRow extends BudgetUsageAggregate {
+  bucket?: string | null;
 }
 
-function validateBody(body: PolicyBody, reply: FastifyReply, requireAll: boolean): { name?: string; enabled?: boolean; doc?: Record<string, unknown> } | null {
-  const result: { name?: string; enabled?: boolean; doc?: Record<string, unknown> } = {};
+function invalidBody(reply: FastifyReply, issues: { path: PropertyKey[]; message: string }[]): FastifyReply {
+  const issue = issues[0];
+  const path = issue?.path.length ? `${issue.path.join('.')}: ` : '';
+  return reply.status(400).send({
+    error: `Invalid budget policy: ${path}${issue?.message ?? 'invalid request'}`,
+  });
+}
 
-  if (body.name !== undefined) {
-    if (typeof body.name !== 'string' || body.name.trim() === '') {
-      reply.status(400).send({ error: 'name must be a non-empty string' });
-      return null;
-    }
-    result.name = body.name.trim();
-  } else if (requireAll) {
-    reply.status(400).send({ error: 'name is required' });
-    return null;
-  }
+function canonicalPolicy(row: {
+  id: string;
+  name: string;
+  enabled: boolean;
+  doc: unknown;
+  createdAt: number;
+  updatedAt: number;
+}): BudgetPolicy {
+  return BudgetPolicySchema.parse(row);
+}
 
-  if (body.enabled !== undefined) {
-    if (typeof body.enabled !== 'boolean') {
-      reply.status(400).send({ error: 'enabled must be a boolean' });
-      return null;
-    }
-    result.enabled = body.enabled;
-  }
+function statusesFor(
+  doc: BudgetPolicy,
+  spend: BudgetUsageAggregate,
+) {
+  return metricStatuses(doc.doc.limits, spend, doc.doc.actions);
+}
 
-  if (body.doc !== undefined) {
-    const parsed = parseBudgetPolicyDoc(body.doc);
-    if ('error' in parsed) {
-      reply.status(400).send({ error: `Invalid policy doc: ${parsed.error}` });
-      return null;
-    }
-    result.doc = body.doc as Record<string, unknown>;
-  } else if (requireAll) {
-    reply.status(400).send({ error: 'doc is required' });
-    return null;
-  }
+function ungroupedBucket(): BudgetBucket {
+  return { kind: 'all' };
+}
 
-  return result;
+function groupedBucket(key: string, value: string | null): BudgetBucket {
+  return value === null
+    ? { kind: 'untagged', key }
+    : { kind: 'tag', key, value };
+}
+
+function emptySpend(): BudgetUsageAggregate {
+  return {
+    totalTokens: 0,
+    costUsd: 0,
+    turns: 0,
+    tokenReportedTurnCount: 0,
+    costReportedTurnCount: 0,
+  };
+}
+
+function statusRank(state: 'ok' | 'warning' | 'blocked'): number {
+  return state === 'blocked' ? 2 : state === 'warning' ? 1 : 0;
 }
 
 export async function budgetRoutes(
@@ -73,36 +94,142 @@ export async function budgetRoutes(
   const { db } = opts;
 
   app.get('/', async () => {
-    return { policies: await db.listBudgetPolicies() };
+    return BudgetPolicyListResponseSchema.parse({
+      policies: (await db.listBudgetPolicies()).map(canonicalPolicy),
+    });
   });
 
-  app.post('/', async (request: FastifyRequest<{ Body: PolicyBody }>, reply) => {
-    const body = request.body ?? {};
-    const validated = validateBody(body, reply, true);
-    if (!validated) return reply;
+  app.get('/agents/status', async () => {
+    const now = Date.now();
+    const policies = (await db.listBudgetPolicies())
+      .map(canonicalPolicy)
+      .filter((policy) => policy.enabled);
+    const agents = await db.listAgents();
+    const statuses = [];
+
+    for (const agent of agents) {
+      const metadata = agent.metadata as Record<string, unknown> | null;
+      const knownTags: Record<string, string> = {
+        ...readDefaultTags(metadata),
+        agent: agent.id,
+        harness: agent.harness,
+      };
+      const matches = [];
+      let state: 'ok' | 'warning' | 'blocked' = 'ok';
+
+      for (const policy of policies) {
+        const conflictsKnownTag = Object.entries(policy.doc.selector)
+          .some(([key, value]) => (
+            knownTags[key] !== undefined && knownTags[key] !== value
+          ));
+        if (conflictsKnownTag) continue;
+        const selector = {
+          ...policy.doc.selector,
+          agent: agent.id,
+        };
+        const since = windowStartMs(policy.doc.window, now);
+        const buckets: Array<{
+          bucket: BudgetBucket;
+          spend: BudgetUsageAggregate;
+        }> = [];
+
+        if (!policy.doc.groupBy) {
+          buckets.push({
+            bucket: ungroupedBucket(),
+            spend: await db.getBudgetSpend(selector, since) as BudgetUsageAggregate,
+          });
+        } else {
+          const observed = await db.getBudgetSpendBuckets(
+            selector,
+            since,
+            policy.doc.groupBy,
+          ) as BudgetSpendRow[];
+          const byValue = new Map<string, {
+            bucket: BudgetBucket;
+            spend: BudgetUsageAggregate;
+          }>();
+          for (const row of observed) {
+            const key = row.bucket === null ? 'untagged' : `tag:${row.bucket}`;
+            byValue.set(key, {
+              bucket: groupedBucket(policy.doc.groupBy, row.bucket ?? null),
+              spend: {
+                totalTokens: row.totalTokens,
+                costUsd: row.costUsd,
+                turns: row.turns,
+                tokenReportedTurnCount: row.tokenReportedTurnCount,
+                costReportedTurnCount: row.costReportedTurnCount,
+              },
+            });
+          }
+          for (const value of readBudgetDimensions(metadata)[policy.doc.groupBy] ?? []) {
+            const key = `tag:${value}`;
+            if (!byValue.has(key)) {
+              byValue.set(key, {
+                bucket: groupedBucket(policy.doc.groupBy, value),
+                spend: emptySpend(),
+              });
+            }
+          }
+          if (byValue.size === 0) {
+            byValue.set('untagged', {
+              bucket: groupedBucket(policy.doc.groupBy, null),
+              spend: emptySpend(),
+            });
+          }
+          buckets.push(...byValue.values());
+        }
+
+        for (const bucket of buckets) {
+          const metricStatus = statusesFor(policy, bucket.spend);
+          for (const metric of metricStatus) {
+            if (statusRank(metric.state) > statusRank(state)) {
+              state = metric.state;
+            }
+          }
+          matches.push({
+            policyId: policy.id,
+            policyName: policy.name,
+            bucket: bucket.bucket,
+            statuses: metricStatus,
+          });
+        }
+      }
+
+      statuses.push({
+        agentId: agent.id,
+        state,
+        evaluatedAt: now,
+        matches,
+      });
+    }
+
+    return AgentBudgetStatusListResponseSchema.parse({ statuses });
+  });
+
+  app.post('/', async (request: FastifyRequest<{ Body: unknown }>, reply) => {
+    const parsed = BudgetPolicyCreateInputSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return invalidBody(reply, parsed.error.issues);
+    const input = parsed.data;
     const created = await db.createBudgetPolicy({
-      name: validated.name!,
-      doc: validated.doc!,
-      ...(validated.enabled !== undefined ? { enabled: validated.enabled } : {}),
+      name: input.name,
+      enabled: input.enabled,
+      doc: input.doc,
     });
-    return reply.status(201).send(created);
+    return reply.status(201).send(canonicalPolicy(created));
   });
 
   app.get('/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
     const policy = await db.getBudgetPolicy(request.params.id);
     if (!policy) return reply.status(404).send({ error: 'Budget policy not found' });
-    return policy;
+    return canonicalPolicy(policy);
   });
 
-  app.put('/:id', async (request: FastifyRequest<{ Params: { id: string }; Body: PolicyBody }>, reply) => {
-    const validated = validateBody(request.body ?? {}, reply, false);
-    if (!validated) return reply;
-    if (Object.keys(validated).length === 0) {
-      return reply.status(400).send({ error: 'Provide at least one of: name, enabled, doc' });
-    }
-    const updated = await db.updateBudgetPolicy(request.params.id, validated);
+  app.patch('/:id', async (request: FastifyRequest<{ Params: { id: string }; Body: unknown }>, reply) => {
+    const parsed = BudgetPolicyPatchInputSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return invalidBody(reply, parsed.error.issues);
+    const updated = await db.updateBudgetPolicy(request.params.id, parsed.data);
     if (!updated) return reply.status(404).send({ error: 'Budget policy not found' });
-    return updated;
+    return canonicalPolicy(updated);
   });
 
   app.delete('/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply) => {
@@ -121,31 +248,43 @@ export async function budgetRoutes(
     const policy = await db.getBudgetPolicy(request.params.id);
     if (!policy) return reply.status(404).send({ error: 'Budget policy not found' });
 
-    const parsed = parseBudgetPolicyDoc(policy.doc);
-    if ('error' in parsed) {
-      return reply.status(422).send({ error: `Policy doc is invalid: ${parsed.error}` });
-    }
-    const doc = parsed.doc;
+    const canonical = canonicalPolicy(policy);
+    const doc = canonical.doc;
     const now = Date.now();
     const since = windowStartMs(doc.window, now);
 
     if (!doc.groupBy) {
-      const spend = await db.getBudgetSpend(doc.selector, since);
-      return {
+      const spend = await db.getBudgetSpend(doc.selector, since) as BudgetUsageAggregate;
+      return BudgetSpendResponseSchema.parse({
         policyId: policy.id,
         window: doc.window,
         windowStart: since,
-        buckets: [{ bucket: null, spend, statuses: metricStatuses(doc.limits, spend) }],
-      };
+        buckets: [{
+          bucket: ungroupedBucket(),
+          spend,
+          statuses: statusesFor(canonical, spend),
+        }],
+      });
     }
 
-    const observed = await db.getBudgetSpendBuckets(doc.selector, since, doc.groupBy);
-    const buckets = new Map<string, { bucket: string; spend: { totalTokens: number; costUsd: number; turns: number } }>();
+    const observed = await db.getBudgetSpendBuckets(
+      doc.selector,
+      since,
+      doc.groupBy,
+    ) as BudgetSpendRow[];
+    const buckets = new Map<string, { bucket: BudgetBucket; spend: BudgetUsageAggregate }>();
     for (const row of observed) {
-      const label = row.bucket ?? UNTAGGED_BUCKET;
-      buckets.set(label, {
-        bucket: label,
-        spend: { totalTokens: row.totalTokens, costUsd: row.costUsd, turns: row.turns },
+      const identity = groupedBucket(doc.groupBy, row.bucket ?? null);
+      const mapKey = row.bucket === null ? 'untagged' : `tag:${row.bucket}`;
+      buckets.set(mapKey, {
+        bucket: identity,
+        spend: {
+          totalTokens: row.totalTokens,
+          costUsd: row.costUsd,
+          turns: row.turns,
+          tokenReportedTurnCount: row.tokenReportedTurnCount,
+          costReportedTurnCount: row.costReportedTurnCount,
+        },
       });
     }
 
@@ -154,19 +293,32 @@ export async function budgetRoutes(
     for (const agent of agents) {
       const dimensions = readBudgetDimensions(agent.metadata as Record<string, unknown> | null);
       for (const value of dimensions[doc.groupBy] ?? []) {
-        if (!buckets.has(value)) {
-          buckets.set(value, { bucket: value, spend: { totalTokens: 0, costUsd: 0, turns: 0 } });
+        const mapKey = `tag:${value}`;
+        if (!buckets.has(mapKey)) {
+          buckets.set(mapKey, {
+            bucket: groupedBucket(doc.groupBy, value),
+            spend: {
+              totalTokens: 0,
+              costUsd: 0,
+              turns: 0,
+              tokenReportedTurnCount: 0,
+              costReportedTurnCount: 0,
+            },
+          });
         }
       }
     }
 
-    return {
+    return BudgetSpendResponseSchema.parse({
       policyId: policy.id,
       window: doc.window,
       windowStart: since,
       buckets: [...buckets.values()]
-        .sort((a, b) => b.spend.totalTokens - a.spend.totalTokens)
-        .map((entry) => ({ ...entry, statuses: metricStatuses(doc.limits, entry.spend) })),
-    };
+        .sort((a, b) => (b.spend.totalTokens ?? -1) - (a.spend.totalTokens ?? -1))
+        .map((entry) => ({
+          ...entry,
+          statuses: statusesFor(canonical, entry.spend),
+        })),
+    });
   });
 }

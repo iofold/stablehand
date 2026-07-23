@@ -15,12 +15,15 @@
 import { mkdir } from 'node:fs/promises';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
+import { SandboxSecretsSchema } from '@ctxmill/contracts';
 import { createClient } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-node';
 import type {
   OpenSessionRequest,
   OpenSessionResponse,
   DeliverTurnRequest,
+  RenewTurnDeliveryCapabilityRequest,
+  RenewTurnDeliveryCapabilityResponse,
   SuspendSessionResponse,
   KillSessionResponse,
   SessionEvent,
@@ -31,6 +34,7 @@ import {
   SessionEventSchema,
   TurnCompletedSchema,
   TurnFailedSchema,
+  RenewTurnDeliveryCapabilityResponseSchema,
   SuspendSessionResponseSchema,
   KillSessionResponseSchema,
 } from '@ctxmill/proto/sandbox/v1';
@@ -44,12 +48,13 @@ import type {
   AgentEvent,
   HarnessSessionConfig,
 } from '../harness/types.js';
-import type { ToolContext } from '../tool/types.js';
+import type { ToolContext, ToolDefinition } from '../tool/types.js';
 import type { ExecutionPhase } from './execution-phase.js';
 import { ExecutionPhaseTracker } from './execution-phase.js';
 import { SessionStateCollector } from './checkpoint.js';
 import {
   protoFreshBootstrapToSessionConfig,
+  protoNativeToolPolicyToInternal,
   protoRestoreBootstrapToRestorePoint,
   protoDeliverTurnToInput,
   agentEventToSessionEvent,
@@ -62,6 +67,22 @@ import { createSandboxCallbackAuthInterceptor } from './callback-auth.js';
 import type { OrchestratorServiceClient } from './tool-proxy.js';
 import { getToolApiToken, setSessionTools } from './daemon.js';
 import { generatePtcScripts } from './ptc-codegen.js';
+import {
+  assertMonotonicTurnDelivery,
+  parseTurnDeliveryCapability,
+  sameTurnDeliveryIdentity,
+  type TurnDeliveryIdentity,
+} from './turn-delivery-capability.js';
+import {
+  armTurnDeliveryExpiry,
+  assertTurnDeliveryContextCurrent,
+  clearTurnDeliveryExpiry,
+  registerPtcTurnDeliveryContext,
+  revokePtcTurnDeliveryContext,
+  runWithTurnDeliveryContext,
+  type TurnDeliveryContext,
+} from './turn-delivery-context.js';
+import { PassThroughHarnessTurnEnforcer } from '../harness/enforcement/pass-through.js';
 
 async function mkdirSafe(dir: string): Promise<void> {
   try {
@@ -77,6 +98,7 @@ async function mkdirSafe(dir: string): Promise<void> {
 function createDaemonHandlersForSession(
   secrets: ResolvedSecrets,
   orcClient: OrchestratorServiceClient | undefined,
+  sandboxSessionId: string,
   agentId: string,
   workspaceDir: string,
 ): Map<string, (input: unknown) => Promise<string>> | undefined {
@@ -101,7 +123,7 @@ function createDaemonHandlersForSession(
   return createArtifactHandlers({
     artifactStore,
     orchestratorClient: orcClient,
-    turnId: activeRunId,
+    sandboxSessionId,
     agentId,
     workspaceDir,
   });
@@ -209,13 +231,32 @@ export function resetOrchestratorClient(): void {
 interface SessionContext {
   readonly session: HarnessSession;
   readonly sessionId: string;
+  readonly agentId: string;
   readonly conversationId: string;
   readonly harnessName: string;
   readonly stateCollector: SessionStateCollector;
   readonly phaseTracker: ExecutionPhaseTracker;
   readonly abortController: AbortController;
-  currentTurnId: string | null;
+  readonly ptcConfig: {
+    tools: ToolDefinition[];
+    scriptDir: string;
+    daemonPort: number;
+  };
+  readonly highestDeliveryByTurn: Map<string, TurnDeliveryIdentity>;
+  activeDelivery: ActiveTurnDelivery | null;
+  closing: boolean;
+  killPromise?: Promise<KillSessionResponse>;
+  poisoned: boolean;
 }
+
+interface ActiveTurnDelivery {
+  readonly context: TurnDeliveryContext;
+  readonly settled: Promise<TurnDeliverySettlement>;
+  readonly resolveSettlement: (settlement: TurnDeliverySettlement) => void;
+  settlement?: TurnDeliverySettlement;
+}
+
+type TurnDeliverySettlement = 'released' | 'poisoned';
 
 /* -------------------------------------------------------------------------- */
 /*  Module-level session state: SessionContext bundles session state with      */
@@ -224,7 +265,22 @@ interface SessionContext {
 
 let activeContext: SessionContext | null = null;
 let openingContext: Promise<SessionContext> | null = null;
-const activeRunId: { current: string } = { current: '' };
+
+const KILL_ACTIVE_DELIVERY_TIMEOUT_MS = 30_000;
+const ITERATOR_CLEANUP_TIMEOUT_MS = 10_000;
+const MAX_ITERATOR_CLEANUP_STEPS = 16;
+
+function validateTurnSecrets(turnSecrets: Readonly<Record<string, string>>): void {
+  const parsed = SandboxSecretsSchema.safeParse(turnSecrets);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new ConnectError(
+      `Invalid turn secrets${issue?.path.length ? `.${issue.path.join('.')}` : ''}: `
+      + (issue?.message ?? 'validation failed'),
+      Code.InvalidArgument,
+    );
+  }
+}
 
 function validateRequestedSessionId(sessionId: string, operation: string): string {
   const requestedSessionId = sessionId.trim();
@@ -362,11 +418,14 @@ export async function openSession(
   }
 
   openingContext = (async (): Promise<SessionContext> => {
+    opts?.signal?.throwIfAborted();
     const orcClient = opts?.orchestratorClient ?? getOrchestratorClient();
     let harnessName: string;
     let session: HarnessSession;
     let conversationId: string;
     let sessionId: string;
+    let agentId: string;
+    let ptcConfig: SessionContext['ptcConfig'];
     let lastCompletedTurnId: string | undefined;
 
     if (req.bootstrap.case === 'fresh') {
@@ -374,23 +433,31 @@ export async function openSession(
       harnessName = fresh.harnessName;
       conversationId = fresh.conversationId;
       sessionId = validateRequestedSessionId(fresh.sessionId, 'openSession');
+      agentId = fresh.agentId;
 
       const daemonHandlers = createDaemonHandlersForSession(
         secrets,
         orcClient,
+        sessionId,
         fresh.agentId,
         fresh.workspaceDir || '/workspace',
       );
 
       const tools = protoToToolDefs(fresh.tools, {
         orchestratorClient: orcClient,
-        agentId: fresh.agentId,
-        turnIdRef: activeRunId,
+        callbackRoute: {
+          sandboxSessionId: sessionId,
+          agentId: fresh.agentId,
+        },
         daemonHandlers,
       });
       const config = protoFreshBootstrapToSessionConfig(fresh, tools, secrets);
+      ptcConfig = {
+        tools,
+        scriptDir: `${config.workspaceDir}/.tools`,
+        daemonPort: parseInt(process.env.PTC_PORT ?? '8080', 10),
+      };
       setSessionTools(tools, createToolContext(fresh.agentId, fresh.conversationId, sessionId, config.workspaceDir));
-      const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
 
       try {
         const ptcEligible = tools.filter((t) => t.programmatic === true);
@@ -398,8 +465,8 @@ export async function openSession(
 
         const ptcScripts = await generatePtcScripts({
           tools,
-          scriptDir: `${config.workspaceDir}/.tools`,
-          daemonPort: ptcPort,
+          scriptDir: ptcConfig.scriptDir,
+          daemonPort: ptcConfig.daemonPort,
           token: getToolApiToken(),
         });
 
@@ -412,13 +479,12 @@ export async function openSession(
         config.systemPrompt = appendPtcDegradedNotice(config.systemPrompt, err);
       }
 
-      if (opts?.signal) {
-        config.signal = opts.signal;
-      }
-
       await mkdirSafe(config.workspaceDir);
 
       const harness = await resolveHarness(harnessName);
+      config.turnEnforcer = new PassThroughHarnessTurnEnforcer(
+        harness.enforcementCapabilities,
+      );
       session = await harness.openSession(config);
     } else if (req.bootstrap.case === 'restore') {
       const restore = req.bootstrap.value;
@@ -429,6 +495,7 @@ export async function openSession(
       harnessName = checkpoint.harnessName;
       conversationId = checkpoint.conversationId;
       sessionId = checkpoint.sessionId;
+      agentId = restore.agentId;
       lastCompletedTurnId = checkpoint.cursor?.lastCompletedTurnId;
 
       const restorePoint = protoRestoreBootstrapToRestorePoint(restore);
@@ -436,13 +503,16 @@ export async function openSession(
       const daemonHandlers = createDaemonHandlersForSession(
         secrets,
         orcClient,
+        sessionId,
         restore.agentId,
         workspaceDir,
       );
       const tools = protoToToolDefs(restore.tools, {
         orchestratorClient: orcClient,
-        agentId: restore.agentId,
-        turnIdRef: activeRunId,
+        callbackRoute: {
+          sandboxSessionId: sessionId,
+          agentId: restore.agentId,
+        },
         daemonHandlers,
       });
 
@@ -451,22 +521,19 @@ export async function openSession(
         conversationId: checkpoint.conversationId,
         systemPrompt: restore.systemPrompt,
         tools,
-        ...(restore.nativeTools
-          ? {
-              nativeTools: {
-                allowlist: [...restore.nativeTools.allowlist],
-                blocklist: [...restore.nativeTools.blocklist],
-              },
-            }
+        ...(restore.nativeToolPolicy
+          ? { nativeToolPolicy: protoNativeToolPolicyToInternal(restore.nativeToolPolicy) }
           : {}),
         secrets,
         harnessConfigJson: restore.harnessConfigJson,
         workspaceDir,
-        signal: opts?.signal,
+      };
+      ptcConfig = {
+        tools,
+        scriptDir: `${config.workspaceDir}/.tools`,
+        daemonPort: parseInt(process.env.PTC_PORT ?? '8080', 10),
       };
       setSessionTools(tools, createToolContext(restore.agentId, checkpoint.conversationId, sessionId, config.workspaceDir));
-
-      const ptcPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
 
       try {
         const ptcEligible = tools.filter((t) => t.programmatic === true);
@@ -474,8 +541,8 @@ export async function openSession(
 
         await generatePtcScripts({
           tools,
-          scriptDir: `${config.workspaceDir}/.tools`,
-          daemonPort: ptcPort,
+          scriptDir: ptcConfig.scriptDir,
+          daemonPort: ptcConfig.daemonPort,
           token: getToolApiToken(),
         });
       } catch (err) {
@@ -486,20 +553,33 @@ export async function openSession(
       await mkdirSafe(config.workspaceDir);
 
       const harness = await resolveHarness(harnessName);
+      config.turnEnforcer = new PassThroughHarnessTurnEnforcer(
+        harness.enforcementCapabilities,
+      );
       session = await harness.openSession(config, restorePoint);
     } else {
       throw new Error('[sandbox] openSession: missing bootstrap (neither fresh nor restore)');
     }
 
+    if (opts?.signal?.aborted) {
+      await session.close();
+      opts.signal.throwIfAborted();
+    }
+
     activeContext = {
       session,
       sessionId,
+      agentId,
       conversationId,
       harnessName,
       stateCollector: new SessionStateCollector(lastCompletedTurnId),
       phaseTracker: new ExecutionPhaseTracker(),
       abortController: new AbortController(),
-      currentTurnId: null,
+      ptcConfig,
+      highestDeliveryByTurn: new Map(),
+      activeDelivery: null,
+      closing: false,
+      poisoned: false,
     };
 
     return activeContext;
@@ -523,6 +603,301 @@ export async function openSession(
 /*  deliverTurn                                                                */
 /* -------------------------------------------------------------------------- */
 
+function createActiveTurnDelivery(
+  parsed: ReturnType<typeof parseTurnDeliveryCapability>,
+  turnSecrets: Readonly<Record<string, string>>,
+): ActiveTurnDelivery {
+  let resolveSettlement!: (settlement: TurnDeliverySettlement) => void;
+  const settled = new Promise<TurnDeliverySettlement>((resolve) => {
+    resolveSettlement = resolve;
+  });
+  const context: TurnDeliveryContext = {
+    identity: parsed.identity,
+    capability: parsed.capability,
+    leaseExpiresAtMs: parsed.leaseExpiresAtMs,
+    abortController: new AbortController(),
+    turnSecrets: Object.freeze({ ...turnSecrets }),
+  };
+
+  return {
+    context,
+    settled,
+    resolveSettlement,
+  };
+}
+
+function releaseActiveTurnDelivery(
+  sessionContext: SessionContext,
+  delivery: ActiveTurnDelivery,
+): void {
+  if (delivery.settlement) return;
+  delivery.settlement = 'released';
+  clearTurnDeliveryExpiry(delivery.context);
+  revokePtcTurnDeliveryContext(delivery.context);
+  if (!delivery.context.abortController.signal.aborted) {
+    delivery.context.abortController.abort(
+      new ConnectError('Turn delivery ended', Code.Canceled),
+    );
+  }
+  if (sessionContext.activeDelivery === delivery) {
+    sessionContext.activeDelivery = null;
+  }
+  delivery.resolveSettlement('released');
+}
+
+function poisonActiveTurnDelivery(
+  sessionContext: SessionContext,
+  delivery: ActiveTurnDelivery,
+  reason: unknown,
+): void {
+  if (delivery.settlement) return;
+  delivery.settlement = 'poisoned';
+  sessionContext.poisoned = true;
+  clearTurnDeliveryExpiry(delivery.context);
+  revokePtcTurnDeliveryContext(delivery.context);
+  if (!delivery.context.abortController.signal.aborted) {
+    delivery.context.abortController.abort(reason);
+  }
+  if (!sessionContext.abortController.signal.aborted) {
+    sessionContext.abortController.abort(reason);
+  }
+  delivery.resolveSettlement('poisoned');
+}
+
+async function awaitSafeDeliveryHandoff(
+  active: ActiveTurnDelivery,
+  successorLeaseExpiresAtMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  const remainingMs = successorLeaseExpiresAtMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new ConnectError(
+      'Successor turn delivery capability expired before safe handoff',
+      Code.FailedPrecondition,
+    );
+  }
+
+  let timeout: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
+  const timedOut = new Promise<'expired'>((resolve) => {
+    timeout = setTimeout(() => resolve('expired'), remainingMs);
+    timeout.unref();
+  });
+  const requestAborted = signal
+    ? new Promise<'aborted'>((resolve) => {
+      if (signal.aborted) {
+        resolve('aborted');
+        return;
+      }
+      onAbort = () => resolve('aborted');
+      signal.addEventListener('abort', onAbort, { once: true });
+    })
+    : new Promise<never>(() => undefined);
+
+  try {
+    const result = await Promise.race([
+      active.settled,
+      timedOut,
+      requestAborted,
+    ]);
+    if (result === 'expired') {
+      throw new ConnectError(
+        'Cannot prove safe handoff from expired predecessor delivery',
+        Code.FailedPrecondition,
+      );
+    }
+    if (result === 'aborted') {
+      throw new ConnectError(
+        'Successor delivery request was cancelled before safe handoff',
+        Code.Canceled,
+      );
+    }
+    if (result === 'poisoned') {
+      throw new ConnectError(
+        'Cannot prove safe handoff from poisoned predecessor delivery',
+        Code.FailedPrecondition,
+      );
+    }
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (signal && onAbort) {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+}
+
+async function admitTurnDelivery(
+  ctx: SessionContext,
+  req: DeliverTurnRequest,
+  signal?: AbortSignal,
+): Promise<ActiveTurnDelivery> {
+  if (
+    ctx.poisoned
+    || ctx.closing
+    || ctx.abortController.signal.aborted
+    || activeContext !== ctx
+  ) {
+    throw new ConnectError(
+      'Sandbox session is closing or unavailable for turn delivery',
+      Code.FailedPrecondition,
+    );
+  }
+  let parsed = parseTurnDeliveryCapability(
+    req.deliveryCapability,
+    {
+      turnId: req.turnId,
+      sandboxSessionId: req.sessionId,
+      agentId: ctx.agentId,
+    },
+  );
+  const previous = ctx.highestDeliveryByTurn.get(req.turnId);
+  assertMonotonicTurnDelivery(previous, parsed.identity);
+
+  const active = ctx.activeDelivery;
+  if (active) {
+    if (active.context.identity.turnId !== req.turnId) {
+      throw new ConnectError(
+        '[sandbox] deliverTurn: turn already in progress',
+        Code.FailedPrecondition,
+      );
+    }
+    if (
+      parsed.identity.fenceToken <= active.context.identity.fenceToken
+    ) {
+      throw new ConnectError(
+        '[sandbox] deliverTurn: delivery is already in progress',
+        Code.FailedPrecondition,
+      );
+    }
+    if (active.context.abortController.signal.aborted) {
+      throw new ConnectError(
+        'Cannot prove safe handoff from an aborted predecessor delivery',
+        Code.FailedPrecondition,
+      );
+    }
+
+    // Publish the successor fence before asking the predecessor to stop. Any
+    // concurrently arriving predecessor is stale from this point forward.
+    ctx.highestDeliveryByTurn.set(req.turnId, parsed.identity);
+    active.context.abortController.abort(new ConnectError(
+      'Turn delivery superseded by a higher fence',
+      Code.Canceled,
+    ));
+    await awaitSafeDeliveryHandoff(
+      active,
+      parsed.leaseExpiresAtMs,
+      signal,
+    );
+
+    if (
+      ctx.poisoned
+      || ctx.closing
+      || ctx.abortController.signal.aborted
+      || activeContext !== ctx
+    ) {
+      throw new ConnectError(
+        'Sandbox session began closing during turn delivery handoff',
+        Code.FailedPrecondition,
+      );
+    }
+
+    parsed = parseTurnDeliveryCapability(
+      req.deliveryCapability,
+      {
+        turnId: req.turnId,
+        sandboxSessionId: req.sessionId,
+        agentId: ctx.agentId,
+      },
+    );
+    assertMonotonicTurnDelivery(
+      ctx.highestDeliveryByTurn.get(req.turnId),
+      parsed.identity,
+    );
+    if (ctx.activeDelivery) {
+      throw new ConnectError(
+        'Cannot prove exclusive harness ownership for successor delivery',
+        Code.FailedPrecondition,
+      );
+    }
+  }
+
+  signal?.throwIfAborted();
+  if (
+    ctx.poisoned
+    || ctx.closing
+    || ctx.abortController.signal.aborted
+    || activeContext !== ctx
+  ) {
+    throw new ConnectError(
+      'Sandbox session is closing or unavailable for turn delivery',
+      Code.FailedPrecondition,
+    );
+  }
+  ctx.highestDeliveryByTurn.set(req.turnId, parsed.identity);
+  const delivery = createActiveTurnDelivery(parsed, req.turnSecrets);
+  ctx.activeDelivery = delivery;
+  armTurnDeliveryExpiry(delivery.context);
+  return delivery;
+}
+
+export async function renewTurnDeliveryCapability(
+  req: RenewTurnDeliveryCapabilityRequest,
+): Promise<RenewTurnDeliveryCapabilityResponse> {
+  const ctx = await getContextForSession(
+    req.sessionId,
+    'renewTurnDeliveryCapability',
+  );
+  const active = ctx.activeDelivery;
+  if (!active || active.context.identity.turnId !== req.turnId) {
+    throw new ConnectError(
+      'No active delivery matches the renewal request',
+      Code.FailedPrecondition,
+    );
+  }
+  if (active.context.abortController.signal.aborted) {
+    throw new ConnectError(
+      'Cannot renew an aborted turn delivery',
+      Code.FailedPrecondition,
+    );
+  }
+
+  const parsed = parseTurnDeliveryCapability(
+    req.deliveryCapability,
+    {
+      turnId: req.turnId,
+      sandboxSessionId: req.sessionId,
+      agentId: ctx.agentId,
+    },
+  );
+  if (!sameTurnDeliveryIdentity(active.context.identity, parsed.identity)) {
+    throw new ConnectError(
+      'Turn delivery renewal authority does not match the active delivery',
+      Code.FailedPrecondition,
+    );
+  }
+  if (parsed.leaseExpiresAtMs < active.context.leaseExpiresAtMs) {
+    throw new ConnectError(
+      'Turn delivery renewal cannot shorten the active lease',
+      Code.FailedPrecondition,
+    );
+  }
+  if (
+    parsed.leaseExpiresAtMs === active.context.leaseExpiresAtMs
+    && parsed.capability.signature !== active.context.capability.signature
+  ) {
+    throw new ConnectError(
+      'Idempotent turn delivery renewal must repeat the same signature',
+      Code.FailedPrecondition,
+    );
+  }
+
+  active.context.capability = parsed.capability;
+  active.context.leaseExpiresAtMs = parsed.leaseExpiresAtMs;
+  armTurnDeliveryExpiry(active.context);
+
+  return create(RenewTurnDeliveryCapabilityResponseSchema, { renewed: true });
+}
+
 /**
  * Deliver a turn to the active session and stream back SessionEvent envelopes.
  *
@@ -541,53 +916,227 @@ export async function* deliverTurn(
   },
 ): AsyncGenerator<SessionEvent> {
   const ctx = await getContextForSession(req.sessionId, 'deliverTurn');
-  if (ctx.stateCollector.hasCompletedTurn(req.turnId)) {
-    console.error(
-      `[sandbox] turn ${req.turnId} already completed — acknowledging duplicate delivery without invoking harness`,
-    );
+  const turnId = req.turnId;
+  try {
+    validateTurnSecrets(req.turnSecrets);
+  } catch (error) {
     yield create(SessionEventSchema, {
       payload: {
-        case: 'turnCompleted',
-        value: create(TurnCompletedSchema, { turnId: req.turnId }),
+        case: 'turnFailed',
+        value: create(TurnFailedSchema, {
+          turnId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }),
       },
     });
     return;
   }
-  if (ctx.currentTurnId) {
-    throw new Error('[sandbox] deliverTurn: turn already in progress');
-  }
-
-  const turnId = req.turnId;
+  const delivery = await admitTurnDelivery(ctx, req, opts?.signal);
   let seq = 0;
   let sawSemanticEnd = false;
   let suspendBreak = false;
   let abortBreak = false;
+  let phaseStarted = false;
+  let stateStarted = false;
+  let iterator: AsyncIterator<AgentEvent> | undefined;
+  let iteratorDone = false;
+  let iteratorClosePromise: Promise<void> | undefined;
+  let deliveryReleased = false;
   const pendingTurnRequests = new Map<string, string>();
+  let unlinkRequestAbort: (() => void) | undefined;
 
-  ctx.currentTurnId = turnId;
-  activeRunId.current = turnId;
-  ctx.phaseTracker.startTurn(turnId);
-  ctx.stateCollector.startTurn(turnId);
+  if (opts?.signal) {
+    const abortFromRequest = (): void => {
+      revokePtcTurnDeliveryContext(delivery.context);
+      if (!delivery.context.abortController.signal.aborted) {
+        delivery.context.abortController.abort(
+          opts.signal?.reason
+            ?? new ConnectError('Turn delivery request cancelled', Code.Canceled),
+        );
+      }
+    };
+    if (opts.signal.aborted) {
+      abortFromRequest();
+    } else {
+      opts.signal.addEventListener('abort', abortFromRequest, { once: true });
+      unlinkRequestAbort = () => {
+        opts.signal?.removeEventListener('abort', abortFromRequest);
+      };
+    }
+  }
+
+  const releaseDelivery = (): void => {
+    if (deliveryReleased) return;
+    deliveryReleased = true;
+    if (phaseStarted) {
+      ctx.phaseTracker.endTurn();
+      phaseStarted = false;
+    }
+    if (stateStarted) {
+      ctx.stateCollector.endTurn();
+      stateStarted = false;
+    }
+    releaseActiveTurnDelivery(ctx, delivery);
+  };
+
+  const closeIterator = (): Promise<void> => {
+    if (iteratorClosePromise) return iteratorClosePromise;
+    iteratorClosePromise = (async () => {
+      if (!iterator || iteratorDone || !iterator.return) return;
+
+      const cleanupDeadlineAtMs = Date.now() + ITERATOR_CLEANUP_TIMEOUT_MS;
+      const cleanupTimeoutError = new Error(
+        `Iterator cleanup did not settle within ${ITERATOR_CLEANUP_TIMEOUT_MS}ms`,
+      );
+      const awaitCleanupStep = async <T>(operation: Promise<T>): Promise<T> => {
+        const remainingMs = cleanupDeadlineAtMs - Date.now();
+        if (remainingMs <= 0) throw cleanupTimeoutError;
+
+        let timeout: NodeJS.Timeout | undefined;
+        try {
+          return await Promise.race([
+            operation,
+            new Promise<never>((_resolve, reject) => {
+              timeout = setTimeout(() => reject(cleanupTimeoutError), remainingMs);
+              timeout.unref();
+            }),
+          ]);
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
+      };
+
+      let result: IteratorResult<AgentEvent> | undefined;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          result = await awaitCleanupStep(
+            runWithTurnDeliveryContext(
+              delivery.context,
+              () => iterator!.return!(undefined),
+            ),
+          );
+          break;
+        } catch (error) {
+          if (error === cleanupTimeoutError) throw error;
+          lastError = error;
+          console.error(
+            `[sandbox] turn ${turnId} iterator close attempt ${attempt} failed:`,
+            error,
+          );
+        }
+      }
+
+      if (!result) {
+        throw lastError;
+      }
+
+      for (
+        let cleanupStep = 0;
+        result.done !== true && cleanupStep < MAX_ITERATOR_CLEANUP_STEPS;
+        cleanupStep++
+      ) {
+        result = await awaitCleanupStep(
+          runWithTurnDeliveryContext(
+            delivery.context,
+            () => iterator!.next(),
+          ),
+        );
+      }
+      if (result.done !== true) {
+        throw new Error(
+          `Iterator cleanup exceeded ${MAX_ITERATOR_CLEANUP_STEPS} steps`,
+        );
+      }
+      iteratorDone = true;
+    })();
+    return iteratorClosePromise;
+  };
+
+  const poisonDelivery = (reason: unknown): never => {
+    poisonActiveTurnDelivery(ctx, delivery, reason);
+    throw new ConnectError(
+      `Turn ${turnId} teardown could not prove exclusive sandbox ownership; session poisoned`,
+      Code.Internal,
+      undefined,
+      undefined,
+      reason,
+    );
+  };
 
   try {
+    if (ctx.stateCollector.hasCompletedTurn(turnId)) {
+      console.error(
+        `[sandbox] turn ${turnId} already completed — acknowledging duplicate delivery without invoking harness`,
+      );
+      releaseDelivery();
+      yield create(SessionEventSchema, {
+        payload: {
+          case: 'turnCompleted',
+          value: create(TurnCompletedSchema, { turnId }),
+        },
+      });
+      return;
+    }
+
+    delivery.context.abortController.signal.throwIfAborted();
+
+    const ptcToken = registerPtcTurnDeliveryContext(delivery.context);
+    await generatePtcScripts({
+      ...ctx.ptcConfig,
+      token: ptcToken,
+    });
+    assertTurnDeliveryContextCurrent(delivery.context);
+
+    ctx.phaseTracker.startTurn(turnId);
+    phaseStarted = true;
+    ctx.stateCollector.startTurn(turnId);
+    stateStarted = true;
+
     const input = protoDeliverTurnToInput(req);
-    const turnSignal = opts?.signal
-      ? AbortSignal.any([ctx.abortController.signal, opts.signal])
-      : ctx.abortController.signal;
+    const turnSignals = [
+      ctx.abortController.signal,
+      delivery.context.abortController.signal,
+      ...(opts?.signal ? [opts.signal] : []),
+    ];
+    const turnSignal = AbortSignal.any(turnSignals);
     turnSignal.throwIfAborted();
     const context = {
       signal: turnSignal,
       onApprovalNeeded: opts?.onApprovalNeeded,
+      turnSecrets: delivery.context.turnSecrets,
     };
 
-    for await (const event of ctx.session.deliverTurn(input, context)) {
-      if (!event || !event.type) continue;
+    // The capability deadline is checked once immediately before obtaining the
+    // harness iterator and again before every state-advancing next() call.
+    assertTurnDeliveryContextCurrent(delivery.context);
+    const iterable = runWithTurnDeliveryContext(
+      delivery.context,
+      () => ctx.session.deliverTurn(input, context),
+    );
+    iterator = runWithTurnDeliveryContext(
+      delivery.context,
+      () => iterable[Symbol.asyncIterator](),
+    );
 
+    while (true) {
+      assertTurnDeliveryContextCurrent(delivery.context);
+      const next = await runWithTurnDeliveryContext(
+        delivery.context,
+        () => iterator!.next(),
+      );
       if (turnSignal.aborted) {
         console.error(`[sandbox] turn ${turnId} aborted mid-stream after ${seq} events`);
         abortBreak = true;
+        if (next.done) iteratorDone = true;
         break;
       }
+      if (next.done) {
+        iteratorDone = true;
+        break;
+      }
+      const event = next.value;
+      if (!event || !event.type) continue;
 
       seq++;
 
@@ -617,13 +1166,17 @@ export async function* deliverTurn(
       }
     }
 
+    await closeIterator();
+
+    let terminalEvent: SessionEvent | undefined;
     if (sawSemanticEnd && pendingTurnRequests.size === 0 && !abortBreak) {
       // Record acceptance before yielding the terminal acknowledgement. If the
       // orchestrator disappears after receiving this frame but before marking
       // its durable resume attempt complete, a retry with the same turn ID
       // must stop here rather than invoke the model twice.
       ctx.stateCollector.endTurn(true);
-      yield create(SessionEventSchema, {
+      stateStarted = false;
+      terminalEvent = create(SessionEventSchema, {
         payload: {
           case: 'turnCompleted',
           value: create(TurnCompletedSchema, { turnId }),
@@ -636,11 +1189,14 @@ export async function* deliverTurn(
         `[sandbox] turn ${turnId} suspended after ${seq} events — no terminal frame emitted`,
       );
     } else {
+      const abortReason = turnSignal.reason instanceof Error
+        ? turnSignal.reason.message
+        : 'delivery aborted';
       const cause = abortBreak
-        ? 'session killed mid-turn'
+        ? abortReason
         : 'harness stream ended without done event';
       const pendingSummary = pendingTurnRequestSummary(pendingTurnRequests);
-      yield create(SessionEventSchema, {
+      terminalEvent = create(SessionEventSchema, {
         payload: {
           case: 'turnFailed',
           value: create(TurnFailedSchema, {
@@ -654,7 +1210,18 @@ export async function* deliverTurn(
         `[sandbox] turn ${turnId} failed — ${cause}; pending requests: ${pendingSummary}; ${seq} events emitted`,
       );
     }
+
+    releaseDelivery();
+    if (terminalEvent) {
+      yield terminalEvent;
+    }
   } catch (err: unknown) {
+    try {
+      await closeIterator();
+    } catch (closeError) {
+      poisonDelivery(closeError);
+    }
+    releaseDelivery();
     yield create(SessionEventSchema, {
       payload: {
         case: 'turnFailed',
@@ -667,9 +1234,18 @@ export async function* deliverTurn(
 
     console.error(`[sandbox] turn ${turnId} failed:`, err);
   } finally {
-    ctx.phaseTracker.endTurn();
-    ctx.stateCollector.endTurn();
-    ctx.currentTurnId = null;
+    try {
+      if (!deliveryReleased && delivery.settlement !== 'poisoned') {
+        try {
+          await closeIterator();
+        } catch (closeError) {
+          poisonDelivery(closeError);
+        }
+        releaseDelivery();
+      }
+    } finally {
+      unlinkRequestAbort?.();
+    }
   }
 }
 
@@ -779,28 +1355,86 @@ export async function suspendSession(
  * Safe to call when no session is active — returns `no_session` status.
  */
 export async function killSession(requestedSessionId?: string): Promise<KillSessionResponse> {
-  if (requestedSessionId) {
-    await getContextForSession(requestedSessionId, 'killSession');
-  }
-
-  if (!activeContext) {
+  const ctx = requestedSessionId
+    ? await getContextForSession(requestedSessionId, 'killSession')
+    : activeContext;
+  if (!ctx) {
     return create(KillSessionResponseSchema, { finalStatus: 'no_session' });
   }
+  if (ctx.killPromise) {
+    return ctx.killPromise;
+  }
 
-  const ctx = activeContext;
+  // Close admission before the first await. Concurrent or handoff-waiting
+  // deliveries will observe this gate and cannot install a new turn context.
+  ctx.closing = true;
+  ctx.killPromise = killSessionContext(ctx);
+  return ctx.killPromise;
+}
+
+async function killSessionContext(ctx: SessionContext): Promise<KillSessionResponse> {
   const sessionId = ctx.sessionId;
+  const activeDelivery = ctx.activeDelivery;
   console.error(`[sandbox] killing session ${sessionId}`);
 
   try {
-    ctx.abortController.abort();
+    if (activeDelivery) {
+      revokePtcTurnDeliveryContext(activeDelivery.context);
+      if (!activeDelivery.context.abortController.signal.aborted) {
+        activeDelivery.context.abortController.abort(
+          new ConnectError('Sandbox session killed', Code.Canceled),
+        );
+      }
+    }
+    if (!ctx.abortController.signal.aborted) {
+      ctx.abortController.abort(
+        new ConnectError('Sandbox session killed', Code.Canceled),
+      );
+    }
+
+    if (activeDelivery) {
+      let timeout: NodeJS.Timeout | undefined;
+      try {
+        const result = await Promise.race([
+          activeDelivery.settled,
+          new Promise<'timeout'>((resolve) => {
+            timeout = setTimeout(
+              () => resolve('timeout'),
+              KILL_ACTIVE_DELIVERY_TIMEOUT_MS,
+            );
+            timeout.unref();
+          }),
+        ]);
+        if (result !== 'released') {
+          if (result === 'timeout') {
+            poisonActiveTurnDelivery(
+              ctx,
+              activeDelivery,
+              new Error('Timed out waiting for active turn teardown during kill'),
+            );
+          }
+          throw new ConnectError(
+            'Sandbox session kill could not prove the active turn stopped; container termination required',
+            Code.DeadlineExceeded,
+          );
+        }
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    }
+
     await ctx.session.close();
   } catch (err: unknown) {
+    ctx.poisoned = true;
     console.error(`[sandbox] session ${sessionId} close error:`, err);
-  } finally {
-    activeContext = null;
-    openingContext = null;
-    setSessionTools([]);
+    throw err;
   }
+
+  if (activeContext === ctx) {
+    activeContext = null;
+  }
+  openingContext = null;
+  setSessionTools([]);
 
   return create(KillSessionResponseSchema, { finalStatus: 'killed' });
 }

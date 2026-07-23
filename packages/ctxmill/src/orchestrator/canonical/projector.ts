@@ -1,4 +1,5 @@
 import type { EventMap } from '../../events/bus.js';
+import { materializeTurnUsage } from '../usage.js';
 import { classifyChannel, type CanonicalFrame } from './frames.js';
 
 interface A2UIRenderBlock {
@@ -209,7 +210,7 @@ export class CanonicalProjector {
           runId: p.turnId,
           threadId: p.conversationId,
           status: p.status,
-          ...(p.usage ? { usage: p.usage } : {}),
+          usage: materializeTurnUsage(p.usage),
           timestamp: p.timestamp,
         }));
         return frames;
@@ -230,7 +231,9 @@ export class CanonicalProjector {
             return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
               ...identity,
               ...(typeof event.status === 'string' ? { status: event.status } : {}),
-              ...(isRecord(event.usage) ? { usage: event.usage } : {}),
+              usage: materializeTurnUsage(
+                isRecord(event.usage) ? event.usage : null,
+              ),
             })];
           case 'RUN_ERROR':
             return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {

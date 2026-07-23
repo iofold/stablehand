@@ -1,7 +1,9 @@
 import type {
   AgentResourceLimits,
+  BuiltinToolPolicy,
   ClaudeAgentsConfig,
   LangGraphConfig,
+  NativeToolPolicy,
   PIAgentConfig,
 } from '@ctxmill/contracts';
 
@@ -31,10 +33,8 @@ export interface ManifestInlineTool {
   input: Record<string, unknown>;
 }
 
-export interface ManifestNativeTools {
-  allowlist?: string[];
-  blocklist?: string[];
-}
+export type ManifestNativeToolPolicy = NativeToolPolicy;
+export type ManifestBuiltinToolPolicy = BuiltinToolPolicy;
 
 export interface ManifestTrigger {
   event?: string;
@@ -86,7 +86,8 @@ export type ManifestMode = 'interactive' | 'background' | 'both';
 interface ManifestSpecCommon {
   instructions: string;
   tools?: ManifestToolRef[];
-  nativeTools?: ManifestNativeTools;
+  builtinToolPolicy?: ManifestBuiltinToolPolicy;
+  nativeToolPolicy?: ManifestNativeToolPolicy;
   triggers?: ManifestTrigger[];
   emits?: ManifestEmit[];
   hitl?: ManifestHITL;

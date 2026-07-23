@@ -146,7 +146,7 @@ describe('GET /api/catalogs/tools', () => {
     expect(catalog).toContainEqual(expect.objectContaining({ name: composioTool, source: 'composio' }));
   });
 
-  it('includes HTTP tool names after creating an agent with httpTools', async () => {
+  it('keeps HTTP tool definitions separate while registering them in the catalog', async () => {
     const agentName = uniqueId('http-tools-agent');
     const httpToolName = uniqueId('remote-search');
 
@@ -175,7 +175,10 @@ describe('GET /api/catalogs/tools', () => {
     });
 
     expect(created.statusCode).toBe(201);
-    expect(created.json<{ tools: string[] }>().tools).toContain(httpToolName);
+    expect(created.json<{ tools: string[]; httpTools: Array<{ name: string }> }>()).toMatchObject({
+      tools: [],
+      httpTools: [{ name: httpToolName }],
+    });
 
     const catalog = await getCatalog();
     const httpTool = catalog.find((item) => item.name === httpToolName);

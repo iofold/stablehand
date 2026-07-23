@@ -42,10 +42,8 @@ export async function interruptRoutes(
     }
 
     if (attempt.status === 'pending') {
-      await db.failPendingInterruptResumeAttempt(
+      await db.failUnclaimedInterruptResumeAttempt(
         attempt.id,
-        attempt.updatedAt,
-        Math.max(Date.now(), attempt.updatedAt + 1),
         'Session resume service is not available',
       );
     }
@@ -152,7 +150,7 @@ export async function interruptRoutes(
       }
 
       const resolveAction: 'approve' | 'reject' = body.action === 'submit' ? 'approve' : body.action as 'approve' | 'reject';
-      const dbInterrupt = await db.getPendingInterrupt(body.interruptId);
+      const dbInterrupt = await db.getInterruptById(body.interruptId);
       const turnId = dbInterrupt?.turnId ?? interrupts.findTurnIdByInterruptId(body.interruptId);
 
       // Ownership (ctx-aac): a live in-memory interrupt for another agent must
@@ -187,11 +185,8 @@ export async function interruptRoutes(
             return acceptResumeAttempt(reply, existingResumeAttempt, resolveAction);
           }
           if (existingResumeAttempt?.status === 'failed') {
-            const retriedAt = Math.max(Date.now(), existingResumeAttempt.updatedAt + 1);
             let attempt = await db.retryFailedInterruptResumeAttempt(
               existingResumeAttempt.id,
-              existingResumeAttempt.updatedAt,
-              retriedAt,
             );
             if (!attempt) {
               const current = await db.getInterruptResumeAttemptForInterrupt(dbInterrupt.id);

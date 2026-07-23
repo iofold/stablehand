@@ -4,6 +4,7 @@ import type { Artifact } from '@/lib/api';
 import { useArtifactsStore } from '@/stores/artifacts';
 import { useAgentsStore } from '@/stores/agents';
 import { formatBytes } from '@/lib/format';
+import { downloadArtifact as downloadArtifactFile } from '@/lib/api';
 
 interface ArtifactRowProps {
   artifact: Artifact;
@@ -25,6 +26,8 @@ export function ArtifactRow({ artifact, isSelected, showAgentName = false }: Art
   const deleteArtifact = useArtifactsStore((s) => s.deleteArtifact);
   const agents = useAgentsStore((s) => s.agents);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const agentName = showAgentName
     ? agents.find((a) => a.id === artifact.agentId)?.name
@@ -33,9 +36,17 @@ export function ArtifactRow({ artifact, isSelected, showAgentName = false }: Art
     ? `${artifact.agentId.slice(0, 8)}...`
     : 'No agent';
 
-  const handleDownload = (e: React.MouseEvent) => {
+  const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    window.open(`/api/artifacts/${artifact.id}/download`, '_blank');
+    setIsDownloading(true);
+    setActionError(null);
+    try {
+      await downloadArtifactFile(artifact.id, artifact.name);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   const handleDelete = async (e: React.MouseEvent) => {
@@ -43,11 +54,11 @@ export function ArtifactRow({ artifact, isSelected, showAgentName = false }: Art
     if (!window.confirm(`Are you sure you want to delete ${artifact.name}?`)) return;
     
     setIsDeleting(true);
+    setActionError(null);
     try {
       await deleteArtifact(artifact.id);
     } catch (err) {
-      console.error('Failed to delete artifact:', err);
-      alert('Failed to delete artifact');
+      setActionError(err instanceof Error ? err.message : String(err));
       setIsDeleting(false);
     }
   };
@@ -90,23 +101,32 @@ export function ArtifactRow({ artifact, isSelected, showAgentName = false }: Art
         {artifact.createdAt ? new Date(artifact.createdAt).toLocaleDateString() : 'Unknown'}
       </td>
       <td className="px-4 py-3">
-        <div className="flex items-center gap-2 justify-end">
-          <button
-            type="button"
-            onClick={handleDownload}
-            className="p-1.5 text-surface-400 hover:text-accent-400 hover:bg-surface-700 rounded transition-colors"
-            title="Download"
-          >
-            <Download className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={handleDelete}
-            className="p-1.5 text-surface-400 hover:text-red-400 hover:bg-surface-700 rounded transition-colors"
-            title="Delete"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2 justify-end">
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={isDownloading || isDeleting}
+              className="p-1.5 text-surface-400 hover:text-accent-400 hover:bg-surface-700 rounded transition-colors"
+              title={isDownloading ? 'Downloading' : 'Download'}
+            >
+              <Download className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={isDeleting || isDownloading}
+              className="p-1.5 text-surface-400 hover:text-red-400 hover:bg-surface-700 rounded transition-colors"
+              title="Delete"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+          {actionError && (
+            <p role="alert" className="max-w-48 text-right text-xs text-red-300">
+              {actionError}
+            </p>
+          )}
         </div>
       </td>
     </tr>

@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseRepository } from '../database/repository.js';
-import type { EventFrameRow, TurnSelect } from '../database/types.js';
-import type { EventMap, TypedEventBus } from '../events/bus.js';
-import { unrefTimer } from '../util/timing.js';
+import type { TurnSelect } from '../database/types.js';
+import type {
+  EventMap,
+  EventPersistenceContext,
+  TypedEventBus,
+} from '../events/bus.js';
 import {
   publishMessageCanonicalState,
 } from './message-publisher.js';
@@ -13,6 +16,12 @@ import {
   TURN_ERROR_ORCHESTRATOR_RESTART,
   type TurnFinalizer,
 } from './turn-finalizer.js';
+import {
+  acquireSandboxSessionLifecycleOperation,
+  type SandboxSessionLifecycleOperationGuard,
+} from './sandbox-session-lifecycle-operation.js';
+import type { TurnDeliveryFence } from './turn-delivery-fence.js';
+import { acquireTurnDeliveryLease } from './turn-delivery-lease.js';
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -26,12 +35,17 @@ interface TurnReconcilerDeps {
     | 'getOpenTurnsStartedBefore'
     | 'getPendingInterruptForTurn'
     | 'getMessages'
-    | 'getTurnFrames'
     | 'stageAssistantMessageUpdate'
-    | 'claimTurnReconciliationLease'
-    | 'renewTurnReconciliationLease'
-    | 'authorizeQueuedTurnRedispatch'
-    | 'releaseTurnReconciliationLease'
+    | 'claimTurnDeliveryLease'
+    | 'renewTurnDeliveryLease'
+    | 'isTurnDeliveryFenceCurrent'
+    | 'wasTurnFinalizedByDeliveryFence'
+    | 'releaseTurnDeliveryLease'
+    | 'getSandboxSession'
+    | 'claimSandboxSessionLifecycleOperation'
+    | 'renewSandboxSessionLifecycleOperation'
+    | 'markSandboxSessionLifecycleOperationExecuting'
+    | 'cancelSandboxSessionLifecycleOperation'
   >;
   eventBus: Pick<TypedEventBus, 'emitAsync'>;
   finalizer: TurnFinalizer;
@@ -40,7 +54,10 @@ interface TurnReconcilerDeps {
     params: RedispatchQueuedTurnParams,
     signal: AbortSignal,
   ) => Promise<void>;
-  resetStrandedSession?: (sessionId: string) => Promise<void>;
+  resetStrandedSession?: (
+    sessionId: string,
+    lifecycleOperation: SandboxSessionLifecycleOperationGuard,
+  ) => Promise<void>;
 }
 
 interface TurnReconciliationResult {
@@ -70,6 +87,12 @@ export interface ConversationToolCallRepairDeps {
   logger: Logger;
 }
 
+interface ConversationToolCallRepairOptions {
+  turnId: string;
+  deliveryFence: TurnDeliveryFence;
+  signal?: AbortSignal;
+}
+
 const TAG = '[TurnReconciler]';
 const DEFAULT_RECONCILIATION_LEASE_MS = 60_000;
 const DEFAULT_RECONCILIATION_HEARTBEAT_MS = 20_000;
@@ -78,30 +101,13 @@ type ToolCallish = { status?: unknown; error?: unknown; type?: unknown };
 
 interface QueuedRedispatchCandidate {
   turn: TurnSelect;
-  params: RedispatchQueuedTurnParams;
-  republishUserMessage: EventMap['user.message'] | null;
+  params: Omit<RedispatchQueuedTurnParams, 'deliveryContext'>;
+  recoveryUserMessage?: EventMap['user.message'];
   order: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function hasDurableUserMessage(frames: EventFrameRow[], messageId: string): boolean {
-  return frames.some((frame) => {
-    if (frame.sourceType === 'user.message') {
-      return true;
-    }
-    if (frame.type !== 'TEXT_MESSAGE_START') {
-      return false;
-    }
-    try {
-      const payload = JSON.parse(frame.payload) as unknown;
-      return isRecord(payload) && payload.role === 'user' && payload.messageId === messageId;
-    } catch {
-      return false;
-    }
-  });
 }
 
 /** Mark still-running tool-call entries as errored; returns the repaired array or null when untouched. */
@@ -142,7 +148,7 @@ export async function reconcileStrandedTurnsOnStartup(
     now: options.now ?? Date.now,
   };
   if (leaseContext.leaseMs <= 0 || leaseContext.heartbeatMs <= 0) {
-    throw new Error('Turn reconciliation lease and heartbeat durations must be positive');
+    throw new Error('Turn delivery lease and heartbeat durations must be positive');
   }
   if (leaseContext.heartbeatMs >= leaseContext.leaseMs) {
     throw new Error('Turn reconciliation heartbeat must be shorter than its lease');
@@ -154,7 +160,6 @@ export async function reconcileStrandedTurnsOnStartup(
   let redispatched = 0;
   const strandedTurns: TurnSelect[] = [];
   const queuedCandidates: QueuedRedispatchCandidate[] = [];
-  const strandedSessionIds = new Set<string>();
 
   for (const turn of openTurns) {
     try {
@@ -165,7 +170,7 @@ export async function reconcileStrandedTurnsOnStartup(
         continue;
       }
 
-      if (turn.status === 'queued' && deps.redispatchQueuedTurn) {
+      if (deps.redispatchQueuedTurn && turn.status === 'queued') {
         const queuedCandidate = await buildQueuedRedispatchCandidate(deps, turn);
         if (queuedCandidate) {
           queuedCandidates.push(queuedCandidate);
@@ -181,16 +186,91 @@ export async function reconcileStrandedTurnsOnStartup(
 
   for (const turn of strandedTurns) {
     try {
-      const outcome = await withTurnReconciliationLease(
+      const outcome = await withTurnDeliveryLease(
         deps,
         turn.id,
         leaseContext,
-        async () => {
-          const finalized = await failStrandedTurn(deps, turn);
-          if (finalized && turn.status !== 'queued' && turn.sandboxSessionId) {
-            strandedSessionIds.add(turn.sandboxSessionId);
+        async (signal, fence) => {
+          const shouldResetSession = Boolean(
+            deps.resetStrandedSession
+            && turn.status !== 'queued'
+            && turn.sandboxSessionId,
+          );
+          const observedSession = shouldResetSession
+            ? await deps.db.getSandboxSession(turn.sandboxSessionId!)
+            : undefined;
+          const lifecycleOperation =
+            shouldResetSession
+            && observedSession?.status === 'ACTIVE'
+              ? await acquireSandboxSessionLifecycleOperation(
+                  { db: deps.db, logger: deps.logger },
+                  observedSession.id,
+                  'reset',
+                  {
+                    expectedActiveGeneration: {
+                      restoreFenceToken: observedSession.restoreFenceToken,
+                      containerId: observedSession.containerId,
+                    },
+                    allowedTurnDelivery: {
+                      turnId: turn.id,
+                      fence,
+                    },
+                  },
+                )
+              : undefined;
+          if (
+            shouldResetSession
+            && !lifecycleOperation
+          ) {
+            deps.logger.info(
+              `${TAG} sandbox session ${turn.sandboxSessionId} is owned by ` +
+              'another lifecycle worker; leaving its stranded turn open',
+            );
+            return false;
           }
-          return finalized;
+
+          try {
+            const finalized = await failStrandedTurn(
+              deps,
+              turn,
+              TURN_ERROR_ORCHESTRATOR_RESTART,
+              {
+                signal,
+                fence,
+                ...(lifecycleOperation && turn.sandboxSessionId
+                  ? {
+                      lifecycleReset: {
+                        sandboxSessionId: turn.sandboxSessionId,
+                        fence: lifecycleOperation.fence,
+                      },
+                    }
+                  : {}),
+              },
+            );
+            if (finalized && lifecycleOperation && turn.sandboxSessionId) {
+              if (!await lifecycleOperation.markExecuting()) {
+                throw new Error(
+                  `Sandbox lifecycle reset ${turn.sandboxSessionId} ` +
+                  'lost ownership after stranded turn finalization',
+                );
+              }
+              try {
+                await deps.resetStrandedSession!(
+                  turn.sandboxSessionId,
+                  lifecycleOperation,
+                );
+              } catch (err) {
+                deps.logger.error(
+                  `${TAG} failed to reset stranded session ` +
+                  `${turn.sandboxSessionId}:`,
+                  err,
+                );
+              }
+            }
+            return finalized;
+          } finally {
+            await lifecycleOperation?.stop();
+          }
         },
       );
       if (outcome.claimed && outcome.value) {
@@ -202,8 +282,6 @@ export async function reconcileStrandedTurnsOnStartup(
       deps.logger.error(`${TAG} failed to finalize stranded turn ${turn.id}:`, err);
     }
   }
-
-  await resetStrandedSessions(deps, strandedSessionIds);
 
   const redispatchComplete = processQueuedRedispatches(deps, queuedCandidates, leaseContext, {
     onRedispatched: () => {
@@ -227,24 +305,37 @@ export async function reconcileStrandedTurnsOnStartup(
 export async function repairConversationRunningToolCalls(
   deps: ConversationToolCallRepairDeps,
   conversationId: string,
+  options: ConversationToolCallRepairOptions,
 ): Promise<void> {
   const messages = await deps.db.getMessages(conversationId);
   if (!Array.isArray(messages)) {
     return;
   }
   for (const message of messages) {
+    if (message.turnId !== options.turnId) {
+      continue;
+    }
     const repairedToolCalls = repairRunningEntries(message.toolCalls, false);
     const repairedParts = repairRunningEntries(message.parts, true);
     if (repairedToolCalls || repairedParts) {
+      options.signal?.throwIfAborted();
       const updated = await deps.db.stageAssistantMessageUpdate(
         message.id,
         repairedToolCalls,
         repairedParts,
+        options.deliveryFence,
       );
       if (!updated) {
-        throw new Error(`Assistant message ${message.id} disappeared during tool-state repair`);
+        throw new Error(
+          `Turn ${options.turnId} lost delivery ownership during tool-state repair`,
+        );
       }
-      await publishMessageCanonicalState(deps, updated);
+      options.signal?.throwIfAborted();
+      const persistenceContext: EventPersistenceContext = {
+        deliveryFence: options.deliveryFence,
+      };
+      await publishMessageCanonicalState(deps, updated, persistenceContext);
+      options.signal?.throwIfAborted();
     }
   }
 }
@@ -266,10 +357,8 @@ async function buildQueuedRedispatchCandidate(
   }
 
   const userMessage = messages[userMessageIndex]!;
-  const frames = await deps.db.getTurnFrames(turn.id);
-  const emitTurnStarted = !frames.some((frame) => frame.type === 'RUN_STARTED');
   const messagesForTurn = messages.slice(0, userMessageIndex + 1);
-  const republishUserMessage = turn.mode !== 'background' && !hasDurableUserMessage(frames, turn.userMessageId)
+  const recoveryUserMessage = turn.mode !== 'background'
     ? {
         turnId: turn.id,
         agentId: turn.agentId,
@@ -278,12 +367,12 @@ async function buildQueuedRedispatchCandidate(
         content: userMessage.content,
         timestamp: userMessage.createdAt,
       }
-    : null;
+    : undefined;
 
   return {
     turn,
     order: userMessageIndex,
-    republishUserMessage,
+    ...(recoveryUserMessage ? { recoveryUserMessage } : {}),
     params: {
       turnId: turn.id,
       agentId: turn.agentId,
@@ -292,7 +381,6 @@ async function buildQueuedRedispatchCandidate(
       taskDescription: turn.taskDescription ?? messages[userMessageIndex]?.content ?? '',
       userMessageId: turn.userMessageId,
       messages: mapMessagesToInternal(messagesForTurn, turn.agentId),
-      emitTurnStarted,
     },
   };
 }
@@ -301,10 +389,30 @@ async function failStrandedTurn(
   deps: TurnReconcilerDeps,
   turn: TurnSelect,
   error = TURN_ERROR_ORCHESTRATOR_RESTART,
+  ownership?: {
+    signal: AbortSignal;
+    fence: TurnDeliveryFence;
+    lifecycleReset?: {
+      sandboxSessionId: string;
+      fence: {
+        ownerId: string;
+        fenceToken: number;
+      };
+    };
+  },
 ): Promise<boolean> {
+  ownership?.signal.throwIfAborted();
   if (turn.conversationId) {
-    await repairConversationRunningToolCalls(deps, turn.conversationId);
+    if (!ownership) {
+      throw new Error(`Stranded turn ${turn.id} repair requires delivery ownership`);
+    }
+    await repairConversationRunningToolCalls(deps, turn.conversationId, {
+      turnId: turn.id,
+      deliveryFence: ownership.fence,
+      signal: ownership.signal,
+    });
   }
+  ownership?.signal.throwIfAborted();
 
   const result = await deps.finalizer.finalize({
     turnId: turn.id,
@@ -314,25 +422,12 @@ async function failStrandedTurn(
     status: 'error',
     error,
     durationMs: Date.now() - turn.startedAt,
+    ...(ownership ? { expectedDeliveryFence: ownership.fence } : {}),
+    ...(ownership?.lifecycleReset
+      ? { lifecycleReset: ownership.lifecycleReset }
+      : {}),
   });
   return result.finalized;
-}
-
-async function resetStrandedSessions(
-  deps: TurnReconcilerDeps,
-  sessionIds: ReadonlySet<string>,
-): Promise<void> {
-  if (!deps.resetStrandedSession || sessionIds.size === 0) {
-    return;
-  }
-
-  await Promise.all(Array.from(sessionIds).map(async (sessionId) => {
-    try {
-      await deps.resetStrandedSession!(sessionId);
-    } catch (err) {
-      deps.logger.error(`${TAG} failed to reset stranded session ${sessionId}:`, err);
-    }
-  }));
 }
 
 async function processQueuedRedispatches(
@@ -368,30 +463,42 @@ async function processQueuedRedispatches(
         continue;
       }
       try {
-        const outcome = await withTurnReconciliationLease(
+        const outcome = await withTurnDeliveryLease(
           deps,
           candidate.turn.id,
           leaseContext,
-          async (signal) => {
-            const authorized = await deps.db.authorizeQueuedTurnRedispatch(
-              candidate.turn.id,
-              leaseContext.ownerId,
-              leaseContext.now(),
-            );
-            if (!authorized) {
-              deps.logger.info(
-                `${TAG} queued turn ${candidate.turn.id} lost fenced redispatch authorization`,
-              );
-              return false;
-            }
+          async (signal, fence) => {
             try {
               signal.throwIfAborted();
-              if (candidate.republishUserMessage) {
-                await deps.eventBus.emitAsync('user.message', candidate.republishUserMessage);
+              await deps.redispatchQueuedTurn!({
+                ...candidate.params,
+                deliveryContext: {
+                  fence,
+                  ...(candidate.recoveryUserMessage
+                    ? { userMessage: candidate.recoveryUserMessage }
+                    : {}),
+                },
+              }, signal);
+              const fenceStillCurrent = !signal.aborted
+                && await deps.db.isTurnDeliveryFenceCurrent(
+                  candidate.turn.id,
+                  fence,
+                );
+              if (!fenceStillCurrent) {
+                const finalizedByFence =
+                  await deps.db.wasTurnFinalizedByDeliveryFence(
+                    candidate.turn.id,
+                    fence,
+                  );
+                if (!finalizedByFence) {
+                  deps.logger.warn(
+                    signal.aborted
+                      ? `${TAG} queued turn ${candidate.turn.id} redispatch stopped after lease loss`
+                      : `${TAG} queued turn ${candidate.turn.id} lost its fence before redispatch completed`,
+                  );
+                  return false;
+                }
               }
-              signal.throwIfAborted();
-              await deps.redispatchQueuedTurn!(candidate.params, signal);
-              signal.throwIfAborted();
               callbacks.onRedispatched();
               return true;
             } catch (err) {
@@ -403,7 +510,10 @@ async function processQueuedRedispatches(
               }
               deps.logger.error(`${TAG} queued turn ${candidate.turn.id} redispatch failed:`, err);
               const errorMessage = err instanceof Error ? err.message : String(err);
-              const finalized = await failStrandedTurn(deps, candidate.turn, errorMessage);
+              const finalized = await failStrandedTurn(deps, candidate.turn, errorMessage, {
+                signal,
+                fence,
+              });
               if (finalized) {
                 callbacks.onFailed();
               }
@@ -427,111 +537,35 @@ async function processQueuedRedispatches(
   }));
 }
 
-async function withTurnReconciliationLease<T>(
+async function withTurnDeliveryLease<T>(
   deps: TurnReconcilerDeps,
   turnId: string,
   context: TurnLeaseContext,
-  action: (signal: AbortSignal) => Promise<T>,
+  action: (
+    signal: AbortSignal,
+    fence: TurnDeliveryFence,
+  ) => Promise<T>,
 ): Promise<{ claimed: false } | { claimed: true; value: T }> {
-  const claimedAt = context.now();
-  const claimed = await deps.db.claimTurnReconciliationLease({
+  const lease = await acquireTurnDeliveryLease(
+    { db: deps.db, logger: deps.logger },
     turnId,
-    ownerId: context.ownerId,
-    claimedAt,
-    leaseExpiresAt: claimedAt + context.leaseMs,
-  });
-  if (!claimed) {
+    {
+      ownerId: context.ownerId,
+      leaseMs: context.leaseMs,
+      heartbeatMs: context.heartbeatMs,
+      now: context.now,
+    },
+  );
+  if (!lease) {
     return { claimed: false };
   }
 
-  const leaseAbortController = new AbortController();
-  let leaseExpiresAt = claimed.leaseExpiresAt;
-  let stopped = false;
-  let renewalInFlight = false;
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const loseLease = (message: string, cause?: unknown) => {
-    if (leaseAbortController.signal.aborted) {
-      return;
-    }
-    const error = new Error(message, cause === undefined ? undefined : { cause });
-    leaseAbortController.abort(error);
-    deps.logger.warn(`${TAG} ${message}`);
-  };
-
-  const armExpiryWatchdog = () => {
-    if (stopped || leaseAbortController.signal.aborted) {
-      return;
-    }
-    if (expiryTimer) {
-      clearTimeout(expiryTimer);
-    }
-    const remainingMs = leaseExpiresAt - context.now();
-    if (remainingMs <= 0) {
-      loseLease(`reconciliation lease expired for turn ${turnId}`);
-      return;
-    }
-    expiryTimer = setTimeout(() => {
-      expiryTimer = undefined;
-      if (context.now() >= leaseExpiresAt) {
-        loseLease(`reconciliation lease expired for turn ${turnId}`);
-        return;
-      }
-      armExpiryWatchdog();
-    }, remainingMs);
-    unrefTimer(expiryTimer);
-  };
-
-  armExpiryWatchdog();
-  const heartbeat = setInterval(() => {
-    if (stopped || renewalInFlight || leaseAbortController.signal.aborted) {
-      return;
-    }
-    renewalInFlight = true;
-    const renewedAt = context.now();
-    void deps.db.renewTurnReconciliationLease(
-      turnId,
-      context.ownerId,
-      renewedAt,
-      renewedAt + context.leaseMs,
-    ).then((renewed) => {
-      if (!renewed && !stopped) {
-        loseLease(`lost reconciliation lease for turn ${turnId}`);
-        return;
-      }
-      if (renewed) {
-        leaseExpiresAt = renewed.leaseExpiresAt;
-        armExpiryWatchdog();
-      }
-    }).catch((err: unknown) => {
-      if (!stopped) {
-        deps.logger.warn(`${TAG} failed to renew reconciliation lease for turn ${turnId}:`, err);
-        if (context.now() >= leaseExpiresAt) {
-          loseLease(`reconciliation lease expired for turn ${turnId}`, err);
-        }
-      }
-    }).finally(() => {
-      renewalInFlight = false;
-    });
-  }, context.heartbeatMs);
-  unrefTimer(heartbeat);
-
   try {
-    return { claimed: true, value: await action(leaseAbortController.signal) };
+    return {
+      claimed: true,
+      value: await action(lease.signal, lease.fence),
+    };
   } finally {
-    stopped = true;
-    clearInterval(heartbeat);
-    if (expiryTimer) {
-      clearTimeout(expiryTimer);
-      expiryTimer = undefined;
-    }
-    try {
-      await deps.db.releaseTurnReconciliationLease(turnId, context.ownerId);
-    } catch (err) {
-      deps.logger.warn(
-        `${TAG} failed to release reconciliation lease for turn ${turnId}; it will expire:`,
-        err,
-      );
-    }
+    await lease.release();
   }
 }

@@ -111,8 +111,9 @@ spec:
     - ref: read-file
     - ref: list-directory
     - ref: search-files
-  nativeTools:
-    blocklist:
+  nativeToolPolicy:
+    policy: deny
+    names:
       - execute
   mode: interactive
 `,

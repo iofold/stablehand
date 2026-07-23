@@ -1,6 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TurnSchema } from '@ctxmill/contracts';
 
 import { AgentTurnsTab } from './AgentTurnsTab';
 import { restoreSandboxSession } from '@/lib/api';
@@ -23,8 +24,8 @@ async function flushEffects(): Promise<void> {
   });
 }
 
-function makeTurn(overrides: Partial<AgentTurn> = {}): AgentTurn {
-  return {
+function makeTurn(overrides: Record<string, unknown> = {}): AgentTurn {
+  return TurnSchema.parse({
     id: 'turn-1',
     agentId: 'agent-1',
     conversationId: 'conv-1',
@@ -33,8 +34,9 @@ function makeTurn(overrides: Partial<AgentTurn> = {}): AgentTurn {
     startedAt: 1_700_000_000_000,
     completedAt: 1_700_000_001_000,
     conversationMessageCount: 1,
+    usage: null,
     ...overrides,
-  } as AgentTurn;
+  });
 }
 
 describe('AgentTurnsTab error vs empty', () => {
@@ -162,6 +164,41 @@ describe('AgentTurnsTab error vs empty', () => {
       .map((cell) => cell.textContent?.trim() ?? '');
     expect(cells).toContain('3');
     expect(cells).not.toContain('6');
+  });
+
+  it('distinguishes pending conversation cost from a complete zero-cost turn', () => {
+    const turns = [
+      makeTurn({
+        usage: {
+          inputTokens: 120,
+          outputTokens: 30,
+          totalTokens: 150,
+          modelCalls: { observed: 1, costKnown: 0, expected: 1 },
+          cost: { totalUsd: null, knownUsd: 0, coverage: 'pending' },
+        },
+      }),
+    ];
+
+    act(() => {
+      root.render(
+        <AgentTurnsTab
+          turns={turns}
+          loading={false}
+          filter="all"
+          onFilterChange={() => undefined}
+          agentId="agent-1"
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain('Cost pending');
+
+    const firstRow = container.querySelector('tbody tr') as HTMLElement | null;
+    act(() => {
+      firstRow!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.querySelector('[data-testid="turn-cost"]')?.textContent).toBe('Cost pending');
   });
 });
 

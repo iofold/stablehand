@@ -13,6 +13,7 @@ import type { LocalFunctionExecutor } from '../../tool/executor.js';
 import type { DefaultToolRegistry } from '../../tool/registry.js';
 import type { ToolContext } from '@ctxmill/sandbox-daemon';
 import type { DatabaseRepository } from '../../database/repository.js';
+import type { GrpcCallbackAuthConfig } from './callback-auth.js';
 import {
   createOrchestratorServiceImpl,
   DefaultOrchestratorToolRegistry,
@@ -27,7 +28,8 @@ export interface GrpcRouterOptions {
   interruptManager?: InterruptManager;
   toolExecutor?: LocalFunctionExecutor;
   toolDefinitionRegistry?: DefaultToolRegistry;
-  repository?: DatabaseRepository;
+  repository: DatabaseRepository;
+  callbackAuthConfig?: GrpcCallbackAuthConfig;
 }
 
 export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRouter) => void {
@@ -37,6 +39,9 @@ export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRoute
     agentId: grpcCtx.agentId,
     conversationId: grpcCtx.conversationId ?? '',
     turnId: grpcCtx.turnId,
+    ...(grpcCtx.sandboxSessionId
+      ? { sandboxSessionId: grpcCtx.sandboxSessionId }
+      : {}),
     requestId: grpcCtx.requestId,
     workspaceDir: '/workspace',
     eventBus,
@@ -60,6 +65,7 @@ export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRoute
     eventBus,
     toolRegistry,
     repository: opts.repository,
+    callbackAuthConfig: opts.callbackAuthConfig,
   });
 
   return (router: ConnectRouter) => {

@@ -8,7 +8,7 @@
   - `GET /api/agents/:id/stream` uses `text/event-stream`
   - `POST /api/agents/:id/workspace` expects `application/gzip` or `application/x-gzip`
 - **Authentication:** HTTP API routes are protected by a static bearer token when `CTXMILL_API_TOKEN` is set. Production startup fails without that token unless `CTXMILL_AUTH_DISABLED=true` is explicitly set.
-- **Shared TypeScript types:** CTXMill exports API and streaming types from `@ctxmill/shared` (for example `ApiAgent`, `ApiAgentTurn`, `ApiMessage`, `AgentSessionEvent`, `MessageCommittedEvent`).
+- **Canonical API contracts:** CTXMill exports strict schemas and inferred types from `@ctxmill/contracts` (for example `AgentSchema`, `TurnSchema`, `ConversationSummarySchema`, `Agent`, and `Turn`). Streaming-only types remain in `@ctxmill/shared`.
 
 ### Authentication
 
@@ -37,7 +37,7 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | GET | `/api/agents` | List agents |
 | POST | `/api/agents` | Create agent |
 | GET | `/api/agents/:id` | Get agent detail |
-| PUT | `/api/agents/:id` | Update agent |
+| PATCH | `/api/agents/:id` | Update agent |
 | DELETE | `/api/agents/:id` | Delete agent |
 | **Agent Execution** |  |  |
 | POST | `/api/agents/:id/message` | Send interactive message |
@@ -76,11 +76,10 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | **Webhooks** |  |  |
 | GET | `/api/agents/:id/webhooks` | List webhooks |
 | POST | `/api/agents/:id/webhooks` | Create webhook |
-| PUT | `/api/agents/:id/webhooks/:webhookId` | Update webhook |
+| PATCH | `/api/agents/:id/webhooks/:webhookId` | Update webhook |
 | DELETE | `/api/agents/:id/webhooks/:webhookId` | Delete webhook |
 | **Feedback** |  |  |
 | POST | `/api/agents/:id/feedback` | Submit thumbs-up/thumbs-down feedback |
-| GET | `/api/agents/:id/versions` | List stored agent versions |
 | **Settings** |  |  |
 | GET | `/api/settings` | Get system settings |
 | PUT | `/api/settings` | Update system settings |
@@ -171,7 +170,7 @@ Also used by specific file/workspace endpoints:
 
 Useful exported types from `@ctxmill/shared`:
 
-- API resources: `ApiAgent`, `ApiAgentTurn`, `ApiMessage`
+- API resources: `Agent`, `Turn`, `ConversationSummary`, `Message`
 - Streaming: `AgentSessionEvent`, `AgentSessionEventType`, `MessageCommittedEvent`
 
 ### Validation ranges
@@ -278,17 +277,7 @@ Per-agent sandbox resource limits:
       "CHECKPOINTED": 0,
       "RESTORING": 0,
       "TERMINATED": 0
-    },
-    "recentTurns": [
-      {
-        "id": "turn_123",
-        "agentId": "agent_123",
-        "conversationId": "conv_123",
-        "status": "running",
-        "mode": "interactive",
-        "startedAt": 1712140000000
-      }
-    ]
+    }
   }
 ]
 ```
@@ -380,14 +369,13 @@ Per-agent sandbox resource limits:
     "CHECKPOINTED": 0,
     "RESTORING": 0,
     "TERMINATED": 0
-  },
-  "recentTurns": []
+  }
 }
 ```
 
 - **Notes:** `404` if the agent does not exist.
 
-#### `PUT /api/agents/:id`
+#### `PATCH /api/agents/:id`
 
 - **Description:** Updates mutable agent fields.
 - **Request body:** any subset of the create fields.
@@ -494,7 +482,10 @@ Per-agent sandbox resource limits:
 
 - **Notes:**
   - Updates the agent status to `running` and returns before the run completes.
-  - `sandboxSecrets` is optional and memory-only for the created turn. Values are merged into the sandbox container environment for the initial sandbox-session start, override same-named stored agent/env secrets for that turn, and are not written to task messages, checkpoints, or agent records.
+  - `sandboxSecrets` is optional and scoped to the created turn. CTXMill carries the exact map on that turn's `DeliverTurn` RPC as immutable harness context. Harness adapters pass it explicitly to the relevant model or child-process environment without mutating the daemon's stable process environment.
+  - To support queued restart and checkpointed HITL continuation, CTXMill retains an authenticated encrypted envelope while the turn is open and deletes it atomically when terminal finalization succeeds. Plaintext is never written to task messages, agent records, container startup configuration, events, or checkpoints.
+  - Use per-agent stored secrets for model/provider credentials initialized when a persistent harness session opens. Use per-turn values for short-lived integration credentials consumed by that turn.
+  - `CTXMILL_*`, `ORCHESTRATOR_URL`, `SANDBOX_PORT`, `PTC_PORT`, and `NODE_OPTIONS` are reserved runtime controls and are rejected.
 
 #### `POST /api/agents/:id/turns/:turnId/cancel`
 
@@ -1074,7 +1065,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Notes:** Returns only active webhooks.
 
-#### `PUT /api/agents/:id/webhooks/:webhookId`
+#### `PATCH /api/agents/:id/webhooks/:webhookId`
 
 - **Description:** Updates a webhook subscription for the agent.
 - **Request body:**
@@ -1126,30 +1117,6 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 ```
 
 - **Notes:** The endpoint does not persist feedback analytics or run an in-process learner. Register a webhook for `feedback.received` when an external learning service needs the signal.
-
-#### `GET /api/agents/:id/versions`
-
-- **Description:** Lists stored versions of an agent manifest.
-- **Query params:** None.
-- **Response:**
-
-```json
-{
-  "versions": [
-    {
-      "id": "ver_123",
-      "agentId": "agent_123",
-      "version": 3,
-      "manifest": { "spec": { "instructions": "..." } },
-      "changedBy": "user",
-      "changeNote": "Tuned instructions",
-      "createdAt": 1712140000000
-    }
-  ]
-}
-```
-
-- **Notes:** Useful for configuration audit trails.
 
 ### l. Settings (`/api/settings`)
 

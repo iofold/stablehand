@@ -4,7 +4,8 @@ import {
   DeliverTurnRequestSchema,
   FreshBootstrapSchema,
   MessageSchema,
-  NativeToolConfigSchema,
+  NativeToolPolicy,
+  NativeToolPolicyConfigSchema,
   PendingRequestSchema,
   RestoreBootstrapSchema,
   RunnerStateSchema,
@@ -12,6 +13,7 @@ import {
   ToolCallSchema,
   ToolLocation,
   ToolMetadataSchema,
+  TurnDeliveryCapabilitySchema,
   WorkspaceRefSchema,
   type AgentEvent as ProtoAgentEvent,
   type DeliverTurnRequest,
@@ -225,22 +227,48 @@ describe('protoFreshBootstrapToSessionConfig', () => {
     expect(config.harnessConfigJson).toBe('');
   });
 
-  it('preserves the canonical native-tool policy', () => {
+  it.each([
+    ['all', NativeToolPolicy.ALL, [], { policy: 'all' }],
+    ['allow', NativeToolPolicy.ALLOW, ['Read', 'Glob'], { policy: 'allow', names: ['Read', 'Glob'] }],
+    ['deny', NativeToolPolicy.DENY, ['Bash'], { policy: 'deny', names: ['Bash'] }],
+    ['none', NativeToolPolicy.NONE, [], { policy: 'none' }],
+  ])('preserves the canonical %s native-tool policy', (_label, policy, names, expected) => {
     const config = protoFreshBootstrapToSessionConfig(
       makeFreshBootstrap({
-        nativeTools: create(NativeToolConfigSchema, {
-          allowlist: ['Read', 'Glob'],
-          blocklist: ['Bash'],
+        nativeToolPolicy: create(NativeToolPolicyConfigSchema, {
+          policy,
+          names,
         }),
       }),
       [],
       {},
     );
 
-    expect(config.nativeTools).toEqual({
-      allowlist: ['Read', 'Glob'],
-      blocklist: ['Bash'],
-    });
+    expect(config.nativeToolPolicy).toEqual(expected);
+  });
+
+  it('rejects an unspecified native-tool policy instead of guessing', () => {
+    expect(() => protoFreshBootstrapToSessionConfig(
+      makeFreshBootstrap({
+        nativeToolPolicy: create(NativeToolPolicyConfigSchema, {
+          policy: NativeToolPolicy.UNSPECIFIED,
+        }),
+      }),
+      [],
+      {},
+    )).toThrow('Native tool policy is unspecified');
+  });
+
+  it('rejects an unknown native-tool policy enum instead of dropping the policy', () => {
+    expect(() => protoFreshBootstrapToSessionConfig(
+      makeFreshBootstrap({
+        nativeToolPolicy: create(NativeToolPolicyConfigSchema, {
+          policy: 99 as NativeToolPolicy,
+        }),
+      }),
+      [],
+      {},
+    )).toThrow('Unknown native tool policy value: 99');
   });
 });
 
@@ -280,6 +308,9 @@ describe('protoDeliverTurnToInput', () => {
     const request: DeliverTurnRequest = create(DeliverTurnRequestSchema, {
       sessionId: 'session-123',
       turnId: 'turn-7',
+      turnSecrets: {
+        PILOT_TURN_OWNERSHIP_TOKEN: 'must-remain-outside-harness-input',
+      },
       messages: [
         create(MessageSchema, {
           id: 'msg-1',
@@ -336,6 +367,7 @@ describe('protoDeliverTurnToInput', () => {
       toolCallId: 'tc-1',
     });
     expect(input.messages[0].createdAt).toBeInstanceOf(Date);
+    expect(input).not.toHaveProperty('turnSecrets');
   });
 
   it('throws a descriptive error when tool call arguments are malformed JSON', () => {
@@ -792,6 +824,29 @@ describe('protoToToolDefs', () => {
     const registerArtifact = vi.fn<OrchestratorServiceClient['registerArtifact']>();
     const resolveArtifact = vi.fn<OrchestratorServiceClient['resolveArtifact']>();
     const client: OrchestratorServiceClient = { requestTool, registerArtifact, resolveArtifact };
+    const leaseExpiresAtMs = Date.now() + 60_000;
+    const deliveryContext = {
+      identity: {
+        turnId: 'run-123',
+        sandboxSessionId: 'sandbox-session-123',
+        agentId: 'agent-123',
+        ownerId: 'owner-123',
+        fenceToken: 1,
+        restoreFenceToken: 0,
+        containerId: 'container-123',
+      },
+      capability: create(TurnDeliveryCapabilitySchema, {
+        ownerId: 'owner-123',
+        fenceToken: 1n,
+        leaseExpiresAtMs: BigInt(leaseExpiresAtMs),
+        restoreFenceToken: 0n,
+        containerId: 'container-123',
+        agentId: 'agent-123',
+        signature: 'ctxmill-open-turn-delivery-capability-v1',
+      }),
+      leaseExpiresAtMs,
+      abortController: new AbortController(),
+    };
 
     const [definition] = protoToToolDefs(
       [
@@ -808,8 +863,11 @@ describe('protoToToolDefs', () => {
       ],
       {
         orchestratorClient: client,
-        turnId: 'run-123',
-        agentId: 'agent-123',
+        callbackRoute: {
+          sandboxSessionId: 'sandbox-session-123',
+          agentId: 'agent-123',
+          resolveDeliveryContext: () => deliveryContext,
+        },
       },
     );
 
@@ -821,6 +879,7 @@ describe('protoToToolDefs', () => {
     const [request] = requestTool.mock.calls[0] ?? [];
     expect(request).toMatchObject({
       turnId: 'run-123',
+      sandboxSessionId: 'sandbox-session-123',
       agentId: 'agent-123',
       toolName: 'emit-event',
       argsJson: '{"name":"turn.completed"}',

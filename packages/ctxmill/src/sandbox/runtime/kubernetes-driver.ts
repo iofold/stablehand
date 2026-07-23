@@ -4,6 +4,7 @@ import { request as httpsRequest } from 'node:https';
 import { dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import * as tar from 'tar-stream';
+import { RUNTIME_INSTANCE_TOKEN_ENV } from '@ctxmill/shared';
 
 import { hasStatusCode, statusCodeError } from '../../util/status-code-error.js';
 import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from '../container-scope.js';
@@ -52,6 +53,15 @@ interface KubeMetadata {
 
 interface KubePod {
   metadata?: KubeMetadata;
+  spec?: {
+    containers?: Array<{
+      name?: string;
+      env?: Array<{
+        name?: string;
+        value?: string;
+      }>;
+    }>;
+  };
   status?: {
     phase?: string;
     podIP?: string;
@@ -268,6 +278,20 @@ export class KubernetesContainerDriver {
     const pod = await this.findPodBySelector(`ctxmill.sandbox-session-id=${sessionId},${CONTAINER_SCOPE_LABEL}=${this.scopeId}`)
       ?? await this.findPodBySelector(`ctxmill.sandbox-session-id=${sessionId}`);
     return pod ? this.podToContainerInfo(this.jobNameFromPod(pod) ?? `ctxmill-sandbox-${sanitizeKubernetesName(sessionId)}`, pod) : null;
+  }
+
+  async getRuntimeInstanceToken(
+    containerId: string,
+  ): Promise<string | undefined> {
+    const pod = await this.findPod(containerId);
+    const sandboxContainer = pod?.spec?.containers?.find(
+      (container) => container.name === 'sandbox',
+    ) ?? pod?.spec?.containers?.[0];
+    const token = sandboxContainer?.env
+      ?.find((entry) => entry.name === RUNTIME_INSTANCE_TOKEN_ENV)
+      ?.value
+      ?.trim();
+    return token || undefined;
   }
 
   async listManagedContainers(): Promise<ContainerInfo[]> {

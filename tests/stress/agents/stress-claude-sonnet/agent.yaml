@@ -32,8 +32,9 @@ spec:
   tools:
     - ref: calculator
     - ref: emit-event
-  nativeTools:
-    allowlist:
+  nativeToolPolicy:
+    policy: allow
+    names:
       - Read
       - Write
       - Edit

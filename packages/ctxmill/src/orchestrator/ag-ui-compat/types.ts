@@ -16,6 +16,7 @@ export interface AGUIMessage {
   content?: string;
   name?: string;
   toolCallId?: string;
+  createdAt?: number;
 }
 
 export interface AGUITool {

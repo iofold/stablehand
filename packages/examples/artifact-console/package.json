@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ctxmill/contracts": "workspace:*",
     "@ctxmill/react": "workspace:*",
-    "@ctxmill/shared": "workspace:*",
     "clsx": "^2.1.0",
     "lucide-react": "^0.474.0",
     "react": "^19.0.0",

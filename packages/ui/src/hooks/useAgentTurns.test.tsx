@@ -1,11 +1,12 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { TurnSchema } from '@ctxmill/contracts';
 import { useAgentTurns } from './useAgentTurns';
 import type { AgentTurn } from '@/stores/agents';
 
-function makeTurn(overrides: Partial<AgentTurn>): AgentTurn {
-  return {
+function makeTurn(overrides: Record<string, unknown>): AgentTurn {
+  return TurnSchema.parse({
     id: 'turn-' + Math.random().toString(36).slice(2),
     agentId: 'agent-1',
     conversationId: 'conv-default',
@@ -13,8 +14,9 @@ function makeTurn(overrides: Partial<AgentTurn>): AgentTurn {
     mode: 'background',
     startedAt: 1_700_000_000_000,
     conversationMessageCount: 0,
+    usage: null,
     ...overrides,
-  } as AgentTurn;
+  });
 }
 
 interface ProbeProps {
@@ -86,7 +88,7 @@ describe('useAgentTurns filter normalization (ctx-u4p)', () => {
   it('matches uppercase ERROR to the lowercase "error" filter without synonym mapping', () => {
     const turns = [
       makeTurn({ status: 'ERROR', conversationId: 'a' }),
-      makeTurn({ status: 'failed' as never, conversationId: 'b' }),
+      makeTurn({ status: 'CANCELLED', conversationId: 'b' }),
       makeTurn({ status: 'COMPLETED', conversationId: 'c' }),
     ];
 

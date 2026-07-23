@@ -8,6 +8,7 @@ import { create } from '@bufbuild/protobuf';
 import { ConnectError, Code } from '@connectrpc/connect';
 import {
   RequestToolResponseSchema,
+  TurnDeliveryCapabilitySchema,
 } from '@ctxmill/proto/sandbox/v1';
 
 import {
@@ -47,6 +48,37 @@ function makeMockClient(
   };
 }
 
+function callbackRoute(turnId = 'run-1', agentId = 'agent-1') {
+  const leaseExpiresAtMs = Date.now() + 60_000;
+  const deliveryContext = {
+    identity: {
+      turnId,
+      sandboxSessionId: 'sandbox-session-1',
+      agentId,
+      ownerId: 'owner-1',
+      fenceToken: 1,
+      restoreFenceToken: 0,
+      containerId: 'container-1',
+    },
+    capability: create(TurnDeliveryCapabilitySchema, {
+      ownerId: 'owner-1',
+      fenceToken: 1n,
+      leaseExpiresAtMs: BigInt(leaseExpiresAtMs),
+      restoreFenceToken: 0n,
+      containerId: 'container-1',
+      agentId,
+      signature: 'ctxmill-open-turn-delivery-capability-v1',
+    }),
+    leaseExpiresAtMs,
+    abortController: new AbortController(),
+  };
+  return {
+    sandboxSessionId: 'sandbox-session-1',
+    agentId,
+    resolveDeliveryContext: () => deliveryContext,
+  };
+}
+
 /* -------------------------------------------------------------------------- */
 /*  createToolProxy                                                            */
 /* -------------------------------------------------------------------------- */
@@ -56,6 +88,29 @@ describe('createToolProxy', () => {
     vi.restoreAllMocks();
   });
 
+  it('sends the canonical sandbox callback identity with every tool request', async () => {
+    const client = makeMockClient();
+    const handler = createToolProxy(
+      'search',
+      client,
+      {
+        ...callbackRoute('turn-1'),
+      },
+      { retryDelays: [] },
+    );
+
+    await handler({});
+
+    expect(client.requestTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnId: 'turn-1',
+        sandboxSessionId: 'sandbox-session-1',
+        agentId: 'agent-1',
+      }),
+      expect.any(Object),
+    );
+  });
+
   it('sends a RequestTool RPC and returns the result', async () => {
     const client = makeMockClient({
       requestTool: vi.fn().mockResolvedValue(
@@ -63,7 +118,7 @@ describe('createToolProxy', () => {
       ),
     });
 
-    const handler = createToolProxy('search', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('search', client, callbackRoute(), {
       retryDelays: [],
     });
     const result = await handler({ query: 'hello' });
@@ -90,8 +145,7 @@ describe('createToolProxy', () => {
     const firstHandler = firstModule.createToolProxy(
       'emit-event',
       makeMockClient({ requestTool: firstRequestTool }),
-      'session-a',
-      'agent-1',
+      callbackRoute('turn-a'),
       { retryDelays: [] },
     );
     await firstHandler({ type: 'stress.tools.complete' });
@@ -104,8 +158,7 @@ describe('createToolProxy', () => {
     const secondHandler = secondModule.createToolProxy(
       'emit-event',
       makeMockClient({ requestTool: secondRequestTool }),
-      'session-b',
-      'agent-1',
+      callbackRoute('turn-b'),
       { retryDelays: [] },
     );
     await secondHandler({ type: 'stress.tools.complete' });
@@ -122,7 +175,7 @@ describe('createToolProxy', () => {
       ),
     });
 
-    const handler = createToolProxy('foo', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('foo', client, callbackRoute(), {
       retryDelays: [],
     });
     await expect(handler({})).rejects.toThrow('Unknown orchestrator tool: foo');
@@ -136,7 +189,7 @@ describe('createToolProxy', () => {
 
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, callbackRoute(), {
       retryDelays: [1, 1, 1], // Short delays for testing
     });
     const result = await handler({ type: 'test' });
@@ -151,7 +204,7 @@ describe('createToolProxy', () => {
 
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, callbackRoute(), {
       retryDelays: [1, 1], // 2 retries + 1 initial = 3 attempts
     });
     await expect(handler({ type: 'test' })).rejects.toThrow(
@@ -166,7 +219,7 @@ describe('createToolProxy', () => {
 
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('bad-tool', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('bad-tool', client, callbackRoute(), {
       retryDelays: [1, 1, 1],
     });
     await expect(handler({})).rejects.toThrow(/failed after/);
@@ -179,7 +232,7 @@ describe('createToolProxy', () => {
     );
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('tool', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('tool', client, callbackRoute(), {
       retryDelays: [],
     });
     await handler('already-json');
@@ -194,7 +247,7 @@ describe('createToolProxy', () => {
     );
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('tool', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('tool', client, callbackRoute(), {
       retryDelays: [],
     });
     await handler(undefined);
@@ -209,7 +262,7 @@ describe('createToolProxy', () => {
     );
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('tool', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('tool', client, callbackRoute(), {
       retryDelays: [],
     });
     await handler({ count: 9007199254740993n });
@@ -233,7 +286,7 @@ describe('HITL approval flow through proxy', () => {
     );
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('request-approval', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('request-approval', client, callbackRoute(), {
       retryDelays: [],
     });
 
@@ -253,7 +306,7 @@ describe('HITL approval flow through proxy', () => {
     );
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('request-approval', client, 'run-1', 'agent-1', {
+    const handler = createToolProxy('request-approval', client, callbackRoute(), {
       retryDelays: [],
     });
 

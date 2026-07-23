@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSSEConnection } from '@/lib/api';
-import { useSSE } from '@/lib/useSSE';
+import { useSSE, useSSEStatus } from '@/lib/useSSE';
 import { useConversationStore } from '@/stores/conversation';
 
 vi.mock('@/lib/api', async () => {
@@ -36,9 +36,10 @@ function Harness({
 }: {
   enabled?: boolean;
   eventCursor?: string;
-}): null {
+}) {
   useSSE('agent-1', { enabled, eventCursor });
-  return null;
+  const status = useSSEStatus();
+  return <span data-testid="sse-status">{status}</span>;
 }
 
 describe('useSSE', () => {
@@ -60,6 +61,7 @@ describe('useSSE', () => {
     act(() => root.unmount());
     container.remove();
     useConversationStore.setState({ handleSSEEvent: originalHandleSSEEvent });
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -92,6 +94,7 @@ describe('useSSE', () => {
           threadId: 'conversation-1',
           status: 'completed',
           timestamp: 2,
+          usage: null,
         }),
         lastEventId: 'seq:42',
       }));
@@ -115,6 +118,7 @@ describe('useSSE', () => {
       root.render(<Harness enabled={false} />);
     });
     expect(createSSEConnection).not.toHaveBeenCalled();
+    expect(container.textContent).toBe('connecting');
 
     act(() => {
       root.render(
@@ -125,5 +129,99 @@ describe('useSSE', () => {
       'agent-1',
       '000000000042',
     );
+  });
+
+  it('keeps an intentional snapshot handoff in connecting state', () => {
+    const firstEventSource = createFakeEventSource();
+    const secondEventSource = createFakeEventSource();
+    vi.mocked(createSSEConnection)
+      .mockReturnValueOnce(firstEventSource as unknown as EventSource)
+      .mockReturnValueOnce(secondEventSource as unknown as EventSource);
+
+    act(() => {
+      root.render(<Harness eventCursor="000000000041" />);
+    });
+    act(() => {
+      firstEventSource.onopen?.(new Event('open'));
+    });
+    expect(container.textContent).toBe('connected');
+
+    act(() => {
+      root.render(<Harness enabled={false} />);
+    });
+
+    expect(firstEventSource.close).toHaveBeenCalledOnce();
+    expect(container.textContent).toBe('connecting');
+
+    act(() => {
+      root.render(<Harness eventCursor="000000000042" />);
+    });
+    expect(createSSEConnection).toHaveBeenLastCalledWith(
+      'agent-1',
+      '000000000042',
+    );
+    expect(container.textContent).toBe('connecting');
+  });
+
+  it('does not report a transient connection loss when EventSource reconnects within the grace period', () => {
+    vi.useFakeTimers();
+    const eventSource = createFakeEventSource();
+    vi.mocked(createSSEConnection).mockReturnValue(
+      eventSource as unknown as EventSource,
+    );
+
+    act(() => {
+      root.render(<Harness />);
+    });
+    expect(container.textContent).toBe('connecting');
+
+    act(() => {
+      eventSource.onerror?.(new Event('error'));
+    });
+    expect(container.textContent).toBe('connecting');
+
+    act(() => {
+      eventSource.onopen?.(new Event('open'));
+    });
+    expect(container.textContent).toBe('connected');
+
+    act(() => {
+      eventSource.onerror?.(new Event('error'));
+    });
+    expect(container.textContent).toBe('connected');
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+      eventSource.onopen?.(new Event('open'));
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(container.textContent).toBe('connected');
+  });
+
+  it('reports a sustained connection loss after the reconnect grace period', () => {
+    vi.useFakeTimers();
+    const eventSource = createFakeEventSource();
+    vi.mocked(createSSEConnection).mockReturnValue(
+      eventSource as unknown as EventSource,
+    );
+
+    act(() => {
+      root.render(<Harness />);
+    });
+    act(() => {
+      eventSource.onopen?.(new Event('open'));
+      eventSource.onerror?.(new Event('error'));
+    });
+    expect(container.textContent).toBe('connected');
+
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(container.textContent).toBe('disconnected');
+
+    act(() => {
+      eventSource.onopen?.(new Event('open'));
+    });
+    expect(container.textContent).toBe('connected');
   });
 });

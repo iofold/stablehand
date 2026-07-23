@@ -140,8 +140,5 @@ Switching an agent from one harness to another is straightforward but requires u
 
 1.  **Update `harness`**: Change `spec.harness` to the new harness ID (`langgraph`, `claude-agents`, or `pi-agent`).
 2.  **Update `harnessConfig`**: Adjust the fields in `spec.harnessConfig` to match the new harness's schema (e.g., Claude Agents uses `maxTurns`, LangGraph uses `temperature`).
-3.  **Check `nativeTools`**:
-    - **LangGraph**: Uses a `blocklist` (e.g., `blocklist: [execute]`).
-    - **Claude Agents**: Uses an `allowlist` with capitalized names (e.g., `allowlist: [Read, Write, Edit, Bash]`).
-    - **PI Agent**: Uses an `allowlist` with lowercase names (e.g., `allowlist: [read, write, edit, bash]`).
+3.  **Check `nativeToolPolicy`**: All harnesses use the same `all`/`allow`/`deny`/`none` modes. Update only the SDK-owned names when changing harnesses: Claude names are typically capitalized (for example `Read` and `Bash`), while PI names are lowercase (for example `read` and `bash`).
 4.  **Verify Tools**: Since all harnesses require Zod schemas for custom tools, your existing tool definitions should work across all harnesses without modification.

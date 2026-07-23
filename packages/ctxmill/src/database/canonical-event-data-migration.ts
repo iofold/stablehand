@@ -135,26 +135,43 @@ export async function canonicalizePersistedEventContracts(sql: postgres.Sql): Pr
         )
         || CASE WHEN payload::jsonb ? 'status'
           THEN jsonb_build_object('status', payload::jsonb->'status') ELSE '{}'::jsonb END
-        || CASE
-          WHEN payload::jsonb->'usage' ?& ARRAY[
-            'inputTokens', 'outputTokens', 'totalTokens'
-          ] THEN jsonb_build_object(
-            'usage',
-            jsonb_build_object(
+        || jsonb_build_object(
+          'usage',
+          CASE
+            WHEN payload::jsonb->'usage' ?& ARRAY[
+              'inputTokens', 'outputTokens', 'totalTokens'
+            ] THEN jsonb_build_object(
               'inputTokens', payload::jsonb#>'{usage,inputTokens}',
               'outputTokens', payload::jsonb#>'{usage,outputTokens}',
-              'totalTokens', payload::jsonb#>'{usage,totalTokens}'
+              'totalTokens', payload::jsonb#>'{usage,totalTokens}',
+              'modelCalls', jsonb_build_object(
+                'observed', 0,
+                'costKnown', 0,
+                'expected', NULL
+              ),
+              'cost', CASE
+                WHEN jsonb_typeof(payload::jsonb#>'{usage,costUsd}') = 'number'
+                  THEN jsonb_build_object(
+                    'totalUsd', payload::jsonb#>'{usage,costUsd}',
+                    'knownUsd', payload::jsonb#>'{usage,costUsd}',
+                    'coverage', 'complete'
+                  )
+                WHEN jsonb_typeof(payload::jsonb#>'{usage,cost}') = 'number'
+                  THEN jsonb_build_object(
+                    'totalUsd', payload::jsonb#>'{usage,cost}',
+                    'knownUsd', payload::jsonb#>'{usage,cost}',
+                    'coverage', 'complete'
+                  )
+                ELSE jsonb_build_object(
+                  'totalUsd', NULL,
+                  'knownUsd', 0,
+                  'coverage', 'unpriced'
+                )
+              END
             )
-            || CASE
-              WHEN payload::jsonb#>'{usage,costUsd}' IS NOT NULL
-                THEN jsonb_build_object('costUsd', payload::jsonb#>'{usage,costUsd}')
-              WHEN payload::jsonb#>'{usage,cost}' IS NOT NULL
-                THEN jsonb_build_object('costUsd', payload::jsonb#>'{usage,cost}')
-              ELSE '{}'::jsonb
-            END
-          )
-          ELSE '{}'::jsonb
-        END
+            ELSE 'null'::jsonb
+          END
+        )
         WHEN 'RUN_ERROR' THEN jsonb_build_object(
           'type', 'RUN_ERROR',
           'runId', COALESCE(payload::jsonb->'runId', to_jsonb(turn_id)),

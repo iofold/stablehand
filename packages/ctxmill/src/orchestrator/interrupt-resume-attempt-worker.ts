@@ -1,49 +1,60 @@
-import type { InterruptResumeAttemptRow } from '../database/repository.js';
+import { randomUUID } from 'node:crypto';
+
+import type {
+  DatabaseRepository,
+  InterruptResumeAttemptRow,
+  TurnDeliveryLeaseRow,
+} from '../database/repository.js';
 import { unrefTimer } from '../util/timing.js';
+import type {
+  PreparedInterruptContinuation,
+  PreparedInterruptContinuationReady,
+} from './session-manager/interrupt-resume-service.js';
+import {
+  SessionRecoveryConflictError,
+  SessionRestoreInProgressError,
+} from './session-manager/session-recovery-coordinator.js';
+import type { TurnDeliveryFence } from './turn-delivery-fence.js';
+import {
+  monitorClaimedTurnDeliveryLease,
+  type TurnDeliveryLeaseGuard,
+} from './turn-delivery-lease.js';
 
 const TAG = '[InterruptResumeAttemptWorker]';
 const DEFAULT_LEASE_MS = 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_HEARTBEAT_MS = 20_000;
-const DEFAULT_RENEWAL_RETRY_MS = 1_000;
-const DEFAULT_MAX_RENEWAL_RETRIES = 3;
 const DEFAULT_SCAN_LIMIT = 50;
 
-export interface InterruptResumeAttemptStore {
-  getRecoverableInterruptResumeAttempts(
-    staleBefore: number,
-    limit: number,
-  ): Promise<InterruptResumeAttemptRow[]>;
-  claimInterruptResumeAttempt(input: {
-    id: string;
-    expectedUpdatedAt: number;
-    staleBefore: number;
-    claimedAt: number;
-  }): Promise<InterruptResumeAttemptRow | undefined>;
-  renewInterruptResumeAttemptLease(
-    id: string,
-    expectedUpdatedAt: number,
-    renewedAt: number,
-  ): Promise<InterruptResumeAttemptRow | undefined>;
-  completeInterruptResumeAttempt(
-    id: string,
-    expectedUpdatedAt: number,
-    completedAt: number,
-  ): Promise<InterruptResumeAttemptRow | undefined>;
-  failInterruptResumeAttempt(
-    id: string,
-    expectedUpdatedAt: number,
-    failedAt: number,
-    error: string,
-  ): Promise<InterruptResumeAttemptRow | undefined>;
-}
+export type InterruptResumeAttemptStore = Pick<
+  DatabaseRepository,
+  | 'getTurn'
+  | 'getSandboxSession'
+  | 'getRecoverableInterruptResumeAttempts'
+  | 'claimInterruptResumeDelivery'
+  | 'renewTurnDeliveryLease'
+  | 'releaseTurnDeliveryLease'
+  | 'completeInterruptResumeDelivery'
+  | 'failInterruptResumeDelivery'
+  | 'completeTerminalInterruptResumeAttempt'
+  | 'failUnclaimedInterruptResumeAttempt'
+>;
 
 interface InterruptResumeSessionManager {
-  resumeWithInterruptResolution(
+  prepareInterruptContinuation(
     sandboxSessionId: string,
     turnId: string,
     agentId: string,
     interruptId: string,
+    recoveryAuthority?: {
+      attemptId: string;
+      fence: TurnDeliveryFence;
+    },
+  ): Promise<PreparedInterruptContinuation>;
+  executeInterruptContinuation(
+    prepared: PreparedInterruptContinuationReady,
+    attemptId: string,
+    fence: TurnDeliveryFence,
     signal?: AbortSignal,
   ): Promise<void>;
 }
@@ -55,25 +66,22 @@ interface Logger {
 }
 
 interface InterruptResumeAttemptWorkerOptions {
+  ownerId?: string;
   leaseMs?: number;
   pollIntervalMs?: number;
   heartbeatMs?: number;
-  renewalRetryMs?: number;
-  maxRenewalRetries?: number;
   scanLimit?: number;
   now?: () => number;
 }
 
 export class InterruptResumeAttemptWorker {
+  private readonly ownerId: string;
+
   private readonly leaseMs: number;
 
   private readonly pollIntervalMs: number;
 
   private readonly heartbeatMs: number;
-
-  private readonly renewalRetryMs: number;
-
-  private readonly maxRenewalRetries: number;
 
   private readonly scanLimit: number;
 
@@ -99,13 +107,21 @@ export class InterruptResumeAttemptWorker {
     },
     options: InterruptResumeAttemptWorkerOptions = {},
   ) {
+    this.ownerId = options.ownerId ?? randomUUID();
     this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
-    this.renewalRetryMs = options.renewalRetryMs ?? DEFAULT_RENEWAL_RETRY_MS;
-    this.maxRenewalRetries = options.maxRenewalRetries ?? DEFAULT_MAX_RENEWAL_RETRIES;
     this.scanLimit = options.scanLimit ?? DEFAULT_SCAN_LIMIT;
     this.now = options.now ?? Date.now;
+    if (
+      this.leaseMs <= 0
+      || this.heartbeatMs <= 0
+      || this.heartbeatMs >= this.leaseMs
+    ) {
+      throw new Error(
+        'Interrupt resume heartbeat must be positive and shorter than its lease',
+      );
+    }
   }
 
   start(): void {
@@ -137,9 +153,7 @@ export class InterruptResumeAttemptWorker {
     }
 
     const scan = (async () => {
-      const staleBefore = this.now() - this.leaseMs;
       const attempts = await this.deps.db.getRecoverableInterruptResumeAttempts(
-        staleBefore,
         this.scanLimit,
       );
       if (this.stopping) {
@@ -187,7 +201,10 @@ export class InterruptResumeAttemptWorker {
     this.runningAttemptIds.add(attempt.id);
     const task = this.process(attempt)
       .catch((err) => {
-        this.deps.logger.error(`${TAG} unexpected attempt failure for ${attempt.id}:`, err);
+        this.deps.logger.error(
+          `${TAG} unexpected attempt failure for ${attempt.id}:`,
+          err,
+        );
       })
       .finally(() => {
         this.runningAttemptIds.delete(attempt.id);
@@ -200,233 +217,259 @@ export class InterruptResumeAttemptWorker {
     if (this.stopping) {
       return;
     }
-    const now = this.now();
-    const claimed = await this.deps.db.claimInterruptResumeAttempt({
-      id: attempt.id,
-      expectedUpdatedAt: attempt.updatedAt,
-      staleBefore: now - this.leaseMs,
-      claimedAt: Math.max(now, attempt.updatedAt + 1),
-    });
-    if (!claimed) {
-      return;
-    }
-    if (this.stopping) {
-      // Shutdown raced an already-issued claim. Do not start a new delivery;
-      // the next worker can reclaim this lease once it becomes stale.
-      return;
-    }
-
-    let leaseUpdatedAt = claimed.updatedAt;
-    let leaseLost = false;
-    let renewalFailures = 0;
-    let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
-    let heartbeatInFlight: Promise<void> | undefined;
-    let leaseExpiryTimer: ReturnType<typeof setTimeout> | undefined;
-    let heartbeatStopped = false;
-    const deliveryAbortController = new AbortController();
-
-    const loseLease = (reason: string, cause?: unknown) => {
-      if (leaseLost) {
-        return;
-      }
-      leaseLost = true;
-      if (leaseExpiryTimer) {
-        clearTimeout(leaseExpiryTimer);
-        leaseExpiryTimer = undefined;
-      }
-      const error = new Error(reason, cause === undefined ? undefined : { cause });
-      deliveryAbortController.abort(error);
-      this.deps.logger.warn(`${TAG} ${reason}`);
-    };
-
-    const armLeaseExpiryWatchdog = () => {
-      if (heartbeatStopped || leaseLost) {
-        return;
-      }
-      if (leaseExpiryTimer) {
-        clearTimeout(leaseExpiryTimer);
-      }
-      const leaseRemainingMs = leaseUpdatedAt + this.leaseMs - this.now();
-      if (leaseRemainingMs <= 0) {
-        loseLease(`lease expired for attempt ${claimed.id}`);
-        return;
-      }
-      leaseExpiryTimer = setTimeout(() => {
-        leaseExpiryTimer = undefined;
-        if (this.now() >= leaseUpdatedAt + this.leaseMs) {
-          loseLease(`lease expired for attempt ${claimed.id}`);
-          return;
-        }
-        armLeaseExpiryWatchdog();
-      }, leaseRemainingMs);
-      unrefTimer(leaseExpiryTimer);
-    };
-
-    const scheduleHeartbeat = (requestedDelayMs = this.heartbeatMs) => {
-      if (heartbeatStopped || leaseLost) {
-        return;
-      }
-      const leaseRemainingMs = leaseUpdatedAt + this.leaseMs - this.now();
-      if (leaseRemainingMs <= 0) {
-        loseLease(`lease expired for attempt ${claimed.id}`);
-        return;
-      }
-      const delayMs = Math.max(0, Math.min(requestedDelayMs, leaseRemainingMs));
-      heartbeatTimer = setTimeout(() => {
-        heartbeatTimer = undefined;
-        const heartbeat = (async () => {
-          if (heartbeatStopped || leaseLost) {
-            return;
-          }
-          if (this.now() >= leaseUpdatedAt + this.leaseMs) {
-            loseLease(`lease expired for attempt ${claimed.id}`);
-            return;
-          }
-          const renewedAt = Math.max(this.now(), leaseUpdatedAt + 1);
-          try {
-            const renewed = await this.deps.db.renewInterruptResumeAttemptLease(
-              claimed.id,
-              leaseUpdatedAt,
-              renewedAt,
-            );
-            if (!renewed) {
-              loseLease(`lease ownership lost for attempt ${claimed.id}`);
-              return;
-            }
-            leaseUpdatedAt = renewed.updatedAt;
-            renewalFailures = 0;
-            armLeaseExpiryWatchdog();
-          } catch (err) {
-            renewalFailures++;
-            const leaseRemainingAfterFailure = leaseUpdatedAt + this.leaseMs - this.now();
-            if (
-              leaseRemainingAfterFailure <= 0
-              || renewalFailures > this.maxRenewalRetries
-            ) {
-              loseLease(
-                `lease renewal failed for attempt ${claimed.id}; cancelling owned delivery`,
-                err,
-              );
-              return;
-            }
-            this.deps.logger.warn(
-              `${TAG} transient lease renewal failure for attempt ${claimed.id} `
-              + `(retry ${renewalFailures}/${this.maxRenewalRetries}):`,
-              err,
-            );
-            const retryDelay = this.renewalRetryMs * (2 ** (renewalFailures - 1));
-            scheduleHeartbeat(retryDelay);
-            return;
-          }
-          scheduleHeartbeat();
-        })();
-        heartbeatInFlight = heartbeat;
-        void heartbeat.finally(() => {
-          if (heartbeatInFlight === heartbeat) {
-            heartbeatInFlight = undefined;
-          }
-        });
-      }, delayMs);
-      unrefTimer(heartbeatTimer);
-    };
-
-    const stopHeartbeat = async () => {
-      heartbeatStopped = true;
-      if (heartbeatTimer) {
-        clearTimeout(heartbeatTimer);
-        heartbeatTimer = undefined;
-      }
-
-      // A renewal transport call can hang forever. Keep the independent lease
-      // watchdog armed while it is in flight and wait only until either the
-      // renewal settles or ownership necessarily expires. This prevents a
-      // successful delivery from stranding process shutdown/local recovery.
-      const inFlightHeartbeat = heartbeatInFlight;
-      if (inFlightHeartbeat && !leaseLost) {
-        let onLeaseLost: (() => void) | undefined;
-        const leaseLostPromise = new Promise<void>((resolve) => {
-          if (deliveryAbortController.signal.aborted) {
-            resolve();
-            return;
-          }
-          onLeaseLost = () => resolve();
-          deliveryAbortController.signal.addEventListener('abort', onLeaseLost, { once: true });
-        });
-        try {
-          await Promise.race([inFlightHeartbeat, leaseLostPromise]);
-        } finally {
-          if (onLeaseLost) {
-            deliveryAbortController.signal.removeEventListener('abort', onLeaseLost);
-          }
-        }
-      }
-
-      if (leaseExpiryTimer) {
-        clearTimeout(leaseExpiryTimer);
-        leaseExpiryTimer = undefined;
-      }
-    };
-
-    if (!claimed.sandboxSessionId) {
-      await this.deps.db.failInterruptResumeAttempt(
-        claimed.id,
-        leaseUpdatedAt,
-        Math.max(this.now(), leaseUpdatedAt + 1),
+    if (!attempt.sandboxSessionId) {
+      const failed = await this.deps.db.failUnclaimedInterruptResumeAttempt(
+        attempt.id,
         'Interrupt resume attempt has no sandbox session',
       );
+      if (!failed) {
+        this.deps.logger.warn(
+          `${TAG} could not fail unclaimed attempt ${attempt.id}; ownership changed`,
+        );
+      }
       return;
     }
 
-    armLeaseExpiryWatchdog();
-    scheduleHeartbeat();
-    let resumeCompleted = false;
-    try {
-      await this.deps.sessionManager.resumeWithInterruptResolution(
-        claimed.sandboxSessionId,
-        claimed.turnId,
-        claimed.agentId,
-        claimed.interruptId,
-        deliveryAbortController.signal,
+    const originalTurn = await this.deps.db.getTurn(attempt.turnId);
+    if (
+      originalTurn
+      && (
+        originalTurn.completedAt !== null
+        || (originalTurn.status !== 'queued' && originalTurn.status !== 'running')
+      )
+    ) {
+      const repaired = await this.deps.db.completeTerminalInterruptResumeAttempt(
+        attempt.id,
       );
-      deliveryAbortController.signal.throwIfAborted();
-      resumeCompleted = true;
-      await stopHeartbeat();
-      if (leaseLost) {
-        return;
-      }
-      const completed = await this.deps.db.completeInterruptResumeAttempt(
-        claimed.id,
-        leaseUpdatedAt,
-        Math.max(this.now(), leaseUpdatedAt + 1),
-      );
-      if (!completed) {
-        this.deps.logger.warn(`${TAG} completion CAS lost for attempt ${claimed.id}`);
-      }
-    } catch (err) {
-      await stopHeartbeat();
-      if (resumeCompleted) {
-        // Delivery returned successfully, so retry safety now depends on the
-        // deterministic turn ID and sandbox boundary dedupe. Leave the lease
-        // in progress; a stale-lease scan will finish it.
-        this.deps.logger.error(
-          `${TAG} completion persistence failed for attempt ${claimed.id}; leaving it recoverable:`,
-          err,
+      if (!repaired) {
+        this.deps.logger.warn(
+          `${TAG} terminal repair lost for attempt ${attempt.id}`,
         );
-        return;
       }
-      if (leaseLost) {
-        return;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      const failed = await this.deps.db.failInterruptResumeAttempt(
-        claimed.id,
-        leaseUpdatedAt,
-        Math.max(this.now(), leaseUpdatedAt + 1),
-        message,
+      return;
+    }
+
+    let guard: TurnDeliveryLeaseGuard | undefined;
+    try {
+      let prepared: PreparedInterruptContinuation;
+      const candidateSession = await this.deps.db.getSandboxSession(
+        attempt.sandboxSessionId,
       );
-      if (!failed) {
-        this.deps.logger.warn(`${TAG} failure CAS lost for attempt ${claimed.id}`);
+      if (candidateSession?.status === 'ACTIVE') {
+        const provisionalClaim = await this.deps.db.claimInterruptResumeDelivery({
+          attemptId: attempt.id,
+          sandboxSessionId: attempt.sandboxSessionId,
+          ownerId: this.ownerId,
+          leaseDurationMs: this.leaseMs,
+        });
+        if (!provisionalClaim) {
+          return;
+        }
+        await this.assertConsistentClaim(
+          attempt,
+          provisionalClaim.lease,
+          provisionalClaim.attempt.id,
+        );
+        guard = this.monitorLease(attempt.turnId, provisionalClaim.lease);
+        try {
+          prepared = await this.deps.sessionManager.prepareInterruptContinuation(
+            attempt.sandboxSessionId,
+            attempt.turnId,
+            attempt.agentId,
+            attempt.interruptId,
+            {
+              attemptId: attempt.id,
+              fence: guard.fence,
+            },
+          );
+        } catch (err) {
+          await this.handlePreparationFailure(attempt, err, guard);
+          return;
+        }
+      } else {
+        // CHECKPOINTED/RESTORING/TERMINATED sessions cannot admit turn
+        // delivery. Restore or join the durable session winner first; no
+        // harness execution occurs until the claim below succeeds.
+        try {
+          prepared = await this.deps.sessionManager.prepareInterruptContinuation(
+            attempt.sandboxSessionId,
+            attempt.turnId,
+            attempt.agentId,
+            attempt.interruptId,
+          );
+        } catch (err) {
+          await this.handlePreparationFailure(attempt, err);
+          return;
+        }
       }
+
+      if (prepared.kind === 'terminal') {
+        const repaired = await this.deps.db.completeTerminalInterruptResumeAttempt(
+          attempt.id,
+        );
+        if (!repaired) {
+          this.deps.logger.warn(
+            `${TAG} terminal repair lost for attempt ${attempt.id}`,
+          );
+        }
+        return;
+      }
+      if (this.stopping) {
+        return;
+      }
+
+      // Dead ACTIVE recovery may invalidate a provisional delivery, while a
+      // non-ACTIVE session is restored before it can admit delivery at all.
+      // This claim adopts the authoritative restored/replacement session.
+      const preparedClaim = await this.deps.db.claimInterruptResumeDelivery({
+        attemptId: attempt.id,
+        sandboxSessionId: prepared.sandboxSessionId,
+        ownerId: this.ownerId,
+        leaseDurationMs: this.leaseMs,
+      });
+      if (!preparedClaim) {
+        return;
+      }
+      await this.assertConsistentClaim(
+        attempt,
+        preparedClaim.lease,
+        preparedClaim.attempt.id,
+      );
+      if (!guard) {
+        guard = this.monitorLease(attempt.turnId, preparedClaim.lease);
+      } else if (
+        preparedClaim.lease.ownerId !== guard.fence.ownerId
+        || preparedClaim.lease.fenceToken !== guard.fence.fenceToken
+      ) {
+        await guard.release();
+        guard = this.monitorLease(attempt.turnId, preparedClaim.lease);
+      }
+      const executionGuard = guard;
+      let executionCompleted = false;
+      try {
+        await this.deps.sessionManager.executeInterruptContinuation(
+          prepared,
+          attempt.id,
+          executionGuard.fence,
+          executionGuard.signal,
+        );
+        executionCompleted = true;
+        executionGuard.signal.throwIfAborted();
+        const completed = await this.deps.db.completeInterruptResumeDelivery(
+          attempt.id,
+          executionGuard.fence,
+        );
+        if (!completed) {
+          this.deps.logger.warn(
+            `${TAG} completion fence lost for attempt ${attempt.id}`,
+          );
+        }
+      } catch (err) {
+        if (executionCompleted) {
+          this.deps.logger.error(
+            `${TAG} completion persistence failed for attempt ${attempt.id}; `
+            + 'leaving terminal repair recoverable:',
+            err,
+          );
+          return;
+        }
+        if (executionGuard.signal.aborted) {
+          return;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        const failed = await this.deps.db.failInterruptResumeDelivery(
+          attempt.id,
+          executionGuard.fence,
+          message,
+        );
+        if (!failed) {
+          this.deps.logger.warn(
+            `${TAG} failure fence lost for attempt ${attempt.id}`,
+          );
+        }
+      }
+    } finally {
+      await guard?.release();
+    }
+  }
+
+  private monitorLease(
+    turnId: string,
+    lease: TurnDeliveryLeaseRow,
+  ): TurnDeliveryLeaseGuard {
+    return monitorClaimedTurnDeliveryLease(
+      {
+        db: this.deps.db,
+        logger: this.deps.logger,
+      },
+      turnId,
+      {
+        ownerId: lease.ownerId,
+        fenceToken: lease.fenceToken,
+      },
+      {
+        leaseMs: this.leaseMs,
+        heartbeatMs: this.heartbeatMs,
+        now: this.now,
+      },
+    );
+  }
+
+  private async handlePreparationFailure(
+    attempt: InterruptResumeAttemptRow,
+    err: unknown,
+    guard?: TurnDeliveryLeaseGuard,
+  ): Promise<void> {
+    if (guard?.signal.aborted) {
+      return;
+    }
+    if (
+      err instanceof SessionRecoveryConflictError
+      || err instanceof SessionRestoreInProgressError
+    ) {
+      this.deps.logger.info(
+        `${TAG} deferring attempt ${attempt.id} while sandbox recovery is owned elsewhere`,
+      );
+      return;
+    }
+
+    const message = err instanceof Error ? err.message : String(err);
+    const failed = guard
+      ? await this.deps.db.failInterruptResumeDelivery(
+          attempt.id,
+          guard.fence,
+          message,
+        )
+      : await this.deps.db.failUnclaimedInterruptResumeAttempt(
+          attempt.id,
+          message,
+        );
+    if (!failed) {
+      this.deps.logger.warn(
+        `${TAG} preparation failure could not update attempt ${attempt.id}; ownership changed`,
+        err,
+      );
+    }
+  }
+
+  private async assertConsistentClaim(
+    attempt: InterruptResumeAttemptRow,
+    lease: TurnDeliveryLeaseRow,
+    claimedAttemptId: string,
+  ): Promise<void> {
+    if (
+      lease.turnId !== attempt.turnId
+      || lease.ownerId !== this.ownerId
+      || claimedAttemptId !== attempt.id
+    ) {
+      await this.deps.db.releaseTurnDeliveryLease(
+        lease.turnId,
+        lease.ownerId,
+        lease.fenceToken,
+      );
+      throw new Error(
+        `Interrupt resume claim ${attempt.id} returned inconsistent delivery ownership`,
+      );
     }
   }
 }

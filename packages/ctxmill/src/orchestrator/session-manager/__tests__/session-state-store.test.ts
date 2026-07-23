@@ -31,7 +31,7 @@ function createAgentDef(overrides?: Partial<AgentDefinition>): AgentDefinition {
     projectDir: overrides?.projectDir,
     mode: overrides?.mode,
     resourceLimits: overrides?.resourceLimits,
-    nativeTools: overrides?.nativeTools,
+    nativeToolPolicy: overrides?.nativeToolPolicy,
     workspaceContent: overrides?.workspaceContent,
   };
 }

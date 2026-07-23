@@ -1,4 +1,10 @@
 import { dirname } from 'node:path';
+import {
+  BuiltinToolPolicySchema,
+  NativeToolPolicySchema,
+  type BuiltinToolPolicy,
+  type NativeToolPolicy,
+} from '@ctxmill/contracts';
 
 import type { DatabaseRepository } from '../database/repository.js';
 import type { AgentDefinition, AgentResourceLimits } from '@ctxmill/sandbox-daemon';
@@ -8,15 +14,12 @@ import type { AgentDefinition, AgentResourceLimits } from '@ctxmill/sandbox-daem
  *
  * This module is the single source of truth for how a stored agent row
  * becomes the AgentDefinition the runtime enforces. It is deliberately pure
- * and secret-free: runtime sandbox secrets are asymmetric between the startup
- * and resume paths, so each call site applies its own injection
- * (TurnStartupService wraps with withRuntimeSandboxSecrets; the resume path
- * re-derives via getRuntimeSandboxSecrets in the runtime factory).
+ * and secret-free. Stable agent secrets are resolved by sandbox lifecycle
+ * services; ephemeral turn secrets travel only on DeliverTurn.
  */
 
 export type StoredAgent = NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
 
-export type NativeTools = { allowlist?: string[]; blocklist?: string[] };
 export type WorkspaceContent = { files?: Array<{ src: string; dest: string }> };
 export type AgentMode = 'interactive' | 'background' | 'both';
 
@@ -50,7 +53,8 @@ export function resolveResourceLimits(agent: StoredAgent): AgentResourceLimits |
 
 /** Top-level API values persisted in metadata override their canonical manifest counterparts. */
 export function extractManifestRuntimeFields(agent: StoredAgent): {
-  nativeTools?: NativeTools;
+  builtinToolPolicy?: BuiltinToolPolicy;
+  nativeToolPolicy?: NativeToolPolicy;
   workspaceContent?: WorkspaceContent;
   mode?: AgentMode;
 } {
@@ -59,9 +63,18 @@ export function extractManifestRuntimeFields(agent: StoredAgent): {
   const metadata = isObjectRecord(agent.metadata) ? agent.metadata : {};
   const workspace = isObjectRecord(manifestSpec?.workspace) ? manifestSpec.workspace : undefined;
 
-  const nativeTools = ('nativeTools' in metadata
-    ? metadata.nativeTools
-    : manifestSpec?.nativeTools) as NativeTools | undefined;
+  const builtinToolPolicyCandidate = 'builtinToolPolicy' in metadata
+    ? metadata.builtinToolPolicy
+    : manifestSpec?.builtinToolPolicy;
+  const builtinToolPolicy = builtinToolPolicyCandidate === undefined
+    ? undefined
+    : BuiltinToolPolicySchema.parse(builtinToolPolicyCandidate);
+  const nativeToolPolicyCandidate = 'nativeToolPolicy' in metadata
+    ? metadata.nativeToolPolicy
+    : manifestSpec?.nativeToolPolicy;
+  const nativeToolPolicy = nativeToolPolicyCandidate === undefined
+    ? undefined
+    : NativeToolPolicySchema.parse(nativeToolPolicyCandidate);
   const workspaceContent = ('workspaceContent' in metadata
     ? metadata.workspaceContent
     : workspace?.content) as WorkspaceContent | undefined;
@@ -70,7 +83,8 @@ export function extractManifestRuntimeFields(agent: StoredAgent): {
     : manifestSpec?.mode) as AgentMode | undefined;
 
   return {
-    ...(nativeTools ? { nativeTools } : {}),
+    ...(builtinToolPolicy ? { builtinToolPolicy } : {}),
+    ...(nativeToolPolicy ? { nativeToolPolicy } : {}),
     ...(workspaceContent ? { workspaceContent } : {}),
     ...(mode ? { mode } : {}),
   };
@@ -79,7 +93,12 @@ export function extractManifestRuntimeFields(agent: StoredAgent): {
 export function buildAgentDefinition(agent: StoredAgent): AgentDefinition {
   const harnessConfig = parseStoredHarnessConfig(agent.harnessConfig);
   const resourceLimits = resolveResourceLimits(agent);
-  const { nativeTools, workspaceContent, mode } = extractManifestRuntimeFields(agent);
+  const {
+    builtinToolPolicy,
+    nativeToolPolicy,
+    workspaceContent,
+    mode,
+  } = extractManifestRuntimeFields(agent);
   const workspaceDir = agent.workspaceDir ?? undefined;
 
   return {
@@ -93,8 +112,26 @@ export function buildAgentDefinition(agent: StoredAgent): AgentDefinition {
     workspaceDir,
     projectDir: workspaceDir ? dirname(workspaceDir) : undefined,
     resourceLimits,
-    ...(nativeTools ? { nativeTools } : {}),
+    ...(builtinToolPolicy ? { builtinToolPolicy } : {}),
+    ...(nativeToolPolicy ? { nativeToolPolicy } : {}),
     ...(workspaceContent ? { workspaceContent } : {}),
     ...(mode ? { mode } : {}),
   };
+}
+
+export function resolveAgentToolNames(
+  agentDef: Pick<AgentDefinition, 'tools' | 'metadata'>,
+): string[] {
+  const names = new Set(agentDef.tools ?? []);
+  const httpTools = agentDef.metadata?.httpTools;
+  if (!Array.isArray(httpTools)) {
+    return [...names];
+  }
+
+  for (const tool of httpTools) {
+    if (isObjectRecord(tool) && typeof tool.name === 'string') {
+      names.add(tool.name);
+    }
+  }
+  return [...names];
 }

@@ -12,7 +12,17 @@ import {
   resolveResourceLimits,
 } from '../../agent-definition.js';
 import { validateAgentHttpToolsConfig } from '../../http-tools.js';
+import { materializeTurnUsage } from '../../usage.js';
 import type { AgentHttpToolDefinition, AgentRouteOptions, StoredAgent } from './types.js';
+
+export const AGENT_MANAGED_METADATA_FIELDS: ReadonlySet<string> = new Set([
+  'builtinToolPolicy',
+  'httpTools',
+  'mode',
+  'nativeToolPolicy',
+  'resourceLimits',
+  'workspaceContent',
+]);
 
 export function safeError(message: string, err: unknown): { error: string; detail?: string } {
   console.error('[agents] endpoint error:', err);
@@ -71,27 +81,28 @@ export function validateResourceLimits(limits: Record<string, unknown>): string[
   return errors;
 }
 
-export function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim() !== '';
-}
-
 export function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-export function getHttpToolNames(httpTools?: AgentHttpToolDefinition[] | unknown): string[] {
-  if (!Array.isArray(httpTools) || httpTools.length === 0) return [];
-  return httpTools
-    .filter((tool): tool is AgentHttpToolDefinition => isObjectRecord(tool) && isNonEmptyString(tool.name))
-    .map((tool) => tool.name);
+export function getAgentHttpTools(metadata: Record<string, unknown> | null | undefined): AgentHttpToolDefinition[] {
+  return Array.isArray(metadata?.httpTools)
+    ? metadata.httpTools as AgentHttpToolDefinition[]
+    : [];
+}
+
+export function getPublicAgentMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!metadata) return null;
+  const publicMetadata = Object.fromEntries(
+    Object.entries(metadata).filter(([key]) => !AGENT_MANAGED_METADATA_FIELDS.has(key)),
+  );
+  return Object.keys(publicMetadata).length > 0 ? publicMetadata : null;
 }
 
 export function validateHttpTools(httpTools?: AgentHttpToolDefinition[] | unknown): string | null {
   return validateAgentHttpToolsConfig(httpTools);
-}
-
-export function mergeToolNames(baseTools: string[], httpTools?: AgentHttpToolDefinition[] | unknown): string[] {
-  return [...new Set([...baseTools, ...getHttpToolNames(httpTools)])];
 }
 
 type AgentRequest = FastifyRequest & { agent: StoredAgent };
@@ -109,11 +120,29 @@ export function ensureAgentWorkspace(
 }
 
 export function toAgentResponse(agent: StoredAgent): Agent {
-  const { nativeTools, workspaceContent, mode } = extractManifestRuntimeFields(agent);
+  const {
+    builtinToolPolicy,
+    nativeToolPolicy,
+    workspaceContent,
+    mode,
+  } = extractManifestRuntimeFields(agent);
   return AgentSchema.parse({
-    ...agent,
+    id: agent.id,
+    name: agent.name,
+    harness: agent.harness,
     harnessConfig: parseStoredHarnessConfig(agent.harnessConfig),
-    nativeTools: nativeTools ?? null,
+    systemPrompt: agent.systemPrompt,
+    tools: agent.tools,
+    description: agent.description,
+    workspaceDir: agent.workspaceDir,
+    status: 'idle',
+    manifest: agent.manifest,
+    createdAt: agent.createdAt,
+    updatedAt: agent.updatedAt,
+    httpTools: getAgentHttpTools(agent.metadata),
+    metadata: getPublicAgentMetadata(agent.metadata),
+    builtinToolPolicy: builtinToolPolicy ?? null,
+    nativeToolPolicy: nativeToolPolicy ?? null,
     workspaceContent: workspaceContent ?? null,
     mode: mode ?? null,
     // Canonical resolution (metadata override ?? manifest spec.resources.sandbox) so the API
@@ -152,16 +181,7 @@ export function toApiAgentTurn(
     ...(sandboxSession?.status === 'CHECKPOINTED' && typeof sandboxSession.updatedAt === 'number'
       ? { checkpointAt: sandboxSession.updatedAt }
       : {}),
-    ...(turn.totalTokens != null
-      ? {
-        usage: {
-          inputTokens: turn.inputTokens ?? 0,
-          outputTokens: turn.outputTokens ?? 0,
-          totalTokens: turn.totalTokens,
-          ...(turn.costUsd != null ? { costUsd: turn.costUsd } : {}),
-        },
-      }
-      : {}),
+    usage: materializeTurnUsage(turn),
   };
 }
 

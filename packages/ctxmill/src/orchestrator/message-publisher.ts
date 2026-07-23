@@ -1,6 +1,10 @@
 import type { DatabaseRepository } from '../database/repository.js';
 import type { MessageSelect } from '../database/types.js';
-import type { EventMap, TypedEventBus } from '../events/bus.js';
+import type {
+  EventMap,
+  EventPersistenceContext,
+  TypedEventBus,
+} from '../events/bus.js';
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -91,18 +95,29 @@ function updatedPayload(message: MessageSelect): EventMap['message.updated'] {
 export async function publishMessageCanonicalState(
   deps: MessagePublisherDeps,
   message: MessageSelect,
+  persistenceContext?: EventPersistenceContext,
 ): Promise<number> {
   let publishedRevision = message.publishedRevision;
   let published = 0;
 
   if (publishedRevision < 0) {
-    await deps.eventBus.emitAsync('message.committed', committedPayload(message));
+    const payload = committedPayload(message);
+    if (persistenceContext) {
+      await deps.eventBus.emitAsync('message.committed', payload, persistenceContext);
+    } else {
+      await deps.eventBus.emitAsync('message.committed', payload);
+    }
     publishedRevision = 0;
     published++;
   }
 
   if (message.messageRevision > publishedRevision) {
-    await deps.eventBus.emitAsync('message.updated', updatedPayload(message));
+    const payload = updatedPayload(message);
+    if (persistenceContext) {
+      await deps.eventBus.emitAsync('message.updated', payload, persistenceContext);
+    } else {
+      await deps.eventBus.emitAsync('message.updated', payload);
+    }
     published++;
   }
 

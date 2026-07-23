@@ -20,7 +20,6 @@ import type { ToolContext, ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
 import {
   normalizeStreamTextDeltas,
-  resolveSecretRef,
 } from './shared.js';
 import { ClaudeAgentsConfigSchema, type ClaudeAgentsConfig } from './schemas.js';
 import {
@@ -33,9 +32,12 @@ import {
   requestToolApproval,
   withTurnTracing,
 } from './kit/index.js';
-
-const CLAUDE_SKILL_TOOL_NAME = 'Skill';
-const CLAUDE_PROJECT_SKILLS_DIR = '.claude/skills';
+import {
+  createGatewayCorrelationHeaders,
+  resolveHarnessModelConnection,
+  type HarnessModelConnection,
+} from './model-gateway.js';
+import { TURN_ONLY_ENFORCEMENT_CAPABILITIES } from './enforcement/types.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -151,7 +153,7 @@ class ClaudeSession implements HarnessSession {
   constructor(
     private readonly config: HarnessSessionConfig,
     private readonly harnessConfig: ClaudeAgentsConfig,
-    private readonly apiKey: string,
+    private readonly connection: HarnessModelConnection,
     private readonly harness: ClaudeAgentsHarness,
     private readonly sdk: ClaudeSdkModule,
   ) {
@@ -245,7 +247,7 @@ class ClaudeSession implements HarnessSession {
           ...(agents ? { agents } : {}),
           ...(isFirstTurn ? { sessionId: sdkSessionId } : { resume: sdkSessionId }),
           abortController,
-          env: this.buildClaudeEnv(),
+          env: this.buildClaudeEnv(context.turnSecrets, input.turnId),
           ...(maxTurns != null ? { maxTurns } : {}),
         },
       } as Parameters<typeof sdkQuery>[0]);
@@ -419,66 +421,43 @@ class ClaudeSession implements HarnessSession {
   }
 
   private buildAllowedTools(): string[] | undefined {
-    const nativeTools = this.config.nativeTools;
-    const merged: string[] = [];
-
-    if (nativeTools?.allowlist) {
-      merged.push(...nativeTools.allowlist);
+    const nativeToolPolicy = this.config.nativeToolPolicy;
+    if (!nativeToolPolicy || nativeToolPolicy.policy === 'all' || nativeToolPolicy.policy === 'deny') {
+      return undefined;
     }
-
-    if (this.harnessConfig.subagents) {
-      merged.push('Agent');
+    if (nativeToolPolicy.policy === 'none') {
+      return ['mcp__ctxmill__*'];
     }
-
-    if (this.hasConfiguredSkills()) {
-      merged.push(CLAUDE_SKILL_TOOL_NAME);
-    }
-
-    return merged.length ? [...new Set([...merged, 'mcp__ctxmill__*'])] : undefined;
-  }
-
-  private hasConfiguredSkills(): boolean {
-    if (this.hasProjectSkillsSetup()) {
-      return true;
-    }
-
-    const subagents = this.harnessConfig.subagents;
-    return Object.values(subagents ?? {}).some((definition) =>
-      definition.skills !== undefined && definition.skills.length > 0,
-    );
-  }
-
-  private hasProjectSkillsSetup(): boolean {
-    return this.harnessConfig.setup?.symlinks?.some((link) =>
-      this.isProjectSkillsPath(link.dest),
-    ) ?? false;
-  }
-
-  private isProjectSkillsPath(value: string): boolean {
-    const normalized = path.posix.normalize(value.replace(/\\/g, '/'));
-    return normalized === CLAUDE_PROJECT_SKILLS_DIR
-      || normalized.startsWith(`${CLAUDE_PROJECT_SKILLS_DIR}/`);
+    return [...new Set([...nativeToolPolicy.names, 'mcp__ctxmill__*'])];
   }
 
   private buildDisallowedTools(): string[] | undefined {
-    const nativeTools = this.config.nativeTools;
-    const merged: string[] = [];
-    if (nativeTools?.blocklist) {
-      merged.push(...nativeTools.blocklist);
-    }
-    return merged.length ? merged : undefined;
+    const nativeToolPolicy = this.config.nativeToolPolicy;
+    return nativeToolPolicy?.policy === 'deny' ? [...nativeToolPolicy.names] : undefined;
   }
 
-  private buildClaudeEnv(): Record<string, string> {
+  private buildClaudeEnv(
+    turnSecrets: Readonly<Record<string, string>> = {},
+    turnId?: string,
+  ): Record<string, string> {
     const claudeEnv: Record<string, string> = {
       HOME: process.env.HOME ?? '/home/ctxmill',
       PATH:
         process.env.PATH ??
         '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-      ANTHROPIC_API_KEY: this.apiKey,
+      ...(this.connection.apiKey
+        ? { ANTHROPIC_API_KEY: this.connection.apiKey }
+        : {}),
       CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
-      ...(this.harnessConfig.baseUrl
-        ? { ANTHROPIC_BASE_URL: this.harnessConfig.baseUrl }
+      ...(this.connection.baseUrl
+        ? { ANTHROPIC_BASE_URL: this.connection.baseUrl }
+        : {}),
+      ...(this.connection.mode === 'gateway' && turnId
+        ? {
+            ANTHROPIC_CUSTOM_HEADERS: Object.entries(
+              createGatewayCorrelationHeaders(turnId),
+            ).map(([key, value]) => `${key}: ${value}`).join('\n'),
+          }
         : {}),
     };
     // Keys that must never be forwarded into the agent env — either because
@@ -541,9 +520,30 @@ class ClaudeSession implements HarnessSession {
       'SLACK_SIGNING_SECRET',
       'STRIPE_SECRET_KEY',
       'STRIPE_WEBHOOK_SECRET',
+      // Deployment-owned gateway access is translated into the one native
+      // Anthropic credential and endpoint above. Do not forward the control
+      // namespace itself into the child process.
+      'CTXMILL_MODEL_GATEWAY_ENABLED',
+      'CTXMILL_MODEL_GATEWAY_URL',
+      'CTXMILL_MODEL_GATEWAY_RUNTIME_KEY',
+      'CTXMILL_MODEL_GATEWAY_REVISION',
     ]);
     for (const [k, v] of Object.entries(process.env)) {
       if (v !== undefined && !(k in claudeEnv) && !ENV_BLOCKLIST.has(k)) claudeEnv[k] = v;
+    }
+    for (const [k, v] of Object.entries(turnSecrets)) {
+      if (
+        this.connection.mode === 'gateway'
+        && (
+          k === 'ANTHROPIC_API_KEY'
+          || k === 'ANTHROPIC_BASE_URL'
+          || k === 'ANTHROPIC_CUSTOM_HEADERS'
+          || k.startsWith('CTXMILL_MODEL_GATEWAY_')
+        )
+      ) {
+        continue;
+      }
+      claudeEnv[k] = v;
     }
     return claudeEnv;
   }
@@ -553,6 +553,8 @@ class ClaudeSession implements HarnessSession {
 export class ClaudeAgentsHarness implements AgentHarness {
   readonly name = 'claude-agents';
   readonly configSchema = ClaudeAgentsConfigSchema;
+  readonly enforcementCapabilities =
+    TURN_ONLY_ENFORCEMENT_CAPABILITIES;
 
   protected async loadSdkModule(): Promise<ClaudeSdkModule> {
     const baseSdk: ClaudeSdkModule = {
@@ -570,15 +572,24 @@ export class ClaudeAgentsHarness implements AgentHarness {
   ): Promise<HarnessSession> {
     const sdk = await this.loadSdkModule();
     const harnessConfig = parseHarnessConfig(ClaudeAgentsConfigSchema, config.harnessConfigJson);
-    const apiKey =
-      resolveSecretRef(harnessConfig.apiKeyRef, config.secrets) ??
-      process.env.ANTHROPIC_API_KEY;
+    const connection = resolveHarnessModelConnection({
+      provider: 'anthropic',
+      apiKeyRef: harnessConfig.apiKeyRef,
+      baseUrl: harnessConfig.baseUrl,
+      secrets: config.secrets,
+    });
 
-    if (!apiKey) {
+    if (!connection.apiKey) {
       throw new Error('Missing Anthropic API key for claude-agents harness.');
     }
 
-    const session = new ClaudeSession(config, harnessConfig, apiKey, this, sdk);
+    const session = new ClaudeSession(
+      config,
+      harnessConfig,
+      connection,
+      this,
+      sdk,
+    );
     if (restore) {
       const sdkSessionId = restore.payload['sessionId'];
       if (typeof sdkSessionId === 'string' && sdkSessionId.length > 0) {

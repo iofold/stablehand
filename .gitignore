@@ -39,3 +39,6 @@ agent.md
 
 # Private planning docs — kept local, excluded from the public tree
 docs/plans/private/
+
+# Local compose overrides (operator-specific, never committed)
+docker-compose.override.yml

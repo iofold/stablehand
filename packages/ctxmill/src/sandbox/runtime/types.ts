@@ -78,6 +78,7 @@ export interface SandboxContainerManager {
   restoreArchive(containerId: string, archive: Buffer, options?: { deletedPaths?: string[] }): Promise<void>;
   extractLogs(containerId: string, tail?: number): Promise<string>;
   getContainer(sessionId: string): Promise<ContainerInfo | null>;
+  getRuntimeInstanceToken(containerId: string): Promise<string | undefined>;
   listManagedContainers(): Promise<ContainerInfo[]>;
   listManagedContainersWithLabels(): Promise<ManagedContainerWithLabels[]>;
   getContainerExitCode(containerId: string): Promise<number | null>;

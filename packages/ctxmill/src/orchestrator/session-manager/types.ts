@@ -1,16 +1,20 @@
 import { createClient } from '@connectrpc/connect';
 import { HarnessService } from '@ctxmill/proto/sandbox/v1';
+import type { BuiltinToolPolicy } from '@ctxmill/contracts';
 
 import type { DatabaseRepository, SandboxSessionRow } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
 import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 import type { WorkspaceDiffService } from '../../sandbox/workspace-diff.js';
-import type { Message } from '@ctxmill/sandbox-daemon';
+import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { InterruptManager } from '../interrupt.js';
 import type { SessionStateStore } from './session-state-store.js';
 import type { SessionStatusCoordinator } from './session-status-coordinator.js';
 import type { SessionEvent } from '../session-turn-service.js';
+import type { InterruptContinuationExecution } from './interrupt-resume-service.js';
+import type { TurnDeliveryFence } from '../turn-delivery-fence.js';
+import type { TurnSecrets } from './turn-secrets.js';
 
 export interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -37,16 +41,24 @@ export interface SessionRecord {
   agentId: string;
   containerName: string;
   containerId: string;
+  restoreFenceToken: number;
+  runtimeDefinitionHash?: string;
   status: SessionStatus;
   harnessName: string;
   sessionWorkspaceDir?: string;
   grpcClient?: HarnessGrpcClient;
 }
 
-export function asStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const strings = value.filter((entry): entry is string => typeof entry === 'string');
-  return strings.length > 0 ? strings : undefined;
+export interface SessionRecoveryAuthority {
+  attemptId: string;
+  turnId: string;
+  fence: TurnDeliveryFence;
+}
+
+export interface SessionEnsureOptions {
+  concurrencyReservationId?: string;
+  recoveryAuthority?: SessionRecoveryAuthority;
+  runtimeDefinitionHash?: string;
 }
 
 export function dbSessionToRecord(
@@ -59,6 +71,8 @@ export function dbSessionToRecord(
     agentId: row.agentId,
     containerName: row.containerName ?? '',
     containerId: row.containerId ?? '',
+    restoreFenceToken: row.restoreFenceToken,
+    runtimeDefinitionHash: row.runtimeDefinitionHash ?? '',
     status: (row.status as SessionRecord['status']) ?? 'ACTIVE',
     harnessName: row.harnessName,
     ...(grpcClient ? { grpcClient } : {}),
@@ -68,8 +82,14 @@ export function dbSessionToRecord(
 export interface TurnQueueEntry {
   messages: Message[];
   turnId: string;
+  turnSecrets?: TurnSecrets;
   channel: AsyncChannel<SessionEvent>;
   signal?: AbortSignal;
+}
+
+export interface TurnDeliveryOptions {
+  signal?: AbortSignal;
+  turnSecrets?: TurnSecrets;
 }
 
 export class AsyncChannel<T> {
@@ -136,7 +156,15 @@ export interface SandboxSessionManagerDeps {
   maxConcurrentSessionsPerAgent?: number;
   interruptManager?: InterruptManager;
   buildSandboxSecrets: (agentId: string) => Promise<Readonly<Record<string, string>>>;
-  resolveToolsForAgent?: (toolNames: string[], excludeBuiltins?: string[], agentId?: string) => ToolMetadata[];
+  resolveRuntimeDefinitionHash?: (
+    agentId: string,
+    agentDef: AgentDefinition,
+  ) => Promise<string>;
+  resolveToolsForAgent?: (
+    toolNames: string[],
+    builtinToolPolicy?: BuiltinToolPolicy,
+    agentId?: string,
+  ) => ToolMetadata[];
   logger: Logger;
   config: {
     idleTimeoutMs: number;
@@ -145,4 +173,8 @@ export interface SandboxSessionManagerDeps {
   };
   dataDir?: string;
   workspaceDiffService: WorkspaceDiffService;
+  executeInterruptContinuation?: (
+    input: InterruptContinuationExecution,
+  ) => Promise<void>;
+  resolveTurnSecrets: (turnId: string) => Promise<TurnSecrets>;
 }

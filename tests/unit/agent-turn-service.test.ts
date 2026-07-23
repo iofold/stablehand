@@ -11,12 +11,26 @@ import type { SessionTurnExecutor } from '../../packages/ctxmill/src/orchestrato
 import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { AgentSessionEvent, MessageCommittedEvent } from '../../packages/shared/src/events.js';
 import { TURN_CANCELLED_MESSAGE } from '../../packages/ctxmill/src/orchestrator/turn-cancellation.js';
+import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/canonical-log.js';
 import {
   TestTurnRegistry,
   createTestSandboxSessionManager,
 } from '../utils/test-turn-registry.js';
 
 type StreamEvent = AgentSessionEvent | MessageCommittedEvent;
+
+function expectedDeliveryFence() {
+  return expect.objectContaining({
+    ownerId: expect.any(String),
+    fenceToken: 1,
+  });
+}
+
+function expectedDeliveryPersistenceContext() {
+  return {
+    deliveryFence: expectedDeliveryFence(),
+  };
+}
 
 async function* eventStream(events: readonly StreamEvent[]) {
   for (const event of events) {
@@ -84,8 +98,11 @@ function makeParams(overrides: Partial<ExecuteTurnParams> = {}): ExecuteTurnPara
 
 type MockSessionManager = {
   ensureSession: ReturnType<typeof vi.fn>;
+  findSessionById?: ReturnType<typeof vi.fn>;
   startTurn: ReturnType<typeof vi.fn>;
   completeTurn: ReturnType<typeof vi.fn>;
+  abandonTurnDelivery: ReturnType<typeof vi.fn>;
+  getPendingSessionReset: ReturnType<typeof vi.fn>;
 };
 
 function makeCommittedEvent(
@@ -110,13 +127,18 @@ function createDeps(overrides: {
     addCanonicalMessage?: ReturnType<typeof vi.fn>;
     updateTurn: ReturnType<typeof vi.fn>;
     finalizeTurnIfOpen?: ReturnType<typeof vi.fn>;
+    finalizeTurnAndMarkLifecycleDraining?: ReturnType<typeof vi.fn>;
     getTurn?: ReturnType<typeof vi.fn>;
     getMessage?: ReturnType<typeof vi.fn>;
     getMessages?: ReturnType<typeof vi.fn>;
     getMessagesPendingCanonicalPublish?: ReturnType<typeof vi.fn>;
     stageAssistantMessageUpdate?: ReturnType<typeof vi.fn>;
+    claimTurnDeliveryLease?: ReturnType<typeof vi.fn>;
+    renewTurnDeliveryLease?: ReturnType<typeof vi.fn>;
+    releaseTurnDeliveryLease?: ReturnType<typeof vi.fn>;
+    isTurnDeliveryFenceCurrent?: ReturnType<typeof vi.fn>;
   };
-  sessionManager?: MockSessionManager;
+  sessionManager?: Partial<MockSessionManager>;
   eventBus?: TypedEventBus;
 } = {}) {
   const sessionTurnService = overrides.sessionTurnService ?? {
@@ -174,18 +196,56 @@ function createDeps(overrides: {
     addCanonicalMessage: configuredAddCanonicalMessage,
     updateTurn: vi.fn().mockResolvedValue(undefined),
     finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
+    finalizeTurnAndMarkLifecycleDraining: vi.fn().mockResolvedValue(true),
     getTurn: vi.fn().mockResolvedValue({ id: 'run-1', sandboxSessionId: 'sandbox-1' }),
     getMessage: vi.fn().mockImplementation(async (id: string) => canonicalMessages.get(id)),
     getMessages: vi.fn().mockResolvedValue([]),
     getMessagesPendingCanonicalPublish: vi.fn().mockResolvedValue([]),
+    claimTurnDeliveryLease: vi.fn().mockImplementation(async (input: {
+      turnId: string;
+      ownerId: string;
+      leaseDurationMs: number;
+    }) => ({
+      turnId: input.turnId,
+      ownerId: input.ownerId,
+      fenceToken: 1,
+      leaseExpiresAt: Date.now() + input.leaseDurationMs,
+      updatedAt: Date.now(),
+    })),
+    renewTurnDeliveryLease: vi.fn().mockImplementation(async (
+      turnId: string,
+      ownerId: string,
+      fenceToken: number,
+      leaseDurationMs: number,
+    ) => ({
+      turnId,
+      ownerId,
+      fenceToken,
+      leaseExpiresAt: Date.now() + leaseDurationMs,
+      updatedAt: Date.now(),
+    })),
+    releaseTurnDeliveryLease: vi.fn().mockResolvedValue(true),
+    isTurnDeliveryFenceCurrent: vi.fn().mockResolvedValue(true),
     stageAssistantMessageUpdate: overrides.db?.stageAssistantMessageUpdate
       ?? defaultStageAssistantMessageUpdate,
     ...overrides.db,
   };
-  const sessionManager = overrides.sessionManager ?? {
+  const sessionManager = {
     ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
+    findSessionById: vi.fn().mockReturnValue({
+      sessionId: 'sandbox-1',
+      conversationId: 'conv-1',
+      agentId: 'agent-1',
+      containerName: 'sandbox-1',
+      containerId: 'container-1',
+      status: 'ACTIVE',
+      harnessName: 'claude-agents',
+    }),
     startTurn: vi.fn().mockReturnValue(undefined),
     completeTurn: vi.fn().mockResolvedValue(undefined),
+    abandonTurnDelivery: vi.fn().mockResolvedValue(undefined),
+    getPendingSessionReset: vi.fn().mockReturnValue(undefined),
+    ...overrides.sessionManager,
   };
   const eventBus = overrides.eventBus ?? new TypedEventBus();
 
@@ -231,17 +291,54 @@ describe('AgentTurnService', () => {
       },
     });
 
-    expect(db.updateTurn).toHaveBeenCalledWith('run-1', { sandboxSessionId: 'sandbox-1' });
+    expect(db.updateTurn).not.toHaveBeenCalled();
 
     expect(sessionTurnService.executeSessionTurn).toHaveBeenCalledWith(
       params.agentDef,
       params.conversationId,
       params.messages,
       params.turnId,
-      abortController.signal,
-      params.agentId,
-      'sandbox-1',
+      {
+        signal: expect.any(AbortSignal),
+        agentId: params.agentId,
+        existingSessionId: 'sandbox-1',
+      },
     );
+  });
+
+  it('performs no sandbox, message, event, or terminal mutation when delivery admission is lost', async () => {
+    const eventBus = createEventBusMock();
+    const releaseReservation = vi.fn();
+    const ctx = createDeps({
+      eventBus,
+      db: {
+        addMessage: vi.fn(),
+        updateTurn: vi.fn(),
+        finalizeTurnIfOpen: vi.fn(),
+        claimTurnDeliveryLease: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+    const service = new AgentTurnService(ctx.deps);
+
+    await service.executeTurn(makeParams({
+      concurrencyReservation: {
+        agentId: 'agent-1',
+        id: 'reservation-1',
+        release: releaseReservation,
+      },
+    }));
+
+    expect(ctx.db.claimTurnDeliveryLease).toHaveBeenCalledTimes(1);
+    expect(releaseReservation).toHaveBeenCalledTimes(1);
+    expect(ctx.sessionManager.ensureSession).not.toHaveBeenCalled();
+    expect(ctx.sessionManager.startTurn).not.toHaveBeenCalled();
+    expect(ctx.sessionTurnService.executeSessionTurn).not.toHaveBeenCalled();
+    expect(ctx.db.addCanonicalMessage).not.toHaveBeenCalled();
+    expect(ctx.db.stageAssistantMessageUpdate).not.toHaveBeenCalled();
+    expect(ctx.db.finalizeTurnIfOpen).not.toHaveBeenCalled();
+    expect(ctx.sessionManager.completeTurn).not.toHaveBeenCalled();
+    expect(eventBus.emit).not.toHaveBeenCalled();
+    expect(eventBus.emitAsync).not.toHaveBeenCalled();
   });
 
   it('propagates an external recovery lease abort into the active session turn', async () => {
@@ -257,8 +354,9 @@ describe('AgentTurnService', () => {
       _conversationId: string,
       _messages: Message[],
       _turnId: string,
-      signal?: AbortSignal,
+      options?: { signal?: AbortSignal },
     ) {
+      const signal = options?.signal;
       observedSignal = signal;
       streamStartedResolve?.();
       await new Promise<void>((resolve) => {
@@ -282,7 +380,7 @@ describe('AgentTurnService', () => {
     const turnPromise = service.executeTurn(makeParams({ signal: leaseController.signal }));
 
     await streamStarted;
-    leaseController.abort(new Error('reconciliation lease lost'));
+    leaseController.abort(new Error('delivery lease lost'));
     await turnPromise;
 
     expect(observedSignal).toBeDefined();
@@ -291,6 +389,7 @@ describe('AgentTurnService', () => {
     expect(ctx.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
       'run-1',
       expect.objectContaining({ status: 'cancelled' }),
+      expectedDeliveryFence(),
     );
   });
 
@@ -310,7 +409,178 @@ describe('AgentTurnService', () => {
       'conv-1',
       'interactive',
       'test task',
-      { suppressEvent: true },
+      {
+        suppressEvent: true,
+        deliveryContext: {
+          fence: expect.objectContaining({
+            ownerId: expect.any(String),
+            fenceToken: 1,
+          }),
+        },
+      },
+    );
+  });
+
+  it('continues the original HITL turn on its prepared sandbox and existing fence', async () => {
+    const fence = { ownerId: 'resume-worker', fenceToken: 8 };
+    const { db, sessionManager } = await executeEvents([
+      makeCommittedEvent({ content: 'continued answer' }),
+      { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
+    ], {
+      params: {
+        sandboxSessionId: 'sandbox-1',
+        continuationAttemptId: 'attempt-1',
+        deliveryContext: { fence },
+      },
+    });
+
+    expect(sessionManager.ensureSession).not.toHaveBeenCalled();
+    expect(sessionManager.findSessionById).toHaveBeenCalledWith('sandbox-1');
+    expect(sessionManager.startTurn).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
+      'agent-1',
+      'conv-1',
+      'interactive',
+      'test task',
+      {
+        suppressEvent: true,
+        deliveryContext: { fence },
+        deliveryAdmission: 'continuation',
+      },
+    );
+    expect(db.addCanonicalMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'canonical-run-1-resume-attempt-1-0',
+        turnId: 'run-1',
+        content: 'continued answer',
+      }),
+      fence,
+    );
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        sandboxSessionId: 'sandbox-1',
+        status: 'completed',
+      }),
+      fence,
+    );
+  });
+
+  it('keeps the original HITL turn open when continuation execution fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fence = { ownerId: 'resume-worker', fenceToken: 8 };
+    const ctx = createDeps();
+    ctx.sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([
+      {
+        type: 'RUN_ERROR',
+        timestamp: 1,
+        runId: 'run-1',
+        error: 'continuation failed',
+      },
+    ]));
+
+    await expect(new AgentTurnService(ctx.deps).executeTurn(makeParams({
+      sandboxSessionId: 'sandbox-1',
+      continuationAttemptId: 'attempt-1',
+      deliveryContext: { fence },
+    }))).rejects.toThrow('continuation failed');
+
+    expect(ctx.db.finalizeTurnIfOpen).not.toHaveBeenCalled();
+    expect(ctx.sessionManager.abandonTurnDelivery).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
+    );
+  });
+
+  it('atomically drains a reserved session reset with the owned terminal turn', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const deliveryFence = { ownerId: 'delivery-owner', fenceToken: 5 };
+    const lifecycleReset = {
+      sandboxSessionId: 'sandbox-1',
+      fence: { ownerId: 'reset-owner', fenceToken: 3 },
+    };
+    const ctx = createDeps({
+      sessionManager: {
+        getPendingSessionReset: vi.fn().mockReturnValue(lifecycleReset),
+      },
+    });
+    ctx.sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([
+      {
+        type: 'RUN_ERROR',
+        timestamp: 1,
+        runId: 'run-1',
+        error: 'sandbox transport failed',
+      },
+    ]));
+
+    await new AgentTurnService(ctx.deps).executeTurn(makeParams({
+      deliveryContext: { fence: deliveryFence },
+    }));
+
+    expect(ctx.db.finalizeTurnIfOpen).not.toHaveBeenCalled();
+    expect(ctx.db.finalizeTurnAndMarkLifecycleDraining).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        sandboxSessionId: 'sandbox-1',
+        status: 'error',
+        error: 'sandbox transport failed',
+      }),
+      deliveryFence,
+      {
+        sandboxSessionId: 'sandbox-1',
+        ownerId: 'reset-owner',
+        fenceToken: 3,
+      },
+    );
+    expect(ctx.sessionManager.completeTurn).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
+      'agent-1',
+      'conv-1',
+      'error',
+      expect.any(Number),
+      'sandbox transport failed',
+      undefined,
+    );
+  });
+
+  it('does not flush or finalize after a recovery owner loses its durable fence', async () => {
+    const addCanonicalMessage = vi.fn().mockResolvedValue({ id: 'should-not-write' });
+    const { db, sessionManager } = await executeEvents([
+      {
+        type: 'TEXT_MESSAGE_CONTENT',
+        timestamp: 1,
+        runId: 'run-1',
+        messageId: 'streamed-1',
+        delta: 'partial text',
+      },
+    ], {
+      params: {
+        deliveryContext: {
+          fence: {
+            ownerId: 'stale-owner',
+            fenceToken: 4,
+          },
+        },
+      },
+      deps: {
+        db: {
+          addMessage: addCanonicalMessage,
+          addCanonicalMessage,
+          updateTurn: vi.fn(),
+          finalizeTurnIfOpen: vi.fn(),
+          isTurnDeliveryFenceCurrent: vi.fn().mockResolvedValue(false),
+        },
+      },
+    });
+
+    expect(db.updateTurn).not.toHaveBeenCalled();
+    expect(addCanonicalMessage).not.toHaveBeenCalled();
+    expect(db.finalizeTurnIfOpen).not.toHaveBeenCalled();
+    expect(sessionManager.abandonTurnDelivery).toHaveBeenCalledWith(
+      'sandbox-1',
+      'run-1',
     );
   });
 
@@ -327,12 +597,16 @@ describe('AgentTurnService', () => {
     });
 
     expect(db.getTurn).toHaveBeenCalledWith('run-1');
-    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith('run-1', {
-      sandboxSessionId: 'sandbox-2',
-      completedAt: expect.any(Number),
-      error: null,
-      status: 'completed',
-    });
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'run-1',
+      {
+        sandboxSessionId: 'sandbox-2',
+        completedAt: expect.any(Number),
+        error: null,
+        status: 'completed',
+      },
+      expectedDeliveryFence(),
+    );
     expect(sessionManager.completeTurn).toHaveBeenCalledWith(
       'sandbox-2',
       'run-1',
@@ -367,11 +641,15 @@ describe('AgentTurnService', () => {
     expect(sessionManager.ensureSession).not.toHaveBeenCalled();
     expect(sessionManager.startTurn).not.toHaveBeenCalled();
     expect(sessionTurnService.executeSessionTurn).not.toHaveBeenCalled();
-    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith('run-1', {
-      completedAt: expect.any(Number),
-      error: TURN_CANCELLED_MESSAGE,
-      status: 'cancelled',
-    });
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'run-1',
+      {
+        completedAt: expect.any(Number),
+        error: TURN_CANCELLED_MESSAGE,
+        status: 'cancelled',
+      },
+      expectedDeliveryFence(),
+    );
     expect(eventBus.emit).toHaveBeenCalledWith('turn.completed', expect.objectContaining({
       turnId: 'run-1',
       status: 'cancelled',
@@ -407,8 +685,94 @@ describe('AgentTurnService', () => {
           event,
           timestamp: expect.any(Number),
         }),
+        expectedDeliveryPersistenceContext(),
       ]);
     }
+  });
+
+  it('keeps consuming sandbox deltas while canonical persistence serializes them exactly', async () => {
+    let releaseFirstPersist!: () => void;
+    const firstPersistReleased = new Promise<void>((resolve) => {
+      releaseFirstPersist = resolve;
+    });
+    let markSecondYield!: () => void;
+    const secondYielded = new Promise<void>((resolve) => {
+      markSecondYield = resolve;
+    });
+    let yielded = 0;
+    let nextSeq = 0;
+    const durableOrder: string[] = [];
+    const persist = async (
+      frames: Array<{ sourceType?: string | null }>,
+      waitForGate = false,
+    ) => {
+      if (waitForGate) {
+        await firstPersistReleased;
+      }
+      durableOrder.push(String(frames[0]?.sourceType));
+      return frames.map(() => ++nextSeq);
+    };
+    let fencedPersistCount = 0;
+    const canonicalLog = new CanonicalLog({
+      db: {
+        saveEventBatch: vi.fn(async (frames) => persist(frames)),
+        saveFencedEventBatch: vi.fn(async (frames) => {
+          fencedPersistCount++;
+          return persist(frames, fencedPersistCount === 1);
+        }),
+        saveRecoveryEventBatch: vi.fn(async (frames) => persist(frames)),
+        saveMessageEventBatch: vi.fn(async (frames) => persist(frames)),
+        saveTerminalEventBatch: vi.fn(async (frames) => persist(frames)),
+        getFramesSince: vi.fn(async () => []),
+        getTurnFrames: vi.fn(async () => []),
+      },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const eventBus = new TypedEventBus({
+      persistEvent: (eventName, _agentId, _payload, parsedPayload, context) =>
+        canonicalLog.ingest(eventName, parsedPayload ?? {}, context),
+    });
+    async function* streamingDeltas(): AsyncGenerator<AgentSessionEvent> {
+      yielded++;
+      yield {
+        type: 'TEXT_MESSAGE_CONTENT',
+        timestamp: 1,
+        runId: 'run-1',
+        messageId: 'stream-1',
+        delta: 'A',
+      };
+      yielded++;
+      markSecondYield();
+      yield {
+        type: 'TEXT_MESSAGE_CONTENT',
+        timestamp: 2,
+        runId: 'run-1',
+        messageId: 'stream-1',
+        delta: 'B',
+      };
+      yield { type: 'RUN_FINISHED', timestamp: 3, runId: 'run-1' };
+    }
+    const ctx = createDeps({
+      eventBus,
+      sessionTurnService: {
+        executeSessionTurn: vi.fn().mockImplementation(streamingDeltas),
+      },
+    });
+    const execution = new AgentTurnService(ctx.deps).executeTurn(makeParams());
+
+    await secondYielded;
+    expect(yielded).toBe(2);
+    expect(durableOrder).toEqual([]);
+
+    releaseFirstPersist();
+    await execution;
+    await canonicalLog.drain();
+    expect(durableOrder).toEqual([
+      'message.delta',
+      'message.delta',
+      'message.committed',
+      'turn.completed',
+    ]);
   });
 
   it('persists assistant MESSAGE_COMMITTED events to the database', async () => {
@@ -422,14 +786,17 @@ describe('AgentTurnService', () => {
     const { db } = await executeEvents([committed]);
 
     expect(db.addMessage).toHaveBeenCalledTimes(1);
-    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      role: 'assistant',
-      content: 'Hello world',
-      toolCalls: undefined,
-      toolCallId: undefined,
-    }));
+    expect(db.addMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: 'Hello world',
+        toolCalls: undefined,
+        toolCallId: undefined,
+      }),
+      expectedDeliveryFence(),
+    );
   });
 
   it('persists tool MESSAGE_COMMITTED events with tool metadata', async () => {
@@ -443,14 +810,17 @@ describe('AgentTurnService', () => {
 
     const { db } = await executeEvents([committed]);
 
-    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      role: 'tool',
-      content: '{"ok":true}',
-      toolCalls: [],
-      toolCallId: 'tool-call-1',
-    }));
+    expect(db.addMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        role: 'tool',
+        content: '{"ok":true}',
+        toolCalls: [],
+        toolCallId: 'tool-call-1',
+      }),
+      expectedDeliveryFence(),
+    );
   });
 
   it('flushes accumulated assistant text when the stream ends without MESSAGE_COMMITTED', async () => {
@@ -463,15 +833,18 @@ describe('AgentTurnService', () => {
     const { db } = await executeEvents(events);
 
     expect(db.addMessage).toHaveBeenCalledTimes(1);
-    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      role: 'assistant',
-      content: 'Hello world',
-      toolCalls: undefined,
-      toolCallId: undefined,
-      parts: [{ type: 'text', content: 'Hello world' }],
-    }));
+    expect(db.addMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: 'Hello world',
+        toolCalls: undefined,
+        toolCallId: undefined,
+        parts: [{ type: 'text', content: 'Hello world' }],
+      }),
+      expectedDeliveryFence(),
+    );
   });
 
   it('flushes pending tool-call state when the stream ends before a result arrives', async () => {
@@ -484,15 +857,18 @@ describe('AgentTurnService', () => {
     const { db } = await executeEvents(events);
 
     expect(db.addMessage).toHaveBeenCalledTimes(1);
-    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      role: 'assistant',
-      content: '',
-      toolCallId: undefined,
-      parts: [{ type: 'tool_call', id: 'tc-1', name: 'search', args: '', status: 'complete' }],
-      toolCalls: [{ id: 'tc-1', name: 'search', args: '', status: 'complete' }],
-    }));
+    expect(db.addMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: '',
+        toolCallId: undefined,
+        parts: [{ type: 'tool_call', id: 'tc-1', name: 'search', args: '', status: 'complete' }],
+        toolCalls: [{ id: 'tc-1', name: 'search', args: '', status: 'complete' }],
+      }),
+      expectedDeliveryFence(),
+    );
   });
 
   it('persists assistant and tool messages separately for tool-use turns', async () => {
@@ -510,38 +886,50 @@ describe('AgentTurnService', () => {
     const { db } = await executeEvents(events);
 
     expect(db.addMessage).toHaveBeenCalledTimes(3);
-    expect(db.addMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      role: 'assistant',
-      content: 'Let me check.',
-      toolCalls: [
-        {
-          id: 'tc-1',
-          name: 'search',
-          args: '{"q":"test"}',
-          status: 'complete',
-        },
-      ],
-    }));
+    expect(db.addMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: 'Let me check.',
+        toolCalls: [
+          {
+            id: 'tc-1',
+            name: 'search',
+            args: '{"q":"test"}',
+            status: 'complete',
+          },
+        ],
+      }),
+      expectedDeliveryFence(),
+    );
     const firstCall = (db.addMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(firstCall.parts).toHaveLength(2);
     expect(firstCall.parts[0]).toEqual({ type: 'text', content: 'Let me check.' });
     expect(firstCall.parts[1]).toMatchObject({ type: 'tool_call', id: 'tc-1', name: 'search', status: 'complete' });
-    expect(db.addMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      turnId: 'run-1',
-      role: 'tool',
-      content: 'Found 3 results',
-      toolCallId: 'tc-1',
-    }));
-    expect(db.addMessage).toHaveBeenNthCalledWith(3, expect.objectContaining({
-      agentId: 'agent-1',
-      conversationId: 'conv-1',
-      role: 'assistant',
-      content: 'Based on the results:',
-    }));
+    expect(db.addMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        turnId: 'run-1',
+        role: 'tool',
+        content: 'Found 3 results',
+        toolCallId: 'tc-1',
+      }),
+      expectedDeliveryFence(),
+    );
+    expect(db.addMessage).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        agentId: 'agent-1',
+        conversationId: 'conv-1',
+        role: 'assistant',
+        content: 'Based on the results:',
+      }),
+      expectedDeliveryFence(),
+    );
   });
 
   it('updates both persisted assistant tool-call projections after later tool results', async () => {
@@ -564,9 +952,10 @@ describe('AgentTurnService', () => {
       ],
       [
         { type: 'text', content: 'Checking.' },
-        { type: 'tool_call', id: 'tc-1', name: 'search', args: '', result: 'first', status: 'complete' },
-        { type: 'tool_call', id: 'tc-2', name: 'lookup', args: '', result: 'second', status: 'complete' },
+        { type: 'tool_call', id: 'tc-1', name: 'search', args: '', result: 'first', error: undefined, status: 'complete' },
+        { type: 'tool_call', id: 'tc-2', name: 'lookup', args: '', result: 'second', error: undefined, status: 'complete' },
       ],
+      expectedDeliveryFence(),
     );
   });
 
@@ -643,7 +1032,7 @@ describe('AgentTurnService', () => {
       outputTokens: 30,
       totalTokens: 150,
       costUsd: 0.0021,
-    }));
+    }), expectedDeliveryFence());
     expect(sessionManager.completeTurn).toHaveBeenCalledWith(
       'sandbox-1',
       'run-1',
@@ -734,27 +1123,34 @@ describe('AgentTurnService', () => {
       },
     ]);
 
-    expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
-      role: 'assistant',
-      toolCalls: [
-        expect.objectContaining({
-          id: 'tc-running',
-          status: 'error',
-          error: expect.stringContaining('still running'),
-        }),
-      ],
-      parts: [
-        expect.objectContaining({
-          type: 'tool_call',
-          id: 'tc-running',
-          status: 'error',
-          error: expect.stringContaining('still running'),
-        }),
-      ],
-    }));
-    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith('run-1', expect.objectContaining({
-      error: expect.stringContaining('running tool call'),
-    }));
+    expect(db.addMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'assistant',
+        toolCalls: [
+          expect.objectContaining({
+            id: 'tc-running',
+            status: 'error',
+            error: expect.stringContaining('still running'),
+          }),
+        ],
+        parts: [
+          expect.objectContaining({
+            type: 'tool_call',
+            id: 'tc-running',
+            status: 'error',
+            error: expect.stringContaining('still running'),
+          }),
+        ],
+      }),
+      expectedDeliveryFence(),
+    );
+    expect(db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        error: expect.stringContaining('running tool call'),
+      }),
+      expectedDeliveryFence(),
+    );
     expect(sessionManager.completeTurn).toHaveBeenCalledWith(
       'sandbox-1',
       'run-1',
@@ -782,6 +1178,7 @@ describe('AgentTurnService', () => {
       getMessages: vi.fn().mockResolvedValue([
         {
           id: 'msg-persisted',
+          turnId: 'run-1',
           toolCalls: runningToolCalls,
           parts: runningParts,
         },
@@ -828,6 +1225,7 @@ describe('AgentTurnService', () => {
           error: expect.stringContaining('still running'),
         }),
       ],
+      expectedDeliveryFence(),
     );
   });
 
@@ -962,6 +1360,7 @@ describe('AgentTurnService', () => {
       expect(finalizeTurnIfOpen).toHaveBeenCalledWith(
         'run-1',
         expect.objectContaining({ status: 'completed', error: null }),
+        expectedDeliveryFence(),
       );
     });
 
@@ -1207,8 +1606,9 @@ describe('AgentTurnService', () => {
         _conversationId: string,
         _messages: Message[],
         _turnId: string,
-        signal?: AbortSignal,
+        options?: { signal?: AbortSignal },
       ) {
+        const signal = options?.signal;
         const chunks = ['one', 'two', 'three'];
         for (const [index, chunk] of chunks.entries()) {
           if (signal?.aborted) {
@@ -1268,8 +1668,9 @@ describe('AgentTurnService', () => {
         _conversationId: string,
         _messages: Message[],
         _turnId: string,
-        signal?: AbortSignal,
+        options?: { signal?: AbortSignal },
       ) {
+        const signal = options?.signal;
         yield makeCommittedEvent({
           runId: turn.turnId,
           turnId: turn.turnId,
@@ -1304,14 +1705,17 @@ describe('AgentTurnService', () => {
       await turnPromise;
 
       expect(db.addMessage).toHaveBeenCalledTimes(1);
-      expect(db.addMessage).toHaveBeenCalledWith(expect.objectContaining({
-        agentId: 'agent-1',
-        conversationId: 'conv-1',
-        role: 'assistant',
-        content: 'Committed before cancel',
-        toolCalls: undefined,
-        toolCallId: undefined,
-      }));
+      expect(db.addMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: 'agent-1',
+          conversationId: 'conv-1',
+          role: 'assistant',
+          content: 'Committed before cancel',
+          toolCalls: undefined,
+          toolCallId: undefined,
+        }),
+        expectedDeliveryFence(),
+      );
     });
 
     it('emits turn.completed with cancelled status when TestTurnRegistry.cancelTurn is called', async () => {

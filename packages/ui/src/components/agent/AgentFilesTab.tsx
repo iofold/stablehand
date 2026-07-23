@@ -62,7 +62,7 @@ export function AgentFilesTab({ agentId, conversationId }: AgentFilesTabProps) {
     setUploadMessage(null);
     try {
       const result = await uploadWorkspaceTarball(agentId, file);
-      setUploadMessage(`Uploaded workspace archive: ${result.files} files, ${result.totalBytes} bytes.`);
+      setUploadMessage(`Uploaded workspace archive: ${result.fileCount} files, ${result.totalBytes} bytes.`);
       setSelectedFile(null);
       refreshExplorer();
     } catch (err) {

@@ -23,6 +23,8 @@ interface CallbackAuthLogger {
 
 interface MessageIdentity {
   agentIds: string[];
+  sandboxSessionIds: string[];
+  requiresSandboxSessionId: boolean;
 }
 
 function nonEmptyTrimmed(value: string | undefined | null): string | undefined {
@@ -59,13 +61,20 @@ function readPayloadAgentId(payloadJson: string): string | undefined {
 
 function readMessageIdentity(message: unknown): MessageIdentity {
   const agentIds = new Set<string>();
+  const sandboxSessionIds = new Set<string>();
 
   if (!isRecord(message)) {
-    return { agentIds: [] };
+    return {
+      agentIds: [],
+      sandboxSessionIds: [],
+      requiresSandboxSessionId: false,
+    };
   }
 
   const directAgentId = readString(message, 'agentId');
   if (directAgentId) agentIds.add(directAgentId);
+  const directSandboxSessionId = readString(message, 'sandboxSessionId');
+  if (directSandboxSessionId) sandboxSessionIds.add(directSandboxSessionId);
 
   const artifact = message.artifact;
   if (isRecord(artifact)) {
@@ -81,6 +90,8 @@ function readMessageIdentity(message: unknown): MessageIdentity {
 
   return {
     agentIds: Array.from(agentIds),
+    sandboxSessionIds: Array.from(sandboxSessionIds),
+    requiresSandboxSessionId: 'turnId' in message,
   };
 }
 
@@ -124,25 +135,36 @@ export function resolveGrpcCallbackAuthConfig(
   return { mode: 'open' };
 }
 
-export function mintGrpcCallbackToken(sessionId: string, agentId: string, secret: string): string {
+export function mintGrpcCallbackToken(
+  sandboxSessionId: string,
+  agentId: string,
+  secret: string,
+): string {
   return createHmac('sha256', secret)
-    .update(`${CALLBACK_TOKEN_CONTEXT}:${sessionId}:${agentId}`)
+    .update(`${CALLBACK_TOKEN_CONTEXT}:${sandboxSessionId}:${agentId}`)
     .digest('base64url');
 }
 
 export function getGrpcCallbackSandboxSecrets(
-  sessionId: string,
+  sandboxSessionId: string,
   agentId: string,
   config: GrpcCallbackAuthConfig = resolveGrpcCallbackAuthConfig(process.env, { warn: () => undefined }),
 ): Record<string, string> {
   if (config.mode === 'open') {
-    return {};
+    return {
+      [CALLBACK_SESSION_ENV]: sandboxSessionId,
+      [CALLBACK_AGENT_ENV]: agentId,
+    };
   }
 
   return {
-    [CALLBACK_SESSION_ENV]: sessionId,
+    [CALLBACK_SESSION_ENV]: sandboxSessionId,
     [CALLBACK_AGENT_ENV]: agentId,
-    [CALLBACK_TOKEN_ENV]: mintGrpcCallbackToken(sessionId, agentId, config.secret),
+    [CALLBACK_TOKEN_ENV]: mintGrpcCallbackToken(
+      sandboxSessionId,
+      agentId,
+      config.secret,
+    ),
   };
 }
 
@@ -155,22 +177,37 @@ export function validateGrpcCallbackAuth(
     return;
   }
 
-  const sessionId = nonEmptyTrimmed(headers.get(CALLBACK_SESSION_HEADER));
+  const sandboxSessionId = nonEmptyTrimmed(headers.get(CALLBACK_SESSION_HEADER));
   const agentId = nonEmptyTrimmed(headers.get(CALLBACK_AGENT_HEADER));
   const token = nonEmptyTrimmed(headers.get(CALLBACK_TOKEN_HEADER));
-  if (!sessionId || !agentId || !token) {
+  if (!sandboxSessionId || !agentId || !token) {
     unauthorized();
   }
 
-  const expectedToken = mintGrpcCallbackToken(sessionId, agentId, config.secret);
+  const expectedToken = mintGrpcCallbackToken(
+    sandboxSessionId,
+    agentId,
+    config.secret,
+  );
   if (!tokensEqual(token, expectedToken)) {
     unauthorized();
   }
 
   const identity = readMessageIdentity(message);
+  if (
+    identity.requiresSandboxSessionId
+    && identity.sandboxSessionIds.length === 0
+  ) {
+    denied('Sandbox callback session identity is required');
+  }
   for (const messageAgentId of identity.agentIds) {
     if (messageAgentId !== agentId) {
       denied('Sandbox callback agent mismatch');
+    }
+  }
+  for (const messageSandboxSessionId of identity.sandboxSessionIds) {
+    if (messageSandboxSessionId !== sandboxSessionId) {
+      denied('Sandbox callback session mismatch');
     }
   }
 }

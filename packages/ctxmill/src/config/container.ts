@@ -20,6 +20,7 @@ import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
 import { createGuardedFetch } from '../util/egress.js';
 import { createWebhookRelaySpineConsumer } from '../orchestrator/webhook-relay.js';
 import { TurnStartupService } from '../orchestrator/turn-startup-service.js';
+import { TurnSecretEnvelopeCodec } from '../orchestrator/turn-secret-envelope.js';
 import { TurnFinalizer } from '../orchestrator/turn-finalizer.js';
 import { reconcileStrandedTurnsOnStartup } from '../orchestrator/turn-reconciler.js';
 import { reconcilePendingMessagePublishesOnStartup } from '../orchestrator/message-publisher.js';
@@ -42,13 +43,29 @@ import { SessionStatusCoordinator } from '../orchestrator/session-manager/sessio
 import { DefaultToolRegistry } from '../tool/registry.js';
 import { LocalToolProvider } from '../tool/providers/local.js';
 import { ArtifactToolProvider } from '../tool/providers/artifact.js';
-import { builtinTools, builtinToolNames } from '../tool/builtin/index.js';
+import {
+  builtinNamesAllowedByPolicy,
+  builtinTools,
+  builtinToolNames,
+} from '../tool/builtin/index.js';
 import { createCtxmillGuideTool } from '../tool/builtin/ctxmill-guide.js';
 import { resolveToolLocation } from '../tool/metadata.js';
-import { zodToJsonSchema } from '@ctxmill/sandbox-daemon';
+import {
+  zodToJsonSchema,
+  type AgentDefinition,
+} from '@ctxmill/sandbox-daemon';
 import { ArtifactStore } from '../artifact/artifact-store.js';
 import { VALID_WEBHOOK_EVENTS } from '../orchestrator/webhook-events.js';
 import { ToolLocation } from '@ctxmill/proto/sandbox/v1';
+import type { BuiltinToolPolicy } from '@ctxmill/contracts';
+import {
+  mergeSandboxSecrets,
+  resolveModelGatewayConfig,
+} from '../cost-control/model-gateway-config.js';
+import { LiteLLMSpendClient } from '../cost-control/litellm-spend-client.js';
+import { ModelGatewayReconciler } from '../cost-control/model-gateway-reconciler.js';
+import type { ModelGatewayStatusConfig } from '../orchestrator/routes/model-gateway.js';
+import { createRuntimeDefinitionFingerprint } from '../orchestrator/session-manager/runtime-definition-fingerprint.js';
 
 const LOCATION_TO_PROTO = {
   sandbox: ToolLocation.SANDBOX,
@@ -76,6 +93,10 @@ export interface AppContainer {
   workspaceDiffService: WorkspaceDiffService;
   settingsService: SystemSettingsService;
   lifecyclePolicy: ContainerLifecyclePolicy;
+  /** Non-secret gateway status projection for the HTTP API. */
+  modelGateway: ModelGatewayStatusConfig;
+  /** Optional deployment-scoped spend reconciler; absent in direct-only mode. */
+  modelGatewayReconciler?: ModelGatewayReconciler;
   /** Durable canonical event spine (ADR-015); serves replay when CTXMILL_CANONICAL_EVENTS=1. */
   canonicalLog: CanonicalLog;
   /** Startup turn reconciliation (ADR-014/ctx-7e3x): fail stranded turns and replay durable queued turns. */
@@ -161,6 +182,7 @@ export async function createContainer(
   userConfig: CTXMillConfig,
   dataDir: string,
 ): Promise<AppContainer> {
+  const modelGatewayConfig = resolveModelGatewayConfig();
   const config: ResolvedConfig = {
     database: {
       type: 'postgres',
@@ -185,6 +207,7 @@ export async function createContainer(
     dbConn.pgClient,
     secretMasterKey,
   );
+  const turnSecretEnvelopeCodec = new TurnSecretEnvelopeCodec(secretMasterKey);
 
   // ── Tools ───────────────────────────────────────────────
   const toolExecutor = new LocalFunctionExecutor();
@@ -200,6 +223,14 @@ export async function createContainer(
   const toolRegistry = new DefaultToolRegistry();
   toolRegistry.addProvider(new LocalToolProvider(toolExecutor));
   const turnStartupService = new TurnStartupService({
+    turnSecretEnvelopeCodec,
+    modelGateway: modelGatewayConfig.enabled
+      ? {
+        enabled: true,
+        profile: modelGatewayConfig.profile,
+        revision: modelGatewayConfig.revision,
+      }
+      : { enabled: false },
     logger: {
       info: (msg: string, ...args: unknown[]) => console.log('[TurnStartupService]', msg, ...args),
       warn: (msg: string, ...args: unknown[]) => console.warn('[TurnStartupService]', msg, ...args),
@@ -237,10 +268,11 @@ export async function createContainer(
   // ADR-006 persist-then-dispatch holds.
   const canonicalLog = new CanonicalLog({ db, logger: console });
   const eventBus = new TypedEventBus({
-    persistEvent: async (type, _agentId, payload, parsedPayload) => {
+    persistEvent: async (type, _agentId, payload, parsedPayload, context) => {
       const persisted = await canonicalLog.ingest(
         type,
         parsedPayload ?? JSON.parse(payload) as Record<string, unknown>,
+        context,
       );
       return persisted.length > 0;
     },
@@ -255,9 +287,20 @@ export async function createContainer(
       sseManager.broadcastFrame(frame.agentId, frame.body, frame.seq);
     }
   });
-  const interruptManager = new InterruptManager(eventBus, db, async (sessionId) => {
+  const interruptManager = new InterruptManager(eventBus, db, async (sessionId, turnId) => {
     if (sessionManagerRef) {
-      await sessionManagerRef.suspendSession(sessionId, 'hitl-timeout', { allowActiveTurn: true });
+      const fence = sessionManagerRef.getTurnDeliveryFence(turnId);
+      if (!fence) {
+        console.warn(
+          `[InterruptManager] refusing unfenced HITL timeout checkpoint for `
+          + `session ${sessionId}, turn ${turnId}`,
+        );
+        return;
+      }
+      await sessionManagerRef.suspendSession(sessionId, 'hitl-timeout', {
+        allowActiveTurn: true,
+        allowedTurnDelivery: { turnId, fence },
+      });
     }
   });
   await interruptManager.loadFromDb();
@@ -344,17 +387,23 @@ export async function createContainer(
     },
     reconciliationCallbacks: {
       onSessionReconnected: (session, grpcClient) => {
-        sessionManagerRef?.getSessionReconciler().onSessionReconnected(session, grpcClient);
+        const reconciler = sessionManagerRef?.getSessionReconciler();
+        if (!reconciler) {
+          throw new Error(
+            'Session reconciler is unavailable during startup adoption',
+          );
+        }
+        return reconciler.onSessionReconnected(session, grpcClient);
       },
       onSessionEvicted: (sessionId, conversationId) => {
         return sessionManagerRef?.getSessionReconciler().onSessionEvicted(sessionId, conversationId);
       },
-      reconcileStrandedRestoring: async (session) => {
+      reconcileExpiredSandboxSessionRestore: async (session) => {
         const reconciler = sessionManagerRef?.getSessionReconciler();
         if (!reconciler) {
           throw new Error('Session reconciler is unavailable during startup reconciliation');
         }
-        return reconciler.reconcileStrandedRestoring(session);
+        return reconciler.reconcileExpiredSandboxSessionRestore(session);
       },
     },
     statusCoordinator: sessionStatusCoordinator,
@@ -393,28 +442,52 @@ export async function createContainer(
       entries.filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
     );
 
-    return {
+    return mergeSandboxSecrets({
       ...envSecrets,
       ...agentSecrets,
-    };
+    }, modelGatewayConfig.enabled
+      ? modelGatewayConfig.sandboxEnvironment
+      : undefined);
   }
 
-  const resolveToolsForAgent = (toolNames: string[], excludeBuiltins?: string[], agentId?: string) => {
+  async function resolveRuntimeDefinitionHash(
+    agentId: string,
+    agentDef: AgentDefinition,
+  ): Promise<string> {
+    const agentSecretRevision = secretProvider.revision
+      ? await secretProvider.revision(agentId)
+      : 'untracked';
+    return createRuntimeDefinitionFingerprint(agentDef, {
+      gateway: modelGatewayConfig.enabled
+        ? {
+            enabled: true,
+            profile: modelGatewayConfig.profile,
+            revision: modelGatewayConfig.revision,
+          }
+        : { enabled: false },
+      agentSecretRevision,
+    });
+  }
+
+  const resolveToolsForAgent = (
+    toolNames: string[],
+    builtinToolPolicy?: BuiltinToolPolicy,
+    agentId?: string,
+  ) => {
     const declaredTools = new Set(toolNames);
-    const excluded = excludeBuiltins ? new Set(excludeBuiltins) : undefined;
+    const allowedBuiltinNames = builtinNamesAllowedByPolicy(builtinToolNames, builtinToolPolicy);
     const allTools = new Map<string, { name: string; description: string; input: unknown; requiresApproval?: boolean; location?: 'sandbox' | 'orchestrator' | 'daemon'; programmatic?: boolean }>();
     for (const tool of toolExecutor.list()) {
-      if (declaredTools.has(tool.name) || builtinToolNames.has(tool.name)) {
+      if (declaredTools.has(tool.name) || allowedBuiltinNames.has(tool.name)) {
         allTools.set(tool.name, tool);
       }
     }
     for (const tool of toolRegistry.listForAgent(toolNames, agentId)) {
       allTools.set(tool.name, tool);
     }
-
-    if (excluded) {
-      for (const name of excluded) {
-        if (builtinToolNames.has(name)) allTools.delete(name);
+    for (const builtinName of builtinToolNames) {
+      if (!allowedBuiltinNames.has(builtinName)) {
+        allTools.delete(builtinName);
       }
     }
 
@@ -438,6 +511,7 @@ export async function createContainer(
     });
   };
 
+  const agentTurnServiceHolder: { current?: AgentTurnService } = {};
   const realSessionManagerDeps: ConstructorParameters<typeof SandboxSessionManagerImpl>[0] = {
     containerManager,
     db,
@@ -448,10 +522,28 @@ export async function createContainer(
     maxConcurrentSessionsPerAgent: startupSettings.maxConcurrentSessionsPerAgent,
     interruptManager,
     buildSandboxSecrets,
+    resolveRuntimeDefinitionHash,
     resolveToolsForAgent,
     dataDir,
     workspaceDiffService,
     logger: sessionManagerLogger,
+    executeInterruptContinuation: async (input) => {
+      if (!agentTurnServiceHolder.current) {
+        throw new Error(
+          'Agent turn service is unavailable for interrupt continuation',
+        );
+      }
+      await agentTurnServiceHolder.current.executeTurn(input);
+    },
+    resolveTurnSecrets: async (turnId) => {
+      const envelope = await db.getTurnSecretEnvelope(turnId);
+      if (!envelope) {
+        throw new Error(
+          `Encrypted turn credentials are missing for HITL turn ${turnId}`,
+        );
+      }
+      return turnSecretEnvelopeCodec.open(turnId, envelope);
+    },
     config: {
       idleTimeoutMs: startupSettings.idleTimeoutMs,
       maxQueuedMessages: 100,
@@ -466,9 +558,6 @@ export async function createContainer(
 
   const sessionTurnService = createSessionTurnExecutor({
     sessionManager,
-    onSessionReady: (turnId, sandboxSessionId) => {
-      void db.updateTurn(turnId, { sandboxSessionId });
-    },
   });
 
   const agentTurnService = new AgentTurnService({
@@ -477,12 +566,29 @@ export async function createContainer(
     eventBus,
     sessionTurnService,
   });
+  agentTurnServiceHolder.current = agentTurnService;
   // Tag-based budget policies: block at turn admission, warn on threshold
   // crossings observed at turn completion (usage is only known at done).
   const budgetEnforcer = new BudgetEnforcer({ db, eventBus, logger: console });
   eventBus.on('turn.completed', (payload) => {
     void budgetEnforcer.onTurnCompleted(payload as EventMap['turn.completed']);
   });
+  const modelGatewayReconciler = modelGatewayConfig.enabled
+    ? new ModelGatewayReconciler({
+      db,
+      spendClient: new LiteLLMSpendClient({
+        baseUrl: modelGatewayConfig.baseUrl,
+        meteringKey: modelGatewayConfig.meteringKey,
+        explicitFreeModels: modelGatewayConfig.explicitFreeModels,
+      }),
+      onUsageReconciled: (change) =>
+        budgetEnforcer.onTurnUsageReconciled(change),
+      logger: console,
+    }, {
+      profile: modelGatewayConfig.profile,
+      revision: modelGatewayConfig.revision,
+    })
+    : undefined;
   turnStartupService.configureExecution({
     db,
     eventBus,
@@ -506,6 +612,7 @@ export async function createContainer(
   });
 
   callbackDispatcher.start();
+  modelGatewayReconciler?.start();
 
   return {
     config,
@@ -526,6 +633,14 @@ export async function createContainer(
     workspaceDiffService,
     settingsService,
     lifecyclePolicy,
+    modelGateway: modelGatewayConfig.enabled
+      ? {
+        enabled: true,
+        profile: modelGatewayConfig.profile,
+        revision: modelGatewayConfig.revision,
+      }
+      : { enabled: false },
+    ...(modelGatewayReconciler ? { modelGatewayReconciler } : {}),
     canonicalLog,
     reconcileStrandedTurns: (bootTimeMs: number) => reconcileStrandedTurnsOnStartup(
       {
@@ -535,7 +650,8 @@ export async function createContainer(
         logger: console,
         redispatchQueuedTurn: (params, signal) =>
           turnStartupService.redispatchQueuedTurn(params, signal),
-        resetStrandedSession: (sessionId) => realSessionManager.killSession(sessionId),
+        resetStrandedSession: (sessionId, lifecycleOperation) =>
+          realSessionManager.killSession(sessionId, { lifecycleOperation }),
       },
       bootTimeMs,
     ),
@@ -543,6 +659,7 @@ export async function createContainer(
     sessionManager: realSessionManager,
     close: async () => {
       lifecyclePolicy.stop();
+      await modelGatewayReconciler?.stop();
       await canonicalLog.drain();
       spineConsumerRunner.stop();
       callbackDispatcher.stop();

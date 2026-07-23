@@ -8,17 +8,32 @@ export type ConversationSelect = typeof pgSchema.conversations.$inferSelect;
 export type MessageInsert = typeof pgSchema.messages.$inferInsert;
 export type MessageSelect = typeof pgSchema.messages.$inferSelect;
 export type TurnStatus = pgSchema.TurnStatus;
+export type SandboxSessionLifecycleOperation =
+  pgSchema.SandboxSessionLifecycleOperation;
+export type SandboxSessionLifecyclePhase =
+  pgSchema.SandboxSessionLifecyclePhase;
 export type TurnInsert = typeof pgSchema.turns.$inferInsert;
 export type TurnSelect = typeof pgSchema.turns.$inferSelect;
+export type ModelCallUsageRow = typeof pgSchema.modelCallUsage.$inferSelect;
+export type ModelCallAttemptUsageRow =
+  typeof pgSchema.modelCallAttemptUsage.$inferSelect;
+export type ModelGatewayReconciliationStateRow =
+  typeof pgSchema.modelGatewayReconciliationState.$inferSelect;
+export type ModelGatewaySpendQuarantineRow =
+  typeof pgSchema.modelGatewaySpendQuarantine.$inferSelect;
+export type TurnSecretEnvelopeInsert =
+  Omit<typeof pgSchema.turnSecretEnvelopes.$inferInsert, 'turnId' | 'createdAt'>;
+export type TurnSecretEnvelopeRow = typeof pgSchema.turnSecretEnvelopes.$inferSelect;
 export type TurnStartRequestInsert = typeof pgSchema.turnStartRequests.$inferInsert;
 export type TurnStartRequestRow = typeof pgSchema.turnStartRequests.$inferSelect;
-export type TurnReconciliationLeaseRow = typeof pgSchema.turnReconciliationLeases.$inferSelect;
+export type TurnDeliveryLeaseRow = typeof pgSchema.turnDeliveryLeases.$inferSelect;
+export type SandboxSessionLifecycleOperationRow =
+  typeof pgSchema.sandboxSessionLifecycleOperations.$inferSelect;
 type TriggerInsertBase = typeof pgSchema.eventTriggers.$inferInsert;
 export type TriggerInsert = Omit<TriggerInsertBase, 'selectorHash'> & { selectorHash?: string };
 export type TriggerSelect = typeof pgSchema.eventTriggers.$inferSelect;
 export type SpineCursorRow = typeof pgSchema.spineCursors.$inferSelect;
 export type TriggerFiringRow = typeof pgSchema.triggerFirings.$inferSelect;
-export type VersionSelect = typeof pgSchema.agentVersions.$inferSelect;
 export type InterruptInsert = typeof pgSchema.pendingInterrupts.$inferInsert;
 export type InterruptRow = typeof pgSchema.pendingInterrupts.$inferSelect;
 export type InterruptResumeAttemptInsert = typeof pgSchema.interruptResumeAttempts.$inferInsert;
@@ -31,10 +46,11 @@ export type BudgetPolicyInsert = typeof pgSchema.budgetPolicies.$inferInsert;
 export type BudgetPolicyRow = typeof pgSchema.budgetPolicies.$inferSelect;
 export type SandboxSessionRow = Omit<
   typeof pgSchema.sandboxSessions.$inferSelect,
-  'restoreAttempts' | 'lastRestoreError'
+  'restoreAttempts' | 'lastRestoreError' | 'runtimeDefinitionHash'
 > & {
   restoreAttempts?: number | null;
   lastRestoreError?: string | null;
+  runtimeDefinitionHash?: string | null;
 };
 export type SystemSettingRow = typeof pgSchema.systemSettings.$inferSelect;
 export type EventFrameRow = typeof pgSchema.eventStore.$inferSelect;

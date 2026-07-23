@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import type { AgentSessionEvent } from '@ctxmill/shared';
+import type { NativeToolPolicy } from '@ctxmill/contracts';
 import type { ToolDefinition } from '../tool/types.js';
-import type { Message, NativeToolConfig } from '../types.js';
+import type { Message } from '../types.js';
+import type {
+  HarnessEnforcementCapabilities,
+  HarnessTurnEnforcer,
+} from './enforcement/types.js';
 
 export type ResolvedSecrets = Record<string, string>;
 
@@ -50,6 +55,7 @@ export interface TokenUsage {
 export interface AgentHarness {
   readonly name: string;
   readonly configSchema: z.ZodType;
+  readonly enforcementCapabilities: HarnessEnforcementCapabilities;
   openSession(config: HarnessSessionConfig, restore?: HarnessRestorePoint): Promise<HarnessSession>;
 }
 
@@ -64,10 +70,11 @@ export interface HarnessSessionConfig {
   conversationId: string;
   systemPrompt: string;
   tools: ToolDefinition[];
-  nativeTools?: NativeToolConfig;
+  nativeToolPolicy?: NativeToolPolicy;
   secrets: ResolvedSecrets;
   workspaceDir: string;
   harnessConfigJson: string;
+  turnEnforcer?: HarnessTurnEnforcer;
   signal?: AbortSignal;
   onApprovalNeeded?: ApprovalCallback;
 }
@@ -86,6 +93,7 @@ export interface HarnessTurnInput {
 export interface HarnessTurnContext {
   signal?: AbortSignal;
   onApprovalNeeded?: ApprovalCallback;
+  turnSecrets?: Readonly<Record<string, string>>;
 }
 
 export interface HarnessExportedState {

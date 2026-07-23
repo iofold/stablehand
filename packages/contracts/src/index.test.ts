@@ -5,6 +5,62 @@ import { describe, expect, it } from 'vitest';
 import * as contracts from './index.js';
 
 describe('@ctxmill/contracts', () => {
+  it('defines one strict analytics overview contract for API and SDK consumers', () => {
+    const schema = (contracts as Record<string, unknown>).AnalyticsOverviewSchema;
+    expect(schema).toBeDefined();
+    const overviewSchema = schema as {
+      parse(value: unknown): unknown;
+    };
+    const metrics = {
+      turns: 2,
+      completedTurns: 1,
+      errorTurns: 1,
+      cancelledTurns: 0,
+      activeTurns: 0,
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+      tokenReportedTurns: 2,
+      knownCostUsd: 0.01,
+      costCoverage: {
+        complete: 1,
+        partial: 0,
+        pending: 0,
+        unpriced: 1,
+      },
+    };
+    const overview = {
+      window: '24h',
+      from: 1_000,
+      to: 2_000,
+      bucketSizeMs: 100,
+      totals: {
+        agents: 2,
+        activeAgents: 1,
+        ...metrics,
+      },
+      activity: [{
+        from: 1_000,
+        to: 1_100,
+        ...metrics,
+      }],
+      agents: [{
+        agentId: 'agent-1',
+        name: 'Close analyst',
+        harness: 'langgraph',
+        model: 'gpt-5.4-mini',
+        lastActivityAt: 1_500,
+        ...metrics,
+      }],
+    };
+
+    expect(overviewSchema.parse(overview)).toEqual(overview);
+    expect(() => overviewSchema.parse({
+      ...overview,
+      unexpected: true,
+    })).toThrow();
+  });
+
   it('defines a strict conversation snapshot boundary for SSE replay', () => {
     const snapshot = {
       conversationId: 'conversation-1',
@@ -43,6 +99,31 @@ describe('@ctxmill/contracts', () => {
       .toHaveLength(19);
   });
 
+  it('preserves persisted message timestamps in AG-UI snapshots', () => {
+    const snapshot = {
+      type: 'MESSAGES_SNAPSHOT',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      timestamp: 1_784_546_935_300,
+      messages: [{
+        id: 'message-1',
+        role: 'assistant',
+        content: 'Persisted answer',
+        createdAt: 1_784_546_935_222,
+      }],
+    };
+
+    expect(contracts.MessagesSnapshotEventSchema.parse(snapshot))
+      .toEqual(snapshot);
+    expect(() => contracts.MessagesSnapshotEventSchema.parse({
+      ...snapshot,
+      messages: [{
+        ...snapshot.messages[0],
+        createdAt: '2026-07-20T11:28:55.222Z',
+      }],
+    })).toThrow();
+  });
+
   it('strictly validates canonical agent inputs without legacy model fields', () => {
     const valid = {
       name: 'bank-reconciliation',
@@ -50,7 +131,8 @@ describe('@ctxmill/contracts', () => {
       harnessConfig: { model: 'claude-sonnet-4-20250514' },
       systemPrompt: 'Reconcile the account.',
       tools: ['artifact_upload'],
-      nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+      builtinToolPolicy: { policy: 'deny', names: ['emit-event'] },
+      nativeToolPolicy: { policy: 'allow', names: ['Bash'] },
       workspaceContent: {
         files: [{ src: 'skills', dest: '.claude/skills' }],
       },
@@ -62,13 +144,19 @@ describe('@ctxmill/contracts', () => {
     };
 
     expect(contracts.AgentCreateInputSchema.parse(valid)).toEqual(valid);
-    expect(contracts.AgentUpdateInputSchema.parse({
-      nativeTools: null,
+    expect(contracts.AgentPatchInputSchema.parse({
+      description: null,
+      builtinToolPolicy: null,
+      metadata: null,
+      nativeToolPolicy: null,
       workspaceContent: null,
       mode: null,
       manifest: null,
     })).toEqual({
-      nativeTools: null,
+      description: null,
+      builtinToolPolicy: null,
+      metadata: null,
+      nativeToolPolicy: null,
       workspaceContent: null,
       mode: null,
       manifest: null,
@@ -76,6 +164,11 @@ describe('@ctxmill/contracts', () => {
     expect(() => contracts.AgentCreateInputSchema.parse({
       ...valid,
       model: 'legacy-model',
+    })).toThrow();
+    expect(() => contracts.AgentCreateInputSchema.parse({
+      ...valid,
+      nativeTools: { allowlist: ['Bash'] },
+      nativeToolPolicy: undefined,
     })).toThrow();
   });
 
@@ -105,7 +198,7 @@ describe('@ctxmill/contracts', () => {
 
     expect(() => contracts.ClaudeAgentsConfigSchema.parse({
       model: 'claude-sonnet-4-20250514',
-      nativeTools: { allowlist: ['Read'] },
+      nativeToolPolicy: { policy: 'allow', names: ['Read'] },
     })).toThrow();
     expect(() => contracts.PIAgentConfigSchema.parse({
       provider: 'gemini',
@@ -125,17 +218,24 @@ describe('@ctxmill/contracts', () => {
       model: 'gpt-5',
       extensions: ['/host/extension.ts'],
     })).toThrow();
-    expect(() => contracts.AgentNativeToolsSchema.parse({
-      allowlist: ['Bash', 'Bash'],
+    expect(() => contracts.NativeToolPolicySchema.parse({
+      policy: 'allow',
+      names: ['Bash', 'Bash'],
     })).toThrow();
-    expect(() => contracts.AgentNativeToolsSchema.parse({
-      allowlist: ['Bash'],
-      blocklist: ['Bash'],
+    expect(() => contracts.NativeToolPolicySchema.parse({
+      policy: 'allow',
+      names: [],
     })).toThrow();
+    expect(() => contracts.NativeToolPolicySchema.parse({
+      policy: 'all',
+      names: ['Bash'],
+    })).toThrow();
+    expect(contracts.NativeToolPolicySchema.parse({ policy: 'all' })).toEqual({ policy: 'all' });
+    expect(contracts.NativeToolPolicySchema.parse({ policy: 'none' })).toEqual({ policy: 'none' });
   });
 
   it('validates the Pilot control-plane response surface', () => {
-    expect(contracts.AgentListResponseSchema.parse([{
+    const agent = {
       id: 'agent-1',
       name: 'bank-reconciliation',
       harness: 'claude-agents',
@@ -146,11 +246,12 @@ describe('@ctxmill/contracts', () => {
       workspaceDir: '/data/agents/agent-1',
       status: 'idle',
       manifest: null,
-      version: 1,
       metadata: null,
       createdAt: 1,
       updatedAt: 2,
-      nativeTools: null,
+      builtinToolPolicy: null,
+      nativeToolPolicy: null,
+      httpTools: [],
       workspaceContent: null,
       mode: null,
       resourceLimits: null,
@@ -163,7 +264,6 @@ describe('@ctxmill/contracts', () => {
       activeTurnCount: 0,
       tokensTotal: 100,
       tokensLast24h: 100,
-      recentTurns: [],
       sandboxSessionsByStatus: {
         ACTIVE: 0,
         CHECKPOINTED: 1,
@@ -171,7 +271,10 @@ describe('@ctxmill/contracts', () => {
         TERMINATED: 0,
       },
       lastActivity: null,
-    }])).toHaveLength(1);
+    };
+    expect(contracts.AgentListResponseSchema.parse([agent])).toHaveLength(1);
+    expect(() => contracts.AgentSchema.parse({ ...agent, version: 1 })).toThrow();
+    expect(() => contracts.AgentSchema.parse({ ...agent, recentTurns: [] })).toThrow();
 
     expect(contracts.SecretListResponseSchema.parse({ keys: ['ANTHROPIC_API_KEY'] }))
       .toEqual({ keys: ['ANTHROPIC_API_KEY'] });
@@ -179,6 +282,66 @@ describe('@ctxmill/contracts', () => {
       keys: ['ANTHROPIC_API_KEY'],
       values: { ANTHROPIC_API_KEY: 'must-not-leak' },
     })).toThrow();
+  });
+
+  it('rejects sandbox runtime controls from per-turn secret inputs', () => {
+    expect(contracts.BackgroundTurnStartInputSchema.parse({
+      task: 'Run close workflow',
+      sandboxSecrets: {
+        PILOT_TURN_OWNERSHIP_TOKEN: 'turn-token',
+      },
+    })).toMatchObject({
+      sandboxSecrets: {
+        PILOT_TURN_OWNERSHIP_TOKEN: 'turn-token',
+      },
+    });
+
+    expect(() => contracts.BackgroundTurnStartInputSchema.parse({
+      task: 'Run close workflow',
+      sandboxSecrets: {
+        CTXMILL_CALLBACK_TOKEN: 'forged-token',
+      },
+    })).toThrow();
+    expect(() => contracts.ConversationTurnStartInputSchema.parse({
+      content: 'Run close workflow',
+      sandboxSecrets: {
+        ORCHESTRATOR_URL: 'https://attacker.example',
+      },
+    })).toThrow();
+    expect(() => contracts.BackgroundTurnStartInputSchema.parse({
+      task: 'Run close workflow',
+      sandboxSecrets: {
+        PILOT_TURN_OWNERSHIP_TOKEN: 'token\0suffix',
+      },
+    })).toThrow();
+    expect(() => contracts.BackgroundTurnStartInputSchema.parse({
+      task: 'Run close workflow',
+      sandboxSecrets: JSON.parse('{"__proto__":"forged"}'),
+    })).toThrow();
+  });
+
+  it('validates canonical sandbox-session restore lease fields', () => {
+    const sandboxSession = {
+      id: 'sandbox-1',
+      conversationId: 'conversation-1',
+      agentId: 'agent-1',
+      containerName: 'ctxmill-sandbox-1',
+      containerId: 'container-1',
+      status: 'ACTIVE',
+      harnessName: 'claude-agents',
+      checkpointRef: null,
+      createdAt: 1,
+      updatedAt: 2,
+      lastActivityAt: 3,
+      restoreAttempts: 1,
+      lastRestoreError: null,
+      restoreOwnerId: null,
+      restoreFenceToken: 2,
+      restoreLeaseExpiresAt: null,
+    };
+
+    expect(contracts.SandboxSessionListResponseSchema.parse([sandboxSession]))
+      .toEqual([sandboxSession]);
   });
 
   it('uses an explicit immutable workspace revision contract', () => {
@@ -344,6 +507,7 @@ describe('@ctxmill/contracts', () => {
         ...identities,
         status: 'completed',
         durationMs: 10,
+        usage: null,
         timestamp: 2,
       },
       'tool_call.started': {
@@ -439,11 +603,11 @@ describe('@ctxmill/contracts', () => {
   });
 
   it('never exposes a stored webhook signing secret on readback', () => {
-    expect(() => contracts.WebhookUpsertInputSchema.parse({
+    expect(() => contracts.WebhookCreateInputSchema.parse({
       url: 'https://pilot.test/hooks/ctxmill',
       events: ['turn.completed'],
     })).toThrow();
-    expect(contracts.WebhookUpsertInputSchema.parse({
+    expect(contracts.WebhookCreateInputSchema.parse({
       url: 'https://pilot.test/hooks/ctxmill',
       events: ['turn.completed'],
       secret: 'rotation-key',
@@ -452,6 +616,17 @@ describe('@ctxmill/contracts', () => {
       events: ['turn.completed'],
       secret: 'rotation-key',
     });
+    expect(contracts.WebhookPatchInputSchema.parse({
+      events: ['message.updated'],
+    })).toEqual({
+      events: ['message.updated'],
+    });
+    expect(contracts.WebhookPatchInputSchema.parse({
+      secret: 'rotated-key',
+    })).toEqual({
+      secret: 'rotated-key',
+    });
+    expect(() => contracts.WebhookPatchInputSchema.parse({})).toThrow();
 
     const webhook = {
       id: 'webhook-1',

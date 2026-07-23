@@ -67,7 +67,7 @@ describe('HTTP tool CRUD via agent API', () => {
     await testApp?.close();
   });
 
-  it('POST /api/agents with httpTools includes HTTP tool names in tools', async () => {
+  it('POST /api/agents keeps inline HTTP definitions distinct from tool references', async () => {
     const response = await createAgent({
       name: 'create-http-tools',
       tools: ['base-tool'],
@@ -78,11 +78,12 @@ describe('HTTP tool CRUD via agent API', () => {
 
     const body = response.json();
 
-    expect(body.tools).toEqual(['base-tool', 'search-api']);
-    expect(body.metadata.httpTools).toEqual([buildHttpTool()]);
+    expect(body.tools).toEqual(['base-tool']);
+    expect(body.httpTools).toEqual([buildHttpTool()]);
+    expect(body.metadata ?? {}).not.toHaveProperty('httpTools');
   });
 
-  it('PUT /api/agents/:id updates httpTools and removes old HTTP tools', async () => {
+  it('PATCH /api/agents/:id replaces httpTools without changing tool references', async () => {
     const created = await createAgent({
       name: 'replace-http-tools',
       tools: ['base-tool'],
@@ -91,7 +92,7 @@ describe('HTTP tool CRUD via agent API', () => {
     const agentId = created.json().id;
 
     const updateResponse = await app.inject({
-      method: 'PUT',
+      method: 'PATCH',
       url: `/api/agents/${agentId}`,
       payload: {
         httpTools: [
@@ -109,9 +110,9 @@ describe('HTTP tool CRUD via agent API', () => {
 
     const body = updateResponse.json();
 
-    expect(body.tools).toEqual(['base-tool', 'weather-api']);
+    expect(body.tools).toEqual(['base-tool']);
     expect(body.tools).not.toContain('old-http-tool');
-    expect(body.metadata.httpTools).toEqual([
+    expect(body.httpTools).toEqual([
       buildHttpTool({
         name: 'weather-api',
         description: 'Fetch weather data',
@@ -121,7 +122,7 @@ describe('HTTP tool CRUD via agent API', () => {
     ]);
   });
 
-  it('GET /api/agents/:id returns metadata.httpTools', async () => {
+  it('GET /api/agents/:id returns top-level httpTools', async () => {
     const created = await createAgent({
       name: 'get-http-tools',
       httpTools: [buildHttpTool()],
@@ -137,11 +138,12 @@ describe('HTTP tool CRUD via agent API', () => {
 
     const body = response.json();
 
-    expect(body.metadata.httpTools).toEqual([buildHttpTool()]);
-    expect(body.tools).toContain('search-api');
+    expect(body.httpTools).toEqual([buildHttpTool()]);
+    expect(body.metadata ?? {}).not.toHaveProperty('httpTools');
+    expect(body.tools).not.toContain('search-api');
   });
 
-  it('creates an agent with mixed base tools and httpTools merged together', async () => {
+  it('creates an agent with separate referenced tools and inline HTTP definitions', async () => {
     const response = await createAgent({
       name: 'mixed-tools',
       tools: ['file-read', 'web-search'],
@@ -160,8 +162,8 @@ describe('HTTP tool CRUD via agent API', () => {
 
     const body = response.json();
 
-    expect(body.tools).toEqual(['file-read', 'web-search', 'search-api', 'weather-api']);
-    expect(body.metadata.httpTools).toHaveLength(2);
+    expect(body.tools).toEqual(['file-read', 'web-search']);
+    expect(body.httpTools).toHaveLength(2);
   });
 
   it('updating only httpTools preserves base tools', async () => {
@@ -173,7 +175,7 @@ describe('HTTP tool CRUD via agent API', () => {
     const agentId = created.json().id;
 
     const response = await app.inject({
-      method: 'PUT',
+      method: 'PATCH',
       url: `/api/agents/${agentId}`,
       payload: {
         httpTools: [buildHttpTool({ name: 'replacement-http-tool' })],
@@ -184,8 +186,8 @@ describe('HTTP tool CRUD via agent API', () => {
 
     const body = response.json();
 
-    expect(body.tools).toEqual(['file-read', 'web-search', 'replacement-http-tool']);
-    expect(body.metadata.httpTools).toEqual([buildHttpTool({ name: 'replacement-http-tool' })]);
+    expect(body.tools).toEqual(['file-read', 'web-search']);
+    expect(body.httpTools).toEqual([buildHttpTool({ name: 'replacement-http-tool' })]);
   });
 
   it('updating only base tools preserves httpTools', async () => {
@@ -197,7 +199,7 @@ describe('HTTP tool CRUD via agent API', () => {
     const agentId = created.json().id;
 
     const response = await app.inject({
-      method: 'PUT',
+      method: 'PATCH',
       url: `/api/agents/${agentId}`,
       payload: {
         tools: ['web-search', 'calculator'],
@@ -208,8 +210,8 @@ describe('HTTP tool CRUD via agent API', () => {
 
     const body = response.json();
 
-    expect(body.tools).toEqual(['web-search', 'calculator', 'search-api']);
-    expect(body.metadata.httpTools).toEqual([buildHttpTool({ name: 'search-api' })]);
+    expect(body.tools).toEqual(['web-search', 'calculator']);
+    expect(body.httpTools).toEqual([buildHttpTool({ name: 'search-api' })]);
   });
 
   it('rejects httpTool with missing name', async () => {

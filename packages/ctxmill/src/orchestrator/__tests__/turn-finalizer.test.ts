@@ -31,6 +31,9 @@ function createDeps(options: {
   return {
     db: {
       finalizeTurnIfOpen: vi.fn().mockResolvedValue(options.finalizeResult ?? true),
+      finalizeTurnAndMarkLifecycleDraining: vi.fn().mockResolvedValue(
+        options.finalizeResult ?? true,
+      ),
       getTurn: vi.fn().mockResolvedValue(options.turn ?? BASE_TURN),
     },
     eventBus: {
@@ -128,7 +131,16 @@ describe('TurnFinalizer (ADR-014)', () => {
         inputTokens: 3,
         outputTokens: 4,
         totalTokens: 7,
-        costUsd: 0.01,
+        modelCalls: {
+          observed: 0,
+          costKnown: 0,
+          expected: null,
+        },
+        cost: {
+          totalUsd: 0.01,
+          knownUsd: 0.01,
+          coverage: 'complete',
+        },
       },
       timestamp: 150,
     });
@@ -145,6 +157,34 @@ describe('TurnFinalizer (ADR-014)', () => {
     const result = await finalizer.finalize({ ...BASE_PARAMS, settleSessionLifecycle });
 
     expect(result).toEqual({ finalized: false, published: false });
+    expect(deps.eventBus.emitAsync).not.toHaveBeenCalled();
+    expect(settleSessionLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('does not repair or publish after a fenced finalizer loses ownership', async () => {
+    const deps = createDeps({ finalizeResult: false });
+    const settleSessionLifecycle = vi.fn();
+    const finalizer = new TurnFinalizer(deps);
+
+    const result = await finalizer.finalize({
+      ...BASE_PARAMS,
+      expectedDeliveryFence: {
+        ownerId: 'stale-owner',
+        fenceToken: 1,
+      },
+      settleSessionLifecycle,
+    });
+
+    expect(result).toEqual({ finalized: false, published: false });
+    expect(deps.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+      'turn-1',
+      expect.objectContaining({ status: 'error' }),
+      expect.objectContaining({
+        ownerId: 'stale-owner',
+        fenceToken: 1,
+      }),
+    );
+    expect(deps.db.getTurn).not.toHaveBeenCalled();
     expect(deps.eventBus.emitAsync).not.toHaveBeenCalled();
     expect(settleSessionLifecycle).not.toHaveBeenCalled();
   });

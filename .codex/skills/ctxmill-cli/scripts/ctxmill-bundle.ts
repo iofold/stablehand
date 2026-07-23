@@ -2,6 +2,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { redactSensitiveFields as redact } from '../../../../packages/ctxmill/src/cli/redaction.ts';
 
 type JsonRecord = Record<string, unknown>;
 type Flags = Record<string, string | boolean>;
@@ -9,7 +10,6 @@ interface ParsedArgs { positionals: string[]; flags: Flags }
 interface FetchResult { name: string; endpoint: string; ok: boolean; data: unknown; error?: string }
 
 class UsageError extends Error { exitCode = 2 }
-const SECRET_KEY_RE = /(secret|token|password|authorization|api[_-]?key|credential|private[_-]?key)/i;
 const args = parseArgs(Bun.argv.slice(2));
 
 try {
@@ -205,5 +205,4 @@ function stringValue(value: unknown): string { return value === undefined || val
 function parseMaybeJson(text: string): unknown { if (!text) return null; try { return JSON.parse(text); } catch { return text; } }
 function eventArray(value: unknown): JsonRecord[] { return isRecord(value) && Array.isArray(value.events) ? value.events.filter(isRecord) : []; }
 function sinceQuery(flags: Flags): string { const since = flagString(flags, 'since'); if (!since) return ''; if (/^\d+$/.test(since)) return `&since=${encodeURIComponent(since)}`; const parsed = Date.parse(since); return Number.isFinite(parsed) ? `&since=${encodeURIComponent(String(parsed))}` : ''; }
-function redact(value: unknown, seen = new WeakSet<object>()): unknown { if (Array.isArray(value)) return value.map((item) => redact(item, seen)); if (!isRecord(value)) return value; if (seen.has(value)) return '[Circular]'; seen.add(value); const out: JsonRecord = {}; for (const [key, child] of Object.entries(value)) out[key] = SECRET_KEY_RE.test(key) ? '[REDACTED]' : redact(child, seen); return out; }
 function helpText(): string { return `ctxmill-bundle.ts — collect a ctxmill debug bundle\n\nUsage:\n  bun scripts/ctxmill-bundle.ts --agent <agentId> [--turn <turnId>] [--conversation <conversationId>] [--out <dir>]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --agent <agentId>      Agent id\n  --turn <turnId>        Execution turn id\n  --conversation <id>    Conversation id\n  --events-limit <n>     Number of recent events (default 200)\n  --out <dir>            Output directory (default .ctxmill/debug/<timestamp>)\n  --no-redact            Disable secret redaction\n`; }

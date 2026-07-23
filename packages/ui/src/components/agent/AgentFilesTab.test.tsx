@@ -41,7 +41,13 @@ describe('AgentFilesTab workspace upload', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    uploadWorkspaceTarballMock.mockResolvedValue({ files: 1, totalBytes: 12 });
+    uploadWorkspaceTarballMock.mockResolvedValue({
+      revision: 1,
+      sha256: 'abc123',
+      fileCount: 1,
+      totalBytes: 12,
+      appliedAt: 1234,
+    });
     fetchSettingsMock.mockResolvedValue({
       maxWorkspaceTarBytes: 100 * 1024 * 1024,
       maxTarUploadBytes: 100 * 1024 * 1024,

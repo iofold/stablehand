@@ -9,6 +9,7 @@ import {
   fetchTriggers,
   updateTrigger,
 } from '@/lib/api';
+import { makeAgentFixture } from '@/test/agent-fixture';
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -33,6 +34,16 @@ async function flushEffects(): Promise<void> {
   });
 }
 
+function setControlValue(control: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  const prototype = control instanceof HTMLTextAreaElement
+    ? HTMLTextAreaElement.prototype
+    : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+  setter?.call(control, value);
+  control.dispatchEvent(new Event('input', { bubbles: true }));
+  control.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
 describe('TriggersPage', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -45,7 +56,7 @@ describe('TriggersPage', () => {
 
     useAgentsStore.setState((state) => ({
       ...state,
-      agents: [{ id: 'agent-1', name: 'Agent 1', status: 'active', tools: [], harness: 'test', harnessConfig: {} }],
+      agents: [makeAgentFixture({ status: 'active', harness: 'test', harnessConfig: {} })],
       loading: false,
       error: null,
       fetchAgents: vi.fn().mockResolvedValue(undefined),
@@ -226,5 +237,95 @@ describe('TriggersPage', () => {
     const rowError = container.querySelector('[data-testid="trigger-row-error"]');
     expect(rowError).not.toBeNull();
     expect(rowError!.textContent).toContain('Failed to delete trigger.');
+  });
+
+  it('clears an existing selector with an explicit null update', async () => {
+    fetchTriggersMock.mockResolvedValueOnce([{
+      id: 'trigger-1',
+      agentId: 'agent-1',
+      eventType: 'turn.completed',
+      taskTemplate: 'summarize',
+      selector: { kind: 'invoice' },
+      enabled: true,
+    }]);
+
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    const editButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.title === 'Edit trigger',
+    );
+    expect(editButton).not.toBeNull();
+    act(() => {
+      editButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const selector = container.querySelector<HTMLTextAreaElement>('textarea[placeholder=\'{"key": "value"}\']');
+    expect(selector).not.toBeNull();
+    act(() => setControlValue(selector!, ''));
+
+    const updateButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.trim() === 'Update',
+    );
+    expect(updateButton).not.toBeNull();
+    await act(async () => {
+      updateButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(updateTriggerMock).toHaveBeenCalledWith('trigger-1', expect.objectContaining({
+      selector: null,
+    }));
+  });
+
+  it('rejects a selector JSON array before making an API request', async () => {
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    const editButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.title === 'Edit trigger',
+    );
+    act(() => {
+      editButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const selector = container.querySelector<HTMLTextAreaElement>('textarea[placeholder=\'{"key": "value"}\']');
+    act(() => setControlValue(selector!, '[]'));
+    const updateButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.trim() === 'Update',
+    );
+    await act(async () => {
+      updateButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(updateTriggerMock).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Selector must be a JSON object.');
+  });
+
+  it('shows the server mutation detail when saving fails', async () => {
+    updateTriggerMock.mockRejectedValueOnce(new Error('Trigger conflict detail'));
+
+    act(() => {
+      root.render(<TriggersPage />);
+    });
+    await flushEffects();
+
+    const editButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.title === 'Edit trigger',
+    );
+    act(() => {
+      editButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const updateButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.trim() === 'Update',
+    );
+    await act(async () => {
+      updateButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('Trigger conflict detail');
   });
 });

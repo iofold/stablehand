@@ -201,6 +201,11 @@ export function createTestSandboxSessionManager(
       }
       await registry.completeTurn(turnId, error);
     },
+    abandonTurnDelivery: async (_sandboxSessionId: string, turnId: string) => {
+      turnIdsBySessionId.delete(_sandboxSessionId);
+      void turnId;
+    },
+    getPendingSessionReset: () => undefined,
     cancelCurrentTurn: () => false,
     getAbortSignal: (sandboxSessionId: string) => {
       const turnId = turnIdsBySessionId.get(sandboxSessionId);

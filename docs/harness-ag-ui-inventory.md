@@ -64,7 +64,7 @@ harnessRegistry.register(new PIAgentHarness());
 
 ### Key Features Claimed In This Snapshot
 - **Backend**: `LocalShellBackend` (filesystem + shell execution)
-- **Tool Blocklist**: Middleware support via `nativeTools.blocklist`
+- **Native Tool Policy**: `nativeToolPolicy` applies the common `all`/`allow`/`deny`/`none` contract through middleware
 - **Knowledge Context**: Stub (no real knowledge lookup)
 - **Transcript**: Maintains full history, passes to SDK each turn
 - **Skills**: Historical claim; current CTXMill does not auto-seed `.ctxmill/skills`
@@ -91,8 +91,9 @@ tools:
   - ref: list-directory
   - ref: search-files
   - ref: execute-trade
-nativeTools:
-  blocklist: [execute]
+nativeToolPolicy:
+  policy: deny
+  names: [execute]
 ```
 
 ---
@@ -129,7 +130,7 @@ nativeTools:
 ### Key Features
 - **SDK**: `@anthropic-ai/claude-agent-sdk` (query + MCP integration)
 - **MCP Server**: `createSdkMcpServer` hosts tools for agent
-- **Tool Allowlist/Blocklist**: Via `nativeTools` + SDK `allowedTools`/`disallowedTools`
+- **Native Tool Policy**: `nativeToolPolicy` maps the common policy to SDK `allowedTools`/`disallowedTools`
 - **Tool Location**: Native tools (e.g., Read, Write, Edit, Bash) auto-populated from SDK
 - **Knowledge Context**: Stub
 - **Stateless**: Fresh agent per turn
@@ -152,8 +153,9 @@ harnessConfig:
   temperature: 0.3
 tools:
   - ref: emit-event
-nativeTools:
-  allowlist: [Read, Write, Edit, Bash, Grep, Glob]
+nativeToolPolicy:
+  policy: allow
+  names: [Read, Write, Edit, Bash, Grep, Glob]
 ```
 
 ---
@@ -188,7 +190,7 @@ nativeTools:
 
 ### Key Features
 - **SDK**: `@mariozechner/pi-coding-agent` (native tools + custom tools)
-- **Native Tools**: Read, Bash, Edit, Write, Grep, Find, Ls (selectable via allowlist)
+- **Native Tools**: Read, Bash, Edit, Write, Grep, Find, Ls (selected by the common native-tool policy)
 - **Tool Conversion**: Zod → TypeBox (custom `zodToTypeBox()` converter)
 - **Knowledge Context**: Stub
 - **Session Lifecycle**: PI Session with `subscribe()` listener + `prompt()` API
@@ -196,7 +198,7 @@ nativeTools:
 
 ### Tool Execution Flow
 1. Custom tools converted via `convertTools()` + TypeBox schema
-2. Native tools selected from allowlist/blocklist
+2. Native tools selected by `nativeToolPolicy`
 3. Tool execution happens in PI SDK (streaming events)
 4. Approval check happens in tool `execute` callback
 5. Result formatted as PI-compatible `{ content, details }`
@@ -211,8 +213,9 @@ harnessConfig:
   apiKeyRef: "$secret:OPENAI_API_KEY"
 tools:
   - ref: emit-event
-nativeTools:
-  allowlist: [read, bash, edit, write]
+nativeToolPolicy:
+  policy: allow
+  names: [read, bash, edit, write]
 ```
 
 ---

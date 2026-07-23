@@ -365,13 +365,37 @@ describe('Events and Triggers Integration', () => {
   // ────────────────────────────────────────────────────────
 
   describe('Feedback and removed learning endpoints', () => {
-    it('POST /api/agents/:id/feedback emits feedback.received', async () => {
+    it('attributes feedback to the exact turn that owns the target message', async () => {
       const conversation = await container.db.createConversation(agentId);
-      const turn = await container.db.createTurn({
+      const targetTurn = await container.db.createTurn({
         agentId,
         conversationId: conversation.id,
         mode: 'interactive',
         taskDescription: 'feedback target',
+        startedAt: 1_000,
+      });
+      const targetMessage = await container.db.addMessage({
+        id: 'message-feedback-target',
+        conversationId: conversation.id,
+        agentId,
+        turnId: targetTurn.id,
+        role: 'assistant',
+        content: 'older answer',
+      });
+      const newerTurn = await container.db.createTurn({
+        agentId,
+        conversationId: conversation.id,
+        mode: 'interactive',
+        taskDescription: 'newer turn',
+        startedAt: 2_000,
+      });
+      await container.db.addMessage({
+        id: 'message-feedback-newer',
+        conversationId: conversation.id,
+        agentId,
+        turnId: newerTurn.id,
+        role: 'assistant',
+        content: 'newer answer',
       });
       const received = new Promise<unknown>((resolve) => {
         container.eventBus.once('feedback.received', resolve);
@@ -382,7 +406,7 @@ describe('Events and Triggers Integration', () => {
         url: `/api/agents/${agentId}/feedback`,
         payload: {
           conversationId: conversation.id,
-          messageId: 'message-feedback-test',
+          messageId: targetMessage.id,
           type: 'thumbs_up',
         },
       });
@@ -390,30 +414,51 @@ describe('Events and Triggers Integration', () => {
       expect(res.statusCode).toBe(201);
       const body = res.json();
       expect(body.feedbackId).toEqual(expect.any(String));
-      expect(body.turnId).toBe(turn.id);
+      expect(body.turnId).toBe(targetTurn.id);
       await expect(received).resolves.toMatchObject({
         feedbackId: body.feedbackId,
-        turnId: turn.id,
+        turnId: targetTurn.id,
         agentId,
         type: 'thumbs_up',
-        messageId: 'message-feedback-test',
+        messageId: targetMessage.id,
       });
     });
 
-    it('does not invent a turn identity for feedback on an empty conversation', async () => {
+    it('requires a messageId instead of falling back to the conversation latest turn', async () => {
+      const conversation = await container.db.createConversation(agentId);
+      await container.db.createTurn({
+        agentId,
+        conversationId: conversation.id,
+        mode: 'interactive',
+        taskDescription: 'feedback target',
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/feedback`,
+        payload: {
+          conversationId: conversation.id,
+          type: 'thumbs_down',
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'conversationId, messageId, and type ("thumbs_up" or "thumbs_down") are required' });
+    });
+
+    it('rejects a message that is not owned by the agent and conversation', async () => {
       const conversation = await container.db.createConversation(agentId);
       const res = await app.inject({
         method: 'POST',
         url: `/api/agents/${agentId}/feedback`,
         payload: {
           conversationId: conversation.id,
-          messageId: 'message-without-turn',
+          messageId: 'unknown-message',
           type: 'thumbs_down',
         },
       });
 
       expect(res.statusCode).toBe(404);
-      expect(res.json()).toEqual({ error: 'No turn found for conversation' });
+      expect(res.json()).toEqual({ error: 'Feedback message not found' });
     });
 
     it('trace and feedback stats endpoints are removed', async () => {

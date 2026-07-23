@@ -33,7 +33,8 @@ spec:
     - ref: list-directory
     - ref: search-files
     - ref: execute-trade
-  nativeTools:
-    blocklist:
+  nativeToolPolicy:
+    policy: deny
+    names:
       - execute
   mode: interactive

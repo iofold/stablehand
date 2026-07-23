@@ -9,6 +9,7 @@ import {
   ToolCallIdSchema,
   TurnIdSchema,
 } from './ids.js';
+import { TurnUsageSchema } from './usage.js';
 
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const TimestampSchema = z.number().int().nonnegative().optional();
@@ -46,6 +47,7 @@ export const AgUiMessageSchema = z.strictObject({
   toolCallId: ToolCallIdSchema.optional(),
   toolCalls: z.array(StreamToolCallStateSchema).optional(),
   parts: z.array(StreamMessagePartSchema).optional(),
+  createdAt: z.number().int().nonnegative().optional(),
 });
 
 export const AgUiToolSchema = z.strictObject({
@@ -80,12 +82,7 @@ export const RunFinishedEventSchema = z.strictObject({
   type: z.literal('RUN_FINISHED'),
   ...RunFrameIdentity,
   status: z.string().optional(),
-  usage: z.strictObject({
-    inputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-    totalTokens: z.number().int().nonnegative(),
-    costUsd: z.number().nonnegative().optional(),
-  }).optional(),
+  usage: TurnUsageSchema.nullable(),
 });
 
 export const RunErrorEventSchema = z.strictObject({

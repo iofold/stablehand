@@ -53,7 +53,8 @@ function createMockContainerManager(): ContainerManager {
 
 function createMockDb(): DatabaseRepository {
   return {
-    updateSandboxSessionStatus: vi.fn().mockResolvedValue(undefined),
+    activateTurnIfOpen: vi.fn().mockResolvedValue(true),
+    updateSandboxSessionMetadata: vi.fn().mockResolvedValue(undefined),
     updateTurn: vi.fn().mockResolvedValue(undefined),
   } as unknown as DatabaseRepository;
 }
@@ -166,6 +167,7 @@ function createManager(options?: { turnTimeoutMs?: number }) {
     statusCoordinator,
     workspaceDiffService: new WorkspaceDiffService({ containerManager }),
     buildSandboxSecrets: async () => ({}),
+    resolveTurnSecrets: async () => ({}),
     logger,
     config: {
       idleTimeoutMs: 60_000,
@@ -195,6 +197,7 @@ function seedSession(
     agentId: overrides?.agentId ?? 'agent-1',
     containerName: overrides?.containerName ?? 'ctxmill-sandbox-sess-1',
     containerId: overrides?.containerId ?? 'c-1',
+    restoreFenceToken: overrides?.restoreFenceToken ?? 0,
     status: overrides?.status ?? 'ACTIVE',
     harnessName: overrides?.harnessName ?? 'langgraph',
     sessionWorkspaceDir: overrides?.sessionWorkspaceDir,
@@ -301,6 +304,11 @@ describe('SandboxSessionManager concurrency', () => {
     const { manager, logger, internals } = createManager();
     const sessionId = 'sess-limit';
     let iterationCount = 0;
+    seedSession(
+      internals,
+      { deliverTurn: vi.fn() },
+      { sessionId, conversationId: 'conv-limit' },
+    );
 
     const enqueue = (suffix: string) => {
       const queue = internals.stateStore.turnQueues.get(sessionId) ?? [];
@@ -342,6 +350,11 @@ describe('SandboxSessionManager concurrency', () => {
     const { manager, internals } = createManager();
     const sessionId = 'sess-overflow';
     let lastQueuedChannel = createChannel();
+    seedSession(
+      internals,
+      { deliverTurn: vi.fn() },
+      { sessionId, conversationId: 'conv-overflow' },
+    );
 
     const enqueue = (suffix: string) => {
       lastQueuedChannel = createChannel();

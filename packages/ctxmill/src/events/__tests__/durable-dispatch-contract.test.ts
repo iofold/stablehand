@@ -64,9 +64,10 @@ describe('TypedEventBus durable persistence contract', () => {
     const bus = new TypedEventBus({ persistEvent });
     bus.on('agent.created', listener);
 
-    await bus.emitAsync('agent.created', agentCreatedPayload());
+    const didEmit = await bus.emitAsync('agent.created', agentCreatedPayload());
 
     expect(persistEvent).toHaveBeenCalledOnce();
+    expect(didEmit).toBe(false);
     expect(listener).not.toHaveBeenCalled();
   });
 
@@ -109,6 +110,37 @@ describe('TypedEventBus durable persistence contract', () => {
     await flushMicrotasks();
 
     expect(onFire).not.toHaveBeenCalled();
+  });
+
+  it('reports a fenced custom-event no-op and does not dispatch listeners', async () => {
+    const listener = vi.fn();
+    const persistEvent = vi.fn().mockResolvedValue(false);
+    const bus = new TypedEventBus({ persistEvent });
+    bus.on('custom.ready' as never, listener);
+    const context = {
+      deliveryFence: {
+        ownerId: 'delivery-owner',
+        fenceToken: 7,
+      },
+    };
+
+    await expect(
+      bus.emitCustomAsync(
+        'custom.ready',
+        'agent-1',
+        { ok: true },
+        context,
+      ),
+    ).resolves.toBe(false);
+
+    expect(persistEvent).toHaveBeenCalledWith(
+      'custom.ready',
+      'agent-1',
+      expect.any(String),
+      expect.objectContaining({ ok: true }),
+      context,
+    );
+    expect(listener).not.toHaveBeenCalled();
   });
 
   // Stage 2 lifecycle/retry-policy code (e.g. session-turn-orchestrator turn.started/turn.completed)

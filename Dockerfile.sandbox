@@ -19,6 +19,8 @@ WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 
 COPY packages/shared/package.json packages/shared/tsconfig.json packages/shared/
+COPY packages/contracts/package.json packages/contracts/tsconfig.json packages/contracts/
+COPY packages/manifest/package.json packages/manifest/tsconfig.json packages/manifest/
 COPY packages/client/package.json packages/client/tsconfig.json packages/client/
 COPY packages/react/package.json packages/react/tsconfig.json packages/react/tsconfig.typecheck.json packages/react/
 COPY packages/ctxmill/package.json packages/ctxmill/tsconfig.json packages/ctxmill/
@@ -32,6 +34,8 @@ COPY packages/ui/package.json packages/ui/
 RUN pnpm install --frozen-lockfile
 
 COPY packages/shared/src/ packages/shared/src/
+COPY packages/contracts/src/ packages/contracts/src/
+COPY packages/manifest/src/ packages/manifest/src/
 COPY packages/client/src/ packages/client/src/
 COPY packages/react/src/ packages/react/src/
 COPY packages/ctxmill/src/ packages/ctxmill/src/
@@ -40,6 +44,8 @@ COPY packages/proto/ packages/proto/
 
 RUN cd packages/shared && npx tsc --build
 RUN cd packages/proto && npx tsc -p tsconfig.build.json
+RUN pnpm --filter @ctxmill/contracts build
+RUN pnpm --filter @ctxmill/manifest build
 RUN pnpm --filter @ctxmill/sandbox-daemon build
 RUN pnpm --filter ctxmill build
 

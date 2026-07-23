@@ -122,13 +122,13 @@ describe('Agent CRUD & related endpoints', () => {
     it('persists the complete compiled registration contract once', async () => {
       const res = await createAgent({
         name: 'complete-registration',
-        nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+        nativeToolPolicy: { policy: 'deny', names: ['Write'] },
         workspaceContent: {
           files: [{ src: 'skills', dest: '.claude/skills' }],
         },
         mode: 'background',
         manifest: canonicalManifest('complete-registration', {
-          nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+          nativeToolPolicy: { policy: 'deny', names: ['Write'] },
           workspace: {
             content: {
               files: [{ src: 'skills', dest: '.claude/skills' }],
@@ -141,7 +141,7 @@ describe('Agent CRUD & related endpoints', () => {
       expect(res.statusCode, res.body).toBe(201);
       const body = res.json();
       expect(body).toMatchObject({
-        nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+        nativeToolPolicy: { policy: 'deny', names: ['Write'] },
         workspaceContent: {
           files: [{ src: 'skills', dest: '.claude/skills' }],
         },
@@ -153,7 +153,7 @@ describe('Agent CRUD & related endpoints', () => {
         throw new Error('Expected created agent to be stored');
       }
       expect(stored.metadata).toMatchObject({
-        nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+        nativeToolPolicy: { policy: 'deny', names: ['Write'] },
         workspaceContent: {
           files: [{ src: 'skills', dest: '.claude/skills' }],
         },
@@ -163,7 +163,7 @@ describe('Agent CRUD & related endpoints', () => {
         metadata: { name: 'complete-registration' },
       });
       expect(buildAgentDefinition(stored)).toMatchObject({
-        nativeTools: { allowlist: ['Bash'], blocklist: ['Write'] },
+        nativeToolPolicy: { policy: 'deny', names: ['Write'] },
         workspaceContent: {
           files: [{ src: 'skills', dest: '.claude/skills' }],
         },
@@ -198,6 +198,19 @@ describe('Agent CRUD & related endpoints', () => {
       expect(unrepresentable.statusCode).toBe(400);
       expect(unrepresentable.json().error).toBe('Invalid canonical agent manifest');
       expect(unrepresentable.json().details).toContain('triggers cannot be registered');
+    });
+
+    it('rejects any manifest-owned fields that disagree with the canonical manifest', async () => {
+      const res = await createAgent({
+        name: 'body-name',
+        nativeToolPolicy: { policy: 'none' },
+        manifest: canonicalManifest('manifest-name'),
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('Agent definition conflicts with canonical manifest');
+      expect(res.json().details).toContain('name');
+      expect(res.json().details).toContain('nativeToolPolicy');
     });
 
     it('rejects missing name', async () => {
@@ -293,11 +306,84 @@ describe('Agent CRUD & related endpoints', () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe('Invalid agent definition');
     });
+
+    it('returns managed HTTP tools top-level and keeps public metadata round-trip safe', async () => {
+      const httpTool = {
+        name: 'lookup-rate',
+        description: 'Look up the current exchange rate',
+        endpoint: 'https://api.example.com/rates',
+        method: 'GET',
+      };
+      const created = await createAgent({
+        name: 'managed-field-round-trip',
+        tools: ['tool-a'],
+        httpTools: [httpTool],
+        resourceLimits: { cpus: 1 },
+        mode: 'both',
+        metadata: { owner: 'finance' },
+      });
+
+      expect(created.statusCode, created.body).toBe(201);
+      expect(created.json()).toMatchObject({
+        tools: ['tool-a'],
+        httpTools: [httpTool],
+        resourceLimits: { cpus: 1 },
+        mode: 'both',
+        metadata: { owner: 'finance' },
+      });
+      expect(created.json().metadata).not.toHaveProperty('httpTools');
+      expect(created.json().metadata).not.toHaveProperty('resourceLimits');
+      expect(created.json().metadata).not.toHaveProperty('mode');
+
+      const updated = await app.inject({
+        method: 'PATCH',
+        url: `/api/agents/${created.json().id}`,
+        payload: {
+          systemPrompt: 'Round-trip metadata safely.',
+          metadata: created.json().metadata,
+        },
+      });
+
+      expect(updated.statusCode, updated.body).toBe(200);
+      expect(updated.json()).toMatchObject({
+        tools: ['tool-a'],
+        httpTools: [httpTool],
+        systemPrompt: 'Round-trip metadata safely.',
+        metadata: { owner: 'finance' },
+      });
+    });
+
+    it('rejects ambiguous collisions between tool references and inline HTTP tools', async () => {
+      const res = await createAgent({
+        name: 'ambiguous-http-tool-name',
+        tools: ['lookup-rate'],
+        httpTools: [{
+          name: 'lookup-rate',
+          description: 'Look up the current exchange rate',
+          endpoint: 'https://api.example.com/rates',
+        }],
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toContain('cannot also be an HTTP tool');
+    });
+
+    it('rejects duplicate agent names as canonical deployment identities', async () => {
+      const first = await createAgent({ name: 'unique-deployment-name' });
+      expect(first.statusCode, first.body).toBe(201);
+
+      const duplicate = await createAgent({ name: 'unique-deployment-name' });
+      expect(duplicate.statusCode).toBe(409);
+      expect(duplicate.json()).toMatchObject({
+        code: 'agent_name_conflict',
+        name: 'unique-deployment-name',
+      });
+    });
   });
 
-  // ── PUT /api/agents/:id ────────────────────────────────────
+  // ── PATCH /api/agents/:id ────────────────────────────────────
 
-  describe('PUT /api/agents/:id', () => {
+  describe('PATCH /api/agents/:id', () => {
     let agentId: string;
 
     beforeAll(async () => {
@@ -307,7 +393,7 @@ describe('Agent CRUD & related endpoints', () => {
 
     it('updates name only', async () => {
       const res = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${agentId}`,
         payload: { name: 'renamed-agent' },
       });
@@ -317,7 +403,7 @@ describe('Agent CRUD & related endpoints', () => {
 
     it('updates harnessConfig only', async () => {
       const res = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${agentId}`,
         payload: {
           harnessConfig: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
@@ -329,7 +415,7 @@ describe('Agent CRUD & related endpoints', () => {
 
     it('rejects provider aliases on harnessConfig update', async () => {
       const res = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${agentId}`,
         payload: {
           harnessConfig: { provider: 'gemini', model: 'gemini-3-flash-preview' },
@@ -342,7 +428,7 @@ describe('Agent CRUD & related endpoints', () => {
 
     it('updates multiple fields', async () => {
       const res = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${agentId}`,
         payload: { name: 'multi-update', systemPrompt: 'updated prompt', tools: ['new-tool'] },
       });
@@ -353,7 +439,33 @@ describe('Agent CRUD & related endpoints', () => {
       expect(body.tools).toEqual(['new-tool']);
     });
 
-    it('resourceLimits update overrides manifest defaults and clearing falls back to manifest', async () => {
+    it('clears nullable description and replaces public metadata exactly', async () => {
+      const created = await createAgent({
+        name: 'clear-agent-fields',
+        description: 'Remove me',
+        metadata: { owner: 'finance', obsolete: true },
+      });
+      expect(created.statusCode, created.body).toBe(201);
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/agents/${created.json().id}`,
+        payload: {
+          description: null,
+          metadata: { owner: 'accounting' },
+        },
+      });
+
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().description).toBeNull();
+      expect(res.json().metadata).toEqual({ owner: 'accounting' });
+
+      const stored = await container.db.getAgent(created.json().id as string);
+      expect(stored?.description).toBeNull();
+      expect(stored?.metadata).toEqual({ owner: 'accounting' });
+    });
+
+    it('requires manifest-backed resource limits to be edited through the manifest', async () => {
       const created = await createAgent({
         name: 'resource-limits-manifest-agent',
         manifest: canonicalManifest('resource-limits-manifest-agent', {
@@ -377,31 +489,20 @@ describe('Agent CRUD & related endpoints', () => {
       });
 
       const updated = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${manifestAgentId}`,
         payload: {
           resourceLimits: { cpus: 2, memoryMb: 2048, timeoutSec: 900 },
         },
       });
-      expect(updated.statusCode).toBe(200);
-      expect(updated.json().resourceLimits).toEqual({
-        cpus: 2,
-        memoryMb: 2048,
-        timeoutSec: 900,
-      });
+      expect(updated.statusCode).toBe(400);
+      expect(updated.json().error).toBe('Manifest-backed agents must be edited through manifest');
 
-      const storedUpdated = await container.db.getAgent(manifestAgentId);
-      expect(storedUpdated?.metadata).toEqual(expect.objectContaining({
-        resourceLimits: { cpus: 2, memoryMb: 2048, timeoutSec: 900 },
-      }));
-
-      const cleared = await app.inject({
-        method: 'PUT',
+      const unchanged = await app.inject({
+        method: 'GET',
         url: `/api/agents/${manifestAgentId}`,
-        payload: { resourceLimits: null },
       });
-      expect(cleared.statusCode).toBe(200);
-      expect(cleared.json().resourceLimits).toEqual({
+      expect(unchanged.json().resourceLimits).toEqual({
         cpus: 1,
         memoryMb: 1024,
         timeoutSec: 300,
@@ -411,11 +512,11 @@ describe('Agent CRUD & related endpoints', () => {
     it('updates and explicitly clears compiled manifest runtime fields', async () => {
       const created = await createAgent({
         name: 'runtime-field-update-agent',
-        nativeTools: { allowlist: ['Bash'] },
+        nativeToolPolicy: { policy: 'allow', names: ['Bash'] },
         workspaceContent: { files: [{ src: 'skills', dest: 'skills' }] },
         mode: 'background',
         manifest: canonicalManifest('runtime-field-update-agent', {
-          nativeTools: { allowlist: ['Bash'] },
+          nativeToolPolicy: { policy: 'allow', names: ['Bash'] },
           workspace: {
             content: {
               files: [{ src: 'skills', dest: 'skills' }],
@@ -428,14 +529,14 @@ describe('Agent CRUD & related endpoints', () => {
       const runtimeAgentId = created.json().id as string;
 
       const updated = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${runtimeAgentId}`,
         payload: {
-          nativeTools: { blocklist: ['Write'] },
+          nativeToolPolicy: { policy: 'deny', names: ['Write'] },
           workspaceContent: { files: [{ src: 'hooks', dest: 'hooks' }] },
           mode: 'both',
           manifest: canonicalManifest('runtime-field-update-agent', {
-            nativeTools: { blocklist: ['Write'] },
+            nativeToolPolicy: { policy: 'deny', names: ['Write'] },
             workspace: {
               content: {
                 files: [{ src: 'hooks', dest: 'hooks' }],
@@ -447,7 +548,7 @@ describe('Agent CRUD & related endpoints', () => {
       });
       expect(updated.statusCode).toBe(200);
       expect(updated.json()).toMatchObject({
-        nativeTools: { blocklist: ['Write'] },
+        nativeToolPolicy: { policy: 'deny', names: ['Write'] },
         workspaceContent: { files: [{ src: 'hooks', dest: 'hooks' }] },
         mode: 'both',
         manifest: {
@@ -456,10 +557,10 @@ describe('Agent CRUD & related endpoints', () => {
       });
 
       const cleared = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${runtimeAgentId}`,
         payload: {
-          nativeTools: null,
+          nativeToolPolicy: null,
           workspaceContent: null,
           mode: null,
           manifest: null,
@@ -467,16 +568,117 @@ describe('Agent CRUD & related endpoints', () => {
       });
       expect(cleared.statusCode).toBe(200);
       expect(cleared.json()).toMatchObject({
-        nativeTools: null,
+        nativeToolPolicy: null,
         workspaceContent: null,
         mode: null,
         manifest: null,
       });
     });
 
+    it('replaces manifest-derived runtime fields without retaining stale API overrides', async () => {
+      const created = await createAgent({
+        name: 'manifest-replacement-agent',
+        builtinToolPolicy: { policy: 'deny', names: ['emit-event'] },
+        nativeToolPolicy: { policy: 'allow', names: ['Read'] },
+        workspaceContent: { files: [{ src: 'old', dest: 'old' }] },
+        mode: 'background',
+        resourceLimits: { cpus: 2 },
+        manifest: canonicalManifest('manifest-replacement-agent', {
+          builtinToolPolicy: { policy: 'deny', names: ['emit-event'] },
+          nativeToolPolicy: { policy: 'allow', names: ['Read'] },
+          workspace: { content: { files: [{ src: 'old', dest: 'old' }] } },
+          mode: 'background',
+          resources: { sandbox: { cpus: 2 } },
+        }),
+      });
+      expect(created.statusCode, created.body).toBe(201);
+
+      const replaced = await app.inject({
+        method: 'PATCH',
+        url: `/api/agents/${created.json().id}`,
+        payload: {
+          manifest: canonicalManifest('manifest-replacement-agent', {
+            builtinToolPolicy: { policy: 'all' },
+            nativeToolPolicy: { policy: 'none' },
+            mode: 'interactive',
+            resources: { sandbox: { cpus: 1 } },
+          }),
+        },
+      });
+
+      expect(replaced.statusCode, replaced.body).toBe(200);
+      expect(replaced.json()).toMatchObject({
+        builtinToolPolicy: { policy: 'all' },
+        nativeToolPolicy: { policy: 'none' },
+        workspaceContent: null,
+        mode: 'interactive',
+        resourceLimits: { cpus: 1 },
+      });
+    });
+
+    it('derives manifest-owned core fields and clears omitted description on replacement', async () => {
+      const created = await createAgent({
+        name: 'manifest-core-before',
+        description: 'Remove this description',
+        manifest: {
+          ...canonicalManifest('manifest-core-before'),
+          metadata: {
+            name: 'manifest-core-before',
+            description: 'Remove this description',
+          },
+        },
+      });
+      expect(created.statusCode, created.body).toBe(201);
+
+      const replacementManifest = canonicalManifest('manifest-core-after', {
+        instructions: 'Prompt from the replacement manifest.',
+        tools: [{ ref: 'replacement-tool' }],
+      });
+      const replaced = await app.inject({
+        method: 'PATCH',
+        url: `/api/agents/${created.json().id}`,
+        payload: { manifest: replacementManifest },
+      });
+
+      expect(replaced.statusCode, replaced.body).toBe(200);
+      expect(replaced.json()).toMatchObject({
+        name: 'manifest-core-after',
+        systemPrompt: 'Prompt from the replacement manifest.',
+        tools: ['replacement-tool'],
+        description: null,
+        manifest: replacementManifest,
+      });
+    });
+
+    it('rejects direct definition edits to a manifest-backed agent', async () => {
+      const created = await createAgent({
+        name: 'manifest-core-guard',
+        manifest: canonicalManifest('manifest-core-guard'),
+      });
+      expect(created.statusCode, created.body).toBe(201);
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/agents/${created.json().id}`,
+        payload: { systemPrompt: 'This would leave the manifest stale.' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('Manifest-backed agents must be edited through manifest');
+
+      const policyRes = await app.inject({
+        method: 'PATCH',
+        url: `/api/agents/${created.json().id}`,
+        payload: { nativeToolPolicy: { policy: 'none' } },
+      });
+
+      expect(policyRes.statusCode).toBe(400);
+      expect(policyRes.json().error).toBe('Manifest-backed agents must be edited through manifest');
+    });
+
     it('rejects update with no fields', async () => {
       const res = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${agentId}`,
         payload: {},
       });
@@ -485,7 +687,7 @@ describe('Agent CRUD & related endpoints', () => {
 
     it('rejects harness change without harnessConfig', async () => {
       const res = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${agentId}`,
         payload: { harness: 'claude-agents' },
       });
@@ -496,7 +698,7 @@ describe('Agent CRUD & related endpoints', () => {
 
     it('rejects mismatched harnessConfig when changing harness', async () => {
       const res = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${agentId}`,
         payload: {
           harness: 'claude-agents',
@@ -510,7 +712,7 @@ describe('Agent CRUD & related endpoints', () => {
 
     it('rejects legacy model field updates', async () => {
       const res = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: `/api/agents/${agentId}`,
         payload: { model: 'new-model' },
       });
@@ -521,11 +723,30 @@ describe('Agent CRUD & related endpoints', () => {
 
     it('rejects update on non-existent agent', async () => {
       const res = await app.inject({
-        method: 'PUT',
+        method: 'PATCH',
         url: '/api/agents/nonexistent-id',
         payload: { name: 'nope' },
       });
       expect(res.statusCode).toBe(404);
+    });
+
+    it('rejects renaming an agent to another agent deployment identity', async () => {
+      const first = await createAgent({ name: 'rename-source' });
+      const second = await createAgent({ name: 'rename-target' });
+      expect(first.statusCode, first.body).toBe(201);
+      expect(second.statusCode, second.body).toBe(201);
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/agents/${first.json().id}`,
+        payload: { name: 'rename-target' },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 'agent_name_conflict',
+        name: 'rename-target',
+      });
     });
   });
 
@@ -562,7 +783,11 @@ describe('Agent CRUD & related endpoints', () => {
       const listed = listRes.json().find((entry: Record<string, unknown>) => entry.id === agentId);
       expect(listed.status).toBe('running');
 
-      await container.db.updateTurn(turn.id, { completedAt: Date.now() });
+      await container.db.finalizeTurnIfOpen(turn.id, {
+        status: 'completed',
+        completedAt: Date.now(),
+        error: null,
+      });
       res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
       expect(res.json().status).toBe('idle');
     });
@@ -589,7 +814,11 @@ describe('Agent CRUD & related endpoints', () => {
           taskDescription: `completed turn ${i}`,
           sandboxSessionId: sandboxSession.id,
         });
-        await container.db.updateTurn(turn.id, { completedAt: Date.now() });
+        await container.db.finalizeTurnIfOpen(turn.id, {
+          status: 'completed',
+          completedAt: Date.now(),
+          error: null,
+        });
       }
       for (let i = 0; i < 2; i++) {
         const turn = await container.db.createTurn({
@@ -599,7 +828,11 @@ describe('Agent CRUD & related endpoints', () => {
           taskDescription: `failed turn ${i}`,
           sandboxSessionId: sandboxSession.id,
         });
-        await container.db.updateTurn(turn.id, { completedAt: Date.now(), error: 'boom' });
+        await container.db.finalizeTurnIfOpen(turn.id, {
+          status: 'error',
+          completedAt: Date.now(),
+          error: 'boom',
+        });
       }
 
       // Conversation B: multi-turn conversation with no sandbox session at all.
@@ -610,7 +843,11 @@ describe('Agent CRUD & related endpoints', () => {
         mode: 'interactive',
         taskDescription: 'completed without sandbox',
       });
-      await container.db.updateTurn(completedNoSandbox.id, { completedAt: Date.now() });
+      await container.db.finalizeTurnIfOpen(completedNoSandbox.id, {
+        status: 'completed',
+        completedAt: Date.now(),
+        error: null,
+      });
       await container.db.createTurn({
         agentId,
         conversationId: convB.id,
@@ -638,6 +875,7 @@ describe('Agent CRUD & related endpoints', () => {
         'activeSessions',
         'sessions',
         'sessionsByStatus',
+        'recentTurns',
       ];
 
       const res = await app.inject({ method: 'GET', url: `/api/agents/${agentId}` });
@@ -645,7 +883,6 @@ describe('Agent CRUD & related endpoints', () => {
       const body = res.json();
       expect(body).toMatchObject(expectedCounters);
       expect(body.sandboxSessionsByStatus).toEqual(expectedSandboxSessionsByStatus);
-      expect(body.recentTurns).toHaveLength(5);
       for (const field of legacyFields) {
         expect(body).not.toHaveProperty(field);
       }
@@ -655,7 +892,6 @@ describe('Agent CRUD & related endpoints', () => {
       const listed = listRes.json().find((entry: Record<string, unknown>) => entry.id === agentId);
       expect(listed).toMatchObject(expectedCounters);
       expect(listed.sandboxSessionsByStatus).toEqual(expectedSandboxSessionsByStatus);
-      expect(listed.recentTurns).toHaveLength(5);
       for (const field of legacyFields) {
         expect(listed).not.toHaveProperty(field);
       }
@@ -701,6 +937,43 @@ describe('Agent CRUD & related endpoints', () => {
         url: `/api/agents/${id}`,
       });
       expect(getRes.statusCode).toBe(404);
+    });
+
+    it('retains one durable agent.deleted tombstone after hard deletion', async () => {
+      const created = await createAgent({ name: 'delete-with-tombstone' });
+      const id = created.json().id as string;
+      const busErrors: Array<{ source: string; event: string; error: string }> = [];
+      container.eventBus.on('bus.error', (error) => {
+        busErrors.push(error);
+      });
+
+      // Make the test deterministic: the create event belongs to the history
+      // that hard deletion removes, while the delete event is the sole retained
+      // lifecycle tombstone.
+      await container.canonicalLog.drain();
+
+      const delRes = await app.inject({
+        method: 'DELETE',
+        url: `/api/agents/${id}`,
+      });
+      expect(delRes.statusCode).toBe(204);
+
+      const frames = await container.db.getFramesSince(id, 0, {
+        channels: ['system'],
+      });
+
+      expect(busErrors).toEqual([]);
+      expect(frames).toHaveLength(1);
+      expect(frames[0]).toMatchObject({
+        agentId: id,
+        channel: 'system',
+        sourceType: 'agent.deleted',
+        type: 'agent.deleted',
+      });
+      expect(JSON.parse(frames[0]!.payload)).toEqual({
+        agentId: id,
+        timestamp: expect.any(Number),
+      });
     });
 
     it('kills active sandbox sessions before deleting the agent', async () => {
@@ -870,7 +1143,11 @@ describe('Agent CRUD & related endpoints', () => {
         mode: 'background',
         taskDescription: 'completed detail test',
       });
-      await container.db.updateTurn(run.id, { completedAt: Date.now() });
+      await container.db.finalizeTurnIfOpen(run.id, {
+        status: 'completed',
+        completedAt: Date.now(),
+        error: null,
+      });
 
       const res = await app.inject({
         method: 'GET',
@@ -898,6 +1175,30 @@ describe('Agent CRUD & related endpoints', () => {
         url: `/api/agents/${agentId}/turns/${conversation.id}`,
       });
       expect(res.statusCode).toBe(404);
+    });
+  });
+
+  describe('POST /api/agents/:id/secrets', () => {
+    it('enforces the strict secret input contract and returns its canonical response', async () => {
+      const created = await createAgent({ name: 'strict-secret-contract-agent' });
+      expect(created.statusCode, created.body).toBe(201);
+      const strictSecretAgentId = created.json().id as string;
+
+      const invalid = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${strictSecretAgentId}/secrets`,
+        payload: { key: '   ', value: 'secret', unexpected: true },
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json().error).toBe('Invalid secret');
+
+      const valid = await app.inject({
+        method: 'POST',
+        url: `/api/agents/${strictSecretAgentId}/secrets`,
+        payload: { key: '  PROVIDER_TOKEN  ', value: '  byte-exact value  ' },
+      });
+      expect(valid.statusCode, valid.body).toBe(201);
+      expect(valid.json()).toEqual({ key: 'PROVIDER_TOKEN' });
     });
   });
 
@@ -947,7 +1248,11 @@ describe('Agent CRUD & related endpoints', () => {
         agentId,
         conversationId,
         mode: 'interactive',
+      });
+      await container.db.finalizeTurnIfOpen(completedRunId, {
+        status: 'completed',
         completedAt: Date.now(),
+        error: null,
       });
 
       const res = await app.inject({
@@ -1040,7 +1345,7 @@ describe('Agent CRUD & related endpoints', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json().cancelled).toBe(true);
-      const interrupt = await container.db.getPendingInterrupt(interruptId);
+      const interrupt = await container.db.getInterruptById(interruptId);
       expect(interrupt?.status).toBe('resolved');
       expect(interrupt?.resolvedAction).toBe('reject');
       expect(interrupt?.resolvedData).toBe('Turn cancelled');
@@ -1060,10 +1365,10 @@ describe('Agent CRUD & related endpoints', () => {
     });
   });
 
-  // ── GET /api/agents/:id/versions ───────────────────────────
+  // ── Removed agent version history ──────────────────────────
 
   describe('GET /api/agents/:id/versions', () => {
-    it('returns versions array', async () => {
+    it('does not expose the retired version-history route', async () => {
       const created = await createAgent({ name: 'version-agent' });
       const agentId = created.json().id;
 
@@ -1071,10 +1376,7 @@ describe('Agent CRUD & related endpoints', () => {
         method: 'GET',
         url: `/api/agents/${agentId}/versions`,
       });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(body).toEqual(expect.objectContaining({ versions: expect.any(Array) }));
-      expect(Array.isArray(body.versions)).toBe(true);
+      expect(res.statusCode).toBe(404);
     });
   });
 

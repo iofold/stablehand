@@ -4,6 +4,11 @@ import { liveApiHeaders } from './live-api-auth.js';
 const API = 'http://localhost:3002';
 const TURN_TIMEOUT_MS = 180_000;
 const TEST_TIMEOUT_MS = 300_000;
+const DIRECT_OPENAI_HARNESS_CONFIG = {
+  provider: 'openai',
+  model: 'gpt-5.4-mini',
+  apiKeyRef: '$secret:OPENAI_API_KEY',
+} as const;
 
 const cleanup: { agents: Set<string>; triggers: Set<string> } = {
   agents: new Set(),
@@ -122,7 +127,9 @@ async function createAgent(overrides: Record<string, unknown> = {}) {
   const payload = {
     name: uniqueName('e2e-agent'),
     harness: 'langgraph',
-    harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
+    // Gateway behavior has its own live matrix. This broad CRUD/orchestrator
+    // suite deletes its agents, so it must not leave gateway spend orphaned.
+    harnessConfig: DIRECT_OPENAI_HARNESS_CONFIG,
     systemPrompt: 'You are a concise test assistant. Always reply as briefly as possible.',
     tools: [],
     ...overrides,
@@ -244,11 +251,11 @@ describe('Scenario Group 1: Agent Registration & CRUD', () => {
       id: created.agentId,
       name: created.data.name,
       harness: 'langgraph',
-      harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
+      harnessConfig: DIRECT_OPENAI_HARNESS_CONFIG,
     }));
 
     const updatedName = uniqueName('updated-agent');
-    const update = await api('PUT', `/api/agents/${created.agentId}`, {
+    const update = await api('PATCH', `/api/agents/${created.agentId}`, {
       name: updatedName,
       systemPrompt: 'Updated E2E system prompt.',
     });
@@ -281,9 +288,8 @@ describe('Scenario Group 1: Agent Registration & CRUD', () => {
       }],
     });
 
-    const metadata = parseMetadata(created.data?.metadata);
-    expect(created.data?.tools).toEqual(expect.arrayContaining(['remote-search']));
-    expect(metadata?.httpTools).toEqual(expect.arrayContaining([
+    expect(created.data?.tools).toEqual([]);
+    expect(created.data?.httpTools).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: 'remote-search',
         endpoint: 'https://api.example.com/search',
@@ -293,6 +299,7 @@ describe('Scenario Group 1: Agent Registration & CRUD', () => {
     const webhookCreate = await api('POST', `/api/agents/${created.agentId}/webhooks`, {
       url: 'https://hooks.example.test/e2e',
       events: ['turn.started', 'turn.completed'],
+      secret: 'scenario-webhook-secret',
     });
     expect(webhookCreate.status).toBe(201);
     expect(typeof webhookCreate.data?.id).toBe('string');
@@ -316,7 +323,11 @@ describe('Scenario Group 1: Agent Registration & CRUD', () => {
     const r = await api('POST', '/api/agents', {
       name: agentName,
       harness: 'langgraph',
-      harnessConfig: { provider: 'openai', model: 'gpt-5.4' },
+      harnessConfig: {
+        provider: 'openai',
+        model: 'gpt-5.4',
+        apiKeyRef: '$secret:OPENAI_API_KEY',
+      },
       systemPrompt: 'Imported manifest test agent.',
       tools: [],
     });
@@ -371,7 +382,10 @@ describe('Scenario Group 2: Real Agent Execution', () => {
   it('S2b: Claude agent executes and completes', async () => {
     const created = await createAgent({
       harness: 'claude-agents',
-      harnessConfig: { model: 'claude-sonnet-4-6' },
+      harnessConfig: {
+        model: 'claude-sonnet-4-6',
+        apiKeyRef: '$secret:ANTHROPIC_API_KEY',
+      },
     });
 
     const started = await startTurn(created.agentId, 'Reply with the word success and nothing else.');

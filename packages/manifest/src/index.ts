@@ -4,7 +4,8 @@ export type {
   ManifestSpec,
   ManifestHarnessConfig,
   ManifestToolRef,
-  ManifestNativeTools,
+  ManifestBuiltinToolPolicy,
+  ManifestNativeToolPolicy,
   ManifestFileCopy,
   ManifestWorkspaceContent,
   ManifestMCPTool,
@@ -31,6 +32,6 @@ export {
 export { parseManifestString, serializeManifestYAML, serializeManifestJSON } from './parser.js';
 export {
   manifestToAgentCreateInput,
-  manifestToAgentUpdateInput,
+  manifestToAgentPatchInput,
   type ManifestConversionOptions,
 } from './convert.js';

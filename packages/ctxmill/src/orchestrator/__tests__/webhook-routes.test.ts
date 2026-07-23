@@ -22,8 +22,6 @@ function createMockDb() {
     harness: 'langgraph',
     harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-test' }),
     manifest: null,
-    version: 1,
-    status: 'created',
     createdAt: 1,
     updatedAt: 1,
   };
@@ -59,14 +57,14 @@ function createMockDb() {
     updateWebhookForAgent: vi.fn(async (
       id: string,
       agentId: string,
-      data: { url: string; events: string[]; secret?: string | null },
+      data: { url?: string; events?: string[]; secret?: string },
     ) => (id === 'hook-1' && agentId === 'agent-1'
       ? {
           id,
           agentId,
-          url: data.url,
-          events: data.events,
-          secret: data.secret ?? null,
+          url: data.url ?? 'https://hooks.example/run-completed',
+          events: data.events ?? ['turn.completed'],
+          secret: data.secret ?? 'stored-list-secret',
           active: true,
           createdAt: 10,
           updatedAt: 20,
@@ -214,7 +212,7 @@ describe('webhook routes', () => {
 
   it('updates a webhook with valid events', async () => {
     const response = await app.inject({
-      method: 'PUT',
+      method: 'PATCH',
       url: '/api/agents/agent-1/webhooks/hook-1',
       payload: {
         url: 'https://hooks.example/updated',
@@ -241,7 +239,7 @@ describe('webhook routes', () => {
 
   it('rejects invalid event types when updating a webhook', async () => {
     const response = await app.inject({
-      method: 'PUT',
+      method: 'PATCH',
       url: '/api/agents/agent-1/webhooks/hook-1',
       payload: {
         url: 'https://hooks.example/updated',
@@ -258,27 +256,36 @@ describe('webhook routes', () => {
     });
   });
 
-  it('rejects update payloads missing required webhook fields', async () => {
+  it('updates webhook routing without requiring the write-only secret again', async () => {
     const response = await app.inject({
-      method: 'PUT',
+      method: 'PATCH',
       url: '/api/agents/agent-1/webhooks/hook-1',
       payload: {
         events: ['turn.completed'],
-        secret: 'rotated-secret',
       },
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({
-      error: 'Invalid webhook definition',
-      issues: [{ path: 'url' }],
+    expect(response.statusCode).toBe(200);
+    expect(db.updateWebhookForAgent).toHaveBeenCalledWith('hook-1', 'agent-1', {
+      events: ['turn.completed'],
     });
+    expect(response.json()).toMatchObject({ hasSecret: true });
+  });
+
+  it('rejects empty webhook patches', async () => {
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/api/agents/agent-1/webhooks/hook-1',
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(400);
     expect(db.updateWebhookForAgent).not.toHaveBeenCalled();
   });
 
   it('returns 404 when updating a webhook outside the agent', async () => {
     const response = await app.inject({
-      method: 'PUT',
+      method: 'PATCH',
       url: '/api/agents/agent-1/webhooks/other-hook',
       payload: {
         url: 'https://hooks.example/updated',

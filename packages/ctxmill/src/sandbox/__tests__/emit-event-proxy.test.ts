@@ -16,6 +16,7 @@ import {
   RequestToolResponseSchema,
   ToolMetadataSchema,
   ToolLocation,
+  TurnDeliveryCapabilitySchema,
   type ToolMetadata as ProtoToolMetadata,
 } from '@ctxmill/proto/sandbox/v1';
 
@@ -65,6 +66,37 @@ function makeEventBus() {
   vi.spyOn(bus, 'emitCustom');
   vi.spyOn(bus, 'emitCustomAsync');
   return bus;
+}
+
+function callbackRoute(turnId = 'turn-1', agentId = 'agent-1') {
+  const leaseExpiresAtMs = Date.now() + 60_000;
+  const deliveryContext = {
+    identity: {
+      turnId,
+      sandboxSessionId: 'sandbox-session-1',
+      agentId,
+      ownerId: 'owner-1',
+      fenceToken: 1,
+      restoreFenceToken: 0,
+      containerId: 'container-1',
+    },
+    capability: create(TurnDeliveryCapabilitySchema, {
+      ownerId: 'owner-1',
+      fenceToken: 1n,
+      leaseExpiresAtMs: BigInt(leaseExpiresAtMs),
+      restoreFenceToken: 0n,
+      containerId: 'container-1',
+      agentId,
+      signature: 'ctxmill-open-turn-delivery-capability-v1',
+    }),
+    leaseExpiresAtMs,
+    abortController: new AbortController(),
+  };
+  return {
+    sandboxSessionId: 'sandbox-session-1',
+    agentId,
+    resolveDeliveryContext: () => deliveryContext,
+  };
 }
 
 function makeEmitEventProtoMetadata(): ProtoToolMetadata {
@@ -140,7 +172,7 @@ describe('emit-event through sandbox tool proxy', () => {
     );
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, callbackRoute(), {
       retryDelays: [],
     });
 
@@ -179,7 +211,7 @@ describe('emit-event through sandbox tool proxy', () => {
     });
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, callbackRoute(), {
       retryDelays: [],
     });
 
@@ -203,7 +235,7 @@ describe('emit-event through sandbox tool proxy', () => {
     );
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, callbackRoute(), {
       retryDelays: [],
     });
 
@@ -222,7 +254,7 @@ describe('emit-event through sandbox tool proxy', () => {
 
     const client = makeMockClient({ requestTool });
 
-    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, callbackRoute(), {
       retryDelays: [1], // Single fast retry for testing
     });
 
@@ -248,8 +280,7 @@ describe('protoToToolDefs wires emit-event proxy', () => {
 
     const defs = protoToToolDefs(tools, {
       orchestratorClient: client,
-      turnId: 'turn-1',
-      agentId: 'agent-1',
+      callbackRoute: callbackRoute(),
     });
 
     expect(defs).toHaveLength(1);
@@ -274,8 +305,7 @@ describe('protoToToolDefs wires emit-event proxy', () => {
     const tools = [makeEmitEventProtoMetadata()];
     const defs = protoToToolDefs(tools, {
       orchestratorClient: makeMockClient(),
-      turnId: 'turn-1',
-      agentId: 'agent-1',
+      callbackRoute: callbackRoute(),
     });
 
     // Should validate correctly
@@ -390,7 +420,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     });
 
     // 3. Create the sandbox-side proxy handler
-    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, callbackRoute(), {
       retryDelays: [],
     });
 
@@ -434,7 +464,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
       requestTool: async (req) => svcImpl.requestTool(req as any),
     });
 
-    const handler = createToolProxy('emit-event', client, 'turn-1', 'agent-1', {
+    const handler = createToolProxy('emit-event', client, callbackRoute(), {
       retryDelays: [],
     });
 
@@ -454,7 +484,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
       requestTool: async (req) => svcImpl.requestTool(req as any),
     });
 
-    const handler = createToolProxy('emit-event', client, 'turn-42', 'data-agent', {
+    const handler = createToolProxy('emit-event', client, callbackRoute('turn-42', 'data-agent'), {
       retryDelays: [],
     });
 
@@ -506,8 +536,7 @@ describe('emit-event end-to-end: proxy -> orchestrator -> EventBus', () => {
     const protoTools = [makeEmitEventProtoMetadata()];
     const toolDefs = protoToToolDefs(protoTools, {
       orchestratorClient: client,
-      turnId: 'turn-proto',
-      agentId: 'proto-agent',
+      callbackRoute: callbackRoute('turn-proto', 'proto-agent'),
     });
 
     expect(toolDefs).toHaveLength(1);

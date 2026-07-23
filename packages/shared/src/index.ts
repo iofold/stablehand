@@ -11,6 +11,15 @@ export {
   projectTurnStatus,
 } from './status.js';
 export {
+  RUNTIME_INSTANCE_TOKEN_ENV,
+  RUNTIME_INSTANCE_TOKEN_HEADER,
+} from './runtime-instance-auth.js';
+export {
+  SYSTEM_SETTING_BOUNDS,
+  SYSTEM_SETTING_FIELDS,
+  validateSystemSettingValue,
+} from './system-settings.js';
+export {
   CANONICAL_LLM_PROVIDERS,
   LLM_PROVIDER_ALIASES,
   isCanonicalLLMProvider,
@@ -19,17 +28,11 @@ export {
 } from './llm-providers.js';
 export type { AgentSessionEventType, AgentSessionEvent, MessageCommittedEvent } from './events.js';
 export type { CanonicalLLMProvider } from './llm-providers.js';
+export type { SystemSettingBounds, SystemSettingField } from './system-settings.js';
 export type {
-  ApiAgent,
-  ApiAgentResourceLimits,
-  HttpToolDefinition,
-  ApiAgentTurn,
   ApiTurnStatus,
   ApiConversationStatus,
   ApiTokenUsage,
-  ApiBudgetPolicy,
-  ApiBudgetSpend,
-  ApiBudgetSpendBucket,
   ApiMessage,
   ApiMessagePart,
   ApiToolCallState,
@@ -39,5 +42,4 @@ export type {
   ApiSandboxRestoreSuccess,
   SandboxSessionStatus,
   ApiSandboxSessionStatusCounts,
-  ApiConversationSummary,
 } from './api.js';

@@ -7,6 +7,14 @@ import { countActiveSandboxSessions } from '@/lib/lifecycle-status';
 import type { Agent } from '@/stores/agents';
 import { EmptyDashboard } from './illustrations/EmptyDashboard';
 import { HoverGlow } from './MicroInteractions';
+import {
+  fetchAgentBudgetStatuses,
+  fetchModelGatewayStatus,
+} from '@/lib/api';
+import type {
+  AgentBudgetStatus,
+  ModelGatewayStatus,
+} from '@ctxmill/contracts';
 
 interface DashboardProps {
   agents: Agent[];
@@ -72,6 +80,32 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange, onRet
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<FilterStatus>('all');
+  const [budgetStatuses, setBudgetStatuses] = useState<
+    Record<string, AgentBudgetStatus>
+  >({});
+  const [modelGatewayStatus, setModelGatewayStatus] =
+    useState<ModelGatewayStatus>();
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.allSettled([
+      fetchAgentBudgetStatuses(),
+      fetchModelGatewayStatus(),
+    ]).then(([budgets, gateway]) => {
+      if (cancelled) return;
+      if (budgets.status === 'fulfilled') {
+        setBudgetStatuses(Object.fromEntries(
+          budgets.value.map((status) => [status.agentId, status]),
+        ));
+      }
+      if (gateway.status === 'fulfilled') {
+        setModelGatewayStatus(gateway.value);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agents]);
 
   const filteredAgents = useMemo(() => {
     return agents.filter((agent) => {
@@ -207,7 +241,12 @@ export function Dashboard({ agents, loading, error, onFilteredCountChange, onRet
               style={{ animationDelay: `${i * 50}ms`, animationFillMode: 'both' }}
             >
               <HoverGlow>
-                <AgentCard agent={agent} onEdit={setEditingAgent} />
+                <AgentCard
+                  agent={agent}
+                  onEdit={setEditingAgent}
+                  budgetStatus={budgetStatuses[agent.id]}
+                  modelGatewayStatus={modelGatewayStatus}
+                />
               </HoverGlow>
             </div>
           ))}

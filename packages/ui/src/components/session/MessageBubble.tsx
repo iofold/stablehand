@@ -128,7 +128,7 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
             <span className="typing-cursor" />
           )}
         </div>
-        {!isStreaming && agentId && (
+        {!isStreaming && agentId && conversationId && (
           <div className="mt-2">
             <FeedbackButtons
               agentId={agentId}

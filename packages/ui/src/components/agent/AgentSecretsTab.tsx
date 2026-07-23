@@ -22,8 +22,8 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
       setError(null);
       const data = await fetchSecretKeys(agentId);
       setKeys(data.keys ?? []);
-    } catch {
-      setError('Failed to load secrets');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
       setKeys([]);
     } finally {
       setLoading(false);
@@ -35,17 +35,17 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
   }, [loadKeys]);
 
   const handleAdd = async () => {
-    if (!newKey.trim() || !newValue.trim()) return;
+    if (!newKey.trim() || newValue.length === 0) return;
     setSaving(true);
     setError(null);
     try {
-      await setSecret(agentId, newKey.trim(), newValue.trim());
+      await setSecret(agentId, newKey, newValue);
       await loadKeys();
       setNewKey('');
       setNewValue('');
       setShowForm(false);
-    } catch {
-      setError('Failed to save secret');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
@@ -58,8 +58,8 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
       await deleteSecret(agentId, key);
       await loadKeys();
       setConfirmDelete(null);
-    } catch {
-      setError('Failed to delete secret');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeleting(false);
     }
@@ -114,23 +114,24 @@ export function AgentSecretsTab({ agentId }: AgentSecretsTabProps) {
             type="text"
             placeholder="KEY_NAME (e.g. OPENAI_API_KEY)"
             value={newKey}
-            onChange={(e) => setNewKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
+            onChange={(e) => setNewKey(e.target.value)}
             className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 font-mono placeholder:text-surface-400 focus:outline-none focus:border-accent-500/50"
             data-testid="secret-key-input"
           />
-          <input
-            type="password"
+          <textarea
             placeholder="Secret value"
             value={newValue}
             onChange={(e) => setNewValue(e.target.value)}
-            className="w-full rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 text-sm text-surface-200 placeholder:text-surface-400 focus:outline-none focus:border-accent-500/50"
+            rows={4}
+            spellCheck={false}
+            className="w-full resize-y rounded-lg border border-surface-600/50 bg-surface-900/50 px-3 py-2 font-mono text-sm text-surface-200 placeholder:text-surface-400 focus:outline-none focus:border-accent-500/50"
             data-testid="secret-value-input"
           />
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={handleAdd}
-              disabled={saving || !newKey.trim() || !newValue.trim()}
+              disabled={saving || !newKey.trim() || newValue.length === 0}
               className="rounded-lg bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               data-testid="save-secret-button"
             >

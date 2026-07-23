@@ -21,7 +21,8 @@ spec:
   tools:
     - ref: request-approval
     - ref: emit-event
-  nativeTools:
-    blocklist:
+  nativeToolPolicy:
+    policy: deny
+    names:
       - execute
   mode: interactive

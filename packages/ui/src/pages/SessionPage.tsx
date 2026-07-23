@@ -74,7 +74,10 @@ export function SessionPage() {
   const [error, setError] = useState<string | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [pastRunError, setPastRunError] = useState<string | null>(null);
-  const [lastFailedContent, setLastFailedContent] = useState<string | null>(null);
+  const [lastFailedTurn, setLastFailedTurn] = useState<{
+    content: string;
+    requestedTurnId: string;
+  } | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>(routeConversationId);
   const requestedConversationKey = routeConversationId
     ?? (isNewConversationPath(location.pathname) ? '__new__' : '__latest__');
@@ -118,9 +121,9 @@ export function SessionPage() {
         const isNewSession = isNewConversationPath(location.pathname);
 
         if (!resolvedConversationId && !isNewSession) {
-          const convs = await fetchConversations(id!) as Array<{ id: string }>;
+          const convs = await fetchConversations(id!);
           if (!mounted) return;
-          if (Array.isArray(convs) && convs.length > 0) {
+          if (convs.length > 0) {
             resolvedConversationId = convs[0].id;
           }
         }
@@ -262,14 +265,18 @@ export function SessionPage() {
   const agentNotFound = agentsLoaded && id && !agent;
 
   const handleSend = useCallback(
-    async (content: string) => {
+    async (content: string, requestedTurnId: string = globalThis.crypto.randomUUID()) => {
       if (!id || !streamReady) return;
       setError(null);
       setPastRunError(null);
-      setLastFailedContent(null);
+      setLastFailedTurn(null);
       const optimisticMessageId = addUserMessage(content);
       try {
-        const response = await sendMessage(id, content, conversationId);
+        const response = await sendMessage(id, {
+          content,
+          conversationId,
+          requestedTurnId,
+        });
         if (response?.conversationId && !conversationId) {
           setConversationId(response.conversationId);
           setActiveConversation(response.conversationId);
@@ -277,9 +284,9 @@ export function SessionPage() {
         }
       } catch (err) {
         discardOptimisticUserMessage(optimisticMessageId);
-        console.error('[Session] Failed to send message:', err);
+        console.debug('[Session] Failed to send message:', err);
         setError(err instanceof Error ? err.message : String(err));
-        setLastFailedContent(content);
+        setLastFailedTurn({ content, requestedTurnId });
       }
     },
     [
@@ -294,46 +301,56 @@ export function SessionPage() {
   );
 
   const handleApprove = useCallback(async () => {
-    if (!id) return;
+    if (!id || !interrupt?.interruptId) return;
     setError(null);
     try {
       const toolCallName = interrupt?.toolCallName || '';
       useConversationStore.getState().addSystemMessage(
         `✓ Approved${toolCallName ? `: ${toolCallName}` : ''}`,
       );
-      await sendInterrupt(id, 'approve', undefined, interrupt?.interruptId);
+      await sendInterrupt(id, {
+        interruptId: interrupt.interruptId,
+        action: 'approve',
+      });
       clearInterrupt();
     } catch (err) {
-      console.error('[Session] Failed to send approval:', err);
+      console.debug('[Session] Failed to send approval:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolCallName]);
 
   const handleReject = useCallback(async () => {
-    if (!id) return;
+    if (!id || !interrupt?.interruptId) return;
     setError(null);
     try {
       const toolCallName = interrupt?.toolCallName || '';
       useConversationStore.getState().addSystemMessage(
         `✗ Rejected${toolCallName ? `: ${toolCallName}` : ''}`,
       );
-      await sendInterrupt(id, 'reject', undefined, interrupt?.interruptId);
+      await sendInterrupt(id, {
+        interruptId: interrupt.interruptId,
+        action: 'reject',
+      });
       clearInterrupt();
     } catch (err) {
-      console.error('[Session] Failed to send rejection:', err);
+      console.debug('[Session] Failed to send rejection:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolCallName]);
 
   const handleDocSubmit = useCallback(
     async (content: string) => {
-      if (!id) return;
+      if (!id || !interrupt?.interruptId) return;
       setError(null);
       try {
-        await sendInterrupt(id, 'submit', { content }, interrupt?.interruptId);
+        await sendInterrupt(id, {
+          interruptId: interrupt.interruptId,
+          action: 'submit',
+          data: { content },
+        });
         clearInterrupt();
       } catch (err) {
-        console.error('[Session] Failed to submit document:', err);
+        console.debug('[Session] Failed to submit document:', err);
         setError(err instanceof Error ? err.message : String(err));
       }
     },
@@ -342,13 +359,17 @@ export function SessionPage() {
 
   const handleFormSubmit = useCallback(
     async (values: Record<string, string>) => {
-      if (!id) return;
+      if (!id || !interrupt?.interruptId) return;
       setError(null);
       try {
-        await sendInterrupt(id, 'submit', values, interrupt?.interruptId);
+        await sendInterrupt(id, {
+          interruptId: interrupt.interruptId,
+          action: 'submit',
+          data: values,
+        });
         clearInterrupt();
       } catch (err) {
-        console.error('[Session] Failed to submit form:', err);
+        console.debug('[Session] Failed to submit form:', err);
         setError(err instanceof Error ? err.message : String(err));
       }
     },
@@ -487,8 +508,10 @@ export function SessionPage() {
               <ErrorDisplay
                 summary={humanizeError(error).summary}
                 details={humanizeError(error).details || undefined}
-                onRetry={lastFailedContent ? () => handleSend(lastFailedContent) : undefined}
-                onDismiss={() => { setError(null); setLastFailedContent(null); }}
+                onRetry={lastFailedTurn
+                  ? () => handleSend(lastFailedTurn.content, lastFailedTurn.requestedTurnId)
+                  : undefined}
+                onDismiss={() => { setError(null); setLastFailedTurn(null); }}
               />
             </div>
           )}

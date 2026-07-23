@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { AgentEvent, HarnessSessionConfig } from '../types.js';
 import type { Message } from '../../types.js';
 import type { ToolDefinition } from '../../tool/types.js';
+import type { NativeToolPolicy } from '@ctxmill/contracts';
 import {
   assertAbortContract,
   assertApprovalFlowContract,
@@ -13,7 +14,7 @@ import {
 } from './contract/assert-agent-event-contract.js';
 
 const mockStreamEvents = vi.fn();
-const mockCreateDeepAgent = vi.fn(() => ({
+const mockCreateDeepAgent = vi.fn((_config?: Record<string, unknown>) => ({
   streamEvents: mockStreamEvents,
 }));
 const mockLangSmith = vi.hoisted(() => {
@@ -48,8 +49,12 @@ vi.mock('langsmith', () => ({
   RunTree: mockLangSmith.FakeRunTree,
 }));
 
+const mockLocalShellBackendOptions: Array<Record<string, unknown>> = [];
+
 class MockLocalShellBackend {
-  constructor(..._args: unknown[]) {}
+  constructor(options: Record<string, unknown>) {
+    mockLocalShellBackendOptions.push(options);
+  }
 }
 
 function makeMessage(role: Message['role'], content: string, extra: Partial<Message> = {}): Message {
@@ -151,12 +156,106 @@ async function openRestoredTestSession(
 describe('LangGraphHarness message history', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLocalShellBackendOptions.length = 0;
     mockLangSmith.FakeRunTree.runs = [];
     delete process.env.LANGSMITH_TRACING;
     delete process.env.LANGSMITH_PROJECT;
     mockCreateDeepAgent.mockReturnValue({
       streamEvents: mockStreamEvents,
     });
+  });
+
+  it.each([
+    {
+      label: 'allow',
+      nativeToolPolicy: { policy: 'allow', names: ['read_file'] } as NativeToolPolicy,
+      readFileBlocked: false,
+      executeBlocked: true,
+    },
+    {
+      label: 'deny',
+      nativeToolPolicy: { policy: 'deny', names: ['execute'] } as NativeToolPolicy,
+      readFileBlocked: false,
+      executeBlocked: true,
+    },
+    {
+      label: 'none',
+      nativeToolPolicy: { policy: 'none' } as NativeToolPolicy,
+      readFileBlocked: true,
+      executeBlocked: true,
+    },
+  ])('enforces the $label native-tool policy without blocking ctxmill tools', async ({
+    nativeToolPolicy,
+    readFileBlocked,
+    executeBlocked,
+  }) => {
+    mockStreamEvents.mockImplementation(() => langGraphStream([{
+      event: 'on_chat_model_stream',
+      data: { chunk: { content: 'Done.' } },
+    }]));
+    const customTool: ToolDefinition = {
+      name: 'ctxmill_search',
+      description: 'Search ctxmill data',
+      input: z.object({ query: z.string() }),
+      handler: async () => 'result',
+    };
+    const messages = [makeMessage('user', 'Use tools')];
+    const session = await openRestoredTestSession({
+      stateVersion: '1',
+      messages,
+      payload: { transcript: messages },
+    }, makeConfig({ nativeToolPolicy, tools: [customTool] }));
+
+    try {
+      await collectEvents(session.deliverTurn({ messages, turnId: 'turn-policy' }, {}));
+      const params = mockCreateDeepAgent.mock.calls[0]?.[0] as {
+        middleware?: Array<{
+          name?: string;
+          beforeToolCall?: (call: { name: string }) => { blocked: boolean };
+        }>;
+      } | undefined;
+      const middleware = params?.middleware?.find((candidate) =>
+        candidate.name === 'ctxmill-native-tool-policy',
+      );
+
+      expect(middleware?.beforeToolCall?.({ name: 'read_file' })).toEqual(expect.objectContaining({
+        blocked: readFileBlocked,
+      }));
+      expect(middleware?.beforeToolCall?.({ name: 'execute' })).toEqual(expect.objectContaining({
+        blocked: executeBlocked,
+      }));
+      expect(middleware?.beforeToolCall?.({ name: 'ctxmill_search' })).toEqual({ blocked: false });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it.each([
+    ['an omitted policy', undefined],
+    ['the all policy', { policy: 'all' } as NativeToolPolicy],
+  ])('does not install native-tool policy middleware for %s', async (_label, nativeToolPolicy) => {
+    mockStreamEvents.mockImplementation(() => langGraphStream([{
+      event: 'on_chat_model_stream',
+      data: { chunk: { content: 'Done.' } },
+    }]));
+    const messages = [makeMessage('user', 'Use tools')];
+    const session = await openRestoredTestSession({
+      stateVersion: '1',
+      messages,
+      payload: { transcript: messages },
+    }, makeConfig({ nativeToolPolicy }));
+
+    try {
+      await collectEvents(session.deliverTurn({ messages, turnId: 'turn-policy-all' }, {}));
+      const params = mockCreateDeepAgent.mock.calls[0]?.[0] as {
+        middleware?: Array<{ name?: string }>;
+      } | undefined;
+      expect(params?.middleware).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'ctxmill-native-tool-policy' }),
+      ]));
+    } finally {
+      await session.close();
+    }
   });
 
   it('passes restored tool and system messages through to streamEvents', async () => {
@@ -211,6 +310,64 @@ describe('LangGraphHarness message history', () => {
     ]);
   });
 
+  it('passes each turn secret to model resolution and the shell backend without mutating process.env', async () => {
+    const tokenKey = 'PILOT_TURN_OWNERSHIP_TOKEN';
+    const previousToken = process.env[tokenKey];
+    process.env[tokenKey] = 'stable-token';
+    mockStreamEvents.mockImplementation(() => langGraphStream([
+      {
+        event: 'on_chat_model_stream',
+        data: { chunk: { content: 'Done.' } },
+      },
+    ]));
+
+    const messages = [makeMessage('user', 'Turn A')];
+    const session = await openRestoredTestSession({
+      stateVersion: '1',
+      messages,
+      payload: { transcript: messages },
+    });
+    const buildModelFromConfig = vi.fn(async () => createMockChatModel());
+    Reflect.set(session, 'buildModelFromConfig', buildModelFromConfig);
+
+    try {
+      await collectEvents(session.deliverTurn(
+        { messages, turnId: 'turn-secret-a' },
+        { turnSecrets: { [tokenKey]: 'turn-token-a' } },
+      ));
+      expect(process.env[tokenKey]).toBe('stable-token');
+
+      const secondMessages = [makeMessage('user', 'Turn B')];
+      await collectEvents(session.deliverTurn(
+        { messages: secondMessages, turnId: 'turn-secret-b' },
+        { turnSecrets: { [tokenKey]: 'turn-token-b' } },
+      ));
+      expect(process.env[tokenKey]).toBe('stable-token');
+
+      expect(buildModelFromConfig).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ [tokenKey]: 'turn-token-a' }),
+        'turn-secret-a',
+      );
+      expect(buildModelFromConfig).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ [tokenKey]: 'turn-token-b' }),
+        'turn-secret-b',
+      );
+      const firstEnv = mockLocalShellBackendOptions[0]?.env as Record<string, string> | undefined;
+      const secondEnv = mockLocalShellBackendOptions[1]?.env as Record<string, string> | undefined;
+      expect(firstEnv?.[tokenKey]).toBe('turn-token-a');
+      expect(secondEnv?.[tokenKey]).toBe('turn-token-b');
+    } finally {
+      await session.close();
+      if (previousToken === undefined) {
+        delete process.env[tokenKey];
+      } else {
+        process.env[tokenKey] = previousToken;
+      }
+    }
+  });
+
   it('satisfies the shared plain-text turn contract', async () => {
     mockStreamEvents.mockImplementation(() => langGraphStream([
       {
@@ -236,6 +393,7 @@ describe('LangGraphHarness message history', () => {
         turnId,
         exportedState,
         expectedContent: 'LangGraph contract reply',
+        requireDoneUsage: false,
       });
     } finally {
       await session.close();
@@ -283,6 +441,7 @@ describe('LangGraphHarness message history', () => {
         turnId,
         exportedState,
         expectedContent: 'LangGraph used search.',
+        requireDoneUsage: false,
         expectedTool: {
           id: 'tool-langgraph-search',
           name: 'search',
@@ -376,6 +535,7 @@ describe('LangGraphHarness message history', () => {
         events: events as AgentEvent[],
         turnId,
         exportedState,
+        requireDoneUsage: false,
         expectedTool: {
           id: 'tool-langgraph-error',
           name: 'search',

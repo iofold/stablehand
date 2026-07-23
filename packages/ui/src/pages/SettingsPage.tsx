@@ -1,6 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import {
+  SYSTEM_SETTING_BOUNDS,
+  SYSTEM_SETTING_FIELDS,
+  validateSystemSettingValue,
+} from '@ctxmill/shared';
+import {
   Settings,
   Server,
   Database,
@@ -15,6 +20,9 @@ import { fetchConfig, fetchSettings, updateSettings } from '@/lib/api';
 import type { AppConfig, SystemSettings } from '@/lib/api';
 import { PageShell } from '@/components/ui/PageShell';
 import { BudgetsSection } from '@/components/settings/BudgetsSection';
+
+const MB = 1024 * 1024;
+const SECOND_MS = 1000;
 
 function formatUptime(ms: number): string {
   const secs = Math.floor(ms / 1000);
@@ -150,28 +158,36 @@ export function SettingsPage() {
   }, []);
 
   const handleSaveSettings = useCallback(async () => {
-    if (!window.confirm('Save all settings? Some changes may require a restart to take effect.')) return;
-    setSaving(true);
-    setSaveError(null);
-    setSaveSuccess(false);
-    try {
-      const MB = 1024 * 1024;
-      const S = 1000;
-      const updated = await updateSettings({
+    const draftSettings: SystemSettings = {
         maxWorkspaceTarBytes:      Math.round(Number(draftTarMb) * MB),
         maxTarUploadBytes:         Math.round(Number(draftUploadMb) * MB),
-        idleTimeoutMs:             Math.round(Number(draftIdleSec) * S),
-        turnTimeoutMs:             Math.round(Number(draftTurnSec) * S),
-        reconciliationIntervalMs:  Math.round(Number(draftReconcileSec) * S),
+        idleTimeoutMs:             Math.round(Number(draftIdleSec) * SECOND_MS),
+        turnTimeoutMs:             Math.round(Number(draftTurnSec) * SECOND_MS),
+        reconciliationIntervalMs:  Math.round(Number(draftReconcileSec) * SECOND_MS),
         maxGlobalContainers:       Math.round(Number(draftMaxContainers)),
-        queueTimeoutMs:            Math.round(Number(draftQueueSec) * S),
+        queueTimeoutMs:            Math.round(Number(draftQueueSec) * SECOND_MS),
         maxConcurrentSessionsPerAgent: Math.round(Number(draftMaxRunsPerAgent)),
         maxTriggerDepth:           Math.round(Number(draftTriggerDepth)),
         defaultCpus:               Number(draftCpus),
         defaultMemoryMb:           Math.round(Number(draftMemoryMb)),
         defaultPidsLimit:          Math.round(Number(draftPidsLimit)),
         defaultTimeoutSec:         Math.round(Number(draftTimeoutSec)),
-      });
+    };
+    for (const field of SYSTEM_SETTING_FIELDS) {
+      const validationError = validateSystemSettingValue(field, draftSettings[field]);
+      if (validationError) {
+        setSaveSuccess(false);
+        setSaveError(validationError);
+        return;
+      }
+    }
+
+    if (!window.confirm('Save all settings? Some changes may require a restart to take effect.')) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
+    try {
+      const updated = await updateSettings(draftSettings);
       setSettings(updated);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -259,8 +275,8 @@ export function SettingsPage() {
               settingsLoading={settingsLoading}
               settings={settings}
             >
-              <LimitRow label="Max Workspace Snapshot" description="Maximum size of the workspace tar snapshot captured on suspend" value={draftTarMb} onChange={setDraftTarMb} min={1} max={1024} />
-              <LimitRow label="Max Workspace Upload" description="Maximum total size of a workspace tarball uploaded via the Files tab (ADR 010)" value={draftUploadMb} onChange={setDraftUploadMb} min={1} max={1024} />
+              <LimitRow label="Max Workspace Snapshot" description="Maximum size of the workspace tar snapshot captured on suspend" value={draftTarMb} onChange={setDraftTarMb} min={SYSTEM_SETTING_BOUNDS.maxWorkspaceTarBytes.min / MB} max={SYSTEM_SETTING_BOUNDS.maxWorkspaceTarBytes.max / MB} />
+              <LimitRow label="Max Workspace Upload" description="Maximum total size of a workspace tarball uploaded via the Files tab (ADR 010)" value={draftUploadMb} onChange={setDraftUploadMb} min={SYSTEM_SETTING_BOUNDS.maxTarUploadBytes.min / MB} max={SYSTEM_SETTING_BOUNDS.maxTarUploadBytes.max / MB} />
               <ReadonlyLimitRow
                 label="Max Per-File (Workspace)"
                 description="Per-file cap inside an uploaded workspace archive. Enforced by ADR 010 server-side."
@@ -285,9 +301,9 @@ export function SettingsPage() {
               settingsLoading={settingsLoading}
               settings={settings}
             >
-              <LimitRow label="Idle Timeout" description="Seconds before an idle session is checkpointed (also governs HITL wait)" value={draftIdleSec} onChange={setDraftIdleSec} unit="s" min={10} max={3600} />
-              <LimitRow label="Turn Timeout" description="Max seconds for a single agent turn" value={draftTurnSec} onChange={setDraftTurnSec} unit="s" min={10} max={3600} />
-              <LimitRow label="Reconciliation Interval" description="Seconds between container state reconciliation sweeps" value={draftReconcileSec} onChange={setDraftReconcileSec} unit="s" min={10} max={3600} />
+              <LimitRow label="Idle Timeout" description="Seconds before an idle session is checkpointed (also governs HITL wait)" value={draftIdleSec} onChange={setDraftIdleSec} unit="s" min={SYSTEM_SETTING_BOUNDS.idleTimeoutMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.idleTimeoutMs.max / SECOND_MS} />
+              <LimitRow label="Turn Timeout" description="Max seconds for a single agent turn" value={draftTurnSec} onChange={setDraftTurnSec} unit="s" min={SYSTEM_SETTING_BOUNDS.turnTimeoutMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.turnTimeoutMs.max / SECOND_MS} />
+              <LimitRow label="Reconciliation Interval" description="Seconds between container state reconciliation sweeps" value={draftReconcileSec} onChange={setDraftReconcileSec} unit="s" min={SYSTEM_SETTING_BOUNDS.reconciliationIntervalMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.reconciliationIntervalMs.max / SECOND_MS} />
             </SettingsSection>
 
             <SettingsSection
@@ -298,10 +314,10 @@ export function SettingsPage() {
               settingsLoading={settingsLoading}
               settings={settings}
             >
-              <LimitRow label="Max Global Containers" description="Max concurrent sandbox containers" value={draftMaxContainers} onChange={setDraftMaxContainers} unit="" min={1} max={200} />
-              <LimitRow label="Queue Timeout" description="Seconds a session waits for a container slot" value={draftQueueSec} onChange={setDraftQueueSec} unit="s" min={1} max={300} />
-              <LimitRow label="Max Sessions Per Agent" description="Max concurrent sessions per agent" value={draftMaxRunsPerAgent} onChange={setDraftMaxRunsPerAgent} unit="" min={1} max={50} />
-              <LimitRow label="Max Trigger Depth" description="Max event chain cascade depth" value={draftTriggerDepth} onChange={setDraftTriggerDepth} unit="" min={1} max={20} />
+              <LimitRow label="Max Global Containers" description="Max concurrent sandbox containers" value={draftMaxContainers} onChange={setDraftMaxContainers} unit="" min={SYSTEM_SETTING_BOUNDS.maxGlobalContainers.min} max={SYSTEM_SETTING_BOUNDS.maxGlobalContainers.max} />
+              <LimitRow label="Queue Timeout" description="Seconds a session waits for a container slot" value={draftQueueSec} onChange={setDraftQueueSec} unit="s" min={SYSTEM_SETTING_BOUNDS.queueTimeoutMs.min / SECOND_MS} max={SYSTEM_SETTING_BOUNDS.queueTimeoutMs.max / SECOND_MS} />
+              <LimitRow label="Max Sessions Per Agent" description="Max concurrent sessions per agent" value={draftMaxRunsPerAgent} onChange={setDraftMaxRunsPerAgent} unit="" min={SYSTEM_SETTING_BOUNDS.maxConcurrentSessionsPerAgent.min} max={SYSTEM_SETTING_BOUNDS.maxConcurrentSessionsPerAgent.max} />
+              <LimitRow label="Max Trigger Depth" description="Max event chain cascade depth" value={draftTriggerDepth} onChange={setDraftTriggerDepth} unit="" min={SYSTEM_SETTING_BOUNDS.maxTriggerDepth.min} max={SYSTEM_SETTING_BOUNDS.maxTriggerDepth.max} />
             </SettingsSection>
 
             <SettingsSection
@@ -312,10 +328,10 @@ export function SettingsPage() {
               settingsLoading={settingsLoading}
               settings={settings}
             >
-              <LimitRow label="Default CPU" description="Default CPU cores per container" value={draftCpus} onChange={setDraftCpus} unit="cores" step={0.5} min={0.25} max={8} />
-              <LimitRow label="Default Memory" description="Default memory per container" value={draftMemoryMb} onChange={setDraftMemoryMb} unit="MB" min={64} max={8192} />
-              <LimitRow label="Default PID Limit" description="Default process limit per container" value={draftPidsLimit} onChange={setDraftPidsLimit} unit="" min={32} max={4096} />
-              <LimitRow label="Default Session Timeout" description="Default session timeout in seconds" value={draftTimeoutSec} onChange={setDraftTimeoutSec} unit="s" min={10} max={3600} />
+              <LimitRow label="Default CPU" description="Default CPU cores per container" value={draftCpus} onChange={setDraftCpus} unit="cores" step={0.1} min={SYSTEM_SETTING_BOUNDS.defaultCpus.min} max={SYSTEM_SETTING_BOUNDS.defaultCpus.max} />
+              <LimitRow label="Default Memory" description="Default memory per container" value={draftMemoryMb} onChange={setDraftMemoryMb} unit="MB" min={SYSTEM_SETTING_BOUNDS.defaultMemoryMb.min} max={SYSTEM_SETTING_BOUNDS.defaultMemoryMb.max} />
+              <LimitRow label="Default PID Limit" description="Default process limit per container" value={draftPidsLimit} onChange={setDraftPidsLimit} unit="" min={SYSTEM_SETTING_BOUNDS.defaultPidsLimit.min} max={SYSTEM_SETTING_BOUNDS.defaultPidsLimit.max} />
+              <LimitRow label="Default Session Timeout" description="Default session timeout in seconds" value={draftTimeoutSec} onChange={setDraftTimeoutSec} unit="s" min={SYSTEM_SETTING_BOUNDS.defaultTimeoutSec.min} max={SYSTEM_SETTING_BOUNDS.defaultTimeoutSec.max} />
             </SettingsSection>
 
             <BudgetsSection />

@@ -5,7 +5,7 @@
 
 ## Context
 
-The customer-readiness ralplan (`docs/plans/shipped/2026-04-30-customer-functionality-readiness-ralplan.md`) names release gates against the dev1 docker-compose stack only. We have two operational targets: dev1 (local docker-compose under traefik on `*.dev.example.com`) and dev2 (k3s on `[redacted-ip]`, exposed at `*.demo.example.com`, images via `imagePullPolicy: Never`).
+The customer-readiness ralplan (`docs/plans/shipped/2026-04-30-customer-functionality-readiness-ralplan.md`) names release gates against the dev1 docker-compose stack only. We have two operational targets: dev1 (local docker-compose under traefik on `*.dev.example.com`) and dev2 (k3s on a tailnet-only host, exposed at the shared demo domain, images via `imagePullPolicy: Never`).
 
 The customer-shape question shapes whether dev2 must pass release gates and how much we invest in image-build automation.
 
@@ -14,7 +14,7 @@ The customer-shape question shapes whether dev2 must pass release gates and how 
 CTXMill targets two customer modes simultaneously:
 
 1. **DIY self-hosted** — customer runs their own docker-compose stack from the repo. Required gate: dev1 docker-compose `@smoke`.
-2. **Hosted demo on dev2** — we operate dev2 for design partners. Required gate: dev2 `kubectl apply` deploy + `@smoke` against `*.demo.example.com`.
+2. **Hosted demo on dev2** — we operate dev2 for design partners. Required gate: dev2 `kubectl apply` deploy + `@smoke` against the demo domain.
 
 Both gates are required release evidence. ADR 008's required-gate command list expands to include a dev2 deploy-smoke step.
 
@@ -34,7 +34,7 @@ Both gates are required release evidence. ADR 008's required-gate command list e
 
   # Added by this ADR
   scripts/deploy-dev2.sh   # builds, imports to k3s, rolls out
-  pnpm test:e2e:smoke -- --base-url https://orchestrator.demo.example.com
+  pnpm test:e2e:smoke -- --base-url "$DEV2_DEMO_URL"
   ```
 
   Exact script names will be settled during Stage 5 implementation; this ADR fixes the contract that both targets must pass.

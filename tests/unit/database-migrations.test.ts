@@ -53,6 +53,191 @@ describe('database migration baseline guard', () => {
     );
   });
 
+  it('hard-migrates explicit tool policies and separates HTTP definitions from tool refs', async () => {
+    await dropAllPublicTables(conn);
+    await runMigrations(conn.pgClient);
+    await conn.pgClient`
+      INSERT INTO agents (
+        id, name, harness, harness_config, system_prompt, tools,
+        manifest, metadata, created_at, updated_at
+      )
+      VALUES
+        (
+          'agent-policy-allow', 'allow-agent', 'claude-agents', '{}', 'prompt',
+          '["search","weather","artifact_upload"]',
+          '{"spec":{"nativeTools":{"blocklist":["Bash"]}}}',
+          '{
+            "nativeTools":{"allowlist":["Read","Write"],"blocklist":["Bash"]},
+            "excludeBuiltinTools":["artifact_download"],
+            "httpTools":[{"name":"weather","description":"Weather","endpoint":"https://example.test"}],
+            "owner":"ops"
+          }',
+          1, 1
+        ),
+        (
+          'agent-policy-none', 'none-agent', 'pi-agent', '{}', 'prompt',
+          '["weather"]',
+          NULL,
+          '{
+            "nativeTools":{"allowlist":[],"blocklist":["bash"]},
+            "excludeBuiltinTools":[],
+            "httpTools":[{"name":"weather","description":"Weather","endpoint":"https://example.test"}]
+          }',
+          1, 1
+        ),
+        (
+          'agent-policy-deny', 'deny-agent', 'langgraph', '{}', 'prompt',
+          '[]',
+          '{"spec":{"nativeTools":{}}}',
+          '{"nativeTools":{"blocklist":["execute"]}}',
+          1, 1
+        )
+    `;
+
+    await runMigrations(conn.pgClient);
+
+    const rows = await conn.pgClient`
+      SELECT id, tools, manifest, metadata
+      FROM agents
+      WHERE id LIKE 'agent-policy-%'
+      ORDER BY id
+    `;
+    expect(rows).toEqual([
+      expect.objectContaining({
+        id: 'agent-policy-allow',
+        tools: ['search', 'artifact_upload'],
+        manifest: {
+          spec: { nativeToolPolicy: { policy: 'deny', names: ['Bash'] } },
+        },
+        metadata: {
+          nativeToolPolicy: { policy: 'allow', names: ['Read', 'Write'] },
+          builtinToolPolicy: { policy: 'deny', names: ['artifact_download'] },
+          httpTools: [{
+            name: 'weather',
+            description: 'Weather',
+            endpoint: 'https://example.test',
+          }],
+          owner: 'ops',
+        },
+      }),
+      expect.objectContaining({
+        id: 'agent-policy-deny',
+        tools: [],
+        manifest: { spec: { nativeToolPolicy: { policy: 'all' } } },
+        metadata: { nativeToolPolicy: { policy: 'deny', names: ['execute'] } },
+      }),
+      expect.objectContaining({
+        id: 'agent-policy-none',
+        tools: [],
+        manifest: null,
+        metadata: {
+          nativeToolPolicy: { policy: 'none' },
+          builtinToolPolicy: { policy: 'all' },
+          httpTools: [{
+            name: 'weather',
+            description: 'Weather',
+            endpoint: 'https://example.test',
+          }],
+        },
+      }),
+    ]);
+
+    await runMigrations(conn.pgClient);
+    const repeated = await conn.pgClient`
+      SELECT id, tools, manifest, metadata
+      FROM agents
+      WHERE id LIKE 'agent-policy-%'
+      ORDER BY id
+    `;
+    expect(repeated).toEqual(rows);
+  });
+
+  it('establishes unique deployment names without clobbering existing suffix-shaped names', async () => {
+    await dropAllPublicTables(conn);
+    await runMigrations(conn.pgClient);
+    await conn.pgClient`DROP INDEX idx_agents_name`;
+    await conn.pgClient`
+      INSERT INTO agents (
+        id, name, harness, harness_config, system_prompt, tools,
+        manifest, created_at, updated_at
+      )
+      VALUES
+        (
+          'agent-a', 'shared', 'langgraph', '{}', 'prompt', '[]',
+          '{"metadata":{"name":"shared"},"spec":{}}', 1, 1
+        ),
+        (
+          'agent-b', 'shared', 'langgraph', '{}', 'prompt', '[]',
+          '{"metadata":{"name":"shared"},"spec":{}}', 2, 2
+        ),
+        (
+          'agent-c', 'shared', 'langgraph', '{}', 'prompt', '[]',
+          '{"metadata":{"name":"shared"},"spec":{}}', 3, 3
+        ),
+        (
+          'agent-collision', 'shared-duplicate-agent-b', 'langgraph', '{}', 'prompt', '[]',
+          NULL, 1, 1
+        )
+    `;
+
+    await runMigrations(conn.pgClient);
+
+    const rows = await conn.pgClient`
+      SELECT id, name, manifest
+      FROM agents
+      ORDER BY id
+    `;
+    expect(rows).toEqual([
+      expect.objectContaining({
+        id: 'agent-a',
+        name: 'shared',
+        manifest: { metadata: { name: 'shared' }, spec: {} },
+      }),
+      expect.objectContaining({
+        id: 'agent-b',
+        name: 'shared-duplicate-agent-b-1',
+        manifest: { metadata: { name: 'shared-duplicate-agent-b-1' }, spec: {} },
+      }),
+      expect.objectContaining({
+        id: 'agent-c',
+        name: 'shared-duplicate-agent-c',
+        manifest: { metadata: { name: 'shared-duplicate-agent-c' }, spec: {} },
+      }),
+      expect.objectContaining({
+        id: 'agent-collision',
+        name: 'shared-duplicate-agent-b',
+        manifest: null,
+      }),
+    ]);
+
+    await runMigrations(conn.pgClient);
+    const repeated = await conn.pgClient`
+      SELECT id, name, manifest
+      FROM agents
+      ORDER BY id
+    `;
+    expect(repeated).toEqual(rows);
+  });
+
+  it('removes retired agent version storage', async () => {
+    await dropAllPublicTables(conn);
+    await runMigrations(conn.pgClient);
+
+    const [table] = await conn.pgClient`
+      SELECT to_regclass('public.agent_versions') AS name
+    `;
+    const retiredColumns = await conn.pgClient`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'agents'
+        AND column_name IN ('status', 'version')
+    `;
+
+    expect(table?.name).toBeNull();
+    expect(retiredColumns).toEqual([]);
+  });
+
   it('hard-migrates persisted event, trigger, wait, and webhook contracts', async () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
@@ -221,7 +406,16 @@ describe('database migration baseline guard', () => {
         inputTokens: 3,
         outputTokens: 5,
         totalTokens: 8,
-        costUsd: 0.01,
+        modelCalls: {
+          observed: 0,
+          costKnown: 0,
+          expected: null,
+        },
+        cost: {
+          totalUsd: 0.01,
+          knownUsd: 0.01,
+          coverage: 'complete',
+        },
       },
       timestamp: 13,
     });

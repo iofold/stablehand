@@ -22,7 +22,8 @@ spec:
     3. Report that the stress test is complete.
   tools:
     - ref: emit-event
-  nativeTools:
-    blocklist:
+  nativeToolPolicy:
+    policy: deny
+    names:
       - execute
   mode: interactive

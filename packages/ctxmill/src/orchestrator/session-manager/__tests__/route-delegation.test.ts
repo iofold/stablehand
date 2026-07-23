@@ -4,7 +4,7 @@
  * ADR 005 establishes that sandbox-session status mutations must flow through
  * `SessionLifecycleService` / `SessionStatusCoordinator`. This test asserts
  * that no Fastify route handler under `packages/ctxmill/src/orchestrator/routes`
- * calls `db.updateSandboxSessionStatus` directly. If a future change adds a
+ * calls `db.updateSandboxSessionMetadata` directly. If a future change adds a
  * direct mutation, this test fails and the regression is caught at PR time.
  */
 import { promises as fs } from 'node:fs';
@@ -31,14 +31,14 @@ async function listFiles(dir: string): Promise<string[]> {
 }
 
 describe('routes/* never bypass SessionLifecycleService', () => {
-  it('contains no direct calls to db.updateSandboxSessionStatus', async () => {
+  it('contains no direct calls to db.updateSandboxSessionMetadata', async () => {
     const files = await listFiles(ROUTES_DIR);
     expect(files.length).toBeGreaterThan(0);
 
     const offenders: string[] = [];
     for (const file of files) {
       const text = await fs.readFile(file, 'utf-8');
-      if (/\bupdateSandboxSessionStatus\b/.test(text)) {
+      if (/\bupdateSandboxSessionMetadata\b/.test(text)) {
         offenders.push(path.relative(ROUTES_DIR, file));
       }
     }

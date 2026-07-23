@@ -26,8 +26,14 @@ import {
   ToolCallSchema,
   type ToolMetadata as ProtoToolMetadata,
   ToolLocation,
+  NativeToolPolicy as ProtoNativeToolPolicy,
+  type NativeToolPolicyConfig as ProtoNativeToolPolicyConfig,
   type Message as ProtoMessage,
 } from '@ctxmill/proto/sandbox/v1';
+import {
+  NativeToolPolicySchema,
+  type NativeToolPolicy,
+} from '@ctxmill/contracts';
 
 import type { AgentSessionEvent } from '@ctxmill/shared';
 import type {
@@ -48,7 +54,11 @@ import type { Message } from '../types.js';
 import { jsonSchemaToZod } from '../tool/schema-convert.js';
 import type { SessionCheckpoint } from './checkpoint.js';
 import { stringifyJsonWithBigInts, toJsonCompatibleValue } from './json-serialization.js';
-import { createToolProxy, type OrchestratorServiceClient } from './tool-proxy.js';
+import {
+  createToolProxy,
+  type OrchestratorServiceClient,
+  type ToolCallbackRoute,
+} from './tool-proxy.js';
 
 type ProtoAgentSessionEvent = ProtoSessionEvent & {
   payload: {
@@ -63,6 +73,35 @@ type ProtoCommittedSessionEvent = ProtoSessionEvent & {
     value: NonNullable<ProtoSessionEvent['payload']['value']>;
   };
 };
+
+export function protoNativeToolPolicyToInternal(
+  nativeToolPolicy: ProtoNativeToolPolicyConfig | undefined,
+): NativeToolPolicy | undefined {
+  if (!nativeToolPolicy) {
+    return undefined;
+  }
+  if (nativeToolPolicy.policy === ProtoNativeToolPolicy.UNSPECIFIED) {
+    throw new Error('Native tool policy is unspecified');
+  }
+
+  const names = [...nativeToolPolicy.names];
+  switch (nativeToolPolicy.policy) {
+    case ProtoNativeToolPolicy.ALL:
+      return NativeToolPolicySchema.parse(
+        names.length === 0 ? { policy: 'all' } : { policy: 'all', names },
+      );
+    case ProtoNativeToolPolicy.ALLOW:
+      return NativeToolPolicySchema.parse({ policy: 'allow', names });
+    case ProtoNativeToolPolicy.DENY:
+      return NativeToolPolicySchema.parse({ policy: 'deny', names });
+    case ProtoNativeToolPolicy.NONE:
+      return NativeToolPolicySchema.parse(
+        names.length === 0 ? { policy: 'none' } : { policy: 'none', names },
+      );
+    default:
+      throw new Error(`Unknown native tool policy value: ${nativeToolPolicy.policy}`);
+  }
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Proto → Internal: FreshBootstrap → HarnessSessionConfig                    */
@@ -81,13 +120,8 @@ export function protoFreshBootstrapToSessionConfig(
     secrets,
     workspaceDir: fresh.workspaceDir || '/workspace',
     harnessConfigJson: fresh.harnessConfigJson,
-    ...(fresh.nativeTools
-      ? {
-          nativeTools: {
-            allowlist: [...fresh.nativeTools.allowlist],
-            blocklist: [...fresh.nativeTools.blocklist],
-          },
-        }
+    ...(fresh.nativeToolPolicy
+      ? { nativeToolPolicy: protoNativeToolPolicyToInternal(fresh.nativeToolPolicy) }
       : {}),
   };
 }
@@ -280,9 +314,7 @@ export function protoSessionCheckpointToInternal(
  */
 export interface ProtoToolDefsOptions {
   orchestratorClient?: OrchestratorServiceClient;
-  turnId?: string;
-  turnIdRef?: { current: string };
-  agentId?: string;
+  callbackRoute?: ToolCallbackRoute;
   daemonHandlers?: Map<string, (input: unknown) => Promise<string>>;
 }
 
@@ -308,15 +340,22 @@ export function protoToToolDefs(
 
     let handler: (input: unknown) => Promise<string>;
 
-    const effectiveTurnId = opts?.turnId ?? opts?.turnIdRef;
     if (isDaemon && opts?.daemonHandlers?.has(t.name)) {
       handler = opts.daemonHandlers.get(t.name)!;
     } else if (isDaemon) {
       throw new Error(
         `Daemon handler for "${t.name}" is not configured. Ensure artifact storage and orchestrator routing are enabled before opening the session.`,
       );
-    } else if (isOrchestrator && opts?.orchestratorClient && effectiveTurnId && opts.agentId) {
-      handler = createToolProxy(t.name, opts.orchestratorClient, effectiveTurnId, opts.agentId);
+    } else if (
+      isOrchestrator
+      && opts?.orchestratorClient
+      && opts.callbackRoute
+    ) {
+      handler = createToolProxy(
+        t.name,
+        opts.orchestratorClient,
+        opts.callbackRoute,
+      );
     } else if (isOrchestrator) {
       throw new Error(
         `Orchestrator proxy for "${t.name}" is not connected. Session startup requires ORCHESTRATOR_URL and routing metadata.`,

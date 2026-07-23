@@ -217,20 +217,24 @@ function mergeCommittedToolCall(
 ): ToolCallState {
   if (!preview) return canonical;
 
-  const status = preview.error
-    ? 'error'
-    : preview.result !== undefined
-      ? preview.status
-      : preview.status === 'complete' || preview.status === 'error'
+  const hasCanonicalOutcome = canonical.result !== undefined
+    || canonical.error !== undefined;
+  const status = hasCanonicalOutcome
+    ? canonical.status
+    : preview.error
+      ? 'error'
+      : preview.result !== undefined
         ? preview.status
-        : canonical.status;
+        : preview.status === 'complete' || preview.status === 'error'
+          ? preview.status
+          : canonical.status;
 
   return {
     id: canonical.id,
     name: canonical.name || preview.name,
     args: preview.args || canonical.args,
-    result: preview.result ?? canonical.result,
-    error: preview.error ?? canonical.error,
+    result: hasCanonicalOutcome ? canonical.result : preview.result,
+    error: hasCanonicalOutcome ? canonical.error : preview.error,
     status,
   };
 }
@@ -241,22 +245,47 @@ function mergeToolResultIntoCommittedMessages(
   result: string,
   error: string | undefined,
 ): Message[] | undefined {
-  const status: ToolCallState['status'] = error ? 'error' : 'complete';
   let changed = false;
 
   const nextMessages = messages.map((message) => {
     let messageChanged = false;
+    const canonicalOutcome = message.parts?.find(
+      (part): part is Extract<MessagePart, { type: 'tool_call' }> =>
+        part.type === 'tool_call'
+        && part.id === toolCallId
+        && (part.result !== undefined || part.error !== undefined),
+    ) ?? message.toolCalls?.find(
+      (toolCall) => toolCall.id === toolCallId
+        && (toolCall.result !== undefined || toolCall.error !== undefined),
+    );
+    const resolvedResult = canonicalOutcome ? canonicalOutcome.result : result;
+    const resolvedError = canonicalOutcome ? canonicalOutcome.error : error;
+    const resolvedStatus: ToolCallState['status'] = canonicalOutcome
+      ? canonicalOutcome.status
+      : error
+        ? 'error'
+        : 'complete';
 
     const toolCalls = message.toolCalls?.map((toolCall) => {
       if (toolCall.id !== toolCallId) return toolCall;
       messageChanged = true;
-      return { ...toolCall, result, error, status };
+      return {
+        ...toolCall,
+        result: resolvedResult,
+        error: resolvedError,
+        status: resolvedStatus,
+      };
     });
 
     const parts = message.parts?.map((part) => {
       if (part.type !== 'tool_call' || part.id !== toolCallId) return part;
       messageChanged = true;
-      return { ...part, result, error, status };
+      return {
+        ...part,
+        result: resolvedResult,
+        error: resolvedError,
+        status: resolvedStatus,
+      };
     });
 
     if (!messageChanged) return message;
@@ -307,11 +336,36 @@ function normalizeAuthoritativeMessageUpdate(
   return {
     message: {
       id: event.messageId as string,
+      ...(typeof event.conversationId === 'string'
+        ? { conversationId: event.conversationId }
+        : existing?.conversationId
+          ? { conversationId: existing.conversationId }
+          : {}),
+      ...(typeof event.agentId === 'string'
+        ? { agentId: event.agentId }
+        : existing?.agentId
+          ? { agentId: existing.agentId }
+          : {}),
+      ...(typeof event.turnId === 'string'
+        ? { turnId: event.turnId }
+        : existing?.turnId
+          ? { turnId: existing.turnId }
+          : {}),
+      ...(typeof event.messageSeq === 'number'
+        ? { messageSeq: event.messageSeq }
+        : existing?.messageSeq !== undefined
+          ? { messageSeq: existing.messageSeq }
+          : {}),
       messageRevision: event.messageRevision as number,
       role: 'assistant',
       content: (event.content as string) || '',
       parts: parts.length > 0 ? parts : undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      ...(typeof event.toolCallId === 'string'
+        ? { toolCallId: event.toolCallId }
+        : existing?.toolCallId
+          ? { toolCallId: existing.toolCallId }
+          : {}),
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     },
     toolCallIds,
@@ -861,12 +915,17 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
 
         const msg: Message = {
           id: event.messageId,
+          ...(typeof event.conversationId === 'string' ? { conversationId: event.conversationId } : {}),
+          ...(typeof event.agentId === 'string' ? { agentId: event.agentId } : {}),
+          ...(typeof event.turnId === 'string' ? { turnId: event.turnId } : {}),
+          ...(typeof event.messageSeq === 'number' ? { messageSeq: event.messageSeq } : {}),
           messageRevision: 0,
           role,
           content,
           parts: parts.length > 0 ? parts : undefined,
           toolCalls: mergedToolCalls.length > 0 ? mergedToolCalls : undefined,
-          createdAt: new Date().toISOString(),
+          ...(typeof event.toolCallId === 'string' ? { toolCallId: event.toolCallId } : {}),
+          createdAt: normalizeCreatedAt(event.timestamp),
         };
 
         set((prev) => {

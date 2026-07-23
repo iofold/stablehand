@@ -11,6 +11,8 @@ COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 
 # Copy all package.json and config files to resolve workspace dependencies
 COPY packages/shared/package.json packages/shared/tsconfig.json packages/shared/
+COPY packages/contracts/package.json packages/contracts/tsconfig.json packages/contracts/
+COPY packages/manifest/package.json packages/manifest/tsconfig.json packages/manifest/
 COPY packages/client/package.json packages/client/tsconfig.json packages/client/
 COPY packages/react/package.json packages/react/tsconfig.json packages/react/tsconfig.typecheck.json packages/react/
 COPY packages/ctxmill/package.json packages/ctxmill/tsconfig.json packages/ctxmill/
@@ -28,6 +30,8 @@ RUN pnpm install --frozen-lockfile
 
 # Copy source code
 COPY packages/shared/src/ packages/shared/src/
+COPY packages/contracts/src/ packages/contracts/src/
+COPY packages/manifest/src/ packages/manifest/src/
 COPY packages/client/src/ packages/client/src/
 COPY packages/react/src/ packages/react/src/
 COPY packages/ctxmill/src/ packages/ctxmill/src/
@@ -40,6 +44,12 @@ RUN cd packages/shared && npx tsc --build
 
 # Build proto (compile .ts to .js so Node 22 strip-only mode can handle enums)
 RUN cd packages/proto && npx tsc -p tsconfig.build.json
+
+# Build strict runtime contracts consumed by the sandbox daemon
+RUN pnpm --filter @ctxmill/contracts build
+
+# Build canonical manifest parsing consumed by the orchestrator
+RUN pnpm --filter @ctxmill/manifest build
 
 # Build sandbox-daemon (ctxmill depends on it via re-export stubs)
 RUN pnpm --filter @ctxmill/sandbox-daemon build
@@ -59,6 +69,8 @@ WORKDIR /app
 
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY packages/shared/package.json packages/shared/
+COPY packages/contracts/package.json packages/contracts/
+COPY packages/manifest/package.json packages/manifest/
 COPY packages/client/package.json packages/client/
 COPY packages/react/package.json packages/react/
 COPY packages/ctxmill/package.json packages/ctxmill/
@@ -72,6 +84,8 @@ COPY packages/ui/package.json packages/ui/
 RUN pnpm install --frozen-lockfile --prod --shamefully-hoist
 
 COPY --from=build /app/packages/shared/dist/ packages/shared/dist/
+COPY --from=build /app/packages/contracts/dist/ packages/contracts/dist/
+COPY --from=build /app/packages/manifest/dist/ packages/manifest/dist/
 COPY --from=build /app/packages/ctxmill/dist/ packages/ctxmill/dist/
 COPY --from=build /app/packages/sandbox-daemon/dist/ packages/sandbox-daemon/dist/
 COPY --from=build /app/packages/proto/dist/ packages/proto/dist/

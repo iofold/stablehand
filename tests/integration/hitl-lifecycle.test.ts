@@ -153,7 +153,10 @@ describe('HITL lifecycle boundary conditions', () => {
       await Promise.resolve();
 
       await expect(approval).resolves.toMatchObject({ action: 'suspend' });
-      expect(onTimeout).toHaveBeenCalledWith(turn.sandboxSessionId);
+      expect(onTimeout).toHaveBeenCalledWith(
+        turn.sandboxSessionId,
+        'run-1',
+      );
       expect(registry.getTurn(turn.turnId)?.status).toBe('suspended');
       expect(registry.getTurn(turn.turnId)?.suspendReason).toBe('hitl_timeout');
 

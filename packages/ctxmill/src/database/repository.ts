@@ -1,15 +1,26 @@
 import { eq, sql, gt, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike, type SQL } from 'drizzle-orm';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { DrizzleDb } from './connection.js';
 import * as pgSchema from './schema-pg.js';
 import { sanitizeDbJsonValue, sanitizeDbText, sanitizeDbValue } from '../util/sanitize.js';
 import { isUniqueConstraintViolation } from './errors.js';
 import {
+  SANDBOX_SESSION_STATUSES,
   projectConversationStatus,
   type ApiSandboxSessionStatusCounts,
   type SandboxSessionStatus,
 } from '@ctxmill/shared';
+import type {
+  AnalyticsActivityBucket,
+  AnalyticsMetrics,
+  TurnUsage,
+} from '@ctxmill/contracts';
+import type {
+  InvalidLiteLLMSpendRecord,
+  LiteLLMSpendRecord,
+} from '../cost-control/litellm-spend-client.js';
+import { projectGatewayTurnUsage } from '../cost-control/gateway-usage-projection.js';
 
 import type {
   AgentInsert,
@@ -25,11 +36,12 @@ import type {
   EventFrameInsert,
   EventFrameRow,
   InterruptInsert,
-  InterruptResumeAttemptInsert,
   InterruptResumeAttemptRow,
   InterruptRow,
   MessageInsert,
   MessageSelect,
+  SandboxSessionLifecycleOperation,
+  SandboxSessionLifecycleOperationRow,
   SandboxSessionRow,
   SystemSettingRow,
   SpineCursorRow,
@@ -37,12 +49,13 @@ import type {
   TriggerInsert,
   TriggerSelect,
   TurnInsert,
-  TurnReconciliationLeaseRow,
+  TurnSecretEnvelopeInsert,
+  TurnSecretEnvelopeRow,
+  TurnDeliveryLeaseRow,
   TurnSelect,
   TurnStartRequestInsert,
   TurnStartRequestRow,
   TurnStatus,
-  VersionSelect,
   WebhookInsert,
   WebhookRow,
   BudgetPolicyRow,
@@ -57,21 +70,42 @@ export type {
   EventFrameRow,
   InterruptResumeAttemptRow,
   InterruptRow,
+  SandboxSessionLifecycleOperation,
+  SandboxSessionLifecycleOperationRow,
   SandboxSessionRow,
   SpineCursorRow,
   SystemSettingRow,
   TurnStartRequestRow,
-  TurnReconciliationLeaseRow,
+  TurnDeliveryLeaseRow,
+  TurnSecretEnvelopeRow,
   TriggerFiringRow,
   WebhookRow,
 } from './types.js';
 
+export interface AnalyticsAgentRow extends AnalyticsMetrics {
+  agentId: string;
+  name: string;
+  harness: string;
+  harnessConfig: string;
+  lastActivityAt: number | null;
+}
+
+export interface AnalyticsSnapshot {
+  activity: AnalyticsActivityBucket[];
+  agents: AnalyticsAgentRow[];
+}
+
 const sanitizeTypedDbValue = <T>(value: T, context: string): T => sanitizeDbValue(value, context) as T;
 const DEFAULT_CLAIM_LEASE_MS = 60_000;
 const CALLBACK_EVENT_SEQ_DEDUPE_INDEX = 'idx_outbox_callback_event_seq';
-type InterruptResumeAttemptUpdate = Omit<Partial<InterruptResumeAttemptInsert>, 'attempts'> & {
-  attempts?: number | SQL<unknown>;
-};
+const LIVE_SANDBOX_SESSION_INDEX = 'idx_sandbox_sessions_conversation_live';
+const RUNNING_CONVERSATION_TURN_INDEX = 'idx_turns_conversation_running';
+const STALE_SANDBOX_CALLBACK_DELIVERY = Symbol(
+  'stale-sandbox-callback-delivery',
+);
+const SANDBOX_SESSION_STATUS_SET: ReadonlySet<string> = new Set(
+  SANDBOX_SESSION_STATUSES,
+);
 export type ResolveInterruptWithResumeAttemptResult =
   | {
       kind: 'ready';
@@ -82,6 +116,66 @@ export type ResolveInterruptWithResumeAttemptResult =
       kind: 'conflict';
       interrupt: InterruptRow;
     };
+
+export interface ExpectedTurnDeliveryFence {
+  ownerId: string;
+  fenceToken: number;
+}
+
+export interface AdmittedTurnDeliveryCapabilityClaims {
+  turnId: string;
+  sandboxSessionId: string;
+  agentId: string;
+  conversationId: string;
+  ownerId: string;
+  fenceToken: number;
+  leaseExpiresAtMs: number;
+  restoreFenceToken: number;
+  containerId: string | null;
+}
+
+export interface SandboxSessionLifecycleFence {
+  ownerId: string;
+  fenceToken: number;
+}
+
+export interface SandboxSessionActiveGeneration {
+  restoreFenceToken: number;
+  containerId: string | null;
+}
+
+export interface ExpectedSandboxCallbackGeneration {
+  sandboxSessionId: string;
+  expectedActiveGeneration: SandboxSessionActiveGeneration;
+}
+
+export interface ExpectedSandboxCallbackDelivery
+  extends ExpectedSandboxCallbackGeneration {
+  turnId: string;
+  agentId: string;
+  expectedDeliveryFence: ExpectedTurnDeliveryFence;
+}
+
+export interface SandboxSessionRestoreFence {
+  ownerId: string;
+  fenceToken: number;
+}
+
+export interface ReconciledSandboxSessionRestore {
+  session: SandboxSessionRow;
+  outcome: 'CHECKPOINTED' | 'TERMINATED';
+}
+
+type CanonicalMessageInsert = Omit<
+  MessageInsert,
+  'messageSeq' | 'messageRevision' | 'publishedRevision'
+> & {
+  turnId: string;
+  role: 'assistant' | 'tool';
+};
+
+type RepositoryTransaction =
+  Parameters<Parameters<DrizzleDb['transaction']>[0]>[0];
 
 export class SandboxSessionStatusConflictError extends Error {
   constructor(
@@ -94,10 +188,84 @@ export class SandboxSessionStatusConflictError extends Error {
   }
 }
 
+export class LiveSandboxSessionConflictError extends Error {
+  constructor(readonly conversationId: string) {
+    super(`Conversation ${conversationId} already has an ACTIVE or RESTORING sandbox session`);
+    this.name = 'LiveSandboxSessionConflictError';
+  }
+}
+
 const sanitizeOptionalDbText = <T extends string | null | undefined>(value: T, context: string): T => {
   if (value == null) return value;
   return sanitizeDbText(value, context) as T;
 };
+
+function validateTurnDeliveryFenceToken(fenceToken: number, context: string): number {
+  if (!Number.isSafeInteger(fenceToken) || fenceToken < 1) {
+    throw new Error(`${context} must be a positive safe integer`);
+  }
+  return fenceToken;
+}
+
+function validatePositiveSafeInteger(value: number, context: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${context} must be a positive safe integer`);
+  }
+  return value;
+}
+
+function validateNonNegativeSafeInteger(value: number, context: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${context} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function validateLeaseDurationMs(leaseDurationMs: number, context: string): number {
+  return validatePositiveSafeInteger(leaseDurationMs, context);
+}
+
+const SANDBOX_SESSION_LIFECYCLE_OPERATIONS:
+  ReadonlySet<SandboxSessionLifecycleOperation> = new Set([
+    'checkpoint',
+    'terminate',
+    'reset',
+    'adopt',
+  ]);
+
+function validateSandboxSessionLifecycleOperation(
+  operation: string,
+): SandboxSessionLifecycleOperation {
+  if (!SANDBOX_SESSION_LIFECYCLE_OPERATIONS.has(
+    operation as SandboxSessionLifecycleOperation,
+  )) {
+    throw new Error(`Unsupported sandbox session lifecycle operation: ${operation}`);
+  }
+  return operation as SandboxSessionLifecycleOperation;
+}
+
+function validateSandboxSessionStatus(
+  status: string,
+  context: string,
+): SandboxSessionStatus {
+  const sanitizedStatus = sanitizeDbText(status, context);
+  if (!SANDBOX_SESSION_STATUS_SET.has(sanitizedStatus)) {
+    throw new Error(`Unsupported sandbox session status: ${sanitizedStatus}`);
+  }
+  return sanitizedStatus as SandboxSessionStatus;
+}
+
+function databaseClockMs(): SQL<number> {
+  return sql<number>`floor(extract(epoch from clock_timestamp()) * 1000)::bigint`;
+}
+
+function parseDatabaseClockMs(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`Database clock returned invalid epoch milliseconds: ${String(value)}`);
+  }
+  return parsed;
+}
 
 function eventBatchAgentId(frames: EventFrameInsert[]): string {
   const agentIds = new Set(frames.map((frame) => frame.agentId));
@@ -105,6 +273,14 @@ function eventBatchAgentId(frames: EventFrameInsert[]): string {
     throw new Error('Canonical event batches must contain exactly one agent');
   }
   return sanitizeDbText(frames[0]!.agentId, 'eventStore.agentId');
+}
+
+function eventBatchTurnId(frames: EventFrameInsert[]): string {
+  const turnIds = new Set(frames.map((frame) => frame.turnId));
+  if (turnIds.size !== 1 || frames[0]!.turnId == null) {
+    throw new Error('Fenced canonical event batches must contain exactly one turn');
+  }
+  return sanitizeDbText(frames[0]!.turnId, 'eventStore.turnId');
 }
 
 function normalizeTriggerSelector(value: unknown): unknown {
@@ -147,6 +323,198 @@ export class DatabaseRepository {
       throw new Error(`Expected ${context} insert to return a row but got undefined`);
     }
     return row;
+  }
+
+  /**
+   * A reserved reset may temporarily whitelist the one delivery it is
+   * fencing so that worker can persist its terminal state. No delivery is
+   * admitted once lifecycle execution begins.
+   */
+  private deliveryAdmittedByLifecycleOperation(): SQL<boolean> {
+    return sql<boolean>`NOT EXISTS (
+      SELECT 1
+      FROM ${this.schema.sandboxSessionLifecycleOperations}
+      WHERE ${this.schema.sandboxSessionLifecycleOperations.sandboxSessionId}
+        = ${this.schema.turns.sandboxSessionId}
+        AND ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'completed'
+        AND (
+          ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'reserved'
+          OR ${this.schema.sandboxSessionLifecycleOperations.allowedTurnId}
+            IS DISTINCT FROM ${this.schema.turns.id}
+          OR ${this.schema.sandboxSessionLifecycleOperations.allowedDeliveryOwnerId}
+            IS DISTINCT FROM ${this.schema.turns.deliveryOwnerId}
+          OR ${this.schema.sandboxSessionLifecycleOperations.allowedDeliveryFenceToken}
+            IS DISTINCT FROM ${this.schema.turns.deliveryFenceToken}
+        )
+    )`;
+  }
+
+  /**
+   * Lock and verify a delivery owner inside its caller's transaction.
+   *
+   * Lock order is agent event head (when publishing) -> turn -> delivery
+   * lease -> message. State-only mutations start at the turn. Claim,
+   * activation, finalization, and delivery writes therefore share the same
+   * turn-before-lease ordering and cannot deadlock one another.
+   */
+  private async lockCurrentDeliveryFence(
+    tx: RepositoryTransaction,
+    turnId: string,
+    expectedDeliveryFence: ExpectedTurnDeliveryFence,
+    context: string,
+  ): Promise<boolean> {
+    const sanitizedTurnId = sanitizeDbText(turnId, `${context}.turnId`);
+    const ownerId = sanitizeDbText(
+      expectedDeliveryFence.ownerId,
+      `${context}.ownerId`,
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      expectedDeliveryFence.fenceToken,
+      `${context}.fenceToken`,
+    );
+    const rowFenceCondition = and(
+      eq(this.schema.turns.deliveryOwnerId, ownerId),
+      eq(this.schema.turns.deliveryFenceToken, fenceToken),
+    );
+    const [turn] = await tx
+      .select({ turnId: this.schema.turns.id })
+      .from(this.schema.turns)
+      .where(and(
+        eq(this.schema.turns.id, sanitizedTurnId),
+        isNull(this.schema.turns.completedAt),
+        rowFenceCondition,
+        this.deliveryAdmittedByLifecycleOperation(),
+        or(
+          isNull(this.schema.turns.sandboxSessionId),
+          sql<boolean>`EXISTS (
+            SELECT 1
+            FROM ${this.schema.sandboxSessions}
+            WHERE ${this.schema.sandboxSessions.id} = ${this.schema.turns.sandboxSessionId}
+              AND ${this.schema.sandboxSessions.status} = 'ACTIVE'
+          )`,
+        ),
+      ))
+      .for('update');
+    if (!turn) {
+      return false;
+    }
+
+    const [lease] = await tx
+      .select({
+        leaseExpiresAt: this.schema.turnDeliveryLeases.leaseExpiresAt,
+      })
+      .from(this.schema.turnDeliveryLeases)
+      .where(and(
+        eq(this.schema.turnDeliveryLeases.turnId, sanitizedTurnId),
+        eq(this.schema.turnDeliveryLeases.ownerId, ownerId),
+        eq(this.schema.turnDeliveryLeases.fenceToken, fenceToken),
+        gt(this.schema.turnDeliveryLeases.leaseExpiresAt, databaseClockMs()),
+      ))
+      .for('update');
+    return lease !== undefined;
+  }
+
+  private async lockExactSandboxCallbackDelivery(
+    tx: RepositoryTransaction,
+    input: ExpectedSandboxCallbackDelivery,
+    context: string,
+  ): Promise<{ conversationId: string } | undefined> {
+    const turnId = sanitizeDbText(input.turnId, `${context}.turnId`);
+    const sandboxSessionId = sanitizeDbText(
+      input.sandboxSessionId,
+      `${context}.sandboxSessionId`,
+    );
+    const agentId = sanitizeDbText(input.agentId, `${context}.agentId`);
+    const ownerId = sanitizeDbText(
+      input.expectedDeliveryFence.ownerId,
+      `${context}.ownerId`,
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      input.expectedDeliveryFence.fenceToken,
+      `${context}.fenceToken`,
+    );
+    if (!input.expectedActiveGeneration) {
+      throw new Error(`${context}.expectedActiveGeneration is required`);
+    }
+    const restoreFenceToken = validateNonNegativeSafeInteger(
+      input.expectedActiveGeneration.restoreFenceToken,
+      `${context}.restoreFenceToken`,
+    );
+    if (
+      input.expectedActiveGeneration.containerId !== null
+      && typeof input.expectedActiveGeneration.containerId !== 'string'
+    ) {
+      throw new Error(`${context}.containerId must be a string or null`);
+    }
+    const containerId =
+      input.expectedActiveGeneration.containerId === null
+        ? null
+        : sanitizeDbText(
+            input.expectedActiveGeneration.containerId,
+            `${context}.containerId`,
+          );
+
+    // Callback mutations use session -> turn -> lease. Lifecycle and restore
+    // transitions lock the same session row first, so a generation change
+    // either commits before admission (and is rejected) or waits until the
+    // callback mutation has committed under the still-current generation.
+    const [session] = await tx
+      .select({
+        conversationId: this.schema.sandboxSessions.conversationId,
+      })
+      .from(this.schema.sandboxSessions)
+      .where(and(
+        eq(this.schema.sandboxSessions.id, sandboxSessionId),
+        eq(this.schema.sandboxSessions.agentId, agentId),
+        eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+        eq(
+          this.schema.sandboxSessions.restoreFenceToken,
+          restoreFenceToken,
+        ),
+        containerId === null
+          ? isNull(this.schema.sandboxSessions.containerId)
+          : eq(this.schema.sandboxSessions.containerId, containerId),
+      ))
+      .for('update');
+    if (!session) {
+      return undefined;
+    }
+
+    const [turn] = await tx
+      .select({
+        conversationId: this.schema.turns.conversationId,
+      })
+      .from(this.schema.turns)
+      .where(and(
+        eq(this.schema.turns.id, turnId),
+        eq(this.schema.turns.sandboxSessionId, sandboxSessionId),
+        eq(this.schema.turns.agentId, agentId),
+        eq(this.schema.turns.conversationId, session.conversationId),
+        eq(this.schema.turns.status, 'running'),
+        isNull(this.schema.turns.completedAt),
+        isNotNull(this.schema.turns.conversationId),
+        eq(this.schema.turns.deliveryOwnerId, ownerId),
+        eq(this.schema.turns.deliveryFenceToken, fenceToken),
+        this.deliveryAdmittedByLifecycleOperation(),
+      ))
+      .for('update');
+    if (!turn?.conversationId) {
+      return undefined;
+    }
+
+    const [lease] = await tx
+      .select({ turnId: this.schema.turnDeliveryLeases.turnId })
+      .from(this.schema.turnDeliveryLeases)
+      .where(and(
+        eq(this.schema.turnDeliveryLeases.turnId, turnId),
+        eq(this.schema.turnDeliveryLeases.ownerId, ownerId),
+        eq(this.schema.turnDeliveryLeases.fenceToken, fenceToken),
+        gt(this.schema.turnDeliveryLeases.leaseExpiresAt, databaseClockMs()),
+      ))
+      .for('update');
+    return lease
+      ? { conversationId: turn.conversationId }
+      : undefined;
   }
 
   // ── Agents ──────────────────────────────────────────────
@@ -207,6 +575,264 @@ export class DatabaseRepository {
     return this.db.query.agents.findMany();
   }
 
+  /**
+   * Bounded operational analytics for the dashboard. This deliberately
+   * returns aggregate rows rather than exposing raw turn history to the UI.
+   */
+  async getAnalyticsSnapshot(input: {
+    from: number;
+    to: number;
+    bucketSizeMs: number;
+  }): Promise<AnalyticsSnapshot> {
+    const { from, to, bucketSizeMs } = input;
+    if (
+      !Number.isSafeInteger(from)
+      || from < 0
+      || !Number.isSafeInteger(to)
+      || to <= from
+      || !Number.isSafeInteger(bucketSizeMs)
+      || bucketSizeMs <= 0
+    ) {
+      throw new Error('Invalid analytics range');
+    }
+    const bucketCount = Math.ceil((to - from) / bucketSizeMs);
+    if (bucketCount > 720) {
+      throw new Error('Analytics range exceeds 720 buckets');
+    }
+
+    const costCoverage = sql<string>`
+      CASE
+        WHEN ${this.schema.turns.usage} #>> '{cost,coverage}'
+          IN ('complete', 'partial', 'pending', 'unpriced')
+          THEN ${this.schema.turns.usage} #>> '{cost,coverage}'
+        WHEN ${this.schema.turns.costUsd} IS NOT NULL THEN 'complete'
+        ELSE 'pending'
+      END
+    `;
+    const knownCost = sql<number>`
+      CASE
+        WHEN ${this.schema.turns.usage} IS NOT NULL THEN
+          COALESCE((${this.schema.turns.usage} #>> '{cost,knownUsd}')::float8, 0)
+        ELSE COALESCE(${this.schema.turns.costUsd}, 0)
+      END
+    `;
+    const joinedTurn = and(
+      eq(this.schema.turns.agentId, this.schema.agents.id),
+      sql`${this.schema.turns.startedAt} >= ${from}`,
+      sql`${this.schema.turns.startedAt} < ${to}`,
+    );
+
+    const agentRows = await this.db
+      .select({
+        agentId: this.schema.agents.id,
+        name: this.schema.agents.name,
+        harness: this.schema.agents.harness,
+        harnessConfig: this.schema.agents.harnessConfig,
+        lastActivityAt: sql<number | null>`
+          max(coalesce(${this.schema.turns.completedAt}, ${this.schema.turns.startedAt}))::float8
+        `,
+        turns: sql<number>`count(${this.schema.turns.id})::int`,
+        completedTurns: sql<number>`
+          count(${this.schema.turns.id}) FILTER (
+            WHERE ${this.schema.turns.status} = 'completed'
+          )::int
+        `,
+        errorTurns: sql<number>`
+          count(${this.schema.turns.id}) FILTER (
+            WHERE ${this.schema.turns.status} = 'error'
+          )::int
+        `,
+        cancelledTurns: sql<number>`
+          count(${this.schema.turns.id}) FILTER (
+            WHERE ${this.schema.turns.status} = 'cancelled'
+          )::int
+        `,
+        activeTurns: sql<number>`
+          count(${this.schema.turns.id}) FILTER (
+            WHERE ${this.schema.turns.status} IN ('queued', 'running')
+          )::int
+        `,
+        inputTokens: sql<number>`
+          coalesce(sum(${this.schema.turns.inputTokens}), 0)::float8
+        `,
+        outputTokens: sql<number>`
+          coalesce(sum(${this.schema.turns.outputTokens}), 0)::float8
+        `,
+        totalTokens: sql<number>`
+          coalesce(sum(${this.schema.turns.totalTokens}), 0)::float8
+        `,
+        tokenReportedTurns: sql<number>`
+          count(${this.schema.turns.totalTokens})::int
+        `,
+        knownCostUsd: sql<number>`
+          coalesce(sum(${knownCost}) FILTER (
+            WHERE ${this.schema.turns.id} IS NOT NULL
+          ), 0)::float8
+        `,
+        coverageComplete: sql<number>`
+          count(${this.schema.turns.id}) FILTER (
+            WHERE ${costCoverage} = 'complete'
+          )::int
+        `,
+        coveragePartial: sql<number>`
+          count(${this.schema.turns.id}) FILTER (
+            WHERE ${costCoverage} = 'partial'
+          )::int
+        `,
+        coveragePending: sql<number>`
+          count(${this.schema.turns.id}) FILTER (
+            WHERE ${costCoverage} = 'pending'
+          )::int
+        `,
+        coverageUnpriced: sql<number>`
+          count(${this.schema.turns.id}) FILTER (
+            WHERE ${costCoverage} = 'unpriced'
+          )::int
+        `,
+      })
+      .from(this.schema.agents)
+      .leftJoin(this.schema.turns, joinedTurn)
+      .groupBy(
+        this.schema.agents.id,
+        this.schema.agents.name,
+        this.schema.agents.harness,
+        this.schema.agents.harnessConfig,
+      );
+
+    const bucketRows = await this.db
+      .select({
+        bucket: sql<number>`
+          floor((${this.schema.turns.startedAt} - ${from})::float8 / ${bucketSizeMs})::int
+        `.as('bucket'),
+        turns: sql<number>`count(*)::int`,
+        completedTurns: sql<number>`
+          count(*) FILTER (WHERE ${this.schema.turns.status} = 'completed')::int
+        `,
+        errorTurns: sql<number>`
+          count(*) FILTER (WHERE ${this.schema.turns.status} = 'error')::int
+        `,
+        cancelledTurns: sql<number>`
+          count(*) FILTER (WHERE ${this.schema.turns.status} = 'cancelled')::int
+        `,
+        activeTurns: sql<number>`
+          count(*) FILTER (
+            WHERE ${this.schema.turns.status} IN ('queued', 'running')
+          )::int
+        `,
+        inputTokens: sql<number>`
+          coalesce(sum(${this.schema.turns.inputTokens}), 0)::float8
+        `,
+        outputTokens: sql<number>`
+          coalesce(sum(${this.schema.turns.outputTokens}), 0)::float8
+        `,
+        totalTokens: sql<number>`
+          coalesce(sum(${this.schema.turns.totalTokens}), 0)::float8
+        `,
+        tokenReportedTurns: sql<number>`
+          count(${this.schema.turns.totalTokens})::int
+        `,
+        knownCostUsd: sql<number>`coalesce(sum(${knownCost}), 0)::float8`,
+        coverageComplete: sql<number>`
+          count(*) FILTER (WHERE ${costCoverage} = 'complete')::int
+        `,
+        coveragePartial: sql<number>`
+          count(*) FILTER (WHERE ${costCoverage} = 'partial')::int
+        `,
+        coveragePending: sql<number>`
+          count(*) FILTER (WHERE ${costCoverage} = 'pending')::int
+        `,
+        coverageUnpriced: sql<number>`
+          count(*) FILTER (WHERE ${costCoverage} = 'unpriced')::int
+        `,
+      })
+      .from(this.schema.turns)
+      .where(and(
+        sql`${this.schema.turns.startedAt} >= ${from}`,
+        sql`${this.schema.turns.startedAt} < ${to}`,
+      ))
+      .groupBy(sql`bucket`)
+      .orderBy(sql`bucket`);
+
+    const emptyMetrics = (): AnalyticsMetrics => ({
+      turns: 0,
+      completedTurns: 0,
+      errorTurns: 0,
+      cancelledTurns: 0,
+      activeTurns: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      tokenReportedTurns: 0,
+      knownCostUsd: 0,
+      costCoverage: {
+        complete: 0,
+        partial: 0,
+        pending: 0,
+        unpriced: 0,
+      },
+    });
+    const metricsFromRow = (row: {
+      turns: number;
+      completedTurns: number;
+      errorTurns: number;
+      cancelledTurns: number;
+      activeTurns: number;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      tokenReportedTurns: number;
+      knownCostUsd: number;
+      coverageComplete: number;
+      coveragePartial: number;
+      coveragePending: number;
+      coverageUnpriced: number;
+    }): AnalyticsMetrics => ({
+      turns: Number(row.turns),
+      completedTurns: Number(row.completedTurns),
+      errorTurns: Number(row.errorTurns),
+      cancelledTurns: Number(row.cancelledTurns),
+      activeTurns: Number(row.activeTurns),
+      inputTokens: Number(row.inputTokens),
+      outputTokens: Number(row.outputTokens),
+      totalTokens: Number(row.totalTokens),
+      tokenReportedTurns: Number(row.tokenReportedTurns),
+      knownCostUsd: Number(row.knownCostUsd),
+      costCoverage: {
+        complete: Number(row.coverageComplete),
+        partial: Number(row.coveragePartial),
+        pending: Number(row.coveragePending),
+        unpriced: Number(row.coverageUnpriced),
+      },
+    });
+
+    const buckets = new Map(
+      bucketRows.map((row) => [Number(row.bucket), metricsFromRow(row)]),
+    );
+    const activity = Array.from({ length: bucketCount }, (_, index) => ({
+      from: from + index * bucketSizeMs,
+      to: Math.min(to, from + (index + 1) * bucketSizeMs),
+      ...(buckets.get(index) ?? emptyMetrics()),
+    }));
+    const agents = agentRows
+      .map((row): AnalyticsAgentRow => ({
+        agentId: row.agentId,
+        name: row.name,
+        harness: row.harness,
+        harnessConfig: row.harnessConfig,
+        lastActivityAt: row.lastActivityAt === null
+          ? null
+          : Number(row.lastActivityAt),
+        ...metricsFromRow(row),
+      }))
+      .sort((left, right) => (
+        right.totalTokens - left.totalTokens
+        || right.turns - left.turns
+        || left.name.localeCompare(right.name)
+      ));
+
+    return { activity, agents };
+  }
+
   async updateAgent(id: string, data: Partial<Omit<AgentInsert, 'id'>>): Promise<AgentSelect | undefined> {
     const sanitizedData = sanitizeTypedDbValue(data, 'agents.update');
     const [updated] = await this.db
@@ -223,7 +849,10 @@ export class DatabaseRepository {
 
   /**
    * Delete an agent and all its related data in a single transaction.
-   * Order: messages -> conversations -> runs -> events -> agent
+   * Order: messages -> conversations -> runs -> events -> agent.
+   *
+   * The lifecycle-independent agent_event_heads row is retained as the writer
+   * mutex for the durable agent.deleted tombstone emitted after this returns.
    */
   async deleteAgentCascade(agentId: string): Promise<void> {
     await this.db.transaction(async (tx) => {
@@ -315,12 +944,19 @@ export class DatabaseRepository {
    * sequence. The row starts unpublished (-1); CanonicalLog advances the
    * publication watermark in the same transaction as its committed frame.
    */
+  async addCanonicalMessage(data: CanonicalMessageInsert): Promise<MessageSelect>;
   async addCanonicalMessage(
-    data: Omit<MessageInsert, 'messageSeq' | 'messageRevision' | 'publishedRevision'> & {
-      turnId: string;
-      role: 'assistant' | 'tool';
-    },
-  ): Promise<MessageSelect> {
+    data: CanonicalMessageInsert,
+    expectedDeliveryFence: ExpectedTurnDeliveryFence,
+  ): Promise<MessageSelect | undefined>;
+  async addCanonicalMessage(
+    data: CanonicalMessageInsert,
+    expectedDeliveryFence: ExpectedTurnDeliveryFence | undefined,
+  ): Promise<MessageSelect | undefined>;
+  async addCanonicalMessage(
+    data: CanonicalMessageInsert,
+    expectedDeliveryFence?: ExpectedTurnDeliveryFence,
+  ): Promise<MessageSelect | undefined> {
     const sanitizedData: MessageInsert = {
       ...data,
       content: sanitizeDbText(data.content, 'messages.content'),
@@ -332,6 +968,18 @@ export class DatabaseRepository {
     };
 
     return this.db.transaction(async (tx) => {
+      if (
+        expectedDeliveryFence
+        && !await this.lockCurrentDeliveryFence(
+          tx,
+          data.turnId,
+          expectedDeliveryFence,
+          'messages.canonical.deliveryFence',
+        )
+      ) {
+        return undefined;
+      }
+
       // Serialize allocation per turn. When a caller supplies a stable id,
       // checking for an existing row while holding this lock makes retries
       // idempotent without consuming another turn-local sequence.
@@ -412,6 +1060,7 @@ export class DatabaseRepository {
     id: string,
     toolCalls: unknown[] | null,
     parts: unknown[] | null,
+    expectedDeliveryFence?: ExpectedTurnDeliveryFence,
   ): Promise<MessageSelect | undefined> {
     return this.db.transaction(async (tx) => {
       const [message] = await tx
@@ -425,6 +1074,17 @@ export class DatabaseRepository {
         return undefined;
       }
       if (message.turnId) {
+        if (
+          expectedDeliveryFence
+          && !await this.lockCurrentDeliveryFence(
+            tx,
+            message.turnId,
+            expectedDeliveryFence,
+            'messages.stage.deliveryFence',
+          )
+        ) {
+          return undefined;
+        }
         const [turn] = await tx
           .select({ completedAt: this.schema.turns.completedAt })
           .from(this.schema.turns)
@@ -436,6 +1096,8 @@ export class DatabaseRepository {
         if (turn.completedAt != null) {
           throw new Error(`Cannot update assistant message ${id} on terminal turn ${message.turnId}`);
         }
+      } else if (expectedDeliveryFence) {
+        return undefined;
       }
 
       const [updated] = await tx.update(this.schema.messages)
@@ -617,17 +1279,169 @@ export class DatabaseRepository {
     );
   }
 
-  async updateTurn(
-    id: string,
-    updates: Partial<Omit<TurnInsert, 'id'>>,
-  ): Promise<TurnSelect | undefined> {
-    const sanitizedUpdates = sanitizeTypedDbValue(updates, 'turns.update');
-    const [updated] = await this.db
-      .update(this.schema.turns)
-      .set(sanitizedUpdates)
-      .where(eq(this.schema.turns.id, id))
-      .returning();
-    return updated;
+  async createTurnWithSecretEnvelope(
+    data: TurnInsert,
+    secretEnvelope: TurnSecretEnvelopeInsert,
+  ): Promise<TurnSelect> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'turns.insert');
+    const sanitizedEnvelope = sanitizeTypedDbValue(
+      secretEnvelope,
+      'turnSecretEnvelopes.insert',
+    );
+    return this.db.transaction(async (tx) => {
+      const [turn] = await tx
+        .insert(this.schema.turns)
+        .values(sanitizedData)
+        .returning();
+      if (!turn) {
+        throw new Error('Failed to insert turn');
+      }
+      await tx.insert(this.schema.turnSecretEnvelopes).values({
+        turnId: turn.id,
+        ...sanitizedEnvelope,
+      });
+      return turn;
+    });
+  }
+
+  async getTurnSecretEnvelope(
+    turnId: string,
+  ): Promise<TurnSecretEnvelopeRow | undefined> {
+    return this.db.query.turnSecretEnvelopes.findFirst({
+      where: eq(
+        this.schema.turnSecretEnvelopes.turnId,
+        sanitizeDbText(turnId, 'turnSecretEnvelopes.get.turnId'),
+      ),
+    });
+  }
+
+  /**
+   * Admit ordinary delivery only while the turn is still open.
+   *
+   * Keeping this as a database compare-and-set prevents a delayed delivery
+   * callback from changing a concurrently cancelled/finalized turn back to
+   * running.
+   */
+  async activateTurnIfOpen(
+    turnId: string,
+    sandboxSessionId: string,
+    expectedActiveGeneration: SandboxSessionActiveGeneration,
+  ): Promise<boolean> {
+    const sanitizedTurnId = sanitizeDbText(turnId, 'turns.activate.turnId');
+    const sanitizedSessionId = sanitizeDbText(
+      sandboxSessionId,
+      'turns.activate.sandboxSessionId',
+    );
+    const expectedRestoreFenceToken = validateNonNegativeSafeInteger(
+      expectedActiveGeneration.restoreFenceToken,
+      'turns.activate.restoreFenceToken',
+    );
+    const expectedContainerId = expectedActiveGeneration.containerId === null
+      ? null
+      : sanitizeDbText(
+          expectedActiveGeneration.containerId,
+          'turns.activate.containerId',
+        );
+    return this.db.transaction(async (tx) => {
+      const [session] = await tx
+        .select({
+          id: this.schema.sandboxSessions.id,
+          restoreFenceToken: this.schema.sandboxSessions.restoreFenceToken,
+          containerId: this.schema.sandboxSessions.containerId,
+        })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sanitizedSessionId),
+          eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+        ))
+        .for('update');
+      if (
+        !session
+        || session.restoreFenceToken !== expectedRestoreFenceToken
+        || session.containerId !== expectedContainerId
+      ) {
+        return false;
+      }
+      const [lifecycleOperation] = await tx
+        .select({
+          sandboxSessionId:
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+        })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sanitizedSessionId,
+          ),
+          inArray(
+            this.schema.sandboxSessionLifecycleOperations.phase,
+            ['reserved', 'draining', 'executing'],
+          ),
+        ))
+        .limit(1);
+      if (lifecycleOperation) {
+        return false;
+      }
+      const [activated] = await tx
+        .update(this.schema.turns)
+        .set({
+          status: 'running',
+          sandboxSessionId: sanitizedSessionId,
+        })
+        .where(and(
+          eq(this.schema.turns.id, sanitizedTurnId),
+          isNull(this.schema.turns.completedAt),
+          inArray(this.schema.turns.status, ['queued', 'running']),
+        ))
+        .returning({ turnId: this.schema.turns.id });
+      return activated !== undefined;
+    });
+  }
+
+  async isSandboxSessionActiveGenerationCurrent(
+    sandboxSessionId: string,
+    expectedActiveGeneration: SandboxSessionActiveGeneration,
+  ): Promise<boolean> {
+    const expectedRestoreFenceToken = validateNonNegativeSafeInteger(
+      expectedActiveGeneration.restoreFenceToken,
+      'sandboxSessions.activeGeneration.restoreFenceToken',
+    );
+    const expectedContainerId = expectedActiveGeneration.containerId === null
+      ? null
+      : sanitizeDbText(
+          expectedActiveGeneration.containerId,
+          'sandboxSessions.activeGeneration.containerId',
+        );
+    const [session] = await this.db
+      .select({ id: this.schema.sandboxSessions.id })
+      .from(this.schema.sandboxSessions)
+      .where(and(
+        eq(
+          this.schema.sandboxSessions.id,
+          sanitizeDbText(
+            sandboxSessionId,
+            'sandboxSessions.activeGeneration.id',
+          ),
+        ),
+        eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+        eq(
+          this.schema.sandboxSessions.restoreFenceToken,
+          expectedRestoreFenceToken,
+        ),
+        expectedContainerId === null
+          ? isNull(this.schema.sandboxSessions.containerId)
+          : eq(this.schema.sandboxSessions.containerId, expectedContainerId),
+        sql<boolean>`NOT EXISTS (
+          SELECT 1
+          FROM ${this.schema.sandboxSessionLifecycleOperations}
+          WHERE ${this.schema.sandboxSessionLifecycleOperations.sandboxSessionId}
+              = ${this.schema.sandboxSessions.id}
+            AND ${this.schema.sandboxSessionLifecycleOperations.phase}
+              IN ('reserved', 'draining', 'executing')
+        )`,
+      ))
+      .limit(1);
+    return session !== undefined;
   }
 
   async getTurnsByAgent(agentId: string): Promise<TurnSelect[]> {
@@ -644,160 +1458,1658 @@ export class DatabaseRepository {
   }
 
   /**
-   * Atomically claim startup reconciliation ownership for one open turn.
+   * Resolve one immutable turn-delivery capability without substituting the
+   * currently-owned fence or runtime generation.
    *
-   * Pending/timed-out approvals and durable resume attempts retain ownership of
-   * HITL turns. A competing reconciler may take over only after lease expiry.
+   * Session -> turn -> lease is the same lock order used by turn activation.
+   * Holding the session row also serializes this admission point with restore
+   * and lifecycle claims. This method is deliberately read-only: a rejected
+   * tuple leaves every durable owner and lease field untouched.
    */
-  async claimTurnReconciliationLease(input: {
+  async getTurnDeliveryCapabilityClaims(input: {
     turnId: string;
-    ownerId: string;
-    claimedAt: number;
-    leaseExpiresAt: number;
-  }): Promise<TurnReconciliationLeaseRow | undefined> {
-    const turnId = sanitizeDbText(input.turnId, 'turnReconciliationLeases.turnId');
-    const ownerId = sanitizeDbText(input.ownerId, 'turnReconciliationLeases.ownerId');
-    if (input.leaseExpiresAt <= input.claimedAt) {
-      throw new Error('Turn reconciliation lease expiry must be after its claim time');
+    sandboxSessionId: string;
+    agentId: string;
+    expectedDeliveryFence: ExpectedTurnDeliveryFence;
+    expectedActiveGeneration: SandboxSessionActiveGeneration;
+  }): Promise<AdmittedTurnDeliveryCapabilityClaims | undefined> {
+    const turnId = sanitizeDbText(
+      input.turnId,
+      'turnDelivery.capability.turnId',
+    );
+    const sandboxSessionId = sanitizeDbText(
+      input.sandboxSessionId,
+      'turnDelivery.capability.sandboxSessionId',
+    );
+    const agentId = sanitizeDbText(
+      input.agentId,
+      'turnDelivery.capability.agentId',
+    );
+    const ownerId = sanitizeDbText(
+      input.expectedDeliveryFence.ownerId,
+      'turnDelivery.capability.ownerId',
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      input.expectedDeliveryFence.fenceToken,
+      'turnDelivery.capability.fenceToken',
+    );
+    if (!input.expectedActiveGeneration) {
+      throw new Error(
+        'turnDelivery.capability.expectedActiveGeneration is required',
+      );
     }
+    const restoreFenceToken = validateNonNegativeSafeInteger(
+      input.expectedActiveGeneration.restoreFenceToken,
+      'turnDelivery.capability.restoreFenceToken',
+    );
+    if (
+      input.expectedActiveGeneration.containerId !== null
+      && typeof input.expectedActiveGeneration.containerId !== 'string'
+    ) {
+      throw new Error(
+        'turnDelivery.capability.containerId must be a string or null',
+      );
+    }
+    const containerId =
+      input.expectedActiveGeneration.containerId === null
+        ? null
+        : sanitizeDbText(
+            input.expectedActiveGeneration.containerId,
+            'turnDelivery.capability.containerId',
+          );
 
-    const eligibleTurn = this.db
-      .select({
-        turnId: this.schema.turns.id,
-        ownerId: sql<string>`${ownerId}`.as('owner_id'),
-        leaseExpiresAt: sql<number>`${input.leaseExpiresAt}::bigint`.as('lease_expires_at'),
-        updatedAt: sql<number>`${input.claimedAt}::bigint`.as('updated_at'),
-      })
-      .from(this.schema.turns)
-      .where(and(
-        eq(this.schema.turns.id, turnId),
-        isNull(this.schema.turns.completedAt),
-        sql<boolean>`NOT EXISTS (
-          SELECT 1
-          FROM ${this.schema.pendingInterrupts}
-          LEFT JOIN ${this.schema.interruptResumeAttempts}
-            ON ${this.schema.interruptResumeAttempts.interruptId} = ${this.schema.pendingInterrupts.id}
-          WHERE ${this.schema.pendingInterrupts.turnId} = ${this.schema.turns.id}
-            AND (
-              ${this.schema.pendingInterrupts.status} IN ('pending', 'timed_out')
-              OR ${this.schema.interruptResumeAttempts.status} IN ('pending', 'in_progress', 'failed')
-            )
-        )`,
-      ));
-    const [claimed] = await this.db
-      .insert(this.schema.turnReconciliationLeases)
-      .select(eligibleTurn)
-      .onConflictDoUpdate({
-        target: this.schema.turnReconciliationLeases.turnId,
-        set: {
-          ownerId,
-          leaseExpiresAt: input.leaseExpiresAt,
-          updatedAt: input.claimedAt,
-        },
-        setWhere: or(
-          lte(this.schema.turnReconciliationLeases.leaseExpiresAt, input.claimedAt),
-          eq(this.schema.turnReconciliationLeases.ownerId, ownerId),
-        ),
-      })
-      .returning();
-    return claimed;
+    return this.db.transaction(async (tx) => {
+      const [session] = await tx
+        .select({
+          conversationId: this.schema.sandboxSessions.conversationId,
+          restoreFenceToken: this.schema.sandboxSessions.restoreFenceToken,
+          containerId: this.schema.sandboxSessions.containerId,
+        })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sandboxSessionId),
+          eq(this.schema.sandboxSessions.agentId, agentId),
+          eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+          eq(
+            this.schema.sandboxSessions.restoreFenceToken,
+            restoreFenceToken,
+          ),
+          containerId === null
+            ? isNull(this.schema.sandboxSessions.containerId)
+            : eq(this.schema.sandboxSessions.containerId, containerId),
+        ))
+        .for('update');
+      if (!session) {
+        return undefined;
+      }
+
+      const [turn] = await tx
+        .select({ turnId: this.schema.turns.id })
+        .from(this.schema.turns)
+        .where(and(
+          eq(this.schema.turns.id, turnId),
+          eq(this.schema.turns.sandboxSessionId, sandboxSessionId),
+          eq(this.schema.turns.agentId, agentId),
+          eq(
+            this.schema.turns.conversationId,
+            session.conversationId,
+          ),
+          eq(this.schema.turns.status, 'running'),
+          isNull(this.schema.turns.completedAt),
+          eq(this.schema.turns.deliveryOwnerId, ownerId),
+          eq(this.schema.turns.deliveryFenceToken, fenceToken),
+          this.deliveryAdmittedByLifecycleOperation(),
+        ))
+        .for('update');
+      if (!turn) {
+        return undefined;
+      }
+
+      const [lease] = await tx
+        .select({
+          ownerId: this.schema.turnDeliveryLeases.ownerId,
+          fenceToken: this.schema.turnDeliveryLeases.fenceToken,
+          leaseExpiresAt: this.schema.turnDeliveryLeases.leaseExpiresAt,
+        })
+        .from(this.schema.turnDeliveryLeases)
+        .where(and(
+          eq(this.schema.turnDeliveryLeases.turnId, turnId),
+          eq(this.schema.turnDeliveryLeases.ownerId, ownerId),
+          eq(this.schema.turnDeliveryLeases.fenceToken, fenceToken),
+          gt(
+            this.schema.turnDeliveryLeases.leaseExpiresAt,
+            databaseClockMs(),
+          ),
+        ))
+        .for('update');
+      if (!lease) {
+        return undefined;
+      }
+
+      return {
+        turnId,
+        sandboxSessionId,
+        agentId,
+        conversationId: session.conversationId,
+        ownerId: lease.ownerId,
+        fenceToken: lease.fenceToken,
+        leaseExpiresAtMs: lease.leaseExpiresAt,
+        restoreFenceToken: session.restoreFenceToken,
+        containerId: session.containerId,
+      };
+    });
   }
 
-  async renewTurnReconciliationLease(
-    turnId: string,
-    ownerId: string,
-    renewedAt: number,
-    leaseExpiresAt: number,
-  ): Promise<TurnReconciliationLeaseRow | undefined> {
-    if (leaseExpiresAt <= renewedAt) {
-      throw new Error('Renewed turn reconciliation lease expiry must be after its renewal time');
-    }
-    const [renewed] = await this.db
-      .update(this.schema.turnReconciliationLeases)
-      .set({ leaseExpiresAt, updatedAt: renewedAt })
+  /**
+   * Conservatively protect a sandbox session while any exact turn delivery
+   * still owns it. Lifecycle cleanup only needs existence; callback admission
+   * uses getTurnDeliveryCapabilityClaims with the immutable caller tuple.
+   */
+  async hasLiveTurnDeliveryForSandboxSession(sessionId: string): Promise<boolean> {
+    const [delivery] = await this.db
+      .select({ turnId: this.schema.turns.id })
+      .from(this.schema.turns)
+      .innerJoin(
+        this.schema.turnDeliveryLeases,
+        and(
+          eq(this.schema.turnDeliveryLeases.turnId, this.schema.turns.id),
+          eq(this.schema.turnDeliveryLeases.ownerId, this.schema.turns.deliveryOwnerId),
+          eq(this.schema.turnDeliveryLeases.fenceToken, this.schema.turns.deliveryFenceToken),
+        ),
+      )
       .where(and(
         eq(
-          this.schema.turnReconciliationLeases.turnId,
-          sanitizeDbText(turnId, 'turnReconciliationLeases.renew.turnId'),
+          this.schema.turns.sandboxSessionId,
+          sanitizeDbText(sessionId, 'turnDelivery.liveForSession.sandboxSessionId'),
+        ),
+        eq(this.schema.turns.status, 'running'),
+        isNull(this.schema.turns.completedAt),
+        gt(this.schema.turnDeliveryLeases.leaseExpiresAt, databaseClockMs()),
+        this.deliveryAdmittedByLifecycleOperation(),
+        sql<boolean>`EXISTS (
+          SELECT 1
+          FROM ${this.schema.sandboxSessions}
+          WHERE ${this.schema.sandboxSessions.id} = ${this.schema.turns.sandboxSessionId}
+            AND ${this.schema.sandboxSessions.status} = 'ACTIVE'
+        )`,
+      ))
+      .limit(1);
+    return delivery !== undefined;
+  }
+
+  async getRecoverableSandboxSessionLifecycleOperations(): Promise<
+    SandboxSessionLifecycleOperationRow[]
+  > {
+    return this.db
+      .select()
+      .from(this.schema.sandboxSessionLifecycleOperations)
+      .where(and(
+        inArray(
+          this.schema.sandboxSessionLifecycleOperations.phase,
+          ['reserved', 'draining', 'executing'],
+        ),
+        lte(
+          this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+          databaseClockMs(),
+        ),
+      ))
+      .orderBy(
+        asc(this.schema.sandboxSessionLifecycleOperations.updatedAt),
+        asc(this.schema.sandboxSessionLifecycleOperations.sandboxSessionId),
+      );
+  }
+
+  async hasUnfinishedSandboxSessionLifecycleOperation(
+    sandboxSessionId: string,
+  ): Promise<boolean> {
+    const [operation] = await this.db
+      .select({
+        sandboxSessionId:
+          this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+      })
+      .from(this.schema.sandboxSessionLifecycleOperations)
+      .where(and(
+        eq(
+          this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          sanitizeDbText(
+            sandboxSessionId,
+            'sandboxSessionLifecycleOperations.unfinished.sandboxSessionId',
+          ),
+        ),
+        inArray(
+          this.schema.sandboxSessionLifecycleOperations.phase,
+          ['reserved', 'draining', 'executing'],
+        ),
+      ))
+      .limit(1);
+    return operation !== undefined;
+  }
+
+  /**
+   * Reserve lifecycle or runtime-adoption work for one ACTIVE sandbox session.
+   *
+   * An unfinished operation is a durable admission barrier. Its worker lease
+   * may expire for takeover, but activation remains blocked until the
+   * operation is explicitly cancelled before execution or completed together
+   * with a non-ACTIVE session transition.
+   */
+  async claimSandboxSessionLifecycleOperation(input: {
+    sandboxSessionId: string;
+    operation: SandboxSessionLifecycleOperation;
+    ownerId: string;
+    leaseDurationMs: number;
+    expectedActiveGeneration: SandboxSessionActiveGeneration;
+    allowedTurnDelivery?: {
+      turnId: string;
+      ownerId: string;
+      fenceToken: number;
+      interruptResumeAttemptId?: string;
+    };
+  }): Promise<SandboxSessionLifecycleOperationRow | undefined> {
+    const sandboxSessionId = sanitizeDbText(
+      input.sandboxSessionId,
+      'sandboxSessionLifecycleOperations.sandboxSessionId',
+    );
+    const operation = validateSandboxSessionLifecycleOperation(input.operation);
+    const ownerId = sanitizeDbText(
+      input.ownerId,
+      'sandboxSessionLifecycleOperations.ownerId',
+    );
+    const leaseDurationMs = validateLeaseDurationMs(
+      input.leaseDurationMs,
+      'sandboxSessionLifecycleOperations.leaseDurationMs',
+    );
+    if (!input.expectedActiveGeneration) {
+      throw new Error(
+        'sandboxSessionLifecycleOperations.expectedActiveGeneration is required',
+      );
+    }
+    if (
+      input.expectedActiveGeneration.containerId !== null
+      && typeof input.expectedActiveGeneration.containerId !== 'string'
+    ) {
+      throw new Error(
+        'sandboxSessionLifecycleOperations.expectedActiveGeneration.containerId ' +
+        'must be a string or null',
+      );
+    }
+    const expectedActiveGeneration: SandboxSessionActiveGeneration = {
+      restoreFenceToken: validateNonNegativeSafeInteger(
+        input.expectedActiveGeneration.restoreFenceToken,
+        'sandboxSessionLifecycleOperations.expectedActiveGeneration.restoreFenceToken',
+      ),
+      containerId: input.expectedActiveGeneration.containerId === null
+        ? null
+        : sanitizeDbText(
+            input.expectedActiveGeneration.containerId,
+            'sandboxSessionLifecycleOperations.expectedActiveGeneration.containerId',
+          ),
+    };
+    const operationId = randomUUID();
+    const allowedTurnDelivery = input.allowedTurnDelivery
+      ? {
+          turnId: sanitizeDbText(
+            input.allowedTurnDelivery.turnId,
+            'sandboxSessionLifecycleOperations.allowedTurnDelivery.turnId',
+          ),
+          ownerId: sanitizeDbText(
+            input.allowedTurnDelivery.ownerId,
+            'sandboxSessionLifecycleOperations.allowedTurnDelivery.ownerId',
+          ),
+          fenceToken: validateTurnDeliveryFenceToken(
+            input.allowedTurnDelivery.fenceToken,
+            'sandboxSessionLifecycleOperations.allowedTurnDelivery.fenceToken',
+          ),
+          interruptResumeAttemptId:
+            input.allowedTurnDelivery.interruptResumeAttemptId === undefined
+              ? undefined
+              : sanitizeDbText(
+                  input.allowedTurnDelivery.interruptResumeAttemptId,
+                  'sandboxSessionLifecycleOperations.allowedTurnDelivery.interruptResumeAttemptId',
+                ),
+        }
+      : undefined;
+    return this.db.transaction(async (tx) => {
+      // Lifecycle always locks the session first. Its delivery check is
+      // non-locking; turn activation also locks this session row before it may
+      // cross the delivery boundary.
+      const [session] = await tx
+        .select({
+          sandboxSessionId: this.schema.sandboxSessions.id,
+          containerId: this.schema.sandboxSessions.containerId,
+          restoreFenceToken: this.schema.sandboxSessions.restoreFenceToken,
+        })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sandboxSessionId),
+          eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+        ))
+        .for('update');
+      if (!session) {
+        return undefined;
+      }
+      if (
+        session.restoreFenceToken !== expectedActiveGeneration.restoreFenceToken
+        || session.containerId !== expectedActiveGeneration.containerId
+      ) {
+        return undefined;
+      }
+
+      const [clock] = await tx
+        .select({ nowMs: databaseClockMs() })
+        .from(this.schema.sandboxSessions)
+        .where(eq(this.schema.sandboxSessions.id, sandboxSessionId))
+        .limit(1);
+      if (!clock) {
+        throw new Error('Database clock query returned no row');
+      }
+      const nowMs = parseDatabaseClockMs(clock.nowMs);
+      const leaseExpiresAt = nowMs + leaseDurationMs;
+
+      const [existingOperation] = await tx
+        .select()
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(eq(
+          this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          sandboxSessionId,
+        ))
+        .for('update');
+      const isUnfinishedTakeover =
+        existingOperation !== undefined
+        && existingOperation.phase !== 'completed';
+      if (
+        isUnfinishedTakeover
+        && (
+          existingOperation.operation !== operation
+          || (
+            existingOperation.ownerId !== ownerId
+            && existingOperation.leaseExpiresAt > nowMs
+          )
+        )
+      ) {
+        return undefined;
+      }
+      const persistedAllowedTurnDelivery = isUnfinishedTakeover
+        && existingOperation.allowedTurnId
+        && existingOperation.allowedDeliveryOwnerId
+        && existingOperation.allowedDeliveryFenceToken !== null
+        ? {
+            turnId: existingOperation.allowedTurnId,
+            ownerId: existingOperation.allowedDeliveryOwnerId,
+            fenceToken: existingOperation.allowedDeliveryFenceToken,
+            interruptResumeAttemptId:
+              existingOperation.allowedInterruptResumeAttemptId ?? undefined,
+          }
+        : undefined;
+      const effectiveAllowedTurnDelivery = isUnfinishedTakeover
+        ? persistedAllowedTurnDelivery
+        : allowedTurnDelivery;
+      const allowedLeaseCondition = isUnfinishedTakeover
+        ? sql<boolean>`TRUE`
+        : effectiveAllowedTurnDelivery
+          ? sql<boolean>`EXISTS (
+              SELECT 1
+              FROM ${this.schema.turnDeliveryLeases}
+              WHERE ${this.schema.turnDeliveryLeases.turnId}
+                  = ${this.schema.turns.id}
+                AND ${this.schema.turnDeliveryLeases.ownerId}
+                  = ${effectiveAllowedTurnDelivery.ownerId}
+                AND ${this.schema.turnDeliveryLeases.fenceToken}
+                  = ${effectiveAllowedTurnDelivery.fenceToken}
+                AND ${this.schema.turnDeliveryLeases.leaseExpiresAt}
+                  > ${databaseClockMs()}
+            )`
+          : sql<boolean>`FALSE`;
+      const disallowedDelivery = effectiveAllowedTurnDelivery
+        ? sql<boolean>`NOT (
+            ${this.schema.turns.id} = ${effectiveAllowedTurnDelivery.turnId}
+            AND ${this.schema.turns.deliveryOwnerId}
+                = ${effectiveAllowedTurnDelivery.ownerId}
+            AND ${this.schema.turns.deliveryFenceToken}
+                = ${effectiveAllowedTurnDelivery.fenceToken}
+            AND ${allowedLeaseCondition}
+          )`
+        : sql<boolean>`TRUE`;
+      const [blockingDelivery] = await tx
+        .select({ turnId: this.schema.turns.id })
+        .from(this.schema.turns)
+        .where(and(
+          eq(this.schema.turns.sandboxSessionId, sandboxSessionId),
+          eq(this.schema.turns.status, 'running'),
+          isNull(this.schema.turns.completedAt),
+          disallowedDelivery,
+        ))
+        .limit(1);
+      if (blockingDelivery) {
+        return undefined;
+      }
+
+      const activeResumes = await tx
+        .select({
+          id: this.schema.interruptResumeAttempts.id,
+          interruptId: this.schema.interruptResumeAttempts.interruptId,
+          turnId: this.schema.interruptResumeAttempts.turnId,
+          sandboxSessionId:
+            this.schema.interruptResumeAttempts.sandboxSessionId,
+          interruptStatus: this.schema.pendingInterrupts.status,
+        })
+        .from(this.schema.interruptResumeAttempts)
+        .innerJoin(
+          this.schema.pendingInterrupts,
+          eq(
+            this.schema.pendingInterrupts.id,
+            this.schema.interruptResumeAttempts.interruptId,
+          ),
+        )
+        .where(and(
+          eq(
+            this.schema.interruptResumeAttempts.sandboxSessionId,
+            sandboxSessionId,
+          ),
+          eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
+        ));
+      const allowedResumeAttemptId =
+        effectiveAllowedTurnDelivery?.interruptResumeAttemptId;
+      const allowedResumeTurnId = effectiveAllowedTurnDelivery?.turnId;
+      const matchingResolvedResume = allowedResumeAttemptId === undefined
+        ? undefined
+        : activeResumes.find((attempt) =>
+            operation === 'reset'
+            && attempt.id === allowedResumeAttemptId
+            && attempt.turnId === allowedResumeTurnId
+            && attempt.sandboxSessionId === sandboxSessionId
+            && attempt.interruptStatus === 'resolved'
+          );
+      if (
+        activeResumes.some((attempt) => attempt.id !== matchingResolvedResume?.id)
+        || (allowedResumeAttemptId !== undefined && !matchingResolvedResume)
+      ) {
+        return undefined;
+      }
+
+      const [claimed] = await tx
+        .insert(this.schema.sandboxSessionLifecycleOperations)
+        .values({
+          sandboxSessionId,
+          operation,
+          operationId,
+          phase: 'reserved',
+          ownerId,
+          fenceToken: 1,
+          allowedTurnId: allowedTurnDelivery?.turnId ?? null,
+          allowedDeliveryOwnerId: allowedTurnDelivery?.ownerId ?? null,
+          allowedDeliveryFenceToken: allowedTurnDelivery?.fenceToken ?? null,
+          allowedInterruptResumeAttemptId:
+            allowedTurnDelivery?.interruptResumeAttemptId ?? null,
+          leaseExpiresAt,
+          updatedAt: nowMs,
+        })
+        .onConflictDoUpdate({
+          target: this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          set: {
+            operation: sql<SandboxSessionLifecycleOperation>`
+              CASE
+                WHEN ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'completed'
+                THEN ${this.schema.sandboxSessionLifecycleOperations.operation}
+                ELSE ${operation}
+              END
+            `,
+            operationId: sql<string>`
+              CASE
+                WHEN ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'completed'
+                THEN ${this.schema.sandboxSessionLifecycleOperations.operationId}
+                ELSE ${operationId}
+              END
+            `,
+            phase: sql<SandboxSessionLifecycleOperationRow['phase']>`
+              CASE
+                WHEN ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'completed'
+                THEN ${this.schema.sandboxSessionLifecycleOperations.phase}
+                ELSE 'reserved'
+              END
+            `,
+            ownerId,
+            fenceToken: sql<number>`
+              CASE
+                WHEN ${this.schema.sandboxSessionLifecycleOperations.ownerId} = ${ownerId}
+                  AND ${this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt} > ${nowMs}
+                THEN ${this.schema.sandboxSessionLifecycleOperations.fenceToken}
+                ELSE ${this.schema.sandboxSessionLifecycleOperations.fenceToken} + 1
+              END
+            `,
+            allowedTurnId: sql<string | null>`
+              CASE
+                WHEN ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'completed'
+                THEN ${this.schema.sandboxSessionLifecycleOperations.allowedTurnId}
+                ELSE ${allowedTurnDelivery?.turnId ?? null}
+              END
+            `,
+            allowedDeliveryOwnerId: sql<string | null>`
+              CASE
+                WHEN ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'completed'
+                THEN ${this.schema.sandboxSessionLifecycleOperations.allowedDeliveryOwnerId}
+                ELSE ${allowedTurnDelivery?.ownerId ?? null}
+              END
+            `,
+            allowedDeliveryFenceToken: sql<number | null>`
+              CASE
+                WHEN ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'completed'
+                THEN ${this.schema.sandboxSessionLifecycleOperations.allowedDeliveryFenceToken}
+                ELSE ${allowedTurnDelivery?.fenceToken ?? null}
+              END
+            `,
+            allowedInterruptResumeAttemptId: sql<string | null>`
+              CASE
+                WHEN ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'completed'
+                THEN ${this.schema.sandboxSessionLifecycleOperations.allowedInterruptResumeAttemptId}
+                ELSE ${allowedTurnDelivery?.interruptResumeAttemptId ?? null}
+              END
+            `,
+            leaseExpiresAt,
+            updatedAt: nowMs,
+          },
+          setWhere: or(
+            eq(this.schema.sandboxSessionLifecycleOperations.phase, 'completed'),
+            and(
+              eq(
+                this.schema.sandboxSessionLifecycleOperations.operation,
+                operation,
+              ),
+              or(
+                lte(
+                  this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+                  nowMs,
+                ),
+                eq(
+                  this.schema.sandboxSessionLifecycleOperations.ownerId,
+                  ownerId,
+                ),
+              ),
+            ),
+          ),
+        })
+        .returning();
+      return claimed;
+    });
+  }
+
+  async renewSandboxSessionLifecycleOperation(
+    sandboxSessionId: string,
+    ownerId: string,
+    fenceToken: number,
+    leaseDurationMs: number,
+  ): Promise<SandboxSessionLifecycleOperationRow | undefined> {
+    const [renewed] = await this.db
+      .update(this.schema.sandboxSessionLifecycleOperations)
+      .set({
+        leaseExpiresAt: sql`${databaseClockMs()} + ${validateLeaseDurationMs(
+          leaseDurationMs,
+          'sandboxSessionLifecycleOperations.renew.leaseDurationMs',
+        )}`,
+        updatedAt: databaseClockMs(),
+      })
+      .where(and(
+        eq(
+          this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          sanitizeDbText(
+            sandboxSessionId,
+            'sandboxSessionLifecycleOperations.renew.sandboxSessionId',
+          ),
         ),
         eq(
-          this.schema.turnReconciliationLeases.ownerId,
-          sanitizeDbText(ownerId, 'turnReconciliationLeases.renew.ownerId'),
+          this.schema.sandboxSessionLifecycleOperations.ownerId,
+          sanitizeDbText(
+            ownerId,
+            'sandboxSessionLifecycleOperations.renew.ownerId',
+          ),
         ),
-        gt(this.schema.turnReconciliationLeases.leaseExpiresAt, renewedAt),
+        eq(
+          this.schema.sandboxSessionLifecycleOperations.fenceToken,
+          validateTurnDeliveryFenceToken(
+            fenceToken,
+            'sandboxSessionLifecycleOperations.renew.fenceToken',
+          ),
+        ),
+        inArray(
+          this.schema.sandboxSessionLifecycleOperations.phase,
+          ['reserved', 'draining', 'executing'],
+        ),
+        gt(
+          this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+          databaseClockMs(),
+        ),
+      ))
+      .returning();
+    return renewed;
+  }
+
+  async markSandboxSessionLifecycleOperationExecuting(
+    sandboxSessionId: string,
+    ownerId: string,
+    fenceToken: number,
+  ): Promise<boolean> {
+    const sanitizedSessionId = sanitizeDbText(
+      sandboxSessionId,
+      'sandboxSessionLifecycleOperations.execute.sandboxSessionId',
+    );
+    const sanitizedOwnerId = sanitizeDbText(
+      ownerId,
+      'sandboxSessionLifecycleOperations.execute.ownerId',
+    );
+    const validatedFenceToken = validateTurnDeliveryFenceToken(
+      fenceToken,
+      'sandboxSessionLifecycleOperations.execute.fenceToken',
+    );
+    return this.db.transaction(async (tx) => {
+      const [operation] = await tx
+        .select({
+          sandboxSessionId: this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          operation: this.schema.sandboxSessionLifecycleOperations.operation,
+          allowedTurnId: this.schema.sandboxSessionLifecycleOperations.allowedTurnId,
+          allowedDeliveryOwnerId:
+            this.schema.sandboxSessionLifecycleOperations.allowedDeliveryOwnerId,
+          allowedDeliveryFenceToken:
+            this.schema.sandboxSessionLifecycleOperations.allowedDeliveryFenceToken,
+          allowedInterruptResumeAttemptId:
+            this.schema.sandboxSessionLifecycleOperations
+              .allowedInterruptResumeAttemptId,
+          leaseExpiresAt: this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+        })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sanitizedSessionId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.ownerId,
+            sanitizedOwnerId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.fenceToken,
+            validatedFenceToken,
+          ),
+          inArray(
+            this.schema.sandboxSessionLifecycleOperations.phase,
+            ['reserved', 'draining', 'executing'],
+          ),
+        ))
+        .for('update');
+      if (!operation) {
+        return false;
+      }
+      if (operation.operation === 'adopt') {
+        // Runtime adoption is a read/connect/cache barrier only. It must stay
+        // reserved so recovery can always cancel it without performing a
+        // destructive session transition.
+        return false;
+      }
+
+      // Drain every in-flight mutation admitted by the reserved whitelist.
+      // Delivery writers lock turn -> lease, so this uses the same order.
+      let shouldInvalidateAllowedDelivery = false;
+      if (operation.allowedTurnId) {
+        const [allowedTurn] = await tx
+          .select({
+            turnId: this.schema.turns.id,
+            completedAt: this.schema.turns.completedAt,
+            deliveryOwnerId: this.schema.turns.deliveryOwnerId,
+            deliveryFenceToken: this.schema.turns.deliveryFenceToken,
+          })
+          .from(this.schema.turns)
+          .where(eq(this.schema.turns.id, operation.allowedTurnId))
+          .for('update');
+        if (
+          !allowedTurn
+          || allowedTurn.deliveryOwnerId !== operation.allowedDeliveryOwnerId
+          || allowedTurn.deliveryFenceToken !== operation.allowedDeliveryFenceToken
+        ) {
+          return false;
+        }
+        const [allowedLease] = await tx
+          .select({ turnId: this.schema.turnDeliveryLeases.turnId })
+          .from(this.schema.turnDeliveryLeases)
+          .where(and(
+            eq(this.schema.turnDeliveryLeases.turnId, operation.allowedTurnId),
+            eq(
+              this.schema.turnDeliveryLeases.ownerId,
+              operation.allowedDeliveryOwnerId ?? '',
+            ),
+            eq(
+              this.schema.turnDeliveryLeases.fenceToken,
+              operation.allowedDeliveryFenceToken ?? -1,
+            ),
+          ))
+          .for('update');
+        if (!allowedLease) {
+          return false;
+        }
+        if (allowedTurn.completedAt === null) {
+          if (operation.operation === 'checkpoint') {
+            const [parkedInterrupt] = await tx
+              .select({ id: this.schema.pendingInterrupts.id })
+              .from(this.schema.pendingInterrupts)
+              .where(and(
+                eq(this.schema.pendingInterrupts.turnId, operation.allowedTurnId),
+                inArray(this.schema.pendingInterrupts.status, ['pending', 'timed_out']),
+              ))
+              .limit(1);
+            if (!parkedInterrupt) {
+              return false;
+            }
+          } else if (
+            operation.operation === 'reset'
+            && operation.allowedInterruptResumeAttemptId
+          ) {
+            const [resumeAttempt] = await tx
+              .select({
+                id: this.schema.interruptResumeAttempts.id,
+                interruptId: this.schema.interruptResumeAttempts.interruptId,
+              })
+              .from(this.schema.interruptResumeAttempts)
+              .where(and(
+                eq(
+                  this.schema.interruptResumeAttempts.id,
+                  operation.allowedInterruptResumeAttemptId,
+                ),
+                eq(
+                  this.schema.interruptResumeAttempts.turnId,
+                  operation.allowedTurnId,
+                ),
+                eq(
+                  this.schema.interruptResumeAttempts.sandboxSessionId,
+                  sanitizedSessionId,
+                ),
+                eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
+              ))
+              .for('update');
+            if (!resumeAttempt) {
+              return false;
+            }
+            const [resolvedInterrupt] = await tx
+              .select({ id: this.schema.pendingInterrupts.id })
+              .from(this.schema.pendingInterrupts)
+              .where(and(
+                eq(this.schema.pendingInterrupts.id, resumeAttempt.interruptId),
+                eq(this.schema.pendingInterrupts.turnId, operation.allowedTurnId),
+                eq(this.schema.pendingInterrupts.status, 'resolved'),
+              ))
+              .for('update');
+            if (!resolvedInterrupt) {
+              return false;
+            }
+          } else {
+            return false;
+          }
+          shouldInvalidateAllowedDelivery = true;
+        }
+      }
+
+      const [session] = await tx
+        .select({ sandboxSessionId: this.schema.sandboxSessions.id })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sanitizedSessionId),
+          eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+        ))
+        .limit(1);
+      if (!session) {
+        return false;
+      }
+
+      const [clock] = await tx
+        .select({ nowMs: databaseClockMs() })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(eq(
+          this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          sanitizedSessionId,
+        ))
+        .limit(1);
+      if (!clock) {
+        throw new Error('Database clock query returned no row');
+      }
+      const nowMs = parseDatabaseClockMs(clock.nowMs);
+      if (operation.leaseExpiresAt <= nowMs) {
+        return false;
+      }
+      if (shouldInvalidateAllowedDelivery && operation.allowedTurnId) {
+        await tx
+          .update(this.schema.turnDeliveryLeases)
+          .set({
+            leaseExpiresAt: nowMs,
+            updatedAt: nowMs,
+          })
+          .where(and(
+            eq(this.schema.turnDeliveryLeases.turnId, operation.allowedTurnId),
+            eq(
+              this.schema.turnDeliveryLeases.ownerId,
+              operation.allowedDeliveryOwnerId ?? '',
+            ),
+            eq(
+              this.schema.turnDeliveryLeases.fenceToken,
+              operation.allowedDeliveryFenceToken ?? -1,
+            ),
+          ));
+      }
+
+      const [liveDelivery] = await tx
+        .select({ turnId: this.schema.turns.id })
+        .from(this.schema.turns)
+        .innerJoin(
+          this.schema.turnDeliveryLeases,
+          and(
+            eq(this.schema.turnDeliveryLeases.turnId, this.schema.turns.id),
+            eq(this.schema.turnDeliveryLeases.ownerId, this.schema.turns.deliveryOwnerId),
+            eq(this.schema.turnDeliveryLeases.fenceToken, this.schema.turns.deliveryFenceToken),
+          ),
+        )
+        .where(and(
+          eq(this.schema.turns.sandboxSessionId, sanitizedSessionId),
+          eq(this.schema.turns.status, 'running'),
+          isNull(this.schema.turns.completedAt),
+          gt(this.schema.turnDeliveryLeases.leaseExpiresAt, nowMs),
+        ))
+        .limit(1);
+      if (liveDelivery) {
+        return false;
+      }
+
+      const activeResumes = await tx
+        .select({ id: this.schema.interruptResumeAttempts.id })
+        .from(this.schema.interruptResumeAttempts)
+        .where(and(
+          eq(
+            this.schema.interruptResumeAttempts.sandboxSessionId,
+            sanitizedSessionId,
+          ),
+          eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
+        ));
+      if (activeResumes.some(
+        (attempt) =>
+          attempt.id !== operation.allowedInterruptResumeAttemptId,
+      )) {
+        return false;
+      }
+
+      const [updated] = await tx
+        .update(this.schema.sandboxSessionLifecycleOperations)
+        .set({
+          phase: 'executing',
+          updatedAt: nowMs,
+        })
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sanitizedSessionId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.ownerId,
+            sanitizedOwnerId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.fenceToken,
+            validatedFenceToken,
+          ),
+          inArray(
+            this.schema.sandboxSessionLifecycleOperations.phase,
+            ['reserved', 'draining', 'executing'],
+          ),
+          gt(
+            this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+            nowMs,
+          ),
+        ))
+        .returning({
+          sandboxSessionId: this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+        });
+      return updated !== undefined;
+    });
+  }
+
+  async cancelSandboxSessionLifecycleOperation(
+    sandboxSessionId: string,
+    ownerId: string,
+    fenceToken: number,
+  ): Promise<boolean> {
+    const [cancelled] = await this.db
+      .update(this.schema.sandboxSessionLifecycleOperations)
+      .set({
+        phase: 'completed',
+        updatedAt: databaseClockMs(),
+      })
+      .where(and(
+        eq(
+          this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          sanitizeDbText(
+            sandboxSessionId,
+            'sandboxSessionLifecycleOperations.cancel.sandboxSessionId',
+          ),
+        ),
+        eq(
+          this.schema.sandboxSessionLifecycleOperations.ownerId,
+          sanitizeDbText(
+            ownerId,
+            'sandboxSessionLifecycleOperations.cancel.ownerId',
+          ),
+        ),
+        eq(
+          this.schema.sandboxSessionLifecycleOperations.fenceToken,
+          validateTurnDeliveryFenceToken(
+            fenceToken,
+            'sandboxSessionLifecycleOperations.cancel.fenceToken',
+          ),
+        ),
+        or(
+          eq(this.schema.sandboxSessionLifecycleOperations.phase, 'reserved'),
+          and(
+            eq(
+              this.schema.sandboxSessionLifecycleOperations.operation,
+              'adopt',
+            ),
+            inArray(
+              this.schema.sandboxSessionLifecycleOperations.phase,
+              ['draining', 'executing'],
+            ),
+          ),
+        ),
+        gt(
+          this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+          databaseClockMs(),
+        ),
+      ))
+      .returning({ sandboxSessionId: this.schema.sandboxSessionLifecycleOperations.sandboxSessionId });
+    return cancelled !== undefined;
+  }
+
+  async completeSandboxSessionLifecycleOperation(input: {
+    sandboxSessionId: string;
+    ownerId: string;
+    fenceToken: number;
+    fromStatus: string;
+    toStatus: string;
+    extra?: {
+      containerName?: string | null;
+      containerId?: string | null;
+      restoreAttempts?: number | null;
+      lastRestoreError?: string | null;
+    };
+  }): Promise<boolean> {
+    const sandboxSessionId = sanitizeDbText(
+      input.sandboxSessionId,
+      'sandboxSessionLifecycleOperations.complete.sandboxSessionId',
+    );
+    const ownerId = sanitizeDbText(
+      input.ownerId,
+      'sandboxSessionLifecycleOperations.complete.ownerId',
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      input.fenceToken,
+      'sandboxSessionLifecycleOperations.complete.fenceToken',
+    );
+    const fromStatus = sanitizeDbText(
+      input.fromStatus,
+      'sandboxSessionLifecycleOperations.complete.fromStatus',
+    );
+    const toStatus = sanitizeDbText(
+      input.toStatus,
+      'sandboxSessionLifecycleOperations.complete.toStatus',
+    );
+    if (fromStatus !== 'ACTIVE') {
+      throw new Error(
+        `Sandbox lifecycle completion must leave ACTIVE, received ${fromStatus} -> ${toStatus}`,
+      );
+    }
+    if (toStatus !== 'CHECKPOINTED' && toStatus !== 'TERMINATED') {
+      throw new Error(
+        `Sandbox lifecycle completion cannot transition ACTIVE -> ${toStatus}`,
+      );
+    }
+    const extra = input.extra
+      ? sanitizeTypedDbValue(
+          input.extra,
+          'sandboxSessionLifecycleOperations.complete.extra',
+        )
+      : undefined;
+
+    return this.db.transaction(async (tx) => {
+      const [session] = await tx
+        .select({ sandboxSessionId: this.schema.sandboxSessions.id })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sandboxSessionId),
+          eq(this.schema.sandboxSessions.status, fromStatus),
+        ))
+        .for('update');
+      if (!session) {
+        return false;
+      }
+
+      const [operation] = await tx
+        .select({
+          sandboxSessionId: this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          operation: this.schema.sandboxSessionLifecycleOperations.operation,
+        })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sandboxSessionId,
+          ),
+          eq(this.schema.sandboxSessionLifecycleOperations.ownerId, ownerId),
+          eq(this.schema.sandboxSessionLifecycleOperations.fenceToken, fenceToken),
+          eq(this.schema.sandboxSessionLifecycleOperations.phase, 'executing'),
+          gt(
+            this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+            databaseClockMs(),
+          ),
+        ))
+        .for('update');
+      if (!operation) {
+        return false;
+      }
+      if (
+        operation.operation === 'terminate' && toStatus !== 'TERMINATED'
+      ) {
+        throw new Error(
+          `Sandbox lifecycle operation ${operation.operation} cannot complete as ${toStatus}`,
+        );
+      }
+
+      const nowMs = databaseClockMs();
+      const [updated] = await tx
+        .update(this.schema.sandboxSessions)
+        .set({
+          status: toStatus,
+          updatedAt: nowMs,
+          lastActivityAt: nowMs,
+          ...(extra?.containerName !== undefined
+            ? { containerName: extra.containerName }
+            : {}),
+          ...(extra?.containerId !== undefined
+            ? { containerId: extra.containerId }
+            : {}),
+          ...(extra?.restoreAttempts !== undefined && extra.restoreAttempts !== null
+            ? { restoreAttempts: extra.restoreAttempts }
+            : {}),
+          ...(extra?.lastRestoreError !== undefined
+            ? { lastRestoreError: extra.lastRestoreError }
+            : {}),
+        })
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sandboxSessionId),
+          eq(this.schema.sandboxSessions.status, fromStatus),
+        ))
+        .returning({ sandboxSessionId: this.schema.sandboxSessions.id });
+      if (!updated) {
+        return false;
+      }
+
+      await tx
+        .update(this.schema.sandboxSessionLifecycleOperations)
+        .set({
+          phase: 'completed',
+          updatedAt: nowMs,
+        })
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sandboxSessionId,
+          ),
+          eq(this.schema.sandboxSessionLifecycleOperations.ownerId, ownerId),
+          eq(this.schema.sandboxSessionLifecycleOperations.fenceToken, fenceToken),
+          eq(this.schema.sandboxSessionLifecycleOperations.phase, 'executing'),
+        ));
+      return true;
+    });
+  }
+
+  /**
+   * Atomically claim delivery ownership for one open turn.
+   *
+   * The turn row adopts the returned monotonic token in the same transaction,
+   * so every later state/event/message mutation can fence against it.
+   */
+  async claimTurnDeliveryLease(input: {
+    turnId: string;
+    ownerId: string;
+    leaseDurationMs: number;
+  }): Promise<TurnDeliveryLeaseRow | undefined> {
+    const turnId = sanitizeDbText(input.turnId, 'turnDeliveryLeases.turnId');
+    const ownerId = sanitizeDbText(input.ownerId, 'turnDeliveryLeases.ownerId');
+    const leaseDurationMs = validateLeaseDurationMs(
+      input.leaseDurationMs,
+      'turnDeliveryLeases.leaseDurationMs',
+    );
+
+    return this.db.transaction(async (tx) => {
+      // All fenced turn/lease mutations lock the turn before the lease. Besides
+      // making claim-vs-finalize atomic, the shared order avoids deadlocks.
+      const [eligibleTurn] = await tx
+        .select({ turnId: this.schema.turns.id })
+        .from(this.schema.turns)
+        .where(and(
+          eq(this.schema.turns.id, turnId),
+          isNull(this.schema.turns.completedAt),
+          sql<boolean>`NOT EXISTS (
+            SELECT 1
+            FROM ${this.schema.pendingInterrupts}
+            LEFT JOIN ${this.schema.interruptResumeAttempts}
+              ON ${this.schema.interruptResumeAttempts.interruptId} = ${this.schema.pendingInterrupts.id}
+            WHERE ${this.schema.pendingInterrupts.turnId} = ${this.schema.turns.id}
+              AND (
+                ${this.schema.pendingInterrupts.status} IN ('pending', 'timed_out')
+                OR ${this.schema.interruptResumeAttempts.status} IN ('pending', 'in_progress', 'failed')
+              )
+          )`,
+          sql<boolean>`NOT EXISTS (
+            SELECT 1
+            FROM ${this.schema.sandboxSessionLifecycleOperations}
+            WHERE ${this.schema.sandboxSessionLifecycleOperations.sandboxSessionId}
+              = ${this.schema.turns.sandboxSessionId}
+              AND ${this.schema.sandboxSessionLifecycleOperations.phase} <> 'completed'
+          )`,
+        ))
+        .for('update');
+      if (!eligibleTurn) {
+        return undefined;
+      }
+
+      const [clock] = await tx
+        .select({ nowMs: databaseClockMs() })
+        .from(this.schema.turns)
+        .where(eq(this.schema.turns.id, turnId))
+        .limit(1);
+      if (!clock) {
+        throw new Error('Database clock query returned no row');
+      }
+      const nowMs = parseDatabaseClockMs(clock.nowMs);
+      const leaseExpiresAt = nowMs + leaseDurationMs;
+      const [claimed] = await tx
+        .insert(this.schema.turnDeliveryLeases)
+        .values({
+          turnId,
+          ownerId,
+          fenceToken: 1,
+          leaseExpiresAt,
+          updatedAt: nowMs,
+        })
+        .onConflictDoUpdate({
+          target: this.schema.turnDeliveryLeases.turnId,
+          set: {
+            ownerId,
+            fenceToken: sql<number>`
+              CASE
+                WHEN ${this.schema.turnDeliveryLeases.fenceToken} > 0
+                  AND ${this.schema.turnDeliveryLeases.ownerId} = ${ownerId}
+                  AND ${this.schema.turnDeliveryLeases.leaseExpiresAt} > ${nowMs}
+                THEN ${this.schema.turnDeliveryLeases.fenceToken}
+                ELSE ${this.schema.turnDeliveryLeases.fenceToken} + 1
+              END
+            `,
+            leaseExpiresAt,
+            updatedAt: nowMs,
+          },
+          setWhere: or(
+            lte(this.schema.turnDeliveryLeases.leaseExpiresAt, nowMs),
+            eq(this.schema.turnDeliveryLeases.ownerId, ownerId),
+          ),
+        })
+        .returning();
+      if (claimed) {
+        await tx
+          .update(this.schema.turns)
+          .set({
+            deliveryOwnerId: claimed.ownerId,
+            deliveryFenceToken: claimed.fenceToken,
+          })
+          .where(and(
+            eq(this.schema.turns.id, turnId),
+            isNull(this.schema.turns.completedAt),
+          ));
+      }
+      return claimed;
+    });
+  }
+
+  async renewTurnDeliveryLease(
+    turnId: string,
+    ownerId: string,
+    fenceToken: number,
+    leaseDurationMs: number,
+  ): Promise<TurnDeliveryLeaseRow | undefined> {
+    const durationMs = validateLeaseDurationMs(
+      leaseDurationMs,
+      'turnDeliveryLeases.renew.leaseDurationMs',
+    );
+    const [renewed] = await this.db
+      .update(this.schema.turnDeliveryLeases)
+      .set({
+        leaseExpiresAt: sql`${databaseClockMs()} + ${durationMs}`,
+        updatedAt: databaseClockMs(),
+      })
+      .where(and(
+        eq(
+          this.schema.turnDeliveryLeases.turnId,
+          sanitizeDbText(turnId, 'turnDeliveryLeases.renew.turnId'),
+        ),
+        eq(
+          this.schema.turnDeliveryLeases.ownerId,
+          sanitizeDbText(ownerId, 'turnDeliveryLeases.renew.ownerId'),
+        ),
+        eq(
+          this.schema.turnDeliveryLeases.fenceToken,
+          validateTurnDeliveryFenceToken(
+            fenceToken,
+            'turnDeliveryLeases.renew.fenceToken',
+          ),
+        ),
+        gt(this.schema.turnDeliveryLeases.leaseExpiresAt, databaseClockMs()),
+        sql<boolean>`EXISTS (
+          SELECT 1
+          FROM ${this.schema.turns}
+          WHERE ${this.schema.turns.id} = ${this.schema.turnDeliveryLeases.turnId}
+            AND ${this.schema.turns.completedAt} IS NULL
+            AND ${this.schema.turns.deliveryOwnerId} = ${sanitizeDbText(
+              ownerId,
+              'turnDeliveryLeases.renew.ownerId',
+            )}
+            AND ${this.schema.turns.deliveryFenceToken} = ${validateTurnDeliveryFenceToken(
+              fenceToken,
+              'turnDeliveryLeases.renew.fenceToken',
+            )}
+            AND ${this.deliveryAdmittedByLifecycleOperation()}
+            AND (
+              ${this.schema.turns.sandboxSessionId} IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM ${this.schema.sandboxSessions}
+                WHERE ${this.schema.sandboxSessions.id} = ${this.schema.turns.sandboxSessionId}
+                  AND ${this.schema.sandboxSessions.status} = 'ACTIVE'
+              )
+            )
+        )`,
       ))
       .returning();
     return renewed;
   }
 
   /**
-   * Authorize recovery dispatch while preserving queued crash-retry state.
+   * Atomically admit one turn delivery.
    *
-   * Only the owner of a still-live reconciliation lease may pass this fence,
-   * and a HITL resume workflow that appeared after the original claim wins.
-   * The normal delivery boundary changes the turn to running; if this owner
-   * dies before then, the queued turn remains eligible for lease takeover.
+   * Only a genuinely queued turn may cross the delivery boundary. An expired
+   * running turn is fenced-finalized for explicit retry, never re-executed.
    */
-  async authorizeQueuedTurnRedispatch(
+  async activateTurnDelivery(
+    input: {
+      turnId: string;
+      sandboxSessionId: string;
+      ownerId: string;
+      fenceToken: number;
+      expectedActiveGeneration: SandboxSessionActiveGeneration;
+    },
+  ): Promise<boolean> {
+    const sanitizedTurnId = sanitizeDbText(
+      input.turnId,
+      'turnDeliveryLeases.activate.turnId',
+    );
+    const sanitizedOwnerId = sanitizeDbText(
+      input.ownerId,
+      'turnDeliveryLeases.activate.ownerId',
+    );
+    const sanitizedSandboxSessionId = sanitizeDbText(
+      input.sandboxSessionId,
+      'turnDeliveryLeases.activate.sandboxSessionId',
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      input.fenceToken,
+      'turnDeliveryLeases.activate.fenceToken',
+    );
+    const expectedRestoreFenceToken = validateNonNegativeSafeInteger(
+      input.expectedActiveGeneration.restoreFenceToken,
+      'turnDeliveryLeases.activate.restoreFenceToken',
+    );
+    const expectedContainerId =
+      input.expectedActiveGeneration.containerId === null
+        ? null
+        : sanitizeDbText(
+            input.expectedActiveGeneration.containerId,
+            'turnDeliveryLeases.activate.containerId',
+          );
+    try {
+      return await this.db.transaction(async (tx) => {
+      // A conversation row is the global ordered-stream admission boundary.
+      // Read the immutable target first, then lock the conversation before the
+      // sandbox row so replicas racing through different sessions serialize.
+      const [candidateTurn] = await tx
+        .select({
+          conversationId: this.schema.turns.conversationId,
+        })
+        .from(this.schema.turns)
+        .where(eq(this.schema.turns.id, sanitizedTurnId))
+        .limit(1);
+      if (!candidateTurn?.conversationId) {
+        return false;
+      }
+      const [conversation] = await tx
+        .select({
+          conversationId: this.schema.conversations.id,
+          agentId: this.schema.conversations.agentId,
+        })
+        .from(this.schema.conversations)
+        .where(eq(
+          this.schema.conversations.id,
+          candidateTurn.conversationId,
+        ))
+        .for('update');
+      if (!conversation) {
+        return false;
+      }
+
+      // Session-row ownership is the common serialization boundary shared
+      // with lifecycle intent claim. Check the intent in a second statement
+      // after acquiring the row lock so READ COMMITTED cannot retain a stale
+      // pre-wait subquery snapshot.
+      const [session] = await tx
+        .select({
+          sandboxSessionId: this.schema.sandboxSessions.id,
+          agentId: this.schema.sandboxSessions.agentId,
+          conversationId: this.schema.sandboxSessions.conversationId,
+          restoreFenceToken: this.schema.sandboxSessions.restoreFenceToken,
+          containerId: this.schema.sandboxSessions.containerId,
+        })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sanitizedSandboxSessionId),
+          eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+        ))
+        .for('update');
+      if (!session) {
+        return false;
+      }
+      if (
+        session.restoreFenceToken !== expectedRestoreFenceToken
+        || session.containerId !== expectedContainerId
+        ||
+        session.agentId !== conversation.agentId
+        || session.conversationId !== conversation.conversationId
+      ) {
+        return false;
+      }
+
+      const [lifecycleOperation] = await tx
+        .select({
+          sandboxSessionId:
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+        })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sanitizedSandboxSessionId,
+          ),
+          inArray(
+            this.schema.sandboxSessionLifecycleOperations.phase,
+            ['reserved', 'draining', 'executing'],
+          ),
+        ))
+        .limit(1);
+      if (lifecycleOperation) {
+        return false;
+      }
+
+      // A conversation is a single ordered harness stream. The conversation
+      // lock serializes competing admissions; reject a second open running
+      // turn even if it is bound to another session or its lease has expired.
+      // Recovery must explicitly settle or rebind the stranded turn first.
+      const [openRunningTurn] = await tx
+        .select({ turnId: this.schema.turns.id })
+        .from(this.schema.turns)
+        .where(and(
+          eq(this.schema.turns.conversationId, conversation.conversationId),
+          eq(this.schema.turns.status, 'running'),
+          isNull(this.schema.turns.completedAt),
+          sql<boolean>`${this.schema.turns.id} <> ${sanitizedTurnId}`,
+        ))
+        .limit(1);
+      if (openRunningTurn) {
+        return false;
+      }
+
+      const [turn] = await tx
+        .select({ turnId: this.schema.turns.id })
+        .from(this.schema.turns)
+        .where(and(
+          eq(this.schema.turns.id, sanitizedTurnId),
+          eq(this.schema.turns.agentId, session.agentId),
+          eq(
+            this.schema.turns.conversationId,
+            conversation.conversationId,
+          ),
+          isNull(this.schema.turns.completedAt),
+          eq(this.schema.turns.status, 'queued'),
+          eq(this.schema.turns.deliveryOwnerId, sanitizedOwnerId),
+          eq(this.schema.turns.deliveryFenceToken, fenceToken),
+          sql<boolean>`NOT EXISTS (
+            SELECT 1
+            FROM ${this.schema.pendingInterrupts}
+            LEFT JOIN ${this.schema.interruptResumeAttempts}
+              ON ${this.schema.interruptResumeAttempts.interruptId} = ${this.schema.pendingInterrupts.id}
+            WHERE ${this.schema.pendingInterrupts.turnId} = ${this.schema.turns.id}
+              AND (
+                ${this.schema.pendingInterrupts.status} IN ('pending', 'timed_out')
+                OR ${this.schema.interruptResumeAttempts.status} IN ('pending', 'in_progress', 'failed')
+              )
+          )`,
+        ))
+        .for('update');
+      if (!turn) {
+        return false;
+      }
+
+      const [lease] = await tx
+        .select({
+          leaseExpiresAt: this.schema.turnDeliveryLeases.leaseExpiresAt,
+        })
+        .from(this.schema.turnDeliveryLeases)
+        .where(and(
+          eq(this.schema.turnDeliveryLeases.turnId, sanitizedTurnId),
+          eq(this.schema.turnDeliveryLeases.ownerId, sanitizedOwnerId),
+          eq(this.schema.turnDeliveryLeases.fenceToken, fenceToken),
+          gt(this.schema.turnDeliveryLeases.leaseExpiresAt, databaseClockMs()),
+        ))
+        .for('update');
+      if (!lease) {
+        return false;
+      }
+
+      const activated = await tx
+        .update(this.schema.turns)
+        .set({
+          status: 'running',
+          sandboxSessionId: sanitizedSandboxSessionId,
+          deliveryOwnerId: sanitizedOwnerId,
+          deliveryFenceToken: fenceToken,
+        })
+        .where(and(
+          eq(this.schema.turns.id, sanitizedTurnId),
+          isNull(this.schema.turns.completedAt),
+        ))
+        .returning({ turnId: this.schema.turns.id });
+      return activated.length > 0;
+      });
+    } catch (error) {
+      if (isUniqueConstraintViolation(error, RUNNING_CONVERSATION_TURN_INDEX)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async isTurnDeliveryFenceCurrent(
     turnId: string,
-    ownerId: string,
-    checkedAt: number,
+    fence: { ownerId: string; fenceToken: number },
   ): Promise<boolean> {
     const sanitizedTurnId = sanitizeDbText(
       turnId,
-      'turnReconciliationLeases.authorize.turnId',
+      'turnDeliveryLeases.current.turnId',
     );
     const sanitizedOwnerId = sanitizeDbText(
-      ownerId,
-      'turnReconciliationLeases.authorize.ownerId',
+      fence.ownerId,
+      'turnDeliveryLeases.current.ownerId',
     );
-    const [authorized] = await this.db
+    const fenceToken = validateTurnDeliveryFenceToken(
+      fence.fenceToken,
+      'turnDeliveryLeases.current.fenceToken',
+    );
+    const [current] = await this.db
       .select({ turnId: this.schema.turns.id })
       .from(this.schema.turns)
       .where(and(
         eq(this.schema.turns.id, sanitizedTurnId),
-        eq(this.schema.turns.status, 'queued'),
         isNull(this.schema.turns.completedAt),
+        eq(this.schema.turns.deliveryOwnerId, sanitizedOwnerId),
+        eq(this.schema.turns.deliveryFenceToken, fenceToken),
+        this.deliveryAdmittedByLifecycleOperation(),
+        or(
+          isNull(this.schema.turns.sandboxSessionId),
+          sql<boolean>`EXISTS (
+            SELECT 1
+            FROM ${this.schema.sandboxSessions}
+            WHERE ${this.schema.sandboxSessions.id} = ${this.schema.turns.sandboxSessionId}
+              AND ${this.schema.sandboxSessions.status} = 'ACTIVE'
+          )`,
+        ),
         sql<boolean>`EXISTS (
           SELECT 1
-          FROM ${this.schema.turnReconciliationLeases}
-          WHERE ${this.schema.turnReconciliationLeases.turnId} = ${this.schema.turns.id}
-            AND ${this.schema.turnReconciliationLeases.ownerId} = ${sanitizedOwnerId}
-            AND ${this.schema.turnReconciliationLeases.leaseExpiresAt} > ${checkedAt}
-        )`,
-        sql<boolean>`NOT EXISTS (
-          SELECT 1
-          FROM ${this.schema.pendingInterrupts}
-          LEFT JOIN ${this.schema.interruptResumeAttempts}
-            ON ${this.schema.interruptResumeAttempts.interruptId} = ${this.schema.pendingInterrupts.id}
-          WHERE ${this.schema.pendingInterrupts.turnId} = ${this.schema.turns.id}
-            AND (
-              ${this.schema.pendingInterrupts.status} IN ('pending', 'timed_out')
-              OR ${this.schema.interruptResumeAttempts.status} IN ('pending', 'in_progress', 'failed')
-          )
+          FROM ${this.schema.turnDeliveryLeases}
+          WHERE ${this.schema.turnDeliveryLeases.turnId} = ${this.schema.turns.id}
+            AND ${this.schema.turnDeliveryLeases.ownerId} = ${sanitizedOwnerId}
+            AND ${this.schema.turnDeliveryLeases.fenceToken} = ${fenceToken}
+            AND ${this.schema.turnDeliveryLeases.leaseExpiresAt} > ${databaseClockMs()}
         )`,
       ))
       .limit(1);
-    return authorized !== undefined;
+    return current !== undefined;
   }
 
-  async releaseTurnReconciliationLease(
+  /**
+   * Report whether this exact delivery generation durably finalized the turn.
+   *
+   * Successful finalization intentionally makes `isTurnDeliveryFenceCurrent`
+   * false because the turn is no longer open. Recovery workers use this
+   * predicate to distinguish that success from ownership loss after an
+   * awaitable redispatch returns.
+   */
+  async wasTurnFinalizedByDeliveryFence(
     turnId: string,
-    ownerId: string,
+    fence: { ownerId: string; fenceToken: number },
   ): Promise<boolean> {
-    const released = await this.db
-      .delete(this.schema.turnReconciliationLeases)
+    const [finalized] = await this.db
+      .select({ turnId: this.schema.turns.id })
+      .from(this.schema.turns)
       .where(and(
         eq(
-          this.schema.turnReconciliationLeases.turnId,
-          sanitizeDbText(turnId, 'turnReconciliationLeases.release.turnId'),
+          this.schema.turns.id,
+          sanitizeDbText(
+            turnId,
+            'turnDeliveryLeases.finalized.turnId',
+          ),
+        ),
+        isNotNull(this.schema.turns.completedAt),
+        eq(
+          this.schema.turns.deliveryOwnerId,
+          sanitizeDbText(
+            fence.ownerId,
+            'turnDeliveryLeases.finalized.ownerId',
+          ),
         ),
         eq(
-          this.schema.turnReconciliationLeases.ownerId,
-          sanitizeDbText(ownerId, 'turnReconciliationLeases.release.ownerId'),
+          this.schema.turns.deliveryFenceToken,
+          validateTurnDeliveryFenceToken(
+            fence.fenceToken,
+            'turnDeliveryLeases.finalized.fenceToken',
+          ),
         ),
       ))
-      .returning({ turnId: this.schema.turnReconciliationLeases.turnId });
+      .limit(1);
+    return finalized !== undefined;
+  }
+
+  async updateTurnIfDeliveryOwned(
+    turnId: string,
+    fence: { ownerId: string; fenceToken: number },
+    updates: Partial<Omit<
+      TurnInsert,
+      'id' | 'deliveryOwnerId' | 'deliveryFenceToken'
+    >>,
+  ): Promise<TurnSelect | undefined> {
+    const sanitizedTurnId = sanitizeDbText(
+      turnId,
+      'turnDeliveryLeases.update.turnId',
+    );
+    const sanitizedOwnerId = sanitizeDbText(
+      fence.ownerId,
+      'turnDeliveryLeases.update.ownerId',
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      fence.fenceToken,
+      'turnDeliveryLeases.update.fenceToken',
+    );
+    const sanitizedUpdates = sanitizeTypedDbValue(updates, 'turns.deliveryUpdate');
+    return this.db.transaction(async (tx) => {
+      if (!await this.lockCurrentDeliveryFence(
+        tx,
+        sanitizedTurnId,
+        { ownerId: sanitizedOwnerId, fenceToken },
+        'turnDeliveryLeases.update',
+      )) {
+        return undefined;
+      }
+
+      const [updated] = await tx
+        .update(this.schema.turns)
+        .set(sanitizedUpdates)
+        .where(and(
+          eq(this.schema.turns.id, sanitizedTurnId),
+          isNull(this.schema.turns.completedAt),
+          eq(this.schema.turns.deliveryOwnerId, sanitizedOwnerId),
+          eq(this.schema.turns.deliveryFenceToken, fenceToken),
+        ))
+        .returning();
+      return updated;
+    });
+  }
+
+  async releaseTurnDeliveryLease(
+    turnId: string,
+    ownerId: string,
+    fenceToken: number,
+  ): Promise<boolean> {
+    const released = await this.db
+      .update(this.schema.turnDeliveryLeases)
+      .set({
+        leaseExpiresAt: databaseClockMs(),
+        updatedAt: databaseClockMs(),
+      })
+      .where(and(
+        eq(
+          this.schema.turnDeliveryLeases.turnId,
+          sanitizeDbText(turnId, 'turnDeliveryLeases.release.turnId'),
+        ),
+        eq(
+          this.schema.turnDeliveryLeases.ownerId,
+          sanitizeDbText(ownerId, 'turnDeliveryLeases.release.ownerId'),
+        ),
+        eq(
+          this.schema.turnDeliveryLeases.fenceToken,
+          validateTurnDeliveryFenceToken(
+            fenceToken,
+            'turnDeliveryLeases.release.fenceToken',
+          ),
+        ),
+        gt(this.schema.turnDeliveryLeases.leaseExpiresAt, databaseClockMs()),
+      ))
+      .returning({ turnId: this.schema.turnDeliveryLeases.turnId });
     return released.length > 0;
   }
 
@@ -828,15 +3140,276 @@ export class DatabaseRepository {
       outputTokens?: number;
       totalTokens?: number;
       costUsd?: number;
+      usage?: TurnUsage | null;
+    },
+    expectedFence?: {
+      ownerId: string;
+      fenceToken: number;
     },
   ): Promise<boolean> {
     const sanitizedUpdates = sanitizeTypedDbValue(updates, 'turns.finalize');
-    const updated = await this.db
-      .update(this.schema.turns)
-      .set(sanitizedUpdates)
-      .where(and(eq(this.schema.turns.id, id), isNull(this.schema.turns.completedAt)))
-      .returning({ id: this.schema.turns.id });
-    return updated.length > 0;
+    const turnId = sanitizeDbText(id, 'turns.finalize.id');
+    if (!expectedFence) {
+      return this.db.transaction(async (tx) => {
+        const updated = await tx
+          .update(this.schema.turns)
+          .set(sanitizedUpdates)
+          .where(and(
+            eq(this.schema.turns.id, turnId),
+            isNull(this.schema.turns.completedAt),
+          ))
+          .returning({ id: this.schema.turns.id });
+        if (updated.length === 0) {
+          return false;
+        }
+        await tx
+          .delete(this.schema.turnSecretEnvelopes)
+          .where(eq(this.schema.turnSecretEnvelopes.turnId, turnId));
+        return true;
+      });
+    }
+
+    const ownerId = sanitizeDbText(
+      expectedFence.ownerId,
+      'turnDeliveryLeases.finalize.ownerId',
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      expectedFence.fenceToken,
+      'turnDeliveryLeases.finalize.fenceToken',
+    );
+    return this.db.transaction(async (tx) => {
+      if (!await this.lockCurrentDeliveryFence(
+        tx,
+        turnId,
+        { ownerId, fenceToken },
+        'turnDeliveryLeases.finalize',
+      )) {
+        return false;
+      }
+
+      const updated = await tx
+        .update(this.schema.turns)
+        .set(sanitizedUpdates)
+        .where(and(
+          eq(this.schema.turns.id, turnId),
+          isNull(this.schema.turns.completedAt),
+          eq(this.schema.turns.deliveryOwnerId, ownerId),
+          eq(this.schema.turns.deliveryFenceToken, fenceToken),
+        ))
+        .returning({ id: this.schema.turns.id });
+      if (updated.length === 0) {
+        return false;
+      }
+      await tx
+        .delete(this.schema.turnSecretEnvelopes)
+        .where(eq(this.schema.turnSecretEnvelopes.turnId, turnId));
+      return true;
+    });
+  }
+
+  /**
+   * Close an exactly-owned stranded turn and durably advance its pre-reserved
+   * sandbox reset in the same transaction.
+   *
+   * Lock order is session -> lifecycle operation -> turn -> delivery lease.
+   * Once this commits, lifecycle recovery must complete the reset even if the
+   * worker crashes before it can contact the sandbox.
+   */
+  async finalizeTurnAndMarkLifecycleDraining(
+    id: string,
+    updates: {
+      sandboxSessionId?: string;
+      completedAt: number;
+      error: string | null;
+      status: Exclude<TurnStatus, 'queued' | 'running'>;
+      inputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+      costUsd?: number;
+      usage?: TurnUsage | null;
+    },
+    expectedFence: ExpectedTurnDeliveryFence,
+    lifecycleOperation: {
+      sandboxSessionId: string;
+      ownerId: string;
+      fenceToken: number;
+    },
+  ): Promise<boolean> {
+    const turnId = sanitizeDbText(id, 'turns.lifecycleFinalize.id');
+    const sanitizedUpdates = sanitizeTypedDbValue(
+      updates,
+      'turns.lifecycleFinalize',
+    );
+    const deliveryOwnerId = sanitizeDbText(
+      expectedFence.ownerId,
+      'turns.lifecycleFinalize.deliveryOwnerId',
+    );
+    const deliveryFenceToken = validateTurnDeliveryFenceToken(
+      expectedFence.fenceToken,
+      'turns.lifecycleFinalize.deliveryFenceToken',
+    );
+    const sandboxSessionId = sanitizeDbText(
+      lifecycleOperation.sandboxSessionId,
+      'turns.lifecycleFinalize.sandboxSessionId',
+    );
+    const lifecycleOwnerId = sanitizeDbText(
+      lifecycleOperation.ownerId,
+      'turns.lifecycleFinalize.lifecycleOwnerId',
+    );
+    const lifecycleFenceToken = validateTurnDeliveryFenceToken(
+      lifecycleOperation.fenceToken,
+      'turns.lifecycleFinalize.lifecycleFenceToken',
+    );
+
+    return this.db.transaction(async (tx) => {
+      const [session] = await tx
+        .select({ sandboxSessionId: this.schema.sandboxSessions.id })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sandboxSessionId),
+          eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+        ))
+        .for('update');
+      if (!session) {
+        return false;
+      }
+
+      const [operation] = await tx
+        .select({
+          sandboxSessionId:
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          leaseExpiresAt:
+            this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+        })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sandboxSessionId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.operation,
+            'reset',
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.phase,
+            'reserved',
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.ownerId,
+            lifecycleOwnerId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.fenceToken,
+            lifecycleFenceToken,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.allowedTurnId,
+            turnId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.allowedDeliveryOwnerId,
+            deliveryOwnerId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.allowedDeliveryFenceToken,
+            deliveryFenceToken,
+          ),
+        ))
+        .for('update');
+      if (!operation) {
+        return false;
+      }
+
+      if (!await this.lockCurrentDeliveryFence(
+        tx,
+        turnId,
+        {
+          ownerId: deliveryOwnerId,
+          fenceToken: deliveryFenceToken,
+        },
+        'turns.lifecycleFinalize.deliveryFence',
+      )) {
+        return false;
+      }
+
+      const [clock] = await tx
+        .select({ nowMs: databaseClockMs() })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(eq(
+          this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          sandboxSessionId,
+        ))
+        .limit(1);
+      if (!clock) {
+        throw new Error('Database clock query returned no row');
+      }
+      const nowMs = parseDatabaseClockMs(clock.nowMs);
+      if (operation.leaseExpiresAt <= nowMs) {
+        return false;
+      }
+
+      const [updatedTurn] = await tx
+        .update(this.schema.turns)
+        .set(sanitizedUpdates)
+        .where(and(
+          eq(this.schema.turns.id, turnId),
+          eq(this.schema.turns.sandboxSessionId, sandboxSessionId),
+          isNull(this.schema.turns.completedAt),
+          eq(this.schema.turns.deliveryOwnerId, deliveryOwnerId),
+          eq(this.schema.turns.deliveryFenceToken, deliveryFenceToken),
+        ))
+        .returning({ id: this.schema.turns.id });
+      if (!updatedTurn) {
+        return false;
+      }
+      await tx
+        .delete(this.schema.turnSecretEnvelopes)
+        .where(eq(this.schema.turnSecretEnvelopes.turnId, turnId));
+
+      const [draining] = await tx
+        .update(this.schema.sandboxSessionLifecycleOperations)
+        .set({
+          phase: 'draining',
+          updatedAt: nowMs,
+        })
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sandboxSessionId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.operation,
+            'reset',
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.phase,
+            'reserved',
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.ownerId,
+            lifecycleOwnerId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.fenceToken,
+            lifecycleFenceToken,
+          ),
+          gt(
+            this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+            nowMs,
+          ),
+        ))
+        .returning({
+          sandboxSessionId:
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+        });
+      if (!draining) {
+        throw new Error(
+          `Lifecycle reset ${sandboxSessionId} lost ownership during turn finalization`,
+        );
+      }
+      return true;
+    });
   }
 
   async getTurn(id: string): Promise<TurnSelect | undefined> {
@@ -991,6 +3564,219 @@ export class DatabaseRepository {
   }
 
   /**
+   * Persist repeatable delivery frames only while their owner/token is live.
+   *
+   * Unlike the startup-publication primitive below, this intentionally does
+   * not deduplicate provenance: tool/custom/text deltas may legitimately
+   * repeat. The event head and delivery fence are locked in the same
+   * transaction as frame insertion.
+   */
+  async saveFencedEventBatch(
+    frames: EventFrameInsert[],
+    expectedDeliveryFence: ExpectedTurnDeliveryFence,
+    expectedSandboxDelivery?: ExpectedSandboxCallbackGeneration,
+  ): Promise<number[]> {
+    if (frames.length === 0) {
+      return [];
+    }
+    const agentId = eventBatchAgentId(frames);
+    const turnId = eventBatchTurnId(frames);
+    try {
+      return await this.db.transaction(async (tx) => {
+        const lockTimestamp = Date.now();
+        await tx
+          .insert(this.schema.agentEventHeads)
+          .values({ agentId, committedSeq: 0, updatedAt: lockTimestamp })
+          .onConflictDoNothing();
+        const [lockedHead] = await tx
+          .select({ agentId: this.schema.agentEventHeads.agentId })
+          .from(this.schema.agentEventHeads)
+          .where(eq(this.schema.agentEventHeads.agentId, agentId))
+          .for('update');
+        if (!lockedHead) {
+          throw new Error(`Cannot lock canonical event head for agent ${agentId}`);
+        }
+        const ownsDelivery = expectedSandboxDelivery
+          ? await this.lockExactSandboxCallbackDelivery(
+            tx,
+            {
+              turnId,
+              sandboxSessionId: expectedSandboxDelivery.sandboxSessionId,
+              agentId,
+              expectedDeliveryFence,
+              expectedActiveGeneration:
+                expectedSandboxDelivery.expectedActiveGeneration,
+            },
+            'eventStore.sandboxCallback',
+          )
+          : await this.lockCurrentDeliveryFence(
+            tx,
+            turnId,
+            expectedDeliveryFence,
+            'eventStore.deliveryFence',
+          );
+        if (!ownsDelivery) {
+          // Roll back the event-head bootstrap as well as the frame insert.
+          // Returning from this transaction would leave a durable mutation
+          // for a rejected callback when this agent has no prior events.
+          if (expectedSandboxDelivery) {
+            throw STALE_SANDBOX_CALLBACK_DELIVERY;
+          }
+          return [];
+        }
+
+        const now = Date.now();
+        const rows = await tx
+          .insert(this.schema.eventStore)
+          .values(frames.map((frame) => ({
+            type: sanitizeDbText(frame.type, 'eventStore.type'),
+            agentId,
+            payload: sanitizeDbText(frame.payload, 'eventStore.payload'),
+            createdAt: now,
+            turnId,
+            conversationId: frame.conversationId ?? null,
+            channel: frame.channel ?? 'system',
+            sourceType: sanitizeOptionalDbText(frame.sourceType ?? null, 'eventStore.sourceType'),
+            sourcePayload: sanitizeOptionalDbText(frame.sourcePayload ?? null, 'eventStore.sourcePayload'),
+          })))
+          .returning({ seq: this.schema.eventStore.seq });
+        const committedSeq = rows.at(-1)?.seq;
+        if (committedSeq == null) {
+          throw new Error(`Fenced canonical event insert for agent ${agentId} returned no sequence`);
+        }
+        await tx
+          .update(this.schema.agentEventHeads)
+          .set({ committedSeq, updatedAt: Date.now() })
+          .where(eq(this.schema.agentEventHeads.agentId, agentId));
+        return rows.map((row) => row.seq);
+      });
+    } catch (err) {
+      if (err === STALE_SANDBOX_CALLBACK_DELIVERY) {
+        return [];
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Persist one recovery-only startup publication exactly once.
+   *
+   * This deliberately does not change saveEventBatch semantics: arbitrary
+   * custom and tool events remain repeatable even when their provenance is
+   * identical.
+   */
+  async saveRecoveryEventBatch(
+    frames: EventFrameInsert[],
+    publication: {
+      turnId: string;
+      sourceType: 'user.message' | 'turn.started';
+      ownerId: string;
+      fenceToken: number;
+    },
+  ): Promise<number[]> {
+    if (frames.length === 0) {
+      throw new Error('Recovery startup publication requires at least one frame');
+    }
+    const turnId = sanitizeDbText(publication.turnId, 'eventStore.recovery.turnId');
+    const { sourceType } = publication;
+    if (sourceType !== 'user.message' && sourceType !== 'turn.started') {
+      throw new Error(
+        'Recovery startup publication only supports user.message and turn.started',
+      );
+    }
+    const ownerId = sanitizeDbText(
+      publication.ownerId,
+      'eventStore.recovery.ownerId',
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      publication.fenceToken,
+      'eventStore.recovery.fenceToken',
+    );
+    if (frames.some((frame) => frame.turnId !== turnId)) {
+      throw new Error('Recovery startup publication frames must belong to its turn');
+    }
+    if (frames[0]!.sourceType !== sourceType) {
+      throw new Error(
+        `Recovery startup publication must begin with ${sourceType} provenance`,
+      );
+    }
+    if (frames.slice(1).some((frame) => (
+      frame.sourceType != null && frame.sourceType !== sourceType
+    ))) {
+      throw new Error('Recovery startup publication contains conflicting provenance');
+    }
+
+    const agentId = eventBatchAgentId(frames);
+    return this.db.transaction(async (tx) => {
+      const lockTimestamp = Date.now();
+      await tx
+        .insert(this.schema.agentEventHeads)
+        .values({ agentId, committedSeq: 0, updatedAt: lockTimestamp })
+        .onConflictDoNothing();
+      const [lockedHead] = await tx
+        .select({ agentId: this.schema.agentEventHeads.agentId })
+        .from(this.schema.agentEventHeads)
+        .where(eq(this.schema.agentEventHeads.agentId, agentId))
+        .for('update');
+      if (!lockedHead) {
+        throw new Error(`Cannot lock canonical event head for agent ${agentId}`);
+      }
+
+      if (!await this.lockCurrentDeliveryFence(
+        tx,
+        turnId,
+        { ownerId, fenceToken },
+        'eventStore.recovery.deliveryFence',
+      )) {
+        return [];
+      }
+
+      const [existing] = await tx
+        .select({ seq: this.schema.eventStore.seq })
+        .from(this.schema.eventStore)
+        .where(and(
+          eq(this.schema.eventStore.turnId, turnId),
+          eq(this.schema.eventStore.sourceType, sourceType),
+        ))
+        .limit(1);
+      if (existing) {
+        return [];
+      }
+
+      const now = Date.now();
+      const rows = await tx
+        .insert(this.schema.eventStore)
+        .values(frames.map((frame) => ({
+          type: sanitizeDbText(frame.type, 'eventStore.type'),
+          agentId,
+          payload: sanitizeDbText(frame.payload, 'eventStore.payload'),
+          createdAt: now,
+          turnId,
+          conversationId: frame.conversationId ?? null,
+          channel: frame.channel ?? 'system',
+          sourceType: sanitizeOptionalDbText(
+            frame.sourceType ?? null,
+            'eventStore.sourceType',
+          ),
+          sourcePayload: sanitizeOptionalDbText(
+            frame.sourcePayload ?? null,
+            'eventStore.sourcePayload',
+          ),
+        })))
+        .returning({ seq: this.schema.eventStore.seq });
+      const committedSeq = rows.at(-1)?.seq;
+      if (committedSeq == null) {
+        throw new Error(`Canonical recovery insert for agent ${agentId} returned no sequence`);
+      }
+      await tx
+        .update(this.schema.agentEventHeads)
+        .set({ committedSeq, updatedAt: Date.now() })
+        .where(eq(this.schema.agentEventHeads.agentId, agentId));
+      return rows.map((row) => row.seq);
+    });
+  }
+
+  /**
    * Atomically persist a canonical message frame and its publication
    * watermark. A frame insert failure leaves the row pending for startup
    * recovery; the watermark can never get ahead of event_store.
@@ -998,6 +3784,7 @@ export class DatabaseRepository {
   async saveMessageEventBatch(
     frames: EventFrameInsert[],
     publication: { messageId: string; targetRevision: number },
+    expectedDeliveryFence?: ExpectedTurnDeliveryFence,
   ): Promise<number[]> {
     if (frames.length === 0) {
       throw new Error('Canonical message publication requires at least one frame');
@@ -1017,6 +3804,28 @@ export class DatabaseRepository {
         .for('update');
       if (!lockedHead) {
         throw new Error(`Cannot lock canonical event head for agent ${agentId}`);
+      }
+      if (expectedDeliveryFence) {
+        const [messageIdentity] = await tx
+          .select({ turnId: this.schema.messages.turnId })
+          .from(this.schema.messages)
+          .where(eq(this.schema.messages.id, publication.messageId));
+        if (!messageIdentity) {
+          throw new Error(
+            `Cannot publish canonical frame for missing message ${publication.messageId}`,
+          );
+        }
+        if (
+          !messageIdentity.turnId
+          || !await this.lockCurrentDeliveryFence(
+            tx,
+            messageIdentity.turnId,
+            expectedDeliveryFence,
+            'eventStore.message.deliveryFence',
+          )
+        ) {
+          return [];
+        }
       }
       const [message] = await tx
         .select({
@@ -1460,14 +4269,168 @@ export class DatabaseRepository {
     return Boolean(row);
   }
 
-  async getAgentVersions(agentId: string): Promise<VersionSelect[]> {
-    return this.db.query.agentVersions.findMany({
-      where: eq(this.schema.agentVersions.agentId, agentId),
-      orderBy: (v, { desc }) => [desc(v.version)],
+  // ── Pending Interrupts (Durable HITL) ──────────────────
+
+  /**
+   * Atomically install a callback-created approval interrupt while the exact
+   * sandbox delivery still owns the turn. When replacing an in-process
+   * waiter, its durable predecessor is superseded in the same transaction so
+   * callers never observe a resolved predecessor without its replacement.
+   */
+  async installPendingInterruptIfSandboxCallbackCurrent(
+    data: InterruptInsert,
+    authority: ExpectedSandboxCallbackDelivery,
+    supersededInterruptId?: string,
+  ): Promise<InterruptRow | undefined> {
+    const sanitizedData = sanitizeTypedDbValue(
+      data,
+      'pendingInterrupts.callbackInstall',
+    );
+    const expectedTurnId = sanitizeDbText(
+      authority.turnId,
+      'pendingInterrupts.callbackInstall.authority.turnId',
+    );
+    const expectedSandboxSessionId = sanitizeDbText(
+      authority.sandboxSessionId,
+      'pendingInterrupts.callbackInstall.authority.sandboxSessionId',
+    );
+    const expectedAgentId = sanitizeDbText(
+      authority.agentId,
+      'pendingInterrupts.callbackInstall.authority.agentId',
+    );
+    if (
+      sanitizedData.turnId !== expectedTurnId
+      || sanitizedData.sandboxSessionId !== expectedSandboxSessionId
+      || sanitizedData.agentId !== expectedAgentId
+    ) {
+      return undefined;
+    }
+    const sanitizedSupersededInterruptId = supersededInterruptId === undefined
+      ? undefined
+      : sanitizeDbText(
+          supersededInterruptId,
+          'pendingInterrupts.callbackInstall.supersededInterruptId',
+        );
+    if (sanitizedSupersededInterruptId === sanitizedData.id) {
+      throw new Error(
+        'A pending interrupt replacement must use a new immutable id',
+      );
+    }
+
+    return this.db.transaction(async (tx) => {
+      const delivery = await this.lockExactSandboxCallbackDelivery(
+        tx,
+        authority,
+        'pendingInterrupts.callbackInstall',
+      );
+      if (!delivery) {
+        return undefined;
+      }
+
+      const actionableInterrupts = await tx
+        .select({ id: this.schema.pendingInterrupts.id })
+        .from(this.schema.pendingInterrupts)
+        .where(and(
+          eq(this.schema.pendingInterrupts.turnId, expectedTurnId),
+          inArray(
+            this.schema.pendingInterrupts.status,
+            ['pending', 'timed_out'],
+          ),
+        ))
+        .for('update');
+      if (sanitizedSupersededInterruptId === undefined) {
+        if (actionableInterrupts.length > 0) {
+          return undefined;
+        }
+      } else if (
+        actionableInterrupts.length !== 1
+        || actionableInterrupts[0]?.id !== sanitizedSupersededInterruptId
+      ) {
+        return undefined;
+      }
+
+      if (sanitizedSupersededInterruptId !== undefined) {
+        const [superseded] = await tx
+          .update(this.schema.pendingInterrupts)
+          .set({
+            status: 'resolved',
+            resolvedAt: databaseClockMs(),
+            resolvedAction: 'reject',
+            resolvedData: 'Superseded by new interrupt',
+          })
+          .where(and(
+            eq(
+              this.schema.pendingInterrupts.id,
+              sanitizedSupersededInterruptId,
+            ),
+            eq(this.schema.pendingInterrupts.turnId, expectedTurnId),
+            eq(this.schema.pendingInterrupts.agentId, expectedAgentId),
+            inArray(
+              this.schema.pendingInterrupts.status,
+              ['pending', 'timed_out'],
+            ),
+          ))
+          .returning({ id: this.schema.pendingInterrupts.id });
+        if (!superseded) {
+          return undefined;
+        }
+      }
+
+      const [installed] = await tx
+        .insert(this.schema.pendingInterrupts)
+        .values({
+          ...sanitizedData,
+          status: 'pending',
+          resolvedAt: null,
+          resolvedAction: null,
+          resolvedData: null,
+        })
+        .returning();
+      if (!installed) {
+        throw new Error(
+          'Expected pending interrupt installation to return a row',
+        );
+      }
+      return installed;
     });
   }
 
-  // ── Pending Interrupts (Durable HITL) ──────────────────
+  /**
+   * Compensate a callback installation whose canonical requested event could
+   * not be persisted. The immutable identity and pending-state comparison
+   * prevent delayed cleanup from deleting a later replacement.
+   */
+  async deletePendingInterruptInstallation(
+    id: string,
+    turnId: string,
+    toolCallId: string,
+  ): Promise<boolean> {
+    const deleted = await this.db
+      .delete(this.schema.pendingInterrupts)
+      .where(and(
+        eq(
+          this.schema.pendingInterrupts.id,
+          sanitizeDbText(id, 'pendingInterrupts.callbackInstall.delete.id'),
+        ),
+        eq(
+          this.schema.pendingInterrupts.turnId,
+          sanitizeDbText(
+            turnId,
+            'pendingInterrupts.callbackInstall.delete.turnId',
+          ),
+        ),
+        eq(
+          this.schema.pendingInterrupts.toolCallId,
+          sanitizeDbText(
+            toolCallId,
+            'pendingInterrupts.callbackInstall.delete.toolCallId',
+          ),
+        ),
+        eq(this.schema.pendingInterrupts.status, 'pending'),
+      ))
+      .returning({ id: this.schema.pendingInterrupts.id });
+    return deleted.length > 0;
+  }
 
   async savePendingInterrupt(data: InterruptInsert): Promise<InterruptRow> {
     const sanitizedData = sanitizeTypedDbValue(data, 'pendingInterrupts.upsert');
@@ -1499,7 +4462,7 @@ export class DatabaseRepository {
     return row;
   }
 
-  async getPendingInterrupt(id: string): Promise<InterruptRow | undefined> {
+  async getInterruptById(id: string): Promise<InterruptRow | undefined> {
     return this.db.query.pendingInterrupts.findFirst({
       where: eq(this.schema.pendingInterrupts.id, id),
     });
@@ -1711,176 +4674,567 @@ export class DatabaseRepository {
     return updated.length;
   }
 
-  async getResolvedInterruptsForSandboxSession(sandboxSessionId: string): Promise<InterruptRow[]> {
-    return this.db.query.pendingInterrupts.findMany({
-      where: and(
-        eq(this.schema.pendingInterrupts.sandboxSessionId, sandboxSessionId),
-        eq(this.schema.pendingInterrupts.status, 'resolved'),
-      ),
-    });
-  }
-
   async getInterruptResumeAttemptForInterrupt(interruptId: string): Promise<InterruptResumeAttemptRow | undefined> {
     return this.db.query.interruptResumeAttempts.findFirst({
       where: eq(this.schema.interruptResumeAttempts.interruptId, interruptId),
     });
   }
 
-  async getRecoverableInterruptResumeAttempts(
-    staleBefore: number,
-    limit = 50,
-  ): Promise<InterruptResumeAttemptRow[]> {
-    return this.db.query.interruptResumeAttempts.findMany({
-      where: or(
-        eq(this.schema.interruptResumeAttempts.status, 'pending'),
-        and(
-          eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
-          lte(this.schema.interruptResumeAttempts.updatedAt, staleBefore),
-        ),
-      ),
-      orderBy: (attempts) => [asc(attempts.updatedAt), asc(attempts.id)],
-      limit: Math.max(1, Math.min(Math.trunc(limit), 500)),
+  async claimInterruptResumeDelivery(input: {
+    attemptId: string;
+    sandboxSessionId: string;
+    ownerId: string;
+    leaseDurationMs: number;
+  }): Promise<{
+    attempt: InterruptResumeAttemptRow;
+    lease: TurnDeliveryLeaseRow;
+  } | undefined> {
+    const attemptId = sanitizeDbText(
+      input.attemptId,
+      'interruptResumeDelivery.claim.attemptId',
+    );
+    const sandboxSessionId = sanitizeDbText(
+      input.sandboxSessionId,
+      'interruptResumeDelivery.claim.sandboxSessionId',
+    );
+    const ownerId = sanitizeDbText(
+      input.ownerId,
+      'interruptResumeDelivery.claim.ownerId',
+    );
+    const leaseDurationMs = validateLeaseDurationMs(
+      input.leaseDurationMs,
+      'interruptResumeDelivery.claim.leaseDurationMs',
+    );
+
+    return this.db.transaction(async (tx) => {
+      const [attemptPreview] = await tx
+        .select({
+          turnId: this.schema.interruptResumeAttempts.turnId,
+          interruptId: this.schema.interruptResumeAttempts.interruptId,
+        })
+        .from(this.schema.interruptResumeAttempts)
+        .where(eq(this.schema.interruptResumeAttempts.id, attemptId))
+        .limit(1);
+      const [sessionPreview] = await tx
+        .select({
+          conversationId: this.schema.sandboxSessions.conversationId,
+        })
+        .from(this.schema.sandboxSessions)
+        .where(eq(this.schema.sandboxSessions.id, sandboxSessionId))
+        .limit(1);
+      if (!attemptPreview || !sessionPreview) {
+        return undefined;
+      }
+
+      // Match ordinary delivery admission's global lock prefix so a
+      // continuation cannot deadlock or race a fresh turn on the same ordered
+      // conversation stream.
+      const [conversation] = await tx
+        .select({
+          id: this.schema.conversations.id,
+          agentId: this.schema.conversations.agentId,
+        })
+        .from(this.schema.conversations)
+        .where(eq(
+          this.schema.conversations.id,
+          sessionPreview.conversationId,
+        ))
+        .for('update');
+      if (!conversation) {
+        return undefined;
+      }
+
+      const [session] = await tx
+        .select({
+          id: this.schema.sandboxSessions.id,
+          conversationId: this.schema.sandboxSessions.conversationId,
+          agentId: this.schema.sandboxSessions.agentId,
+        })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sandboxSessionId),
+          eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+          eq(
+            this.schema.sandboxSessions.conversationId,
+            conversation.id,
+          ),
+          eq(this.schema.sandboxSessions.agentId, conversation.agentId),
+        ))
+        .for('update');
+      if (!session) {
+        return undefined;
+      }
+
+      const [lifecycleOperation] = await tx
+        .select({
+          sandboxSessionId:
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+        })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sandboxSessionId,
+          ),
+          inArray(
+            this.schema.sandboxSessionLifecycleOperations.phase,
+            ['reserved', 'draining', 'executing'],
+          ),
+        ))
+        .limit(1);
+      if (lifecycleOperation) {
+        return undefined;
+      }
+
+      const [turn] = await tx
+        .select({
+          id: this.schema.turns.id,
+          sandboxSessionId: this.schema.turns.sandboxSessionId,
+          agentId: this.schema.turns.agentId,
+          conversationId: this.schema.turns.conversationId,
+          deliveryOwnerId: this.schema.turns.deliveryOwnerId,
+          deliveryFenceToken: this.schema.turns.deliveryFenceToken,
+        })
+        .from(this.schema.turns)
+        .where(and(
+          eq(this.schema.turns.id, attemptPreview.turnId),
+          eq(this.schema.turns.status, 'running'),
+          isNull(this.schema.turns.completedAt),
+          eq(this.schema.turns.agentId, session.agentId),
+          eq(this.schema.turns.conversationId, session.conversationId),
+        ))
+        .for('update');
+      if (!turn) {
+        return undefined;
+      }
+
+      const [otherRunningTurn] = await tx
+        .select({ id: this.schema.turns.id })
+        .from(this.schema.turns)
+        .where(and(
+          eq(this.schema.turns.conversationId, session.conversationId),
+          eq(this.schema.turns.status, 'running'),
+          isNull(this.schema.turns.completedAt),
+          sql<boolean>`${this.schema.turns.id} <> ${turn.id}`,
+        ))
+        .limit(1);
+      if (otherRunningTurn) {
+        return undefined;
+      }
+
+      const [existingLease] = await tx
+        .select()
+        .from(this.schema.turnDeliveryLeases)
+        .where(eq(this.schema.turnDeliveryLeases.turnId, turn.id))
+        .for('update');
+      const [interrupt] = await tx
+        .select({
+          id: this.schema.pendingInterrupts.id,
+        })
+        .from(this.schema.pendingInterrupts)
+        .where(and(
+          eq(
+            this.schema.pendingInterrupts.id,
+            attemptPreview.interruptId,
+          ),
+          eq(this.schema.pendingInterrupts.turnId, turn.id),
+          eq(this.schema.pendingInterrupts.agentId, session.agentId),
+          eq(this.schema.pendingInterrupts.status, 'resolved'),
+        ))
+        .for('update');
+      if (!interrupt) {
+        return undefined;
+      }
+      const [attempt] = await tx
+        .select()
+        .from(this.schema.interruptResumeAttempts)
+        .where(and(
+          eq(this.schema.interruptResumeAttempts.id, attemptId),
+          eq(this.schema.interruptResumeAttempts.interruptId, interrupt.id),
+          eq(this.schema.interruptResumeAttempts.turnId, turn.id),
+          inArray(
+            this.schema.interruptResumeAttempts.status,
+            ['pending', 'in_progress'],
+          ),
+        ))
+        .for('update');
+      if (!attempt) {
+        return undefined;
+      }
+
+      const [clock] = await tx
+        .select({ nowMs: databaseClockMs() })
+        .from(this.schema.sandboxSessions)
+        .where(eq(this.schema.sandboxSessions.id, sandboxSessionId))
+        .limit(1);
+      if (!clock) {
+        throw new Error('Database clock query returned no row');
+      }
+      const nowMs = parseDatabaseClockMs(clock.nowMs);
+      const leaseIsCurrent = existingLease !== undefined
+        && existingLease.ownerId === turn.deliveryOwnerId
+        && existingLease.fenceToken === turn.deliveryFenceToken
+        && existingLease.leaseExpiresAt > nowMs;
+      if (leaseIsCurrent) {
+        if (
+          attempt.status !== 'in_progress'
+          || existingLease.ownerId !== ownerId
+          || turn.sandboxSessionId !== sandboxSessionId
+          || attempt.sandboxSessionId !== sandboxSessionId
+        ) {
+          return undefined;
+        }
+        const [renewedLease] = await tx
+          .update(this.schema.turnDeliveryLeases)
+          .set({
+            leaseExpiresAt: nowMs + leaseDurationMs,
+            updatedAt: nowMs,
+          })
+          .where(and(
+            eq(this.schema.turnDeliveryLeases.turnId, turn.id),
+            eq(this.schema.turnDeliveryLeases.ownerId, ownerId),
+            eq(
+              this.schema.turnDeliveryLeases.fenceToken,
+              existingLease.fenceToken,
+            ),
+          ))
+          .returning();
+        return renewedLease ? { attempt, lease: renewedLease } : undefined;
+      }
+
+      const nextFenceToken = (existingLease?.fenceToken ?? 0) + 1;
+      const [lease] = await tx
+        .insert(this.schema.turnDeliveryLeases)
+        .values({
+          turnId: turn.id,
+          ownerId,
+          fenceToken: nextFenceToken,
+          leaseExpiresAt: nowMs + leaseDurationMs,
+          updatedAt: nowMs,
+        })
+        .onConflictDoUpdate({
+          target: this.schema.turnDeliveryLeases.turnId,
+          set: {
+            ownerId,
+            fenceToken: nextFenceToken,
+            leaseExpiresAt: nowMs + leaseDurationMs,
+            updatedAt: nowMs,
+          },
+        })
+        .returning();
+      if (!lease) {
+        throw new Error(
+          `Expected interrupt resume delivery lease for turn ${turn.id}`,
+        );
+      }
+
+      await tx
+        .update(this.schema.turns)
+        .set({
+          sandboxSessionId,
+          deliveryOwnerId: ownerId,
+          deliveryFenceToken: nextFenceToken,
+        })
+        .where(eq(this.schema.turns.id, turn.id));
+      const [claimedAttempt] = await tx
+        .update(this.schema.interruptResumeAttempts)
+        .set({
+          sandboxSessionId,
+          status: 'in_progress',
+          attempts: sql`${this.schema.interruptResumeAttempts.attempts} + 1`,
+          lastError: null,
+          completedAt: null,
+          updatedAt: nowMs,
+        })
+        .where(eq(this.schema.interruptResumeAttempts.id, attempt.id))
+        .returning();
+      if (!claimedAttempt) {
+        throw new Error(
+          `Expected interrupt resume attempt ${attempt.id} claim to return a row`,
+        );
+      }
+      return { attempt: claimedAttempt, lease };
     });
   }
 
-  async claimInterruptResumeAttempt(input: {
-    id: string;
-    expectedUpdatedAt: number;
-    staleBefore: number;
-    claimedAt: number;
-  }): Promise<InterruptResumeAttemptRow | undefined> {
-    const id = sanitizeDbText(input.id, 'interruptResumeAttempts.claim.id');
-    const [claimed] = await this.db
-      .update(this.schema.interruptResumeAttempts)
-      .set({
-        status: 'in_progress',
-        attempts: sql`${this.schema.interruptResumeAttempts.attempts} + 1`,
-        updatedAt: input.claimedAt,
-        lastError: null,
-        completedAt: null,
-      })
-      .where(and(
-        eq(this.schema.interruptResumeAttempts.id, id),
-        eq(this.schema.interruptResumeAttempts.updatedAt, input.expectedUpdatedAt),
-        or(
-          eq(this.schema.interruptResumeAttempts.status, 'pending'),
-          and(
-            eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
-            lte(this.schema.interruptResumeAttempts.updatedAt, input.staleBefore),
-          ),
-        ),
-      ))
-      .returning();
-    return claimed;
+  async completeInterruptResumeDelivery(
+    attemptId: string,
+    fence: ExpectedTurnDeliveryFence,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    return this.finishInterruptResumeDelivery(
+      attemptId,
+      fence,
+      'completed',
+    );
   }
 
-  async renewInterruptResumeAttemptLease(
-    id: string,
-    expectedUpdatedAt: number,
-    renewedAt: number,
+  async failInterruptResumeDelivery(
+    attemptId: string,
+    fence: ExpectedTurnDeliveryFence,
+    error: string,
   ): Promise<InterruptResumeAttemptRow | undefined> {
-    return this.updateOwnedInterruptResumeAttempt(
-      id,
-      expectedUpdatedAt,
-      { updatedAt: renewedAt },
+    return this.finishInterruptResumeDelivery(
+      attemptId,
+      fence,
+      'failed',
+      sanitizeDbText(error, 'interruptResumeDelivery.failure.error'),
     );
+  }
+
+  private async finishInterruptResumeDelivery(
+    attemptIdInput: string,
+    fence: ExpectedTurnDeliveryFence,
+    status: 'completed' | 'failed',
+    error?: string,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    const attemptId = sanitizeDbText(
+      attemptIdInput,
+      'interruptResumeDelivery.finish.attemptId',
+    );
+    const ownerId = sanitizeDbText(
+      fence.ownerId,
+      'interruptResumeDelivery.finish.ownerId',
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      fence.fenceToken,
+      'interruptResumeDelivery.finish.fenceToken',
+    );
+    return this.db.transaction(async (tx) => {
+      const [preview] = await tx
+        .select({
+          turnId: this.schema.interruptResumeAttempts.turnId,
+          sandboxSessionId:
+            this.schema.interruptResumeAttempts.sandboxSessionId,
+        })
+        .from(this.schema.interruptResumeAttempts)
+        .where(eq(this.schema.interruptResumeAttempts.id, attemptId))
+        .limit(1);
+      if (!preview?.sandboxSessionId) {
+        return undefined;
+      }
+      const [session] = await tx
+        .select({ id: this.schema.sandboxSessions.id })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(
+            this.schema.sandboxSessions.id,
+            preview.sandboxSessionId,
+          ),
+          eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+        ))
+        .for('update');
+      if (!session) {
+        return undefined;
+      }
+      const [turn] = await tx
+        .select({
+          id: this.schema.turns.id,
+          sandboxSessionId: this.schema.turns.sandboxSessionId,
+        })
+        .from(this.schema.turns)
+        .where(and(
+          eq(this.schema.turns.id, preview.turnId),
+          eq(
+            this.schema.turns.sandboxSessionId,
+            preview.sandboxSessionId,
+          ),
+          eq(this.schema.turns.deliveryOwnerId, ownerId),
+          eq(this.schema.turns.deliveryFenceToken, fenceToken),
+        ))
+        .for('update');
+      if (!turn) {
+        return undefined;
+      }
+      const [lease] = await tx
+        .select({ turnId: this.schema.turnDeliveryLeases.turnId })
+        .from(this.schema.turnDeliveryLeases)
+        .where(and(
+          eq(this.schema.turnDeliveryLeases.turnId, turn.id),
+          eq(this.schema.turnDeliveryLeases.ownerId, ownerId),
+          eq(this.schema.turnDeliveryLeases.fenceToken, fenceToken),
+          gt(this.schema.turnDeliveryLeases.leaseExpiresAt, databaseClockMs()),
+        ))
+        .for('update');
+      if (!lease) {
+        return undefined;
+      }
+      const [attempt] = await tx
+        .select({ id: this.schema.interruptResumeAttempts.id })
+        .from(this.schema.interruptResumeAttempts)
+        .where(and(
+          eq(this.schema.interruptResumeAttempts.id, attemptId),
+          eq(this.schema.interruptResumeAttempts.turnId, turn.id),
+          eq(
+            this.schema.interruptResumeAttempts.sandboxSessionId,
+            preview.sandboxSessionId,
+          ),
+          eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
+        ))
+        .for('update');
+      if (!attempt) {
+        return undefined;
+      }
+      const nowMs = databaseClockMs();
+      const [finished] = await tx
+        .update(this.schema.interruptResumeAttempts)
+        .set({
+          status,
+          updatedAt: nowMs,
+          completedAt: status === 'completed' ? nowMs : null,
+          lastError: status === 'failed' ? error ?? 'Resume failed' : null,
+        })
+        .where(eq(this.schema.interruptResumeAttempts.id, attemptId))
+        .returning();
+      return finished;
+    });
+  }
+
+  async completeTerminalInterruptResumeAttempt(
+    attemptId: string,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    const sanitizedId = sanitizeDbText(
+      attemptId,
+      'interruptResumeAttempts.terminalRepair.id',
+    );
+    return this.db.transaction(async (tx) => {
+      const [preview] = await tx
+        .select({
+          id: this.schema.interruptResumeAttempts.id,
+          turnId: this.schema.interruptResumeAttempts.turnId,
+        })
+        .from(this.schema.interruptResumeAttempts)
+        .where(and(
+          eq(this.schema.interruptResumeAttempts.id, sanitizedId),
+          inArray(
+            this.schema.interruptResumeAttempts.status,
+            ['pending', 'in_progress'],
+          ),
+        ))
+        .limit(1);
+      if (!preview) {
+        return undefined;
+      }
+      const [terminalTurn] = await tx
+        .select({ id: this.schema.turns.id })
+        .from(this.schema.turns)
+        .where(and(
+          eq(this.schema.turns.id, preview.turnId),
+          isNotNull(this.schema.turns.completedAt),
+          inArray(
+            this.schema.turns.status,
+            ['completed', 'error', 'cancelled'],
+          ),
+        ))
+        .for('update');
+      if (!terminalTurn) {
+        return undefined;
+      }
+      const [attempt] = await tx
+        .select({ id: this.schema.interruptResumeAttempts.id })
+        .from(this.schema.interruptResumeAttempts)
+        .where(and(
+          eq(this.schema.interruptResumeAttempts.id, sanitizedId),
+          eq(this.schema.interruptResumeAttempts.turnId, terminalTurn.id),
+          inArray(
+            this.schema.interruptResumeAttempts.status,
+            ['pending', 'in_progress'],
+          ),
+        ))
+        .for('update');
+      if (!attempt) {
+        return undefined;
+      }
+      const nowMs = databaseClockMs();
+      const [completed] = await tx
+        .update(this.schema.interruptResumeAttempts)
+        .set({
+          status: 'completed',
+          updatedAt: nowMs,
+          completedAt: nowMs,
+          lastError: null,
+        })
+        .where(eq(this.schema.interruptResumeAttempts.id, sanitizedId))
+        .returning();
+      return completed;
+    });
+  }
+
+  async failUnclaimedInterruptResumeAttempt(
+    attemptId: string,
+    error: string,
+  ): Promise<InterruptResumeAttemptRow | undefined> {
+    const sanitizedId = sanitizeDbText(
+      attemptId,
+      'interruptResumeAttempts.unclaimedFailure.id',
+    );
+    const [failed] = await this.db
+      .update(this.schema.interruptResumeAttempts)
+      .set({
+        status: 'failed',
+        updatedAt: databaseClockMs(),
+        completedAt: null,
+        lastError: sanitizeDbText(
+          error,
+          'interruptResumeAttempts.unclaimedFailure.error',
+        ),
+      })
+      .where(and(
+        eq(this.schema.interruptResumeAttempts.id, sanitizedId),
+        eq(this.schema.interruptResumeAttempts.status, 'pending'),
+      ))
+      .returning();
+    return failed;
+  }
+
+  async getRecoverableInterruptResumeAttempts(
+    limit = 50,
+  ): Promise<InterruptResumeAttemptRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.interruptResumeAttempts)
+      .where(or(
+        eq(this.schema.interruptResumeAttempts.status, 'pending'),
+        and(
+          eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
+          sql<boolean>`NOT EXISTS (
+            SELECT 1
+            FROM ${this.schema.turnDeliveryLeases}
+            INNER JOIN ${this.schema.turns}
+              ON ${this.schema.turns.id}
+                = ${this.schema.turnDeliveryLeases.turnId}
+            WHERE ${this.schema.turnDeliveryLeases.turnId}
+                = ${this.schema.interruptResumeAttempts.turnId}
+              AND ${this.schema.turns.deliveryOwnerId}
+                = ${this.schema.turnDeliveryLeases.ownerId}
+              AND ${this.schema.turns.deliveryFenceToken}
+                = ${this.schema.turnDeliveryLeases.fenceToken}
+              AND ${this.schema.turnDeliveryLeases.leaseExpiresAt}
+                > ${databaseClockMs()}
+          )`,
+        ),
+      ))
+      .orderBy(
+        asc(this.schema.interruptResumeAttempts.updatedAt),
+        asc(this.schema.interruptResumeAttempts.id),
+      )
+      .limit(Math.max(1, Math.min(Math.trunc(limit), 500)));
   }
 
   async retryFailedInterruptResumeAttempt(
     id: string,
-    expectedUpdatedAt: number,
-    retriedAt: number,
   ): Promise<InterruptResumeAttemptRow | undefined> {
     const sanitizedId = sanitizeDbText(id, 'interruptResumeAttempts.retry.id');
     const [row] = await this.db
       .update(this.schema.interruptResumeAttempts)
       .set({
         status: 'pending',
-        updatedAt: retriedAt,
+        updatedAt: databaseClockMs(),
         completedAt: null,
         lastError: null,
       })
       .where(and(
         eq(this.schema.interruptResumeAttempts.id, sanitizedId),
         eq(this.schema.interruptResumeAttempts.status, 'failed'),
-        eq(this.schema.interruptResumeAttempts.updatedAt, expectedUpdatedAt),
-      ))
-      .returning();
-    return row;
-  }
-
-  async completeInterruptResumeAttempt(
-    id: string,
-    expectedUpdatedAt: number,
-    completedAt: number,
-  ): Promise<InterruptResumeAttemptRow | undefined> {
-    return this.updateOwnedInterruptResumeAttempt(
-      id,
-      expectedUpdatedAt,
-      {
-        status: 'completed',
-        updatedAt: completedAt,
-        completedAt,
-        lastError: null,
-      },
-    );
-  }
-
-  async failInterruptResumeAttempt(
-    id: string,
-    expectedUpdatedAt: number,
-    failedAt: number,
-    error: string,
-  ): Promise<InterruptResumeAttemptRow | undefined> {
-    return this.updateOwnedInterruptResumeAttempt(
-      id,
-      expectedUpdatedAt,
-      {
-        status: 'failed',
-        updatedAt: failedAt,
-        completedAt: null,
-        lastError: sanitizeDbText(error, 'interruptResumeAttempts.lastError'),
-      },
-    );
-  }
-
-  async failPendingInterruptResumeAttempt(
-    id: string,
-    expectedUpdatedAt: number,
-    failedAt: number,
-    error: string,
-  ): Promise<InterruptResumeAttemptRow | undefined> {
-    const sanitizedId = sanitizeDbText(id, 'interruptResumeAttempts.pendingFailure.id');
-    const [row] = await this.db
-      .update(this.schema.interruptResumeAttempts)
-      .set({
-        status: 'failed',
-        updatedAt: failedAt,
-        completedAt: null,
-        lastError: sanitizeDbText(error, 'interruptResumeAttempts.lastError'),
-      })
-      .where(and(
-        eq(this.schema.interruptResumeAttempts.id, sanitizedId),
-        eq(this.schema.interruptResumeAttempts.status, 'pending'),
-        eq(this.schema.interruptResumeAttempts.updatedAt, expectedUpdatedAt),
-      ))
-      .returning();
-    return row;
-  }
-
-  private async updateOwnedInterruptResumeAttempt(
-    id: string,
-    expectedUpdatedAt: number,
-    set: InterruptResumeAttemptUpdate,
-  ): Promise<InterruptResumeAttemptRow | undefined> {
-    const sanitizedId = sanitizeDbText(id, 'interruptResumeAttempts.ownedUpdate.id');
-    const [row] = await this.db
-      .update(this.schema.interruptResumeAttempts)
-      .set(set)
-      .where(and(
-        eq(this.schema.interruptResumeAttempts.id, sanitizedId),
-        eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
-        eq(this.schema.interruptResumeAttempts.updatedAt, expectedUpdatedAt),
       ))
       .returning();
     return row;
@@ -2053,17 +5407,21 @@ export class DatabaseRepository {
   async updateWebhookForAgent(
     id: string,
     agentId: string,
-    data: { url: string; events: string[]; secret?: string | null },
+    data: { url?: string; events?: string[]; secret?: string },
   ): Promise<WebhookRow | undefined> {
     const sanitizedData = sanitizeTypedDbValue(data, 'webhooks.update');
+    const updates: {
+      url?: string;
+      events?: string[];
+      secret?: string;
+      updatedAt: number;
+    } = { updatedAt: Date.now() };
+    if (sanitizedData.url !== undefined) updates.url = sanitizedData.url;
+    if (sanitizedData.events !== undefined) updates.events = sanitizedData.events;
+    if (sanitizedData.secret !== undefined) updates.secret = sanitizedData.secret;
     const [row] = await this.db
       .update(this.schema.webhooks)
-      .set({
-        url: sanitizedData.url,
-        events: sanitizedData.events,
-        secret: sanitizedData.secret ?? null,
-        updatedAt: Date.now(),
-      })
+      .set(updates)
       .where(and(eq(this.schema.webhooks.id, id), eq(this.schema.webhooks.agentId, agentId)))
       .returning();
     return row;
@@ -2122,7 +5480,13 @@ export class DatabaseRepository {
     selector: Record<string, string>,
     sinceMs: number,
     bucket?: { key: string; value: string | null },
-  ): Promise<{ totalTokens: number; costUsd: number; turns: number }> {
+  ): Promise<{
+    totalTokens: number | null;
+    costUsd: number | null;
+    turns: number;
+    tokenReportedTurnCount: number;
+    costReportedTurnCount: number;
+  }> {
     const containment: Record<string, string> = { ...selector };
     const conditions: SQL[] = [
       sql`${this.schema.turns.startedAt} >= ${sinceMs}`,
@@ -2140,13 +5504,21 @@ export class DatabaseRepository {
 
     const [row] = await this.db
       .select({
-        totalTokens: sql<number>`coalesce(sum(${this.schema.turns.totalTokens}), 0)::float8`,
-        costUsd: sql<number>`coalesce(sum(${this.schema.turns.costUsd}), 0)::float8`,
+        totalTokens: sql<number | null>`sum(${this.schema.turns.totalTokens})::float8`,
+        costUsd: sql<number | null>`sum(${this.schema.turns.costUsd})::float8`,
         turns: sql<number>`count(*)::int`,
+        tokenReportedTurnCount: sql<number>`count(${this.schema.turns.totalTokens})::int`,
+        costReportedTurnCount: sql<number>`count(${this.schema.turns.costUsd})::int`,
       })
       .from(this.schema.turns)
       .where(and(...conditions));
-    return row ?? { totalTokens: 0, costUsd: 0, turns: 0 };
+    return row ?? {
+      totalTokens: null,
+      costUsd: null,
+      turns: 0,
+      tokenReportedTurnCount: 0,
+      costReportedTurnCount: 0,
+    };
   }
 
   /** Spend grouped by a tag key; bucket is null for turns missing the key. */
@@ -2154,7 +5526,14 @@ export class DatabaseRepository {
     selector: Record<string, string>,
     sinceMs: number,
     groupByKey: string,
-  ): Promise<Array<{ bucket: string | null; totalTokens: number; costUsd: number; turns: number }>> {
+  ): Promise<Array<{
+    bucket: string | null;
+    totalTokens: number | null;
+    costUsd: number | null;
+    turns: number;
+    tokenReportedTurnCount: number;
+    costReportedTurnCount: number;
+  }>> {
     const conditions: SQL[] = [
       sql`${this.schema.turns.startedAt} >= ${sinceMs}`,
     ];
@@ -2165,9 +5544,11 @@ export class DatabaseRepository {
     return this.db
       .select({
         bucket: sql<string | null>`${this.schema.turns.tags} ->> ${groupByKey}`.as('bucket'),
-        totalTokens: sql<number>`coalesce(sum(${this.schema.turns.totalTokens}), 0)::float8`,
-        costUsd: sql<number>`coalesce(sum(${this.schema.turns.costUsd}), 0)::float8`,
+        totalTokens: sql<number | null>`sum(${this.schema.turns.totalTokens})::float8`,
+        costUsd: sql<number | null>`sum(${this.schema.turns.costUsd})::float8`,
         turns: sql<number>`count(*)::int`,
+        tokenReportedTurnCount: sql<number>`count(${this.schema.turns.totalTokens})::int`,
+        costReportedTurnCount: sql<number>`count(${this.schema.turns.costUsd})::int`,
       })
       .from(this.schema.turns)
       .where(and(...conditions))
@@ -2175,6 +5556,631 @@ export class DatabaseRepository {
       // would bind the key as two distinct parameters, which Postgres then
       // rejects as select-expression-not-in-GROUP-BY.
       .groupBy(sql`bucket`);
+  }
+
+  // ── Model gateway spend reconciliation ─────────────────
+
+  async claimModelGatewayReconciliationLease(input: {
+    gatewayProfile: string;
+    gatewayRevision: string;
+    ownerId: string;
+    nowMs: number;
+    leaseMs: number;
+  }): Promise<{ fenceToken: number; watermarkMs: number } | undefined> {
+    const gatewayProfile = sanitizeDbText(
+      input.gatewayProfile,
+      'modelGatewayReconciliation.claim.gatewayProfile',
+    );
+    const gatewayRevision = sanitizeDbText(
+      input.gatewayRevision,
+      'modelGatewayReconciliation.claim.gatewayRevision',
+    );
+    const ownerId = sanitizeDbText(
+      input.ownerId,
+      'modelGatewayReconciliation.claim.ownerId',
+    );
+    const nowMs = sanitizeTypedDbValue(
+      input.nowMs,
+      'modelGatewayReconciliation.claim.nowMs',
+    );
+    const leaseExpiresAt = nowMs + sanitizeTypedDbValue(
+      input.leaseMs,
+      'modelGatewayReconciliation.claim.leaseMs',
+    );
+
+    return this.db.transaction(async (tx) => {
+      await tx
+        .insert(this.schema.modelGatewayReconciliationState)
+        .values({
+          gatewayProfile,
+          gatewayRevision,
+          watermarkMs: 0,
+          leaseFenceToken: 0,
+          updatedAt: nowMs,
+        })
+        .onConflictDoNothing();
+      const [current] = await tx
+        .select()
+        .from(this.schema.modelGatewayReconciliationState)
+        .where(eq(
+          this.schema.modelGatewayReconciliationState.gatewayProfile,
+          gatewayProfile,
+        ))
+        .for('update');
+      if (!current) {
+        throw new Error(
+          `Model gateway reconciliation state ${gatewayProfile} disappeared during claim`,
+        );
+      }
+      if (
+        current.leaseOwnerId !== null
+        && current.leaseOwnerId !== ownerId
+        && current.leaseExpiresAt !== null
+        && current.leaseExpiresAt > nowMs
+      ) {
+        return undefined;
+      }
+
+      const fenceToken = current.leaseFenceToken + 1;
+      const [claimed] = await tx
+        .update(this.schema.modelGatewayReconciliationState)
+        .set({
+          gatewayRevision,
+          leaseOwnerId: ownerId,
+          leaseFenceToken: fenceToken,
+          leaseExpiresAt,
+          lastAttemptAt: nowMs,
+          updatedAt: nowMs,
+        })
+        .where(and(
+          eq(
+            this.schema.modelGatewayReconciliationState.gatewayProfile,
+            gatewayProfile,
+          ),
+          eq(
+            this.schema.modelGatewayReconciliationState.leaseFenceToken,
+            current.leaseFenceToken,
+          ),
+        ))
+        .returning({
+          fenceToken:
+            this.schema.modelGatewayReconciliationState.leaseFenceToken,
+          watermarkMs:
+            this.schema.modelGatewayReconciliationState.watermarkMs,
+        });
+      return claimed;
+    });
+  }
+
+  async recordModelGatewayReconciliationFailure(input: {
+    gatewayProfile: string;
+    ownerId: string;
+    fenceToken: number;
+    nowMs: number;
+    error: string;
+  }): Promise<boolean> {
+    const updated = await this.db
+      .update(this.schema.modelGatewayReconciliationState)
+      .set({
+        leaseOwnerId: null,
+        leaseExpiresAt: null,
+        lastError: sanitizeDbText(
+          input.error.slice(0, 2_000),
+          'modelGatewayReconciliation.failure.error',
+        ),
+        updatedAt: input.nowMs,
+      })
+      .where(and(
+        eq(
+          this.schema.modelGatewayReconciliationState.gatewayProfile,
+          sanitizeDbText(
+            input.gatewayProfile,
+            'modelGatewayReconciliation.failure.gatewayProfile',
+          ),
+        ),
+        eq(
+          this.schema.modelGatewayReconciliationState.leaseOwnerId,
+          sanitizeDbText(
+            input.ownerId,
+            'modelGatewayReconciliation.failure.ownerId',
+          ),
+        ),
+        eq(
+          this.schema.modelGatewayReconciliationState.leaseFenceToken,
+          input.fenceToken,
+        ),
+      ))
+      .returning({
+        gatewayProfile:
+          this.schema.modelGatewayReconciliationState.gatewayProfile,
+      });
+    return updated.length > 0;
+  }
+
+  async reconcileModelGatewaySpend(input: {
+    gatewayProfile: string;
+    gatewayRevision: string;
+    ownerId: string;
+    fenceToken: number;
+    nowMs: number;
+    processedThroughMs: number;
+    settleBeforeMs: number;
+    records: readonly LiteLLMSpendRecord[];
+    invalid: readonly InvalidLiteLLMSpendRecord[];
+  }): Promise<{
+    attached: number;
+    quarantined: number;
+    affectedTurnIds: string[];
+    usageChanges: Array<{
+      turnId: string;
+      agentId: string;
+      previousUsage: TurnUsage | null;
+      usage: TurnUsage;
+    }>;
+    watermarkMs: number;
+  }> {
+    const gatewayProfile = sanitizeDbText(
+      input.gatewayProfile,
+      'modelGatewayReconciliation.commit.gatewayProfile',
+    );
+    const gatewayRevision = sanitizeDbText(
+      input.gatewayRevision,
+      'modelGatewayReconciliation.commit.gatewayRevision',
+    );
+    const ownerId = sanitizeDbText(
+      input.ownerId,
+      'modelGatewayReconciliation.commit.ownerId',
+    );
+
+    return this.db.transaction(async (tx) => {
+      const [state] = await tx
+        .select()
+        .from(this.schema.modelGatewayReconciliationState)
+        .where(eq(
+          this.schema.modelGatewayReconciliationState.gatewayProfile,
+          gatewayProfile,
+        ))
+        .for('update');
+      if (
+        !state
+        || state.leaseOwnerId !== ownerId
+        || state.leaseFenceToken !== input.fenceToken
+        || state.leaseExpiresAt === null
+        || state.leaseExpiresAt <= input.nowMs
+      ) {
+        throw new Error(
+          `Model gateway reconciliation lease ${gatewayProfile}/${input.fenceToken} is no longer owned`,
+        );
+      }
+
+      const quarantine = async (entry: {
+        transactionId: string;
+        correlationId?: string;
+        reason: string;
+        safeFields: Record<string, unknown>;
+      }): Promise<void> => {
+        const sanitizedPayload = sanitizeDbJsonValue(
+          entry.safeFields,
+          'modelGatewaySpendQuarantine.sanitizedPayload',
+        ) as Record<string, unknown>;
+        await tx
+          .insert(this.schema.modelGatewaySpendQuarantine)
+          .values({
+            gatewayProfile,
+            gatewayTransactionId: entry.transactionId,
+            correlationId: entry.correlationId ?? null,
+            reason: entry.reason,
+            sanitizedPayload,
+            firstSeenAt: input.nowMs,
+            lastSeenAt: input.nowMs,
+          })
+          .onConflictDoUpdate({
+            target: [
+              this.schema.modelGatewaySpendQuarantine.gatewayProfile,
+              this.schema.modelGatewaySpendQuarantine.gatewayTransactionId,
+            ],
+            set: {
+              correlationId: entry.correlationId ?? null,
+              reason: entry.reason,
+              sanitizedPayload,
+              occurrences: sql<number>`
+                ${this.schema.modelGatewaySpendQuarantine.occurrences} + 1
+              `,
+              lastSeenAt: input.nowMs,
+            },
+          });
+      };
+
+      for (const invalid of input.invalid) {
+        await quarantine({
+          transactionId: invalid.transactionId,
+          ...(invalid.correlationId
+            ? { correlationId: invalid.correlationId }
+            : {}),
+          reason: invalid.reason,
+          safeFields: invalid.safeFields,
+        });
+      }
+
+      const affectedTurnIds = new Set<string>();
+      let attached = 0;
+      let quarantined = input.invalid.length;
+      for (const record of input.records) {
+        const [turn] = await tx
+          .select()
+          .from(this.schema.turns)
+          .where(and(
+            eq(this.schema.turns.gatewayProfile, gatewayProfile),
+            eq(
+              this.schema.turns.gatewayCorrelationId,
+              record.correlationId,
+            ),
+          ))
+          .limit(1);
+        if (!turn) {
+          await quarantine({
+            transactionId: record.transactionId,
+            correlationId: record.correlationId,
+            reason: 'unknown_turn',
+            safeFields: {
+              ...(record.requestedModel
+                ? { modelGroup: record.requestedModel }
+                : {}),
+              ...(record.resolvedModel ? { model: record.resolvedModel } : {}),
+              ...(record.provider ? { provider: record.provider } : {}),
+              status: record.status,
+            },
+          });
+          quarantined++;
+          continue;
+        }
+
+        let [aggregate] = await tx
+          .select()
+          .from(this.schema.modelCallUsage)
+          .where(eq(this.schema.modelCallUsage.turnId, turn.id))
+          .limit(1);
+        if (!aggregate) {
+          [aggregate] = await tx
+            .insert(this.schema.modelCallUsage)
+            .values({
+              turnId: turn.id,
+              observationScope: 'turn_aggregate',
+              gatewayProfile,
+              gatewayRevision,
+              correlationId: record.correlationId,
+              status: 'pending',
+              updatedAt: input.nowMs,
+            })
+            .returning();
+        }
+        if (!aggregate) {
+          throw new Error(`Failed to create model usage aggregate for turn ${turn.id}`);
+        }
+
+        const [existingAttempt] = await tx
+          .select({
+            modelCallUsageId:
+              this.schema.modelCallAttemptUsage.modelCallUsageId,
+          })
+          .from(this.schema.modelCallAttemptUsage)
+          .where(and(
+            eq(
+              this.schema.modelCallAttemptUsage.gatewayProfile,
+              gatewayProfile,
+            ),
+            eq(
+              this.schema.modelCallAttemptUsage.gatewayTransactionId,
+              record.transactionId,
+            ),
+          ))
+          .limit(1);
+        if (
+          existingAttempt
+          && existingAttempt.modelCallUsageId !== aggregate.id
+        ) {
+          throw new Error(
+            `Gateway transaction ${record.transactionId} is already attached to another turn`,
+          );
+        }
+        await tx
+          .insert(this.schema.modelCallAttemptUsage)
+          .values({
+            modelCallUsageId: aggregate.id,
+            gatewayProfile,
+            gatewayRevision,
+            gatewayTransactionId: record.transactionId,
+            requestedModel: record.requestedModel ?? null,
+            resolvedModel: record.resolvedModel ?? null,
+            provider: record.provider ?? null,
+            status: record.status,
+            inputTokens: record.inputTokens ?? null,
+            outputTokens: record.outputTokens ?? null,
+            totalTokens: record.totalTokens ?? null,
+            cacheReadTokens: record.cacheReadTokens ?? null,
+            cacheCreateTokens: record.cacheCreateTokens ?? null,
+            reasoningTokens: record.reasoningTokens ?? null,
+            costUsd: record.costUsd ?? null,
+            costState: record.costState,
+            startedAt: record.startedAt,
+            endedAt: record.endedAt,
+            ingestedAt: input.nowMs,
+          })
+          .onConflictDoUpdate({
+            target: [
+              this.schema.modelCallAttemptUsage.gatewayProfile,
+              this.schema.modelCallAttemptUsage.gatewayTransactionId,
+            ],
+            set: {
+              gatewayRevision,
+              requestedModel: record.requestedModel ?? null,
+              resolvedModel: record.resolvedModel ?? null,
+              provider: record.provider ?? null,
+              status: record.status,
+              inputTokens: record.inputTokens ?? null,
+              outputTokens: record.outputTokens ?? null,
+              totalTokens: record.totalTokens ?? null,
+              cacheReadTokens: record.cacheReadTokens ?? null,
+              cacheCreateTokens: record.cacheCreateTokens ?? null,
+              reasoningTokens: record.reasoningTokens ?? null,
+              costUsd: record.costUsd ?? null,
+              costState: record.costState,
+              startedAt: record.startedAt,
+              endedAt: record.endedAt,
+              ingestedAt: input.nowMs,
+            },
+          });
+        await tx
+          .delete(this.schema.modelGatewaySpendQuarantine)
+          .where(and(
+            eq(
+              this.schema.modelGatewaySpendQuarantine.gatewayProfile,
+              gatewayProfile,
+            ),
+            eq(
+              this.schema.modelGatewaySpendQuarantine.gatewayTransactionId,
+              record.transactionId,
+            ),
+          ));
+        attached++;
+        affectedTurnIds.add(turn.id);
+      }
+
+      const usageChanges: Array<{
+        turnId: string;
+        agentId: string;
+        previousUsage: TurnUsage | null;
+        usage: TurnUsage;
+      }> = [];
+      for (const turnId of affectedTurnIds) {
+        const [turn] = await tx
+          .select()
+          .from(this.schema.turns)
+          .where(eq(this.schema.turns.id, turnId))
+          .limit(1);
+        const [aggregate] = await tx
+          .select()
+          .from(this.schema.modelCallUsage)
+          .where(eq(this.schema.modelCallUsage.turnId, turnId))
+          .limit(1);
+        if (!turn || !aggregate || !turn.gatewayMode) {
+          throw new Error(`Gateway usage turn ${turnId} lost its attribution row`);
+        }
+        const attempts = await tx
+          .select()
+          .from(this.schema.modelCallAttemptUsage)
+          .where(eq(
+            this.schema.modelCallAttemptUsage.modelCallUsageId,
+            aggregate.id,
+          ));
+        const settled = turn.completedAt !== null
+          && turn.completedAt <= input.settleBeforeMs;
+        const harnessUsage = (
+          turn.inputTokens !== null
+          && turn.outputTokens !== null
+          && turn.totalTokens !== null
+        )
+          ? {
+            inputTokens: turn.inputTokens,
+            outputTokens: turn.outputTokens,
+            totalTokens: turn.totalTokens,
+          }
+          : null;
+        const usage = projectGatewayTurnUsage({
+          turnMode: turn.gatewayMode,
+          harnessUsage,
+          attempts,
+          settled,
+        });
+        const knownCostUsd = attempts.reduce(
+          (sum, attempt) => sum + (
+            attempt.costState === 'unpriced'
+              ? 0
+              : attempt.costUsd ?? 0
+          ),
+          0,
+        );
+        const aggregateCostState = attempts.some(
+          (attempt) => attempt.costState === 'unpriced',
+        )
+          ? 'unpriced'
+          : attempts.some((attempt) => attempt.costState === 'priced')
+            ? 'priced'
+            : 'explicit_free';
+        const aggregateTokens = attempts.reduce<{
+          inputTokens: number;
+          outputTokens: number;
+          totalTokens: number;
+          cacheReadTokens: number;
+          cacheCreateTokens: number;
+          reasoningTokens: number;
+        }>((sum, attempt) => ({
+          inputTokens: sum.inputTokens + (attempt.inputTokens ?? 0),
+          outputTokens: sum.outputTokens + (attempt.outputTokens ?? 0),
+          totalTokens: sum.totalTokens + (attempt.totalTokens ?? 0),
+          cacheReadTokens: sum.cacheReadTokens + (attempt.cacheReadTokens ?? 0),
+          cacheCreateTokens:
+            sum.cacheCreateTokens + (attempt.cacheCreateTokens ?? 0),
+          reasoningTokens:
+            sum.reasoningTokens + (attempt.reasoningTokens ?? 0),
+        }), {
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          reasoningTokens: 0,
+        });
+
+        await tx
+          .update(this.schema.modelCallUsage)
+          .set({
+            gatewayRevision,
+            status: settled ? 'settled' : 'pending',
+            inputTokens: aggregateTokens.inputTokens,
+            outputTokens: aggregateTokens.outputTokens,
+            totalTokens: aggregateTokens.totalTokens,
+            cacheReadTokens: aggregateTokens.cacheReadTokens,
+            cacheCreateTokens: aggregateTokens.cacheCreateTokens,
+            reasoningTokens: aggregateTokens.reasoningTokens,
+            knownCostUsd,
+            costState: aggregateCostState,
+            updatedAt: input.nowMs,
+          })
+          .where(eq(this.schema.modelCallUsage.id, aggregate.id));
+        if (usage) {
+          await tx
+            .update(this.schema.turns)
+            .set({
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+              totalTokens: usage.totalTokens,
+              costUsd: usage.cost.totalUsd,
+              usage,
+              usageReconciledAt: input.nowMs,
+            })
+            .where(eq(this.schema.turns.id, turnId));
+          const previousUsage = turn.usage ?? null;
+          if (!isDeepStrictEqual(previousUsage, usage)) {
+            usageChanges.push({
+              turnId,
+              agentId: turn.agentId,
+              previousUsage,
+              usage,
+            });
+          }
+        }
+      }
+
+      const watermarkMs = Math.max(
+        state.watermarkMs,
+        input.processedThroughMs,
+      );
+      const [committed] = await tx
+        .update(this.schema.modelGatewayReconciliationState)
+        .set({
+          gatewayRevision,
+          watermarkMs,
+          leaseOwnerId: null,
+          leaseExpiresAt: null,
+          lastSuccessAt: input.nowMs,
+          lastError: null,
+          updatedAt: input.nowMs,
+        })
+        .where(and(
+          eq(
+            this.schema.modelGatewayReconciliationState.gatewayProfile,
+            gatewayProfile,
+          ),
+          eq(
+            this.schema.modelGatewayReconciliationState.leaseOwnerId,
+            ownerId,
+          ),
+          eq(
+            this.schema.modelGatewayReconciliationState.leaseFenceToken,
+            input.fenceToken,
+          ),
+        ))
+        .returning({
+          watermarkMs:
+            this.schema.modelGatewayReconciliationState.watermarkMs,
+        });
+      if (!committed) {
+        throw new Error(
+          `Model gateway reconciliation lease ${gatewayProfile}/${input.fenceToken} was lost before commit`,
+        );
+      }
+      return {
+        attached,
+        quarantined,
+        affectedTurnIds: [...affectedTurnIds],
+        usageChanges,
+        watermarkMs: committed.watermarkMs,
+      };
+    });
+  }
+
+  async getModelGatewayReconciliationState(
+    gatewayProfile: string,
+  ): Promise<
+    typeof this.schema.modelGatewayReconciliationState.$inferSelect | undefined
+  > {
+    return this.db.query.modelGatewayReconciliationState.findFirst({
+      where: eq(
+        this.schema.modelGatewayReconciliationState.gatewayProfile,
+        gatewayProfile,
+      ),
+    });
+  }
+
+  async getModelGatewayReconciliationMetrics(
+    gatewayProfile: string,
+  ): Promise<{
+    pendingCalls: number;
+    unpricedCalls: number;
+    quarantinedTransactions: number;
+    orphanTransactions: number;
+  }> {
+    const profile = sanitizeDbText(
+      gatewayProfile,
+      'modelGatewayReconciliation.metrics.gatewayProfile',
+    );
+    const [callMetrics] = await this.db
+      .select({
+        pendingCalls: sql<number>`
+          count(*) filter (
+            where ${this.schema.modelCallUsage.status} = 'pending'
+          )::int
+        `,
+        unpricedCalls: sql<number>`
+          count(*) filter (
+            where ${this.schema.modelCallUsage.costState} = 'unpriced'
+          )::int
+        `,
+      })
+      .from(this.schema.modelCallUsage)
+      .where(eq(this.schema.modelCallUsage.gatewayProfile, profile));
+    const [quarantineMetrics] = await this.db
+      .select({
+        quarantinedTransactions: sql<number>`count(*)::int`,
+        orphanTransactions: sql<number>`
+          count(*) filter (
+            where ${this.schema.modelGatewaySpendQuarantine.reason} = 'unknown_turn'
+          )::int
+        `,
+      })
+      .from(this.schema.modelGatewaySpendQuarantine)
+      .where(eq(
+        this.schema.modelGatewaySpendQuarantine.gatewayProfile,
+        profile,
+      ));
+    return {
+      pendingCalls: callMetrics?.pendingCalls ?? 0,
+      unpricedCalls: callMetrics?.unpricedCalls ?? 0,
+      quarantinedTransactions:
+        quarantineMetrics?.quarantinedTransactions ?? 0,
+      orphanTransactions: quarantineMetrics?.orphanTransactions ?? 0,
+    };
   }
 
   // ── Sandbox Sessions ───────────────────────────────────────
@@ -2185,25 +6191,45 @@ export class DatabaseRepository {
     agentId: string;
     containerName?: string;
     containerId?: string;
-    status?: string;
+    status?: SandboxSessionStatus;
     harnessName: string;
+    runtimeDefinitionHash?: string;
   }): Promise<SandboxSessionRow> {
     const sanitizedSession = sanitizeTypedDbValue(session, 'sandboxSessions.insert');
-    return this.insertOne(
-      this.db
-        .insert(this.schema.sandboxSessions)
-        .values({
-          ...(sanitizedSession.id !== undefined ? { id: sanitizedSession.id } : {}),
-          conversationId: sanitizedSession.conversationId,
-          agentId: sanitizedSession.agentId,
-          containerName: sanitizedSession.containerName ?? null,
-          containerId: sanitizedSession.containerId ?? null,
-          status: sanitizedSession.status ?? 'ACTIVE',
-          harnessName: sanitizedSession.harnessName,
-        })
-        .returning(),
-      'sandbox session',
-    );
+    if (sanitizedSession.status === 'RESTORING') {
+      throw new Error(
+        'RESTORING sandbox sessions must be entered through claimSandboxSessionRestore',
+      );
+    }
+    try {
+      return await this.insertOne(
+        this.db
+          .insert(this.schema.sandboxSessions)
+          .values({
+            ...(sanitizedSession.id !== undefined ? { id: sanitizedSession.id } : {}),
+            conversationId: sanitizedSession.conversationId,
+            agentId: sanitizedSession.agentId,
+            containerName: sanitizedSession.containerName ?? null,
+            containerId: sanitizedSession.containerId ?? null,
+            status: validateSandboxSessionStatus(
+              sanitizedSession.status ?? 'ACTIVE',
+              'sandboxSessions.insert.status',
+            ),
+            harnessName: sanitizedSession.harnessName,
+            runtimeDefinitionHash:
+              sanitizedSession.runtimeDefinitionHash ?? null,
+          })
+          .returning(),
+        'sandbox session',
+      );
+    } catch (error) {
+      if (isUniqueConstraintViolation(error, LIVE_SANDBOX_SESSION_INDEX)) {
+        throw new LiveSandboxSessionConflictError(
+          sanitizedSession.conversationId,
+        );
+      }
+      throw error;
+    }
   }
 
   async getSandboxSession(id: string): Promise<SandboxSessionRow | null> {
@@ -2220,56 +6246,492 @@ export class DatabaseRepository {
       .select()
       .from(this.schema.sandboxSessions)
       .where(eq(this.schema.sandboxSessions.conversationId, conversationId))
+      .orderBy(
+        sql`CASE
+          WHEN ${this.schema.sandboxSessions.status} IN ('ACTIVE', 'RESTORING')
+            THEN 0
+          ELSE 1
+        END`,
+        desc(this.schema.sandboxSessions.createdAt),
+      )
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async getLiveSandboxSessionByConversation(
+    conversationId: string,
+  ): Promise<SandboxSessionRow | null> {
+    const rows = await this.db
+      .select()
+      .from(this.schema.sandboxSessions)
+      .where(and(
+        eq(
+          this.schema.sandboxSessions.conversationId,
+          sanitizeDbText(
+            conversationId,
+            'sandboxSessions.liveByConversation.conversationId',
+          ),
+        ),
+        inArray(this.schema.sandboxSessions.status, ['ACTIVE', 'RESTORING']),
+      ))
       .orderBy(desc(this.schema.sandboxSessions.createdAt))
       .limit(1);
     return rows[0] ?? null;
   }
 
-  async updateSandboxSessionStatus(
+  /**
+   * Atomically admits one checkpoint restore generation and consumes one
+   * global retry attempt.
+   */
+  async claimSandboxSessionRestore(input: {
+    sandboxSessionId: string;
+    ownerId: string;
+    leaseDurationMs: number;
+    maxAttempts: number;
+  }): Promise<SandboxSessionRow | undefined> {
+    const sandboxSessionId = sanitizeDbText(
+      input.sandboxSessionId,
+      'sandboxSessionRestore.claim.sandboxSessionId',
+    );
+    const ownerId = sanitizeDbText(
+      input.ownerId,
+      'sandboxSessionRestore.claim.ownerId',
+    );
+    const leaseDurationMs = validateLeaseDurationMs(
+      input.leaseDurationMs,
+      'sandboxSessionRestore.claim.leaseDurationMs',
+    );
+    const maxAttempts = validatePositiveSafeInteger(
+      input.maxAttempts,
+      'sandboxSessionRestore.claim.maxAttempts',
+    );
+    try {
+      const [claimed] = await this.db
+        .update(this.schema.sandboxSessions)
+        .set({
+          status: 'RESTORING',
+          restoreOwnerId: ownerId,
+          restoreFenceToken:
+            sql`${this.schema.sandboxSessions.restoreFenceToken} + 1`,
+          restoreLeaseExpiresAt:
+            sql`${databaseClockMs()} + ${leaseDurationMs}`,
+          restoreAttempts:
+            sql`${this.schema.sandboxSessions.restoreAttempts} + 1`,
+          updatedAt: databaseClockMs(),
+          lastActivityAt: databaseClockMs(),
+        })
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sandboxSessionId),
+          eq(this.schema.sandboxSessions.status, 'CHECKPOINTED'),
+          lt(this.schema.sandboxSessions.restoreAttempts, maxAttempts),
+        ))
+        .returning();
+      return claimed;
+    } catch (error) {
+      if (isUniqueConstraintViolation(error, LIVE_SANDBOX_SESSION_INDEX)) {
+        const session = await this.getSandboxSession(sandboxSessionId);
+        if (session) {
+          throw new LiveSandboxSessionConflictError(session.conversationId);
+        }
+      }
+      throw error;
+    }
+  }
+
+  async renewSandboxSessionRestoreLease(
+    sandboxSessionId: string,
+    fence: SandboxSessionRestoreFence,
+    leaseDurationMs: number,
+  ): Promise<SandboxSessionRow | undefined> {
+    const [renewed] = await this.db
+      .update(this.schema.sandboxSessions)
+      .set({
+        restoreLeaseExpiresAt: sql`${databaseClockMs()} + ${validateLeaseDurationMs(
+          leaseDurationMs,
+          'sandboxSessionRestore.renew.leaseDurationMs',
+        )}`,
+        updatedAt: databaseClockMs(),
+      })
+      .where(and(
+        eq(
+          this.schema.sandboxSessions.id,
+          sanitizeDbText(
+            sandboxSessionId,
+            'sandboxSessionRestore.renew.sandboxSessionId',
+          ),
+        ),
+        eq(this.schema.sandboxSessions.status, 'RESTORING'),
+        eq(
+          this.schema.sandboxSessions.restoreOwnerId,
+          sanitizeDbText(fence.ownerId, 'sandboxSessionRestore.renew.ownerId'),
+        ),
+        eq(
+          this.schema.sandboxSessions.restoreFenceToken,
+          validateTurnDeliveryFenceToken(
+            fence.fenceToken,
+            'sandboxSessionRestore.renew.fenceToken',
+          ),
+        ),
+        gt(
+          this.schema.sandboxSessions.restoreLeaseExpiresAt,
+          databaseClockMs(),
+        ),
+      ))
+      .returning();
+    return renewed;
+  }
+
+  async completeSandboxSessionRestore(
+    sandboxSessionId: string,
+    fence: SandboxSessionRestoreFence,
+    runtime: {
+      containerName: string;
+      containerId: string;
+    },
+  ): Promise<SandboxSessionRow | undefined> {
+    const sanitizedRuntime = sanitizeTypedDbValue(
+      runtime,
+      'sandboxSessionRestore.complete.runtime',
+    );
+    try {
+      const [completed] = await this.db
+        .update(this.schema.sandboxSessions)
+        .set({
+          status: 'ACTIVE',
+          containerName: sanitizedRuntime.containerName,
+          containerId: sanitizedRuntime.containerId,
+          restoreAttempts: 0,
+          lastRestoreError: null,
+          restoreOwnerId: null,
+          restoreLeaseExpiresAt: null,
+          updatedAt: databaseClockMs(),
+          lastActivityAt: databaseClockMs(),
+        })
+        .where(and(
+          eq(
+            this.schema.sandboxSessions.id,
+            sanitizeDbText(
+              sandboxSessionId,
+              'sandboxSessionRestore.complete.sandboxSessionId',
+            ),
+          ),
+          eq(this.schema.sandboxSessions.status, 'RESTORING'),
+          eq(
+            this.schema.sandboxSessions.restoreOwnerId,
+            sanitizeDbText(
+              fence.ownerId,
+              'sandboxSessionRestore.complete.ownerId',
+            ),
+          ),
+          eq(
+            this.schema.sandboxSessions.restoreFenceToken,
+            validateTurnDeliveryFenceToken(
+              fence.fenceToken,
+              'sandboxSessionRestore.complete.fenceToken',
+            ),
+          ),
+          gt(
+            this.schema.sandboxSessions.restoreLeaseExpiresAt,
+            databaseClockMs(),
+          ),
+        ))
+        .returning();
+      return completed;
+    } catch (error) {
+      if (isUniqueConstraintViolation(error, LIVE_SANDBOX_SESSION_INDEX)) {
+        const session = await this.getSandboxSession(sandboxSessionId);
+        if (session) {
+          throw new LiveSandboxSessionConflictError(session.conversationId);
+        }
+      }
+      throw error;
+    }
+  }
+
+  async failSandboxSessionRestore(
+    sandboxSessionId: string,
+    fence: SandboxSessionRestoreFence,
+    failure: {
+      toStatus: 'CHECKPOINTED' | 'TERMINATED';
+      error: string;
+    },
+  ): Promise<SandboxSessionRow | undefined> {
+    const [failed] = await this.db
+      .update(this.schema.sandboxSessions)
+      .set({
+        status: failure.toStatus,
+        containerName: null,
+        containerId: null,
+        lastRestoreError: sanitizeDbText(
+          failure.error,
+          'sandboxSessionRestore.fail.error',
+        ),
+        restoreOwnerId: null,
+        restoreLeaseExpiresAt: null,
+        updatedAt: databaseClockMs(),
+        lastActivityAt: databaseClockMs(),
+      })
+      .where(and(
+        eq(
+          this.schema.sandboxSessions.id,
+          sanitizeDbText(
+            sandboxSessionId,
+            'sandboxSessionRestore.fail.sandboxSessionId',
+          ),
+        ),
+        eq(this.schema.sandboxSessions.status, 'RESTORING'),
+        eq(
+          this.schema.sandboxSessions.restoreOwnerId,
+          sanitizeDbText(fence.ownerId, 'sandboxSessionRestore.fail.ownerId'),
+        ),
+        eq(
+          this.schema.sandboxSessions.restoreFenceToken,
+          validateTurnDeliveryFenceToken(
+            fence.fenceToken,
+            'sandboxSessionRestore.fail.fenceToken',
+          ),
+        ),
+        gt(
+          this.schema.sandboxSessions.restoreLeaseExpiresAt,
+          databaseClockMs(),
+        ),
+      ))
+      .returning();
+    return failed;
+  }
+
+  /**
+   * Fence and reconcile exactly one expired restore generation. A stale owner
+   * can no longer complete or record failure after this transaction commits.
+   */
+  async reconcileExpiredSandboxSessionRestore(
+    sandboxSessionId: string,
+    expectedFenceToken?: number,
+  ): Promise<ReconciledSandboxSessionRestore | undefined> {
+    const sanitizedSessionId = sanitizeDbText(
+      sandboxSessionId,
+      'sandboxSessionRestore.reconcile.sandboxSessionId',
+    );
+    const validatedFenceToken = expectedFenceToken === undefined
+      ? undefined
+      : validateTurnDeliveryFenceToken(
+          expectedFenceToken,
+          'sandboxSessionRestore.reconcile.fenceToken',
+        );
+    return this.db.transaction(async (tx) => {
+      const [session] = await tx
+        .select()
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sanitizedSessionId),
+          eq(this.schema.sandboxSessions.status, 'RESTORING'),
+          ...(validatedFenceToken === undefined
+            ? []
+            : [
+                eq(
+                  this.schema.sandboxSessions.restoreFenceToken,
+                  validatedFenceToken,
+                ),
+              ]),
+        ))
+        .for('update');
+      const [clock] = await tx
+        .select({ nowMs: databaseClockMs() })
+        .from(this.schema.sandboxSessions)
+        .where(eq(this.schema.sandboxSessions.id, sanitizedSessionId))
+        .limit(1);
+      if (
+        !session
+        || session.restoreLeaseExpiresAt === null
+        || !clock
+        || session.restoreLeaseExpiresAt > parseDatabaseClockMs(clock.nowMs)
+      ) {
+        return undefined;
+      }
+
+      const [checkpoint] = await tx
+        .select({ id: this.schema.agentCheckpoints.id })
+        .from(this.schema.agentCheckpoints)
+        .where(eq(
+          this.schema.agentCheckpoints.sandboxSessionId,
+          sanitizedSessionId,
+        ))
+        .limit(1);
+      const outcome = checkpoint ? 'CHECKPOINTED' : 'TERMINATED';
+      const [reconciled] = await tx
+        .update(this.schema.sandboxSessions)
+        .set({
+          status: outcome,
+          containerName: null,
+          containerId: null,
+          restoreOwnerId: null,
+          restoreFenceToken:
+            sql`${this.schema.sandboxSessions.restoreFenceToken} + 1`,
+          restoreLeaseExpiresAt: null,
+          lastRestoreError:
+            session.lastRestoreError ?? 'restore lease expired before completion',
+          updatedAt: databaseClockMs(),
+          lastActivityAt: databaseClockMs(),
+        })
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sanitizedSessionId),
+          eq(this.schema.sandboxSessions.status, 'RESTORING'),
+          eq(
+            this.schema.sandboxSessions.restoreFenceToken,
+            session.restoreFenceToken,
+          ),
+        ))
+        .returning();
+      return reconciled ? { session: reconciled, outcome } : undefined;
+    });
+  }
+
+  async updateSandboxSessionMetadata(
     id: string,
-    status: string,
-    extra?: {
+    status: SandboxSessionStatus,
+    extra: {
       containerName?: string | null;
       containerId?: string | null;
       restoreAttempts?: number | null;
       lastRestoreError?: string | null;
     },
-    options?: {
-      expectedFrom?: string;
-    },
+    expectedActiveGeneration: SandboxSessionActiveGeneration | undefined,
   ): Promise<void> {
-    const sanitizedStatus = sanitizeDbText(status, 'sandboxSessions.status');
-    const sanitizedExtra = extra ? sanitizeTypedDbValue(extra, 'sandboxSessions.update') : undefined;
-    const expectedFrom = options?.expectedFrom
-      ? sanitizeDbText(options.expectedFrom, 'sandboxSessions.expectedFrom')
+    const sanitizedSessionId = sanitizeDbText(
+      id,
+      'sandboxSessions.metadata.id',
+    );
+    const expectedStatus = validateSandboxSessionStatus(
+      status,
+      'sandboxSessions.metadata.status',
+    );
+    const sanitizedExtra = sanitizeTypedDbValue(
+      extra,
+      'sandboxSessions.metadata',
+    );
+    if (expectedStatus === 'RESTORING') {
+      throw new Error(
+        'RESTORING sandbox session metadata requires a restore-fenced method',
+      );
+    }
+    if (expectedStatus === 'ACTIVE' && !expectedActiveGeneration) {
+      throw new Error(
+        'ACTIVE sandbox session metadata requires its expected active generation',
+      );
+    }
+    if (expectedStatus !== 'ACTIVE' && expectedActiveGeneration) {
+      throw new Error(
+        `${expectedStatus} sandbox session metadata cannot use an active generation`,
+      );
+    }
+    const validatedActiveGeneration = expectedActiveGeneration
+      ? {
+          restoreFenceToken: validateNonNegativeSafeInteger(
+            expectedActiveGeneration.restoreFenceToken,
+            'sandboxSessions.metadata.restoreFenceToken',
+          ),
+          containerId: expectedActiveGeneration.containerId === null
+            ? null
+            : sanitizeDbText(
+                expectedActiveGeneration.containerId,
+                'sandboxSessions.metadata.containerId',
+              ),
+        }
       : undefined;
 
-    const [updated] = await this.db
-      .update(this.schema.sandboxSessions)
-      .set({
-        status: sanitizedStatus,
-        updatedAt: Date.now(),
-        lastActivityAt: Date.now(),
-        ...(sanitizedExtra?.containerName !== undefined ? { containerName: sanitizedExtra.containerName } : {}),
-        ...(sanitizedExtra?.containerId !== undefined ? { containerId: sanitizedExtra.containerId } : {}),
-        ...(sanitizedExtra?.restoreAttempts !== undefined && sanitizedExtra.restoreAttempts !== null
-          ? { restoreAttempts: sanitizedExtra.restoreAttempts }
-          : {}),
-        ...(sanitizedExtra?.lastRestoreError !== undefined
-          ? { lastRestoreError: sanitizedExtra.lastRestoreError }
-          : {}),
-      })
-      .where(expectedFrom
-        ? and(eq(this.schema.sandboxSessions.id, id), eq(this.schema.sandboxSessions.status, expectedFrom))
-        : eq(this.schema.sandboxSessions.id, id))
-      .returning({ id: this.schema.sandboxSessions.id });
-
-    if (!updated) {
-      if (expectedFrom) {
-        throw new SandboxSessionStatusConflictError(id, expectedFrom, sanitizedStatus);
+    await this.db.transaction(async (tx) => {
+      // Serialize with lifecycle claim on the session row first. The lifecycle
+      // query must be a second READ COMMITTED statement after acquiring that
+      // lock; embedding NOT EXISTS in a waiting UPDATE can retain a stale
+      // pre-wait snapshot and cross a just-admitted lifecycle operation.
+      const [session] = await tx
+        .select({
+          id: this.schema.sandboxSessions.id,
+          status: this.schema.sandboxSessions.status,
+          restoreFenceToken: this.schema.sandboxSessions.restoreFenceToken,
+          containerId: this.schema.sandboxSessions.containerId,
+        })
+        .from(this.schema.sandboxSessions)
+        .where(eq(this.schema.sandboxSessions.id, sanitizedSessionId))
+        .for('update');
+      if (
+        !session
+        || session.status !== expectedStatus
+        || (
+          expectedStatus === 'ACTIVE'
+          && (
+            session.restoreFenceToken
+              !== validatedActiveGeneration!.restoreFenceToken
+            || session.containerId !== validatedActiveGeneration!.containerId
+          )
+        )
+      ) {
+        throw new SandboxSessionStatusConflictError(
+          sanitizedSessionId,
+          expectedStatus,
+          expectedStatus,
+        );
       }
-      throw new Error(`Sandbox session ${id} not found for status update`);
-    }
+
+      if (expectedStatus === 'ACTIVE') {
+        const [lifecycleOperation] = await tx
+          .select({
+            sandboxSessionId:
+              this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          })
+          .from(this.schema.sandboxSessionLifecycleOperations)
+          .where(and(
+            eq(
+              this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+              sanitizedSessionId,
+            ),
+            inArray(
+              this.schema.sandboxSessionLifecycleOperations.phase,
+              ['reserved', 'draining', 'executing'],
+            ),
+          ))
+          .limit(1);
+        if (lifecycleOperation) {
+          throw new SandboxSessionStatusConflictError(
+            sanitizedSessionId,
+            expectedStatus,
+            expectedStatus,
+          );
+        }
+      }
+
+      const [updated] = await tx
+        .update(this.schema.sandboxSessions)
+        .set({
+          updatedAt: databaseClockMs(),
+          lastActivityAt: databaseClockMs(),
+          ...(sanitizedExtra.containerName !== undefined
+            ? { containerName: sanitizedExtra.containerName }
+            : {}),
+          ...(sanitizedExtra.containerId !== undefined
+            ? { containerId: sanitizedExtra.containerId }
+            : {}),
+          ...(sanitizedExtra.restoreAttempts !== undefined
+            && sanitizedExtra.restoreAttempts !== null
+            ? { restoreAttempts: sanitizedExtra.restoreAttempts }
+            : {}),
+          ...(sanitizedExtra.lastRestoreError !== undefined
+            ? { lastRestoreError: sanitizedExtra.lastRestoreError }
+            : {}),
+        })
+        .where(and(
+          eq(this.schema.sandboxSessions.id, sanitizedSessionId),
+          eq(this.schema.sandboxSessions.status, expectedStatus),
+        ))
+        .returning({ id: this.schema.sandboxSessions.id });
+      if (!updated) {
+        throw new SandboxSessionStatusConflictError(
+          sanitizedSessionId,
+          expectedStatus,
+          expectedStatus,
+        );
+      }
+    });
   }
 
   async deleteSandboxSession(id: string): Promise<void> {
@@ -2285,25 +6747,26 @@ export class DatabaseRepository {
       .where(eq(this.schema.sandboxSessions.status, 'ACTIVE'));
   }
 
-  /**
-   * Sessions that may be stranded mid-restore. The orchestrator's startup
-   * reconciler uses this to detect rows left in RESTORING after a crash.
-   * Optionally filtered by an updated_at cutoff so callers can require the
-   * row to be older than `updatedBeforeMs` (e.g. exclude in-flight restores
-   * from a process that just started).
-   */
-  async getStrandedRestoringSessions(updatedBeforeMs?: number): Promise<SandboxSessionRow[]> {
+  /** All sessions currently inside the cross-replica restore admission state. */
+  async getRestoringSandboxSessions(): Promise<SandboxSessionRow[]> {
     return this.db
       .select()
       .from(this.schema.sandboxSessions)
-      .where(
-        and(
-          eq(this.schema.sandboxSessions.status, 'RESTORING'),
-          updatedBeforeMs === undefined
-            ? undefined
-            : lt(this.schema.sandboxSessions.updatedAt, updatedBeforeMs),
+      .where(eq(this.schema.sandboxSessions.status, 'RESTORING'));
+  }
+
+  /** Restore generations whose durable owner lease has expired. */
+  async getExpiredSandboxSessionRestores(): Promise<SandboxSessionRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.sandboxSessions)
+      .where(and(
+        eq(this.schema.sandboxSessions.status, 'RESTORING'),
+        lte(
+          this.schema.sandboxSessions.restoreLeaseExpiresAt,
+          databaseClockMs(),
         ),
-      );
+      ));
   }
 
   async getSandboxSessionsByAgent(agentId: string): Promise<SandboxSessionRow[]> {
@@ -2346,7 +6809,7 @@ export class DatabaseRepository {
 
   private async queryConversationSummaries(options: {
     agentId?: string;
-    sandboxStatuses?: string[];
+    sandboxStatuses?: SandboxSessionStatus[];
   }): Promise<ConversationSummaryRow[]> {
     const turnStats = this.db
       .select({
@@ -2494,43 +6957,146 @@ export class DatabaseRepository {
 
   // ── Checkpoints v2 (sandbox-session based) ────────────────
 
-  async createCheckpointV2(checkpoint: {
-    sandboxSessionId: string;
-    agentId: string;
-    checkpointVersion?: number;
-    checkpointData: Record<string, unknown>;
-    harnessState?: Record<string, unknown>;
-    workspaceRef?: string;
-    suspendReason?: string;
-  }): Promise<{ id: string }> {
+  /**
+   * Persist a checkpoint only while the exact executing lifecycle worker still
+   * owns the session. The checkpoint generation and its lifecycle provenance
+   * are committed together under the database clock, so a stale worker cannot
+   * publish a checkpoint after another replica has taken over.
+   */
+  async createCheckpointV2(
+    checkpoint: {
+      sandboxSessionId: string;
+      agentId: string;
+      checkpointVersion?: number;
+      checkpointData: Record<string, unknown>;
+      harnessState?: Record<string, unknown>;
+      workspaceRef?: string;
+      suspendReason?: string;
+    },
+    lifecycleOperation: SandboxSessionLifecycleFence,
+  ): Promise<{ id: string } | undefined> {
     const sanitizedCheckpoint = sanitizeTypedDbValue({
       sandboxSessionId: checkpoint.sandboxSessionId,
       agentId: checkpoint.agentId,
       checkpointVersion: checkpoint.checkpointVersion,
       workspaceRef: checkpoint.workspaceRef,
       suspendReason: checkpoint.suspendReason,
-    }, 'agentCheckpoints.insert');
+    }, 'agentCheckpoints.lifecycleInsert');
+    const ownerId = sanitizeDbText(
+      lifecycleOperation.ownerId,
+      'agentCheckpoints.lifecycleInsert.ownerId',
+    );
+    const fenceToken = validateTurnDeliveryFenceToken(
+      lifecycleOperation.fenceToken,
+      'agentCheckpoints.lifecycleInsert.fenceToken',
+    );
     const checkpointData = sanitizeDbJsonValue(
       checkpoint.checkpointData,
-      'agentCheckpoints.checkpointData',
+      'agentCheckpoints.lifecycleInsert.checkpointData',
     ) as Record<string, unknown>;
     const harnessState = checkpoint.harnessState
-      ? sanitizeDbJsonValue(checkpoint.harnessState, 'agentCheckpoints.harnessState') as Record<string, unknown>
+      ? sanitizeDbJsonValue(
+          checkpoint.harnessState,
+          'agentCheckpoints.lifecycleInsert.harnessState',
+        ) as Record<string, unknown>
       : null;
-    const [row] = await this.db
-      .insert(this.schema.agentCheckpoints)
-      .values({
-        sandboxSessionId: sanitizedCheckpoint.sandboxSessionId,
-        agentId: sanitizedCheckpoint.agentId,
-        checkpointVersion: sanitizedCheckpoint.checkpointVersion ?? 2,
-        checkpointData,
-        harnessState,
-        workspaceRef: sanitizedCheckpoint.workspaceRef ?? null,
-        suspendReason: sanitizedCheckpoint.suspendReason ?? null,
-      })
-      .returning({ id: this.schema.agentCheckpoints.id });
-    if (!row) throw new Error('Expected insert to return a row but got undefined');
-    return row;
+
+    return this.db.transaction(async (tx) => {
+      // Use the same session -> lifecycle lock order as claim and completion.
+      // Materialize the clock only after both ownership rows are locked.
+      const [session] = await tx
+        .select({ sandboxSessionId: this.schema.sandboxSessions.id })
+        .from(this.schema.sandboxSessions)
+        .where(and(
+          eq(
+            this.schema.sandboxSessions.id,
+            sanitizedCheckpoint.sandboxSessionId,
+          ),
+          eq(
+            this.schema.sandboxSessions.agentId,
+            sanitizedCheckpoint.agentId,
+          ),
+          eq(this.schema.sandboxSessions.status, 'ACTIVE'),
+        ))
+        .for('update');
+      if (!session) {
+        return undefined;
+      }
+
+      const [operation] = await tx
+        .select({
+          sandboxSessionId:
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          operationId:
+            this.schema.sandboxSessionLifecycleOperations.operationId,
+          leaseExpiresAt:
+            this.schema.sandboxSessionLifecycleOperations.leaseExpiresAt,
+        })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(and(
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+            sanitizedCheckpoint.sandboxSessionId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.operation,
+            'checkpoint',
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.phase,
+            'executing',
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.ownerId,
+            ownerId,
+          ),
+          eq(
+            this.schema.sandboxSessionLifecycleOperations.fenceToken,
+            fenceToken,
+          ),
+        ))
+        .for('update');
+      if (!operation) {
+        return undefined;
+      }
+
+      const [clock] = await tx
+        .select({ nowMs: databaseClockMs() })
+        .from(this.schema.sandboxSessionLifecycleOperations)
+        .where(eq(
+          this.schema.sandboxSessionLifecycleOperations.sandboxSessionId,
+          sanitizedCheckpoint.sandboxSessionId,
+        ))
+        .limit(1);
+      if (!clock) {
+        throw new Error('Database clock query returned no row');
+      }
+      const nowMs = parseDatabaseClockMs(clock.nowMs);
+      if (operation.leaseExpiresAt <= nowMs) {
+        return undefined;
+      }
+
+      const [row] = await tx
+        .insert(this.schema.agentCheckpoints)
+        .values({
+          sandboxSessionId: sanitizedCheckpoint.sandboxSessionId,
+          agentId: sanitizedCheckpoint.agentId,
+          checkpointVersion: sanitizedCheckpoint.checkpointVersion ?? 2,
+          checkpointData,
+          harnessState,
+          workspaceRef: sanitizedCheckpoint.workspaceRef ?? null,
+          suspendReason: sanitizedCheckpoint.suspendReason ?? null,
+          lifecycleOperationId: operation.operationId,
+          lifecycleOwnerId: ownerId,
+          lifecycleFenceToken: fenceToken,
+          createdAt: nowMs,
+        })
+        .returning({ id: this.schema.agentCheckpoints.id });
+      if (!row) {
+        throw new Error('Expected insert to return a row but got undefined');
+      }
+      return row;
+    });
   }
 
   async getCheckpointV2(sandboxSessionId: string): Promise<CheckpointV2 | null> {
@@ -2544,6 +7110,34 @@ export class DatabaseRepository {
     const row = rows[0];
     if (!row) return null;
     return row;
+  }
+
+  async getCheckpointV2ForLifecycleOperation(
+    sandboxSessionId: string,
+    lifecycleOperationId: string,
+  ): Promise<CheckpointV2 | null> {
+    const rows = await this.db
+      .select()
+      .from(this.schema.agentCheckpoints)
+      .where(and(
+        eq(
+          this.schema.agentCheckpoints.sandboxSessionId,
+          sanitizeDbText(
+            sandboxSessionId,
+            'agentCheckpoints.lifecycleOperation.sandboxSessionId',
+          ),
+        ),
+        eq(
+          this.schema.agentCheckpoints.lifecycleOperationId,
+          sanitizeDbText(
+            lifecycleOperationId,
+            'agentCheckpoints.lifecycleOperation.operationId',
+          ),
+        ),
+      ))
+      .orderBy(desc(this.schema.agentCheckpoints.createdAt))
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   async deleteCheckpointsForSandboxSession(sandboxSessionId: string): Promise<number> {
@@ -2571,18 +7165,48 @@ export class DatabaseRepository {
     return Object.fromEntries(rows.map((r: SystemSettingRow) => [r.key, r.value]));
   }
 
-  async tryInsertToolDedup(requestId: string, turnId: string, toolName: string): Promise<boolean> {
-    try {
-      await this.db.insert(this.schema.toolRequestDedup).values(
-        sanitizeTypedDbValue({ requestId, turnId, toolName, status: 'in_progress' }, 'toolRequestDedup.insert'),
+  async tryAdmitToolRequest(
+    input: ExpectedSandboxCallbackDelivery & {
+      requestId: string;
+      toolName: string;
+    },
+  ): Promise<'inserted' | 'duplicate' | 'stale'> {
+    const requestId = sanitizeDbText(
+      input.requestId,
+      'toolRequestDedup.admit.requestId',
+    );
+    const turnId = sanitizeDbText(
+      input.turnId,
+      'toolRequestDedup.admit.turnId',
+    );
+    const toolName = sanitizeDbText(
+      input.toolName,
+      'toolRequestDedup.admit.toolName',
+    );
+    return this.db.transaction(async (tx) => {
+      const delivery = await this.lockExactSandboxCallbackDelivery(
+        tx,
+        input,
+        'toolRequestDedup.admit',
       );
-      return true;
-    } catch (err: unknown) {
-      if (isUniqueConstraintViolation(err)) {
-        return false;
+      if (!delivery) {
+        return 'stale';
       }
-      throw err;
-    }
+
+      const inserted = await tx
+        .insert(this.schema.toolRequestDedup)
+        .values({
+          requestId,
+          turnId,
+          toolName,
+          status: 'in_progress',
+        })
+        .onConflictDoNothing({
+          target: this.schema.toolRequestDedup.requestId,
+        })
+        .returning({ requestId: this.schema.toolRequestDedup.requestId });
+      return inserted.length > 0 ? 'inserted' : 'duplicate';
+    });
   }
 
   async getToolDedup(requestId: string): Promise<{
@@ -2598,16 +7222,49 @@ export class DatabaseRepository {
     });
   }
 
-  async completeToolDedup(requestId: string, result: string | null, error: string | null): Promise<void> {
+  async completeToolDedup(
+    requestId: string,
+    result: string | null,
+    error: string | null,
+    input: ExpectedSandboxCallbackDelivery,
+  ): Promise<boolean> {
     const status = error ? 'failed' : 'completed';
-    await this.db.update(this.schema.toolRequestDedup)
-      .set(sanitizeTypedDbValue({
-        status,
-        result,
-        error,
-        completedAt: Date.now(),
-      }, 'toolRequestDedup.complete'))
-      .where(eq(this.schema.toolRequestDedup.requestId, requestId));
+    const sanitizedRequestId = sanitizeDbText(
+      requestId,
+      'toolRequestDedup.complete.requestId',
+    );
+    const turnId = sanitizeDbText(
+      input.turnId,
+      'toolRequestDedup.complete.turnId',
+    );
+    return this.db.transaction(async (tx) => {
+      const delivery = await this.lockExactSandboxCallbackDelivery(
+        tx,
+        {
+          ...input,
+          turnId,
+        },
+        'toolRequestDedup.complete',
+      );
+      if (!delivery) {
+        return false;
+      }
+      const [completed] = await tx
+        .update(this.schema.toolRequestDedup)
+        .set(sanitizeTypedDbValue({
+          status,
+          result,
+          error,
+          completedAt: Date.now(),
+        }, 'toolRequestDedup.complete'))
+        .where(and(
+          eq(this.schema.toolRequestDedup.requestId, sanitizedRequestId),
+          eq(this.schema.toolRequestDedup.turnId, turnId),
+          eq(this.schema.toolRequestDedup.status, 'in_progress'),
+        ))
+        .returning({ requestId: this.schema.toolRequestDedup.requestId });
+      return completed !== undefined;
+    });
   }
 
   async cleanupToolDedup(maxAgeMs: number = 10 * 60 * 1000): Promise<number> {
@@ -2626,6 +7283,73 @@ export class DatabaseRepository {
       this.db.insert(this.schema.artifacts).values(sanitizedData).returning(),
       'artifact',
     );
+  }
+
+  async saveArtifactIfDeliveryOwned(
+    data: ArtifactInsert,
+    input: ExpectedSandboxCallbackDelivery,
+  ): Promise<ArtifactRow | undefined> {
+    const sanitizedData = sanitizeTypedDbValue(data, 'artifacts.fencedInsert');
+    const turnId = sanitizeDbText(
+      input.turnId,
+      'artifacts.fencedInsert.turnId',
+    );
+    const agentId = sanitizeDbText(
+      input.agentId,
+      'artifacts.fencedInsert.agentId',
+    );
+    return this.db.transaction(async (tx) => {
+      const delivery = await this.lockExactSandboxCallbackDelivery(
+        tx,
+        {
+          ...input,
+          turnId,
+          agentId,
+        },
+        'artifacts.fencedInsert',
+      );
+      if (!delivery) {
+        return undefined;
+      }
+      if (
+        sanitizedData.turnId != null
+        && sanitizedData.turnId !== turnId
+      ) {
+        throw new Error(
+          `Artifact turn ${sanitizedData.turnId} does not match callback turn ${turnId}`,
+        );
+      }
+      if (
+        sanitizedData.agentId != null
+        && sanitizedData.agentId !== agentId
+      ) {
+        throw new Error(
+          `Artifact agent ${sanitizedData.agentId} does not match callback agent ${agentId}`,
+        );
+      }
+      if (
+        sanitizedData.conversationId != null
+        && sanitizedData.conversationId !== delivery.conversationId
+      ) {
+        throw new Error(
+          `Artifact conversation ${sanitizedData.conversationId} does not match callback conversation ${delivery.conversationId}`,
+        );
+      }
+
+      const [artifact] = await tx
+        .insert(this.schema.artifacts)
+        .values({
+          ...sanitizedData,
+          turnId,
+          agentId,
+          conversationId: delivery.conversationId,
+        })
+        .returning();
+      if (!artifact) {
+        throw new Error('Expected fenced artifact insert to return a row');
+      }
+      return artifact;
+    });
   }
 
   async getArtifact(id: string): Promise<ArtifactRow | undefined> {

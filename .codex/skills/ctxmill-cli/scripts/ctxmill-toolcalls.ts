@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { redactSensitiveFields as redact } from '../../../../packages/ctxmill/src/cli/redaction.ts';
+
 export {};
 
 type JsonRecord = Record<string, unknown>;
@@ -22,7 +24,6 @@ interface ToolCallSummary {
 class UsageError extends Error { exitCode = 2 }
 class ApiError extends Error { exitCode = 1; constructor(message: string, readonly status: number, readonly data: unknown) { super(message); } }
 
-const SECRET_KEY_RE = /(secret|token|password|authorization|api[_-]?key|credential|private[_-]?key)/i;
 const args = parseArgs(Bun.argv.slice(2));
 
 try {
@@ -265,7 +266,6 @@ function stringValue(value: unknown): string { return value === undefined || val
 function parseMaybeJson(text: string): unknown { if (!text) return null; try { return JSON.parse(text); } catch { return text; } }
 function parseJsonish(value: unknown): unknown { return typeof value === 'string' ? parseMaybeJson(value) : value; }
 function summarizeValue(value: unknown, max = 140): string { const text = typeof value === 'string' ? value : value === undefined ? '' : JSON.stringify(value); return text.length <= max ? text : `${text.slice(0, max - 1)}…`; }
-function redact(value: unknown, seen = new WeakSet<object>()): unknown { if (Array.isArray(value)) return value.map((item) => redact(item, seen)); if (!isRecord(value)) return value; if (seen.has(value)) return '[Circular]'; seen.add(value); const out: JsonRecord = {}; for (const [key, child] of Object.entries(value)) out[key] = SECRET_KEY_RE.test(key) ? '[REDACTED]' : redact(child, seen); return out; }
 function normalizeSince(value: string | undefined): string | undefined { if (!value) return undefined; if (/^\d+$/.test(value)) return value; const parsed = Date.parse(value); if (Number.isFinite(parsed)) return String(parsed); const relative = value.match(/^now-(\d+)(s|m|h|d)$/); if (!relative) throw new UsageError('--since must be epoch ms, ISO datetime, or now-<n>s|m|h|d'); const amount = Number(relative[1]); const unit = relative[2]; const multiplier = unit === 's' ? 1000 : unit === 'm' ? 60_000 : unit === 'h' ? 3_600_000 : 86_400_000; return String(Date.now() - amount * multiplier); }
 function table(rows: Array<Record<string, unknown>>, columns: Array<[string, string, number?]>): string { if (rows.length === 0) return '(none)'; const rendered = rows.map((row) => columns.map(([key, _label, max]) => summarizeValue(row[key], max ?? 40))); const widths = columns.map(([_key, label], i) => Math.max(label.length, ...rendered.map((row) => row[i]!.length))); return [columns.map(([_key, label], i) => label.padEnd(widths[i]!)).join('  '), widths.map((w) => '-'.repeat(w)).join('  '), ...rendered.map((row) => row.map((cell, i) => cell.padEnd(widths[i]!)).join('  '))].join('\n'); }
 function helpText(): string { return `ctxmill-toolcalls.ts — extract ctxmill tool-call timeline\n\nUsage:\n  bun scripts/ctxmill-toolcalls.ts --agent <agentId> [--turn <turnId> | --conversation <conversationId>]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --agent <agentId>      Agent id\n  --turn <turnId>        Execution turn id; used to discover conversation id\n  --conversation <id>    Conversation id\n  --since <time>         Epoch ms, ISO datetime, or now-5m for event lookup\n  --events-limit <n>     Event lookup limit (default 200)\n  --include-results      Include full tool results instead of short summaries\n  --json                 Emit JSON\n  --no-redact            Disable secret redaction\n`; }

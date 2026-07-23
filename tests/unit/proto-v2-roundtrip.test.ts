@@ -6,10 +6,12 @@ import {
   type MessageShape,
 } from '../../packages/proto/node_modules/@bufbuild/protobuf/dist/esm/index.js';
 import { describe, expect, it } from 'vitest';
+import * as sandboxProto from '../../packages/proto/gen/ctxmill/sandbox/v1/sandbox_pb.js';
 
 import {
   FreshBootstrapSchema,
-  NativeToolConfigSchema,
+  NativeToolPolicy,
+  NativeToolPolicyConfigSchema,
   OpenSessionRequestSchema,
   ToolLocation,
   ToolMetadataSchema,
@@ -23,6 +25,12 @@ function expectRoundTrip<Desc extends DescMessage>(schema: Desc, value: MessageS
 }
 
 describe('proto v2 sandbox roundtrip', () => {
+  it('uses one explicit native-tool policy field instead of lossy allow/block lists', () => {
+    expect(sandboxProto).toHaveProperty('NativeToolPolicyConfigSchema');
+    expect(FreshBootstrapSchema.fields.map((field) => field.name)).toContain('native_tool_policy');
+    expect(FreshBootstrapSchema.fields.map((field) => field.name)).not.toContain('native_tools');
+  });
+
   it('preserves programmatic flag when tools are plain objects in OpenSessionRequest', () => {
     const message = create(OpenSessionRequestSchema, {
       bootstrap: {
@@ -50,9 +58,9 @@ describe('proto v2 sandbox roundtrip', () => {
             },
           ],
           workspaceDir: '/workspace',
-          nativeTools: create(NativeToolConfigSchema, {
-            allowlist: ['Read', 'Glob'],
-            blocklist: ['Bash'],
+          nativeToolPolicy: create(NativeToolPolicyConfigSchema, {
+            policy: NativeToolPolicy.ALLOW,
+            names: ['Read', 'Glob'],
           }),
         }),
       },
@@ -68,9 +76,9 @@ describe('proto v2 sandbox roundtrip', () => {
     expect(decoded.bootstrap.value.tools[0]?.programmatic).toBe(true);
     expect(decoded.bootstrap.value.tools[1]?.name).toBe('manual-tool');
     expect(decoded.bootstrap.value.tools[1]?.programmatic).toBe(false);
-    expect(decoded.bootstrap.value.nativeTools).toMatchObject({
-      allowlist: ['Read', 'Glob'],
-      blocklist: ['Bash'],
+    expect(decoded.bootstrap.value.nativeToolPolicy).toMatchObject({
+      policy: NativeToolPolicy.ALLOW,
+      names: ['Read', 'Glob'],
     });
   });
 

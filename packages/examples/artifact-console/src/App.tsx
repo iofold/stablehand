@@ -7,7 +7,7 @@ import {
   type CtxmillA2UIComponents,
   type CtxmillRunPhase,
 } from '@ctxmill/react';
-import type { ApiAgent } from '@ctxmill/shared';
+import { AgentListResponseSchema, type Agent } from '@ctxmill/contracts';
 import { KeyRound, LogOut, MessageSquarePlus, Plug, Square } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -43,7 +43,7 @@ function loadConnection(): Connection | null {
   return null;
 }
 
-function TokenGate({ onConnect }: { onConnect: (connection: Connection, agents: ApiAgent[]) => void }) {
+function TokenGate({ onConnect }: { onConnect: (connection: Connection, agents: Agent[]) => void }) {
   const [apiBase, setApiBase] = useState(DEFAULT_API_BASE);
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +63,7 @@ function TokenGate({ onConnect }: { onConnect: (connection: Connection, agents: 
       if (!res.ok) {
         throw new Error(`API responded ${res.status}.`);
       }
-      const agents = (await res.json()) as ApiAgent[];
+      const agents = AgentListResponseSchema.parse(await res.json());
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ apiBase: base, token: candidate.token }));
       onConnect({ apiBase: base, token: candidate.token }, agents);
     } catch (err) {
@@ -152,7 +152,7 @@ function ChatSurface({
   connection,
   components,
 }: {
-  agent: ApiAgent;
+  agent: Agent;
   connection: Connection;
   components: CtxmillA2UIComponents;
 }) {
@@ -175,7 +175,7 @@ function ChatSurfaceInner({
   components,
   onNewConversation,
 }: {
-  agent: ApiAgent;
+  agent: Agent;
   connection: Connection;
   components: CtxmillA2UIComponents;
   onNewConversation: () => void;
@@ -283,11 +283,11 @@ function ChatSurfaceInner({
 
 export function App() {
   const [connection, setConnection] = useState<Connection | null>(null);
-  const [agents, setAgents] = useState<ApiAgent[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const components = useMemo(() => chartComponents(), []);
 
-  const handleConnect = useCallback((conn: Connection, agentList: ApiAgent[]) => {
+  const handleConnect = useCallback((conn: Connection, agentList: Agent[]) => {
     setConnection(conn);
     setAgents(agentList);
     setSelectedId((prev) => prev ?? agentList[0]?.id ?? null);

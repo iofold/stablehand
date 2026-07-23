@@ -1,4 +1,5 @@
 import type { ToolCall } from './tool/types.js';
+import type { BuiltinToolPolicy, NativeToolPolicy } from '@ctxmill/contracts';
 export interface AgentResourceLimits {
   cpus?: number;
   memoryMb?: number;
@@ -6,17 +7,13 @@ export interface AgentResourceLimits {
   timeoutSec?: number;
 }
 
-export interface NativeToolConfig {
-  allowlist?: string[];
-  blocklist?: string[];
-}
-
 export interface AgentDefinition {
   name: string;
   harness: string;
   harnessConfig: Record<string, unknown>;
   tools: string[];
-  nativeTools?: NativeToolConfig;
+  builtinToolPolicy?: BuiltinToolPolicy;
+  nativeToolPolicy?: NativeToolPolicy;
   systemPrompt: string;
   description?: string;
   metadata?: Record<string, unknown>;

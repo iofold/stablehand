@@ -10,7 +10,12 @@ import {
   TurnIdSchema,
   WebhookIdSchema,
 } from './ids.js';
-import { WorkspaceRelativePathSchema } from './harness.js';
+import {
+  BuiltinToolPolicySchema,
+  NativeToolPolicySchema,
+  WorkspaceRelativePathSchema,
+} from './harness.js';
+import { TurnUsageSchema } from './usage.js';
 
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const StringRecordSchema = z.record(z.string(), z.string());
@@ -21,33 +26,6 @@ export const AgentResourceLimitsSchema = z.strictObject({
   memoryMb: z.number().int().min(256).max(4096).optional(),
   pidsLimit: z.number().int().min(64).max(512).optional(),
   timeoutSec: z.number().int().min(60).max(3600).optional(),
-});
-
-export const AgentNativeToolsSchema = z.strictObject({
-  allowlist: z.array(z.string().trim().min(1)).optional(),
-  blocklist: z.array(z.string().trim().min(1)).optional(),
-}).superRefine((value, context) => {
-  for (const field of ['allowlist', 'blocklist'] as const) {
-    const names = value[field] ?? [];
-    if (new Set(names).size !== names.length) {
-      context.addIssue({
-        code: 'custom',
-        path: [field],
-        message: `${field} must not contain duplicate tool names`,
-      });
-    }
-  }
-
-  const blocked = new Set(value.blocklist ?? []);
-  for (const name of value.allowlist ?? []) {
-    if (blocked.has(name)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['blocklist'],
-        message: `Tool "${name}" cannot appear in both allowlist and blocklist`,
-      });
-    }
-  }
 });
 
 export const AgentWorkspaceContentSchema = z.strictObject({
@@ -82,31 +60,28 @@ export const AgentCreateInputSchema = z.strictObject({
   systemPrompt: z.string(),
   tools: z.array(z.string().trim().min(1)),
   httpTools: z.array(HttpToolDefinitionSchema).optional(),
+  builtinToolPolicy: BuiltinToolPolicySchema.optional(),
   description: z.string().optional(),
   metadata: UnknownRecordSchema.optional(),
   resourceLimits: AgentResourceLimitsSchema.nullable().optional(),
-  nativeTools: AgentNativeToolsSchema.optional(),
+  nativeToolPolicy: NativeToolPolicySchema.optional(),
   workspaceContent: AgentWorkspaceContentSchema.optional(),
   mode: AgentModeSchema.optional(),
   manifest: UnknownRecordSchema.optional(),
 });
 
-export const AgentUpdateInputSchema = AgentCreateInputSchema
+export const AgentPatchInputSchema = AgentCreateInputSchema
   .partial()
   .extend({
-    nativeTools: AgentNativeToolsSchema.nullable().optional(),
+    description: z.string().nullable().optional(),
+    builtinToolPolicy: BuiltinToolPolicySchema.nullable().optional(),
+    metadata: UnknownRecordSchema.nullable().optional(),
+    nativeToolPolicy: NativeToolPolicySchema.nullable().optional(),
     workspaceContent: AgentWorkspaceContentSchema.nullable().optional(),
     mode: AgentModeSchema.nullable().optional(),
     manifest: UnknownRecordSchema.nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'At least one agent field is required');
-
-export const TokenUsageSchema = z.strictObject({
-  inputTokens: z.number().int().nonnegative(),
-  outputTokens: z.number().int().nonnegative(),
-  totalTokens: z.number().int().nonnegative(),
-  costUsd: z.number().nonnegative().optional(),
-});
 
 export const TurnStatusSchema = z.enum([
   'QUEUED',
@@ -149,7 +124,7 @@ export const TurnSchema = z.strictObject({
   restoreAttempts: z.number().int().nonnegative().nullable().optional(),
   lastRestoreError: z.string().nullable().optional(),
   checkpointAt: EpochMillisecondsSchema.optional(),
-  usage: TokenUsageSchema.optional(),
+  usage: TurnUsageSchema.nullable(),
 });
 
 export const SandboxSessionsByStatusSchema = z.strictObject({
@@ -170,11 +145,12 @@ export const AgentSchema = z.strictObject({
   workspaceDir: z.string().nullable(),
   status: z.string(),
   manifest: UnknownRecordSchema.nullable(),
-  version: z.number().int().nonnegative().nullable(),
   metadata: UnknownRecordSchema.nullable(),
   createdAt: EpochMillisecondsSchema,
   updatedAt: EpochMillisecondsSchema,
-  nativeTools: AgentNativeToolsSchema.nullable(),
+  builtinToolPolicy: BuiltinToolPolicySchema.nullable(),
+  nativeToolPolicy: NativeToolPolicySchema.nullable(),
+  httpTools: z.array(HttpToolDefinitionSchema),
   workspaceContent: AgentWorkspaceContentSchema.nullable(),
   mode: AgentModeSchema.nullable(),
   resourceLimits: AgentResourceLimitsSchema.nullable(),
@@ -187,7 +163,6 @@ export const AgentSchema = z.strictObject({
   activeTurnCount: z.number().int().nonnegative().optional(),
   tokensTotal: z.number().int().nonnegative().optional(),
   tokensLast24h: z.number().int().nonnegative().optional(),
-  recentTurns: z.array(TurnSchema).optional(),
   sandboxSessionsByStatus: SandboxSessionsByStatusSchema.optional(),
   lastActivity: EpochMillisecondsSchema.nullable().optional(),
 });
@@ -207,15 +182,88 @@ export const SecretPutResponseSchema = z.strictObject({
   key: z.string().trim().min(1),
 });
 
-export const SandboxSecretsSchema = z.record(
-  z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
-  z.string(),
-);
+export const MAX_SANDBOX_SECRET_COUNT = 128;
+export const MAX_SANDBOX_SECRET_KEY_LENGTH = 128;
+export const MAX_SANDBOX_SECRET_VALUE_BYTES = 64 * 1024;
+export const MAX_SANDBOX_SECRETS_TOTAL_BYTES = 128 * 1024;
+
+const RESERVED_SANDBOX_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set([
+  'NODE_OPTIONS',
+  'ORCHESTRATOR_URL',
+  'PTC_PORT',
+  'SANDBOX_PORT',
+]);
+const UNSAFE_RECORD_KEYS: ReadonlySet<string> = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+]);
+const UTF8_ENCODER = new TextEncoder();
+
+export function isReservedSandboxEnvironmentKey(key: string): boolean {
+  return key.startsWith('CTXMILL_')
+    || RESERVED_SANDBOX_ENVIRONMENT_KEYS.has(key)
+    || UNSAFE_RECORD_KEYS.has(key);
+}
+
+const SandboxSecretsRecordSchema = z.record(
+  z.string()
+    .max(MAX_SANDBOX_SECRET_KEY_LENGTH)
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+  z.string().refine(
+    (value) => !value.includes('\0'),
+    'Secret value cannot contain a NUL byte',
+  ),
+).superRefine((secrets, ctx) => {
+  const entries = Object.entries(secrets);
+  if (entries.length > MAX_SANDBOX_SECRET_COUNT) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `At most ${MAX_SANDBOX_SECRET_COUNT} sandbox secrets are allowed`,
+    });
+  }
+
+  let totalBytes = 0;
+  for (const [key, value] of entries) {
+    const valueBytes = UTF8_ENCODER.encode(value).byteLength;
+    totalBytes += UTF8_ENCODER.encode(key).byteLength + valueBytes;
+    if (valueBytes > MAX_SANDBOX_SECRET_VALUE_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `Secret value exceeds ${MAX_SANDBOX_SECRET_VALUE_BYTES} UTF-8 bytes`,
+      });
+    }
+  }
+
+  if (totalBytes > MAX_SANDBOX_SECRETS_TOTAL_BYTES) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Sandbox secrets exceed ${MAX_SANDBOX_SECRETS_TOTAL_BYTES} total UTF-8 bytes`,
+    });
+  }
+});
+
+export const SandboxSecretsSchema = z.preprocess((value, ctx) => {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    for (const key of Object.keys(value)) {
+      if (isReservedSandboxEnvironmentKey(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: 'Secret key is reserved by the sandbox runtime',
+        });
+      }
+    }
+  }
+  return value;
+}, SandboxSecretsRecordSchema);
 
 export const TagsSchema = z.record(z.string().trim().min(1), z.string().min(1).max(256));
 
 export const BackgroundTurnStartInputSchema = z.strictObject({
   task: z.string().trim().min(1),
+  conversationId: ConversationIdSchema.optional(),
   requestedTurnId: z.string().trim().min(1).optional(),
   sandboxSecrets: SandboxSecretsSchema.optional(),
   tags: TagsSchema.optional(),
@@ -336,6 +384,8 @@ export const ConversationSummaryListResponseSchema = z.strictObject({
   conversations: z.array(ConversationSummarySchema),
 });
 
+export const ActiveConversationListResponseSchema = z.array(ConversationSummarySchema);
+
 export const SandboxSessionSchema = z.strictObject({
   id: SandboxSessionIdSchema,
   conversationId: ConversationIdSchema,
@@ -350,6 +400,9 @@ export const SandboxSessionSchema = z.strictObject({
   lastActivityAt: EpochMillisecondsSchema,
   restoreAttempts: z.number().int().nonnegative().nullable().optional(),
   lastRestoreError: z.string().nullable().optional(),
+  restoreOwnerId: z.string().nullable(),
+  restoreFenceToken: z.number().int().nonnegative(),
+  restoreLeaseExpiresAt: EpochMillisecondsSchema.nullable(),
 });
 
 export const SandboxSessionListResponseSchema = z.array(SandboxSessionSchema);
@@ -450,11 +503,17 @@ export const WebhookEventNameSchema = z.enum([
   'budget.threshold',
 ]);
 
-export const WebhookUpsertInputSchema = z.strictObject({
+export const WebhookCreateInputSchema = z.strictObject({
   url: z.string().url(),
   events: z.array(WebhookEventNameSchema).min(1),
   secret: z.string().min(1),
 });
+
+export const WebhookPatchInputSchema = WebhookCreateInputSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'Webhook patch must include at least one field',
+  });
 
 export const WebhookSchema = z.strictObject({
   id: WebhookIdSchema,
@@ -515,11 +574,11 @@ export const SandboxMetricsResponseSchema = z.strictObject({
 });
 
 export type AgentResourceLimits = z.infer<typeof AgentResourceLimitsSchema>;
-export type AgentNativeTools = z.infer<typeof AgentNativeToolsSchema>;
 export type AgentWorkspaceContent = z.infer<typeof AgentWorkspaceContentSchema>;
 export type AgentMode = z.infer<typeof AgentModeSchema>;
+export type HttpToolDefinition = z.infer<typeof HttpToolDefinitionSchema>;
 export type AgentCreateInput = z.input<typeof AgentCreateInputSchema>;
-export type AgentUpdateInput = z.input<typeof AgentUpdateInputSchema>;
+export type AgentPatchInput = z.input<typeof AgentPatchInputSchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type Turn = z.infer<typeof TurnSchema>;
 export type Message = z.infer<typeof MessageSchema>;
@@ -533,4 +592,5 @@ export type BackgroundTurnStartInput = z.input<typeof BackgroundTurnStartInputSc
 export type ConversationTurnStartInput = z.input<typeof ConversationTurnStartInputSchema>;
 export type InterruptResolveInput = z.input<typeof InterruptResolveInputSchema>;
 export type FileWriteInput = z.input<typeof FileWriteInputSchema>;
-export type WebhookUpsertInput = z.input<typeof WebhookUpsertInputSchema>;
+export type WebhookCreateInput = z.input<typeof WebhookCreateInputSchema>;
+export type WebhookPatchInput = z.input<typeof WebhookPatchInputSchema>;

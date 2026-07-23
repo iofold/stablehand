@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { redactSensitiveFields as redact } from '../../../../packages/ctxmill/src/cli/redaction.ts';
+
 export {};
 
 type JsonRecord = Record<string, unknown>;
@@ -10,7 +12,6 @@ class UsageError extends Error { exitCode = 2 }
 class TimeoutError extends Error { exitCode = 3 }
 class ApiError extends Error { exitCode = 1; constructor(message: string, readonly status: number, readonly data: unknown) { super(message); } }
 
-const SECRET_KEY_RE = /(secret|token|password|authorization|api[_-]?key|credential|private[_-]?key)/i;
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'ERROR', 'CANCELLED', 'TERMINATED', 'completed', 'error', 'cancelled']);
 const args = parseArgs(Bun.argv.slice(2));
 
@@ -210,6 +211,5 @@ function stringValue(value: unknown): string { return value === undefined || val
 function parseMaybeJson(text: string): unknown { if (!text) return null; try { return JSON.parse(text); } catch { return text; } }
 function eventArray(value: unknown): JsonRecord[] { return isRecord(value) && Array.isArray(value.events) ? value.events.filter(isRecord) : []; }
 function matchesPayload(event: JsonRecord, contains: string | undefined): boolean { return contains ? JSON.stringify(event).includes(contains) : true; }
-function redact(value: unknown, seen = new WeakSet<object>()): unknown { if (Array.isArray(value)) return value.map((item) => redact(item, seen)); if (!isRecord(value)) return value; if (seen.has(value)) return '[Circular]'; seen.add(value); const out: JsonRecord = {}; for (const [key, child] of Object.entries(value)) out[key] = SECRET_KEY_RE.test(key) ? '[REDACTED]' : redact(child, seen); return out; }
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function helpText(): string { return `ctxmill-tail.ts — follow ctxmill live streams and wait for events/turns\n\nUsage:\n  bun scripts/ctxmill-tail.ts stream <agentId> [--jsonl]\n  bun scripts/ctxmill-tail.ts events [--agent <agentId>] [--type <type>] [--cursor n]\n  bun scripts/ctxmill-tail.ts wait-event (--type <type> | --agent <agentId>) [--contains text] [--timeout-ms 120000]\n  bun scripts/ctxmill-tail.ts wait-turn <agentId> <turnId> [--timeout-ms 120000]\n\nFlags:\n  --base-url <url>       ctxmill API root\n  --api-token <token>    Bearer token (default: CTXMILL_API_TOKEN)\n  --json / --jsonl       Emit one JSON object per line\n  --interval-ms <n>      Poll interval for events/turn waits (default 2000)\n  --limit <n>            Event page size (default 50)\n  --no-redact            Disable secret redaction\n`; }

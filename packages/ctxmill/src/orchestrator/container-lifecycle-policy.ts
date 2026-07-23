@@ -4,7 +4,11 @@ import {
   type ContainerInfo,
   type SandboxContainerManager,
 } from '../sandbox/container-manager.js';
-import type { DatabaseRepository, SandboxSessionRow } from '../database/repository.js';
+import type {
+  DatabaseRepository,
+  SandboxSessionActiveGeneration,
+  SandboxSessionRow,
+} from '../database/repository.js';
 import { retryWithBackoff } from '@ctxmill/sandbox-daemon';
 import { hasStatusCode } from '../util/status-code-error.js';
 import { parsePositiveMs, unrefTimer } from '../util/timing.js';
@@ -12,14 +16,25 @@ import {
   type HarnessGrpcClient,
   waitForContainerReady,
 } from './session-manager/grpc-session-client.js';
+import type {
+  SessionReconnectionRegistration,
+} from './session-manager/ports.js';
 import { sandboxGrpcBaseUrl } from './session-manager/sandbox-endpoint.js';
-import type { SessionStatusCoordinator } from './session-manager/session-status-coordinator.js';
+import {
+  StaleTransitionError,
+  type SessionStatusCoordinator,
+} from './session-manager/session-status-coordinator.js';
 import type { SessionStatus } from './session-manager/types.js';
 import { isAliveContainerStatus } from '../sandbox/runtime/status.js';
 import { stopAndRemoveContainer } from './container-cleanup.js';
+import {
+  acquireSandboxSessionLifecycleOperation,
+  type SandboxSessionLifecycleOperationGuard,
+} from './sandbox-session-lifecycle-operation.js';
 
 const TAG = '[LifecyclePolicy]';
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_LIFECYCLE_RECOVERY_INTERVAL_MS = 5_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
 const MAX_IDLE_CHECKPOINT_FAILURES = 3;
 
@@ -48,9 +63,14 @@ interface Logger {
 }
 
 export interface ReconciliationCallbacks {
-  onSessionReconnected: (session: SandboxSessionRow, grpcClient?: HarnessGrpcClient) => void;
+  onSessionReconnected: (
+    session: SandboxSessionRow,
+    grpcClient?: HarnessGrpcClient,
+  ) => SessionReconnectionRegistration;
   onSessionEvicted: (sessionId: string, conversationId: string) => void | Promise<void>;
-  reconcileStrandedRestoring: (session: SandboxSessionRow) => Promise<'CHECKPOINTED' | 'TERMINATED'>;
+  reconcileExpiredSandboxSessionRestore: (
+    session: SandboxSessionRow,
+  ) => Promise<'CHECKPOINTED' | 'TERMINATED' | undefined>;
 }
 
 export interface ContainerLifecyclePolicyDeps {
@@ -93,6 +113,10 @@ function getStartedAtMs(labels: Record<string, string>): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function isLiveSandboxSessionStatus(status: string): boolean {
+  return status === 'ACTIVE' || status === 'RESTORING';
+}
+
 export class ContainerLifecyclePolicy {
   private readonly containerManager: SandboxContainerManager;
   private readonly db: DatabaseRepository;
@@ -104,7 +128,9 @@ export class ContainerLifecyclePolicy {
   private readonly entries = new Map<string, PauseEntry>();
   private readonly sessionConversationIds = new Map<string, string>();
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
+  private lifecycleRecoveryTimer: ReturnType<typeof setInterval> | null = null;
   private reconciliationRunning = false;
+  private lifecycleRecoveryRunning = false;
   private readonly removingContainers = new Set<string>();
 
   constructor(deps: ContainerLifecyclePolicyDeps) {
@@ -126,6 +152,7 @@ export class ContainerLifecyclePolicy {
     }
 
     this.startReconciliationTimer();
+    this.startLifecycleRecoveryTimer();
 
     this.logger.info(
       `${TAG} started periodic reconciliation every ${this.reconciliationIntervalMs / 1000}s`,
@@ -136,6 +163,10 @@ export class ContainerLifecyclePolicy {
     if (this.reconciliationTimer) {
       clearInterval(this.reconciliationTimer);
       this.reconciliationTimer = null;
+    }
+    if (this.lifecycleRecoveryTimer) {
+      clearInterval(this.lifecycleRecoveryTimer);
+      this.lifecycleRecoveryTimer = null;
     }
     this.cleanupAll();
     this.logger.info(`${TAG} stopped`);
@@ -179,6 +210,27 @@ export class ContainerLifecyclePolicy {
       });
     }, this.reconciliationIntervalMs);
     unrefTimer(this.reconciliationTimer);
+  }
+
+  private startLifecycleRecoveryTimer(): void {
+    this.lifecycleRecoveryTimer = setInterval(() => {
+      void this.runLifecycleRecovery().catch((err) => {
+        this.logger.error(`${TAG} lifecycle recovery error:`, err);
+      });
+    }, DEFAULT_LIFECYCLE_RECOVERY_INTERVAL_MS);
+    unrefTimer(this.lifecycleRecoveryTimer);
+  }
+
+  private async runLifecycleRecovery(): Promise<void> {
+    if (this.lifecycleRecoveryRunning) {
+      return;
+    }
+    this.lifecycleRecoveryRunning = true;
+    try {
+      await this.reconcileExpiredLifecycleOperations();
+    } finally {
+      this.lifecycleRecoveryRunning = false;
+    }
   }
 
   private clearEntryTimers(entry: PauseEntry): void {
@@ -344,6 +396,40 @@ export class ContainerLifecyclePolicy {
       return;
     }
 
+    let hasLiveDelivery: boolean;
+    try {
+      hasLiveDelivery = await this.db.hasLiveTurnDeliveryForSandboxSession(sessionId);
+    } catch (err) {
+      if (this.entries.get(sessionId) !== entry || entry.idleCallbacks !== callbacks) {
+        return;
+      }
+      this.logger.error(
+        `${TAG} failed to verify turn delivery before idle checkpoint for session ${sessionId}:`,
+        err,
+      );
+      this.rescheduleIdleCheckpointRetry(sessionId, entry, callbacks);
+      return;
+    }
+
+    if (
+      this.entries.get(sessionId) !== entry
+      || entry.idleCallbacks !== callbacks
+      || entry.state !== 'none'
+    ) {
+      return;
+    }
+
+    if (hasLiveDelivery) {
+      entry.idleFailureCount = 0;
+      this.armIdleTimer(sessionId, entry);
+      this.entries.set(sessionId, entry);
+      this.logger.debug(
+        `${TAG} deferred idle checkpoint for session ${sessionId}; ` +
+        'a turn has a live delivery lease',
+      );
+      return;
+    }
+
     entry.state = 'promoting';
     this.entries.set(sessionId, entry);
     this.logger.debug(`${TAG} idle timeout reached for session ${sessionId}, checkpointing directly`);
@@ -384,38 +470,49 @@ export class ContainerLifecyclePolicy {
 
   private async reconcileOnStartup(): Promise<void> {
     this.logger.info(`${TAG} reconciling sandbox sessions on startup`);
+    await this.runLifecycleRecovery();
 
-    const [dbSessions, strandedRestoring, liveContainers] = await Promise.all([
+    const [
+      dbSessions,
+      restoringSessions,
+      expiredRestores,
+      liveContainers,
+    ] = await Promise.all([
       this.db.getActiveSandboxSessions(),
-      this.db.getStrandedRestoringSessions(),
+      this.db.getRestoringSandboxSessions(),
+      this.db.getExpiredSandboxSessionRestores(),
       this.containerManager.listManagedContainersWithLabels(),
     ]);
 
-    // ctx-7fz: roll any session stranded in RESTORING back to a recoverable
-    // state. This must run before container reconciliation so the rest of the
-    // pass sees a consistent ACTIVE/CHECKPOINTED set.
-    let restoringReconciled = 0;
-    let restoringTerminated = 0;
-    for (const stranded of strandedRestoring) {
-      this.sessionConversationIds.set(stranded.id, stranded.conversationId);
-      const outcome = await this.reconciliationCallbacks.reconcileStrandedRestoring(stranded);
-      await this.reconciliationCallbacks.onSessionEvicted(stranded.id, stranded.conversationId);
-      if (outcome === 'CHECKPOINTED') {
-        restoringReconciled++;
-      } else {
-        restoringTerminated++;
-      }
-      this.cleanup(stranded.id);
-    }
-    if (strandedRestoring.length > 0) {
+    // Reconcile only the exact expired restore generations observed by the
+    // database. Container liveness cannot substitute for a durable owner
+    // lease: a process may crash after starting its runtime.
+    const {
+      restoringReconciled,
+      restoringTerminated,
+      preservedRestoringSessionIds,
+    } =
+      await this.reconcileExpiredSandboxSessionRestores(
+        restoringSessions,
+        expiredRestores,
+      );
+    if (restoringSessions.length > 0) {
       this.logger.info(
-        `${TAG} stranded-RESTORING reconciliation: checkpointed=${restoringReconciled}, terminated=${restoringTerminated}`,
+        `${TAG} expired restore reconciliation: checkpointed=${restoringReconciled}, terminated=${restoringTerminated}`,
       );
     }
 
     const containerByName = new Map(liveContainers.map((container) => [container.containerName, container]));
     const containerById = new Map(liveContainers.map((container) => [container.containerId, container]));
-    const knownContainerIds = new Set<string>();
+    const knownContainerIds = new Set(
+      liveContainers
+        .filter((container) => {
+          const sessionId = container.labels['ctxmill.sandbox-session-id'];
+          return sessionId !== undefined
+            && preservedRestoringSessionIds.has(sessionId);
+        })
+        .map((container) => container.containerId),
+    );
     let reconnected = 0;
     let markedCheckpointed = 0;
     let deleted = 0;
@@ -429,13 +526,43 @@ export class ContainerLifecyclePolicy {
         knownContainerIds.add(container.containerId);
       }
       const alive = container !== undefined && isAliveContainerStatus(container.status);
+      const hasUnfinishedLifecycleOperation =
+        await this.db.hasUnfinishedSandboxSessionLifecycleOperation(session.id);
+      const hasLiveDelivery = await this.db.hasLiveTurnDeliveryForSandboxSession(session.id);
+
+      if (hasUnfinishedLifecycleOperation) {
+        this.logger.info(
+          `${TAG} session ${session.id}: deferring startup adoption while ` +
+          'a sandbox lifecycle operation is unfinished',
+        );
+        continue;
+      }
+
+      if (hasLiveDelivery) {
+        this.logger.info(
+          `${TAG} session ${session.id}: deferring startup adoption while ` +
+          'a turn has a live delivery lease',
+        );
+        continue;
+      }
 
       if (!alive) {
         const resultingStatus = await this.demoteDeadSession(
           session.id,
           session.conversationId,
           session.status as SessionStatus,
+          {
+            restoreFenceToken: session.restoreFenceToken,
+            containerId: session.containerId,
+          },
         );
+        if (!resultingStatus) {
+          this.logger.info(
+            `${TAG} session ${session.id}: deferring dead-session demotion; ` +
+            'lifecycle ownership was not available',
+          );
+          continue;
+        }
         if (resultingStatus === 'CHECKPOINTED') {
           markedCheckpointed++;
         } else {
@@ -454,12 +581,106 @@ export class ContainerLifecyclePolicy {
 
       if (session.status === 'ACTIVE' && container.status !== 'paused') {
         const reconnectedSession = await this.syncContainerBinding(session, container);
+        if (!reconnectedSession) {
+          continue;
+        }
 
-        this.logger.info(`${TAG} session ${session.id}: container running, reconnecting gRPC client`);
-        const baseUrl = sandboxGrpcBaseUrl(container);
-        const { grpcClient } = await waitForContainerReady(baseUrl);
-        this.reconciliationCallbacks.onSessionReconnected(reconnectedSession, grpcClient);
-        reconnected++;
+        const adoption = await acquireSandboxSessionLifecycleOperation(
+          { db: this.db, logger: this.logger },
+          session.id,
+          'adopt',
+          {
+            expectedActiveGeneration: {
+              restoreFenceToken: reconnectedSession.restoreFenceToken,
+              containerId: reconnectedSession.containerId,
+            },
+          },
+        );
+        if (!adoption || adoption.operation !== 'adopt') {
+          await adoption?.stop();
+          this.logger.info(
+            `${TAG} session ${session.id}: deferring startup adoption; ` +
+            'durable adoption ownership was not available',
+          );
+          continue;
+        }
+
+        let reconnectionRegistration:
+          SessionReconnectionRegistration | undefined;
+        let registered = false;
+        try {
+          adoption.signal.throwIfAborted();
+          this.logger.info(`${TAG} session ${session.id}: container running, reconnecting gRPC client`);
+          const baseUrl = sandboxGrpcBaseUrl(container);
+          const runtimeInstanceToken =
+            await this.containerManager.getRuntimeInstanceToken(
+              container.containerId,
+            );
+          adoption.signal.throwIfAborted();
+          if (!runtimeInstanceToken) {
+            this.logger.warn(
+              `${TAG} session ${session.id}: skipping startup adoption; ` +
+              'the live container has no runtime instance token',
+            );
+            continue;
+          }
+          const { grpcClient } = await waitForContainerReady(baseUrl, {
+            runtimeInstanceToken,
+            signal: adoption.signal,
+          });
+          adoption.signal.throwIfAborted();
+          const currentSession = await this.db.getSandboxSession(session.id);
+          adoption.signal.throwIfAborted();
+          if (
+            !currentSession
+            || currentSession.status !== 'ACTIVE'
+            || currentSession.restoreFenceToken
+              !== reconnectedSession.restoreFenceToken
+            || currentSession.containerId !== reconnectedSession.containerId
+          ) {
+            this.logger.info(
+              `${TAG} session ${session.id}: skipping stale startup adoption; ` +
+              'the active generation changed while waiting for gRPC readiness',
+            );
+            continue;
+          }
+          // The generation-tagged cache is a revocable registration. Durable
+          // admission remains blocked until cancellation is confirmed; if
+          // ownership was lost during a stalled callback, the exact installed
+          // record and its idle monitor are rolled back below.
+          reconnectionRegistration =
+            this.reconciliationCallbacks.onSessionReconnected(
+              currentSession,
+              grpcClient,
+            );
+          registered = true;
+        } finally {
+          let released: boolean;
+          try {
+            released = await this.releaseStartupAdoption(
+              adoption,
+              reconnectedSession,
+              reconnectionRegistration,
+            );
+
+            if (!released) {
+              await reconnectionRegistration?.revoke();
+              if (registered) {
+                this.logger.warn(
+                  `${TAG} session ${session.id}: rolled back startup adoption after ownership loss`,
+                );
+              } else {
+                this.logger.warn(
+                  `${TAG} session ${session.id}: could not release startup adoption ownership`,
+                );
+              }
+            } else if (registered) {
+              reconnected++;
+            }
+          } finally {
+            await adoption.stop();
+          }
+        }
       }
     }
 
@@ -470,7 +691,13 @@ export class ContainerLifecyclePolicy {
 
       if (this.removingContainers.has(container.containerId)) continue;
 
-      if (this.shouldDeferUnownedStartupContainer(container, container.labels['ctxmill.sandbox-session-id'])) {
+      const sessionId = container.labels['ctxmill.sandbox-session-id'];
+      if (sessionId && await this.hasPersistedLiveSandboxSession(sessionId)) {
+        knownContainerIds.add(container.containerId);
+        continue;
+      }
+
+      if (this.shouldDeferUnownedStartupContainer(container, sessionId)) {
         continue;
       }
 
@@ -497,23 +724,90 @@ export class ContainerLifecyclePolicy {
     );
   }
 
+  private async releaseStartupAdoption(
+    adoption: SandboxSessionLifecycleOperationGuard,
+    expectedSession: SandboxSessionRow,
+    registration: SessionReconnectionRegistration | undefined,
+  ): Promise<boolean> {
+    try {
+      return await adoption.cancel();
+    } catch (error) {
+      // Cancellation may have committed even when its response was lost.
+      // Preserve the only idle monitor only after authoritative readback
+      // proves the same generation is ACTIVE and no durable barrier remains.
+      try {
+        const [
+          sessionAfterCancellation,
+          hasUnfinishedLifecycleOperation,
+        ] = await Promise.all([
+          this.db.getSandboxSession(expectedSession.id),
+          this.db.hasUnfinishedSandboxSessionLifecycleOperation(
+            expectedSession.id,
+          ),
+        ]);
+        const released = Boolean(
+          sessionAfterCancellation?.status === 'ACTIVE'
+          && sessionAfterCancellation.restoreFenceToken
+            === expectedSession.restoreFenceToken
+          && sessionAfterCancellation.containerId
+            === expectedSession.containerId
+          && !hasUnfinishedLifecycleOperation
+        );
+        this.logger.warn(
+          released
+            ? `${TAG} session ${expectedSession.id}: adoption cancellation response was lost; authoritative readback confirmed release`
+            : `${TAG} session ${expectedSession.id}: adoption cancellation failed and authoritative readback did not confirm release`,
+          error,
+        );
+        return released;
+      } catch (readbackError) {
+        await registration?.revoke();
+        this.logger.error(
+          `${TAG} session ${expectedSession.id}: adoption cancellation readback failed`,
+          readbackError,
+        );
+        throw new Error(
+          `Could not classify startup adoption cancellation for sandbox session ${expectedSession.id}`,
+          { cause: readbackError },
+        );
+      }
+    }
+  }
+
   private async syncContainerBinding(
     session: SandboxSessionRow,
     container: ContainerInfo,
-  ): Promise<SandboxSessionRow> {
+  ): Promise<SandboxSessionRow | undefined> {
     if (session.containerName === container.containerName && session.containerId === container.containerId) {
       return session;
     }
 
-    await this.statusCoordinator.transition({
-      sessionId: session.id,
-      fromStatus: session.status as SessionStatus,
-      toStatus: session.status as SessionStatus,
-      extra: {
-        containerName: container.containerName,
-        containerId: container.containerId,
-      },
-    });
+    try {
+      await this.statusCoordinator.transition({
+        sessionId: session.id,
+        fromStatus: session.status as SessionStatus,
+        toStatus: session.status as SessionStatus,
+        extra: {
+          containerName: container.containerName,
+          containerId: container.containerId,
+        },
+        expectedActiveGeneration: session.status === 'ACTIVE'
+          ? {
+              restoreFenceToken: session.restoreFenceToken,
+              containerId: session.containerId,
+            }
+          : undefined,
+      });
+    } catch (error) {
+      if (!(error instanceof StaleTransitionError)) {
+        throw error;
+      }
+      this.logger.info(
+        `${TAG} session ${session.id}: skipping stale container binding repair; ` +
+        'the persisted generation changed',
+      );
+      return undefined;
+    }
     return {
       ...session,
       containerName: container.containerName,
@@ -559,7 +853,15 @@ export class ContainerLifecyclePolicy {
       const alive = container !== undefined && isAliveContainerStatus(container.status);
 
       if (alive) {
-        activeRows.push(await this.syncContainerBinding(session, container));
+        const syncedSession = await this.syncContainerBinding(session, container);
+        if (syncedSession) {
+          activeRows.push(syncedSession);
+        } else {
+          const currentSession = await this.db.getSandboxSession(session.id);
+          if (currentSession?.status === 'ACTIVE') {
+            activeRows.push(currentSession);
+          }
+        }
         continue;
       }
 
@@ -568,12 +870,34 @@ export class ContainerLifecyclePolicy {
         continue;
       }
 
+      const hasLiveDelivery = await this.db.hasLiveTurnDeliveryForSandboxSession(session.id);
+      if (hasLiveDelivery) {
+        activeRows.push(session);
+        this.logger.debug(
+          `${TAG} readback: preserving session ${session.id}; ` +
+          'a turn has a live delivery lease',
+        );
+        continue;
+      }
+
       const resultingStatus = await this.demoteDeadSession(
         session.id,
         session.conversationId,
         session.status as SessionStatus,
+        {
+          restoreFenceToken: session.restoreFenceToken,
+          containerId: session.containerId,
+        },
         { afterTransition: () => this.releaseMissingContainerSlot(session) },
       );
+      if (!resultingStatus) {
+        activeRows.push(session);
+        this.logger.debug(
+          `${TAG} readback: preserving session ${session.id}; ` +
+          'lifecycle ownership was not available',
+        );
+        continue;
+      }
       this.logger.info(
         resultingStatus === 'CHECKPOINTED'
           ? `${TAG} readback: session ${session.id} container gone, checkpoint exists -> CHECKPOINTED`
@@ -593,16 +917,33 @@ export class ContainerLifecyclePolicy {
     this.reconciliationRunning = true;
 
     try {
-      const [dbSessions, managedContainers] = await Promise.all([
+      await this.runLifecycleRecovery();
+      const [
+        dbSessions,
+        restoringSessions,
+        expiredRestores,
+        managedContainers,
+      ] = await Promise.all([
         this.db.getActiveSandboxSessions(),
+        this.db.getRestoringSandboxSessions(),
+        this.db.getExpiredSandboxSessionRestores(),
         this.containerManager.listManagedContainersWithLabels() as Promise<ManagedContainerWithLabels[]>,
       ]);
+
+      const { preservedRestoringSessionIds } =
+        await this.reconcileExpiredSandboxSessionRestores(
+          restoringSessions,
+          expiredRestores,
+        );
 
       for (const session of dbSessions) {
         this.sessionConversationIds.set(session.id, session.conversationId);
       }
 
-      const activeSessionIds = new Set(dbSessions.map((session) => session.id));
+      const liveSessionIds = new Set([
+        ...dbSessions.map((session) => session.id),
+        ...preservedRestoringSessionIds,
+      ]);
       const cleanupReasons = new Map<string, string>();
       const managedContainerIds = new Set(managedContainers.map((container) => container.containerId));
       let terminated = 0;
@@ -646,21 +987,29 @@ export class ContainerLifecyclePolicy {
         const isExpired = Number.isFinite(startedAtMs)
           && timeoutSec > 0
           && (Date.now() - startedAtMs) / 1000 > timeoutSec;
-        const hasActiveSession = sessionId !== undefined && activeSessionIds.has(sessionId);
+        let hasLiveSession = sessionId !== undefined && liveSessionIds.has(sessionId);
+        if (
+          !hasLiveSession
+          && sessionId
+          && await this.hasPersistedLiveSandboxSession(sessionId)
+        ) {
+          hasLiveSession = true;
+          liveSessionIds.add(sessionId);
+        }
         if (
           !cleanupReasons.has(container.containerId)
-          && !hasActiveSession
+          && !hasLiveSession
           && this.shouldDeferUnownedStartupContainer(container, sessionId)
         ) {
           continue;
         }
-        const shouldReview = cleanupReasons.has(container.containerId) || !hasActiveSession || isExpired;
+        const shouldReview = cleanupReasons.has(container.containerId) || !hasLiveSession || isExpired;
 
         if (!shouldReview) {
           continue;
         }
 
-        const decision = cleanupReasons.has(container.containerId) || !hasActiveSession
+        const decision = cleanupReasons.has(container.containerId) || !hasLiveSession
           ? 'kill'
           : await this.shouldKillContainer(container.containerId, sessionId);
 
@@ -669,9 +1018,9 @@ export class ContainerLifecyclePolicy {
         }
 
         let reason = cleanupReasons.get(container.containerId) ?? 'container eligible for cleanup';
-        if (!cleanupReasons.has(container.containerId) && !hasActiveSession && sessionId) {
-          reason = 'no matching active session in DB';
-        } else if (!cleanupReasons.has(container.containerId) && !hasActiveSession && !sessionId) {
+        if (!cleanupReasons.has(container.containerId) && !hasLiveSession && sessionId) {
+          reason = 'no matching live session in DB';
+        } else if (!cleanupReasons.has(container.containerId) && !hasLiveSession && !sessionId) {
           reason = 'container has no associated session';
         } else if (!cleanupReasons.has(container.containerId) && isExpired) {
           reason = 'container exceeded timeout';
@@ -692,6 +1041,193 @@ export class ContainerLifecyclePolicy {
     }
   }
 
+  private async reconcileExpiredSandboxSessionRestores(
+    sessions: SandboxSessionRow[],
+    expiredRestores: SandboxSessionRow[],
+  ): Promise<{
+    restoringReconciled: number;
+    restoringTerminated: number;
+    preservedRestoringSessionIds: ReadonlySet<string>;
+  }> {
+    let restoringReconciled = 0;
+    let restoringTerminated = 0;
+    const preservedRestoringSessionIds = new Set<string>();
+    const expiredFenceBySessionId = new Map(
+      expiredRestores.map((session) => [
+        session.id,
+        session.restoreFenceToken,
+      ]),
+    );
+    for (const session of sessions) {
+      this.sessionConversationIds.set(session.id, session.conversationId);
+      if (
+        expiredFenceBySessionId.get(session.id)
+          !== session.restoreFenceToken
+      ) {
+        preservedRestoringSessionIds.add(session.id);
+        this.logger.debug(
+          `${TAG} preserving leased restore generation ${session.restoreFenceToken} for session ${session.id}`,
+        );
+        continue;
+      }
+
+      try {
+        const outcome =
+          await this.reconciliationCallbacks.reconcileExpiredSandboxSessionRestore(
+            session,
+          );
+        if (!outcome) {
+          preservedRestoringSessionIds.add(session.id);
+          continue;
+        }
+        await this.reconciliationCallbacks.onSessionEvicted(
+          session.id,
+          session.conversationId,
+        );
+        if (outcome === 'CHECKPOINTED') {
+          restoringReconciled += 1;
+        } else {
+          restoringTerminated += 1;
+        }
+        this.cleanup(session.id);
+      } catch (error) {
+        // Another replica may have completed or reconciled the restore after
+        // this scan. Its compare-and-set result is authoritative; one stale
+        // row must not abort the rest of lifecycle reconciliation.
+        this.logger.warn(
+          `${TAG} could not reconcile expired restore for session ${session.id}:`,
+          error,
+        );
+      }
+    }
+
+    return {
+      restoringReconciled,
+      restoringTerminated,
+      preservedRestoringSessionIds,
+    };
+  }
+
+  private async hasPersistedLiveSandboxSession(
+    sessionId: string,
+  ): Promise<boolean> {
+    const current = await this.db.getSandboxSession(sessionId);
+    return current !== null && isLiveSandboxSessionStatus(current.status);
+  }
+
+  private async reconcileExpiredLifecycleOperations(): Promise<void> {
+    const recoverable = await this.db.getRecoverableSandboxSessionLifecycleOperations();
+    for (const persistedOperation of recoverable) {
+      const observedSession = await this.db.getSandboxSession(
+        persistedOperation.sandboxSessionId,
+      );
+      if (!observedSession || observedSession.status !== 'ACTIVE') {
+        continue;
+      }
+      const lifecycleOperation = await acquireSandboxSessionLifecycleOperation(
+        { db: this.db, logger: this.logger },
+        persistedOperation.sandboxSessionId,
+        persistedOperation.operation,
+        {
+          expectedActiveGeneration: {
+            restoreFenceToken: observedSession.restoreFenceToken,
+            containerId: observedSession.containerId,
+          },
+        },
+      );
+      if (!lifecycleOperation) {
+        continue;
+      }
+      if (
+        lifecycleOperation.operation !== persistedOperation.operation
+        || lifecycleOperation.operationId !== persistedOperation.operationId
+      ) {
+        await lifecycleOperation.stop();
+        continue;
+      }
+
+      if (lifecycleOperation.operation === 'adopt') {
+        const cancelled = await lifecycleOperation.cancel();
+        if (cancelled) {
+          this.logger.info(
+            `${TAG} cancelled abandoned startup adoption for session ` +
+            persistedOperation.sandboxSessionId,
+          );
+        }
+        continue;
+      }
+
+      if (lifecycleOperation.phase === 'reserved') {
+        const cancelled = await lifecycleOperation.cancel();
+        if (cancelled) {
+          this.logger.info(
+            `${TAG} cancelled abandoned reserved ${persistedOperation.operation} ` +
+            `for session ${persistedOperation.sandboxSessionId}`,
+          );
+        }
+        continue;
+      }
+
+      try {
+        if (!await lifecycleOperation.markExecuting()) {
+          continue;
+        }
+        const session = await this.db.getSandboxSession(
+          persistedOperation.sandboxSessionId,
+        );
+        if (!session || session.status !== 'ACTIVE') {
+          continue;
+        }
+        const checkpoint = persistedOperation.operation === 'checkpoint'
+          ? await this.db.getCheckpointV2ForLifecycleOperation(
+              session.id,
+              lifecycleOperation.operationId,
+            )
+          : persistedOperation.operation === 'reset'
+            ? await this.db.getCheckpointV2(session.id)
+            : null;
+        const resultingStatus = persistedOperation.operation === 'terminate'
+          ? 'TERMINATED'
+          : checkpoint
+            ? 'CHECKPOINTED'
+            : 'TERMINATED';
+        await this.statusCoordinator.transition({
+          sessionId: session.id,
+          fromStatus: 'ACTIVE',
+          toStatus: resultingStatus,
+          clearRuntime: true,
+          lifecycleOperation: lifecycleOperation.fence,
+        });
+        if (session.containerId) {
+          await stopAndRemoveContainer(
+            this.containerManager,
+            session.containerId,
+            this.logger,
+            `${TAG} recovering ${persistedOperation.operation} for session ${session.id}`,
+            5,
+          );
+        }
+        await this.reconciliationCallbacks.onSessionEvicted(
+          session.id,
+          session.conversationId,
+        );
+        this.cleanup(session.id);
+        this.logger.info(
+          `${TAG} recovered expired ${persistedOperation.operation} for ` +
+          `session ${session.id} -> ${resultingStatus}`,
+        );
+      } catch (err) {
+        this.logger.error(
+          `${TAG} failed recovering ${persistedOperation.operation} for ` +
+          `session ${persistedOperation.sandboxSessionId}:`,
+          err,
+        );
+      } finally {
+        await lifecycleOperation.stop();
+      }
+    }
+  }
+
   private async shouldKillContainer(
     containerId: string,
     sessionId?: string,
@@ -707,17 +1243,41 @@ export class ContainerLifecyclePolicy {
       return 'skip';
     }
 
+    const hasLiveDelivery = await this.db.hasLiveTurnDeliveryForSandboxSession(sessionId);
+    if (hasLiveDelivery) {
+      this.logger.debug(
+        `${TAG} skipping kill for session ${sessionId}; ` +
+        'a turn has a live delivery lease',
+      );
+      return 'skip';
+    }
+
     const alive = await this.containerManager.isContainerAlive(containerId);
     if (alive) {
       return 'skip';
     }
 
+    const observedSession = await this.db.getSandboxSession(sessionId);
+    if (
+      !observedSession
+      || observedSession.status !== 'ACTIVE'
+      || observedSession.containerId !== containerId
+    ) {
+      return 'skip';
+    }
     const conversationId = this.sessionConversationIds.get(sessionId);
     const resultingStatus = await this.demoteDeadSession(
       sessionId,
       conversationId,
-      (currentStatus as SessionStatus) ?? 'ACTIVE',
+      (currentStatus as SessionStatus) ?? observedSession.status,
+      {
+        restoreFenceToken: observedSession.restoreFenceToken,
+        containerId: observedSession.containerId,
+      },
     );
+    if (!resultingStatus) {
+      return 'skip';
+    }
     if (resultingStatus === 'CHECKPOINTED') {
       return 'kill-after-checkpoint';
     }
@@ -728,27 +1288,53 @@ export class ContainerLifecyclePolicy {
     sessionId: string,
     conversationId: string | undefined,
     fromStatus: SessionStatus,
+    expectedActiveGeneration: SandboxSessionActiveGeneration,
     options: { afterTransition?: () => Promise<void> } = {},
-  ): Promise<'CHECKPOINTED' | 'TERMINATED'> {
-    const checkpoint = await this.db.getCheckpointV2(sessionId);
-    const resultingStatus = checkpoint ? 'CHECKPOINTED' : 'TERMINATED';
-    await this.statusCoordinator.transition({
+  ): Promise<'CHECKPOINTED' | 'TERMINATED' | undefined> {
+    const lifecycleOperation = await acquireSandboxSessionLifecycleOperation(
+      { db: this.db, logger: this.logger },
       sessionId,
-      fromStatus,
-      toStatus: resultingStatus,
-      clearRuntime: true,
-    });
-    await options.afterTransition?.();
-    if (conversationId) {
-      await this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
-    }
-    this.cleanup(sessionId);
-    this.logger.info(
-      checkpoint
-        ? `${TAG} session ${sessionId}: dead container, checkpoint exists -> CHECKPOINTED`
-        : `${TAG} session ${sessionId}: dead container, no checkpoint -> TERMINATED`,
+      'reset',
+      { expectedActiveGeneration },
     );
-    return resultingStatus;
+    if (!lifecycleOperation) {
+      return undefined;
+    }
+    if (lifecycleOperation.operation !== 'reset') {
+      await lifecycleOperation.stop();
+      return undefined;
+    }
+
+    const executing = await lifecycleOperation.markExecuting();
+    if (!executing) {
+      await lifecycleOperation.cancel();
+      return undefined;
+    }
+
+    try {
+      const checkpoint = await this.db.getCheckpointV2(sessionId);
+      const resultingStatus = checkpoint ? 'CHECKPOINTED' : 'TERMINATED';
+      await this.statusCoordinator.transition({
+        sessionId,
+        fromStatus,
+        toStatus: resultingStatus,
+        clearRuntime: true,
+        lifecycleOperation: lifecycleOperation.fence,
+      });
+      await options.afterTransition?.();
+      if (conversationId) {
+        await this.reconciliationCallbacks.onSessionEvicted(sessionId, conversationId);
+      }
+      this.cleanup(sessionId);
+      this.logger.info(
+        checkpoint
+          ? `${TAG} session ${sessionId}: dead container, checkpoint exists -> CHECKPOINTED`
+          : `${TAG} session ${sessionId}: dead container, no checkpoint -> TERMINATED`,
+      );
+      return resultingStatus;
+    } finally {
+      await lifecycleOperation.stop();
+    }
   }
 
   private async releaseMissingContainerSlot(session: SandboxSessionRow): Promise<void> {

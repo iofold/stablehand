@@ -30,14 +30,26 @@ import {
   type OpenSessionRequest,
   OpenSessionResponseSchema,
   type DeliverTurnRequest,
+  type RenewTurnDeliveryCapabilityRequest,
   type SuspendSessionRequest,
   type KillSessionRequest,
   KillSessionResponseSchema,
 } from '@ctxmill/proto/sandbox/v1';
 
-import { openSession, deliverTurn, suspendSession, killSession } from './runner.js';
+import {
+  openSession,
+  deliverTurn,
+  renewTurnDeliveryCapability,
+  suspendSession,
+  killSession,
+} from './runner.js';
 import { validateCheckpointSize } from './checkpoint.js';
 import { stringifyJsonWithBigInts } from './json-serialization.js';
+import { createRuntimeInstanceAuthInterceptor } from './runtime-instance-auth.js';
+import {
+  resolvePtcTurnDeliveryContext,
+  runWithTurnDeliveryContext,
+} from './turn-delivery-context.js';
 
 import type { ResolvedSecrets } from '../harness/types.js';
 import type { ToolContext, ToolDefinition } from '../tool/types.js';
@@ -155,6 +167,13 @@ function isAuthorized(request: Request, token: string): boolean {
   return request.headers.get('authorization') === `Bearer ${token}`;
 }
 
+function readBearerToken(request: Request): string | undefined {
+  const authorization = request.headers.get('authorization');
+  if (!authorization?.startsWith('Bearer ')) return undefined;
+  const token = authorization.slice('Bearer '.length);
+  return token || undefined;
+}
+
 export function startToolApi(
   port: number = 8080,
   getTools: () => ToolDefinition[],
@@ -181,15 +200,22 @@ export function startToolApi(
         return response;
       };
 
-      if (!isAuthorized(request, token)) {
-        return respond(jsonResponse({ error: 'Unauthorized' }, 401));
-      }
-
       if (request.method === 'GET' && url.pathname === '/tools') {
+        if (!isAuthorized(request, token)) {
+          return respond(jsonResponse({ error: 'Unauthorized' }, 401));
+        }
         return respond(jsonResponse(getTools().map((tool) => tool.name)));
       }
 
       if (request.method === 'POST' && url.pathname.startsWith('/tools/')) {
+        const deliveryToken = readBearerToken(request);
+        const deliveryContext = deliveryToken
+          ? resolvePtcTurnDeliveryContext(deliveryToken)
+          : undefined;
+        if (!deliveryContext) {
+          return respond(jsonResponse({ error: 'Unauthorized' }, 401));
+        }
+
         const toolName = decodeURIComponent(url.pathname.slice('/tools/'.length));
         const tool = getTools().find((candidate) => candidate.name === toolName);
 
@@ -211,7 +237,13 @@ export function startToolApi(
             return respond(jsonResponse(inputResult.body, 400));
           }
 
-          const result = await tool.handler(inputResult.data, opts?.makeContext?.() ?? getSessionToolContext());
+          const result = await runWithTurnDeliveryContext(
+            deliveryContext,
+            () => tool.handler(
+              inputResult.data,
+              opts?.makeContext?.() ?? getSessionToolContext(),
+            ),
+          );
           return respond(jsonResponse(parseToolResult(result)));
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : String(error);
@@ -241,12 +273,17 @@ export function startToolApi(
  * OpenSession — unary RPC.
  * Initialises a new session from a FreshBootstrap or RestoreBootstrap.
  */
-async function handleOpenSession(req: OpenSessionRequest) {
+export async function handleOpenSession(
+  req: OpenSessionRequest,
+  context: HandlerContext,
+) {
   console.error(`[sandbox] OpenSession called`);
 
   try {
     const resolvedSecrets = ensureSecrets();
-    const result = await openSession(req, resolvedSecrets, {});
+    const result = await openSession(req, resolvedSecrets, {
+      signal: context.signal,
+    });
 
     console.error(`[sandbox] session opened — sessionId=${result.sessionId}, status=${result.status}`);
 
@@ -271,6 +308,16 @@ export async function* handleDeliverTurn(
   context: HandlerContext,
 ) {
   yield* deliverTurn(req, { signal: context.signal });
+}
+
+/**
+ * RenewTurnDeliveryCapability — extends only the exact active delivery
+ * authority. The request is authenticated by the runtime-instance interceptor.
+ */
+export async function handleRenewTurnDeliveryCapability(
+  req: RenewTurnDeliveryCapabilityRequest,
+) {
+  return await renewTurnDeliveryCapability(req);
 }
 
 /**
@@ -335,6 +382,7 @@ function registerRoutes(router: ConnectRouter) {
   router.service(HarnessService, {
     openSession: handleOpenSession,
     deliverTurn: handleDeliverTurn,
+    renewTurnDeliveryCapability: handleRenewTurnDeliveryCapability,
     suspendSession: handleSuspendSession,
     killSession: handleKillSession,
   });
@@ -373,9 +421,12 @@ export async function startDaemon(
   port: number = Number(process.env.SANDBOX_PORT) || 50051,
 ): Promise<Server> {
   const toolApiPort = parseInt(process.env.PTC_PORT ?? '8080', 10);
+  const runtimeInstanceAuthInterceptor =
+    createRuntimeInstanceAuthInterceptor();
 
   const connectHandler = connectNodeAdapter({
     routes: registerRoutes,
+    interceptors: [runtimeInstanceAuthInterceptor],
   });
 
   server = createServer(connectHandler);

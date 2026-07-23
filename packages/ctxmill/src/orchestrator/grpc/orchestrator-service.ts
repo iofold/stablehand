@@ -26,7 +26,19 @@ import {
 } from '@ctxmill/proto/sandbox/v1';
 import type { TypedEventBus } from '../../events/bus.js';
 import type { InterruptManager } from '../interrupt.js';
-import type { DatabaseRepository } from '../../database/repository.js';
+import type {
+  DatabaseRepository,
+  ExpectedTurnDeliveryFence,
+  SandboxSessionActiveGeneration,
+} from '../../database/repository.js';
+import {
+  resolveGrpcCallbackAuthConfig,
+  type GrpcCallbackAuthConfig,
+} from './callback-auth.js';
+import {
+  validateTurnDeliveryCapabilitySignature,
+  type TurnDeliveryCapabilityClaims,
+} from './turn-delivery-capability.js';
 
 /**
  * Context passed to each orchestrator-side tool handler when dispatching
@@ -34,9 +46,12 @@ import type { DatabaseRepository } from '../../database/repository.js';
  */
 export interface ToolHandlerContext {
   turnId: string;
+  sandboxSessionId?: string;
   agentId: string;
   conversationId?: string;
   requestId: string;
+  deliveryFence?: ExpectedTurnDeliveryFence;
+  activeGeneration?: SandboxSessionActiveGeneration;
 }
 
 /**
@@ -72,16 +87,124 @@ function ensureConnectError(err: unknown): ConnectError {
   return new ConnectError(detail, Code.Internal);
 }
 
+interface SandboxCallbackIdentity {
+  turnId: string;
+  sandboxSessionId: string;
+  agentId: string;
+}
+
+interface AdmittedSandboxCallback {
+  claims: TurnDeliveryCapabilityClaims;
+  conversationId?: string;
+}
+
+function requireCallbackIdentity(identity: SandboxCallbackIdentity): void {
+  if (!identity.turnId) {
+    throw new ConnectError('turn_id is required', Code.InvalidArgument);
+  }
+  if (!identity.sandboxSessionId) {
+    throw new ConnectError('sandbox_session_id is required', Code.InvalidArgument);
+  }
+  if (!identity.agentId) {
+    throw new ConnectError('agent_id is required', Code.InvalidArgument);
+  }
+}
+
+async function admitLiveSandboxCallback(
+  repository: DatabaseRepository | undefined,
+  identity: SandboxCallbackIdentity,
+  deliveryCapability: RequestToolRequest['deliveryCapability'],
+  authConfig: GrpcCallbackAuthConfig,
+): Promise<AdmittedSandboxCallback | undefined> {
+  if (!repository) {
+    return undefined;
+  }
+  requireCallbackIdentity(identity);
+  const claims = validateTurnDeliveryCapabilitySignature(
+    deliveryCapability,
+    identity,
+    authConfig,
+  );
+  if (claims.leaseExpiresAtMs <= Date.now()) {
+    throw new ConnectError(
+      'Sandbox callback delivery capability has expired',
+      Code.FailedPrecondition,
+    );
+  }
+  const admitted = await repository.getTurnDeliveryCapabilityClaims({
+    turnId: identity.turnId,
+    sandboxSessionId: identity.sandboxSessionId,
+    agentId: identity.agentId,
+    expectedDeliveryFence: deliveryFence(claims),
+    expectedActiveGeneration: activeGeneration(claims),
+  });
+  if (!admitted) {
+    throw new ConnectError(
+      'Sandbox callback does not belong to the presented live turn delivery',
+      Code.FailedPrecondition,
+    );
+  }
+  return {
+    claims,
+    ...('conversationId' in admitted
+      && typeof admitted.conversationId === 'string'
+      ? { conversationId: admitted.conversationId }
+      : {}),
+  };
+}
+
+function deliveryFence(
+  claims: Pick<TurnDeliveryCapabilityClaims, 'ownerId' | 'fenceToken'>,
+): ExpectedTurnDeliveryFence {
+  return {
+    ownerId: claims.ownerId,
+    fenceToken: claims.fenceToken,
+  };
+}
+
+function activeGeneration(
+  claims: Pick<
+    TurnDeliveryCapabilityClaims,
+    'restoreFenceToken' | 'containerId'
+  >,
+): SandboxSessionActiveGeneration {
+  return {
+    restoreFenceToken: claims.restoreFenceToken,
+    containerId: claims.containerId ?? null,
+  };
+}
+
 async function completeToolDedupOrThrow(
   repository: DatabaseRepository,
   requestId: string,
   result: string | null,
   error: string | null,
   phase: string,
+  authority: {
+    turnId: string;
+    sandboxSessionId: string;
+    agentId: string;
+    expectedDeliveryFence: ExpectedTurnDeliveryFence;
+    expectedActiveGeneration: SandboxSessionActiveGeneration;
+  },
 ): Promise<void> {
   try {
-    await repository.completeToolDedup(requestId, result, error);
+    const completed = await repository.completeToolDedup(
+      requestId,
+      result,
+      error,
+      authority,
+    );
+    if (!completed) {
+      throw new ConnectError(
+        `Tool request ${requestId} delivery authority changed before ${phase}`,
+        Code.FailedPrecondition,
+      );
+    }
   } catch (err) {
+    if (err instanceof ConnectError) {
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[OrchestratorService] Failed to finalize tool dedup for ${requestId}:`, err);
     throw new ConnectError(
@@ -133,6 +256,7 @@ export interface OrchestratorServiceDeps {
   eventBus: TypedEventBus;
   toolRegistry: OrchestratorToolRegistry;
   repository?: DatabaseRepository;
+  callbackAuthConfig?: GrpcCallbackAuthConfig;
 }
 
 /**
@@ -143,6 +267,8 @@ export interface OrchestratorServiceDeps {
  */
 export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
   const { eventBus, toolRegistry } = deps;
+  const callbackAuthConfig = deps.callbackAuthConfig
+    ?? resolveGrpcCallbackAuthConfig(process.env, { warn: () => undefined });
 
   return {
     /**
@@ -153,16 +279,67 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
      */
     async requestTool(req: RequestToolRequest): Promise<RequestToolResponse> {
       try {
-        const { turnId, agentId, toolName, argsJson, requestId } = req;
+        const {
+          turnId,
+          sandboxSessionId,
+          agentId,
+          toolName,
+          argsJson,
+          requestId,
+        } = req;
 
         if (!toolName) {
           throw new ConnectError('tool_name is required', Code.InvalidArgument);
         }
+        if (deps.repository && !requestId) {
+          throw new ConnectError('request_id is required', Code.InvalidArgument);
+        }
+        const liveDelivery = await admitLiveSandboxCallback(
+          deps.repository,
+          {
+            turnId,
+            sandboxSessionId,
+            agentId,
+          },
+          req.deliveryCapability,
+          callbackAuthConfig,
+        );
+        const callbackAuthority = liveDelivery
+          ? {
+            turnId,
+            sandboxSessionId,
+            agentId,
+            expectedDeliveryFence: deliveryFence(liveDelivery.claims),
+            expectedActiveGeneration: activeGeneration(liveDelivery.claims),
+          }
+          : undefined;
 
         let dedupInserted = false;
         if (requestId && deps.repository) {
-          const inserted = await deps.repository.tryInsertToolDedup(requestId, turnId, toolName);
-          if (!inserted) {
+          if (!callbackAuthority) {
+            throw new ConnectError(
+              'Sandbox callback does not belong to a live turn delivery',
+              Code.FailedPrecondition,
+            );
+          }
+          const admission = await deps.repository.tryAdmitToolRequest({
+            requestId,
+            turnId,
+            sandboxSessionId,
+            agentId,
+            toolName,
+            expectedDeliveryFence:
+              callbackAuthority.expectedDeliveryFence,
+            expectedActiveGeneration:
+              callbackAuthority.expectedActiveGeneration,
+          });
+          if (admission === 'stale') {
+            throw new ConnectError(
+              'Sandbox callback delivery ownership changed before tool admission',
+              Code.FailedPrecondition,
+            );
+          }
+          if (admission === 'duplicate') {
             const existing = await deps.repository.getToolDedup(requestId);
             if (existing) {
               if (existing.turnId !== turnId || existing.toolName !== toolName) {
@@ -192,6 +369,10 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
                 Code.Unavailable,
               );
             }
+            throw new ConnectError(
+              `Tool request ${requestId} admission changed concurrently`,
+              Code.Unavailable,
+            );
           } else {
             dedupInserted = true;
           }
@@ -199,12 +380,19 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
 
         const failToolRequest = async (error: string, phase: string): Promise<RequestToolResponse> => {
           if (dedupInserted && deps.repository) {
+            if (!callbackAuthority) {
+              throw new ConnectError(
+                'Sandbox callback delivery authority is unavailable',
+                Code.FailedPrecondition,
+              );
+            }
             await completeToolDedupOrThrow(
               deps.repository,
               requestId,
               null,
               error,
               phase,
+              callbackAuthority,
             );
           }
           return create(RequestToolResponseSchema, {
@@ -228,14 +416,22 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           }
         }
 
-        const turn = deps.repository ? await deps.repository.getTurn(turnId) : undefined;
         let result: string;
         try {
           result = await handler(args, {
             turnId,
             agentId,
-            ...(turn?.conversationId ? { conversationId: turn.conversationId } : {}),
+            ...(sandboxSessionId ? { sandboxSessionId } : {}),
+            ...(liveDelivery?.conversationId
+              ? { conversationId: liveDelivery.conversationId }
+              : {}),
             requestId,
+            ...(liveDelivery
+              ? {
+                deliveryFence: deliveryFence(liveDelivery.claims),
+                activeGeneration: activeGeneration(liveDelivery.claims),
+              }
+              : {}),
           });
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
@@ -243,12 +439,19 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
         }
 
         if (dedupInserted && deps.repository) {
+          if (!callbackAuthority) {
+            throw new ConnectError(
+              'Sandbox callback delivery authority is unavailable',
+              Code.FailedPrecondition,
+            );
+          }
           await completeToolDedupOrThrow(
             deps.repository,
             requestId,
             result,
             null,
             'successful execution',
+            callbackAuthority,
           );
         }
         return create(RequestToolResponseSchema, {
@@ -267,11 +470,27 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
      */
     async emitEvent(req: EmitEventRequest): Promise<EmitEventResponse> {
       try {
-        const { turnId, eventType, payloadJson } = req;
+        const {
+          turnId,
+          sandboxSessionId,
+          agentId,
+          eventType,
+          payloadJson,
+        } = req;
 
         if (!eventType) {
           throw new ConnectError('event_type is required', Code.InvalidArgument);
         }
+        const liveDelivery = await admitLiveSandboxCallback(
+          deps.repository,
+          {
+            turnId,
+            sandboxSessionId,
+            agentId,
+          },
+          req.deliveryCapability,
+          callbackAuthConfig,
+        );
 
         let payload: Record<string, unknown> = {};
         if (payloadJson) {
@@ -282,14 +501,42 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           }
         }
 
+        if (
+          typeof payload.agentId === 'string'
+          && agentId
+          && payload.agentId !== agentId
+        ) {
+          throw new ConnectError('payload agentId does not match agent_id', Code.InvalidArgument);
+        }
         payload.turnId = turnId;
-
-        // Extract agentId from payload if present, otherwise use empty string
-        const agentId = typeof payload.agentId === 'string' ? payload.agentId : '';
+        payload.agentId = agentId;
 
         try {
-          await eventBus.emitCustomAsync(eventType, agentId, payload);
+          let didEmit: boolean;
+          if (liveDelivery) {
+            didEmit = await eventBus.emitCustomAsync(
+              eventType,
+              agentId,
+              payload,
+              {
+                deliveryFence: deliveryFence(liveDelivery.claims),
+                sandboxSessionId,
+                activeGeneration: activeGeneration(liveDelivery.claims),
+              },
+            );
+          } else {
+            didEmit = await eventBus.emitCustomAsync(eventType, agentId, payload);
+          }
+          if (!didEmit) {
+            throw new ConnectError(
+              'Sandbox callback delivery ownership changed before event persistence',
+              Code.FailedPrecondition,
+            );
+          }
         } catch (err) {
+          if (err instanceof ConnectError) {
+            throw err;
+          }
           console.error(`[OrchestratorService] EmitEvent failed for ${eventType}:`, err);
           throw ensureConnectError(err);
         }
@@ -301,24 +548,69 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
     },
 
     async registerArtifact(req: RegisterArtifactRequest): Promise<RegisterArtifactResponse> {
-      const { artifact } = req;
+      const {
+        turnId,
+        sandboxSessionId,
+        agentId,
+        artifact,
+      } = req;
       if (!artifact || !artifact.name) {
         throw new ConnectError('artifact with name is required', Code.InvalidArgument);
+      }
+      if (!artifact.turnId || artifact.turnId !== turnId) {
+        throw new ConnectError(
+          'artifact turn_id must match request turn_id',
+          Code.InvalidArgument,
+        );
+      }
+      if (!artifact.agentId || artifact.agentId !== agentId) {
+        throw new ConnectError(
+          'artifact agent_id must match request agent_id',
+          Code.InvalidArgument,
+        );
       }
 
       try {
         if (deps.repository) {
-          const row = await deps.repository.saveArtifact({
+          const liveDelivery = await admitLiveSandboxCallback(
+            deps.repository,
+            {
+              turnId,
+              sandboxSessionId,
+              agentId,
+            },
+            req.deliveryCapability,
+            callbackAuthConfig,
+          );
+          if (!liveDelivery) {
+            throw new ConnectError(
+              'Sandbox callback does not belong to a live turn delivery',
+              Code.FailedPrecondition,
+            );
+          }
+          const row = await deps.repository.saveArtifactIfDeliveryOwned({
             id: artifact.id || undefined,
-            agentId: artifact.agentId,
-            turnId: artifact.turnId || req.turnId || undefined,
+            agentId,
+            turnId,
             name: artifact.name,
             mimeType: artifact.mimeType,
             sizeBytes: Number(artifact.sizeBytes),
             storageKey: artifact.storageKey,
             bucket: artifact.bucket,
             metadata: artifact.metadataJson ? JSON.parse(artifact.metadataJson) : undefined,
+          }, {
+            turnId,
+            sandboxSessionId,
+            agentId,
+            expectedDeliveryFence: deliveryFence(liveDelivery.claims),
+            expectedActiveGeneration: activeGeneration(liveDelivery.claims),
           });
+          if (!row) {
+            throw new ConnectError(
+              'Sandbox callback delivery ownership changed before artifact persistence',
+              Code.FailedPrecondition,
+            );
+          }
 
           return create(RegisterArtifactResponseSchema, {
             artifactId: row.id,
@@ -330,6 +622,9 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           error: 'No repository configured for artifact storage',
         });
       } catch (err) {
+        if (err instanceof ConnectError) {
+          throw err;
+        }
         const errorMsg = err instanceof Error ? err.message : String(err);
         return create(RegisterArtifactResponseSchema, {
           artifactId: '',
@@ -339,7 +634,12 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
     },
 
     async resolveArtifact(req: ResolveArtifactRequest): Promise<ResolveArtifactResponse> {
-      const { artifactId, agentId: callerAgentId } = req;
+      const {
+        artifactId,
+        agentId: callerAgentId,
+        turnId,
+        sandboxSessionId,
+      } = req;
       if (!artifactId) {
         throw new ConnectError('artifact_id is required', Code.InvalidArgument);
       }
@@ -351,14 +651,24 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           });
         }
 
+        await admitLiveSandboxCallback(
+          deps.repository,
+          {
+            turnId,
+            sandboxSessionId,
+            agentId: callerAgentId,
+          },
+          req.deliveryCapability,
+          callbackAuthConfig,
+        );
         const row = await deps.repository.getArtifact(artifactId);
         // Ownership boundary: the callback-auth interceptor has already verified
         // that req.agentId is the true authenticated sandbox agent, so an
         // owned artifact belonging to a different agent must not be resolvable
         // across sandboxes. Unowned rows (agentId null — orphaned or operator
-        // uploads) and open/dev mode (callerAgentId empty) stay resolvable, and
-        // a cross-agent hit is reported as not-found to avoid an existence oracle.
-        if (!row || (callerAgentId && row.agentId && row.agentId !== callerAgentId)) {
+        // uploads) stay resolvable to an admitted sandbox delivery, and a
+        // cross-agent hit is reported as not-found to avoid an existence oracle.
+        if (!row || (row.agentId && row.agentId !== callerAgentId)) {
           return create(ResolveArtifactResponseSchema, {
             error: `Artifact not found: ${artifactId}`,
           });
@@ -379,6 +689,9 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           }),
         });
       } catch (err) {
+        if (err instanceof ConnectError) {
+          throw err;
+        }
         const errorMsg = err instanceof Error ? err.message : String(err);
         return create(ResolveArtifactResponseSchema, { error: errorMsg });
       }
@@ -424,7 +737,38 @@ export function registerDefaultToolHandlers(
     payload.conversationId = ctx.conversationId;
     payload.agentId = ctx.agentId;
 
-    await eventBus.emitCustomAsync(eventType, ctx.agentId, payload);
+    let didEmit: boolean;
+    if (
+      ctx.deliveryFence
+      && ctx.sandboxSessionId
+      && ctx.activeGeneration
+    ) {
+      didEmit = await eventBus.emitCustomAsync(
+        eventType,
+        ctx.agentId,
+        payload,
+        {
+          deliveryFence: ctx.deliveryFence,
+          sandboxSessionId: ctx.sandboxSessionId,
+          activeGeneration: ctx.activeGeneration,
+        },
+      );
+    } else if (ctx.deliveryFence) {
+      didEmit = await eventBus.emitCustomAsync(
+        eventType,
+        ctx.agentId,
+        payload,
+        { deliveryFence: ctx.deliveryFence },
+      );
+    } else {
+      didEmit = await eventBus.emitCustomAsync(eventType, ctx.agentId, payload);
+    }
+    if (!didEmit) {
+      throw new ConnectError(
+        'Sandbox callback delivery ownership changed before event persistence',
+        Code.FailedPrecondition,
+      );
+    }
 
     return JSON.stringify({ ok: true, eventType });
   });
@@ -434,7 +778,28 @@ export function registerDefaultToolHandlers(
       const reason = typeof args.reason === 'string' ? args.reason : 'Tool requires approval';
 
       const turn = repository ? await repository.getTurn(ctx.turnId) : undefined;
-      const sandboxSessionId = turn?.sandboxSessionId ?? undefined;
+      const sandboxSessionId = ctx.sandboxSessionId ?? turn?.sandboxSessionId ?? undefined;
+      const callbackAuthority = repository
+        ? (
+          ctx.deliveryFence
+          && ctx.activeGeneration
+          && sandboxSessionId
+            ? {
+              turnId: ctx.turnId,
+              sandboxSessionId,
+              agentId: ctx.agentId,
+              expectedDeliveryFence: ctx.deliveryFence,
+              expectedActiveGeneration: ctx.activeGeneration,
+            }
+            : undefined
+        )
+        : undefined;
+      if (repository && !callbackAuthority) {
+        throw new ConnectError(
+          'Sandbox callback delivery authority is required for approval persistence',
+          Code.FailedPrecondition,
+        );
+      }
 
       const resolution = await interruptManager.waitForApproval(
         ctx.turnId,
@@ -444,7 +809,8 @@ export function registerDefaultToolHandlers(
         { ...args, reason },
         300_000,
         sandboxSessionId,
-        turn?.conversationId ?? undefined,
+        ctx.conversationId ?? turn?.conversationId ?? undefined,
+        callbackAuthority,
       );
 
       if (resolution.action === 'approve') {

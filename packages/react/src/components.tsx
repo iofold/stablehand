@@ -528,14 +528,43 @@ export function useCtxmillChat(options: UseCtxmillChatOptions) {
   const [state, dispatch] = useReducer(reduceCtxmillChatState, undefined, () => createInitialChatState(threadId));
   const stateRef = useRef<CtxmillChatState>(state);
   const abortRef = useRef<AbortController | null>(null);
+  const identityRef = useRef({ agentId, threadId });
+  const identityVersionRef = useRef(0);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
-  const stop = useCallback(() => {
-    abortRef.current?.abort();
+  useEffect(() => {
+    const previous = identityRef.current;
+    if (previous.agentId === agentId && previous.threadId === threadId) {
+      return;
+    }
+
+    identityRef.current = { agentId, threadId };
+    identityVersionRef.current += 1;
+    const activeController = abortRef.current;
     abortRef.current = null;
+    activeController?.abort();
+
+    const nextState = createInitialChatState(threadId);
+    stateRef.current = nextState;
+    dispatch({ type: 'reset', threadId: nextState.threadId });
+  }, [agentId, threadId]);
+
+  useEffect(() => () => {
+    identityVersionRef.current += 1;
+    const activeController = abortRef.current;
+    abortRef.current = null;
+    activeController?.abort();
+  }, []);
+
+  const stop = useCallback(() => {
+    const activeController = abortRef.current;
+    if (!activeController) return;
+    abortRef.current = null;
+    activeController.abort();
+    dispatch({ type: 'run_settled' });
   }, []);
 
   const sendMessage = useCallback(async (content: string) => {
@@ -543,7 +572,14 @@ export function useCtxmillChat(options: UseCtxmillChatOptions) {
     dispatch({ type: 'append_user_message', message: userMessage });
     const runId = createCtxmillId('turn');
     const controller = new AbortController();
+    const identityVersion = identityVersionRef.current;
+    abortRef.current?.abort();
     abortRef.current = controller;
+
+    const isActiveRun = () => (
+      identityVersionRef.current === identityVersion
+      && abortRef.current === controller
+    );
 
     try {
       const messages = [...toCtxmillMessages(stateRef.current.messages), userMessage];
@@ -554,17 +590,19 @@ export function useCtxmillChat(options: UseCtxmillChatOptions) {
         messages,
         signal: controller.signal,
       })) {
-        dispatch({ type: 'stream_event', event });
+        if (isActiveRun() && !controller.signal.aborted) {
+          dispatch({ type: 'stream_event', event });
+        }
       }
     } catch (err) {
-      if (!controller.signal.aborted) {
+      if (isActiveRun() && !controller.signal.aborted) {
         dispatch({ type: 'set_error', error: err instanceof Error ? err.message : String(err) });
       }
     } finally {
       // Covers stop()/aborts and streams that close without RUN_FINISHED —
       // otherwise isRunning wedges true and the composer stays disabled.
-      dispatch({ type: 'run_settled' });
-      if (abortRef.current === controller) {
+      if (isActiveRun()) {
+        dispatch({ type: 'run_settled' });
         abortRef.current = null;
       }
     }

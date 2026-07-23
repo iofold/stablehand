@@ -48,6 +48,7 @@ const MAX_HEARTBEAT_FAILURES = 3;
 interface ConnectionState {
   queue: string[];
   draining: boolean;
+  drainWaiters: Set<(connected: boolean) => void>;
   lastEventTime: number;
   consecutiveHeartbeatFailures: number;
   agentId: string;
@@ -146,6 +147,7 @@ export class SSEManager {
     const state: ConnectionState = {
       queue: [],
       draining: false,
+      drainWaiters: new Set(),
       lastEventTime: Date.now(),
       consecutiveHeartbeatFailures: 0,
       agentId,
@@ -177,6 +179,7 @@ export class SSEManager {
       if (!st) return;
       if (st.queue.length === 0) {
         st.draining = false;
+        this.resolveDrainWaiters(st, true);
         return;
       }
       while (st.queue.length > 0) {
@@ -189,6 +192,7 @@ export class SSEManager {
         }
       }
       st.draining = false;
+      this.resolveDrainWaiters(st, true);
     });
 
     // Send heartbeat comment every 15s to keep connection alive
@@ -236,6 +240,9 @@ export class SSEManager {
     if (state?.durableTail?.pollInterval) {
       clearInterval(state.durableTail.pollInterval);
       state.durableTail.pollInterval = null;
+    }
+    if (state) {
+      this.resolveDrainWaiters(state, false);
     }
     this.connectionState.delete(reply);
 
@@ -332,6 +339,8 @@ export class SSEManager {
             );
             if (!this.connectionState.has(reply)) return;
             tail.cursor = frame.seq;
+            const drain = this.waitForDrain(reply);
+            if (drain && !await drain) return;
           }
 
           if (page.length < DURABLE_REPLAY_PAGE_SIZE) {
@@ -346,6 +355,23 @@ export class SSEManager {
         state.durableTail.draining = false;
       }
     }
+  }
+
+  private waitForDrain(reply: FastifyReply): Promise<boolean> | null {
+    const state = this.connectionState.get(reply);
+    if (!state || (!state.draining && state.queue.length === 0)) {
+      return null;
+    }
+    return new Promise((resolve) => {
+      state.drainWaiters.add(resolve);
+    });
+  }
+
+  private resolveDrainWaiters(state: ConnectionState, connected: boolean): void {
+    for (const resolve of state.drainWaiters) {
+      resolve(connected);
+    }
+    state.drainWaiters.clear();
   }
 
   private writeToClient(agentId: string, reply: FastifyReply, data: string): void {

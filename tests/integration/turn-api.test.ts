@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { allowConsoleErrors } from '../setup-strict.js';
 
@@ -9,6 +9,7 @@ describe('Turn API lifecycle', () => {
   let container: TestAppHandle['container'];
   let testApp: TestAppHandle | undefined;
   let agentId: string;
+  let restoreTurnLaunch: (() => void) | undefined;
 
   beforeEach(() => { allowConsoleErrors(); });
 
@@ -18,6 +19,10 @@ describe('Turn API lifecycle', () => {
     });
     app = testApp.app;
     container = testApp.container;
+    const turnLaunch = vi
+      .spyOn(container.turnStartupService, 'launchPreparedTurn')
+      .mockResolvedValue(undefined);
+    restoreTurnLaunch = () => turnLaunch.mockRestore();
 
     const createRes = await app.inject({
       method: 'POST',
@@ -35,6 +40,7 @@ describe('Turn API lifecycle', () => {
   });
 
   afterAll(async () => {
+    restoreTurnLaunch?.();
     await testApp?.close();
   });
 
@@ -126,6 +132,66 @@ describe('Turn API lifecycle', () => {
     });
 
     expect(res.statusCode).toBe(404);
+  });
+
+  it('rejects interactive turns for a background-only agent before writing a turn', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: {
+        name: 'background-only-agent',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
+        systemPrompt: 'Run background work only.',
+        tools: [],
+        mode: 'background',
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/agents/${created.json().id}/message`,
+      payload: { content: 'This must not start.' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      code: 'agent_mode_not_allowed',
+      configuredMode: 'background',
+      requestedMode: 'interactive',
+    });
+    expect(await container.db.getTurnsByAgent(created.json().id as string)).toHaveLength(0);
+  });
+
+  it('rejects background turns for an interactive-only agent before writing a turn', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: {
+        name: 'interactive-only-agent',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
+        systemPrompt: 'Run interactive work only.',
+        tools: [],
+        mode: 'interactive',
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/agents/${created.json().id}/turns`,
+      payload: { task: 'This must not start.' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      code: 'agent_mode_not_allowed',
+      configuredMode: 'interactive',
+      requestedMode: 'background',
+    });
+    expect(await container.db.getTurnsByAgent(created.json().id as string)).toHaveLength(0);
   });
 
   it('replays the original background turn for a repeated idempotency key', async () => {

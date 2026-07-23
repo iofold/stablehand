@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentCard } from './AgentCard';
-import type { Agent } from '@/stores/agents';
+import { makeAgentFixture } from '@/test/agent-fixture';
 
 const navigateMock = vi.fn();
 
@@ -11,14 +11,7 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => navigateMock,
 }));
 
-const baseAgent: Agent = {
-  id: 'agent-1',
-  name: 'Agent 1',
-  status: 'idle',
-  tools: [],
-  harness: 'langgraph',
-  harnessConfig: { model: 'gpt-5.4-mini' },
-};
+const baseAgent = makeAgentFixture();
 
 describe('AgentCard', () => {
   let container: HTMLDivElement;
@@ -140,5 +133,41 @@ describe('AgentCard', () => {
     });
 
     expect(statusLabel()).toContain('Running');
+  });
+
+  it('shows budget and metering health as separate chips', () => {
+    act(() => {
+      root.render(
+        <AgentCard
+          agent={baseAgent}
+          budgetStatus={{
+            agentId: baseAgent.id,
+            state: 'blocked',
+            evaluatedAt: 1,
+            matches: [],
+          }}
+          modelGatewayStatus={{
+            enabled: true,
+            profile: 'default',
+            revision: 'dev1-r1',
+            state: 'degraded',
+            watermarkAt: 1,
+            lastAttemptAt: 1,
+            lastSuccessAt: 1,
+            lagMs: 120_000,
+            lastError: 'spend endpoint returned HTTP 503',
+            pendingCalls: 2,
+            unpricedCalls: 1,
+            quarantinedTransactions: 0,
+            orphanTransactions: 0,
+          }}
+        />,
+      );
+    });
+
+    expect(container.querySelector('[data-testid="agent-budget-chip"]')?.textContent)
+      .toContain('Budget blocked');
+    expect(container.querySelector('[data-testid="agent-metering-chip"]')?.textContent)
+      .toContain('Metering degraded');
   });
 });

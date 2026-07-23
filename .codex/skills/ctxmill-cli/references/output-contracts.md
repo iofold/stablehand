@@ -19,7 +19,6 @@
 | 2 | Invalid CLI usage |
 | 3 | Timeout / wait condition unmet |
 | 4 | Unsafe operation blocked |
-| 5 | Unexpected response shape |
 
 ## `ctxmill.ts --json`
 

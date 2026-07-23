@@ -10,6 +10,12 @@ import {
 
 import { ArtifactStore } from '../artifact/artifact-store.js';
 import { stringifyJsonWithBigInts } from './json-serialization.js';
+import {
+  assertTurnDeliveryContextCurrent,
+  requireTurnDeliveryContext,
+  snapshotTurnDeliveryCapability,
+  type TurnDeliveryContext,
+} from './turn-delivery-context.js';
 import type { OrchestratorServiceClient } from './tool-proxy.js';
 
 interface Logger {
@@ -21,9 +27,10 @@ interface Logger {
 export interface ArtifactHandlerDeps {
   artifactStore: ArtifactStore;
   orchestratorClient: OrchestratorServiceClient;
-  turnId: string | { current: string };
+  sandboxSessionId: string;
   agentId: string;
   workspaceDir: string;
+  resolveDeliveryContext?: () => TurnDeliveryContext;
   logger?: Logger;
 }
 
@@ -63,10 +70,6 @@ function detectMimeType(filename: string): string {
   return MIME_TYPES[ext] ?? 'application/octet-stream';
 }
 
-function getEffectiveTurnId(turnId: string | { current: string }): string {
-  return typeof turnId === 'string' ? turnId : turnId.current;
-}
-
 function resolveWorkspacePath(workspaceDir: string, requestedPath: string): string | null {
   const resolvedWorkspaceDir = resolve(workspaceDir);
   const resolvedPath = resolve(resolvedWorkspaceDir, requestedPath);
@@ -80,11 +83,21 @@ function resolveWorkspacePath(workspaceDir: string, requestedPath: string): stri
 }
 
 export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (input: unknown) => Promise<string>> {
-  const { artifactStore, orchestratorClient, turnId, agentId, workspaceDir, logger: maybeLogger } = deps;
+  const {
+    artifactStore,
+    orchestratorClient,
+    sandboxSessionId,
+    agentId,
+    workspaceDir,
+    resolveDeliveryContext,
+    logger: maybeLogger,
+  } = deps;
   const logger = maybeLogger ?? console;
   const handlers = new Map<string, (input: unknown) => Promise<string>>();
 
   handlers.set('artifact_upload', async (rawInput: unknown) => {
+    const deliveryContext = resolveDeliveryContext?.()
+      ?? requireTurnDeliveryContext({ sandboxSessionId, agentId });
     const input = rawInput as {
       path?: string;
       name?: string;
@@ -112,9 +125,10 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       const filename = input.name ?? basename(fullPath);
       const mimeType = input.mimeType ?? detectMimeType(fullPath);
       const artifactId = randomUUID();
-      const effectiveTurnId = getEffectiveTurnId(turnId);
+      const effectiveTurnId = deliveryContext.identity.turnId;
       const storageKey = buildArtifactStorageKey(artifactId, filename);
 
+      assertTurnDeliveryContextCurrent(deliveryContext);
       await artifactStore.upload(storageKey, fileBuffer, mimeType);
       logger.info(`[artifact] uploaded ${storageKey} (${fileBuffer.byteLength} bytes)`);
 
@@ -123,10 +137,12 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
         response = await orchestratorClient.registerArtifact(
           create(RegisterArtifactRequestSchema, {
             turnId: effectiveTurnId,
-            agentId,
+            sandboxSessionId: deliveryContext.identity.sandboxSessionId,
+            agentId: deliveryContext.identity.agentId,
+            deliveryCapability: snapshotTurnDeliveryCapability(deliveryContext),
             artifact: create(ArtifactMetaSchema, {
               id: artifactId,
-              agentId,
+              agentId: deliveryContext.identity.agentId,
               turnId: effectiveTurnId,
               name: filename,
               mimeType,
@@ -137,6 +153,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
               createdAt: BigInt(Date.now()),
             }),
           }),
+          { signal: deliveryContext.abortController.signal },
         );
       } catch (rpcErr) {
         try {
@@ -170,6 +187,8 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
   });
 
   handlers.set('artifact_download', async (rawInput: unknown) => {
+    const deliveryContext = resolveDeliveryContext?.()
+      ?? requireTurnDeliveryContext({ sandboxSessionId, agentId });
     const input = rawInput as { artifactId?: string; path?: string };
 
     if (!input.artifactId) {
@@ -180,8 +199,12 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       const response = await orchestratorClient.resolveArtifact(
         create(ResolveArtifactRequestSchema, {
           artifactId: input.artifactId,
-          agentId,
+          agentId: deliveryContext.identity.agentId,
+          turnId: deliveryContext.identity.turnId,
+          sandboxSessionId: deliveryContext.identity.sandboxSessionId,
+          deliveryCapability: snapshotTurnDeliveryCapability(deliveryContext),
         }),
+        { signal: deliveryContext.abortController.signal },
       );
 
       if (response.error || !response.artifact) {
@@ -189,6 +212,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       }
 
       const artifact = response.artifact;
+      assertTurnDeliveryContextCurrent(deliveryContext);
       const { body, contentType } = await artifactStore.download(artifact.storageKey);
       logger.info(`[artifact] downloaded ${artifact.storageKey} (${body.byteLength} bytes)`);
 
@@ -198,6 +222,7 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
         return stringifyJsonWithBigInts({ error: `Path must be within workspace: ${workspaceDir}` });
       }
 
+      assertTurnDeliveryContextCurrent(deliveryContext);
       await mkdir(dirname(fullPath), { recursive: true });
       await writeFile(fullPath, body);
 

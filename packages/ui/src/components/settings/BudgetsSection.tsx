@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Loader2, Plus, Trash2, Wallet } from 'lucide-react';
-import type { ApiBudgetPolicy, ApiBudgetSpend } from '@ctxmill/shared';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, Plus, Trash2, Wallet } from 'lucide-react';
+import {
+  BudgetPolicyDocSchema,
+  type BudgetBucket,
+  type BudgetPolicy,
+  type BudgetPolicyDoc,
+  type BudgetSpendResponse,
+  type ModelGatewayStatus,
+} from '@ctxmill/contracts';
 import {
   createBudgetPolicy,
   deleteBudgetPolicy,
   fetchBudgetPolicies,
   fetchBudgetSpend,
+  fetchModelGatewayStatus,
   updateBudgetPolicy,
 } from '@/lib/api';
 import { formatCompactNumber } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { RelativeTime } from '@/components/ui/RelativeTime';
 
-const POLICY_TEMPLATE = {
+const POLICY_TEMPLATE: BudgetPolicyDoc = {
   selector: { bu: 'finance' },
   groupBy: 'user',
   window: 'rolling-24h',
@@ -28,42 +37,87 @@ const METRIC_LABELS: Record<string, string> = {
   turns: 'turns',
 };
 
-function SpendMeter({ spend }: { spend: ApiBudgetSpend }) {
+function formatMetricValue(metric: string, value: number): string {
+  if (metric !== 'costUsd') return formatCompactNumber(value);
+  if (value > 0 && value < 0.0001) return value.toPrecision(2);
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  });
+}
+
+function bucketLabel(bucket: BudgetBucket): string {
+  if (bucket.kind === 'all') return 'all matching runs';
+  if (bucket.kind === 'untagged') return `${bucket.key}: untagged`;
+  return `${bucket.key}=${bucket.value}`;
+}
+
+function bucketKey(bucket: BudgetBucket): string {
+  if (bucket.kind === 'all') return 'all';
+  if (bucket.kind === 'untagged') return `untagged:${bucket.key}`;
+  return `tag:${bucket.key}:${bucket.value}`;
+}
+
+function SpendMeter({ spend }: { spend: BudgetSpendResponse }) {
   return (
     <div className="space-y-3">
       {spend.buckets.length === 0 && (
         <p className="text-xs text-surface-400">No spend recorded in this window.</p>
       )}
       {spend.buckets.map((bucket) => (
-        <div key={bucket.bucket ?? '__all__'} className="space-y-1.5">
+        <div key={bucketKey(bucket.bucket)} className="space-y-1.5">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-mono text-surface-300">{bucket.bucket ?? 'all matching runs'}</span>
+            <span className="font-mono text-surface-300">{bucketLabel(bucket.bucket)}</span>
             <span className="text-surface-400 tabular-nums">
-              {formatCompactNumber(bucket.spend.totalTokens)} tokens · {bucket.spend.turns} turns
-              {bucket.spend.costUsd > 0 ? ` · $${bucket.spend.costUsd.toFixed(4)}` : ''}
+              {bucket.spend.totalTokens === null
+                ? 'Tokens not reported'
+                : `${formatCompactNumber(bucket.spend.totalTokens)} tokens`}
+              {' · '}{bucket.spend.turns} turns
+              {bucket.spend.tokenReportedTurnCount < bucket.spend.turns
+                ? ` · tokens ${bucket.spend.tokenReportedTurnCount}/${bucket.spend.turns} reported`
+                : ''}
+              {' · '}{bucket.spend.costUsd === null
+                ? 'Cost not reported'
+                : `$${bucket.spend.costUsd.toFixed(4)}`}
+              {bucket.spend.costReportedTurnCount < bucket.spend.turns
+                ? ` (${bucket.spend.costReportedTurnCount}/${bucket.spend.turns} turns)`
+                : ''}
             </span>
           </div>
           {bucket.statuses.map((status) => {
-            const pct = Math.min(100, Math.round(status.ratio * 100));
-            const over = status.ratio >= 1;
-            const warn = !over && status.ratio >= 0.8;
+            const pct = status.ratio === null
+              ? 0
+              : Math.min(100, Math.round(status.ratio * 100));
+            const blocked = status.state === 'blocked';
+            const warning = status.state === 'warning';
             return (
               <div key={status.metric} className="flex items-center gap-2">
                 <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-700/60">
                   <div
                     className={cn(
                       'h-full rounded-full transition-all',
-                      over ? 'bg-status-error' : warn ? 'bg-status-warning' : 'bg-accent-500',
+                      blocked
+                        ? 'bg-status-error'
+                        : warning
+                          ? 'bg-status-warning'
+                          : 'bg-accent-500',
                     )}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
                 <span className={cn(
                   'w-40 text-right text-[11px] tabular-nums',
-                  over ? 'text-red-300' : warn ? 'text-amber-300' : 'text-surface-400',
+                  blocked
+                    ? 'text-red-300'
+                    : warning
+                      ? 'text-amber-300'
+                      : 'text-surface-400',
                 )}
                 >
-                  {formatCompactNumber(status.spent)} / {formatCompactNumber(status.limit)} {METRIC_LABELS[status.metric] ?? status.metric}
+                  {status.spent === null
+                    ? 'Not reported'
+                    : formatMetricValue(status.metric, status.spent)}
+                  {' / '}{formatMetricValue(status.metric, status.limit)} {METRIC_LABELS[status.metric] ?? status.metric}
                 </span>
               </div>
             );
@@ -82,9 +136,9 @@ function PolicyEditor({
   onCancel,
 }: {
   initialName: string;
-  initialDoc: Record<string, unknown>;
+  initialDoc: BudgetPolicyDoc;
   submitLabel: string;
-  onSubmit: (name: string, doc: Record<string, unknown>) => Promise<void>;
+  onSubmit: (name: string, doc: BudgetPolicyDoc) => Promise<void>;
   onCancel: () => void;
 }) {
   const [name, setName] = useState(initialName);
@@ -93,11 +147,18 @@ function PolicyEditor({
   const [busy, setBusy] = useState(false);
 
   const handleSubmit = async () => {
-    let doc: Record<string, unknown>;
+    let rawDoc: unknown;
     try {
-      doc = JSON.parse(docText) as Record<string, unknown>;
+      rawDoc = JSON.parse(docText) as unknown;
     } catch {
       setError('Policy doc is not valid JSON.');
+      return;
+    }
+    const parsed = BudgetPolicyDocSchema.safeParse(rawDoc);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const path = issue?.path.length ? `${issue.path.join('.')}: ` : '';
+      setError(`Invalid policy: ${path}${issue?.message ?? 'invalid document'}`);
       return;
     }
     if (!name.trim()) {
@@ -107,7 +168,7 @@ function PolicyEditor({
     setBusy(true);
     setError(null);
     try {
-      await onSubmit(name.trim(), doc);
+      await onSubmit(name.trim(), parsed.data);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
@@ -150,12 +211,15 @@ function PolicyEditor({
 }
 
 export function BudgetsSection() {
-  const [policies, setPolicies] = useState<ApiBudgetPolicy[] | null>(null);
+  const [policies, setPolicies] = useState<BudgetPolicy[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [spendById, setSpendById] = useState<Record<string, ApiBudgetSpend | 'loading' | { error: string }>>({});
+  const [spendById, setSpendById] = useState<Record<string, BudgetSpendResponse | 'loading' | { error: string }>>({});
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [modelGatewayStatus, setModelGatewayStatus] =
+    useState<ModelGatewayStatus | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -166,7 +230,26 @@ export function BudgetsSection() {
     }
   }, []);
 
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    void reload();
+    let cancelled = false;
+    const refreshGateway = async () => {
+      try {
+        const status = await fetchModelGatewayStatus();
+        if (!cancelled) setModelGatewayStatus(status);
+      } catch {
+        if (!cancelled) setModelGatewayStatus(null);
+      }
+    };
+    void refreshGateway();
+    const timer = setInterval(() => {
+      void refreshGateway();
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [reload]);
 
   const loadSpend = useCallback(async (id: string) => {
     setSpendById((prev) => ({ ...prev, [id]: 'loading' }));
@@ -195,6 +278,40 @@ export function BudgetsSection() {
             blocked when any matching bucket is exhausted.
           </p>
         </div>
+        {modelGatewayStatus && (
+          <span
+            data-testid="model-gateway-status"
+            title={modelGatewayStatus.lastError ?? undefined}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px]',
+              modelGatewayStatus.state === 'healthy'
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                : modelGatewayStatus.state === 'degraded'
+                  ? 'border-violet-500/30 bg-violet-500/10 text-violet-300'
+                  : 'border-surface-600 bg-surface-700/30 text-surface-300',
+            )}
+          >
+            {modelGatewayStatus.state === 'healthy'
+              ? <CheckCircle2 className="h-3.5 w-3.5" />
+              : modelGatewayStatus.state === 'degraded'
+                ? <AlertTriangle className="h-3.5 w-3.5" />
+                : null}
+            {modelGatewayStatus.state === 'disabled'
+              ? 'Direct metering'
+              : modelGatewayStatus.state === 'initializing'
+                ? 'Cost sync starting'
+                : modelGatewayStatus.state === 'degraded'
+                  ? 'Cost sync degraded'
+                  : (
+                    <>
+                      Cost synced
+                      {modelGatewayStatus.lastSuccessAt !== null && (
+                        <> <RelativeTime timestamp={modelGatewayStatus.lastSuccessAt} /></>
+                      )}
+                    </>
+                  )}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => { setCreating((v) => !v); setEditingId(null); }}
@@ -206,6 +323,11 @@ export function BudgetsSection() {
       </div>
 
       <div className="divide-y divide-surface-700/50">
+        {mutationError && (
+          <div role="alert" className="px-5 py-3 text-sm text-red-300">
+            Budget policy update failed: {mutationError}
+          </div>
+        )}
         {creating && (
           <div className="px-5 py-4">
             <PolicyEditor
@@ -253,9 +375,9 @@ export function BudgetsSection() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-surface-200 truncate">{policy.name}</p>
                   <p className="text-[11px] font-mono text-surface-400 truncate">
-                    {JSON.stringify((policy.doc as { selector?: unknown }).selector ?? {})}
-                    {(policy.doc as { groupBy?: string }).groupBy ? ` · by ${(policy.doc as { groupBy?: string }).groupBy}` : ''}
-                    {' · '}{(policy.doc as { window?: string }).window}
+                    {JSON.stringify(policy.doc.selector)}
+                    {policy.doc.groupBy ? ` · by ${policy.doc.groupBy}` : ''}
+                    {' · '}{policy.doc.window}
                   </p>
                 </div>
                 <label className="flex items-center gap-1.5 text-xs text-surface-400">
@@ -263,8 +385,13 @@ export function BudgetsSection() {
                     type="checkbox"
                     checked={policy.enabled}
                     onChange={async (e) => {
-                      await updateBudgetPolicy(policy.id, { enabled: e.target.checked });
-                      await reload();
+                      setMutationError(null);
+                      try {
+                        await updateBudgetPolicy(policy.id, { enabled: e.target.checked });
+                        await reload();
+                      } catch (err) {
+                        setMutationError(err instanceof Error ? err.message : String(err));
+                      }
                     }}
                   />
                   Enabled
@@ -281,8 +408,13 @@ export function BudgetsSection() {
                   aria-label={`Delete ${policy.name}`}
                   onClick={async () => {
                     if (!window.confirm(`Delete budget policy "${policy.name}"?`)) return;
-                    await deleteBudgetPolicy(policy.id);
-                    await reload();
+                    setMutationError(null);
+                    try {
+                      await deleteBudgetPolicy(policy.id);
+                      await reload();
+                    } catch (err) {
+                      setMutationError(err instanceof Error ? err.message : String(err));
+                    }
                   }}
                   className="text-surface-400 hover:text-red-300"
                 >

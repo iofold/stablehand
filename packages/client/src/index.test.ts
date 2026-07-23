@@ -21,6 +21,64 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('CtxmillControlClient', () => {
+  it('patches agents through the canonical partial-update contract', async () => {
+    const updatedAgent = {
+      id: 'agent-1',
+      name: 'Agent one',
+      harness: 'claude-agents',
+      harnessConfig: {},
+      systemPrompt: 'Help.',
+      tools: [],
+      description: 'Updated description',
+      workspaceDir: null,
+      status: 'active',
+      manifest: null,
+      metadata: null,
+      createdAt: 1,
+      updatedAt: 2,
+      builtinToolPolicy: null,
+      nativeToolPolicy: null,
+      httpTools: [],
+      workspaceContent: null,
+      mode: null,
+      resourceLimits: null,
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(updatedAgent));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.agents.update('agent-1', {
+      description: 'Updated description',
+    })).resolves.toMatchObject({ description: 'Updated description' });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://ctxmill.test/api/agents/agent-1',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ description: 'Updated description' }),
+      }),
+    );
+  });
+
+  it('rejects an empty agent patch before transport', async () => {
+    const fetchImpl = vi.fn();
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.agents.update('agent-1', {})).rejects.toMatchObject({
+      name: 'CtxmillContractError',
+      direction: 'request',
+      method: 'PATCH',
+      path: '/agents/agent-1',
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('loads a conversation snapshot with its exact SSE replay cursor', async () => {
     const snapshot = {
       conversationId: 'conversation-1',
@@ -98,6 +156,253 @@ describe('CtxmillControlClient', () => {
       code: 'unavailable',
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards a canonical conversation identity when starting a background turn', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      sandboxSessionId: null,
+    }));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.turns.startBackground('agent-1', {
+      task: 'continue April close',
+      conversationId: 'conversation-1',
+    })).resolves.toMatchObject({
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://ctxmill.test/api/agents/agent-1/turns',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          task: 'continue April close',
+          conversationId: 'conversation-1',
+        }),
+      }),
+    );
+  });
+
+  it('uses distinct create and partial PATCH contracts for webhooks', async () => {
+    const webhook = {
+      id: 'webhook-1',
+      agentId: 'agent-1',
+      url: 'https://example.test/hook',
+      events: ['turn.completed'],
+      active: true,
+      hasSecret: true,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(webhook))
+      .mockResolvedValueOnce(jsonResponse(webhook));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.webhooks.create('agent-1', {
+      url: 'https://example.test/hook',
+      events: ['turn.completed'],
+      secret: 'signing-secret',
+    })).resolves.toMatchObject({ id: 'webhook-1' });
+    await expect(client.webhooks.update('agent-1', 'webhook-1', {
+      events: ['turn.completed'],
+    })).resolves.toMatchObject({ id: 'webhook-1' });
+
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({
+        url: 'https://example.test/hook',
+        events: ['turn.completed'],
+        secret: 'signing-secret',
+      }),
+    });
+    expect(fetchImpl.mock.calls[1]?.[1]).toMatchObject({
+      method: 'PATCH',
+      body: JSON.stringify({ events: ['turn.completed'] }),
+    });
+  });
+
+  it('exposes canonical budget policy, spend, and agent-status resources', async () => {
+    const policy = {
+      id: 'policy-1',
+      name: 'Finance cap',
+      enabled: true,
+      doc: {
+        selector: { department: 'finance' },
+        window: 'rolling-24h',
+        limits: { costUsd: 10 },
+        actions: [{ threshold: 1, action: 'block' }],
+      },
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ policies: [policy] }))
+      .mockResolvedValueOnce(jsonResponse({
+        policyId: 'policy-1',
+        window: 'rolling-24h',
+        windowStart: 1,
+        buckets: [],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ statuses: [] }));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.budgets.list()).resolves.toEqual({ policies: [policy] });
+    await expect(client.budgets.spend('policy-1')).resolves.toMatchObject({
+      policyId: 'policy-1',
+    });
+    await expect(client.budgets.agentStatuses()).resolves.toEqual({ statuses: [] });
+
+    expect(fetchImpl.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ['https://ctxmill.test/api/budgets', 'GET'],
+      ['https://ctxmill.test/api/budgets/policy-1/spend', 'GET'],
+      ['https://ctxmill.test/api/budgets/agents/status', 'GET'],
+    ]);
+  });
+
+  it('exposes the sanitized model-gateway reconciliation status', async () => {
+    const status = {
+      enabled: true,
+      profile: 'primary',
+      revision: 'revision-1',
+      state: 'healthy',
+      watermarkAt: 10,
+      lastAttemptAt: 11,
+      lastSuccessAt: 11,
+      lagMs: 1,
+      lastError: null,
+      pendingCalls: 0,
+      unpricedCalls: 0,
+      quarantinedTransactions: 0,
+      orphanTransactions: 0,
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(status));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.modelGateway.status()).resolves.toEqual(status);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://ctxmill.test/api/model-gateway/status',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('exposes the canonical analytics overview with an optional window', async () => {
+    const overview = {
+      window: '7d',
+      from: 1,
+      to: 2,
+      bucketSizeMs: 1,
+      totals: {
+        agents: 1,
+        activeAgents: 1,
+        turns: 1,
+        completedTurns: 1,
+        errorTurns: 0,
+        cancelledTurns: 0,
+        activeTurns: 0,
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        tokenReportedTurns: 1,
+        knownCostUsd: 0.001,
+        costCoverage: {
+          complete: 1,
+          partial: 0,
+          pending: 0,
+          unpriced: 0,
+        },
+      },
+      activity: [{
+        from: 1,
+        to: 2,
+        turns: 1,
+        completedTurns: 1,
+        errorTurns: 0,
+        cancelledTurns: 0,
+        activeTurns: 0,
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        tokenReportedTurns: 1,
+        knownCostUsd: 0.001,
+        costCoverage: {
+          complete: 1,
+          partial: 0,
+          pending: 0,
+          unpriced: 0,
+        },
+      }],
+      agents: [{
+        agentId: 'agent-1',
+        name: 'Analyst',
+        harness: 'langgraph',
+        model: 'gpt-5.4-mini',
+        lastActivityAt: 1,
+        turns: 1,
+        completedTurns: 1,
+        errorTurns: 0,
+        cancelledTurns: 0,
+        activeTurns: 0,
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        tokenReportedTurns: 1,
+        knownCostUsd: 0.001,
+        costCoverage: {
+          complete: 1,
+          partial: 0,
+          pending: 0,
+          unpriced: 0,
+        },
+      }],
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(overview));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.analytics.overview({ window: '7d' })).resolves.toEqual(overview);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://ctxmill.test/api/analytics/overview?window=7d',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('rejects an empty webhook patch before transport', async () => {
+    const fetchImpl = vi.fn();
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.webhooks.update('agent-1', 'webhook-1', {})).rejects.toMatchObject({
+      name: 'CtxmillContractError',
+      direction: 'request',
+      method: 'PATCH',
+      path: '/agents/agent-1/webhooks/webhook-1',
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('fails closed when a successful response violates its contract', async () => {

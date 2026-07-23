@@ -1,0 +1,71 @@
+services:
+  litellm-db:
+    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${LITELLM_DATABASE_PASSWORD:?set LITELLM_DATABASE_PASSWORD}
+      POSTGRES_DB: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - litellm-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  litellm:
+    build:
+      context: .
+      dockerfile: deploy/compose/model-gateway/Dockerfile
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set LITELLM_SALT_KEY}
+      LITELLM_DATABASE_URL: postgresql://litellm:${LITELLM_DATABASE_PASSWORD}@litellm-db:5432/litellm
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${LITELLM_PORT:-4400}:4000"
+    volumes:
+      - ./deploy/compose/model-gateway/config.yaml:/app/config.yaml:ro
+    networks:
+      - default
+      - ctxmill-agents
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      - "traefik.http.routers.litellm.rule=Host(`${LITELLM_DOMAIN:-litellm.dev.example.com}`)"
+      - "traefik.http.routers.litellm.entrypoints=websecure"
+      - "traefik.http.routers.litellm.tls.certresolver=letsencrypt"
+      - "traefik.http.services.litellm.loadbalancer.server.port=4000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  orchestrator:
+    environment:
+      CTXMILL_MODEL_GATEWAY_ENABLED: "true"
+      CTXMILL_MODEL_GATEWAY_URL: http://litellm:4000
+      CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: ${CTXMILL_MODEL_GATEWAY_RUNTIME_KEY:?set CTXMILL_MODEL_GATEWAY_RUNTIME_KEY}
+      CTXMILL_MODEL_GATEWAY_METERING_KEY: ${CTXMILL_MODEL_GATEWAY_METERING_KEY:?set CTXMILL_MODEL_GATEWAY_METERING_KEY}
+      CTXMILL_MODEL_GATEWAY_REVISION: ${CTXMILL_MODEL_GATEWAY_REVISION:?set CTXMILL_MODEL_GATEWAY_REVISION}
+      CTXMILL_MODEL_GATEWAY_EXPLICIT_FREE_MODELS: ${CTXMILL_MODEL_GATEWAY_EXPLICIT_FREE_MODELS:-}
+    depends_on:
+      litellm:
+        condition: service_healthy
+
+volumes:
+  litellm-data:

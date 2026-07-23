@@ -57,7 +57,6 @@ async function createTestAgent(prefix: string): Promise<CreatedAgent> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       name: uniqueName(prefix),
-      displayName: 'Artifact REST Test',
       harness: 'langgraph',
       description: 'Live REST artifact integration test agent',
       harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },

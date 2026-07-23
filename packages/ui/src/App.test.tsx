@@ -57,6 +57,10 @@ vi.mock('./pages/ArtifactsPage', () => ({
   ArtifactsPage: () => <div data-testid="artifacts-page">artifacts</div>,
 }));
 
+vi.mock('./pages/AnalyticsPage', () => ({
+  AnalyticsPage: () => <div data-testid="analytics-page">analytics</div>,
+}));
+
 describe('App routes', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -96,5 +100,10 @@ describe('App routes', () => {
   it('renders the dashboard on the root route', () => {
     renderAt('/');
     expect(container.querySelector('[data-testid="dashboard-page"]')).not.toBeNull();
+  });
+
+  it('renders the dedicated analytics page', () => {
+    renderAt('/analytics');
+    expect(container.querySelector('[data-testid="analytics-page"]')).not.toBeNull();
   });
 });

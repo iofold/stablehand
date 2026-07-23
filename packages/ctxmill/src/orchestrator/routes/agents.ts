@@ -10,7 +10,6 @@ import { secretRoutes } from './agents/secrets.js';
 import { turnRoutes } from './agents/turns.js';
 import { streamRoutes } from './agents/stream.js';
 import type { AgentRouteOptions, AgentSubRouteOptions } from './agents/types.js';
-import { versionRoutes } from './agents/versions.js';
 import { webhookRoutes } from './agents/webhooks.js';
 
 export type { ActiveLifecycleRouteOptions, AgentRouteOptions } from './agents/types.js';
@@ -40,5 +39,4 @@ export async function agentRoutes(app: FastifyInstance, opts: AgentRouteOptions)
   await app.register(fileRoutes, subOpts);
   await app.register(secretRoutes, subOpts);
   await app.register(webhookRoutes, subOpts);
-  await app.register(versionRoutes, subOpts);
 }

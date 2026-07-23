@@ -10,7 +10,7 @@ import {
   countActiveSandboxSessions,
   isTerminalConversationStatus,
 } from '@/lib/lifecycle-status';
-import type { ApiConversationSummary } from '@ctxmill/shared';
+import type { ConversationSummary } from '@ctxmill/contracts';
 import { PageShell } from '@/components/ui/PageShell';
 import { StatsRow } from '@/components/ui/StatsRow';
 import { formatDurationBetween, formatRunningDuration } from '@/lib/format';
@@ -25,8 +25,9 @@ export function DashboardPage() {
   const displayLoading = authRequired || loading;
 
   const navigate = useNavigate();
-  const [activeConversations, setActiveConversations] = useState<ApiConversationSummary[]>([]);
+  const [activeConversations, setActiveConversations] = useState<ConversationSummary[]>([]);
   const [filteredCount, setFilteredCount] = useState<number | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -42,8 +43,7 @@ export function DashboardPage() {
       if (useApiAuthStore.getState().authRequired) return;
 
       try {
-        const activeConvs = await fetchActiveConversations();
-        const activeArray = Array.isArray(activeConvs) ? activeConvs : [];
+        const activeConversations = await fetchActiveConversations();
         
         const currentAgents = useAgentsStore.getState().agents;
         const agentConvPromises = currentAgents
@@ -53,8 +53,8 @@ export function DashboardPage() {
           }).catch(() => []));
         const allAgentConvs = (await Promise.all(agentConvPromises)).flat();
 
-        const merged = new Map<string, ApiConversationSummary>();
-        for (const c of [...activeArray, ...allAgentConvs]) merged.set(c.id, c);
+        const merged = new Map<string, ConversationSummary>();
+        for (const c of [...activeConversations, ...allAgentConvs]) merged.set(c.id, c);
         const allConvs = Array.from(merged.values())
           .sort((a, b) => b.startedAt - a.startedAt)
           .slice(0, 20);
@@ -87,11 +87,16 @@ export function DashboardPage() {
     return map;
   }, [agents]);
 
-  const handleCancelRun = async (conv: ApiConversationSummary) => {
-    if (conv.latestTurnId) {
-      await cancelTurn(conv.agentId, conv.latestTurnId);
+  const handleCancelRun = async (conv: ConversationSummary) => {
+    setCancelError(null);
+    try {
+      if (conv.latestTurnId) {
+        await cancelTurn(conv.agentId, conv.latestTurnId);
+      }
+      setActiveConversations((prev) => prev.filter((entry) => entry.id !== conv.id));
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : String(err));
     }
-    setActiveConversations((prev) => prev.filter((entry) => entry.id !== conv.id));
   };
 
   return (
@@ -125,6 +130,12 @@ export function DashboardPage() {
             onRetry={() => { void fetchAgents(); }}
           />
         </div>
+
+        {cancelError && (
+          <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            Failed to cancel conversation: {cancelError}
+          </div>
+        )}
 
         {activeConversations.length > 0 && (
           <div data-testid="active-sessions-section" className="animate-fade-in">
@@ -180,7 +191,7 @@ export function DashboardPage() {
                               data-testid="cancel-run-button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleCancelRun(conv);
+                                void handleCancelRun(conv);
                               }}
                               className="rounded-md p-1.5 text-surface-400 transition-colors hover:text-red-400 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
                               title="Cancel conversation"

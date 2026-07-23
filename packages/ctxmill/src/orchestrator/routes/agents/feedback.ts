@@ -18,7 +18,7 @@ export async function feedbackRoutes(
         Params: { id: string };
         Body: {
           conversationId: string;
-          messageId?: string;
+          messageId: string;
           type: 'thumbs_up' | 'thumbs_down';
           comment?: string;
         };
@@ -35,21 +35,33 @@ export async function feedbackRoutes(
       if (
         !body ||
         typeof body.conversationId !== 'string' ||
+        typeof body.messageId !== 'string' ||
+        body.messageId.trim() === '' ||
         (body.type !== 'thumbs_up' && body.type !== 'thumbs_down')
       ) {
         return reply.status(400).send({
-          error: 'conversationId and type ("thumbs_up" or "thumbs_down") are required',
+          error: 'conversationId, messageId, and type ("thumbs_up" or "thumbs_down") are required',
         });
       }
 
-      const allTurns = await db.getTurnsByAgent(id);
-      const matchingTurn = allTurns
-        .filter((turn) => turn.conversationId === body.conversationId)
-        .sort((a, b) => b.startedAt - a.startedAt)[0];
-      if (!matchingTurn) {
-        return reply.status(404).send({ error: 'No turn found for conversation' });
+      const message = await db.getMessage(body.messageId);
+      if (
+        !message
+        || message.agentId !== id
+        || message.conversationId !== body.conversationId
+        || !message.turnId
+      ) {
+        return reply.status(404).send({ error: 'Feedback message not found' });
       }
-      const turnId = matchingTurn.id;
+      const turn = await db.getTurn(message.turnId);
+      if (
+        !turn
+        || turn.agentId !== id
+        || turn.conversationId !== body.conversationId
+      ) {
+        return reply.status(404).send({ error: 'Feedback message not found' });
+      }
+      const turnId = turn.id;
       const feedbackId = randomUUID();
 
       const eventPayload: EventMap['feedback.received'] = {

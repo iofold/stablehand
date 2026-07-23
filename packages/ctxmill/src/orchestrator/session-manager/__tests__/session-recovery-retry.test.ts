@@ -1,5 +1,5 @@
 /**
- * Integration tests for the restore retry policy + stranded-RESTORING
+ * Integration tests for the restore retry policy + expired-restore
  * reconciliation owned by SessionRecoveryCoordinator.
  *
  * Covers ADR 013 budget/backoff and ctx-7fz crash-recovery semantics.
@@ -7,10 +7,20 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SessionRecoveryCoordinator } from '../session-recovery-coordinator.js';
+import {
+  SessionRecoveryCoordinator,
+  SessionRestoreInProgressError,
+} from '../session-recovery-coordinator.js';
 import { SessionStateStore } from '../session-state-store.js';
-import { SessionStatusCoordinator } from '../session-status-coordinator.js';
-import { InvalidCheckpointError, MAX_RESTORE_ATTEMPTS } from '../restore-retry-policy.js';
+import {
+  SessionStatusCoordinator,
+  StaleTransitionError,
+} from '../session-status-coordinator.js';
+import {
+  decideRestoreOutcome,
+  InvalidCheckpointError,
+  MAX_RESTORE_ATTEMPTS,
+} from '../restore-retry-policy.js';
 import type { SandboxSessionRow } from '../../../database/repository.js';
 import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 
@@ -38,6 +48,7 @@ interface TestHarness {
   sleep: ReturnType<typeof vi.fn>;
   getCheckpointV2: ReturnType<typeof vi.fn>;
   getSandboxSession: ReturnType<typeof vi.fn>;
+  reconcileExpiredSandboxSessionRestore: ReturnType<typeof vi.fn>;
   agentDef: AgentDefinition;
 }
 
@@ -52,13 +63,14 @@ function makeAgentDef(): AgentDefinition {
 }
 
 function makeRow(overrides: Partial<SandboxSessionRow> = {}): SandboxSessionRow {
+  const status = overrides.status ?? 'CHECKPOINTED';
   return {
     id: 'sess-1',
     conversationId: 'conv-1',
     agentId: 'agent-1',
     containerName: null,
     containerId: null,
-    status: 'CHECKPOINTED',
+    status,
     harnessName: 'langgraph',
     checkpointRef: null,
     createdAt: 1,
@@ -66,6 +78,10 @@ function makeRow(overrides: Partial<SandboxSessionRow> = {}): SandboxSessionRow 
     lastActivityAt: 1,
     restoreAttempts: 0,
     lastRestoreError: null,
+    restoreOwnerId: status === 'RESTORING' ? 'restore-owner' : null,
+    restoreFenceToken: status === 'RESTORING' ? 1 : 0,
+    restoreLeaseExpiresAt:
+      status === 'RESTORING' ? Date.now() + 60_000 : null,
     ...overrides,
   };
 }
@@ -75,7 +91,7 @@ function createHarness(): TestHarness {
   const logger = createLogger();
   const statusUpdates: StatusUpdate[] = [];
 
-  const updateSandboxSessionStatus = vi.fn(async (
+  const updateSandboxSessionMetadata = vi.fn(async (
     _id: string,
     status: string,
     extra?: Record<string, unknown>,
@@ -84,13 +100,14 @@ function createHarness(): TestHarness {
   });
 
   const statusCoordinator = new SessionStatusCoordinator({
-    db: { updateSandboxSessionStatus },
+    db: { updateSandboxSessionMetadata },
     logger,
     // intentionally omit stateStore so transitions never short-circuit on
     // stale cache state — the test uses fromStatus directly.
   });
 
   const dbRow = makeRow();
+  const restoreOnce = vi.fn();
 
   const getCheckpointV2 = vi.fn().mockResolvedValue({
     id: 'ckpt-1',
@@ -112,13 +129,15 @@ function createHarness(): TestHarness {
       ...dbRow,
       status: lastUpdate?.status ?? dbRow.status,
       restoreAttempts:
-        (lastUpdate?.extra?.restoreAttempts as number | null | undefined) ?? dbRow.restoreAttempts,
+        (lastUpdate?.extra?.restoreAttempts as number | null | undefined)
+          ?? dbRow.restoreAttempts,
       lastRestoreError:
         (lastUpdate?.extra?.lastRestoreError as string | null | undefined) ?? dbRow.lastRestoreError,
     };
   });
 
-  const restoreOnce = vi.fn();
+  const reconcileExpiredSandboxSessionRestore = vi.fn()
+    .mockResolvedValue(undefined);
 
   const containerManager = {
     createContainer: vi.fn(),
@@ -137,6 +156,7 @@ function createHarness(): TestHarness {
     db: {
       getCheckpointV2,
       getSandboxSession,
+      reconcileExpiredSandboxSessionRestore,
     },
     statusCoordinator,
     stateStore,
@@ -159,10 +179,40 @@ function createHarness(): TestHarness {
     sleep,
   });
 
-  // Replace `restoreFromCheckpointOnce` with the test double so we exercise
-  // only the retry-loop logic.
+  // Replace the container work with a double while preserving the production
+  // invariant that one fenced attempt durably records its outcome before the
+  // retry loop observes the row.
   Object.defineProperty(coordinator, 'restoreFromCheckpointOnce', {
-    value: restoreOnce,
+    value: async (...args: Parameters<
+      SessionRecoveryCoordinator['restoreFromCheckpointOnce']
+    >) => {
+      try {
+        return await restoreOnce(...args);
+      } catch (error) {
+        if (
+          error instanceof SessionRestoreInProgressError
+          || error instanceof StaleTransitionError
+        ) {
+          throw error;
+        }
+        const attempt = Math.max(
+          statusUpdates.length + 1,
+          (args[0].restoreAttempts ?? 0) + 1,
+        );
+        const outcome = decideRestoreOutcome(error, attempt);
+        statusUpdates.push({
+          status:
+            outcome.toStatus === 'TERMINATED'
+              ? 'TERMINATED'
+              : 'CHECKPOINTED',
+          extra: {
+            restoreAttempts: attempt,
+            lastRestoreError: outcome.classification.message,
+          },
+        });
+        throw error;
+      }
+    },
     writable: true,
   });
 
@@ -176,6 +226,7 @@ function createHarness(): TestHarness {
     sleep,
     getCheckpointV2,
     getSandboxSession,
+    reconcileExpiredSandboxSessionRestore,
     agentDef: makeAgentDef(),
   };
 }
@@ -249,6 +300,55 @@ describe('SessionRecoveryCoordinator — restore retry policy (ADR 013)', () => 
     expect(harness.sleep.mock.calls.map((c) => c[0])).toEqual([5_000, 15_000]);
   });
 
+  it('does not consume the persisted restore budget when admission fails before a claim', async () => {
+    const harness = createHarness();
+    const admittedRestore = harness.coordinator.restoreFromCheckpointOnce.bind(
+      harness.coordinator,
+    );
+    let admissionFailed = false;
+    const restoreAttempt = vi.fn(async (
+      ...args: Parameters<
+        SessionRecoveryCoordinator['restoreFromCheckpointOnce']
+      >
+    ) => {
+      if (!admissionFailed) {
+        admissionFailed = true;
+        throw new Error('database unavailable before restore admission');
+      }
+      return admittedRestore(...args);
+    });
+    Object.defineProperty(harness.coordinator, 'restoreFromCheckpointOnce', {
+      value: restoreAttempt,
+      writable: true,
+    });
+
+    await expect(
+      harness.coordinator.restoreFromCheckpointWithRetry(
+        harness.dbRow,
+        harness.agentDef,
+      ),
+    ).rejects.toThrow('database unavailable before restore admission');
+
+    expect(restoreAttempt).toHaveBeenCalledOnce();
+    expect(harness.statusUpdates).toEqual([]);
+    expect(harness.sleep).not.toHaveBeenCalled();
+
+    harness.restoreOnce.mockRejectedValue(
+      new ConnectError('admitted failure', Code.Unavailable),
+    );
+    await expect(
+      harness.coordinator.restoreFromCheckpointWithRetry(
+        harness.dbRow,
+        harness.agentDef,
+      ),
+    ).rejects.toThrow('admitted failure');
+
+    expect(harness.restoreOnce).toHaveBeenCalledTimes(MAX_RESTORE_ATTEMPTS);
+    expect(
+      harness.statusUpdates.at(-1)?.extra,
+    ).toMatchObject({ restoreAttempts: MAX_RESTORE_ATTEMPTS });
+  });
+
   it('non-retryable failure bypasses retry and goes to TERMINATED on first try', async () => {
     const harness = createHarness();
     harness.restoreOnce.mockRejectedValueOnce(new InvalidCheckpointError('checkpoint corrupt'));
@@ -268,9 +368,33 @@ describe('SessionRecoveryCoordinator — restore retry policy (ADR 013)', () => 
     expect(harness.sleep).not.toHaveBeenCalled();
   });
 
-  it('reconciles a session stranded in RESTORING with a valid checkpoint by retrying', async () => {
+  it('explicitly reconciles an expired restore generation before retrying', async () => {
     const harness = createHarness();
-    const stranded = makeRow({ status: 'RESTORING', restoreAttempts: 1 });
+    const expiredRestore = makeRow({
+      status: 'RESTORING',
+      restoreAttempts: 1,
+    });
+    const reconciliationError = 'orchestrator restarted while restoring';
+    harness.reconcileExpiredSandboxSessionRestore.mockImplementationOnce(
+      async () => {
+        harness.statusUpdates.push({
+          status: 'CHECKPOINTED',
+          extra: {
+            restoreAttempts: 1,
+            lastRestoreError: reconciliationError,
+          },
+        });
+        return {
+          session: makeRow({
+            status: 'CHECKPOINTED',
+            restoreAttempts: 1,
+            lastRestoreError: reconciliationError,
+            restoreFenceToken: expiredRestore.restoreFenceToken + 1,
+          }),
+          outcome: 'CHECKPOINTED',
+        };
+      },
+    );
     harness.restoreOnce.mockResolvedValueOnce({
       sessionId: 'sess-1',
       conversationId: 'conv-1',
@@ -281,11 +405,13 @@ describe('SessionRecoveryCoordinator — restore retry policy (ADR 013)', () => 
       harnessName: 'langgraph',
     });
 
-    const record = await harness.coordinator.recoverOrReconnect(
-      'conv-1',
+    const outcome = await harness.coordinator.reconcileExpiredSandboxSessionRestore(
+      expiredRestore,
+    );
+    expect(outcome).toBe('CHECKPOINTED');
+    const record = await harness.coordinator.restoreFromCheckpointWithRetry(
+      { ...expiredRestore, status: 'CHECKPOINTED' },
       harness.agentDef,
-      'agent-1',
-      stranded,
     );
 
     expect(record.status).toBe('ACTIVE');
@@ -298,22 +424,202 @@ describe('SessionRecoveryCoordinator — restore retry policy (ADR 013)', () => 
     });
   });
 
-  it('reconcileStrandedRestoring with no checkpoint terminates the session and creates a fresh one', async () => {
+  it('reconcileExpiredSandboxSessionRestore with no checkpoint terminates the session', async () => {
     const harness = createHarness();
     harness.getCheckpointV2.mockResolvedValueOnce(null);
-    const stranded = makeRow({ status: 'RESTORING', restoreAttempts: 0 });
-
-    const record = await harness.coordinator.recoverOrReconnect(
-      'conv-1',
-      harness.agentDef,
-      'agent-1',
-      stranded,
+    const expiredRestore = makeRow({
+      status: 'RESTORING',
+      restoreAttempts: 0,
+    });
+    const reconciliationError =
+      'orchestrator restart: no recoverable checkpoint';
+    harness.reconcileExpiredSandboxSessionRestore.mockImplementationOnce(
+      async () => {
+        harness.statusUpdates.push({
+          status: 'TERMINATED',
+          extra: {
+            restoreAttempts: 0,
+            lastRestoreError: reconciliationError,
+          },
+        });
+        return {
+          session: makeRow({
+            status: 'TERMINATED',
+            lastRestoreError: reconciliationError,
+            restoreFenceToken: expiredRestore.restoreFenceToken + 1,
+          }),
+          outcome: 'TERMINATED',
+        };
+      },
     );
 
-    expect(record.sessionId).toBe('fresh');
+    const outcome = await harness.coordinator.reconcileExpiredSandboxSessionRestore(
+      expiredRestore,
+    );
+
+    expect(outcome).toBe('TERMINATED');
     const terminated = harness.statusUpdates.find((u) => u.status === 'TERMINATED');
     expect(terminated?.extra).toMatchObject({
       lastRestoreError: expect.stringContaining('no recoverable checkpoint'),
     });
+  });
+
+  it('joins another replica restoring the same session without demoting it', async () => {
+    const harness = createHarness();
+    const restoring = makeRow({ status: 'RESTORING', restoreAttempts: 1 });
+    const active = makeRow({
+      status: 'ACTIVE',
+      containerId: 'container-live',
+      containerName: 'container-live',
+      restoreAttempts: 0,
+    });
+    harness.getSandboxSession
+      .mockResolvedValueOnce(restoring)
+      .mockResolvedValueOnce(active);
+    const reconnected = {
+      sessionId: active.id,
+      conversationId: active.conversationId,
+      agentId: active.agentId,
+      containerName: 'container-live',
+      containerId: 'container-live',
+      status: 'ACTIVE' as const,
+      harnessName: active.harnessName,
+    };
+    vi.spyOn(harness.coordinator, 'reconnectToContainer')
+      .mockResolvedValue(reconnected);
+
+    const record = await harness.coordinator.recoverOrReconnect(
+      restoring.conversationId,
+      harness.agentDef,
+      restoring.agentId,
+      restoring,
+    );
+
+    expect(record).toEqual(reconnected);
+    expect(harness.statusUpdates).toEqual([]);
+    expect(harness.restoreOnce).not.toHaveBeenCalled();
+  });
+
+  it('joins the same-row restore winner after losing CHECKPOINTED admission', async () => {
+    const harness = createHarness();
+    const restoring = makeRow({ status: 'RESTORING', restoreAttempts: 1 });
+    const active = makeRow({
+      status: 'ACTIVE',
+      containerId: 'container-live',
+      containerName: 'container-live',
+      restoreAttempts: 0,
+    });
+    harness.restoreOnce.mockRejectedValueOnce(
+      new StaleTransitionError('sess-1', 'CHECKPOINTED', 'RESTORING'),
+    );
+    harness.getSandboxSession
+      .mockResolvedValueOnce(restoring)
+      .mockResolvedValueOnce(active);
+    const reconnected = {
+      sessionId: active.id,
+      conversationId: active.conversationId,
+      agentId: active.agentId,
+      containerName: 'container-live',
+      containerId: 'container-live',
+      status: 'ACTIVE' as const,
+      harnessName: active.harnessName,
+    };
+    vi.spyOn(harness.coordinator, 'reconnectToContainer')
+      .mockResolvedValue(reconnected);
+
+    const record = await harness.coordinator.restoreFromCheckpointWithRetry(
+      makeRow({ status: 'CHECKPOINTED' }),
+      harness.agentDef,
+    );
+
+    expect(record).toEqual(reconnected);
+    expect(harness.statusUpdates).toEqual([]);
+    expect(harness.restoreOnce).toHaveBeenCalledOnce();
+  });
+
+  it('joins a peer that acquires restore admission during retry backoff', async () => {
+    const harness = createHarness();
+    const restoring = makeRow({ status: 'RESTORING', restoreAttempts: 1 });
+    const active = makeRow({
+      status: 'ACTIVE',
+      containerId: 'container-peer',
+      containerName: 'container-peer',
+      restoreAttempts: 0,
+    });
+    harness.restoreOnce.mockRejectedValueOnce(
+      new ConnectError('transient restore failure', Code.Unavailable),
+    );
+    harness.getSandboxSession
+      .mockResolvedValueOnce(restoring)
+      .mockResolvedValueOnce(active);
+    const reconnected = {
+      sessionId: active.id,
+      conversationId: active.conversationId,
+      agentId: active.agentId,
+      containerName: 'container-peer',
+      containerId: 'container-peer',
+      status: 'ACTIVE' as const,
+      harnessName: active.harnessName,
+    };
+    vi.spyOn(harness.coordinator, 'reconnectToContainer')
+      .mockResolvedValue(reconnected);
+
+    const record = await harness.coordinator.restoreFromCheckpointWithRetry(
+      makeRow({ status: 'CHECKPOINTED' }),
+      harness.agentDef,
+    );
+
+    expect(record).toEqual(reconnected);
+    expect(harness.restoreOnce).toHaveBeenCalledOnce();
+    expect(harness.statusUpdates).toEqual([
+      expect.objectContaining({
+        status: 'CHECKPOINTED',
+        extra: expect.objectContaining({ restoreAttempts: 1 }),
+      }),
+    ]);
+  });
+
+  it('honours restore attempts consumed by a peer during backoff', async () => {
+    const harness = createHarness();
+    harness.restoreOnce
+      .mockRejectedValueOnce(new ConnectError('local attempt one', Code.Unavailable))
+      .mockRejectedValueOnce(new ConnectError('local global attempt three', Code.Unavailable));
+    harness.getSandboxSession.mockResolvedValue(
+      makeRow({
+        status: 'CHECKPOINTED',
+        restoreAttempts: 2,
+        lastRestoreError: 'peer consumed attempt two',
+      }),
+    );
+
+    await expect(harness.coordinator.restoreFromCheckpointWithRetry(
+      makeRow({ status: 'CHECKPOINTED', restoreAttempts: 0 }),
+      harness.agentDef,
+    )).rejects.toThrow('local global attempt three');
+
+    expect(harness.restoreOnce).toHaveBeenCalledTimes(2);
+    expect(harness.statusUpdates.at(-1)).toEqual(expect.objectContaining({
+      status: 'CHECKPOINTED',
+      extra: expect.objectContaining({
+        restoreAttempts: 3,
+        lastRestoreError: expect.stringContaining('local global attempt three'),
+      }),
+    }));
+  });
+
+  it('leaves a long-running cross-replica restore untouched when join wait expires', async () => {
+    const harness = createHarness();
+    const restoring = makeRow({ status: 'RESTORING', restoreAttempts: 1 });
+    harness.getSandboxSession.mockResolvedValue(restoring);
+
+    await expect(harness.coordinator.recoverOrReconnect(
+      restoring.conversationId,
+      harness.agentDef,
+      restoring.agentId,
+      restoring,
+    )).rejects.toBeInstanceOf(SessionRestoreInProgressError);
+
+    expect(harness.statusUpdates).toEqual([]);
+    expect(harness.restoreOnce).not.toHaveBeenCalled();
   });
 });

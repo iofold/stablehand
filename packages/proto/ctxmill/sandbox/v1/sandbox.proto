@@ -6,6 +6,7 @@ import "google/protobuf/struct.proto";
 service HarnessService {
   rpc OpenSession(OpenSessionRequest) returns (OpenSessionResponse);
   rpc DeliverTurn(DeliverTurnRequest) returns (stream SessionEvent);
+  rpc RenewTurnDeliveryCapability(RenewTurnDeliveryCapabilityRequest) returns (RenewTurnDeliveryCapabilityResponse);
   rpc SuspendSession(SuspendSessionRequest) returns (SuspendSessionResponse);
   rpc KillSession(KillSessionRequest) returns (KillSessionResponse);
 }
@@ -34,7 +35,7 @@ message FreshBootstrap {
   repeated ToolMetadata tools = 7;
   string workspace_dir = 8;
   string session_id = 9;
-  NativeToolConfig native_tools = 10;
+  NativeToolPolicyConfig native_tool_policy = 10;
 }
 
 message RestoreBootstrap {
@@ -43,7 +44,7 @@ message RestoreBootstrap {
   string agent_id = 3;
   string harness_config_json = 4;
   string system_prompt = 5;
-  NativeToolConfig native_tools = 6;
+  NativeToolPolicyConfig native_tool_policy = 6;
 }
 
 message OpenSessionResponse {
@@ -55,6 +56,28 @@ message DeliverTurnRequest {
   string session_id = 1;
   repeated Message messages = 2;
   string turn_id = 3;
+  TurnDeliveryCapability delivery_capability = 4;
+  map<string, string> turn_secrets = 5;
+}
+
+message TurnDeliveryCapability {
+  string owner_id = 1;
+  uint64 fence_token = 2;
+  int64 lease_expires_at_ms = 3;
+  uint64 restore_fence_token = 4;
+  optional string container_id = 5;
+  string agent_id = 6;
+  string signature = 7;
+}
+
+message RenewTurnDeliveryCapabilityRequest {
+  string session_id = 1;
+  string turn_id = 2;
+  TurnDeliveryCapability delivery_capability = 3;
+}
+
+message RenewTurnDeliveryCapabilityResponse {
+  bool renewed = 1;
 }
 
 message SessionEvent {
@@ -140,6 +163,8 @@ message RequestToolRequest {
   string tool_name = 3;
   string args_json = 4;
   string request_id = 5;
+  string sandbox_session_id = 6;
+  TurnDeliveryCapability delivery_capability = 7;
 }
 
 message RequestToolResponse {
@@ -152,13 +177,24 @@ message EmitEventRequest {
   string turn_id = 1;
   string event_type = 2;
   string payload_json = 3;
+  string sandbox_session_id = 4;
+  string agent_id = 5;
+  TurnDeliveryCapability delivery_capability = 6;
 }
 
 message EmitEventResponse {}
 
-message NativeToolConfig {
-  repeated string allowlist = 1;
-  repeated string blocklist = 2;
+enum NativeToolPolicy {
+  NATIVE_TOOL_POLICY_UNSPECIFIED = 0;
+  NATIVE_TOOL_POLICY_ALL = 1;
+  NATIVE_TOOL_POLICY_ALLOW = 2;
+  NATIVE_TOOL_POLICY_DENY = 3;
+  NATIVE_TOOL_POLICY_NONE = 4;
+}
+
+message NativeToolPolicyConfig {
+  NativeToolPolicy policy = 1;
+  repeated string names = 2;
 }
 
 message Message {
@@ -273,6 +309,8 @@ message RegisterArtifactRequest {
   string turn_id = 1;
   string agent_id = 2;
   ArtifactMeta artifact = 3;
+  string sandbox_session_id = 4;
+  TurnDeliveryCapability delivery_capability = 5;
 }
 
 message RegisterArtifactResponse {
@@ -283,6 +321,9 @@ message RegisterArtifactResponse {
 message ResolveArtifactRequest {
   string artifact_id = 1;
   string agent_id = 2;
+  string turn_id = 3;
+  string sandbox_session_id = 4;
+  TurnDeliveryCapability delivery_capability = 5;
 }
 
 message ResolveArtifactResponse {

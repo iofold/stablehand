@@ -113,8 +113,9 @@ describe('Turn cancellation with AbortSignal', () => {
             _conversationId: string,
             _messages: Message[],
             _turnId: string,
-            signal?: AbortSignal,
+            options?: { signal?: AbortSignal },
           ) => {
+            const signal = options?.signal;
             yieldedEvents.length = 0; // reset
             return (async function* () {
               yieldedEvents.push('chunk-1');
@@ -203,6 +204,10 @@ describe('Turn cancellation with AbortSignal', () => {
           turnId: turn.turnId,
           role: 'assistant',
           content: expect.stringContaining('Hello'),
+        }),
+        expect.objectContaining({
+          ownerId: expect.any(String),
+          fenceToken: expect.any(Number),
         }),
       );
 

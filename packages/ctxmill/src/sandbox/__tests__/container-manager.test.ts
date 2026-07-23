@@ -364,6 +364,41 @@ describe('ContainerManager', () => {
 
   // ── stopContainer ───────────────────────────────────────
 
+  describe('getRuntimeInstanceToken', () => {
+    it('reads the exact token from the target Docker container environment', async () => {
+      docker._mockContainer.inspect.mockResolvedValue({
+        Config: {
+          Env: [
+            'OTHER_VALUE=before',
+            'CTXMILL_RUNTIME_INSTANCE_TOKEN=runtime-token-1',
+            'OTHER_VALUE_2=after',
+          ],
+        },
+        State: { Status: 'running', ExitCode: 0 },
+      });
+
+      await expect(
+        manager.getRuntimeInstanceToken('sha256-abc123'),
+      ).resolves.toBe('runtime-token-1');
+      expect(docker.getContainer).toHaveBeenCalledWith('sha256-abc123');
+    });
+
+    it('does not confuse a similarly prefixed environment variable for the token', async () => {
+      docker._mockContainer.inspect.mockResolvedValue({
+        Config: {
+          Env: [
+            'CTXMILL_RUNTIME_INSTANCE_TOKEN_SUFFIX=wrong-token',
+          ],
+        },
+        State: { Status: 'running', ExitCode: 0 },
+      });
+
+      await expect(
+        manager.getRuntimeInstanceToken('sha256-abc123'),
+      ).resolves.toBeUndefined();
+    });
+  });
+
   describe('stopContainer', () => {
     it('calls docker stop with default timeout', async () => {
       await manager.stopContainer('sha256-abc123');

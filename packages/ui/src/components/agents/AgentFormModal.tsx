@@ -5,6 +5,20 @@ import { useAgentsStore, type Agent } from '@/stores/agents';
 import { fetchCatalogTools, type CatalogTool } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { ToolPickerModal } from './ToolPickerModal';
+import {
+  CTXMILL_HARNESS_NAMES,
+  HARNESS_CONFIG_SCHEMAS,
+  type AgentCreateInput,
+  type AgentPatchInput,
+  type BuiltinToolPolicy,
+  type NativeToolPolicy,
+} from '@ctxmill/contracts';
+import {
+  manifestToAgentPatchInput,
+  parseManifestString,
+  serializeManifestYAML,
+  validateManifest,
+} from '@ctxmill/manifest';
 
 interface AgentFormModalProps {
   open: boolean;
@@ -12,11 +26,7 @@ interface AgentFormModalProps {
   agent?: Agent | null;
 }
 
-const HARNESS_OPTIONS = [
-  'langgraph',
-  'claude-agents',
-  'pi-agent',
-] as const;
+const DEFAULT_HARNESS = 'langgraph';
 
 const HARNESS_CONFIG_TEMPLATES: Record<string, object> = {
   langgraph: { provider: 'openai', model: 'gpt-5.4-mini', apiKeyRef: '$secret:OPENAI_API_KEY' },
@@ -61,26 +71,28 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   const { createAgent, updateAgent } = useAgentsStore();
 
   const [name, setName] = useState('');
-  const [harness, setHarness] = useState<string>(HARNESS_OPTIONS[0]);
+  const [harness, setHarness] = useState<string>(DEFAULT_HARNESS);
   const [harnessConfigText, setHarnessConfigText] = useState(
-    JSON.stringify(HARNESS_CONFIG_TEMPLATES[HARNESS_OPTIONS[0]], null, 2)
+    JSON.stringify(HARNESS_CONFIG_TEMPLATES[DEFAULT_HARNESS], null, 2)
   );
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [tools, setTools] = useState<string[]>([]);
-  const [excludedBuiltins, setExcludedBuiltins] = useState<string[]>([]);
+  const [builtinToolPolicy, setBuiltinToolPolicy] = useState<BuiltinToolPolicy>({ policy: 'all' });
   const [builtinTools, setBuiltinTools] = useState<CatalogTool[]>([]);
   const [toolPickerOpen, setToolPickerOpen] = useState(false);
-  const [nativeToolsMode, setNativeToolsMode] = useState<'none' | 'allowlist' | 'blocklist'>('none');
+  const [nativeToolPolicyMode, setNativeToolPolicyMode] = useState<NativeToolPolicy['policy']>('all');
   const [nativeToolsList, setNativeToolsList] = useState<string[]>([]);
   const [nativeToolInput, setNativeToolInput] = useState('');
+  const [manifestYamlText, setManifestYamlText] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   const isEditing = Boolean(agent);
+  const isManifestEditor = Boolean(agent?.manifest);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || isManifestEditor) return;
     let mounted = true;
     fetchCatalogTools().then((data) => {
       if (mounted && Array.isArray(data)) {
@@ -90,7 +102,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       console.debug('[AgentFormModal] Failed to load tools:', err);
     });
     return () => { mounted = false; };
-  }, [open]);
+  }, [isManifestEditor, open]);
 
   // Populate form when editing
   useEffect(() => {
@@ -98,35 +110,32 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
 
     if (agent) {
       setName(agent.name);
-      setHarness(agent.harness ?? HARNESS_OPTIONS[0]);
+      setHarness(agent.harness ?? DEFAULT_HARNESS);
       setHarnessConfigText(formatJsonLike(agent.harnessConfig));
       setDescription(agent.description ?? '');
       setSystemPrompt(agent.systemPrompt ?? '');
       setTools(agent.tools ?? []);
       
-      const metaExcluded = agent.metadata?.excludeBuiltinTools;
-      setExcludedBuiltins(Array.isArray(metaExcluded) ? metaExcluded.filter((v: unknown): v is string => typeof v === 'string') : []);
-
-      if (agent.nativeTools?.allowlist?.length) {
-        setNativeToolsMode('allowlist');
-        setNativeToolsList(agent.nativeTools.allowlist);
-      } else if (agent.nativeTools?.blocklist?.length) {
-        setNativeToolsMode('blocklist');
-        setNativeToolsList(agent.nativeTools.blocklist);
-      } else {
-        setNativeToolsMode('none');
-        setNativeToolsList([]);
-      }
+      setBuiltinToolPolicy(agent.builtinToolPolicy ?? { policy: 'all' });
+      const nativePolicy = agent.nativeToolPolicy ?? { policy: 'all' };
+      setNativeToolPolicyMode(nativePolicy.policy);
+      setNativeToolsList(
+        nativePolicy.policy === 'allow' || nativePolicy.policy === 'deny'
+          ? nativePolicy.names
+          : [],
+      );
+      setManifestYamlText(formatManifestYaml(agent.manifest));
     } else {
       setName('');
-      setHarness(HARNESS_OPTIONS[0]);
-      setHarnessConfigText(JSON.stringify(HARNESS_CONFIG_TEMPLATES[HARNESS_OPTIONS[0]], null, 2));
+      setHarness(DEFAULT_HARNESS);
+      setHarnessConfigText(JSON.stringify(HARNESS_CONFIG_TEMPLATES[DEFAULT_HARNESS], null, 2));
       setDescription('');
       setSystemPrompt('');
       setTools([]);
-      setExcludedBuiltins([]);
-      setNativeToolsMode('none');
+      setBuiltinToolPolicy({ policy: 'all' });
+      setNativeToolPolicyMode('all');
       setNativeToolsList([]);
+      setManifestYamlText('');
     }
     setNativeToolInput('');
     setErrors({});
@@ -176,13 +185,29 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   const validate = (): boolean => {
     const errs: Record<string, string> = {};
     if (!name.trim()) errs.name = 'Name is required';
-    if (!harness) errs.harness = 'Harness is required';
+    const canonicalHarness = CTXMILL_HARNESS_NAMES.find((name) => name === harness);
+    if (!canonicalHarness) errs.harness = 'Select a supported harness';
     if (!systemPrompt.trim()) errs.systemPrompt = 'System prompt is required';
+    if (
+      (nativeToolPolicyMode === 'allow' || nativeToolPolicyMode === 'deny')
+      && nativeToolsList.length === 0
+    ) {
+      errs.nativeToolPolicy = 'Add at least one native tool name for this policy';
+    }
     if (!harnessConfigText.trim()) {
       errs.harnessConfig = 'Harness config is required';
     } else {
       try {
-        JSON.parse(harnessConfigText);
+        const parsedHarnessConfig = JSON.parse(harnessConfigText) as unknown;
+        if (canonicalHarness) {
+          const result = HARNESS_CONFIG_SCHEMAS[canonicalHarness].safeParse(parsedHarnessConfig);
+          if (!result.success) {
+            errs.harnessConfig = result.error.issues.map((issue) => {
+              const path = ['harnessConfig', ...issue.path.map(String)].join('.');
+              return `${path}: ${issue.message}`;
+            }).join('; ');
+          }
+        }
       } catch {
         errs.harnessConfig = 'Harness config must be valid JSON';
       }
@@ -192,36 +217,59 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   };
 
   const handleSave = async () => {
+    if (isManifestEditor && agent) {
+      setSaving(true);
+      setErrors({});
+      try {
+        const manifest = validateManifest(parseManifestString(manifestYamlText));
+        const payload = manifestToAgentPatchInput(manifest, {
+          ...(manifest.spec.instructions.startsWith('file:')
+            ? { resolvedInstructions: agent.systemPrompt }
+            : {}),
+        });
+        await updateAgent(agent.id, payload);
+        onClose();
+      } catch (error) {
+        setErrors({ _form: errorMessage(error) });
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (!validate()) return;
     setSaving(true);
     try {
       const parsedHarnessConfig = JSON.parse(harnessConfigText) as Record<string, unknown>;
-      const nativeTools = nativeToolsMode === 'none' ? null
-        : nativeToolsMode === 'allowlist' ? { allowlist: nativeToolsList }
-        : { blocklist: nativeToolsList };
-      const metadata = buildMetadata(agent?.metadata, nativeTools);
-      if (excludedBuiltins.length > 0) {
-        metadata.excludeBuiltinTools = excludedBuiltins;
-      } else {
-        delete metadata.excludeBuiltinTools;
-      }
-      const payload = {
+      const nativeToolPolicy: NativeToolPolicy =
+        nativeToolPolicyMode === 'allow' || nativeToolPolicyMode === 'deny'
+          ? { policy: nativeToolPolicyMode, names: nativeToolsList }
+          : { policy: nativeToolPolicyMode };
+      const commonInput = {
         name: name.trim(),
         harness,
-        systemPrompt: systemPrompt.trim(),
+        systemPrompt,
         tools,
-        description: description.trim() || undefined,
         harnessConfig: parsedHarnessConfig,
-        metadata,
+        nativeToolPolicy,
+        builtinToolPolicy,
       };
       if (isEditing && agent) {
+        const payload: AgentPatchInput = {
+          ...commonInput,
+          description: description.length > 0 ? description : null,
+        };
         await updateAgent(agent.id, payload);
       } else {
+        const payload: AgentCreateInput = {
+          ...commonInput,
+          ...(description.length > 0 ? { description } : {}),
+        };
         await createAgent(payload);
       }
       onClose();
-    } catch {
-      setErrors({ _form: 'Failed to save agent. Please try again.' });
+    } catch (error) {
+      setErrors({ _form: errorMessage(error) });
     } finally {
       setSaving(false);
     }
@@ -238,13 +286,13 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         onClick={onClose}
       />
       <div
-        className="relative z-10 w-full max-w-lg mx-4 rounded-lg border border-surface-700 bg-surface-850 animate-slide-up"
+        className="relative z-10 mx-4 flex h-[min(92vh,56rem)] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-surface-700 bg-surface-850 animate-slide-up"
         role="dialog"
         aria-modal="true"
         aria-label={isEditing ? 'Edit Agent' : 'New Agent'}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-surface-700/40 px-6 py-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-surface-700/40 px-6 py-4">
           <h2 className="text-lg font-semibold text-surface-100">
             {isEditing ? 'Edit Agent' : 'New Agent'}
           </h2>
@@ -259,11 +307,42 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         </div>
 
         {/* Body */}
-        <div className="max-h-[70vh] overflow-y-auto px-6 py-5 space-y-5">
+        <div
+          className={cn(
+            'min-h-0 flex-1 px-6 py-5',
+            isManifestEditor ? 'flex flex-col overflow-hidden' : 'space-y-5 overflow-y-auto',
+          )}
+        >
           {errors._form && (
-            <p className="text-sm text-red-400">{errors._form}</p>
+            <p role="alert" className="mb-3 text-sm text-red-400">{errors._form}</p>
           )}
 
+          {isManifestEditor ? (
+            <section className="flex min-h-0 flex-1 flex-col" aria-label="Canonical agent manifest editor">
+              <div className="mb-3 flex shrink-0 items-start justify-between gap-6">
+                <div>
+                  <label htmlFor="agent-manifest-yaml" className="text-label">
+                    Agent manifest YAML
+                  </label>
+                  <p className="mt-1 text-xs text-surface-400">
+                    This canonical manifest is the complete source for the agent definition.
+                  </p>
+                </div>
+                <span className="shrink-0 rounded border border-accent-500/20 bg-accent-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-accent-300">
+                  ctxmill.io/v1
+                </span>
+              </div>
+              <textarea
+                id="agent-manifest-yaml"
+                aria-label="Agent manifest YAML"
+                value={manifestYamlText}
+                onChange={(event) => setManifestYamlText(event.target.value)}
+                spellCheck={false}
+                className="input-base min-h-[32rem] flex-1 resize-none whitespace-pre font-mono text-sm leading-6"
+              />
+            </section>
+          ) : (
+            <>
           {/* Name */}
           <div>
             <label htmlFor="agent-name" className="text-label">
@@ -304,7 +383,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
               }}
               className={cn('input-base mt-1.5', errors.harness && 'border-red-500/60')}
             >
-              {HARNESS_OPTIONS.map((option) => (
+              {CTXMILL_HARNESS_NAMES.map((option) => (
                 <option key={option} value={option}>
                   {option}
                 </option>
@@ -397,6 +476,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
                 </span>
               ))}
               {builtinTools.map((tool) => {
+                const excludedBuiltins = excludedBuiltinNames(builtinToolPolicy, builtinTools);
                 const isExcluded = excludedBuiltins.includes(tool.name);
                 const isDeclared = tools.includes(tool.name);
                 return (
@@ -404,11 +484,14 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
                     key={tool.name}
                     type="button"
                     onClick={() => {
-                      setExcludedBuiltins((prev) =>
-                        isExcluded
-                          ? prev.filter((t) => t !== tool.name)
-                          : [...prev, tool.name]
-                      );
+                      const nextExcluded = isExcluded
+                        ? excludedBuiltins.filter((name) => name !== tool.name)
+                        : [...excludedBuiltins, tool.name];
+                      setBuiltinToolPolicy(policyFromExcludedBuiltinNames(
+                        nextExcluded,
+                        builtinTools,
+                        builtinToolPolicy,
+                      ));
                     }}
                     className={cn(
                       'inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded-md border transition-colors',
@@ -434,22 +517,25 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
           <div>
             <div className="text-label">Native SDK Tools</div>
             <div className="flex gap-2 mt-1.5 mb-2">
-              {(['none', 'allowlist', 'blocklist'] as const).map((mode) => (
+              {(['all', 'none', 'allow', 'deny'] as const).map((mode) => (
                 <button
                   key={mode}
                   type="button"
-                  onClick={() => { setNativeToolsMode(mode); if (mode === 'none') setNativeToolsList([]); }}
+                  onClick={() => {
+                    setNativeToolPolicyMode(mode);
+                    if (mode === 'all' || mode === 'none') setNativeToolsList([]);
+                  }}
                   className={`px-2 py-1 text-xs rounded ${
-                    nativeToolsMode === mode
+                    nativeToolPolicyMode === mode
                       ? 'bg-accent/20 text-accent border border-accent/30'
                       : 'bg-surface-800 text-surface-400 border border-surface-700 hover:border-surface-600'
                   }`}
                 >
-                  {mode === 'none' ? 'Default (all)' : mode === 'allowlist' ? 'Allowlist' : 'Blocklist'}
+                  {mode === 'all' ? 'All' : mode === 'none' ? 'None' : mode === 'allow' ? 'Allow only' : 'Deny listed'}
                 </button>
               ))}
             </div>
-            {nativeToolsMode !== 'none' && (
+            {(nativeToolPolicyMode === 'allow' || nativeToolPolicyMode === 'deny') && (
               <>
                 <input
                   type="text"
@@ -461,9 +547,12 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
                   onBlur={() =>
                     handleTagBlur(nativeToolInput, nativeToolsList, setNativeToolsList, setNativeToolInput)
                   }
-                  placeholder={`SDK tool names to ${nativeToolsMode}...`}
+                  placeholder={`SDK tool names to ${nativeToolPolicyMode}...`}
                   className="input-base"
                 />
+                {errors.nativeToolPolicy && (
+                  <p className="mt-1 text-xs text-red-400">{errors.nativeToolPolicy}</p>
+                )}
                 <TagList
                   items={nativeToolsList}
                   onRemove={(i) => setNativeToolsList(nativeToolsList.filter((_, idx) => idx !== i))}
@@ -471,10 +560,12 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
               </>
             )}
           </div>
+            </>
+          )}
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-6 border-t border-surface-700/40 px-6 py-4">
+        <div className="flex shrink-0 items-center justify-end gap-6 border-t border-surface-700/40 px-6 py-4">
           <button
             type="button"
             onClick={onClose}
@@ -493,36 +584,93 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         </div>
       </div>
 
-      <ToolPickerModal
-        open={toolPickerOpen}
-        onClose={() => setToolPickerOpen(false)}
-        selectedTools={tools}
-        onSelectionChange={setTools}
-        excludedBuiltins={excludedBuiltins}
-        onExcludedBuiltinsChange={setExcludedBuiltins}
-      />
+      {!isManifestEditor && (
+        <ToolPickerModal
+          open={toolPickerOpen}
+          onClose={() => setToolPickerOpen(false)}
+          selectedTools={tools}
+          onSelectionChange={setTools}
+          excludedBuiltins={excludedBuiltinNames(builtinToolPolicy, builtinTools)}
+          onExcludedBuiltinsChange={(names) => {
+            setBuiltinToolPolicy(policyFromExcludedBuiltinNames(
+              names,
+              builtinTools,
+              builtinToolPolicy,
+            ));
+          }}
+        />
+      )}
     </div>,
     document.body,
   );
 }
 
-function buildMetadata(
-  metadata: Record<string, unknown> | null | undefined,
-  nativeTools: { allowlist?: string[]; blocklist?: string[] } | null,
-): Record<string, unknown> {
-  const preserved = extractNonManagedMetadata(metadata);
-  preserved.nativeTools = nativeTools;
-  return preserved;
+function excludedBuiltinNames(
+  policy: BuiltinToolPolicy,
+  tools: readonly CatalogTool[],
+): string[] {
+  const names = tools.map((tool) => tool.name);
+  switch (policy.policy) {
+    case 'all':
+      return [];
+    case 'none':
+      return names;
+    case 'allow': {
+      const allowed = new Set(policy.names);
+      return names.filter((name) => !allowed.has(name));
+    }
+    case 'deny':
+      return policy.names.filter((name) => names.includes(name));
+  }
 }
 
-function extractNonManagedMetadata(
-  metadata: Record<string, unknown> | null | undefined,
-): Record<string, unknown> {
-  if (!metadata) return {};
-  const next = { ...metadata };
-  delete next.nativeTools;
-  delete next.excludeBuiltinTools;
-  return next;
+function policyFromExcludedBuiltinNames(
+  excludedNames: readonly string[],
+  tools: readonly CatalogTool[],
+  currentPolicy: BuiltinToolPolicy,
+): BuiltinToolPolicy {
+  const catalogNames = tools.map((tool) => tool.name);
+  const catalogNameSet = new Set(catalogNames);
+  const excludedSet = new Set(excludedNames);
+  const excludedCatalogNames = catalogNames.filter((name) => excludedSet.has(name));
+
+  if (currentPolicy.policy === 'allow') {
+    const names = [
+      ...currentPolicy.names.filter((name) => !catalogNameSet.has(name)),
+      ...catalogNames.filter((name) => !excludedSet.has(name)),
+    ];
+    return names.length > 0 ? { policy: 'allow', names: [...new Set(names)] } : { policy: 'none' };
+  }
+
+  if (currentPolicy.policy === 'deny') {
+    const names = [
+      ...currentPolicy.names.filter((name) => !catalogNameSet.has(name)),
+      ...excludedCatalogNames,
+    ];
+    return names.length > 0 ? { policy: 'deny', names: [...new Set(names)] } : { policy: 'all' };
+  }
+
+  if (currentPolicy.policy === 'none') {
+    const names = catalogNames.filter((name) => !excludedSet.has(name));
+    return names.length > 0 ? { policy: 'allow', names } : { policy: 'none' };
+  }
+
+  if (excludedCatalogNames.length === 0) return { policy: 'all' };
+  if (tools.length > 0 && excludedCatalogNames.length === tools.length) return { policy: 'none' };
+  return { policy: 'deny', names: excludedCatalogNames };
+}
+
+function formatManifestYaml(value: unknown): string {
+  if (value == null) return '';
+  try {
+    return serializeManifestYAML(validateManifest(value));
+  } catch {
+    return formatJsonLike(value);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function formatJsonLike(value: unknown): string {

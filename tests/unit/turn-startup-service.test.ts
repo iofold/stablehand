@@ -3,18 +3,22 @@ import { describe, expect, test, vi } from 'vitest';
 import type { DatabaseRepository } from '../../packages/ctxmill/src/database/repository.js';
 import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 import { buildAgentDefinition } from '../../packages/ctxmill/src/orchestrator/agent-definition.js';
+import { TurnSecretEnvelopeCodec } from '../../packages/ctxmill/src/orchestrator/turn-secret-envelope.js';
 import { TurnStartupService } from '../../packages/ctxmill/src/orchestrator/turn-startup-service.js';
 
 type StoredAgent = NonNullable<Awaited<ReturnType<DatabaseRepository['getAgent']>>>;
+const TEST_TURN_SECRET_CODEC = new TurnSecretEnvelopeCodec(Buffer.alloc(32, 3));
 
 function createService() {
   return new TurnStartupService({
+    allocateTurnId: () => 'turn-1',
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
     },
+    turnSecretEnvelopeCodec: TEST_TURN_SECRET_CODEC,
   });
 }
 
@@ -28,9 +32,7 @@ function createAgent(overrides: Partial<StoredAgent> = {}): StoredAgent {
     tools: ['search'],
     description: 'Agent description',
     workspaceDir: '/tmp/project/agents/assistant',
-    status: 'ready',
     manifest: null,
-    version: 1,
     metadata: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -52,7 +54,9 @@ function createExecutionMocks() {
   const db = {
     addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
     createConversation: vi.fn().mockResolvedValue({ id: 'conv-new', agentId: 'agent-1' }),
-    createTurn: vi.fn().mockImplementation(async (input: { id?: string }) => ({ id: input.id ?? 'turn-1' })),
+    createTurnWithSecretEnvelope: vi.fn().mockImplementation(
+      async (input: { id?: string }) => ({ id: input.id ?? 'turn-1' }),
+    ),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
     getAgent: vi.fn().mockResolvedValue(createAgent()),
     getConversation: vi.fn().mockResolvedValue({ id: 'conv-existing', agentId: 'agent-1' }),
@@ -66,6 +70,13 @@ function createExecutionMocks() {
         createdAt: Date.now(),
       },
     ]),
+    getTurnSecretEnvelope: vi.fn().mockImplementation(async (turnId: string) => ({
+      turnId,
+      ...TEST_TURN_SECRET_CODEC.seal(turnId, {
+        PILOT_TURN_OWNERSHIP_TOKEN: 'queued-token',
+      }),
+      createdAt: Date.now(),
+    })),
     getTurn: vi.fn().mockResolvedValue(null),
     updateTurn: vi.fn().mockResolvedValue(undefined),
     finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
@@ -198,16 +209,23 @@ describe('TurnStartupService', () => {
       });
 
       expect(mocks.db.getConversation).toHaveBeenCalledWith('conv-existing');
-      expect(mocks.db.createTurn).toHaveBeenCalledWith({
-        id: 'turn-custom',
-        agentId: 'agent-1',
-        conversationId: 'conv-existing',
-        mode: 'background',
-        status: 'queued',
-        userMessageId: 'msg-1',
-        tags: { agent: 'agent-1', harness: 'langgraph', mode: 'background' },
-        taskDescription: 'background task',
-      });
+      expect(mocks.db.createTurnWithSecretEnvelope).toHaveBeenCalledWith(
+        {
+          id: 'turn-custom',
+          agentId: 'agent-1',
+          conversationId: 'conv-existing',
+          mode: 'background',
+          status: 'queued',
+          userMessageId: 'msg-1',
+          tags: { agent: 'agent-1', harness: 'langgraph', mode: 'background' },
+          taskDescription: 'background task',
+        },
+        expect.objectContaining({
+          iv: expect.any(String),
+          ciphertext: expect.any(String),
+          authTag: expect.any(String),
+        }),
+      );
       expect(mocks.eventBus.emit).toHaveBeenCalledTimes(1);
       expect(mocks.eventBus.emit).toHaveBeenCalledWith('turn.pending', expect.objectContaining({
         turnId: 'turn-custom',
@@ -300,7 +318,7 @@ describe('TurnStartupService', () => {
       })).rejects.toThrow('Turn already exists for id turn-custom');
 
       expect(mocks.db.addMessage).not.toHaveBeenCalled();
-      expect(mocks.db.createTurn).not.toHaveBeenCalled();
+      expect(mocks.db.createTurnWithSecretEnvelope).not.toHaveBeenCalled();
     });
 
     test('rolls back the user message when turn creation fails after message persistence', async () => {
@@ -319,7 +337,7 @@ describe('TurnStartupService', () => {
       })).rejects.toThrow('limit reached');
 
       expect(mocks.db.deleteMessage).toHaveBeenCalledWith('msg-1');
-      expect(mocks.db.createTurn).not.toHaveBeenCalled();
+      expect(mocks.db.createTurnWithSecretEnvelope).not.toHaveBeenCalled();
     });
 
 
@@ -369,7 +387,7 @@ describe('TurnStartupService', () => {
         mode: 'interactive',
       })).rejects.toThrow('message load failed');
 
-      expect(mocks.db.createTurn).toHaveBeenCalledTimes(1);
+      expect(mocks.db.createTurnWithSecretEnvelope).toHaveBeenCalledTimes(1);
       expect(mocks.db.finalizeTurnIfOpen).toHaveBeenCalledWith('turn-1', expect.objectContaining({
         error: 'message load failed',
         completedAt: expect.any(Number),
@@ -402,7 +420,7 @@ describe('TurnStartupService', () => {
         emitUserMessageEvent: false,
       })).rejects.toThrow('event store unavailable');
 
-      expect(mocks.db.createTurn).toHaveBeenCalledTimes(1);
+      expect(mocks.db.createTurnWithSecretEnvelope).toHaveBeenCalledTimes(1);
       expect(listener).not.toHaveBeenCalled();
       expect(mocks.db.finalizeTurnIfOpen).toHaveBeenCalledWith('turn-1', expect.objectContaining({
         error: 'event store unavailable',
@@ -448,7 +466,7 @@ describe('TurnStartupService', () => {
         db: {
           addMessage: vi.fn(),
           createConversation: vi.fn(),
-          createTurn: vi.fn(),
+          createTurnWithSecretEnvelope: vi.fn(),
           deleteMessage: vi.fn(),
           getAgent: vi.fn(),
           getConversation: vi.fn(),
@@ -483,7 +501,7 @@ describe('TurnStartupService', () => {
           db: {
             addMessage: vi.fn(),
             createConversation: vi.fn(),
-            createTurn: vi.fn(),
+            createTurnWithSecretEnvelope: vi.fn(),
             deleteMessage: vi.fn(),
             getAgent: vi.fn(),
             getConversation: vi.fn(),
@@ -524,7 +542,7 @@ describe('TurnStartupService', () => {
         db: {
           addMessage: vi.fn(),
           createConversation: vi.fn(),
-          createTurn: vi.fn(),
+          createTurnWithSecretEnvelope: vi.fn(),
           deleteMessage: vi.fn(),
           getAgent: vi.fn(),
           getConversation: vi.fn(),
@@ -593,11 +611,13 @@ describe('TurnStartupService', () => {
         taskDescription: 'queued prompt',
         userMessageId: 'msg-1',
         messages: [],
-        emitTurnStarted: false,
+        deliveryContext: {
+          fence: { ownerId: 'owner-1', fenceToken: 1 },
+        },
       }, controller.signal);
 
       expect(mocks.db.addMessage).not.toHaveBeenCalled();
-      expect(mocks.db.createTurn).not.toHaveBeenCalled();
+      expect(mocks.db.createTurnWithSecretEnvelope).not.toHaveBeenCalled();
       expect(mocks.sessionManager.reserveConcurrencySlot).toHaveBeenCalledWith('agent-1');
       expect(mocks.agentTurnService.executeTurn).toHaveBeenCalledWith(expect.objectContaining({
         agentDef: expect.objectContaining({ name: 'assistant' }),
@@ -610,7 +630,39 @@ describe('TurnStartupService', () => {
         concurrencyReservation: reservation,
         suppressTurnStartedEvent: true,
         signal: controller.signal,
+        turnSecrets: {
+          PILOT_TURN_OWNERSHIP_TOKEN: 'queued-token',
+        },
       }));
+    });
+
+    test('fails a queued redispatch closed when its encrypted credentials are missing', async () => {
+      const service = createService();
+      const mocks = createExecutionMocks();
+      mocks.db.getTurnSecretEnvelope.mockResolvedValue(undefined);
+      service.configureExecution(mocks);
+
+      await service.redispatchQueuedTurn({
+        turnId: 'turn-missing-envelope',
+        agentId: 'agent-1',
+        conversationId: 'conv-existing',
+        mode: 'interactive',
+        taskDescription: 'queued prompt',
+        userMessageId: 'msg-1',
+        messages: [],
+        deliveryContext: {
+          fence: { ownerId: 'owner-1', fenceToken: 1 },
+        },
+      }, new AbortController().signal);
+
+      expect(mocks.agentTurnService.executeTurn).not.toHaveBeenCalled();
+      expect(mocks.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+        'turn-missing-envelope',
+        expect.objectContaining({
+          error: expect.stringContaining('Encrypted turn credentials are missing'),
+        }),
+        { ownerId: 'owner-1', fenceToken: 1 },
+      );
     });
   });
 });

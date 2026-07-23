@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { allowConsoleErrors } from '../setup-strict.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -359,5 +359,39 @@ describe('File endpoint integration tests', () => {
       revision: 2,
       sha256: upload.json().sha256,
     });
+  });
+
+  it('rolls the workspace back when revision persistence fails', async () => {
+    const baseline = await createWorkspaceArchive({
+      'deployment.txt': 'stable workspace',
+    });
+    const baselineUpload = await app.inject({
+      method: 'POST',
+      url: `/api/agents/${agentId}/workspace`,
+      headers: { 'content-type': 'application/gzip' },
+      payload: baseline,
+    });
+    expect(baselineUpload.statusCode, baselineUpload.body).toBe(201);
+
+    const revisionSpy = vi.spyOn(container.db, 'recordAgentWorkspaceRevision')
+      .mockRejectedValueOnce(new Error('revision store unavailable'));
+    const replacement = await createWorkspaceArchive({
+      'deployment.txt': 'partial replacement must not survive',
+    });
+    const failedUpload = await app.inject({
+      method: 'POST',
+      url: `/api/agents/${agentId}/workspace`,
+      headers: { 'content-type': 'application/gzip' },
+      payload: replacement,
+    });
+
+    expect(failedUpload.statusCode).toBeGreaterThanOrEqual(400);
+    expect(revisionSpy).toHaveBeenCalledTimes(1);
+    const readback = await app.inject({
+      method: 'GET',
+      url: `/api/agents/${agentId}/files/read?path=deployment.txt`,
+    });
+    expect(readback.statusCode, readback.body).toBe(200);
+    expect(readback.json().content).toBe('stable workspace');
   });
 });

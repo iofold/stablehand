@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -315,33 +316,47 @@ export async function fileRoutes(
           maxBytes: maxTarBytes,
         });
 
-        const oldDir = `${baseDir}.old`;
-
-        await rm(oldDir, { recursive: true, force: true });
-
+        const oldDir = `${baseDir}.old-${randomUUID()}`;
         const baseExists = await stat(baseDir).then(() => true, () => false);
-        if (baseExists) {
-          await rename(baseDir, oldDir);
-        }
-        await rename(tempDir, baseDir);
-
-        await rm(oldDir, { recursive: true, force: true });
-
-        await chownRecursive(baseDir, 1000, 1000);
-
-        const digest = await digestWorkspace(baseDir);
+        const digest = await digestWorkspace(tempDir);
         if (digest.fileCount !== result.files || digest.totalBytes !== result.totalBytes) {
           throw new Error(
             'Extracted workspace accounting did not match the applied filesystem',
           );
         }
-        const appliedAt = Date.now();
-        const state = await db.recordAgentWorkspaceRevision(agent.id, {
-          ...digest,
-          appliedAt,
-        });
 
-        return reply.status(201).send(toWorkspaceRevision(state));
+        await chownRecursive(tempDir, 1000, 1000);
+        if (baseExists) {
+          await rename(baseDir, oldDir);
+        }
+
+        let workspaceSwapped = false;
+        try {
+          await rename(tempDir, baseDir);
+          workspaceSwapped = true;
+
+          const appliedAt = Date.now();
+          const state = await db.recordAgentWorkspaceRevision(agent.id, {
+            ...digest,
+            appliedAt,
+          });
+
+          // The revision row is the commit point. Backup cleanup is best
+          // effort and cannot make an applied deployment fail afterwards.
+          await rm(oldDir, { recursive: true, force: true }).catch((cleanupError: unknown) => {
+            request.log.warn({ err: cleanupError, oldDir }, 'Failed to remove old workspace backup');
+          });
+
+          return reply.status(201).send(toWorkspaceRevision(state));
+        } catch (swapError) {
+          if (workspaceSwapped) {
+            await rm(baseDir, { recursive: true, force: true });
+          }
+          if (baseExists) {
+            await rename(oldDir, baseDir);
+          }
+          throw swapError;
+        }
       } catch (err) {
         await rm(tempDir, { recursive: true, force: true });
 

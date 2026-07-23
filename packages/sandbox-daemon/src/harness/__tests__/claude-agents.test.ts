@@ -1025,6 +1025,206 @@ describe('buildClaudeEnv secret redaction (mr-9486.57)', () => {
       delete process.env.LANGSMITH_API_KEY;
     }
   });
+
+  it('passes each turn secret only in that SDK query environment', async () => {
+    const tokenKey = 'PILOT_TURN_OWNERSHIP_TOKEN';
+    const blockedHostKey = 'AWS_ACCESS_KEY_ID';
+    const providerKey = 'ANTHROPIC_API_KEY';
+    const previousToken = process.env[tokenKey];
+    const previousBlockedHostValue = process.env[blockedHostKey];
+    const previousProviderValue = process.env[providerKey];
+    process.env[tokenKey] = 'stable-token';
+    process.env[blockedHostKey] = 'stable-aws-key';
+    process.env[providerKey] = 'stable-anthropic-key';
+
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    });
+
+    const session = await harness.openSession(makeConfig());
+    try {
+      await collectEvents(session.deliverTurn(
+        { messages: [makeMessage('user', 'Turn A')], turnId: 'turn-secret-a' },
+        {
+          turnSecrets: {
+            [tokenKey]: 'turn-token-a',
+            [blockedHostKey]: 'turn-aws-key-a',
+            [providerKey]: 'turn-anthropic-key-a',
+          },
+        },
+      ));
+      expect(process.env[tokenKey]).toBe('stable-token');
+      expect(process.env[blockedHostKey]).toBe('stable-aws-key');
+      expect(process.env[providerKey]).toBe('stable-anthropic-key');
+
+      await collectEvents(session.deliverTurn(
+        { messages: [makeMessage('user', 'Turn B')], turnId: 'turn-secret-b' },
+        {
+          turnSecrets: {
+            [tokenKey]: 'turn-token-b',
+            [blockedHostKey]: 'turn-aws-key-b',
+            [providerKey]: 'turn-anthropic-key-b',
+          },
+        },
+      ));
+      expect(process.env[tokenKey]).toBe('stable-token');
+      expect(process.env[blockedHostKey]).toBe('stable-aws-key');
+      expect(process.env[providerKey]).toBe('stable-anthropic-key');
+
+      const firstEnv = mockQuery.mock.calls[0]?.[0]?.options?.env;
+      const secondEnv = mockQuery.mock.calls[1]?.[0]?.options?.env;
+      expect(firstEnv?.[tokenKey]).toBe('turn-token-a');
+      expect(secondEnv?.[tokenKey]).toBe('turn-token-b');
+      expect(firstEnv?.[blockedHostKey]).toBe('turn-aws-key-a');
+      expect(secondEnv?.[blockedHostKey]).toBe('turn-aws-key-b');
+      expect(firstEnv?.[providerKey]).toBe('turn-anthropic-key-a');
+      expect(secondEnv?.[providerKey]).toBe('turn-anthropic-key-b');
+    } finally {
+      await session.close();
+      if (previousToken === undefined) {
+        delete process.env[tokenKey];
+      } else {
+        process.env[tokenKey] = previousToken;
+      }
+      if (previousBlockedHostValue === undefined) {
+        delete process.env[blockedHostKey];
+      } else {
+        process.env[blockedHostKey] = previousBlockedHostValue;
+      }
+      if (previousProviderValue === undefined) {
+        delete process.env[providerKey];
+      } else {
+        process.env[providerKey] = previousProviderValue;
+      }
+    }
+  });
+});
+
+describe('Claude Agents model gateway connection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses the Anthropic-native gateway endpoint and opaque correlation headers', async () => {
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    });
+    const config = makeConfig({
+      harnessConfigJson: JSON.stringify({
+        model: 'ctxmill-anthropic',
+      }),
+      secrets: {
+        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
+        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+        ANTHROPIC_API_KEY: 'upstream-key-that-must-not-win',
+      },
+    });
+
+    const session = await harness.openSession(config);
+    try {
+      await collectEvents(session.deliverTurn(
+        {
+          messages: [makeMessage('user', 'Hello')],
+          turnId: 'customer@example.com-close',
+        },
+        {
+          turnSecrets: {
+            ANTHROPIC_API_KEY: 'turn-override-that-must-not-win',
+            ANTHROPIC_BASE_URL: 'https://attacker.invalid',
+          },
+        },
+      ));
+    } finally {
+      await session.close();
+    }
+
+    const queryCall = mockQuery.mock.calls[0]?.[0] as {
+      options?: { env?: Record<string, string> };
+    } | undefined;
+    const capturedEnv = queryCall?.options?.env ?? {};
+    expect(capturedEnv.ANTHROPIC_API_KEY).toBe('runtime-key');
+    expect(capturedEnv.ANTHROPIC_BASE_URL).toBe('http://litellm:4000');
+    expect(capturedEnv.ANTHROPIC_CUSTOM_HEADERS).toContain(
+      'x-litellm-trace-id: ct_',
+    );
+    expect(capturedEnv.ANTHROPIC_CUSTOM_HEADERS).toContain(
+      'x-litellm-spend-logs-metadata:',
+    );
+    expect(capturedEnv.ANTHROPIC_CUSTOM_HEADERS).not.toContain(
+      'customer@example.com',
+    );
+    expect(capturedEnv).not.toHaveProperty('CTXMILL_MODEL_GATEWAY_RUNTIME_KEY');
+  });
+
+  it('preserves an explicit direct endpoint and key', async () => {
+    const harness = new ClaudeAgentsHarness();
+    Reflect.set(harness, 'loadSdkModule', async () => ({
+      query: mockQuery,
+      tool: mockTool,
+      createSdkMcpServer: mockCreateSdkMcpServer,
+    }));
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    });
+    const session = await harness.openSession(makeConfig({
+      harnessConfigJson: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        apiKeyRef: '$secret:DIRECT_ANTHROPIC_KEY',
+        baseUrl: 'https://direct.example.test',
+      }),
+      secrets: {
+        DIRECT_ANTHROPIC_KEY: 'direct-key',
+        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
+        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+      },
+    }));
+
+    try {
+      await collectEvents(session.deliverTurn(
+        { messages: [makeMessage('user', 'Hello')], turnId: 'turn-direct' },
+        {},
+      ));
+    } finally {
+      await session.close();
+    }
+
+    const queryCall = mockQuery.mock.calls[0]?.[0] as {
+      options?: { env?: Record<string, string> };
+    } | undefined;
+    expect(queryCall?.options?.env).toEqual(expect.objectContaining({
+      ANTHROPIC_API_KEY: 'direct-key',
+      ANTHROPIC_BASE_URL: 'https://direct.example.test',
+    }));
+    expect(queryCall?.options?.env).not.toHaveProperty('ANTHROPIC_CUSTOM_HEADERS');
+  });
 });
 
 describe('toSdkSessionId (ctx-0u1b: SDK requires UUID sessionId)', () => {

@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import type {
+  BashSpawnContext,
+  BashToolOptions,
+  ToolsOptions,
+} from '@mariozechner/pi-coding-agent';
+import type {
   AgentHarness,
   AgentEvent as CtxMillAgentEvent,
   ApprovalCallback,
@@ -17,6 +22,7 @@ import type {
 import type { ToolDefinition } from '../tool/types.js';
 import type { Message } from '../types.js';
 import { PIAgentConfigSchema, type PIAgentConfig } from './schemas.js';
+import { requireCurrentTurnSecrets } from '../sandbox/turn-delivery-context.js';
 import {
   TurnAccumulator,
   errorMessage,
@@ -25,9 +31,15 @@ import {
   normalizeTokenUsage,
   parseHarnessConfig,
   requestToolApproval,
-  resolveModelAuth,
   withTurnTracing,
 } from './kit/index.js';
+import { filterNativeToolNames } from './native-tool-policy.js';
+import {
+  createGatewayCorrelationHeaders,
+  resolveHarnessModelConnection,
+  type HarnessModelConnection,
+} from './model-gateway.js';
+import { TURN_ONLY_ENFORCEMENT_CAPABILITIES } from './enforcement/types.js';
 
 let _sdk: {
   createAgentSession: any;
@@ -255,56 +267,65 @@ function resolveModel(
   getModelFn: any,
   harnessConfig: PIAgentConfig,
   secrets: ResolvedSecrets,
-): any {
+): {
+  model: any;
+  pricingKnown: boolean;
+  connection: HarnessModelConnection;
+} {
   const { provider, model, baseUrl, apiKeyRef } = harnessConfig;
-  const { apiKey: resolvedApiKey } = resolveModelAuth({ provider, apiKeyRef, secrets });
-
-  if (baseUrl) {
+  const connection = resolveHarnessModelConnection({
+    provider,
+    apiKeyRef,
+    baseUrl,
+    secrets,
+  });
+  const resolved = getModelFn(provider, model);
+  if (resolved) {
     return {
+      connection,
+      pricingKnown: connection.mode === 'direct',
+      model: connection.baseUrl
+        ? {
+          ...resolved,
+          provider,
+          id: model,
+          baseUrl: connection.baseUrl,
+          apiKey: connection.apiKey,
+        }
+        : resolved,
+    };
+  }
+
+  const providerDefaults: Record<string, { baseUrl: string; api: string }> = {
+    openai: { baseUrl: 'https://api.openai.com/v1', api: 'openai-completions' },
+    anthropic: { baseUrl: 'https://api.anthropic.com', api: 'anthropic-messages' },
+    google: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', api: 'google-generative-ai' },
+  };
+  const defaults = providerDefaults[provider] ?? providerDefaults.openai;
+
+  return {
+    connection,
+    pricingKnown: false,
+    model: {
       id: model,
       name: model,
       provider,
-      api: 'openai-completions' as const,
-      baseUrl,
-      apiKey: resolvedApiKey,
+      api: defaults.api,
+      baseUrl: connection.baseUrl ?? defaults.baseUrl,
+      apiKey: connection.apiKey,
       reasoning: false,
       input: ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 128000,
       maxTokens: 16384,
-    };
-  }
-
-  const resolved = getModelFn(provider, model);
-  if (resolved) {
-    return resolved;
-  }
-
-  const providerDefaults: Record<string, { baseUrl: string; api: string }> = {
-    openai: { baseUrl: 'https://api.openai.com/v1', api: 'openai-completions' },
-    anthropic: { baseUrl: 'https://api.anthropic.com/v1', api: 'anthropic' },
-    google: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', api: 'google-genai' },
-  };
-  const defaults = providerDefaults[provider] ?? providerDefaults.openai;
-
-  return {
-    id: model,
-    name: model,
-    provider,
-    api: defaults.api,
-    baseUrl: defaults.baseUrl,
-    apiKey: resolvedApiKey,
-    reasoning: false,
-    input: ['text'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 16384,
+    },
   };
 }
 
-function _piUpdateUsage(
+export function _piUpdateUsage(
   totalUsage: TokenUsage | undefined,
   piEvent: Record<string, unknown>,
+  pricingKnown: boolean,
 ): TokenUsage | undefined {
   if (piEvent.type !== 'turn_end') {
     return totalUsage;
@@ -329,7 +350,7 @@ function _piUpdateUsage(
   nextUsage.inputTokens += normalized.inputTokens;
   nextUsage.outputTokens += normalized.outputTokens;
   nextUsage.totalTokens += normalized.totalTokens;
-  if (normalized.costUsd !== undefined) {
+  if (pricingKnown && normalized.costUsd !== undefined) {
     nextUsage.costUsd = (nextUsage.costUsd ?? 0) + normalized.costUsd;
   }
 
@@ -383,7 +404,10 @@ export function _piMapAgentEvent(
     }
 
     case 'agent_end': {
-      return { type: 'done', usage };
+      return {
+        type: 'done',
+        ...(usage ? { usage } : {}),
+      };
     }
 
     default:
@@ -398,12 +422,15 @@ type NativePiSession = {
   dispose: () => void;
   agent: {
     replaceMessages: (messages: Array<Record<string, unknown>>) => void;
+    setModel: (model: Record<string, unknown>) => void;
   };
 };
 
 export class PIAgentHarness implements AgentHarness {
   readonly name = 'pi-agent';
   readonly configSchema = PIAgentConfigSchema;
+  readonly enforcementCapabilities =
+    TURN_ONLY_ENFORCEMENT_CAPABILITIES;
 
   async openSession(config: HarnessSessionConfig, restore?: HarnessRestorePoint): Promise<HarnessSession> {
     const sdk = await getSDK();
@@ -427,12 +454,11 @@ export class PIAgentHarness implements AgentHarness {
         console.error(`[pi-agent] Failed to load extension: ${extPath}`, err);
       }
     }
-    const { apiKey: resolvedApiKey } = resolveModelAuth({
-      provider: harnessConfig.provider,
-      apiKeyRef: harnessConfig.apiKeyRef,
-      secrets: config.secrets,
-    });
-    const model = resolveModel(sdk.getModel, harnessConfig, config.secrets);
+    const { model, pricingKnown, connection } = resolveModel(
+      sdk.getModel,
+      harnessConfig,
+      config.secrets,
+    );
 
     const nativeTools = this.buildNativeTools(config, {
       createReadTool: sdk.createReadTool,
@@ -455,10 +481,10 @@ export class PIAgentHarness implements AgentHarness {
     const customTools = convertTools(sdk.Type, config.tools, turnRef, extensions);
 
     const authStorage = sdk.AuthStorage.inMemory();
-    if (resolvedApiKey) {
-      authStorage.setRuntimeApiKey(harnessConfig.provider, resolvedApiKey);
+    if (connection.apiKey) {
+      authStorage.setRuntimeApiKey(harnessConfig.provider, connection.apiKey);
       if (typeof model.api === 'string' && model.api !== harnessConfig.provider) {
-        authStorage.setRuntimeApiKey(model.api, resolvedApiKey);
+        authStorage.setRuntimeApiKey(model.api, connection.apiKey);
       }
     }
     const modelRegistry = new sdk.ModelRegistry(authStorage);
@@ -486,7 +512,15 @@ export class PIAgentHarness implements AgentHarness {
     });
     const nativeSession: NativePiSession = created.session;
 
-    const session = new PiAgentSession(nativeSession, config, turnRef, extensions);
+    const session = new PiAgentSession(
+      nativeSession,
+      config,
+      turnRef,
+      extensions,
+      pricingKnown,
+      model,
+      connection.mode === 'gateway',
+    );
     for (const ext of extensions) {
       try {
         await ext.onSessionStart?.({
@@ -512,19 +546,28 @@ export class PIAgentHarness implements AgentHarness {
     config: HarnessSessionConfig,
     factories: {
       createReadTool: (cwd: string) => unknown;
-      createBashTool: (cwd: string) => unknown;
+      createBashTool: (cwd: string, options?: BashToolOptions) => unknown;
       createEditTool: (cwd: string) => unknown;
       createWriteTool: (cwd: string) => unknown;
       createGrepTool: (cwd: string) => unknown;
       createFindTool: (cwd: string) => unknown;
       createLsTool: (cwd: string) => unknown;
-      createCodingTools: (cwd: string) => unknown[];
+      createCodingTools: (cwd: string, options?: ToolsOptions) => unknown[];
     },
   ): unknown[] {
     const cwd = config.workspaceDir ?? process.cwd();
+    const bashOptions: BashToolOptions = {
+      spawnHook: (context: BashSpawnContext): BashSpawnContext => ({
+        ...context,
+        env: {
+          ...context.env,
+          ...requireCurrentTurnSecrets(),
+        },
+      }),
+    };
     const allFactories: Record<string, () => unknown> = {
       read: () => factories.createReadTool(cwd),
-      bash: () => factories.createBashTool(cwd),
+      bash: () => factories.createBashTool(cwd, bashOptions),
       edit: () => factories.createEditTool(cwd),
       write: () => factories.createWriteTool(cwd),
       grep: () => factories.createGrepTool(cwd),
@@ -532,16 +575,11 @@ export class PIAgentHarness implements AgentHarness {
       ls: () => factories.createLsTool(cwd),
     };
 
-    const primaryConf = config.nativeTools;
-    if (!primaryConf) {
-      return factories.createCodingTools(cwd);
+    const nativeToolPolicy = config.nativeToolPolicy;
+    if (!nativeToolPolicy || nativeToolPolicy.policy === 'all') {
+      return factories.createCodingTools(cwd, { bash: bashOptions });
     }
-
-    let names = primaryConf.allowlist ?? Object.keys(allFactories);
-    const blocked = new Set(primaryConf.blocklist ?? []);
-    if (blocked.size > 0) {
-      names = names.filter((n) => !blocked.has(n));
-    }
+    const names = filterNativeToolNames(Object.keys(allFactories), nativeToolPolicy);
     return names.filter((n) => n in allFactories).map((n) => allFactories[n]());
   }
 
@@ -555,6 +593,9 @@ class PiAgentSession implements HarnessSession {
     private readonly config: HarnessSessionConfig,
     private readonly turnRef: ConvertToolsContext,
     private readonly extensions: PIAgentExtension[],
+    private readonly pricingKnown: boolean,
+    private readonly model: Record<string, unknown>,
+    private readonly gatewayEnabled: boolean,
   ) {}
 
   restoreTranscript(messages: Message[]): void {
@@ -629,7 +670,11 @@ class PiAgentSession implements HarnessSession {
             console.error(`[pi-agent] SDK model error: ${msg.errorMessage}`);
           }
         }
-        totalUsage = _piUpdateUsage(totalUsage, piEvent);
+        totalUsage = _piUpdateUsage(
+          totalUsage,
+          piEvent,
+          this.pricingKnown,
+        );
         const mapped = _piMapAgentEvent(piEvent, totalUsage);
         if (mapped) {
           if (mapped.type === 'text_delta') {
@@ -638,7 +683,7 @@ class PiAgentSession implements HarnessSession {
             if (!aborted) {
               accumulator.recordDone({
                 ...mapped,
-                usage: mapped.usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                ...(mapped.usage ? { usage: mapped.usage } : {}),
               });
             }
           } else {
@@ -673,11 +718,22 @@ class PiAgentSession implements HarnessSession {
         done = true;
         accumulator.recordDone({
           type: 'done',
-          usage: totalUsage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          ...(totalUsage ? { usage: totalUsage } : {}),
         });
       }
 
       this.nativeSession.agent.replaceMessages(this.buildNativeHistoryMessages(nativeHistory));
+      if (this.gatewayEnabled) {
+        this.nativeSession.agent.setModel({
+          ...this.model,
+          headers: {
+            ...(typeof this.model.headers === 'object' && this.model.headers !== null
+              ? this.model.headers as Record<string, string>
+              : {}),
+            ...createGatewayCorrelationHeaders(input.turnId),
+          },
+        });
+      }
 
       const promptPromise = lastUserMsg
         ? this.nativeSession.prompt(lastUserMsg.content)

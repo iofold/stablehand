@@ -14,3 +14,5 @@ export const builtinToolNames: ReadonlySet<string> = new Set([
   ...builtinTools.map((t) => t.name),
   CTXMILL_GUIDE_TOOL_NAME,
 ]);
+
+export { builtinNamesAllowedByPolicy } from './policy.js';

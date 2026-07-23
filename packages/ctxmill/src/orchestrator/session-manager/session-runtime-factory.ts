@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { dirname, join } from 'node:path';
 import { create } from '@bufbuild/protobuf';
 import {
-  NativeToolConfigSchema,
   OpenSessionRequestSchema,
   ToolMetadataSchema,
 } from '@ctxmill/proto/sandbox/v1';
@@ -20,18 +18,22 @@ import {
   getConversationWorkspacePath,
 } from '../../workspace/session-workspace.js';
 import {
+  createRuntimeInstanceToken,
   retryGrpcCall,
   waitForContainerReady,
 } from './grpc-session-client.js';
+import { RUNTIME_INSTANCE_TOKEN_ENV } from '@ctxmill/shared';
 import { getGrpcCallbackSandboxSecrets } from '../grpc/callback-auth.js';
-import { getRuntimeSandboxSecrets } from './runtime-sandbox-secrets.js';
 import { sandboxGrpcBaseUrl } from './sandbox-endpoint.js';
+import { applyWorkspaceSetup } from './workspace-setup.js';
+import { nativeToolPolicyToProto } from './native-tool-policy-proto.js';
+import { resolveAgentToolNames } from '../agent-definition.js';
+import type { BuiltinToolPolicy } from '@ctxmill/contracts';
 import type {
   Logger,
   SessionRecord,
   ToolMetadata,
 } from './types.js';
-import { asStringArray } from './types.js';
 
 const TAG = '[SandboxSessionManager]';
 
@@ -39,8 +41,16 @@ export interface SessionRuntimeFactoryDeps {
   containerManager: Pick<SandboxContainerManager, 'createContainer' | 'startContainer' | 'stopContainer' | 'removeContainer'>;
   db: Pick<DatabaseRepository, 'createSandboxSession'>;
   buildSandboxSecrets: (agentId: string) => Promise<Readonly<Record<string, string>>>;
-  resolveToolsForAgent: (toolNames: string[], excludeBuiltins?: string[], agentId?: string) => ToolMetadata[];
+  resolveToolsForAgent: (
+    toolNames: string[],
+    builtinToolPolicy?: BuiltinToolPolicy,
+    agentId?: string,
+  ) => ToolMetadata[];
   checkConcurrencyLimit: (agentId: string, options?: { excludeReservationId?: string }) => void;
+  resolveRuntimeDefinitionHash: (
+    agentId: string,
+    agentDef: AgentDefinition,
+  ) => Promise<string>;
   logger: Logger;
   dataDir?: string;
 }
@@ -52,11 +62,19 @@ export class SessionRuntimeFactory {
     conversationId: string,
     agentDef: AgentDefinition,
     agentId?: string,
-    options?: { concurrencyReservationId?: string },
+    options?: {
+      concurrencyReservationId?: string;
+      runtimeDefinitionHash?: string;
+    },
   ): Promise<SessionRecord> {
     const harnessName = agentDef.harness ?? 'langgraph';
     const sessionId = randomUUID();
     const effectiveAgentId = agentId ?? agentDef.name;
+    const runtimeDefinitionHash = options?.runtimeDefinitionHash
+      ?? await this.deps.resolveRuntimeDefinitionHash(
+        effectiveAgentId,
+        agentDef,
+      );
 
     this.deps.checkConcurrencyLimit(effectiveAgentId, {
       excludeReservationId: options?.concurrencyReservationId,
@@ -83,7 +101,10 @@ export class SessionRuntimeFactory {
         this.deps.logger.debug(`${TAG} using conversation workspace at ${sessionWorkspaceDir}`);
       }
 
-      if (workspaceDir && agentDef.workspaceContent && (!this.deps.dataDir || createdConversationWorkspace)) {
+      // A server-managed workspace has already been materialized by the workspace
+      // upload API and copied into the conversation directory above. The manifest
+      // sources describe the original project checkout and are not runtime paths.
+      if (workspaceDir && agentDef.workspaceContent && !this.deps.dataDir) {
         await prepareWorkspace({
           workspaceDir,
           projectDir: agentDef.projectDir,
@@ -92,33 +113,15 @@ export class SessionRuntimeFactory {
         }, this.deps.logger);
       }
 
-      const setup = agentDef.harnessConfig['setup'];
-      const symlinks =
-        workspaceDir && typeof setup === 'object' && setup !== null && 'symlinks' in setup && Array.isArray(setup.symlinks)
-          ? setup.symlinks
-          : undefined;
+      await applyWorkspaceSetup(workspaceDir, agentDef.harnessConfig);
 
-      if (workspaceDir && symlinks) {
-        for (const link of symlinks) {
-          const srcPath = join(workspaceDir, link.src);
-          const destPath = join(workspaceDir, link.dest);
-          await fs.mkdir(dirname(destPath), { recursive: true });
-          try {
-            await fs.symlink(srcPath, destPath);
-          } catch (err: unknown) {
-            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-              throw err;
-            }
-          }
-        }
-      }
-
-      const sandboxSecrets = {
+      const runtimeInstanceToken = createRuntimeInstanceToken();
+      const stableSandboxSecrets = {
         ...(await this.deps.buildSandboxSecrets(effectiveAgentId)),
-        ...getRuntimeSandboxSecrets(agentDef),
         ...getGrpcCallbackSandboxSecrets(sessionId, effectiveAgentId),
+        [RUNTIME_INSTANCE_TOKEN_ENV]: runtimeInstanceToken,
       };
-      const secretKeys = Object.keys(sandboxSecrets);
+      const secretKeys = Object.keys(stableSandboxSecrets);
       this.deps.logger.info(`${TAG} injecting ${secretKeys.length} secrets: [${secretKeys.join(', ')}]`);
 
       const containerInfo = await this.deps.containerManager.createContainer({
@@ -131,7 +134,7 @@ export class SessionRuntimeFactory {
         memoryMb: agentDef.resourceLimits?.memoryMb,
         pidsLimit: agentDef.resourceLimits?.pidsLimit,
         timeoutSec: agentDef.resourceLimits?.timeoutSec,
-        secrets: sandboxSecrets,
+        secrets: stableSandboxSecrets,
       });
       createdContainerId = containerInfo.containerId;
 
@@ -140,11 +143,13 @@ export class SessionRuntimeFactory {
 
       const baseUrl = sandboxGrpcBaseUrl(reachableContainerInfo);
       this.deps.logger.debug(`${TAG} waiting for container at ${baseUrl}`);
-      const { grpcClient } = await waitForContainerReady(baseUrl);
+      const { grpcClient } = await waitForContainerReady(baseUrl, {
+        runtimeInstanceToken,
+      });
 
       const resolvedTools = this.deps.resolveToolsForAgent(
-        agentDef.tools ?? [],
-        asStringArray(agentDef.metadata?.excludeBuiltinTools),
+        resolveAgentToolNames(agentDef),
+        agentDef.builtinToolPolicy,
         effectiveAgentId,
       );
       const openReq = create(OpenSessionRequestSchema, {
@@ -158,11 +163,8 @@ export class SessionRuntimeFactory {
             harnessConfigJson: JSON.stringify(agentDef.harnessConfig),
             systemPrompt: agentDef.systemPrompt,
             workspaceDir: '/workspace',
-            nativeTools: agentDef.nativeTools
-              ? create(NativeToolConfigSchema, {
-                  allowlist: agentDef.nativeTools.allowlist ?? [],
-                  blocklist: agentDef.nativeTools.blocklist ?? [],
-                })
+            nativeToolPolicy: agentDef.nativeToolPolicy
+              ? nativeToolPolicyToProto(agentDef.nativeToolPolicy)
               : undefined,
             tools: resolvedTools.map((tool) => create(ToolMetadataSchema, {
               name: tool.name,
@@ -186,6 +188,7 @@ export class SessionRuntimeFactory {
         containerId: reachableContainerInfo.containerId,
         harnessName,
         status: 'ACTIVE',
+        runtimeDefinitionHash,
       });
 
       return {
@@ -194,6 +197,8 @@ export class SessionRuntimeFactory {
         agentId: effectiveAgentId,
         containerName: reachableContainerInfo.containerName,
         containerId: reachableContainerInfo.containerId,
+        restoreFenceToken: dbSession.restoreFenceToken,
+        runtimeDefinitionHash,
         status: 'ACTIVE',
         harnessName,
         grpcClient,

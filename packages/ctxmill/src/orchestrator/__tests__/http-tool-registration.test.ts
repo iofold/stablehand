@@ -51,20 +51,26 @@ vi.mock('@connectrpc/connect-node', () => ({
 function createRouteDbMock(): {
   db: DatabaseRepository;
   createAgent: ReturnType<typeof vi.fn>;
+  deleteAgentCascade: ReturnType<typeof vi.fn>;
   getAgent: ReturnType<typeof vi.fn>;
   updateAgent: ReturnType<typeof vi.fn>;
 } {
   const createAgent = vi.fn();
+  const deleteAgentCascade = vi.fn();
   const getAgent = vi.fn();
   const updateAgent = vi.fn();
+  const getActiveTurnsForAgent = vi.fn().mockResolvedValue([]);
 
   return {
     db: {
       createAgent,
+      deleteAgentCascade,
       getAgent,
+      getActiveTurnsForAgent,
       updateAgent,
     } as unknown as DatabaseRepository,
     createAgent,
+    deleteAgentCascade,
     getAgent,
     updateAgent,
   };
@@ -85,9 +91,7 @@ function storedAgent(
     harnessConfig: input.harnessConfig
       ?? JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
     workspaceDir: null,
-    status: 'created',
     manifest: null,
-    version: 1,
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -177,7 +181,7 @@ describe('HTTP tool registration', () => {
     vi.restoreAllMocks();
   });
 
-  it('stores POST httpTools in metadata and appends tool names', async () => {
+  it('stores POST httpTools in metadata without merging definition names into references', async () => {
     const { db, createAgent } = createRouteDbMock();
     createAgent.mockImplementation(async (input: Record<string, unknown>) => storedAgent(input));
 
@@ -208,7 +212,7 @@ describe('HTTP tool registration', () => {
 
     expect(response.statusCode).toBe(201);
     expect(createAgent).toHaveBeenCalledWith(expect.objectContaining({
-      tools: ['read_file', 'remote-search'],
+      tools: ['read_file'],
       metadata: {
         httpTools: [{
           name: 'remote-search',
@@ -263,6 +267,36 @@ describe('HTTP tool registration', () => {
     await app.close();
   });
 
+  it('compensates agent creation when HTTP tool registration fails', async () => {
+    const { db, createAgent, deleteAgentCascade } = createRouteDbMock();
+    createAgent.mockImplementation(async (input: Record<string, unknown>) => storedAgent(input));
+    const toolRegistry = new DefaultToolRegistry();
+    vi.spyOn(toolRegistry, 'refresh').mockRejectedValueOnce(new Error('registry refresh failed'));
+    const app = await buildAgentsApp(db, toolRegistry);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/',
+      payload: {
+        name: 'Atomic create',
+        harness: 'langgraph',
+        harnessConfig: { model: 'gpt-4o' },
+        systemPrompt: 'test',
+        tools: [],
+        httpTools: [{
+          name: 'remote-search',
+          description: 'Search remote API',
+          endpoint: 'https://api.example.com/search',
+        }],
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(deleteAgentCascade).toHaveBeenCalledWith('agent-1');
+    expect(toolRegistry.getTool('remote-search', 'agent-1')).toBeUndefined();
+    await app.close();
+  });
+
   it('rejects invalid POST httpTools', async () => {
     const { db, createAgent } = createRouteDbMock();
     const app = await buildAgentsApp(db);
@@ -295,14 +329,14 @@ describe('HTTP tool registration', () => {
     await app.close();
   });
 
-  it('updates PUT httpTools and refreshes merged tool names', async () => {
+  it('updates PATCH httpTools without mutating referenced tool names', async () => {
     const { db, getAgent, updateAgent } = createRouteDbMock();
     getAgent.mockResolvedValue(storedAgent({
       name: 'Agent',
       harness: 'langgraph',
       harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-4o' }),
       systemPrompt: 'test',
-      tools: ['read_file', 'old-http-tool'],
+      tools: ['read_file'],
       metadata: {
         httpTools: [{
           name: 'old-http-tool',
@@ -318,7 +352,7 @@ describe('HTTP tool registration', () => {
         ? input.harnessConfig
         : JSON.stringify(input.harnessConfig ?? { provider: 'openai', model: 'gpt-4o' }),
       systemPrompt: typeof input.systemPrompt === 'string' ? input.systemPrompt : 'test',
-      tools: Array.isArray(input.tools) ? input.tools : ['read_file', 'old-http-tool'],
+      tools: Array.isArray(input.tools) ? input.tools : ['read_file'],
       metadata: input.metadata ?? null,
       description: input.description ?? null,
     }));
@@ -332,17 +366,75 @@ describe('HTTP tool registration', () => {
     }];
 
     const response = await app.inject({
-      method: 'PUT',
+      method: 'PATCH',
       url: '/agent-1',
       payload: { httpTools },
     });
 
     expect(response.statusCode).toBe(200);
     expect(updateAgent).toHaveBeenCalledWith('agent-1', expect.objectContaining({
-      tools: ['read_file', 'new-http-tool'],
       metadata: { httpTools },
     }));
 
+    await app.close();
+  });
+
+  it('restores the prior agent and provider when HTTP tool update registration fails', async () => {
+    const { db, getAgent, updateAgent } = createRouteDbMock();
+    const original = storedAgent({
+      name: 'Agent',
+      tools: ['read_file'],
+      metadata: {
+        httpTools: [{
+          name: 'old-http-tool',
+          description: 'Old tool',
+          endpoint: 'https://old.example.com',
+        }],
+      },
+    });
+    getAgent.mockResolvedValue(original);
+    updateAgent
+      .mockResolvedValueOnce(storedAgent({
+        ...original,
+        metadata: {
+          httpTools: [{
+            name: 'new-http-tool',
+            description: 'New tool',
+            endpoint: 'https://new.example.com',
+          }],
+        },
+      }))
+      .mockResolvedValueOnce(original);
+
+    const toolRegistry = new DefaultToolRegistry();
+    await registerAgentHttpTools(toolRegistry, original);
+    const actualRefresh = toolRegistry.refresh.bind(toolRegistry);
+    vi.spyOn(toolRegistry, 'refresh')
+      .mockRejectedValueOnce(new Error('registry refresh failed'))
+      .mockImplementation(actualRefresh);
+    const app = await buildAgentsApp(db, toolRegistry);
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/agent-1',
+      payload: {
+        httpTools: [{
+          name: 'new-http-tool',
+          description: 'New tool',
+          endpoint: 'https://new.example.com',
+        }],
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(updateAgent).toHaveBeenCalledTimes(2);
+    expect(updateAgent.mock.calls[1]?.[1]).toMatchObject({
+      name: 'Agent',
+      tools: ['read_file'],
+      metadata: original.metadata,
+    });
+    expect(toolRegistry.getTool('old-http-tool', 'agent-1')).toBeDefined();
+    expect(toolRegistry.getTool('new-http-tool', 'agent-1')).toBeUndefined();
     await app.close();
   });
 

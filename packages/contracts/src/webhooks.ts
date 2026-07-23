@@ -11,6 +11,7 @@ import {
   TurnIdSchema,
   WebhookDeliveryIdSchema,
 } from './ids.js';
+import { TurnUsageSchema } from './usage.js';
 
 export const CTXMILL_WEBHOOK_SIGNATURE_VERSION = 'v1';
 export const CTXMILL_WEBHOOK_DEFAULT_TOLERANCE_SECONDS = 300;
@@ -34,13 +35,6 @@ const turnIdentity = {
   agentId: AgentIdSchema,
   conversationId: ConversationIdSchema,
 };
-
-const UsageSchema = z.strictObject({
-  inputTokens: z.number().int().nonnegative(),
-  outputTokens: z.number().int().nonnegative(),
-  totalTokens: z.number().int().nonnegative(),
-  costUsd: z.number().nonnegative().optional(),
-});
 
 const MessagePartSchema = z.looseObject({
   type: z.string(),
@@ -68,7 +62,7 @@ export const TurnCompletedWebhookPayloadSchema = z.strictObject({
   status: z.enum(['completed', 'error', 'cancelled']),
   error: z.string().optional(),
   durationMs: z.number().int().nonnegative(),
-  usage: UsageSchema.optional(),
+  usage: TurnUsageSchema.nullable(),
   timestamp: TimestampSchema,
 });
 

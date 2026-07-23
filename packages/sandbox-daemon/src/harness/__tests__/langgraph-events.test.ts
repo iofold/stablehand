@@ -195,11 +195,11 @@ describe('LangGraphHarness', () => {
     const buildModelForConfig = Reflect.get(session, 'buildModelForConfig') as (config: {
       provider: 'google';
       model: string;
-    }) => Promise<unknown>;
+    }, secrets: Record<string, string>) => Promise<unknown>;
     await buildModelForConfig.call(session, {
       provider: 'google',
       model: 'gemini-2.5-flash',
-    });
+    }, {});
 
     expect(mockChatGoogleGenerativeAI).toHaveBeenCalledWith(expect.objectContaining({
       apiKey: 'gemini-env-key',
@@ -527,5 +527,63 @@ describe('LangGraphHarness', () => {
         status: 'complete',
       }),
     ]);
+  });
+
+  it('sums terminal usage once per LangChain model run', async () => {
+    const firstEnd = {
+      event: 'on_chat_model_end',
+      run_id: 'model-call-1',
+      data: {
+        output: {
+          usage_metadata: {
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+          },
+        },
+      },
+    };
+    mockStreamEvents.mockImplementation(() => langGraphStream([
+      {
+        event: 'on_chat_model_stream',
+        run_id: 'model-call-1',
+        data: { chunk: { content: '' } },
+      },
+      firstEnd,
+      firstEnd,
+      {
+        event: 'on_chat_model_stream',
+        run_id: 'model-call-2',
+        data: { chunk: { content: 'Done.' } },
+      },
+      {
+        event: 'on_chat_model_end',
+        run_id: 'model-call-2',
+        data: {
+          output: {
+            usage_metadata: {
+              input_tokens: 20,
+              output_tokens: 7,
+              total_tokens: 27,
+            },
+          },
+        },
+      },
+    ]));
+
+    const { session } = await openTestSession();
+    const events = await collectEvents(session.deliverTurn({
+      messages: [makeMessage('user', 'Use a tool, then answer')],
+      turnId: 'turn-usage',
+    }, {}));
+    const done = events.find(
+      (event): event is Extract<AgentEvent, { type: 'done' }> => event.type === 'done',
+    );
+
+    expect(done?.usage).toEqual({
+      inputTokens: 30,
+      outputTokens: 12,
+      totalTokens: 42,
+    });
   });
 });

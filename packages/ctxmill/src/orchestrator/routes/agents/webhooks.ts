@@ -2,16 +2,18 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import {
   WebhookSchema,
-  WebhookUpsertInputSchema,
+  WebhookCreateInputSchema,
+  WebhookPatchInputSchema,
   type Webhook,
-  type WebhookUpsertInput,
+  type WebhookCreateInput,
+  type WebhookPatchInput,
 } from '@ctxmill/contracts';
 
 import type { WebhookRow } from '../../../database/repository.js';
 import type { AgentSubRouteOptions } from './types.js';
 
-type WebhookValidationResult =
-  | { ok: true; body: WebhookUpsertInput }
+type WebhookValidationResult<T> =
+  | { ok: true; body: T }
   | {
       ok: false;
       error: {
@@ -20,20 +22,35 @@ type WebhookValidationResult =
       };
     };
 
-function validateWebhookBody(body: unknown): WebhookValidationResult {
-  const result = WebhookUpsertInputSchema.safeParse(body);
+function webhookValidationError(issues: ReadonlyArray<{ path: PropertyKey[]; message: string }>) {
+  return {
+    error: 'Invalid webhook definition' as const,
+    issues: issues.map((issue) => ({
+      path: issue.path.join('.'),
+      message: issue.message,
+    })),
+  };
+}
+
+function validateWebhookCreateBody(body: unknown): WebhookValidationResult<WebhookCreateInput> {
+  const result = WebhookCreateInputSchema.safeParse(body);
   if (result.success) {
     return { ok: true, body: result.data };
   }
   return {
     ok: false,
-    error: {
-      error: 'Invalid webhook definition',
-      issues: result.error.issues.map((issue) => ({
-        path: issue.path.join('.'),
-        message: issue.message,
-      })),
-    },
+    error: webhookValidationError(result.error.issues),
+  };
+}
+
+function validateWebhookPatchBody(body: unknown): WebhookValidationResult<WebhookPatchInput> {
+  const result = WebhookPatchInputSchema.safeParse(body);
+  if (result.success) {
+    return { ok: true, body: result.data };
+  }
+  return {
+    ok: false,
+    error: webhookValidationError(result.error.issues),
   };
 }
 
@@ -53,7 +70,7 @@ export async function webhookRoutes(
 
   app.post('/:id/webhooks', { preHandler: [loadAgent] }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const validated = validateWebhookBody(request.body);
+    const validated = validateWebhookCreateBody(request.body);
     if (!validated.ok) {
       return reply.status(400).send(validated.error);
     }
@@ -73,9 +90,9 @@ export async function webhookRoutes(
     return reply.status(201).send(toApiWebhook(webhook));
   });
 
-  app.put('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {
+  app.patch('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {
     const { id, webhookId } = request.params as { id: string; webhookId: string };
-    const validated = validateWebhookBody(request.body);
+    const validated = validateWebhookPatchBody(request.body);
     if (!validated.ok) {
       return reply.status(400).send(validated.error);
     }

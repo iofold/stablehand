@@ -70,13 +70,14 @@ function parseRunInput(body: unknown): AGUIRunAgentInput | null {
   };
 }
 
-function toAGUIMessage(message: {
+export function toAGUIMessage(message: {
   id: string;
   role: string;
   content: string;
   toolCallId?: string | null;
   toolCalls?: unknown[] | null;
   parts?: unknown[] | null;
+  createdAt?: number;
 }): AGUIMessage {
   const role = isAGUIMessageRole(message.role) ? message.role : 'assistant';
   return {
@@ -84,6 +85,7 @@ function toAGUIMessage(message: {
     role,
     content: message.content,
     ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+    ...(message.createdAt !== undefined ? { createdAt: message.createdAt } : {}),
     // Structured transcript fidelity in the snapshot (ctx-4fs): reconnecting
     // clients get tool-call state and message parts, not just flattened text.
     ...(Array.isArray(message.toolCalls) && message.toolCalls.length > 0 ? { toolCalls: message.toolCalls } : {}),
@@ -221,7 +223,13 @@ export async function agUiCompatRoutes(
     };
 
     if (!canonicalLog) {
-      writeEvent({ type: 'RUN_ERROR', message: 'canonical event log not configured', timestamp: Date.now() });
+      writeEvent({
+        type: 'RUN_ERROR',
+        runId: activeTurn.id,
+        threadId: conversationId,
+        message: 'canonical event log not configured',
+        timestamp: Date.now(),
+      });
       reply.raw.end();
       cleanup();
       return reply;

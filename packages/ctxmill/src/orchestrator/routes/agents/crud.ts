@@ -1,46 +1,93 @@
+import { rm } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { seedAgentWorkspace } from '../../../workspace/ensure.js';
 import type { TurnSelect } from '../../../database/types.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ApiSandboxSessionStatusCounts } from '@ctxmill/shared';
 import {
   AgentCreateInputSchema,
-  AgentUpdateInputSchema,
+  AgentPatchInputSchema,
   type AgentCreateInput,
-  type AgentUpdateInput,
+  type AgentPatchInput,
 } from '@ctxmill/contracts';
 import {
   agentManifestSchema,
   manifestToAgentCreateInput,
+  type AgentManifest,
 } from '@ctxmill/manifest';
 
 import { getAgentHttpToolProviderName, registerAgentHttpTools } from '../../http-tools.js';
 import {
+  AGENT_MANAGED_METADATA_FIELDS,
   ensureAgentWorkspace,
+  getAgentHttpTools,
   getRequestAgent,
-  mergeToolNames,
   toAgentResponse,
-  toApiAgentTurn,
   validateHarnessConfigInput,
   validateHttpTools,
   validateResourceLimits,
 } from './helpers.js';
 import type { AgentHttpToolDefinition, AgentSubRouteOptions, StoredAgent } from './types.js';
+import { isUniqueConstraintViolation } from '../../../database/errors.js';
 
-const RESERVED_METADATA_FIELDS = new Set([
-  'httpTools',
-  'mode',
-  'nativeTools',
-  'resourceLimits',
-  'workspaceContent',
-]);
+const AGENT_NAME_UNIQUE_CONSTRAINT = 'idx_agents_name';
 
-function findReservedMetadataField(metadata: Record<string, unknown> | undefined): string | undefined {
-  return Object.keys(metadata ?? {}).find((key) => RESERVED_METADATA_FIELDS.has(key));
+function agentNameConflict(name: string) {
+  return {
+    error: `Agent name "${name}" is already in use`,
+    code: 'agent_name_conflict',
+    name,
+  };
+}
+
+function agentPersistenceSnapshot(agent: StoredAgent) {
+  return {
+    name: agent.name,
+    harness: agent.harness,
+    harnessConfig: agent.harnessConfig,
+    systemPrompt: agent.systemPrompt,
+    tools: agent.tools,
+    description: agent.description,
+    workspaceDir: agent.workspaceDir,
+    manifest: agent.manifest,
+    metadata: agent.metadata,
+  };
+}
+
+function findReservedMetadataField(metadata: Record<string, unknown> | null | undefined): string | undefined {
+  return Object.keys(metadata ?? {}).find((key) => AGENT_MANAGED_METADATA_FIELDS.has(key));
+}
+
+function findHttpToolNameCollision(
+  tools: readonly string[],
+  httpTools: readonly AgentHttpToolDefinition[] | undefined,
+): string | undefined {
+  const toolNames = new Set(tools);
+  return httpTools?.find((tool) => toolNames.has(tool.name))?.name;
 }
 
 type ManifestValidationResult =
-  | { success: true; manifest: Record<string, unknown> }
+  | {
+    success: true;
+    manifest: Record<string, unknown>;
+    compiled: AgentCreateInput;
+  }
   | { success: false; details: unknown };
+
+const MANIFEST_OWNED_FIELDS = [
+  'name',
+  'harness',
+  'harnessConfig',
+  'systemPrompt',
+  'tools',
+  'description',
+  'metadata',
+  'resourceLimits',
+  'builtinToolPolicy',
+  'nativeToolPolicy',
+  'workspaceContent',
+  'mode',
+] as const;
 
 function validateManifestSnapshot(
   manifest: unknown,
@@ -53,23 +100,72 @@ function validateManifestSnapshot(
   }
 
   try {
+    const validatedManifest = parsed.data as AgentManifest;
     // Conversion is also the representability gate: declarations that the
     // agent API cannot apply must fail instead of being persisted and ignored.
-    manifestToAgentCreateInput(parsed.data, {
-      resolvedInstructions: systemPrompt
-        ?? (parsed.data.spec.instructions.startsWith('file:')
-          ? 'Validated file-backed instructions'
-          : parsed.data.spec.instructions),
+    const usesFileBackedInstructions = validatedManifest.spec.instructions.startsWith('file:');
+    if (usesFileBackedInstructions && systemPrompt === undefined) {
+      return {
+        success: false,
+        details: 'File-backed manifest instructions require the resolved systemPrompt',
+      };
+    }
+    const compiled = manifestToAgentCreateInput(validatedManifest, {
+      ...(usesFileBackedInstructions ? { resolvedInstructions: systemPrompt } : {}),
       ...(workspaceContent ? { workspaceContent } : {}),
     });
+    return {
+      success: true,
+      manifest: { ...validatedManifest },
+      compiled,
+    };
   } catch (error) {
     return {
       success: false,
       details: error instanceof Error ? error.message : String(error),
     };
   }
+}
 
-  return { success: true, manifest: { ...parsed.data } };
+function manifestDefinitionConflicts(
+  input: AgentCreateInput | AgentPatchInput,
+  compiled: AgentCreateInput,
+): string[] {
+  const inputRecord = input as Record<string, unknown>;
+  const compiledRecord = compiled as Record<string, unknown>;
+  return MANIFEST_OWNED_FIELDS.filter((field) => {
+    if (inputRecord[field] === undefined) return false;
+    const expected = field === 'description'
+      ? compiledRecord[field] ?? null
+      : compiledRecord[field];
+    return !isDeepStrictEqual(inputRecord[field], expected);
+  });
+}
+
+function hasManifestOwnedPatch(input: AgentPatchInput): boolean {
+  const inputRecord = input as Record<string, unknown>;
+  return MANIFEST_OWNED_FIELDS.some((field) => inputRecord[field] !== undefined);
+}
+
+function manifestCompiledPatch(
+  input: AgentPatchInput,
+  compiled: AgentCreateInput,
+): AgentPatchInput {
+  return {
+    ...input,
+    name: compiled.name,
+    harness: compiled.harness,
+    harnessConfig: compiled.harnessConfig,
+    systemPrompt: compiled.systemPrompt,
+    tools: compiled.tools,
+    description: compiled.description ?? null,
+    metadata: compiled.metadata ?? null,
+    resourceLimits: compiled.resourceLimits ?? null,
+    builtinToolPolicy: compiled.builtinToolPolicy ?? null,
+    nativeToolPolicy: compiled.nativeToolPolicy ?? null,
+    workspaceContent: compiled.workspaceContent ?? null,
+    mode: compiled.mode ?? null,
+  };
 }
 
 const defaultSandboxSessionCounts = (): ApiSandboxSessionStatusCounts => ({
@@ -91,9 +187,6 @@ function buildAgentSummary(
 ): Record<string, unknown> {
   const completedTurns = opts.allTurns.filter((turn) => turn.completedAt !== null && !turn.error).length;
   const failedTurns = opts.allTurns.filter((turn) => !!turn.error).length;
-  const recentTurns = [...opts.allTurns]
-    .sort((a, b) => b.startedAt - a.startedAt)
-    .slice(0, 5);
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
   const tokensTotal = opts.allTurns.reduce((sum, turn) => sum + (turn.totalTokens ?? 0), 0);
   const tokensLast24h = opts.allTurns.reduce(
@@ -103,7 +196,7 @@ function buildAgentSummary(
 
   return {
     ...toAgentResponse(agent),
-    // Derived at read from open turns (ctx-1xb); the stored column is vestigial.
+    // Derived at read from open turns (ctx-1xb).
     status: opts.activeTurns.length > 0 ? 'running' : 'idle',
     sseClients: deps.sse.getClientCount(agent.id),
     hasPendingInterrupt: deps.interrupts.hasPendingForAgent(agent.id),
@@ -115,7 +208,6 @@ function buildAgentSummary(
     activeTurnCount: opts.activeTurns.length,
     tokensTotal,
     tokensLast24h,
-    recentTurns: recentTurns.map((turn) => toApiAgentTurn(turn)),
     sandboxSessionsByStatus: opts.sandboxSessionsByStatus,
   };
 }
@@ -135,6 +227,7 @@ export async function crudRoutes(
     toolRegistry,
     containerManager,
     sessionManager,
+    canonicalLog,
     loadAgent,
   } = opts;
 
@@ -197,14 +290,31 @@ export async function crudRoutes(
           details: manifestValidation.details,
         });
       }
+      if (manifestValidation?.success) {
+        const conflicts = manifestDefinitionConflicts(body, manifestValidation.compiled);
+        if (conflicts.length > 0) {
+          return reply.status(400).send({
+            error: 'Agent definition conflicts with canonical manifest',
+            details: conflicts,
+          });
+        }
+      }
+      const manifestCompiled = manifestValidation?.success
+        ? manifestValidation.compiled
+        : undefined;
+      const definition = manifestCompiled ?? body;
 
-      const validatedHarnessConfig = validateHarnessConfigInput(body.harness, body.harnessConfig, harnessSchemas);
+      const validatedHarnessConfig = validateHarnessConfigInput(
+        definition.harness,
+        definition.harnessConfig,
+        harnessSchemas,
+      );
       if (!validatedHarnessConfig.success) {
         return reply.status(validatedHarnessConfig.status).send(validatedHarnessConfig.body);
       }
 
-      if (body.resourceLimits) {
-        const limitsErrors = validateResourceLimits(body.resourceLimits as Record<string, unknown>);
+      if (definition.resourceLimits) {
+        const limitsErrors = validateResourceLimits(definition.resourceLimits as Record<string, unknown>);
         if (limitsErrors.length > 0) {
           return reply.status(400).send({
             error: 'Invalid resource limits',
@@ -219,37 +329,53 @@ export async function crudRoutes(
         return reply.status(400).send({ error: httpToolError });
       }
 
-      const metadata: Record<string, unknown> = { ...(body.metadata ?? {}) };
-      if (body.resourceLimits) {
-        metadata.resourceLimits = body.resourceLimits;
+      const httpToolNameCollision = findHttpToolNameCollision(definition.tools, httpToolDefs);
+      if (httpToolNameCollision) {
+        return reply.status(400).send({
+          error: `Tool reference "${httpToolNameCollision}" cannot also be an HTTP tool`,
+        });
       }
-      if (body.nativeTools) {
-        metadata.nativeTools = body.nativeTools;
+
+      const metadata: Record<string, unknown> = { ...(definition.metadata ?? {}) };
+      if (definition.resourceLimits) {
+        metadata.resourceLimits = definition.resourceLimits;
       }
-      if (body.workspaceContent) {
-        metadata.workspaceContent = body.workspaceContent;
+      if (definition.builtinToolPolicy) {
+        metadata.builtinToolPolicy = definition.builtinToolPolicy;
       }
-      if (body.mode) {
-        metadata.mode = body.mode;
+      if (definition.nativeToolPolicy) {
+        metadata.nativeToolPolicy = definition.nativeToolPolicy;
+      }
+      if (definition.workspaceContent) {
+        metadata.workspaceContent = definition.workspaceContent;
+      }
+      if (definition.mode) {
+        metadata.mode = definition.mode;
       }
       if (httpToolDefs !== undefined) {
         metadata.httpTools = httpToolDefs;
       }
 
-      const toolNames = mergeToolNames(body.tools, httpToolDefs);
-
-      let agent = await db.createAgent({
-        name: body.name,
-        harness: body.harness,
-        harnessConfig: JSON.stringify(validatedHarnessConfig.harnessConfig),
-        systemPrompt: body.systemPrompt,
-        tools: toolNames,
-        description: body.description ?? null,
-        metadata: Object.keys(metadata).length > 0 ? metadata : null,
-        ...(manifestValidation?.success
-          ? { manifest: manifestValidation.manifest }
-          : {}),
-      });
+      let agent: StoredAgent;
+      try {
+        agent = await db.createAgent({
+          name: definition.name,
+          harness: definition.harness,
+          harnessConfig: JSON.stringify(validatedHarnessConfig.harnessConfig),
+          systemPrompt: definition.systemPrompt,
+          tools: definition.tools,
+          description: definition.description ?? null,
+          metadata: Object.keys(metadata).length > 0 ? metadata : null,
+          ...(manifestValidation?.success
+            ? { manifest: manifestValidation.manifest }
+            : {}),
+        });
+      } catch (error) {
+        if (isUniqueConstraintViolation(error, AGENT_NAME_UNIQUE_CONSTRAINT)) {
+          return reply.status(409).send(agentNameConflict(body.name));
+        }
+        throw error;
+      }
 
       const workspaceDir = ensureAgentWorkspace(agent.id, { dataDir });
       if (workspaceDir) {
@@ -261,7 +387,24 @@ export async function crudRoutes(
       }
 
       if (toolRegistry) {
-        await registerAgentHttpTools(toolRegistry, agent, secretProvider);
+        try {
+          await registerAgentHttpTools(toolRegistry, agent, secretProvider);
+        } catch (registrationError) {
+          toolRegistry.removeProvider(getAgentHttpToolProviderName(agent.id));
+          try {
+            await db.deleteAgentCascade(agent.id);
+            if (agent.workspaceDir) {
+              await rm(agent.workspaceDir, { recursive: true, force: true });
+            }
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [registrationError, rollbackError],
+              `HTTP tool registration and agent creation rollback both failed for ${agent.id}`,
+              { cause: rollbackError },
+            );
+          }
+          throw registrationError;
+        }
       }
 
       if (eventBus) {
@@ -272,11 +415,11 @@ export async function crudRoutes(
         });
       }
 
-      return reply.status(201).send(toAgentResponse(agent));
+      return reply.status(201).send({ ...toAgentResponse(agent), status: 'idle' });
     },
   );
 
-  app.put(
+  app.patch(
     '/:id',
     { preHandler: [loadAgent] },
     async (
@@ -287,14 +430,25 @@ export async function crudRoutes(
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const parsedBody = AgentUpdateInputSchema.safeParse(request.body);
+      const parsedBody = AgentPatchInputSchema.safeParse(request.body);
       if (!parsedBody.success) {
         return reply.status(400).send({
           error: 'Invalid agent update',
           details: parsedBody.error.issues,
         });
       }
-      const body: AgentUpdateInput = parsedBody.data;
+      const body: AgentPatchInput = parsedBody.data;
+
+      const agent = getRequestAgent(request);
+      if (
+        agent.manifest
+        && body.manifest === undefined
+        && hasManifestOwnedPatch(body)
+      ) {
+        return reply.status(400).send({
+          error: 'Manifest-backed agents must be edited through manifest',
+        });
+      }
 
       const reservedMetadataField = findReservedMetadataField(body.metadata);
       if (reservedMetadataField) {
@@ -305,16 +459,33 @@ export async function crudRoutes(
 
       const manifestValidation = body.manifest === undefined || body.manifest === null
         ? undefined
-        : validateManifestSnapshot(body.manifest, body.systemPrompt, body.workspaceContent);
+        : validateManifestSnapshot(
+          body.manifest,
+          body.systemPrompt ?? agent.systemPrompt,
+          body.workspaceContent,
+        );
       if (manifestValidation && !manifestValidation.success) {
         return reply.status(400).send({
           error: 'Invalid canonical agent manifest',
           details: manifestValidation.details,
         });
       }
+      if (manifestValidation?.success) {
+        const conflicts = manifestDefinitionConflicts(body, manifestValidation.compiled);
+        if (conflicts.length > 0) {
+          return reply.status(400).send({
+            error: 'Agent definition conflicts with canonical manifest',
+            details: conflicts,
+          });
+        }
+      }
 
-      if (body.resourceLimits) {
-        const limitsErrors = validateResourceLimits(body.resourceLimits as Record<string, unknown>);
+      const update = manifestValidation?.success
+        ? manifestCompiledPatch(body, manifestValidation.compiled)
+        : body;
+
+      if (update.resourceLimits) {
+        const limitsErrors = validateResourceLimits(update.resourceLimits as Record<string, unknown>);
         if (limitsErrors.length > 0) {
           return reply.status(400).send({
             error: 'Invalid resource limits',
@@ -323,35 +494,41 @@ export async function crudRoutes(
         }
       }
 
-      const agent = getRequestAgent(request);
       const existingMetadata = (agent.metadata ?? {}) as Record<string, unknown>;
-      const existingHttpTools = Array.isArray(existingMetadata.httpTools)
-        ? existingMetadata.httpTools as AgentHttpToolDefinition[]
-        : undefined;
-      const existingHttpToolNames = new Set(existingHttpTools?.map((tool) => tool.name) ?? []);
+      const existingHttpTools = getAgentHttpTools(existingMetadata);
 
-      const httpToolError = validateHttpTools(body.httpTools);
+      const httpToolError = validateHttpTools(update.httpTools);
       if (httpToolError) {
         return reply.status(400).send({ error: httpToolError });
       }
 
+
+      const nextBaseTools = update.tools ?? agent.tools;
+      const nextHttpTools = update.httpTools ?? existingHttpTools;
+      const httpToolNameCollision = findHttpToolNameCollision(nextBaseTools, nextHttpTools);
+      if (httpToolNameCollision) {
+        return reply.status(400).send({
+          error: `Tool reference "${httpToolNameCollision}" cannot also be an HTTP tool`,
+        });
+      }
+
       const updateData: Parameters<typeof db.updateAgent>[1] = {};
-      if (body.name !== undefined) updateData.name = body.name;
-      if (body.systemPrompt !== undefined) updateData.systemPrompt = body.systemPrompt;
-      if (body.description !== undefined) updateData.description = body.description;
-      if (body.manifest === null) {
+      if (update.name !== undefined) updateData.name = update.name;
+      if (update.systemPrompt !== undefined) updateData.systemPrompt = update.systemPrompt;
+      if (update.description !== undefined) updateData.description = update.description;
+      if (update.manifest === null) {
         updateData.manifest = null;
       } else if (manifestValidation?.success) {
         updateData.manifest = manifestValidation.manifest;
       }
 
-      if (body.harness !== undefined && body.harnessConfig === undefined) {
+      if (update.harness !== undefined && update.harnessConfig === undefined) {
         return reply.status(400).send({ error: 'harnessConfig is required when changing harness' });
       }
 
-      const nextHarness = body.harness ?? agent.harness;
-      if (body.harnessConfig !== undefined) {
-        const validatedHarnessConfig = validateHarnessConfigInput(nextHarness, body.harnessConfig, harnessSchemas);
+      const nextHarness = update.harness ?? agent.harness;
+      if (update.harnessConfig !== undefined) {
+        const validatedHarnessConfig = validateHarnessConfigInput(nextHarness, update.harnessConfig, harnessSchemas);
         if (!validatedHarnessConfig.success) {
           return reply.status(validatedHarnessConfig.status).send(validatedHarnessConfig.body);
         }
@@ -359,70 +536,122 @@ export async function crudRoutes(
         updateData.harnessConfig = JSON.stringify(validatedHarnessConfig.harnessConfig);
       }
 
-      if (body.harness !== undefined) {
-        updateData.harness = body.harness;
+      if (update.harness !== undefined) {
+        updateData.harness = update.harness;
       }
 
-      const shouldUpdateTools = body.tools !== undefined || body.httpTools !== undefined;
-      if (shouldUpdateTools) {
-        const baseTools = (body.tools !== undefined ? body.tools : agent.tools)
-          .filter((toolName) => !existingHttpToolNames.has(toolName));
-        const nextHttpTools = body.httpTools !== undefined ? body.httpTools : existingHttpTools;
-        updateData.tools = mergeToolNames(baseTools, nextHttpTools);
-      }
+      if (update.tools !== undefined) updateData.tools = update.tools;
 
       if (
-        body.resourceLimits !== undefined
-        || body.metadata !== undefined
-        || body.httpTools !== undefined
-        || body.nativeTools !== undefined
-        || body.workspaceContent !== undefined
-        || body.mode !== undefined
+        update.resourceLimits !== undefined
+        || update.builtinToolPolicy !== undefined
+        || update.metadata !== undefined
+        || update.httpTools !== undefined
+        || update.nativeToolPolicy !== undefined
+        || update.workspaceContent !== undefined
+        || update.mode !== undefined
+        || update.manifest !== undefined
       ) {
-        const newMetadata = { ...existingMetadata, ...(body.metadata ?? {}) };
+        const existingManagedMetadata = Object.fromEntries(
+          Object.entries(existingMetadata).filter(([key]) => AGENT_MANAGED_METADATA_FIELDS.has(key)),
+        );
+        const newMetadata = update.metadata !== undefined
+          ? { ...(update.metadata ?? {}), ...existingManagedMetadata }
+          : { ...existingMetadata };
 
-        if (body.httpTools === undefined && existingMetadata.httpTools !== undefined) {
+        // A replaced manifest is a complete declarative snapshot. Remove the
+        // prior compiled overrides first so omitted values are truly removed
+        // and the new manifest becomes the fallback source of truth.
+        if (update.manifest !== undefined) {
+          delete newMetadata.builtinToolPolicy;
+          delete newMetadata.nativeToolPolicy;
+          delete newMetadata.resourceLimits;
+          delete newMetadata.workspaceContent;
+          delete newMetadata.mode;
+        }
+
+        if (update.httpTools === undefined && existingMetadata.httpTools !== undefined) {
           newMetadata.httpTools = existingMetadata.httpTools;
         }
 
-        if (body.resourceLimits === null) {
+        if (update.resourceLimits === null) {
           delete newMetadata.resourceLimits;
-        } else if (body.resourceLimits) {
-          newMetadata.resourceLimits = body.resourceLimits;
+        } else if (update.resourceLimits) {
+          newMetadata.resourceLimits = update.resourceLimits;
         }
 
-        if (body.nativeTools === null) {
-          delete newMetadata.nativeTools;
-        } else if (body.nativeTools) {
-          newMetadata.nativeTools = body.nativeTools;
+        if (update.builtinToolPolicy === null) {
+          delete newMetadata.builtinToolPolicy;
+        } else if (update.builtinToolPolicy) {
+          newMetadata.builtinToolPolicy = update.builtinToolPolicy;
         }
 
-        if (body.workspaceContent === null) {
+        if (update.nativeToolPolicy === null) {
+          delete newMetadata.nativeToolPolicy;
+        } else if (update.nativeToolPolicy) {
+          newMetadata.nativeToolPolicy = update.nativeToolPolicy;
+        }
+
+        if (update.workspaceContent === null) {
           delete newMetadata.workspaceContent;
-        } else if (body.workspaceContent) {
-          newMetadata.workspaceContent = body.workspaceContent;
+        } else if (update.workspaceContent) {
+          newMetadata.workspaceContent = update.workspaceContent;
         }
 
-        if (body.mode === null) {
+        if (update.mode === null) {
           delete newMetadata.mode;
-        } else if (body.mode) {
-          newMetadata.mode = body.mode;
+        } else if (update.mode) {
+          newMetadata.mode = update.mode;
         }
 
-        if (body.httpTools !== undefined) {
-          newMetadata.httpTools = body.httpTools;
+        if (update.httpTools !== undefined) {
+          newMetadata.httpTools = update.httpTools;
         }
 
         updateData.metadata = Object.keys(newMetadata).length > 0 ? newMetadata : null;
       }
 
-      const updated = await db.updateAgent(id, updateData);
-
-      if (updated && toolRegistry) {
-        await registerAgentHttpTools(toolRegistry, updated, secretProvider);
+      let updated: StoredAgent | undefined;
+      try {
+        updated = await db.updateAgent(id, updateData);
+      } catch (error) {
+        if (
+          update.name !== undefined
+          && isUniqueConstraintViolation(error, AGENT_NAME_UNIQUE_CONSTRAINT)
+        ) {
+          return reply.status(409).send(agentNameConflict(update.name));
+        }
+        throw error;
       }
 
-      return reply.send(updated ? toAgentResponse(updated) : updated);
+      if (updated && toolRegistry) {
+        try {
+          await registerAgentHttpTools(toolRegistry, updated, secretProvider);
+        } catch (registrationError) {
+          try {
+            const restored = await db.updateAgent(id, agentPersistenceSnapshot(agent));
+            if (!restored) {
+              throw new Error(
+                `Agent ${id} disappeared while rolling back its HTTP tool update`,
+                { cause: registrationError },
+              );
+            }
+            await registerAgentHttpTools(toolRegistry, restored, secretProvider);
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [registrationError, rollbackError],
+              `HTTP tool registration and agent update rollback both failed for ${id}`,
+              { cause: rollbackError },
+            );
+          }
+          throw registrationError;
+        }
+      }
+
+      const activeTurns = updated ? await db.getActiveTurnsForAgent(id) : [];
+      return reply.send(updated
+        ? { ...toAgentResponse(updated), status: activeTurns.length > 0 ? 'running' : 'idle' }
+        : updated);
     },
   );
 
@@ -478,10 +707,14 @@ export async function crudRoutes(
         }
       }
 
+      // Stop prior local canonical writes before purging the agent's history.
+      // The delete event is intentionally persisted afterwards as the sole
+      // retained lifecycle tombstone for this hard-deleted agent.
+      await canonicalLog?.drain();
       await db.deleteAgentCascade(id);
 
       if (eventBus) {
-        eventBus.emit('agent.deleted', {
+        await eventBus.emitAsync('agent.deleted', {
           agentId: id,
           timestamp: Date.now(),
         });

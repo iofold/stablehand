@@ -359,7 +359,7 @@ describe('PIAgentHarness private helpers', () => {
     });
   });
 
-  it('should build native tools from allowlist and apply blocklist', () => {
+  it('selects only explicitly allowed native tools', () => {
     const harness = new PIAgentHarness();
     const buildNativeTools = getBuildNativeTools(harness);
     const factories = {
@@ -370,13 +370,16 @@ describe('PIAgentHarness private helpers', () => {
       createGrepTool: vi.fn((cwd: string) => ({ name: 'grep', cwd })),
       createFindTool: vi.fn((cwd: string) => ({ name: 'find', cwd })),
       createLsTool: vi.fn((cwd: string) => ({ name: 'ls', cwd })),
-      createCodingTools: vi.fn((cwd: string) => [{ name: 'coding-tools', cwd }]),
+      createCodingTools: vi.fn((
+        cwd: string,
+        _options?: { bash?: { spawnHook?: unknown } },
+      ) => [{ name: 'coding-tools', cwd }]),
     };
 
     const tools = buildNativeTools(makeConfig({
-      nativeTools: {
-        allowlist: ['read', 'bash', 'edit'],
-        blocklist: ['bash'],
+      nativeToolPolicy: {
+        policy: 'allow',
+        names: ['read', 'edit'],
       },
     }), factories) as Array<{ name: string }>;
 
@@ -386,7 +389,49 @@ describe('PIAgentHarness private helpers', () => {
     ]);
   });
 
-  it('should use full coding tool set when nativeTools is undefined', () => {
+  it('denies only explicitly named native tools', () => {
+    const harness = new PIAgentHarness();
+    const factories = {
+      createReadTool: vi.fn((cwd: string) => ({ name: 'read', cwd })),
+      createBashTool: vi.fn((cwd: string) => ({ name: 'bash', cwd })),
+      createEditTool: vi.fn((cwd: string) => ({ name: 'edit', cwd })),
+      createWriteTool: vi.fn((cwd: string) => ({ name: 'write', cwd })),
+      createGrepTool: vi.fn((cwd: string) => ({ name: 'grep', cwd })),
+      createFindTool: vi.fn((cwd: string) => ({ name: 'find', cwd })),
+      createLsTool: vi.fn((cwd: string) => ({ name: 'ls', cwd })),
+      createCodingTools: vi.fn(),
+    };
+
+    const tools = getBuildNativeTools(harness)(makeConfig({
+      nativeToolPolicy: { policy: 'deny', names: ['bash', 'write'] },
+    }), factories) as Array<{ name: string }>;
+
+    expect(tools.map((tool) => tool.name)).toEqual(['read', 'edit', 'grep', 'find', 'ls']);
+  });
+
+  it('selects no native tools for the none policy', () => {
+    const harness = new PIAgentHarness();
+    const factories = {
+      createReadTool: vi.fn(),
+      createBashTool: vi.fn(),
+      createEditTool: vi.fn(),
+      createWriteTool: vi.fn(),
+      createGrepTool: vi.fn(),
+      createFindTool: vi.fn(),
+      createLsTool: vi.fn(),
+      createCodingTools: vi.fn(),
+    };
+
+    expect(getBuildNativeTools(harness)(makeConfig({
+      nativeToolPolicy: { policy: 'none' },
+    }), factories)).toEqual([]);
+    expect(factories.createCodingTools).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the policy is omitted', undefined],
+    ['the policy is all', { policy: 'all' as const }],
+  ])('uses the full coding tool set when %s', (_label, nativeToolPolicy) => {
     const harness = new PIAgentHarness();
     const buildNativeTools = getBuildNativeTools(harness);
     const factories = {
@@ -400,10 +445,17 @@ describe('PIAgentHarness private helpers', () => {
       createCodingTools: vi.fn((cwd: string) => [{ name: 'coding-tools', cwd }]),
     };
 
-    const tools = buildNativeTools(makeConfig(), factories);
+    const tools = buildNativeTools(makeConfig({ nativeToolPolicy }), factories);
 
     expect(tools).toEqual([{ name: 'coding-tools', cwd: '/tmp/workspace' }]);
-    expect(factories.createCodingTools).toHaveBeenCalledWith('/tmp/workspace');
+    expect(factories.createCodingTools).toHaveBeenCalledWith(
+      '/tmp/workspace',
+      {
+        bash: {
+          spawnHook: expect.any(Function),
+        },
+      },
+    );
   });
 });
 
@@ -556,9 +608,9 @@ describe('PIAgentHarness native tool flow', () => {
     };
 
     const nativeTools = getBuildNativeTools(harness)(makeConfig({
-      nativeTools: {
-        allowlist: ['read', 'bash'],
-        blocklist: ['bash'],
+      nativeToolPolicy: {
+        policy: 'allow',
+        names: ['read'],
       },
     }), {
       createReadTool: mockCreateReadTool,

@@ -1,8 +1,13 @@
 import { isTurnCancelled, type ApiTokenUsage } from '@ctxmill/shared';
 
-import type { DatabaseRepository } from '../database/repository.js';
+import type {
+  DatabaseRepository,
+  SandboxSessionLifecycleFence,
+} from '../database/repository.js';
 import type { TypedEventBus } from '../events/bus.js';
 import { turnCompletedPayload } from './turn-terminal-publisher.js';
+import type { TurnDeliveryFence } from './turn-delivery-fence.js';
+import { materializeTurnUsage } from './usage.js';
 
 export type TurnFinalStatus = 'completed' | 'error' | 'cancelled';
 
@@ -47,7 +52,12 @@ interface Logger {
 }
 
 interface TurnFinalizerDeps {
-  db: Pick<DatabaseRepository, 'finalizeTurnIfOpen' | 'getTurn'>;
+  db: Pick<
+    DatabaseRepository,
+    | 'finalizeTurnIfOpen'
+    | 'finalizeTurnAndMarkLifecycleDraining'
+    | 'getTurn'
+  >;
   eventBus: Pick<TypedEventBus, 'emitAsync'>;
   logger?: Logger;
 }
@@ -63,13 +73,23 @@ export interface FinalizeTurnParams {
   durationMs?: number;
   /** Harness-reported token usage from the turn's RUN_FINISHED event. */
   usage?: ApiTokenUsage;
+  /** Require this live reconciliation owner/token for the terminal write. */
+  expectedDeliveryFence?: TurnDeliveryFence;
+  /**
+   * Pre-reserved reset advanced atomically with the terminal turn write.
+   * Requires expectedDeliveryFence and the exact bound sandbox session.
+   */
+  lifecycleReset?: {
+    sandboxSessionId: string;
+    fence: SandboxSessionLifecycleFence;
+  };
   /**
    * Live-session cleanup after terminal publication is attempted. This callback
    * clears the controller/in-memory active marker only; TurnFinalizer is the
    * sole turn.completed publisher. Invoked exactly when this call finalized
    * the durable row, including when publication fails and startup must repair it.
    */
-  settleSessionLifecycle?: (completedAt: number) => void;
+  settleSessionLifecycle?: (completedAt: number) => void | Promise<void>;
 }
 
 /**
@@ -88,7 +108,15 @@ export class TurnFinalizer {
 
   async finalize(params: FinalizeTurnParams): Promise<{ finalized: boolean; published: boolean }> {
     const completedAt = Date.now();
-    const finalized = await this.deps.db.finalizeTurnIfOpen(params.turnId, {
+    const existingTurn = params.usage
+      ? await this.deps.db.getTurn(params.turnId)
+      : undefined;
+    const canonicalUsage = params.usage
+      ? materializeTurnUsage(params.usage, {
+        gatewayPending: existingTurn?.gatewayCorrelationId != null,
+      })
+      : null;
+    const updates = {
       ...(params.sandboxSessionId ? { sandboxSessionId: params.sandboxSessionId } : {}),
       completedAt,
       error: params.error ?? null,
@@ -98,10 +126,36 @@ export class TurnFinalizer {
           inputTokens: params.usage.inputTokens,
           outputTokens: params.usage.outputTokens,
           totalTokens: params.usage.totalTokens,
-          ...(params.usage.costUsd !== undefined ? { costUsd: params.usage.costUsd } : {}),
+          usage: canonicalUsage,
+          ...(canonicalUsage?.cost.totalUsd != null
+            ? { costUsd: canonicalUsage.cost.totalUsd }
+            : {}),
         }
         : {}),
-    });
+    };
+    if (params.lifecycleReset && !params.expectedDeliveryFence) {
+      throw new Error(
+        `Turn ${params.turnId} lifecycle reset requires delivery ownership`,
+      );
+    }
+    const finalized = params.lifecycleReset
+      ? await this.deps.db.finalizeTurnAndMarkLifecycleDraining(
+        params.turnId,
+        updates,
+        params.expectedDeliveryFence!,
+        {
+          sandboxSessionId: params.lifecycleReset.sandboxSessionId,
+          ownerId: params.lifecycleReset.fence.ownerId,
+          fenceToken: params.lifecycleReset.fence.fenceToken,
+        },
+      )
+      : params.expectedDeliveryFence
+        ? await this.deps.db.finalizeTurnIfOpen(
+        params.turnId,
+        updates,
+        params.expectedDeliveryFence,
+      )
+        : await this.deps.db.finalizeTurnIfOpen(params.turnId, updates);
 
     try {
       if (finalized) {
@@ -113,10 +167,16 @@ export class TurnFinalizer {
           status: params.status,
           error: params.error,
           durationMs: params.durationMs ?? 0,
-          ...(params.usage ? { usage: params.usage } : {}),
+          usage: canonicalUsage,
           timestamp: completedAt,
         });
         return { finalized: true, published: true };
+      }
+
+      // A fenced finalizer that loses ownership must not repair or publish the
+      // terminal state written (or still owned) by a newer reconciler.
+      if (params.expectedDeliveryFence) {
+        return { finalized: false, published: false };
       }
 
       const turn = await this.deps.db.getTurn(params.turnId);
@@ -140,7 +200,7 @@ export class TurnFinalizer {
     } finally {
       if (finalized && params.settleSessionLifecycle) {
         try {
-          params.settleSessionLifecycle(completedAt);
+          await params.settleSessionLifecycle(completedAt);
         } catch (err) {
           this.deps.logger?.error(
             `[TurnFinalizer] session lifecycle settlement failed for turn ${params.turnId}:`,

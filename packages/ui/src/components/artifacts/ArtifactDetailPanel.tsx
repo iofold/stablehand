@@ -1,17 +1,28 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { X, Download } from 'lucide-react';
 import { useArtifactsStore } from '@/stores/artifacts';
 import { getMimeIcon } from './ArtifactRow';
 import { formatBytes } from '@/lib/format';
+import { downloadArtifact as downloadArtifactFile } from '@/lib/api';
 
 
 export function ArtifactDetailPanel() {
   const { selectedArtifact, clearSelection } = useArtifactsStore();
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   if (!selectedArtifact) return null;
 
-  const handleDownload = () => {
-    window.open(`/api/artifacts/${selectedArtifact.id}/download`, '_blank');
+  const handleDownload = async () => {
+    setIsDownloading(true);
+    setDownloadError(null);
+    try {
+      await downloadArtifactFile(selectedArtifact.id, selectedArtifact.name);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
@@ -43,11 +54,17 @@ export function ArtifactDetailPanel() {
         <button
           type="button"
           onClick={handleDownload}
+          disabled={isDownloading}
           className="w-full flex items-center justify-center gap-2 py-2.5 bg-accent-500 hover:bg-accent-400 text-white rounded-md font-medium transition-colors"
         >
           <Download className="w-4 h-4" />
-          Download File
+          {isDownloading ? 'Downloading...' : 'Download File'}
         </button>
+        {downloadError && (
+          <p role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+            Download failed: {downloadError}
+          </p>
+        )}
 
         <div className="space-y-4">
           <div>

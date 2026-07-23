@@ -25,7 +25,8 @@ spec:
   tools:
     - ref: execute-trade
     - ref: emit-event
-  nativeTools:
-    blocklist:
+  nativeToolPolicy:
+    policy: deny
+    names:
       - execute
   mode: interactive

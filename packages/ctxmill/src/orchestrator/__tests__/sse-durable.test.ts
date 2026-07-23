@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FastifyReply } from 'fastify';
+import { EventEmitter } from 'node:events';
 
 import { SSEManager, formatSeqId, parseSeqId } from '../sse.js';
 
@@ -61,6 +62,63 @@ describe('durable SSE serving (Stage 4 A2, ADR-015)', () => {
     expect(writtenIds(written)).toEqual(
       [5, 6, 7, 8].map((seq) => formatSeqId(seq)),
     );
+    manager.shutdown();
+  });
+
+  it('pauses durable replay on socket backpressure instead of disconnecting', async () => {
+    const manager = new SSEManager();
+    const written: string[] = [];
+    const raw = Object.assign(new EventEmitter(), {
+      write: vi.fn((data: string) => {
+        written.push(data);
+        return written.length !== 1 && written.length !== 64;
+      }),
+      end: vi.fn(),
+      writableEnded: false,
+      destroyed: false,
+    });
+    const reply = { raw } as unknown as FastifyReply;
+    const frames = Array.from({ length: 125 }, (_, index) => ({
+      seq: index + 1,
+      event: {
+        type: 'CUSTOM',
+        name: 'ctxmill.message.updated',
+        messageRevision: index + 1,
+        ...(index === 0 ? { projection: 'x'.repeat(555_000) } : {}),
+      },
+    }));
+
+    const subscribed = manager.subscribeDurable('agent-1', reply, 0, 125, {
+      getWatermark: async () => 125,
+      getPage: async (afterSeq, throughSeq, limit) =>
+        frames
+          .filter(({ seq }) => seq > afterSeq && seq <= throughSeq)
+          .slice(0, limit),
+    });
+
+    await vi.waitFor(() => {
+      expect(writtenIds(written)).toEqual([formatSeqId(1)]);
+    });
+    expect(written[0]!.length).toBeGreaterThan(500_000);
+    expect(manager.getClientCount('agent-1')).toBe(1);
+    expect(raw.end).not.toHaveBeenCalled();
+
+    raw.emit('drain');
+
+    await vi.waitFor(() => {
+      expect(writtenIds(written)).toHaveLength(64);
+    });
+    expect(manager.getClientCount('agent-1')).toBe(1);
+    expect(raw.end).not.toHaveBeenCalled();
+
+    raw.emit('drain');
+    await subscribed;
+
+    expect(writtenIds(written)).toEqual(
+      frames.map(({ seq }) => formatSeqId(seq)),
+    );
+    expect(manager.getClientCount('agent-1')).toBe(1);
+    expect(raw.end).not.toHaveBeenCalled();
     manager.shutdown();
   });
 

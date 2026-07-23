@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { InterruptManager } from '../../packages/ctxmill/src/orchestrator/interrupt.js';
-import type { InterruptRow } from '../../packages/ctxmill/src/database/repository.js';
+import type {
+  ExpectedSandboxCallbackDelivery,
+  InterruptRow,
+} from '../../packages/ctxmill/src/database/repository.js';
 import { TypedEventBus } from '../../packages/ctxmill/src/events/bus.js';
 
 type InterruptStore = NonNullable<ConstructorParameters<typeof InterruptManager>[1]>;
@@ -8,6 +11,7 @@ type InterruptInsert = Parameters<InterruptStore['savePendingInterrupt']>[0];
 
 function createMockInterruptDb(options: {
   beforeSave?: (data: InterruptInsert) => Promise<void>;
+  exactInstallResult?: 'admit' | 'stale';
 } = {}) {
   const rows = new Map<string, InterruptRow>();
 
@@ -36,6 +40,48 @@ function createMockInterruptDb(options: {
       const row = toRow(data);
       rows.set(row.id, row);
       return row;
+    }),
+    installPendingInterruptIfSandboxCallbackCurrent: vi.fn(async (
+      data: InterruptInsert,
+      _authority: ExpectedSandboxCallbackDelivery,
+      supersededInterruptId?: string,
+    ) => {
+      if (options.exactInstallResult === 'stale') {
+        return undefined;
+      }
+      if (supersededInterruptId) {
+        const superseded = rows.get(supersededInterruptId);
+        if (!superseded || superseded.status !== 'pending') {
+          return undefined;
+        }
+        rows.set(supersededInterruptId, {
+          ...superseded,
+          status: 'resolved',
+          resolvedAt: Date.now(),
+          resolvedAction: 'reject',
+          resolvedData: 'Superseded by new interrupt',
+        });
+      }
+      const row = toRow(data);
+      rows.set(row.id, row);
+      return row;
+    }),
+    deletePendingInterruptInstallation: vi.fn(async (
+      id: string,
+      turnId: string,
+      toolCallId: string,
+    ) => {
+      const row = rows.get(id);
+      if (
+        !row
+        || row.turnId !== turnId
+        || row.toolCallId !== toolCallId
+        || row.status !== 'pending'
+      ) {
+        return false;
+      }
+      rows.delete(id);
+      return true;
     }),
     resolveInterrupt: vi.fn(async (id: string, action: string, data?: unknown) => {
       const row = rows.get(id);
@@ -83,6 +129,20 @@ function createMockInterruptDb(options: {
 
   return { db, rows };
 }
+
+const SANDBOX_CALLBACK_AUTHORITY: ExpectedSandboxCallbackDelivery = {
+  turnId: 'run-1',
+  sandboxSessionId: 'sandbox-1',
+  agentId: 'agent-1',
+  expectedDeliveryFence: {
+    ownerId: 'worker-a',
+    fenceToken: 7,
+  },
+  expectedActiveGeneration: {
+    restoreFenceToken: 3,
+    containerId: 'container-a',
+  },
+};
 
 describe('InterruptManager', () => {
   let manager: InterruptManager;
@@ -320,6 +380,86 @@ describe('InterruptManager', () => {
 
       await expect(durableManager.resolveForTurn('run-1', 'approve')).resolves.toBe(true);
       await expect(replacement).resolves.toEqual({ action: 'approve' });
+
+      durableManager.shutdown();
+    });
+  });
+
+  describe('sandbox callback fencing', () => {
+    it('rejects a stale approval installation without a row, event, or waiter', async () => {
+      const { db, rows } = createMockInterruptDb({
+        exactInstallResult: 'stale',
+      });
+      const persistEvent = vi.fn().mockResolvedValue(true);
+      const bus = new TypedEventBus({ persistEvent });
+      const listener = vi.fn();
+      bus.on('interrupt.requested', listener);
+      const durableManager = new InterruptManager(bus, db);
+
+      await expect(durableManager.waitForApproval(
+        'run-1',
+        'agent-1',
+        'tc-1',
+        'request-approval',
+        { reason: 'confirm' },
+        60_000,
+        'sandbox-1',
+        'conversation-1',
+        SANDBOX_CALLBACK_AUTHORITY,
+      )).rejects.toThrow(
+        'Sandbox callback delivery ownership changed before interrupt persistence',
+      );
+
+      expect(db.installPendingInterruptIfSandboxCallbackCurrent).toHaveBeenCalledOnce();
+      expect(db.savePendingInterrupt).not.toHaveBeenCalled();
+      expect(rows.size).toBe(0);
+      expect(persistEvent).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
+      expect(durableManager.hasPendingForTurn('run-1')).toBe(false);
+
+      durableManager.shutdown();
+    });
+
+    it('passes exact authority to event persistence and compensates a rejected event', async () => {
+      const { db, rows } = createMockInterruptDb();
+      const persistEvent = vi.fn().mockResolvedValue(false);
+      const bus = new TypedEventBus({ persistEvent });
+      const listener = vi.fn();
+      bus.on('interrupt.requested', listener);
+      const durableManager = new InterruptManager(bus, db);
+
+      await expect(durableManager.waitForApproval(
+        'run-1',
+        'agent-1',
+        'tc-1',
+        'request-approval',
+        { reason: 'confirm' },
+        60_000,
+        'sandbox-1',
+        'conversation-1',
+        SANDBOX_CALLBACK_AUTHORITY,
+      )).rejects.toThrow(
+        'Interrupt request event was rejected for stale turn delivery',
+      );
+
+      expect(persistEvent).toHaveBeenCalledWith(
+        'interrupt.requested',
+        'agent-1',
+        expect.any(String),
+        expect.objectContaining({
+          turnId: 'run-1',
+          sandboxSessionId: 'sandbox-1',
+        }),
+        {
+          deliveryFence: SANDBOX_CALLBACK_AUTHORITY.expectedDeliveryFence,
+          sandboxSessionId: 'sandbox-1',
+          activeGeneration: SANDBOX_CALLBACK_AUTHORITY.expectedActiveGeneration,
+        },
+      );
+      expect(db.deletePendingInterruptInstallation).toHaveBeenCalledOnce();
+      expect(rows.size).toBe(0);
+      expect(listener).not.toHaveBeenCalled();
+      expect(durableManager.hasPendingForTurn('run-1')).toBe(false);
 
       durableManager.shutdown();
     });

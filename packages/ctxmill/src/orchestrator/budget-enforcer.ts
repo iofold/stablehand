@@ -1,5 +1,6 @@
 import type { DatabaseRepository } from '../database/repository.js';
 import type { EventMap, TypedEventBus } from '../events/bus.js';
+import type { TurnUsage } from '@ctxmill/contracts';
 import {
   BudgetExceededError,
   TagNotProvisionedError,
@@ -98,49 +99,102 @@ export class BudgetEnforcer {
     try {
       const turn = await this.deps.db.getTurn(payload.turnId);
       if (!turn) return;
-      const tags = turn.tags ?? {};
-      const contribution: BudgetSpend = {
-        totalTokens: payload.usage?.totalTokens ?? 0,
-        costUsd: payload.usage?.costUsd ?? 0,
-        turns: 1,
-      };
-
-      const matched = await this.matchPolicies(tags);
-      for (const match of matched) {
-        const spendAfter = await this.deps.db.getBudgetSpend(
-          match.doc.selector,
-          windowStartMs(match.doc.window, Date.now()),
-          match.bucket,
-        );
-        const statusesAfter = metricStatuses(match.doc.limits, spendAfter);
-
-        for (const action of match.doc.actions) {
-          const crossing = statusesAfter.find((after) => {
-            const before = after.spent - (
-              after.metric === 'totalTokens' ? contribution.totalTokens
-              : after.metric === 'costUsd' ? contribution.costUsd
-              : contribution.turns
-            );
-            return before < action.threshold * after.limit && after.ratio >= action.threshold;
-          });
-          if (!crossing) continue;
-
-          this.deps.eventBus?.emit('budget.threshold', {
-            policyId: match.policyId,
-            policyName: match.policyName,
-            bucket: match.bucketLabel,
-            action: action.action,
-            threshold: action.threshold,
-            metric: crossing.metric,
-            spent: crossing.spent,
-            limit: crossing.limit,
-            agentId: payload.agentId,
-            timestamp: Date.now(),
-          });
-        }
-      }
+      await this.evaluateThresholdCrossings({
+        agentId: payload.agentId,
+        tags: turn.tags ?? {},
+        contribution: {
+          totalTokens: payload.usage?.totalTokens ?? null,
+          costUsd: payload.usage?.cost.totalUsd ?? null,
+          turns: 1,
+        },
+      });
     } catch (err) {
       this.deps.logger.error(`${TAG} threshold check failed for turn ${payload.turnId}:`, err);
+    }
+  }
+
+  /**
+   * Re-run the crossing evaluator when asynchronous gateway reconciliation
+   * changes the durable usage projection. Only the persisted delta
+   * contributes: turn count was already charged at completion.
+   */
+  async onTurnUsageReconciled(params: {
+    turnId: string;
+    agentId: string;
+    previousUsage: TurnUsage | null;
+    usage: TurnUsage;
+  }): Promise<void> {
+    try {
+      const turn = await this.deps.db.getTurn(params.turnId);
+      if (!turn) return;
+      const previousCost = params.previousUsage?.cost.totalUsd ?? null;
+      const costDelta = params.usage.cost.totalUsd === null
+        ? null
+        : params.usage.cost.totalUsd - (previousCost ?? 0);
+      await this.evaluateThresholdCrossings({
+        agentId: params.agentId,
+        tags: turn.tags ?? {},
+        contribution: {
+          totalTokens:
+            params.usage.totalTokens - (params.previousUsage?.totalTokens ?? 0),
+          costUsd: costDelta,
+          turns: 0,
+        },
+      });
+    } catch (err) {
+      this.deps.logger.error(
+        `${TAG} reconciled threshold check failed for turn ${params.turnId}:`,
+        err,
+      );
+    }
+  }
+
+  private async evaluateThresholdCrossings(params: {
+    agentId: string;
+    tags: Record<string, string>;
+    contribution: BudgetSpend;
+  }): Promise<void> {
+    const matched = await this.matchPolicies(params.tags);
+    for (const match of matched) {
+      const spendAfter = await this.deps.db.getBudgetSpend(
+        match.doc.selector,
+        windowStartMs(match.doc.window, Date.now()),
+        match.bucket,
+      );
+      const statusesAfter = metricStatuses(
+        match.doc.limits,
+        spendAfter,
+        match.doc.actions,
+      );
+
+      for (const action of match.doc.actions) {
+        const crossing = statusesAfter.find((after) => {
+          if (after.spent === null || after.ratio === null) return false;
+          const turnContribution = after.metric === 'totalTokens'
+            ? params.contribution.totalTokens
+            : after.metric === 'costUsd'
+              ? params.contribution.costUsd
+              : params.contribution.turns;
+          if (turnContribution === null || turnContribution <= 0) return false;
+          const before = after.spent - turnContribution;
+          return before < action.threshold * after.limit
+            && after.ratio >= action.threshold;
+        });
+        if (!crossing || crossing.spent === null) continue;
+
+        this.deps.eventBus?.emit('budget.threshold', {
+          policyId: match.policyId,
+          policyName: match.policyName,
+          bucket: match.bucketLabel,
+          action: action.action,
+          threshold: action.threshold,
+          metric: crossing.metric,
+          spent: crossing.spent,
+          limit: crossing.limit,
+          agentId: params.agentId,
+          timestamp: Date.now(),
+        });
+      }
     }
   }
 

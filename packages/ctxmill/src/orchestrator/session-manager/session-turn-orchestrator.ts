@@ -3,14 +3,18 @@ import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import {
   DeliverTurnRequestSchema,
+  RenewTurnDeliveryCapabilityRequestSchema,
   type SessionEvent as ProtoSessionEvent,
+  type TurnDeliveryCapability,
 } from '@ctxmill/proto/sandbox/v1';
 
-import type { TypedEventBus } from '../../events/bus.js';
+import type { EventMap, TypedEventBus } from '../../events/bus.js';
 import { protoSessionEventToCustom } from '../../sandbox/proto-convert.js';
-import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
+import type { Message } from '@ctxmill/sandbox-daemon';
+import type { SandboxSessionActiveGeneration } from '../../database/repository.js';
 import type { ContainerLifecyclePolicy } from '../container-lifecycle-policy.js';
 import type { InterruptManager } from '../interrupt.js';
+import type { SandboxSessionLifecycleOperationGuard } from '../sandbox-session-lifecycle-operation.js';
 import type { SessionEvent as CustomSessionEvent } from '../session-turn-service.js';
 import { TURN_CANCELLED_MESSAGE } from '../turn-cancellation.js';
 import { unrefTimer } from '../../util/timing.js';
@@ -20,6 +24,7 @@ import {
   AsyncChannel,
   type Logger,
   type SessionRecord,
+  type TurnDeliveryOptions,
 } from './types.js';
 import { ConcurrencyLimitError } from './concurrency-limit-error.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
@@ -27,10 +32,16 @@ import {
   turnErrorSandboxConnectionLost,
   turnErrorSandboxStreamEndedWithoutCompletion,
 } from '../turn-finalizer.js';
+import type {
+  TurnDeliveryFence,
+  TurnDeliveryContext,
+} from '../turn-delivery-fence.js';
 
 const TAG = '[SandboxSessionManager]';
 const MAX_DRAIN_ITERATIONS = 100;
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_CAPABILITY_REFRESH_MS = 10_000;
+const MIN_CAPABILITY_REFRESH_MS = 100;
 
 function summarizeTurnDeliveryFailure(err: unknown): string {
   if (err instanceof ConnectError) {
@@ -65,24 +76,42 @@ export interface SessionTurnOrchestratorDeps {
     maxConcurrentSessionsPerAgent?: number;
   };
   onCheckpoint: (sessionId: string) => Promise<void>;
-  onStaleContainer: (
-    sessionId: string,
-    conversationId: string,
-    agentDef: AgentDefinition,
-    agentId?: string,
-  ) => Promise<SessionRecord>;
-  onSessionRebound?: (event: {
+  reserveSessionReset: (event: {
     turnId: string;
-    previousSessionId: string;
     sessionId: string;
-  }) => Promise<void>;
-  onTurnActive?: (turnId: string) => void | Promise<void>;
+    deliveryFence: TurnDeliveryFence;
+  }) => Promise<SandboxSessionLifecycleOperationGuard | undefined>;
+  executeReservedSessionReset: (
+    sessionId: string,
+    lifecycleOperation: SandboxSessionLifecycleOperationGuard,
+  ) => Promise<void>;
+  resetSession: (sessionId: string) => Promise<void>;
+  onTurnActive?: (event: {
+    turnId: string;
+    sessionId: string;
+    expectedActiveGeneration: SandboxSessionActiveGeneration;
+    deliveryFence?: TurnDeliveryFence;
+  }) => boolean | void | Promise<boolean | void>;
+  verifyActiveGeneration?: (
+    sessionId: string,
+    expectedActiveGeneration: SandboxSessionActiveGeneration,
+  ) => boolean | Promise<boolean>;
+  verifyTurnDeliveryFence?: (
+    turnId: string,
+    fence: TurnDeliveryFence,
+  ) => boolean | Promise<boolean>;
+  issueTurnDeliveryCapability: (input: {
+    turnId: string;
+    sandboxSessionId: string;
+    agentId: string;
+    expectedActiveGeneration: SandboxSessionActiveGeneration;
+    expectedDeliveryFence: TurnDeliveryFence;
+  }) => Promise<TurnDeliveryCapability | undefined>;
   executeDeliverTurn: (
     sessionId: string,
     messages: Message[],
     turnId: string,
-    onSessionRebound?: (nextSessionId: string) => void,
-    signal?: AbortSignal,
+    options?: TurnDeliveryOptions,
   ) => AsyncGenerator<CustomSessionEvent>;
 }
 
@@ -94,10 +123,21 @@ export interface ConcurrencyReservation {
 
 export interface SessionTurnStartOptions {
   suppressEvent?: boolean;
+  deliveryContext?: TurnDeliveryContext;
+  deliveryAdmission?: 'activate' | 'continuation';
 }
 
 export class SessionTurnOrchestrator {
   private readonly startupReservationsByAgent = new Map<string, Set<string>>();
+  private readonly pendingSessionResets = new Map<string, {
+    sessionId: string;
+    lifecycleOperation: SandboxSessionLifecycleOperationGuard;
+  }>();
+  private readonly deliveryContexts = new Map<string, {
+    context: TurnDeliveryContext;
+    requiresActivation: boolean;
+    turnStarted?: EventMap['turn.started'];
+  }>();
 
   constructor(private readonly deps: SessionTurnOrchestratorDeps) {}
 
@@ -117,7 +157,25 @@ export class SessionTurnOrchestrator {
 
     const controller = new AbortController();
     this.deps.stateStore.registerTurnController(sessionId, turnId, controller);
-    if (!options?.suppressEvent) {
+    if (options?.deliveryContext) {
+      this.deliveryContexts.set(turnId, {
+        context: options.deliveryContext,
+        requiresActivation: options.deliveryAdmission !== 'continuation',
+        ...(options.deliveryAdmission === 'continuation'
+          ? {}
+          : {
+              turnStarted: {
+                turnId,
+                sandboxSessionId: sessionId,
+                agentId,
+                conversationId,
+                mode,
+                taskDescription: taskDescription ?? '',
+                timestamp: Date.now(),
+              },
+            }),
+      });
+    } else if (!options?.suppressEvent) {
       this.deps.eventBus?.emit('turn.started', {
         turnId,
         sandboxSessionId: sessionId,
@@ -131,7 +189,7 @@ export class SessionTurnOrchestrator {
     return controller.signal;
   }
 
-  completeTurn(
+  async completeTurn(
     sessionId: string,
     turnId: string,
     _agentId: string,
@@ -140,9 +198,56 @@ export class SessionTurnOrchestrator {
     _durationMs: number,
     _error?: string,
     _usage?: { inputTokens: number; outputTokens: number; totalTokens: number; costUsd?: number },
-  ): void {
+  ): Promise<void> {
+    this.deliveryContexts.delete(turnId);
     this.deps.stateStore.clearTurnController(sessionId, turnId);
     this.deps.stateStore.markTurnInactive(sessionId, turnId);
+    const pendingReset = this.pendingSessionResets.get(turnId);
+    if (!pendingReset) {
+      return;
+    }
+    this.pendingSessionResets.delete(turnId);
+    try {
+      await this.deps.executeReservedSessionReset(
+        pendingReset.sessionId,
+        pendingReset.lifecycleOperation,
+      );
+    } finally {
+      await pendingReset.lifecycleOperation.stop();
+    }
+  }
+
+  async abandonTurnDelivery(sessionId: string, turnId: string): Promise<void> {
+    this.deliveryContexts.delete(turnId);
+    this.deps.stateStore.clearTurnController(sessionId, turnId);
+    this.deps.stateStore.markTurnInactive(sessionId, turnId);
+    const pendingReset = this.pendingSessionResets.get(turnId);
+    if (!pendingReset) {
+      return;
+    }
+    this.pendingSessionResets.delete(turnId);
+    try {
+      await pendingReset.lifecycleOperation.cancel();
+    } finally {
+      await pendingReset.lifecycleOperation.stop();
+    }
+  }
+
+  getPendingSessionReset(
+    turnId: string,
+  ): { sandboxSessionId: string; fence: { ownerId: string; fenceToken: number } } | undefined {
+    const pendingReset = this.pendingSessionResets.get(turnId);
+    return pendingReset
+      ? {
+          sandboxSessionId: pendingReset.sessionId,
+          fence: pendingReset.lifecycleOperation.fence,
+        }
+      : undefined;
+  }
+
+  getTurnDeliveryFence(turnId: string): TurnDeliveryFence | undefined {
+    const fence = this.getDeliveryFence(turnId);
+    return fence ? { ...fence } : undefined;
   }
 
   cancelCurrentTurn(sessionId: string, turnId?: string): boolean {
@@ -156,6 +261,7 @@ export class SessionTurnOrchestrator {
     if (queue && queuedIndex >= 0) {
       const [entry] = queue.splice(queuedIndex, 1);
       entry?.channel.fail(new Error(TURN_CANCELLED_MESSAGE));
+      this.deliveryContexts.delete(targetTurnId);
       this.deps.stateStore.clearTurnController(sessionId, targetTurnId);
       return true;
     }
@@ -228,8 +334,12 @@ export class SessionTurnOrchestrator {
     sessionId: string,
     messages: Message[],
     turnId: string,
-    signal?: AbortSignal,
+    options?: TurnDeliveryOptions,
   ): AsyncGenerator<CustomSessionEvent> {
+    const signal = options?.signal;
+    const turnSecrets = options?.turnSecrets
+      ? { ...options.turnSecrets }
+      : undefined;
     signal?.throwIfAborted();
     const record = this.deps.stateStore.getSessionById(sessionId);
     const conversationId = record?.conversationId;
@@ -238,10 +348,11 @@ export class SessionTurnOrchestrator {
     }
 
     const shouldQueue = await this.deps.stateStore.withConversationLock(conversationId, async () => {
+      signal?.throwIfAborted();
       if (this.deps.stateStore.isActiveTurn(sessionId)) {
         return true;
       }
-      await this.markTurnActive(sessionId, turnId);
+      await this.markTurnActive(sessionId, turnId, signal);
       return false;
     });
 
@@ -253,7 +364,13 @@ export class SessionTurnOrchestrator {
         );
       }
       const channel = new AsyncChannel<CustomSessionEvent>();
-      const entry = { messages, turnId, channel, signal };
+      const entry = {
+        messages,
+        turnId,
+        ...(turnSecrets ? { turnSecrets } : {}),
+        channel,
+        signal,
+      };
       queue.push(entry);
       this.deps.logger.debug(
         `${TAG} session ${sessionId}: buffering turn ${turnId} (queue depth: ${queue.length})`,
@@ -287,27 +404,20 @@ export class SessionTurnOrchestrator {
       }
     }
 
-    let currentSessionId = sessionId;
-    const onSessionRebound = (nextSessionId: string) => {
-      currentSessionId = nextSessionId;
-    };
-
     try {
       yield* this.executeDeliverTurn(
         sessionId,
         messages,
         turnId,
-        false,
-        onSessionRebound,
-        signal,
+        {
+          ...(signal ? { signal } : {}),
+          ...(turnSecrets ? { turnSecrets } : {}),
+        },
       );
     } finally {
       await this.deps.stateStore.withConversationLock(conversationId, async () => {
-        this.deps.stateStore.markTurnInactive(currentSessionId, turnId);
-        if (currentSessionId !== sessionId) {
-          this.deps.stateStore.markTurnInactive(sessionId, turnId);
-        }
-        await this.drainCoalescedQueue(currentSessionId);
+        this.deps.stateStore.markTurnInactive(sessionId, turnId);
+        await this.drainCoalescedQueue(sessionId);
       });
     }
   }
@@ -316,15 +426,34 @@ export class SessionTurnOrchestrator {
     sessionId: string,
     messages: Message[],
     turnId: string,
-    _retried = false,
-    onSessionRebound?: (nextSessionId: string) => void,
-    signal?: AbortSignal,
+    options?: TurnDeliveryOptions,
   ): AsyncGenerator<CustomSessionEvent> {
+    yield* this.executeDeliverTurnAttempt(
+      sessionId,
+      messages,
+      turnId,
+      options,
+      false,
+    );
+  }
+
+  private async *executeDeliverTurnAttempt(
+    sessionId: string,
+    messages: Message[],
+    turnId: string,
+    options: TurnDeliveryOptions | undefined,
+    retried: boolean,
+  ): AsyncGenerator<CustomSessionEvent> {
+    const signal = options?.signal;
+    const turnSecrets = options?.turnSecrets;
+    signal?.throwIfAborted();
     const record = this.deps.stateStore.getSessionById(sessionId);
     if (!record) {
       throw new Error(`Session ${sessionId} not found for turn delivery`);
     }
 
+    await this.verifyDeliveryFence(turnId);
+    signal?.throwIfAborted();
     await this.deps.lifecyclePolicy.cancelIdleTimeout(sessionId);
 
     this.deps.logger.debug(
@@ -335,14 +464,48 @@ export class SessionTurnOrchestrator {
       sessionId,
       turnId,
       messages: toProtoMessages(messages),
+      ...(turnSecrets ? { turnSecrets: { ...turnSecrets } } : {}),
     });
     let eventCount = 0;
     let sawTerminalFrame = false;
+    const turnAbortSignal =
+      this.deps.stateStore.getTurnAbortSignal(sessionId, turnId);
+    const deliveryFence = this.getDeliveryFence(turnId);
+    const expectedActiveGeneration: SandboxSessionActiveGeneration = {
+      restoreFenceToken: record.restoreFenceToken,
+      containerId: record.containerId || null,
+    };
+    const initialCapability = deliveryFence
+      ? await this.deps.issueTurnDeliveryCapability({
+        turnId,
+        sandboxSessionId: sessionId,
+        agentId: record.agentId,
+        expectedActiveGeneration,
+        expectedDeliveryFence: deliveryFence,
+      })
+      : undefined;
+    if (deliveryFence && !initialCapability) {
+      throw new Error(`Turn ${turnId} lost delivery capability admission`);
+    }
+    if (initialCapability) {
+      request.deliveryCapability = initialCapability;
+    }
+    const capabilityLossController = new AbortController();
+    const renewalStopController = new AbortController();
+    let capabilityRenewal: Promise<void> | undefined;
 
     try {
       signal?.throwIfAborted();
-      const stream: AsyncIterable<ProtoSessionEvent> = signal
-        ? record.grpcClient!.deliverTurn(request, { signal })
+      await this.verifyDeliveryFence(turnId);
+      signal?.throwIfAborted();
+      this.assertCapabilityUnexpired(initialCapability, turnId);
+      const deliverySignal = initialCapability
+        ? signal
+          ? AbortSignal.any([signal, capabilityLossController.signal])
+          : capabilityLossController.signal
+        : signal;
+      const stream: AsyncIterable<ProtoSessionEvent> = deliverySignal
+        ? record.grpcClient!.deliverTurn(request, { signal: deliverySignal })
         : record.grpcClient!.deliverTurn(request);
       const turnTimeout = this.deps.config.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
       const abortController = new AbortController();
@@ -356,7 +519,17 @@ export class SessionTurnOrchestrator {
       let iterator: AsyncIterator<ProtoSessionEvent> | undefined;
       try {
         iterator = stream[Symbol.asyncIterator]();
-        const turnAbortSignal = this.deps.stateStore.getTurnAbortSignal(sessionId, turnId);
+        if (initialCapability && deliveryFence) {
+          capabilityRenewal = this.maintainTurnDeliveryCapability({
+            record,
+            turnId,
+            expectedActiveGeneration,
+            expectedDeliveryFence: deliveryFence,
+            initialCapability,
+            stopSignal: renewalStopController.signal,
+            lossController: capabilityLossController,
+          });
+        }
         const timeoutError = () =>
           new Error(`Turn ${turnId} timed out after ${turnTimeout}ms for session ${sessionId}`);
         const cancellationError = () => new Error(`Turn ${turnId} cancelled for session ${sessionId}`);
@@ -474,6 +647,8 @@ export class SessionTurnOrchestrator {
           }
         }
       } finally {
+        renewalStopController.abort();
+        void capabilityRenewal;
         if (iterator?.return) {
           void iterator.return().catch((returnErr: unknown) => {
             this.deps.logger.debug(`${TAG} iterator.return() failed for turn ${turnId}:`, returnErr);
@@ -484,11 +659,23 @@ export class SessionTurnOrchestrator {
         }
       }
     } catch (err) {
-      if (signal?.aborted) {
+      if (capabilityLossController.signal.aborted) {
         this.deps.logger.info(
-          `${TAG} externally fenced turn ${turnId} for session ${sessionId}`,
+          `${TAG} delivery capability lost for turn ${turnId} on session ${sessionId}`,
         );
-        await this.settleTurnActive(sessionId, record);
+        return;
+      }
+      if (signal?.aborted) {
+        if (turnAbortSignal?.aborted) {
+          this.deps.logger.info(
+            `${TAG} turn ${turnId} cancelled for session ${sessionId}`,
+          );
+          await this.settleTurnActive(sessionId, record);
+        } else {
+          this.deps.logger.info(
+            `${TAG} externally fenced turn ${turnId} for session ${sessionId}`,
+          );
+        }
         return;
       }
       if (err instanceof Error && err.message === `Turn ${turnId} cancelled for session ${sessionId}`) {
@@ -499,70 +686,37 @@ export class SessionTurnOrchestrator {
 
       const isAbort = err instanceof ConnectError && err.code === Code.Aborted;
 
-      if (!_retried && eventCount === 0 && isAbort) {
+      if (!retried && eventCount === 0 && isAbort) {
         this.deps.logger.warn(
           `${TAG} stream aborted before any events for turn ${turnId} on session ${sessionId}, retrying once`,
         );
-        yield* this.executeDeliverTurn(
+        yield* this.executeDeliverTurnAttempt(
           sessionId,
           messages,
           turnId,
+          {
+            ...(signal ? { signal } : {}),
+            ...(turnSecrets ? { turnSecrets } : {}),
+          },
           true,
-          undefined,
-          signal,
         );
         return;
       }
 
-      if (!_retried && eventCount > 0 && isAbort) {
-        this.deps.logger.warn(
-          `${TAG} stream aborted mid-turn (${eventCount} events received) for turn ${turnId} on session ${sessionId} — connection dropped during tool execution`,
-        );
-        await this.deps.statusCoordinator.transition({
-          sessionId,
-          fromStatus: record.status,
-          toStatus: 'TERMINATED',
-          clearRuntime: true,
-        });
-        this.deps.stateStore.deleteSession(record.conversationId);
-      }
-
-      const agentDef = this.deps.stateStore.getAgentDef(record.conversationId);
-      if (SessionRecoveryCoordinator.isStaleContainerError(err) && agentDef && !_retried) {
+      if (
+        (eventCount > 0 && isAbort)
+        || SessionRecoveryCoordinator.isStaleContainerError(err)
+      ) {
         const failureSummary = summarizeTurnDeliveryFailure(err);
+        const resetReserved = await this.reserveSessionReset(
+          sessionId,
+          turnId,
+        );
         this.deps.logger.warn(
-          `${TAG} stale container for session ${sessionId}, recovering and retrying turn: ${failureSummary}`,
+          `${TAG} sandbox session ${sessionId} failed during turn ${turnId}; `
+          + `${resetReserved ? 'reserved a fenced reset' : 'reset reservation unavailable'}: `
+          + failureSummary,
         );
-        await this.deps.statusCoordinator.transition({
-          sessionId,
-          fromStatus: record.status,
-          toStatus: 'TERMINATED',
-          extra: { lastRestoreError: failureSummary },
-          clearRuntime: true,
-        });
-        this.deps.stateStore.deleteSession(record.conversationId);
-        const newRecord = await this.deps.onStaleContainer(
-          sessionId,
-          record.conversationId,
-          agentDef,
-          record.agentId,
-        );
-        this.deps.stateStore.rebindTurnRuntime(sessionId, newRecord.sessionId, turnId);
-        await this.deps.onSessionRebound?.({
-          turnId,
-          previousSessionId: sessionId,
-          sessionId: newRecord.sessionId,
-        });
-        onSessionRebound?.(newRecord.sessionId);
-        yield* this.executeDeliverTurn(
-          newRecord.sessionId,
-          messages,
-          turnId,
-          true,
-          onSessionRebound,
-          signal,
-        );
-        return;
       }
 
       const errorMessage = isAbort && eventCount > 0
@@ -629,13 +783,9 @@ export class SessionTurnOrchestrator {
         `${TAG} draining queued turn ${nextEntry.turnId} (remaining depth: ${queue.length}) for session ${sessionId}`,
       );
 
-      await this.markTurnActive(sessionId, nextEntry.turnId);
-      let currentSessionId = sessionId;
-      const onSessionRebound = (nextSessionId: string) => {
-        currentSessionId = nextSessionId;
-      };
-      let drainReboundQueue = false;
       try {
+        nextEntry.signal?.throwIfAborted();
+        await this.markTurnActive(sessionId, nextEntry.turnId, nextEntry.signal);
         const turnAbortSignal = this.deps.stateStore.getTurnAbortSignal(sessionId, nextEntry.turnId);
         if (turnAbortSignal?.aborted) {
           throw new Error(`Turn ${nextEntry.turnId} cancelled for session ${sessionId}`);
@@ -645,8 +795,10 @@ export class SessionTurnOrchestrator {
           sessionId,
           nextEntry.messages,
           nextEntry.turnId,
-          onSessionRebound,
-          nextEntry.signal,
+          {
+            ...(nextEntry.signal ? { signal: nextEntry.signal } : {}),
+            ...(nextEntry.turnSecrets ? { turnSecrets: nextEntry.turnSecrets } : {}),
+          },
         )) {
           nextEntry.channel.push(event);
         }
@@ -655,17 +807,8 @@ export class SessionTurnOrchestrator {
         const error = err instanceof Error ? err : new Error(String(err));
         nextEntry.channel.fail(error);
       } finally {
-        this.deps.stateStore.clearTurnController(currentSessionId, nextEntry.turnId);
-        this.deps.stateStore.markTurnInactive(currentSessionId, nextEntry.turnId);
-        if (currentSessionId !== sessionId) {
-          this.deps.stateStore.clearTurnController(sessionId, nextEntry.turnId);
-          this.deps.stateStore.markTurnInactive(sessionId, nextEntry.turnId);
-          drainReboundQueue = true;
-        }
-      }
-      if (drainReboundQueue) {
-        await this.drainCoalescedQueue(currentSessionId);
-        return;
+        this.deps.stateStore.clearTurnController(sessionId, nextEntry.turnId);
+        this.deps.stateStore.markTurnInactive(sessionId, nextEntry.turnId);
       }
     }
 
@@ -704,30 +847,260 @@ export class SessionTurnOrchestrator {
   }
 
   private async handleContainerGone(sessionId: string): Promise<void> {
-    this.deps.logger.warn(`${TAG} container gone for session ${sessionId}, marking TERMINATED`);
-    const record = this.deps.stateStore.getSessionById(sessionId);
-    if (record) {
-      await this.deps.statusCoordinator.transition({
-        sessionId,
-        fromStatus: record.status,
-        toStatus: 'TERMINATED',
-        clearRuntime: true,
-      });
-      this.deps.stateStore.deleteSession(record.conversationId);
-      this.deps.stateStore.deleteAgentDef(record.conversationId);
-    }
-    this.deps.stateStore.deleteQueue(sessionId);
-    this.deps.stateStore.markTurnInactive(sessionId);
+    this.deps.logger.warn(
+      `${TAG} container gone for session ${sessionId}; requesting a fenced reset`,
+    );
+    await this.deps.resetSession(sessionId);
   }
 
-  private async markTurnActive(sessionId: string, turnId: string): Promise<void> {
+  private async markTurnActive(
+    sessionId: string,
+    turnId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted();
+    const record = this.deps.stateStore.getSessionById(sessionId);
+    if (!record || record.status !== 'ACTIVE') {
+      throw new Error(
+        `Sandbox session ${sessionId} has no ACTIVE runtime for turn ${turnId}`,
+      );
+    }
+    const expectedActiveGeneration: SandboxSessionActiveGeneration = {
+      restoreFenceToken: record.restoreFenceToken,
+      containerId: record.containerId || null,
+    };
+    const delivery = this.deliveryContexts.get(turnId);
+    const fence = delivery?.context.fence;
+    if (delivery?.requiresActivation === false) {
+      await this.verifyDeliveryFence(turnId);
+      const current = await this.deps.verifyActiveGeneration?.(
+        sessionId,
+        expectedActiveGeneration,
+      );
+      if (current === false) {
+        throw new Error(
+          `Turn ${turnId} references a stale runtime generation for sandbox session ${sessionId}`,
+        );
+      }
+    } else {
+      const activated = await this.deps.onTurnActive?.({
+        turnId,
+        sessionId,
+        expectedActiveGeneration,
+        ...(fence ? { deliveryFence: fence } : {}),
+      });
+      if (activated === false) {
+        throw new Error(`Turn ${turnId} lost durable delivery admission`);
+      }
+    }
+    signal?.throwIfAborted();
+
+    if (delivery) {
+      if (!this.deps.eventBus) {
+        throw new Error(`Turn ${turnId} fenced delivery requires a durable event bus`);
+      }
+      await this.verifyDeliveryFence(turnId);
+      signal?.throwIfAborted();
+      if (delivery.context.userMessage) {
+        await this.deps.eventBus.emitAsync('user.message', delivery.context.userMessage, {
+          deliveryFence: delivery.context.fence,
+        });
+      }
+      await this.verifyDeliveryFence(turnId);
+      signal?.throwIfAborted();
+      if (delivery.turnStarted) {
+        await this.deps.eventBus.emitAsync(
+          'turn.started',
+          {
+            ...delivery.turnStarted,
+            sandboxSessionId: sessionId,
+          },
+          {
+            deliveryFence: delivery.context.fence,
+          },
+        );
+        await this.verifyDeliveryFence(turnId);
+        signal?.throwIfAborted();
+      }
+    }
+
     this.deps.stateStore.markTurnActive(sessionId, turnId);
+  }
+
+  private getDeliveryFence(turnId: string): TurnDeliveryFence | undefined {
+    return this.deliveryContexts.get(turnId)?.context.fence;
+  }
+
+  private async reserveSessionReset(
+    sessionId: string,
+    turnId: string,
+  ): Promise<boolean> {
+    if (this.pendingSessionResets.has(turnId)) {
+      return true;
+    }
+    const deliveryFence = this.getDeliveryFence(turnId);
+    if (!deliveryFence) {
+      this.deps.logger.warn(
+        `${TAG} refusing an unfenced reset for session ${sessionId}, turn ${turnId}`,
+      );
+      return false;
+    }
+
+    await this.verifyDeliveryFence(turnId);
+    const lifecycleOperation = await this.deps.reserveSessionReset({
+      turnId,
+      sessionId,
+      deliveryFence,
+    });
+    if (!lifecycleOperation) {
+      return false;
+    }
     try {
-      await this.deps.onTurnActive?.(turnId);
+      await this.verifyDeliveryFence(turnId);
     } catch (err) {
-      this.deps.logger.error(`${TAG} failed to mark turn ${turnId} active durably:`, err);
+      try {
+        await lifecycleOperation.cancel();
+      } finally {
+        await lifecycleOperation.stop();
+      }
+      throw err;
+    }
+    this.pendingSessionResets.set(turnId, {
+      sessionId,
+      lifecycleOperation,
+    });
+    return true;
+  }
+
+  private async verifyDeliveryFence(turnId: string): Promise<void> {
+    const fence = this.getDeliveryFence(turnId);
+    if (!fence || !this.deps.verifyTurnDeliveryFence) {
+      return;
+    }
+    if (!await this.deps.verifyTurnDeliveryFence(turnId, fence)) {
+      throw new Error(`Turn ${turnId} lost reconciliation fence`);
     }
   }
+
+  private assertCapabilityUnexpired(
+    capability: TurnDeliveryCapability | undefined,
+    turnId: string,
+  ): void {
+    if (!capability) {
+      return;
+    }
+    const deadline = Number(capability.leaseExpiresAtMs);
+    if (!Number.isSafeInteger(deadline) || deadline <= Date.now()) {
+      throw new Error(`Turn ${turnId} delivery capability expired before dispatch`);
+    }
+  }
+
+  private async maintainTurnDeliveryCapability(input: {
+    record: SessionRecord;
+    turnId: string;
+    expectedActiveGeneration: SandboxSessionActiveGeneration;
+    expectedDeliveryFence: TurnDeliveryFence;
+    initialCapability: TurnDeliveryCapability;
+    stopSignal: AbortSignal;
+    lossController: AbortController;
+  }): Promise<void> {
+    let deadline = Number(input.initialCapability.leaseExpiresAtMs);
+    while (!input.stopSignal.aborted && !input.lossController.signal.aborted) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        input.lossController.abort(
+          new Error(`Turn ${input.turnId} delivery capability expired`),
+        );
+        return;
+      }
+      const refreshDelayMs = Math.max(
+        MIN_CAPABILITY_REFRESH_MS,
+        Math.min(
+          DEFAULT_CAPABILITY_REFRESH_MS,
+          Math.floor(remainingMs / 3),
+        ),
+      );
+      if (!await waitForCapabilityRefresh(
+        refreshDelayMs,
+        input.stopSignal,
+      )) {
+        return;
+      }
+
+      try {
+        const capability = await this.deps.issueTurnDeliveryCapability({
+          turnId: input.turnId,
+          sandboxSessionId: input.record.sessionId,
+          agentId: input.record.agentId,
+          expectedActiveGeneration: input.expectedActiveGeneration,
+          expectedDeliveryFence: input.expectedDeliveryFence,
+        });
+        if (input.stopSignal.aborted) {
+          return;
+        }
+        if (!capability) {
+          input.lossController.abort(
+            new Error(`Turn ${input.turnId} lost delivery capability admission`),
+          );
+          return;
+        }
+        this.assertCapabilityUnexpired(capability, input.turnId);
+        const response =
+          await input.record.grpcClient!.renewTurnDeliveryCapability(
+            create(RenewTurnDeliveryCapabilityRequestSchema, {
+              sessionId: input.record.sessionId,
+              turnId: input.turnId,
+              deliveryCapability: capability,
+            }),
+            { signal: input.stopSignal },
+          );
+        if (!response.renewed) {
+          input.lossController.abort(
+            new Error(`Sandbox rejected turn ${input.turnId} capability renewal`),
+          );
+          return;
+        }
+        deadline = Number(capability.leaseExpiresAtMs);
+      } catch (error) {
+        if (input.stopSignal.aborted) {
+          return;
+        }
+        if (Date.now() >= deadline) {
+          input.lossController.abort(
+            new Error(
+              `Turn ${input.turnId} delivery capability expired during renewal`,
+              { cause: error },
+            ),
+          );
+          return;
+        }
+        this.deps.logger.warn(
+          `${TAG} turn ${input.turnId} capability renewal failed; retrying before expiry:`,
+          error,
+        );
+      }
+    }
+  }
+}
+
+async function waitForCapabilityRefresh(
+  delayMs: number,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) {
+    return false;
+  }
+  return new Promise((resolve) => {
+    const finish = (completed: boolean): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      resolve(completed);
+    };
+    const onAbort = (): void => finish(false);
+    const timer = setTimeout(() => finish(true), delayMs);
+    unrefTimer(timer);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function toProtoMessages(messages: Message[]): Array<{

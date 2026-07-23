@@ -10,13 +10,15 @@ import { createSSEConnection } from '@/lib/api';
 
 export type SSEStatus = 'connecting' | 'connected' | 'disconnected';
 
+const SSE_DISCONNECT_GRACE_MS = 5_000;
+
 interface SSEStatusStore {
   status: SSEStatus;
   setStatus: (status: SSEStatus) => void;
 }
 
 const useSSEStatusStore = create<SSEStatusStore>((set) => ({
-  status: 'disconnected',
+  status: 'connecting',
   setStatus: (status) => set({ status }),
 }));
 
@@ -94,7 +96,9 @@ export function useSSE(
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       if (mountedRef.current) {
-        setStatus('disconnected');
+        // SessionPage disables SSE while installing its REST snapshot. That
+        // intentional cursor handoff is pending work, not a connection loss.
+        setStatus('connecting');
       }
       return;
     }
@@ -102,10 +106,17 @@ export function useSSE(
     setStatus('connecting');
     useConversationStore.getState().seenEventIds?.clear();
     const es = createSSEConnection(agentId, eventCursor);
+    let hasOpened = false;
+    let disconnectStatusTimer: ReturnType<typeof setTimeout> | null = null;
     eventSourceRef.current = es;
 
     es.onopen = () => {
       if (!mountedRef.current || eventSourceRef.current !== es) return;
+      if (disconnectStatusTimer !== null) {
+        clearTimeout(disconnectStatusTimer);
+        disconnectStatusTimer = null;
+      }
+      hasOpened = true;
       setStatus('connected');
     };
 
@@ -116,11 +127,27 @@ export function useSSE(
 
     es.onerror = () => {
       if (!mountedRef.current || eventSourceRef.current !== es) return;
-      setStatus('disconnected');
-      // EventSource will auto-reconnect
+      if (!hasOpened) {
+        setStatus('connecting');
+        return;
+      }
+      if (disconnectStatusTimer === null) {
+        disconnectStatusTimer = setTimeout(() => {
+          disconnectStatusTimer = null;
+          if (!mountedRef.current || eventSourceRef.current !== es) return;
+          setStatus('disconnected');
+        }, SSE_DISCONNECT_GRACE_MS);
+      }
+      // EventSource auto-reconnects; keep the last known connected state
+      // during its normal retry window so brief transport churn is not shown
+      // as an application failure.
     };
 
     return () => {
+      if (disconnectStatusTimer !== null) {
+        clearTimeout(disconnectStatusTimer);
+        disconnectStatusTimer = null;
+      }
       es.onopen = null;
       es.onmessage = null;
       es.onerror = null;
@@ -129,7 +156,7 @@ export function useSSE(
         eventSourceRef.current = null;
       }
       if (mountedRef.current) {
-        setStatus('disconnected');
+        setStatus('connecting');
       }
     };
   }, [agentId, enabled, eventCursor, handleEvent, setStatus]);

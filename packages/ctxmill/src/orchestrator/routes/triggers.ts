@@ -7,6 +7,10 @@ export interface TriggerRouteOptions {
   db: DatabaseRepository;
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 /**
  * REST API routes for event triggers and custom event emission.
  */
@@ -24,7 +28,7 @@ export async function triggerRoutes(
         Body: {
           agentId: string;
           eventType: string;
-          selector?: Record<string, unknown>;
+          selector?: unknown;
           taskTemplate: string;
           enabled?: boolean;
         };
@@ -34,7 +38,7 @@ export async function triggerRoutes(
       const body = request.body as {
         agentId?: string;
         eventType?: string;
-        selector?: Record<string, unknown>;
+        selector?: unknown;
         taskTemplate?: string;
         enabled?: boolean;
       } | undefined;
@@ -43,6 +47,10 @@ export async function triggerRoutes(
         return reply.status(400).send({
           error: 'agentId, eventType, and taskTemplate are required',
         });
+      }
+
+      if (body.selector !== undefined && !isJsonObject(body.selector)) {
+        return reply.status(400).send({ error: 'selector must be a JSON object' });
       }
 
       // Verify agent exists
@@ -105,7 +113,7 @@ export async function triggerRoutes(
         Body: {
           enabled?: boolean;
           taskTemplate?: string;
-          selector?: Record<string, unknown>;
+          selector?: unknown;
           eventType?: string;
         };
       }>,
@@ -115,7 +123,7 @@ export async function triggerRoutes(
       const body = request.body as {
         enabled?: boolean;
         taskTemplate?: string;
-        selector?: Record<string, unknown>;
+        selector?: unknown;
         eventType?: string;
       } | undefined;
 
@@ -123,9 +131,26 @@ export async function triggerRoutes(
         return reply.status(400).send({ error: 'Request body is required' });
       }
 
+      if (
+        body.selector !== undefined
+        && body.selector !== null
+        && !isJsonObject(body.selector)
+      ) {
+        return reply.status(400).send({ error: 'selector must be a JSON object or null' });
+      }
+
+      const updates = {
+        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+        ...(body.taskTemplate !== undefined ? { taskTemplate: body.taskTemplate } : {}),
+        ...(body.eventType !== undefined ? { eventType: body.eventType } : {}),
+        ...(body.selector !== undefined ? {
+          selector: body.selector === null ? undefined : body.selector,
+        } : {}),
+      };
+
       let updated;
       try {
-        updated = await triggerManager.update(id, body);
+        updated = await triggerManager.update(id, updates);
       } catch (err) {
         if (err instanceof TriggerConflictError) {
           return reply.status(409).send({ error: err.message });

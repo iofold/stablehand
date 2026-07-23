@@ -148,6 +148,7 @@ describe('Event Bus Integration Flows', () => {
         expect.any(String),
         // Parsed payload rides along so persistence layers avoid a re-parse (ADR-015).
         expect.objectContaining({ turnId: 'turn-persist-1' }),
+        undefined,
       );
 
       // Verify the JSON payload is valid

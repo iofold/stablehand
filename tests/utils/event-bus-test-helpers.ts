@@ -140,6 +140,7 @@ export function createMockSSEManager() {
 
 export function createMockDatabase() {
   let nextMessageSeq = 0;
+  let nextDeliveryFenceToken = 0;
   const canonicalMessages = new Map<string, Record<string, unknown>>();
   const addCanonicalMessage = vi.fn().mockImplementation(async (
     data: Record<string, unknown>,
@@ -198,6 +199,37 @@ export function createMockDatabase() {
     updateTurn: vi.fn(),
     finalizeTurnIfOpen: vi.fn().mockResolvedValue(true),
     listTurns: vi.fn(),
+    claimTurnDeliveryLease: vi.fn().mockImplementation(async (input: {
+      turnId: string;
+      ownerId: string;
+      leaseDurationMs: number;
+    }) => {
+      const now = Date.now();
+      return {
+        turnId: input.turnId,
+        ownerId: input.ownerId,
+        fenceToken: ++nextDeliveryFenceToken,
+        leaseExpiresAt: now + input.leaseDurationMs,
+        updatedAt: now,
+      };
+    }),
+    renewTurnDeliveryLease: vi.fn().mockImplementation(async (
+      turnId: string,
+      ownerId: string,
+      fenceToken: number,
+      leaseDurationMs: number,
+    ) => {
+      const now = Date.now();
+      return {
+        turnId,
+        ownerId,
+        fenceToken,
+        leaseExpiresAt: now + leaseDurationMs,
+        updatedAt: now,
+      };
+    }),
+    releaseTurnDeliveryLease: vi.fn().mockResolvedValue(true),
+    isTurnDeliveryFenceCurrent: vi.fn().mockResolvedValue(true),
     persistEvent: vi.fn(),
   };
 }

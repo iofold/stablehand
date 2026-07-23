@@ -228,7 +228,7 @@ Relevant code:
 
 PostgreSQL is the current system of record for:
 
-- `agents` — Agent definitions (name, model, harness, tools, status)
+- `agents` — Agent definitions (name, model, harness, and tools)
 - `conversations` — Chat conversation sessions per agent
 - `messages` — Individual messages within conversations
 - `sandbox_sessions` — Sandbox session per conversation (status, restore attempts)
@@ -236,7 +236,6 @@ PostgreSQL is the current system of record for:
 - `event_store` — Durable canonical event log and operational event API source
 - `suspended_sessions` — Sessions waiting on external events
 - `eventTriggers` — Event-driven agent trigger rules
-- `agentVersions` — Agent manifest version history
 - `pendingInterrupts` — HITL approval requests in progress
 - `interruptResumeAttempts` — Durable restart-safe HITL resume attempts
 - `agentCheckpoints` — Sandbox checkpoint/resume state

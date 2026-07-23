@@ -6,6 +6,16 @@ function isActiveStatus(status: string | undefined): boolean {
   return status === undefined || status === 'active';
 }
 
+function publicSandboxSession<T extends Record<string, unknown>>(
+  session: T,
+): Omit<T, 'runtimeDefinitionHash'> {
+  return Object.fromEntries(
+    Object.entries(session).filter(
+      ([key]) => key !== 'runtimeDefinitionHash',
+    ),
+  ) as Omit<T, 'runtimeDefinitionHash'>;
+}
+
 export async function activeConversationRoutes(
   app: FastifyInstance,
   opts: ActiveLifecycleRouteOptions,
@@ -42,6 +52,10 @@ export async function activeSandboxSessionRoutes(
         shouldDefer: (session) => Boolean(sessionManager?.getActiveTurnId(session.id)),
       })
       : await db.getActiveSandboxSessions();
-    return reply.send(activeSandboxSessions);
+    return reply.send(
+      activeSandboxSessions.map((session) =>
+        publicSandboxSession(session),
+      ),
+    );
   });
 }

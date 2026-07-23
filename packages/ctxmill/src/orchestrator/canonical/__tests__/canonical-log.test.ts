@@ -13,6 +13,16 @@ function createDeps() {
       frames.forEach((frame, index) => rows.push({ ...frame, seq: seqs[index], createdAt: Date.now() }));
       return seqs;
     }),
+    saveRecoveryEventBatch: vi.fn(async (frames: Array<Record<string, unknown>>) => {
+      const seqs = frames.map(() => ++nextSeq);
+      frames.forEach((frame, index) => rows.push({ ...frame, seq: seqs[index], createdAt: Date.now() }));
+      return seqs;
+    }),
+    saveFencedEventBatch: vi.fn(async (frames: Array<Record<string, unknown>>) => {
+      const seqs = frames.map(() => ++nextSeq);
+      frames.forEach((frame, index) => rows.push({ ...frame, seq: seqs[index], createdAt: Date.now() }));
+      return seqs;
+    }),
     saveMessageEventBatch: vi.fn(async (frames: Array<Record<string, unknown>>) => {
       const seqs = frames.map(() => ++nextSeq);
       frames.forEach((frame, index) => rows.push({ ...frame, seq: seqs[index], createdAt: Date.now() }));
@@ -296,6 +306,101 @@ describe('CanonicalLog (ADR-015)', () => {
     expect(deps.db.saveEventBatch).not.toHaveBeenCalled();
     expect(persisted.map((frame) => frame.type)).toEqual(['RUN_ERROR', 'RUN_FINISHED']);
     expect(seen).toEqual([['RUN_ERROR', 'RUN_FINISHED']]);
+  });
+
+  it('routes recovery startup publication through the fenced idempotent transaction', async () => {
+    const deps = createDeps();
+    const log = new CanonicalLog(deps as never);
+
+    const persisted = await log.ingest(
+      'turn.started',
+      EVENT_MAP_SAMPLES['turn.started'],
+      {
+        deliveryFence: {
+          ownerId: 'reconciler-a',
+          fenceToken: 7,
+        },
+      },
+    );
+
+    expect(persisted).toHaveLength(1);
+    expect(deps.db.saveRecoveryEventBatch).toHaveBeenCalledWith(
+      [expect.objectContaining({
+        type: 'RUN_STARTED',
+        turnId: 'turn-1',
+        sourceType: 'turn.started',
+      })],
+      {
+        turnId: 'turn-1',
+        sourceType: 'turn.started',
+        ownerId: 'reconciler-a',
+        fenceToken: 7,
+      },
+    );
+    expect(deps.db.saveEventBatch).not.toHaveBeenCalled();
+  });
+
+  it('routes recovery stream events through fenced persistence without startup dedupe', async () => {
+    const deps = createDeps();
+    const log = new CanonicalLog(deps as never);
+    const fence = {
+      ownerId: 'reconciler-a',
+      fenceToken: 7,
+    };
+
+    const persisted = await log.ingest(
+      'message.delta',
+      CHUNK,
+      { deliveryFence: fence },
+    );
+
+    expect(persisted).toHaveLength(2);
+    expect(deps.db.saveFencedEventBatch).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({ type: 'TEXT_MESSAGE_START', turnId: 'turn-1' }),
+        expect.objectContaining({ type: 'TEXT_MESSAGE_CONTENT', turnId: 'turn-1' }),
+      ],
+      fence,
+    );
+    expect(deps.db.saveRecoveryEventBatch).not.toHaveBeenCalled();
+    expect(deps.db.saveEventBatch).not.toHaveBeenCalled();
+  });
+
+  it('forwards the exact sandbox generation for callback event persistence', async () => {
+    const deps = createDeps();
+    const log = new CanonicalLog(deps as never);
+    const fence = {
+      ownerId: 'callback-owner',
+      fenceToken: 11,
+    };
+    const activeGeneration = {
+      restoreFenceToken: 4,
+      containerId: 'sandbox-container-generation-4',
+    };
+
+    const persisted = await log.ingest(
+      'message.delta',
+      CHUNK,
+      {
+        deliveryFence: fence,
+        sandboxSessionId: 'sandbox-1',
+        activeGeneration,
+      },
+    );
+
+    expect(persisted).toHaveLength(2);
+    expect(deps.db.saveFencedEventBatch).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({ type: 'TEXT_MESSAGE_START', turnId: 'turn-1' }),
+        expect.objectContaining({ type: 'TEXT_MESSAGE_CONTENT', turnId: 'turn-1' }),
+      ],
+      fence,
+      {
+        sandboxSessionId: 'sandbox-1',
+        expectedActiveGeneration: activeGeneration,
+      },
+    );
+    expect(deps.db.saveEventBatch).not.toHaveBeenCalled();
   });
 
   it('does not fan out or synthesize seqs when a concurrent terminal publisher won', async () => {

@@ -1,4 +1,5 @@
 import Fastify, { type FastifyRequest } from 'fastify';
+import { SandboxSessionListResponseSchema } from '@ctxmill/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -445,7 +446,20 @@ describe('global sandbox session readback route', () => {
       id: 'sandbox-1',
       conversationId: 'conversation-1',
       agentId: 'agent-1',
+      containerName: 'ctxmill-sandbox-1',
+      containerId: 'container-1',
       status: 'ACTIVE',
+      harnessName: 'claude-agents',
+      checkpointRef: null,
+      createdAt: 1,
+      updatedAt: 2,
+      lastActivityAt: 3,
+      restoreAttempts: 1,
+      lastRestoreError: null,
+      restoreOwnerId: null,
+      restoreFenceToken: 2,
+      restoreLeaseExpiresAt: null,
+      runtimeDefinitionHash: 'internal-runtime-definition',
     };
     let shouldDefer: ((session: typeof row) => boolean) | undefined;
     const lifecyclePolicy = {
@@ -473,7 +487,17 @@ describe('global sandbox session readback route', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual([row]);
+    const publicRow = Object.fromEntries(
+      Object.entries(row).filter(
+        ([key]) => key !== 'runtimeDefinitionHash',
+      ),
+    );
+    expect(SandboxSessionListResponseSchema.parse(response.json())).toEqual([
+      publicRow,
+    ]);
+    expect(response.json()[0]).not.toHaveProperty(
+      'runtimeDefinitionHash',
+    );
     expect(lifecyclePolicy.getActiveSandboxSessionsForReadback).toHaveBeenCalledTimes(1);
     expect(db.getActiveSandboxSessions).not.toHaveBeenCalled();
     expect(shouldDefer?.(row)).toBe(true);

@@ -98,10 +98,11 @@ function createDurableTriggerHarness() {
   };
   const canonicalLog = new CanonicalLog({ db: db as never, logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } });
   const eventBus = new TypedEventBus({
-    persistEvent: async (type, _agentId, payload, parsedPayload) => {
+    persistEvent: async (type, _agentId, payload, parsedPayload, context) => {
       const persisted = await canonicalLog.ingest(
         type,
         parsedPayload ?? JSON.parse(payload) as Record<string, unknown>,
+        context,
       );
       return persisted.length > 0;
     },

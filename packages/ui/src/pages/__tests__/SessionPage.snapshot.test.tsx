@@ -14,7 +14,9 @@ import {
   fetchAgentTurns,
   fetchConversationSnapshot,
   fetchInterrupts,
+  sendMessage,
 } from '@/lib/api';
+import { makeAgentFixture } from '@/test/agent-fixture';
 
 const { sessionInputMock, useSSEMock } = vi.hoisted(() => ({
   sessionInputMock: vi.fn(),
@@ -39,6 +41,7 @@ vi.mock('@/lib/api', async () => {
     fetchAgentTurns: vi.fn(),
     fetchConversationSnapshot: vi.fn(),
     fetchInterrupts: vi.fn(),
+    sendMessage: vi.fn(),
   };
 });
 
@@ -47,7 +50,7 @@ vi.mock('@/components/session/SessionThread', () => ({
 }));
 
 vi.mock('@/components/session/SessionInput', () => ({
-  SessionInput: (props: { disabled: boolean }) => {
+  SessionInput: (props: { disabled: boolean; onSend: (content: string) => Promise<void> }) => {
     sessionInputMock(props);
     return null;
   },
@@ -60,6 +63,7 @@ vi.mock('@/components/ui/ConnectionBanner', () => ({
 const fetchAgentTurnsMock = vi.mocked(fetchAgentTurns);
 const fetchConversationSnapshotMock = vi.mocked(fetchConversationSnapshot);
 const fetchInterruptsMock = vi.mocked(fetchInterrupts);
+const sendMessageMock = vi.mocked(sendMessage);
 
 async function flushEffects(): Promise<void> {
   await act(async () => {
@@ -82,14 +86,7 @@ describe('SessionPage conversation snapshot boundary', () => {
 
     useConversationStore.getState().reset();
     useAgentsStore.setState({
-      agents: [{
-        id: 'agent-1',
-        name: 'Agent 1',
-        status: 'active',
-        tools: [],
-        harness: 'test',
-        harnessConfig: {},
-      }],
+      agents: [makeAgentFixture({ status: 'active', harness: 'test', harnessConfig: {} })],
       loading: false,
       error: null,
     });
@@ -168,5 +165,60 @@ describe('SessionPage conversation snapshot boundary', () => {
     expect(sessionInputMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ disabled: false }),
     );
+  });
+
+  it('reuses one requestedTurnId when retrying a response-lost message', async () => {
+    sendMessageMock
+      .mockRejectedValueOnce(new Error('response lost'))
+      .mockResolvedValueOnce({
+        messageId: 'message-1',
+        conversationId: 'conversation-1',
+        turnId: 'turn-1',
+      });
+
+    act(() => {
+      root.render(
+        <MemoryRouter initialEntries={['/agents/agent-1/conversations/new']}>
+          <Routes>
+            <Route
+              path="/agents/:id/conversations/new"
+              element={<SessionPage />}
+            />
+            <Route
+              path="/agents/:id/conversations/:conversationId"
+              element={<div data-testid="conversation-route" />}
+            />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    await flushEffects();
+
+    const inputProps = sessionInputMock.mock.lastCall?.[0] as {
+      disabled: boolean;
+      onSend: (content: string) => Promise<void>;
+    };
+    expect(inputProps.disabled).toBe(false);
+
+    await act(async () => {
+      await inputProps.onSend('reconcile the account');
+    });
+
+    const firstInput = sendMessageMock.mock.calls[0]?.[1];
+    expect(firstInput).toMatchObject({ content: 'reconcile the account' });
+    expect(firstInput?.requestedTurnId).toEqual(expect.any(String));
+
+    const retry = container.querySelector('[data-testid="error-retry-button"]') as HTMLButtonElement;
+    expect(retry).not.toBeNull();
+    await act(async () => {
+      retry.click();
+      await Promise.resolve();
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageMock.mock.calls[1]?.[1]).toMatchObject({
+      content: 'reconcile the account',
+      requestedTurnId: firstInput?.requestedTurnId,
+    });
   });
 });

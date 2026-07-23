@@ -13,6 +13,7 @@ import type {
   HarnessTurnInput,
   HarnessTurnContext,
   HarnessExportedState,
+  ResolvedSecrets,
   TokenUsage,
 } from './types.js';
 import type { Message } from '../types.js';
@@ -27,9 +28,14 @@ import {
   normalizeTokenUsage,
   parseHarnessConfig,
   requestToolApproval,
-  resolveModelAuth,
   withTurnTracing,
 } from './kit/index.js';
+import { isNativeToolAllowed } from './native-tool-policy.js';
+import {
+  createGatewayCorrelationHeaders,
+  resolveHarnessModelConnection,
+} from './model-gateway.js';
+import { TURN_ONLY_ENFORCEMENT_CAPABILITIES } from './enforcement/types.js';
 
 /**
  * Minimal interface for a deep agent that supports streamEvents.
@@ -80,6 +86,8 @@ interface DeepAgentMessage {
 export class LangGraphHarness implements AgentHarness {
   readonly name = 'langgraph';
   readonly configSchema = LangGraphConfigSchema;
+  readonly enforcementCapabilities =
+    TURN_ONLY_ENFORCEMENT_CAPABILITIES;
 
   async openSession(config: HarnessSessionConfig, restore?: HarnessRestorePoint): Promise<HarnessSession> {
     const session = new LangGraphSession(config);
@@ -109,6 +117,11 @@ class LangGraphSession implements HarnessSession {
 
   async *deliverTurn(input: HarnessTurnInput, context: HarnessTurnContext): AsyncGenerator<AgentEvent> {
     const { agentId, conversationId, workspaceDir, tools, systemPrompt } = this.config;
+    const turnSecrets = context.turnSecrets ?? {};
+    const effectiveSecrets = {
+      ...this.config.secrets,
+      ...turnSecrets,
+    };
 
     const ac = new AbortController();
     const unlinkAbort = linkTurnAbort(this.config.signal, context.signal, () => ac.abort());
@@ -120,7 +133,10 @@ class LangGraphSession implements HarnessSession {
       const drainQueuedEvents = () => queuedEvents.splice(0);
 
       // Step 1: Resolve the chat model from config + secrets
-      const chatModel = await this.buildModelFromConfig();
+      const chatModel = await this.buildModelFromConfig(
+        effectiveSecrets,
+        input.turnId,
+      );
 
       // Step 2: Build tool execution context
       const ctx = {
@@ -140,10 +156,12 @@ class LangGraphSession implements HarnessSession {
       const { createDeepAgent, LocalShellBackend } = await this.loadDeepAgentsModule();
       const backend = new LocalShellBackend({
         rootDir: workspaceDir ?? process.cwd(),
-        inheritEnv: true,
+        env: {
+          ...process.env,
+          ...turnSecrets,
+        } as Record<string, string>,
       });
 
-      const allBlocklisted = this.config.nativeTools?.blocklist ?? [];
       // Load workspace middleware once — used for both main agent and subagent propagation
       const workspaceMiddleware: Record<string, unknown>[] = [];
       for (const mwPath of (this.harnessConfig.middleware ?? [])) {
@@ -161,6 +179,8 @@ class LangGraphSession implements HarnessSession {
         this.harnessConfig.subagents,
         lcTools,
         workspaceMiddleware,
+        effectiveSecrets,
+        input.turnId,
       );
 
       const hasSystemMessage = this.transcript.some((message) => message.role === 'system');
@@ -175,8 +195,12 @@ class LangGraphSession implements HarnessSession {
       const middlewares: Record<string, unknown>[] = [
         createToolErrorBoundaryMiddleware(),
       ];
-      if (allBlocklisted.length > 0) {
-        middlewares.push(this.createToolBlocklistMiddleware(allBlocklisted));
+      const nativeToolPolicy = this.config.nativeToolPolicy;
+      if (nativeToolPolicy && nativeToolPolicy.policy !== 'all') {
+        middlewares.push(this.createNativeToolPolicyMiddleware(
+          nativeToolPolicy,
+          new Set(tools.map((tool) => tool.name)),
+        ));
       }
 
       middlewares.push(...workspaceMiddleware);
@@ -205,7 +229,8 @@ class LangGraphSession implements HarnessSession {
 
       const pendingToolCalls: Array<{ id: string; name: string }> = [];
       const toolRunIdToInfo = new Map<string, { toolCallId: string; startTime: number }>();
-      let usage: TokenUsage | undefined;
+      const usageByModelRunId = new Map<string, TokenUsage>();
+      let turnOnlyUsage: TokenUsage | undefined;
 
       for await (const ev of makeIterableAbortable(eventStream, ac.signal)) {
         for (const queuedEvent of drainQueuedEvents()) {
@@ -218,7 +243,14 @@ class LangGraphSession implements HarnessSession {
         if (event === 'on_chat_model_stream') {
           const chunk = data.chunk;
           if (!chunk) continue;
-          usage = this.extractUsage(data) ?? usage;
+          const observedUsage = this.extractUsage(data);
+          if (observedUsage) {
+            if (typeof ev.run_id === 'string' && ev.run_id.length > 0) {
+              usageByModelRunId.set(ev.run_id, observedUsage);
+            } else {
+              turnOnlyUsage = observedUsage;
+            }
+          }
 
           for (const textDelta of normalizeStreamTextDeltas(chunk.content)) {
             yield accumulator.appendText(textDelta);
@@ -233,6 +265,17 @@ class LangGraphSession implements HarnessSession {
                   name: tc.name,
                 });
               }
+            }
+          }
+        }
+
+        if (event === 'on_chat_model_end') {
+          const observedUsage = this.extractUsage(data);
+          if (observedUsage) {
+            if (typeof ev.run_id === 'string' && ev.run_id.length > 0) {
+              usageByModelRunId.set(ev.run_id, observedUsage);
+            } else {
+              turnOnlyUsage = observedUsage;
             }
           }
         }
@@ -343,7 +386,13 @@ class LangGraphSession implements HarnessSession {
         yield queuedEvent;
       }
 
-      accumulator.recordDone({ type: 'done', usage: usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
+      const usage = usageByModelRunId.size > 0
+        ? this.sumUsage([...usageByModelRunId.values()])
+        : turnOnlyUsage;
+      accumulator.recordDone({
+        type: 'done',
+        ...(usage ? { usage } : {}),
+      });
       yield* finalizeTurn(accumulator, this.transcript, agentId);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -391,42 +440,78 @@ class LangGraphSession implements HarnessSession {
     return converted;
   }
 
-  private createToolBlocklistMiddleware(blocklist: string[]): Record<string, unknown> {
-    const blocked: ReadonlySet<string> = new Set(blocklist);
+  private createNativeToolPolicyMiddleware(
+    nativeToolPolicy: NonNullable<HarnessSessionConfig['nativeToolPolicy']>,
+    ctxmillToolNames: ReadonlySet<string>,
+  ): Record<string, unknown> {
     return {
-      name: 'ctxmill-tool-blocklist',
+      name: 'ctxmill-native-tool-policy',
       beforeToolCall: (call: { name: string }) => {
-        if (blocked.has(call.name)) {
-          return { blocked: true, reason: `Tool '${call.name}' is blocklisted by nativeTools config` };
+        if (ctxmillToolNames.has(call.name) || isNativeToolAllowed(nativeToolPolicy, call.name)) {
+          return { blocked: false };
         }
-        return { blocked: false };
+        return {
+          blocked: true,
+          reason: `Native tool '${call.name}' is denied by nativeToolPolicy '${nativeToolPolicy.policy}'`,
+        };
       },
     };
   }
 
   private extractUsage(data: Record<string, unknown>): TokenUsage | undefined {
-    const chunk = data.chunk;
-    if (typeof chunk === 'object' && chunk !== null && !Array.isArray(chunk)) {
-      const chunkRecord = chunk as Record<string, unknown>;
-      const chunkUsage = normalizeTokenUsage(chunkRecord.usage_metadata as Record<string, unknown> | undefined);
-      if (chunkUsage) {
-        return chunkUsage;
+    for (const value of [data.output, data.chunk]) {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        continue;
       }
+      const record = value as Record<string, unknown>;
+      const usage = normalizeTokenUsage(
+        record.usage_metadata as Record<string, unknown> | undefined,
+      );
+      if (usage) return usage;
 
-      const responseMetadata = chunkRecord.response_metadata;
-      if (typeof responseMetadata === 'object' && responseMetadata !== null && !Array.isArray(responseMetadata)) {
+      const responseMetadata = record.response_metadata;
+      if (
+        typeof responseMetadata === 'object'
+        && responseMetadata !== null
+        && !Array.isArray(responseMetadata)
+      ) {
         const responseRecord = responseMetadata as Record<string, unknown>;
-        return normalizeTokenUsage(
-          (responseRecord.tokenUsage ?? responseRecord.usage) as Record<string, unknown> | undefined,
+        const responseUsage = normalizeTokenUsage(
+          (responseRecord.tokenUsage ?? responseRecord.usage) as
+            | Record<string, unknown>
+            | undefined,
         );
+        if (responseUsage) return responseUsage;
       }
     }
 
     return normalizeTokenUsage(data.usage as Record<string, unknown> | undefined);
   }
 
-  private async buildModelFromConfig(): Promise<BaseLanguageModel> {
-    return this.buildModelForConfig(this.harnessConfig);
+  private sumUsage(entries: TokenUsage[]): TokenUsage {
+    const total = entries.reduce<TokenUsage>((sum, usage) => ({
+      inputTokens: sum.inputTokens + usage.inputTokens,
+      outputTokens: sum.outputTokens + usage.outputTokens,
+      totalTokens: sum.totalTokens + usage.totalTokens,
+      ...(sum.costUsd !== undefined && usage.costUsd !== undefined
+        ? { costUsd: sum.costUsd + usage.costUsd }
+        : {}),
+    }), {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      ...(entries.every((usage) => usage.costUsd !== undefined)
+        ? { costUsd: 0 }
+        : {}),
+    });
+    return total;
+  }
+
+  private async buildModelFromConfig(
+    secrets: ResolvedSecrets,
+    turnId?: string,
+  ): Promise<BaseLanguageModel> {
+    return this.buildModelForConfig(this.harnessConfig, secrets, turnId);
   }
 
   private async loadDeepAgentsModule(): Promise<typeof import('deepagents')> {
@@ -440,38 +525,57 @@ class LangGraphSession implements HarnessSession {
     baseUrl?: string;
     temperature?: number;
     maxTokens?: number;
+    topP?: number;
     reasoning?: 'off' | 'low' | 'medium' | 'high';
-  }): Promise<BaseLanguageModel> {
-    const { secrets } = this.config;
-    const { provider, model, apiKeyRef, baseUrl, temperature, maxTokens, reasoning } = config;
-    const { apiKey: resolvedApiKey } = resolveModelAuth({ provider, apiKeyRef, secrets });
+  }, secrets: ResolvedSecrets, turnId?: string): Promise<BaseLanguageModel> {
+    const { provider, model, apiKeyRef, baseUrl, temperature, maxTokens, topP, reasoning } = config;
+    const connection = resolveHarnessModelConnection({
+      provider,
+      apiKeyRef,
+      baseUrl,
+      secrets,
+    });
+    const correlationHeaders = connection.mode === 'gateway' && turnId
+      ? createGatewayCorrelationHeaders(turnId)
+      : undefined;
 
     if (provider === 'anthropic') {
       const { ChatAnthropic } = await import('@langchain/anthropic');
       return new ChatAnthropic({
-        anthropicApiKey: resolvedApiKey || undefined,
-        anthropicApiUrl: baseUrl || undefined,
+        anthropicApiKey: connection.apiKey,
+        anthropicApiUrl: connection.baseUrl,
+        ...(correlationHeaders
+          ? { clientOptions: { defaultHeaders: correlationHeaders } }
+          : {}),
         model,
         modelName: model,
         ...(temperature != null ? { temperature } : {}),
         ...(maxTokens != null ? { maxTokens } : {}),
+        ...(topP != null ? { topP } : {}),
       }) as unknown as BaseLanguageModel;
     } else if (provider === 'google') {
       const { ChatGoogleGenerativeAI } = await import('@langchain/google-genai');
       return new ChatGoogleGenerativeAI({
-        apiKey: resolvedApiKey || undefined,
+        apiKey: connection.apiKey,
         model,
         ...(temperature != null ? { temperature } : {}),
         ...(maxTokens != null ? { maxOutputTokens: maxTokens } : {}),
+        ...(topP != null ? { topP } : {}),
       }) as unknown as BaseLanguageModel;
     } else {
       const { ChatOpenAI } = await import('@langchain/openai');
       return new ChatOpenAI({
-        apiKey: resolvedApiKey || undefined,
-        configuration: baseUrl ? { baseURL: baseUrl } : undefined,
+        apiKey: connection.apiKey,
+        configuration: connection.baseUrl || correlationHeaders
+          ? {
+              ...(connection.baseUrl ? { baseURL: connection.baseUrl } : {}),
+              ...(correlationHeaders ? { defaultHeaders: correlationHeaders } : {}),
+            }
+          : undefined,
         modelName: model,
         ...(temperature != null ? { temperature } : {}),
         ...(maxTokens != null ? { maxTokens } : {}),
+        ...(topP != null ? { topP } : {}),
         ...(reasoning && reasoning !== 'off' ? { reasoning_effort: reasoning } : {}),
       }) as unknown as BaseLanguageModel;
     }
@@ -481,6 +585,8 @@ class LangGraphSession implements HarnessSession {
     subagentConfigs: LangGraphConfig['subagents'],
     parentTools?: unknown[],
     workspaceMiddleware?: Record<string, unknown>[],
+    secrets: ResolvedSecrets = this.config.secrets,
+    turnId?: string,
   ): Promise<Record<string, unknown>[] | undefined> {
     if (!subagentConfigs?.length) return undefined;
 
@@ -508,7 +614,7 @@ class LangGraphSession implements HarnessSession {
             baseUrl: this.harnessConfig.baseUrl,
             temperature: config.temperature,
             maxTokens: config.maxTokens,
-          });
+          }, secrets, turnId);
         }
 
         if (config.tools && parentTools) {

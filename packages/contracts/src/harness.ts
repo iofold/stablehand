@@ -9,6 +9,36 @@ export const CTXMILL_HARNESS_NAMES = [
 export const CtxmillHarnessNameSchema = z.enum(CTXMILL_HARNESS_NAMES);
 export const CtxmillLlmProviderSchema = z.enum(['openai', 'anthropic', 'google']);
 
+const NativeToolNamesSchema = z.array(z.string().trim().min(1)).min(1).superRefine(
+  (names, context) => {
+    if (new Set(names).size !== names.length) {
+      context.addIssue({
+        code: 'custom',
+        message: 'names must not contain duplicate tool names',
+      });
+    }
+  },
+);
+
+/**
+ * One exact policy for harness-owned tools.
+ *
+ * `all` and `none` intentionally carry no names. `allow` and `deny` require a
+ * non-empty, unique list. This avoids the absent-vs-empty ambiguity that
+ * repeated protobuf fields introduced with independent allow/block lists.
+ */
+function createToolPolicySchema() {
+  return z.discriminatedUnion('policy', [
+    z.strictObject({ policy: z.literal('all') }),
+    z.strictObject({ policy: z.literal('allow'), names: NativeToolNamesSchema }),
+    z.strictObject({ policy: z.literal('deny'), names: NativeToolNamesSchema }),
+    z.strictObject({ policy: z.literal('none') }),
+  ]);
+}
+
+export const NativeToolPolicySchema = createToolPolicySchema();
+export const BuiltinToolPolicySchema = createToolPolicySchema();
+
 const UrlSchema = z.string().refine(
   (value) => URL.canParse(value),
   'Expected an absolute URL',
@@ -62,6 +92,34 @@ export const LangGraphConfigSchema = z.strictObject({
   setup: HarnessSetupSchema.optional(),
   subagents: z.array(LangGraphSubagentSchema).optional(),
   middleware: z.array(z.string().min(1)).optional(),
+}).superRefine((config, context) => {
+  if (config.reasoning !== undefined && config.provider !== 'openai') {
+    context.addIssue({
+      code: 'custom',
+      path: ['reasoning'],
+      message: 'reasoning is supported only by the OpenAI LangGraph provider',
+    });
+  }
+
+  if (config.baseUrl && config.provider === 'google') {
+    context.addIssue({
+      code: 'custom',
+      path: ['baseUrl'],
+      message: 'baseUrl is not supported by the Google LangGraph provider',
+    });
+  }
+
+  if (config.baseUrl) {
+    config.subagents?.forEach((subagent, index) => {
+      if (subagent.provider && subagent.provider !== config.provider) {
+        context.addIssue({
+          code: 'custom',
+          path: ['subagents', index, 'provider'],
+          message: 'subagent provider must match the parent provider when baseUrl is set',
+        });
+      }
+    });
+  }
 });
 
 const ClaudeAgentDefinitionSchema = z.strictObject({
@@ -75,7 +133,7 @@ const ClaudeAgentDefinitionSchema = z.strictObject({
 });
 
 export const ClaudeAgentsConfigSchema = z.strictObject({
-  provider: CtxmillLlmProviderSchema.optional(),
+  provider: z.literal('anthropic').optional(),
   model: z.string().min(1),
   apiKeyRef: z.string().min(1).optional(),
   baseUrl: UrlSchema.optional(),
@@ -96,6 +154,8 @@ export type LangGraphConfig = z.infer<typeof LangGraphConfigSchema>;
 export type ClaudeAgentsConfig = z.infer<typeof ClaudeAgentsConfigSchema>;
 export type PIAgentConfig = z.infer<typeof PIAgentConfigSchema>;
 export type CtxmillHarnessName = z.infer<typeof CtxmillHarnessNameSchema>;
+export type NativeToolPolicy = z.infer<typeof NativeToolPolicySchema>;
+export type BuiltinToolPolicy = z.infer<typeof BuiltinToolPolicySchema>;
 
 export const HARNESS_CONFIG_SCHEMAS = {
   'claude-agents': ClaudeAgentsConfigSchema,

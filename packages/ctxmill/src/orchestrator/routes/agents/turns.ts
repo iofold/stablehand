@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
+import { SandboxSecretsSchema } from '@ctxmill/contracts';
 
 import {
   ActiveTurnSuspendError,
@@ -7,7 +8,7 @@ import {
   SandboxSessionNotFoundError,
 } from '../../session-manager/session-lifecycle-service.js';
 import { classifyRestoreFailure } from '../../session-manager/restore-retry-policy.js';
-import type { RuntimeSandboxSecrets } from '../../session-manager/runtime-sandbox-secrets.js';
+import type { TurnSecrets } from '../../session-manager/turn-secrets.js';
 import { TURN_CANCELLED_MESSAGE, isTurnCancelled } from '../../turn-cancellation.js';
 import { TurnFinalizer } from '../../turn-finalizer.js';
 import { buildAgentDefinition } from '../../agent-definition.js';
@@ -108,23 +109,17 @@ export async function turnRoutes(
     ? new TurnFinalizer({ db, eventBus, logger: console })
     : null;
 
-  const parseSandboxSecrets = (value: unknown): RuntimeSandboxSecrets | undefined => {
+  const parseSandboxSecrets = (value: unknown): TurnSecrets | undefined => {
     if (value === undefined) return undefined;
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      throw new Error('sandboxSecrets must be an object of environment variable names to string values');
+    const parsed = SandboxSecretsSchema.safeParse(value);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      throw new Error(
+        `sandboxSecrets${issue?.path.length ? `.${issue.path.join('.')}` : ''}: `
+        + (issue?.message ?? 'validation failed'),
+      );
     }
-
-    const secrets: Record<string, string> = {};
-    for (const [key, secretValue] of Object.entries(value)) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-        throw new Error(`Invalid sandbox secret key: ${key}`);
-      }
-      if (typeof secretValue !== 'string') {
-        throw new Error(`sandboxSecrets.${key} must be a string`);
-      }
-      secrets[key] = secretValue;
-    }
-    return secrets;
+    return Object.freeze({ ...parsed.data });
   };
 
   const RESERVED_TAG_KEYS = new Set(['agent', 'harness', 'mode']);
@@ -248,7 +243,7 @@ export async function turnRoutes(
       let ledger: { id: string; requestHash: string; turnId: string } | undefined;
 
       try {
-        const sandboxSecrets = parseSandboxSecrets(body.sandboxSecrets);
+        const turnSecrets = parseSandboxSecrets(body.sandboxSecrets);
         const tags = parseTags(body.tags);
         const requestedTurnId = parseRequestedId(body.requestedTurnId, 'requestedTurnId');
         const requestedConversationId = parseRequestedId(body.conversationId, 'conversationId');
@@ -258,7 +253,7 @@ export async function turnRoutes(
           content: body.content,
           conversationId: requestedConversationId ?? null,
           requestedTurnId: requestedTurnId ?? null,
-          sandboxSecrets: sandboxSecrets ?? null,
+          sandboxSecrets: turnSecrets ?? null,
           tags: tags ?? null,
         });
         const claimed = await claimIdempotentStart({
@@ -286,7 +281,7 @@ export async function turnRoutes(
             idempotencyKey && !requestedConversationId,
           ),
           emitUserMessageEvent: true,
-          sandboxSecrets,
+          turnSecrets,
           ...(tags ? { tags } : {}),
         });
         const response: TurnStartApiResponse = {
@@ -354,7 +349,7 @@ export async function turnRoutes(
       const agent = getRequestAgent(request);
       let ledger: { id: string; requestHash: string; turnId: string } | undefined;
       try {
-        const sandboxSecrets = parseSandboxSecrets(body.sandboxSecrets);
+        const turnSecrets = parseSandboxSecrets(body.sandboxSecrets);
         const tags = parseTags(body.tags);
         const requestedTurnId = parseRequestedId(body.requestedTurnId, 'requestedTurnId');
         const requestedConversationId = parseRequestedId(body.conversationId, 'conversationId');
@@ -365,7 +360,7 @@ export async function turnRoutes(
           mode: 'background',
           conversationId: requestedConversationId ?? null,
           requestedTurnId: requestedTurnId ?? null,
-          sandboxSecrets: sandboxSecrets ?? null,
+          sandboxSecrets: turnSecrets ?? null,
           tags: tags ?? null,
         });
         const claimed = await claimIdempotentStart({
@@ -393,7 +388,7 @@ export async function turnRoutes(
             idempotencyKey && !requestedConversationId,
           ),
           emitUserMessageEvent: false,
-          sandboxSecrets,
+          turnSecrets,
           ...(tags ? { tags } : {}),
         });
         const response: TurnStartApiResponse = {

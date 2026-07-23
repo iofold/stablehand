@@ -2,7 +2,10 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { create } from '@bufbuild/protobuf';
-import { RegisterArtifactResponseSchema } from '@ctxmill/proto/sandbox/v1';
+import {
+  RegisterArtifactResponseSchema,
+  TurnDeliveryCapabilitySchema,
+} from '@ctxmill/proto/sandbox/v1';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ArtifactStore } from '../../artifact/artifact-store.js';
@@ -40,13 +43,37 @@ describe('artifact handlers', () => {
       requestTool: vi.fn(),
       resolveArtifact: vi.fn(),
     } as unknown as OrchestratorServiceClient;
+    const leaseExpiresAtMs = Date.now() + 60_000;
+    const deliveryContext = {
+      identity: {
+        turnId: 'turn-1',
+        sandboxSessionId: 'sandbox-session-1',
+        agentId: 'agent-1',
+        ownerId: 'owner-1',
+        fenceToken: 1,
+        restoreFenceToken: 0,
+        containerId: 'container-1',
+      },
+      capability: create(TurnDeliveryCapabilitySchema, {
+        ownerId: 'owner-1',
+        fenceToken: 1n,
+        leaseExpiresAtMs: BigInt(leaseExpiresAtMs),
+        restoreFenceToken: 0n,
+        containerId: 'container-1',
+        agentId: 'agent-1',
+        signature: 'ctxmill-open-turn-delivery-capability-v1',
+      }),
+      leaseExpiresAtMs,
+      abortController: new AbortController(),
+    };
 
     const handlers = createArtifactHandlers({
       artifactStore,
       orchestratorClient,
-      turnId: 'turn-1',
+      sandboxSessionId: 'sandbox-session-1',
       agentId: 'agent-1',
       workspaceDir,
+      resolveDeliveryContext: () => deliveryContext,
       logger: {
         info: vi.fn(),
         warn: vi.fn(),
@@ -58,6 +85,18 @@ describe('artifact handlers', () => {
 
     expect(JSON.parse(result ?? '{}')).toEqual({ error: 'Upload failed: metadata unavailable' });
     expect(artifactStore.upload).toHaveBeenCalledTimes(1);
+    expect(orchestratorClient.registerArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnId: 'turn-1',
+        sandboxSessionId: 'sandbox-session-1',
+        agentId: 'agent-1',
+        deliveryCapability: expect.objectContaining({
+          ownerId: 'owner-1',
+          fenceToken: 1n,
+        }),
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(artifactStore.deleteObject).toHaveBeenCalledWith(expect.stringMatching(/^artifacts\/.+\/report\.txt$/));
   });
 });

@@ -41,7 +41,7 @@ HTTP/UI request
 | Harnesses | LangGraph, Claude Agents, PI Agent. Models are configured per agent/manifest/harness config. |
 | API auth | Production bearer-token auth for `/api/*`; `GET /health` and `GET /api/health` are public. |
 | Sandbox callback auth | Session-scoped HMAC callback credentials derived from `CTXMILL_CALLBACK_TOKEN_SECRET` or `CTXMILL_API_TOKEN`. |
-| Secrets | Per-agent encrypted secrets in PostgreSQL. Production fails closed without a strong `SECRET_MASTER_KEY`. Secrets are injected at start/restore, not checkpointed. |
+| Secrets | Per-agent encrypted secrets are injected at start/restore. Per-turn secrets use a terminally deleted encrypted envelope and travel only with `DeliverTurn`. Neither form is checkpointed; production fails closed without a strong `SECRET_MASTER_KEY`. |
 | Streaming | Canonical AG-UI frames persisted to `event_store`; SSE ids are zero-padded durable seq values. The `?wire=legacy` escape hatch was removed (W6c, 2026-07-10); the canonical vocabulary is the only wire. |
 | HITL | Durable pending interrupts, approve/reject/timeout/suspend outcomes, restart-safe resume attempts. |
 | Checkpoint/restore | Harness state plus orchestrator-captured workspace tar. Manual restore route resets retry budget and supports async restore. |

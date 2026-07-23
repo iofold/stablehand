@@ -14,8 +14,11 @@ import { agentRoutes } from '../routes/agents.js';
 import { mapAgentHttpToolsToConfigs } from '../http-tools.js';
 import { SSEManager } from '../sse.js';
 import { TurnStartupService } from '../turn-startup-service.js';
+import { TurnSecretEnvelopeCodec } from '../turn-secret-envelope.js';
 import type { SandboxSessionManager } from '../sandbox-session-manager.js';
 import { createWebhookRelaySpineConsumer } from '../webhook-relay.js';
+
+const TEST_TURN_SECRET_CODEC = new TurnSecretEnvelopeCodec(Buffer.alloc(32, 11));
 
 type AgentRow = {
   id: string;
@@ -69,8 +72,6 @@ function createAgentRow(overrides?: Partial<AgentRow>): AgentRow {
     harness: 'langgraph',
     harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-test' }),
     manifest: null,
-    version: 1,
-    status: 'created',
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -83,6 +84,13 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
   const conversations = new Map<string, { id: string; agentId: string; createdAt: number; updatedAt: number }>();
   const messages = new Map<string, MessageRow[]>();
   const turns = new Map<string, TurnRow>();
+  const turnSecretEnvelopes = new Map<string, {
+    turnId: string;
+    iv: string;
+    ciphertext: string;
+    authTag: string;
+    createdAt: number;
+  }>();
   const callbackOutbox = new Map<string, CallbackOutboxRow>();
 
   let agentCounter = agents.size;
@@ -245,8 +253,11 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
         status: attempts >= row.maxAttempts ? 'failed' : 'pending',
       });
     }),
-    createTurn: vi.fn(async (data: Record<string, unknown>) => {
-      const id = `turn-${Date.now()}`;
+    createTurnWithSecretEnvelope: vi.fn(async (
+      data: Record<string, unknown>,
+      secretEnvelope?: { iv: string; ciphertext: string; authTag: string },
+    ) => {
+      const id = typeof data.id === 'string' ? data.id : `turn-${Date.now()}`;
       const row = {
         id,
         ...data,
@@ -256,8 +267,17 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
         error: null,
       };
       turns.set(id, row as unknown as TurnRow);
+      if (secretEnvelope) {
+        turnSecretEnvelopes.set(id, {
+          turnId: id,
+          ...secretEnvelope,
+          createdAt: Date.now(),
+        });
+      }
       return row;
     }),
+    getTurnSecretEnvelope: vi.fn(async (turnId: string) =>
+      turnSecretEnvelopes.get(turnId)),
     updateTurn: vi.fn(async () => undefined),
     finalizeTurnIfOpen: vi.fn(async () => true),
     getTurn: vi.fn(async (id: string) => {
@@ -272,6 +292,7 @@ function createMockDb(options?: { agents?: AgentRow[]; webhooks?: WebhookRow[] }
       conversations,
       messages,
       turns,
+      turnSecretEnvelopes,
       callbackOutbox,
     },
   };
@@ -301,7 +322,10 @@ function createMockSessionManager(): SandboxSessionManager {
 }
 
 function createTurnStartupServiceStub(): TurnStartupService {
-  return new TurnStartupService({ logger: console });
+  return new TurnStartupService({
+    logger: console,
+    turnSecretEnvelopeCodec: TEST_TURN_SECRET_CODEC,
+  });
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -352,8 +376,12 @@ async function createWebhookRelayRuntime(
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   });
   const eventBus = new TypedEventBus({
-    persistEvent: async (type, _agentId, payload, parsedPayload) => {
-      await canonicalLog.ingest(type, parsedPayload ?? toRecord(JSON.parse(payload) as unknown));
+    persistEvent: async (type, _agentId, payload, parsedPayload, context) => {
+      await canonicalLog.ingest(
+        type,
+        parsedPayload ?? toRecord(JSON.parse(payload) as unknown),
+        context,
+      );
     },
   });
   const runner = new SpineConsumerRunner({
@@ -444,7 +472,7 @@ describe('Pilot integration', () => {
   });
 
   describe('agent registration with HTTP tools and webhooks', () => {
-    it('registers an agent with merged HTTP tools and manages webhook registration', async () => {
+    it('registers an agent with separate HTTP tools and manages webhook registration', async () => {
       const system = await buildApp();
       app = system.app;
 
@@ -474,20 +502,19 @@ describe('Pilot integration', () => {
       expect(createResponse.statusCode).toBe(201);
       expect(createResponse.json()).toEqual(expect.objectContaining({
         id: 'agent-1',
-        tools: ['read_file', 'remote-search'],
-        metadata: {
-          httpTools: [{
-            name: 'remote-search',
-            description: 'Search a Pilot API',
-            endpoint: 'https://api.example.com/search',
-            method: 'POST',
-            inputSchema: {
-              type: 'object',
-              properties: { query: { type: 'string' } },
-              required: ['query'],
-            },
-          }],
-        },
+        tools: ['read_file'],
+        httpTools: [{
+          name: 'remote-search',
+          description: 'Search a Pilot API',
+          endpoint: 'https://api.example.com/search',
+          method: 'POST',
+          inputSchema: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          },
+        }],
+        metadata: null,
       }));
 
       const webhookResponse = await app.inject({
@@ -515,6 +542,41 @@ describe('Pilot integration', () => {
           events: ['turn.started', 'turn.completed', 'tool_call.started'],
         }),
       ]);
+    });
+
+    it('rejects sandbox runtime control variables from per-turn sandboxSecrets', async () => {
+      const system = await buildApp();
+      app = system.app;
+
+      const createResponse = await app.inject({
+        method: 'POST',
+        url: '/api/agents',
+        payload: {
+          name: 'Pilot Agent',
+          harness: 'langgraph',
+          harnessConfig: { provider: 'openai', model: 'gpt-4o' },
+          systemPrompt: 'Test Pilot integration',
+          tools: [],
+        },
+      });
+      expect(createResponse.statusCode).toBe(201);
+
+      const startResponse = await app.inject({
+        method: 'POST',
+        url: '/api/agents/agent-1/turns',
+        payload: {
+          task: 'Attempt runtime credential override',
+          sandboxSecrets: {
+            CTXMILL_CALLBACK_TOKEN: 'forged-token',
+          },
+        },
+      });
+
+      expect(startResponse.statusCode).toBe(400);
+      expect(startResponse.json()).toEqual({
+        error: 'sandboxSecrets.CTXMILL_CALLBACK_TOKEN: Secret key is reserved by the sandbox runtime',
+      });
+      expect(system.agentTurnService.executeTurn).not.toHaveBeenCalled();
     });
   });
 
@@ -651,7 +713,7 @@ describe('Pilot integration', () => {
       expect(startResponse.statusCode).toBe(201);
       expect(agentTurnService.executeTurn).toHaveBeenCalledTimes(1);
       expect(agentTurnService.executeTurn).toHaveBeenCalledWith(expect.objectContaining({
-        sandboxSecrets: {
+        turnSecrets: {
           PILOT_SERVICE_TOKEN: 'runtime-token',
           PILOT_API_BASE: 'http://api:3000',
         },

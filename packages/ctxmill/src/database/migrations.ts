@@ -4,6 +4,7 @@ import {
   TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID,
   TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION,
 } from './canonical-event-data-migration.js';
+import { canonicalizePersistedToolPolicies } from './tool-policy-data-migration.js';
 
 export {
   TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID,
@@ -125,23 +126,80 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
 
     // ── 1. agents (root table) ─────────────────────────────────────────
     await sql`
-    CREATE TABLE IF NOT EXISTS agents (
-      id TEXT PRIMARY KEY NOT NULL,
-      name TEXT NOT NULL,
-      harness TEXT NOT NULL,
-      harness_config TEXT NOT NULL,
-      system_prompt TEXT NOT NULL,
-      tools JSONB NOT NULL,
-      description TEXT,
-      workspace_dir TEXT,
-      status TEXT NOT NULL DEFAULT 'created',
-      manifest JSONB,
-      version BIGINT DEFAULT 1,
-      metadata JSONB,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL
-    )
-  `;
+      CREATE TABLE IF NOT EXISTS agents (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        harness TEXT NOT NULL,
+        harness_config TEXT NOT NULL,
+        system_prompt TEXT NOT NULL,
+        tools JSONB NOT NULL,
+        description TEXT,
+        workspace_dir TEXT,
+        manifest JSONB,
+        metadata JSONB,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      )
+    `;
+    // Agent names are deployment identities. Keep the oldest row on its
+    // declared name and deterministically rename historical duplicates before
+    // establishing the invariant. The canonical manifest snapshot follows the
+    // renamed row so API and declarative identity cannot drift.
+    await sql.unsafe(`
+    DO $$
+    DECLARE
+      duplicate_agent RECORD;
+      candidate_name TEXT;
+      collision_suffix INTEGER;
+    BEGIN
+      FOR duplicate_agent IN
+        SELECT id, name
+        FROM (
+          SELECT
+            id,
+            name,
+            row_number() OVER (PARTITION BY name ORDER BY created_at, id) AS duplicate_rank
+          FROM agents
+        ) AS ranked
+        WHERE duplicate_rank > 1
+        ORDER BY name, duplicate_rank
+      LOOP
+        candidate_name := duplicate_agent.name || '-duplicate-' || duplicate_agent.id;
+        collision_suffix := 0;
+        WHILE EXISTS (
+          SELECT 1
+          FROM agents
+          WHERE name = candidate_name
+            AND id <> duplicate_agent.id
+        ) LOOP
+          collision_suffix := collision_suffix + 1;
+          candidate_name := duplicate_agent.name || '-duplicate-' || duplicate_agent.id
+            || '-' || collision_suffix;
+        END LOOP;
+
+        UPDATE agents
+        SET
+          name = candidate_name,
+          manifest = CASE
+            WHEN jsonb_typeof(manifest) = 'object'
+              THEN jsonb_set(
+                manifest,
+                '{metadata}',
+                coalesce(manifest->'metadata', '{}'::jsonb)
+                  || jsonb_build_object('name', candidate_name),
+                true
+              )
+            ELSE manifest
+          END
+        WHERE id = duplicate_agent.id;
+      END LOOP;
+    END
+    $$
+    `);
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_name ON agents(name)`;
+    await sql`DROP TABLE IF EXISTS agent_versions`;
+    await sql`ALTER TABLE agents DROP COLUMN IF EXISTS version`;
+    await sql`ALTER TABLE agents DROP COLUMN IF EXISTS status`;
 
   // ── 2. agent_workspace_state (→ agents) ────────────────────────────
   await sql`
@@ -201,18 +259,76 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       container_id TEXT,
       status TEXT NOT NULL DEFAULT 'ACTIVE',
       harness_name TEXT NOT NULL,
+      runtime_definition_hash TEXT,
       checkpoint_ref TEXT,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
       last_activity_at BIGINT NOT NULL,
       restore_attempts INTEGER NOT NULL DEFAULT 0,
-      last_restore_error TEXT
+      last_restore_error TEXT,
+      restore_owner_id TEXT,
+      restore_fence_token BIGINT NOT NULL DEFAULT 0,
+      restore_lease_expires_at BIGINT
     )
   `;
 
   // Idempotent column additions for pre-existing schemas (ADR 013 retry policy).
   await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS restore_attempts INTEGER NOT NULL DEFAULT 0`;
   await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS last_restore_error TEXT`;
+  await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS restore_owner_id TEXT`;
+  await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS restore_fence_token BIGINT NOT NULL DEFAULT 0`;
+  await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS restore_lease_expires_at BIGINT`;
+  await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS runtime_definition_hash TEXT`;
+  // Durable lifecycle intent blocks new turn admission while a sandbox is
+  // being checkpointed, terminated, reset, or adopted by a startup worker.
+  // A lease may expire for worker takeover, but the unfinished intent remains
+  // an admission barrier.
+  await sql`
+    CREATE TABLE IF NOT EXISTS sandbox_session_lifecycle_operations (
+      sandbox_session_id TEXT PRIMARY KEY NOT NULL
+        REFERENCES sandbox_sessions(id) ON DELETE CASCADE,
+      operation TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      phase TEXT NOT NULL DEFAULT 'reserved',
+      owner_id TEXT NOT NULL,
+      fence_token BIGINT NOT NULL DEFAULT 0,
+      allowed_turn_id TEXT,
+      allowed_delivery_owner_id TEXT,
+      allowed_delivery_fence_token BIGINT,
+      allowed_interrupt_resume_attempt_id TEXT,
+      lease_expires_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    )
+  `;
+  await sql`
+    ALTER TABLE sandbox_session_lifecycle_operations
+    ADD COLUMN IF NOT EXISTS operation_id TEXT
+  `;
+  await sql`
+    UPDATE sandbox_session_lifecycle_operations
+    SET operation_id = uuid_generate_v4()::text
+    WHERE operation_id IS NULL
+  `;
+  await sql`
+    ALTER TABLE sandbox_session_lifecycle_operations
+    ALTER COLUMN operation_id SET NOT NULL
+  `;
+  await sql`
+    ALTER TABLE sandbox_session_lifecycle_operations
+    ADD COLUMN IF NOT EXISTS allowed_turn_id TEXT
+  `;
+  await sql`
+    ALTER TABLE sandbox_session_lifecycle_operations
+    ADD COLUMN IF NOT EXISTS allowed_delivery_owner_id TEXT
+  `;
+  await sql`
+    ALTER TABLE sandbox_session_lifecycle_operations
+    ADD COLUMN IF NOT EXISTS allowed_delivery_fence_token BIGINT
+  `;
+  await sql`
+    ALTER TABLE sandbox_session_lifecycle_operations
+    ADD COLUMN IF NOT EXISTS allowed_interrupt_resume_attempt_id TEXT
+  `;
 
   // ── 7. turns (→ sandbox_sessions, agents, conversations) ───────────
   await sql`
@@ -232,8 +348,16 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       output_tokens BIGINT,
       total_tokens BIGINT,
       cost_usd DOUBLE PRECISION,
+      usage JSONB,
+      gateway_correlation_id TEXT,
+      gateway_profile TEXT,
+      gateway_revision TEXT,
+      gateway_mode TEXT,
+      usage_reconciled_at BIGINT,
       next_message_seq BIGINT NOT NULL DEFAULT 0,
       terminal_published_seq BIGINT,
+      delivery_owner_id TEXT,
+      delivery_fence_token BIGINT,
       tags JSONB NOT NULL DEFAULT '{}'::jsonb
     )
   `;
@@ -248,8 +372,53 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS output_tokens BIGINT`;
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS total_tokens BIGINT`;
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION`;
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS usage JSONB`;
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS gateway_correlation_id TEXT`;
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS gateway_profile TEXT`;
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS gateway_revision TEXT`;
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS gateway_mode TEXT`;
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS usage_reconciled_at BIGINT`;
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS next_message_seq BIGINT NOT NULL DEFAULT 0`;
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS terminal_published_seq BIGINT`;
+  // Hard-cut the former recovery-only names to general delivery ownership.
+  await sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'turns' AND column_name = 'reconciliation_owner_id'
+      ) THEN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'turns' AND column_name = 'delivery_owner_id'
+        ) THEN
+          ALTER TABLE turns RENAME COLUMN reconciliation_owner_id TO delivery_owner_id;
+        ELSE
+          UPDATE turns
+          SET delivery_owner_id = COALESCE(delivery_owner_id, reconciliation_owner_id);
+          ALTER TABLE turns DROP COLUMN reconciliation_owner_id;
+        END IF;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'turns' AND column_name = 'reconciliation_fence_token'
+      ) THEN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'turns' AND column_name = 'delivery_fence_token'
+        ) THEN
+          ALTER TABLE turns RENAME COLUMN reconciliation_fence_token TO delivery_fence_token;
+        ELSE
+          UPDATE turns
+          SET delivery_fence_token = COALESCE(delivery_fence_token, reconciliation_fence_token);
+          ALTER TABLE turns DROP COLUMN reconciliation_fence_token;
+        END IF;
+      END IF;
+    END
+    $$
+  `;
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS delivery_owner_id TEXT`;
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS delivery_fence_token BIGINT`;
   // Budget-attribution tags: jsonb containment drives spend aggregation.
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '{}'::jsonb`;
   await sql`CREATE INDEX IF NOT EXISTS idx_turns_tags_gin ON turns USING gin(tags)`;
@@ -271,6 +440,113 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`ALTER TABLE turns ALTER COLUMN status SET DEFAULT 'queued'`;
   await sql`ALTER TABLE turns ALTER COLUMN status SET NOT NULL`;
 
+  // Gateway spend is recorded separately from turn execution. The first
+  // implementation has turn-only observation granularity: every LiteLLM
+  // transaction is retained as an attempt beneath one aggregate row, so
+  // retries/fallbacks cannot inflate logical model-call counts.
+  await sql`
+    CREATE TABLE IF NOT EXISTS model_call_usage (
+      id TEXT PRIMARY KEY NOT NULL,
+      turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+      observation_scope TEXT NOT NULL DEFAULT 'turn_aggregate',
+      gateway_profile TEXT NOT NULL,
+      gateway_revision TEXT NOT NULL,
+      correlation_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      input_tokens BIGINT,
+      output_tokens BIGINT,
+      total_tokens BIGINT,
+      cache_read_tokens BIGINT,
+      cache_create_tokens BIGINT,
+      reasoning_tokens BIGINT,
+      known_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+      cost_state TEXT NOT NULL DEFAULT 'unpriced',
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS model_call_attempt_usage (
+      id TEXT PRIMARY KEY NOT NULL,
+      model_call_usage_id TEXT NOT NULL
+        REFERENCES model_call_usage(id) ON DELETE CASCADE,
+      gateway_profile TEXT NOT NULL,
+      gateway_revision TEXT NOT NULL,
+      gateway_transaction_id TEXT NOT NULL,
+      requested_model TEXT,
+      resolved_model TEXT,
+      provider TEXT,
+      status TEXT NOT NULL,
+      input_tokens BIGINT,
+      output_tokens BIGINT,
+      total_tokens BIGINT,
+      cache_read_tokens BIGINT,
+      cache_create_tokens BIGINT,
+      reasoning_tokens BIGINT,
+      cost_usd DOUBLE PRECISION,
+      cost_state TEXT NOT NULL,
+      started_at BIGINT NOT NULL,
+      ended_at BIGINT NOT NULL,
+      ingested_at BIGINT NOT NULL
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS model_gateway_reconciliation_state (
+      gateway_profile TEXT PRIMARY KEY NOT NULL,
+      gateway_revision TEXT NOT NULL,
+      watermark_ms BIGINT NOT NULL DEFAULT 0,
+      lease_owner_id TEXT,
+      lease_fence_token BIGINT NOT NULL DEFAULT 0,
+      lease_expires_at BIGINT,
+      last_attempt_at BIGINT,
+      last_success_at BIGINT,
+      last_error TEXT,
+      updated_at BIGINT NOT NULL
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS model_gateway_spend_quarantine (
+      id TEXT PRIMARY KEY NOT NULL,
+      gateway_profile TEXT NOT NULL,
+      gateway_transaction_id TEXT NOT NULL,
+      correlation_id TEXT,
+      reason TEXT NOT NULL,
+      sanitized_payload JSONB NOT NULL,
+      occurrences INTEGER NOT NULL DEFAULT 1,
+      first_seen_at BIGINT NOT NULL,
+      last_seen_at BIGINT NOT NULL
+    )
+  `;
+
+  // Encrypted per-turn credentials survive queued restart and HITL recovery,
+  // but are deleted atomically when their turn reaches a terminal state.
+  await sql`
+    CREATE TABLE IF NOT EXISTS turn_secret_envelopes (
+      turn_id TEXT PRIMARY KEY NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+      iv TEXT NOT NULL,
+      ciphertext TEXT NOT NULL,
+      auth_tag TEXT NOT NULL,
+      created_at BIGINT NOT NULL
+    )
+  `;
+
+  await sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'sandbox_session_lifecycle_operations_allowed_turn_id_fkey'
+          AND conrelid = 'sandbox_session_lifecycle_operations'::regclass
+      ) THEN
+        ALTER TABLE sandbox_session_lifecycle_operations
+        ADD CONSTRAINT sandbox_session_lifecycle_operations_allowed_turn_id_fkey
+        FOREIGN KEY (allowed_turn_id) REFERENCES turns(id) ON DELETE SET NULL;
+      END IF;
+    END
+    $$
+  `;
+
   // ── 8. turn_start_requests (→ agents) ──────────────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS turn_start_requests (
@@ -287,20 +563,80 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // Renewable per-turn startup reconciliation lease. This is deliberately
-  // separate from turn status: a crashed owner leaves a queued turn reclaimable
-  // without falsely marking it as running.
+  // One renewable lease owns normal delivery and crash takeover alike.
   await sql`
-    CREATE TABLE IF NOT EXISTS turn_reconciliation_leases (
+    DO $$
+    BEGIN
+      IF to_regclass('public.turn_reconciliation_leases') IS NOT NULL
+        AND to_regclass('public.turn_delivery_leases') IS NULL THEN
+        ALTER TABLE turn_reconciliation_leases RENAME TO turn_delivery_leases;
+      END IF;
+    END
+    $$
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS turn_delivery_leases (
       turn_id TEXT PRIMARY KEY NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
       owner_id TEXT NOT NULL,
+      fence_token BIGINT NOT NULL DEFAULT 0,
       lease_expires_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL
     )
   `;
   await sql`
-    CREATE INDEX IF NOT EXISTS idx_turn_reconciliation_leases_expires
-    ON turn_reconciliation_leases(lease_expires_at)
+    ALTER TABLE turn_delivery_leases
+    ADD COLUMN IF NOT EXISTS fence_token BIGINT NOT NULL DEFAULT 0
+  `;
+  await sql`
+    DO $$
+    BEGIN
+      IF to_regclass('public.turn_reconciliation_leases') IS NOT NULL THEN
+        EXECUTE '
+          INSERT INTO turn_delivery_leases (
+            turn_id, owner_id, fence_token, lease_expires_at, updated_at
+          )
+          SELECT turn_id, owner_id, fence_token, lease_expires_at, updated_at
+          FROM turn_reconciliation_leases
+          ON CONFLICT (turn_id) DO UPDATE
+          SET owner_id = EXCLUDED.owner_id,
+              fence_token = EXCLUDED.fence_token,
+              lease_expires_at = EXCLUDED.lease_expires_at,
+              updated_at = EXCLUDED.updated_at
+          WHERE EXCLUDED.fence_token > turn_delivery_leases.fence_token
+        ';
+        DROP TABLE turn_reconciliation_leases;
+      END IF;
+    END
+    $$
+  `;
+  await sql`DROP INDEX IF EXISTS idx_turn_reconciliation_leases_expires`;
+  await sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'turn_delivery_leases'::regclass
+          AND conname = 'turn_reconciliation_leases_pkey'
+      ) THEN
+        ALTER TABLE turn_delivery_leases
+        RENAME CONSTRAINT turn_reconciliation_leases_pkey
+        TO turn_delivery_leases_pkey;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'turn_delivery_leases'::regclass
+          AND conname = 'turn_reconciliation_leases_turn_id_fkey'
+      ) THEN
+        ALTER TABLE turn_delivery_leases
+        RENAME CONSTRAINT turn_reconciliation_leases_turn_id_fkey
+        TO turn_delivery_leases_turn_id_fkey;
+      END IF;
+    END
+    $$
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_turn_delivery_leases_expires
+    ON turn_delivery_leases(lease_expires_at)
   `;
 
   // ── 9. event_store ─────────────────────────────────────────────────
@@ -329,12 +665,19 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // Per-agent writer lock + committed watermark. Every canonical event writer
   // locks this row before allocating SERIAL values, so committed_seq is safe
   // for cursor replay even with multiple orchestrator/database connections.
+  // This event-spine state deliberately has no agents FK: agent.deleted is
+  // persisted after the live agent projection and its prior history are hard
+  // deleted, leaving one durable lifecycle tombstone.
   await sql`
     CREATE TABLE IF NOT EXISTS agent_event_heads (
-      agent_id TEXT PRIMARY KEY NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      agent_id TEXT PRIMARY KEY NOT NULL,
       committed_seq BIGINT NOT NULL DEFAULT 0,
       updated_at BIGINT NOT NULL
     )
+  `;
+  await sql`
+    ALTER TABLE agent_event_heads
+    DROP CONSTRAINT IF EXISTS agent_event_heads_agent_id_fkey
   `;
   await sql`
     INSERT INTO agent_event_heads (agent_id, committed_seq, updated_at)
@@ -343,7 +686,6 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       max(event_store.seq)::bigint,
       (extract(epoch FROM clock_timestamp()) * 1000)::bigint
     FROM event_store
-    INNER JOIN agents ON agents.id = event_store.agent_id
     GROUP BY event_store.agent_id
     ON CONFLICT (agent_id) DO UPDATE SET
       committed_seq = greatest(
@@ -406,20 +748,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
-  // ── 11. agent_versions (→ agents) ──────────────────────────────────
-  await sql`
-    CREATE TABLE IF NOT EXISTS agent_versions (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      version BIGINT NOT NULL,
-      manifest JSONB NOT NULL,
-      changed_by TEXT,
-      change_note TEXT,
-      created_at BIGINT NOT NULL
-    )
-  `;
-
-  // ── 12. pending_interrupts (→ turns, agents) ───────────────────────
+  // ── 11. pending_interrupts (→ turns, agents) ───────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS pending_interrupts (
       id TEXT PRIMARY KEY,
@@ -459,6 +788,22 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   `;
   await renameColumn(sql, 'interrupt_resume_attempts', 'agent_session_id', 'turn_id');
   await renameColumn(sql, 'interrupt_resume_attempts', 'session_id', 'sandbox_session_id');
+  await sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'sandbox_lifecycle_allowed_resume_attempt_fkey'
+          AND conrelid = 'sandbox_session_lifecycle_operations'::regclass
+      ) THEN
+        ALTER TABLE sandbox_session_lifecycle_operations
+        ADD CONSTRAINT sandbox_lifecycle_allowed_resume_attempt_fkey
+        FOREIGN KEY (allowed_interrupt_resume_attempt_id)
+        REFERENCES interrupt_resume_attempts(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `;
 
   // ── 15. agent_checkpoints (→ sandbox_sessions) ─────────────────────
   await sql`
@@ -471,10 +816,16 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       harness_state JSONB,
       workspace_ref TEXT,
       suspend_reason TEXT,
+      lifecycle_operation_id TEXT,
+      lifecycle_owner_id TEXT,
+      lifecycle_fence_token BIGINT,
       created_at BIGINT NOT NULL
     )
   `;
   await renameColumn(sql, 'agent_checkpoints', 'session_id', 'sandbox_session_id');
+  await sql`ALTER TABLE agent_checkpoints ADD COLUMN IF NOT EXISTS lifecycle_operation_id TEXT`;
+  await sql`ALTER TABLE agent_checkpoints ADD COLUMN IF NOT EXISTS lifecycle_owner_id TEXT`;
+  await sql`ALTER TABLE agent_checkpoints ADD COLUMN IF NOT EXISTS lifecycle_fence_token BIGINT`;
 
   // PAUSED sandbox-session status was removed. Normalize any old rows forward
   // before dropping the old pause metadata columns.
@@ -491,6 +842,72 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       container_id = NULL,
       updated_at = (EXTRACT(EPOCH FROM now()) * 1000)::bigint
     WHERE s.status = 'PAUSED'
+  `;
+  // Existing RESTORING rows predate durable restore ownership. Mark them with
+  // an already-expired synthetic generation so reconciliation can fence and
+  // recover them immediately.
+  await sql`
+    UPDATE sandbox_sessions
+    SET
+      restore_owner_id = COALESCE(
+        restore_owner_id,
+        'migration-expired-restore'
+      ),
+      restore_fence_token = GREATEST(restore_fence_token, 1),
+      restore_lease_expires_at = COALESCE(restore_lease_expires_at, 0)
+    WHERE status = 'RESTORING'
+  `;
+  await sql`
+    UPDATE sandbox_sessions
+    SET
+      restore_owner_id = NULL,
+      restore_lease_expires_at = NULL
+    WHERE status <> 'RESTORING'
+  `;
+  await sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'sandbox_sessions_status_check'
+          AND conrelid = 'sandbox_sessions'::regclass
+      ) THEN
+        ALTER TABLE sandbox_sessions
+        ADD CONSTRAINT sandbox_sessions_status_check
+        CHECK (
+          status IN ('ACTIVE', 'CHECKPOINTED', 'RESTORING', 'TERMINATED')
+        );
+      END IF;
+    END $$;
+  `;
+  await sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'sandbox_sessions_restore_ownership_check'
+          AND conrelid = 'sandbox_sessions'::regclass
+      ) THEN
+        ALTER TABLE sandbox_sessions
+        ADD CONSTRAINT sandbox_sessions_restore_ownership_check
+        CHECK (
+          (
+            status = 'RESTORING'
+            AND restore_owner_id IS NOT NULL
+            AND restore_fence_token > 0
+            AND restore_lease_expires_at IS NOT NULL
+          )
+          OR
+          (
+            status <> 'RESTORING'
+            AND restore_owner_id IS NULL
+            AND restore_lease_expires_at IS NULL
+          )
+        );
+      END IF;
+    END $$;
   `;
   await sql`ALTER TABLE sandbox_sessions DROP COLUMN IF EXISTS paused_at`;
   await sql`ALTER TABLE sandbox_sessions DROP COLUMN IF EXISTS paused_reason`;
@@ -632,19 +1049,73 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
 
   // sandbox_sessions
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_conversation ON sandbox_sessions(conversation_id)`;
+  // One conversation owns one live harness stream. This intentionally fails
+  // migration when legacy data contains multiple live rows so operators must
+  // reconcile the corresponding containers instead of silently orphaning one.
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sandbox_sessions_conversation_live
+    ON sandbox_sessions(conversation_id)
+    WHERE status IN ('ACTIVE', 'RESTORING')
+  `;
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_agent ON sandbox_sessions(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_status ON sandbox_sessions(status)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_last_activity ON sandbox_sessions(last_activity_at)`;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_sandbox_session_lifecycle_operations_phase
+    ON sandbox_session_lifecycle_operations(phase)
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_sandbox_session_lifecycle_operations_expires
+    ON sandbox_session_lifecycle_operations(lease_expires_at)
+  `;
 
   // turns
   await sql`CREATE INDEX IF NOT EXISTS idx_turns_agent_started ON turns(agent_id, started_at)`;
   await sql`DROP INDEX IF EXISTS idx_turns_session`;
   await sql`CREATE INDEX IF NOT EXISTS idx_turns_sandbox_session ON turns(sandbox_session_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_turns_status_open ON turns(status) WHERE completed_at IS NULL`;
+  // Admission leaves losers queued. The partial unique index is the final
+  // cross-replica guard even when two replicas race on different turn rows.
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_conversation_running
+    ON turns(conversation_id)
+    WHERE conversation_id IS NOT NULL
+      AND status = 'running'
+      AND completed_at IS NULL
+  `;
   await sql`
     CREATE INDEX IF NOT EXISTS idx_turns_terminal_publish_pending
     ON turns(completed_at)
     WHERE completed_at IS NOT NULL AND terminal_published_seq IS NULL
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_gateway_correlation
+    ON turns(gateway_profile, gateway_correlation_id)
+    WHERE gateway_correlation_id IS NOT NULL
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_call_usage_turn
+    ON model_call_usage(turn_id)
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_call_usage_correlation
+    ON model_call_usage(gateway_profile, correlation_id)
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_call_attempt_gateway_transaction
+    ON model_call_attempt_usage(gateway_profile, gateway_transaction_id)
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_model_call_attempt_aggregate
+    ON model_call_attempt_usage(model_call_usage_id)
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_gateway_quarantine_transaction
+    ON model_gateway_spend_quarantine(gateway_profile, gateway_transaction_id)
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_model_gateway_quarantine_correlation
+    ON model_gateway_spend_quarantine(gateway_profile, correlation_id)
   `;
 
   // turn_start_requests
@@ -675,10 +1146,6 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // trigger_firings
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_trigger_firings_trigger_event_seq ON trigger_firings(trigger_id, event_seq)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_trigger_firings_event_seq ON trigger_firings(event_seq)`;
-
-  // agent_versions
-  await sql`DROP INDEX IF EXISTS idx_agent_versions_agent_version`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_versions_agent_version ON agent_versions(agent_id, version)`;
 
   // pending_interrupts
   await sql`DROP INDEX IF EXISTS idx_interrupts_agent_session`;
@@ -722,6 +1189,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
 
   // Run persisted-data hard cuts only after every additive column/index step
   // above has normalized older baseline/v1 schemas.
+  await canonicalizePersistedToolPolicies(sql);
   await canonicalizePersistedEventContracts(sql);
 
   // Adopt only terminal history that already contains the complete frame set

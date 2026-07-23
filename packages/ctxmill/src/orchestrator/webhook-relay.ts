@@ -1,6 +1,7 @@
 import type { DatabaseRepository } from '../database/repository.js';
 import type { SpineConsumer, SpineRawEvent } from '../events/spine-consumer-runner.js';
 import type { CallbackDispatcher } from './callback-dispatcher.js';
+import { materializeTurnUsage } from './usage.js';
 import { isValidWebhookEvent, type ValidWebhookEvent } from './webhook-events.js';
 
 type EnqueueCallbackArgs = Parameters<CallbackDispatcher['enqueue']>[0];
@@ -130,7 +131,13 @@ export function buildWebhookPayload(
 ): Record<string, unknown> {
   const webhookPayload: Record<string, unknown> = {};
   for (const field of WEBHOOK_PAYLOAD_FIELDS[eventType]) {
-    webhookPayload[field] = payload[field];
+    webhookPayload[field] = eventType === 'turn.completed' && field === 'usage'
+      ? materializeTurnUsage(
+        payload.usage && typeof payload.usage === 'object'
+          ? payload.usage as Record<string, unknown>
+          : null,
+      )
+      : payload[field];
   }
   return webhookPayload;
 }

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -30,7 +30,7 @@ import type { TabId } from '@/components/agent';
 
 const TABS: { id: TabId; label: string; testId?: string }[] = [
   { id: 'overview', label: 'Overview' },
-  { id: 'turns', label: 'Turns', testId: 'turns-tab' },
+  { id: 'turns', label: 'Conversations', testId: 'turns-tab' },
   { id: 'tools', label: 'Tools', testId: 'tools-tab' },
   { id: 'files', label: 'Files', testId: 'files-tab' },
   { id: 'artifacts', label: 'Artifacts', testId: 'artifacts-tab' },
@@ -53,6 +53,7 @@ export function AgentDetailPage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [runTask, setRunTask] = useState('');
   const [submittingRun, setSubmittingRun] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const [turnFilter, setTurnFilter] = useState<string>('all');
 
@@ -68,29 +69,34 @@ export function AgentDetailPage() {
     turnsLoading,
     error: agentDetailError,
     loadTurns,
+    recentConversations,
+    conversationsLoading,
+    conversationsError,
+    loadConversations,
   } = useAgentDetail(id, activeTab);
 
   const { filteredTurns } = useAgentTurns(allTurns, turnFilter);
   const conversationCount = agent?.conversationCount ?? 0;
   const activeSandboxSessionCount = countActiveSandboxSessions(agent?.sandboxSessionsByStatus);
 
-  const recentTurns = useMemo(() => {
-    return [...allTurns]
-      .sort((a, b) => b.startedAt - a.startedAt)
-      .slice(0, 10);
-  }, [allTurns]);
-
-  const toolsCount = agent?.tools?.length ?? 0;
+  const toolsCount = (agent?.tools?.length ?? 0) + (agent?.httpTools?.length ?? 0);
 
   const handleStartRun = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!id || !runTask.trim()) return;
     setSubmittingRun(true);
+    setRunError(null);
     try {
       await startBackgroundRun(id, runTask.trim());
       setRunTask('');
       setShowRunForm(false);
-      loadTurns();
+      if (activeTab === 'overview') {
+        void loadConversations();
+      } else if (activeTab === 'turns') {
+        void loadTurns();
+      }
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmittingRun(false);
     }
@@ -219,7 +225,7 @@ export function AgentDetailPage() {
           {showRunForm && (
             <form
               onSubmit={handleStartRun}
-              className="flex flex-col gap-2 pb-3 pt-1 sm:flex-row sm:items-center"
+              className="flex flex-col gap-2 pb-3 pt-1 sm:flex-row sm:flex-wrap sm:items-center"
             >
               <input
                 type="text"
@@ -236,6 +242,11 @@ export function AgentDetailPage() {
               >
                 {submittingRun ? 'Starting...' : 'Run'}
               </button>
+              {runError && (
+                <p role="alert" className="basis-full text-sm text-red-300">
+                  Failed to start turn: {runError}
+                </p>
+              )}
             </form>
           )}
         </div>
@@ -278,14 +289,12 @@ export function AgentDetailPage() {
             toolsCount={toolsCount}
             tokensLast24h={agent?.tokensLast24h}
             tokensTotal={agent?.tokensTotal}
-            recentTurns={recentTurns}
-            onContinueConversation={(conversationId) => {
-              if (conversationId) {
-                navigate(`/agents/${id}/conversations/${conversationId}`);
-              } else {
-                setActiveTab('turns');
-              }
-            }}
+            recentConversations={recentConversations}
+            conversationsLoading={conversationsLoading}
+            conversationsError={conversationsError}
+            onOpenConversation={(conversationId) => navigate(`/agents/${id}/conversations/${conversationId}`)}
+            onViewAllConversations={() => setActiveTab('turns')}
+            onRetryConversations={() => { void loadConversations(); }}
           />
         )}
 
@@ -307,7 +316,13 @@ export function AgentDetailPage() {
         )}
 
         {activeTab === 'tools' && id && (
-          <AgentToolsTab tools={agent.tools} agentId={id} nativeTools={agent.nativeTools} />
+          <AgentToolsTab
+            tools={agent.tools}
+            httpTools={agent.httpTools}
+            agentId={id}
+            nativeToolPolicy={agent.nativeToolPolicy}
+            builtinToolPolicy={agent.builtinToolPolicy}
+          />
         )}
 
         {activeTab === 'files' && id && (

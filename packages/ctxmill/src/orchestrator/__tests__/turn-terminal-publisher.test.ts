@@ -61,7 +61,21 @@ describe('terminal publication recovery', () => {
       status: 'error',
       error: 'boom',
       durationMs: 50,
-      usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      usage: {
+        inputTokens: 3,
+        outputTokens: 4,
+        totalTokens: 7,
+        modelCalls: {
+          observed: 0,
+          costKnown: 0,
+          expected: null,
+        },
+        cost: {
+          totalUsd: null,
+          knownUsd: 0,
+          coverage: 'unpriced',
+        },
+      },
       timestamp: 150,
     });
     expect(eventBus.emitAsync).toHaveBeenNthCalledWith(2, 'turn.completed', {
@@ -71,6 +85,7 @@ describe('terminal publication recovery', () => {
       conversationId: 'conv-1',
       status: 'completed',
       durationMs: 200,
+      usage: null,
       timestamp: 300,
     });
     expect(logger.info).toHaveBeenCalledWith(

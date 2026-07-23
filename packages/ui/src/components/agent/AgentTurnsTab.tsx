@@ -11,6 +11,7 @@ import type { AgentTurn } from '@/stores/agents';
 import { restoreSandboxSession } from '@/lib/api';
 import { formatCompactNumber, formatDurationBetween } from '@/lib/format';
 import { RelativeTime } from '@/components/ui/RelativeTime';
+import { describeTurnCost, summarizeTurnCosts } from '@/lib/usage-cost';
 
 /* ------------------------------------------------------------------ */
 /*  AgentTurnsTab                                                      */
@@ -81,6 +82,7 @@ export function AgentTurnsTab({
       conversationMessageCount: Math.max(...conversationTurns.map((entry) => entry.conversationMessageCount ?? 0)),
       lastMessageAt: Math.max(...conversationTurns.map((entry) => entry.completedAt ?? entry.startedAt)),
       totalTokens: conversationTurns.reduce((sum, entry) => sum + (entry.usage?.totalTokens ?? 0), 0),
+      cost: summarizeTurnCosts(conversationTurns.map((entry) => entry.usage)),
       entries: conversationTurns.sort((a, b) => b.startedAt - a.startedAt),
     })).sort((a, b) => b.startedAt - a.startedAt);
   }, [turns]);
@@ -164,7 +166,7 @@ export function AgentTurnsTab({
         </div>
       ) : (
         <div className="border border-surface-700 rounded-lg overflow-x-auto bg-surface-800/30">
-          <table className="w-full text-left border-collapse min-w-[600px]">
+          <table className="w-full text-left border-collapse min-w-[760px]">
             <thead>
               <tr className="bg-surface-800/50">
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Conversation</th>
@@ -174,6 +176,7 @@ export function AgentTurnsTab({
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Turns</th>
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Messages</th>
                 <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Tokens</th>
+                <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Model cost</th>
                 <th className="px-4 py-3 border-b border-surface-700"></th>
               </tr>
             </thead>
@@ -215,6 +218,21 @@ export function AgentTurnsTab({
                           ? <span title={`${conversation.totalTokens.toLocaleString()} tokens`}>{formatCompactNumber(conversation.totalTokens)}</span>
                           : '--'}
                       </td>
+                      <td
+                        className={cn(
+                          'px-4 py-3 text-xs tabular-nums',
+                          conversation.cost.state === 'complete'
+                            ? 'text-emerald-300'
+                            : conversation.cost.state === 'pending'
+                              ? 'text-blue-300'
+                              : conversation.cost.state === 'partial'
+                                ? 'text-amber-300'
+                                : 'text-surface-400',
+                        )}
+                        title={conversation.cost.title}
+                      >
+                        {conversation.cost.label}
+                      </td>
                       <td className="px-4 py-3 text-right">
                         {isExpanded ? (
                           <ChevronDown className="h-4 w-4 text-surface-400 inline-block" />
@@ -227,7 +245,7 @@ export function AgentTurnsTab({
                     {/* Expanded conversation detail */}
                     {isExpanded && (
                       <tr className="bg-surface-900/30">
-                        <td colSpan={8} className="p-0">
+                        <td colSpan={9} className="p-0">
                           <div data-testid="conversation-detail" className="px-4 py-4 space-y-4 border-t border-surface-700/30">
                             {/* Conversation actions */}
                             <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -258,6 +276,7 @@ export function AgentTurnsTab({
                             <div className="space-y-3">
                               <p className="text-[11px] text-surface-400 uppercase tracking-wider">Turns</p>
                               {conversation.entries.map((entry, idx) => {
+                                const turnCost = describeTurnCost(entry.usage);
                                 const showRetryRestore =
                                   entry.sandboxStatus === 'CHECKPOINTED'
                                   && Boolean(entry.lastRestoreError)
@@ -285,6 +304,22 @@ export function AgentTurnsTab({
                                             {formatCompactNumber(entry.usage!.totalTokens)} tok
                                           </span>
                                         )}
+                                        <span
+                                          data-testid="turn-cost"
+                                          className={cn(
+                                            'rounded-full border px-2 py-0.5 text-[11px] tabular-nums',
+                                            turnCost.state === 'complete'
+                                              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                                              : turnCost.state === 'pending'
+                                                ? 'border-blue-500/30 bg-blue-500/10 text-blue-300'
+                                                : turnCost.state === 'partial'
+                                                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                                                  : 'border-surface-600 bg-surface-700/30 text-surface-400',
+                                          )}
+                                          title={turnCost.title}
+                                        >
+                                          {turnCost.label}
+                                        </span>
                                       </div>
                                       {showRetryRestore && (
                                         <button

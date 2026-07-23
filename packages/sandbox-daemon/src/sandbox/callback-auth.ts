@@ -11,9 +11,9 @@ export const CALLBACK_TOKEN_ENV = 'CTXMILL_CALLBACK_TOKEN';
 type CallbackAuthEnv = Readonly<Record<string, string | undefined>>;
 
 export interface SandboxCallbackAuthIdentity {
-  sessionId: string;
+  sandboxSessionId: string;
   agentId: string;
-  token: string;
+  token?: string;
 }
 
 function nonEmptyTrimmed(value: string | undefined): string | undefined {
@@ -24,24 +24,30 @@ function nonEmptyTrimmed(value: string | undefined): string | undefined {
 export function getSandboxCallbackAuthIdentity(
   env: CallbackAuthEnv = process.env,
 ): SandboxCallbackAuthIdentity | undefined {
-  const sessionId = nonEmptyTrimmed(env[CALLBACK_SESSION_ENV]);
+  const sandboxSessionId = nonEmptyTrimmed(env[CALLBACK_SESSION_ENV]);
   const agentId = nonEmptyTrimmed(env[CALLBACK_AGENT_ENV]);
   const token = nonEmptyTrimmed(env[CALLBACK_TOKEN_ENV]);
 
-  if (!sessionId || !agentId || !token) {
+  if (!sandboxSessionId || !agentId) {
     return undefined;
   }
 
-  return { sessionId, agentId, token };
+  return {
+    sandboxSessionId,
+    agentId,
+    ...(token ? { token } : {}),
+  };
 }
 
 export function applySandboxCallbackAuthHeaders(
   headers: Headers,
   identity: SandboxCallbackAuthIdentity,
 ): void {
-  headers.set(CALLBACK_SESSION_HEADER, identity.sessionId);
+  headers.set(CALLBACK_SESSION_HEADER, identity.sandboxSessionId);
   headers.set(CALLBACK_AGENT_HEADER, identity.agentId);
-  headers.set(CALLBACK_TOKEN_HEADER, identity.token);
+  if (identity.token) {
+    headers.set(CALLBACK_TOKEN_HEADER, identity.token);
+  }
 }
 
 export function createSandboxCallbackAuthInterceptor(

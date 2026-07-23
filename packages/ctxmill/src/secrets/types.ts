@@ -4,4 +4,6 @@ export interface SecretProvider {
   delete(agentId: string, key: string, toolId?: string): Promise<void>;
   deleteForAgent?(agentId: string): Promise<void>;
   list(agentId: string, toolId?: string): Promise<string[]>;
+  /** Non-secret metadata revision used to invalidate warm runtimes. */
+  revision?(agentId: string): Promise<string>;
 }

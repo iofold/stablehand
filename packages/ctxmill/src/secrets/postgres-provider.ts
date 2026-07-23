@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type postgres from 'postgres';
 import type { SecretProvider } from './types.js';
 import { encrypt, decrypt } from './crypto.js';
@@ -72,5 +72,23 @@ export class PostgresSecretProvider implements SecretProvider {
       SELECT key FROM secrets WHERE agent_id = ${agentId} AND tool_id = ${tid}
     `;
     return rows.map((r) => r.key as string);
+  }
+
+  async revision(agentId: string): Promise<string> {
+    const rows = await this.sql`
+      SELECT id, tool_id, key, updated_at::text AS updated_at
+      FROM secrets
+      WHERE agent_id = ${agentId}
+      ORDER BY tool_id, key, id
+    `;
+    const metadata = rows.map((row) => ({
+      id: String(row.id),
+      toolId: String(row.tool_id),
+      key: String(row.key),
+      updatedAt: String(row.updated_at),
+    }));
+    return createHash('sha256')
+      .update(JSON.stringify(metadata))
+      .digest('hex');
   }
 }

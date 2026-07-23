@@ -8,6 +8,7 @@ import {
   fetchEventStats,
   fetchEventTypes,
 } from '@/lib/api';
+import { makeAgentFixture } from '@/test/agent-fixture';
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -42,7 +43,7 @@ describe('EventsPage', () => {
 
     useAgentsStore.setState((state) => ({
       ...state,
-      agents: [{ id: 'agent-1', name: 'Agent 1', status: 'active', tools: [], harness: 'test', harnessConfig: {} }],
+      agents: [makeAgentFixture({ status: 'active', harness: 'test', harnessConfig: {} })],
       loading: false,
       error: null,
       fetchAgents: vi.fn().mockResolvedValue(undefined),

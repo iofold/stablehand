@@ -1,6 +1,6 @@
 ---
 name: ctxmill-cli
-description: Use when operating, debugging, or inspecting a ctxmill app via its HTTP API. Wraps agent/turn/conversation/sandbox-session/event/artifact/file/secret/setting/trigger/webhook/knowledge/feedback CRUD plus SSE and AG-UI wire streaming, multipart uploads, and gzip uploads with bundled Bun TypeScript CLIs.
+description: Use when operating, debugging, or inspecting a ctxmill app via its HTTP API. Wraps agent/turn/conversation/sandbox-session/event/artifact/file/secret/setting/trigger/webhook operations, feedback submission, SSE and AG-UI wire streaming, multipart uploads, and gzip uploads with bundled Bun TypeScript CLIs.
 ---
 
 # ctxmill CLI
@@ -66,7 +66,7 @@ Run any script with `--help` for exact commands.
 
 ## Mutation safety
 
-- Destructive commands (`agents delete`, `secrets delete`, `webhooks delete`, `triggers delete`, `artifacts delete`, `files delete`, `knowledge shared delete`) refuse to run without `--yes` (or `CTXMILL_YES=1`). They exit code 4 (unsafe-blocked) when the guard fires.
+- Destructive commands (`agents delete`, `secrets delete`, `webhooks delete`, `triggers delete`, `artifacts delete`, `files delete`) refuse to run without `--yes` (or `CTXMILL_YES=1`). They exit code 4 (unsafe-blocked) when the guard fires.
 - Mutation commands (`turns cancel|message|start`, `sandbox-sessions suspend|restore|kill`, `interrupts resolve`, `tools test`, `triggers create|update|emit`, `artifacts upload`, `workspace upload`, anything that writes secrets/settings/webhooks/feedback) must be explicit in the user's task — do not invoke speculatively.
 - Body input flags: `--data '<json>'` (inline) or `--from-file <path|->` (file or stdin).
 
@@ -79,7 +79,6 @@ Run any script with `--help` for exact commands.
 | 2 | Invalid CLI usage |
 | 3 | Timeout / wait condition unmet |
 | 4 | Unsafe operation blocked (missing `--yes`) |
-| 5 | Unexpected response shape |
 
 ## References
 

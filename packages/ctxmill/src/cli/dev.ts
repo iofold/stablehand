@@ -15,6 +15,7 @@ import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
 
 import { ensureAgentWorkspace, seedAgentWorkspace } from '../workspace/ensure.js';
 import { DefaultOrchestratorToolRegistry, registerDefaultToolHandlers } from '../orchestrator/grpc/orchestrator-service.js';
+import { startRuntimeApi } from './runtime-startup.js';
 
 function agentInputToDefinition(
   input: AgentCreateInput,
@@ -26,7 +27,7 @@ function agentInputToDefinition(
     harnessConfig: input.harnessConfig,
     tools: input.tools,
     systemPrompt: input.systemPrompt,
-    ...(input.nativeTools ? { nativeTools: input.nativeTools } : {}),
+    ...(input.nativeToolPolicy ? { nativeToolPolicy: input.nativeToolPolicy } : {}),
     ...(input.description !== undefined ? { description: input.description } : {}),
     ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
     ...(input.mode !== undefined ? { mode: input.mode } : {}),
@@ -74,30 +75,6 @@ export async function startDev() {
     }
   }
 
-  const model = process.env.OPENAI_MODEL;
-  if (!model) {
-    console.error('\n  Set OPENAI_MODEL in .env or environment before starting ctxmill dev\n');
-    process.exit(1);
-  }
-
-  const provider: 'anthropic' | 'openai' | 'google' = model.includes('claude')
-    ? 'anthropic'
-    : model.includes('gemini')
-      ? 'google'
-      : 'openai';
-
-  // Pick the API key that matches the detected provider — no cross-provider fallback
-  const apiKey = provider === 'anthropic'
-    ? process.env.ANTHROPIC_API_KEY
-    : provider === 'google'
-      ? process.env.GOOGLE_API_KEY
-      : process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    const keyName = provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : provider === 'google' ? 'GOOGLE_API_KEY' : 'OPENAI_API_KEY';
-    console.error(`\n  Set ${keyName} in .env or environment (detected provider: ${provider})\n`);
-    process.exit(1);
-  }
-
   // Discover agents
   const agentsDir = join(cwd, 'agents');
   const agents: string[] = [];
@@ -133,7 +110,7 @@ export async function startDev() {
   ╚═══════════════════════════════════════╝\x1b[0m
   `);
 
-  console.log(`  \x1b[1mProvider:\x1b[0m ${provider} (${model})`);
+  console.log('  \x1b[1mModels:\x1b[0m    per-agent harness configuration');
   console.log(`  \x1b[1mAgents:\x1b[0m   ${agents.length} [${agents.join(', ')}]`);
   console.log(`  \x1b[1mTools:\x1b[0m    ${tools.length} [${tools.join(', ')}]`);
   console.log('');
@@ -186,7 +163,6 @@ export async function startDev() {
         description: def.description ?? null,
         metadata: def.metadata ?? null,
         manifest: manifestProject?.agentCreateInput.manifest,
-        status: 'created',
       });
     }
   }
@@ -220,17 +196,47 @@ export async function startDev() {
   for (const tool of toolDefs) {
     toolRegistry.set(tool.name, async (args, ctx) => {
       if (tool.requiresApproval && container.interruptManager && container.sseManager) {
+        if (
+          !ctx.sandboxSessionId
+          || !ctx.deliveryFence
+          || !ctx.activeGeneration
+        ) {
+          throw new Error(
+            'Sandbox callback delivery authority is required for approval persistence',
+          );
+        }
+        const callbackAuthority = {
+          turnId: ctx.turnId,
+          sandboxSessionId: ctx.sandboxSessionId,
+          agentId: ctx.agentId,
+          expectedDeliveryFence: ctx.deliveryFence,
+          expectedActiveGeneration: ctx.activeGeneration,
+        };
+
         if (container.eventBus) {
-          container.eventBus.emit('tool_call.started', {
-            turnId: ctx.turnId,
-            agentId: ctx.agentId,
-            conversationId: ctx.conversationId ?? '',
-            toolCallId: ctx.requestId,
-            toolCallName: tool.name,
-            args: args as Record<string, unknown>,
-            requiresApproval: true,
-            timestamp: Date.now(),
-          });
+          const didEmit = await container.eventBus.emitAsync(
+            'tool_call.started',
+            {
+              turnId: ctx.turnId,
+              agentId: ctx.agentId,
+              conversationId: ctx.conversationId ?? '',
+              toolCallId: ctx.requestId,
+              toolCallName: tool.name,
+              args: args as Record<string, unknown>,
+              requiresApproval: true,
+              timestamp: Date.now(),
+            },
+            {
+              deliveryFence: ctx.deliveryFence,
+              sandboxSessionId: ctx.sandboxSessionId,
+              activeGeneration: ctx.activeGeneration,
+            },
+          );
+          if (!didEmit) {
+            throw new Error(
+              'Sandbox callback delivery ownership changed before approval event persistence',
+            );
+          }
         }
 
         const resolution = await container.interruptManager.waitForApproval(
@@ -240,8 +246,9 @@ export async function startDev() {
           tool.name,
           args as Record<string, unknown>,
           undefined,
-          undefined,
+          ctx.sandboxSessionId,
           ctx.conversationId,
+          callbackAuthority,
         );
 
         if (resolution.action !== 'approve') {
@@ -275,28 +282,20 @@ export async function startDev() {
     sessionManager: container.sessionManager,
     lifecyclePolicy: container.lifecyclePolicy,
     canonicalLog: container.canonicalLog,
+    modelGateway: container.modelGateway,
   });
-  await server.listen({ port: apiPort, host: '0.0.0.0' });
-  console.log(`  \x1b[32mAPI:\x1b[0m  http://localhost:${apiPort}`);
-
   // Boot order matters (ctx-wbt, ADR-014): seed slot accounting from live
   // containers BEFORE lifecycle reconciliation so reconciliation-driven
   // removals free real slots; reconcile stranded turns AFTER it so sandbox
-  // rows are repaired first.
-  const bootTimeMs = Date.now();
-  void (async () => {
-    try {
-      await container.containerManager.rehydrateAccounting?.();
-    } catch (err: unknown) {
-      console.error('  \x1b[33mSlot-accounting rehydration failed (non-fatal):\x1b[0m', err);
-    }
-    await container.lifecyclePolicy.start().catch((err: unknown) => {
-      console.error('  \x1b[33mLifecycle startup failed (non-fatal):\x1b[0m', err);
-    });
-    await container.reconcileStrandedTurns(bootTimeMs).catch((err: unknown) => {
-      console.error('  \x1b[33mTurn reconciliation failed (non-fatal):\x1b[0m', err);
-    });
-  })();
+  // rows are repaired first. Fastify listen runs onReady hooks (including
+  // durable HITL resumption), so it is intentionally inside this fail-closed
+  // barrier rather than preceding or racing it.
+  await startRuntimeApi({
+    server,
+    runtime: container,
+    listen: { port: apiPort, host: '0.0.0.0' },
+  });
+  console.log(`  \x1b[32mAPI:\x1b[0m  http://localhost:${apiPort}`);
 
   // ── Start UI server ─────────────────────────────────
   // Docker-first workflow: disable UI auto-probing unless explicitly enabled.

@@ -58,6 +58,7 @@ function createMockContainerManager(): ContainerManager {
     extractWorkspaceDiff: vi.fn().mockResolvedValue(undefined),
     extractLogs: vi.fn().mockResolvedValue(undefined),
     getContainer: vi.fn().mockResolvedValue(undefined),
+    getRuntimeInstanceToken: vi.fn().mockResolvedValue('runtime-instance-token-1'),
     listManagedContainers: vi.fn().mockResolvedValue([]),
     getContainerExitCode: vi.fn().mockResolvedValue(undefined),
     ensureNetwork: vi.fn().mockResolvedValue(undefined),
@@ -66,27 +67,131 @@ function createMockContainerManager(): ContainerManager {
 }
 
 function createMockDb(): DatabaseRepository {
+  let restoreFenceToken = 0;
+  let restoreAttempts = 0;
+  let restoreRow: SandboxSessionRow | null = null;
   return {
     getSandboxSessionByConversation: vi.fn().mockResolvedValue(null),
+    getLiveSandboxSessionByConversation: vi.fn().mockResolvedValue(null),
+    getSandboxSession: vi.fn().mockImplementation(async () =>
+      restoreRow ?? createDbSession('TERMINATED')
+    ),
     getCheckpointV2: vi.fn().mockResolvedValue(null),
     updateTurn: vi.fn().mockResolvedValue(undefined),
-    updateSandboxSessionStatus: vi.fn().mockResolvedValue(undefined),
-    createSandboxSession: vi.fn().mockImplementation(async (session: { id?: string; conversationId: string; agentId: string; containerName?: string; containerId?: string; status?: string; harnessName: string }) => ({
-      id: session.id ?? 'generated-session',
-      conversationId: session.conversationId,
-      agentId: session.agentId,
-      containerName: session.containerName ?? null,
-      containerId: session.containerId ?? null,
-      status: session.status ?? 'ACTIVE',
-      harnessName: session.harnessName,
-      checkpointRef: null,
-      createdAt: Date.now(),
+    updateSandboxSessionMetadata: vi.fn().mockImplementation(
+      async (_sessionId, status, extra) => {
+        restoreRow = createDbSession(status, {
+          ...(restoreRow ?? {}),
+          ...(extra ?? {}),
+          status,
+        });
+      },
+    ),
+    completeSandboxSessionLifecycleOperation: vi.fn().mockImplementation(
+      async (input) => {
+        restoreRow = createDbSession(input.toStatus, {
+          ...(restoreRow ?? {}),
+          ...(input.extra ?? {}),
+          status: input.toStatus,
+        });
+        return true;
+      },
+    ),
+    claimSandboxSessionLifecycleOperation: vi.fn().mockImplementation(async (input) => ({
+      sandboxSessionId: input.sandboxSessionId,
+      operation: input.operation,
+      operationId: 'lifecycle-operation-1',
+      phase: 'reserved',
+      ownerId: input.ownerId,
+      fenceToken: 1,
+      allowedTurnId: input.allowedTurnDelivery?.turnId ?? null,
+      allowedDeliveryOwnerId: input.allowedTurnDelivery?.ownerId ?? null,
+      allowedDeliveryFenceToken: input.allowedTurnDelivery?.fenceToken ?? null,
+      leaseExpiresAt: Date.now() + input.leaseDurationMs,
       updatedAt: Date.now(),
-      lastActivityAt: Date.now(),
     })),
+    renewSandboxSessionLifecycleOperation: vi.fn().mockImplementation(async (
+      sandboxSessionId,
+      ownerId,
+      fenceToken,
+    ) => ({
+      sandboxSessionId,
+      operation: 'checkpoint',
+      operationId: 'lifecycle-operation-1',
+      phase: 'reserved',
+      ownerId,
+      fenceToken,
+      allowedTurnId: null,
+      allowedDeliveryOwnerId: null,
+      allowedDeliveryFenceToken: null,
+      leaseExpiresAt: Date.now() + 60_000,
+      updatedAt: Date.now(),
+    })),
+    markSandboxSessionLifecycleOperationExecuting: vi.fn().mockResolvedValue(true),
+    cancelSandboxSessionLifecycleOperation: vi.fn().mockResolvedValue(true),
+    activateTurnIfOpen: vi.fn().mockResolvedValue(true),
+    createSandboxSession: vi.fn().mockImplementation(async (session: {
+      id?: string;
+      conversationId: string;
+      agentId: string;
+      containerName?: string;
+      containerId?: string;
+      status?: SandboxSessionRow['status'];
+      harnessName: string;
+    }) => {
+      restoreRow = createDbSession(session.status ?? 'ACTIVE', {
+        id: session.id ?? 'generated-session',
+        conversationId: session.conversationId,
+        agentId: session.agentId,
+        containerName: session.containerName ?? null,
+        containerId: session.containerId ?? null,
+        harnessName: session.harnessName,
+      });
+      return restoreRow;
+    }),
     deleteSandboxSession: vi.fn().mockResolvedValue(undefined),
     createCheckpointV2: vi.fn().mockResolvedValue({ id: 'ckpt-1' }),
     getActiveSandboxSessions: vi.fn().mockResolvedValue([]),
+    getRestoringSandboxSessions: vi.fn().mockResolvedValue([]),
+    getExpiredSandboxSessionRestores: vi.fn().mockResolvedValue([]),
+    claimSandboxSessionRestore: vi.fn().mockImplementation(async (input) => {
+      restoreFenceToken += 1;
+      restoreAttempts += 1;
+      restoreRow = createDbSession('RESTORING', {
+        id: input.sandboxSessionId,
+        restoreOwnerId: input.ownerId,
+        restoreFenceToken,
+        restoreLeaseExpiresAt: Date.now() + input.leaseDurationMs,
+        restoreAttempts,
+      });
+      return restoreRow;
+    }),
+    renewSandboxSessionRestoreLease: vi.fn().mockImplementation(async () =>
+      restoreRow
+    ),
+    completeSandboxSessionRestore: vi.fn().mockImplementation(
+      async (_sessionId, _fence, runtime) => {
+        restoreAttempts = 0;
+        restoreRow = createDbSession('ACTIVE', {
+          containerName: runtime.containerName,
+          containerId: runtime.containerId,
+          restoreFenceToken,
+          restoreAttempts,
+        });
+        return restoreRow;
+      },
+    ),
+    failSandboxSessionRestore: vi.fn().mockImplementation(
+      async (_sessionId, _fence, failure) => {
+        restoreRow = createDbSession(failure.toStatus, {
+          restoreFenceToken,
+          restoreAttempts,
+          lastRestoreError: failure.error,
+        });
+        return restoreRow;
+      },
+    ),
+    reconcileExpiredSandboxSessionRestore: vi.fn().mockResolvedValue(undefined),
     getSandboxSessionsByAgent: vi.fn().mockResolvedValue([]),
   } as unknown as DatabaseRepository;
 }
@@ -149,19 +254,33 @@ function createMessage(content: string): Message {
   } as unknown as Message;
 }
 
-function createDbSession(status: SandboxSessionRow['status']): SandboxSessionRow {
+function createDbSession(
+  status: SandboxSessionRow['status'],
+  overrides: Partial<SandboxSessionRow> = {},
+): SandboxSessionRow {
   return {
-    id: 'sess-1',
-    conversationId: 'conv-1',
-    agentId: 'agent-1',
-    containerName: 'ctxmill-sandbox-sess-1',
-    containerId: 'c-1',
+    id: overrides.id ?? 'sess-1',
+    conversationId: overrides.conversationId ?? 'conv-1',
+    agentId: overrides.agentId ?? 'agent-1',
+    containerName: overrides.containerName ?? 'ctxmill-sandbox-sess-1',
+    containerId: overrides.containerId ?? 'c-1',
     status,
-    harnessName: 'langgraph',
-    checkpointRef: null,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    lastActivityAt: Date.now(),
+    harnessName: overrides.harnessName ?? 'langgraph',
+    checkpointRef: overrides.checkpointRef ?? null,
+    createdAt: overrides.createdAt ?? Date.now(),
+    updatedAt: overrides.updatedAt ?? Date.now(),
+    lastActivityAt: overrides.lastActivityAt ?? Date.now(),
+    restoreAttempts: overrides.restoreAttempts ?? 0,
+    lastRestoreError: overrides.lastRestoreError ?? null,
+    restoreOwnerId:
+      overrides.restoreOwnerId
+      ?? (status === 'RESTORING' ? 'restore-owner' : null),
+    restoreFenceToken:
+      overrides.restoreFenceToken
+      ?? (status === 'RESTORING' ? 1 : 0),
+    restoreLeaseExpiresAt:
+      overrides.restoreLeaseExpiresAt
+      ?? (status === 'RESTORING' ? Date.now() + 60_000 : null),
   };
 }
 
@@ -264,6 +383,7 @@ describe('SandboxSessionManager session recovery', () => {
       statusCoordinator,
       workspaceDiffService: new WorkspaceDiffService({ containerManager }),
       buildSandboxSecrets: async () => ({}),
+      resolveTurnSecrets: async () => ({}),
       resolveToolsForAgent,
       logger,
       config: { idleTimeoutMs: 60_000, maxQueuedMessages: 10 },
@@ -285,40 +405,69 @@ describe('SandboxSessionManager session recovery', () => {
       (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>).mockResolvedValue(createDbSession('ACTIVE'));
       (db.getCheckpointV2 as ReturnType<typeof vi.fn>).mockResolvedValue(createCheckpoint());
 
-      const sessionPromise = manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+      const builtinToolPolicy = { policy: 'deny', names: ['request-approval'] } as const;
+      const sessionPromise = manager.ensureSession('conv-1', createAgentDef({
+        tools: ['search'],
+        builtinToolPolicy,
+        metadata: {
+          httpTools: [
+            { name: 'weather', description: 'Weather', endpoint: 'https://example.test/weather' },
+          ],
+        },
+      }), 'agent-1');
       await vi.advanceTimersByTimeAsync(10_500);
       const session = await sessionPromise;
 
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
-        'sess-1',
-        'CHECKPOINTED',
+      expect(db.completeSandboxSessionLifecycleOperation).toHaveBeenCalledWith(
         expect.objectContaining({
-          containerId: null,
-          containerName: null,
+          sandboxSessionId: 'sess-1',
+          fromStatus: 'ACTIVE',
+          toStatus: 'CHECKPOINTED',
+          extra: expect.objectContaining({
+            containerId: null,
+            containerName: null,
+          }),
         }),
-        { expectedFrom: 'ACTIVE' },
       );
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+      expect(db.claimSandboxSessionRestore).toHaveBeenCalledWith({
+        sandboxSessionId: 'sess-1',
+        ownerId: expect.any(String),
+        leaseDurationMs: expect.any(Number),
+        maxAttempts: expect.any(Number),
+      });
+      expect(db.completeSandboxSessionRestore).toHaveBeenCalledWith(
         'sess-1',
-        'RESTORING',
-        undefined,
-        { expectedFrom: 'CHECKPOINTED' },
+        {
+          ownerId: expect.any(String),
+          fenceToken: 1,
+        },
+        expect.objectContaining({
+          containerId: 'c-1',
+          containerName: 'ctxmill-sandbox-sess-1',
+        }),
       );
       expect(session.sessionId).toBe('sess-1');
       expect(session.status).toBe('ACTIVE');
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
-      expect(resolveToolsForAgent).toHaveBeenCalledWith([], undefined, 'agent-1');
-      expect(grpcClient.openSession).toHaveBeenCalledWith(expect.objectContaining({
-        bootstrap: {
-          case: 'restore',
-          value: expect.objectContaining({
-            agentId: 'agent-1',
-            harnessConfigJson: '{}',
-            systemPrompt: 'test system prompt',
-            tools: [expect.objectContaining({ name: 'search', programmatic: true })],
-          }),
-        },
-      }));
+      expect(resolveToolsForAgent).toHaveBeenCalledWith(
+        ['search', 'weather'],
+        builtinToolPolicy,
+        'agent-1',
+      );
+      expect(grpcClient.openSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bootstrap: {
+            case: 'restore',
+            value: expect.objectContaining({
+              agentId: 'agent-1',
+              harnessConfigJson: '{}',
+              systemPrompt: 'test system prompt',
+              tools: [expect.objectContaining({ name: 'search', programmatic: true })],
+            }),
+          },
+        }),
+        expect.objectContaining({ signal: expect.anything() }),
+      );
     });
 
     it('CHECKPOINTED restore retries openSession on transient unavailable errors', async () => {
@@ -355,14 +504,17 @@ describe('SandboxSessionManager session recovery', () => {
       expect(containerManager.createContainer).toHaveBeenCalledWith(expect.objectContaining({
         agentId: 'agent-1',
       }));
-      expect(grpcClient.openSession).toHaveBeenCalledWith(expect.objectContaining({
-        bootstrap: {
-          case: 'restore',
-          value: expect.objectContaining({
-            agentId: 'agent-1',
-          }),
-        },
-      }));
+      expect(grpcClient.openSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bootstrap: {
+            case: 'restore',
+            value: expect.objectContaining({
+              agentId: 'agent-1',
+            }),
+          },
+        }),
+        expect.objectContaining({ signal: expect.anything() }),
+      );
     });
 
     it('injects session-scoped callback auth secrets into restored session containers', async () => {
@@ -389,6 +541,40 @@ describe('SandboxSessionManager session recovery', () => {
       });
     });
 
+    it('binds the restore gRPC client to the exact replacement container instance token', async () => {
+      (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>)
+        .mockResolvedValue(createDbSession('CHECKPOINTED'));
+      (db.getCheckpointV2 as ReturnType<typeof vi.fn>)
+        .mockResolvedValue(createCheckpoint());
+
+      await manager.ensureSession(
+        'conv-1',
+        createAgentDef({ name: 'Display Name' }),
+        'agent-1',
+      );
+
+      const createOpts = vi.mocked(containerManager.createContainer).mock.calls[0]?.[0];
+      if (!createOpts) {
+        throw new Error('expected createContainer to be called');
+      }
+      const runtimeInstanceToken =
+        createOpts.secrets?.CTXMILL_RUNTIME_INSTANCE_TOKEN;
+      expect(runtimeInstanceToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+      const transportOptions =
+        connectMocks.createConnectTransportMock.mock.calls[0]?.[0];
+      const interceptor = transportOptions?.interceptors?.[0];
+      if (!interceptor) {
+        throw new Error('expected runtime-instance authentication interceptor');
+      }
+      const request = { header: new Headers() };
+      await interceptor(vi.fn(async () => ({})))(request);
+
+      expect(
+        request.header.get('x-ctxmill-runtime-instance-token'),
+      ).toBe(runtimeInstanceToken);
+    });
+
     it('ACTIVE + reconnect fails + no checkpoint → creates fresh session', async () => {
       vi.useFakeTimers();
       const failingClient = createMockGrpcClient();
@@ -403,7 +589,18 @@ describe('SandboxSessionManager session recovery', () => {
       await vi.advanceTimersByTimeAsync(10_500);
       const session = await sessionPromise;
 
-      expect(db.updateSandboxSessionStatus).not.toHaveBeenCalledWith('sess-1', 'CHECKPOINTED');
+      expect(db.updateSandboxSessionMetadata).not.toHaveBeenCalledWith('sess-1', 'CHECKPOINTED');
+      expect(db.completeSandboxSessionLifecycleOperation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSessionId: 'sess-1',
+          fromStatus: 'ACTIVE',
+          toStatus: 'TERMINATED',
+          extra: expect.objectContaining({
+            containerId: null,
+            containerName: null,
+          }),
+        }),
+      );
       expect(db.createSandboxSession).toHaveBeenCalledTimes(1);
       expect(session.sessionId).not.toBe('sess-1');
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
@@ -420,10 +617,38 @@ describe('SandboxSessionManager session recovery', () => {
       expect(session.sessionId).toBe('sess-1');
       expect(session.status).toBe('ACTIVE');
     });
+
+    it('revalidates a cached ACTIVE session for an authoritative HITL recovery', async () => {
+      (db.getSandboxSessionByConversation as ReturnType<typeof vi.fn>)
+        .mockResolvedValue(createDbSession('ACTIVE'));
+      await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
+      vi.mocked(db.getSandboxSessionByConversation).mockClear();
+      connectMocks.createClientMock.mockClear();
+
+      const session = await manager.ensureSession(
+        'conv-1',
+        createAgentDef(),
+        'agent-1',
+        {
+          recoveryAuthority: {
+            attemptId: 'attempt-1',
+            turnId: 'turn-1',
+            fence: {
+              ownerId: 'resume-worker',
+              fenceToken: 7,
+            },
+          },
+        },
+      );
+
+      expect(db.getSandboxSessionByConversation).toHaveBeenCalledWith('conv-1');
+      expect(connectMocks.createClientMock).toHaveBeenCalledOnce();
+      expect(session.sessionId).toBe('sess-1');
+    });
   });
 
   describe('executeDeliverTurn — stale container recovery', () => {
-    it('ConnectError(Unavailable) during stream → retries via ensureSession', async () => {
+    it('ConnectError(Unavailable) during stream fails closed without transparent redelivery', async () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
       grpcClient.deliverTurn
         .mockImplementationOnce(() => {
@@ -435,14 +660,17 @@ describe('SandboxSessionManager session recovery', () => {
 
       const events = await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1'));
 
-      expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(2);
-      expect(containerManager.createContainer).toHaveBeenCalledTimes(2);
+      expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(1);
+      expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
       expect(events).toEqual([
-        expect.objectContaining({ type: 'message_committed', content: 'recovered' }),
+        expect.objectContaining({
+          type: 'turn_failed',
+          errorMessage: '[unavailable] unavailable',
+        }),
       ]);
     });
 
-    it('stale retry rebinds the logical turn to the replacement sandbox session', async () => {
+    it('does not terminate a stale session through an unfenced status write', async () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
       grpcClient.deliverTurn
         .mockImplementationOnce(() => {
@@ -454,22 +682,11 @@ describe('SandboxSessionManager session recovery', () => {
 
       await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1'));
 
-      const updateTurn = db.updateTurn as ReturnType<typeof vi.fn>;
-      expect(updateTurn).toHaveBeenCalledWith(
-        'turn-1',
-        expect.objectContaining({
-          sandboxSessionId: expect.any(String),
-        }),
-      );
-      const reboundSessionId = updateTurn.mock.calls.at(-1)?.[1]?.sandboxSessionId;
-      expect(reboundSessionId).not.toBe(session.sessionId);
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
+      expect(db.updateSandboxSessionMetadata).not.toHaveBeenCalledWith(
         session.sessionId,
         'TERMINATED',
-        expect.objectContaining({
-          lastRestoreError: expect.stringContaining('unavailable'),
-        }),
-        { expectedFrom: 'ACTIVE' },
+        expect.anything(),
+        expect.anything(),
       );
     });
 
@@ -492,7 +709,7 @@ describe('SandboxSessionManager session recovery', () => {
       );
     });
 
-    it('ENOTFOUND error during stream → retries via ensureSession', async () => {
+    it('ENOTFOUND during stream fails closed without transparent redelivery', async () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
       grpcClient.deliverTurn
         .mockImplementationOnce(() => {
@@ -504,8 +721,11 @@ describe('SandboxSessionManager session recovery', () => {
 
       const events = await collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1'));
 
-      expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(2);
-      expect(events[0]).toEqual(expect.objectContaining({ type: 'message_committed', content: 'retried after dns failure' }));
+      expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(1);
+      expect(events[0]).toEqual(expect.objectContaining({
+        type: 'turn_failed',
+        errorMessage: expect.stringContaining('ENOTFOUND'),
+      }));
     });
 
     it('ConnectError(InvalidArgument) → emits turn_failed without retry', async () => {
@@ -522,7 +742,7 @@ describe('SandboxSessionManager session recovery', () => {
       expect(containerManager.createContainer).toHaveBeenCalledTimes(1);
     });
 
-    it('retry limited to once — second failure emits turn_failed', async () => {
+    it('does not invoke a second delivery after a stale first failure', async () => {
       const session = await manager.ensureSession('conv-1', createAgentDef(), 'agent-1');
       grpcClient.deliverTurn
         .mockImplementationOnce(() => {
@@ -534,9 +754,9 @@ describe('SandboxSessionManager session recovery', () => {
 
       await expect(collectEvents(manager.deliverTurn(session.sessionId, [createMessage('hello')], 'turn-1')))
         .resolves.toEqual([
-          expect.objectContaining({ type: 'turn_failed', errorMessage: '[unavailable] unavailable-2' }),
+          expect.objectContaining({ type: 'turn_failed', errorMessage: '[unavailable] unavailable-1' }),
         ]);
-      expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(2);
+      expect(grpcClient.deliverTurn).toHaveBeenCalledTimes(1);
     });
 
     it('no cached agentDef → emits turn_failed without retry', async () => {
@@ -596,18 +816,26 @@ describe('SandboxSessionManager session recovery', () => {
         sessionId: session.sessionId,
         reason: 'idle-checkpoint',
       }));
-      expect(db.createCheckpointV2).toHaveBeenCalledWith(expect.objectContaining({
-        sandboxSessionId: session.sessionId,
-        suspendReason: 'idle-checkpoint',
-      }));
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
-        session.sessionId,
-        'CHECKPOINTED',
+      expect(db.createCheckpointV2).toHaveBeenCalledWith(
         expect.objectContaining({
-          containerId: null,
-          containerName: null,
+          sandboxSessionId: session.sessionId,
+          suspendReason: 'idle-checkpoint',
         }),
-        { expectedFrom: 'ACTIVE' },
+        expect.objectContaining({
+          ownerId: expect.any(String),
+          fenceToken: expect.any(Number),
+        }),
+      );
+      expect(db.completeSandboxSessionLifecycleOperation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSessionId: session.sessionId,
+          fromStatus: 'ACTIVE',
+          toStatus: 'CHECKPOINTED',
+          extra: expect.objectContaining({
+            containerId: null,
+            containerName: null,
+          }),
+        }),
       );
     });
 
@@ -624,16 +852,18 @@ describe('SandboxSessionManager session recovery', () => {
         sessionId: session.sessionId,
         reason: 'manual-checkpoint',
       }));
-      expect(db.updateSandboxSessionStatus).toHaveBeenCalledWith(
-        session.sessionId,
-        'CHECKPOINTED',
+      expect(db.completeSandboxSessionLifecycleOperation).toHaveBeenCalledWith(
         expect.objectContaining({
-          containerId: null,
-          containerName: null,
+          sandboxSessionId: session.sessionId,
+          fromStatus: 'ACTIVE',
+          toStatus: 'CHECKPOINTED',
+          extra: expect.objectContaining({
+            containerId: null,
+            containerName: null,
+          }),
         }),
-        { expectedFrom: 'ACTIVE' },
       );
-      expect(db.updateSandboxSessionStatus).not.toHaveBeenCalledWith(session.sessionId, 'TERMINATED');
+      expect(db.updateSandboxSessionMetadata).not.toHaveBeenCalledWith(session.sessionId, 'TERMINATED');
       expect(lifecyclePolicy.cancelIdleTimeout).toHaveBeenCalledWith(session.sessionId);
       expect(containerManager.stopContainer).toHaveBeenCalledWith('c-1', 10);
       expect(containerManager.removeContainer).toHaveBeenCalledWith('c-1', true);
@@ -658,10 +888,11 @@ describe('SandboxSessionManager session recovery', () => {
         reason: 'manual-checkpoint',
       }));
       expect(db.createCheckpointV2).not.toHaveBeenCalled();
-      expect(db.updateSandboxSessionStatus).not.toHaveBeenCalledWith(
-        session.sessionId,
-        'CHECKPOINTED',
-        expect.anything(),
+      expect(db.completeSandboxSessionLifecycleOperation).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxSessionId: session.sessionId,
+          toStatus: 'CHECKPOINTED',
+        }),
       );
       expect(containerManager.stopContainer).not.toHaveBeenCalled();
       expect(containerManager.removeContainer).not.toHaveBeenCalled();

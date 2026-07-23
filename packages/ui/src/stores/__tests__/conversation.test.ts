@@ -473,6 +473,74 @@ describe('conversation store', () => {
     ]);
   });
 
+  it('keeps canonical tool outcomes and tool-message identity when a bounded raw result arrives later', () => {
+    const { handleSSEEvent } = getStore();
+    const canonicalResult = 'X'.repeat(700);
+    const boundedRawResult = canonicalResult.slice(0, 500);
+
+    handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', {
+      toolCallId: 'tc1',
+      toolCallName: 'bash',
+    }));
+    handleSSEEvent(makeEvent('TOOL_CALL_ARGS', {
+      toolCallId: 'tc1',
+      delta: '{"command":"print 700 characters"}',
+    }));
+    handleSSEEvent(makeEvent('CUSTOM', {
+      name: 'ctxmill.message.committed',
+      messageId: 'assistant-tool-call',
+      role: 'assistant',
+      content: '',
+      messageSeq: 0,
+      turnId: 'r1',
+      parts: [{
+        type: 'tool_call',
+        id: 'tc1',
+        name: 'bash',
+        args: '{"command":"print 700 characters"}',
+        result: canonicalResult,
+        status: 'complete',
+      }],
+      toolCalls: [{
+        id: 'tc1',
+        name: 'bash',
+        args: '{"command":"print 700 characters"}',
+        status: 'complete',
+      }],
+    }));
+    handleSSEEvent(makeEvent('CUSTOM', {
+      name: 'ctxmill.message.committed',
+      messageId: 'canonical-tool-result',
+      role: 'tool',
+      content: canonicalResult,
+      toolCallId: 'tc1',
+      messageSeq: 1,
+      turnId: 'r1',
+    }));
+    handleSSEEvent(makeEvent('TOOL_CALL_RESULT', {
+      toolCallId: 'tc1',
+      result: boundedRawResult,
+    }));
+
+    const [assistantMessage, toolMessage] = getStore().messages;
+    expect(assistantMessage.turnId).toBe('r1');
+    expect(assistantMessage.messageSeq).toBe(0);
+    expect(assistantMessage.parts?.[0]).toEqual(expect.objectContaining({
+      type: 'tool_call',
+      id: 'tc1',
+      result: canonicalResult,
+    }));
+    expect(assistantMessage.toolCalls?.[0].result).toBe(canonicalResult);
+    expect(toolMessage).toEqual(expect.objectContaining({
+      turnId: 'r1',
+      messageSeq: 1,
+      role: 'tool',
+      toolCallId: 'tc1',
+      content: canonicalResult,
+    }));
+  });
+
   it('full tool-call flow produces one committed message with merged result', () => {
     const { handleSSEEvent } = getStore();
 

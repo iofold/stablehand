@@ -1,8 +1,8 @@
 import {
   AgentCreateInputSchema,
-  AgentUpdateInputSchema,
+  AgentPatchInputSchema,
   type AgentCreateInput,
-  type AgentUpdateInput,
+  type AgentPatchInput,
 } from '@ctxmill/contracts';
 
 import type { AgentManifest } from './types.js';
@@ -80,11 +80,16 @@ function toAgentInputCandidate(
       }
       return tool.ref;
     }) ?? [],
+    ...(manifest.spec.builtinToolPolicy
+      ? { builtinToolPolicy: manifest.spec.builtinToolPolicy }
+      : {}),
     ...(manifest.metadata.description !== undefined
       ? { description: manifest.metadata.description }
       : {}),
     ...(metadata ? { metadata } : {}),
-    ...(manifest.spec.nativeTools ? { nativeTools: manifest.spec.nativeTools } : {}),
+    ...(manifest.spec.nativeToolPolicy
+      ? { nativeToolPolicy: manifest.spec.nativeToolPolicy }
+      : {}),
     ...(workspaceContent ? { workspaceContent } : {}),
     ...(resourceLimits ? { resourceLimits } : {}),
     ...(manifest.spec.mode ? { mode: manifest.spec.mode } : {}),
@@ -99,9 +104,9 @@ export function manifestToAgentCreateInput(
   return AgentCreateInputSchema.parse(toAgentInputCandidate(manifest, options));
 }
 
-export function manifestToAgentUpdateInput(
+export function manifestToAgentPatchInput(
   manifest: AgentManifest,
   options: ManifestConversionOptions = {},
-): AgentUpdateInput {
-  return AgentUpdateInputSchema.parse(toAgentInputCandidate(manifest, options));
+): AgentPatchInput {
+  return AgentPatchInputSchema.parse(toAgentInputCandidate(manifest, options));
 }

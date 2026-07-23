@@ -42,6 +42,8 @@ function buildAgentRunService(sessionTurnService: SessionTurnExecutor) {
     ensureSession: vi.fn().mockResolvedValue({ sessionId: 'sandbox-1' }),
     startTurn: vi.fn().mockReturnValue(undefined),
     completeTurn: vi.fn().mockResolvedValue(undefined),
+    abandonTurnDelivery: vi.fn().mockResolvedValue(undefined),
+    getPendingSessionReset: vi.fn().mockReturnValue(undefined),
   };
   const db = createMockDatabase();
   const deps: AgentTurnServiceDeps = {

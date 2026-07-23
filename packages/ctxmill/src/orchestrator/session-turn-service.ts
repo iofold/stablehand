@@ -15,6 +15,7 @@ import type { AgentSessionEvent } from '../events/types.js';
 import type { SessionEvent } from '@ctxmill/sandbox-daemon';
 import type { AgentDefinition, Message } from '@ctxmill/sandbox-daemon';
 import type { SandboxSessionManager } from './sandbox-session-manager.js';
+import type { TurnSecrets } from './session-manager/turn-secrets.js';
 
 export type { AGUISessionEvent, MessageCommittedSessionEvent, TurnFailedSessionEvent, SessionEvent } from '@ctxmill/sandbox-daemon';
 
@@ -46,7 +47,13 @@ export type SessionTurnSessionManager = {
 export interface SessionTurnExecutorDeps {
   sessionManager: SessionTurnSessionManager;
   logger?: Logger;
-  onSessionReady?: (turnId: string, sandboxSessionId: string) => void;
+}
+
+export interface SessionTurnExecutionOptions {
+  signal?: AbortSignal;
+  agentId?: string;
+  existingSessionId?: string;
+  turnSecrets?: TurnSecrets;
 }
 
 export interface SessionTurnExecutor {
@@ -55,9 +62,7 @@ export interface SessionTurnExecutor {
     conversationId: string,
     messages: Message[],
     turnId: string,
-    signal?: AbortSignal,
-    agentId?: string,
-    existingSessionId?: string,
+    options?: SessionTurnExecutionOptions,
   ): AsyncGenerator<AgentSessionEvent>;
 }
 
@@ -70,9 +75,7 @@ export function createSessionTurnExecutor(deps: SessionTurnExecutorDeps): Sessio
       conversationId,
       messages,
       turnId,
-      signal,
-      agentId,
-      existingSessionId,
+      options,
     ) => executeSessionTurn(
       deps,
       logger,
@@ -80,9 +83,7 @@ export function createSessionTurnExecutor(deps: SessionTurnExecutorDeps): Sessio
       conversationId,
       messages,
       turnId,
-      signal,
-      agentId,
-      existingSessionId,
+      options,
     ),
   };
 }
@@ -95,15 +96,18 @@ async function* executeSessionTurn(
   conversationId: string,
   messages: Message[],
   turnId: string,
-  signal?: AbortSignal,
-  agentId?: string,
-  existingSessionId?: string,
+  options?: SessionTurnExecutionOptions,
 ): AsyncGenerator<AgentSessionEvent> {
   const { sessionManager } = deps;
+  const {
+    signal,
+    agentId,
+    existingSessionId,
+    turnSecrets,
+  } = options ?? {};
 
   const sessionId = existingSessionId
     ?? (await sessionManager.ensureSession(conversationId, agentDef, agentId ?? agentDef.name)).sessionId;
-  deps.onSessionReady?.(turnId, sessionId);
   logger.debug(`Session ${sessionId} ready for turn ${turnId} (agent=${agentDef.name})`);
 
   if (signal?.aborted) {
@@ -112,7 +116,16 @@ async function* executeSessionTurn(
   }
 
   try {
-    const stream = sessionManager.deliverTurn(sessionId, messages, turnId);
+    const deliveryOptions = {
+      ...(signal ? { signal } : {}),
+      ...(turnSecrets ? { turnSecrets: { ...turnSecrets } } : {}),
+    };
+    const stream = sessionManager.deliverTurn(
+      sessionId,
+      messages,
+      turnId,
+      Object.keys(deliveryOptions).length > 0 ? deliveryOptions : undefined,
+    );
 
     for await (const sessionEvent of stream) {
       if (signal?.aborted) {

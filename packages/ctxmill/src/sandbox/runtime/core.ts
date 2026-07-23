@@ -21,6 +21,7 @@ export interface SandboxRuntimeDriver {
   restoreArchive(containerId: string, archive: Buffer, options?: { deletedPaths?: string[] }): Promise<void>;
   extractLogs(containerId: string, tail?: number): Promise<string>;
   getContainer(sessionId: string): Promise<ContainerInfo | null>;
+  getRuntimeInstanceToken(containerId: string): Promise<string | undefined>;
   listManagedContainers(): Promise<ContainerInfo[]>;
   listManagedContainersWithLabels(): Promise<ManagedContainerWithLabels[]>;
   getContainerExitCode(containerId: string): Promise<number | null>;
@@ -132,6 +133,12 @@ export class SandboxContainerCore implements SandboxContainerManager {
 
   async getContainer(sessionId: string): Promise<ContainerInfo | null> {
     return this.options.driver.getContainer(sessionId);
+  }
+
+  async getRuntimeInstanceToken(
+    containerId: string,
+  ): Promise<string | undefined> {
+    return this.options.driver.getRuntimeInstanceToken(containerId);
   }
 
   async listManagedContainers(): Promise<ContainerInfo[]> {

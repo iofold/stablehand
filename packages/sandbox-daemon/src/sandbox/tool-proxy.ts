@@ -18,12 +18,18 @@ import {
   type RegisterArtifactResponse,
   type ResolveArtifactRequest,
   type ResolveArtifactResponse,
+  type RequestToolRequest,
   RequestToolRequestSchema,
   type RequestToolResponse,
 } from '@ctxmill/proto/sandbox/v1';
 
 import { retryWithBackoff } from '../util/retry.js';
 import { stringifyJsonWithBigInts } from './json-serialization.js';
+import {
+  requireTurnDeliveryContext,
+  snapshotTurnDeliveryCapability,
+  type TurnDeliveryContext,
+} from './turn-delivery-context.js';
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -37,13 +43,7 @@ import { stringifyJsonWithBigInts } from './json-serialization.js';
  */
 export interface OrchestratorServiceClient {
   requestTool: (
-    req: {
-      turnId: string;
-      agentId: string;
-      toolName: string;
-      argsJson: string;
-      requestId: string;
-    },
+    req: RequestToolRequest,
     opts?: { timeoutMs?: number; signal?: AbortSignal },
   ) => Promise<RequestToolResponse>;
   registerArtifact: (
@@ -64,6 +64,13 @@ export interface ToolProxyOptions {
   timeoutMs?: number;
   /** Retry delays in ms for exponential backoff (default: [100, 500, 2000]). */
   retryDelays?: number[];
+}
+
+/** Canonical routing identity attached to every sandbox callback. */
+export interface ToolCallbackRoute {
+  sandboxSessionId: string;
+  agentId: string;
+  resolveDeliveryContext?: () => TurnDeliveryContext;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -91,8 +98,7 @@ const DEFAULT_RETRY_DELAYS = [100, 500, 2000]; // 3 retries with exponential bac
 export function createToolProxy(
   toolName: string,
   orchestratorClient: OrchestratorServiceClient,
-  turnId: string | { current: string },
-  agentId: string,
+  route: ToolCallbackRoute,
   opts?: ToolProxyOptions,
 ): (input: unknown) => Promise<string> {
   const timeoutMs = opts?.timeoutMs
@@ -100,24 +106,30 @@ export function createToolProxy(
   const retryDelays = opts?.retryDelays ?? DEFAULT_RETRY_DELAYS;
 
   return async (input: unknown): Promise<string> => {
-    const resolvedTurnId = typeof turnId === 'string' ? turnId : turnId.current;
+    const deliveryContext = route.resolveDeliveryContext?.()
+      ?? requireTurnDeliveryContext({
+        sandboxSessionId: route.sandboxSessionId,
+        agentId: route.agentId,
+      });
     const requestId = generateRequestId();
     const argsJson = typeof input === 'string' ? input : stringifyJsonWithBigInts(input ?? {});
-
-    const req = create(RequestToolRequestSchema, {
-      turnId: resolvedTurnId,
-      agentId,
-      toolName,
-      argsJson,
-      requestId,
-    });
 
     try {
       return await retryWithBackoff(
         async () => {
+          const req = create(RequestToolRequestSchema, {
+            turnId: deliveryContext.identity.turnId,
+            sandboxSessionId: deliveryContext.identity.sandboxSessionId,
+            agentId: deliveryContext.identity.agentId,
+            toolName,
+            argsJson,
+            requestId,
+            deliveryCapability: snapshotTurnDeliveryCapability(deliveryContext),
+          });
           const response = await callWithTimeout(
             (signal) => orchestratorClient.requestTool(req, { timeoutMs, signal }),
             timeoutMs,
+            deliveryContext.abortController.signal,
           );
 
           if (response.error) {
@@ -177,12 +189,16 @@ function isNonRetryableCode(code: number): boolean {
 async function callWithTimeout<T>(
   fn: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
+  parentSignal?: AbortSignal,
 ): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const result = await fn(controller.signal);
+    const signal = parentSignal
+      ? AbortSignal.any([controller.signal, parentSignal])
+      : controller.signal;
+    const result = await fn(signal);
     return result;
   } finally {
     clearTimeout(timer);

@@ -29,8 +29,9 @@ spec:
     Always write clearly and professionally.
   tools:
     - ref: emit-event
-  nativeTools:
-    allowlist:
+  nativeToolPolicy:
+    policy: allow
+    names:
       - Read
       - Write
       - Edit

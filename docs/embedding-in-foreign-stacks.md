@@ -162,16 +162,27 @@ docker compose build
 
 ## Secret Injection
 
-Today, sandbox containers receive secrets as **environment variables** assembled by the orchestrator at session startup / restore time.
+Sandbox sessions have two deliberately separate secret lifetimes:
 
-The effective runtime contract is:
+1. At container start or checkpoint restore, the orchestrator reads its host
+   allowlist and the agent's Secret Store, adds CTXMill's session-control
+   credentials, and injects that stable map into the container environment.
+2. For each accepted `POST /api/agents/:id/message` or
+   `POST /api/agents/:id/turns`, optional `sandboxSecrets` travel only on the
+   live `DeliverTurn` RPC. The daemon gives the harness an immutable copy for
+   that exact admitted turn. Harness adapters pass those values explicitly to
+   the model client or child-process environment; the daemon's `process.env`
+   and stable session secret map are never mutated.
 
-1. read a hardcoded allowlist of host env vars from the orchestrator process
-2. read all per-agent secrets from the CTXMILL Secret Store
-3. merge any explicit per-turn `sandboxSecrets` from `POST /api/agents/:id/message` or `POST /api/agents/:id/turns`
-4. inject the merged map into the sandbox container's `Env`
+Turn delivery takes an immutable copy, so warm-session reuse, queueing, and an
+empty-stream retry cannot substitute a later caller's values. Turn secrets are
+not part of container startup configuration or checkpoints. While a turn is
+open, an authenticated encrypted envelope lets queued restart and checkpointed
+HITL continuation recover that same map; terminal finalization deletes it.
 
-Merge precedence is: allowlisted host env < per-agent Secret Store < per-turn `sandboxSecrets`.
+Where a harness consumes both maps for the same integration, precedence is:
+allowlisted host env < per-agent Secret Store < per-turn `sandboxSecrets`.
+CTXMill's own session-control credentials are not overrideable.
 
 ### SANDBOX_SECRET_ALLOWLIST
 The orchestrator only passes specific environment variables to the sandbox. The current allowlist includes:
@@ -189,20 +200,36 @@ This means the current model is:
 
 - host env → sandbox: **allowlisted only**
 - per-agent secret store → sandbox: **any key name**
-- per-run `sandboxSecrets` → sandbox: **runtime-only for the created interactive/background run**
+- per-turn `sandboxSecrets` → harness/model/child process: **explicit immutable map for only the admitted interactive/background turn**
 
 If you need custom secrets for tools or harnesses, the supported path today is to store them in the CTXMILL Secret Store (via the API/UI) rather than expecting arbitrary host env passthrough.
 
 For short-lived integration tokens that should not be stored on the agent, pass `sandboxSecrets` when starting a background run:
 
 ```bash
-curl -X POST http://orchestrator:3001/api/agents/$AGENT_ID/session \
+curl -X POST http://orchestrator:3001/api/agents/$AGENT_ID/turns \
   -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"task":"Run the monthly close workflow","sandboxSecrets":{"MYAPP_SERVICE_TOKEN":"jwt-or-token"}}'
 ```
 
-Per-run sandbox secrets are memory-only. They are not persisted to task messages, agent records, or checkpoints; a later restore from checkpoint uses the host allowlist and per-agent Secret Store again.
+Per-turn sandbox secrets are never persisted in plaintext. They do not appear
+in task messages, agent records, container definitions, events, or checkpoints.
+CTXMill retains only an authenticated encrypted envelope while the turn is open
+so the same turn can survive queueing, process restart, or checkpointed HITL.
+The envelope is deleted atomically when that turn reaches a terminal state.
+
+Persistent harnesses may initialize model/provider clients when the sandbox
+session opens. Therefore model API keys and provider endpoint configuration
+belong in the agent Secret Store; use per-turn `sandboxSecrets` for integration
+credentials consumed during the live turn.
+
+Detached work that outlives its admitted turn cannot use the expired turn
+context. Use an authenticated service call or a stored agent secret for
+background activity with a longer lifetime.
+
+The API rejects sandbox runtime-control keys: every `CTXMILL_*` key plus
+`ORCHESTRATOR_URL`, `SANDBOX_PORT`, `PTC_PORT`, and `NODE_OPTIONS`.
 
 ### Registering a custom secret end-to-end
 

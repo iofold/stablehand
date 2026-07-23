@@ -102,4 +102,27 @@ describe('KubernetesContainerDriver pod scheduling wait', () => {
 
     await expect(driver.startContainer('ctxmill-sandbox-test')).rejects.toThrow(/exited before becoming ready/);
   });
+
+  it('reads the exact runtime instance token from the target pod environment', async () => {
+    const driver = createDriver();
+    stubFindPod(driver, [{
+      ...runningPod,
+      spec: {
+        containers: [{
+          name: 'sandbox',
+          env: [
+            { name: 'OTHER_VALUE', value: 'before' },
+            {
+              name: 'CTXMILL_RUNTIME_INSTANCE_TOKEN',
+              value: 'runtime-token-1',
+            },
+          ],
+        }],
+      },
+    }]);
+
+    await expect(
+      driver.getRuntimeInstanceToken('ctxmill-sandbox-test'),
+    ).resolves.toBe('runtime-token-1');
+  });
 });
