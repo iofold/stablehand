@@ -1,6 +1,7 @@
 {
   "name": "create-ctxmill",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "Scaffold a new CTXMill project",
   "bin": {

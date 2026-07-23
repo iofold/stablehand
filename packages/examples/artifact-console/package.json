@@ -1,6 +1,7 @@
 {
   "name": "@ctxmill/example-artifact-console",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Token-gated CTXMill console built for static artifact hosting (artifact-use)",

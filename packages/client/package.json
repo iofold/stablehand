@@ -1,6 +1,7 @@
 {
   "name": "@ctxmill/client",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "Strict control-plane and AG-UI clients for CTXMill integrations",
   "sideEffects": false,

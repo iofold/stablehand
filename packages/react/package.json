@@ -1,6 +1,7 @@
 {
   "name": "@ctxmill/react",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "React components and hooks for CTXMill AG-UI chat integrations",
   "sideEffects": false,

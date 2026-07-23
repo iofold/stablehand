@@ -1,6 +1,7 @@
 {
   "name": "@ctxmill/manifest",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "Strict browser-light and Node agent manifest contracts for CTXMill",
   "sideEffects": false,

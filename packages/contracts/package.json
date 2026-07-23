@@ -1,6 +1,7 @@
 {
   "name": "@ctxmill/contracts",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "Strict runtime contracts for CTXMill APIs and event streams",
   "sideEffects": false,

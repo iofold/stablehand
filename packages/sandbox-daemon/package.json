@@ -1,6 +1,7 @@
 {
   "name": "@ctxmill/sandbox-daemon",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "Sandbox daemon - gRPC server and harness adapters for ctxmill",
   "main": "dist/index.js",

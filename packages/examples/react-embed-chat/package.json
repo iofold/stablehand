@@ -1,6 +1,7 @@
 {
   "name": "@ctxmill/example-react-embed-chat",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Embeddable React chat example for CTXMill AG-UI integrations",

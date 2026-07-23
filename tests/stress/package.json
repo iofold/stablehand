@@ -1,5 +1,6 @@
 {
   "name": "@ctxmill/stress-tests",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {

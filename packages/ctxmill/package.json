@@ -1,6 +1,7 @@
 {
   "name": "ctxmill",
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "Framework for building vertical AI products with ambient agents",
   "main": "dist/index.js",
