@@ -28,7 +28,8 @@ agent.md
 *.db
 *.db-shm
 *.db-wal
-.sisyphus/notepads/
+.sisyphus/
+.opencode/
 
 # bv (beads viewer) local config and caches
 .bv/

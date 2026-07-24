@@ -110,8 +110,7 @@ pnpm typecheck                             # TypeScript check all packages
 
 # Test
 pnpm test                                  # Vitest (unit + integration + compliance)
-agent-browser skills get core              # Browser E2E certification workflow
-agent-browser skills get dogfood           # Deep exploratory browser QA workflow
+# Browser E2E certification: docs/verification/e2e-testing-journey.md
 # No contract test command/job unless restored
 
 # Docker Helpers

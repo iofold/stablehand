@@ -31,7 +31,7 @@ CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persi
 
 ```bash
 # 1. Clone and enter the project
-git clone <repo-url>
+git clone https://github.com/iofold/ctxmill.git
 cd ctxmill
 
 # 2. Configure your environment
@@ -64,9 +64,7 @@ docker compose down
 pnpm test
 
 # Run browser E2E certification against an already-running stack
-agent-browser skills get core
-agent-browser skills get dogfood
-# Then follow docs/verification/e2e-testing-journey.md
+# (see docs/verification/e2e-testing-journey.md)
 ```
 
 ### Service Endpoints
@@ -125,7 +123,7 @@ tests/
 
 ## Example Surface
 
-The maintained example in this repo is the kitchen-sink project in [packages/examples/kitchen-sink](/path/to/stablehand/packages/examples/kitchen-sink). It exercises the shipped harness set, shared tools, and event-triggered chaining across multiple agents.
+The maintained example in this repo is the kitchen-sink project in [packages/examples/kitchen-sink](packages/examples/kitchen-sink). It exercises the shipped harness set, shared tools, and event-triggered chaining across multiple agents.
 
 The scaffolded starter from `create-ctxmill` is intentionally generic. It creates a single assistant agent with file, knowledge, and search-style helper tools rather than a domain-specific finance, supply-chain, or marketing template.
 
@@ -190,7 +188,6 @@ The shipped UI includes:
 | [Observability](docs/observability.md) | Monitoring, logging, and debugging your deployment |
 | [Debugging Harnesses](docs/debugging-harnesses.md) | Troubleshooting agent execution inside sandbox containers |
 | [Event Pipeline Mapping](docs/event-pipeline-mapping.md) | Proto → TypeScript → AG-UI event conversion reference |
-| [Deploying with Bhatti](docs/deploy-bhatti.md) | Firecracker microVM deployment |
 
 ## License
 
