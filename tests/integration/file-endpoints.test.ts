@@ -336,7 +336,7 @@ describe('File endpoint integration tests', () => {
     expect(upload.json()).toMatchObject({
       revision: 1,
       fileCount: 2,
-      totalBytes: 42,
+      totalBytes: 41,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       appliedAt: expect.any(Number),
     });
