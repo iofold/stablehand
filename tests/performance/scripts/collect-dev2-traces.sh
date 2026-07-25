@@ -21,7 +21,7 @@ done
 
 turn_id_literals="$(
   printf '%s\n' "${turn_ids[@]}" \
-    | jq -Rsc 'split("\n") | map(select(length > 0) | "'"'"'" + . + "'"'"'") | join(",")'
+    | jq -Rrsc 'split("\n") | map(select(length > 0) | "'"'"'" + . + "'"'"'") | join(",")'
 )"
 started_at="$(jq -r '.startedAt' "$RUN_JSON")"
 completed_at="$(jq -r '.completedAt' "$RUN_JSON")"
