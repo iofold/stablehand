@@ -649,6 +649,7 @@ class PiAgentSession implements HarnessSession {
     let totalUsage: TokenUsage | undefined;
     let unsubscribe: (() => void) | undefined;
     let aborted = false;
+    let modelError: string | undefined;
     let unlinkAbort: () => void = () => {};
     const accumulator = new TurnAccumulator({ turnId: input.turnId });
 
@@ -672,6 +673,11 @@ class PiAgentSession implements HarnessSession {
           const msg = piEvent.message as Record<string, unknown> | undefined;
           if (msg?.stopReason === 'error') {
             console.error(`[pi-agent] SDK model error: ${msg.errorMessage}`);
+            if (piEvent.type === 'turn_end') {
+              modelError = typeof msg.errorMessage === 'string' && msg.errorMessage.length > 0
+                ? msg.errorMessage
+                : 'PI model request failed';
+            }
           }
         }
         totalUsage = _piUpdateUsage(
@@ -684,7 +690,7 @@ class PiAgentSession implements HarnessSession {
           if (mapped.type === 'text_delta') {
             eventQueue.push(accumulator.appendText(mapped.content));
           } else if (mapped.type === 'done') {
-            if (!aborted) {
+            if (!aborted && !modelError) {
               accumulator.recordDone({
                 ...mapped,
                 ...(mapped.usage ? { usage: mapped.usage } : {}),
@@ -706,6 +712,9 @@ class PiAgentSession implements HarnessSession {
           }
         }
         if (piEvent.type === 'agent_end') {
+          if (!aborted && modelError) {
+            eventQueue.push({ type: 'error', error: modelError });
+          }
           done = true;
         }
       });

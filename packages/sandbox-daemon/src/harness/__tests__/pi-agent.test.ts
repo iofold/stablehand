@@ -271,6 +271,58 @@ describe('PIAgentHarness transcript syncing', () => {
     }
   });
 
+  it('emits an error instead of success when the PI SDK reports a model error', async () => {
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    const prompt = vi.fn(async () => {
+      listener?.({
+        type: 'turn_end',
+        message: {
+          stopReason: 'error',
+          errorMessage: 'provider rejected configured model',
+          usage: {
+            input: 0,
+            output: 0,
+            totalTokens: 0,
+          },
+        },
+      });
+      listener?.({ type: 'agent_end', messages: [], willRetry: false });
+    });
+
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt,
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        state: createNativeState(),
+        setModel: vi.fn(),
+      },
+    });
+
+    const session = await new PIAgentHarness().openSession(makeConfig());
+    try {
+      const events = await collectEvents(session.deliverTurn({
+        turnId: 'turn-pi-model-error',
+        messages: [
+          makeMessage('user', 'Trigger an error', '2026-04-05T10:00:00.000Z'),
+        ],
+      }, {}));
+
+      expect(events).toEqual([{
+        type: 'error',
+        error: 'provider rejected configured model',
+      }]);
+    } finally {
+      await session.close();
+    }
+  });
+
   it('registers Google runtime auth through the canonical model runtime', async () => {
     const dispose = vi.fn();
     mockCreateAgentSession.mockResolvedValue({
