@@ -13,6 +13,7 @@ export class KubernetesContainerManager extends SandboxContainerCore {
       maxGlobalContainers: options.maxGlobalContainers ?? 20,
       queueTimeoutMs: options.queueTimeoutMs ?? 60_000,
       loggerTag: '[KubernetesContainerManager]',
+      runtime: 'kubernetes',
     });
   }
 }

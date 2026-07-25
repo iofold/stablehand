@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EventMap, EventName } from '../../../events/bus.js';
 import { KNOWN_BUS_EVENT_NAMES } from '../frames.js';
 import { CanonicalLog } from '../canonical-log.js';
+import type {
+  PerformanceAttributes,
+  PerformancePhase,
+} from '../../../observability/performance.js';
 
 function createDeps() {
   let nextSeq = 100;
@@ -208,6 +212,40 @@ const EVENT_MAP_SAMPLES: { [K in EventName]: EventMap[K] } = {
 };
 
 describe('CanonicalLog (ADR-015)', () => {
+  it('measures durable frame persistence with turn correlation', async () => {
+    const deps = createDeps();
+    const measured: Array<{
+      phase: PerformancePhase;
+      attributes: PerformanceAttributes;
+    }> = [];
+    const performance = {
+      measure: vi.fn(async <T>(
+        phase: PerformancePhase,
+        attributes: PerformanceAttributes,
+        operation: () => Promise<T>,
+      ): Promise<T> => {
+        measured.push({ phase, attributes });
+        return operation();
+      }),
+    };
+    const log = new CanonicalLog({
+      ...deps,
+      performance,
+    });
+
+    await log.ingest('message.delta', CHUNK);
+
+    expect(measured).toEqual([{
+      phase: 'event.persist',
+      attributes: expect.objectContaining({
+        'ctxmill.turn.id': 'turn-1',
+        'ctxmill.agent.id': 'agent-1',
+        'ctxmill.event.name': 'message.delta',
+        'ctxmill.event.frame_count': 2,
+      }),
+    }]);
+  });
+
   it('persists before fan-out and hands subscribers seq-stamped frames (ADR-006)', async () => {
     const deps = createDeps();
     const log = new CanonicalLog(deps as never);

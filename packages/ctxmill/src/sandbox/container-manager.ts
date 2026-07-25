@@ -30,6 +30,7 @@ export class ContainerManager extends SandboxContainerCore {
       maxGlobalContainers: options?.maxGlobalContainers ?? 20,
       queueTimeoutMs: options?.queueTimeoutMs ?? 60_000,
       loggerTag: '[ContainerManager]',
+      runtime: 'docker',
     });
   }
 }

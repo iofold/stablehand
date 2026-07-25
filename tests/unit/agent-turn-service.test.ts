@@ -16,6 +16,11 @@ import {
   TestTurnRegistry,
   createTestSandboxSessionManager,
 } from '../utils/test-turn-registry.js';
+import type {
+  PerformanceAttributes,
+  PerformanceMeasurement,
+  PerformancePhase,
+} from '../../packages/ctxmill/src/observability/performance.js';
 
 type StreamEvent = AgentSessionEvent | MessageCommittedEvent;
 
@@ -281,6 +286,82 @@ async function executeEvents(
 describe('AgentTurnService', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('measures session admission, first event, first token, and turn delivery', async () => {
+    const observations: Array<{
+      phase: PerformancePhase;
+      attributes: PerformanceAttributes;
+      outcome?: string;
+    }> = [];
+    const performance = {
+      start: vi.fn((
+        phase: PerformancePhase,
+        attributes: PerformanceAttributes,
+      ): PerformanceMeasurement => {
+        const observation = { phase, attributes, outcome: undefined as string | undefined };
+        observations.push(observation);
+        return {
+          setAttribute: vi.fn(),
+          end: vi.fn((outcome = 'ok') => {
+            observation.outcome = outcome;
+            return { phase, durationMs: 1, outcome };
+          }),
+        };
+      }),
+      measure: vi.fn(async <T>(
+        phase: PerformancePhase,
+        attributes: PerformanceAttributes,
+        operation: () => Promise<T>,
+      ): Promise<T> => {
+        observations.push({ phase, attributes, outcome: 'ok' });
+        return operation();
+      }),
+    };
+    const ctx = createDeps();
+    ctx.sessionTurnService.executeSessionTurn.mockReturnValue(eventStream([
+      {
+        type: 'RUN_STARTED',
+        runId: 'run-1',
+        threadId: 'conv-1',
+      },
+      {
+        type: 'TEXT_MESSAGE_CONTENT',
+        runId: 'run-1',
+        threadId: 'conv-1',
+        messageId: 'message-1',
+        delta: 'hello',
+      },
+      makeCommittedEvent({ content: 'hello' }),
+      {
+        type: 'RUN_FINISHED',
+        runId: 'run-1',
+        threadId: 'conv-1',
+      },
+    ]));
+
+    await new AgentTurnService({
+      ...ctx.deps,
+      performance,
+    }).executeTurn(makeParams());
+
+    expect(observations.map((observation) => observation.phase)).toEqual(
+      expect.arrayContaining([
+        'turn.execute',
+        'session.ensure',
+        'turn.delivery',
+        'turn.first_event',
+        'turn.first_token',
+      ]),
+    );
+    expect(observations.find(({ phase }) => phase === 'turn.first_token'))
+      .toMatchObject({
+        attributes: expect.objectContaining({
+          'ctxmill.turn.id': 'run-1',
+          'ctxmill.harness': 'claude-agents',
+        }),
+        outcome: 'ok',
+      });
   });
 
   it('calls executeSessionTurn with conversation turn inputs and abort signal', async () => {

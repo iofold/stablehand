@@ -1,4 +1,8 @@
 import { ContainerAccounting, type ContainerAccountingEntry } from '../container-accounting.js';
+import {
+  performanceInstrumentation,
+  type PerformanceRecorder,
+} from '../../observability/performance.js';
 import { isAliveContainerStatus } from './status.js';
 import type {
   ContainerInfo,
@@ -33,6 +37,8 @@ export interface SandboxContainerCoreOptions {
   maxGlobalContainers: number;
   queueTimeoutMs: number;
   loggerTag: string;
+  runtime: 'docker' | 'kubernetes';
+  performance?: PerformanceRecorder;
 }
 
 /** Container-manager-relevant subset of runtime settings (live updates, ctx-reir). */
@@ -47,9 +53,11 @@ export interface SandboxRuntimeSettingsUpdate {
 
 export class SandboxContainerCore implements SandboxContainerManager {
   private readonly accounting: ContainerAccounting;
+  private readonly performance: PerformanceRecorder;
 
   constructor(private readonly options: SandboxContainerCoreOptions) {
     this.accounting = new ContainerAccounting(options.maxGlobalContainers, options.queueTimeoutMs);
+    this.performance = options.performance ?? performanceInstrumentation;
   }
 
   /**
@@ -66,11 +74,29 @@ export class SandboxContainerCore implements SandboxContainerManager {
   }
 
   async createContainer(opts: CreateContainerOptions): Promise<ContainerInfo> {
-    await this.accounting.acquireSlot();
+    const attributes = {
+      'ctxmill.runtime': this.options.runtime,
+      'ctxmill.harness': opts.harnessName,
+      'ctxmill.session.id': opts.sessionId,
+      'ctxmill.agent.id': opts.agentId,
+      'ctxmill.conversation.id': opts.conversationId,
+    };
+    const queueMeasurement = this.performance.start('sandbox.queue', attributes);
+    try {
+      await this.accounting.acquireSlot();
+      queueMeasurement.end('ok');
+    } catch (error) {
+      queueMeasurement.end('error', error);
+      throw error;
+    }
     let containerCreated = false;
 
     try {
-      const info = await this.options.driver.createContainer(opts);
+      const info = await this.performance.measure(
+        'sandbox.create',
+        attributes,
+        () => this.options.driver.createContainer(opts),
+      );
       this.accounting.registerCreated(info.containerId, opts.harnessName);
       containerCreated = true;
       return info;

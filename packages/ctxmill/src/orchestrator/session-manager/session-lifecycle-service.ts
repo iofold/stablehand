@@ -39,6 +39,10 @@ import type {
   SessionRecord,
 } from './types.js';
 import { dbSessionToRecord } from './types.js';
+import {
+  performanceInstrumentation,
+  type PerformanceRecorder,
+} from '../../observability/performance.js';
 
 const TAG = '[SandboxSessionManager]';
 
@@ -151,6 +155,7 @@ export interface SessionLifecycleServiceDeps {
   workspaceDiffService: WorkspaceDiffService;
   logger: Logger;
   parsePendingRequestPayload: (payloadJson: string) => Record<string, unknown>;
+  performance?: PerformanceRecorder;
 }
 
 export class SessionLifecycleService {
@@ -450,6 +455,21 @@ export class SessionLifecycleService {
     sessionId: string,
     reason: string,
     options: SuspendSessionOptions = {},
+  ): Promise<SessionCheckpoint> {
+    return (this.deps.performance ?? performanceInstrumentation).measure(
+      'checkpoint.suspend',
+      {
+        'ctxmill.session.id': sessionId,
+        'ctxmill.checkpoint.reason': reason,
+      },
+      () => this.suspendSessionMeasured(sessionId, reason, options),
+    );
+  }
+
+  private async suspendSessionMeasured(
+    sessionId: string,
+    reason: string,
+    options: SuspendSessionOptions,
   ): Promise<SessionCheckpoint> {
     const record = this.findSessionById(sessionId);
     if (!record) {

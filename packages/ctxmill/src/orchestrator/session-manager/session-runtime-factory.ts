@@ -34,6 +34,10 @@ import type {
   SessionRecord,
   ToolMetadata,
 } from './types.js';
+import {
+  performanceInstrumentation,
+  type PerformanceRecorder,
+} from '../../observability/performance.js';
 
 const TAG = '[SandboxSessionManager]';
 
@@ -53,6 +57,7 @@ export interface SessionRuntimeFactoryDeps {
   ) => Promise<string>;
   logger: Logger;
   dataDir?: string;
+  performance?: PerformanceRecorder;
 }
 
 export class SessionRuntimeFactory {
@@ -68,8 +73,44 @@ export class SessionRuntimeFactory {
     },
   ): Promise<SessionRecord> {
     const harnessName = agentDef.harness ?? 'langgraph';
+    const effectiveAgentId = agentId ?? agentDef.name;
+    return (this.deps.performance ?? performanceInstrumentation).measure(
+      'session.create',
+      {
+        'ctxmill.harness': harnessName,
+        'ctxmill.agent.id': effectiveAgentId,
+        'ctxmill.conversation.id': conversationId,
+        'ctxmill.session.state': 'cold',
+      },
+      () => this.createFreshSessionMeasured(
+        conversationId,
+        agentDef,
+        agentId,
+        options,
+      ),
+    );
+  }
+
+  private async createFreshSessionMeasured(
+    conversationId: string,
+    agentDef: AgentDefinition,
+    agentId?: string,
+    options?: {
+      concurrencyReservationId?: string;
+      runtimeDefinitionHash?: string;
+    },
+  ): Promise<SessionRecord> {
+    const harnessName = agentDef.harness ?? 'langgraph';
     const sessionId = randomUUID();
     const effectiveAgentId = agentId ?? agentDef.name;
+    const performance = this.deps.performance ?? performanceInstrumentation;
+    const performanceAttributes = {
+      'ctxmill.harness': harnessName,
+      'ctxmill.agent.id': effectiveAgentId,
+      'ctxmill.conversation.id': conversationId,
+      'ctxmill.session.id': sessionId,
+      'ctxmill.session.state': 'cold',
+    };
     const runtimeDefinitionHash = options?.runtimeDefinitionHash
       ?? await this.deps.resolveRuntimeDefinitionHash(
         effectiveAgentId,
@@ -91,29 +132,35 @@ export class SessionRuntimeFactory {
     let createdContainerId: string | undefined;
 
     try {
-      if (this.deps.dataDir && agentDef.workspaceDir) {
-        conversationDir = getConversationDir(this.deps.dataDir, effectiveAgentId, conversationId);
-        const preparedWorkspace = await ensureConversationWorkspace(agentDef.workspaceDir, conversationDir);
-        createdConversationWorkspace = preparedWorkspace.created;
-        sessionWorkspaceDir = preparedWorkspace.workspaceDir;
-        workspaceDir = preparedWorkspace.workspaceDir;
+      await performance.measure(
+        'workspace.prepare',
+        performanceAttributes,
+        async () => {
+          if (this.deps.dataDir && agentDef.workspaceDir) {
+            conversationDir = getConversationDir(this.deps.dataDir, effectiveAgentId, conversationId);
+            const preparedWorkspace = await ensureConversationWorkspace(agentDef.workspaceDir, conversationDir);
+            createdConversationWorkspace = preparedWorkspace.created;
+            sessionWorkspaceDir = preparedWorkspace.workspaceDir;
+            workspaceDir = preparedWorkspace.workspaceDir;
 
-        this.deps.logger.debug(`${TAG} using conversation workspace at ${sessionWorkspaceDir}`);
-      }
+            this.deps.logger.debug(`${TAG} using conversation workspace at ${sessionWorkspaceDir}`);
+          }
 
-      // A server-managed workspace has already been materialized by the workspace
-      // upload API and copied into the conversation directory above. The manifest
-      // sources describe the original project checkout and are not runtime paths.
-      if (workspaceDir && agentDef.workspaceContent && !this.deps.dataDir) {
-        await prepareWorkspace({
-          workspaceDir,
-          projectDir: agentDef.projectDir,
-          harnessName,
-          workspaceContent: agentDef.workspaceContent,
-        }, this.deps.logger);
-      }
+          // A server-managed workspace has already been materialized by the workspace
+          // upload API and copied into the conversation directory above. The manifest
+          // sources describe the original project checkout and are not runtime paths.
+          if (workspaceDir && agentDef.workspaceContent && !this.deps.dataDir) {
+            await prepareWorkspace({
+              workspaceDir,
+              projectDir: agentDef.projectDir,
+              harnessName,
+              workspaceContent: agentDef.workspaceContent,
+            }, this.deps.logger);
+          }
 
-      await applyWorkspaceSetup(workspaceDir, agentDef.harnessConfig);
+          await applyWorkspaceSetup(workspaceDir, agentDef.harnessConfig);
+        },
+      );
 
       const runtimeInstanceToken = createRuntimeInstanceToken();
       const stableSandboxSecrets = {
@@ -138,14 +185,22 @@ export class SessionRuntimeFactory {
       });
       createdContainerId = containerInfo.containerId;
 
-      const startedContainerInfo = await this.deps.containerManager.startContainer(containerInfo.containerId);
+      const startedContainerInfo = await performance.measure(
+        'sandbox.start',
+        performanceAttributes,
+        () => this.deps.containerManager.startContainer(containerInfo.containerId),
+      );
       const reachableContainerInfo = startedContainerInfo?.containerName ? startedContainerInfo : containerInfo;
 
       const baseUrl = sandboxGrpcBaseUrl(reachableContainerInfo);
       this.deps.logger.debug(`${TAG} waiting for container at ${baseUrl}`);
-      const { grpcClient } = await waitForContainerReady(baseUrl, {
-        runtimeInstanceToken,
-      });
+      const { grpcClient } = await performance.measure(
+        'sandbox.ready',
+        performanceAttributes,
+        () => waitForContainerReady(baseUrl, {
+          runtimeInstanceToken,
+        }),
+      );
 
       const resolvedTools = this.deps.resolveToolsForAgent(
         resolveAgentToolNames(agentDef),
@@ -178,7 +233,11 @@ export class SessionRuntimeFactory {
       });
 
       this.deps.logger.debug(`${TAG} opening session on container ${reachableContainerInfo.containerName}`);
-      await retryGrpcCall(() => grpcClient.openSession(openReq), 5, 1000);
+      await performance.measure(
+        'harness.open',
+        performanceAttributes,
+        () => retryGrpcCall(() => grpcClient.openSession(openReq), 5, 1000),
+      );
 
       const dbSession = await this.deps.db.createSandboxSession({
         id: sessionId,

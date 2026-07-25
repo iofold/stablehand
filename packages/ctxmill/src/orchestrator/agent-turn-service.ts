@@ -27,6 +27,12 @@ import {
   acquireTurnDeliveryLease,
   type TurnDeliveryLeaseGuard,
 } from './turn-delivery-lease.js';
+import {
+  performanceInstrumentation,
+  type PerformanceMeasurement,
+  type PerformanceOutcome,
+  type PerformanceRecorder,
+} from '../observability/performance.js';
 
 const INDIVIDUALLY_HANDLED = new Set([
   'MESSAGE_COMMITTED',
@@ -75,6 +81,7 @@ export interface AgentTurnServiceDeps {
   eventBus: TypedEventBus;
   /** Session-turn executor for running turns in sandbox containers. */
   sessionTurnService: SessionTurnExecutor;
+  performance?: PerformanceRecorder;
 }
 
 export interface ExecuteTurnParams {
@@ -110,12 +117,14 @@ export class AgentTurnService {
   private eventBus: TypedEventBus;
   private sessionTurnService: SessionTurnExecutor;
   private turnFinalizer: TurnFinalizer;
+  private performance: PerformanceRecorder;
 
   constructor(deps: AgentTurnServiceDeps) {
     this.db = deps.db;
     this.sessionManager = deps.sessionManager;
     this.eventBus = deps.eventBus;
     this.sessionTurnService = deps.sessionTurnService;
+    this.performance = deps.performance ?? performanceInstrumentation;
     this.turnFinalizer = new TurnFinalizer({ db: deps.db, eventBus: deps.eventBus, logger: console });
   }
 
@@ -128,6 +137,24 @@ export class AgentTurnService {
    */
   async executeTurn(params: ExecuteTurnParams): Promise<void> {
     const { agentDef, messages, agentId, conversationId, turnId, mode, taskDescription } = params;
+    const harnessName = agentDef.harness ?? 'langgraph';
+    const performanceAttributes = {
+      'ctxmill.turn.id': turnId,
+      'ctxmill.agent.id': agentId,
+      'ctxmill.conversation.id': conversationId,
+      'ctxmill.harness': harnessName,
+      'ctxmill.mode': mode,
+    };
+    const turnExecutionMeasurement = this.performance.start(
+      'turn.execute',
+      performanceAttributes,
+    );
+    let deliveryMeasurement: PerformanceMeasurement | undefined;
+    let firstEventMeasurement: PerformanceMeasurement | undefined;
+    let firstTokenMeasurement: PerformanceMeasurement | undefined;
+    let deliveryStarted = false;
+    let eventObserved = false;
+    let tokenObserved = false;
     let deliveryContext = params.deliveryContext;
     let ownedDeliveryLease: TurnDeliveryLeaseGuard | undefined;
     let deliverySignal = params.signal;
@@ -670,13 +697,17 @@ export class AgentTurnService {
               `Prepared interrupt continuation session ${params.sandboxSessionId} is not active`,
             );
           })()
-        : await this.sessionManager.ensureSession(
-          conversationId,
-          agentDef,
-          agentId,
-          params.concurrencyReservation
-            ? { concurrencyReservationId: params.concurrencyReservation.id }
-            : undefined,
+        : await this.performance.measure(
+          'session.ensure',
+          performanceAttributes,
+          () => this.sessionManager.ensureSession(
+            conversationId,
+            agentDef,
+            agentId,
+            params.concurrencyReservation
+              ? { concurrencyReservationId: params.concurrencyReservation.id }
+              : undefined,
+          ),
         );
       if (params.sandboxSessionId && (
         sandboxSession.status !== 'ACTIVE'
@@ -724,6 +755,24 @@ export class AgentTurnService {
         ? AbortSignal.any(activeSignals)
         : activeSignals[0];
 
+      const deliveryAttributes = {
+        ...performanceAttributes,
+        'ctxmill.session.id': sandboxSessionId,
+      };
+      deliveryMeasurement = this.performance.start(
+        'turn.delivery',
+        deliveryAttributes,
+      );
+      firstEventMeasurement = this.performance.start(
+        'turn.first_event',
+        deliveryAttributes,
+      );
+      firstTokenMeasurement = this.performance.start(
+        'turn.first_token',
+        deliveryAttributes,
+      );
+      deliveryStarted = true;
+
       const eventSource: AsyncGenerator<AgentSessionEvent> = this.sessionTurnService.executeSessionTurn(
         agentDef,
         conversationId,
@@ -738,6 +787,8 @@ export class AgentTurnService {
       );
 
       for await (const event of eventSource) {
+        eventObserved = true;
+        firstEventMeasurement.end('ok');
         if (signal?.aborted) break;
         await assertDeliveryOwnership();
 
@@ -910,6 +961,10 @@ export class AgentTurnService {
         // Emit text chunks to internal event bus (for triggers and monitoring)
         if (event.type === 'TEXT_MESSAGE_CONTENT' && 'delta' in event) {
           const textEvent = event as unknown as TextContentEvent;
+          if (textEvent.delta.length > 0) {
+            tokenObserved = true;
+            firstTokenMeasurement.end('ok');
+          }
           accumulatedText += textEvent.delta;
 
           const lastPart = streamingParts[streamingParts.length - 1];
@@ -1001,7 +1056,32 @@ export class AgentTurnService {
       try {
         await settleExecution();
       } finally {
-        await ownedDeliveryLease?.release();
+        try {
+          await ownedDeliveryLease?.release();
+        } finally {
+          const outcome: PerformanceOutcome = wasCancelled
+            ? 'cancelled'
+            : turnError
+              ? 'error'
+              : deliveryStarted
+                ? 'ok'
+                : 'empty';
+          const error = outcome === 'error' ? turnError : undefined;
+          if (!eventObserved) {
+            firstEventMeasurement?.end(
+              outcome === 'ok' ? 'empty' : outcome,
+              error,
+            );
+          }
+          if (!tokenObserved) {
+            firstTokenMeasurement?.end(
+              outcome === 'ok' ? 'empty' : outcome,
+              error,
+            );
+          }
+          deliveryMeasurement?.end(outcome, error);
+          turnExecutionMeasurement.end(outcome, error);
+        }
       }
     }
     if (continuationExecutionError) {

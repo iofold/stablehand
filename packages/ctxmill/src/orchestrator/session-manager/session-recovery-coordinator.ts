@@ -54,6 +54,10 @@ import type {
   ToolMetadata,
 } from './types.js';
 import { dbSessionToRecord } from './types.js';
+import {
+  performanceInstrumentation,
+  type PerformanceRecorder,
+} from '../../observability/performance.js';
 
 const TAG = '[SandboxSessionManager]';
 const TRANSPORT_ERROR_RE = /ENOTFOUND|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ETIMEDOUT|UND_ERR_SOCKET|socket hang up/i;
@@ -163,6 +167,7 @@ export interface SessionRecoveryCoordinatorDeps {
    * AbortSignal cancellation.
    */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  performance?: PerformanceRecorder;
 }
 
 export class SessionRecoveryCoordinator implements SessionReconciler {
@@ -346,6 +351,23 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     dbSession: SandboxSessionRow,
     agentDef: AgentDefinition,
   ): Promise<SessionRecord> {
+    return (this.deps.performance ?? performanceInstrumentation).measure(
+      'session.restore',
+      {
+        'ctxmill.harness': dbSession.harnessName,
+        'ctxmill.session.id': dbSession.id,
+        'ctxmill.agent.id': dbSession.agentId,
+        'ctxmill.conversation.id': dbSession.conversationId,
+        'ctxmill.session.state': 'checkpointed',
+      },
+      () => this.restoreFromCheckpointOnceMeasured(dbSession, agentDef),
+    );
+  }
+
+  private async restoreFromCheckpointOnceMeasured(
+    dbSession: SandboxSessionRow,
+    agentDef: AgentDefinition,
+  ): Promise<SessionRecord> {
     if (dbSession.status !== 'CHECKPOINTED') {
       throw new Error(
         `Restore attempt for session ${dbSession.id} requires CHECKPOINTED status, received ${dbSession.status}`,
@@ -353,6 +375,14 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     }
     const harnessName = dbSession.harnessName;
     const sessionId = dbSession.id;
+    const performance = this.deps.performance ?? performanceInstrumentation;
+    const performanceAttributes = {
+      'ctxmill.harness': harnessName,
+      'ctxmill.session.id': sessionId,
+      'ctxmill.agent.id': dbSession.agentId,
+      'ctxmill.conversation.id': dbSession.conversationId,
+      'ctxmill.session.state': 'checkpointed',
+    };
 
     this.deps.logger.info(`${TAG} restoring session ${sessionId} from checkpoint`);
     const restoreLease = await acquireSandboxSessionRestoreLease(
@@ -429,12 +459,23 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       createdContainer = containerInfo;
       restoreLease.signal.throwIfAborted();
 
-      const startedContainerInfo = await this.deps.containerManager.startContainer(containerInfo.containerId);
+      const startedContainerInfo = await performance.measure(
+        'sandbox.start',
+        performanceAttributes,
+        () => this.deps.containerManager.startContainer(containerInfo.containerId),
+      );
       restoreLease.signal.throwIfAborted();
       const reachableContainerInfo = startedContainerInfo?.containerName ? startedContainerInfo : containerInfo;
 
       if (!sessionWorkspaceDir) {
-        await this.deps.workspaceDiffService.restore(sessionId, containerInfo.containerId);
+        await performance.measure(
+          'workspace.restore',
+          performanceAttributes,
+          () => this.deps.workspaceDiffService.restore(
+            sessionId,
+            containerInfo.containerId,
+          ),
+        );
         restoreLease.signal.throwIfAborted();
         this.deps.logger.info(`${TAG} workspace restored for session ${sessionId}`);
       } else {
@@ -444,10 +485,14 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       }
 
       const baseUrl = sandboxGrpcBaseUrl(reachableContainerInfo);
-      const { grpcClient } = await waitForContainerReady(baseUrl, {
-        runtimeInstanceToken,
-        signal: restoreLease.signal,
-      });
+      const { grpcClient } = await performance.measure(
+        'sandbox.ready',
+        performanceAttributes,
+        () => waitForContainerReady(baseUrl, {
+          runtimeInstanceToken,
+          signal: restoreLease.signal,
+        }),
+      );
       restoreLease.signal.throwIfAborted();
 
       const restoreTools = this.deps.resolveToolsForAgent(
@@ -483,13 +528,17 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
         },
       });
 
-      await retryGrpcCall(
-        () => grpcClient.openSession(openReq, {
-          signal: restoreLease.signal,
-        }),
-        5,
-        1000,
-        restoreLease.signal,
+      await performance.measure(
+        'harness.open',
+        performanceAttributes,
+        () => retryGrpcCall(
+          () => grpcClient.openSession(openReq, {
+            signal: restoreLease.signal,
+          }),
+          5,
+          1000,
+          restoreLease.signal,
+        ),
       );
 
       restoreLease.signal.throwIfAborted();

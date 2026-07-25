@@ -3,6 +3,10 @@ import { CanonicalStreamEventSchema } from '@ctxmill/contracts';
 import { CanonicalProjector } from './projector.js';
 import type { CanonicalFrame, PersistedFrame } from './frames.js';
 import type { EventPersistenceContext } from '../../events/bus.js';
+import {
+  performanceInstrumentation,
+  type PerformanceRecorder,
+} from '../../observability/performance.js';
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -22,6 +26,7 @@ interface CanonicalLogDeps {
     | 'getTurnFrames'
   >;
   logger: Logger;
+  performance?: Pick<PerformanceRecorder, 'measure'>;
 }
 
 export type FrameSubscriber = (frames: PersistedFrame[]) => void;
@@ -81,7 +86,19 @@ export class CanonicalLog {
       return [];
     }
     this.validateRunFrames(eventName, frames);
-    const persisted = await this.persist(frames, eventName, payload, context);
+    const persisted = await (
+      this.deps.performance ?? performanceInstrumentation
+    ).measure(
+      'event.persist',
+      {
+        'ctxmill.event.name': eventName,
+        'ctxmill.event.frame_count': frames.length,
+        'ctxmill.turn.id': frames[0]?.turnId ?? undefined,
+        'ctxmill.agent.id': frames[0]?.agentId,
+        'ctxmill.conversation.id': frames[0]?.conversationId ?? undefined,
+      },
+      () => this.persist(frames, eventName, payload, context),
+    );
     if (persisted.length > 0) {
       this.fanOut(persisted);
     }

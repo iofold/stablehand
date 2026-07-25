@@ -57,6 +57,18 @@ export interface PerformanceMeasurement {
   ): PerformanceObservation;
 }
 
+export interface PerformanceRecorder {
+  start(
+    phase: PerformancePhase,
+    attributes?: PerformanceAttributes,
+  ): PerformanceMeasurement;
+  measure<T>(
+    phase: PerformancePhase,
+    attributes: PerformanceAttributes,
+    operation: () => Promise<T>,
+  ): Promise<T>;
+}
+
 type ActiveSpanRunner = <T>(
   name: string,
   attributes: Record<string, PerformanceAttributeValue>,
@@ -118,7 +130,7 @@ function errorValue(error: unknown): Error {
  * receive only the bounded attributes above, so enabling the OTLP metrics
  * exporter cannot create an unbounded time-series cardinality explosion.
  */
-export class PerformanceInstrumentation {
+export class PerformanceInstrumentation implements PerformanceRecorder {
   private readonly now: () => number;
   private readonly startSpan: NonNullable<
     PerformanceInstrumentationOptions['startSpan']
