@@ -5,7 +5,7 @@ import type {
   BashSpawnContext,
   BashToolOptions,
   ToolsOptions,
-} from '@mariozechner/pi-coding-agent';
+} from '@earendil-works/pi-coding-agent';
 import type {
   AgentHarness,
   AgentEvent as CtxMillAgentEvent,
@@ -46,8 +46,8 @@ let _sdk: {
   SessionManager: any;
   DefaultResourceLoader: any;
   SettingsManager: any;
-  AuthStorage: any;
-  ModelRegistry: any;
+  ModelRuntime: any;
+  InMemoryCredentialStore: any;
   createReadTool: any;
   createBashTool: any;
   createEditTool: any;
@@ -57,20 +57,19 @@ let _sdk: {
   createLsTool: any;
   createCodingTools: any;
   Type: any;
-  getModel: any;
 } | null = null;
 
 async function getSDK() {
   if (!_sdk) {
-    const codingAgent = await import('@mariozechner/pi-coding-agent');
-    const piAi = await import('@mariozechner/pi-ai');
+    const codingAgent = await import('@earendil-works/pi-coding-agent');
+    const piAi = await import('@earendil-works/pi-ai');
     _sdk = {
       createAgentSession: codingAgent.createAgentSession,
       SessionManager: codingAgent.SessionManager,
       DefaultResourceLoader: codingAgent.DefaultResourceLoader,
       SettingsManager: codingAgent.SettingsManager,
-      AuthStorage: codingAgent.AuthStorage,
-      ModelRegistry: codingAgent.ModelRegistry,
+      ModelRuntime: codingAgent.ModelRuntime,
+      InMemoryCredentialStore: piAi.InMemoryCredentialStore,
       createReadTool: codingAgent.createReadTool,
       createBashTool: codingAgent.createBashTool,
       createEditTool: codingAgent.createEditTool,
@@ -80,7 +79,6 @@ async function getSDK() {
       createLsTool: codingAgent.createLsTool,
       createCodingTools: codingAgent.createCodingTools,
       Type: piAi.Type,
-      getModel: piAi.getModel,
     };
   }
   return _sdk;
@@ -280,16 +278,19 @@ function resolveModel(
     secrets,
   });
   const resolved = getModelFn(provider, model);
+  const gatewayBaseUrl = connection.mode === 'gateway' && provider === 'google'
+    ? `${connection.baseUrl.replace(/\/+$/, '')}/v1beta`
+    : connection.baseUrl;
   if (resolved) {
     return {
       connection,
       pricingKnown: connection.mode === 'direct',
-      model: connection.baseUrl
+      model: gatewayBaseUrl
         ? {
           ...resolved,
           provider,
           id: model,
-          baseUrl: connection.baseUrl,
+          baseUrl: gatewayBaseUrl,
           apiKey: connection.apiKey,
         }
         : resolved,
@@ -311,7 +312,7 @@ function resolveModel(
       name: model,
       provider,
       api: defaults.api,
-      baseUrl: connection.baseUrl ?? defaults.baseUrl,
+      baseUrl: gatewayBaseUrl ?? defaults.baseUrl,
       apiKey: connection.apiKey,
       reasoning: false,
       input: ['text'],
@@ -420,10 +421,10 @@ type NativePiSession = {
   prompt: (text: string) => Promise<void>;
   abort: () => Promise<void>;
   dispose: () => void;
-  agent: {
-    replaceMessages: (messages: Array<Record<string, unknown>>) => void;
-    setModel: (model: Record<string, unknown>) => void;
+  state: {
+    messages: Array<Record<string, unknown>>;
   };
+  setModel: (model: Record<string, unknown>) => Promise<void> | void;
 };
 
 export class PIAgentHarness implements AgentHarness {
@@ -454,8 +455,14 @@ export class PIAgentHarness implements AgentHarness {
         console.error(`[pi-agent] Failed to load extension: ${extPath}`, err);
       }
     }
+    const credentialStore = new sdk.InMemoryCredentialStore();
+    const modelRuntime = await sdk.ModelRuntime.create({
+      credentials: credentialStore,
+      modelsPath: null,
+      allowModelNetwork: false,
+    });
     const { model, pricingKnown, connection } = resolveModel(
-      sdk.getModel,
+      modelRuntime.getModel.bind(modelRuntime),
       harnessConfig,
       config.secrets,
     );
@@ -480,14 +487,12 @@ export class PIAgentHarness implements AgentHarness {
     };
     const customTools = convertTools(sdk.Type, config.tools, turnRef, extensions);
 
-    const authStorage = sdk.AuthStorage.inMemory();
     if (connection.apiKey) {
-      authStorage.setRuntimeApiKey(harnessConfig.provider, connection.apiKey);
-      if (typeof model.api === 'string' && model.api !== harnessConfig.provider) {
-        authStorage.setRuntimeApiKey(model.api, connection.apiKey);
-      }
+      await modelRuntime.setRuntimeApiKey(
+        harnessConfig.provider,
+        connection.apiKey,
+      );
     }
-    const modelRegistry = new sdk.ModelRegistry(authStorage);
     const settingsManager = sdk.SettingsManager.inMemory();
     const resourceLoader = new sdk.DefaultResourceLoader({
       cwd,
@@ -500,14 +505,13 @@ export class PIAgentHarness implements AgentHarness {
     const created = await sdk.createAgentSession({
       cwd,
       model,
-      tools: nativeTools as any[],
-      customTools: customTools as any[],
+      modelRuntime,
+      noTools: 'builtin',
+      customTools: [...nativeTools, ...customTools] as any[],
       sessionManager: restore
         ? sdk.SessionManager.continueRecent(cwd)
         : sdk.SessionManager.create(cwd),
       settingsManager,
-      authStorage,
-      modelRegistry,
       resourceLoader,
     });
     const nativeSession: NativePiSession = created.session;
@@ -722,9 +726,11 @@ class PiAgentSession implements HarnessSession {
         });
       }
 
-      this.nativeSession.agent.replaceMessages(this.buildNativeHistoryMessages(nativeHistory));
+      this.nativeSession.state.messages = this.buildNativeHistoryMessages(
+        nativeHistory,
+      );
       if (this.gatewayEnabled) {
-        this.nativeSession.agent.setModel({
+        await this.nativeSession.setModel({
           ...this.model,
           headers: {
             ...(typeof this.model.headers === 'object' && this.model.headers !== null

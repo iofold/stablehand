@@ -3,6 +3,7 @@ import {
   LangGraphConfigSchema,
   PIAgentConfigSchema,
 } from '@ctxmill/contracts/harness';
+import { isCertifiedNativeModelGatewayProvider } from '@ctxmill/shared';
 import { toOpaqueTurnCorrelation } from '@ctxmill/sandbox-daemon/harness/model-gateway';
 
 export type ModelGatewayTurnAttribution =
@@ -33,7 +34,7 @@ function connectionMode(branch: Branch): 'direct' | 'gateway' {
   if (branch.apiKeyRef !== undefined || branch.baseUrl !== undefined) {
     return 'direct';
   }
-  return branch.provider === 'openai' || branch.provider === 'anthropic'
+  return isCertifiedNativeModelGatewayProvider(branch.provider)
     ? 'gateway'
     : 'direct';
 }

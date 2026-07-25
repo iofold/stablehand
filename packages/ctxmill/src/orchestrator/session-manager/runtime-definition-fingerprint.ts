@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isCertifiedNativeModelGatewayProvider } from '@ctxmill/shared';
 
 export type RuntimeDefinitionFingerprintContext = {
   gateway:
@@ -105,8 +106,7 @@ function collectConnectionModes(
     const explicitlyDirect =
       stringField(branch, 'apiKeyRef') !== undefined
       || stringField(branch, 'baseUrl') !== undefined;
-    const gatewayCertified =
-      provider === 'openai' || provider === 'anthropic';
+    const gatewayCertified = isCertifiedNativeModelGatewayProvider(provider);
     modes.push({
       path,
       provider,

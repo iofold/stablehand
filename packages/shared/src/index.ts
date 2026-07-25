@@ -21,13 +21,18 @@ export {
 } from './system-settings.js';
 export {
   CANONICAL_LLM_PROVIDERS,
+  CERTIFIED_NATIVE_MODEL_GATEWAY_PROVIDERS,
   LLM_PROVIDER_ALIASES,
   isCanonicalLLMProvider,
+  isCertifiedNativeModelGatewayProvider,
   normalizeLLMProvider,
   supportedLLMProviderDescription,
 } from './llm-providers.js';
 export type { AgentSessionEventType, AgentSessionEvent, MessageCommittedEvent } from './events.js';
-export type { CanonicalLLMProvider } from './llm-providers.js';
+export type {
+  CanonicalLLMProvider,
+  CertifiedNativeModelGatewayProvider,
+} from './llm-providers.js';
 export type { SystemSettingBounds, SystemSettingField } from './system-settings.js';
 export type {
   ApiTurnStatus,

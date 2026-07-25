@@ -14,6 +14,11 @@ export default defineConfig({
       '@ctxmill/sandbox-daemon/harness/schemas': resolve(__dirname, 'packages/sandbox-daemon/src/harness/schemas.ts'),
       '@ctxmill/sandbox-daemon': resolve(__dirname, 'packages/sandbox-daemon/src/index.ts'),
       '@ctxmill/proto/sandbox/v1': resolve(__dirname, 'packages/proto/gen/ctxmill/sandbox/v1/sandbox_pb.ts'),
+      '@earendil-works/pi-ai': resolve(__dirname, 'packages/sandbox-daemon/node_modules/@earendil-works/pi-ai'),
+      '@earendil-works/pi-coding-agent': resolve(
+        __dirname,
+        'packages/sandbox-daemon/node_modules/@earendil-works/pi-coding-agent',
+      ),
     },
   },
   test: {
@@ -24,7 +29,7 @@ export default defineConfig({
     teardownTimeout: 5000,
     server: {
       deps: {
-        inline: [/@langchain\//],
+        inline: [/@langchain\//, /@earendil-works\//],
       },
     },
   },

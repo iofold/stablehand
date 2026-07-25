@@ -5,7 +5,24 @@ const mockCreateAgentSession = vi.fn();
 const mockSessionManagerInMemory = vi.fn(() => ({ type: 'session-manager' }));
 const mockSessionManagerCreate = vi.fn((cwd: string) => ({ type: 'session-manager-file', cwd }));
 const mockSessionManagerContinueRecent = vi.fn((cwd: string) => ({ type: 'session-manager-continue', cwd }));
-const mockAuthStorageInMemory = vi.fn(() => ({ setRuntimeApiKey: vi.fn() }));
+const mockSetRuntimeApiKey = vi.fn();
+const mockGetModel = vi.fn((provider: string, model: string) => ({ provider, id: model }));
+const mockModelRuntime = {
+  getModel: mockGetModel,
+  setRuntimeApiKey: mockSetRuntimeApiKey,
+};
+function createNativeState(onMessages = vi.fn()) {
+  let messages: Array<Record<string, unknown>> = [];
+  return {
+    get messages() {
+      return messages;
+    },
+    set messages(next: Array<Record<string, unknown>>) {
+      messages = next;
+      onMessages(next);
+    },
+  };
+}
 const mockCreateCodingTools = vi.fn((cwd: string) => [{ name: 'coding-tools', cwd }]);
 const mockCreateReadTool = vi.fn((cwd: string) => ({ name: 'read', cwd }));
 const mockCreateBashTool = vi.fn((cwd: string) => ({ name: 'bash', cwd }));
@@ -15,7 +32,7 @@ const mockCreateGrepTool = vi.fn((cwd: string) => ({ name: 'grep', cwd }));
 const mockCreateFindTool = vi.fn((cwd: string) => ({ name: 'find', cwd }));
 const mockCreateLsTool = vi.fn((cwd: string) => ({ name: 'ls', cwd }));
 
-vi.mock('@mariozechner/pi-coding-agent', () => ({
+vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   SessionManager: {
     inMemory: mockSessionManagerInMemory,
@@ -28,10 +45,9 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
     };
   }),
   SettingsManager: { inMemory: vi.fn(() => ({ type: 'settings-manager' })) },
-  AuthStorage: { inMemory: mockAuthStorageInMemory },
-  ModelRegistry: vi.fn(function MockModelRegistry() {
-    return { type: 'model-registry' };
-  }),
+  ModelRuntime: {
+    create: vi.fn(async () => mockModelRuntime),
+  },
   createCodingTools: mockCreateCodingTools,
   createReadTool: mockCreateReadTool,
   createBashTool: mockCreateBashTool,
@@ -42,24 +58,31 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
   createLsTool: mockCreateLsTool,
 }));
 
-vi.mock('@mariozechner/pi-ai', async () => {
+vi.mock('@earendil-works/pi-ai', async () => {
   const { Type } = await import('@sinclair/typebox');
   return {
     Type,
-    getModel: vi.fn((provider: string, model: string) => ({ provider, id: model })),
+    InMemoryCredentialStore: vi.fn(function MockCredentialStore() {
+      return { type: 'credential-store' };
+    }),
   };
 });
 
 import { Type } from '@sinclair/typebox';
-import { PIAgentHarness, convertTools, zodToTypeBox, _piMapAgentEvent } from '../../packages/sandbox-daemon/src/index.ts';
+import {
+  PIAgentHarness,
+  convertTools,
+  zodToTypeBox,
+  _piMapAgentEvent,
+} from '../../packages/sandbox-daemon/src/harness/pi-agent.ts';
 import type {
   AgentEvent,
   AgentHarness,
   HarnessSessionConfig,
   TokenUsage,
-} from '../../packages/sandbox-daemon/src/index.ts';
-import type { ToolDefinition } from '../../packages/sandbox-daemon/src/index.ts';
-import type { Message } from '../../packages/sandbox-daemon/src/index.ts';
+} from '../../packages/sandbox-daemon/src/harness/types.ts';
+import type { ToolDefinition } from '../../packages/sandbox-daemon/src/tool/types.ts';
+import type { Message } from '../../packages/sandbox-daemon/src/types.ts';
 
 function makeMessage(
   role: Message['role'],
@@ -475,10 +498,8 @@ describe('PIAgentHarness native tool flow', () => {
           prompt: vi.fn(async () => undefined),
           abort: vi.fn(async () => undefined),
           dispose: vi.fn(),
-          agent: {
-            replaceMessages: vi.fn(),
-            getMessages: vi.fn(() => []),
-          },
+          state: createNativeState(),
+          setModel: vi.fn(),
         },
       };
     });
@@ -505,10 +526,8 @@ describe('PIAgentHarness native tool flow', () => {
           prompt: vi.fn(async () => undefined),
           abort: vi.fn(async () => undefined),
           dispose: vi.fn(),
-          agent: {
-            replaceMessages: vi.fn(),
-            getMessages: vi.fn(() => []),
-          },
+          state: createNativeState(),
+          setModel: vi.fn(),
         },
       };
     });
@@ -535,10 +554,8 @@ describe('PIAgentHarness native tool flow', () => {
         prompt: vi.fn(async () => undefined),
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages,
-          getMessages: vi.fn(() => []),
-        },
+        state: createNativeState(replaceMessages),
+        setModel: vi.fn(),
       },
     });
 
@@ -565,7 +582,12 @@ describe('PIAgentHarness native tool flow', () => {
         nativePersistence: true,
       },
     });
-    expect(replaceMessages).not.toHaveBeenCalled();
+    expect(replaceMessages).toHaveBeenCalledWith([
+      expect.objectContaining({
+        role: 'user',
+        content: '[Previous assistant response]\nRestored reply',
+      }),
+    ]);
 
     await session.close();
   });
@@ -577,10 +599,8 @@ describe('PIAgentHarness native tool flow', () => {
         prompt: vi.fn(async () => undefined),
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-          getMessages: vi.fn(() => []),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 
@@ -640,10 +660,8 @@ describe('PIAgentHarness native tool flow', () => {
         prompt: vi.fn(async () => undefined),
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-          getMessages: vi.fn(() => []),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 

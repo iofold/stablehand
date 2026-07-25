@@ -207,6 +207,50 @@ describe('LangGraphHarness', () => {
     }));
   });
 
+  it('uses native Google gateway transport with opaque turn correlation', async () => {
+    vi.resetModules();
+    const { LangGraphHarness } = await import('../langgraph.js');
+    const session = await new LangGraphHarness().openSession(makeConfig({
+      secrets: {
+        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
+        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+      },
+      harnessConfigJson: JSON.stringify({
+        model: 'gemini-2.5-flash',
+        provider: 'google',
+      }),
+    }));
+
+    const buildModelForConfig = Reflect.get(session, 'buildModelForConfig') as (config: {
+      provider: 'google';
+      model: string;
+    }, secrets: Record<string, string>, turnId: string) => Promise<unknown>;
+    await buildModelForConfig.call(session, {
+      provider: 'google',
+      model: 'gemini-2.5-flash',
+    }, {
+      CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
+      CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+      CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+      CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+    }, 'sensitive-google-turn');
+
+    expect(mockChatGoogleGenerativeAI).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'runtime-key',
+      baseUrl: 'http://litellm:4000',
+      customHeaders: {
+        'x-litellm-trace-id': expect.stringMatching(/^ct_[a-f0-9]{32}$/),
+        'x-litellm-spend-logs-metadata': expect.any(String),
+      },
+      model: 'gemini-2.5-flash',
+    }));
+    expect(JSON.stringify(mockChatGoogleGenerativeAI.mock.calls.at(-1))).not.toContain(
+      'sensitive-google-turn',
+    );
+  });
+
   it('openSession with restore populates transcript from payload.transcript', async () => {
     mockStreamEvents.mockImplementation(() => langGraphStream([
       {

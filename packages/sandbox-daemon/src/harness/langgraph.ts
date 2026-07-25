@@ -557,6 +557,8 @@ class LangGraphSession implements HarnessSession {
       const { ChatGoogleGenerativeAI } = await import('@langchain/google-genai');
       return new ChatGoogleGenerativeAI({
         apiKey: connection.apiKey,
+        baseUrl: connection.baseUrl,
+        customHeaders: correlationHeaders,
         model,
         ...(temperature != null ? { temperature } : {}),
         ...(maxTokens != null ? { maxOutputTokens: maxTokens } : {}),

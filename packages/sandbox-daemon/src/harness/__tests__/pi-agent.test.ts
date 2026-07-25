@@ -3,10 +3,38 @@ import { create } from '@bufbuild/protobuf';
 import { z } from 'zod';
 import { Type } from '@sinclair/typebox';
 import { TurnDeliveryCapabilitySchema } from '@ctxmill/proto/sandbox/v1';
-import type { BashToolOptions } from '@mariozechner/pi-coding-agent';
+import type { BashToolOptions } from '@earendil-works/pi-coding-agent';
 
 const mockCreateAgentSession = vi.fn();
 const mockSetRuntimeApiKey = vi.fn();
+const mockGetModel = vi.fn((provider: string, model: string) => {
+  const apiByProvider: Record<string, string> = {
+    openai: 'openai-completions',
+    anthropic: 'anthropic-messages',
+    google: 'google-generative-ai',
+  };
+  return {
+    provider,
+    id: model,
+    api: apiByProvider[provider],
+  };
+});
+const mockModelRuntime = {
+  getModel: mockGetModel,
+  setRuntimeApiKey: mockSetRuntimeApiKey,
+};
+function createNativeState(onMessages = vi.fn()) {
+  let messages: Array<Record<string, unknown>> = [];
+  return {
+    get messages() {
+      return messages;
+    },
+    set messages(next: Array<Record<string, unknown>>) {
+      messages = next;
+      onMessages(next);
+    },
+  };
+}
 const mockCreateCodingTools = vi.fn((
   cwd: string,
   _options?: { bash?: BashToolOptions },
@@ -38,7 +66,7 @@ const mockLangSmith = vi.hoisted(() => {
   return { FakeClient, FakeRunTree };
 });
 
-vi.mock('@mariozechner/pi-coding-agent', () => ({
+vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   SessionManager: {
     create: vi.fn((cwd: string) => ({ type: 'session-manager-file', cwd })),
@@ -50,10 +78,9 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
     };
   }),
   SettingsManager: { inMemory: vi.fn(() => ({ type: 'settings-manager' })) },
-  AuthStorage: { inMemory: vi.fn(() => ({ setRuntimeApiKey: mockSetRuntimeApiKey })) },
-  ModelRegistry: vi.fn(function MockModelRegistry() {
-    return { type: 'model-registry' };
-  }),
+  ModelRuntime: {
+    create: vi.fn(async () => mockModelRuntime),
+  },
   createCodingTools: mockCreateCodingTools,
   createReadTool: vi.fn((cwd: string) => ({ name: 'read', cwd })),
   createBashTool: vi.fn((cwd: string) => ({ name: 'bash', cwd })),
@@ -64,20 +91,13 @@ vi.mock('@mariozechner/pi-coding-agent', () => ({
   createLsTool: vi.fn((cwd: string) => ({ name: 'ls', cwd })),
 }));
 
-vi.mock('@mariozechner/pi-ai', async () => {
+vi.mock('@earendil-works/pi-ai', async () => {
   const { Type } = await import('@sinclair/typebox');
-  const apiByProvider: Record<string, string> = {
-    openai: 'openai-completions',
-    anthropic: 'anthropic-messages',
-    google: 'google-generative-ai',
-  };
   return {
     Type,
-    getModel: vi.fn((provider: string, model: string) => ({
-      provider,
-      id: model,
-      api: apiByProvider[provider],
-    })),
+    InMemoryCredentialStore: vi.fn(function MockCredentialStore() {
+      return { type: 'credential-store' };
+    }),
   };
 });
 
@@ -224,9 +244,8 @@ describe('PIAgentHarness transcript syncing', () => {
         prompt,
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages,
-        },
+        state: createNativeState(replaceMessages),
+        setModel: vi.fn(),
       },
     });
 
@@ -252,7 +271,7 @@ describe('PIAgentHarness transcript syncing', () => {
     }
   });
 
-  it('registers Google runtime key under the model API auth bucket', async () => {
+  it('registers Google runtime auth through the canonical model runtime', async () => {
     const dispose = vi.fn();
     mockCreateAgentSession.mockResolvedValue({
       session: {
@@ -260,9 +279,8 @@ describe('PIAgentHarness transcript syncing', () => {
         prompt: vi.fn(),
         abort: vi.fn(async () => undefined),
         dispose,
-        agent: {
-          replaceMessages: vi.fn(),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 
@@ -277,7 +295,17 @@ describe('PIAgentHarness transcript syncing', () => {
     }));
 
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'test-google-key');
-    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google-generative-ai', 'test-google-key');
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledOnce();
+    expect(mockCreateAgentSession.mock.calls[0]?.[0]).toMatchObject({
+      modelRuntime: mockModelRuntime,
+      noTools: 'builtin',
+    });
+    expect(mockCreateAgentSession.mock.calls[0]?.[0]).not.toHaveProperty(
+      'authStorage',
+    );
+    expect(mockCreateAgentSession.mock.calls[0]?.[0]).not.toHaveProperty(
+      'modelRegistry',
+    );
 
     await session.close();
     expect(dispose).toHaveBeenCalledOnce();
@@ -296,9 +324,8 @@ describe('PIAgentHarness transcript syncing', () => {
           prompt: vi.fn(),
           abort: vi.fn(async () => undefined),
           dispose: vi.fn(),
-          agent: {
-            replaceMessages: vi.fn(),
-          },
+          state: createNativeState(),
+          setModel: vi.fn(),
         },
       });
 
@@ -345,10 +372,8 @@ describe('PIAgentHarness transcript syncing', () => {
         prompt,
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-          setModel,
-        },
+        state: createNativeState(),
+        setModel,
       },
     });
 
@@ -402,6 +427,79 @@ describe('PIAgentHarness transcript syncing', () => {
     }
   });
 
+  it('uses the versioned native Google gateway and per-turn correlation headers', async () => {
+    const setModel = vi.fn();
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt: vi.fn(async () => {
+          listener?.({ type: 'agent_end', messages: [] });
+        }),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        state: createNativeState(),
+        setModel,
+      },
+    });
+
+    const session = await new PIAgentHarness().openSession(makeConfig({
+      secrets: {
+        GOOGLE_API_KEY: 'upstream-key-must-not-win',
+        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
+        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+      },
+      harnessConfigJson: JSON.stringify({
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+      }),
+    }));
+
+    try {
+      expect(mockCreateAgentSession.mock.calls[0]?.[0]).toMatchObject({
+        model: {
+          provider: 'google',
+          id: 'gemini-2.5-flash',
+          api: 'google-generative-ai',
+          baseUrl: 'http://litellm:4000/v1beta',
+          apiKey: 'runtime-key',
+        },
+      });
+      expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'runtime-key');
+      expect(mockSetRuntimeApiKey).toHaveBeenCalledOnce();
+      expect(mockSetRuntimeApiKey).not.toHaveBeenCalledWith(
+        'google',
+        'upstream-key-must-not-win',
+      );
+
+      await collectEvents(session.deliverTurn({
+        turnId: 'sensitive-native-google-turn',
+        messages: [makeMessage('user', 'Hello', '2026-04-05T10:00:00.000Z')],
+      }, {}));
+
+      expect(setModel).toHaveBeenCalledOnce();
+      const correlatedModel = setModel.mock.calls[0]?.[0] as {
+        headers?: Record<string, string>;
+      };
+      expect(correlatedModel.headers).toEqual({
+        'x-litellm-trace-id': expect.stringMatching(/^ct_[a-f0-9]{32}$/),
+        'x-litellm-spend-logs-metadata': expect.any(String),
+      });
+      expect(JSON.stringify(correlatedModel.headers)).not.toContain(
+        'sensitive-native-google-turn',
+      );
+    } finally {
+      await session.close();
+    }
+  });
+
   it('falls back to environment secrets for Google runtime auth', async () => {
     process.env.GOOGLE_API_KEY = 'env-google-key';
     mockCreateAgentSession.mockResolvedValue({
@@ -410,9 +508,8 @@ describe('PIAgentHarness transcript syncing', () => {
         prompt: vi.fn(),
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 
@@ -427,7 +524,7 @@ describe('PIAgentHarness transcript syncing', () => {
     }));
 
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'env-google-key');
-    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google-generative-ai', 'env-google-key');
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledOnce();
 
     await session.close();
   });
@@ -439,9 +536,8 @@ describe('PIAgentHarness transcript syncing', () => {
         prompt: vi.fn(),
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 
@@ -455,7 +551,7 @@ describe('PIAgentHarness transcript syncing', () => {
     }));
 
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'default-google-key');
-    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google-generative-ai', 'default-google-key');
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledOnce();
 
     await session.close();
   });
@@ -470,9 +566,8 @@ describe('PIAgentHarness transcript syncing', () => {
         prompt: vi.fn(),
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 
@@ -541,9 +636,8 @@ describe('PIAgentHarness transcript syncing', () => {
         prompt,
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages,
-        },
+        state: createNativeState(replaceMessages),
+        setModel: vi.fn(),
       },
     });
 
@@ -612,9 +706,8 @@ describe('PIAgentHarness transcript syncing', () => {
         prompt,
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages,
-        },
+        state: createNativeState(replaceMessages),
+        setModel: vi.fn(),
       },
     });
 
@@ -712,9 +805,8 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
         prompt,
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 
@@ -783,9 +875,8 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
         prompt,
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 
@@ -863,9 +954,8 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
         prompt,
         abort: vi.fn(async () => undefined),
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 
@@ -984,9 +1074,8 @@ describe('PIAgentHarness AgentEvent contract baseline', () => {
         prompt,
         abort,
         dispose: vi.fn(),
-        agent: {
-          replaceMessages: vi.fn(),
-        },
+        state: createNativeState(),
+        setModel: vi.fn(),
       },
     });
 

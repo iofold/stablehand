@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 
-import type { CanonicalLLMProvider } from '@ctxmill/shared';
+import {
+  isCertifiedNativeModelGatewayProvider,
+  type CanonicalLLMProvider,
+  type CertifiedNativeModelGatewayProvider,
+} from '@ctxmill/shared';
 import { resolveModelAuth } from './kit/model-auth.js';
 import type { ResolvedSecrets } from './types.js';
 
@@ -20,7 +24,7 @@ export type HarnessModelConnection =
     }
   | {
       mode: 'gateway';
-      provider: 'openai' | 'anthropic';
+      provider: CertifiedNativeModelGatewayProvider;
       apiKey: string;
       baseUrl: string;
       gatewayRevision: string;
@@ -62,7 +66,9 @@ export function resolveHarnessModelConnection(
 ): HarnessModelConnection {
   const explicitlyDirect = input.apiKeyRef !== undefined || input.baseUrl !== undefined;
   const gatewayEnabled = nonEmpty(input.secrets, GATEWAY_ENV.enabled) === 'true';
-  const gatewayCertified = input.provider === 'openai' || input.provider === 'anthropic';
+  const gatewayCertified = isCertifiedNativeModelGatewayProvider(
+    input.provider,
+  );
   if (explicitlyDirect || !gatewayEnabled || !gatewayCertified) {
     return directConnection(input);
   }
@@ -91,7 +97,7 @@ export function resolveHarnessModelConnection(
   }
   return {
     mode: 'gateway',
-    provider: 'anthropic',
+    provider: input.provider,
     apiKey: runtimeKey,
     baseUrl: rootUrl.replace(/\/+$/, ''),
     gatewayRevision: revision,

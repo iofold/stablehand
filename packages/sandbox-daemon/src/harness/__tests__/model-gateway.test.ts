@@ -80,7 +80,7 @@ describe('resolveHarnessModelConnection', () => {
     });
   });
 
-  it('keeps Google direct until its native gateway row is certified', () => {
+  it('uses the gateway root for certified native Google clients', () => {
     expect(resolveHarnessModelConnection({
       provider: 'google',
       secrets: {
@@ -88,9 +88,11 @@ describe('resolveHarnessModelConnection', () => {
         GOOGLE_API_KEY: 'google-key',
       },
     })).toEqual({
-      mode: 'direct',
+      mode: 'gateway',
       provider: 'google',
-      apiKey: 'google-key',
+      apiKey: 'runtime-key',
+      baseUrl: 'http://litellm:4000',
+      gatewayRevision: 'dev1-1',
     });
   });
 

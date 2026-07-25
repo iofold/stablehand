@@ -65,7 +65,7 @@ describe('resolveModelGatewayTurnAttribution', () => {
     })).toEqual({ mode: 'direct' });
   });
 
-  it('keeps uncertified native Google branches direct', () => {
+  it('attributes implicit native Google branches to the gateway', () => {
     expect(resolveModelGatewayTurnAttribution({
       harness: 'langgraph',
       harnessConfig: {
@@ -74,7 +74,12 @@ describe('resolveModelGatewayTurnAttribution', () => {
       },
       gateway,
       turnId: 'turn-google',
-    })).toEqual({ mode: 'direct' });
+    })).toEqual({
+      mode: 'gateway_only',
+      profile: 'default',
+      revision: 'dev1-r1',
+      correlationId: expect.stringMatching(/^ct_[a-f0-9]{32}$/),
+    });
   });
 
   it('classifies independently configured LangGraph branches as mixed', () => {
@@ -90,6 +95,7 @@ describe('resolveModelGatewayTurnAttribution', () => {
             systemPrompt: 'Help',
             provider: 'google',
             model: 'gemini-2.5-flash',
+            apiKeyRef: '$secret:GOOGLE_API_KEY',
           },
           {
             name: 'gateway-anthropic',

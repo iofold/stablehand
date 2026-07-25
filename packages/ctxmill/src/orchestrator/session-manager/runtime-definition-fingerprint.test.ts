@@ -101,4 +101,32 @@ describe('createRuntimeDefinitionFingerprint', () => {
       rotatedAgentSecret,
     ])).toHaveLength(5);
   });
+
+  it('invalidates implicit Google runtimes when the gateway revision rotates', () => {
+    const definition = {
+      ...agentDefinition(),
+      harnessConfig: {
+        provider: 'google',
+        model: 'gemini-2.5-flash',
+      },
+    };
+    const first = createRuntimeDefinitionFingerprint(definition, {
+      gateway: {
+        enabled: true,
+        profile: 'default',
+        revision: 'gateway-1',
+      },
+      agentSecretRevision: 'secrets-1',
+    });
+    const rotated = createRuntimeDefinitionFingerprint(definition, {
+      gateway: {
+        enabled: true,
+        profile: 'default',
+        revision: 'gateway-2',
+      },
+      agentSecretRevision: 'secrets-1',
+    });
+
+    expect(rotated).not.toBe(first);
+  });
 });
