@@ -22,8 +22,13 @@ const StageSchema = z.strictObject({
   iterations: z.number().int().positive(),
   sseClientsPerAgent: z.number().int().positive().default(1),
   prompt: z.string().trim().min(1),
+  warmupTurns: z.number().int().nonnegative().default(0),
   timeoutMs: z.number().int().positive().default(120_000),
   settleMs: z.number().int().nonnegative().default(2_000),
+  harnessConfig: z.record(z.string(), z.unknown()),
+  systemPrompt: z.string().trim().min(1).default(
+    'You are a performance-test agent. Follow the user request directly and respond concisely.',
+  ),
 });
 
 const PerformanceProfileSchema = z.strictObject({
@@ -47,6 +52,12 @@ export function parsePerformanceProfile(value: unknown): PerformanceProfile {
       throw new Error(
         `Stage "${stage.name}" concurrency ${stage.concurrency} exceeds `
         + `safety.maxConcurrency ${profile.safety.maxConcurrency}`,
+      );
+    }
+    if (stage.sessionMode !== 'cold' && stage.warmupTurns < 1) {
+      throw new Error(
+        `Stage "${stage.name}" uses ${stage.sessionMode} sessions and requires `
+        + 'warmupTurns >= 1',
       );
     }
   }

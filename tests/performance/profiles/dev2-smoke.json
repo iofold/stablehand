@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "name": "dev2-smoke",
+  "target": {
+    "apiBase": "https://stablehand.staging.example.com/api",
+    "kubernetesNamespace": "ctxmill"
+  },
+  "safety": {
+    "maxConcurrency": 1,
+    "abortErrorRate": 0.05,
+    "maxNodeCpuPercent": 75,
+    "maxNodeMemoryPercent": 75
+  },
+  "stages": [
+    {
+      "name": "langgraph-cold-c1",
+      "harness": "langgraph",
+      "agentPrefix": "perf-dev2-lg",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "pi-cold-c1",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-dev2-pi",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "claude-cold-c1",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-dev2-claude",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "apiKeyRef": "$secret:ANTHROPIC_API_KEY"
+      }
+    },
+    {
+      "name": "langgraph-resume-c1",
+      "harness": "langgraph",
+      "agentPrefix": "perf-dev2-lg-resume",
+      "topology": "unique-agents",
+      "sessionMode": "resume",
+      "concurrency": 1,
+      "iterations": 1,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    }
+  ]
+}

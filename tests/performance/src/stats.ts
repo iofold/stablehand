@@ -1,16 +1,31 @@
 export interface TurnSample {
+  runId?: string;
+  stageName?: string;
   turnId: string;
   agentId: string;
+  conversationId?: string;
+  sandboxSessionId?: string;
   harness: 'langgraph' | 'pi-agent' | 'claude-agents';
+  iteration?: number;
+  lane?: number;
   outcome: 'completed' | 'error' | 'cancelled' | 'timeout';
   admissionMs?: number;
   timeToFirstEventMs?: number;
   timeToRunStartedMs?: number;
   timeToFirstTokenMs?: number;
   completionMs?: number;
+  suspendMs?: number;
+  restoreMs?: number;
   serverToClientFirstEventLagMs?: number;
   serverToClientTerminalLagMs?: number;
   eventCount: number;
+  sseClientEventCounts?: number[];
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  knownCostUsd?: number;
+  totalCostUsd?: number;
+  costCoverage?: 'pending' | 'complete' | 'partial' | 'unpriced';
   error?: string;
 }
 
@@ -30,6 +45,17 @@ export interface TurnSampleSummary {
   failed: number;
   errorRate: number;
   totalEvents: number;
+  totalSseDeliveries: number;
+  sseFanoutMismatches: number;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    knownCostUsd: number;
+    totalCostUsd: number;
+    pricedTurns: number;
+    unpricedTurns: number;
+  };
   timings: Record<string, DistributionSummary>;
 }
 
@@ -71,6 +97,8 @@ const TIMING_FIELDS = [
   'timeToRunStartedMs',
   'timeToFirstTokenMs',
   'completionMs',
+  'suspendMs',
+  'restoreMs',
   'serverToClientFirstEventLagMs',
   'serverToClientTerminalLagMs',
 ] as const satisfies readonly (keyof TurnSample)[];
@@ -94,6 +122,27 @@ export function summarizeTurnSamples(
     failed,
     errorRate: samples.length === 0 ? 0 : failed / samples.length,
     totalEvents: samples.reduce((total, sample) => total + sample.eventCount, 0),
+    totalSseDeliveries: samples.reduce(
+      (total, sample) => total
+        + (sample.sseClientEventCounts?.reduce(
+          (subtotal, count) => subtotal + count,
+          0,
+        ) ?? sample.eventCount),
+      0,
+    ),
+    sseFanoutMismatches: samples.filter((sample) => {
+      const counts = sample.sseClientEventCounts ?? [];
+      return counts.length > 1 && new Set(counts).size > 1;
+    }).length,
+    usage: {
+      inputTokens: samples.reduce((total, sample) => total + (sample.inputTokens ?? 0), 0),
+      outputTokens: samples.reduce((total, sample) => total + (sample.outputTokens ?? 0), 0),
+      totalTokens: samples.reduce((total, sample) => total + (sample.totalTokens ?? 0), 0),
+      knownCostUsd: samples.reduce((total, sample) => total + (sample.knownCostUsd ?? 0), 0),
+      totalCostUsd: samples.reduce((total, sample) => total + (sample.totalCostUsd ?? 0), 0),
+      pricedTurns: samples.filter((sample) => sample.costCoverage === 'complete').length,
+      unpricedTurns: samples.filter((sample) => sample.costCoverage === 'unpriced').length,
+    },
     timings,
   };
 }

@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "name": "dev2-capacity",
+  "target": {
+    "apiBase": "https://stablehand.staging.example.com/api",
+    "kubernetesNamespace": "ctxmill"
+  },
+  "safety": {
+    "maxConcurrency": 5,
+    "abortErrorRate": 0.05,
+    "maxNodeCpuPercent": 75,
+    "maxNodeMemoryPercent": 75
+  },
+  "stages": [
+    {
+      "name": "langgraph-cold-c1",
+      "harness": "langgraph",
+      "agentPrefix": "perf-cap-lg-c1",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 5,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "langgraph-cold-c3",
+      "harness": "langgraph",
+      "agentPrefix": "perf-cap-lg-c3",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 3,
+      "iterations": 5,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "langgraph-cold-c5",
+      "harness": "langgraph",
+      "agentPrefix": "perf-cap-lg-c5",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 5,
+      "iterations": 5,
+      "sseClientsPerAgent": 3,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "pi-cold-c3",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-cap-pi-c3",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 3,
+      "iterations": 5,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "claude-cold-c3",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-cap-claude-c3",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 3,
+      "iterations": 5,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "apiKeyRef": "$secret:ANTHROPIC_API_KEY"
+      }
+    },
+    {
+      "name": "langgraph-warm-c3",
+      "harness": "langgraph",
+      "agentPrefix": "perf-cap-lg-warm",
+      "topology": "unique-agents",
+      "sessionMode": "warm",
+      "concurrency": 3,
+      "iterations": 10,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "settleMs": 2000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "langgraph-resume-c3",
+      "harness": "langgraph",
+      "agentPrefix": "perf-cap-lg-resume",
+      "topology": "unique-agents",
+      "sessionMode": "resume",
+      "concurrency": 3,
+      "iterations": 5,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    }
+  ]
+}

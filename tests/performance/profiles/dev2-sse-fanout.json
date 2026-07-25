@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "name": "dev2-sse-fanout",
+  "target": {
+    "apiBase": "https://stablehand.staging.example.com/api",
+    "kubernetesNamespace": "ctxmill"
+  },
+  "safety": {
+    "maxConcurrency": 3,
+    "abortErrorRate": 0.05,
+    "maxNodeCpuPercent": 75,
+    "maxNodeMemoryPercent": 75
+  },
+  "stages": [
+    {
+      "name": "langgraph-hot-c3-sse10",
+      "harness": "langgraph",
+      "agentPrefix": "perf-sse-lg",
+      "topology": "hot-agent",
+      "sessionMode": "cold",
+      "concurrency": 3,
+      "iterations": 5,
+      "sseClientsPerAgent": 10,
+      "settleMs": 3000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    },
+    {
+      "name": "langgraph-hot-c3-sse50",
+      "harness": "langgraph",
+      "agentPrefix": "perf-sse-lg",
+      "topology": "hot-agent",
+      "sessionMode": "cold",
+      "concurrency": 3,
+      "iterations": 5,
+      "sseClientsPerAgent": 50,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyRef": "$secret:OPENAI_API_KEY"
+      }
+    }
+  ]
+}

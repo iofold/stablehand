@@ -22,6 +22,8 @@
     "verify:stabilization": "node scripts/verify-stabilization.mjs",
     "test:e2e:required": "playwright test --config=playwright.config.ts --project=chromium --grep @smoke",
     "test:e2e:harness-matrix:extended": "playwright test --config=playwright.harness-matrix.config.ts",
+    "test:performance": "vitest run tests/performance/performance.test.ts packages/ctxmill/src/observability/__tests__/performance.test.ts",
+    "perf:dev2": "tests/performance/scripts/run-dev2.sh",
     "audit:prod": "pnpm audit --prod --audit-level high"
   },
   "devDependencies": {
