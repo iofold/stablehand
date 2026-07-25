@@ -20,6 +20,11 @@ Provide these through the deployment secret store:
 - `CTXMILL_MODEL_GATEWAY_METERING_KEY`: a key allowed to read
   `/spend/logs/v2`. It stays in the orchestrator.
 - `CTXMILL_MODEL_GATEWAY_REVISION`: non-secret release/credential revision.
+- Provider credentials for the configured inventory: `OPENAI_API_KEY`,
+  `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, plus
+  `CLOUDFLARE_ACCOUNT_ID` and a durable Workers AI API token in
+  `CLOUDFLARE_API_KEY`. `OPENROUTER_API_KEY` is required only when using the
+  optional `glm-5.2` alias.
 
 Generate the runtime virtual key after LiteLLM is healthy:
 
@@ -33,7 +38,15 @@ curl -fsS http://127.0.0.1:4400/key/generate \
       "gpt-5.4",
       "claude-sonnet-4-6",
       "claude-haiku-4-5",
-      "claude-opus-4-6"
+      "claude-opus-4-6",
+      "gemini-3.6-flash",
+      "cf-gpt-oss-120b",
+      "cf-kimi-k2.7-code",
+      "cf-glm-5.2",
+      "cf-gemma-4-26b",
+      "cf-qwen3-30b",
+      "gpt-5.6-terra",
+      "glm-5.2"
     ],
     "key_alias": "ctxmill-runtime"
   }'
