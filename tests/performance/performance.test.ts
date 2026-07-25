@@ -163,6 +163,37 @@ describe('stream event observation', () => {
       terminalType: 'RUN_FINISHED',
     });
   });
+
+  it('does not count the echoed user message as time to first token', () => {
+    const observation: TurnEventObservation = {};
+
+    observeTurnEvent(observation, {
+      type: 'TEXT_MESSAGE_CONTENT',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      messageId: 'user-message-1',
+      delta: 'hello',
+      timestamp: 10,
+    }, 100);
+    observeTurnEvent(observation, {
+      type: 'RUN_STARTED',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      timestamp: 20,
+    }, 120);
+    observeTurnEvent(observation, {
+      type: 'TEXT_MESSAGE_CONTENT',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      messageId: 'assistant-message-1',
+      delta: 'world',
+      timestamp: 30,
+    }, 140);
+
+    expect(observation.firstEventAtMs).toBe(100);
+    expect(observation.runStartedAtMs).toBe(120);
+    expect(observation.firstTokenAtMs).toBe(140);
+  });
 });
 
 describe('performance profile', () => {

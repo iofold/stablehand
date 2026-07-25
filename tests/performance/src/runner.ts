@@ -289,6 +289,10 @@ export async function runPerformanceProfile(
       string,
       { agentId: string; sandboxSessionId: string }
     >();
+    const activeResumeSessions = new Map<
+      string,
+      { agentId: string; sandboxSessionId: string }
+    >();
 
     try {
       for (const agent of agents) {
@@ -324,7 +328,7 @@ export async function runPerformanceProfile(
               client: options.client,
               hub: hubs.get(agent.id)!,
               runId,
-              stageName: `${stage.name}:warmup`,
+              stageName: stage.name,
               harness: stage.harness,
               agentId: agent.id,
               conversationId: laneConversations[lane]!,
@@ -350,6 +354,12 @@ export async function runPerformanceProfile(
               agentId: agent.id,
               sandboxSessionId: sample.sandboxSessionId,
             });
+            if (stage.sessionMode === 'resume') {
+              activeResumeSessions.set(sample.sandboxSessionId, {
+                agentId: agent.id,
+                sandboxSessionId: sample.sandboxSessionId,
+              });
+            }
           },
         );
       }
@@ -364,6 +374,7 @@ export async function runPerformanceProfile(
               laneSessions[lane]!,
               { signal: options.signal, timeoutMs: stage.timeoutMs },
             );
+            activeResumeSessions.delete(laneSessions[lane]!);
           },
         );
       }
@@ -386,6 +397,10 @@ export async function runPerformanceProfile(
                 laneSessions[lane]!,
                 { signal: options.signal, timeoutMs: stage.timeoutMs },
               );
+              activeResumeSessions.set(laneSessions[lane]!, {
+                agentId: agent.id,
+                sandboxSessionId: laneSessions[lane]!,
+              });
               restoreMs = now() - restoreStartedAt;
             }
 
@@ -444,6 +459,7 @@ export async function runPerformanceProfile(
               );
               sample.suspendMs = now() - suspendStartedAt;
               laneSessions[lane] = sample.sandboxSessionId;
+              activeResumeSessions.delete(sample.sandboxSessionId);
             }
             if (
               stage.sessionMode === 'cold'
@@ -492,7 +508,16 @@ export async function runPerformanceProfile(
       stages.push(result);
       await options.onStage?.(result);
     } finally {
-      if (stage.sessionMode !== 'resume') {
+      if (stage.sessionMode === 'resume') {
+        await Promise.allSettled(
+          Array.from(activeResumeSessions.values(), (session) =>
+            options.client.sandboxSessions.suspend(
+              session.agentId,
+              session.sandboxSessionId,
+              { timeoutMs: stage.timeoutMs },
+            )),
+        );
+      } else {
         await Promise.allSettled(
           Array.from(cleanupSessions.values(), (session) =>
             options.client.sandboxSessions.kill(

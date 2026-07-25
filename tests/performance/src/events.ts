@@ -37,7 +37,11 @@ export function observeTurnEvent(
   if (event.type === 'RUN_STARTED') {
     observation.runStartedAtMs ??= receivedAtMs;
   }
-  if (event.type === 'TEXT_MESSAGE_CONTENT' && event.delta.length > 0) {
+  if (
+    event.type === 'TEXT_MESSAGE_CONTENT'
+    && event.delta.length > 0
+    && observation.runStartedAtMs !== undefined
+  ) {
     observation.firstTokenAtMs ??= receivedAtMs;
   }
   if (
