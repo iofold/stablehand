@@ -12,9 +12,12 @@ if (( ${#turn_ids[@]} == 0 )); then
   : >"$OUTPUT_PATH"
   exit 0
 fi
-for turn_id in "${turn_ids[@]}"; do
-  if [[ ! "$turn_id" =~ ^[A-Za-z0-9._:-]+$ ]]; then
-    printf 'Invalid turn id in %s\n' "$TURN_IDS_PATH" >&2
+mapfile -t session_ids < <(
+  jq -r '.stages[].samples[].sandboxSessionId // empty' "$RUN_JSON" | sort -u
+)
+for identifier in "${turn_ids[@]}" "${session_ids[@]}"; do
+  if [[ ! "$identifier" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+    printf 'Invalid correlation id in performance evidence\n' >&2
     exit 2
   fi
 done
@@ -23,6 +26,14 @@ turn_id_literals="$(
   printf '%s\n' "${turn_ids[@]}" \
     | jq -Rrsc 'split("\n") | map(select(length > 0) | "'"'"'" + . + "'"'"'") | join(",")'
 )"
+correlation_predicate="attributes_string['ctxmill.turn.id'] IN ($turn_id_literals)"
+if (( ${#session_ids[@]} > 0 )); then
+  session_id_literals="$(
+    printf '%s\n' "${session_ids[@]}" \
+      | jq -Rrsc 'split("\n") | map(select(length > 0) | "'"'"'" + . + "'"'"'") | join(",")'
+  )"
+  correlation_predicate="$correlation_predicate OR attributes_string['ctxmill.session.id'] IN ($session_id_literals)"
+fi
 started_at="$(jq -r '.startedAt' "$RUN_JSON")"
 completed_at="$(jq -r '.completedAt' "$RUN_JSON")"
 clickhouse_pod="$(
@@ -68,7 +79,7 @@ WHERE timestamp >= parseDateTime64BestEffort('$started_at') - INTERVAL 1 MINUTE
     FROM signoz_traces.signoz_index_v3
     WHERE timestamp >= parseDateTime64BestEffort('$started_at') - INTERVAL 1 MINUTE
       AND timestamp <= parseDateTime64BestEffort('$completed_at') + INTERVAL 5 MINUTE
-      AND attributes_string['ctxmill.turn.id'] IN ($turn_id_literals)
+      AND ($correlation_predicate)
   )
 ORDER BY timestamp, trace_id, span_id
 FORMAT JSONEachRow
