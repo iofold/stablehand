@@ -49,6 +49,62 @@ describe('model gateway deployment', () => {
     ).toBe('${GOOGLE_API_KEY:-}');
   });
 
+  it('publishes a curated Cloudflare Workers AI inventory with deployment-owned credentials', () => {
+    const config = readYaml<ModelGatewayConfig>(
+      'deploy/compose/model-gateway/config.yaml',
+    );
+    const compose = readYaml<ModelGatewayCompose>(
+      'deploy/compose/model-gateway/docker-compose.yml',
+    );
+    const cloudflareModels = config.model_list?.filter(
+      (entry) => entry.litellm_params?.model?.startsWith('cloudflare/'),
+    );
+
+    expect(cloudflareModels).toEqual([
+      {
+        model_name: 'cf-gpt-oss-120b',
+        litellm_params: {
+          model: 'cloudflare/@cf/openai/gpt-oss-120b',
+          api_key: 'os.environ/CLOUDFLARE_API_KEY',
+        },
+      },
+      {
+        model_name: 'cf-kimi-k2.7-code',
+        litellm_params: {
+          model: 'cloudflare/@cf/moonshotai/kimi-k2.7-code',
+          api_key: 'os.environ/CLOUDFLARE_API_KEY',
+        },
+      },
+      {
+        model_name: 'cf-glm-5.2',
+        litellm_params: {
+          model: 'cloudflare/@cf/zai-org/glm-5.2',
+          api_key: 'os.environ/CLOUDFLARE_API_KEY',
+        },
+      },
+      {
+        model_name: 'cf-gemma-4-26b',
+        litellm_params: {
+          model: 'cloudflare/@cf/google/gemma-4-26b-a4b-it',
+          api_key: 'os.environ/CLOUDFLARE_API_KEY',
+        },
+      },
+      {
+        model_name: 'cf-qwen3-30b',
+        litellm_params: {
+          model: 'cloudflare/@cf/qwen/qwen3-30b-a3b-fp8',
+          api_key: 'os.environ/CLOUDFLARE_API_KEY',
+        },
+      },
+    ]);
+    expect(
+      compose.services?.litellm?.environment?.CLOUDFLARE_ACCOUNT_ID,
+    ).toBe('${CLOUDFLARE_ACCOUNT_ID:-}');
+    expect(
+      compose.services?.litellm?.environment?.CLOUDFLARE_API_KEY,
+    ).toBe('${CLOUDFLARE_API_KEY:-}');
+  });
+
   it('publishes the authenticated admin UI through the dev1 TLS router', () => {
     const compose = readYaml<ModelGatewayCompose>(
       'deploy/compose/model-gateway/docker-compose.yml',

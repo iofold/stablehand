@@ -23,6 +23,28 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.6-flash
       api_key: os.environ/GOOGLE_API_KEY
+  # Curated Workers AI inventory. These aliases keep harness configuration
+  # provider-neutral while LiteLLM owns the Cloudflare protocol translation.
+  - model_name: cf-gpt-oss-120b
+    litellm_params:
+      model: cloudflare/@cf/openai/gpt-oss-120b
+      api_key: os.environ/CLOUDFLARE_API_KEY
+  - model_name: cf-kimi-k2.7-code
+    litellm_params:
+      model: cloudflare/@cf/moonshotai/kimi-k2.7-code
+      api_key: os.environ/CLOUDFLARE_API_KEY
+  - model_name: cf-glm-5.2
+    litellm_params:
+      model: cloudflare/@cf/zai-org/glm-5.2
+      api_key: os.environ/CLOUDFLARE_API_KEY
+  - model_name: cf-gemma-4-26b
+    litellm_params:
+      model: cloudflare/@cf/google/gemma-4-26b-a4b-it
+      api_key: os.environ/CLOUDFLARE_API_KEY
+  - model_name: cf-qwen3-30b
+    litellm_params:
+      model: cloudflare/@cf/qwen/qwen3-30b-a3b-fp8
+      api_key: os.environ/CLOUDFLARE_API_KEY
   - model_name: gpt-5.6-terra
     litellm_params:
       model: openai/gpt-5.6-terra
