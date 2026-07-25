@@ -438,6 +438,58 @@ describe('agent SSE fanout hub', () => {
 });
 
 describe('measured turn execution', () => {
+  it('lets the API allocate a new conversation and records the returned identity', async () => {
+    const startConversationTurn = vi.fn().mockResolvedValue({
+      messageId: 'message-1',
+      turnId: 'turn-1',
+      conversationId: 'conversation-created-by-api',
+    });
+    const client = {
+      turns: {
+        startConversationTurn,
+        get: vi.fn().mockResolvedValue({
+          turn: {
+            id: 'turn-1',
+            status: 'COMPLETED',
+          },
+          messages: [],
+        }),
+      },
+    };
+    const hub = {
+      trackTurn: vi.fn().mockResolvedValue({
+        observation: {
+          terminalAtMs: 120,
+          eventCount: 2,
+          terminalType: 'RUN_FINISHED',
+        },
+        clientEventCounts: [2],
+        heartbeatCounts: [0],
+      }),
+      cancelTurn: vi.fn(),
+    };
+    const times = [100, 110];
+
+    const sample = await executeMeasuredTurn({
+      client: client as never,
+      hub,
+      runId: 'run-a',
+      stageName: 'langgraph-cold',
+      harness: 'langgraph',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      prompt: 'hello',
+      timeoutMs: 1_000,
+      clockOffsetMs: 0,
+      now: () => times.shift()!,
+    });
+
+    expect(startConversationTurn.mock.calls[0]![1]).not.toHaveProperty(
+      'conversationId',
+    );
+    expect(sample.conversationId).toBe('conversation-created-by-api');
+  });
+
   it('correlates admission, SSE, server timestamps, and canonical usage', async () => {
     const client = {
       turns: {

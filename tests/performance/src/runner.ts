@@ -41,7 +41,7 @@ interface ExecuteMeasuredTurnOptions {
   stageName: string;
   harness: TurnSample['harness'];
   agentId: string;
-  conversationId: string;
+  conversationId?: string;
   turnId?: string;
   prompt: string;
   timeoutMs: number;
@@ -85,7 +85,9 @@ export async function executeMeasuredTurn(
       options.agentId,
       {
         content: options.prompt,
-        conversationId: options.conversationId,
+        ...(options.conversationId
+          ? { conversationId: options.conversationId }
+          : {}),
         requestedTurnId: turnId,
         tags: {
           'ctxmill.performance.run_id': options.runId,
@@ -101,7 +103,10 @@ export async function executeMeasuredTurn(
     const admittedAt = now();
     if (
       response.turnId !== turnId
-      || response.conversationId !== options.conversationId
+      || (
+        options.conversationId !== undefined
+        && response.conversationId !== options.conversationId
+      )
     ) {
       throw new Error(
         `Turn admission identity mismatch: requested ${turnId}/${options.conversationId}, `
@@ -125,7 +130,7 @@ export async function executeMeasuredTurn(
       stageName: options.stageName,
       turnId,
       agentId: options.agentId,
-      conversationId: options.conversationId,
+      conversationId: response.conversationId,
       sandboxSessionId: detail.turn.sandboxSessionId,
       harness: options.harness,
       outcome: terminalOutcome(detail.turn.status),
@@ -233,7 +238,7 @@ function errorSample(input: {
   runId: string;
   stage: PerformanceStage;
   agentId: string;
-  conversationId: string;
+  conversationId?: string;
   turnId: string;
   iteration: number;
   lane: number;
@@ -301,9 +306,9 @@ export async function runPerformanceProfile(
         Array.from(hubs.values(), (hub) => hub.start(stage.timeoutMs)),
       );
 
-      const laneConversations = Array.from(
+      const laneConversations: Array<string | undefined> = Array.from(
         { length: stage.concurrency },
-        () => randomUUID(),
+        () => undefined,
       );
       const laneSessions: Array<string | undefined> = Array.from(
         { length: stage.concurrency },
@@ -334,6 +339,12 @@ export async function runPerformanceProfile(
                 + `${sample.error ?? sample.outcome}`,
               );
             }
+            if (!sample.conversationId) {
+              throw new Error(
+                `Warmup turn ${sample.turnId} did not return a conversation ID`,
+              );
+            }
+            laneConversations[lane] = sample.conversationId;
             laneSessions[lane] = sample.sandboxSessionId;
             cleanupSessions.set(sample.sandboxSessionId, {
               agentId: agent.id,
@@ -365,8 +376,8 @@ export async function runPerformanceProfile(
           stage.concurrency,
           async (agent, lane): Promise<TurnSample> => {
             const conversationId = stage.sessionMode === 'cold'
-              ? randomUUID()
-              : laneConversations[lane]!;
+              ? undefined
+              : laneConversations[lane];
             let restoreMs: number | undefined;
             if (stage.sessionMode === 'resume') {
               const restoreStartedAt = now();
