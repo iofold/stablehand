@@ -30,7 +30,10 @@ function readYaml<T>(path: string): T {
 
 interface KubernetesResource {
   kind?: string;
-  metadata?: { name?: string };
+  metadata?: {
+    name?: string;
+    annotations?: Record<string, string>;
+  };
   spec?: Record<string, unknown>;
 }
 
@@ -178,6 +181,33 @@ describe('model gateway deployment', () => {
           }],
         },
       },
+    });
+  });
+
+  it('publishes the authenticated LiteLLM admin UI through the dev2 TLS ingress', () => {
+    const resources = readYamlDocuments('deploy/k3s/dev2/model-gateway.yaml');
+    const ingress = findResource(resources, 'Ingress', 'litellm');
+
+    expect(ingress.metadata?.annotations).toMatchObject({
+      'nginx.ingress.kubernetes.io/force-ssl-redirect': 'true',
+    });
+    expect(ingress.spec).toMatchObject({
+      ingressClassName: 'nginx-tailnet',
+      rules: [{
+        host: 'litellm.staging.example.com',
+        http: {
+          paths: [{
+            path: '/',
+            pathType: 'Prefix',
+            backend: {
+              service: {
+                name: 'litellm',
+                port: { number: 4000 },
+              },
+            },
+          }],
+        },
+      }],
     });
   });
 
