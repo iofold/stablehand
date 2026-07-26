@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import type { ModelGatewayStatus } from '../../../packages/contracts/src/index.js';
+import {
+  HARNESS_CONFIG_SCHEMAS,
+  type ModelGatewayStatus,
+} from '../../../packages/contracts/src/index.js';
 
 const SafetySchema = z.strictObject({
   maxConcurrency: z.number().int().positive().default(5),
@@ -172,6 +175,16 @@ export function assertModelGatewayRequirement(
 export function parsePerformanceProfile(value: unknown): PerformanceProfile {
   const profile = PerformanceProfileSchema.parse(value);
   for (const stage of profile.stages) {
+    const harnessConfig = HARNESS_CONFIG_SCHEMAS[stage.harness].safeParse(
+      stage.harnessConfig,
+    );
+    if (!harnessConfig.success) {
+      const detail = harnessConfig.error.issues.map((issue) =>
+        `${issue.path.join('.') || '<root>'}: ${issue.message}`).join('; ');
+      throw new Error(
+        `Invalid harnessConfig for stage "${stage.name}" (${stage.harness}): ${detail}`,
+      );
+    }
     if (stage.concurrency > profile.safety.maxConcurrency) {
       throw new Error(
         `Stage "${stage.name}" concurrency ${stage.concurrency} exceeds `

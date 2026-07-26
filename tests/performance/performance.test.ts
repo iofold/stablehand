@@ -353,6 +353,33 @@ describe('performance profile', () => {
     })).toThrow(/requires warmupTurns >= 1/);
   });
 
+  it('rejects harness config drift before mutating a remote agent', () => {
+    expect(() => parsePerformanceProfile({
+      schemaVersion: 1,
+      name: 'invalid-claude-config',
+      target: {
+        apiBase: 'https://stablehand.staging.example.com/api',
+        kubernetesNamespace: 'ctxmill',
+      },
+      stages: [{
+        name: 'claude-cold',
+        harness: 'claude-agents',
+        agentPrefix: 'perf-claude',
+        topology: 'unique-agents',
+        sessionMode: 'cold',
+        concurrency: 1,
+        iterations: 1,
+        sseClientsPerAgent: 1,
+        prompt: 'Reply with exactly BENCHMARK_OK.',
+        harnessConfig: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-5',
+          maxTokens: 1024,
+        },
+      }],
+    })).toThrow(/Invalid harnessConfig for stage "claude-cold"/);
+  });
+
   it('plans measured, warmup, model-call, and SSE load before execution', () => {
     const profile = parsePerformanceProfile({
       schemaVersion: 1,
@@ -625,7 +652,7 @@ describe('performance profile', () => {
       stage.harness === 'claude-agents');
     expect(smokeClaudeStages).not.toHaveLength(0);
     expect(smokeClaudeStages.every((stage) =>
-      stage.harnessConfig.maxTokens === 1024)).toBe(true);
+      Object.keys(stage.harnessConfig).sort().join(',') === 'model,provider')).toBe(true);
     expect(gatewayProfiles.every((profile) =>
       profile.requirements.modelGateway === 'required')).toBe(true);
     expect(gatewayProfiles.flatMap((profile) => profile.stages).every((stage) =>

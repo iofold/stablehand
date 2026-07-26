@@ -61,8 +61,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "anthropic",
-        "model": "claude-sonnet-5",
-        "maxTokens": 1024
+        "model": "claude-sonnet-5"
       }
     },
     {

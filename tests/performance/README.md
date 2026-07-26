@@ -160,7 +160,8 @@ The load generator records:
   client;
 - time to first token: POST start to the first non-empty
   `TEXT_MESSAGE_CONTENT`;
-- completion: POST start to `RUN_FINISHED` or `RUN_ERROR`;
+- completion: POST start to the authoritative `RUN_FINISHED` boundary; failed
+  turns include `RUN_ERROR` immediately before it;
 - server-to-client event lag, corrected with a five-probe health-endpoint clock
   estimate and reported with the clock uncertainty;
 - checkpoint suspend and restore request duration;
