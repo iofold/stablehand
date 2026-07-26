@@ -7,6 +7,7 @@ import { ArtifactRow } from './ArtifactRow';
 import { downloadArtifact, type Artifact } from '@/lib/api';
 import { useArtifactsStore } from '@/stores/artifacts';
 import { useAgentsStore } from '@/stores/agents';
+import { ArtifactSchema } from '@ctxmill/contracts';
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -15,16 +16,23 @@ vi.mock('@/lib/api', async () => {
 
 const downloadArtifactMock = vi.mocked(downloadArtifact);
 
-const ARTIFACT: Artifact = {
+const ARTIFACT: Artifact = ArtifactSchema.parse({
   id: 'artifact-1',
   agentId: 'agent-1',
+  turnId: null,
+  conversationId: null,
   name: 'report.csv',
   mimeType: 'text/csv',
   sizeBytes: 128,
   storageKey: 'artifacts/report.csv',
   bucket: 'test',
-  status: 'ready',
-};
+  kind: null,
+  metadata: null,
+  status: 'active',
+  expiresAt: null,
+  createdAt: 1,
+  updatedAt: 1,
+});
 
 async function flushEffects(): Promise<void> {
   await act(async () => {

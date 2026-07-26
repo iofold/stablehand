@@ -14,6 +14,7 @@ import type { DefaultToolRegistry } from '../../tool/registry.js';
 import type { ToolContext } from '@ctxmill/sandbox-daemon';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { GrpcCallbackAuthConfig } from './callback-auth.js';
+import type { ArtifactRegistrationService } from '../../artifact/registration-service.js';
 import {
   createOrchestratorServiceImpl,
   DefaultOrchestratorToolRegistry,
@@ -30,6 +31,7 @@ export interface GrpcRouterOptions {
   toolDefinitionRegistry?: DefaultToolRegistry;
   repository: DatabaseRepository;
   callbackAuthConfig?: GrpcCallbackAuthConfig;
+  artifactRegistration?: ArtifactRegistrationService;
 }
 
 export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRouter) => void {
@@ -66,6 +68,7 @@ export function createGrpcRoutes(opts: GrpcRouterOptions): (router: ConnectRoute
     toolRegistry,
     repository: opts.repository,
     callbackAuthConfig: opts.callbackAuthConfig,
+    artifactRegistration: opts.artifactRegistration,
   });
 
   return (router: ConnectRouter) => {

@@ -25,6 +25,8 @@ import {
   type ResolveArtifactResponse,
 } from '@ctxmill/proto/sandbox/v1';
 import type { TypedEventBus } from '../../events/bus.js';
+import { ArtifactRegistrationService } from '../../artifact/registration-service.js';
+import { validateArtifactRegistrationFields } from '../../artifact/validation.js';
 import type { InterruptManager } from '../interrupt.js';
 import type {
   DatabaseRepository,
@@ -257,6 +259,7 @@ export interface OrchestratorServiceDeps {
   toolRegistry: OrchestratorToolRegistry;
   repository?: DatabaseRepository;
   callbackAuthConfig?: GrpcCallbackAuthConfig;
+  artifactRegistration?: ArtifactRegistrationService;
 }
 
 /**
@@ -267,6 +270,10 @@ export interface OrchestratorServiceDeps {
  */
 export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
   const { eventBus, toolRegistry } = deps;
+  const artifactRegistration = deps.artifactRegistration
+    ?? (deps.repository
+      ? new ArtifactRegistrationService({ repository: deps.repository, eventBus })
+      : undefined);
   const callbackAuthConfig = deps.callbackAuthConfig
     ?? resolveGrpcCallbackAuthConfig(process.env, { warn: () => undefined });
 
@@ -569,9 +576,29 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
           Code.InvalidArgument,
         );
       }
+      let rawMetadata: unknown;
+      if (artifact.metadataJson) {
+        try {
+          rawMetadata = JSON.parse(artifact.metadataJson) as unknown;
+        } catch {
+          throw new ConnectError('artifact metadata_json must be valid JSON', Code.InvalidArgument);
+        }
+      }
+      const registrationFields = validateArtifactRegistrationFields({
+        kind: artifact.kind || undefined,
+        metadata: rawMetadata,
+      });
+      if (!registrationFields.success) {
+        throw new ConnectError(
+          registrationFields.error,
+          registrationFields.reason === 'metadata_too_large'
+            ? Code.ResourceExhausted
+            : Code.InvalidArgument,
+        );
+      }
 
       try {
-        if (deps.repository) {
+        if (deps.repository && artifactRegistration) {
           const liveDelivery = await admitLiveSandboxCallback(
             deps.repository,
             {
@@ -588,7 +615,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
               Code.FailedPrecondition,
             );
           }
-          const row = await deps.repository.saveArtifactIfDeliveryOwned({
+          const row = await artifactRegistration.registerIfDeliveryOwned({
             id: artifact.id || undefined,
             agentId,
             turnId,
@@ -597,7 +624,8 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
             sizeBytes: Number(artifact.sizeBytes),
             storageKey: artifact.storageKey,
             bucket: artifact.bucket,
-            metadata: artifact.metadataJson ? JSON.parse(artifact.metadataJson) : undefined,
+            ...(registrationFields.kind ? { kind: registrationFields.kind } : {}),
+            ...(registrationFields.metadata ? { metadata: registrationFields.metadata } : {}),
           }, {
             turnId,
             sandboxSessionId,
@@ -686,6 +714,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
             bucket: row.bucket,
             metadataJson: row.metadata ? JSON.stringify(row.metadata) : '',
             createdAt: BigInt(row.createdAt),
+            kind: row.kind ?? '',
           }),
         });
       } catch (err) {

@@ -303,6 +303,7 @@ message ArtifactMeta {
   string bucket = 8;
   string metadata_json = 9;
   int64 created_at = 10;
+  string kind = 11;
 }
 
 message RegisterArtifactRequest {

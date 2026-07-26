@@ -800,8 +800,10 @@ describe('OrchestratorService — RegisterArtifact', () => {
         id: 'artifact-live',
       }),
     });
+    const eventBus = makeEventBus();
+    const emit = vi.spyOn(eventBus, 'emit');
     const svc = createOrchestratorServiceImpl({
-      eventBus: makeEventBus(),
+      eventBus,
       toolRegistry: makeRegistry(),
       repository,
     });
@@ -816,6 +818,8 @@ describe('OrchestratorService — RegisterArtifact', () => {
         turnId: 'run-1',
         agentId: 'agent-1',
         name: 'live.txt',
+        kind: 'eval_report',
+        metadataJson: '{"suite":"smoke"}',
       }),
       }),
     ));
@@ -827,6 +831,8 @@ describe('OrchestratorService — RegisterArtifact', () => {
         turnId: 'run-1',
         agentId: 'agent-1',
         name: 'live.txt',
+        kind: 'eval_report',
+        metadata: { suite: 'smoke' },
       }),
       {
         turnId: 'run-1',
@@ -842,6 +848,48 @@ describe('OrchestratorService — RegisterArtifact', () => {
         },
       },
     );
+    expect(emit).toHaveBeenCalledWith('artifact.created', expect.objectContaining({
+      artifactId: 'artifact-live',
+      agentId: 'agent-1',
+      turnId: 'run-1',
+      kind: 'eval_report',
+    }));
+  });
+
+  it('rejects invalid kind and oversized metadata at the gRPC boundary', async () => {
+    const repository = makeDedupRepository();
+    const svc = createOrchestratorServiceImpl({
+      eventBus: makeEventBus(),
+      toolRegistry: makeRegistry(),
+      repository,
+    });
+    const request = (kind: string, metadataJson: string) => withLiveDeliveryCapability(
+      create(RegisterArtifactRequestSchema, {
+        turnId: 'run-1',
+        sandboxSessionId: 'sandbox-1',
+        agentId: 'agent-1',
+        artifact: create(ArtifactMetaSchema, {
+          id: 'artifact-invalid',
+          turnId: 'run-1',
+          agentId: 'agent-1',
+          name: 'invalid.txt',
+          kind,
+          metadataJson,
+        }),
+      }),
+    );
+
+    await expectConnectError(
+      svc.registerArtifact(request('Invalid Kind', '{}')),
+      Code.InvalidArgument,
+    );
+    await expectConnectError(
+      svc.registerArtifact(request('eval_report', JSON.stringify({
+        content: 'x'.repeat(16 * 1024),
+      }))),
+      Code.ResourceExhausted,
+    );
+    expect(repository.saveArtifactIfDeliveryOwned).not.toHaveBeenCalled();
   });
 
   it('rejects an expired callback without saving artifact metadata', async () => {

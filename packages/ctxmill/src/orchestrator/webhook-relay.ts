@@ -124,6 +124,16 @@ const WEBHOOK_PAYLOAD_FIELDS = {
     'comment',
     'timestamp',
   ],
+  'artifact.created': [
+    'artifactId',
+    'agentId',
+    'turnId',
+    'name',
+    'mimeType',
+    'sizeBytes',
+    'kind',
+    'timestamp',
+  ],
 } as const satisfies Record<ValidWebhookEvent, readonly string[]>;
 
 export function buildWebhookPayload(

@@ -90,6 +90,7 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | GET | `/api/artifacts/:id/download` | Download artifact bytes |
 | GET | `/api/artifacts/:id/download-url` | Get signed download URL |
 | POST | `/api/artifacts/upload-url` | Get signed upload URL |
+| POST | `/api/artifacts/upload` | Upload artifact bytes as multipart form data |
 | DELETE | `/api/artifacts/:id` | Delete artifact |
 | **Events** |  |  |
 | GET | `/api/events` | List persisted events |
@@ -1244,6 +1245,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
       "sizeBytes": 23456,
       "storageKey": "artifacts/art_123/summary.pdf",
       "bucket": "ctxmill-artifacts",
+      "kind": "eval_report",
+      "metadata": { "suite": "weekly" },
       "status": "active",
       "createdAt": 1712140000000
     }
@@ -1297,7 +1300,9 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   "agentId": "agent_123",
   "name": "summary.pdf",
   "mimeType": "application/pdf",
-  "sizeBytes": 23456
+  "sizeBytes": 23456,
+  "kind": "eval_report",
+  "metadata": { "suite": "weekly" }
 }
 ```
 
@@ -1313,7 +1318,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 }
 ```
 
-- **Notes:** The metadata row starts as `pending_upload` and is hidden from list endpoints until the object exists and a download/download-url request confirms it. Direct multipart upload is available at `POST /api/artifacts/upload`; daemon-side direct uploads use the `artifact_upload` tool. Artifact object keys are globally scoped by artifact ID, not by agent ID, so deleting an agent does not imply artifact-object cleanup.
+- **Notes:** `kind` is optional and must match `^[a-z0-9][a-z0-9_-]{0,63}$`. `metadata` is an optional JSON object capped at 16 KiB after UTF-8 serialization. The metadata row starts as `pending_upload` and is hidden from list endpoints until the object exists and a download/download-url request confirms it. Registration emits `artifact.created`; that event means metadata was registered, not that a signed-upload object is already readable. Direct multipart upload is available at `POST /api/artifacts/upload` with `kind` and JSON-encoded `metadata` form fields; daemon-side direct uploads use the same fields on the `artifact_upload` tool. Artifact object keys are globally scoped by artifact ID, not by agent ID, so deleting an agent does not imply artifact-object cleanup. Bundled clients can call `client.artifacts.requestUploadUrl(...)`.
 
 #### `DELETE /api/artifacts/:id`
 
@@ -1807,6 +1812,10 @@ es.onerror = (err) => {
 - `interrupt.requested`
 - `interrupt.resolved`
 - `message.committed`
+- `message.updated`
+- `feedback.received`
+- `budget.threshold`
+- `artifact.created`
 
 ### Delivery format
 
@@ -1816,6 +1825,8 @@ Webhook deliveries are HTTP `POST` requests with:
 - `X-Agent-Id: <agent-id>`
 - `X-Event-Type: <event-name>`
 - `X-Delivery-Id: <delivery-id>`
+- `X-Webhook-Timestamp: <unix-seconds>`
+- `X-Webhook-Signature: v1=<hex-hmac-sha256>`
 
 Body = raw JSON payload for the event.
 
@@ -1876,11 +1887,26 @@ Body = raw JSON payload for the event.
 }
 ```
 
+`artifact.created` example payload:
+
+```json
+{
+  "artifactId": "art_123",
+  "agentId": "agent_123",
+  "turnId": "turn_123",
+  "name": "summary.pdf",
+  "mimeType": "application/pdf",
+  "sizeBytes": 23456,
+  "kind": "eval_report",
+  "timestamp": 1712140001200
+}
+```
+
 ### Signing / secrets
 
-- Webhook registrations accept an optional `secret` field.
-- **Current delivery behavior:** the delivery code sets JSON and `X-*` headers, but does **not** add an HMAC signature header.
-- If you need signed webhooks today, add signing at your reverse proxy or custom delivery layer.
+- Webhook registrations require a signing `secret`; it is accepted on write and never returned on read.
+- The signature input is `<X-Webhook-Timestamp>.<raw-body>` and uses HMAC-SHA256 with the registered secret.
+- Consumers should use the bundled webhook verifier, enforce the default five-minute tolerance, and compare all signed identity headers with the parsed body.
 
 ## 7. Common Workflows (code examples)
 

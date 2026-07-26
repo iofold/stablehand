@@ -558,7 +558,8 @@ async function canonicalizeSubscriptionsAndDeliveries(sql: postgres.Sql): Promis
         'message.committed',
         'message.updated',
         'feedback.received',
-        'budget.threshold'
+        'budget.threshold',
+        'artifact.created'
       )
     ), '[]'::jsonb)
   `;

@@ -998,6 +998,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       size_bytes BIGINT NOT NULL,
       storage_key TEXT NOT NULL,
       bucket TEXT NOT NULL,
+      kind TEXT,
       metadata JSONB,
       status TEXT NOT NULL DEFAULT 'active',
       expires_at BIGINT,
@@ -1005,6 +1006,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       updated_at BIGINT NOT NULL
     )
   `;
+  await sql`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS kind TEXT`;
   await renameColumn(sql, 'artifacts', 'session_id', 'turn_id');
 
   // ── 20. secrets (raw SQL usage — not in Drizzle schema) ────────────

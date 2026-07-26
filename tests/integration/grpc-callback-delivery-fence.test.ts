@@ -216,6 +216,7 @@ describe('sandbox callback delivery fence', () => {
       bucket: 'artifacts',
       metadataJson: '',
       createdAt: BigInt(Date.now()),
+      kind: 'callback_probe',
     };
     const liveArtifactRequest = withDeliveryCapability<RegisterArtifactRequest>({
       $typeName: 'ctxmill.sandbox.v1.RegisterArtifactRequest',
@@ -252,7 +253,9 @@ describe('sandbox callback delivery fence', () => {
       status: 'completed',
     });
     expect(eventListener).toHaveBeenCalledOnce();
-    expect(await testDb.repo.getArtifact('callback-artifact-live')).toBeDefined();
+    expect(await testDb.repo.getArtifact('callback-artifact-live')).toMatchObject({
+      kind: 'callback_probe',
+    });
     const liveFrames = await canonicalLog.replayTurnTail(turn.id);
     expect(liveFrames.length).toBeGreaterThan(0);
 

@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import type { ArtifactStore } from '../../artifact/artifact-store.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
+import { ArtifactRegistrationService } from '../../artifact/registration-service.js';
+import { validateArtifactRegistrationFields } from '../../artifact/validation.js';
 
 export interface ArtifactRouteOptions {
   artifactStore: ArtifactStore;
@@ -10,6 +12,7 @@ export interface ArtifactRouteOptions {
   /** S3 bucket name used when pre-registering artifacts (must match ArtifactStore's bucket). */
   bucket: string;
   eventBus?: TypedEventBus;
+  registrationService?: ArtifactRegistrationService;
 }
 
 function buildArtifactStorageKey(artifactId: string, name: string): string {
@@ -22,6 +25,8 @@ export async function artifactRoutes(
   opts: ArtifactRouteOptions,
 ): Promise<void> {
   const { artifactStore, repository, bucket, eventBus } = opts;
+  const registrationService = opts.registrationService
+    ?? new ArtifactRegistrationService({ repository, eventBus });
 
   const resolveArtifactForRead = async (id: string) => {
     const artifact = await repository.getArtifact(id);
@@ -136,10 +141,18 @@ export async function artifactRoutes(
       name?: string;
       mimeType?: string;
       sizeBytes?: number;
+      kind?: unknown;
+      metadata?: unknown;
     };
 
     if (!body?.agentId || !body.name || !body.mimeType) {
       return reply.status(400).send({ error: 'agentId, name, and mimeType are required' });
+    }
+    const registrationFields = validateArtifactRegistrationFields(body);
+    if (!registrationFields.success) {
+      return reply
+        .status(registrationFields.reason === 'metadata_too_large' ? 413 : 400)
+        .send({ error: registrationFields.error });
     }
 
     const artifactId = randomUUID();
@@ -149,7 +162,7 @@ export async function artifactRoutes(
     const uploadUrl = await artifactStore.getSignedUploadUrl(storageKey, body.mimeType, ttl);
 
     // Pre-register the artifact in DB so callers can reference it by ID immediately
-    await repository.saveArtifact({
+    await registrationService.register({
       id: artifactId,
       agentId: body.agentId,
       name: body.name,
@@ -159,18 +172,8 @@ export async function artifactRoutes(
       bucket,
       status: 'pending_upload',
       expiresAt: Date.now() + ttl * 1000,
-    });
-
-    eventBus?.emit('custom', {
-      type: 'artifact.created',
-      agentId: body.agentId,
-      payload: {
-        artifactId,
-        name: body.name,
-        mimeType: body.mimeType,
-        sizeBytes: body.sizeBytes ?? 0,
-      },
-      timestamp: Date.now(),
+      ...(registrationFields.kind ? { kind: registrationFields.kind } : {}),
+      ...(registrationFields.metadata ? { metadata: registrationFields.metadata } : {}),
     });
 
     return reply.send({
@@ -220,19 +223,38 @@ export async function artifactRoutes(
     if (!name) {
       return reply.status(400).send({ error: 'File name could not be determined' });
     }
+    let metadata: unknown;
+    if (fields.metadata !== undefined) {
+      try {
+        metadata = JSON.parse(fields.metadata) as unknown;
+      } catch {
+        return reply.status(400).send({ error: 'metadata must be valid JSON' });
+      }
+    }
+    const registrationFields = validateArtifactRegistrationFields({
+      kind: fields.kind,
+      metadata,
+    });
+    if (!registrationFields.success) {
+      return reply
+        .status(registrationFields.reason === 'metadata_too_large' ? 413 : 400)
+        .send({ error: registrationFields.error });
+    }
 
     const artifactId = randomUUID();
     const storageKey = buildArtifactStorageKey(artifactId, name);
 
-    await repository.saveArtifact({
+    await registrationService.register({
       id: artifactId,
       agentId,
       name,
       mimeType,
-      sizeBytes: 0,
+      sizeBytes: fileBuffer.length,
       storageKey,
       bucket,
       status: 'pending_upload',
+      ...(registrationFields.kind ? { kind: registrationFields.kind } : {}),
+      ...(registrationFields.metadata ? { metadata: registrationFields.metadata } : {}),
     });
 
     try {
@@ -275,20 +297,6 @@ export async function artifactRoutes(
       return reply.status(500).send({ error: 'Artifact metadata activation failed', artifactId });
     }
 
-    if (eventBus) {
-      eventBus.emit('custom', {
-        type: 'artifact.created',
-        agentId,
-        payload: {
-          artifactId,
-          name,
-          mimeType: artifact.mimeType,
-          sizeBytes: artifact.sizeBytes,
-        },
-        timestamp: Date.now(),
-      });
-    }
-
     return reply.status(201).send({
       id: artifact.id,
       agentId: artifact.agentId,
@@ -298,6 +306,8 @@ export async function artifactRoutes(
       storageKey: artifact.storageKey,
       bucket: artifact.bucket,
       status: artifact.status,
+      kind: artifact.kind,
+      metadata: artifact.metadata,
     });
   });
 

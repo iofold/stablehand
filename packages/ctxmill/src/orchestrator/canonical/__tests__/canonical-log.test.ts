@@ -119,6 +119,16 @@ const EVENT_MAP_SAMPLES: { [K in EventName]: EventMap[K] } = {
     agentId: 'agent-1',
     timestamp: 1_000,
   },
+  'artifact.created': {
+    artifactId: 'artifact-1',
+    agentId: 'agent-1',
+    turnId: 'turn-1',
+    name: 'report.json',
+    mimeType: 'application/json',
+    sizeBytes: 42,
+    kind: 'eval_report',
+    timestamp: 1_000,
+  },
   'feedback.received': {
     feedbackId: 'feedback-1',
     turnId: 'turn-1',

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ToolProvider } from '../provider.js';
 import type { ToolDefinition } from '@ctxmill/sandbox-daemon';
+import { ArtifactKindSchema, ArtifactMetadataSchema } from '@ctxmill/contracts';
 
 /**
  * Provides artifact:upload and artifact:download tool definitions.
@@ -22,7 +23,8 @@ export class ArtifactToolProvider implements ToolProvider {
           path: z.string().describe('File path relative to /workspace'),
           name: z.string().optional().describe('Display name for the artifact (defaults to filename)'),
           mimeType: z.string().optional().describe('MIME type (auto-detected from extension if omitted)'),
-          metadata: z.record(z.string(), z.unknown()).optional().describe('Optional key-value metadata'),
+          kind: ArtifactKindSchema.optional().describe('Optional stable routing kind, such as eval_report'),
+          metadata: ArtifactMetadataSchema.optional().describe('Optional key-value metadata (16 KiB maximum)'),
         }),
         location: 'daemon' as const,
         handler: async () => {

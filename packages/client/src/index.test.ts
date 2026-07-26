@@ -758,6 +758,63 @@ describe('CtxmillAgUiClient', () => {
     );
   });
 
+  it('uses canonical artifact registration and read contracts', async () => {
+    const artifact = {
+      id: 'artifact-1',
+      agentId: 'agent-1',
+      turnId: null,
+      conversationId: null,
+      name: 'report.json',
+      mimeType: 'application/json',
+      sizeBytes: 42,
+      storageKey: 'artifacts/artifact-1/report.json',
+      bucket: 'artifacts',
+      kind: 'eval_report',
+      metadata: { suite: 'smoke' },
+      status: 'active',
+      expiresAt: null,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        artifactId: 'artifact-1',
+        uploadUrl: 'https://storage.test/upload',
+        storageKey: artifact.storageKey,
+        expiresIn: 3600,
+      }))
+      .mockResolvedValueOnce(jsonResponse(artifact));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await client.artifacts.requestUploadUrl({
+      agentId: 'agent-1',
+      name: 'report.json',
+      mimeType: 'application/json',
+      sizeBytes: 42,
+      kind: 'eval_report',
+      metadata: { suite: 'smoke' },
+    });
+    await expect(client.artifacts.get('artifact-1')).resolves.toEqual(artifact);
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://ctxmill.test/api/artifacts/upload-url');
+    expect(fetchImpl.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        agentId: 'agent-1',
+        name: 'report.json',
+        mimeType: 'application/json',
+        sizeBytes: 42,
+        kind: 'eval_report',
+        metadata: { suite: 'smoke' },
+      }),
+    }));
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://ctxmill.test/api/artifacts/artifact-1');
+  });
+
   it('rejects legacy custom-event aliases instead of normalizing them', () => {
     expect(() => clientModule.parseCanonicalStreamEvent({
       type: 'CUSTOM',

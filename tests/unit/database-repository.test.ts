@@ -464,6 +464,8 @@ describe('DatabaseRepository', () => {
         sizeBytes: 12,
         storageKey: 'agent/artifact/survives.txt',
         bucket: 'test-bucket',
+        kind: 'eval_report',
+        metadata: { suite: 'cascade' },
         status: 'active',
       });
       await testDb.conn.pgClient`
@@ -483,6 +485,8 @@ describe('DatabaseRepository', () => {
         agentId: null,
         turnId: null,
         conversationId: null,
+        kind: 'eval_report',
+        metadata: { suite: 'cascade' },
         status: 'active',
       });
       expect(await repo.getInterruptById('delete-cascade-interrupt')).toBeUndefined();
@@ -4587,6 +4591,8 @@ describe('DatabaseRepository', () => {
         sizeBytes: 5,
         storageKey: `proof/${turn.id}`,
         bucket: 'artifacts',
+        kind: 'eval_report',
+        metadata: { suite: 'delivery-fence' },
       }, {
         turnId: turn.id,
         sandboxSessionId: sandboxSession.id,
@@ -4597,6 +4603,8 @@ describe('DatabaseRepository', () => {
       expect(artifact).toMatchObject({
         id: `artifact-${turn.id}`,
         turnId: turn.id,
+        kind: 'eval_report',
+        metadata: { suite: 'delivery-fence' },
       });
 
       await expireTurnDeliveryLease(turn.id);

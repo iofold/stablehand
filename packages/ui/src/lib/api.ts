@@ -38,6 +38,7 @@ import {
   type AgentCreateInput,
   type AgentPatchInput,
   type AgentBudgetStatus,
+  type Artifact,
   type AnalyticsOverview,
   type AnalyticsWindow,
   type BudgetPolicy,
@@ -529,19 +530,7 @@ export async function fetchEventTypes(): Promise<{ types: string[] }> {
 
 // ── Artifact operations ─────────────────────────────────────────────
 
-export interface Artifact {
-  id: string;
-  agentId: string | null;
-  turnId?: string | null;
-  name: string;
-  mimeType: string;
-  sizeBytes: number;
-  storageKey: string;
-  bucket: string;
-  status: string;
-  metadata?: Record<string, unknown>;
-  createdAt?: number;
-}
+export type { Artifact };
 
 export async function fetchArtifacts(agentId: string, turnId?: string): Promise<{ artifacts: Artifact[] }> {
   return apiFetch<{ artifacts: Artifact[] }>(

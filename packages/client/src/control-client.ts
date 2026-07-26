@@ -1,5 +1,11 @@
 import {
   AgentCreateInputSchema,
+  ArtifactDeleteResponseSchema,
+  ArtifactDownloadUrlResponseSchema,
+  ArtifactListResponseSchema,
+  ArtifactSchema,
+  ArtifactUploadUrlInputSchema,
+  ArtifactUploadUrlResponseSchema,
   AgentBudgetStatusListResponseSchema,
   AgentListResponseSchema,
   AgentPatchInputSchema,
@@ -48,6 +54,8 @@ import {
   WorkspaceRevisionResponseSchema,
   type Agent,
   type AgentCreateInput,
+  type Artifact,
+  type ArtifactUploadUrlInput,
   type AgentPatchInput,
   type AgentStreamEvent,
   type AnalyticsOverview,
@@ -146,6 +154,7 @@ export class CtxmillControlClient {
   readonly conversations;
   readonly sandboxSessions;
   readonly interrupts;
+  readonly artifacts;
   readonly files;
   readonly workspaces;
   readonly webhooks;
@@ -453,6 +462,77 @@ export class CtxmillControlClient {
           requestSchema: InterruptResolveInputSchema,
           responseSchema: InterruptResolveResponseSchema,
           json: input,
+          ...requestOptions,
+        }),
+    };
+
+    this.artifacts = {
+      list: (
+        input: {
+          agentId?: string;
+          turnId?: string;
+          limit?: number;
+          offset?: number;
+          search?: string;
+        } = {},
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<{ artifacts: Artifact[]; total?: number }> =>
+        this.transport.request({
+          method: 'GET',
+          path: queryPath('/artifacts', {
+            agentId: input.agentId,
+            turnId: input.turnId,
+            limit: input.limit?.toString(),
+            offset: input.offset?.toString(),
+            search: input.search,
+          }),
+          responseSchema: ArtifactListResponseSchema,
+          ...requestOptions,
+        }),
+      get: (
+        artifactId: string,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<Artifact> =>
+        this.transport.request({
+          method: 'GET',
+          path: `/artifacts/${segment(artifactId, 'artifactId')}`,
+          responseSchema: ArtifactSchema,
+          ...requestOptions,
+        }),
+      requestUploadUrl: (
+        input: ArtifactUploadUrlInput,
+        requestOptions: CtxmillRequestOptions = {},
+      ) =>
+        this.transport.request({
+          method: 'POST',
+          path: '/artifacts/upload-url',
+          requestSchema: ArtifactUploadUrlInputSchema,
+          responseSchema: ArtifactUploadUrlResponseSchema,
+          json: input,
+          ...requestOptions,
+        }),
+      downloadUrl: (
+        artifactId: string,
+        expiresIn?: number,
+        requestOptions: CtxmillRequestOptions = {},
+      ) =>
+        this.transport.request({
+          method: 'GET',
+          path: queryPath(
+            `/artifacts/${segment(artifactId, 'artifactId')}/download-url`,
+            { expiresIn: expiresIn?.toString() },
+          ),
+          responseSchema: ArtifactDownloadUrlResponseSchema,
+          ...requestOptions,
+        }),
+      delete: (
+        artifactId: string,
+        requestOptions: CtxmillRequestOptions = {},
+      ) =>
+        this.transport.request({
+          method: 'DELETE',
+          path: `/artifacts/${segment(artifactId, 'artifactId')}`,
+          responseSchema: ArtifactDeleteResponseSchema,
           ...requestOptions,
         }),
     };

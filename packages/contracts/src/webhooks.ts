@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
-import { WebhookEventNameSchema } from './api.js';
+import { ArtifactKindSchema, WebhookEventNameSchema } from './api.js';
 import {
   AgentIdSchema,
+  ArtifactIdSchema,
   ConversationIdSchema,
   InterruptIdSchema,
   MessageIdSchema,
@@ -150,6 +151,17 @@ export const BudgetThresholdWebhookPayloadSchema = z.strictObject({
   timestamp: TimestampSchema,
 });
 
+export const ArtifactCreatedWebhookPayloadSchema = z.strictObject({
+  artifactId: ArtifactIdSchema,
+  agentId: AgentIdSchema,
+  turnId: TurnIdSchema.optional(),
+  name: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+  kind: ArtifactKindSchema.optional(),
+  timestamp: TimestampSchema,
+});
+
 export const WEBHOOK_PAYLOAD_SCHEMAS = {
   'turn.started': TurnStartedWebhookPayloadSchema,
   'turn.completed': TurnCompletedWebhookPayloadSchema,
@@ -161,6 +173,7 @@ export const WEBHOOK_PAYLOAD_SCHEMAS = {
   'message.updated': MessageUpdatedWebhookPayloadSchema,
   'feedback.received': FeedbackReceivedWebhookPayloadSchema,
   'budget.threshold': BudgetThresholdWebhookPayloadSchema,
+  'artifact.created': ArtifactCreatedWebhookPayloadSchema,
 } as const satisfies Readonly<Record<z.infer<typeof WebhookEventNameSchema>, z.ZodType>>;
 
 export const WebhookPayloadSchema = z.union([
@@ -174,6 +187,7 @@ export const WebhookPayloadSchema = z.union([
   MessageUpdatedWebhookPayloadSchema,
   FeedbackReceivedWebhookPayloadSchema,
   BudgetThresholdWebhookPayloadSchema,
+  ArtifactCreatedWebhookPayloadSchema,
 ]);
 
 export type WebhookEventName = z.infer<typeof WebhookEventNameSchema>;

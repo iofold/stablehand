@@ -11,6 +11,7 @@ export const ToolCallIdSchema = id('ToolCallId');
 export const MessageIdSchema = id('MessageId');
 export const WebhookIdSchema = id('WebhookId');
 export const WebhookDeliveryIdSchema = id('WebhookDeliveryId');
+export const ArtifactIdSchema = id('ArtifactId');
 
 export type AgentId = z.infer<typeof AgentIdSchema>;
 export type ConversationId = z.infer<typeof ConversationIdSchema>;
@@ -21,3 +22,4 @@ export type ToolCallId = z.infer<typeof ToolCallIdSchema>;
 export type MessageId = z.infer<typeof MessageIdSchema>;
 export type WebhookId = z.infer<typeof WebhookIdSchema>;
 export type WebhookDeliveryId = z.infer<typeof WebhookDeliveryIdSchema>;
+export type ArtifactId = z.infer<typeof ArtifactIdSchema>;

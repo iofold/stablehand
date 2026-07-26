@@ -106,6 +106,31 @@ const goldenFixtures = [
     expectedJson: '{"turnId":"turn-1","sandboxSessionId":"sandbox-1","agentId":"agent-1","conversationId":"conv-1","mode":"background","taskDescription":"Run Pilot sync","timestamp":100}',
   },
   {
+    eventType: 'artifact.created',
+    payload: {
+      artifactId: 'artifact-1',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      name: 'report.json',
+      mimeType: 'application/json',
+      sizeBytes: 42,
+      kind: 'eval_report',
+      timestamp: 50,
+      metadata: { must: 'not leak into event' },
+    },
+    expected: {
+      artifactId: 'artifact-1',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      name: 'report.json',
+      mimeType: 'application/json',
+      sizeBytes: 42,
+      kind: 'eval_report',
+      timestamp: 50,
+    },
+    expectedJson: '{"artifactId":"artifact-1","agentId":"agent-1","turnId":"turn-1","name":"report.json","mimeType":"application/json","sizeBytes":42,"kind":"eval_report","timestamp":50}',
+  },
+  {
     eventType: 'turn.completed',
     payload: {
       turnId: 'turn-1',

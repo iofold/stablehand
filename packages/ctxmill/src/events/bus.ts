@@ -85,6 +85,16 @@ export type EventMap = {
     agentId: string;
     timestamp: number;
   };
+  'artifact.created': {
+    artifactId: string;
+    agentId: string;
+    turnId?: string;
+    name: string;
+    mimeType: string;
+    sizeBytes: number;
+    kind?: string;
+    timestamp: number;
+  };
   'feedback.received': {
     feedbackId: string;
     turnId: string;

@@ -39,6 +39,7 @@ import type { SandboxContainerManager } from '../sandbox/container-manager.js';
 import type { LocalFunctionExecutor } from '../tool/executor.js';
 import type { DefaultToolRegistry } from '../tool/registry.js';
 import type { ArtifactStore } from '../artifact/index.js';
+import { ArtifactRegistrationService } from '../artifact/registration-service.js';
 import { registerExistingAgentHttpTools } from './http-tools.js';
 import type { SystemSettingsService } from '../settings/service.js';
 import type { SandboxSessionManager } from './sandbox-session-manager.js';
@@ -156,6 +157,11 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
   await registerExistingAgentHttpTools(db, toolDefinitionRegistry, opts.secretProvider);
 
+  const artifactRegistration = new ArtifactRegistrationService({
+    repository: db,
+    eventBus,
+  });
+
   // ── ConnectRPC (gRPC) plugin ───────────────────────────
   // Registers OrchestratorService so sandbox containers can call back
   // into the orchestrator for tool execution and event emission.
@@ -173,6 +179,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
       toolDefinitionRegistry,
       repository: db,
       callbackAuthConfig,
+      artifactRegistration,
     }),
     interceptors: callbackAuthInterceptor ? [callbackAuthInterceptor] : [],
   });
@@ -295,6 +302,8 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
       artifactStore: opts.artifactStore,
       repository: db,
       bucket: opts.artifactBucket,
+      eventBus,
+      registrationService: artifactRegistration,
     });
   }
 

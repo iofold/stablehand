@@ -322,6 +322,35 @@ describe('@ctxmill/contracts', () => {
     })).toThrow();
   });
 
+  it('validates artifact kind, metadata size, and canonical records', () => {
+    expect(contracts.ArtifactKindSchema.parse('eval_report')).toBe('eval_report');
+    expect(() => contracts.ArtifactKindSchema.parse('Eval Report')).toThrow();
+    expect(contracts.ArtifactMetadataSchema.parse({
+      content: 'x'.repeat((16 * 1024) - 14),
+    })).toBeDefined();
+    expect(() => contracts.ArtifactMetadataSchema.parse({
+      content: 'x'.repeat(16 * 1024),
+    })).toThrow();
+
+    expect(contracts.ArtifactSchema.parse({
+      id: 'artifact-1',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      name: 'report.json',
+      mimeType: 'application/json',
+      sizeBytes: 42,
+      storageKey: 'artifacts/artifact-1/report.json',
+      bucket: 'artifacts',
+      kind: 'eval_report',
+      metadata: { suite: 'smoke' },
+      status: 'active',
+      expiresAt: null,
+      createdAt: 1,
+      updatedAt: 2,
+    })).toMatchObject({ kind: 'eval_report' });
+  });
+
   it('rejects sandbox runtime controls from per-turn secret inputs', () => {
     expect(contracts.BackgroundTurnStartInputSchema.parse({
       task: 'Run close workflow',
@@ -527,7 +556,7 @@ describe('@ctxmill/contracts', () => {
     expect(() => contracts.WebhookEventNameSchema.parse('ag_ui.event')).toThrow();
   });
 
-  it('validates all ten event-specific flat webhook body contracts', () => {
+  it('validates every event-specific flat webhook body contract', () => {
     const identities = {
       turnId: 'turn-1',
       agentId: 'agent-1',
@@ -626,6 +655,16 @@ describe('@ctxmill/contracts', () => {
         limit: 100,
         agentId: 'agent-1',
         timestamp: 10,
+      },
+      'artifact.created': {
+        artifactId: 'artifact-1',
+        agentId: 'agent-1',
+        turnId: 'turn-1',
+        name: 'report.json',
+        mimeType: 'application/json',
+        sizeBytes: 42,
+        kind: 'eval_report',
+        timestamp: 11,
       },
     } as const;
 

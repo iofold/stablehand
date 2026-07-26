@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, relative, resolve } from 'node:path';
 import { create } from '@bufbuild/protobuf';
+import { ArtifactKindSchema, ArtifactMetadataSchema } from '@ctxmill/contracts';
 import {
   ArtifactMetaSchema,
   RegisterArtifactRequestSchema,
@@ -102,11 +103,28 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       path?: string;
       name?: string;
       mimeType?: string;
+      kind?: string;
       metadata?: Record<string, unknown>;
     };
 
     if (!input.path) {
       return stringifyJsonWithBigInts({ error: 'path is required' });
+    }
+    const kind = input.kind === undefined
+      ? undefined
+      : ArtifactKindSchema.safeParse(input.kind);
+    if (kind && !kind.success) {
+      return stringifyJsonWithBigInts({
+        error: 'kind must match ^[a-z0-9][a-z0-9_-]{0,63}$',
+      });
+    }
+    const metadata = input.metadata === undefined
+      ? undefined
+      : ArtifactMetadataSchema.safeParse(input.metadata);
+    if (metadata && !metadata.success) {
+      return stringifyJsonWithBigInts({
+        error: 'metadata must be a JSON object no larger than 16384 serialized bytes',
+      });
     }
 
     const fullPath = resolveWorkspacePath(workspaceDir, input.path);
@@ -149,8 +167,9 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
               sizeBytes: BigInt(fileBuffer.byteLength),
               storageKey,
               bucket: artifactStore.getBucket(),
-              metadataJson: input.metadata ? stringifyJsonWithBigInts(input.metadata) : '',
+              metadataJson: metadata?.success ? stringifyJsonWithBigInts(metadata.data) : '',
               createdAt: BigInt(Date.now()),
+              kind: kind?.success ? kind.data : '',
             }),
           }),
           { signal: deliveryContext.abortController.signal },

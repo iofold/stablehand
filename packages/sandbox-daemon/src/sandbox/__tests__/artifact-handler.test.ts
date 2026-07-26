@@ -81,7 +81,11 @@ describe('artifact handlers', () => {
       },
     });
 
-    const result = await handlers.get('artifact_upload')?.({ path: 'report.txt' });
+    const result = await handlers.get('artifact_upload')?.({
+      path: 'report.txt',
+      kind: 'eval_report',
+      metadata: { suite: 'smoke' },
+    });
 
     expect(JSON.parse(result ?? '{}')).toEqual({ error: 'Upload failed: metadata unavailable' });
     expect(artifactStore.upload).toHaveBeenCalledTimes(1);
@@ -93,6 +97,10 @@ describe('artifact handlers', () => {
         deliveryCapability: expect.objectContaining({
           ownerId: 'owner-1',
           fenceToken: 1n,
+        }),
+        artifact: expect.objectContaining({
+          kind: 'eval_report',
+          metadataJson: '{"suite":"smoke"}',
         }),
       }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),

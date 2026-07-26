@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   AgentIdSchema,
+  ArtifactIdSchema,
   ConversationIdSchema,
   InterruptIdSchema,
   MessageIdSchema,
@@ -20,6 +21,27 @@ import { TurnUsageSchema } from './usage.js';
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const StringRecordSchema = z.record(z.string(), z.string());
 const EpochMillisecondsSchema = z.number().int().nonnegative();
+
+export const ARTIFACT_METADATA_MAX_BYTES = 16 * 1024;
+
+export function serializedJsonByteLength(value: unknown): number {
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized === undefined
+      ? Number.POSITIVE_INFINITY
+      : new TextEncoder().encode(serialized).byteLength;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+export const ArtifactKindSchema = z.string()
+  .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
+
+export const ArtifactMetadataSchema = UnknownRecordSchema.refine(
+  (value) => serializedJsonByteLength(value) <= ARTIFACT_METADATA_MAX_BYTES,
+  `Artifact metadata must not exceed ${ARTIFACT_METADATA_MAX_BYTES} serialized bytes`,
+);
 
 export const AgentResourceLimitsSchema = z.strictObject({
   cpus: z.number().min(0.5).max(4).optional(),
@@ -488,6 +510,74 @@ export const InterruptResolveResponseSchema = z.union([
   }),
 ]);
 
+export const ArtifactStatusSchema = z.enum([
+  'pending_upload',
+  'active',
+  'upload_failed',
+  'deleting',
+  'delete_failed',
+]);
+
+export const ArtifactSchema = z.strictObject({
+  id: ArtifactIdSchema,
+  agentId: AgentIdSchema.nullable(),
+  turnId: TurnIdSchema.nullable(),
+  conversationId: ConversationIdSchema.nullable(),
+  name: z.string().trim().min(1),
+  mimeType: z.string().trim().min(1),
+  sizeBytes: z.number().int().nonnegative(),
+  storageKey: z.string().trim().min(1),
+  bucket: z.string().trim().min(1),
+  kind: ArtifactKindSchema.nullable(),
+  metadata: ArtifactMetadataSchema.nullable(),
+  status: ArtifactStatusSchema,
+  expiresAt: EpochMillisecondsSchema.nullable(),
+  createdAt: EpochMillisecondsSchema,
+  updatedAt: EpochMillisecondsSchema,
+});
+
+export const ArtifactListInputSchema = z.strictObject({
+  agentId: AgentIdSchema.optional(),
+  turnId: TurnIdSchema.optional(),
+  limit: z.number().int().positive().optional(),
+  offset: z.number().int().nonnegative().optional(),
+  search: z.string().optional(),
+});
+
+export const ArtifactListResponseSchema = z.strictObject({
+  artifacts: z.array(ArtifactSchema),
+  total: z.number().int().nonnegative().optional(),
+});
+
+export const ArtifactUploadUrlInputSchema = z.strictObject({
+  agentId: AgentIdSchema,
+  name: z.string().trim().min(1),
+  mimeType: z.string().trim().min(1),
+  sizeBytes: z.number().int().nonnegative().optional(),
+  kind: ArtifactKindSchema.optional(),
+  metadata: ArtifactMetadataSchema.optional(),
+});
+
+export const ArtifactUploadUrlResponseSchema = z.strictObject({
+  artifactId: ArtifactIdSchema,
+  uploadUrl: z.string().url(),
+  storageKey: z.string().trim().min(1),
+  expiresIn: z.number().int().positive(),
+});
+
+export const ArtifactDownloadUrlResponseSchema = z.strictObject({
+  url: z.string().url(),
+  expiresIn: z.number().int().positive(),
+  name: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
+});
+
+export const ArtifactDeleteResponseSchema = z.strictObject({
+  deleted: z.literal(true),
+  id: ArtifactIdSchema,
+});
+
 export const FileListResponseSchema = z.strictObject({
   entries: z.array(z.strictObject({
     name: z.string(),
@@ -534,6 +624,7 @@ export const WebhookEventNameSchema = z.enum([
   'message.updated',
   'feedback.received',
   'budget.threshold',
+  'artifact.created',
 ]);
 
 export const WebhookCreateInputSchema = z.strictObject({
@@ -622,6 +713,9 @@ export type SandboxSession = z.infer<typeof SandboxSessionSchema>;
 export type Interrupt = z.infer<typeof InterruptSchema>;
 export type InterruptRecord = z.infer<typeof InterruptRecordSchema>;
 export type InterruptRecordListInput = z.input<typeof InterruptRecordListInputSchema>;
+export type Artifact = z.infer<typeof ArtifactSchema>;
+export type ArtifactListInput = z.input<typeof ArtifactListInputSchema>;
+export type ArtifactUploadUrlInput = z.input<typeof ArtifactUploadUrlInputSchema>;
 export type Webhook = z.infer<typeof WebhookSchema>;
 export type BackgroundTurnStartInput = z.input<typeof BackgroundTurnStartInputSchema>;
 export type ConversationTurnStartInput = z.input<typeof ConversationTurnStartInputSchema>;

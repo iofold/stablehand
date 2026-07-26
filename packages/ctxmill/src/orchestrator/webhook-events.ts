@@ -11,6 +11,7 @@ export const VALID_WEBHOOK_EVENTS = [
   'message.updated',
   'feedback.received',
   'budget.threshold',
+  'artifact.created',
 ] as const satisfies readonly EventName[];
 
 export type ValidWebhookEvent = typeof VALID_WEBHOOK_EVENTS[number];

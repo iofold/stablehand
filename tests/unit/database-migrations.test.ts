@@ -238,6 +238,26 @@ describe('database migration baseline guard', () => {
     expect(retiredColumns).toEqual([]);
   });
 
+  it('adds artifact kind idempotently', async () => {
+    await dropAllPublicTables(conn);
+    await runMigrations(conn.pgClient);
+    await runMigrations(conn.pgClient);
+
+    const columns = await conn.pgClient`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'artifacts'
+        AND column_name IN ('kind', 'metadata')
+      ORDER BY column_name
+    `;
+
+    expect(columns).toEqual([
+      { column_name: 'kind' },
+      { column_name: 'metadata' },
+    ]);
+  });
+
   it('hard-migrates persisted event, trigger, wait, and webhook contracts', async () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
@@ -341,7 +361,7 @@ describe('database migration baseline guard', () => {
         'webhook-1',
         'agent-1',
         'https://example.test/webhook',
-        '["run.tool_started","tool_call.started","unsupported.event"]',
+        '["run.tool_started","tool_call.started","artifact.created","unsupported.event"]',
         'secret',
         true,
         1,
@@ -449,7 +469,7 @@ describe('database migration baseline guard', () => {
     const [webhook] = await conn.pgClient`
       SELECT events FROM webhooks WHERE id = 'webhook-1'
     `;
-    expect(webhook?.events).toEqual(['tool_call.started']);
+    expect(webhook?.events).toEqual(['artifact.created', 'tool_call.started']);
 
     const [delivery] = await conn.pgClient`
       SELECT event_type, webhook_id, payload, status
