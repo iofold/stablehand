@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parse } from 'yaml';
+import { parse, parseAllDocuments } from 'yaml';
 
 interface ModelGatewayConfig {
   model_list?: Array<{
@@ -26,6 +26,29 @@ interface ModelGatewayCompose {
 
 function readYaml<T>(path: string): T {
   return parse(readFileSync(resolve(process.cwd(), path), 'utf8')) as T;
+}
+
+interface KubernetesResource {
+  kind?: string;
+  metadata?: { name?: string };
+  spec?: Record<string, unknown>;
+}
+
+function readYamlDocuments(path: string): KubernetesResource[] {
+  return parseAllDocuments(
+    readFileSync(resolve(process.cwd(), path), 'utf8'),
+  ).map((document) => document.toJS() as KubernetesResource);
+}
+
+function findResource(
+  resources: readonly KubernetesResource[],
+  kind: string,
+  name: string,
+): KubernetesResource {
+  const resource = resources.find((candidate) =>
+    candidate.kind === kind && candidate.metadata?.name === name);
+  expect(resource, `missing ${kind}/${name}`).toBeDefined();
+  return resource!;
 }
 
 describe('model gateway deployment', () => {
@@ -127,5 +150,61 @@ describe('model gateway deployment', () => {
       'traefik.http.routers.litellm.tls.certresolver=letsencrypt',
       'traefik.http.services.litellm.loadbalancer.server.port=4000',
     ]));
+  });
+
+  it('ships an isolated LiteLLM control plane for dev2', () => {
+    const resources = readYamlDocuments('deploy/k3s/dev2/model-gateway.yaml');
+    const database = findResource(resources, 'Deployment', 'litellm-db');
+    const gateway = findResource(resources, 'Deployment', 'litellm');
+
+    expect(findResource(resources, 'PersistentVolumeClaim', 'litellm-data')).toBeDefined();
+    expect(findResource(resources, 'Service', 'litellm-db')).toBeDefined();
+    expect(findResource(resources, 'Service', 'litellm')).toBeDefined();
+    expect(database.spec).toMatchObject({ strategy: { type: 'Recreate' } });
+    expect(gateway.spec).toMatchObject({
+      template: {
+        spec: {
+          containers: [{
+            name: 'litellm',
+            image: 'ctxmill/litellm:dev2',
+            imagePullPolicy: 'Never',
+            envFrom: [
+              { secretRef: { name: 'ctxmill-provider-secrets' } },
+              { secretRef: { name: 'ctxmill-model-gateway-secrets' } },
+            ],
+            readinessProbe: {
+              httpGet: { path: '/health/readiness', port: 'http' },
+            },
+          }],
+        },
+      },
+    });
+  });
+
+  it('deploys and bootstraps dev2 LiteLLM before enabling orchestrator routing', () => {
+    const deploy = readFileSync(
+      resolve(process.cwd(), 'deploy/k3s/dev2/deploy-dev2.sh'),
+      'utf8',
+    );
+    const secrets = readFileSync(
+      resolve(process.cwd(), 'deploy/k3s/dev2/sync-secrets.sh'),
+      'utf8',
+    );
+    const manifests = readFileSync(
+      resolve(process.cwd(), 'deploy/k3s/dev2/manifests.yaml'),
+      'utf8',
+    );
+
+    expect(deploy).toContain('deploy/compose/model-gateway/Dockerfile');
+    expect(deploy).toContain('model-gateway.yaml');
+    expect(deploy).toContain('bootstrap-model-gateway.sh');
+    expect(deploy).toContain('ctxmill-model-gateway-config');
+    expect(secrets).toContain('ctxmill-model-gateway-secrets');
+    expect(secrets).toContain('CLOUDFLARE_ACCOUNT_ID');
+    expect(secrets).toContain('CLOUDFLARE_API_KEY');
+    expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_ENABLED');
+    expect(manifests).toContain('http://litellm.ctxmill.svc.cluster.local:4000');
+    expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_RUNTIME_KEY');
+    expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_METERING_KEY');
   });
 });
