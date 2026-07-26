@@ -133,6 +133,7 @@ export const FeedbackReceivedWebhookPayloadSchema = z.strictObject({
   agentId: AgentIdSchema,
   type: z.enum(['thumbs_up', 'thumbs_down']),
   messageId: MessageIdSchema.optional(),
+  comment: z.string().max(4000).optional(),
   timestamp: TimestampSchema,
 });
 

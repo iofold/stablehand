@@ -93,6 +93,8 @@ export interface ApiFeedbackRequest {
   conversationId: string;
   messageId: string;
   type: 'thumbs_up' | 'thumbs_down';
+  /** Optional free-text comment; preserved verbatim on the feedback.received event. */
+  comment?: string;
 }
 
 export interface ApiSandboxRestoreSuccess {

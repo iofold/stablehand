@@ -4,6 +4,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { EventMap } from '../../../events/bus.js';
 import type { AgentSubRouteOptions } from './types.js';
 
+/** Maximum accepted length for a feedback comment, in characters. */
+const MAX_COMMENT_LENGTH = 4000;
+
 export async function feedbackRoutes(
   app: FastifyInstance,
   opts: AgentSubRouteOptions,
@@ -30,6 +33,7 @@ export async function feedbackRoutes(
         conversationId?: string;
         messageId?: string;
         type?: string;
+        comment?: unknown;
       } | undefined;
 
       if (
@@ -41,6 +45,16 @@ export async function feedbackRoutes(
       ) {
         return reply.status(400).send({
           error: 'conversationId, messageId, and type ("thumbs_up" or "thumbs_down") are required',
+        });
+      }
+
+      if (body.comment !== undefined && typeof body.comment !== 'string') {
+        return reply.status(400).send({ error: 'comment must be a string' });
+      }
+      const comment = typeof body.comment === 'string' ? body.comment.trim() : undefined;
+      if (comment !== undefined && comment.length > MAX_COMMENT_LENGTH) {
+        return reply.status(400).send({
+          error: `comment must be at most ${MAX_COMMENT_LENGTH} characters`,
         });
       }
 
@@ -70,6 +84,7 @@ export async function feedbackRoutes(
         agentId: id,
         type: body.type,
         messageId: body.messageId,
+        ...(comment !== undefined && comment !== '' ? { comment } : {}),
         timestamp: Date.now(),
       };
 

@@ -121,6 +121,7 @@ const WEBHOOK_PAYLOAD_FIELDS = {
     'agentId',
     'type',
     'messageId',
+    'comment',
     'timestamp',
   ],
 } as const satisfies Record<ValidWebhookEvent, readonly string[]>;

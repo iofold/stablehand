@@ -91,6 +91,7 @@ export type EventMap = {
     agentId: string;
     type: 'thumbs_up' | 'thumbs_down';
     messageId?: string;
+    comment?: string;
     timestamp: number;
   };
   'agent.created': {
