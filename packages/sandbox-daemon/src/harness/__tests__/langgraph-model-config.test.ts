@@ -78,6 +78,31 @@ describe('LangGraph provider model configuration', () => {
     },
   );
 
+  it('maps canonical reasoning off to an explicit protocol-native none value', async () => {
+    const config = makeConfig('openai');
+    config.harnessConfigJson = JSON.stringify({
+      provider: 'openai',
+      model: 'cf-glm-5.2',
+      apiKeyRef: 'providerKey',
+      reasoning: 'off',
+    });
+    const session = await new LangGraphHarness().openSession(config);
+    const buildModel = Reflect.get(session, 'buildModelFromConfig') as (
+      secrets: Readonly<Record<string, string>>,
+      turnId?: string,
+    ) => Promise<unknown>;
+
+    try {
+      await buildModel(config.secrets, 'turn-1');
+    } finally {
+      await session.close();
+    }
+
+    expect(constructorCalls.openai).toEqual([
+      expect.objectContaining({ reasoning_effort: 'none' }),
+    ]);
+  });
+
   it('routes an implicit OpenAI branch through the gateway with opaque turn correlation', async () => {
     const config = makeConfig('openai');
     config.harnessConfigJson = JSON.stringify({

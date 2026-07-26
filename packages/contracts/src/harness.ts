@@ -68,6 +68,8 @@ const HarnessSetupSchema = z.strictObject({
   symlinks: z.array(SymlinkSchema).optional(),
 });
 
+const OpenAIReasoningSchema = z.enum(['off', 'low', 'medium', 'high']);
+
 const LangGraphSubagentSchema = z.strictObject({
   name: z.string().min(1),
   description: z.string(),
@@ -78,6 +80,7 @@ const LangGraphSubagentSchema = z.strictObject({
   tools: z.array(z.string().min(1)).optional(),
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().positive().optional(),
+  reasoning: OpenAIReasoningSchema.optional(),
 });
 
 export const LangGraphConfigSchema = z.strictObject({
@@ -88,7 +91,7 @@ export const LangGraphConfigSchema = z.strictObject({
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().positive().optional(),
   topP: z.number().min(0).max(1).optional(),
-  reasoning: z.enum(['off', 'low', 'medium', 'high']).optional(),
+  reasoning: OpenAIReasoningSchema.optional(),
   setup: HarnessSetupSchema.optional(),
   subagents: z.array(LangGraphSubagentSchema).optional(),
   middleware: z.array(z.string().min(1)).optional(),
@@ -120,6 +123,17 @@ export const LangGraphConfigSchema = z.strictObject({
       }
     });
   }
+
+  config.subagents?.forEach((subagent, index) => {
+    const provider = subagent.provider ?? config.provider;
+    if (subagent.reasoning !== undefined && provider !== 'openai') {
+      context.addIssue({
+        code: 'custom',
+        path: ['subagents', index, 'reasoning'],
+        message: 'reasoning is supported only by OpenAI LangGraph subagents',
+      });
+    }
+  });
 });
 
 const ClaudeAgentDefinitionSchema = z.strictObject({
@@ -147,6 +161,16 @@ export const PIAgentConfigSchema = z.strictObject({
   model: z.string().min(1),
   apiKeyRef: z.string().min(1).optional(),
   baseUrl: UrlSchema.optional(),
+  maxTokens: z.number().int().positive().optional(),
+  reasoning: z.boolean().optional(),
+  thinkingLevel: z.enum([
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]).optional(),
   extensions: z.array(WorkspaceRelativePathSchema).optional(),
 });
 

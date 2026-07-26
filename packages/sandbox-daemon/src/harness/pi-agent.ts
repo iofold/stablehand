@@ -270,7 +270,14 @@ function resolveModel(
   pricingKnown: boolean;
   connection: HarnessModelConnection;
 } {
-  const { provider, model, baseUrl, apiKeyRef } = harnessConfig;
+  const {
+    provider,
+    model,
+    baseUrl,
+    apiKeyRef,
+    maxTokens,
+    reasoning,
+  } = harnessConfig;
   const connection = resolveHarnessModelConnection({
     provider,
     apiKeyRef,
@@ -282,16 +289,22 @@ function resolveModel(
     ? `${connection.baseUrl.replace(/\/+$/, '')}/v1beta`
     : connection.baseUrl;
   if (resolved) {
+    const needsModelOverride = gatewayBaseUrl !== undefined
+      || maxTokens !== undefined
+      || reasoning !== undefined;
     return {
       connection,
       pricingKnown: connection.mode === 'direct',
-      model: gatewayBaseUrl
+      model: needsModelOverride
         ? {
           ...resolved,
           provider,
           id: model,
-          baseUrl: gatewayBaseUrl,
-          apiKey: connection.apiKey,
+          ...(gatewayBaseUrl
+            ? { baseUrl: gatewayBaseUrl, apiKey: connection.apiKey }
+            : {}),
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+          ...(reasoning !== undefined ? { reasoning } : {}),
         }
         : resolved,
     };
@@ -314,11 +327,11 @@ function resolveModel(
       api: defaults.api,
       baseUrl: gatewayBaseUrl ?? defaults.baseUrl,
       apiKey: connection.apiKey,
-      reasoning: false,
+      reasoning: reasoning ?? false,
       input: ['text'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 128000,
-      maxTokens: 16384,
+      maxTokens: maxTokens ?? 16384,
     },
   };
 }
@@ -506,6 +519,9 @@ export class PIAgentHarness implements AgentHarness {
       cwd,
       model,
       modelRuntime,
+      ...(harnessConfig.thinkingLevel
+        ? { thinkingLevel: harnessConfig.thinkingLevel }
+        : {}),
       noTools: 'builtin',
       customTools: [...nativeTools, ...customTools] as any[],
       sessionManager: restore

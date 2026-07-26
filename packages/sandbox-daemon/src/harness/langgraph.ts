@@ -578,7 +578,9 @@ class LangGraphSession implements HarnessSession {
         ...(temperature != null ? { temperature } : {}),
         ...(maxTokens != null ? { maxTokens } : {}),
         ...(topP != null ? { topP } : {}),
-        ...(reasoning && reasoning !== 'off' ? { reasoning_effort: reasoning } : {}),
+        ...(reasoning
+          ? { reasoning_effort: reasoning === 'off' ? 'none' : reasoning }
+          : {}),
       }) as unknown as BaseLanguageModel;
     }
   }
@@ -616,6 +618,7 @@ class LangGraphSession implements HarnessSession {
             baseUrl: this.harnessConfig.baseUrl,
             temperature: config.temperature,
             maxTokens: config.maxTokens,
+            reasoning: config.reasoning,
           }, secrets, turnId);
         }
 

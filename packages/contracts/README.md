@@ -26,7 +26,11 @@ CanonicalStreamEventSchema.parse(eventFromCtxmill);
 Canonical per-harness config schemas are exported from
 `@ctxmill/contracts/harness`. They accept only `openai`, `anthropic`, and
 `google` provider names; agent-level native tools do not belong in harness
-config.
+config. PI Agent optionally accepts `maxTokens`, `reasoning`, and
+`thinkingLevel` so callers can bound generation without inventing a
+provider-specific harness contract. LangGraph's `reasoning: "off"` is an
+explicit request, including for configured subagents; it is not the same as
+omitting the field and inheriting the upstream model default.
 
 Signed webhook helpers are exported from `@ctxmill/contracts/webhooks`.
 `verifyCtxmillWebhook()` validates the five canonical `X-*` headers, clock

@@ -7,7 +7,10 @@ import type { BashToolOptions } from '@earendil-works/pi-coding-agent';
 
 const mockCreateAgentSession = vi.fn();
 const mockSetRuntimeApiKey = vi.fn();
-const mockGetModel = vi.fn((provider: string, model: string) => {
+const mockGetModel = vi.fn((
+  provider: string,
+  model: string,
+): { provider: string; id: string; api: string } | undefined => {
   const apiByProvider: Record<string, string> = {
     openai: 'openai-completions',
     anthropic: 'anthropic-messages',
@@ -406,6 +409,50 @@ describe('PIAgentHarness transcript syncing', () => {
       }
     },
   );
+
+  it('applies canonical output and reasoning bounds to custom gateway models', async () => {
+    mockGetModel.mockReturnValueOnce(undefined);
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: vi.fn(() => vi.fn()),
+        prompt: vi.fn(),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        state: createNativeState(),
+        setModel: vi.fn(),
+      },
+    });
+
+    const session = await new PIAgentHarness().openSession(makeConfig({
+      secrets: {
+        CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
+        CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+        CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+        CTXMILL_MODEL_GATEWAY_REVISION: 'dev2-1',
+      },
+      harnessConfigJson: JSON.stringify({
+        provider: 'openai',
+        model: 'cf-glm-5.2',
+        maxTokens: 96,
+        reasoning: true,
+        thinkingLevel: 'minimal',
+      }),
+    }));
+
+    try {
+      expect(mockCreateAgentSession.mock.calls[0]?.[0]).toMatchObject({
+        model: {
+          provider: 'openai',
+          id: 'cf-glm-5.2',
+          maxTokens: 96,
+          reasoning: true,
+        },
+        thinkingLevel: 'minimal',
+      });
+    } finally {
+      await session.close();
+    }
+  });
 
   it('uses deployment gateway access and rotates opaque correlation headers per turn', async () => {
     const setModel = vi.fn();

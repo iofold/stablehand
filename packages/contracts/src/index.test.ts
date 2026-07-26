@@ -179,6 +179,8 @@ describe('@ctxmill/contracts', () => {
         name: 'reviewer',
         description: 'Review close output',
         systemPrompt: 'Review carefully.',
+        provider: 'openai',
+        reasoning: 'off',
       }],
     })).toMatchObject({ provider: 'openai', model: 'gpt-5' });
     expect(contracts.ClaudeAgentsConfigSchema.parse({
@@ -189,7 +191,15 @@ describe('@ctxmill/contracts', () => {
     expect(contracts.PIAgentConfigSchema.parse({
       provider: 'google',
       model: 'gemini-2.5-pro',
-    })).toMatchObject({ provider: 'google' });
+      maxTokens: 96,
+      reasoning: true,
+      thinkingLevel: 'minimal',
+    })).toMatchObject({
+      provider: 'google',
+      maxTokens: 96,
+      reasoning: true,
+      thinkingLevel: 'minimal',
+    });
     expect(Object.keys(contracts.HARNESS_CONFIG_SCHEMAS).sort()).toEqual([
       'claude-agents',
       'langgraph',
