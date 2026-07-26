@@ -21,11 +21,13 @@ interface AgentStreamHubOptions {
 export interface TurnStreamResult {
   observation: TurnEventObservation;
   clientEventCounts: number[];
+  clientEventSequences: string[][];
   heartbeatCounts: number[];
 }
 
 interface TurnTracker {
   observations: TurnEventObservation[];
+  eventSequences: string[][];
   heartbeatCounts: number[];
   terminalClients: Set<number>;
   resolve: (result: TurnStreamResult) => void;
@@ -95,6 +97,10 @@ export class AgentStreamHub {
           { length: this.options.clients },
           () => ({}),
         ),
+        eventSequences: Array.from(
+          { length: this.options.clients },
+          () => [],
+        ),
         heartbeatCounts: Array.from(
           { length: this.options.clients },
           () => 0,
@@ -150,6 +156,9 @@ export class AgentStreamHub {
         if (!turnId) continue;
         const tracker = this.trackers.get(turnId);
         if (!tracker) continue;
+        tracker.eventSequences[clientIndex]!.push(
+          `${item.id ?? 'missing-id'}:${item.event.type}`,
+        );
         const observation = tracker.observations[clientIndex]!;
         observeTurnEvent(observation, item.event, this.now());
         if (
@@ -165,6 +174,7 @@ export class AgentStreamHub {
               clientEventCounts: tracker.observations.map(
                 (entry) => entry.eventCount ?? 0,
               ),
+              clientEventSequences: tracker.eventSequences,
               heartbeatCounts: tracker.heartbeatCounts,
             });
           }

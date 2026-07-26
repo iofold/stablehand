@@ -32,7 +32,7 @@ if (( ${#session_ids[@]} > 0 )); then
     printf '%s\n' "${session_ids[@]}" \
       | jq -Rrsc 'split("\n") | map(select(length > 0) | "'"'"'" + . + "'"'"'") | join(",")'
   )"
-  correlation_predicate="$correlation_predicate OR attributes_string['ctxmill.session.id'] IN ($session_id_literals)"
+  correlation_predicate="$correlation_predicate OR attributes_string['ctxmill.session.id'] IN ($session_id_literals) OR resources_string['ctxmill.session.id'] IN ($session_id_literals)"
 fi
 started_at="$(jq -r '.startedAt' "$RUN_JSON")"
 completed_at="$(jq -r '.completedAt' "$RUN_JSON")"
@@ -59,14 +59,23 @@ SELECT
   attributes_string['ctxmill.turn.id'] AS turn_id,
   attributes_string['ctxmill.agent.id'] AS agent_id,
   attributes_string['ctxmill.conversation.id'] AS conversation_id,
-  attributes_string['ctxmill.session.id'] AS sandbox_session_id,
+  if(
+    empty(attributes_string['ctxmill.session.id']),
+    resources_string['ctxmill.session.id'],
+    attributes_string['ctxmill.session.id']
+  ) AS sandbox_session_id,
   attributes_string['ctxmill.phase'] AS phase,
-  attributes_string['ctxmill.harness'] AS harness,
+  if(
+    empty(attributes_string['ctxmill.harness']),
+    resources_string['ctxmill.harness'],
+    attributes_string['ctxmill.harness']
+  ) AS harness,
   attributes_string['ctxmill.mode'] AS mode,
   attributes_string['ctxmill.outcome'] AS outcome,
   attributes_string['ctxmill.runtime'] AS runtime,
   attributes_string['ctxmill.session.state'] AS session_state,
   attributes_string['http.route'] AS http_route,
+  attributes_string['url.path'] AS url_path,
   attributes_string['http.request.method'] AS http_method,
   attributes_string['rpc.service'] AS rpc_service,
   attributes_string['rpc.method'] AS rpc_method,

@@ -20,9 +20,13 @@ export interface TurnSample {
   serverToClientTerminalLagMs?: number;
   eventCount: number;
   sseClientEventCounts?: number[];
+  sseClientEventSequences?: string[][];
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  modelCallsObserved?: number;
+  modelCallsCostKnown?: number;
+  modelCallsExpected?: number | null;
   knownCostUsd?: number;
   totalCostUsd?: number;
   costCoverage?: 'pending' | 'complete' | 'partial' | 'unpriced';
@@ -54,7 +58,12 @@ export interface TurnSampleSummary {
     knownCostUsd: number;
     totalCostUsd: number;
     pricedTurns: number;
+    pendingTurns: number;
+    partialTurns: number;
     unpricedTurns: number;
+    modelCallsObserved: number;
+    modelCallsCostKnown: number;
+    modelCallsExpected: number;
   };
   timings: Record<string, DistributionSummary>;
 }
@@ -132,7 +141,13 @@ export function summarizeTurnSamples(
     ),
     sseFanoutMismatches: samples.filter((sample) => {
       const counts = sample.sseClientEventCounts ?? [];
-      return counts.length > 1 && new Set(counts).size > 1;
+      const sequences = sample.sseClientEventSequences ?? [];
+      return (
+        counts.length > 1 && new Set(counts).size > 1
+      ) || (
+        sequences.length > 1
+        && new Set(sequences.map((sequence) => JSON.stringify(sequence))).size > 1
+      );
     }).length,
     usage: {
       inputTokens: samples.reduce((total, sample) => total + (sample.inputTokens ?? 0), 0),
@@ -141,7 +156,21 @@ export function summarizeTurnSamples(
       knownCostUsd: samples.reduce((total, sample) => total + (sample.knownCostUsd ?? 0), 0),
       totalCostUsd: samples.reduce((total, sample) => total + (sample.totalCostUsd ?? 0), 0),
       pricedTurns: samples.filter((sample) => sample.costCoverage === 'complete').length,
+      pendingTurns: samples.filter((sample) => sample.costCoverage === 'pending').length,
+      partialTurns: samples.filter((sample) => sample.costCoverage === 'partial').length,
       unpricedTurns: samples.filter((sample) => sample.costCoverage === 'unpriced').length,
+      modelCallsObserved: samples.reduce(
+        (total, sample) => total + (sample.modelCallsObserved ?? 0),
+        0,
+      ),
+      modelCallsCostKnown: samples.reduce(
+        (total, sample) => total + (sample.modelCallsCostKnown ?? 0),
+        0,
+      ),
+      modelCallsExpected: samples.reduce(
+        (total, sample) => total + (sample.modelCallsExpected ?? 0),
+        0,
+      ),
     },
     timings,
   };

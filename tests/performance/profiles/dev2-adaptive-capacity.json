@@ -20,7 +20,8 @@
     "maxCompletionP95Ms": 90000,
     "maxNodeCpuPercent": 75,
     "maxNodeMemoryPercent": 75,
-    "minTraceTurnCoverage": 0.95
+    "minTraceTurnCoverage": 0.95,
+    "minSandboxMetricCoverage": 0.8
   },
   "harnesses": [
     {

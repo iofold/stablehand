@@ -34,6 +34,7 @@ import {
 } from './src/profile.js';
 import { renderPerformanceReport } from './src/report.js';
 import {
+  cleanupAllManagedSessions,
   refreshPerformanceRunUsage,
   runPerformanceProfile,
   type PerformanceRunResult,
@@ -54,7 +55,9 @@ function usage(): never {
       + '  bun tests/performance/cli.ts evaluate --ramp <ramp.json> '
       + '--output <evidence-directory>\n'
       + '  bun tests/performance/cli.ts resources --kubernetes <jsonl> '
-      + '--output <evidence-directory>\n',
+      + '--output <evidence-directory>\n'
+      + '  bun tests/performance/cli.ts cleanup --api-base <url> '
+      + '[--timeout-ms <milliseconds>]\n',
   );
   process.exit(2);
 }
@@ -290,6 +293,29 @@ async function resourcesCommand(
   );
 }
 
+async function cleanupCommand(
+  values: Record<string, string | boolean | undefined>,
+): Promise<void> {
+  const apiBase = typeof values['api-base'] === 'string'
+    ? values['api-base']
+    : undefined;
+  const timeoutMs = typeof values['timeout-ms'] === 'string'
+    ? Number(values['timeout-ms'])
+    : 60_000;
+  if (!apiBase || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) usage();
+  const token = process.env.CTXMILL_API_TOKEN;
+  if (!token) throw new Error('CTXMILL_API_TOKEN is required');
+
+  const client = createCtxmillControlClient({
+    apiBase,
+    token,
+    timeoutMs,
+    retry: { maxAttempts: 3, baseDelayMs: 100 },
+  });
+  const killedSessions = await cleanupAllManagedSessions(client, timeoutMs);
+  process.stdout.write(`${JSON.stringify({ killedSessions })}\n`);
+}
+
 async function waveCommand(
   values: Record<string, string | boolean | undefined>,
 ): Promise<void> {
@@ -321,6 +347,12 @@ async function evaluateCommand(
   const output = typeof values.output === 'string' ? values.output : undefined;
   if (!rampPath || !output) usage();
   const ramp = parseCapacityRamp(await readJson(rampPath));
+  const profile = parsePerformanceProfile(await readJson(`${output}/profile.json`));
+  const waveWindow = await readJson(
+    existsSync(`${output}/run.json`)
+      ? `${output}/run.json`
+      : `${output}/trace-window.json`,
+  ) as { completedAt: string };
   const kubernetes = await readJson(
     `${output}/kubernetes-summary.json`,
   ) as KubernetesResourceSummary;
@@ -330,16 +362,19 @@ async function evaluateCommand(
   );
   const observation = summarizeCapacityEvidence({
     turns: await readJsonLines<TurnSample>(`${output}/turns.jsonl`),
+    requestedConcurrency: profile.safety.maxConcurrency,
     kubernetes,
     traces: await readJsonLines(`${output}/traces.jsonl`),
     beforePods: await readJson(`${output}/before-pods.json`) as never,
     afterPods: await readJson(`${output}/after-pods.json`) as never,
     afterJobs: await readJson(`${output}/after-jobs.json`) as never,
+    sandbox: await readJson(`${output}/sandbox-metrics-after.json`) as never,
     beforeEvents: await readJson(`${output}/before-events.json`) as never,
     events: await readJson(`${output}/after-events.json`) as never,
     logs: logs.join('\n'),
     beforeGateway: await readJson(`${output}/gateway-before.json`) as never,
     gateway: await readJson(`${output}/gateway-after.json`) as never,
+    waveCompletedAtMs: Date.parse(waveWindow.completedAt),
   });
   const decision = evaluateCapacityWave(observation, ramp.gates);
   await writeFile(
@@ -377,6 +412,8 @@ async function main(): Promise<void> {
       ramp: { type: 'string' },
       concurrency: { type: 'string' },
       ordinal: { type: 'string' },
+      'api-base': { type: 'string' },
+      'timeout-ms': { type: 'string' },
     },
     strict: true,
   });
@@ -406,6 +443,10 @@ async function main(): Promise<void> {
   }
   if (command === 'resources') {
     await resourcesCommand(parsed.values);
+    return;
+  }
+  if (command === 'cleanup') {
+    await cleanupCommand(parsed.values);
     return;
   }
   usage();

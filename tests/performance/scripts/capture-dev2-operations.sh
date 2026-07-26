@@ -24,7 +24,7 @@ mkdir -p "$OUTPUT_DIR"
 "$KUBECTL" top nodes >"$OUTPUT_DIR/$PHASE-node-top.txt" 2>&1 || true
 "$KUBECTL" -n "$NAMESPACE" top pods --containers \
   >"$OUTPUT_DIR/$PHASE-pod-top.txt" 2>&1 || true
-"$KUBECTL" -n "$NAMESPACE" exec deployment/litellm -- \
+if "$KUBECTL" -n "$NAMESPACE" exec deployment/litellm -- \
   python -c '
 import os
 import urllib.request
@@ -34,9 +34,16 @@ request = urllib.request.Request(
     "http://127.0.0.1:4000/metrics",
     headers={"Authorization": "Bearer " + master_key},
 )
-print(urllib.request.urlopen(request, timeout=10).read().decode(), end="")
-' >"$OUTPUT_DIR/$PHASE-litellm-metrics.prom" 2>/dev/null || \
-  : >"$OUTPUT_DIR/$PHASE-litellm-metrics.prom"
+response = urllib.request.urlopen(request, timeout=10)
+print(response.read().decode(), end="")
+' >"$OUTPUT_DIR/$PHASE-litellm-metrics.prom" 2>/dev/null; then
+  printf '{"available":true,"endpoint":"/metrics"}\n' \
+    >"$OUTPUT_DIR/$PHASE-litellm-metrics-status.json"
+else
+  rm -f "$OUTPUT_DIR/$PHASE-litellm-metrics.prom"
+  printf '{"available":false,"endpoint":"/metrics","reason":"endpoint_unavailable"}\n' \
+    >"$OUTPUT_DIR/$PHASE-litellm-metrics-status.json"
+fi
 
 if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
   curl -fsS "$API_BASE/model-gateway/status" \
@@ -64,6 +71,13 @@ for component in orchestrator litellm litellm-db postgres minio; do
     --max-log-requests=20 \
     >"$OUTPUT_DIR/$component.log" 2>&1 || true
 done
+"$KUBECTL" -n "$NAMESPACE" logs \
+  -l 'app.kubernetes.io/name=ctxmill-sandbox' \
+  --all-containers=true \
+  --prefix=true \
+  --since-time="$SINCE_TIME" \
+  --max-log-requests=100 \
+  >"$OUTPUT_DIR/sandbox.log" 2>&1 || true
 
 if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
   curl -fsS "$API_BASE/sandbox/metrics" \

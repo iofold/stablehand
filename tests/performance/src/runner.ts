@@ -13,6 +13,7 @@ import {
   type ClockProbe,
 } from './clock.js';
 import {
+  isManagedBenchmarkAgent,
   reconcileBenchmarkAgents,
 } from './agents.js';
 import {
@@ -73,6 +74,28 @@ export async function cleanupManagedSessions(
       client.kill(session.agentId, session.id, { timeoutMs })),
   );
   return owned.length;
+}
+
+type ManagedBenchmarkClient = Pick<
+  CtxmillControlClient,
+  'agents' | 'sandboxSessions'
+>;
+
+export async function cleanupAllManagedSessions(
+  client: ManagedBenchmarkClient,
+  timeoutMs: number,
+): Promise<number> {
+  const agents = await client.agents.list({ timeoutMs });
+  const managedAgentIds = new Set(
+    agents
+      .filter((agent) => isManagedBenchmarkAgent(agent.metadata))
+      .map((agent) => agent.id),
+  );
+  return cleanupManagedSessions(
+    client.sandboxSessions,
+    managedAgentIds,
+    timeoutMs,
+  );
 }
 
 function terminalOutcome(
@@ -189,9 +212,13 @@ export async function executeMeasuredTurn(
             - observation.terminalServerEventAtMs,
       eventCount: observation.eventCount ?? 0,
       sseClientEventCounts: streamed.clientEventCounts,
+      sseClientEventSequences: streamed.clientEventSequences,
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
       totalTokens: usage?.totalTokens,
+      modelCallsObserved: usage?.modelCalls.observed,
+      modelCallsCostKnown: usage?.modelCalls.costKnown,
+      modelCallsExpected: usage?.modelCalls.expected,
       knownCostUsd: usage?.cost.knownUsd,
       totalCostUsd: usage?.cost.totalUsd ?? undefined,
       costCoverage: usage?.cost.coverage,
@@ -260,6 +287,9 @@ export async function refreshPerformanceRunUsage(
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         totalTokens: usage.totalTokens,
+        modelCallsObserved: usage.modelCalls.observed,
+        modelCallsCostKnown: usage.modelCalls.costKnown,
+        modelCallsExpected: usage.modelCalls.expected,
         knownCostUsd: usage.cost.knownUsd,
         totalCostUsd: usage.cost.totalUsd ?? undefined,
         costCoverage: usage.cost.coverage,

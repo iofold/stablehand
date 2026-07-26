@@ -17,6 +17,7 @@ const CapacityGateSchema = z.strictObject({
   maxNodeCpuPercent: z.number().positive().max(100).default(75),
   maxNodeMemoryPercent: z.number().positive().max(100).default(75),
   minTraceTurnCoverage: z.number().min(0).max(1).default(0.95),
+  minSandboxMetricCoverage: z.number().min(0).max(1).default(0.8),
 }).default({
   maxErrorRate: 0.02,
   maxTimeToFirstTokenP95Ms: 30_000,
@@ -24,6 +25,7 @@ const CapacityGateSchema = z.strictObject({
   maxNodeCpuPercent: 75,
   maxNodeMemoryPercent: 75,
   minTraceTurnCoverage: 0.95,
+  minSandboxMetricCoverage: 0.8,
 });
 
 const CapacityHarnessSchema = z.strictObject({
@@ -63,15 +65,23 @@ export interface CapacityWaveObservation {
   timeToFirstTokenP95Ms: number | null;
   completionP95Ms: number | null;
   traceTurnCoverage: number;
+  sandboxTraceCoverage: number;
+  requestedConcurrency: number;
+  peakActiveSandboxJobs: number;
+  sandboxMetricCoverage: number;
+  settledUsageCoverage: number;
   peakNodeCpuPercent: number;
   peakNodeMemoryPercent: number;
   peakPendingSandboxPods: number;
   activeSandboxJobsAfterSettle: number;
+  activeSandboxContainersAfterSettle: number;
+  queuedSandboxContainersAfterSettle: number;
   podRestartDelta: number;
   oomKilledContainers: number;
   criticalLogMatches: number;
   criticalEventMatches: number;
   gatewayState: string;
+  gatewaySettledThroughWave: boolean;
   gatewayPendingCalls: number;
   gatewayUnpricedCalls: number;
   gatewayQuarantinedTransactions: number;
@@ -180,6 +190,29 @@ export function evaluateCapacityWave(
       + gates.minTraceTurnCoverage,
     );
   }
+  if (observation.sandboxTraceCoverage < gates.minTraceTurnCoverage) {
+    violations.push(
+      `sandbox trace coverage ${observation.sandboxTraceCoverage} is below `
+      + gates.minTraceTurnCoverage,
+    );
+  }
+  if (observation.peakActiveSandboxJobs < observation.requestedConcurrency) {
+    violations.push(
+      `peak active sandbox jobs ${observation.peakActiveSandboxJobs} is below `
+      + `requested concurrency ${observation.requestedConcurrency}`,
+    );
+  }
+  if (observation.sandboxMetricCoverage < gates.minSandboxMetricCoverage) {
+    violations.push(
+      `sandbox metric coverage ${observation.sandboxMetricCoverage} is below `
+      + gates.minSandboxMetricCoverage,
+    );
+  }
+  if (observation.settledUsageCoverage < 1) {
+    violations.push(
+      `settled usage coverage ${observation.settledUsageCoverage} is below 1`,
+    );
+  }
   if (observation.peakNodeCpuPercent > gates.maxNodeCpuPercent) {
     violations.push(
       `node CPU ${observation.peakNodeCpuPercent}% exceeds ${gates.maxNodeCpuPercent}%`,
@@ -201,6 +234,18 @@ export function evaluateCapacityWave(
       `active sandbox jobs remain after settle: ${observation.activeSandboxJobsAfterSettle}`,
     );
   }
+  if (observation.activeSandboxContainersAfterSettle !== 0) {
+    violations.push(
+      `active sandbox containers remain after settle: `
+      + observation.activeSandboxContainersAfterSettle,
+    );
+  }
+  if (observation.queuedSandboxContainersAfterSettle !== 0) {
+    violations.push(
+      `queued sandbox containers remain after settle: `
+      + observation.queuedSandboxContainersAfterSettle,
+    );
+  }
   if (observation.podRestartDelta > 0) {
     violations.push(`pod restart delta: ${observation.podRestartDelta}`);
   }
@@ -217,6 +262,9 @@ export function evaluateCapacityWave(
   }
   if (observation.gatewayState !== 'healthy') {
     violations.push(`gateway state is ${observation.gatewayState}`);
+  }
+  if (!observation.gatewaySettledThroughWave) {
+    violations.push('gateway watermark did not settle through the wave');
   }
   if (observation.gatewayPendingCalls > 0) {
     violations.push(`pending gateway calls: ${observation.gatewayPendingCalls}`);
@@ -247,6 +295,9 @@ interface KubernetesList {
 interface CapacityTrace {
   turn_id?: string;
   name?: string;
+  sandbox_session_id?: string;
+  service_name?: string;
+  url_path?: string;
 }
 
 interface CapacityGatewayEvidence {
@@ -255,20 +306,32 @@ interface CapacityGatewayEvidence {
   unpricedCalls?: number;
   quarantinedTransactions?: number;
   orphanTransactions?: number;
+  watermarkAt?: number;
+  lastSuccessAt?: number;
+}
+
+interface CapacitySandboxEvidence {
+  containers?: {
+    active?: number;
+    queued?: number;
+  };
 }
 
 export interface CapacityEvidenceInput {
   turns: TurnSample[];
   kubernetes: KubernetesResourceSummary;
   traces: CapacityTrace[];
+  requestedConcurrency: number;
   beforePods: KubernetesList;
   afterPods: KubernetesList;
   afterJobs: KubernetesList;
+  sandbox?: CapacitySandboxEvidence;
   beforeEvents?: KubernetesList;
   events: KubernetesList;
   logs: string;
   beforeGateway?: CapacityGatewayEvidence;
   gateway: CapacityGatewayEvidence;
+  waveCompletedAtMs: number;
 }
 
 function statusRecords(item: Record<string, unknown>): Array<Record<string, unknown>> {
@@ -381,6 +444,39 @@ function traceCoverage(
   return covered / turns.length;
 }
 
+function sandboxTraceCoverage(
+  turns: readonly TurnSample[],
+  traces: readonly CapacityTrace[],
+): number {
+  if (turns.length === 0) return 0;
+  const deliveredSessions = new Set(
+    traces
+      .filter((trace) =>
+        trace.service_name?.startsWith('ctxmill-sandbox-')
+        && trace.url_path?.endsWith('HarnessService/DeliverTurn'))
+      .map((trace) => trace.sandbox_session_id)
+      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+  );
+  const covered = turns.filter((turn) =>
+    turn.sandboxSessionId !== undefined
+    && deliveredSessions.has(turn.sandboxSessionId)).length;
+  return covered / turns.length;
+}
+
+function settledUsageCoverage(turns: readonly TurnSample[]): number {
+  if (turns.length === 0) return 0;
+  const covered = turns.filter((turn) =>
+    turn.costCoverage === 'complete'
+    && turn.modelCallsObserved !== undefined
+    && turn.modelCallsObserved > 0
+    && turn.modelCallsCostKnown === turn.modelCallsObserved
+    && (
+      turn.modelCallsExpected === null
+      || turn.modelCallsExpected === turn.modelCallsObserved
+    )).length;
+  return covered / turns.length;
+}
+
 export function summarizeCapacityEvidence(
   input: CapacityEvidenceInput,
 ): CapacityWaveObservation {
@@ -397,11 +493,18 @@ export function summarizeCapacityEvidence(
     timeToFirstTokenP95Ms: turns.timings.timeToFirstTokenMs?.p95 ?? null,
     completionP95Ms: turns.timings.completionMs?.p95 ?? null,
     traceTurnCoverage: traceCoverage(input.turns, input.traces),
+    sandboxTraceCoverage: sandboxTraceCoverage(input.turns, input.traces),
+    requestedConcurrency: input.requestedConcurrency,
+    peakActiveSandboxJobs: input.kubernetes.peakActiveSandboxJobs,
+    sandboxMetricCoverage: input.kubernetes.sandboxMetricCoverage,
+    settledUsageCoverage: settledUsageCoverage(input.turns),
     peakNodeCpuPercent: input.kubernetes.peakNodeCpuPercent,
     peakNodeMemoryPercent: input.kubernetes.peakNodeMemoryPercent,
     peakPendingSandboxPods:
       input.kubernetes.peakPendingSandboxPodsAfterGrace,
     activeSandboxJobsAfterSettle: activeSandboxJobs(input.afterJobs),
+    activeSandboxContainersAfterSettle: input.sandbox?.containers?.active ?? -1,
+    queuedSandboxContainersAfterSettle: input.sandbox?.containers?.queued ?? -1,
     podRestartDelta: Math.max(
       0,
       restartCount(input.afterPods) - restartCount(input.beforePods),
@@ -410,6 +513,9 @@ export function summarizeCapacityEvidence(
     criticalLogMatches: criticalLogCount(input.logs),
     criticalEventMatches: criticalEventCount(input.beforeEvents, input.events),
     gatewayState: input.gateway.state ?? 'unavailable',
+    gatewaySettledThroughWave:
+      (input.gateway.watermarkAt ?? 0) >= input.waveCompletedAtMs
+      && (input.gateway.lastSuccessAt ?? 0) >= input.waveCompletedAtMs,
     gatewayPendingCalls: input.gateway.pendingCalls ?? 0,
     gatewayUnpricedCalls: gatewayCounterDelta('unpricedCalls'),
     gatewayQuarantinedTransactions: gatewayCounterDelta('quarantinedTransactions'),

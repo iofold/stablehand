@@ -40,7 +40,7 @@ while true; do
     labels: (.metadata.labels // {}),
     phase: .status.phase
   }]' <<<"$pods")"
-  normalized_pod_metrics="$(jq -c \
+  metrics_server_pod_metrics="$(jq -c \
     --argjson inventory "$pod_inventory" \
     '[.items[] | . as $metric | {
       name: .metadata.name,
@@ -53,6 +53,39 @@ while true; do
         memory: .usage.memory
       }]
     }]' <<<"$pod_metrics")"
+  pod_metrics_source='metrics-server'
+  normalized_pod_metrics="$metrics_server_pod_metrics"
+  node_name="$(jq -r '.items[0].metadata.name // empty' <<<"$nodes")"
+  if [[ -n "$node_name" ]]; then
+    kubelet_stats="$($KUBECTL get --raw "/api/v1/nodes/$node_name/proxy/stats/summary" 2>/dev/null || true)"
+    if [[ -n "$kubelet_stats" ]] && jq -e '.pods | type == "array"' \
+      >/dev/null 2>&1 <<<"$kubelet_stats"; then
+      normalized_pod_metrics="$(jq -c \
+        --arg namespace "$NAMESPACE" \
+        --argjson inventory "$pod_inventory" \
+        '[.pods[] | select(.podRef.namespace == $namespace) | . as $metric | {
+          name: .podRef.name,
+          labels: (
+            [$inventory[] | select(.name == $metric.podRef.name) | .labels][0] // {}
+          ),
+          containers: [(.containers // [])[] | {
+            name: .name,
+            cpu: (((.cpu.usageNanoCores // 0) | tostring) + "n"),
+            memory: ((.memory.workingSetBytes // 0) | tostring)
+          }]
+        }]' <<<"$kubelet_stats")"
+      pod_metrics_source='kubelet-summary'
+    fi
+  fi
+  if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$normalized_pod_metrics"; then
+    normalized_pod_metrics='[]'
+    pod_metrics_source='unavailable'
+  fi
+  running_sandbox_pods="$(jq \
+    '[.[] | select(
+      .phase == "Running"
+      and .labels["ctxmill.sandbox-session-id"] != null
+    )] | length' <<<"$pod_inventory")"
   pending_sandbox_pods="$(jq \
     '[.[] | select(
       .phase == "Pending"
@@ -81,6 +114,8 @@ while true; do
     --argjson nodeAllocatable "$node_allocatable" \
     --argjson nodeMetrics "$normalized_node_metrics" \
     --argjson podMetrics "$normalized_pod_metrics" \
+    --arg podMetricsSource "$pod_metrics_source" \
+    --argjson runningSandboxPods "$running_sandbox_pods" \
     --argjson pendingSandboxPods "$pending_sandbox_pods" \
     --argjson pendingSandboxPodsAfterGrace "$pending_sandbox_pods_after_grace" \
     --argjson activeSandboxJobs "$active_sandbox_jobs" \

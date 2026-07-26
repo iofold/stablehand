@@ -167,7 +167,20 @@ export function resolveContainerStartupGraceMs(explicitMs?: number): number {
     ?? DEFAULT_CONTAINER_STARTUP_GRACE_MS;
 }
 
-export function buildSandboxOtelEnv(harnessName: string): string[] {
+export interface SandboxOtelIdentity {
+  sessionId: string;
+  agentId: string;
+  conversationId?: string;
+}
+
+function otelResourceValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/,/g, '\\,').replace(/=/g, '\\=');
+}
+
+export function buildSandboxOtelEnv(
+  harnessName: string,
+  identity?: SandboxOtelIdentity,
+): string[] {
   const tracesExporter = process.env.CTXMILL_SANDBOX_OTEL_TRACES_EXPORTER
     ?? process.env.OTEL_TRACES_EXPORTER
     ?? 'none';
@@ -198,6 +211,15 @@ export function buildSandboxOtelEnv(harnessName: string): string[] {
     baseResourceAttributes,
     'ctxmill.component=sandbox',
     `ctxmill.harness=${harnessName}`,
+    ...(identity
+      ? [
+          `ctxmill.session.id=${otelResourceValue(identity.sessionId)}`,
+          `ctxmill.agent.id=${otelResourceValue(identity.agentId)}`,
+          ...(identity.conversationId
+            ? [`ctxmill.conversation.id=${otelResourceValue(identity.conversationId)}`]
+            : []),
+        ]
+      : []),
   ].filter(Boolean).join(',');
 
   return [
@@ -278,7 +300,11 @@ function sandboxEnv(
 ): string[] {
   return [
     `NODE_OPTIONS=--max-old-space-size=${Math.floor(resources.memoryMb * 0.9)}`,
-    ...(sandboxOtelEnv ?? buildSandboxOtelEnv(options.harnessName)),
+    ...(sandboxOtelEnv ?? buildSandboxOtelEnv(options.harnessName, {
+      sessionId: options.sessionId,
+      agentId: options.agentId,
+      ...(options.conversationId ? { conversationId: options.conversationId } : {}),
+    })),
     'SANDBOX_PORT=50051',
     `CTXMILL_HARNESS=${options.harnessName}`,
     `ORCHESTRATOR_URL=${orchestratorUrl}`,

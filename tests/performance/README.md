@@ -69,7 +69,10 @@ stops a stage when its measured turn error rate crosses the declared threshold.
 - `dev2-adaptive-capacity.json`: the controller contract for separate Deep
   Agents and PI Agent cold waves at 1 through 100 concurrency. It is expanded
   into one ordinary strict performance profile per wave so every result and
-  safety decision remains independently reproducible.
+  safety decision remains independently reproducible. Each harness wave is
+  homogeneous and the controller runs them sequentially against the shared
+  global sandbox pool; this does not certify mixed-harness or Claude Agents
+  concurrency.
 
 Profiles are strict JSON. Every non-cold stage must declare at least one
 `warmupTurns`; this prevents a mislabeled "warm" or "resume" result from
@@ -152,9 +155,10 @@ The load generator records:
 - checkpoint suspend and restore request duration;
 - canonical token totals, known cost, total cost, and cost coverage refreshed
   from turn details after LiteLLM reconciliation settles;
+- reconciled observed, priced, and expected model-call counts for every turn;
 - unique canonical events per second and total SSE deliveries per second;
-- per-turn event counts on every SSE consumer. Any count disagreement is an
-  SSE fanout mismatch.
+- per-turn event counts and ordered `event-id:event-type` sequences on every
+  SSE consumer. Any count or sequence disagreement is an SSE fanout mismatch.
 
 The orchestrator emits manual OpenTelemetry spans and low-cardinality
 histograms for:
@@ -171,17 +175,22 @@ checkpoint.suspend
 Turn, conversation, session, and agent IDs are trace attributes only. Metrics
 contain bounded attributes such as harness, mode, runtime, session state,
 topology, phase, and outcome. This avoids turning IDs into unbounded metric
-series. SigNoz traces are exported by `collect-dev2-traces.sh`, which selects
-only operational correlation fields and does not dump request bodies, model
-content, secrets, or arbitrary span attributes.
+series. SigNoz traces are exported by `collect-dev2-traces.sh`, which correlates
+orchestrator spans by turn ID and sandbox `DeliverTurn` spans by the durable
+session resource ID. It selects only operational correlation fields and does
+not dump request bodies, model content, secrets, or arbitrary span attributes.
 
 The Kubernetes sampler records every two seconds:
 
 - node allocatable CPU/memory and metrics-server usage;
-- CTXMILL pod CPU/memory, labels, and container breakdown;
+- CTXMILL pod CPU/memory, labels, and container breakdown from the immediate
+  kubelet summary API, falling back to metrics-server when necessary;
 - running sandbox jobs and pending sandbox pods.
 
-The final report includes peak node, orchestrator, and sandbox usage.
+The final report includes peak node, orchestrator, and sandbox usage plus the
+fraction of observed running sandbox pods that had a resource sample. This
+prevents short-lived pods missing from metrics-server from appearing as false
+zero CPU and memory.
 `load-generator-resource.txt` separately captures CPU and maximum RSS for the
 dev1-side runner.
 
@@ -206,9 +215,14 @@ ABORT                       present only when a safety ceiling tripped
 before/after-pods.json      restart and OOM comparison boundary
 before/after-events.json    namespace event delta boundary
 *-litellm-metrics.prom      gateway counters before and after the wave
+*-litellm-metrics-status.json explicit availability of the optional endpoint
 orchestrator.log            bounded service logs since wave start
 litellm.log                 bounded gateway logs since wave start
+sandbox.log                 bounded surviving sandbox logs since wave start
 gateway-before/after.json   reconciliation health and monotonic-counter boundary
+sandbox-metrics-after.json  post-settle active and queued container counts
+gateway-settlement.jsonl    reconciliation watermark observations
+cleanup-before/after.jsonl  controller-owned clean-boundary observations
 capacity-observation.json   normalized correctness/resource/telemetry facts
 capacity-decision.json      advance or stop plus exact violations
 ```
@@ -230,10 +244,16 @@ Capacity is the highest completed ramp stage before any of these gates fails:
 - any SSE consumer misses or duplicates a terminal turn sequence.
 - fewer than 95% of measured turns have both `ctxmill.turn.execute` and
   `ctxmill.turn.delivery` traces;
+- fewer than 95% of measured sessions have a sandbox `DeliverTurn` span, or
+  fewer than 80% of running sandbox-pod observations have resource metrics;
+- Kubernetes never observes the requested number of active sandbox Jobs;
+- any turn lacks fully settled model-call and cost coverage;
+- any active or queued sandbox container remains after settlement;
 - any service restart, OOM kill, critical namespace event, or critical bounded
   log signature occurs during the wave;
-- the LiteLLM reconciler is unhealthy or leaves pending calls, or the wave
-  increases unpriced, quarantined, or orphan spend counters.
+- the LiteLLM reconciler is unhealthy, its watermark is older than the wave,
+  it leaves pending calls, or the wave increases unpriced, quarantined, or
+  orphan spend counters.
 
 Pending calls are an instantaneous post-settlement gauge and must be zero.
 Unpriced, quarantined, and orphan values are monotonic operational counters,
@@ -247,6 +267,11 @@ scheduling latency from an unschedulable wave. The controller uses 100 only as
 the temporary search ceiling and stops at the first gate failure. On this
 single-node cluster, the Kubernetes pod ceiling is expected to become relevant
 before 100 concurrent sandbox pods.
+
+Before and after every discovery or confirmation wave, the controller kills
+only benchmark-owned sessions and waits for Kubernetes active Jobs plus the
+canonical sandbox active/queued counters to reach zero. A dirty boundary fails
+the wave instead of allowing leftover work to contaminate the next result.
 
 Repeat each candidate stage in at least three separate runs before calling it a
 capacity result. Report the exact harness versions, model/provider routes,

@@ -3,6 +3,7 @@ import { CONTAINER_SCOPE_LABEL } from '../../container-scope.js';
 import {
   buildDockerContainerSpec,
   buildKubernetesJobSpec,
+  buildSandboxOtelEnv,
   resolveSandboxRuntimeDefaults,
   runtimeLabelsToContainerInfo,
   sanitizeKubernetesName,
@@ -31,6 +32,21 @@ const defaults = {
 };
 
 describe('sandbox runtime spec builders', () => {
+  it('correlates sandbox telemetry to its durable runtime identity', () => {
+    const env = buildSandboxOtelEnv('langgraph', {
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      conversationId: 'conversation-1',
+    });
+
+    expect(env).toContain(
+      'OTEL_RESOURCE_ATTRIBUTES=deployment.environment=local,'
+      + 'service.namespace=ctxmill,ctxmill.component=sandbox,'
+      + 'ctxmill.harness=langgraph,ctxmill.session.id=session-1,'
+      + 'ctxmill.agent.id=agent-1,ctxmill.conversation.id=conversation-1',
+    );
+  });
+
   it('resolves shared driver defaults with explicit overrides', () => {
     expect(resolveSandboxRuntimeDefaults()).toEqual({
       cpus: 1,

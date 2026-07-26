@@ -132,6 +132,12 @@ done
 
 sleep 12
 gateway_deadline=$((SECONDS + 45))
+if [[ -f "$OUTPUT_DIR/run.json" ]]; then
+  wave_completed_at="$(jq -r '.completedAt' "$OUTPUT_DIR/run.json")"
+else
+  wave_completed_at="$(jq -r '.failedAt' "$OUTPUT_DIR/failure.json")"
+fi
+wave_completed_at_ms="$(date -u -d "$wave_completed_at" +%s%3N)"
 : >"$OUTPUT_DIR/gateway-settlement.jsonl"
 while (( SECONDS < gateway_deadline )); do
   gateway_status="$(
@@ -143,7 +149,9 @@ while (( SECONDS < gateway_deadline )); do
     '. + {observedAt:$observedAt}' <<<"$gateway_status" \
     >>"$OUTPUT_DIR/gateway-settlement.jsonl"
   if [[ "$(jq -r '.state' <<<"$gateway_status")" == "healthy" ]] \
-    && (( $(jq -r '.pendingCalls // -1' <<<"$gateway_status") == 0 )); then
+    && (( $(jq -r '.pendingCalls // -1' <<<"$gateway_status") == 0 )) \
+    && (( $(jq -r '.watermarkAt // 0' <<<"$gateway_status") >= wave_completed_at_ms )) \
+    && (( $(jq -r '.lastSuccessAt // 0' <<<"$gateway_status") >= wave_completed_at_ms )); then
     break
   fi
   sleep 3

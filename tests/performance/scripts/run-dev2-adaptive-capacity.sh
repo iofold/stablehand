@@ -7,6 +7,7 @@ RUN_SLUG="$(date -u +%Y%m%dT%H%M%SZ)-$(basename "$RAMP_PATH" .json)"
 OUTPUT_ROOT="${2:-$ROOT_DIR/.tmp/performance/$RUN_SLUG}"
 BUN="${BUN:-bun}"
 MAX_TOTAL_MODEL_CALLS="${CTXMILL_PERF_MAX_TOTAL_MODEL_CALLS:-1200}"
+BOUNDARY_TIMEOUT_SECONDS="${CTXMILL_PERF_BOUNDARY_TIMEOUT_SECONDS:-180}"
 
 export KUBECONFIG="${KUBECONFIG:-/path/to/workspace/infra/.k3s-kubeconfig.yaml}"
 namespace="$(jq -r '.target.kubernetesNamespace' "$RAMP_PATH")"
@@ -52,24 +53,68 @@ set_limit() {
 }
 
 restore_limit() {
+  local status=$?
+  trap - EXIT INT TERM
   if (( limit_committed == 0 )); then
     set_limit "$previous_limit" || true
   fi
-  unset CTXMILL_API_TOKEN token_base64
+  unset CTXMILL_API_TOKEN token_base64 || true
+  return "$status"
 }
-trap restore_limit EXIT INT TERM
+trap restore_limit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-active_jobs="$(
-  kubectl -n "$namespace" get jobs -o json \
-    | jq '[.items[] | select(
-      .metadata.labels["ctxmill.sandbox-session-id"] != null
-      and ((.status.active // 0) > 0)
-    )] | length'
-)"
-if (( active_jobs > 0 )); then
-  printf 'Refusing to start with %d active sandbox jobs\n' "$active_jobs" >&2
-  exit 1
-fi
+ensure_clean_boundary() {
+  local evidence_dir="$1"
+  local phase="$2"
+  local deadline=$((SECONDS + BOUNDARY_TIMEOUT_SECONDS))
+  mkdir -p "$evidence_dir"
+  : >"$evidence_dir/cleanup-$phase.jsonl"
+  while (( SECONDS < deadline )); do
+    local cleanup_result
+    cleanup_result="$(
+      "$BUN" "$ROOT_DIR/tests/performance/cli.ts" cleanup \
+        --api-base "$api_base" --timeout-ms 60000
+    )" || return 1
+    local active_jobs
+    active_jobs="$(
+      kubectl -n "$namespace" get jobs -o json \
+        | jq '[.items[] | select(
+          .metadata.labels["ctxmill.sandbox-session-id"] != null
+          and ((.status.active // 0) > 0)
+        )] | length'
+    )"
+    local sandbox_metrics
+    sandbox_metrics="$(
+      curl -fsS "$api_base/sandbox/metrics" \
+        -H "Authorization: Bearer $CTXMILL_API_TOKEN"
+    )" || return 1
+    local active_containers queued_containers killed_sessions
+    active_containers="$(jq -r '.containers.active // -1' <<<"$sandbox_metrics")"
+    queued_containers="$(jq -r '.containers.queued // -1' <<<"$sandbox_metrics")"
+    killed_sessions="$(jq -r '.killedSessions // -1' <<<"$cleanup_result")"
+    jq -nc \
+      --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+      --argjson activeJobs "$active_jobs" \
+      --argjson activeContainers "$active_containers" \
+      --argjson queuedContainers "$queued_containers" \
+      --argjson killedSessions "$killed_sessions" \
+      '$ARGS.named' >>"$evidence_dir/cleanup-$phase.jsonl"
+    if (( active_jobs == 0 \
+      && active_containers == 0 \
+      && queued_containers == 0 \
+      && killed_sessions == 0 )); then
+      return 0
+    fi
+    sleep 2
+  done
+  printf 'Sandbox boundary did not become clean within %ds (%s)\n' \
+    "$BOUNDARY_TIMEOUT_SECONDS" "$phase" >&2
+  return 1
+}
+
+ensure_clean_boundary "$OUTPUT_ROOT" preflight
 
 set_limit "$temporary_limit"
 printf 'Temporary global sandbox ceiling: %d (previously %d)\n' \
@@ -84,6 +129,7 @@ run_wave() {
   local wave_dir="$OUTPUT_ROOT/$wave_name"
   local profile_path="$wave_dir/profile.json"
   mkdir -p "$wave_dir"
+  ensure_clean_boundary "$wave_dir" before
   "$BUN" "$ROOT_DIR/tests/performance/cli.ts" wave \
     --ramp "$RAMP_PATH" \
     --concurrency "$concurrency" \
@@ -96,6 +142,9 @@ run_wave() {
       "$profile_path" "$wave_dir"
   local status=$?
   set -e
+  if ! ensure_clean_boundary "$wave_dir" after; then
+    status=1
+  fi
   local decision="runner_failed"
   local violations='[]'
   if [[ -f "$wave_dir/capacity-decision.json" ]]; then

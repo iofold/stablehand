@@ -19,6 +19,8 @@ export interface KubernetesResourceSample {
   nodeAllocatable: KubernetesNodeQuantity[];
   nodeMetrics: KubernetesNodeQuantity[];
   podMetrics: KubernetesPodMetric[];
+  podMetricsSource?: 'kubelet-summary' | 'metrics-server' | 'unavailable';
+  runningSandboxPods?: number;
   pendingSandboxPods: number;
   pendingSandboxPodsAfterGrace?: number;
   activeSandboxJobs: number;
@@ -29,6 +31,8 @@ export interface KubernetesResourceSummary {
   peakNodeCpuPercent: number;
   peakNodeMemoryPercent: number;
   peakSandboxPods: number;
+  peakRunningSandboxPods: number;
+  sandboxMetricCoverage: number;
   peakPendingSandboxPods: number;
   peakPendingSandboxPodsAfterGrace: number;
   peakActiveSandboxJobs: number;
@@ -95,6 +99,8 @@ export function summarizeKubernetesSamples(
     peakNodeCpuPercent: 0,
     peakNodeMemoryPercent: 0,
     peakSandboxPods: 0,
+    peakRunningSandboxPods: 0,
+    sandboxMetricCoverage: 0,
     peakPendingSandboxPods: 0,
     peakPendingSandboxPodsAfterGrace: 0,
     peakActiveSandboxJobs: 0,
@@ -105,6 +111,8 @@ export function summarizeKubernetesSamples(
     peakModelGatewayCpuCores: 0,
     peakModelGatewayMemoryBytes: 0,
   };
+  let runningSandboxPodObservations = 0;
+  let measuredSandboxPodObservations = 0;
 
   for (const sample of samples) {
     const allocatable = new Map(
@@ -157,6 +165,13 @@ export function summarizeKubernetesSamples(
       }
     }
     summary.peakSandboxPods = Math.max(summary.peakSandboxPods, sandboxPods);
+    const runningSandboxPods = sample.runningSandboxPods ?? sandboxPods;
+    summary.peakRunningSandboxPods = Math.max(
+      summary.peakRunningSandboxPods,
+      runningSandboxPods,
+    );
+    runningSandboxPodObservations += runningSandboxPods;
+    measuredSandboxPodObservations += Math.min(sandboxPods, runningSandboxPods);
     summary.peakPendingSandboxPods = Math.max(
       summary.peakPendingSandboxPods,
       sample.pendingSandboxPods,
@@ -194,6 +209,10 @@ export function summarizeKubernetesSamples(
       modelGatewayMemoryBytes,
     );
   }
+
+  summary.sandboxMetricCoverage = runningSandboxPodObservations === 0
+    ? (samples.length > 0 ? 1 : 0)
+    : measuredSandboxPodObservations / runningSandboxPodObservations;
 
   return summary;
 }
