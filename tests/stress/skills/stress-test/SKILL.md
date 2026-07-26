@@ -209,7 +209,7 @@ CHAIN_BEFORE="$(curl -s "${AUTH_HEADER[@]}" "$API_BASE/api/agents/$CHAIN_ID/turn
 curl -s -X POST "$API_BASE/api/triggers/emit" \
   "${AUTH_HEADER[@]}" \
   -H 'Content-Type: application/json' \
-  -d '{"type":"stress.tools.complete","payload":{"source":"stress-test-skill","ts":0}}' \
+  -d '{"type":"custom.stress.tools.complete","payload":{"source":"stress-test-skill","ts":0}}' \
   | jq .
 
 while true; do

@@ -34,15 +34,18 @@ omitting the field and inheriting the upstream model default.
 
 Signed webhook helpers are exported from `@ctxmill/contracts/webhooks`.
 `verifyCtxmillWebhook()` validates the five canonical `X-*` headers, clock
-skew, all supplied current/previous secrets, the strict payload, and matching
-header/body agent identity. `X-Event-Type` selects the strict flat body schema;
-delivery ID and event type are headers, not duplicate body fields. Signature
-v1 is the lowercase hex HMAC-SHA-256 of:
+skew, all supplied current/previous secrets, the payload, and matching
+header/body identities. `X-Event-Type` selects a strict flat schema for a
+built-in event. Experimental `custom.*` events use a loose envelope with the
+canonical event type, agent identity, caller payload, and timestamp so new
+payload fields survive delivery without projection. Signature v1 is the
+lowercase hex HMAC-SHA-256 of:
 
 ```text
 utf8(X-Webhook-Timestamp) || "." || exact raw HTTP body bytes
 ```
 
-Schemas reject unknown keys. Old execution aliases such as `sessionId`,
-top-level `HITL_PAUSE`, `content` on text deltas, and `subtype` on CTXMill
-custom frames are intentionally unsupported.
+Except for the explicitly experimental custom webhook envelope, schemas reject
+unknown keys. Old execution aliases such as `sessionId`, top-level
+`HITL_PAUSE`, `content` on text deltas, and `subtype` on CTXMill custom frames
+are intentionally unsupported.

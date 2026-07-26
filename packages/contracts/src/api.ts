@@ -23,6 +23,9 @@ const StringRecordSchema = z.record(z.string(), z.string());
 const EpochMillisecondsSchema = z.number().int().nonnegative();
 
 export const ARTIFACT_METADATA_MAX_BYTES = 16 * 1024;
+export const CUSTOM_EVENT_PAYLOAD_MAX_BYTES = 32 * 1024;
+export const CUSTOM_EVENT_NAME_PATTERN_SOURCE = String.raw`^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`;
+export const CUSTOM_EVENT_NAME_PATTERN = new RegExp(CUSTOM_EVENT_NAME_PATTERN_SOURCE);
 
 export function serializedJsonByteLength(value: unknown): number {
   try {
@@ -37,6 +40,36 @@ export function serializedJsonByteLength(value: unknown): number {
 
 export const ArtifactKindSchema = z.string()
   .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
+
+export const CustomEventNameSchema = z.string().regex(
+  CUSTOM_EVENT_NAME_PATTERN,
+  'Custom event names must match ^custom\\.[a-z0-9][a-z0-9_.-]{0,126}$',
+);
+
+export function isCustomEventName(value: string): boolean {
+  return CUSTOM_EVENT_NAME_PATTERN.test(value);
+}
+
+export const CustomEventPayloadSchema = UnknownRecordSchema.refine(
+  (value) => serializedJsonByteLength(value) <= CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
+  `Custom event payload must not exceed ${CUSTOM_EVENT_PAYLOAD_MAX_BYTES} serialized bytes`,
+);
+
+export const CustomEventEmitInputSchema = z.strictObject({
+  type: CustomEventNameSchema,
+  agentId: AgentIdSchema.optional(),
+  payload: CustomEventPayloadSchema,
+});
+
+export const CustomEventEmitResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  type: CustomEventNameSchema,
+});
+
+export const CustomEventPayloadTooLargeErrorSchema = z.strictObject({
+  error: z.literal('custom_event_payload_too_large'),
+  maxBytes: z.literal(CUSTOM_EVENT_PAYLOAD_MAX_BYTES),
+});
 
 export const ArtifactMetadataSchema = UnknownRecordSchema.refine(
   (value) => serializedJsonByteLength(value) <= ARTIFACT_METADATA_MAX_BYTES,
@@ -638,7 +671,7 @@ export const WorkspaceReplaceResponseSchema = z.strictObject({
 
 export const WorkspaceRevisionResponseSchema = WorkspaceReplaceResponseSchema;
 
-export const WebhookEventNameSchema = z.enum([
+export const BUILTIN_WEBHOOK_EVENT_NAMES = [
   'turn.started',
   'turn.completed',
   'tool_call.started',
@@ -650,6 +683,12 @@ export const WebhookEventNameSchema = z.enum([
   'feedback.received',
   'budget.threshold',
   'artifact.created',
+] as const;
+
+export const BuiltinWebhookEventNameSchema = z.enum(BUILTIN_WEBHOOK_EVENT_NAMES);
+export const WebhookEventNameSchema = z.union([
+  BuiltinWebhookEventNameSchema,
+  CustomEventNameSchema,
 ]);
 
 export const WebhookCreateInputSchema = z.strictObject({
@@ -741,6 +780,14 @@ export type InterruptRecordListInput = z.input<typeof InterruptRecordListInputSc
 export type PersistedEvent = z.infer<typeof PersistedEventSchema>;
 export type EventListInput = z.input<typeof EventListInputSchema>;
 export type EventListResponse = z.infer<typeof EventListResponseSchema>;
+export type CustomEventName = z.infer<typeof CustomEventNameSchema>;
+export type CustomEventPayload = z.infer<typeof CustomEventPayloadSchema>;
+export type CustomEventEmitInput = z.input<typeof CustomEventEmitInputSchema>;
+export type CustomEventEmitResponse = z.infer<typeof CustomEventEmitResponseSchema>;
+export type CustomEventPayloadTooLargeError = z.infer<
+  typeof CustomEventPayloadTooLargeErrorSchema
+>;
+export type BuiltinWebhookEventName = z.infer<typeof BuiltinWebhookEventNameSchema>;
 export type Artifact = z.infer<typeof ArtifactSchema>;
 export type ArtifactListInput = z.input<typeof ArtifactListInputSchema>;
 export type ArtifactUploadUrlInput = z.input<typeof ArtifactUploadUrlInputSchema>;

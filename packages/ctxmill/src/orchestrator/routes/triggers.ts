@@ -1,4 +1,10 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import {
+  CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
+  CustomEventEmitInputSchema,
+  serializedJsonByteLength,
+  type CustomEventPayloadTooLargeError,
+} from '@ctxmill/contracts';
 import { TriggerConflictError, type EventTriggerManager } from '../../events/trigger-manager.js';
 import type { DatabaseRepository } from '../../database/repository.js';
 
@@ -197,18 +203,39 @@ export async function triggerRoutes(
       const body = request.body as {
         type?: string;
         agentId?: string;
-        payload?: Record<string, unknown>;
+        payload?: unknown;
       } | undefined;
 
-      if (!body?.type || !body.payload || typeof body.payload !== 'object') {
+      if (
+        body
+        && isJsonObject(body.payload)
+        && serializedJsonByteLength(body.payload) > CUSTOM_EVENT_PAYLOAD_MAX_BYTES
+      ) {
+        const error: CustomEventPayloadTooLargeError = {
+          error: 'custom_event_payload_too_large',
+          maxBytes: CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
+        };
+        return reply.status(413).send(error);
+      }
+
+      const validated = CustomEventEmitInputSchema.safeParse(body);
+      if (!validated.success) {
         return reply.status(400).send({
-          error: 'type and payload are required; payload must be an object',
+          error: 'invalid_custom_event',
+          issues: validated.error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
+          })),
         });
       }
 
-      await triggerManager.emitCustomEventAsync(body.type, body.agentId, body.payload);
+      await triggerManager.emitCustomEventAsync(
+        validated.data.type,
+        validated.data.agentId,
+        validated.data.payload,
+      );
 
-      return { ok: true, type: body.type };
+      return { ok: true, type: validated.data.type };
     },
   );
 }

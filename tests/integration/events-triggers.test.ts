@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+import { verifyCtxmillWebhook } from '@ctxmill/contracts';
 import { allowConsoleErrors } from '../setup-strict.js';
 
 import { createTestApp, type TestAppHandle } from '../utils/test-app.js';
@@ -331,6 +332,124 @@ describe('Events and Triggers Integration', () => {
         expect(body.type).toBe('custom.test');
       });
 
+      it('persists and relays an HTTP custom event through the live spine', async () => {
+        const eventAgentId = agentId || await createAgent('Custom Relay Agent');
+        const eventType = `custom.eval.verdict.${Date.now()}`;
+        const callerPayload = {
+          turnId: '',
+          conversationId: '   ',
+          verdict: 'pass',
+          evidence: { suite: 'integration', scores: [1, 2, 3] },
+        };
+        const signingSecret = 'integration-signing-secret';
+        const fetchDelivery = vi.fn(async (
+          _url: string,
+          _init: RequestInit,
+        ) => new Response(null, { status: 204 }));
+        const previousFetch = container.callbackDispatcher.fetchFn;
+        container.callbackDispatcher.fetchFn = fetchDelivery;
+
+        try {
+          const subscribed = await app.inject({
+            method: 'POST',
+            url: `/api/agents/${eventAgentId}/webhooks`,
+            payload: {
+              url: 'https://pack-b.test/hooks/ctxmill',
+              events: [eventType],
+              secret: signingSecret,
+            },
+          });
+          expect(subscribed.statusCode).toBe(201);
+
+          const emitted = await app.inject({
+            method: 'POST',
+            url: '/api/triggers/emit',
+            payload: {
+              type: eventType,
+              agentId: eventAgentId,
+              payload: callerPayload,
+            },
+          });
+          expect(emitted.statusCode).toBe(200);
+
+          for (let attempt = 0; attempt < 20 && fetchDelivery.mock.calls.length === 0; attempt++) {
+            await container.callbackDispatcher.processPending();
+            if (fetchDelivery.mock.calls.length === 0) {
+              await new Promise((resolve) => setTimeout(resolve, 25));
+            }
+          }
+
+          expect(fetchDelivery).toHaveBeenCalledOnce();
+          const [deliveryUrl, deliveryInit] = fetchDelivery.mock.calls[0];
+          expect(deliveryUrl).toBe('https://pack-b.test/hooks/ctxmill');
+          const headers = new Headers(deliveryInit?.headers);
+          const rawBody = String(deliveryInit?.body);
+          expect(headers.get('X-Event-Type')).toBe(eventType);
+          const verified = await verifyCtxmillWebhook({
+            headers,
+            rawBody,
+            secrets: signingSecret,
+            nowSeconds: Number(headers.get('X-Webhook-Timestamp')),
+          });
+          expect(verified).toMatchObject({
+            valid: true,
+            payload: {
+              type: eventType,
+              agentId: eventAgentId,
+              payload: callerPayload,
+            },
+          });
+          if (!verified.valid) {
+            throw new Error(`Expected valid signed webhook, got ${verified.reason}`);
+          }
+          expect(verified.payload).not.toHaveProperty('turnId');
+          expect(verified.payload).not.toHaveProperty('conversationId');
+
+          const persisted = await app.inject({
+            method: 'GET',
+            url: `/api/events?type=${encodeURIComponent(eventType)}`,
+          });
+          expect(persisted.statusCode).toBe(200);
+          expect(persisted.json().events).toEqual([
+            expect.objectContaining({
+              type: eventType,
+              agentId: eventAgentId,
+            }),
+          ]);
+        } finally {
+          container.callbackDispatcher.fetchFn = previousFetch;
+        }
+      });
+
+      it('POST /api/triggers/emit rejects event names outside custom.*', async () => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/triggers/emit',
+          payload: {
+            type: 'analysis.complete',
+            payload: { message: 'legacy external name' },
+          },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toMatchObject({ error: 'invalid_custom_event' });
+      });
+
+      it('POST /api/triggers/emit rejects payloads above 32 KiB with a typed 413', async () => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/triggers/emit',
+          payload: {
+            type: 'custom.eval.large',
+            payload: { content: 'x'.repeat(32 * 1024) },
+          },
+        });
+        expect(res.statusCode).toBe(413);
+        expect(res.json()).toEqual({
+          error: 'custom_event_payload_too_large',
+          maxBytes: 32 * 1024,
+        });
+      });
+
       it('persists HTTP custom-event correlation fields for composable event filters', async () => {
         const eventAgentId = agentId || await createAgent('Correlation Filter Agent');
         const marker = `correlation-${Date.now()}`;
@@ -409,6 +528,15 @@ describe('Events and Triggers Integration', () => {
           method: 'POST',
           url: '/api/triggers/emit',
           payload: { type: 'custom.test', payload: 'not-an-object' },
+        });
+        expect(res.statusCode).toBe(400);
+      });
+
+      it('POST /api/triggers/emit rejects array payloads', async () => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/triggers/emit',
+          payload: { type: 'custom.test', payload: ['not', 'an', 'object'] },
         });
         expect(res.statusCode).toBe(400);
       });

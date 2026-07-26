@@ -91,6 +91,42 @@ describe('versioned operational CLI', () => {
     );
   });
 
+  it('validates custom event names locally and defaults the payload to an object', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const accepted = await runOpsCli([
+      'triggers',
+      'emit',
+      '--type',
+      'custom.eval.verdict',
+      '--dry-run',
+      '--json',
+    ]);
+    expect(accepted).toBe(0);
+    expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
+      data: {
+        endpoint: '/api/triggers/emit',
+        body: { type: 'custom.eval.verdict', payload: {} },
+      },
+    });
+
+    const rejected = await runOpsCli([
+      'triggers',
+      'emit',
+      '--type',
+      'eval.verdict',
+      '--dry-run',
+      '--json',
+    ]);
+    expect(rejected).toBe(2);
+    expect(JSON.parse(String(stderr.mock.calls[0]?.[0])))
+      .toMatchObject({ error: 'usage_error' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('blocks destructive operations without an explicit confirmation', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

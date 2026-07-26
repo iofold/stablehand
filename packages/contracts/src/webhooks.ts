@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
-import { ArtifactKindSchema, WebhookEventNameSchema } from './api.js';
+import {
+  ArtifactKindSchema,
+  CustomEventNameSchema,
+  CustomEventPayloadSchema,
+  WebhookEventNameSchema,
+  type BuiltinWebhookEventName,
+} from './api.js';
 import {
   AgentIdSchema,
   ArtifactIdSchema,
@@ -162,6 +168,16 @@ export const ArtifactCreatedWebhookPayloadSchema = z.strictObject({
   timestamp: TimestampSchema,
 });
 
+/** @experimental Pack-to-pack custom webhook envelope. */
+export const CustomWebhookPayloadSchema = z.looseObject({
+  type: CustomEventNameSchema,
+  agentId: AgentIdSchema,
+  turnId: TurnIdSchema.optional(),
+  conversationId: ConversationIdSchema.optional(),
+  payload: CustomEventPayloadSchema,
+  timestamp: TimestampSchema,
+});
+
 export const WEBHOOK_PAYLOAD_SCHEMAS = {
   'turn.started': TurnStartedWebhookPayloadSchema,
   'turn.completed': TurnCompletedWebhookPayloadSchema,
@@ -174,7 +190,7 @@ export const WEBHOOK_PAYLOAD_SCHEMAS = {
   'feedback.received': FeedbackReceivedWebhookPayloadSchema,
   'budget.threshold': BudgetThresholdWebhookPayloadSchema,
   'artifact.created': ArtifactCreatedWebhookPayloadSchema,
-} as const satisfies Readonly<Record<z.infer<typeof WebhookEventNameSchema>, z.ZodType>>;
+} as const satisfies Readonly<Record<BuiltinWebhookEventName, z.ZodType>>;
 
 export const WebhookPayloadSchema = z.union([
   TurnStartedWebhookPayloadSchema,
@@ -188,6 +204,7 @@ export const WebhookPayloadSchema = z.union([
   FeedbackReceivedWebhookPayloadSchema,
   BudgetThresholdWebhookPayloadSchema,
   ArtifactCreatedWebhookPayloadSchema,
+  CustomWebhookPayloadSchema,
 ]);
 
 export type WebhookEventName = z.infer<typeof WebhookEventNameSchema>;
@@ -378,12 +395,22 @@ export async function verifyCtxmillWebhook(
   } catch {
     return { valid: false, reason: 'invalid_payload' };
   }
-  const parsedPayload = WEBHOOK_PAYLOAD_SCHEMAS[headers['X-Event-Type']].safeParse(decoded);
+  const eventType = headers['X-Event-Type'];
+  const builtInSchema = Object.prototype.hasOwnProperty.call(
+    WEBHOOK_PAYLOAD_SCHEMAS,
+    eventType,
+  )
+    ? WEBHOOK_PAYLOAD_SCHEMAS[eventType as BuiltinWebhookEventName]
+    : undefined;
+  const parsedPayload = (builtInSchema ?? CustomWebhookPayloadSchema).safeParse(decoded);
   if (!parsedPayload.success) {
     return { valid: false, reason: 'invalid_payload' };
   }
   const payload = parsedPayload.data;
   if (headers['X-Agent-Id'] !== payload.agentId) {
+    return { valid: false, reason: 'header_body_mismatch' };
+  }
+  if (!builtInSchema && headers['X-Event-Type'] !== CustomWebhookPayloadSchema.parse(payload).type) {
     return { valid: false, reason: 'header_body_mismatch' };
   }
 

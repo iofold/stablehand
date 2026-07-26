@@ -1,4 +1,5 @@
 import type postgres from 'postgres';
+import { CUSTOM_EVENT_NAME_PATTERN_SOURCE } from '@ctxmill/contracts';
 
 export const TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID = 'canonical-text-message-end-contract';
 export const TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION = 1;
@@ -532,8 +533,8 @@ async function canonicalizeSubscriptionsAndDeliveries(sql: postgres.Sql): Promis
     )
   `;
 
-  // Webhook events are a closed enum: map old names and discard unsupported
-  // subscriptions instead of carrying compatibility state.
+  // Map old built-in names and discard subscriptions outside the canonical
+  // built-in list or custom.* grammar instead of carrying compatibility state.
   await sql`
     UPDATE webhooks AS webhook
     SET events = COALESCE((
@@ -548,18 +549,21 @@ async function canonicalizeSubscriptionsAndDeliveries(sql: postgres.Sql): Promis
         END AS event_name
         FROM jsonb_array_elements_text(webhook.events) AS entry(value)
       ) AS mapped
-      WHERE mapped.event_name IN (
-        'turn.started',
-        'turn.completed',
-        'tool_call.started',
-        'tool_call.completed',
-        'interrupt.requested',
-        'interrupt.resolved',
-        'message.committed',
-        'message.updated',
-        'feedback.received',
-        'budget.threshold',
-        'artifact.created'
+      WHERE (
+        mapped.event_name IN (
+          'turn.started',
+          'turn.completed',
+          'tool_call.started',
+          'tool_call.completed',
+          'interrupt.requested',
+          'interrupt.resolved',
+          'message.committed',
+          'message.updated',
+          'feedback.received',
+          'budget.threshold',
+          'artifact.created'
+        )
+        OR mapped.event_name ~ ${CUSTOM_EVENT_NAME_PATTERN_SOURCE}
       )
     ), '[]'::jsonb)
   `;

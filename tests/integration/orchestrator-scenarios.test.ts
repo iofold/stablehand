@@ -432,14 +432,14 @@ describe('Scenario Group 2: Real Agent Execution', () => {
 describe('Scenario Group 3: Event System & Triggers', () => {
   it('S3a: emits and persists a custom event', async () => {
     const emitted = await api('POST', '/api/triggers/emit', {
-      type: 'e2e.test.ping',
+      type: 'custom.e2e.test.ping',
       payload: { ts: Date.now() },
     });
     expect(emitted.status).toBe(200);
 
-    const events = await waitForEventType('e2e.test.ping');
+    const events = await waitForEventType('custom.e2e.test.ping');
     expect(events.status).toBe(200);
-    expect(events.data.events.some((event: any) => event.type === 'e2e.test.ping')).toBe(true);
+    expect(events.data.events.some((event: any) => event.type === 'custom.e2e.test.ping')).toBe(true);
   }, TEST_TIMEOUT_MS);
 
   it('S3b: turn.completed on Agent A triggers Agent B', async () => {
@@ -490,21 +490,21 @@ describe('Scenario Group 3: Event System & Triggers', () => {
     );
 
     const emittedOne = await api('POST', '/api/triggers/emit', {
-      type: 'e2e.test.progress',
+      type: 'custom.e2e.test.progress',
       agentId: created.agentId,
       payload: { turnId: started.turnId, step: 1 },
     });
     expect(emittedOne.status).toBe(200);
 
     const emittedTwo = await api('POST', '/api/triggers/emit', {
-      type: 'e2e.test.progress',
+      type: 'custom.e2e.test.progress',
       agentId: created.agentId,
       payload: { turnId: started.turnId, step: 2 },
     });
     expect(emittedTwo.status).toBe(200);
 
     const persisted = await waitForEventType(
-      'e2e.test.progress',
+      'custom.e2e.test.progress',
       (event) => String(event?.payload ?? '').includes(started.turnId),
     );
     expect(persisted.status).toBe(200);

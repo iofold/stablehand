@@ -181,6 +181,12 @@ test.describe('Kitchen Sink — Multi-Agent Chain @extended', () => {
          'analysis.complete',
          'Write a report from: Analysis: {{payload.analysis}}',
        );
+       await registerTrigger(
+         request,
+         claudeId,
+         'custom.analysis.complete',
+         'Write a report from: Analysis: {{payload.analysis}}',
+       );
      }
      if (piId) {
       for (const evt of CHAIN_EVENTS) {
@@ -323,7 +329,7 @@ test.describe('Kitchen Sink — Multi-Agent Chain @extended', () => {
     const emittedAnalysis = `kitchen-sink-analysis-${Date.now()}`;
     const emitRes = await request.post(`${API_BASE}/api/triggers/emit`, {
       data: {
-        type: 'analysis.complete',
+        type: 'custom.analysis.complete',
         agentId: analyst!.id,
         payload: { analysis: emittedAnalysis },
       },

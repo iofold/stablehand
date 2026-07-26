@@ -846,6 +846,39 @@ describe('CtxmillAgUiClient', () => {
     );
   });
 
+  it('emits externally composable custom events through the canonical contract', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      ok: true,
+      type: 'custom.eval.verdict',
+    }));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.events.emitCustom({
+      type: 'custom.eval.verdict',
+      agentId: 'agent-1',
+      payload: { verdict: 'pass' },
+    })).resolves.toEqual({ ok: true, type: 'custom.eval.verdict' });
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://ctxmill.test/api/triggers/emit');
+    expect(fetchImpl.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'custom.eval.verdict',
+        agentId: 'agent-1',
+        payload: { verdict: 'pass' },
+      }),
+    }));
+
+    await expect(client.events.emitCustom({
+      type: 'eval.verdict',
+      payload: {},
+    })).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it('rejects legacy custom-event aliases instead of normalizing them', () => {
     expect(() => clientModule.parseCanonicalStreamEvent({
       type: 'CUSTOM',

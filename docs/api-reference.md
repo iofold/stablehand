@@ -1056,8 +1056,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 ```json
 {
   "url": "https://example.com/ctxmill/webhook",
-  "events": ["turn.started", "turn.completed"],
-  "secret": "optional-shared-secret"
+  "events": ["turn.started", "custom.eval.verdict"],
+  "secret": "required-shared-secret"
 }
 ```
 
@@ -1069,15 +1069,15 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   "id": "wh_123",
   "agentId": "agent_123",
   "url": "https://example.com/ctxmill/webhook",
-  "events": ["turn.started", "turn.completed"],
-  "secret": "optional-shared-secret",
+  "events": ["turn.started", "custom.eval.verdict"],
+  "hasSecret": true,
   "active": true,
   "createdAt": 1712140000000,
   "updatedAt": 1712140000000
 }
 ```
 
-- **Notes:** Valid event names are listed in [Webhook Events](#6-webhook-events).
+- **Notes:** Valid event names are the built-in names listed in [Webhook Events](#6-webhook-events) or canonical custom names matching `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`. The signing secret is required on create, accepted only on write, and represented as `hasSecret` on reads.
 
 #### `GET /api/agents/:id/webhooks`
 
@@ -1092,6 +1092,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
     "agentId": "agent_123",
     "url": "https://example.com/ctxmill/webhook",
     "events": ["turn.started", "turn.completed"],
+    "hasSecret": true,
     "active": true,
     "createdAt": 1712140000000,
     "updatedAt": 1712140000000
@@ -1486,7 +1487,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 ```json
 {
-  "type": "build.completed",
+  "type": "custom.build.completed",
   "agentId": "agent_123",
   "payload": { "buildId": "b_9", "status": "success" }
 }
@@ -1496,10 +1497,19 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Response:**
 
 ```json
-{ "ok": true, "type": "build.completed" }
+{ "ok": true, "type": "custom.build.completed" }
 ```
 
-- **Notes:** `payload` must be an object.
+- **Errors:** An oversized payload returns `413` with the canonical body:
+
+```json
+{
+  "error": "custom_event_payload_too_large",
+  "maxBytes": 32768
+}
+```
+
+- **Notes:** `type` must match `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`. `payload` must be a JSON object and may not exceed 32 KiB (32,768 bytes) after UTF-8 JSON serialization. `agentId` is optional for global trigger events, but must be supplied for delivery to agent-scoped webhook subscriptions. Events are durably persisted before the success response. Bundled clients can call `client.events.emitCustom(...)`.
 
 ### p. Catalogs & Tools (`/api/catalogs`)
 
@@ -1820,6 +1830,7 @@ es.onerror = (err) => {
 - `feedback.received`
 - `budget.threshold`
 - `artifact.created`
+- any experimental pack event matching `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`
 
 ### Delivery format
 
@@ -1906,11 +1917,32 @@ Body = raw JSON payload for the event.
 }
 ```
 
+Experimental `custom.*` example payload:
+
+```json
+{
+  "type": "custom.eval.verdict",
+  "agentId": "agent_123",
+  "turnId": "turn_123",
+  "conversationId": "conv_123",
+  "payload": {
+    "verdict": "pass",
+    "evidence": { "suite": "weekly" }
+  },
+  "timestamp": 1712140001200
+}
+```
+
+The nested `payload` object is delivered exactly as emitted; custom deliveries
+do not project, rename, or truncate caller fields. The outer envelope carries
+the event and correlation identities used by signature verification and
+routing. The 32 KiB cap applies to the caller's nested `payload` at emission.
+
 ### Signing / secrets
 
 - Webhook registrations require a signing `secret`; it is accepted on write and never returned on read.
 - The signature input is `<X-Webhook-Timestamp>.<raw-body>` and uses HMAC-SHA256 with the registered secret.
-- Consumers should use the bundled webhook verifier, enforce the default five-minute tolerance, and compare all signed identity headers with the parsed body.
+- Consumers should use the bundled webhook verifier, enforce the default five-minute tolerance, and compare all signed identity headers with the parsed body. For `custom.*`, the verifier also requires `X-Event-Type` to match the body `type`.
 
 ## 7. Common Workflows (code examples)
 

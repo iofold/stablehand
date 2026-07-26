@@ -377,7 +377,7 @@ describe('database migration baseline guard', () => {
         'webhook-1',
         'agent-1',
         'https://example.test/webhook',
-        '["run.tool_started","tool_call.started","artifact.created","unsupported.event"]',
+        '["run.tool_started","tool_call.started","artifact.created","custom.eval.verdict","custom.Bad","unsupported.event"]',
         'secret',
         true,
         1,
@@ -485,7 +485,11 @@ describe('database migration baseline guard', () => {
     const [webhook] = await conn.pgClient`
       SELECT events FROM webhooks WHERE id = 'webhook-1'
     `;
-    expect(webhook?.events).toEqual(['artifact.created', 'tool_call.started']);
+    expect(webhook?.events).toEqual([
+      'artifact.created',
+      'custom.eval.verdict',
+      'tool_call.started',
+    ]);
 
     const [delivery] = await conn.pgClient`
       SELECT event_type, webhook_id, payload, status

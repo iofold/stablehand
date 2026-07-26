@@ -5,6 +5,7 @@ import {
   AgentPatchInputSchema,
   BackgroundTurnStartInputSchema,
   ConversationTurnStartInputSchema,
+  CustomEventEmitInputSchema,
   FileWriteInputSchema,
   InterruptResolveInputSchema,
   SecretPutInputSchema,
@@ -484,12 +485,20 @@ async function triggerCommand(action: string | undefined, id: string | undefined
     case 'emit': {
       const type = flagString(flags, 'type');
       requireArg(type, 'event type via --type');
-      const body: JsonRecord = { type };
+      const body: JsonRecord = { type, payload: {} };
       const agentId = flagString(flags, 'agent', 'agent-id');
       if (agentId) body.agentId = agentId;
       const payload = flagString(flags, 'payload');
       if (payload) body.payload = parseJsonFlag(payload, '--payload');
-      return requestCommand('triggers emit', 'POST', '/api/triggers/emit', body, formatJsonSummary, flags);
+      return requestCommand(
+        'triggers emit',
+        'POST',
+        '/api/triggers/emit',
+        body,
+        formatJsonSummary,
+        flags,
+        CustomEventEmitInputSchema,
+      );
     }
     default:
       throw new UsageError(`Unknown triggers command: ${action}`);

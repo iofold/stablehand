@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { ConversationIdSchema, TurnIdSchema } from '@ctxmill/contracts';
 import type { TypedEventBus } from './bus.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { TriggerSelect } from '../database/types.js';
@@ -273,15 +274,15 @@ export class EventTriggerManager {
    * report success before durable persistence accepts the event.
    */
   async emitCustomEventAsync(type: string, agentId: string | undefined, payload: Record<string, unknown>): Promise<void> {
+    const turnId = TurnIdSchema.safeParse(payload.turnId);
+    const conversationId = ConversationIdSchema.safeParse(payload.conversationId);
     // Propagate _triggerDepth from the incoming payload if present
     const eventPayload: Record<string, unknown> = {
       type,
       agentId: agentId ?? '',
       payload,
-      ...(typeof payload.turnId === 'string' ? { turnId: payload.turnId } : {}),
-      ...(typeof payload.conversationId === 'string'
-        ? { conversationId: payload.conversationId }
-        : {}),
+      ...(turnId.success ? { turnId: turnId.data } : {}),
+      ...(conversationId.success ? { conversationId: conversationId.data } : {}),
       timestamp: Date.now(),
     };
 

@@ -583,6 +583,48 @@ describe('@ctxmill/contracts', () => {
     expect(() => contracts.WebhookEventNameSchema.parse('ag_ui.event')).toThrow();
   });
 
+  it('owns the experimental custom-event grammar and payload cap', () => {
+    expect(contracts.CustomEventNameSchema.parse('custom.eval.verdict'))
+      .toBe('custom.eval.verdict');
+    for (const invalid of [
+      'eval.verdict',
+      'custom.',
+      'custom.-verdict',
+      'custom.Eval.verdict',
+      'custom.eval/verdict',
+      `custom.${'a'.repeat(128)}`,
+    ]) {
+      expect(() => contracts.CustomEventNameSchema.parse(invalid), invalid).toThrow();
+    }
+
+    expect(contracts.CustomEventPayloadSchema.parse({
+      content: 'x'.repeat((32 * 1024) - 14),
+    })).toBeDefined();
+    expect(contracts.CustomEventPayloadSchema.parse({
+      content: 'é'.repeat(((32 * 1024) - 14) / 2),
+    })).toBeDefined();
+    expect(() => contracts.CustomEventPayloadSchema.parse({
+      content: 'x'.repeat(32 * 1024),
+    })).toThrow();
+    expect(() => contracts.CustomEventPayloadSchema.parse({
+      content: 'é'.repeat((((32 * 1024) - 14) / 2) + 1),
+    })).toThrow();
+    expect(() => contracts.CustomEventPayloadSchema.parse([])).toThrow();
+    expect(contracts.CustomEventPayloadTooLargeErrorSchema.parse({
+      error: 'custom_event_payload_too_large',
+      maxBytes: 32 * 1024,
+    })).toEqual({
+      error: 'custom_event_payload_too_large',
+      maxBytes: 32 * 1024,
+    });
+
+    expect(contracts.WebhookCreateInputSchema.parse({
+      url: 'https://pack.test/hooks/ctxmill',
+      events: ['custom.eval.verdict'],
+      secret: 'pack-secret',
+    })).toMatchObject({ events: ['custom.eval.verdict'] });
+  });
+
   it('validates every event-specific flat webhook body contract', () => {
     const identities = {
       turnId: 'turn-1',
@@ -695,8 +737,8 @@ describe('@ctxmill/contracts', () => {
       },
     } as const;
 
-    expect(contracts.WebhookEventNameSchema.options).toContain('message.updated');
-    for (const eventName of contracts.WebhookEventNameSchema.options) {
+    expect(contracts.BUILTIN_WEBHOOK_EVENT_NAMES).toContain('message.updated');
+    for (const eventName of contracts.BUILTIN_WEBHOOK_EVENT_NAMES) {
       expect(contracts.WEBHOOK_PAYLOAD_SCHEMAS[eventName].parse(fixtures[eventName]))
         .toEqual(fixtures[eventName]);
     }
@@ -794,6 +836,56 @@ describe('@ctxmill/contracts', () => {
       secrets: [fixture.currentSecret, fixture.previousSecret],
       nowSeconds: Number(fixture.timestamp),
     })).resolves.toMatchObject({ valid: true });
+  });
+
+  it('verifies custom webhook envelopes and binds the signed body event type', async () => {
+    const secret = 'custom-webhook-secret';
+    const timestamp = '1700000000';
+    const rawBody = JSON.stringify({
+      type: 'custom.eval.verdict',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      payload: {
+        verdict: 'pass',
+        evidence: { suite: 'weekly' },
+      },
+      timestamp: 1_700_000_000_000,
+    });
+    const signature = await contracts.createCtxmillWebhookSignature({
+      secret,
+      timestamp,
+      rawBody,
+    });
+    const headers = {
+      'X-Delivery-Id': 'delivery-custom-1',
+      'X-Event-Type': 'custom.eval.verdict',
+      'X-Agent-Id': 'agent-1',
+      'X-Webhook-Timestamp': timestamp,
+      'X-Webhook-Signature': signature,
+    };
+
+    await expect(contracts.verifyCtxmillWebhook({
+      headers,
+      rawBody,
+      secrets: secret,
+      nowSeconds: Number(timestamp),
+    })).resolves.toMatchObject({
+      valid: true,
+      payload: {
+        type: 'custom.eval.verdict',
+        payload: { verdict: 'pass' },
+      },
+    });
+
+    await expect(contracts.verifyCtxmillWebhook({
+      headers: { ...headers, 'X-Event-Type': 'custom.eval.other' },
+      rawBody,
+      secrets: secret,
+      nowSeconds: Number(timestamp),
+    })).resolves.toEqual({
+      valid: false,
+      reason: 'header_body_mismatch',
+    });
   });
 
   it('rejects stale, tampered, and identity-mismatched signed webhooks', async () => {

@@ -26,7 +26,7 @@ test.describe('Required release gate smoke @smoke', () => {
     await expect(health).toBeOK();
 
     const emittedAt = new Date().toISOString();
-    const eventType = `release.gate.smoke.${Date.now()}`;
+    const eventType = `custom.release.gate.smoke.${Date.now()}`;
     const emit = await request.post(`${API_BASE}/api/triggers/emit`, {
       data: {
         type: eventType,

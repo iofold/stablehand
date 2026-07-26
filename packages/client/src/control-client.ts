@@ -26,6 +26,8 @@ import {
   ConversationSummaryListResponseSchema,
   ConversationTurnStartInputSchema,
   ConversationTurnStartResponseSchema,
+  CustomEventEmitInputSchema,
+  CustomEventEmitResponseSchema,
   EventCursorSchema,
   EventListInputSchema,
   EventListResponseSchema,
@@ -71,6 +73,7 @@ import {
   type ConversationSnapshot,
   type ConversationSummary,
   type ConversationTurnStartInput,
+  type CustomEventEmitInput,
   type EventListInput,
   type EventListResponse,
   type FileWriteInput,
@@ -500,6 +503,17 @@ export class CtxmillControlClient {
           ...requestOptions,
         });
       },
+      emitCustom: (
+        input: CustomEventEmitInput,
+        requestOptions: CtxmillRequestOptions = {},
+      ) => this.transport.request({
+        method: 'POST',
+        path: '/triggers/emit',
+        requestSchema: CustomEventEmitInputSchema,
+        responseSchema: CustomEventEmitResponseSchema,
+        json: input,
+        ...requestOptions,
+      }),
     };
 
     this.artifacts = {

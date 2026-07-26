@@ -101,16 +101,18 @@ async function ensureStressTrigger(
   request: APIRequestContext,
   chainResponderId: string,
 ): Promise<void> {
-  const response = await request.post(`${API_BASE}/api/triggers`, {
-    data: {
-      agentId: chainResponderId,
-      eventType: 'stress.tools.complete',
-      taskTemplate: 'Chain event received: {{payload}}. Acknowledge it by emitting exactly one stress.chain.done event with payload {"schemaVersion":1,"harness":"stress-chain-responder","agent":"stress-chain-responder","model":"gpt-5.4","status":"ok"}.',
-      enabled: true,
-    },
-  });
+  for (const eventType of ['stress.tools.complete', 'custom.stress.tools.complete']) {
+    const response = await request.post(`${API_BASE}/api/triggers`, {
+      data: {
+        agentId: chainResponderId,
+        eventType,
+        taskTemplate: 'Chain event received: {{payload}}. Acknowledge it by emitting exactly one stress.chain.done event with payload {"schemaVersion":1,"harness":"stress-chain-responder","agent":"stress-chain-responder","model":"gpt-5.4","status":"ok"}.',
+        enabled: true,
+      },
+    });
 
-  expect([200, 201, 409]).toContain(response.status());
+    expect([200, 201, 409]).toContain(response.status());
+  }
 }
 
 test.describe('Stress Test — Multi-Model Multi-Harness', () => {
@@ -356,7 +358,7 @@ test.describe('Stress Test — Multi-Model Multi-Harness', () => {
 
     const emitResponse = await request.post(`${API_BASE}/api/triggers/emit`, {
       data: {
-        type: 'stress.tools.complete',
+        type: 'custom.stress.tools.complete',
         payload: {
           source: 'tests/e2e/stress-smoke.spec.ts',
           emittedAt: new Date().toISOString(),

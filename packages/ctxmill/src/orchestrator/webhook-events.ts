@@ -1,21 +1,18 @@
 import type { EventName } from '../events/bus.js';
+import {
+  BUILTIN_WEBHOOK_EVENT_NAMES,
+  isCustomEventName,
+  type BuiltinWebhookEventName,
+} from '@ctxmill/contracts';
 
-export const VALID_WEBHOOK_EVENTS = [
-  'turn.started',
-  'turn.completed',
-  'tool_call.started',
-  'tool_call.completed',
-  'interrupt.requested',
-  'interrupt.resolved',
-  'message.committed',
-  'message.updated',
-  'feedback.received',
-  'budget.threshold',
-  'artifact.created',
-] as const satisfies readonly EventName[];
+export const VALID_WEBHOOK_EVENTS = BUILTIN_WEBHOOK_EVENT_NAMES satisfies readonly EventName[];
 
-export type ValidWebhookEvent = typeof VALID_WEBHOOK_EVENTS[number];
+export type ValidWebhookEvent = BuiltinWebhookEventName | `custom.${string}`;
 
 export function isValidWebhookEvent(eventType: string): eventType is ValidWebhookEvent {
+  return isBuiltinWebhookEvent(eventType) || isCustomEventName(eventType);
+}
+
+export function isBuiltinWebhookEvent(eventType: string): eventType is BuiltinWebhookEventName {
   return (VALID_WEBHOOK_EVENTS as readonly string[]).includes(eventType);
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { BuiltinWebhookEventName } from '@ctxmill/contracts';
 
 import type { DatabaseRepository, EventFrameRow, WebhookRow } from '../../database/repository.js';
 import type { CallbackDispatcher } from '../callback-dispatcher.js';
@@ -335,7 +336,7 @@ const goldenFixtures = [
     expectedJson: '{"feedbackId":"feedback-1","turnId":"turn-1","agentId":"agent-1","type":"thumbs_up","messageId":"msg-1","timestamp":800}',
   },
 ] satisfies Array<{
-  eventType: ValidWebhookEvent;
+  eventType: BuiltinWebhookEventName;
   payload: Record<string, unknown>;
   expected: Record<string, unknown>;
   expectedJson: string;
@@ -388,6 +389,62 @@ describe('WebhookRelay', () => {
         timestamp: 300,
       },
     });
+  });
+
+  it('passes a custom event envelope through without projecting caller payload fields', async () => {
+    const eventType = 'custom.eval.verdict' as ValidWebhookEvent;
+    const payload = {
+      type: eventType,
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      payload: {
+        verdict: 'pass',
+        evidence: { suite: 'weekly', scores: [1, 2, 3] },
+      },
+      _triggerDepth: 1,
+      timestamp: 800,
+    };
+    const dispatcher = createDispatcher();
+    const { db } = createRelayDb([webhook('hook-custom', eventType)]);
+    const consumer = createWebhookRelaySpineConsumer({ db, callbackDispatcher: dispatcher });
+
+    await consumer.handle(rawEvent(43, eventType, payload));
+
+    expect(dispatcher.enqueue).toHaveBeenCalledOnce();
+    expect(dispatcher.enqueue).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      webhookId: 'hook-custom',
+      callbackUrl: 'https://hooks.example/custom.eval.verdict',
+      eventType,
+      eventSeq: 43,
+      payload,
+    });
+  });
+
+  it('does not enqueue custom webhook payloads outside the canonical 32 KiB contract', async () => {
+    const eventType = 'custom.eval.oversized' as ValidWebhookEvent;
+    const dispatcher = createDispatcher();
+    const logger = { warn: vi.fn() };
+    const { db } = createRelayDb([webhook('hook-custom', eventType)]);
+    const consumer = createWebhookRelaySpineConsumer({
+      db,
+      callbackDispatcher: dispatcher,
+      logger,
+    });
+
+    await consumer.handle(rawEvent(44, eventType, {
+      type: eventType,
+      agentId: 'agent-1',
+      payload: { content: 'x'.repeat(32 * 1024) },
+      timestamp: 800,
+    }));
+
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('custom.eval.oversized at seq 44'),
+    );
   });
 
   it('catches up missed spine events and advances after enqueue succeeds', async () => {

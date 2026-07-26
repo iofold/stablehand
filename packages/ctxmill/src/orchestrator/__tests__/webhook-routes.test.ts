@@ -153,6 +153,33 @@ describe('webhook routes', () => {
     expect(response.json()).not.toHaveProperty('secret');
   });
 
+  it('creates and updates custom-event subscriptions through the canonical grammar', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/agents/agent-1/webhooks',
+      payload: {
+        url: 'https://hooks.example/custom',
+        events: ['custom.eval.verdict'],
+        secret: 'top-secret',
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    expect(db.createWebhook).toHaveBeenCalledWith(expect.objectContaining({
+      events: ['custom.eval.verdict'],
+    }));
+
+    const updated = await app.inject({
+      method: 'PATCH',
+      url: '/api/agents/agent-1/webhooks/hook-1',
+      payload: { events: ['custom.eval.verdict'] },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(db.updateWebhookForAgent).toHaveBeenCalledWith('hook-1', 'agent-1', {
+      events: ['custom.eval.verdict'],
+    });
+  });
+
   it('rejects invalid event types', async () => {
     const response = await app.inject({
       method: 'POST',

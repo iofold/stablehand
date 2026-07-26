@@ -173,26 +173,28 @@ async function registerTrigger(results: SeedResult[]): Promise<void> {
     return;
   }
 
-  const payload: TriggerPayload = {
-    agentId: agent.id,
-    eventType: 'stress.tools.complete',
-    taskTemplate: 'Chain event received: {{payload}}',
-    enabled: true,
-  };
+  for (const eventType of ['stress.tools.complete', 'custom.stress.tools.complete']) {
+    const payload: TriggerPayload = {
+      agentId: agent.id,
+      eventType,
+      taskTemplate: 'Chain event received: {{payload}}',
+      enabled: true,
+    };
 
-  const res = await fetch(`${API_BASE}/api/triggers`, {
-    method: 'POST',
-    headers: jsonHeaders(),
-    body: JSON.stringify(payload),
-  });
+    const res = await fetch(`${API_BASE}/api/triggers`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify(payload),
+    });
 
-  if (res.ok || res.status === 409) {
-    console.log(`  [OK] Trigger: stress.tools.complete -> ${agent.id}`);
-    return;
+    if (res.ok || res.status === 409) {
+      console.log(`  [OK] Trigger: ${eventType} -> ${agent.id}`);
+      continue;
+    }
+
+    const body = await parseJson(res);
+    console.error(`  [WARN] Trigger registration returned ${res.status}: ${JSON.stringify(body)}`);
   }
-
-  const body = await parseJson(res);
-  console.error(`  [WARN] Trigger registration returned ${res.status}: ${JSON.stringify(body)}`);
 }
 
 async function seedAllAgents(): Promise<SeedResult[]> {
@@ -234,7 +236,7 @@ async function main(): Promise<void> {
   await registerTrigger(results);
 
   printSummary(results);
-  console.log('Trigger registered: stress.tools.complete -> stress-chain-responder');
+  console.log('Triggers registered: stress.tools.complete + custom.stress.tools.complete -> stress-chain-responder');
   console.log(`Agents: ${results.map((result) => result.name).join(', ')}`);
 }
 
