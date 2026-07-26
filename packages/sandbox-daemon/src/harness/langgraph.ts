@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { tool as lcTool } from '@langchain/core/tools';
-import { ToolMessage } from '@langchain/core/messages';
+import { SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseLanguageModel } from '@langchain/core/language_models/base';
 import type { StreamEvent } from '@langchain/core/types/stream';
 import type {
@@ -193,6 +193,7 @@ class LangGraphSession implements HarnessSession {
       if (!hasSystemMessage) deepAgentParams.systemPrompt = systemPrompt;
       if (resolvedSubagents) deepAgentParams.subagents = resolvedSubagents;
       const middlewares: Record<string, unknown>[] = [
+        createSystemMessageCompatibilityMiddleware(),
         createToolErrorBoundaryMiddleware(),
       ];
       const nativeToolPolicy = this.config.nativeToolPolicy;
@@ -701,6 +702,39 @@ class LangGraphSession implements HarnessSession {
 }
 
 const GRAPH_INTERRUPT_NAMES = new Set(['GraphInterrupt', 'NodeInterrupt']);
+
+/**
+ * Collapse text-only system prompt fragments into the canonical string form.
+ * Deep Agents composes its prompt as multiple text blocks, while some otherwise
+ * OpenAI-compatible endpoints only accept a single system content value.
+ */
+function createSystemMessageCompatibilityMiddleware(): Record<string, unknown> {
+  return {
+    name: 'ctxmill-system-message-compatibility',
+    wrapModelCall: async (
+      request: { systemMessage?: SystemMessage; [key: string]: unknown },
+      handler: (req: { systemMessage?: SystemMessage; [key: string]: unknown }) => Promise<unknown>,
+    ) => {
+      const content = request.systemMessage?.content;
+      if (!Array.isArray(content) || content.length < 2) return handler(request);
+
+      const textParts: string[] = [];
+      for (const part of content) {
+        if (part == null || typeof part !== 'object'
+            || !('type' in part) || part.type !== 'text'
+            || !('text' in part) || typeof part.text !== 'string') {
+          return handler(request);
+        }
+        textParts.push(part.text);
+      }
+
+      return handler({
+        ...request,
+        systemMessage: new SystemMessage({ content: textParts.join('\n') }),
+      });
+    },
+  };
+}
 
 /**
  * Middleware that catches tool execution errors and returns them as ToolMessage

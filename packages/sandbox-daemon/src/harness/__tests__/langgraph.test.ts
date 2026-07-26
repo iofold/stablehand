@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { SystemMessage } from '@langchain/core/messages';
 import type { AgentEvent, HarnessSessionConfig } from '../types.js';
 import type { Message } from '../../types.js';
 import type { ToolDefinition } from '../../tool/types.js';
@@ -253,6 +254,53 @@ describe('LangGraphHarness message history', () => {
       expect(params?.middleware).not.toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'ctxmill-native-tool-policy' }),
       ]));
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('collapses text-only system prompt fragments before each model call', async () => {
+    mockStreamEvents.mockImplementation(() => langGraphStream([{
+      event: 'on_chat_model_stream',
+      data: { chunk: { content: 'Done.' } },
+    }]));
+    const messages = [makeMessage('user', 'Use tools')];
+    const session = await openRestoredTestSession({
+      stateVersion: '1',
+      messages,
+      payload: { transcript: messages },
+    });
+
+    try {
+      await collectEvents(session.deliverTurn({ messages, turnId: 'turn-system-message' }, {}));
+      const params = mockCreateDeepAgent.mock.calls[0]?.[0] as {
+        middleware?: Array<{
+          name?: string;
+          wrapModelCall?: (
+            request: Record<string, unknown>,
+            handler: (request: Record<string, unknown>) => Promise<unknown>,
+          ) => Promise<unknown>;
+        }>;
+      } | undefined;
+      const middleware = params?.middleware?.find((candidate) =>
+        candidate.name === 'ctxmill-system-message-compatibility',
+      );
+      const handler = vi.fn(async (request: Record<string, unknown>) => request);
+
+      await middleware?.wrapModelCall?.({
+        systemPrompt: 'First\nSecond',
+        systemMessage: new SystemMessage({
+          content: [
+            { type: 'text', text: 'First' },
+            { type: 'text', text: 'Second' },
+          ],
+        }),
+      }, handler);
+
+      const forwarded = handler.mock.calls[0]?.[0] as {
+        systemMessage?: SystemMessage;
+      } | undefined;
+      expect(forwarded?.systemMessage?.content).toBe('First\nSecond');
     } finally {
       await session.close();
     }
