@@ -590,6 +590,9 @@ describe('performance profile', () => {
     expect(new Set(ramp.harnesses.map((stage) => stage.harness))).toEqual(
       new Set(['langgraph', 'pi-agent']),
     );
+    expect(ramp.harnesses.every((stage) =>
+      stage.harnessConfig.provider === 'openai'
+      && stage.harnessConfig.model === 'cf-gpt-oss-120b')).toBe(true);
     expect(ramp.confirmationRuns).toBe(3);
     expect(ramp.gates.minSandboxMetricCoverage).toBe(0.8);
     const wave = buildCapacityWaveProfile(ramp, 8, 2);
