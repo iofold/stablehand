@@ -430,6 +430,39 @@ export const InterruptListResponseSchema = z.strictObject({
   interrupts: z.array(InterruptSchema),
 });
 
+export const InterruptRecordStatusSchema = z.enum([
+  'pending',
+  'resolved',
+  'timed_out',
+]);
+
+export const InterruptRecordSchema = z.strictObject({
+  interruptId: InterruptIdSchema,
+  agentId: AgentIdSchema,
+  turnId: TurnIdSchema,
+  sandboxSessionId: SandboxSessionIdSchema.nullable(),
+  toolCallId: ToolCallIdSchema,
+  toolName: z.string().trim().min(1),
+  args: UnknownRecordSchema,
+  status: InterruptRecordStatusSchema,
+  createdAt: EpochMillisecondsSchema,
+  expiresAt: EpochMillisecondsSchema,
+  resolvedAt: EpochMillisecondsSchema.nullable(),
+  resolvedAction: z.string().nullable(),
+});
+
+export const InterruptRecordListInputSchema = z.strictObject({
+  status: z.enum(['pending', 'resolved', 'all']).optional(),
+  agentId: AgentIdSchema.optional(),
+  limit: z.number().int().positive().max(200).optional(),
+  before: EpochMillisecondsSchema.optional(),
+});
+
+export const InterruptRecordListResponseSchema = z.strictObject({
+  interrupts: z.array(InterruptRecordSchema),
+  nextBefore: EpochMillisecondsSchema.optional(),
+});
+
 export const InterruptResolveInputSchema = z.strictObject({
   interruptId: z.string().trim().min(1),
   action: z.enum(['approve', 'reject', 'submit']),
@@ -587,6 +620,8 @@ export type Conversation = z.infer<typeof ConversationSchema>;
 export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
 export type SandboxSession = z.infer<typeof SandboxSessionSchema>;
 export type Interrupt = z.infer<typeof InterruptSchema>;
+export type InterruptRecord = z.infer<typeof InterruptRecordSchema>;
+export type InterruptRecordListInput = z.input<typeof InterruptRecordListInputSchema>;
 export type Webhook = z.infer<typeof WebhookSchema>;
 export type BackgroundTurnStartInput = z.input<typeof BackgroundTurnStartInputSchema>;
 export type ConversationTurnStartInput = z.input<typeof ConversationTurnStartInputSchema>;

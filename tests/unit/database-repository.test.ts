@@ -2489,6 +2489,69 @@ describe('DatabaseRepository', () => {
       expect(upserted.toolCallId).toBe('tool-call-2');
     });
 
+    it('lists durable interrupts newest-first with cross-agent filters and cursor pagination', async () => {
+      const first = await createRuntimeTurn('Interrupt List First');
+      const second = await createRuntimeTurn('Interrupt List Second');
+      const base = Date.now();
+
+      await repo.savePendingInterrupt({
+        id: 'interrupt-list-old',
+        turnId: first.turn.id,
+        agentId: first.agent.id,
+        sandboxSessionId: first.sandboxSession.id,
+        toolCallId: 'tool-call-old',
+        toolName: 'request-approval',
+        args: { order: 1 },
+        timeoutMs: 60_000,
+        createdAt: base,
+        expiresAt: base + 60_000,
+      });
+      await repo.savePendingInterrupt({
+        id: 'interrupt-list-new',
+        turnId: second.turn.id,
+        agentId: second.agent.id,
+        sandboxSessionId: second.sandboxSession.id,
+        toolCallId: 'tool-call-new',
+        toolName: 'request-approval',
+        args: { order: 2 },
+        timeoutMs: 60_000,
+        createdAt: base + 2,
+        expiresAt: base + 60_002,
+      });
+      await repo.savePendingInterrupt({
+        id: 'interrupt-list-middle',
+        turnId: first.turn.id,
+        agentId: first.agent.id,
+        sandboxSessionId: first.sandboxSession.id,
+        toolCallId: 'tool-call-middle',
+        toolName: 'request-approval',
+        args: { order: 1.5 },
+        timeoutMs: 60_000,
+        createdAt: base + 1,
+        expiresAt: base + 60_001,
+      });
+      await repo.markInterruptTimedOut('interrupt-list-middle', 'Approval expired');
+      await repo.resolveInterrupt('interrupt-list-old', 'approve');
+
+      const actionable = await repo.listInterrupts({ status: 'pending' });
+      expect(actionable.interrupts.map((row) => row.id)).toEqual([
+        'interrupt-list-new',
+        'interrupt-list-middle',
+      ]);
+
+      const firstAgent = await repo.listInterrupts({
+        status: 'all',
+        agentId: first.agent.id,
+        before: base + 2,
+        limit: 1,
+      });
+      expect(firstAgent.interrupts.map((row) => row.id)).toEqual(['interrupt-list-middle']);
+      expect(firstAgent.hasMore).toBe(true);
+
+      const resolved = await repo.listInterrupts({ status: 'resolved' });
+      expect(resolved.interrupts.map((row) => row.id)).toContain('interrupt-list-old');
+    });
+
     it('tracks timed-out interrupts and durable resume attempts', async () => {
       const { agent, sandboxSession, turn } = await createRuntimeTurn('Interrupt Resume Attempt');
       const now = Date.now();

@@ -11,6 +11,7 @@ import {
 import { artifactRoutes } from './routes/artifacts.js';
 import { catalogRoutes } from './routes/catalogs.js';
 import { eventRoutes } from './routes/events.js';
+import { interruptRoutes } from './routes/interrupts.js';
 import { settingsRoutes } from './routes/settings.js';
 import { budgetRoutes } from './routes/budgets.js';
 import { analyticsRoutes } from './routes/analytics.js';
@@ -257,6 +258,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   }
   await app.register(catalogRoutes, { prefix: '/api/catalogs' });
   await app.register(eventRoutes, { prefix: '/api/events', db });
+  await app.register(interruptRoutes, { prefix: '/api/interrupts', db });
   await app.register(budgetRoutes, { prefix: '/api/budgets', db });
   await app.register(analyticsRoutes, { prefix: '/api/analytics', db });
   await app.register(modelGatewayRoutes, {

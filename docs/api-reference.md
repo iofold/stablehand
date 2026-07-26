@@ -62,6 +62,7 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | **Human-in-the-Loop** |  |  |
 | GET | `/api/agents/:id/interrupts` | List pending interrupts |
 | POST | `/api/agents/:id/interrupt` | Resolve an interrupt |
+| GET | `/api/interrupts` | List durable interrupts across agents |
 | **Files & Workspace** |  |  |
 | GET | `/api/agents/:id/files` | List workspace directory entries |
 | GET | `/api/agents/:id/files/read` | Read a workspace file |
@@ -792,6 +793,40 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Notes:** Returns `404` if the conversation does not belong to the agent. `eventCursor` is an opaque, zero-padded durable event sequence; clients must not derive their own boundary.
 
 ### g. Human-in-the-Loop (interrupts)
+
+#### `GET /api/interrupts`
+
+- **Description:** Lists durable interrupt records across all agents for inbox and operations consumers. The database is the source of truth; a newly requested interrupt appears after persistence completes.
+- **Query params:**
+  - `status=pending|resolved|all` (default `pending`; `pending` includes still-actionable `timed_out` records)
+  - `agentId` (optional exact filter)
+  - `limit` (default `50`, maximum `200`)
+  - `before` (optional exclusive `createdAt` epoch-millisecond cursor)
+- **Response:**
+
+```json
+{
+  "interrupts": [
+    {
+      "interruptId": "int_123",
+      "agentId": "agent_123",
+      "turnId": "turn_123",
+      "sandboxSessionId": "sbx_123",
+      "toolCallId": "tc_1",
+      "toolName": "approve_invoice",
+      "args": { "invoiceId": "inv_9" },
+      "status": "pending",
+      "createdAt": 1712140000000,
+      "expiresAt": 1712140300000,
+      "resolvedAt": null,
+      "resolvedAction": null
+    }
+  ],
+  "nextBefore": 1712140000000
+}
+```
+
+- **Notes:** Results are ordered newest-first. Pass `nextBefore` as `before` for the next page. The list deliberately excludes `resolvedData`, which is not exposed by the public interrupt APIs because it may be large or sensitive. The bundled client method is `client.interrupts.listAll(...)`.
 
 #### `GET /api/agents/:id/interrupts`
 

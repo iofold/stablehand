@@ -27,6 +27,8 @@ import {
   FileWriteResponseSchema,
   HealthResponseSchema,
   InterruptListResponseSchema,
+  InterruptRecordListInputSchema,
+  InterruptRecordListResponseSchema,
   InterruptResolveInputSchema,
   InterruptResolveResponseSchema,
   ModelGatewayStatusSchema,
@@ -61,6 +63,8 @@ import {
   type ConversationTurnStartInput,
   type FileWriteInput,
   type Interrupt,
+  type InterruptRecord,
+  type InterruptRecordListInput,
   type InterruptResolveInput,
   type Message,
   type SandboxSession,
@@ -399,6 +403,31 @@ export class CtxmillControlClient {
     };
 
     this.interrupts = {
+      listAll: (
+        input: InterruptRecordListInput = {},
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<{ interrupts: InterruptRecord[]; nextBefore?: number }> => {
+        const parsed = InterruptRecordListInputSchema.safeParse(input);
+        if (!parsed.success) {
+          throw new CtxmillContractError({
+            direction: 'request',
+            method: 'GET',
+            path: '/interrupts',
+            issues: parsed.error.issues,
+          });
+        }
+        return this.transport.request({
+          method: 'GET',
+          path: queryPath('/interrupts', {
+            status: parsed.data.status,
+            agentId: parsed.data.agentId,
+            limit: parsed.data.limit?.toString(),
+            before: parsed.data.before?.toString(),
+          }),
+          responseSchema: InterruptRecordListResponseSchema,
+          ...requestOptions,
+        });
+      },
       list: (
         agentId: string,
         input: { includeResolved?: boolean } = {},

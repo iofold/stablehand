@@ -721,6 +721,43 @@ describe('CtxmillAgUiClient', () => {
     expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://ctxmill.test/api/agents/agent-1/turns/turn-1/cancel');
   });
 
+  it('lists durable interrupts across agents through the control client', async () => {
+    const response = {
+      interrupts: [{
+        interruptId: 'interrupt-1',
+        agentId: 'agent-1',
+        turnId: 'turn-1',
+        sandboxSessionId: 'session-1',
+        toolCallId: 'tool-call-1',
+        toolName: 'request-approval',
+        args: { reason: 'publish' },
+        status: 'pending',
+        createdAt: 100,
+        expiresAt: 200,
+        resolvedAt: null,
+        resolvedAction: null,
+      }],
+      nextBefore: 100,
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(response));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.interrupts.listAll({
+      status: 'resolved',
+      agentId: 'agent-1',
+      limit: 25,
+      before: 123,
+    })).resolves.toEqual(response);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://ctxmill.test/api/interrupts?status=resolved&agentId=agent-1&limit=25&before=123',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
   it('rejects legacy custom-event aliases instead of normalizing them', () => {
     expect(() => clientModule.parseCanonicalStreamEvent({
       type: 'CUSTOM',

@@ -4468,6 +4468,45 @@ export class DatabaseRepository {
     });
   }
 
+  async listInterrupts(options: {
+    status?: 'pending' | 'resolved' | 'all';
+    agentId?: string;
+    limit?: number;
+    before?: number;
+  } = {}): Promise<{ interrupts: InterruptRow[]; hasMore: boolean }> {
+    const status = options.status ?? 'pending';
+    const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 50), 200));
+    const filters: SQL[] = [];
+
+    if (status === 'pending') {
+      filters.push(inArray(this.schema.pendingInterrupts.status, ['pending', 'timed_out']));
+    } else if (status === 'resolved') {
+      filters.push(eq(this.schema.pendingInterrupts.status, 'resolved'));
+    }
+    if (options.agentId) {
+      filters.push(eq(
+        this.schema.pendingInterrupts.agentId,
+        sanitizeDbText(options.agentId, 'pendingInterrupts.list.agentId'),
+      ));
+    }
+    if (options.before !== undefined) {
+      filters.push(lt(this.schema.pendingInterrupts.createdAt, options.before));
+    }
+
+    const rows = await this.db.query.pendingInterrupts.findMany({
+      where: filters.length > 0 ? and(...filters) : undefined,
+      orderBy: (row, { desc: descending }) => [
+        descending(row.createdAt),
+        descending(row.id),
+      ],
+      limit: limit + 1,
+    });
+    return {
+      interrupts: rows.slice(0, limit),
+      hasMore: rows.length > limit,
+    };
+  }
+
   async getPendingInterruptForTurn(turnId: string): Promise<InterruptRow | undefined> {
     return this.db.query.pendingInterrupts.findFirst({
       where: and(

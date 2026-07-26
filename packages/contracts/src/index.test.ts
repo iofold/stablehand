@@ -294,6 +294,34 @@ describe('@ctxmill/contracts', () => {
     })).toThrow();
   });
 
+  it('validates durable cross-agent interrupt records without resolution data', () => {
+    const response = contracts.InterruptRecordListResponseSchema.parse({
+      interrupts: [{
+        interruptId: 'interrupt-1',
+        agentId: 'agent-1',
+        turnId: 'turn-1',
+        sandboxSessionId: null,
+        toolCallId: 'tool-call-1',
+        toolName: 'request-approval',
+        args: { reason: 'publish' },
+        status: 'timed_out',
+        createdAt: 1,
+        expiresAt: 2,
+        resolvedAt: null,
+        resolvedAction: 'timeout',
+      }],
+      nextBefore: 1,
+    });
+
+    expect(response.interrupts[0]?.status).toBe('timed_out');
+    expect(() => contracts.InterruptRecordListResponseSchema.parse({
+      interrupts: [{
+        ...response.interrupts[0],
+        resolvedData: { secret: 'must-not-be-listed' },
+      }],
+    })).toThrow();
+  });
+
   it('rejects sandbox runtime controls from per-turn secret inputs', () => {
     expect(contracts.BackgroundTurnStartInputSchema.parse({
       task: 'Run close workflow',

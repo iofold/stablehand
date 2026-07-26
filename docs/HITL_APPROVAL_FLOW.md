@@ -61,6 +61,7 @@ HITL state is driven by durable interrupt records. Dedicated session pause APIs 
 
 ## Operational Notes
 
+- Inbox-style consumers should poll `GET /api/interrupts` for durable cross-agent discovery and subscribe to `interrupt.requested` / `interrupt.resolved` webhooks for prompt updates. The list reads only persisted rows, defaults to actionable records, and never merges transient in-memory state.
 - The resumption path is DB-first. A human resolution can succeed even if the original in-memory interrupt owner is gone, as long as the interrupt record and sandbox session can be recovered.
 - Live waiter resolutions complete synchronously; durable resume work can return `202 Accepted` and continue through `interrupt_resume_attempts`.
 - Both `approve` and `reject` can resume a checkpointed session. Timed-out rows remain actionable if a human later resolves the interrupt.
