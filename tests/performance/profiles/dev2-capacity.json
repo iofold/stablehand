@@ -5,6 +5,9 @@
     "apiBase": "https://stablehand.staging.example.com/api",
     "kubernetesNamespace": "ctxmill"
   },
+  "requirements": {
+    "modelGateway": "required"
+  },
   "safety": {
     "maxConcurrency": 5,
     "abortErrorRate": 0.05,
@@ -25,8 +28,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
-        "apiKeyRef": "$secret:OPENAI_API_KEY"
+        "model": "cf-glm-5.2"
       }
     },
     {
@@ -42,8 +44,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
-        "apiKeyRef": "$secret:OPENAI_API_KEY"
+        "model": "cf-glm-5.2"
       }
     },
     {
@@ -59,8 +60,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
-        "apiKeyRef": "$secret:OPENAI_API_KEY"
+        "model": "cf-glm-5.2"
       }
     },
     {
@@ -76,8 +76,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
-        "apiKeyRef": "$secret:OPENAI_API_KEY"
+        "model": "cf-glm-5.2"
       }
     },
     {
@@ -93,8 +92,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "anthropic",
-        "model": "claude-sonnet-4-6",
-        "apiKeyRef": "$secret:ANTHROPIC_API_KEY"
+        "model": "claude-sonnet-5"
       }
     },
     {
@@ -111,8 +109,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
-        "apiKeyRef": "$secret:OPENAI_API_KEY"
+        "model": "cf-glm-5.2"
       }
     },
     {
@@ -129,8 +126,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
-        "apiKeyRef": "$secret:OPENAI_API_KEY"
+        "model": "cf-glm-5.2"
       }
     }
   ]

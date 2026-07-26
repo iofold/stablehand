@@ -55,6 +55,65 @@ function findResource(
 }
 
 describe('model gateway deployment', () => {
+  it('publishes the current OpenAI and Anthropic model families without legacy frontier aliases', () => {
+    const config = readYaml<ModelGatewayConfig>(
+      'deploy/compose/model-gateway/config.yaml',
+    );
+
+    expect(config.model_list).toEqual(expect.arrayContaining([
+      {
+        model_name: 'gpt-5.6-sol',
+        litellm_params: {
+          model: 'openai/gpt-5.6-sol',
+          api_key: 'os.environ/OPENAI_API_KEY',
+        },
+      },
+      {
+        model_name: 'gpt-5.6-terra',
+        litellm_params: {
+          model: 'openai/gpt-5.6-terra',
+          api_key: 'os.environ/OPENAI_API_KEY',
+        },
+      },
+      {
+        model_name: 'gpt-5.6-luna',
+        litellm_params: {
+          model: 'openai/gpt-5.6-luna',
+          api_key: 'os.environ/OPENAI_API_KEY',
+        },
+      },
+      {
+        model_name: 'claude-sonnet-5',
+        litellm_params: {
+          model: 'anthropic/claude-sonnet-5',
+          api_key: 'os.environ/ANTHROPIC_API_KEY',
+        },
+      },
+      {
+        model_name: 'claude-opus-5',
+        litellm_params: {
+          model: 'anthropic/claude-opus-5',
+          api_key: 'os.environ/ANTHROPIC_API_KEY',
+        },
+      },
+      {
+        model_name: 'claude-haiku-4-5',
+        litellm_params: {
+          model: 'anthropic/claude-haiku-4-5',
+          api_key: 'os.environ/ANTHROPIC_API_KEY',
+        },
+      },
+    ]));
+    expect(config.model_list?.map((entry) => entry.model_name)).not.toEqual(
+      expect.arrayContaining([
+        'gpt-5.4',
+        'gpt-5.4-mini',
+        'claude-sonnet-4-6',
+        'claude-opus-4-6',
+      ]),
+    );
+  });
+
   it('routes current Google Gemini traffic with a deployment-owned key', () => {
     const config = readYaml<ModelGatewayConfig>(
       'deploy/compose/model-gateway/config.yaml',
@@ -67,6 +126,13 @@ describe('model gateway deployment', () => {
       model_name: 'gemini-3.6-flash',
       litellm_params: {
         model: 'gemini/gemini-3.6-flash',
+        api_key: 'os.environ/GOOGLE_API_KEY',
+      },
+    });
+    expect(config.model_list).toContainEqual({
+      model_name: 'gemini-3.5-flash-lite',
+      litellm_params: {
+        model: 'gemini/gemini-3.5-flash-lite',
         api_key: 'os.environ/GOOGLE_API_KEY',
       },
     });

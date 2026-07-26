@@ -31,7 +31,7 @@
       "timeoutMs": 180000,
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": "off"
       }
@@ -43,7 +43,7 @@
       "timeoutMs": 180000,
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "thinkingLevel": "minimal"
       }

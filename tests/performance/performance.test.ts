@@ -508,24 +508,57 @@ describe('performance profile', () => {
     ]);
   });
 
-  it('ships a bounded cross-harness GLM matrix and ten-way scale plan', () => {
+  it('ships a current frontier matrix and cheaper volumetric plans', () => {
     const readProfile = (name: string) => parsePerformanceProfile(JSON.parse(
       readFileSync(new URL(`./profiles/${name}.json`, import.meta.url), 'utf8'),
     ));
     const matrix = summarizePerformancePlan(readProfile('dev2-model-matrix'));
     const scale = readProfile('dev2-scale-10');
     const scalePlan = summarizePerformancePlan(scale);
+    const gatewayProfiles = [
+      readProfile('dev2-smoke'),
+      readProfile('dev2-capacity'),
+      readProfile('dev2-sse-fanout'),
+      scale,
+    ];
 
     expect(new Set(matrix.stages.map((stage) => stage.harness))).toEqual(
       new Set(['langgraph', 'pi-agent']),
     );
     expect(matrix.stages.some((stage) =>
       stage.modelRoutes.some((route) => route.model === 'cf-glm-5.2'))).toBe(true);
+    const matrixRoutes = new Set(matrix.stages.flatMap((stage) =>
+      stage.modelRoutes.map((route) => `${route.provider}/${route.model}`)));
+    expect([...matrixRoutes]).toEqual(expect.arrayContaining([
+      'openai/gpt-5.6-sol',
+      'openai/gpt-5.6-terra',
+      'openai/gpt-5.6-luna',
+      'anthropic/claude-sonnet-5',
+      'anthropic/claude-opus-5',
+      'anthropic/claude-haiku-4-5',
+      'google/gemini-3.6-flash',
+      'google/gemini-3.5-flash-lite',
+      'openai/cf-glm-5.2',
+    ]));
+    expect([...matrixRoutes]).not.toEqual(expect.arrayContaining([
+      'openai/gpt-5.4',
+      'openai/gpt-5.4-mini',
+      'anthropic/claude-sonnet-4-6',
+      'anthropic/claude-opus-4-6',
+    ]));
     expect(matrix).toMatchObject({
-      totalTurns: 17,
-      estimatedModelCalls: 21,
+      totalTurns: 27,
+      estimatedModelCalls: 31,
       peakConcurrency: 1,
     });
+    expect(scale.stages.every((stage) =>
+      stage.harnessConfig.provider === 'openai'
+      && stage.harnessConfig.model === 'cf-glm-5.2')).toBe(true);
+    expect(gatewayProfiles.every((profile) =>
+      profile.requirements.modelGateway === 'required')).toBe(true);
+    expect(gatewayProfiles.flatMap((profile) => profile.stages).every((stage) =>
+      stage.harnessConfig.apiKeyRef == null
+      && stage.harnessConfig.baseUrl == null)).toBe(true);
     expect(scale.requirements.minGlobalContainers).toBe(10);
     expect(scalePlan).toMatchObject({
       totalTurns: 262,

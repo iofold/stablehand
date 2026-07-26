@@ -57,10 +57,11 @@ stops a stage when its measured turn error rate crosses the declared threshold.
 - `dev2-sse-fanout.json`: three hot-agent conversations with 10 and then 50
   durable SSE consumers. It isolates server-side stream fanout more than the
   ordinary capacity profile.
-- `dev2-model-matrix.json`: 17 bounded turns across Deep Agents and PI Agent.
-  It covers native OpenAI, Anthropic, and Google gateway protocols; all five
-  curated Workers AI aliases; and one heterogeneous Deep Agents turn with GLM
-  and Gemini subagents. The plan estimates 21 model calls.
+- `dev2-model-matrix.json`: 27 bounded turns across Deep Agents and PI Agent.
+  It covers GPT-5.6 Sol, Terra, and Luna; Claude Opus 5, Sonnet 5, and Haiku
+  4.5; Gemini 3.6 Flash and 3.5 Flash-Lite; all five curated Workers AI
+  aliases; and one heterogeneous Deep Agents turn with GLM and Gemini
+  subagents. The plan estimates 31 model calls.
 - `dev2-scale-10.json`: a 1, 3, 5, 8, 10 concurrency ramp for both Deep Agents
   and PI Agent, then warm and checkpoint/restore lanes at concurrency 5. Its
   exact ceiling is 262 CTXMILL turns/model calls and 20 simultaneous SSE
@@ -103,13 +104,15 @@ benchmark can bound output and reasoning without provider-specific keys in the
 agent manifest. Both harnesses attach opaque per-turn correlation headers when
 the deployment gateway is selected.
 
-The matrix intentionally exercises protocol separately from model identity:
+The matrix intentionally exercises protocol separately from model identity.
+Frontier models receive one bounded compatibility turn per harness; they are
+not used for the volumetric waves:
 
 | Lane | Canonical harness provider | LiteLLM alias/protocol |
 | --- | --- | --- |
-| GPT-5.4 mini | `openai` | `gpt-5.4-mini` over OpenAI-compatible `/v1` |
-| Claude Haiku 4.5 | `anthropic` | `claude-haiku-4-5` over native Anthropic |
-| Gemini 3.6 Flash | `google` | `gemini-3.6-flash` over native Google `v1beta` |
+| GPT-5.6 Sol, Terra, Luna | `openai` | current `gpt-5.6-*` aliases over OpenAI-compatible `/v1` |
+| Claude Opus 5, Sonnet 5, Haiku 4.5 | `anthropic` | current Claude aliases over native Anthropic |
+| Gemini 3.6 Flash, 3.5 Flash-Lite | `google` | current Gemini aliases over native Google `v1beta` |
 | GLM 5.2 | `openai` | `cf-glm-5.2` translated by LiteLLM to Workers AI |
 | GPT-OSS, Kimi, Gemma, Qwen | `openai` | curated `cf-*` Workers AI aliases |
 
@@ -119,6 +122,11 @@ LiteLLM alias is not proof that its provider credential works. The matrix
 uses explicit output/reasoning bounds, and the runner still records actual
 gateway-reconciled token and cost coverage.
 
+All capacity, scale, and SSE-fanout stages use the same `cf-glm-5.2` route for
+Deep Agents and PI Agent. This keeps harness comparisons like-for-like and
+keeps repetitive load off frontier-priced models. The bounded smoke profile
+uses GPT-5.6 Luna and Claude Sonnet 5 to retain current-provider coverage.
+
 ## LLM budget envelope
 
 The load planner counts calls; it does not duplicate the product pricing table
@@ -127,14 +135,15 @@ use these operating envelopes:
 
 | Profile | Planned turns | Estimated model calls | Expected spend | Reserve | Hard policy ceiling |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `dev2-model-matrix` | 17 | 21 | $0.10-$0.30 | $1 | $1 |
-| `dev2-scale-10` | 262 | 262 | $0.65-$1.10 | $2 | $3 |
-| Both once | 279 | 283 | $0.75-$1.40 | $3 | $4 |
+| `dev2-model-matrix` | 27 | 31 | $0.20-$0.60 | $1 | $1 |
+| `dev2-scale-10` | 262 | 262 | $1.50-$3.00 | $5 | $6 |
+| Matrix + scale once | 289 | 293 | $1.70-$3.60 | $6 | $7 |
+| Full adaptive worst case | 1,182 | 1,182 | $8-$15 | $20 | $25 |
 
-The range assumes roughly 3,000-5,000 input tokens and normally at most 64
-output tokens per ordinary model call. The Gemini Deep Agents and Qwen matrix
-lanes allow up to 256 tokens because those models can spend part of the bound
-on reasoning. The mixed Deep Agents lane is budgeted as five calls. Provider
+The range assumes roughly 3,000-10,000 input tokens and short fixed responses.
+The current Claude models allow a larger output ceiling because adaptive
+thinking shares the output budget; the test still requires exactly one visible
+token string. The mixed Deep Agents lane is budgeted as five calls. Provider
 retries, model-side reasoning, tool loops, and pricing changes can move actual
 spend, which is why the deployment gateway policy—not this estimate—must hold
 the hard ceiling. Repeat capacity runs require multiplying the reserve by the

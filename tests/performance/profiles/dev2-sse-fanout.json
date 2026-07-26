@@ -5,6 +5,9 @@
     "apiBase": "https://stablehand.staging.example.com/api",
     "kubernetesNamespace": "ctxmill"
   },
+  "requirements": {
+    "modelGateway": "required"
+  },
   "safety": {
     "maxConcurrency": 3,
     "abortErrorRate": 0.05,
@@ -25,8 +28,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
-        "apiKeyRef": "$secret:OPENAI_API_KEY"
+        "model": "cf-glm-5.2"
       }
     },
     {
@@ -42,8 +44,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
-        "apiKeyRef": "$secret:OPENAI_API_KEY"
+        "model": "cf-glm-5.2"
       }
     }
   ]

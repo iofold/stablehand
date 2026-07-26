@@ -23,7 +23,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": "low"
       }
@@ -41,7 +41,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": "low"
       }
@@ -59,7 +59,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": "low"
       }
@@ -77,7 +77,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": "low"
       }
@@ -95,7 +95,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": "low"
       }
@@ -113,7 +113,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "thinkingLevel": "minimal"
       }
@@ -131,7 +131,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "thinkingLevel": "minimal"
       }
@@ -149,7 +149,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "thinkingLevel": "minimal"
       }
@@ -167,7 +167,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "thinkingLevel": "minimal"
       }
@@ -185,7 +185,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "thinkingLevel": "minimal"
       }
@@ -204,7 +204,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": "low"
       }
@@ -223,7 +223,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "thinkingLevel": "minimal"
       }
@@ -242,7 +242,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": "low"
       }
@@ -261,7 +261,7 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.4-mini",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "thinkingLevel": "minimal"
       }
