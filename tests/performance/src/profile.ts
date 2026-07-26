@@ -45,6 +45,7 @@ const StageSchema = z.strictObject({
 const PerformanceProfileSchema = z.strictObject({
   schemaVersion: z.literal(1),
   name: z.string().trim().min(1),
+  expectedOutput: z.string().trim().min(1).optional(),
   target: z.strictObject({
     apiBase: z.url(),
     kubernetesNamespace: z.string().trim().min(1).default('ctxmill'),

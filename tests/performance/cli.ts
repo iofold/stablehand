@@ -34,6 +34,7 @@ import {
 } from './src/profile.js';
 import { renderPerformanceReport } from './src/report.js';
 import {
+  refreshPerformanceRunUsage,
   runPerformanceProfile,
   type PerformanceRunResult,
 } from './src/runner.js';
@@ -45,6 +46,8 @@ function usage(): never {
       + '  bun tests/performance/cli.ts run --profile <profile.json> --output <directory>\n'
       + '  bun tests/performance/cli.ts finalize --result <run.json> '
       + '--kubernetes <kubernetes.jsonl> --output <directory>\n'
+      + '  bun tests/performance/cli.ts refresh --result <run.json> '
+      + '--output <directory>\n'
       + '  bun tests/performance/cli.ts plan --profile <profile.json>\n'
       + '  bun tests/performance/cli.ts wave --ramp <ramp.json> '
       + '--concurrency <count> --ordinal <count> --output <profile.json>\n'
@@ -233,6 +236,42 @@ async function finalizeCommand(
   );
 }
 
+async function refreshCommand(
+  values: Record<string, string | boolean | undefined>,
+): Promise<void> {
+  const resultPath = typeof values.result === 'string' ? values.result : undefined;
+  const output = typeof values.output === 'string' ? values.output : undefined;
+  if (!resultPath || !output) usage();
+  const token = process.env.CTXMILL_API_TOKEN;
+  if (!token) throw new Error('CTXMILL_API_TOKEN is required');
+
+  const result = await readJson(resultPath) as PerformanceRunResult;
+  const client = createCtxmillControlClient({
+    apiBase: result.target.apiBase,
+    token,
+    timeoutMs: 60_000,
+    retry: { maxAttempts: 3, baseDelayMs: 100 },
+  });
+  const refreshed = await refreshPerformanceRunUsage(client, result);
+  const samples = refreshed.stages.flatMap((stage) => stage.samples);
+  await writeFile(
+    `${output}/run.json`,
+    `${JSON.stringify(refreshed, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  await writeFile(
+    `${output}/turns.jsonl`,
+    samples.map((sample) => JSON.stringify(sample)).join('\n') + '\n',
+    { mode: 0o600 },
+  );
+  await writeFile(
+    `${output}/report.md`,
+    renderPerformanceReport(refreshed),
+    { mode: 0o600 },
+  );
+  process.stdout.write(`${JSON.stringify({ refreshedTurns: samples.length })}\n`);
+}
+
 async function resourcesCommand(
   values: Record<string, string | boolean | undefined>,
 ): Promise<void> {
@@ -299,6 +338,7 @@ async function evaluateCommand(
     beforeEvents: await readJson(`${output}/before-events.json`) as never,
     events: await readJson(`${output}/after-events.json`) as never,
     logs: logs.join('\n'),
+    beforeGateway: await readJson(`${output}/gateway-before.json`) as never,
     gateway: await readJson(`${output}/gateway-after.json`) as never,
   });
   const decision = evaluateCapacityWave(observation, ramp.gates);
@@ -346,6 +386,10 @@ async function main(): Promise<void> {
   }
   if (command === 'finalize') {
     await finalizeCommand(parsed.values);
+    return;
+  }
+  if (command === 'refresh') {
+    await refreshCommand(parsed.values);
     return;
   }
   if (command === 'plan') {

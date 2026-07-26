@@ -13,6 +13,7 @@
   "settleMs": 5000,
   "pendingPodGraceSeconds": 30,
   "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+  "expectedOutput": "BENCHMARK_OK",
   "gates": {
     "maxErrorRate": 0.02,
     "maxTimeToFirstTokenP95Ms": 30000,

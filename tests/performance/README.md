@@ -81,6 +81,10 @@ this prevents aliases from silently falling back to direct provider traffic.
 The dev2 wrapper also checks `requirements.minGlobalContainers` against the
 effective `/api/sandbox/metrics` value, so the scale-10 ramp cannot be mistaken
 for ten-way execution while the orchestrator is still queuing above five.
+The model matrix and adaptive ramp also declare `expectedOutput`. A terminal
+`COMPLETED` status is not a pass unless the final persisted assistant message
+matches that value exactly; this catches models that consume their output
+allowance in hidden reasoning and never produce a user-visible answer.
 
 ## Harness and model coverage
 
@@ -124,12 +128,14 @@ use these operating envelopes:
 | `dev2-scale-10` | 262 | 262 | $0.65-$1.10 | $2 | $3 |
 | Both once | 279 | 283 | $0.75-$1.40 | $3 | $4 |
 
-The range assumes roughly 3,000-5,000 input tokens and at most 64 output
-tokens per ordinary model call. The mixed Deep Agents lane is budgeted as five
-calls. Provider retries, model-side reasoning, tool loops, and pricing changes
-can move actual spend, which is why the deployment gateway policy—not this
-estimate—must hold the hard ceiling. Repeat capacity runs require multiplying
-the reserve by the repeat count.
+The range assumes roughly 3,000-5,000 input tokens and normally at most 64
+output tokens per ordinary model call. The Gemini Deep Agents and Qwen matrix
+lanes allow up to 256 tokens because those models can spend part of the bound
+on reasoning. The mixed Deep Agents lane is budgeted as five calls. Provider
+retries, model-side reasoning, tool loops, and pricing changes can move actual
+spend, which is why the deployment gateway policy—not this estimate—must hold
+the hard ceiling. Repeat capacity runs require multiplying the reserve by the
+repeat count.
 
 ## Measurements
 
@@ -144,8 +150,8 @@ The load generator records:
 - server-to-client event lag, corrected with a five-probe health-endpoint clock
   estimate and reported with the clock uncertainty;
 - checkpoint suspend and restore request duration;
-- canonical token totals, known cost, total cost, and cost coverage from the
-  final turn detail;
+- canonical token totals, known cost, total cost, and cost coverage refreshed
+  from turn details after LiteLLM reconciliation settles;
 - unique canonical events per second and total SSE deliveries per second;
 - per-turn event counts on every SSE consumer. Any count disagreement is an
   SSE fanout mismatch.
@@ -202,7 +208,7 @@ before/after-events.json    namespace event delta boundary
 *-litellm-metrics.prom      gateway counters before and after the wave
 orchestrator.log            bounded service logs since wave start
 litellm.log                 bounded gateway logs since wave start
-gateway-after.json          post-settlement reconciliation health
+gateway-before/after.json   reconciliation health and monotonic-counter boundary
 capacity-observation.json   normalized correctness/resource/telemetry facts
 capacity-decision.json      advance or stop plus exact violations
 ```
@@ -226,8 +232,14 @@ Capacity is the highest completed ramp stage before any of these gates fails:
   `ctxmill.turn.delivery` traces;
 - any service restart, OOM kill, critical namespace event, or critical bounded
   log signature occurs during the wave;
-- the LiteLLM reconciler is unhealthy or leaves pending, unpriced,
-  quarantined, or orphan spend records.
+- the LiteLLM reconciler is unhealthy or leaves pending calls, or the wave
+  increases unpriced, quarantined, or orphan spend counters.
+
+Pending calls are an instantaneous post-settlement gauge and must be zero.
+Unpriced, quarantined, and orphan values are monotonic operational counters,
+so capacity decisions use the `gateway-before.json` to `gateway-after.json`
+delta. Historical diagnostic residue therefore remains visible without
+poisoning unrelated later waves.
 
 Pending pods are recorded immediately for diagnosis, but trip the gate only
 after the configured 30-second grace window. This separates ordinary

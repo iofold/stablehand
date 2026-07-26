@@ -30,6 +30,7 @@ import { AgentStreamHub } from './src/stream-hub.js';
 import {
   cleanupManagedSessions,
   executeMeasuredTurn,
+  refreshPerformanceRunUsage,
   runPerformanceProfile,
 } from './src/runner.js';
 import {
@@ -216,6 +217,7 @@ describe('performance profile', () => {
     expect(parsePerformanceProfile({
       schemaVersion: 1,
       name: 'dev2-smoke',
+      expectedOutput: 'BENCHMARK_OK',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
         kubernetesNamespace: 'ctxmill',
@@ -237,6 +239,7 @@ describe('performance profile', () => {
         },
       }],
     })).toMatchObject({
+      expectedOutput: 'BENCHMARK_OK',
       safety: {
         maxConcurrency: 5,
         abortErrorRate: 0.05,
@@ -668,12 +671,19 @@ describe('capacity wave gates', () => {
       beforeEvents: { items: [] },
       events: { items: [{ reason: 'FailedScheduling' }] },
       logs: 'healthy\nFATAL worker exited\n',
+      beforeGateway: {
+        state: 'healthy',
+        pendingCalls: 0,
+        unpricedCalls: 4,
+        quarantinedTransactions: 10,
+        orphanTransactions: 2,
+      },
       gateway: {
         state: 'healthy',
         pendingCalls: 0,
-        unpricedCalls: 0,
-        quarantinedTransactions: 0,
-        orphanTransactions: 0,
+        unpricedCalls: 5,
+        quarantinedTransactions: 12,
+        orphanTransactions: 2,
       },
     });
 
@@ -689,6 +699,9 @@ describe('capacity wave gates', () => {
       criticalLogMatches: 1,
       criticalEventMatches: 1,
       gatewayState: 'healthy',
+      gatewayUnpricedCalls: 1,
+      gatewayQuarantinedTransactions: 2,
+      gatewayOrphanTransactions: 0,
     });
   });
 });
@@ -1022,6 +1035,107 @@ describe('measured turn execution', () => {
       totalTokens: 14,
       totalCostUsd: 0.001,
       costCoverage: 'complete',
+    });
+  });
+
+  it('marks a terminal turn as failed when exact assistant output is absent', async () => {
+    const client = {
+      turns: {
+        startConversationTurn: vi.fn().mockResolvedValue({
+          messageId: 'message-1',
+          turnId: 'turn-1',
+          conversationId: 'conversation-1',
+        }),
+        get: vi.fn().mockResolvedValue({
+          turn: { id: 'turn-1', status: 'COMPLETED' },
+          messages: [{ role: 'user', content: 'Reply with BENCHMARK_OK' }],
+        }),
+      },
+    };
+    const hub = {
+      trackTurn: vi.fn().mockResolvedValue({
+        observation: {
+          terminalAtMs: 200,
+          eventCount: 3,
+          terminalType: 'RUN_FINISHED',
+        },
+        clientEventCounts: [3],
+        heartbeatCounts: [0],
+      }),
+      cancelTurn: vi.fn(),
+    };
+    const times = [100, 120];
+
+    const sample = await executeMeasuredTurn({
+      client: client as never,
+      hub,
+      runId: 'run-a',
+      stageName: 'exact-output',
+      harness: 'langgraph',
+      agentId: 'agent-1',
+      turnId: 'turn-1',
+      prompt: 'Reply with BENCHMARK_OK',
+      expectedOutput: 'BENCHMARK_OK',
+      timeoutMs: 1_000,
+      clockOffsetMs: 0,
+      now: () => times.shift()!,
+    });
+
+    expect(sample).toMatchObject({
+      outcome: 'error',
+      error: expect.stringMatching(/exact assistant output.*not persisted/i),
+    });
+  });
+
+  it('refreshes settled usage and recomputes stage summaries', async () => {
+    const client = {
+      turns: {
+        get: vi.fn().mockResolvedValue({
+          turn: {
+            status: 'COMPLETED',
+            usage: {
+              inputTokens: 10,
+              outputTokens: 5,
+              totalTokens: 15,
+              cost: {
+                totalUsd: 0.002,
+                knownUsd: 0.002,
+                coverage: 'complete',
+              },
+            },
+          },
+          messages: [],
+        }),
+      },
+    };
+    const sample: TurnSample = {
+      turnId: 'turn-1',
+      agentId: 'agent-1',
+      harness: 'langgraph',
+      outcome: 'completed',
+      eventCount: 4,
+      knownCostUsd: 0,
+      costCoverage: 'pending',
+    };
+    const result = {
+      stages: [{ samples: [sample], summary: summarizeTurnSamples([sample]) }],
+    };
+
+    const refreshed = await refreshPerformanceRunUsage(
+      client as never,
+      result as never,
+    );
+
+    expect(refreshed.stages[0]?.samples[0]).toMatchObject({
+      totalTokens: 15,
+      knownCostUsd: 0.002,
+      totalCostUsd: 0.002,
+      costCoverage: 'complete',
+    });
+    expect(refreshed.stages[0]?.summary.usage).toMatchObject({
+      totalTokens: 15,
+      knownCostUsd: 0.002,
+      pricedTurns: 1,
     });
   });
 });

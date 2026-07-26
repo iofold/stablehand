@@ -38,6 +38,15 @@ print(urllib.request.urlopen(request, timeout=10).read().decode(), end="")
 ' >"$OUTPUT_DIR/$PHASE-litellm-metrics.prom" 2>/dev/null || \
   : >"$OUTPUT_DIR/$PHASE-litellm-metrics.prom"
 
+if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
+  curl -fsS "$API_BASE/model-gateway/status" \
+    -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+    >"$OUTPUT_DIR/gateway-$PHASE.json" || \
+    printf '{"state":"unavailable"}\n' >"$OUTPUT_DIR/gateway-$PHASE.json"
+else
+  printf '{"state":"unavailable"}\n' >"$OUTPUT_DIR/gateway-$PHASE.json"
+fi
+
 if [[ "$PHASE" == "before" ]]; then
   exit 0
 fi
@@ -57,16 +66,11 @@ for component in orchestrator litellm litellm-db postgres minio; do
 done
 
 if [[ -n "${CTXMILL_API_TOKEN:-}" ]]; then
-  curl -fsS "$API_BASE/model-gateway/status" \
-    -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
-    >"$OUTPUT_DIR/gateway-after.json" || \
-    printf '{"state":"unavailable"}\n' >"$OUTPUT_DIR/gateway-after.json"
   curl -fsS "$API_BASE/sandbox/metrics" \
     -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
     >"$OUTPUT_DIR/sandbox-metrics-after.json" || \
     printf '{}\n' >"$OUTPUT_DIR/sandbox-metrics-after.json"
 else
-  printf '{"state":"unavailable"}\n' >"$OUTPUT_DIR/gateway-after.json"
   printf '{}\n' >"$OUTPUT_DIR/sandbox-metrics-after.json"
 fi
 

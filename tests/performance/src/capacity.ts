@@ -49,6 +49,7 @@ const CapacityRampSchema = z.strictObject({
   settleMs: z.number().int().nonnegative().default(5_000),
   pendingPodGraceSeconds: z.number().int().positive().default(30),
   prompt: z.string().trim().min(1),
+  expectedOutput: z.string().trim().min(1),
   gates: CapacityGateSchema,
   harnesses: z.array(CapacityHarnessSchema).min(1),
 });
@@ -124,6 +125,7 @@ export function buildCapacityWaveProfile(
   return parsePerformanceProfile({
     schemaVersion: 1,
     name: `${ramp.name}-c${concurrency}-r${runOrdinal}`,
+    expectedOutput: ramp.expectedOutput,
     target: ramp.target,
     requirements: {
       modelGateway: 'required',
@@ -265,6 +267,7 @@ export interface CapacityEvidenceInput {
   beforeEvents?: KubernetesList;
   events: KubernetesList;
   logs: string;
+  beforeGateway?: CapacityGatewayEvidence;
   gateway: CapacityGatewayEvidence;
 }
 
@@ -382,6 +385,12 @@ export function summarizeCapacityEvidence(
   input: CapacityEvidenceInput,
 ): CapacityWaveObservation {
   const turns = summarizeTurnSamples(input.turns);
+  const gatewayCounterDelta = (
+    field: 'unpricedCalls' | 'quarantinedTransactions' | 'orphanTransactions',
+  ): number => Math.max(
+    0,
+    (input.gateway[field] ?? 0) - (input.beforeGateway?.[field] ?? 0),
+  );
   return {
     errorRate: turns.errorRate,
     sseFanoutMismatches: turns.sseFanoutMismatches,
@@ -402,9 +411,8 @@ export function summarizeCapacityEvidence(
     criticalEventMatches: criticalEventCount(input.beforeEvents, input.events),
     gatewayState: input.gateway.state ?? 'unavailable',
     gatewayPendingCalls: input.gateway.pendingCalls ?? 0,
-    gatewayUnpricedCalls: input.gateway.unpricedCalls ?? 0,
-    gatewayQuarantinedTransactions:
-      input.gateway.quarantinedTransactions ?? 0,
-    gatewayOrphanTransactions: input.gateway.orphanTransactions ?? 0,
+    gatewayUnpricedCalls: gatewayCounterDelta('unpricedCalls'),
+    gatewayQuarantinedTransactions: gatewayCounterDelta('quarantinedTransactions'),
+    gatewayOrphanTransactions: gatewayCounterDelta('orphanTransactions'),
   };
 }

@@ -151,6 +151,16 @@ done
 "$ROOT_DIR/tests/performance/scripts/capture-dev2-operations.sh" \
   after "$OUTPUT_DIR" "$RUN_STARTED_AT"
 
+if (( runner_status == 0 )); then
+  "$BUN" "$ROOT_DIR/tests/performance/cli.ts" refresh \
+    --result "$OUTPUT_DIR/run.json" \
+    --output "$OUTPUT_DIR"
+  "$BUN" "$ROOT_DIR/tests/performance/cli.ts" finalize \
+    --result "$OUTPUT_DIR/run.json" \
+    --kubernetes "$OUTPUT_DIR/kubernetes.jsonl" \
+    --output "$OUTPUT_DIR"
+fi
+
 trace_window="$OUTPUT_DIR/run.json"
 if [[ ! -f "$trace_window" ]]; then
   trace_window="$OUTPUT_DIR/trace-window.json"

@@ -54,6 +54,7 @@ interface ExecuteMeasuredTurnOptions {
   conversationId?: string;
   turnId?: string;
   prompt: string;
+  expectedOutput?: string;
   timeoutMs: number;
   clockOffsetMs: number;
   now?: () => number;
@@ -149,6 +150,17 @@ export async function executeMeasuredTurn(
     );
     const { observation } = streamed;
     const usage = detail.turn.usage;
+    const terminal = terminalOutcome(detail.turn.status);
+    const assistantMessage = [...detail.messages]
+      .reverse()
+      .find((message) => message.role === 'assistant');
+    const outputError = terminal === 'completed' && options.expectedOutput !== undefined
+      ? assistantMessage === undefined || assistantMessage.content.trim().length === 0
+        ? 'Expected exact assistant output was not persisted'
+        : assistantMessage.content.trim() !== options.expectedOutput.trim()
+          ? 'Persisted assistant output did not match the exact expected output'
+          : undefined
+      : undefined;
     return {
       runId: options.runId,
       stageName: options.stageName,
@@ -157,7 +169,7 @@ export async function executeMeasuredTurn(
       conversationId: response.conversationId,
       sandboxSessionId: detail.turn.sandboxSessionId,
       harness: options.harness,
-      outcome: terminalOutcome(detail.turn.status),
+      outcome: outputError ? 'error' : terminal,
       admissionMs: admittedAt - submittedAt,
       timeToFirstEventMs: elapsed(observation.firstEventAtMs, submittedAt),
       timeToRunStartedMs: elapsed(observation.runStartedAtMs, submittedAt),
@@ -183,7 +195,7 @@ export async function executeMeasuredTurn(
       knownCostUsd: usage?.cost.knownUsd,
       totalCostUsd: usage?.cost.totalUsd ?? undefined,
       costCoverage: usage?.cost.coverage,
-      error: detail.turn.error,
+      error: detail.turn.error ?? outputError,
     };
   } catch (error) {
     options.hub.cancelTurn(turnId, error);
@@ -231,6 +243,35 @@ export interface PerformanceRunResult {
   completedAt: string;
   clock: PerformanceRunClock;
   stages: PerformanceStageResult[];
+}
+
+export async function refreshPerformanceRunUsage(
+  client: TurnClient,
+  result: PerformanceRunResult,
+): Promise<PerformanceRunResult> {
+  const stages: PerformanceStageResult[] = [];
+  for (const stage of result.stages) {
+    const samples = await mapConcurrent(stage.samples, 20, async (sample) => {
+      const detail = await client.turns.get(sample.agentId, sample.turnId);
+      const usage = detail.turn.usage;
+      if (!usage) return sample;
+      return {
+        ...sample,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        knownCostUsd: usage.cost.knownUsd,
+        totalCostUsd: usage.cost.totalUsd ?? undefined,
+        costCoverage: usage.cost.coverage,
+      };
+    });
+    stages.push({
+      ...stage,
+      samples,
+      summary: summarizeTurnSamples(samples),
+    });
+  }
+  return { ...result, stages };
 }
 
 interface RunPerformanceProfileOptions {
@@ -380,6 +421,7 @@ export async function runPerformanceProfile(
               agentId: agent.id,
               conversationId: laneConversations[lane]!,
               prompt: stage.prompt,
+              expectedOutput: options.profile.expectedOutput,
               timeoutMs: stage.timeoutMs,
               clockOffsetMs: clock.estimate.offsetMs,
               signal: options.signal,
@@ -465,6 +507,7 @@ export async function runPerformanceProfile(
                 conversationId,
                 turnId,
                 prompt: stage.prompt,
+                expectedOutput: options.profile.expectedOutput,
                 timeoutMs: stage.timeoutMs,
                 clockOffsetMs: clock.estimate.offsetMs,
                 signal: options.signal,

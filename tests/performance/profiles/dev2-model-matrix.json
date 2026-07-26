@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "dev2-model-matrix",
+  "expectedOutput": "MATRIX_OK",
   "target": {
     "apiBase": "https://stablehand.staging.example.com/api",
     "kubernetesNamespace": "ctxmill"
@@ -88,7 +89,7 @@
       "harnessConfig": {
         "provider": "google",
         "model": "gemini-3.6-flash",
-        "maxTokens": 64
+        "maxTokens": 256
       }
     },
     {
@@ -259,7 +260,7 @@
       "harnessConfig": {
         "provider": "openai",
         "model": "cf-qwen3-30b",
-        "maxTokens": 64
+        "maxTokens": 256
       }
     },
     {
@@ -275,7 +276,7 @@
       "harnessConfig": {
         "provider": "openai",
         "model": "cf-qwen3-30b",
-        "maxTokens": 64
+        "maxTokens": 256
       }
     },
     {
