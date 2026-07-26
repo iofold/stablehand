@@ -88,11 +88,15 @@ export function renderPerformanceReport(
       `- Peak node CPU: ${fixed(kubernetes.peakNodeCpuPercent)}%`,
       `- Peak node memory: ${fixed(kubernetes.peakNodeMemoryPercent)}%`,
       `- Peak sandbox pods: ${kubernetes.peakSandboxPods} `
-        + `(pending ${kubernetes.peakPendingSandboxPods}, active jobs ${kubernetes.peakActiveSandboxJobs})`,
+        + `(pending ${kubernetes.peakPendingSandboxPods}, sustained pending `
+        + `${kubernetes.peakPendingSandboxPodsAfterGrace}, active jobs `
+        + `${kubernetes.peakActiveSandboxJobs})`,
       `- Peak sandbox usage: ${fixed(kubernetes.peakSandboxCpuCores, 3)} CPU cores, `
         + `${megabytes(kubernetes.peakSandboxMemoryBytes)} MiB`,
       `- Peak orchestrator usage: ${fixed(kubernetes.peakOrchestratorCpuCores, 3)} CPU cores, `
         + `${megabytes(kubernetes.peakOrchestratorMemoryBytes)} MiB`,
+      `- Peak model gateway usage: ${fixed(kubernetes.peakModelGatewayCpuCores, 3)} CPU cores, `
+        + `${megabytes(kubernetes.peakModelGatewayMemoryBytes)} MiB`,
     );
   }
 

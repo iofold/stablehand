@@ -194,6 +194,10 @@ describe('model gateway deployment', () => {
       resolve(process.cwd(), 'deploy/k3s/dev2/manifests.yaml'),
       'utf8',
     );
+    const bootstrap = readFileSync(
+      resolve(process.cwd(), 'deploy/k3s/dev2/bootstrap-model-gateway.sh'),
+      'utf8',
+    );
 
     expect(deploy).toContain('deploy/compose/model-gateway/Dockerfile');
     expect(deploy).toContain('model-gateway.yaml');
@@ -202,6 +206,10 @@ describe('model gateway deployment', () => {
     expect(secrets).toContain('ctxmill-model-gateway-secrets');
     expect(secrets).toContain('CLOUDFLARE_ACCOUNT_ID');
     expect(secrets).toContain('CLOUDFLARE_API_KEY');
+    expect(secrets).toContain('LITELLM_RUNTIME_MAX_BUDGET_USD');
+    expect(bootstrap).toContain('"max_budget"');
+    expect(bootstrap).toContain('"budget_duration": "1d"');
+    expect(bootstrap).not.toContain('\\${');
     expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_ENABLED');
     expect(manifests).toContain('http://litellm.ctxmill.svc.cluster.local:4000');
     expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_RUNTIME_KEY');

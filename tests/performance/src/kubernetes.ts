@@ -20,6 +20,7 @@ export interface KubernetesResourceSample {
   nodeMetrics: KubernetesNodeQuantity[];
   podMetrics: KubernetesPodMetric[];
   pendingSandboxPods: number;
+  pendingSandboxPodsAfterGrace?: number;
   activeSandboxJobs: number;
 }
 
@@ -29,11 +30,14 @@ export interface KubernetesResourceSummary {
   peakNodeMemoryPercent: number;
   peakSandboxPods: number;
   peakPendingSandboxPods: number;
+  peakPendingSandboxPodsAfterGrace: number;
   peakActiveSandboxJobs: number;
   peakSandboxCpuCores: number;
   peakSandboxMemoryBytes: number;
   peakOrchestratorCpuCores: number;
   peakOrchestratorMemoryBytes: number;
+  peakModelGatewayCpuCores: number;
+  peakModelGatewayMemoryBytes: number;
 }
 
 const CPU_FACTORS: Readonly<Record<string, number>> = {
@@ -92,11 +96,14 @@ export function summarizeKubernetesSamples(
     peakNodeMemoryPercent: 0,
     peakSandboxPods: 0,
     peakPendingSandboxPods: 0,
+    peakPendingSandboxPodsAfterGrace: 0,
     peakActiveSandboxJobs: 0,
     peakSandboxCpuCores: 0,
     peakSandboxMemoryBytes: 0,
     peakOrchestratorCpuCores: 0,
     peakOrchestratorMemoryBytes: 0,
+    peakModelGatewayCpuCores: 0,
+    peakModelGatewayMemoryBytes: 0,
   };
 
   for (const sample of samples) {
@@ -121,6 +128,8 @@ export function summarizeKubernetesSamples(
     let sandboxMemoryBytes = 0;
     let orchestratorCpuCores = 0;
     let orchestratorMemoryBytes = 0;
+    let modelGatewayCpuCores = 0;
+    let modelGatewayMemoryBytes = 0;
     for (const pod of sample.podMetrics) {
       const cpu = pod.containers.reduce(
         (total, container) => total + parseCpuCores(container.cpu),
@@ -142,11 +151,19 @@ export function summarizeKubernetesSamples(
         orchestratorCpuCores += cpu;
         orchestratorMemoryBytes += memory;
       }
+      if (pod.labels['app.kubernetes.io/name'] === 'litellm') {
+        modelGatewayCpuCores += cpu;
+        modelGatewayMemoryBytes += memory;
+      }
     }
     summary.peakSandboxPods = Math.max(summary.peakSandboxPods, sandboxPods);
     summary.peakPendingSandboxPods = Math.max(
       summary.peakPendingSandboxPods,
       sample.pendingSandboxPods,
+    );
+    summary.peakPendingSandboxPodsAfterGrace = Math.max(
+      summary.peakPendingSandboxPodsAfterGrace,
+      sample.pendingSandboxPodsAfterGrace ?? 0,
     );
     summary.peakActiveSandboxJobs = Math.max(
       summary.peakActiveSandboxJobs,
@@ -167,6 +184,14 @@ export function summarizeKubernetesSamples(
     summary.peakOrchestratorMemoryBytes = Math.max(
       summary.peakOrchestratorMemoryBytes,
       orchestratorMemoryBytes,
+    );
+    summary.peakModelGatewayCpuCores = Math.max(
+      summary.peakModelGatewayCpuCores,
+      modelGatewayCpuCores,
+    );
+    summary.peakModelGatewayMemoryBytes = Math.max(
+      summary.peakModelGatewayMemoryBytes,
+      modelGatewayMemoryBytes,
     );
   }
 

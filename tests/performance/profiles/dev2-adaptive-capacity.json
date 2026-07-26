@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "name": "dev2-adaptive-capacity",
+  "target": {
+    "apiBase": "https://stablehand.staging.example.com/api",
+    "kubernetesNamespace": "ctxmill"
+  },
+  "levels": [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 80, 100],
+  "maxGlobalContainers": 100,
+  "discoveryRuns": 1,
+  "confirmationRuns": 3,
+  "sseClientsPerAgent": 2,
+  "settleMs": 5000,
+  "pendingPodGraceSeconds": 30,
+  "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+  "gates": {
+    "maxErrorRate": 0.02,
+    "maxTimeToFirstTokenP95Ms": 30000,
+    "maxCompletionP95Ms": 90000,
+    "maxNodeCpuPercent": 75,
+    "maxNodeMemoryPercent": 75,
+    "minTraceTurnCoverage": 0.95
+  },
+  "harnesses": [
+    {
+      "name": "deepagents-cold",
+      "harness": "langgraph",
+      "agentPrefix": "perf-adaptive-deepagents",
+      "timeoutMs": 180000,
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "pi-cold",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-adaptive-pi",
+      "timeoutMs": 180000,
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "thinkingLevel": "minimal"
+      }
+    }
+  ]
+}

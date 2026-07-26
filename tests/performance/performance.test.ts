@@ -28,6 +28,7 @@ import {
 import { mapConcurrent } from './src/pool.js';
 import { AgentStreamHub } from './src/stream-hub.js';
 import {
+  cleanupManagedSessions,
   executeMeasuredTurn,
   runPerformanceProfile,
 } from './src/runner.js';
@@ -36,6 +37,12 @@ import {
   parseMemoryBytes,
   summarizeKubernetesSamples,
 } from './src/kubernetes.js';
+import {
+  buildCapacityWaveProfile,
+  evaluateCapacityWave,
+  parseCapacityRamp,
+  summarizeCapacityEvidence,
+} from './src/capacity.js';
 import { renderPerformanceReport } from './src/report.js';
 import {
   CtxmillControlClient,
@@ -506,6 +513,184 @@ describe('performance profile', () => {
       peakSseConnections: 20,
     });
   });
+
+  it('ships a monotonic adaptive ramp through the global ceiling', () => {
+    const ramp = parseCapacityRamp(JSON.parse(readFileSync(
+      new URL('./profiles/dev2-adaptive-capacity.json', import.meta.url),
+      'utf8',
+    )));
+
+    expect(ramp.levels).toEqual([1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 80, 100]);
+    expect(ramp.maxGlobalContainers).toBe(100);
+    expect(new Set(ramp.harnesses.map((stage) => stage.harness))).toEqual(
+      new Set(['langgraph', 'pi-agent']),
+    );
+    expect(ramp.confirmationRuns).toBe(3);
+    const wave = buildCapacityWaveProfile(ramp, 8, 2);
+    expect(wave).toMatchObject({
+      name: 'dev2-adaptive-capacity-c8-r2',
+      requirements: { modelGateway: 'required', minGlobalContainers: 8 },
+      safety: { maxConcurrency: 8, maxTurns: 16 },
+      stages: [
+        { harness: 'langgraph', concurrency: 8, iterations: 1 },
+        { harness: 'pi-agent', concurrency: 8, iterations: 1 },
+      ],
+    });
+    const controller = readFileSync(
+      new URL('./scripts/run-dev2-adaptive-capacity.sh', import.meta.url),
+      'utf8',
+    );
+    expect(controller).toContain('set_limit "$temporary_limit"');
+    expect(controller).toContain('trap restore_limit EXIT INT TERM');
+    expect(controller).toContain('set_limit "$highest_passed"');
+    expect(controller).not.toContain('\\${');
+  });
+});
+
+describe('capacity wave gates', () => {
+  const healthy = {
+    errorRate: 0,
+    sseFanoutMismatches: 0,
+    timeToFirstTokenP95Ms: 8_000,
+    completionP95Ms: 12_000,
+    traceTurnCoverage: 1,
+    peakNodeCpuPercent: 55,
+    peakNodeMemoryPercent: 30,
+    peakPendingSandboxPods: 0,
+    activeSandboxJobsAfterSettle: 0,
+    podRestartDelta: 0,
+    oomKilledContainers: 0,
+    criticalLogMatches: 0,
+    gatewayState: 'healthy' as const,
+    gatewayPendingCalls: 0,
+    gatewayUnpricedCalls: 0,
+    gatewayQuarantinedTransactions: 0,
+    gatewayOrphanTransactions: 0,
+    criticalEventMatches: 0,
+  };
+
+  it('advances only when correctness, capacity, telemetry, and gateway gates pass', () => {
+    expect(evaluateCapacityWave(healthy, {
+      maxErrorRate: 0.02,
+      maxTimeToFirstTokenP95Ms: 30_000,
+      maxCompletionP95Ms: 90_000,
+      maxNodeCpuPercent: 75,
+      maxNodeMemoryPercent: 75,
+      minTraceTurnCoverage: 0.95,
+    })).toEqual({ decision: 'advance', violations: [] });
+  });
+
+  it('stops and explains every unsafe signal rather than running the next wave', () => {
+    const result = evaluateCapacityWave({
+      ...healthy,
+      errorRate: 0.1,
+      sseFanoutMismatches: 1,
+      traceTurnCoverage: 0.5,
+      peakPendingSandboxPods: 3,
+      podRestartDelta: 1,
+      criticalLogMatches: 2,
+      criticalEventMatches: 1,
+      gatewayState: 'degraded',
+      gatewayPendingCalls: 4,
+    }, {
+      maxErrorRate: 0.02,
+      maxTimeToFirstTokenP95Ms: 30_000,
+      maxCompletionP95Ms: 90_000,
+      maxNodeCpuPercent: 75,
+      maxNodeMemoryPercent: 75,
+      minTraceTurnCoverage: 0.95,
+    });
+
+    expect(result.decision).toBe('stop');
+    expect(result.violations).toEqual(expect.arrayContaining([
+      expect.stringMatching(/error rate/),
+      expect.stringMatching(/SSE fanout/),
+      expect.stringMatching(/trace coverage/),
+      expect.stringMatching(/Pending sandbox pods/),
+      expect.stringMatching(/pod restart/),
+      expect.stringMatching(/critical log/),
+      expect.stringMatching(/critical Kubernetes event/),
+      expect.stringMatching(/gateway state/),
+      expect.stringMatching(/pending gateway calls/),
+    ]));
+  });
+
+  it('derives restart, OOM, trace, log, and gateway evidence from raw artifacts', () => {
+    const summary = summarizeCapacityEvidence({
+      turns: [{
+        turnId: 'turn-1',
+        agentId: 'agent-1',
+        harness: 'langgraph',
+        outcome: 'completed',
+        timeToFirstTokenMs: 5_000,
+        completionMs: 8_000,
+        eventCount: 4,
+        sseClientEventCounts: [4, 4],
+      }, {
+        turnId: 'turn-2',
+        agentId: 'agent-2',
+        harness: 'pi-agent',
+        outcome: 'completed',
+        timeToFirstTokenMs: 7_000,
+        completionMs: 10_000,
+        eventCount: 5,
+        sseClientEventCounts: [5, 5],
+      }],
+      kubernetes: {
+        samples: 2,
+        peakNodeCpuPercent: 60,
+        peakNodeMemoryPercent: 40,
+        peakSandboxPods: 2,
+        peakPendingSandboxPods: 1,
+        peakPendingSandboxPodsAfterGrace: 0,
+        peakActiveSandboxJobs: 2,
+        peakSandboxCpuCores: 0.5,
+        peakSandboxMemoryBytes: 512,
+        peakOrchestratorCpuCores: 0.2,
+        peakOrchestratorMemoryBytes: 256,
+        peakModelGatewayCpuCores: 0.1,
+        peakModelGatewayMemoryBytes: 128,
+      },
+      traces: [
+        { turn_id: 'turn-1', name: 'ctxmill.turn.execute' },
+        { turn_id: 'turn-1', name: 'ctxmill.turn.delivery' },
+        { turn_id: 'turn-2', name: 'ctxmill.turn.execute' },
+      ],
+      beforePods: { items: [{ status: { containerStatuses: [{ restartCount: 1 }] } }] },
+      afterPods: { items: [{ status: { containerStatuses: [{
+        restartCount: 2,
+        lastState: { terminated: { reason: 'OOMKilled' } },
+      }] } }] },
+      afterJobs: { items: [{
+        metadata: { labels: { 'ctxmill.sandbox-session-id': 'session-1' } },
+        status: { active: 1 },
+      }] },
+      beforeEvents: { items: [] },
+      events: { items: [{ reason: 'FailedScheduling' }] },
+      logs: 'healthy\nFATAL worker exited\n',
+      gateway: {
+        state: 'healthy',
+        pendingCalls: 0,
+        unpricedCalls: 0,
+        quarantinedTransactions: 0,
+        orphanTransactions: 0,
+      },
+    });
+
+    expect(summary).toMatchObject({
+      errorRate: 0,
+      timeToFirstTokenP95Ms: 6_900,
+      completionP95Ms: 9_900,
+      traceTurnCoverage: 0.5,
+      peakPendingSandboxPods: 0,
+      activeSandboxJobsAfterSettle: 1,
+      podRestartDelta: 1,
+      oomKilledContainers: 1,
+      criticalLogMatches: 1,
+      criticalEventMatches: 1,
+      gatewayState: 'healthy',
+    });
+  });
 });
 
 describe('benchmark agent inventory', () => {
@@ -688,6 +873,26 @@ describe('agent SSE fanout hub', () => {
 });
 
 describe('measured turn execution', () => {
+  it('kills active benchmark sessions discovered after an aborted turn', async () => {
+    const kill = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      list: vi.fn().mockResolvedValue([
+        { id: 'session-owned', agentId: 'agent-owned' },
+        { id: 'session-other', agentId: 'agent-other' },
+      ]),
+      kill,
+    };
+
+    await cleanupManagedSessions(client as never, new Set(['agent-owned']), 1_000);
+
+    expect(kill).toHaveBeenCalledOnce();
+    expect(kill).toHaveBeenCalledWith(
+      'agent-owned',
+      'session-owned',
+      { timeoutMs: 1_000 },
+    );
+  });
+
   it('lets the API allocate a new conversation and records the returned identity', async () => {
     const startConversationTurn = vi.fn().mockResolvedValue({
       messageId: 'message-1',
@@ -850,6 +1055,10 @@ describe('Kubernetes resource samples', () => {
         name: 'ctxmill-session-1',
         labels: { 'ctxmill.sandbox-session-id': 'session-1' },
         containers: [{ name: 'sandbox', cpu: '750m', memory: '512Mi' }],
+      }, {
+        name: 'litellm-1',
+        labels: { 'app.kubernetes.io/name': 'litellm' },
+        containers: [{ name: 'litellm', cpu: '250m', memory: '400Mi' }],
       }],
       pendingSandboxPods: 1,
       activeSandboxJobs: 2,
@@ -864,6 +1073,8 @@ describe('Kubernetes resource samples', () => {
       peakActiveSandboxJobs: 2,
       peakSandboxCpuCores: 0.75,
       peakOrchestratorCpuCores: 0.5,
+      peakModelGatewayCpuCores: 0.25,
+      peakModelGatewayMemoryBytes: 400 * 1024 * 1024,
     });
   });
 });
@@ -971,11 +1182,14 @@ describe('performance report', () => {
       peakNodeMemoryPercent: 25,
       peakSandboxPods: 1,
       peakPendingSandboxPods: 0,
+      peakPendingSandboxPodsAfterGrace: 0,
       peakActiveSandboxJobs: 1,
       peakSandboxCpuCores: 0.75,
       peakSandboxMemoryBytes: 512 * 1024 * 1024,
       peakOrchestratorCpuCores: 0.5,
       peakOrchestratorMemoryBytes: 300 * 1024 * 1024,
+      peakModelGatewayCpuCores: 0.25,
+      peakModelGatewayMemoryBytes: 400 * 1024 * 1024,
     });
 
     expect(report).toContain('Time to first token');

@@ -22,6 +22,13 @@ tests/performance/scripts/run-dev2.sh \
   .tmp/performance/dev2-capacity-manual
 ```
 
+Run the gated edge search (the global limit is restored on interruption and is
+changed permanently only after three passes at the candidate capacity):
+
+```bash
+tests/performance/scripts/run-dev2-adaptive-capacity.sh
+```
+
 Inspect the exact load without a token or network call:
 
 ```bash
@@ -59,6 +66,10 @@ stops a stage when its measured turn error rate crosses the declared threshold.
   exact ceiling is 262 CTXMILL turns/model calls and 20 simultaneous SSE
   connections. Run it only after dev2 is configured for at least ten global
   sandboxes and a quiet test window is reserved.
+- `dev2-adaptive-capacity.json`: the controller contract for separate Deep
+  Agents and PI Agent cold waves at 1 through 100 concurrency. It is expanded
+  into one ordinary strict performance profile per wave so every result and
+  safety decision remains independently reproducible.
 
 Profiles are strict JSON. Every non-cold stage must declare at least one
 `warmupTurns`; this prevents a mislabeled "warm" or "resume" result from
@@ -186,6 +197,14 @@ runner.stdout.jsonl         machine-readable runner completion
 runner.stderr.log           runner diagnostics
 failure.json                present only when the runner failed
 ABORT                       present only when a safety ceiling tripped
+before/after-pods.json      restart and OOM comparison boundary
+before/after-events.json    namespace event delta boundary
+*-litellm-metrics.prom      gateway counters before and after the wave
+orchestrator.log            bounded service logs since wave start
+litellm.log                 bounded gateway logs since wave start
+gateway-after.json          post-settlement reconciliation health
+capacity-observation.json   normalized correctness/resource/telemetry facts
+capacity-decision.json      advance or stop plus exact violations
 ```
 
 Benchmark agents use stable names and carry
@@ -203,6 +222,19 @@ Capacity is the highest completed ramp stage before any of these gates fails:
 - node CPU or memory crosses the safety ceiling;
 - TTFT or completion p95 crosses the product SLO;
 - any SSE consumer misses or duplicates a terminal turn sequence.
+- fewer than 95% of measured turns have both `ctxmill.turn.execute` and
+  `ctxmill.turn.delivery` traces;
+- any service restart, OOM kill, critical namespace event, or critical bounded
+  log signature occurs during the wave;
+- the LiteLLM reconciler is unhealthy or leaves pending, unpriced,
+  quarantined, or orphan spend records.
+
+Pending pods are recorded immediately for diagnosis, but trip the gate only
+after the configured 30-second grace window. This separates ordinary
+scheduling latency from an unschedulable wave. The controller uses 100 only as
+the temporary search ceiling and stops at the first gate failure. On this
+single-node cluster, the Kubernetes pod ceiling is expected to become relevant
+before 100 concurrent sandbox pods.
 
 Repeat each candidate stage in at least three separate runs before calling it a
 capacity result. Report the exact harness versions, model/provider routes,

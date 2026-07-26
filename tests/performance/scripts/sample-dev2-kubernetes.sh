@@ -6,6 +6,8 @@ NAMESPACE="${CTXMILL_PERF_NAMESPACE:-ctxmill}"
 INTERVAL_SECONDS="${CTXMILL_PERF_SAMPLE_INTERVAL_SECONDS:-2}"
 MAX_CPU_PERCENT="${CTXMILL_PERF_MAX_NODE_CPU_PERCENT:-75}"
 MAX_MEMORY_PERCENT="${CTXMILL_PERF_MAX_NODE_MEMORY_PERCENT:-75}"
+MAX_PENDING_SANDBOX_PODS="${CTXMILL_PERF_MAX_PENDING_SANDBOX_PODS:-0}"
+PENDING_GRACE_SECONDS="${CTXMILL_PERF_PENDING_POD_GRACE_SECONDS:-30}"
 ABORT_FILE="${CTXMILL_PERF_ABORT_FILE:-}"
 KUBECTL="${KUBECTL:-kubectl}"
 
@@ -13,6 +15,7 @@ mkdir -p "$(dirname "$OUTPUT_PATH")"
 touch "$OUTPUT_PATH"
 
 empty_items='{"items":[]}'
+pending_started_epoch=0
 
 while true; do
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
@@ -60,6 +63,18 @@ while true; do
       .metadata.labels["ctxmill.sandbox-session-id"] != null
       and ((.status.active // 0) > 0)
     )] | length' <<<"$jobs")"
+  pending_sandbox_pods_after_grace=0
+  now_epoch="$(date +%s)"
+  if (( pending_sandbox_pods > 0 )); then
+    if (( pending_started_epoch == 0 )); then
+      pending_started_epoch="$now_epoch"
+    fi
+    if (( now_epoch - pending_started_epoch >= PENDING_GRACE_SECONDS )); then
+      pending_sandbox_pods_after_grace="$pending_sandbox_pods"
+    fi
+  else
+    pending_started_epoch=0
+  fi
 
   jq -nc \
     --arg timestamp "$timestamp" \
@@ -67,10 +82,16 @@ while true; do
     --argjson nodeMetrics "$normalized_node_metrics" \
     --argjson podMetrics "$normalized_pod_metrics" \
     --argjson pendingSandboxPods "$pending_sandbox_pods" \
+    --argjson pendingSandboxPodsAfterGrace "$pending_sandbox_pods_after_grace" \
     --argjson activeSandboxJobs "$active_sandbox_jobs" \
     '$ARGS.named' >>"$OUTPUT_PATH"
 
   if [[ -n "$ABORT_FILE" ]]; then
+    if (( pending_sandbox_pods_after_grace > MAX_PENDING_SANDBOX_PODS )); then
+      printf 'Pending sandbox pods %d exceeded safety ceiling %d after %ds grace\n' \
+        "$pending_sandbox_pods_after_grace" "$MAX_PENDING_SANDBOX_PODS" \
+        "$PENDING_GRACE_SECONDS" >"$ABORT_FILE"
+    fi
     while read -r node _cpu cpu_percent _memory memory_percent; do
       cpu_percent="${cpu_percent%\%}"
       memory_percent="${memory_percent%\%}"

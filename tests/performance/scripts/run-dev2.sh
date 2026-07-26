@@ -19,9 +19,16 @@ export CTXMILL_PERF_MAX_NODE_MEMORY_PERCENT="$(
 )"
 export CTXMILL_PERF_ABORT_FILE="$OUTPUT_DIR/ABORT"
 API_BASE="$(jq -r '.target.apiBase' "$PROFILE_PATH")"
+export CTXMILL_PERF_API_BASE="$API_BASE"
 MIN_GLOBAL_CONTAINERS="$(
   jq -r '.requirements.minGlobalContainers // 0' "$PROFILE_PATH"
 )"
+if [[ -n "${CTXMILL_PERF_RAMP_PATH:-}" ]]; then
+  export CTXMILL_PERF_PENDING_POD_GRACE_SECONDS="$(
+    jq -r '.pendingPodGraceSeconds' "$CTXMILL_PERF_RAMP_PATH"
+  )"
+  export CTXMILL_PERF_MAX_PENDING_SANDBOX_PODS=0
+fi
 
 umask 077
 mkdir -p "$OUTPUT_DIR"
@@ -38,6 +45,10 @@ if [[ -z "${CTXMILL_API_TOKEN:-}" ]]; then
   fi
   export CTXMILL_API_TOKEN="$(printf '%s' "$token_base64" | base64 -d)"
 fi
+
+RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+"$ROOT_DIR/tests/performance/scripts/capture-dev2-operations.sh" \
+  before "$OUTPUT_DIR"
 
 if (( MIN_GLOBAL_CONTAINERS > 0 )); then
   configured_global_containers="$(
@@ -94,19 +105,78 @@ wait "$sampler_pid" 2>/dev/null || true
 sampler_pid=''
 
 if (( runner_status != 0 )); then
+  "$BUN" "$ROOT_DIR/tests/performance/cli.ts" resources \
+    --kubernetes "$OUTPUT_DIR/kubernetes.jsonl" \
+    --output "$OUTPUT_DIR"
+else
+  "$BUN" "$ROOT_DIR/tests/performance/cli.ts" finalize \
+    --result "$OUTPUT_DIR/run.json" \
+    --kubernetes "$OUTPUT_DIR/kubernetes.jsonl" \
+    --output "$OUTPUT_DIR"
+fi
+
+settle_deadline=$((SECONDS + 45))
+while (( SECONDS < settle_deadline )); do
+  active_jobs="$(
+    kubectl -n "$CTXMILL_PERF_NAMESPACE" get jobs -o json \
+      | jq '[.items[] | select(
+        .metadata.labels["ctxmill.sandbox-session-id"] != null
+        and ((.status.active // 0) > 0)
+      )] | length'
+  )"
+  if (( active_jobs == 0 )); then
+    break
+  fi
+  sleep 2
+done
+
+sleep 12
+gateway_deadline=$((SECONDS + 45))
+: >"$OUTPUT_DIR/gateway-settlement.jsonl"
+while (( SECONDS < gateway_deadline )); do
+  gateway_status="$(
+    curl -fsS "$API_BASE/model-gateway/status" \
+      -H "Authorization: Bearer $CTXMILL_API_TOKEN" || \
+      printf '{"state":"unavailable","pendingCalls":-1}'
+  )"
+  jq -c --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+    '. + {observedAt:$observedAt}' <<<"$gateway_status" \
+    >>"$OUTPUT_DIR/gateway-settlement.jsonl"
+  if [[ "$(jq -r '.state' <<<"$gateway_status")" == "healthy" ]] \
+    && (( $(jq -r '.pendingCalls // -1' <<<"$gateway_status") == 0 )); then
+    break
+  fi
+  sleep 3
+done
+"$ROOT_DIR/tests/performance/scripts/capture-dev2-operations.sh" \
+  after "$OUTPUT_DIR" "$RUN_STARTED_AT"
+
+trace_window="$OUTPUT_DIR/run.json"
+if [[ ! -f "$trace_window" ]]; then
+  trace_window="$OUTPUT_DIR/trace-window.json"
+fi
+"$ROOT_DIR/tests/performance/scripts/collect-dev2-traces.sh" \
+  "$trace_window" \
+  "$OUTPUT_DIR/turn-ids.txt" \
+  "$OUTPUT_DIR/traces.jsonl"
+
+evaluation_status=0
+if [[ -n "${CTXMILL_PERF_RAMP_PATH:-}" ]]; then
+  set +e
+  "$BUN" "$ROOT_DIR/tests/performance/cli.ts" evaluate \
+    --ramp "$CTXMILL_PERF_RAMP_PATH" \
+    --output "$OUTPUT_DIR"
+  evaluation_status=$?
+  set -e
+fi
+
+if (( runner_status != 0 )); then
   printf 'Performance run failed; evidence is in %s\n' "$OUTPUT_DIR" >&2
   exit "$runner_status"
 fi
-
-"$BUN" "$ROOT_DIR/tests/performance/cli.ts" finalize \
-  --result "$OUTPUT_DIR/run.json" \
-  --kubernetes "$OUTPUT_DIR/kubernetes.jsonl" \
-  --output "$OUTPUT_DIR"
-
-sleep 10
-"$ROOT_DIR/tests/performance/scripts/collect-dev2-traces.sh" \
-  "$OUTPUT_DIR/run.json" \
-  "$OUTPUT_DIR/turn-ids.txt" \
-  "$OUTPUT_DIR/traces.jsonl"
+if (( evaluation_status != 0 )); then
+  printf 'Capacity gate stopped the ramp; evidence is in %s\n' "$OUTPUT_DIR" >&2
+  exit "$evaluation_status"
+fi
 
 printf 'Performance evidence: %s\n' "$OUTPUT_DIR"

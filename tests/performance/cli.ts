@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import {
   appendFile,
   mkdir,
@@ -17,8 +18,15 @@ import {
   createCtxmillControlClient,
 } from '../../packages/client/src/index.js';
 import {
+  buildCapacityWaveProfile,
+  evaluateCapacityWave,
+  parseCapacityRamp,
+  summarizeCapacityEvidence,
+} from './src/capacity.js';
+import {
   summarizeKubernetesSamples,
   type KubernetesResourceSample,
+  type KubernetesResourceSummary,
 } from './src/kubernetes.js';
 import {
   parsePerformanceProfile,
@@ -29,6 +37,7 @@ import {
   runPerformanceProfile,
   type PerformanceRunResult,
 } from './src/runner.js';
+import type { TurnSample } from './src/stats.js';
 
 function usage(): never {
   process.stderr.write(
@@ -36,7 +45,13 @@ function usage(): never {
       + '  bun tests/performance/cli.ts run --profile <profile.json> --output <directory>\n'
       + '  bun tests/performance/cli.ts finalize --result <run.json> '
       + '--kubernetes <kubernetes.jsonl> --output <directory>\n'
-      + '  bun tests/performance/cli.ts plan --profile <profile.json>\n',
+      + '  bun tests/performance/cli.ts plan --profile <profile.json>\n'
+      + '  bun tests/performance/cli.ts wave --ramp <ramp.json> '
+      + '--concurrency <count> --ordinal <count> --output <profile.json>\n'
+      + '  bun tests/performance/cli.ts evaluate --ramp <ramp.json> '
+      + '--output <evidence-directory>\n'
+      + '  bun tests/performance/cli.ts resources --kubernetes <jsonl> '
+      + '--output <evidence-directory>\n',
   );
   process.exit(2);
 }
@@ -51,6 +66,10 @@ async function readJsonLines<T>(path: string): Promise<T[]> {
     .split('\n')
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line) as T);
+}
+
+async function readText(path: string): Promise<string> {
+  return existsSync(path) ? readFile(path, 'utf8') : '';
 }
 
 function installAbortFileMonitor(
@@ -98,6 +117,7 @@ async function runCommand(values: Record<string, string | boolean | undefined>):
   process.once('SIGTERM', onSignal);
   const monitor = installAbortFileMonitor(controller);
   const turnsPath = `${output}/turns.jsonl`;
+  const startedAt = new Date().toISOString();
   await writeFile(turnsPath, '', { mode: 0o600 });
 
   try {
@@ -142,13 +162,26 @@ async function runCommand(values: Record<string, string | boolean | undefined>):
     })}\n`);
   } catch (error) {
     const normalized = error instanceof Error ? error : new Error(String(error));
+    const failedAt = new Date().toISOString();
+    const partialTurns = await readJsonLines<TurnSample>(turnsPath);
     await writeFile(
       `${output}/failure.json`,
       `${JSON.stringify({
         runId,
-        failedAt: new Date().toISOString(),
+        startedAt,
+        failedAt,
         error: normalized.message,
       }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    await writeFile(
+      `${output}/turn-ids.txt`,
+      `${partialTurns.map((sample) => sample.turnId).join('\n')}\n`,
+      { mode: 0o600 },
+    );
+    await writeFile(
+      `${output}/trace-window.json`,
+      `${JSON.stringify({ startedAt, completedAt: failedAt, stages: [] }, null, 2)}\n`,
       { mode: 0o600 },
     );
     throw normalized;
@@ -200,6 +233,98 @@ async function finalizeCommand(
   );
 }
 
+async function resourcesCommand(
+  values: Record<string, string | boolean | undefined>,
+): Promise<void> {
+  const kubernetesPath = typeof values.kubernetes === 'string'
+    ? values.kubernetes
+    : undefined;
+  const output = typeof values.output === 'string' ? values.output : undefined;
+  if (!kubernetesPath || !output) usage();
+  const kubernetes = summarizeKubernetesSamples(
+    await readJsonLines<KubernetesResourceSample>(kubernetesPath),
+  );
+  await writeFile(
+    `${output}/kubernetes-summary.json`,
+    `${JSON.stringify(kubernetes, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+}
+
+async function waveCommand(
+  values: Record<string, string | boolean | undefined>,
+): Promise<void> {
+  const rampPath = typeof values.ramp === 'string' ? values.ramp : undefined;
+  const concurrency = typeof values.concurrency === 'string'
+    ? Number(values.concurrency)
+    : Number.NaN;
+  const ordinal = typeof values.ordinal === 'string'
+    ? Number(values.ordinal)
+    : Number.NaN;
+  const output = typeof values.output === 'string' ? values.output : undefined;
+  if (
+    !rampPath
+    || !output
+    || !Number.isSafeInteger(concurrency)
+    || !Number.isSafeInteger(ordinal)
+    || ordinal < 1
+  ) usage();
+  const ramp = parseCapacityRamp(await readJson(rampPath));
+  const profile = buildCapacityWaveProfile(ramp, concurrency, ordinal);
+  await mkdir(dirname(output), { recursive: true, mode: 0o700 });
+  await writeFile(output, `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function evaluateCommand(
+  values: Record<string, string | boolean | undefined>,
+): Promise<void> {
+  const rampPath = typeof values.ramp === 'string' ? values.ramp : undefined;
+  const output = typeof values.output === 'string' ? values.output : undefined;
+  if (!rampPath || !output) usage();
+  const ramp = parseCapacityRamp(await readJson(rampPath));
+  const kubernetes = await readJson(
+    `${output}/kubernetes-summary.json`,
+  ) as KubernetesResourceSummary;
+  const logs = await Promise.all(
+    ['orchestrator', 'litellm', 'litellm-db', 'postgres', 'minio']
+      .map((component) => readText(`${output}/${component}.log`)),
+  );
+  const observation = summarizeCapacityEvidence({
+    turns: await readJsonLines<TurnSample>(`${output}/turns.jsonl`),
+    kubernetes,
+    traces: await readJsonLines(`${output}/traces.jsonl`),
+    beforePods: await readJson(`${output}/before-pods.json`) as never,
+    afterPods: await readJson(`${output}/after-pods.json`) as never,
+    afterJobs: await readJson(`${output}/after-jobs.json`) as never,
+    beforeEvents: await readJson(`${output}/before-events.json`) as never,
+    events: await readJson(`${output}/after-events.json`) as never,
+    logs: logs.join('\n'),
+    gateway: await readJson(`${output}/gateway-after.json`) as never,
+  });
+  const decision = evaluateCapacityWave(observation, ramp.gates);
+  await writeFile(
+    `${output}/capacity-observation.json`,
+    `${JSON.stringify(observation, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  await writeFile(
+    `${output}/capacity-decision.json`,
+    `${JSON.stringify(decision, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  await appendFile(
+    `${output}/report.md`,
+    '\n## Capacity gate\n\n'
+      + `Decision: **${decision.decision.toUpperCase()}**\n\n`
+      + (decision.violations.length === 0
+        ? 'All correctness, capacity, telemetry, and gateway gates passed.\n'
+        : decision.violations.map((violation) => `- ${violation}`).join('\n') + '\n'),
+    { mode: 0o600 },
+  );
+  process.stdout.write(`${JSON.stringify(decision)}\n`);
+  if (decision.decision === 'stop') process.exitCode = 3;
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   const parsed = parseArgs({
@@ -209,6 +334,9 @@ async function main(): Promise<void> {
       output: { type: 'string' },
       result: { type: 'string' },
       kubernetes: { type: 'string' },
+      ramp: { type: 'string' },
+      concurrency: { type: 'string' },
+      ordinal: { type: 'string' },
     },
     strict: true,
   });
@@ -222,6 +350,18 @@ async function main(): Promise<void> {
   }
   if (command === 'plan') {
     await planCommand(parsed.values);
+    return;
+  }
+  if (command === 'wave') {
+    await waveCommand(parsed.values);
+    return;
+  }
+  if (command === 'evaluate') {
+    await evaluateCommand(parsed.values);
+    return;
+  }
+  if (command === 'resources') {
+    await resourcesCommand(parsed.values);
     return;
   }
   usage();

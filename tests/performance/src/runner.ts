@@ -34,6 +34,10 @@ import {
 } from './stats.js';
 
 type TurnClient = Pick<CtxmillControlClient, 'turns'>;
+type SandboxSessionClient = Pick<
+  CtxmillControlClient['sandboxSessions'],
+  'list' | 'kill'
+>;
 
 interface TurnTrackingHub {
   trackTurn(turnId: string, timeoutMs: number): Promise<TurnStreamResult>;
@@ -54,6 +58,20 @@ interface ExecuteMeasuredTurnOptions {
   clockOffsetMs: number;
   now?: () => number;
   signal?: AbortSignal;
+}
+
+export async function cleanupManagedSessions(
+  client: SandboxSessionClient,
+  agentIds: ReadonlySet<string>,
+  timeoutMs: number,
+): Promise<number> {
+  const active = await client.list({ status: 'active' }, { timeoutMs });
+  const owned = active.filter((session) => agentIds.has(session.agentId));
+  await Promise.all(
+    owned.map((session) =>
+      client.kill(session.agentId, session.id, { timeoutMs })),
+  );
+  return owned.length;
 }
 
 function terminalOutcome(
@@ -556,6 +574,13 @@ export async function runPerformanceProfile(
             )),
         );
       }
+      await Promise.allSettled([
+        cleanupManagedSessions(
+          options.client.sandboxSessions,
+          new Set(agents.map((agent) => agent.id)),
+          stage.timeoutMs,
+        ),
+      ]);
       await Promise.allSettled(
         Array.from(hubs.values(), (hub) => hub.stop()),
       );
