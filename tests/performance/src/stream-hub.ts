@@ -161,10 +161,11 @@ export class AgentStreamHub {
         );
         const observation = tracker.observations[clientIndex]!;
         observeTurnEvent(observation, item.event, this.now());
-        if (
-          item.event.type === 'RUN_FINISHED'
-          || item.event.type === 'RUN_ERROR'
-        ) {
+        // A failed canonical turn is a two-frame terminal batch:
+        // RUN_ERROR followed by the authoritative RUN_FINISHED boundary.
+        // Waiting for the first frame races consumers and can hide the final
+        // frame from some fanout observations.
+        if (item.event.type === 'RUN_FINISHED') {
           tracker.terminalClients.add(clientIndex);
           if (tracker.terminalClients.size === this.options.clients) {
             clearTimeout(tracker.timeout);

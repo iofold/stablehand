@@ -27,7 +27,9 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.6-luna"
+        "model": "gpt-5.6-luna",
+        "maxTokens": 128,
+        "reasoning": "off"
       }
     },
     {
@@ -42,7 +44,9 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.6-luna"
+        "model": "gpt-5.6-luna",
+        "maxTokens": 128,
+        "thinkingLevel": "minimal"
       }
     },
     {
@@ -57,7 +61,8 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "anthropic",
-        "model": "claude-sonnet-5"
+        "model": "claude-sonnet-5",
+        "maxTokens": 1024
       }
     },
     {
@@ -73,7 +78,9 @@
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "gpt-5.6-luna"
+        "model": "gpt-5.6-luna",
+        "maxTokens": 128,
+        "reasoning": "off"
       }
     }
   ]

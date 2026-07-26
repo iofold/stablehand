@@ -198,6 +198,35 @@ describe('stream event observation', () => {
     });
   });
 
+  it('uses RUN_FINISHED as the authoritative terminal after RUN_ERROR', () => {
+    const observation: TurnEventObservation = {};
+
+    observeTurnEvent(observation, {
+      type: 'RUN_ERROR',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      message: 'provider rejected the request',
+      timestamp: 30,
+    }, 160);
+
+    expect(observation.terminalAtMs).toBeUndefined();
+    expect(observation.terminalType).toBeUndefined();
+
+    observeTurnEvent(observation, {
+      type: 'RUN_FINISHED',
+      runId: 'turn-1',
+      threadId: 'conversation-1',
+      usage: null,
+      timestamp: 31,
+    }, 170);
+
+    expect(observation).toMatchObject({
+      terminalAtMs: 170,
+      terminalServerEventAtMs: 31,
+      terminalType: 'RUN_FINISHED',
+    });
+  });
+
   it('does not count the echoed user message as time to first token', () => {
     const observation: TurnEventObservation = {};
 
@@ -513,12 +542,13 @@ describe('performance profile', () => {
       readFileSync(new URL(`./profiles/${name}.json`, import.meta.url), 'utf8'),
     ));
     const matrix = summarizePerformancePlan(readProfile('dev2-model-matrix'));
+    const smoke = readProfile('dev2-smoke');
     const capacity = readProfile('dev2-capacity');
     const fanout = readProfile('dev2-sse-fanout');
     const scale = readProfile('dev2-scale-10');
     const scalePlan = summarizePerformancePlan(scale);
     const gatewayProfiles = [
-      readProfile('dev2-smoke'),
+      smoke,
       capacity,
       fanout,
       scale,
@@ -577,6 +607,25 @@ describe('performance profile', () => {
     expect(volumetricStages.filter((stage) => stage.harness === 'pi-agent')
       .every((stage) => stage.harnessConfig.reasoning === true
         && stage.harnessConfig.thinkingLevel === 'minimal')).toBe(true);
+    const smokeLangGraphLunaStages = smoke.stages.filter((stage) =>
+      stage.harness === 'langgraph'
+      && stage.harnessConfig.model === 'gpt-5.6-luna');
+    expect(smokeLangGraphLunaStages).not.toHaveLength(0);
+    expect(smokeLangGraphLunaStages.every((stage) =>
+      stage.harnessConfig.maxTokens === 128
+      && stage.harnessConfig.reasoning === 'off')).toBe(true);
+    const smokePiLunaStages = smoke.stages.filter((stage) =>
+      stage.harness === 'pi-agent'
+      && stage.harnessConfig.model === 'gpt-5.6-luna');
+    expect(smokePiLunaStages).not.toHaveLength(0);
+    expect(smokePiLunaStages.every((stage) =>
+      stage.harnessConfig.maxTokens === 128
+      && stage.harnessConfig.thinkingLevel === 'minimal')).toBe(true);
+    const smokeClaudeStages = smoke.stages.filter((stage) =>
+      stage.harness === 'claude-agents');
+    expect(smokeClaudeStages).not.toHaveLength(0);
+    expect(smokeClaudeStages.every((stage) =>
+      stage.harnessConfig.maxTokens === 1024)).toBe(true);
     expect(gatewayProfiles.every((profile) =>
       profile.requirements.modelGateway === 'required')).toBe(true);
     expect(gatewayProfiles.flatMap((profile) => profile.stages).every((stage) =>
@@ -1041,6 +1090,65 @@ describe('agent SSE fanout hub', () => {
     expect(result.observation.firstTokenAtMs).toBeLessThan(
       result.observation.terminalAtMs!,
     );
+    await hub.stop();
+  });
+
+  it('collects the complete RUN_ERROR then RUN_FINISHED terminal batch for every consumer', async () => {
+    const queues = [new AsyncQueue<AgentEventStreamItem>(), new AsyncQueue<AgentEventStreamItem>()];
+    let opened = 0;
+    const hub = new AgentStreamHub({
+      agentId: 'agent-1',
+      clients: 2,
+      stream: ({ signal }) => queues[opened++]!.stream(signal),
+    });
+    const starting = hub.start(1_000);
+    for (const queue of queues) {
+      queue.push({
+        id: null,
+        event: {
+          type: 'CONNECTED',
+          agentId: 'agent-1',
+          latestSeq: 0,
+          timestamp: 1,
+        },
+      });
+    }
+    await starting;
+
+    const terminal = hub.trackTurn('turn-1', 1_000);
+    const errorEvent: AgentEventStreamItem = {
+      id: '000000000001',
+      event: {
+        type: 'RUN_ERROR',
+        runId: 'turn-1',
+        threadId: 'conversation-1',
+        message: 'provider rejected the request',
+        timestamp: 10,
+      },
+    };
+    const finishedEvent: AgentEventStreamItem = {
+      id: '000000000002',
+      event: {
+        type: 'RUN_FINISHED',
+        runId: 'turn-1',
+        threadId: 'conversation-1',
+        usage: null,
+        timestamp: 11,
+      },
+    };
+
+    queues[0]!.push(errorEvent);
+    queues[0]!.push(finishedEvent);
+    queues[1]!.push(errorEvent);
+    setTimeout(() => queues[1]!.push(finishedEvent), 10);
+
+    const result = await terminal;
+    expect(result.clientEventCounts).toEqual([2, 2]);
+    expect(result.clientEventSequences).toEqual([
+      ['000000000001:RUN_ERROR', '000000000002:RUN_FINISHED'],
+      ['000000000001:RUN_ERROR', '000000000002:RUN_FINISHED'],
+    ]);
+    expect(result.observation.terminalType).toBe('RUN_FINISHED');
     await hub.stop();
   });
 });

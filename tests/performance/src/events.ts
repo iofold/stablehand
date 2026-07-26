@@ -8,7 +8,7 @@ export interface TurnEventObservation {
   firstServerEventAtMs?: number;
   terminalServerEventAtMs?: number;
   eventCount?: number;
-  terminalType?: 'RUN_FINISHED' | 'RUN_ERROR';
+  terminalType?: 'RUN_FINISHED';
 }
 
 export function eventTurnId(
@@ -44,10 +44,7 @@ export function observeTurnEvent(
   ) {
     observation.firstTokenAtMs ??= receivedAtMs;
   }
-  if (
-    (event.type === 'RUN_FINISHED' || event.type === 'RUN_ERROR')
-    && observation.terminalAtMs === undefined
-  ) {
+  if (event.type === 'RUN_FINISHED' && observation.terminalAtMs === undefined) {
     observation.terminalAtMs = receivedAtMs;
     observation.terminalType = event.type;
     if (event.timestamp !== undefined) {
