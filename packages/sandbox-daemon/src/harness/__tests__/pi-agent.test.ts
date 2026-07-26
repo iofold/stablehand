@@ -378,7 +378,11 @@ describe('PIAgentHarness transcript syncing', () => {
       }),
     }));
 
-    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'test-google-key');
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith(
+      'google',
+      'test-google-key',
+      { allowNetwork: false },
+    );
     expect(mockSetRuntimeApiKey).toHaveBeenCalledOnce();
     expect(mockCreateAgentSession.mock.calls[0]?.[0]).toMatchObject({
       modelRuntime: mockModelRuntime,
@@ -529,7 +533,11 @@ describe('PIAgentHarness transcript syncing', () => {
           apiKey: 'runtime-key',
         },
       });
-      expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('openai', 'runtime-key');
+      expect(mockSetRuntimeApiKey).toHaveBeenCalledWith(
+        'openai',
+        'runtime-key',
+        { allowNetwork: false },
+      );
       expect(mockSetRuntimeApiKey).not.toHaveBeenCalledWith(
         'openai',
         'upstream-key-must-not-win',
@@ -600,7 +608,11 @@ describe('PIAgentHarness transcript syncing', () => {
           apiKey: 'runtime-key',
         },
       });
-      expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'runtime-key');
+      expect(mockSetRuntimeApiKey).toHaveBeenCalledWith(
+        'google',
+        'runtime-key',
+        { allowNetwork: false },
+      );
       expect(mockSetRuntimeApiKey).toHaveBeenCalledOnce();
       expect(mockSetRuntimeApiKey).not.toHaveBeenCalledWith(
         'google',
@@ -651,7 +663,11 @@ describe('PIAgentHarness transcript syncing', () => {
       }),
     }));
 
-    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'env-google-key');
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith(
+      'google',
+      'env-google-key',
+      { allowNetwork: false },
+    );
     expect(mockSetRuntimeApiKey).toHaveBeenCalledOnce();
 
     await session.close();
@@ -678,7 +694,11 @@ describe('PIAgentHarness transcript syncing', () => {
       }),
     }));
 
-    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'default-google-key');
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith(
+      'google',
+      'default-google-key',
+      { allowNetwork: false },
+    );
     expect(mockSetRuntimeApiKey).toHaveBeenCalledOnce();
 
     await session.close();

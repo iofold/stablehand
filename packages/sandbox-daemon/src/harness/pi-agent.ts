@@ -504,6 +504,7 @@ export class PIAgentHarness implements AgentHarness {
       await modelRuntime.setRuntimeApiKey(
         harnessConfig.provider,
         connection.apiKey,
+        { allowNetwork: false },
       );
     }
     const settingsManager = sdk.SettingsManager.inMemory();
