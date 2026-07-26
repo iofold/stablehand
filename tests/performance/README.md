@@ -122,9 +122,11 @@ LiteLLM alias is not proof that its provider credential works. The matrix
 uses explicit output/reasoning bounds, and the runner still records actual
 gateway-reconciled token and cost coverage.
 
-All capacity, scale, and SSE-fanout stages use the same `cf-glm-5.2` route for
-Deep Agents and PI Agent. This keeps harness comparisons like-for-like and
-keeps repetitive load off frontier-priced models. The bounded smoke profile
+All capacity, scale, and SSE-fanout stages use the same
+`cf-gpt-oss-120b` route for Deep Agents and PI Agent. It passed the bounded
+matrix with materially lower latency and spend than GLM 5.2, while keeping
+harness comparisons like-for-like and repetitive load off frontier-priced
+models. GLM 5.2 remains in the compatibility matrix. The bounded smoke profile
 uses GPT-5.6 Luna and Claude Sonnet 5 to retain current-provider coverage.
 
 ## LLM budget envelope
@@ -136,9 +138,9 @@ use these operating envelopes:
 | Profile | Planned turns | Estimated model calls | Expected spend | Reserve | Hard policy ceiling |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `dev2-model-matrix` | 27 | 31 | $0.20-$0.60 | $1 | $1 |
-| `dev2-scale-10` | 262 | 262 | $1.50-$3.00 | $5 | $6 |
-| Matrix + scale once | 289 | 293 | $1.70-$3.60 | $6 | $7 |
-| Full adaptive worst case | 1,182 | 1,182 | $8-$15 | $20 | $25 |
+| `dev2-scale-10` | 262 | 262 | $0.50-$1.50 | $5 | $6 |
+| Matrix + scale once | 289 | 293 | $0.70-$2.10 | $6 | $7 |
+| Full adaptive worst case | 1,182 | 1,182 | $2-$6 | $10 | $15 |
 
 The range assumes roughly 3,000-10,000 input tokens and short fixed responses.
 The current Claude models allow a larger output ceiling because adaptive

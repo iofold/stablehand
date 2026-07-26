@@ -513,12 +513,14 @@ describe('performance profile', () => {
       readFileSync(new URL(`./profiles/${name}.json`, import.meta.url), 'utf8'),
     ));
     const matrix = summarizePerformancePlan(readProfile('dev2-model-matrix'));
+    const capacity = readProfile('dev2-capacity');
+    const fanout = readProfile('dev2-sse-fanout');
     const scale = readProfile('dev2-scale-10');
     const scalePlan = summarizePerformancePlan(scale);
     const gatewayProfiles = [
       readProfile('dev2-smoke'),
-      readProfile('dev2-capacity'),
-      readProfile('dev2-sse-fanout'),
+      capacity,
+      fanout,
       scale,
     ];
 
@@ -562,9 +564,19 @@ describe('performance profile', () => {
     expect(piQwenStages).not.toHaveLength(0);
     expect(piQwenStages.every((stage) =>
       Number(stage.harnessConfig.maxTokens) >= 1024)).toBe(true);
-    expect(scale.stages.every((stage) =>
+    const volumetricStages = [capacity, fanout, scale]
+      .flatMap((profile) => profile.stages)
+      .filter((stage) => stage.harness !== 'claude-agents');
+    expect(volumetricStages.every((stage) =>
       stage.harnessConfig.provider === 'openai'
-      && stage.harnessConfig.model === 'cf-glm-5.2')).toBe(true);
+      && stage.harnessConfig.model === 'cf-gpt-oss-120b')).toBe(true);
+    expect(volumetricStages.every((stage) =>
+      stage.harnessConfig.maxTokens === 64)).toBe(true);
+    expect(volumetricStages.filter((stage) => stage.harness === 'langgraph')
+      .every((stage) => stage.harnessConfig.reasoning === 'off')).toBe(true);
+    expect(volumetricStages.filter((stage) => stage.harness === 'pi-agent')
+      .every((stage) => stage.harnessConfig.reasoning === true
+        && stage.harnessConfig.thinkingLevel === 'minimal')).toBe(true);
     expect(gatewayProfiles.every((profile) =>
       profile.requirements.modelGateway === 'required')).toBe(true);
     expect(gatewayProfiles.flatMap((profile) => profile.stages).every((stage) =>
