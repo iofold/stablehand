@@ -21,6 +21,51 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('CtxmillControlClient', () => {
+  it('exposes canonical schedule CRUD without embedding scheduler logic', async () => {
+    const schedule = {
+      id: 'schedule-1',
+      agentId: 'agent-1',
+      name: 'weekly-canary',
+      cronExpression: '0 9 * * 1',
+      timezone: 'UTC',
+      eventType: 'custom.schedule.weekly-canary',
+      payload: {},
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+      lastFiredAt: null,
+      nextRun: 2,
+    };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ schedules: [schedule] }))
+      .mockResolvedValueOnce(jsonResponse(schedule))
+      .mockResolvedValueOnce(jsonResponse(schedule))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.schedules.list()).resolves.toEqual({ schedules: [schedule] });
+    await expect(client.schedules.create({
+      agentId: 'agent-1',
+      name: 'weekly-canary',
+      cronExpression: '0 9 * * 1',
+      eventType: 'custom.schedule.weekly-canary',
+      payload: {},
+    })).resolves.toEqual(schedule);
+    await expect(client.schedules.update('schedule-1', { enabled: false })).resolves.toEqual(schedule);
+    await expect(client.schedules.delete('schedule-1')).resolves.toBeUndefined();
+
+    expect(fetchImpl.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ['https://ctxmill.test/api/schedules', 'GET'],
+      ['https://ctxmill.test/api/schedules', 'POST'],
+      ['https://ctxmill.test/api/schedules/schedule-1', 'PATCH'],
+      ['https://ctxmill.test/api/schedules/schedule-1', 'DELETE'],
+    ]);
+  });
+
   it('patches agents through the canonical partial-update contract', async () => {
     const updatedAgent = {
       id: 'agent-1',

@@ -9,6 +9,8 @@ import {
   FileWriteInputSchema,
   InterruptResolveInputSchema,
   SecretPutInputSchema,
+  ScheduleCreateInputSchema,
+  SchedulePatchInputSchema,
   WebhookCreateInputSchema,
   WebhookPatchInputSchema,
 } from '@ctxmill/contracts';
@@ -151,6 +153,8 @@ async function executeCommand(
       return fileCommand(action, third, args.flags);
     case 'triggers':
       return triggerCommand(action, third, args.flags);
+    case 'schedules':
+      return scheduleCommand(action, third, args.flags);
     case 'secrets':
       return secretCommand(action, third, fourth, args.flags);
     case 'settings':
@@ -502,6 +506,58 @@ async function triggerCommand(action: string | undefined, id: string | undefined
     }
     default:
       throw new UsageError(`Unknown triggers command: ${action}`);
+  }
+}
+
+async function scheduleCommand(action: string | undefined, id: string | undefined, flags: Flags): Promise<CommandResult> {
+  switch (action) {
+    case 'list':
+    case undefined:
+      return getCommand('schedules list', 'GET', '/api/schedules', formatSchedules, flags);
+    case 'get':
+      requireArg(id, 'scheduleId');
+      return getCommand('schedules get', 'GET', `/api/schedules/${encodeURIComponent(id)}`, formatJsonSummary, flags);
+    case 'create': {
+      const body = await loadBody(flags, {
+        required: true,
+        hint: 'schedule definition (name, cronExpression, eventType, optional agentId/timezone/payload/enabled)',
+      });
+      return requestCommand(
+        'schedules create',
+        'POST',
+        '/api/schedules',
+        body,
+        formatJsonSummary,
+        flags,
+        ScheduleCreateInputSchema,
+      );
+    }
+    case 'update': {
+      requireArg(id, 'scheduleId');
+      const body = await loadBody(flags, { required: true, hint: 'partial schedule definition' });
+      return requestCommand(
+        'schedules update',
+        'PATCH',
+        `/api/schedules/${encodeURIComponent(id)}`,
+        body,
+        formatJsonSummary,
+        flags,
+        SchedulePatchInputSchema,
+      );
+    }
+    case 'delete':
+      requireArg(id, 'scheduleId');
+      confirmDestructive(`schedules delete ${id}`, flags);
+      return requestCommand(
+        'schedules delete',
+        'DELETE',
+        `/api/schedules/${encodeURIComponent(id)}`,
+        undefined,
+        formatJsonSummary,
+        flags,
+      );
+    default:
+      throw new UsageError(`Unknown schedules command: ${action}`);
   }
 }
 
@@ -1465,6 +1521,30 @@ function formatTriggers(data: unknown): string {
   return table(rows, [['id', 'ID', 12], ['agent', 'AGENT', 12], ['type', 'EVENT_TYPE', 28], ['enabled', 'EN', 4], ['selector', 'SELECTOR', 40], ['task', 'TASK', 60]]);
 }
 
+function formatSchedules(data: unknown): string {
+  const list = isRecord(data) && Array.isArray(data.schedules) ? data.schedules : asArray(data);
+  const rows = list.map((schedule) => ({
+    id: getString(schedule, 'id'),
+    name: getString(schedule, 'name'),
+    agent: getString(schedule, 'agentId'),
+    cron: getString(schedule, 'cronExpression'),
+    timezone: getString(schedule, 'timezone'),
+    event: getString(schedule, 'eventType'),
+    enabled: getString(schedule, 'enabled'),
+    nextRun: getString(schedule, 'nextRun'),
+  }));
+  return table(rows, [
+    ['id', 'ID', 12],
+    ['name', 'NAME', 24],
+    ['agent', 'AGENT', 12],
+    ['cron', 'CRON', 18],
+    ['timezone', 'TIMEZONE', 24],
+    ['event', 'EVENT', 36],
+    ['enabled', 'ENABLED', 8],
+    ['nextRun', 'NEXT RUN', 16],
+  ]);
+}
+
 function helpText(invocation = DEFAULT_INVOCATION): string {
   return `ctxmill — agent-friendly ctxmill API CLI
 
@@ -1514,6 +1594,7 @@ Read commands:
   secrets list <agentId>
   webhooks list <agentId>
   triggers list|get ...
+  schedules list|get ...
 
 Mutation commands:
   agents create --from-file <path>
@@ -1555,6 +1636,10 @@ Mutation commands:
   triggers update <triggerId> --from-file <path>
   triggers delete <triggerId>                          [--yes]
   triggers emit --type <t> [--agent <id>] [--payload '{}']
+
+  schedules create --from-file <path>
+  schedules update <scheduleId> --from-file <path>
+  schedules delete <scheduleId>                        [--yes]
 
 Streaming commands:
   stream <agentId> [--limit N] [--timeout ms] [--until-type <t>] [--json]

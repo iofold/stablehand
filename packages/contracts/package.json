@@ -32,6 +32,10 @@
       "types": "./dist/harness.d.ts",
       "import": "./dist/harness.js"
     },
+    "./schedules": {
+      "types": "./dist/schedules.d.ts",
+      "import": "./dist/schedules.js"
+    },
     "./usage": {
       "types": "./dist/usage.d.ts",
       "import": "./dist/usage.js"

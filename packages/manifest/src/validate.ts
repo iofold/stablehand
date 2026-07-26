@@ -65,16 +65,10 @@ const manifestToolRefSchema = z.union([
   z.strictObject({ inline: manifestInlineToolSchema }),
 ]);
 
-const manifestScheduleSchema = z.strictObject({
-  cron: z.string().trim().min(1),
-  description: z.string().optional(),
-});
-
 const manifestTriggerSchema = z.strictObject({
   event: z.string().trim().min(1).optional(),
   filter: z.record(z.string(), z.unknown()).optional(),
   input: z.record(z.string(), z.string()).optional(),
-  schedule: manifestScheduleSchema.optional(),
 });
 
 const manifestEmitSchema = z.strictObject({

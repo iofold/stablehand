@@ -15,6 +15,9 @@ export interface RecoverableRuntime {
     start(): Promise<void>;
   };
   reconcileStrandedTurns(bootTimeMs: number): Promise<unknown>;
+  scheduleService: {
+    start(): Promise<void>;
+  };
 }
 
 export interface StartRuntimeApiOptions {
@@ -65,6 +68,10 @@ export async function startRuntimeApi(
   await runStartupStage(
     'Stranded-turn startup reconciliation',
     () => options.runtime.reconcileStrandedTurns(bootTimeMs),
+  );
+  await runStartupStage(
+    'Schedule service startup',
+    () => options.runtime.scheduleService.start(),
   );
   return options.server.listen(options.listen);
 }

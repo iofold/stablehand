@@ -127,6 +127,59 @@ describe('versioned operational CLI', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('validates canonical schedule mutations locally', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const accepted = await runOpsCli([
+      'schedules',
+      'create',
+      '--data',
+      JSON.stringify({
+        agentId: 'agent-1',
+        name: 'weekly-canary',
+        cronExpression: '0 9 * * 1',
+        eventType: 'custom.schedule.weekly-canary',
+        payload: {},
+      }),
+      '--dry-run',
+      '--json',
+    ]);
+    expect(accepted).toBe(0);
+    expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
+      data: {
+        endpoint: '/api/schedules',
+        body: {
+          agentId: 'agent-1',
+          name: 'weekly-canary',
+          cronExpression: '0 9 * * 1',
+          eventType: 'custom.schedule.weekly-canary',
+          payload: {},
+        },
+      },
+    });
+
+    const rejected = await runOpsCli([
+      'schedules',
+      'create',
+      '--data',
+      JSON.stringify({
+        agentId: 'agent-1',
+        name: 'invalid',
+        cronExpression: '* * * * *',
+        eventType: 'schedule.invalid',
+        payload: {},
+      }),
+      '--dry-run',
+      '--json',
+    ]);
+    expect(rejected).toBe(2);
+    expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toMatchObject({ error: 'usage_error' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('blocks destructive operations without an explicit confirmation', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

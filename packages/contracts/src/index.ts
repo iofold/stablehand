@@ -6,4 +6,5 @@ export * from './harness.js';
 export * from './ids.js';
 export * from './usage.js';
 export * from './model-gateway.js';
+export * from './schedules.js';
 export * from './webhooks.js';

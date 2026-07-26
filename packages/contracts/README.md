@@ -32,6 +32,12 @@ provider-specific harness contract. LangGraph's `reasoning: "off"` is an
 explicit request, including for configured subagents; it is not the same as
 omitting the field and inheriting the upstream model default.
 
+Schedule CRUD schemas are exported from `@ctxmill/contracts/schedules` and
+the package root. They own the stable API shape and reuse the canonical
+`custom.*` event name and 32 KiB payload contracts. Cron parsing and runtime
+clock ownership intentionally remain in the orchestrator, so importing the
+contracts package never loads Croner or scheduler state.
+
 Signed webhook helpers are exported from `@ctxmill/contracts/webhooks`.
 `verifyCtxmillWebhook()` validates the five canonical `X-*` headers, clock
 skew, all supplied current/previous secrets, the payload, and matching

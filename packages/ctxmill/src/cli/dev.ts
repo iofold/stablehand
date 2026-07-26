@@ -268,6 +268,7 @@ export async function startDev() {
     harnessSchemas: container.harnessSchemas,
     dataDir,
     triggerManager: container.triggerManager,
+    scheduleService: container.scheduleService,
     sse: container.sseManager,
     interrupts: container.interruptManager,
     secretProvider: container.secretProvider,
@@ -288,8 +289,9 @@ export async function startDev() {
   // containers BEFORE lifecycle reconciliation so reconciliation-driven
   // removals free real slots; reconcile stranded turns AFTER it so sandbox
   // rows are repaired first. Fastify listen runs onReady hooks (including
-  // durable HITL resumption), so it is intentionally inside this fail-closed
-  // barrier rather than preceding or racing it.
+  // durable HITL resumption), so schedule activation and listen are both
+  // intentionally inside this fail-closed barrier rather than preceding or
+  // racing recovery.
   await startRuntimeApi({
     server,
     runtime: container,

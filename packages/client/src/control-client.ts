@@ -44,6 +44,10 @@ import {
   ModelGatewayStatusSchema,
   SandboxSessionActionResponseSchema,
   SandboxSessionListResponseSchema,
+  ScheduleCreateInputSchema,
+  ScheduleListResponseSchema,
+  SchedulePatchInputSchema,
+  ScheduleSchema,
   SecretListResponseSchema,
   SecretPutInputSchema,
   SecretPutResponseSchema,
@@ -83,6 +87,9 @@ import {
   type InterruptResolveInput,
   type Message,
   type SandboxSession,
+  type Schedule,
+  type ScheduleCreateInput,
+  type SchedulePatchInput,
   type Turn,
   type Webhook,
   type WebhookCreateInput,
@@ -160,6 +167,7 @@ export class CtxmillControlClient {
   readonly turns;
   readonly conversations;
   readonly sandboxSessions;
+  readonly schedules;
   readonly interrupts;
   readonly events;
   readonly artifacts;
@@ -414,6 +422,61 @@ export class CtxmillControlClient {
         this.transport.request({
           method: 'POST',
           path: `/agents/${segment(agentId, 'agentId')}/sandbox-sessions/${segment(sandboxSessionId, 'sandboxSessionId')}/kill`,
+          responseSchema: VoidResponseSchema,
+          ...requestOptions,
+        }),
+    };
+
+    this.schedules = {
+      list: (requestOptions: CtxmillRequestOptions = {}): Promise<{ schedules: Schedule[] }> =>
+        this.transport.request({
+          method: 'GET',
+          path: '/schedules',
+          responseSchema: ScheduleListResponseSchema,
+          ...requestOptions,
+        }),
+      get: (
+        scheduleId: string,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<Schedule> =>
+        this.transport.request({
+          method: 'GET',
+          path: `/schedules/${segment(scheduleId, 'scheduleId')}`,
+          responseSchema: ScheduleSchema,
+          ...requestOptions,
+        }),
+      create: (
+        input: ScheduleCreateInput,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<Schedule> =>
+        this.transport.request({
+          method: 'POST',
+          path: '/schedules',
+          requestSchema: ScheduleCreateInputSchema,
+          responseSchema: ScheduleSchema,
+          json: input,
+          ...requestOptions,
+        }),
+      update: (
+        scheduleId: string,
+        input: SchedulePatchInput,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<Schedule> =>
+        this.transport.request({
+          method: 'PATCH',
+          path: `/schedules/${segment(scheduleId, 'scheduleId')}`,
+          requestSchema: SchedulePatchInputSchema,
+          responseSchema: ScheduleSchema,
+          json: input,
+          ...requestOptions,
+        }),
+      delete: (
+        scheduleId: string,
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<void> =>
+        this.transport.request({
+          method: 'DELETE',
+          path: `/schedules/${segment(scheduleId, 'scheduleId')}`,
           responseSchema: VoidResponseSchema,
           ...requestOptions,
         }),

@@ -14,6 +14,8 @@ import type { SandboxSessionManager } from '../../sandbox-session-manager.js';
 import type { SSEManager } from '../../sse.js';
 import type { ContainerLifecyclePolicy } from '../../container-lifecycle-policy.js';
 import type { CanonicalLog } from '../../canonical/canonical-log.js';
+import type { ScheduleService } from '../../../schedules/service.js';
+import type { EventTriggerManager } from '../../../events/trigger-manager.js';
 
 export type AgentHttpToolDefinition = HttpToolDefinition;
 
@@ -34,6 +36,10 @@ export interface AgentRouteOptions {
   turnStartupService: TurnStartupService;
   /** Durable canonical event spine; present when the container wired one (ADR-015). */
   canonicalLog?: CanonicalLog;
+  /** Container-owned recurring clocks, fenced before an agent is deleted. */
+  scheduleService?: Pick<ScheduleService, 'stopForAgent'>;
+  /** Loaded event triggers, fenced before an agent is deleted. */
+  triggerManager?: Pick<EventTriggerManager, 'stopForAgent'>;
 }
 
 export interface AgentSubRouteOptions extends AgentRouteOptions {

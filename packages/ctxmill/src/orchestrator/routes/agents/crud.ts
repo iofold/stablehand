@@ -228,6 +228,8 @@ export async function crudRoutes(
     containerManager,
     sessionManager,
     canonicalLog,
+    scheduleService,
+    triggerManager,
     loadAgent,
   } = opts;
 
@@ -663,6 +665,11 @@ export async function crudRoutes(
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
+      // Fail closed at the first deletion boundary: fence new schedule and
+      // trigger dispatch while the remaining agent-owned runtime is torn down.
+      const triggerDrain = triggerManager?.stopForAgent(id);
+      const scheduleDrain = scheduleService?.stopForAgent(id);
+      await Promise.all([triggerDrain, scheduleDrain]);
       if (toolRegistry) {
         toolRegistry.removeProvider(getAgentHttpToolProviderName(id));
         await toolRegistry.refresh();

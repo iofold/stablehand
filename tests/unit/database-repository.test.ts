@@ -121,6 +121,7 @@ describe('DatabaseRepository', () => {
         'pending_interrupts',
         'sandbox_session_lifecycle_operations',
         'sandbox_sessions',
+        'schedules',
         'secrets',
         'spine_cursors',
         'suspended_sessions',
@@ -2367,6 +2368,69 @@ describe('DatabaseRepository', () => {
       });
     });
 
+    it('persists schedule CRUD, firing timestamps, and unique names', async () => {
+      const agent = await repo.createAgent({
+        name: 'Schedule Repository Agent',
+        harness: 'langgraph',
+        harnessConfig: JSON.stringify({ model: 'gpt-5.4-mini' }),
+        systemPrompt: 'Schedule persistence test',
+        tools: [],
+      });
+      const created = await repo.createSchedule({
+        agentId: agent.id,
+        name: 'repository-weekly-canary',
+        cronExpression: '0 9 * * 1',
+        timezone: 'UTC',
+        eventType: 'custom.schedule.repository-weekly-canary',
+        payload: { source: 'repository-test' },
+        enabled: true,
+      });
+
+      expect(await repo.getSchedule(created.id)).toMatchObject({
+        agentId: agent.id,
+        name: 'repository-weekly-canary',
+        lastFiredAt: null,
+      });
+      expect(await repo.listSchedules()).toContainEqual(created);
+
+      const global = await repo.createSchedule({
+        name: 'repository-global-clock',
+        cronExpression: '0 * * * *',
+        timezone: 'UTC',
+        eventType: 'custom.schedule.repository-global-clock',
+        payload: {},
+        enabled: true,
+      });
+      expect(global.agentId).toBeNull();
+
+      await expect(repo.createSchedule({
+        agentId: agent.id,
+        name: 'repository-weekly-canary',
+        cronExpression: '0 10 * * 1',
+        timezone: 'UTC',
+        eventType: 'custom.schedule.duplicate',
+        payload: {},
+        enabled: true,
+      })).rejects.toSatisfy((error: unknown) => (
+        isUniqueConstraintViolation(error, 'idx_schedules_name')
+      ));
+
+      const updated = await repo.updateSchedule(created.id, {
+        enabled: false,
+        payload: { source: 'updated' },
+      });
+      expect(updated).toMatchObject({
+        enabled: false,
+        payload: { source: 'updated' },
+      });
+
+      await repo.markScheduleFired(created.id, 1234);
+      expect(await repo.getSchedule(created.id)).toMatchObject({ lastFiredAt: 1234 });
+      await expect(repo.deleteSchedule(created.id)).resolves.toBe(true);
+      await expect(repo.deleteSchedule(global.id)).resolves.toBe(true);
+      await expect(repo.getSchedule(created.id)).resolves.toBeUndefined();
+    });
+
     it('atomically claims due callbacks and only the active claim can complete', async () => {
       const { agent, turn } = await createRuntimeTurn('Callback Claim');
       const now = Date.now();
@@ -2491,6 +2555,7 @@ describe('DatabaseRepository', () => {
       expect(upserted.resolvedAction).toBeNull();
       expect(upserted.resolvedData).toBeNull();
       expect(upserted.toolCallId).toBe('tool-call-2');
+      await repo.resolveInterrupt('interrupt-cas-1', 'reject');
     });
 
     it('lists durable interrupts newest-first with cross-agent filters and cursor pagination', async () => {

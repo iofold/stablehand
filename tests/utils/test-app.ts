@@ -68,6 +68,7 @@ function defaultServerOptions(container: AppContainer, dataDir: string): ServerO
     eventBus: container.eventBus,
     harnessSchemas: container.harnessSchemas,
     triggerManager: container.triggerManager,
+    scheduleService: container.scheduleService,
     sse: container.sseManager,
     interrupts: container.interruptManager,
     secretProvider: container.secretProvider,

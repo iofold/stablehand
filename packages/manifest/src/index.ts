@@ -11,7 +11,6 @@ export type {
   ManifestMCPTool,
   ManifestInlineTool,
   ManifestTrigger,
-  ManifestSchedule,
   ManifestEmit,
   ManifestHITL,
   ManifestApproval,

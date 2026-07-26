@@ -11,11 +11,12 @@ function deferred() {
 }
 
 describe('runtime API startup barrier', () => {
-  it('awaits accounting, lifecycle, and stranded-turn recovery before listen/onReady', async () => {
+  it('awaits recovery and scheduler activation before listen/onReady', async () => {
     const order: string[] = [];
     const accounting = deferred();
     const lifecycle = deferred();
     const turns = deferred();
+    const schedules = deferred();
     const listen = vi.fn(async () => {
       order.push('listen');
       return 'http://127.0.0.1:3001';
@@ -43,6 +44,12 @@ describe('runtime API startup barrier', () => {
           await turns.promise;
           return { failed: 0, redispatched: 0, skippedHitlParked: 0 };
         }),
+        scheduleService: {
+          start: vi.fn(async () => {
+            order.push('schedules');
+            await schedules.promise;
+          }),
+        },
       },
       listen: { port: 3001, host: '0.0.0.0' },
       bootTimeMs: 12_345,
@@ -62,8 +69,23 @@ describe('runtime API startup barrier', () => {
     expect(listen).not.toHaveBeenCalled();
     turns.resolve();
 
+    await vi.waitFor(() => expect(order).toEqual([
+      'accounting',
+      'lifecycle',
+      'turns',
+      'schedules',
+    ]));
+    expect(listen).not.toHaveBeenCalled();
+    schedules.resolve();
+
     await expect(startup).resolves.toBe('http://127.0.0.1:3001');
-    expect(order).toEqual(['accounting', 'lifecycle', 'turns', 'listen']);
+    expect(order).toEqual([
+      'accounting',
+      'lifecycle',
+      'turns',
+      'schedules',
+      'listen',
+    ]);
     expect(listen).toHaveBeenCalledWith({ port: 3001, host: '0.0.0.0' });
   });
 
@@ -82,11 +104,43 @@ describe('runtime API startup barrier', () => {
         reconcileStrandedTurns: vi.fn().mockRejectedValue(
           new Error('database unavailable'),
         ),
+        scheduleService: {
+          start: vi.fn().mockResolvedValue(undefined),
+        },
       },
       listen: { port: 3001, host: '0.0.0.0' },
       bootTimeMs: 12_345,
     })).rejects.toThrow(
       'Stranded-turn startup reconciliation failed: database unavailable',
+    );
+    expect(listen).not.toHaveBeenCalled();
+  });
+
+  it('fails closed without listening when schedule activation fails', async () => {
+    const listen = vi.fn();
+
+    await expect(startRuntimeApi({
+      server: { listen },
+      runtime: {
+        containerManager: {
+          rehydrateAccounting: vi.fn().mockResolvedValue(0),
+        },
+        lifecyclePolicy: {
+          start: vi.fn().mockResolvedValue(undefined),
+        },
+        reconcileStrandedTurns: vi.fn().mockResolvedValue({
+          failed: 0,
+          redispatched: 0,
+          skippedHitlParked: 0,
+        }),
+        scheduleService: {
+          start: vi.fn().mockRejectedValue(new Error('invalid persisted cron')),
+        },
+      },
+      listen: { port: 3001, host: '0.0.0.0' },
+      bootTimeMs: 12_345,
+    })).rejects.toThrow(
+      'Schedule service startup failed: invalid persisted cron',
     );
     expect(listen).not.toHaveBeenCalled();
   });

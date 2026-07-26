@@ -43,6 +43,8 @@ import type {
   SandboxSessionLifecycleOperation,
   SandboxSessionLifecycleOperationRow,
   SandboxSessionRow,
+  ScheduleInsert,
+  ScheduleRow,
   SystemSettingRow,
   SpineCursorRow,
   TriggerFiringRow,
@@ -73,6 +75,7 @@ export type {
   SandboxSessionLifecycleOperation,
   SandboxSessionLifecycleOperationRow,
   SandboxSessionRow,
+  ScheduleRow,
   SpineCursorRow,
   SystemSettingRow,
   TurnStartRequestRow,
@@ -4289,6 +4292,62 @@ export class DatabaseRepository {
       ),
     });
     return Boolean(row);
+  }
+
+  // ── Schedules ───────────────────────────────────────────
+
+  async listSchedules(): Promise<ScheduleRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.schedules)
+      .orderBy(asc(this.schema.schedules.createdAt), asc(this.schema.schedules.id));
+  }
+
+  async getSchedule(id: string): Promise<ScheduleRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(this.schema.schedules)
+      .where(eq(this.schema.schedules.id, id));
+    return row;
+  }
+
+  async createSchedule(data: ScheduleInsert): Promise<ScheduleRow> {
+    const sanitized = sanitizeTypedDbValue(data, 'schedules.insert');
+    return this.insertOne(
+      this.db.insert(this.schema.schedules).values(sanitized).returning(),
+      'schedule',
+    );
+  }
+
+  async updateSchedule(
+    id: string,
+    updates: Partial<Omit<
+      ScheduleInsert,
+      'id' | 'agentId' | 'createdAt' | 'updatedAt' | 'lastFiredAt'
+    >>,
+  ): Promise<ScheduleRow | undefined> {
+    const sanitized = sanitizeTypedDbValue(updates, 'schedules.update');
+    const [row] = await this.db
+      .update(this.schema.schedules)
+      .set({ ...sanitized, updatedAt: Date.now() })
+      .where(eq(this.schema.schedules.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteSchedule(id: string): Promise<boolean> {
+    const rows = await this.db
+      .delete(this.schema.schedules)
+      .where(eq(this.schema.schedules.id, id))
+      .returning({ id: this.schema.schedules.id });
+    return rows.length > 0;
+  }
+
+  async markScheduleFired(id: string, firedAt: number): Promise<void> {
+    await this.db
+      .update(this.schema.schedules)
+      .set({ lastFiredAt: firedAt })
+      .where(eq(this.schema.schedules.id, id));
   }
 
   // ── Pending Interrupts (Durable HITL) ──────────────────

@@ -80,6 +80,8 @@ Webhook-valid runtime event names include `turn.started`, `turn.completed`,
 | GET/POST | `/api/triggers` | List/create event triggers |
 | GET/PUT/DELETE | `/api/triggers/:id` | Manage one trigger |
 | POST | `/api/triggers/emit` | Emit custom event |
+| GET/POST | `/api/schedules` | List/create recurring schedules |
+| GET/PATCH/DELETE | `/api/schedules/:id` | Manage one schedule |
 
 ## Artifacts and workspace files
 
@@ -107,4 +109,4 @@ File routes block sensitive paths and cap read size. Treat workspace file output
 | Can it resume? | `agent_checkpoints`, `sandbox_sessions.checkpointRef` |
 | What tool failed? | `messages.toolCalls`, `messages.parts`, `event_store`, `pending_interrupts` |
 | What artifacts were produced? | artifact repository and `/api/artifacts` |
-| What event chain fired? | `event_triggers`, `scheduled_events`, `event_store` |
+| What event chain fired? | `schedules`, `event_triggers`, `trigger_firings`, `event_store` |

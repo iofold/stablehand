@@ -543,6 +543,224 @@ describe('Events and Triggers Integration', () => {
     });
   });
 
+  describe('Schedules API', () => {
+    it('skips downtime, rehydrates, and delivers a Croner fire through events and webhooks', async () => {
+      const scheduleAgentId = agentId || await createAgent('Schedule Integration Agent');
+      const suffix = Date.now().toString(36);
+      const eventType = `custom.schedule.integration-${suffix}`;
+      const scheduleName = `integration-${suffix}`;
+      const signingSecret = 'schedule-integration-signing-secret';
+      const fetchDelivery = vi.fn(async () => new Response(null, { status: 204 }));
+      const previousFetch = container.callbackDispatcher.fetchFn;
+      const launchTriggeredTurn = vi.spyOn(
+        container.turnStartupService,
+        'launchPreparedTurn',
+      ).mockResolvedValue(undefined);
+      container.callbackDispatcher.fetchFn = fetchDelivery;
+      await container.scheduleService.stop();
+
+      let scheduleId: string | undefined;
+      let scheduleTriggerId: string | undefined;
+      try {
+        const trigger = await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: {
+            agentId: scheduleAgentId,
+            eventType,
+            selector: { probe: suffix },
+            taskTemplate: 'Scheduled probe {{payload.probe}}',
+            enabled: true,
+          },
+        });
+        expect(trigger.statusCode).toBe(201);
+        scheduleTriggerId = trigger.json().id;
+
+        const subscribed = await app.inject({
+          method: 'POST',
+          url: `/api/agents/${scheduleAgentId}/webhooks`,
+          payload: {
+            url: 'https://pack-b.test/hooks/schedule',
+            events: [eventType],
+            secret: signingSecret,
+          },
+        });
+        expect(subscribed.statusCode).toBe(201);
+
+        const created = await app.inject({
+          method: 'POST',
+          url: '/api/schedules',
+          payload: {
+            agentId: scheduleAgentId,
+            name: scheduleName,
+            cronExpression: '* * * * * *',
+            timezone: 'UTC',
+            eventType,
+            payload: { probe: suffix },
+          },
+        });
+        expect(created.statusCode).toBe(201);
+        scheduleId = created.json().id;
+        expect(created.json()).toMatchObject({
+          name: scheduleName,
+          enabled: true,
+          lastFiredAt: null,
+        });
+        expect(created.json().nextRun).toEqual(expect.any(Number));
+
+        // Persisted while the scheduler is down: elapsed fire times are not replayed.
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        const whileStopped = await app.inject({
+          method: 'GET',
+          url: `/api/events?type=${encodeURIComponent(eventType)}`,
+        });
+        expect(whileStopped.json().events).toEqual([]);
+
+        await container.scheduleService.start();
+        let persistedEvent: Record<string, unknown> | undefined;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          await container.callbackDispatcher.processPending();
+          const events = await app.inject({
+            method: 'GET',
+            url: `/api/events?type=${encodeURIComponent(eventType)}`,
+          });
+          persistedEvent = events.json().events[0];
+          if (
+            persistedEvent
+            && fetchDelivery.mock.calls.length > 0
+            && launchTriggeredTurn.mock.calls.length > 0
+          ) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        expect(persistedEvent).toMatchObject({
+          type: eventType,
+          agentId: scheduleAgentId,
+        });
+        expect(fetchDelivery.mock.calls.length).toBeGreaterThan(0);
+        expect(launchTriggeredTurn).toHaveBeenCalledWith(
+          expect.objectContaining({ taskDescription: `Scheduled probe ${suffix}` }),
+          scheduleAgentId,
+          expect.any(Object),
+        );
+        expect(await container.db.hasTriggerFiring(
+          scheduleTriggerId,
+          Number(persistedEvent?.seq),
+        )).toBe(true);
+        const [, deliveryInit] = fetchDelivery.mock.calls[0]!;
+        const headers = new Headers(deliveryInit?.headers);
+        const verified = await verifyCtxmillWebhook({
+          headers,
+          rawBody: String(deliveryInit?.body),
+          secrets: signingSecret,
+          nowSeconds: Number(headers.get('X-Webhook-Timestamp')),
+        });
+        expect(verified).toMatchObject({
+          valid: true,
+          payload: {
+            type: eventType,
+            agentId: scheduleAgentId,
+            payload: { probe: suffix },
+          },
+        });
+
+        const disabled = await app.inject({
+          method: 'PATCH',
+          url: `/api/schedules/${scheduleId}`,
+          payload: { enabled: false },
+        });
+        expect(disabled.statusCode).toBe(200);
+        expect(disabled.json()).toMatchObject({
+          enabled: false,
+          nextRun: null,
+        });
+        expect(disabled.json().lastFiredAt).toEqual(expect.any(Number));
+      } finally {
+        if (scheduleId) {
+          await app.inject({
+            method: 'DELETE',
+            url: `/api/schedules/${scheduleId}`,
+          });
+        }
+        if (scheduleTriggerId) {
+          await app.inject({
+            method: 'DELETE',
+            url: `/api/triggers/${scheduleTriggerId}`,
+          });
+        }
+        await container.scheduleService.start();
+        container.callbackDispatcher.fetchFn = previousFetch;
+        launchTriggeredTurn.mockRestore();
+      }
+    }, 10_000);
+
+    it('stops recurring fires before an agent is hard-deleted', async () => {
+      await container.scheduleService.start();
+      const doomedAgentId = await createAgent(`Scheduled Delete ${Date.now()}`);
+      const suffix = Date.now().toString(36);
+      const eventType = `custom.schedule.deleted-agent-${suffix}`;
+      const launchTriggeredTurn = vi.spyOn(
+        container.turnStartupService,
+        'launchPreparedTurn',
+      ).mockResolvedValue(undefined);
+      const trigger = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          agentId: doomedAgentId,
+          eventType,
+          selector: { probe: suffix },
+          taskTemplate: 'Deletion probe {{payload.probe}}',
+          enabled: true,
+        },
+      });
+      expect(trigger.statusCode).toBe(201);
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/schedules',
+        payload: {
+          agentId: doomedAgentId,
+          name: `deleted-agent-${suffix}`,
+          cronExpression: '* * * * * *',
+          timezone: 'UTC',
+          eventType,
+          payload: { probe: suffix },
+        },
+      });
+      expect(created.statusCode).toBe(201);
+
+      try {
+        await vi.waitFor(
+          () => expect(launchTriggeredTurn).toHaveBeenCalledOnce(),
+          { timeout: 2_000, interval: 25 },
+        );
+        launchTriggeredTurn.mockClear();
+
+        const deleted = await app.inject({
+          method: 'DELETE',
+          url: `/api/agents/${doomedAgentId}`,
+        });
+        expect(deleted.statusCode).toBe(204);
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+        expect(launchTriggeredTurn).not.toHaveBeenCalled();
+        const events = await app.inject({
+          method: 'GET',
+          url: `/api/events?type=${encodeURIComponent(eventType)}`,
+        });
+        expect(events.statusCode).toBe(200);
+        expect(events.json().events).toEqual([]);
+        const schedule = await app.inject({
+          method: 'GET',
+          url: `/api/schedules/${created.json().id}`,
+        });
+        expect(schedule.statusCode).toBe(404);
+      } finally {
+        launchTriggeredTurn.mockRestore();
+      }
+    }, 5_000);
+  });
+
   // ────────────────────────────────────────────────────────
   // Feedback signal endpoint and removed trace/stat endpoints
   // ────────────────────────────────────────────────────────

@@ -78,6 +78,7 @@ const ALL_TABLES = [
   'sandbox_sessions',
   'agent_versions',
   'trigger_firings',
+  'schedules',
   'event_triggers',
   'suspended_sessions',
   'event_store',

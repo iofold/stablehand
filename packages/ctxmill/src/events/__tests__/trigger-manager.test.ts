@@ -26,6 +26,7 @@ function createManager(db = createDbMock()) {
   const bus = new TypedEventBus();
   const onFire = vi.fn().mockResolvedValue(undefined);
   return {
+    bus,
     db,
     onFire,
     manager: new EventTriggerManager(bus, db, onFire),
@@ -47,6 +48,23 @@ function rawEvent(overrides: Partial<SpineRawEvent> = {}): SpineRawEvent {
 }
 
 describe('EventTriggerManager durable mutations', () => {
+  it('rejects malformed custom events at the shared internal choke point', async () => {
+    const { bus, manager } = createManager();
+    const emit = vi.spyOn(bus, 'emitCustomAsync');
+
+    await expect(manager.emitCustomEventAsync(
+      'turn.completed',
+      undefined,
+      {},
+    )).rejects.toThrow();
+    await expect(manager.emitCustomEventAsync(
+      'custom.oversized',
+      undefined,
+      { content: 'x'.repeat(33 * 1024) },
+    )).rejects.toThrow();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it('does not add a trigger to memory when DB registration fails', async () => {
     const db = createDbMock();
     db.saveTrigger.mockRejectedValueOnce(new Error('db unavailable'));
@@ -146,5 +164,53 @@ describe('EventTriggerManager durable mutations', () => {
 
     expect(onFire).not.toHaveBeenCalled();
     expect(db.recordTriggerFiring).not.toHaveBeenCalled();
+  });
+
+  it('retires a target while a spine lookup is pending and prevents its run', async () => {
+    const { manager, db, onFire } = createManager();
+    let releaseLookup!: (alreadyFired: boolean) => void;
+    db.hasTriggerFiring.mockReturnValueOnce(new Promise((resolve) => {
+      releaseLookup = resolve;
+    }));
+    await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'process',
+      enabled: true,
+    });
+
+    const handling = manager.handleRawEvent(rawEvent());
+    await vi.waitFor(() => expect(db.hasTriggerFiring).toHaveBeenCalledOnce());
+    await manager.stopForAgent('agent-1');
+    releaseLookup(false);
+    await handling;
+
+    expect(manager.list('agent-1')).toEqual([]);
+    expect(onFire).not.toHaveBeenCalled();
+    expect(db.recordTriggerFiring).not.toHaveBeenCalled();
+  });
+
+  it('does not admit another target run after retirement while a prior callback finishes', async () => {
+    const { manager, db, onFire } = createManager();
+    let releaseFire!: () => void;
+    onFire.mockReturnValueOnce(new Promise<void>((resolve) => {
+      releaseFire = resolve;
+    }));
+    await manager.register({
+      agentId: 'agent-1',
+      eventType: 'custom.ready',
+      taskTemplate: 'process',
+      enabled: true,
+    });
+
+    const handling = manager.handleRawEvent(rawEvent());
+    await vi.waitFor(() => expect(onFire).toHaveBeenCalledOnce());
+    await manager.stopForAgent('agent-1');
+    releaseFire();
+    await handling;
+
+    expect(db.recordTriggerFiring).toHaveBeenCalledWith(expect.any(String), 42);
+    await manager.handleRawEvent(rawEvent({ seq: 43 }));
+    expect(onFire).toHaveBeenCalledOnce();
   });
 });

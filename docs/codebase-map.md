@@ -1,6 +1,6 @@
 # CTXMill Codebase Map
 
-> Current as of 2026-07-06. This is the compact map for agents and engineers
+> Current as of 2026-07-26. This is the compact map for agents and engineers
 > checking what the repo ships today, where code lives, and which gotchas matter.
 
 ## Package Map
@@ -51,7 +51,8 @@ HTTP/UI request
 | Artifacts | S3/MinIO metadata in Postgres; daemon-location upload/download avoids gRPC byte proxying. |
 | A2UI | Structured UI blocks are produced by `a2ui-render` tool calls and rendered by the dashboard. HITL UI is separate from A2UI. |
 | Settings | DB/env-backed runtime knobs for timeouts, limits, resource defaults, and tar sizes. |
-| Webhooks | `callback_outbox` with claim/retry for subscribed run/tool/message/feedback events. |
+| Webhooks | `callback_outbox` with claim/retry for subscribed run/tool/message/feedback/custom events. |
+| Schedules | Persistent recurring Croner clocks emit canonical `custom.*` events into triggers, event history, and webhooks. |
 | Deployment | Docker-first local stack; dev2 k3s deploy scripts under `deploy/k3s/dev2`. |
 
 ## Important Boundaries
@@ -59,7 +60,7 @@ HTTP/UI request
 - Core CTXMill does not currently ship a first-class internal memory/knowledge retrieval subsystem. Use explicit tools, MCP/HTTP providers, artifacts, or external services.
 - Skill docs in older plans are historical. Current skill-like behavior is SDK/workspace-native, especially Claude `.claude/skills`.
 - Firecracker/microVM execution is not the shipped runtime in this repo; Docker containers are the supported local path.
-- The scheduled event queue exists in code but is not the active turn-dispatch queue.
+- Schedules are single-orchestrator, in-process Croner clocks backed by the `schedules` table. Missed downtime fires are skipped; schedules feed the event/trigger spine and never dispatch turns directly.
 - The React embed package is intentionally lightweight and does not provide dashboard feature parity.
 
 ## Current Gotchas

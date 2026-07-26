@@ -165,6 +165,15 @@ describe('strict manifest validation', () => {
       hitl: { approvals: [{ tool: 'send-payment' }] },
     });
   });
+
+  it('rejects the removed non-executable manifest schedule shape', () => {
+    const candidate = structuredClone(minimalManifest());
+    (candidate.spec as Record<string, unknown>).triggers = [{
+      schedule: { cron: '0 9 * * 1' },
+    }];
+
+    expect(safeValidateManifest(candidate).success).toBe(false);
+  });
 });
 
 describe('parser and serializers', () => {

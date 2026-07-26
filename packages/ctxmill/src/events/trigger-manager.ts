@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { ConversationIdSchema, TurnIdSchema } from '@ctxmill/contracts';
+import {
+  ConversationIdSchema,
+  CustomEventEmitInputSchema,
+  TurnIdSchema,
+} from '@ctxmill/contracts';
 import type { TypedEventBus } from './bus.js';
 import type { DatabaseRepository } from '../database/repository.js';
 import type { TriggerSelect } from '../database/types.js';
@@ -90,6 +94,7 @@ export class EventTriggerManager {
   private db: DatabaseRepository;
   private onFire: TriggerRunCallback;
   private readonly maxDepth: number;
+  private readonly retiredAgentIds = new Set<string>();
 
   constructor(
     eventBus: TypedEventBus,
@@ -166,7 +171,9 @@ export class EventTriggerManager {
       savedTrigger = duplicate;
     }
 
-    this.triggers.set(savedTrigger.id, savedTrigger);
+    if (!this.retiredAgentIds.has(savedTrigger.agentId)) {
+      this.triggers.set(savedTrigger.id, savedTrigger);
+    }
 
     return savedTrigger;
   }
@@ -222,7 +229,9 @@ export class EventTriggerManager {
       throw err;
     }
 
-    this.triggers.set(triggerId, savedTrigger);
+    if (!this.retiredAgentIds.has(savedTrigger.agentId)) {
+      this.triggers.set(triggerId, savedTrigger);
+    }
 
     return savedTrigger;
   }
@@ -260,6 +269,19 @@ export class EventTriggerManager {
   }
 
   /**
+   * Fail closed when agent deletion begins: remove its loaded definitions,
+   * and fence delayed spine handlers before they enter the run callback.
+   * PostgreSQL owns durable trigger deletion via cascade. Turns that already
+   * entered the callback remain owned by the normal session teardown path.
+   */
+  async stopForAgent(agentId: string): Promise<void> {
+    this.retiredAgentIds.add(agentId);
+    for (const [triggerId, trigger] of [...this.triggers]) {
+      if (trigger.agentId === agentId) this.triggers.delete(triggerId);
+    }
+  }
+
+  /**
    * Emit a custom event on the bus, which may trigger matching triggers.
    * The `_triggerDepth` field in the payload is propagated to prevent infinite chains.
    */
@@ -274,31 +296,36 @@ export class EventTriggerManager {
    * report success before durable persistence accepts the event.
    */
   async emitCustomEventAsync(type: string, agentId: string | undefined, payload: Record<string, unknown>): Promise<void> {
-    const turnId = TurnIdSchema.safeParse(payload.turnId);
-    const conversationId = ConversationIdSchema.safeParse(payload.conversationId);
+    const parsed = CustomEventEmitInputSchema.parse({
+      type,
+      ...(agentId === undefined ? {} : { agentId }),
+      payload,
+    });
+    const turnId = TurnIdSchema.safeParse(parsed.payload.turnId);
+    const conversationId = ConversationIdSchema.safeParse(parsed.payload.conversationId);
     // Propagate _triggerDepth from the incoming payload if present
     const eventPayload: Record<string, unknown> = {
-      type,
-      agentId: agentId ?? '',
-      payload,
+      type: parsed.type,
+      agentId: parsed.agentId ?? '',
+      payload: parsed.payload,
       ...(turnId.success ? { turnId: turnId.data } : {}),
       ...(conversationId.success ? { conversationId: conversationId.data } : {}),
       timestamp: Date.now(),
     };
 
     // Carry forward _triggerDepth so handleEvent can enforce the cascade limit
-    if (typeof payload._triggerDepth === 'number') {
-      eventPayload._triggerDepth = payload._triggerDepth;
+    if (typeof parsed.payload._triggerDepth === 'number') {
+      eventPayload._triggerDepth = parsed.payload._triggerDepth;
     }
 
     // Emit to the bus. CanonicalLog persists the source event; SpineConsumerRunner
     // routes the durable source row back to handleRawEvent().
-    await this.eventBus.emitCustomAsync(type, agentId ?? '', eventPayload);
+    await this.eventBus.emitCustomAsync(parsed.type, parsed.agentId ?? '', eventPayload);
     if (!this.hasDurablePersistence()) {
       // Non-durable tests and embedded in-memory harnesses do not construct a
       // CanonicalLog/SpineConsumerRunner. Keep those harnesses functional while
       // production buses with persistEvent remain spine-only.
-      await this.handleEvent(type, eventPayload);
+      await this.handleEvent(parsed.type, eventPayload);
     }
   }
 
@@ -339,6 +366,7 @@ export class EventTriggerManager {
 
     for (const trigger of this.triggers.values()) {
       if (!trigger.enabled) continue;
+      if (this.retiredAgentIds.has(trigger.agentId)) continue;
       if (trigger.eventType !== eventType) continue;
 
       // Check selector match
@@ -356,6 +384,7 @@ export class EventTriggerManager {
         firedAgents.add(trigger.agentId);
         continue;
       }
+      if (this.retiredAgentIds.has(trigger.agentId)) continue;
 
       // Interpolate the task template
       const flatPayload = 'payload' in payloadObj && typeof payloadObj.payload === 'object'
@@ -364,11 +393,14 @@ export class EventTriggerManager {
       const task = interpolateTemplate(trigger.taskTemplate, flatPayload);
 
       // Fire the run — errors are isolated per trigger
+      const operation = this.fireTrigger(
+        trigger,
+        task,
+        currentDepth,
+        eventSeq,
+      );
       try {
-        await this.onFire(trigger.agentId, task, trigger.id, currentDepth + 1, eventSeq);
-        if (eventSeq !== undefined) {
-          await this.db.recordTriggerFiring(trigger.id, eventSeq);
-        }
+        await operation;
         firedAgents.add(trigger.agentId);
 
         // Emit trigger.fired event (as a custom event to avoid circular typed emit)
@@ -379,6 +411,25 @@ export class EventTriggerManager {
           err,
         );
       }
+    }
+  }
+
+  private async fireTrigger(
+    trigger: EventTrigger,
+    task: string,
+    currentDepth: number,
+    eventSeq: number | undefined,
+  ): Promise<void> {
+    if (this.retiredAgentIds.has(trigger.agentId)) return;
+    await this.onFire(
+      trigger.agentId,
+      task,
+      trigger.id,
+      currentDepth + 1,
+      eventSeq,
+    );
+    if (eventSeq !== undefined) {
+      await this.db.recordTriggerFiring(trigger.id, eventSeq);
     }
   }
 

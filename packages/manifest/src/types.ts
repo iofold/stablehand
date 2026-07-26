@@ -40,12 +40,6 @@ export interface ManifestTrigger {
   event?: string;
   filter?: Record<string, unknown>;
   input?: Record<string, string>;
-  schedule?: ManifestSchedule;
-}
-
-export interface ManifestSchedule {
-  cron: string;
-  description?: string;
 }
 
 export interface ManifestEmit {

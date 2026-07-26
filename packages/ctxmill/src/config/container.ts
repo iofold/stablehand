@@ -66,6 +66,7 @@ import { LiteLLMSpendClient } from '../cost-control/litellm-spend-client.js';
 import { ModelGatewayReconciler } from '../cost-control/model-gateway-reconciler.js';
 import type { ModelGatewayStatusConfig } from '../orchestrator/routes/model-gateway.js';
 import { createRuntimeDefinitionFingerprint } from '../orchestrator/session-manager/runtime-definition-fingerprint.js';
+import { ScheduleService } from '../schedules/index.js';
 
 const LOCATION_TO_PROTO = {
   sandbox: ToolLocation.SANDBOX,
@@ -82,6 +83,7 @@ export interface AppContainer {
   sseManager: SSEManager;
   interruptManager: InterruptManager;
   triggerManager: EventTriggerManager;
+  scheduleService: ScheduleService;
   spineConsumerRunner: SpineConsumerRunner;
   agentTurnService: AgentTurnService;
   harnessSchemas: HarnessConfigSchemas;
@@ -324,6 +326,11 @@ export async function createContainer(
       createTriggerSpineConsumer(triggerManager),
       createWebhookRelaySpineConsumer({ db, callbackDispatcher }),
     ],
+    logger: console,
+  });
+  const scheduleService = new ScheduleService({
+    repository: db,
+    triggerManager,
     logger: console,
   });
 
@@ -623,6 +630,7 @@ export async function createContainer(
     sseManager,
     interruptManager,
     triggerManager,
+    scheduleService,
     spineConsumerRunner,
     agentTurnService,
     harnessSchemas: HARNESS_CONFIG_SCHEMAS,
@@ -660,6 +668,7 @@ export async function createContainer(
     close: async () => {
       lifecyclePolicy.stop();
       await modelGatewayReconciler?.stop();
+      await scheduleService.stop();
       await canonicalLog.drain();
       spineConsumerRunner.stop();
       callbackDispatcher.stop();

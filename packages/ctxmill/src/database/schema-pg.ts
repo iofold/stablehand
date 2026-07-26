@@ -374,6 +374,24 @@ export const triggerFirings = pgTable('trigger_firings', {
   eventSeqIdx: index('idx_trigger_firings_event_seq').on(table.eventSeq),
 }));
 
+export const schedules = pgTable('schedules', {
+  id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+  agentId: text('agent_id').references(() => agents.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  cronExpression: text('cron_expression').notNull(),
+  timezone: text('timezone').notNull().default('UTC'),
+  eventType: text('event_type').notNull(),
+  payload: jsonb('payload').notNull().$type<Record<string, unknown>>().default({}),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  lastFiredAt: bigint('last_fired_at', { mode: 'number' }),
+}, (table) => ({
+  nameIdx: uniqueIndex('idx_schedules_name').on(table.name),
+  agentIdx: index('idx_schedules_agent').on(table.agentId),
+  enabledIdx: index('idx_schedules_enabled').on(table.enabled),
+}));
+
 export const pendingInterrupts = pgTable('pending_interrupts', {
   id: text('id').primaryKey(),
   turnId: text('turn_id').notNull().references(() => turns.id, { onDelete: 'cascade' }),

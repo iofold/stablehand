@@ -748,6 +748,27 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
 
+  // ── 10c. schedules (optionally → agents) ──────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS schedules (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      cron_expression TEXT NOT NULL,
+      timezone TEXT NOT NULL DEFAULT 'UTC',
+      event_type TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}',
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      last_fired_at BIGINT
+    )
+  `;
+  await sql`ALTER TABLE schedules ALTER COLUMN agent_id DROP NOT NULL`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedules_name ON schedules(name)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_schedules_agent ON schedules(agent_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(enabled)`;
+
   // ── 11. pending_interrupts (→ turns, agents) ───────────────────────
   await sql`
     CREATE TABLE IF NOT EXISTS pending_interrupts (

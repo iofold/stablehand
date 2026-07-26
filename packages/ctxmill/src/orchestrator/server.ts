@@ -20,8 +20,10 @@ import {
   type ModelGatewayStatusConfig,
 } from './routes/model-gateway.js';
 import { triggerRoutes } from './routes/triggers.js';
+import { scheduleRoutes } from './routes/schedules.js';
 import { sandboxRoutes } from './routes/sandbox.js';
 import type { EventTriggerManager } from '../events/trigger-manager.js';
+import type { ScheduleService } from '../schedules/index.js';
 import type { SSEManager } from './sse.js';
 import type { InterruptManager } from './interrupt.js';
 import type { DatabaseRepository } from '../database/repository.js';
@@ -63,6 +65,7 @@ export interface ServerOptions {
   dataDir?: string;
   /** Event trigger manager for pub/sub trigger system. */
   triggerManager?: EventTriggerManager;
+  scheduleService?: ScheduleService;
   sse: SSEManager;
   interrupts: InterruptManager;
   /** Pre-wired SecretProvider for per-agent encrypted secrets. */
@@ -241,7 +244,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
 
   // ── Route plugins ──────────────────────────────────────
-  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessSchemas, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, turnStartupService: opts.turnStartupService, canonicalLog: opts.canonicalLog });
+  await app.register(agentRoutes, { prefix: '/api/agents', db, sse, interrupts, harnessSchemas, eventBus, dataDir, secretProvider: opts.secretProvider, toolRegistry: toolDefinitionRegistry, containerManager: opts.containerManager, sessionManager: opts.sessionManager, settingsService: opts.settingsService, turnStartupService: opts.turnStartupService, canonicalLog: opts.canonicalLog, scheduleService: opts.scheduleService, triggerManager: opts.triggerManager });
   await app.register(activeConversationRoutes, {
     prefix: '/api/conversations',
     db,
@@ -275,6 +278,12 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   });
   if (triggerManager) {
     await app.register(triggerRoutes, { prefix: '/api/triggers', triggerManager, db });
+  }
+  if (opts.scheduleService) {
+    await app.register(scheduleRoutes, {
+      prefix: '/api/schedules',
+      service: opts.scheduleService,
+    });
   }
   if (opts.settingsService) {
     await app.register(settingsRoutes, {

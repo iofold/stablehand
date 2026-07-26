@@ -103,6 +103,12 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | PUT | `/api/triggers/:id` | Update trigger |
 | DELETE | `/api/triggers/:id` | Delete trigger |
 | POST | `/api/triggers/emit` | Emit custom event |
+| **Schedules** |  |  |
+| GET | `/api/schedules` | List cron schedules |
+| POST | `/api/schedules` | Create cron schedule |
+| GET | `/api/schedules/:id` | Get cron schedule |
+| PATCH | `/api/schedules/:id` | Update cron schedule |
+| DELETE | `/api/schedules/:id` | Delete cron schedule |
 | **Catalogs & Tools** |  |  |
 | GET | `/api/catalogs/tools` | List tools |
 | POST | `/api/catalogs/tools/test` | Test-run a tool |
@@ -126,6 +132,7 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
   - `{ turns: [...] }`
   - `{ conversations: [...] }`
   - `{ artifacts: [...], total }`
+  - `{ schedules: [...] }`
   - `{ items: [...], total }`
   - `{ events: [...], nextCursor }`
   - `{ interrupts: [...] }`
@@ -1511,7 +1518,90 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Notes:** `type` must match `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`. `payload` must be a JSON object and may not exceed 32 KiB (32,768 bytes) after UTF-8 JSON serialization. `agentId` is optional for global trigger events, but must be supplied for delivery to agent-scoped webhook subscriptions. Events are durably persisted before the success response. Bundled clients can call `client.events.emitCustom(...)`.
 
-### p. Catalogs & Tools (`/api/catalogs`)
+Schedules are clocks over this same custom-event entrypoint. They never start
+runs directly: a scheduled fire is durably emitted, then matching event
+triggers and `custom.*` webhook subscriptions consume it through their normal
+paths. This keeps trigger selectors, cascade caps, webhook signing, and event
+history identical for manual and scheduled emissions.
+
+### p. Schedules (`/api/schedules`)
+
+#### `POST /api/schedules`
+
+- **Description:** Persists a recurring Croner schedule and starts its in-process clock.
+- **Request body:**
+
+```json
+{
+  "agentId": "agent_123",
+  "name": "weekly-canary",
+  "cronExpression": "0 9 * * 1",
+  "timezone": "America/New_York",
+  "eventType": "custom.schedule.weekly-canary",
+  "payload": { "probe": "close-readiness" },
+  "enabled": true
+}
+```
+
+- **Response:** `201` with the schedule object:
+
+```json
+{
+  "id": "sched_123",
+  "agentId": "agent_123",
+  "name": "weekly-canary",
+  "cronExpression": "0 9 * * 1",
+  "timezone": "America/New_York",
+  "eventType": "custom.schedule.weekly-canary",
+  "payload": { "probe": "close-readiness" },
+  "enabled": true,
+  "createdAt": 1785081600000,
+  "updatedAt": 1785081600000,
+  "lastFiredAt": null,
+  "nextRun": 1785157200000
+}
+```
+
+- **Defaults:** `timezone` is `UTC`, `payload` is `{}`, and `enabled` is `true`.
+- **Validation:** `agentId` is optional; when supplied it must identify an existing agent and scopes webhook routing and lifecycle cleanup, while omission creates a global custom-event clock. `name` is globally unique; `eventType` and `payload` use the canonical custom-event grammar and 32 KiB cap. Cron validation is delegated to Croner, including its standard five-, six-, and seven-part patterns and recurring nicknames, but ISO one-shot dates are rejected. Invalid expressions or IANA timezones return `400`; duplicate names return `409`; oversized payloads return the same typed `413` as `/api/triggers/emit`.
+
+#### `GET /api/schedules`
+
+- **Description:** Lists every persisted schedule in creation order.
+- **Response:** `{ "schedules": [...] }`.
+- **Notes:** Every item includes a server-computed `nextRun` Unix timestamp in milliseconds. It is `null` when the schedule is disabled.
+
+#### `GET /api/schedules/:id`
+
+- **Description:** Gets one schedule, including `nextRun`.
+- **Response:** schedule object.
+- **Notes:** Returns `404` if not found.
+
+#### `PATCH /api/schedules/:id`
+
+- **Description:** Atomically persists a non-empty partial update, then stops/replaces the affected Croner job.
+- **Request body:** Any non-empty subset of `name`, `cronExpression`, `timezone`, `eventType`, `payload`, or `enabled`.
+- **Response:** updated schedule object.
+- **Notes:** Schedule scope is immutable: an omitted `agentId` remains global, and a supplied `agentId` cannot be reassigned. Disabling a schedule stops future fires and returns `nextRun: null`. The same validation and error statuses as create apply.
+
+#### `DELETE /api/schedules/:id`
+
+- **Description:** Deletes the persisted schedule and stops its Croner job.
+- **Response:** no body (`204`).
+- **Notes:** Returns `404` if not found.
+
+#### Delivery and restart semantics
+
+- Enabled schedules are rehydrated from PostgreSQL during orchestrator startup.
+- `lastFiredAt` advances only after the custom event is durably accepted; a failed emission is logged and leaves it unchanged.
+- Fires missed while the orchestrator is down are skipped. There is no catch-up queue. Consumers that cannot tolerate gaps should reconcile current state on every fire rather than treating each tick as an irreplaceable command.
+- Croner overrun protection skips a new local invocation while the prior one is still running. Its timezone/DST behavior applies: nonexistent local times are skipped and repeated local times fire once.
+- The scheduler assumes one orchestrator replica. A multi-replica deployment needs a database-owned scheduler such as `pg-boss`; do not run this in-process scheduler concurrently in multiple replicas.
+- Bundled clients use `client.schedules.list/get/create/update/delete(...)`. The operational CLI exposes the corresponding `schedules` commands.
+- Schedules are explicit control-plane resources. The old, non-executable `spec.triggers[].schedule` manifest shape is not accepted; create schedules through this API, the bundled client, or the CLI.
+- Hard-deleting an agent first stops and drains its agent-scoped schedule fires; the database then removes those schedule rows with the rest of the agent-owned state. Global schedules are unaffected.
+
+### q. Catalogs & Tools (`/api/catalogs`)
 
 #### `GET /api/catalogs/tools`
 
@@ -1564,7 +1654,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   - The tool must exist and support execution.
   - Time limit is `30s`.
 
-### q. Sandbox Metrics (`/api/sandbox`)
+### r. Sandbox Metrics (`/api/sandbox`)
 
 #### `GET /api/sandbox/metrics`
 
