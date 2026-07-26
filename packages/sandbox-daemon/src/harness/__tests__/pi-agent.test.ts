@@ -6,6 +6,17 @@ import { TurnDeliveryCapabilitySchema } from '@ctxmill/proto/sandbox/v1';
 import type { BashToolOptions } from '@earendil-works/pi-coding-agent';
 
 const mockCreateAgentSession = vi.fn();
+interface MockResourceLoaderOptions {
+  systemPromptOverride?: (base: string | undefined) => string | undefined;
+}
+
+const mockDefaultResourceLoader = vi.fn(function MockDefaultResourceLoader(
+  _options?: MockResourceLoaderOptions,
+) {
+  return {
+    reload: vi.fn(async () => undefined),
+  };
+});
 const mockSetRuntimeApiKey = vi.fn();
 const mockGetModel = vi.fn((
   provider: string,
@@ -75,11 +86,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
     create: vi.fn((cwd: string) => ({ type: 'session-manager-file', cwd })),
     continueRecent: vi.fn((cwd: string) => ({ type: 'session-manager-continue', cwd })),
   },
-  DefaultResourceLoader: vi.fn(function MockDefaultResourceLoader() {
-    return {
-      reload: vi.fn(async () => undefined),
-    };
-  }),
+  DefaultResourceLoader: mockDefaultResourceLoader,
   SettingsManager: { inMemory: vi.fn(() => ({ type: 'settings-manager' })) },
   ModelRuntime: {
     create: vi.fn(async () => mockModelRuntime),
@@ -223,6 +230,28 @@ describe('PIAgentHarness transcript syncing', () => {
     delete process.env.GOOGLE_API_KEY;
     delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     delete process.env.GEMINI_API_KEY;
+  });
+
+  it('uses the canonical CTXMILL system prompt as the PI system prompt', async () => {
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: vi.fn(() => vi.fn()),
+        prompt: vi.fn(async () => undefined),
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        state: createNativeState(),
+        setModel: vi.fn(),
+      },
+    });
+    const session = await new PIAgentHarness().openSession(makeConfig({
+      systemPrompt: 'Canonical system instructions',
+    }));
+
+    const options = mockDefaultResourceLoader.mock.calls[0]?.[0];
+    expect(options?.systemPromptOverride?.('PI default prompt')).toBe(
+      'Canonical system instructions',
+    );
+    await session.close();
   });
 
   it('satisfies the shared plain-text turn contract when the PI SDK reports no usage', async () => {

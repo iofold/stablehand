@@ -511,6 +511,7 @@ export class PIAgentHarness implements AgentHarness {
       cwd,
       agentDir: cwd,
       settingsManager,
+      systemPromptOverride: () => config.systemPrompt,
       appendSystemPromptOverride: () => [],
     });
     await resourceLoader.reload();
