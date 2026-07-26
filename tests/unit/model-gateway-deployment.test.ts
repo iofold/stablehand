@@ -305,6 +305,11 @@ describe('model gateway deployment', () => {
     expect(secrets).toContain('LITELLM_RUNTIME_MAX_BUDGET_USD');
     expect(bootstrap).toContain('"max_budget"');
     expect(bootstrap).toContain('"budget_duration": "1d"');
+    expect(bootstrap).toContain('"http://127.0.0.1:4000/key/update"');
+    expect(bootstrap).toContain("if ! printf '%s' \"$runtime_key\"");
+    expect(bootstrap).toContain('for attempt in range(20)');
+    expect(bootstrap).toContain('time.sleep(0.5)');
+    expect(bootstrap).toContain('LiteLLM runtime key inventory reconciled');
     expect(bootstrap).not.toContain('\\${');
     expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_ENABLED');
     expect(manifests).toContain('http://litellm.ctxmill.svc.cluster.local:4000');
