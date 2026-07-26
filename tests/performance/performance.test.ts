@@ -717,6 +717,39 @@ describe('performance profile', () => {
     );
     expect(traceCollector).toContain("resources_string['ctxmill.session.id']");
   });
+
+  it('ships bounded warm and resume parity lanes for Deep Agents and PI', () => {
+    const lifecycle = parsePerformanceProfile(JSON.parse(readFileSync(
+      new URL('./profiles/dev2-harness-lifecycle.json', import.meta.url),
+      'utf8',
+    )));
+    const plan = summarizePerformancePlan(lifecycle);
+
+    expect(new Set(lifecycle.stages.map((stage) =>
+      `${stage.harness}:${stage.sessionMode}`))).toEqual(new Set([
+      'langgraph:warm',
+      'langgraph:resume',
+      'pi-agent:warm',
+      'pi-agent:resume',
+    ]));
+    expect(lifecycle.stages.every((stage) =>
+      stage.concurrency === 1
+      && stage.warmupTurns >= 1
+      && stage.sseClientsPerAgent === 2)).toBe(true);
+    expect(lifecycle.stages.filter((stage) => stage.harness === 'langgraph')
+      .every((stage) => stage.harnessConfig.reasoning === 'off')).toBe(true);
+    expect(lifecycle.stages.filter((stage) => stage.harness === 'pi-agent')
+      .every((stage) => stage.harnessConfig.reasoning === true
+        && stage.harnessConfig.thinkingLevel === 'minimal')).toBe(true);
+    expect(plan).toMatchObject({
+      measuredTurns: 8,
+      warmupTurns: 4,
+      totalTurns: 12,
+      estimatedModelCalls: 12,
+      peakConcurrency: 1,
+      peakSseConnections: 2,
+    });
+  });
 });
 
 describe('capacity wave gates', () => {

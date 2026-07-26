@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "name": "dev2-harness-lifecycle",
+  "expectedOutput": "BENCHMARK_OK",
+  "target": {
+    "apiBase": "https://stablehand.staging.example.com/api",
+    "kubernetesNamespace": "ctxmill"
+  },
+  "requirements": {
+    "modelGateway": "required",
+    "minGlobalContainers": 1
+  },
+  "safety": {
+    "maxConcurrency": 1,
+    "maxTurns": 12,
+    "maxEstimatedModelCalls": 12,
+    "abortErrorRate": 0.05,
+    "maxNodeCpuPercent": 75,
+    "maxNodeMemoryPercent": 75
+  },
+  "stages": [
+    {
+      "name": "deepagents-warm-c1",
+      "harness": "langgraph",
+      "agentPrefix": "perf-lifecycle-deepagents-warm",
+      "topology": "unique-agents",
+      "sessionMode": "warm",
+      "concurrency": 1,
+      "iterations": 2,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gpt-oss-120b",
+        "maxTokens": 64,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "pi-warm-c1",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-lifecycle-pi-warm",
+      "topology": "unique-agents",
+      "sessionMode": "warm",
+      "concurrency": 1,
+      "iterations": 2,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gpt-oss-120b",
+        "maxTokens": 64,
+        "reasoning": true,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "deepagents-resume-c1",
+      "harness": "langgraph",
+      "agentPrefix": "perf-lifecycle-deepagents-resume",
+      "topology": "unique-agents",
+      "sessionMode": "resume",
+      "concurrency": 1,
+      "iterations": 2,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gpt-oss-120b",
+        "maxTokens": 64,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "pi-resume-c1",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-lifecycle-pi-resume",
+      "topology": "unique-agents",
+      "sessionMode": "resume",
+      "concurrency": 1,
+      "iterations": 2,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gpt-oss-120b",
+        "maxTokens": 64,
+        "reasoning": true,
+        "thinkingLevel": "minimal"
+      }
+    }
+  ]
+}
