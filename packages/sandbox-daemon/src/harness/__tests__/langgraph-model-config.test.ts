@@ -99,7 +99,7 @@ describe('LangGraph provider model configuration', () => {
     }
 
     expect(constructorCalls.openai).toEqual([
-      expect.objectContaining({ reasoning_effort: 'none' }),
+      expect.objectContaining({ reasoning: { effort: 'none' } }),
     ]);
   });
 

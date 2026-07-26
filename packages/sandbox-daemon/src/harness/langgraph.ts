@@ -580,7 +580,7 @@ class LangGraphSession implements HarnessSession {
         ...(maxTokens != null ? { maxTokens } : {}),
         ...(topP != null ? { topP } : {}),
         ...(reasoning
-          ? { reasoning_effort: reasoning === 'off' ? 'none' : reasoning }
+          ? { reasoning: { effort: reasoning === 'off' ? 'none' : reasoning } }
           : {}),
       }) as unknown as BaseLanguageModel;
     }
