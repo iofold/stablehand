@@ -331,6 +331,61 @@ describe('Events and Triggers Integration', () => {
         expect(body.type).toBe('custom.test');
       });
 
+      it('persists HTTP custom-event correlation fields for composable event filters', async () => {
+        const eventAgentId = agentId || await createAgent('Correlation Filter Agent');
+        const marker = `correlation-${Date.now()}`;
+        const turnId = `turn-${marker}`;
+        const conversationId = `conversation-${marker}`;
+        const otherTurnId = `turn-other-${marker}`;
+
+        for (const [currentTurnId, value] of [[turnId, 'target'], [otherTurnId, 'other']] as const) {
+          const emitted = await app.inject({
+            method: 'POST',
+            url: '/api/triggers/emit',
+            payload: {
+              type: 'custom.correlation.probe',
+              agentId: eventAgentId,
+              payload: {
+                turnId: currentTurnId,
+                conversationId,
+                marker,
+                value,
+              },
+            },
+          });
+          expect(emitted.statusCode).toBe(200);
+        }
+
+        const byTurn = await app.inject({
+          method: 'GET',
+          url: `/api/events?turnId=${encodeURIComponent(turnId)}`,
+        });
+        expect(byTurn.statusCode).toBe(200);
+        expect(byTurn.json().events).toEqual([
+          expect.objectContaining({
+            type: 'custom.correlation.probe',
+            turnId,
+            conversationId,
+          }),
+        ]);
+
+        const byConversation = await app.inject({
+          method: 'GET',
+          url: `/api/events?conversationId=${encodeURIComponent(conversationId)}`,
+        });
+        expect(byConversation.statusCode).toBe(200);
+        expect(byConversation.json().events).toHaveLength(2);
+
+        const composed = await app.inject({
+          method: 'GET',
+          url: `/api/events?turnId=${encodeURIComponent(turnId)}&conversationId=${encodeURIComponent(conversationId)}`,
+        });
+        expect(composed.statusCode).toBe(200);
+        expect(composed.json().events).toEqual([
+          expect.objectContaining({ turnId, conversationId }),
+        ]);
+      });
+
       it('POST /api/triggers/emit rejects missing type', async () => {
         const res = await app.inject({
           method: 'POST',

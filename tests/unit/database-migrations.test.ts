@@ -258,6 +258,22 @@ describe('database migration baseline guard', () => {
     ]);
   });
 
+  it('adds the event conversation correlation index idempotently', async () => {
+    await dropAllPublicTables(conn);
+    await runMigrations(conn.pgClient);
+    await runMigrations(conn.pgClient);
+
+    const [index] = await conn.pgClient`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexname = 'idx_event_store_conversation_seq'
+    `;
+
+    expect(index?.indexdef).toContain('(conversation_id, seq)');
+    expect(index?.indexdef).toContain('WHERE (conversation_id IS NOT NULL)');
+  });
+
   it('hard-migrates persisted event, trigger, wait, and webhook contracts', async () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);

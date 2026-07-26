@@ -22,6 +22,8 @@ export async function eventRoutes(
       limit?: string;
       type?: string;
       agentId?: string;
+      turnId?: string;
+      conversationId?: string;
       since?: string;
     };
 
@@ -34,6 +36,8 @@ export async function eventRoutes(
       limit: limit + 1, // fetch one extra to determine if there's a next page
       type: query.type,
       agentId: query.agentId,
+      turnId: query.turnId,
+      conversationId: query.conversationId,
       since,
     });
 

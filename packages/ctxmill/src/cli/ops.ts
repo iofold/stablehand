@@ -327,6 +327,8 @@ async function eventCommand(action: string | undefined, _unused: string | undefi
     case undefined: {
       const query = buildQuery({
         agentId: flagString(flags, 'agent', 'agent-id'),
+        turnId: flagString(flags, 'turn', 'turn-id'),
+        conversationId: flagString(flags, 'conversation', 'conversation-id'),
         type: flagString(flags, 'type'),
         since: normalizeSince(flagString(flags, 'since')),
         limit: flagString(flags, 'limit') ?? '50',
@@ -1495,7 +1497,7 @@ Read commands:
   conversations list|summary|snapshot ...
   sandbox-sessions active
   interrupts list <agentId> [--include-resolved]
-  events list|types|stats
+  events list [--turn <id>] [--conversation <id>] | types | stats
   tools list
 
   artifacts list|get|download-url ...

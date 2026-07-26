@@ -27,6 +27,8 @@ import {
   ConversationTurnStartInputSchema,
   ConversationTurnStartResponseSchema,
   EventCursorSchema,
+  EventListInputSchema,
+  EventListResponseSchema,
   FileListResponseSchema,
   FileReadResponseSchema,
   FileWriteInputSchema,
@@ -69,6 +71,8 @@ import {
   type ConversationSnapshot,
   type ConversationSummary,
   type ConversationTurnStartInput,
+  type EventListInput,
+  type EventListResponse,
   type FileWriteInput,
   type Interrupt,
   type InterruptRecord,
@@ -154,6 +158,7 @@ export class CtxmillControlClient {
   readonly conversations;
   readonly sandboxSessions;
   readonly interrupts;
+  readonly events;
   readonly artifacts;
   readonly files;
   readonly workspaces;
@@ -464,6 +469,37 @@ export class CtxmillControlClient {
           json: input,
           ...requestOptions,
         }),
+    };
+
+    this.events = {
+      list: (
+        input: EventListInput = {},
+        requestOptions: CtxmillRequestOptions = {},
+      ): Promise<EventListResponse> => {
+        const parsed = EventListInputSchema.safeParse(input);
+        if (!parsed.success) {
+          throw new CtxmillContractError({
+            direction: 'request',
+            method: 'GET',
+            path: '/events',
+            issues: parsed.error.issues,
+          });
+        }
+        return this.transport.request({
+          method: 'GET',
+          path: queryPath('/events', {
+            cursor: parsed.data.cursor?.toString(),
+            limit: parsed.data.limit?.toString(),
+            type: parsed.data.type,
+            agentId: parsed.data.agentId,
+            turnId: parsed.data.turnId,
+            conversationId: parsed.data.conversationId,
+            since: parsed.data.since?.toString(),
+          }),
+          responseSchema: EventListResponseSchema,
+          ...requestOptions,
+        });
+      },
     };
 
     this.artifacts = {

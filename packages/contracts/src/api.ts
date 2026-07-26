@@ -510,6 +510,31 @@ export const InterruptResolveResponseSchema = z.union([
   }),
 ]);
 
+export const PersistedEventSchema = z.strictObject({
+  seq: z.number().int().positive(),
+  type: z.string().trim().min(1),
+  agentId: z.string(),
+  turnId: TurnIdSchema.nullable(),
+  conversationId: ConversationIdSchema.nullable(),
+  payload: z.string(),
+  createdAt: EpochMillisecondsSchema,
+});
+
+export const EventListInputSchema = z.strictObject({
+  cursor: z.number().int().positive().optional(),
+  limit: z.number().int().positive().max(200).optional(),
+  type: z.string().trim().min(1).optional(),
+  agentId: AgentIdSchema.optional(),
+  turnId: TurnIdSchema.optional(),
+  conversationId: ConversationIdSchema.optional(),
+  since: EpochMillisecondsSchema.optional(),
+});
+
+export const EventListResponseSchema = z.strictObject({
+  events: z.array(PersistedEventSchema),
+  nextCursor: z.number().int().positive().optional(),
+});
+
 export const ArtifactStatusSchema = z.enum([
   'pending_upload',
   'active',
@@ -713,6 +738,9 @@ export type SandboxSession = z.infer<typeof SandboxSessionSchema>;
 export type Interrupt = z.infer<typeof InterruptSchema>;
 export type InterruptRecord = z.infer<typeof InterruptRecordSchema>;
 export type InterruptRecordListInput = z.input<typeof InterruptRecordListInputSchema>;
+export type PersistedEvent = z.infer<typeof PersistedEventSchema>;
+export type EventListInput = z.input<typeof EventListInputSchema>;
+export type EventListResponse = z.infer<typeof EventListResponseSchema>;
 export type Artifact = z.infer<typeof ArtifactSchema>;
 export type ArtifactListInput = z.input<typeof ArtifactListInputSchema>;
 export type ArtifactUploadUrlInput = z.input<typeof ArtifactUploadUrlInputSchema>;

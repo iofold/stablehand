@@ -1342,6 +1342,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   - `limit` (default `50`, max `200`)
   - `type`
   - `agentId`
+  - `turnId`
+  - `conversationId`
   - `since` (epoch milliseconds)
 - **Response:**
 
@@ -1352,6 +1354,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
       "seq": 912,
       "type": "turn.completed",
       "agentId": "agent_123",
+      "turnId": "turn_123",
+      "conversationId": "conversation_123",
       "payload": "{\"turnId\":\"turn_123\",\"status\":\"completed\"}",
       "createdAt": 1712140000000
     }
@@ -1360,7 +1364,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 }
 ```
 
-- **Notes:** Events are returned newest-first; pass `nextCursor` to fetch older pages.
+- **Notes:** Events are returned newest-first; pass `nextCursor` to fetch older pages. `turnId` and `conversationId` compose with every other filter and use durable event-spine columns, so consumers do not need to parse `payload`. Historical rows written without correlation columns are not retroactively inferred. Bundled clients can call `client.events.list(...)`.
 
 #### `GET /api/events/stats`
 

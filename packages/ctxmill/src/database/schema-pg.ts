@@ -302,6 +302,12 @@ export const eventStore = pgTable('event_store', {
   sourcePayload: text('source_payload'),
 }, (table) => ({
   agentSeqIdx: index('idx_event_store_agent_seq').on(table.agentId, table.seq),
+  turnSeqIdx: index('idx_event_store_turn_seq')
+    .on(table.turnId, table.seq)
+    .where(sql`${table.turnId} IS NOT NULL`),
+  conversationSeqIdx: index('idx_event_store_conversation_seq')
+    .on(table.conversationId, table.seq)
+    .where(sql`${table.conversationId} IS NOT NULL`),
   agentChannelSeqIdx: index('idx_event_store_agent_channel_seq').on(table.agentId, table.channel, table.seq),
 }));
 

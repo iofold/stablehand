@@ -278,6 +278,10 @@ export class EventTriggerManager {
       type,
       agentId: agentId ?? '',
       payload,
+      ...(typeof payload.turnId === 'string' ? { turnId: payload.turnId } : {}),
+      ...(typeof payload.conversationId === 'string'
+        ? { conversationId: payload.conversationId }
+        : {}),
       timestamp: Date.now(),
     };
 

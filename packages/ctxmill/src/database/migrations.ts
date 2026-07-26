@@ -1129,6 +1129,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // event_store
   await sql`CREATE INDEX IF NOT EXISTS idx_event_store_agent_seq ON event_store(agent_id, seq)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_store_turn_seq ON event_store(turn_id, seq) WHERE turn_id IS NOT NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_event_store_conversation_seq ON event_store(conversation_id, seq) WHERE conversation_id IS NOT NULL`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_store_agent_channel_seq ON event_store(agent_id, channel, seq)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_event_store_source_seq ON event_store(seq) WHERE source_type IS NOT NULL`;
 

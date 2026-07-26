@@ -815,6 +815,37 @@ describe('CtxmillAgUiClient', () => {
     expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://ctxmill.test/api/artifacts/artifact-1');
   });
 
+  it('lists persisted events through canonical correlation filters', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      events: [{
+        seq: 12,
+        type: 'custom.eval.verdict',
+        agentId: 'agent-1',
+        turnId: 'turn-1',
+        conversationId: 'conversation-1',
+        payload: '{"verdict":"pass"}',
+        createdAt: 123,
+      }],
+      nextCursor: 11,
+    }));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.events.list({
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      limit: 25,
+    })).resolves.toMatchObject({
+      events: [{ turnId: 'turn-1', conversationId: 'conversation-1' }],
+    });
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(
+      'https://ctxmill.test/api/events?limit=25&turnId=turn-1&conversationId=conversation-1',
+    );
+  });
+
   it('rejects legacy custom-event aliases instead of normalizing them', () => {
     expect(() => clientModule.parseCanonicalStreamEvent({
       type: 'CUSTOM',

@@ -351,6 +351,33 @@ describe('@ctxmill/contracts', () => {
     })).toMatchObject({ kind: 'eval_report' });
   });
 
+  it('validates correlated persisted-event list contracts', () => {
+    expect(contracts.EventListInputSchema.parse({
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+      limit: 25,
+    })).toMatchObject({
+      turnId: 'turn-1',
+      conversationId: 'conversation-1',
+    });
+
+    expect(contracts.EventListResponseSchema.parse({
+      events: [{
+        seq: 12,
+        type: 'custom.eval.verdict',
+        agentId: 'agent-1',
+        turnId: 'turn-1',
+        conversationId: 'conversation-1',
+        payload: '{"verdict":"pass"}',
+        createdAt: 123,
+      }],
+      nextCursor: 11,
+    })).toMatchObject({
+      events: [{ turnId: 'turn-1', conversationId: 'conversation-1' }],
+      nextCursor: 11,
+    });
+  });
+
   it('rejects sandbox runtime controls from per-turn secret inputs', () => {
     expect(contracts.BackgroundTurnStartInputSchema.parse({
       task: 'Run close workflow',

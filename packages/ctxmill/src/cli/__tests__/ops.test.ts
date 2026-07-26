@@ -67,6 +67,30 @@ describe('versioned operational CLI', () => {
     });
   });
 
+  it('forwards event correlation filters without payload parsing', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ events: [] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const exitCode = await runOpsCli([
+      'events',
+      'list',
+      '--turn',
+      'turn-1',
+      '--conversation',
+      'conversation-1',
+      '--json',
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://localhost:3002/api/events?turnId=turn-1&conversationId=conversation-1&limit=50',
+    );
+  });
+
   it('blocks destructive operations without an explicit confirmation', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

@@ -4082,22 +4082,42 @@ export class DatabaseRepository {
   }
 
   /**
-   * Query events with optional filtering by type, agentId, time range,
-   * and cursor-based pagination.
+   * Query events with optional filtering by type, agentId, durable
+   * correlation identity, time range, and cursor-based pagination.
    */
   async getEvents(options: {
     cursor?: number;
     limit?: number;
     type?: string;
     agentId?: string;
+    turnId?: string;
+    conversationId?: string;
     since?: number;
-  } = {}): Promise<Array<{ seq: number; type: string; agentId: string; payload: string; createdAt: number }>> {
-    const { cursor, limit: lim = 50, type: eventType, agentId, since } = options;
+  } = {}): Promise<Array<{
+    seq: number;
+    type: string;
+    agentId: string;
+    turnId: string | null;
+    conversationId: string | null;
+    payload: string;
+    createdAt: number;
+  }>> {
+    const {
+      cursor,
+      limit: lim = 50,
+      type: eventType,
+      agentId,
+      turnId,
+      conversationId,
+      since,
+    } = options;
 
     const conditions = [];
     if (cursor) conditions.push(lt(this.schema.eventStore.seq, cursor));
     if (eventType) conditions.push(eq(this.schema.eventStore.type, eventType));
     if (agentId) conditions.push(eq(this.schema.eventStore.agentId, agentId));
+    if (turnId) conditions.push(eq(this.schema.eventStore.turnId, turnId));
+    if (conversationId) conditions.push(eq(this.schema.eventStore.conversationId, conversationId));
     if (since) conditions.push(gt(this.schema.eventStore.createdAt, since));
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
@@ -4107,6 +4127,8 @@ export class DatabaseRepository {
         seq: this.schema.eventStore.seq,
         type: this.schema.eventStore.type,
         agentId: this.schema.eventStore.agentId,
+        turnId: this.schema.eventStore.turnId,
+        conversationId: this.schema.eventStore.conversationId,
         payload: this.schema.eventStore.payload,
         createdAt: this.schema.eventStore.createdAt,
       })

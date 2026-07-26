@@ -61,6 +61,8 @@ describe('EventsPage', () => {
         seq: 1,
         type: 'turn.completed',
         agentId: 'agent-1',
+        turnId: null,
+        conversationId: null,
         createdAt: Date.now(),
         payload: JSON.stringify({ message: 'done' }),
       }],
@@ -139,6 +141,8 @@ describe('EventsPage', () => {
           seq: 1,
           type: 'TOOL_CALL_START',
           agentId: 'agent-1',
+          turnId: null,
+          conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
             toolCallName: 'search_docs',
@@ -150,6 +154,8 @@ describe('EventsPage', () => {
           seq: 2,
           type: 'TOOL_CALL_RESULT',
           agentId: 'agent-1',
+          turnId: null,
+          conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
             toolCallName: 'search_docs',
@@ -161,6 +167,8 @@ describe('EventsPage', () => {
           seq: 3,
           type: 'CUSTOM',
           agentId: 'agent-1',
+          turnId: null,
+          conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
             name: 'ctxmill.turn.pending',
@@ -172,6 +180,8 @@ describe('EventsPage', () => {
           seq: 4,
           type: 'CUSTOM',
           agentId: 'agent-1',
+          turnId: null,
+          conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
             name: 'ctxmill.message.committed',
@@ -183,6 +193,8 @@ describe('EventsPage', () => {
           seq: 5,
           type: 'TEXT_MESSAGE_CONTENT',
           agentId: 'agent-1',
+          turnId: null,
+          conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
             role: 'assistant',
@@ -193,6 +205,8 @@ describe('EventsPage', () => {
           seq: 6,
           type: 'CUSTOM',
           agentId: 'agent-1',
+          turnId: null,
+          conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
             name: 'ctxmill.a2ui.render',
@@ -223,6 +237,8 @@ describe('EventsPage', () => {
         seq: 12,
         type: 'dev1.callback_auth.live.with.a.long.type.name',
         agentId: 'agent-1',
+        turnId: null,
+        conversationId: null,
         createdAt: Date.now(),
         payload: JSON.stringify({ message: 'callback auth event received' }),
       }],

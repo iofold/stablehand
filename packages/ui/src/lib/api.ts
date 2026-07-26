@@ -47,8 +47,11 @@ import {
   type BudgetSpendResponse,
   type ConversationSummary,
   type ConversationTurnStartInput,
+  type EventListInput,
+  type EventListResponse,
   type InterruptResolveInput,
   type ModelGatewayStatus,
+  type PersistedEvent,
   type SandboxSession,
   type Turn,
 } from '@ctxmill/contracts';
@@ -490,18 +493,8 @@ export async function updateSettings(
 
 // ── Event Log operations ────────────────────────────────────────────
 
-export interface EventRecord {
-  seq: number;
-  type: string;
-  agentId: string;
-  payload: string;
-  createdAt: number;
-}
-
-export interface EventsResponse {
-  events: EventRecord[];
-  nextCursor?: number;
-}
+export type EventRecord = PersistedEvent;
+export type EventsResponse = EventListResponse;
 
 export interface EventStats {
   total: number;
@@ -510,13 +503,7 @@ export interface EventStats {
   recentRate: number;
 }
 
-export async function fetchEvents(params?: {
-  cursor?: number;
-  limit?: number;
-  type?: string;
-  agentId?: string;
-  since?: number;
-}): Promise<EventsResponse> {
+export async function fetchEvents(params?: EventListInput): Promise<EventsResponse> {
   return apiFetch<EventsResponse>(withQuery(`${API_BASE}/events`, params));
 }
 
