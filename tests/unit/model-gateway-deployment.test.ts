@@ -195,6 +195,9 @@ describe('model gateway deployment', () => {
     expect(
       compose.services?.litellm?.environment?.CLOUDFLARE_API_KEY,
     ).toBe('${CLOUDFLARE_API_KEY:-}');
+    expect(config.model_list).not.toContainEqual(expect.objectContaining({
+      model_name: 'glm-5.2',
+    }));
   });
 
   it('publishes the authenticated admin UI through the dev1 TLS router', () => {

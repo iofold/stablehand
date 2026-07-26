@@ -53,16 +53,6 @@ model_list:
     litellm_params:
       model: cloudflare/@cf/qwen/qwen3-30b-a3b-fp8
       api_key: os.environ/CLOUDFLARE_API_KEY
-  # GLM via OpenRouter — needs OPENROUTER_API_KEY in the gateway env before
-  # first use; pricing pinned explicitly so the ledger prices it regardless
-  # of the built-in price map (openrouter z-ai/glm-5.2 list price, 2026-07-23).
-  - model_name: glm-5.2
-    litellm_params:
-      model: openrouter/z-ai/glm-5.2
-      api_key: os.environ/OPENROUTER_API_KEY
-      input_cost_per_token: 0.000000812
-      output_cost_per_token: 0.000002552
-
 litellm_settings:
   turn_off_message_logging: true
   drop_params: true
