@@ -551,6 +551,12 @@ describe('performance profile', () => {
       estimatedModelCalls: 31,
       peakConcurrency: 1,
     });
+    const piGoogleStages = readProfile('dev2-model-matrix').stages.filter((stage) =>
+      stage.harness === 'pi-agent' && stage.harnessConfig.provider === 'google');
+    expect(piGoogleStages).not.toHaveLength(0);
+    expect(piGoogleStages.every((stage) =>
+      Number(stage.harnessConfig.maxTokens) >= 256
+      && stage.harnessConfig.thinkingLevel === 'minimal')).toBe(true);
     expect(scale.stages.every((stage) =>
       stage.harnessConfig.provider === 'openai'
       && stage.harnessConfig.model === 'cf-glm-5.2')).toBe(true);

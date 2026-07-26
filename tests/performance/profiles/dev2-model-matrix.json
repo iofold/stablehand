@@ -245,7 +245,8 @@
       "harnessConfig": {
         "provider": "google",
         "model": "gemini-3.6-flash",
-        "maxTokens": 64
+        "maxTokens": 256,
+        "thinkingLevel": "minimal"
       }
     },
     {
