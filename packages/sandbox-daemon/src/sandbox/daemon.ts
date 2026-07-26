@@ -50,6 +50,7 @@ import {
   resolvePtcTurnDeliveryContext,
   runWithTurnDeliveryContext,
 } from './turn-delivery-context.js';
+import { flushOpenTelemetry } from '../observability/telemetry-flush.js';
 
 import type { ResolvedSecrets } from '../harness/types.js';
 import type { ToolContext, ToolDefinition } from '../tool/types.js';
@@ -364,10 +365,14 @@ async function handleSuspendSession(req: SuspendSessionRequest) {
  * Aborts any in-progress DeliverTurn stream, then instructs the runner to
  * tear down the current session.
  */
-async function handleKillSession(req: KillSessionRequest) {
+export async function handleKillSession(req: KillSessionRequest) {
   console.error(`[sandbox] KillSession called — sessionId=${req.sessionId}, reason=${req.reason}`);
 
   await killSession(req.sessionId);
+  // DeliverTurn is server-streaming, and its transport span finishes only
+  // after the client receives the terminal frame. Flush it before the
+  // orchestrator removes this short-lived sandbox Job.
+  await flushOpenTelemetry();
 
   return create(KillSessionResponseSchema, {
     finalStatus: 'killed',
