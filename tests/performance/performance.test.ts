@@ -557,6 +557,11 @@ describe('performance profile', () => {
     expect(piGoogleStages.every((stage) =>
       Number(stage.harnessConfig.maxTokens) >= 256
       && stage.harnessConfig.thinkingLevel === 'minimal')).toBe(true);
+    const piQwenStages = readProfile('dev2-model-matrix').stages.filter((stage) =>
+      stage.harness === 'pi-agent' && stage.harnessConfig.model === 'cf-qwen3-30b');
+    expect(piQwenStages).not.toHaveLength(0);
+    expect(piQwenStages.every((stage) =>
+      Number(stage.harnessConfig.maxTokens) >= 1024)).toBe(true);
     expect(scale.stages.every((stage) =>
       stage.harnessConfig.provider === 'openai'
       && stage.harnessConfig.model === 'cf-glm-5.2')).toBe(true);

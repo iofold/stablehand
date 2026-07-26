@@ -450,7 +450,7 @@
       "harnessConfig": {
         "provider": "openai",
         "model": "cf-qwen3-30b",
-        "maxTokens": 256
+        "maxTokens": 1024
       }
     },
     {
