@@ -22,15 +22,22 @@ tests/performance/scripts/run-dev2.sh \
   .tmp/performance/dev2-capacity-manual
 ```
 
+Inspect the exact load without a token or network call:
+
+```bash
+pnpm exec bun tests/performance/cli.ts plan \
+  --profile tests/performance/profiles/dev2-model-matrix.json
+```
+
 The wrapper reads `CTXMILL_API_TOKEN` from the process environment or, when it
 is absent, decodes it in memory from the dev2 `ctxmill-core-secrets` Secret.
 The token is not printed or written to the evidence directory. The default
 Kubeconfig is `/path/to/workspace/infra/.k3s-kubeconfig.yaml`.
 
-Do not run `dev2-capacity.json` or `dev2-sse-fanout.json` casually. Dev2 is a
-shared node. The sampler aborts the runner when node CPU or memory exceeds the
-profile ceiling, and the runner stops a stage when its measured turn error rate
-crosses the declared threshold.
+Do not run `dev2-capacity.json`, `dev2-scale-10.json`, or
+`dev2-sse-fanout.json` casually. Dev2 is a shared node. The sampler aborts the
+runner when node CPU or memory exceeds the profile ceiling, and the runner
+stops a stage when its measured turn error rate crosses the declared threshold.
 
 ## Profiles
 
@@ -43,10 +50,75 @@ crosses the declared threshold.
 - `dev2-sse-fanout.json`: three hot-agent conversations with 10 and then 50
   durable SSE consumers. It isolates server-side stream fanout more than the
   ordinary capacity profile.
+- `dev2-model-matrix.json`: 17 bounded turns across Deep Agents and PI Agent.
+  It covers native OpenAI, Anthropic, and Google gateway protocols; all five
+  curated Workers AI aliases; and one heterogeneous Deep Agents turn with GLM
+  and Gemini subagents. The plan estimates 21 model calls.
+- `dev2-scale-10.json`: a 1, 3, 5, 8, 10 concurrency ramp for both Deep Agents
+  and PI Agent, then warm and checkpoint/restore lanes at concurrency 5. Its
+  exact ceiling is 262 CTXMILL turns/model calls and 20 simultaneous SSE
+  connections. Run it only after dev2 is configured for at least ten global
+  sandboxes and a quiet test window is reserved.
 
 Profiles are strict JSON. Every non-cold stage must declare at least one
 `warmupTurns`; this prevents a mislabeled "warm" or "resume" result from
-actually measuring a cold session.
+actually measuring a cold session. `safety.maxTurns` and
+`safety.maxEstimatedModelCalls` reject accidental load expansion before the
+first API call. `requirements.modelGateway: "required"` fails before agent
+reconciliation unless CTXMILL reports a healthy LiteLLM reconciliation path;
+this prevents aliases from silently falling back to direct provider traffic.
+The dev2 wrapper also checks `requirements.minGlobalContainers` against the
+effective `/api/sandbox/metrics` value, so the scale-10 ramp cannot be mistaken
+for ten-way execution while the orchestrator is still queuing above five.
+
+## Harness and model coverage
+
+The `langgraph` harness is CTXMILL's Deep Agents implementation. It constructs
+`deepagents.createDeepAgent()` with provider-native LangChain clients, supports
+cross-provider subagents, and aggregates usage by LangChain model-run ID. The
+matrix runs `deepagents` 1.11.1, the current npm release on 2026-07-26.
+
+PI Agent uses `@earendil-works/pi-coding-agent` and `pi-ai` 0.82.1. It has one
+configured model per session rather than Deep Agents-style subagents. Its
+canonical config supports `maxTokens`, `reasoning`, and `thinkingLevel`, so a
+benchmark can bound output and reasoning without provider-specific keys in the
+agent manifest. Both harnesses attach opaque per-turn correlation headers when
+the deployment gateway is selected.
+
+The matrix intentionally exercises protocol separately from model identity:
+
+| Lane | Canonical harness provider | LiteLLM alias/protocol |
+| --- | --- | --- |
+| GPT-5.4 mini | `openai` | `gpt-5.4-mini` over OpenAI-compatible `/v1` |
+| Claude Haiku 4.5 | `anthropic` | `claude-haiku-4-5` over native Anthropic |
+| Gemini 3.6 Flash | `google` | `gemini-3.6-flash` over native Google `v1beta` |
+| GLM 5.2 | `openai` | `cf-glm-5.2` translated by LiteLLM to Workers AI |
+| GPT-OSS, Kimi, Gemma, Qwen | `openai` | curated `cf-*` Workers AI aliases |
+
+GLM 5.2 is `@cf/zai-org/glm-5.2` behind the gateway. A durable Workers AI
+token with the correct account scope is a release prerequisite; a listed
+LiteLLM alias is not proof that its provider credential works. The matrix
+uses explicit output/reasoning bounds, and the runner still records actual
+gateway-reconciled token and cost coverage.
+
+## LLM budget envelope
+
+The load planner counts calls; it does not duplicate the product pricing table
+or pretend a dollar estimate is enforcement. For short fixed-response prompts,
+use these operating envelopes:
+
+| Profile | Planned turns | Estimated model calls | Expected spend | Reserve | Hard policy ceiling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `dev2-model-matrix` | 17 | 21 | $0.10-$0.30 | $1 | $1 |
+| `dev2-scale-10` | 262 | 262 | $0.65-$1.10 | $2 | $3 |
+| Both once | 279 | 283 | $0.75-$1.40 | $3 | $4 |
+
+The range assumes roughly 3,000-5,000 input tokens and at most 64 output
+tokens per ordinary model call. The mixed Deep Agents lane is budgeted as five
+calls. Provider retries, model-side reasoning, tool loops, and pricing changes
+can move actual spend, which is why the deployment gateway policy—not this
+estimate—must hold the hard ceiling. Repeat capacity runs require multiplying
+the reserve by the repeat count.
 
 ## Measurements
 
@@ -101,7 +173,8 @@ dev1-side runner.
 Every run writes under `.tmp/performance/` by default:
 
 ```text
-run.json                    complete profile and stage result
+plan.json                   preflight load and model-call accounting
+run.json                    v2 result with plan, requirements, and gateway preflight
 turns.jsonl                 one external sample per measured turn
 turn-ids.txt                trace-correlation keys
 kubernetes.jsonl            raw two-second resource samples

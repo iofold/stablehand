@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import type {
   CtxmillControlClient,
 } from '../../../packages/client/src/index.js';
+import type {
+  ModelGatewayStatus,
+} from '../../../packages/contracts/src/index.js';
 
 import {
   estimateClockOffset,
@@ -12,9 +15,12 @@ import {
 import {
   reconcileBenchmarkAgents,
 } from './agents.js';
-import type {
-  PerformanceProfile,
-  PerformanceStage,
+import {
+  assertModelGatewayRequirement,
+  summarizePerformancePlan,
+  type PerformancePlan,
+  type PerformanceProfile,
+  type PerformanceStage,
 } from './profile.js';
 import { mapConcurrent } from './pool.js';
 import {
@@ -175,7 +181,12 @@ export interface PerformanceRunClock {
 
 type PerformanceControlClient = Pick<
   CtxmillControlClient,
-  'agents' | 'turns' | 'sandboxSessions' | 'health' | 'agentEvents'
+  | 'agents'
+  | 'turns'
+  | 'sandboxSessions'
+  | 'health'
+  | 'agentEvents'
+  | 'modelGateway'
 >;
 
 export interface PerformanceStageResult {
@@ -191,10 +202,13 @@ export interface PerformanceStageResult {
 }
 
 export interface PerformanceRunResult {
-  schemaVersion: 1;
+  schemaVersion: 2;
   runId: string;
   profile: string;
   target: PerformanceProfile['target'];
+  requirements: PerformanceProfile['requirements'];
+  plan: PerformancePlan;
+  modelGateway: ModelGatewayStatus | null;
   startedAt: string;
   completedAt: string;
   clock: PerformanceRunClock;
@@ -273,6 +287,21 @@ export async function runPerformanceProfile(
     ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const runId = options.runId ?? randomUUID();
   const startedAtMs = now();
+  let modelGateway: ModelGatewayStatus | null = null;
+  try {
+    modelGateway = await options.client.modelGateway.status({
+      signal: options.signal,
+      timeoutMs: 10_000,
+    });
+  } catch (error) {
+    if (options.profile.requirements.modelGateway === 'required') {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unable to inspect required model gateway: ${message}`, {
+        cause: error,
+      });
+    }
+  }
+  assertModelGatewayRequirement(options.profile, modelGateway);
   const clock = await calibrateClock(options.client, now, options.signal);
   const stages: PerformanceStageResult[] = [];
 
@@ -535,10 +564,13 @@ export async function runPerformanceProfile(
 
   const completedAtMs = now();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId,
     profile: options.profile.name,
     target: options.profile.target,
+    requirements: options.profile.requirements,
+    plan: summarizePerformancePlan(options.profile),
+    modelGateway,
     startedAt: new Date(startedAtMs).toISOString(),
     completedAt: new Date(completedAtMs).toISOString(),
     clock,

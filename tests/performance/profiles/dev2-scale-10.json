@@ -1,0 +1,278 @@
+{
+  "schemaVersion": 1,
+  "name": "dev2-scale-10",
+  "target": {
+    "apiBase": "https://stablehand.staging.example.com/api",
+    "kubernetesNamespace": "ctxmill"
+  },
+  "requirements": {
+    "modelGateway": "required",
+    "minGlobalContainers": 10
+  },
+  "stages": [
+    {
+      "name": "deepagents-cold-c1",
+      "harness": "langgraph",
+      "agentPrefix": "perf-scale-da-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "reasoning": "low"
+      }
+    },
+    {
+      "name": "deepagents-cold-c3",
+      "harness": "langgraph",
+      "agentPrefix": "perf-scale-da-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 3,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "reasoning": "low"
+      }
+    },
+    {
+      "name": "deepagents-cold-c5",
+      "harness": "langgraph",
+      "agentPrefix": "perf-scale-da-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 5,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 4000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "reasoning": "low"
+      }
+    },
+    {
+      "name": "deepagents-cold-c8",
+      "harness": "langgraph",
+      "agentPrefix": "perf-scale-da-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 8,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "reasoning": "low"
+      }
+    },
+    {
+      "name": "deepagents-cold-c10",
+      "harness": "langgraph",
+      "agentPrefix": "perf-scale-da-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 10,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "reasoning": "low"
+      }
+    },
+    {
+      "name": "pi-cold-c1",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-scale-pi-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "pi-cold-c3",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-scale-pi-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 3,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "pi-cold-c5",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-scale-pi-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 5,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 4000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "pi-cold-c8",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-scale-pi-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 8,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "pi-cold-c10",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-scale-pi-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 10,
+      "iterations": 3,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "deepagents-warm-c5",
+      "harness": "langgraph",
+      "agentPrefix": "perf-scale-da-warm",
+      "topology": "unique-agents",
+      "sessionMode": "warm",
+      "concurrency": 5,
+      "iterations": 5,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "settleMs": 4000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "reasoning": "low"
+      }
+    },
+    {
+      "name": "pi-warm-c5",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-scale-pi-warm",
+      "topology": "unique-agents",
+      "sessionMode": "warm",
+      "concurrency": 5,
+      "iterations": 5,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "settleMs": 4000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "deepagents-resume-c5",
+      "harness": "langgraph",
+      "agentPrefix": "perf-scale-da-resume",
+      "topology": "unique-agents",
+      "sessionMode": "resume",
+      "concurrency": 5,
+      "iterations": 3,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "reasoning": "low"
+      }
+    },
+    {
+      "name": "pi-resume-c5",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-scale-pi-resume",
+      "topology": "unique-agents",
+      "sessionMode": "resume",
+      "concurrency": 5,
+      "iterations": 3,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "settleMs": 5000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "thinkingLevel": "minimal"
+      }
+    }
+  ],
+  "safety": {
+    "maxConcurrency": 10,
+    "maxTurns": 300,
+    "maxEstimatedModelCalls": 300,
+    "abortErrorRate": 0.05,
+    "maxNodeCpuPercent": 75,
+    "maxNodeMemoryPercent": 75
+  }
+}

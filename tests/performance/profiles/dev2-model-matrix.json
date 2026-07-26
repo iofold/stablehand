@@ -1,0 +1,328 @@
+{
+  "schemaVersion": 1,
+  "name": "dev2-model-matrix",
+  "target": {
+    "apiBase": "https://stablehand.staging.example.com/api",
+    "kubernetesNamespace": "ctxmill"
+  },
+  "requirements": {
+    "modelGateway": "required"
+  },
+  "stages": [
+    {
+      "name": "deepagents-openai-gpt-5.4-mini",
+      "harness": "langgraph",
+      "agentPrefix": "perf-matrix-da-openai",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "pi-openai-gpt-5.4-mini",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-matrix-pi-openai",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 64,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "deepagents-anthropic-haiku-4.5",
+      "harness": "langgraph",
+      "agentPrefix": "perf-matrix-da-anthropic",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "maxTokens": 64
+      }
+    },
+    {
+      "name": "pi-anthropic-haiku-4.5",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-matrix-pi-anthropic",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "maxTokens": 64
+      }
+    },
+    {
+      "name": "deepagents-google-gemini-3.6-flash",
+      "harness": "langgraph",
+      "agentPrefix": "perf-matrix-da-google",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "google",
+        "model": "gemini-3.6-flash",
+        "maxTokens": 64
+      }
+    },
+    {
+      "name": "pi-google-gemini-3.6-flash",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-matrix-pi-google",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "google",
+        "model": "gemini-3.6-flash",
+        "maxTokens": 64
+      }
+    },
+    {
+      "name": "deepagents-workers-glm-5.2",
+      "harness": "langgraph",
+      "agentPrefix": "perf-matrix-da-glm",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-glm-5.2",
+        "maxTokens": 64,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "pi-workers-glm-5.2",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-matrix-pi-glm",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-glm-5.2",
+        "maxTokens": 64,
+        "reasoning": true,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "deepagents-workers-gpt-oss-120b",
+      "harness": "langgraph",
+      "agentPrefix": "perf-matrix-da-gpt-oss",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gpt-oss-120b",
+        "maxTokens": 64,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "pi-workers-gpt-oss-120b",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-matrix-pi-gpt-oss",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gpt-oss-120b",
+        "maxTokens": 64,
+        "reasoning": true,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "deepagents-workers-kimi-k2.7-code",
+      "harness": "langgraph",
+      "agentPrefix": "perf-matrix-da-kimi",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-kimi-k2.7-code",
+        "maxTokens": 64,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "pi-workers-kimi-k2.7-code",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-matrix-pi-kimi",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-kimi-k2.7-code",
+        "maxTokens": 64,
+        "reasoning": true,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "deepagents-workers-gemma-4-26b",
+      "harness": "langgraph",
+      "agentPrefix": "perf-matrix-da-gemma",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gemma-4-26b",
+        "maxTokens": 64
+      }
+    },
+    {
+      "name": "pi-workers-gemma-4-26b",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-matrix-pi-gemma",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gemma-4-26b",
+        "maxTokens": 64
+      }
+    },
+    {
+      "name": "deepagents-workers-qwen3-30b",
+      "harness": "langgraph",
+      "agentPrefix": "perf-matrix-da-qwen",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-qwen3-30b",
+        "maxTokens": 64
+      }
+    },
+    {
+      "name": "pi-workers-qwen3-30b",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-matrix-pi-qwen",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "sseClientsPerAgent": 2,
+      "prompt": "Reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-qwen3-30b",
+        "maxTokens": 64
+      }
+    },
+    {
+      "name": "deepagents-mixed-provider-subagents",
+      "harness": "langgraph",
+      "agentPrefix": "perf-matrix-da-mixed",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 1,
+      "expectedModelCallsPerTurn": 5,
+      "sseClientsPerAgent": 2,
+      "timeoutMs": 240000,
+      "prompt": "Use the task tool once with glm-reviewer and once with gemini-reviewer. Ask each to return one word. Then reply with exactly MATRIX_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "maxTokens": 128,
+        "reasoning": "low",
+        "subagents": [
+          {
+            "name": "glm-reviewer",
+            "description": "A GLM reviewer for cross-model delegation certification.",
+            "systemPrompt": "Reply with exactly GLM_OK and nothing else.",
+            "provider": "openai",
+            "model": "cf-glm-5.2",
+            "maxTokens": 64,
+            "reasoning": "off"
+          },
+          {
+            "name": "gemini-reviewer",
+            "description": "A Gemini reviewer for cross-provider delegation certification.",
+            "systemPrompt": "Reply with exactly GEMINI_OK and nothing else.",
+            "provider": "google",
+            "model": "gemini-3.6-flash",
+            "maxTokens": 64
+          }
+        ]
+      }
+    }
+  ],
+  "safety": {
+    "maxConcurrency": 1,
+    "maxTurns": 25,
+    "maxEstimatedModelCalls": 30,
+    "abortErrorRate": 0.05,
+    "maxNodeCpuPercent": 75,
+    "maxNodeMemoryPercent": 75
+  }
+}

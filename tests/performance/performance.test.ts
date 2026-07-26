@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -10,7 +12,9 @@ import {
   type TurnEventObservation,
 } from './src/events.js';
 import {
+  assertModelGatewayRequirement,
   parsePerformanceProfile,
+  summarizePerformancePlan,
 } from './src/profile.js';
 import {
   percentile,
@@ -23,15 +27,19 @@ import {
 } from './src/agents.js';
 import { mapConcurrent } from './src/pool.js';
 import { AgentStreamHub } from './src/stream-hub.js';
-import { executeMeasuredTurn } from './src/runner.js';
+import {
+  executeMeasuredTurn,
+  runPerformanceProfile,
+} from './src/runner.js';
 import {
   parseCpuCores,
   parseMemoryBytes,
   summarizeKubernetesSamples,
 } from './src/kubernetes.js';
 import { renderPerformanceReport } from './src/report.js';
-import type {
-  AgentEventStreamItem,
+import {
+  CtxmillControlClient,
+  type AgentEventStreamItem,
 } from '../../packages/client/src/index.js';
 
 describe('performance statistics', () => {
@@ -286,6 +294,217 @@ describe('performance profile', () => {
         },
       }],
     })).toThrow(/requires warmupTurns >= 1/);
+  });
+
+  it('plans measured, warmup, model-call, and SSE load before execution', () => {
+    const profile = parsePerformanceProfile({
+      schemaVersion: 1,
+      name: 'model-matrix',
+      target: {
+        apiBase: 'https://stablehand.staging.example.com/api',
+        kubernetesNamespace: 'ctxmill',
+      },
+      requirements: { modelGateway: 'required' },
+      safety: {
+        maxConcurrency: 3,
+        maxTurns: 20,
+        maxEstimatedModelCalls: 40,
+      },
+      stages: [{
+        name: 'deepagents-mixed',
+        harness: 'langgraph',
+        agentPrefix: 'perf-deepagents-mixed',
+        topology: 'unique-agents',
+        sessionMode: 'warm',
+        concurrency: 3,
+        iterations: 2,
+        warmupTurns: 1,
+        expectedModelCallsPerTurn: 4,
+        sseClientsPerAgent: 2,
+        prompt: 'Delegate once, then reply.',
+        harnessConfig: {
+          provider: 'openai',
+          model: 'gpt-5.4-mini',
+          subagents: [{
+            name: 'glm-reviewer',
+            description: 'Review with GLM.',
+            systemPrompt: 'Review concisely.',
+            provider: 'openai',
+            model: 'cf-glm-5.2',
+          }],
+        },
+      }],
+    });
+
+    expect(summarizePerformancePlan(profile)).toEqual({
+      stages: [{
+        name: 'deepagents-mixed',
+        harness: 'langgraph',
+        modelRoutes: [
+          { provider: 'openai', model: 'gpt-5.4-mini' },
+          { provider: 'openai', model: 'cf-glm-5.2' },
+        ],
+        concurrency: 3,
+        measuredTurns: 6,
+        warmupTurns: 3,
+        totalTurns: 9,
+        estimatedModelCalls: 36,
+        sseConnections: 6,
+      }],
+      measuredTurns: 6,
+      warmupTurns: 3,
+      totalTurns: 9,
+      estimatedModelCalls: 36,
+      peakConcurrency: 3,
+      peakSseConnections: 6,
+    });
+  });
+
+  it('rejects profiles whose total turn plan exceeds the declared ceiling', () => {
+    expect(() => parsePerformanceProfile({
+      schemaVersion: 1,
+      name: 'too-many-turns',
+      target: {
+        apiBase: 'https://stablehand.staging.example.com/api',
+        kubernetesNamespace: 'ctxmill',
+      },
+      safety: { maxTurns: 5 },
+      stages: [{
+        name: 'pi-c3',
+        harness: 'pi-agent',
+        agentPrefix: 'perf-pi',
+        topology: 'unique-agents',
+        sessionMode: 'cold',
+        concurrency: 3,
+        iterations: 2,
+        sseClientsPerAgent: 1,
+        prompt: 'hello',
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
+      }],
+    })).toThrow(/planned turns 6 exceeds safety.maxTurns 5/);
+  });
+
+  it('requires a healthy model gateway when a profile declares one', () => {
+    const profile = parsePerformanceProfile({
+      schemaVersion: 1,
+      name: 'gateway-required',
+      target: {
+        apiBase: 'https://stablehand.staging.example.com/api',
+        kubernetesNamespace: 'ctxmill',
+      },
+      requirements: { modelGateway: 'required' },
+      stages: [{
+        name: 'glm',
+        harness: 'pi-agent',
+        agentPrefix: 'perf-glm',
+        topology: 'unique-agents',
+        sessionMode: 'cold',
+        concurrency: 1,
+        iterations: 1,
+        sseClientsPerAgent: 1,
+        prompt: 'hello',
+        harnessConfig: { provider: 'openai', model: 'cf-glm-5.2' },
+      }],
+    });
+
+    expect(() => assertModelGatewayRequirement(profile, {
+      enabled: false,
+      profile: null,
+      revision: null,
+      state: 'disabled',
+      watermarkAt: null,
+      lastAttemptAt: null,
+      lastSuccessAt: null,
+      lagMs: null,
+      lastError: null,
+      pendingCalls: 0,
+      unpricedCalls: 0,
+      quarantinedTransactions: 0,
+      orphanTransactions: 0,
+    })).toThrow(/requires a healthy model gateway.*disabled/);
+  });
+
+  it('fails a required-gateway run before clock probes or agent mutations', async () => {
+    const requestedUrls: string[] = [];
+    const client = new CtxmillControlClient({
+      apiBase: 'https://ctxmill.example/api',
+      fetch: async (input) => {
+        requestedUrls.push(String(input));
+        return new Response(JSON.stringify({
+          enabled: false,
+          profile: null,
+          revision: null,
+          state: 'disabled',
+          watermarkAt: null,
+          lastAttemptAt: null,
+          lastSuccessAt: null,
+          lagMs: null,
+          lastError: null,
+          pendingCalls: 0,
+          unpricedCalls: 0,
+          quarantinedTransactions: 0,
+          orphanTransactions: 0,
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+    const profile = parsePerformanceProfile({
+      schemaVersion: 1,
+      name: 'gateway-preflight',
+      target: {
+        apiBase: 'https://ctxmill.example/api',
+        kubernetesNamespace: 'ctxmill',
+      },
+      requirements: { modelGateway: 'required' },
+      stages: [{
+        name: 'glm',
+        harness: 'pi-agent',
+        agentPrefix: 'perf-glm',
+        topology: 'unique-agents',
+        sessionMode: 'cold',
+        concurrency: 1,
+        iterations: 1,
+        sseClientsPerAgent: 1,
+        prompt: 'hello',
+        harnessConfig: { provider: 'openai', model: 'cf-glm-5.2' },
+      }],
+    });
+
+    await expect(runPerformanceProfile({ client, profile })).rejects.toThrow(
+      /requires a healthy model gateway.*disabled/,
+    );
+    expect(requestedUrls).toEqual([
+      'https://ctxmill.example/api/model-gateway/status',
+    ]);
+  });
+
+  it('ships a bounded cross-harness GLM matrix and ten-way scale plan', () => {
+    const readProfile = (name: string) => parsePerformanceProfile(JSON.parse(
+      readFileSync(new URL(`./profiles/${name}.json`, import.meta.url), 'utf8'),
+    ));
+    const matrix = summarizePerformancePlan(readProfile('dev2-model-matrix'));
+    const scale = readProfile('dev2-scale-10');
+    const scalePlan = summarizePerformancePlan(scale);
+
+    expect(new Set(matrix.stages.map((stage) => stage.harness))).toEqual(
+      new Set(['langgraph', 'pi-agent']),
+    );
+    expect(matrix.stages.some((stage) =>
+      stage.modelRoutes.some((route) => route.model === 'cf-glm-5.2'))).toBe(true);
+    expect(matrix).toMatchObject({
+      totalTurns: 17,
+      estimatedModelCalls: 21,
+      peakConcurrency: 1,
+    });
+    expect(scale.requirements.minGlobalContainers).toBe(10);
+    expect(scalePlan).toMatchObject({
+      totalTurns: 262,
+      estimatedModelCalls: 262,
+      peakConcurrency: 10,
+      peakSseConnections: 20,
+    });
   });
 });
 
@@ -652,13 +871,34 @@ describe('Kubernetes resource samples', () => {
 describe('performance report', () => {
   it('renders TTFT, resume, throughput, fanout, and resource evidence', () => {
     const report = renderPerformanceReport({
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId: 'run-1',
       profile: 'dev2-smoke',
       target: {
         apiBase: 'https://stablehand.staging.example.com/api',
         kubernetesNamespace: 'ctxmill',
       },
+      requirements: { modelGateway: 'optional' },
+      plan: {
+        stages: [{
+          name: 'resume',
+          harness: 'langgraph',
+          modelRoutes: [{ provider: 'openai', model: 'gpt-5.4-mini' }],
+          concurrency: 1,
+          measuredTurns: 1,
+          warmupTurns: 1,
+          totalTurns: 2,
+          estimatedModelCalls: 2,
+          sseConnections: 2,
+        }],
+        measuredTurns: 1,
+        warmupTurns: 1,
+        totalTurns: 2,
+        estimatedModelCalls: 2,
+        peakConcurrency: 1,
+        peakSseConnections: 2,
+      },
+      modelGateway: null,
       startedAt: '2026-07-25T00:00:00.000Z',
       completedAt: '2026-07-25T00:01:00.000Z',
       clock: {
@@ -739,6 +979,7 @@ describe('performance report', () => {
     });
 
     expect(report).toContain('Time to first token');
+    expect(report).toContain('openai/gpt-5.4-mini');
     expect(report).toContain('Restore p95');
     expect(report).toContain('SSE fanout mismatches');
     expect(report).toContain('Peak node CPU');

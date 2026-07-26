@@ -20,7 +20,10 @@ import {
   summarizeKubernetesSamples,
   type KubernetesResourceSample,
 } from './src/kubernetes.js';
-import { parsePerformanceProfile } from './src/profile.js';
+import {
+  parsePerformanceProfile,
+  summarizePerformancePlan,
+} from './src/profile.js';
 import { renderPerformanceReport } from './src/report.js';
 import {
   runPerformanceProfile,
@@ -32,7 +35,8 @@ function usage(): never {
     'Usage:\n'
       + '  bun tests/performance/cli.ts run --profile <profile.json> --output <directory>\n'
       + '  bun tests/performance/cli.ts finalize --result <run.json> '
-      + '--kubernetes <kubernetes.jsonl> --output <directory>\n',
+      + '--kubernetes <kubernetes.jsonl> --output <directory>\n'
+      + '  bun tests/performance/cli.ts plan --profile <profile.json>\n',
   );
   process.exit(2);
 }
@@ -70,13 +74,23 @@ async function runCommand(values: Record<string, string | boolean | undefined>):
   const profilePath = typeof values.profile === 'string' ? values.profile : undefined;
   const output = typeof values.output === 'string' ? values.output : undefined;
   if (!profilePath || !output) usage();
+  const profile = parsePerformanceProfile(await readJson(profilePath));
+  await mkdir(output, { recursive: true, mode: 0o700 });
+  await writeFile(
+    `${output}/plan.json`,
+    `${JSON.stringify({
+      profile: profile.name,
+      target: profile.target,
+      requirements: profile.requirements,
+      safety: profile.safety,
+      plan: summarizePerformancePlan(profile),
+    }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
   const token = process.env.CTXMILL_API_TOKEN;
   if (!token) {
     throw new Error('CTXMILL_API_TOKEN is required');
   }
-
-  const profile = parsePerformanceProfile(await readJson(profilePath));
-  await mkdir(output, { recursive: true, mode: 0o700 });
   const runId = process.env.CTXMILL_PERF_RUN_ID ?? randomUUID();
   const controller = new AbortController();
   const onSignal = () => controller.abort(new Error('Load runner interrupted'));
@@ -145,6 +159,21 @@ async function runCommand(values: Record<string, string | boolean | undefined>):
   }
 }
 
+async function planCommand(
+  values: Record<string, string | boolean | undefined>,
+): Promise<void> {
+  const profilePath = typeof values.profile === 'string' ? values.profile : undefined;
+  if (!profilePath) usage();
+  const profile = parsePerformanceProfile(await readJson(profilePath));
+  process.stdout.write(`${JSON.stringify({
+    profile: profile.name,
+    target: profile.target,
+    requirements: profile.requirements,
+    safety: profile.safety,
+    plan: summarizePerformancePlan(profile),
+  }, null, 2)}\n`);
+}
+
 async function finalizeCommand(
   values: Record<string, string | boolean | undefined>,
 ): Promise<void> {
@@ -189,6 +218,10 @@ async function main(): Promise<void> {
   }
   if (command === 'finalize') {
     await finalizeCommand(parsed.values);
+    return;
+  }
+  if (command === 'plan') {
+    await planCommand(parsed.values);
     return;
   }
   usage();

@@ -30,18 +30,32 @@ export function renderPerformanceReport(
     `Profile: ${result.profile}`,
     `Target: ${result.target.apiBase}`,
     `Window: ${result.startedAt} to ${result.completedAt}`,
+    `Planned load: ${result.plan.totalTurns} CTXMILL turns `
+      + `(${result.plan.warmupTurns} warmup), about `
+      + `${result.plan.estimatedModelCalls} model calls`,
+    `Model gateway: ${result.modelGateway
+      ? `${result.modelGateway.state} (${result.modelGateway.profile ?? 'no profile'}, `
+        + `${result.modelGateway.revision ?? 'no revision'})`
+      : 'unavailable'}`,
     `Clock offset: ${fixed(result.clock.estimate.offsetMs)} ms `
       + `(uncertainty ${fixed(result.clock.estimate.uncertaintyMs)} ms)`,
     '',
     '## Stage results',
     '',
-    '| Stage | Harness | Mode | Concurrency | SSE clients/agent | Turns | Error rate | Time to first token p95 | Completion p95 | Restore p95 | Turns/s | Events/s | SSE deliveries/s |',
-    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    '| Stage | Harness | Model routes | Mode | Concurrency | SSE clients/agent | Turns | Error rate | Time to first token p95 | Completion p95 | Restore p95 | Turns/s | Events/s | SSE deliveries/s |',
+    '| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
   ];
 
   for (const stage of result.stages) {
+    const plan = result.plan.stages.find((candidate) =>
+      candidate.name === stage.stage.name);
+    const modelRoutes = plan?.modelRoutes
+      .map((route) => `${route.provider}/${route.model}`)
+      .join(', ') || 'unknown';
     lines.push(
-      `| ${stage.stage.name} | ${stage.stage.harness} | ${stage.stage.sessionMode} `
+      `| ${stage.stage.name} | ${stage.stage.harness} `
+      + `| ${modelRoutes} `
+      + `| ${stage.stage.sessionMode} `
       + `| ${stage.stage.concurrency} | ${stage.stage.sseClientsPerAgent} `
       + `| ${stage.summary.turns} `
       + `| ${fixed(stage.summary.errorRate * 100)}% `

@@ -18,6 +18,10 @@ export CTXMILL_PERF_MAX_NODE_MEMORY_PERCENT="$(
   jq -r '.safety.maxNodeMemoryPercent' "$PROFILE_PATH"
 )"
 export CTXMILL_PERF_ABORT_FILE="$OUTPUT_DIR/ABORT"
+API_BASE="$(jq -r '.target.apiBase' "$PROFILE_PATH")"
+MIN_GLOBAL_CONTAINERS="$(
+  jq -r '.requirements.minGlobalContainers // 0' "$PROFILE_PATH"
+)"
 
 umask 077
 mkdir -p "$OUTPUT_DIR"
@@ -33,6 +37,24 @@ if [[ -z "${CTXMILL_API_TOKEN:-}" ]]; then
     exit 1
   fi
   export CTXMILL_API_TOKEN="$(printf '%s' "$token_base64" | base64 -d)"
+fi
+
+if (( MIN_GLOBAL_CONTAINERS > 0 )); then
+  configured_global_containers="$(
+    curl -fsS "$API_BASE/sandbox/metrics" \
+      -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
+      | jq -r '.limits.max_global_containers'
+  )"
+  if ! [[ "$configured_global_containers" =~ ^[0-9]+$ ]]; then
+    printf 'Unable to read effective max_global_containers from %s\n' \
+      "$API_BASE/sandbox/metrics" >&2
+    exit 1
+  fi
+  if (( configured_global_containers < MIN_GLOBAL_CONTAINERS )); then
+    printf 'Profile requires %d global sandboxes; dev2 currently allows %d\n' \
+      "$MIN_GLOBAL_CONTAINERS" "$configured_global_containers" >&2
+    exit 1
+  fi
 fi
 
 sampler_pid=''
