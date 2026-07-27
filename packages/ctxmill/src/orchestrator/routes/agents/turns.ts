@@ -18,6 +18,13 @@ import { getRequestAgent, safeError, toApiAgentTurn } from './helpers.js';
 import type { AgentSubRouteOptions } from './types.js';
 import type { SandboxSessionRow } from '../../../database/repository.js';
 
+const TURN_COST_COVERAGE_FILTER_VALUES: ReadonlySet<string> = new Set([
+  'complete',
+  'partial',
+  'pending',
+  'unpriced',
+]);
+
 type TurnStartApiResponse = {
   turnId: string;
   conversationId: string;
@@ -517,10 +524,29 @@ export async function turnRoutes(
     '/:id/turns',
     { preHandler: [loadAgent] },
     async (
-      request: FastifyRequest<{ Params: { id: string } }>,
+      request: FastifyRequest<{
+        Params: { id: string };
+        Querystring: { coverage?: string | string[] };
+      }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
+
+      const rawCoverage = request.query.coverage;
+      const coverageValues = (Array.isArray(rawCoverage) ? rawCoverage : rawCoverage ? [rawCoverage] : [])
+        .flatMap((value) => value.split(','))
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+      const invalidCoverage = coverageValues.filter(
+        (value) => !TURN_COST_COVERAGE_FILTER_VALUES.has(value),
+      );
+      if (invalidCoverage.length > 0) {
+        return reply.status(400).send({
+          error: `Invalid coverage filter: ${invalidCoverage.join(', ')}. `
+            + 'Valid values: complete, partial, pending, unpriced',
+        });
+      }
+      const coverageFilter = coverageValues.length > 0 ? new Set(coverageValues) : null;
 
       const [turns, sandboxSessions, conversationSummaries] = await Promise.all([
         db.getTurnsByAgent(id),
@@ -538,7 +564,11 @@ export async function turnRoutes(
           turn,
           turn.sandboxSessionId ? sandboxById.get(turn.sandboxSessionId) : null,
           turn.conversationId ? messageCountByConversationId.get(turn.conversationId) ?? 0 : 0,
-        ));
+        ))
+        // Filter on the serialized projection so the result always agrees with
+        // the coverage each turn reports to clients.
+        .filter((turn) => !coverageFilter
+          || (turn.usage != null && coverageFilter.has(turn.usage.cost.coverage)));
 
       return reply.send({ turns: apiTurns });
     },

@@ -125,6 +125,90 @@ describe('Turn API lifecycle', () => {
       ]));
   });
 
+  it('filters the turn listing by cost coverage', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/agents',
+      payload: {
+        name: 'coverage-filter-agent',
+        harness: 'langgraph',
+        harnessConfig: { provider: 'openai', model: 'gpt-5.4-mini' },
+        systemPrompt: 'You are a test agent.',
+        tools: [],
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const coverageAgentId = createRes.json().id as string;
+    const conversation = await container.db.createConversation(coverageAgentId);
+
+    const complete = await container.db.createTurn({
+      agentId: coverageAgentId,
+      conversationId: conversation.id,
+      mode: 'interactive',
+      status: 'completed',
+      startedAt: 1_000,
+      completedAt: 2_000,
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+      costUsd: 0.01,
+    });
+    const gatewayPending = await container.db.createTurn({
+      agentId: coverageAgentId,
+      conversationId: conversation.id,
+      mode: 'interactive',
+      status: 'completed',
+      startedAt: 3_000,
+      completedAt: 4_000,
+      inputTokens: 20,
+      outputTokens: 10,
+      totalTokens: 30,
+      gatewayMode: 'gateway_only',
+    });
+    const directUnpriced = await container.db.createTurn({
+      agentId: coverageAgentId,
+      conversationId: conversation.id,
+      mode: 'interactive',
+      status: 'completed',
+      startedAt: 5_000,
+      completedAt: 6_000,
+      inputTokens: 30,
+      outputTokens: 15,
+      totalTokens: 45,
+    });
+
+    const pendingRes = await app.inject({
+      method: 'GET',
+      url: `/api/agents/${coverageAgentId}/turns?coverage=pending`,
+    });
+    expect(pendingRes.statusCode).toBe(200);
+    expect(pendingRes.json().turns.map((turn: { id: string }) => turn.id))
+      .toEqual([gatewayPending.id]);
+
+    const incompleteRes = await app.inject({
+      method: 'GET',
+      url: `/api/agents/${coverageAgentId}/turns?coverage=partial,pending,unpriced`,
+    });
+    expect(incompleteRes.statusCode).toBe(200);
+    expect(incompleteRes.json().turns.map((turn: { id: string }) => turn.id))
+      .toEqual([directUnpriced.id, gatewayPending.id]);
+
+    const unfilteredRes = await app.inject({
+      method: 'GET',
+      url: `/api/agents/${coverageAgentId}/turns`,
+    });
+    expect(unfilteredRes.json().turns).toHaveLength(3);
+    expect(unfilteredRes.json().turns.map((turn: { id: string }) => turn.id))
+      .toContain(complete.id);
+
+    const invalidRes = await app.inject({
+      method: 'GET',
+      url: `/api/agents/${coverageAgentId}/turns?coverage=bogus`,
+    });
+    expect(invalidRes.statusCode).toBe(400);
+    expect(invalidRes.json().error).toContain('Invalid coverage filter');
+  });
+
   it('returns 404 for non-existent agent', async () => {
     const res = await app.inject({
       method: 'GET',
