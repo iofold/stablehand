@@ -7,6 +7,7 @@ const baseTurn = {
   conversationId: 'conv-1',
   sandboxSessionId: 'sandbox-1',
   mode: 'interactive',
+  status: 'running',
   taskDescription: null,
   startedAt: 1,
   completedAt: null,
@@ -42,6 +43,40 @@ describe('toApiAgentTurn', () => {
 
     expect(turn.status).toBe('CANCELLED');
     expect(turn.error).toBe('Turn cancelled');
+  });
+
+  it('reports gateway-attributed turns awaiting reconciliation as cost-pending', () => {
+    const turn = toApiAgentTurn(
+      {
+        ...baseTurn,
+        completedAt: 10,
+        inputTokens: 100,
+        outputTokens: 50,
+        totalTokens: 150,
+        gatewayMode: 'gateway_only',
+      },
+      null,
+      1,
+    );
+
+    expect(turn.usage?.cost.coverage).toBe('pending');
+  });
+
+  it('reports direct turns without cost as unpriced, matching analytics', () => {
+    const turn = toApiAgentTurn(
+      {
+        ...baseTurn,
+        completedAt: 10,
+        inputTokens: 100,
+        outputTokens: 50,
+        totalTokens: 150,
+        gatewayMode: 'direct',
+      },
+      null,
+      1,
+    );
+
+    expect(turn.usage?.cost.coverage).toBe('unpriced');
   });
 
   it('includes raw sandbox restore fields even when the turn projects ERROR', () => {

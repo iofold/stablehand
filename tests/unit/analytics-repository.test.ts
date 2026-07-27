@@ -111,6 +111,25 @@ describe('analytics repository', () => {
         },
       }),
       testDb.repo.createTurn({
+        id: 'turn-gateway-pending',
+        agentId: 'agent-active',
+        conversationId: 'conversation-active',
+        status: 'completed',
+        startedAt: from + bucketSizeMs + 300,
+        completedAt: from + bucketSizeMs + 900,
+        inputTokens: 30,
+        outputTokens: 10,
+        totalTokens: 40,
+        gatewayMode: 'gateway_only',
+      }),
+      testDb.repo.createTurn({
+        id: 'turn-open',
+        agentId: 'agent-active',
+        conversationId: 'conversation-active',
+        status: 'running',
+        startedAt: from + bucketSizeMs + 400,
+      }),
+      testDb.repo.createTurn({
         id: 'turn-outside-window',
         agentId: 'agent-active',
         conversationId: 'conversation-active',
@@ -153,17 +172,20 @@ describe('analytics repository', () => {
       expect.objectContaining({
         from: from + bucketSizeMs,
         to,
-        turns: 2,
-        completedTurns: 1,
+        turns: 4,
+        completedTurns: 2,
         errorTurns: 1,
-        totalTokens: 30,
-        tokenReportedTurns: 1,
+        activeTurns: 1,
+        totalTokens: 70,
+        tokenReportedTurns: 2,
         knownCostUsd: 0.005,
+        // Gateway-attributed and still-open turns await cost data; a terminal
+        // direct turn without cost will never be priced and reads unpriced.
         costCoverage: {
           complete: 0,
           partial: 1,
-          pending: 1,
-          unpriced: 0,
+          pending: 2,
+          unpriced: 1,
         },
       }),
     ]);
@@ -173,12 +195,19 @@ describe('analytics repository', () => {
       'agent-idle',
     ]);
     expect(snapshot.agents[0]).toMatchObject({
-      turns: 2,
-      completedTurns: 1,
+      turns: 4,
+      completedTurns: 2,
       errorTurns: 1,
-      totalTokens: 150,
+      activeTurns: 1,
+      totalTokens: 190,
       knownCostUsd: 0.01,
       lastActivityAt: from + bucketSizeMs + 1_000,
+      costCoverage: {
+        complete: 1,
+        partial: 0,
+        pending: 2,
+        unpriced: 1,
+      },
     });
     expect(snapshot.agents[1]).toMatchObject({
       turns: 1,

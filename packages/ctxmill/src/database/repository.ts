@@ -609,7 +609,13 @@ export class DatabaseRepository {
           IN ('complete', 'partial', 'pending', 'unpriced')
           THEN ${this.schema.turns.usage} #>> '{cost,coverage}'
         WHEN ${this.schema.turns.costUsd} IS NOT NULL THEN 'complete'
-        ELSE 'pending'
+        WHEN ${this.schema.turns.gatewayMode} IN ('gateway_only', 'mixed')
+          THEN 'pending'
+        WHEN ${this.schema.turns.completedAt} IS NULL
+          AND ${this.schema.turns.error} IS NULL
+          AND ${this.schema.turns.status} NOT IN ('completed', 'failed')
+          THEN 'pending'
+        ELSE 'unpriced'
       END
     `;
     const knownCost = sql<number>`

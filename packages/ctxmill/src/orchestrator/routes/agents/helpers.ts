@@ -152,7 +152,7 @@ export function toAgentResponse(agent: StoredAgent): Agent {
 }
 
 export function toApiAgentTurn(
-  turn: { id: string; agentId: string; conversationId: string | null; sandboxSessionId: string | null; status: string; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null },
+  turn: { id: string; agentId: string; conversationId: string | null; sandboxSessionId: string | null; status: string; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; gatewayMode?: string | null },
   sandboxSession?: {
     status: string;
     restoreAttempts?: number | null;
@@ -181,7 +181,12 @@ export function toApiAgentTurn(
     ...(sandboxSession?.status === 'CHECKPOINTED' && typeof sandboxSession.updatedAt === 'number'
       ? { checkpointAt: sandboxSession.updatedAt }
       : {}),
-    usage: materializeTurnUsage(turn),
+    // Gateway-attributed turns without a reconciled usage envelope are awaiting
+    // spend reconciliation; direct turns without cost stay unpriced. Keeps this
+    // projection in agreement with the analytics costCoverage classification.
+    usage: materializeTurnUsage(turn, {
+      gatewayPending: turn.gatewayMode === 'gateway_only' || turn.gatewayMode === 'mixed',
+    }),
   };
 }
 

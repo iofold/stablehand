@@ -38,6 +38,35 @@ describe('materializeTurnUsage', () => {
     });
   });
 
+  it('marks gateway-attributed aggregates without cost as pending reconciliation', () => {
+    expect(materializeTurnUsage(
+      { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      { gatewayPending: true },
+    )?.cost).toEqual({
+      totalUsd: null,
+      knownUsd: 0,
+      coverage: 'pending',
+    });
+  });
+
+  it('lets a reconciled usage envelope win over the gateway-pending hint', () => {
+    expect(materializeTurnUsage(
+      {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+          modelCalls: { observed: 1, costKnown: 1, expected: null },
+          cost: { totalUsd: 0.02, knownUsd: 0.02, coverage: 'complete' },
+        },
+      },
+      { gatewayPending: true },
+    )?.cost.coverage).toBe('complete');
+  });
+
   it('returns null for absent or incomplete token aggregates', () => {
     expect(materializeTurnUsage(null)).toBeNull();
     expect(materializeTurnUsage({
