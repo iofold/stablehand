@@ -817,7 +817,7 @@ exit 1
     expect(lifecycle.stages.filter((stage) => stage.sessionMode !== 'cold')
       .every((stage) => stage.warmupTurns === 1)).toBe(true);
     expect(lifecycle.stages.every((stage) =>
-      stage.harnessConfig.model === 'cf-glm-5.2'
+      stage.harnessConfig.model === 'cf-glm-5.2-no-thinking'
       && stage.harnessConfig.apiKeyRef == null
       && stage.harnessConfig.baseUrl == null)).toBe(true);
     expect(lifecycle.stages.filter((stage) => stage.harness === 'langgraph')

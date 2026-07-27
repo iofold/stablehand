@@ -64,6 +64,18 @@ model_list:
     litellm_params:
       model: cloudflare/@cf/zai-org/glm-5.2
       api_key: os.environ/CLOUDFLARE_API_KEY
+  # Workers AI exposes GLM thinking control through chat_template_kwargs.
+  # LiteLLM's Cloudflare adapter does not currently include that field in its
+  # supported OpenAI parameter set, so this explicit alias opts it in without
+  # changing the reasoning-enabled route above.
+  - model_name: cf-glm-5.2-no-thinking
+    litellm_params:
+      model: cloudflare/@cf/zai-org/glm-5.2
+      api_key: os.environ/CLOUDFLARE_API_KEY
+      allowed_openai_params:
+        - chat_template_kwargs
+      chat_template_kwargs:
+        enable_thinking: false
   - model_name: cf-gemma-4-26b
     litellm_params:
       model: cloudflare/@cf/google/gemma-4-26b-a4b-it

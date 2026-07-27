@@ -134,10 +134,12 @@ uses GPT-5.6 Luna and Claude Sonnet 5 to retain current-provider coverage.
 
 The lifecycle profile is a separate like-for-like comparison. It runs cold,
 warm, and checkpoint/restore lanes for Deep Agents, PI Agent, and Claude Agents
-against the same `cf-glm-5.2` LiteLLM alias. The Claude harness reaches that
-alias through LiteLLM's Anthropic Messages translation; every lifecycle stage
-omits `apiKeyRef` and `baseUrl`, so an explicit direct provider route cannot
-bypass the configured deployment gateway.
+against the same `cf-glm-5.2-no-thinking` LiteLLM alias. That alias preserves
+the reasoning-enabled `cf-glm-5.2` route and opts this bounded latency workload
+into Workers AI's `chat_template_kwargs.enable_thinking: false` control. The
+Claude harness reaches the alias through LiteLLM's Anthropic Messages
+translation; every lifecycle stage omits `apiKeyRef` and `baseUrl`, so an
+explicit direct provider route cannot bypass the configured deployment gateway.
 
 ## LLM budget envelope
 

@@ -9,6 +9,8 @@ interface ModelGatewayConfig {
     litellm_params?: {
       model?: string;
       api_key?: string;
+      allowed_openai_params?: string[];
+      chat_template_kwargs?: Record<string, unknown>;
     };
   }>;
 }
@@ -56,7 +58,7 @@ function findResource(
 }
 
 describe('model gateway deployment', () => {
-  it('publishes the current OpenAI and Anthropic model families without legacy frontier aliases', () => {
+  it('publishes current OpenAI and Anthropic families while retaining routed legacy aliases', () => {
     const config = readYaml<ModelGatewayConfig>(
       'deploy/compose/model-gateway/config.yaml',
     );
@@ -105,7 +107,7 @@ describe('model gateway deployment', () => {
         },
       },
     ]));
-    expect(config.model_list?.map((entry) => entry.model_name)).not.toEqual(
+    expect(config.model_list?.map((entry) => entry.model_name)).toEqual(
       expect.arrayContaining([
         'gpt-5.4',
         'gpt-5.4-mini',
@@ -173,6 +175,17 @@ describe('model gateway deployment', () => {
         litellm_params: {
           model: 'cloudflare/@cf/zai-org/glm-5.2',
           api_key: 'os.environ/CLOUDFLARE_API_KEY',
+        },
+      },
+      {
+        model_name: 'cf-glm-5.2-no-thinking',
+        litellm_params: {
+          model: 'cloudflare/@cf/zai-org/glm-5.2',
+          api_key: 'os.environ/CLOUDFLARE_API_KEY',
+          allowed_openai_params: ['chat_template_kwargs'],
+          chat_template_kwargs: {
+            enable_thinking: false,
+          },
         },
       },
       {

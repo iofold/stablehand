@@ -45,6 +45,7 @@ curl -fsS http://127.0.0.1:4400/key/generate \
       "cf-gpt-oss-120b",
       "cf-kimi-k2.7-code",
       "cf-glm-5.2",
+      "cf-glm-5.2-no-thinking",
       "cf-gemma-4-26b",
       "cf-qwen3-30b",
       "gpt-5.4-mini",
