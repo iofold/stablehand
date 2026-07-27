@@ -567,6 +567,7 @@ class LangGraphSession implements HarnessSession {
       }) as unknown as BaseLanguageModel;
     } else {
       const { ChatOpenAI } = await import('@langchain/openai');
+      const reasoningEffort = reasoning === 'off' ? 'none' : reasoning;
       return new ChatOpenAI({
         apiKey: connection.apiKey,
         configuration: connection.baseUrl || correlationHeaders
@@ -580,7 +581,9 @@ class LangGraphSession implements HarnessSession {
         ...(maxTokens != null ? { maxTokens } : {}),
         ...(topP != null ? { topP } : {}),
         ...(reasoning
-          ? { reasoning: { effort: reasoning === 'off' ? 'none' : reasoning } }
+          ? connection.baseUrl
+            ? { modelKwargs: { reasoning_effort: reasoningEffort } }
+            : { reasoning: { effort: reasoningEffort } }
           : {}),
       }) as unknown as BaseLanguageModel;
     }

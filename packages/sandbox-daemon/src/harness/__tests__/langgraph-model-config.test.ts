@@ -78,13 +78,45 @@ describe('LangGraph provider model configuration', () => {
     },
   );
 
-  it('maps canonical reasoning off to an explicit protocol-native none value', async () => {
+  it('sends canonical reasoning through the wire-level field for OpenAI-compatible endpoints', async () => {
     const config = makeConfig('openai');
     config.harnessConfigJson = JSON.stringify({
       provider: 'openai',
       model: 'cf-glm-5.2',
-      apiKeyRef: 'providerKey',
       reasoning: 'off',
+    });
+    config.secrets = {
+      CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
+      CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+      CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+      CTXMILL_MODEL_GATEWAY_REVISION: 'dev2-1',
+    };
+    const session = await new LangGraphHarness().openSession(config);
+    const buildModel = Reflect.get(session, 'buildModelFromConfig') as (
+      secrets: Readonly<Record<string, string>>,
+      turnId?: string,
+    ) => Promise<unknown>;
+
+    try {
+      await buildModel(config.secrets, 'turn-1');
+    } finally {
+      await session.close();
+    }
+
+    expect(constructorCalls.openai).toEqual([
+      expect.objectContaining({
+        modelKwargs: { reasoning_effort: 'none' },
+      }),
+    ]);
+  });
+
+  it('keeps canonical reasoning on the native LangChain field for direct OpenAI', async () => {
+    const config = makeConfig('openai');
+    config.harnessConfigJson = JSON.stringify({
+      provider: 'openai',
+      model: 'gpt-5.4-mini',
+      apiKeyRef: 'providerKey',
+      reasoning: 'low',
     });
     const session = await new LangGraphHarness().openSession(config);
     const buildModel = Reflect.get(session, 'buildModelFromConfig') as (
@@ -99,7 +131,7 @@ describe('LangGraph provider model configuration', () => {
     }
 
     expect(constructorCalls.openai).toEqual([
-      expect.objectContaining({ reasoning: { effort: 'none' } }),
+      expect.objectContaining({ reasoning: { effort: 'low' } }),
     ]);
   });
 
