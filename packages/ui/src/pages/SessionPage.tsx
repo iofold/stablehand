@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState } from 'react';
+import { useEffect, useCallback, useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -32,6 +32,7 @@ import {
   parseBudgetBlock,
   type BudgetBlock,
 } from '@/lib/budget-block';
+import { parseTagsInput } from '@/lib/tags';
 
 function humanizeError(raw: string): { summary: string; details: string } {
   if (raw.includes('ConnectError') || raw.includes('stream closed')) {
@@ -85,6 +86,17 @@ export function SessionPage() {
     requestedTurnId: string;
   } | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>(routeConversationId);
+
+  // Budget-attribution tags for a NEW conversation, deep-linked via
+  // ?tags=team%3Dgrowth,env%3Dprod. Applied to the first turn only; the
+  // backend stamps them onto the conversation from there.
+  const pendingTags = useMemo(() => {
+    const raw = new URLSearchParams(location.search).get('tags');
+    if (!raw) return null;
+    const parsed = parseTagsInput(raw);
+    if ('error' in parsed || Object.keys(parsed.tags).length === 0) return null;
+    return parsed.tags;
+  }, [location.search]);
   const requestedConversationKey = routeConversationId
     ?? (isNewConversationPath(location.pathname) ? '__new__' : '__latest__');
   const historyKey = `${id ?? ''}:${requestedConversationKey}`;
@@ -283,6 +295,7 @@ export function SessionPage() {
           content,
           conversationId,
           requestedTurnId,
+          ...(!conversationId && pendingTags ? { tags: pendingTags } : {}),
         });
         if (response?.conversationId && !conversationId) {
           setConversationId(response.conversationId);
@@ -307,6 +320,7 @@ export function SessionPage() {
       addUserMessage,
       discardOptimisticUserMessage,
       conversationId,
+      pendingTags,
       setActiveConversation,
       navigate,
     ],
@@ -512,6 +526,19 @@ export function SessionPage() {
             </div>
           )}
 
+          {!conversationId && pendingTags && (
+            <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-1.5 px-4 pb-1">
+              <span className="text-[11px] text-surface-500">This conversation will be tagged:</span>
+              {Object.entries(pendingTags).map(([key, value]) => (
+                <span
+                  key={key}
+                  className="rounded-full border border-surface-600/50 bg-surface-800/70 px-2 py-0.5 font-mono text-[10px] text-surface-300"
+                >
+                  {key}={value}
+                </span>
+              ))}
+            </div>
+          )}
           {budgetBlock && (
             <div
               data-testid="session-budget-block"

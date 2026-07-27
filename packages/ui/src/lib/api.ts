@@ -274,8 +274,15 @@ export function createSSEConnection(
   return new EventSource(`${url}?${params}`);
 }
 
-export async function startBackgroundRun(agentId: string, task: string) {
-  return apiMutate(`${API_BASE}/agents/${agentId}/turns`, 'POST', { task });
+export async function startBackgroundRun(
+  agentId: string,
+  task: string,
+  tags?: Record<string, string>,
+) {
+  return apiMutate(`${API_BASE}/agents/${agentId}/turns`, 'POST', {
+    task,
+    ...(tags && Object.keys(tags).length > 0 ? { tags } : {}),
+  });
 }
 
 export async function cancelTurn(agentId: string, turnId: string) {

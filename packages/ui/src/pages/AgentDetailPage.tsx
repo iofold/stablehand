@@ -13,6 +13,7 @@ import { AgentFormModal } from '@/components/agents/AgentFormModal';
 
 import { useAgentDetail } from '@/hooks/useAgentDetail';
 import { useAgentTurns } from '@/hooks/useAgentTurns';
+import { parseTagsInput } from '@/lib/tags';
 
 import {
   AgentOverviewTab,
@@ -70,6 +71,7 @@ export function AgentDetailPage() {
   const [showRunForm, setShowRunForm] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [runTask, setRunTask] = useState('');
+  const [runTags, setRunTags] = useState('');
   const [submittingRun, setSubmittingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
 
@@ -113,11 +115,17 @@ export function AgentDetailPage() {
   const handleStartRun = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!id || !runTask.trim()) return;
+    const parsedTags = parseTagsInput(runTags);
+    if ('error' in parsedTags) {
+      setRunError(parsedTags.error);
+      return;
+    }
     setSubmittingRun(true);
     setRunError(null);
     try {
-      await startBackgroundRun(id, runTask.trim());
+      await startBackgroundRun(id, runTask.trim(), parsedTags.tags);
       setRunTask('');
+      setRunTags('');
       setShowRunForm(false);
       if (activeTab === 'overview') {
         void loadConversations();
@@ -263,6 +271,15 @@ export function AgentDetailPage() {
                 onChange={(e) => setRunTask(e.target.value)}
                 placeholder="Describe the task..."
                 className="flex-1 rounded-lg border border-surface-600/40 bg-surface-800/60 px-3 py-2 text-sm text-surface-200 placeholder-surface-400 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/30"
+              />
+              <input
+                type="text"
+                data-testid="run-tags-input"
+                value={runTags}
+                onChange={(e) => setRunTags(e.target.value)}
+                placeholder="Tags (optional): team=growth, env=prod"
+                title="Budget-attribution tags for this run, as key=value pairs"
+                className="w-full rounded-lg border border-surface-600/40 bg-surface-800/60 px-3 py-2 text-sm text-surface-200 placeholder-surface-500 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/30 sm:w-72"
               />
               <button
                 type="submit"

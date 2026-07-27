@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import type { AgentTurn } from '@/stores/agents';
 import { restoreSandboxSession } from '@/lib/api';
 import { formatCompactNumber, formatDurationBetween } from '@/lib/format';
+import { userVisibleTags } from '@/lib/tags';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { describeTurnCost, summarizeTurnCosts } from '@/lib/usage-cost';
 
@@ -324,6 +325,15 @@ export function AgentTurnsTab({
                                         >
                                           {turnCost.label}
                                         </span>
+                                        {userVisibleTags(entry.tags).map(([key, value]) => (
+                                          <span
+                                            key={key}
+                                            className="rounded-full border border-surface-600/50 bg-surface-800/70 px-2 py-0.5 font-mono text-[10px] text-surface-400"
+                                            title="Budget-attribution tag"
+                                          >
+                                            {key}={value}
+                                          </span>
+                                        ))}
                                       </div>
                                       {showRetryRestore && (
                                         <button

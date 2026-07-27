@@ -85,6 +85,10 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
   const [nativeToolsList, setNativeToolsList] = useState<string[]>([]);
   const [nativeToolInput, setNativeToolInput] = useState('');
   const [manifestYamlText, setManifestYamlText] = useState('');
+  // Budget dimensions: per tag key, the bucket values budget policies may
+  // group by (agent metadata.budgetDimensions). Values are comma-separated
+  // in the editor.
+  const [budgetDims, setBudgetDims] = useState<Array<{ key: string; values: string }>>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -125,6 +129,15 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
           : [],
       );
       setManifestYamlText(formatManifestYaml(agent.manifest));
+      const dims = (agent.metadata as Record<string, unknown> | null)?.budgetDimensions;
+      setBudgetDims(
+        dims && typeof dims === 'object'
+          ? Object.entries(dims as Record<string, unknown>).map(([key, values]) => ({
+              key,
+              values: Array.isArray(values) ? values.join(', ') : String(values ?? ''),
+            }))
+          : [],
+      );
     } else {
       setName('');
       setHarness(DEFAULT_HARNESS);
@@ -136,6 +149,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
       setNativeToolPolicyMode('all');
       setNativeToolsList([]);
       setManifestYamlText('');
+      setBudgetDims([]);
     }
     setNativeToolInput('');
     setErrors({});
@@ -212,8 +226,44 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         errs.harnessConfig = 'Harness config must be valid JSON';
       }
     }
+    for (const row of budgetDims) {
+      const key = row.key.trim();
+      const values = row.values.split(',').map((v) => v.trim()).filter(Boolean);
+      if ((key && values.length === 0) || (!key && values.length > 0)) {
+        errs.budgetDimensions = 'Each budget dimension needs a tag key and at least one value';
+        break;
+      }
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
+  };
+
+  /**
+   * Only propose a metadata patch when the budget dimensions actually
+   * changed — the modal must not rewrite metadata it does not manage.
+   */
+  const buildMetadataPayload = (): { changed: boolean; metadata: Record<string, unknown> | null } => {
+    const budgetDimensions: Record<string, string[]> = {};
+    for (const row of budgetDims) {
+      const key = row.key.trim();
+      const values = row.values.split(',').map((v) => v.trim()).filter(Boolean);
+      if (key && values.length > 0) budgetDimensions[key] = values;
+    }
+    const nextDims = Object.keys(budgetDimensions).length > 0 ? budgetDimensions : null;
+    const existingMetadata = (agent?.metadata as Record<string, unknown> | null) ?? null;
+    const existingDims = existingMetadata?.budgetDimensions ?? null;
+    if (JSON.stringify(existingDims) === JSON.stringify(nextDims)) {
+      return { changed: false, metadata: null };
+    }
+    const publicMetadata = { ...(existingMetadata ?? {}) };
+    delete publicMetadata.budgetDimensions;
+    if (nextDims) {
+      return { changed: true, metadata: { ...publicMetadata, budgetDimensions: nextDims } };
+    }
+    return {
+      changed: true,
+      metadata: Object.keys(publicMetadata).length > 0 ? publicMetadata : null,
+    };
   };
 
   const handleSave = async () => {
@@ -254,16 +304,21 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
         nativeToolPolicy,
         builtinToolPolicy,
       };
+      const metadataPatch = buildMetadataPayload();
       if (isEditing && agent) {
         const payload: AgentPatchInput = {
           ...commonInput,
           description: description.length > 0 ? description : null,
+          ...(metadataPatch.changed ? { metadata: metadataPatch.metadata } : {}),
         };
         await updateAgent(agent.id, payload);
       } else {
         const payload: AgentCreateInput = {
           ...commonInput,
           ...(description.length > 0 ? { description } : {}),
+          ...(metadataPatch.changed && metadataPatch.metadata
+            ? { metadata: metadataPatch.metadata }
+            : {}),
         };
         await createAgent(payload);
       }
@@ -424,6 +479,58 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
               rows={2}
               className="input-base mt-1.5 resize-none"
             />
+          </div>
+
+          {/* Budget dimensions */}
+          <div>
+            <div className="text-label">Budget dimensions</div>
+            <p className="mt-1 text-xs text-surface-500">
+              Tag values budget policies can group this agent's runs by
+              (e.g. key <span className="font-mono">team</span>, values{' '}
+              <span className="font-mono">growth, platform</span>). Runs tagged with other
+              values are rejected when a grouped policy matches.
+            </p>
+            <div className="mt-2 space-y-2">
+              {budgetDims.map((row, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={row.key}
+                    onChange={(e) => setBudgetDims((prev) =>
+                      prev.map((r, i) => (i === index ? { ...r, key: e.target.value } : r)))}
+                    placeholder="tag key"
+                    className="input-base w-36 font-mono text-xs"
+                  />
+                  <input
+                    type="text"
+                    value={row.values}
+                    onChange={(e) => setBudgetDims((prev) =>
+                      prev.map((r, i) => (i === index ? { ...r, values: e.target.value } : r)))}
+                    placeholder="allowed values, comma-separated"
+                    className="input-base flex-1 font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Remove budget dimension"
+                    onClick={() => setBudgetDims((prev) => prev.filter((_, i) => i !== index))}
+                    className="rounded-md px-2 py-1 text-xs text-surface-400 hover:bg-surface-700/60 hover:text-surface-200"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                data-testid="add-budget-dimension"
+                onClick={() => setBudgetDims((prev) => [...prev, { key: '', values: '' }])}
+                className="rounded-md border border-surface-600/50 px-2.5 py-1 text-xs text-surface-300 hover:bg-surface-700/60"
+              >
+                Add dimension
+              </button>
+            </div>
+            {errors.budgetDimensions && (
+              <p className="mt-1 text-xs text-red-400">{errors.budgetDimensions}</p>
+            )}
           </div>
 
           {/* System Prompt */}

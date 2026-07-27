@@ -31,7 +31,7 @@ interface AgentsStore {
   updateAgent: (id: string, data: AgentPatchInput) => Promise<Agent>;
   deleteAgent: (id: string) => Promise<void>;
   startPolling: () => () => void;
-  startBackgroundRun: (agentId: string, task: string) => Promise<void>;
+  startBackgroundRun: (agentId: string, task: string, tags?: Record<string, string>) => Promise<void>;
   cancelTurn: (agentId: string, turnId: string) => Promise<void>;
   fetchTurns: (agentId: string) => Promise<AgentTurn[]>;
 }
@@ -111,9 +111,9 @@ export const useAgentsStore = create<AgentsStore>((set, get) => ({
     }, 5000);
     return () => clearInterval(id);
   },
-  startBackgroundRun: async (agentId, task) => {
+  startBackgroundRun: async (agentId, task, tags) => {
     try {
-      await apiStartRun(agentId, task);
+      await apiStartRun(agentId, task, tags);
       await get().fetchAgents();
     } catch (err) {
       console.error('[agents] startBackgroundRun failed:', err);
