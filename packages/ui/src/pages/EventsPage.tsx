@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Activity,
   ChevronDown,
@@ -880,7 +881,13 @@ function EventRow({
         )}
         {showAgent && (
           <td className="px-4 py-3 text-sm text-surface-300 break-words">
-            {agentName || event.agentId.slice(0, 8)}
+            <Link
+              to={`/agents/${event.agentId}`}
+              onClick={(clickEvent) => clickEvent.stopPropagation()}
+              className="hover:text-accent-300 hover:underline"
+            >
+              {agentName || event.agentId.slice(0, 8)}
+            </Link>
           </td>
         )}
         <td className="px-4 py-3 text-sm text-surface-400">

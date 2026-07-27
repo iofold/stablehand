@@ -1,4 +1,5 @@
 import { act } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventsPage } from '../EventsPage';
@@ -82,7 +83,7 @@ describe('EventsPage', () => {
     fetchEventsMock.mockRejectedValueOnce(new Error('events down'));
 
     act(() => {
-      root.render(<EventsPage />);
+      root.render(<MemoryRouter><EventsPage /></MemoryRouter>);
     });
     await flushEffects();
 
@@ -104,7 +105,7 @@ describe('EventsPage', () => {
     fetchEventTypesMock.mockRejectedValueOnce(new Error('types down'));
 
     act(() => {
-      root.render(<EventsPage />);
+      root.render(<MemoryRouter><EventsPage /></MemoryRouter>);
     });
     await flushEffects();
 
@@ -127,7 +128,7 @@ describe('EventsPage', () => {
     fetchEventTypesMock.mockReturnValueOnce(new Promise(() => undefined));
 
     act(() => {
-      root.render(<EventsPage />);
+      root.render(<MemoryRouter><EventsPage /></MemoryRouter>);
     });
 
     expect(container.textContent).toContain('Loading event log');
@@ -218,7 +219,7 @@ describe('EventsPage', () => {
     });
 
     act(() => {
-      root.render(<EventsPage />);
+      root.render(<MemoryRouter><EventsPage /></MemoryRouter>);
     });
     await flushEffects();
 
@@ -246,7 +247,7 @@ describe('EventsPage', () => {
     });
 
     act(() => {
-      root.render(<EventsPage />);
+      root.render(<MemoryRouter><EventsPage /></MemoryRouter>);
     });
     await flushEffects();
 

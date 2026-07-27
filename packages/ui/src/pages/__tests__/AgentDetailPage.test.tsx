@@ -1,4 +1,4 @@
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,6 +18,16 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-router-dom', () => ({
   useParams: () => ({ id: 'agent-1' }),
   useNavigate: () => mocks.navigate,
+  useSearchParams: () => {
+    const [params, setParams] = useState(() => new URLSearchParams());
+    return [
+      params,
+      (update: URLSearchParams | ((prev: URLSearchParams) => URLSearchParams)) => {
+        setParams((prev: URLSearchParams) =>
+          typeof update === 'function' ? update(prev) : update);
+      },
+    ] as const;
+  },
 }));
 
 vi.mock('@/hooks/useAgentDetail', () => ({

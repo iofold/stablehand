@@ -17,7 +17,11 @@ import { describeTurnCost, summarizeTurnCosts } from '@/lib/usage-cost';
 /*  AgentTurnsTab                                                      */
 /* ------------------------------------------------------------------ */
 
-const TURN_FILTERS = ['all', 'queued', 'running', 'completed', 'error', 'cancelled'] as const;
+const TURN_FILTERS = ['all', 'queued', 'running', 'completed', 'error', 'cancelled', 'incomplete-cost'] as const;
+
+const TURN_FILTER_LABELS: Partial<Record<(typeof TURN_FILTERS)[number], string>> = {
+  'incomplete-cost': 'costs incomplete',
+};
 
 export interface AgentTurnsTabProps {
   turns: AgentTurn[];
@@ -127,7 +131,7 @@ export function AgentTurnsTab({
                 : 'bg-surface-800/60 border-surface-700/40 text-surface-400 hover:text-surface-300',
             )}
           >
-            {f}
+            {TURN_FILTER_LABELS[f] ?? f}
           </button>
         ))}
       </div>

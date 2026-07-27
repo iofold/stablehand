@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Play,
@@ -46,7 +46,25 @@ export function AgentDetailPage() {
   const navigate = useNavigate();
   const startBackgroundRun = useAgentsStore((s) => s.startBackgroundRun);
 
-  const [activeTab, setActiveTab] = useState<TabId>('overview');
+  // Tab and turn-filter state live in the URL so places like the Analytics
+  // "costs incomplete" badge can deep-link straight to a filtered view.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const activeTab: TabId = TABS.some((tab) => tab.id === tabParam)
+    ? (tabParam as TabId)
+    : 'overview';
+  const setActiveTab = (tab: TabId) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (tab === 'overview') {
+        next.delete('tab');
+      } else {
+        next.set('tab', tab);
+      }
+      if (tab !== 'turns') next.delete('filter');
+      return next;
+    }, { replace: true });
+  };
 
   // Run form state
   const [showRunForm, setShowRunForm] = useState(false);
@@ -55,7 +73,18 @@ export function AgentDetailPage() {
   const [submittingRun, setSubmittingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
 
-  const [turnFilter, setTurnFilter] = useState<string>('all');
+  const turnFilter = searchParams.get('filter') ?? 'all';
+  const setTurnFilter = (filter: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (filter === 'all') {
+        next.delete('filter');
+      } else {
+        next.set('filter', filter);
+      }
+      return next;
+    }, { replace: true });
+  };
 
   // Conversation-scoped file viewing: when set, Files shows the durable workspace.
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);

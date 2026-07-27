@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { FileText, Image, File, Download, Trash2, Archive } from 'lucide-react';
 import type { Artifact } from '@/lib/api';
 import { useArtifactsStore } from '@/stores/artifacts';
@@ -87,10 +88,15 @@ export function ArtifactRow({ artifact, isSelected, showAgentName = false }: Art
         {formatBytes(artifact.sizeBytes)}
       </td>
       <td className="px-4 py-3 text-sm text-surface-400">
-        {agentName ? (
-          <span className="truncate max-w-[120px] inline-block" title={agentName}>
+        {agentName && artifact.agentId ? (
+          <Link
+            to={`/agents/${artifact.agentId}`}
+            onClick={(clickEvent) => clickEvent.stopPropagation()}
+            className="truncate max-w-[120px] inline-block hover:text-accent-300 hover:underline"
+            title={`${agentName} — open agent`}
+          >
             {agentName}
-          </span>
+          </Link>
         ) : (
           <span className={artifact.agentId ? 'font-mono text-xs' : 'text-xs text-surface-500'}>
             {agentFallback}

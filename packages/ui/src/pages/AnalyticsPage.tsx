@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -156,6 +156,7 @@ function Panel({
 }
 
 export function AnalyticsPage() {
+  const navigate = useNavigate();
   const [window, setWindow] = useState<AnalyticsWindow>('24h');
   const [refreshRevision, setRefreshRevision] = useState(0);
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
@@ -595,12 +596,18 @@ export function AnalyticsPage() {
                           </span>
                         ) : null}
                         {incompleteCostTurns > 0 ? (
-                          <span
-                            title={`${agent.costCoverage.pending} awaiting sync · ${agent.costCoverage.partial} partially priced · ${agent.costCoverage.unpriced} without a configured price`}
-                            className="shrink-0 rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-300"
+                          <button
+                            type="button"
+                            title={`${agent.costCoverage.pending} awaiting sync · ${agent.costCoverage.partial} partially priced · ${agent.costCoverage.unpriced} without a configured price — view these runs`}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              navigate(`/agents/${agent.agentId}?tab=turns&filter=incomplete-cost`);
+                            }}
+                            className="shrink-0 rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-300 hover:bg-sky-500/20"
                           >
                             costs incomplete ({incompleteCostTurns})
-                          </span>
+                          </button>
                         ) : null}
                       </div>
                       <p className="mt-1 truncate text-xs text-surface-400">
