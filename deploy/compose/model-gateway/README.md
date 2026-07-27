@@ -34,19 +34,23 @@ curl -fsS http://127.0.0.1:4400/key/generate \
   -H "Content-Type: application/json" \
   -d '{
     "models": [
-      "gpt-5.4-mini",
-      "gpt-5.4",
-      "claude-sonnet-4-6",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "claude-sonnet-5",
       "claude-haiku-4-5",
-      "claude-opus-4-6",
+      "claude-opus-5",
       "gemini-3.6-flash",
+      "gemini-3.5-flash-lite",
       "cf-gpt-oss-120b",
       "cf-kimi-k2.7-code",
       "cf-glm-5.2",
       "cf-gemma-4-26b",
       "cf-qwen3-30b",
-      "gpt-5.6-terra",
-      "glm-5.2"
+      "gpt-5.4-mini",
+      "gpt-5.4",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6"
     ],
     "key_alias": "ctxmill-runtime"
   }'

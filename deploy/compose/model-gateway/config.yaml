@@ -31,6 +31,25 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.5-flash-lite
       api_key: os.environ/GOOGLE_API_KEY
+  # Legacy aliases retained additively: existing agents were certified against
+  # these names (dev1, 2026-07-23) and dropping a routable name breaks every
+  # agent configured with it. Remove only with a coordinated agent migration.
+  - model_name: gpt-5.4-mini
+    litellm_params:
+      model: openai/gpt-5.4-mini
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-5.4
+    litellm_params:
+      model: openai/gpt-5.4
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
   # Curated Workers AI inventory. These aliases keep harness configuration
   # provider-neutral while LiteLLM owns the Cloudflare protocol translation.
   - model_name: cf-gpt-oss-120b
