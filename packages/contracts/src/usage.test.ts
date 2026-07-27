@@ -72,6 +72,27 @@ describe('usage-bearing API boundaries', () => {
     startedAt: 1,
   } as const;
 
+  it('accepts budget tags and gateway attribution on turns', () => {
+    const parsed = TurnSchema.parse({
+      ...identity,
+      usage: null,
+      tags: { agent: 'agent-1' },
+      gatewayMode: 'gateway_only',
+    });
+    expect(parsed.tags).toEqual({ agent: 'agent-1' });
+    expect(parsed.gatewayMode).toBe('gateway_only');
+    expect(TurnSchema.parse({
+      ...identity,
+      usage: null,
+      gatewayMode: null,
+    }).gatewayMode).toBeNull();
+    expect(() => TurnSchema.parse({
+      ...identity,
+      usage: null,
+      gatewayMode: 'direct',
+    })).toThrow();
+  });
+
   it('requires usage as nullable on turns and rejects the legacy optional shape', () => {
     expect(TurnSchema.parse({ ...identity, usage: null }).usage).toBeNull();
     expect(TurnSchema.parse({ ...identity, usage: USAGE }).usage).toEqual(USAGE);

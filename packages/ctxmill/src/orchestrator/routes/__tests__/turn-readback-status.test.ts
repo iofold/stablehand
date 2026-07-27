@@ -79,6 +79,28 @@ describe('toApiAgentTurn', () => {
     expect(turn.usage?.cost.coverage).toBe('unpriced');
   });
 
+  it('exposes budget tags and gateway attribution mode', () => {
+    const turn = toApiAgentTurn(
+      {
+        ...baseTurn,
+        tags: { agent: 'agent-1', team: 'growth' },
+        gatewayMode: 'mixed',
+      },
+      null,
+      1,
+    );
+
+    expect(turn.tags).toEqual({ agent: 'agent-1', team: 'growth' });
+    expect(turn.gatewayMode).toBe('mixed');
+  });
+
+  it('defaults tags to empty and gatewayMode to null for direct turns', () => {
+    const turn = toApiAgentTurn(baseTurn, null, 1);
+
+    expect(turn.tags).toEqual({});
+    expect(turn.gatewayMode).toBeNull();
+  });
+
   it('includes raw sandbox restore fields even when the turn projects ERROR', () => {
     const turn = toApiAgentTurn(
       { ...baseTurn, completedAt: 10, error: 'Restore retry budget exhausted' },

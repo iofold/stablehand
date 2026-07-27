@@ -180,6 +180,11 @@ export const TurnSchema = z.strictObject({
   lastRestoreError: z.string().nullable().optional(),
   checkpointAt: EpochMillisecondsSchema.optional(),
   usage: TurnUsageSchema.nullable(),
+  // Budget-attribution tags stamped at turn creation (system + caller tags).
+  tags: StringRecordSchema.optional(),
+  // Model-gateway attribution; null means the turn ran on direct provider
+  // credentials and no spend reconciliation is expected for it.
+  gatewayMode: z.enum(['gateway_only', 'mixed']).nullable().optional(),
 });
 
 export const SandboxSessionsByStatusSchema = z.strictObject({

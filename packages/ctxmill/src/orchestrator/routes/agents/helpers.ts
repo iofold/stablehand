@@ -152,7 +152,7 @@ export function toAgentResponse(agent: StoredAgent): Agent {
 }
 
 export function toApiAgentTurn(
-  turn: { id: string; agentId: string; conversationId: string | null; sandboxSessionId: string | null; status: string; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; gatewayMode?: string | null },
+  turn: { id: string; agentId: string; conversationId: string | null; sandboxSessionId: string | null; status: string; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; gatewayMode?: string | null; tags?: Record<string, string> | null },
   sandboxSession?: {
     status: string;
     restoreAttempts?: number | null;
@@ -187,6 +187,10 @@ export function toApiAgentTurn(
     usage: materializeTurnUsage(turn, {
       gatewayPending: turn.gatewayMode === 'gateway_only' || turn.gatewayMode === 'mixed',
     }),
+    tags: turn.tags ?? {},
+    gatewayMode: turn.gatewayMode === 'gateway_only' || turn.gatewayMode === 'mixed'
+      ? turn.gatewayMode
+      : null,
   };
 }
 
