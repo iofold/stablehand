@@ -113,6 +113,14 @@ export function SettingsPage() {
   const [draftPidsLimit, setDraftPidsLimit] = useState('');
   const [draftTimeoutSec, setDraftTimeoutSec] = useState('');
 
+  // BrowserRouter does not scroll to fragments; budget chips and ledger links
+  // deep-link to /settings#budgets, so honor the hash once content renders.
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash) return;
+    document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
+  }, [loading]);
+
   useEffect(() => {
     let mounted = true;
     setLoading(true);

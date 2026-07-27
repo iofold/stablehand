@@ -525,11 +525,24 @@ export function AnalyticsPage() {
                           {agent.name}
                         </p>
                         {budget ? (
-                          <span className={cn(
-                            'shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize',
-                            stateTone(budget.state),
-                          )}>
-                            {budget.state}
+                          <span
+                            title={budget.state === 'ok'
+                              ? 'Within all matching budget policies'
+                              : `Tripped: ${[...new Set(
+                                budget.matches
+                                  .filter((match) => match.statuses.some((status) => status.state !== 'ok'))
+                                  .map((match) => match.policyName),
+                              )].join(', ') || 'budget policy'}`}
+                            className={cn(
+                              'shrink-0 max-w-[180px] truncate rounded-full border px-2 py-0.5 text-[10px] font-medium',
+                              stateTone(budget.state),
+                            )}
+                          >
+                            {budget.state === 'ok'
+                              ? 'ok'
+                              : `${budget.matches.find((match) =>
+                                match.statuses.some((status) => status.state !== 'ok'))?.policyName
+                                ?? 'budget'} · ${budget.state}`}
                           </span>
                         ) : null}
                         {incompleteCostTurns > 0 ? (

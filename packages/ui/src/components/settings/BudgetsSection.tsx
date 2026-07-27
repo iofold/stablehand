@@ -115,9 +115,12 @@ function SpendMeter({ spend }: { spend: BudgetSpendResponse }) {
                 )}
                 >
                   {status.spent === null
-                    ? 'Not reported'
+                    ? 'No usage data'
                     : formatMetricValue(status.metric, status.spent)}
                   {' / '}{formatMetricValue(status.metric, status.limit)} {METRIC_LABELS[status.metric] ?? status.metric}
+                  {status.action
+                    ? ` · ${status.action.action === 'block' ? 'blocks' : 'warns'} at ${Math.round(status.action.threshold * 100)}%`
+                    : ''}
                 </span>
               </div>
             );

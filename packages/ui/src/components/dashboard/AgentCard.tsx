@@ -51,6 +51,16 @@ export function AgentCard({
 }: AgentCardProps) {
   const navigate = useNavigate();
 
+  // Name the policies whose thresholds this agent actually tripped so the
+  // chip can say which budget is warning/blocking, not just that one is.
+  const trippedPolicyNames = budgetStatus && budgetStatus.state !== 'ok'
+    ? [...new Set(
+        budgetStatus.matches
+          .filter((match) => match.statuses.some((status) => status.state !== 'ok'))
+          .map((match) => match.policyName),
+      )]
+    : [];
+
   const activeSessionCount = countActiveSandboxSessions(agent.sandboxSessionsByStatus);
   const dashboardStatus = getDashboardStatus(agent, activeSessionCount);
   const statusConfig = getAgentStatusConfig(dashboardStatus);
@@ -195,18 +205,28 @@ export function AgentCard({
           
           <div className="flex items-center gap-2">
             {budgetStatus && budgetStatus.state !== 'ok' && (
-              <span
+              <button
+                type="button"
                 data-testid="agent-budget-chip"
+                title={`Budget ${budgetStatus.state}${trippedPolicyNames.length > 0 ? `: ${trippedPolicyNames.join(', ')}` : ''} — view budget policies`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  navigate('/settings#budgets');
+                }}
                 className={cn(
-                  'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                  'inline-flex max-w-[220px] items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium hover:brightness-125',
                   budgetStatus.state === 'blocked'
                     ? 'border-red-500/30 bg-red-500/15 text-red-300'
                     : 'border-amber-500/30 bg-amber-500/15 text-amber-300',
                 )}
               >
-                <AlertCircle className="h-3 w-3" />
-                Budget {budgetStatus.state}
-              </span>
+                <AlertCircle className="h-3 w-3 shrink-0" />
+                <span className="truncate">
+                  {trippedPolicyNames.length > 0
+                    ? `${trippedPolicyNames[0]} ${budgetStatus.state}`
+                    : `Budget ${budgetStatus.state}`}
+                </span>
+              </button>
             )}
             {modelGatewayStatus?.state === 'degraded' && (
               <span

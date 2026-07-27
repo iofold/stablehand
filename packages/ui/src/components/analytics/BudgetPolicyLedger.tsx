@@ -120,7 +120,7 @@ function MetricLedger({ status }: { status: BudgetMetricStatus }) {
         <div className="text-right">
           <p className="text-xs font-semibold tabular-nums text-surface-100">
             {status.spent === null
-              ? 'Not reported'
+              ? 'No usage data yet'
               : `${formatMetricValue(status.metric, status.spent)} of ${formatMetricValue(status.metric, status.limit)}`}
           </p>
           <p className={cn(
@@ -131,7 +131,12 @@ function MetricLedger({ status }: { status: BudgetMetricStatus }) {
                 ? 'text-amber-300'
                 : 'text-surface-400',
           )}>
-            {percentage === null ? 'Coverage unavailable' : `${percentage}% used`}
+            {percentage === null
+              ? 'treated as within budget'
+              : `${percentage}% used`}
+            {status.action
+              ? ` · ${status.action.action === 'block' ? 'blocks' : 'warns'} at ${Math.round(status.action.threshold * 100)}%`
+              : ''}
           </p>
         </div>
       </div>
@@ -216,7 +221,7 @@ function Definition({ policy }: { policy: BudgetPolicy }) {
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-label">Policy definition</h3>
         <Link
-          to="/settings"
+          to="/settings#budgets"
           className="inline-flex items-center gap-1 text-[11px] font-medium text-accent-400 hover:text-accent-300"
         >
           <Settings2 className="h-3 w-3" />
@@ -377,7 +382,7 @@ export function BudgetPolicyLedger({
       <div className="m-5 rounded-lg border border-dashed border-surface-700 p-5 text-center">
         <CircleDollarSign className="mx-auto h-5 w-5 text-surface-500" />
         <p className="mt-2 text-sm text-surface-300">No budget policies</p>
-        <Link to="/settings" className="mt-2 inline-block text-xs text-accent-400 hover:text-accent-300">
+        <Link to="/settings#budgets" className="mt-2 inline-block text-xs text-accent-400 hover:text-accent-300">
           Configure guardrails
         </Link>
       </div>
