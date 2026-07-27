@@ -199,10 +199,25 @@ describe('sandbox runtime spec builders', () => {
         { name: 'SANDBOX_PORT', value: '50051' },
         { name: 'CTXMILL_HARNESS', value: 'claude-agents' },
         { name: 'ORCHESTRATOR_URL', value: 'http://orchestrator:3001' },
-        { name: 'OPENAI_API_KEY', value: 'sk-test' },
       ],
+      envFrom: [{ secretRef: { name: 'ctxmill-sandbox-run-001-env' } }],
       volumeMounts: [{ name: 'workspace', mountPath: '/workspace' }],
     });
+    expect(JSON.stringify(spec.manifest)).not.toContain('sk-test');
+    expect((spec as unknown as {
+      secretManifest?: {
+        metadata: { name: string; namespace: string };
+        stringData: Record<string, string>;
+      };
+    }).secretManifest).toEqual(expect.objectContaining({
+      metadata: expect.objectContaining({
+        name: 'ctxmill-sandbox-run-001-env',
+        namespace: 'ctxmill',
+      }),
+      stringData: {
+        OPENAI_API_KEY: 'sk-test',
+      },
+    }));
     expect(spec.manifest.spec.template.spec.volumes).toEqual([{
       name: 'workspace',
       hostPath: {
@@ -215,5 +230,22 @@ describe('sandbox runtime spec builders', () => {
   it('sanitizes Kubernetes names with the current truncation policy', () => {
     expect(sanitizeKubernetesName('Session With Spaces And CAPS')).toBe('session-with-spaces-and-caps');
     expect(sanitizeKubernetesName(`x${'a'.repeat(80)}`)).toHaveLength(52);
+  });
+
+  it('uses the deployment-selected Kubernetes image pull policy', () => {
+    const spec = buildKubernetesJobSpec({
+      options: createOptions,
+      namespace: 'ctxmill',
+      imagePrefix: 'ctxmill/harness',
+      scopeId: 'scope-1',
+      defaults,
+      startupGraceMs: 90_000,
+      startedAtIso: '2026-07-08T15:00:00.000Z',
+      orchestratorUrl: 'http://orchestrator:3001',
+      dataHostPathRoot: '/var/lib/ctxmill/data',
+      imagePullPolicy: 'Never',
+    } as Parameters<typeof buildKubernetesJobSpec>[0] & { imagePullPolicy: 'Never' });
+
+    expect(spec.manifest.spec.template.spec.containers[0]?.imagePullPolicy).toBe('Never');
   });
 });

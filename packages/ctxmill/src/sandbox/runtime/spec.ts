@@ -111,7 +111,10 @@ export interface KubernetesJobSpecInput {
   orchestratorUrl: string;
   dataHostPathRoot: string;
   sandboxOtelEnv?: string[];
+  imagePullPolicy?: KubernetesImagePullPolicy;
 }
+
+export type KubernetesImagePullPolicy = 'Always' | 'IfNotPresent' | 'Never';
 
 export interface KubernetesJobManifest {
   apiVersion: 'batch/v1';
@@ -136,13 +139,14 @@ export interface KubernetesJobManifest {
         containers: Array<{
           name: 'sandbox';
           image: string;
-          imagePullPolicy: 'IfNotPresent';
+          imagePullPolicy: KubernetesImagePullPolicy;
           ports: Array<{ name: string; containerPort: number }>;
           resources: {
             requests: { cpu: string; memory: string };
             limits: { cpu: string; memory: string };
           };
           env: Array<{ name: string; value: string }>;
+          envFrom?: Array<{ secretRef: { name: string } }>;
           volumeMounts: Array<{ name: string; mountPath: string }>;
         }>;
         volumes: Array<{
@@ -154,11 +158,24 @@ export interface KubernetesJobManifest {
   };
 }
 
+export interface KubernetesSecretManifest {
+  apiVersion: 'v1';
+  kind: 'Secret';
+  metadata: {
+    name: string;
+    namespace: string;
+    labels: Record<string, string>;
+  };
+  type: 'Opaque';
+  stringData: Record<string, string>;
+}
+
 export interface KubernetesJobSpec {
   jobName: string;
   workspaceHostPath: string;
   resources: SandboxRuntimeResources;
   manifest: KubernetesJobManifest;
+  secretManifest?: KubernetesSecretManifest;
 }
 
 export function resolveContainerStartupGraceMs(explicitMs?: number): number {
@@ -243,6 +260,10 @@ export function sanitizeKubernetesName(value: string): string {
     .slice(0, 52);
 }
 
+export function kubernetesSandboxSecretName(jobName: string): string {
+  return sanitizeKubernetesName(`${jobName}-env`);
+}
+
 function cpuToQuantity(cpus: number): string {
   return `${Math.max(1, Math.round(cpus * 1000))}m`;
 }
@@ -297,6 +318,7 @@ function sandboxEnv(
   resources: SandboxRuntimeResources,
   orchestratorUrl: string,
   sandboxOtelEnv?: string[],
+  includeSecrets = true,
 ): string[] {
   return [
     `NODE_OPTIONS=--max-old-space-size=${Math.floor(resources.memoryMb * 0.9)}`,
@@ -308,7 +330,9 @@ function sandboxEnv(
     'SANDBOX_PORT=50051',
     `CTXMILL_HARNESS=${options.harnessName}`,
     `ORCHESTRATOR_URL=${orchestratorUrl}`,
-    ...Object.entries(options.secrets ?? {}).map(([key, value]) => `${key}=${value}`),
+    ...(includeSecrets
+      ? Object.entries(options.secrets ?? {}).map(([key, value]) => `${key}=${value}`)
+      : []),
   ];
 }
 
@@ -388,17 +412,30 @@ export function buildKubernetesJobSpec(input: KubernetesJobSpecInput): Kubernete
   const annotations = runtimeAnnotations(resources, input.startedAtIso, input.startupGraceMs);
   const workspaceHostPath = input.options.workspaceDir
     ?? join(input.dataHostPathRoot, 'sandbox-empty', input.options.sessionId);
+  const secretEntries = Object.entries(input.options.secrets ?? {});
+  const secretName = kubernetesSandboxSecretName(jobName);
   const env = kubernetesEnv(sandboxEnv(
     input.options,
     resources,
     input.orchestratorUrl,
     input.sandboxOtelEnv,
+    false,
   ));
+  const secretManifest = secretEntries.length > 0
+    ? {
+        apiVersion: 'v1' as const,
+        kind: 'Secret' as const,
+        metadata: { name: secretName, namespace: input.namespace, labels },
+        type: 'Opaque' as const,
+        stringData: Object.fromEntries(secretEntries),
+      }
+    : undefined;
 
   return {
     jobName,
     workspaceHostPath,
     resources,
+    ...(secretManifest ? { secretManifest } : {}),
     manifest: {
       apiVersion: 'batch/v1',
       kind: 'Job',
@@ -415,7 +452,7 @@ export function buildKubernetesJobSpec(input: KubernetesJobSpecInput): Kubernete
               {
                 name: 'sandbox',
                 image: imageName(input.imagePrefix, input.options.harnessName),
-                imagePullPolicy: 'IfNotPresent',
+                imagePullPolicy: input.imagePullPolicy ?? 'IfNotPresent',
                 ports: [
                   { name: 'grpc', containerPort: 50051 },
                   { name: 'tools', containerPort: 8080 },
@@ -431,6 +468,9 @@ export function buildKubernetesJobSpec(input: KubernetesJobSpecInput): Kubernete
                   },
                 },
                 env,
+                ...(secretManifest
+                  ? { envFrom: [{ secretRef: { name: secretName } }] }
+                  : {}),
                 volumeMounts: [
                   { name: 'workspace', mountPath: WORKSPACE_ROOT },
                 ],

@@ -35,6 +35,7 @@ interface KubernetesResource {
     annotations?: Record<string, string>;
   };
   spec?: Record<string, unknown>;
+  rules?: Array<Record<string, unknown>>;
 }
 
 function readYamlDocuments(path: string): KubernetesResource[] {
@@ -318,5 +319,32 @@ describe('model gateway deployment', () => {
     expect(manifests).toContain('http://litellm.ctxmill.svc.cluster.local:4000');
     expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_RUNTIME_KEY');
     expect(manifests).toContain('CTXMILL_MODEL_GATEWAY_METERING_KEY');
+  });
+
+  it('allows per-sandbox Secrets and forbids registry pulls for imported harness images', () => {
+    const resources = readYamlDocuments('deploy/k3s/dev2/manifests.yaml');
+    const role = findResource(resources, 'Role', 'ctxmill-sandbox-runner');
+    const orchestrator = findResource(resources, 'Deployment', 'orchestrator');
+
+    expect(role.rules).toEqual(
+      expect.arrayContaining([expect.objectContaining({
+        apiGroups: [''],
+        resources: ['secrets'],
+        verbs: expect.arrayContaining(['create', 'get', 'delete']),
+      })]),
+    );
+    expect(orchestrator.spec).toMatchObject({
+      template: {
+        spec: {
+          containers: [expect.objectContaining({
+            name: 'orchestrator',
+            env: expect.arrayContaining([{
+              name: 'CTXMILL_K8S_IMAGE_PULL_POLICY',
+              value: 'Never',
+            }]),
+          })],
+        },
+      },
+    });
   });
 });

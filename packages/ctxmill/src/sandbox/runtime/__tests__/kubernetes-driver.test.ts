@@ -103,26 +103,62 @@ describe('KubernetesContainerDriver pod scheduling wait', () => {
     await expect(driver.startContainer('ctxmill-sandbox-test')).rejects.toThrow(/exited before becoming ready/);
   });
 
-  it('reads the exact runtime instance token from the target pod environment', async () => {
+  it('creates a Job-owned Secret without placing credential values in the Job', async () => {
     const driver = createDriver();
-    stubFindPod(driver, [{
-      ...runningPod,
-      spec: {
-        containers: [{
-          name: 'sandbox',
-          env: [
-            { name: 'OTHER_VALUE', value: 'before' },
-            {
-              name: 'CTXMILL_RUNTIME_INSTANCE_TOKEN',
-              value: 'runtime-token-1',
-            },
-          ],
-        }],
+    const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+    vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined);
+    (driver as unknown as {
+      requestJson: (method: string, path: string, body?: unknown) => Promise<unknown>;
+    }).requestJson = vi.fn(async (method: string, path: string, body?: unknown) => {
+      requests.push({ method, path, body });
+      return path.endsWith('/jobs')
+        ? { metadata: { uid: 'job-uid-1' } }
+        : {};
+    });
+
+    await driver.createContainer({
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      harnessName: 'langgraph',
+      secrets: { OPENAI_API_KEY: 'credential-value' },
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.path).toBe('/apis/batch/v1/namespaces/test/jobs');
+    expect(JSON.stringify(requests[0]?.body)).not.toContain('credential-value');
+    expect(requests[1]).toMatchObject({
+      method: 'POST',
+      path: '/api/v1/namespaces/test/secrets',
+      body: {
+        metadata: {
+          name: 'ctxmill-sandbox-session-1-env',
+          ownerReferences: [{
+            apiVersion: 'batch/v1',
+            kind: 'Job',
+            name: 'ctxmill-sandbox-session-1',
+            uid: 'job-uid-1',
+          }],
+        },
+        stringData: { OPENAI_API_KEY: 'credential-value' },
       },
-    }]);
+    });
+  });
+
+  it('reads the exact runtime instance token from the sandbox Secret', async () => {
+    const driver = createDriver();
+    const requestJson = vi.fn().mockResolvedValue({
+      data: {
+        CTXMILL_RUNTIME_INSTANCE_TOKEN: Buffer.from('runtime-token-1').toString('base64'),
+      },
+    });
+    (driver as unknown as { requestJson: typeof requestJson }).requestJson = requestJson;
 
     await expect(
       driver.getRuntimeInstanceToken('ctxmill-sandbox-test'),
     ).resolves.toBe('runtime-token-1');
+    expect(requestJson).toHaveBeenCalledWith(
+      'GET',
+      '/api/v1/namespaces/test/secrets/ctxmill-sandbox-test-env',
+    );
   });
 });

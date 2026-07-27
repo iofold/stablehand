@@ -10,12 +10,14 @@ import { hasStatusCode, statusCodeError } from '../../util/status-code-error.js'
 import { CONTAINER_SCOPE_LABEL, resolveContainerScopeId } from '../container-scope.js';
 import {
   buildKubernetesJobSpec,
+  kubernetesSandboxSecretName,
   resolveContainerStartupGraceMs,
   resolveSandboxRuntimeDefaults,
   runtimeLabelsToContainerInfo,
   sanitizeKubernetesName,
 } from './spec.js';
 import type { SandboxRuntimeDefaults } from './spec.js';
+import type { KubernetesImagePullPolicy } from './spec.js';
 import type {
   ContainerInfo,
   ContainerManagerOptions,
@@ -42,13 +44,23 @@ export interface KubernetesContainerManagerOptions extends ContainerManagerOptio
   dataHostPathRoot?: string;
   podReadyTimeoutMs?: number;
   podPollIntervalMs?: number;
+  imagePullPolicy?: KubernetesImagePullPolicy;
 }
 
 interface KubeMetadata {
   name?: string;
+  uid?: string;
   labels?: Record<string, string>;
   annotations?: Record<string, string>;
   deletionTimestamp?: string;
+}
+
+interface KubeJob {
+  metadata?: KubeMetadata;
+}
+
+interface KubeSecret {
+  data?: Record<string, string>;
 }
 
 interface KubePod {
@@ -104,6 +116,12 @@ function envNumber(name: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function resolveImagePullPolicy(value: string | undefined): KubernetesImagePullPolicy {
+  return value === 'Always' || value === 'Never' || value === 'IfNotPresent'
+    ? value
+    : 'IfNotPresent';
+}
+
 function unschedulableReason(pod: KubePod | null): string | null {
   const condition = pod?.status?.conditions?.find(
     (c) => c.type === 'PodScheduled' && c.status === 'False' && c.reason === 'Unschedulable',
@@ -134,6 +152,7 @@ export class KubernetesContainerDriver {
   private schedulingWaitMs: number;
   private readonly podPollIntervalMs: number;
   private readonly startupGraceMs: number;
+  private readonly imagePullPolicy: KubernetesImagePullPolicy;
   /** Kept for workspaceDirFor and record metadata only; not slot accounting. */
   private readonly records = new Map<string, ContainerRecord>();
   private tokenPromise: Promise<string>;
@@ -154,6 +173,9 @@ export class KubernetesContainerDriver {
       options.startupGraceMs
         ?? envNumber('CTXMILL_CONTAINER_STARTUP_GRACE_MS')
         ?? this.podReadyTimeoutMs + 30_000,
+    );
+    this.imagePullPolicy = resolveImagePullPolicy(
+      options.imagePullPolicy ?? process.env.CTXMILL_K8S_IMAGE_PULL_POLICY,
     );
     this.tokenPromise = fs.readFile(`${SERVICE_ACCOUNT_ROOT}/token`, 'utf8');
     this.caPromise = fs.readFile(`${SERVICE_ACCOUNT_ROOT}/ca.crt`);
@@ -190,12 +212,48 @@ export class KubernetesContainerDriver {
       startedAtIso: new Date().toISOString(),
       orchestratorUrl: process.env.ORCHESTRATOR_CALLBACK_URL || 'http://orchestrator:3001',
       dataHostPathRoot: this.dataHostPathRoot,
+      imagePullPolicy: this.imagePullPolicy,
     });
 
     console.debug(`${TAG} creating sandbox Job ${spec.jobName} in namespace ${namespace}`);
 
     await fs.mkdir(spec.workspaceHostPath, { recursive: true });
-    await this.requestJson('POST', `/apis/batch/v1/namespaces/${namespace}/jobs`, spec.manifest);
+    const job = await this.requestJson<KubeJob>(
+      'POST',
+      `/apis/batch/v1/namespaces/${namespace}/jobs`,
+      spec.manifest,
+    );
+    if (spec.secretManifest) {
+      try {
+        const jobUid = job.metadata?.uid;
+        if (!jobUid) {
+          throw new Error(`Kubernetes did not return a UID for sandbox Job ${spec.jobName}`);
+        }
+        await this.requestJson('POST', `/api/v1/namespaces/${namespace}/secrets`, {
+          ...spec.secretManifest,
+          metadata: {
+            ...spec.secretManifest.metadata,
+            ownerReferences: [{
+              apiVersion: 'batch/v1',
+              kind: 'Job',
+              name: spec.jobName,
+              uid: jobUid,
+            }],
+          },
+        });
+      } catch (err) {
+        try {
+          await this.deleteJob(spec.jobName);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [err, cleanupError],
+            `Failed to create sandbox Secret and clean up Job ${spec.jobName}`,
+            { cause: cleanupError },
+          );
+        }
+        throw err;
+      }
+    }
 
     this.records.set(spec.jobName, {
       sessionId: opts.sessionId,
@@ -283,6 +341,26 @@ export class KubernetesContainerDriver {
   async getRuntimeInstanceToken(
     containerId: string,
   ): Promise<string | undefined> {
+    const namespace = await this.namespacePromise;
+    try {
+      const secret = await this.requestJson<KubeSecret>(
+        'GET',
+        `/api/v1/namespaces/${namespace}/secrets/${kubernetesSandboxSecretName(containerId)}`,
+      );
+      const encodedToken = secret.data?.[RUNTIME_INSTANCE_TOKEN_ENV];
+      const token = encodedToken
+        ? Buffer.from(encodedToken, 'base64').toString('utf8').trim()
+        : '';
+      if (token) {
+        return token;
+      }
+    } catch (err) {
+      if (!hasStatusCode(err, 404)) {
+        throw err;
+      }
+    }
+
+    // Compatibility for Jobs created before per-sandbox Secrets shipped.
     const pod = await this.findPod(containerId);
     const sandboxContainer = pod?.spec?.containers?.find(
       (container) => container.name === 'sandbox',
