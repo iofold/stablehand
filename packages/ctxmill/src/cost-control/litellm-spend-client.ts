@@ -251,7 +251,11 @@ export class LiteLLMSpendClient {
 
         const startedAt = Date.parse(row.startTime);
         const endedAt = Date.parse(row.endTime);
-        if (startedAt < input.startMs || startedAt > input.endMs) {
+        // A spend row becomes durable only after the provider call finishes.
+        // Cursor on that finalized boundary so a call that lasts longer than
+        // the reconciler overlap cannot start before the window and disappear
+        // before CTXMILL ever observes it.
+        if (endedAt < input.startMs || endedAt > input.endMs) {
           continue;
         }
         const inputTokens = row.prompt_tokens ?? undefined;

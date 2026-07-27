@@ -34,6 +34,69 @@ describe('LiteLLMSpendClient', () => {
     expect(url.searchParams.get('end_date')).toBe('2026-07-24');
   });
 
+  it('filters the exact reconciliation window by finalized time for long calls', async () => {
+    const row = (
+      requestId: string,
+      correlationId: string,
+      startTime: string,
+      endTime: string,
+    ) => ({
+      request_id: requestId,
+      spend: 0.001,
+      prompt_tokens: 10,
+      completion_tokens: 1,
+      total_tokens: 11,
+      startTime,
+      endTime,
+      model: 'cloudflare/@cf/zai-org/glm-5.2',
+      model_group: 'cf-glm-5.2',
+      custom_llm_provider: 'cloudflare',
+      session_id: correlationId,
+      status: 'success',
+    });
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      data: [
+        row(
+          'tx-finished-before',
+          'ct_00000000000000000000000000000000',
+          '2026-07-23T09:58:00.000Z',
+          '2026-07-23T09:59:59.999Z',
+        ),
+        row(
+          'tx-long-call',
+          'ct_11111111111111111111111111111111',
+          '2026-07-23T09:58:30.000Z',
+          '2026-07-23T10:00:30.000Z',
+        ),
+        row(
+          'tx-not-finalized-yet',
+          'ct_22222222222222222222222222222222',
+          '2026-07-23T10:00:30.000Z',
+          '2026-07-23T10:01:00.001Z',
+        ),
+      ],
+      page: 1,
+      page_size: 100,
+      total: 3,
+      total_pages: 1,
+      total_is_capped: false,
+    }));
+    const client = new LiteLLMSpendClient({
+      baseUrl: 'http://litellm:4000',
+      meteringKey: 'metering-key',
+      fetchImpl,
+    });
+
+    const result = await client.listSpend({
+      startMs: Date.parse('2026-07-23T10:00:00.000Z'),
+      endMs: Date.parse('2026-07-23T10:01:00.000Z'),
+    });
+
+    expect(result.records.map((record) => record.transactionId)).toEqual([
+      'tx-long-call',
+    ]);
+  });
+
   it('paginates, normalizes safe fields, and never returns vendor credentials or payloads', async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
