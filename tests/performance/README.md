@@ -132,6 +132,13 @@ harness comparisons like-for-like and repetitive load off frontier-priced
 models. GLM 5.2 remains in the compatibility matrix. The bounded smoke profile
 uses GPT-5.6 Luna and Claude Sonnet 5 to retain current-provider coverage.
 
+The lifecycle profile is a separate like-for-like comparison. It runs cold,
+warm, and checkpoint/restore lanes for Deep Agents, PI Agent, and Claude Agents
+against the same `cf-glm-5.2` LiteLLM alias. The Claude harness reaches that
+alias through LiteLLM's Anthropic Messages translation; every lifecycle stage
+omits `apiKeyRef` and `baseUrl`, so an explicit direct provider route cannot
+bypass the configured deployment gateway.
+
 ## LLM budget envelope
 
 The load planner counts calls; it does not duplicate the product pricing table
@@ -141,7 +148,7 @@ use these operating envelopes:
 | Profile | Planned turns | Estimated model calls | Expected spend | Reserve | Hard policy ceiling |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `dev2-model-matrix` | 27 | 31 | $0.20-$0.60 | $1 | $1 |
-| `dev2-harness-lifecycle` | 12 | 12 | $0.02-$0.10 | $0.25 | $1 |
+| `dev2-harness-lifecycle` | 96 | 96 | $1-$4 | $5 | $6 |
 | `dev2-scale-10` | 262 | 262 | $0.50-$1.50 | $5 | $6 |
 | Matrix + scale once | 289 | 293 | $0.70-$2.10 | $6 | $7 |
 | Full adaptive worst case | 1,182 | 1,182 | $2-$6 | $10 | $15 |

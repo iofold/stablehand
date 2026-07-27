@@ -789,7 +789,7 @@ exit 1
     }
   });
 
-  it('ships bounded warm and resume parity lanes for Deep Agents and PI', () => {
+  it('ships gateway-only GLM lifecycle parity lanes for every harness', () => {
     const lifecycle = parsePerformanceProfile(JSON.parse(readFileSync(
       new URL('./profiles/dev2-harness-lifecycle.json', import.meta.url),
       'utf8',
@@ -798,25 +798,42 @@ exit 1
 
     expect(new Set(lifecycle.stages.map((stage) =>
       `${stage.harness}:${stage.sessionMode}`))).toEqual(new Set([
+      'langgraph:cold',
       'langgraph:warm',
       'langgraph:resume',
+      'pi-agent:cold',
       'pi-agent:warm',
       'pi-agent:resume',
+      'claude-agents:cold',
+      'claude-agents:warm',
+      'claude-agents:resume',
     ]));
     expect(lifecycle.stages.every((stage) =>
       stage.concurrency === 1
-      && stage.warmupTurns >= 1
+      && stage.iterations === 10
       && stage.sseClientsPerAgent === 2)).toBe(true);
+    expect(lifecycle.stages.filter((stage) => stage.sessionMode === 'cold')
+      .every((stage) => stage.warmupTurns === 0)).toBe(true);
+    expect(lifecycle.stages.filter((stage) => stage.sessionMode !== 'cold')
+      .every((stage) => stage.warmupTurns === 1)).toBe(true);
+    expect(lifecycle.stages.every((stage) =>
+      stage.harnessConfig.model === 'cf-glm-5.2'
+      && stage.harnessConfig.apiKeyRef == null
+      && stage.harnessConfig.baseUrl == null)).toBe(true);
     expect(lifecycle.stages.filter((stage) => stage.harness === 'langgraph')
-      .every((stage) => stage.harnessConfig.reasoning === 'off')).toBe(true);
+      .every((stage) => stage.harnessConfig.provider === 'openai'
+        && stage.harnessConfig.reasoning === 'off')).toBe(true);
     expect(lifecycle.stages.filter((stage) => stage.harness === 'pi-agent')
-      .every((stage) => stage.harnessConfig.reasoning === true
+      .every((stage) => stage.harnessConfig.provider === 'openai'
+        && stage.harnessConfig.reasoning === true
         && stage.harnessConfig.thinkingLevel === 'minimal')).toBe(true);
+    expect(lifecycle.stages.filter((stage) => stage.harness === 'claude-agents')
+      .every((stage) => stage.harnessConfig.provider === 'anthropic')).toBe(true);
     expect(plan).toMatchObject({
-      measuredTurns: 8,
-      warmupTurns: 4,
-      totalTurns: 12,
-      estimatedModelCalls: 12,
+      measuredTurns: 90,
+      warmupTurns: 6,
+      totalTurns: 96,
+      estimatedModelCalls: 96,
       peakConcurrency: 1,
       peakSseConnections: 2,
     });

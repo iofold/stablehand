@@ -12,85 +12,176 @@
   },
   "safety": {
     "maxConcurrency": 1,
-    "maxTurns": 12,
-    "maxEstimatedModelCalls": 12,
+    "maxTurns": 96,
+    "maxEstimatedModelCalls": 96,
     "abortErrorRate": 0.05,
     "maxNodeCpuPercent": 75,
     "maxNodeMemoryPercent": 75
   },
   "stages": [
     {
-      "name": "deepagents-warm-c1",
+      "name": "deepagents-cold-c1-glm",
       "harness": "langgraph",
-      "agentPrefix": "perf-lifecycle-deepagents-warm",
+      "agentPrefix": "perf-lifecycle-deepagents-cold-glm",
       "topology": "unique-agents",
-      "sessionMode": "warm",
+      "sessionMode": "cold",
       "concurrency": 1,
-      "iterations": 2,
-      "warmupTurns": 1,
+      "iterations": 10,
       "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "cf-gpt-oss-120b",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": "off"
       }
     },
     {
-      "name": "pi-warm-c1",
-      "harness": "pi-agent",
-      "agentPrefix": "perf-lifecycle-pi-warm",
+      "name": "deepagents-warm-c1-glm",
+      "harness": "langgraph",
+      "agentPrefix": "perf-lifecycle-deepagents-warm-glm",
       "topology": "unique-agents",
       "sessionMode": "warm",
       "concurrency": 1,
-      "iterations": 2,
+      "iterations": 10,
       "warmupTurns": 1,
       "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "cf-gpt-oss-120b",
+        "model": "cf-glm-5.2",
+        "maxTokens": 64,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "deepagents-resume-c1-glm",
+      "harness": "langgraph",
+      "agentPrefix": "perf-lifecycle-deepagents-resume-glm",
+      "topology": "unique-agents",
+      "sessionMode": "resume",
+      "concurrency": 1,
+      "iterations": 10,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-glm-5.2",
+        "maxTokens": 64,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "pi-cold-c1-glm",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-lifecycle-pi-cold-glm",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 10,
+      "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": true,
         "thinkingLevel": "minimal"
       }
     },
     {
-      "name": "deepagents-resume-c1",
-      "harness": "langgraph",
-      "agentPrefix": "perf-lifecycle-deepagents-resume",
-      "topology": "unique-agents",
-      "sessionMode": "resume",
-      "concurrency": 1,
-      "iterations": 2,
-      "warmupTurns": 1,
-      "sseClientsPerAgent": 2,
-      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
-      "harnessConfig": {
-        "provider": "openai",
-        "model": "cf-gpt-oss-120b",
-        "maxTokens": 64,
-        "reasoning": "off"
-      }
-    },
-    {
-      "name": "pi-resume-c1",
+      "name": "pi-warm-c1-glm",
       "harness": "pi-agent",
-      "agentPrefix": "perf-lifecycle-pi-resume",
+      "agentPrefix": "perf-lifecycle-pi-warm-glm",
       "topology": "unique-agents",
-      "sessionMode": "resume",
+      "sessionMode": "warm",
       "concurrency": 1,
-      "iterations": 2,
+      "iterations": 10,
       "warmupTurns": 1,
       "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
       "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
       "harnessConfig": {
         "provider": "openai",
-        "model": "cf-gpt-oss-120b",
+        "model": "cf-glm-5.2",
         "maxTokens": 64,
         "reasoning": true,
         "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "pi-resume-c1-glm",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-lifecycle-pi-resume-glm",
+      "topology": "unique-agents",
+      "sessionMode": "resume",
+      "concurrency": 1,
+      "iterations": 10,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-glm-5.2",
+        "maxTokens": 64,
+        "reasoning": true,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "claude-cold-c1-glm",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-lifecycle-claude-cold-glm",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 1,
+      "iterations": 10,
+      "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "cf-glm-5.2"
+      }
+    },
+    {
+      "name": "claude-warm-c1-glm",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-lifecycle-claude-warm-glm",
+      "topology": "unique-agents",
+      "sessionMode": "warm",
+      "concurrency": 1,
+      "iterations": 10,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "cf-glm-5.2"
+      }
+    },
+    {
+      "name": "claude-resume-c1-glm",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-lifecycle-claude-resume-glm",
+      "topology": "unique-agents",
+      "sessionMode": "resume",
+      "concurrency": 1,
+      "iterations": 10,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "timeoutMs": 180000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "cf-glm-5.2"
       }
     }
   ]

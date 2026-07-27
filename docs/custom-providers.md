@@ -129,7 +129,17 @@ harnessConfig:
   maxTokens: 8192   # reasoning models spend output budget on reasoning_content
 ```
 
-Works on the LangGraph and PI Agent harnesses (OpenAI-compatible path); verified with `@cf/zai-org/glm-5.2` including tool calling and streaming. The Claude Agents harness requires the Anthropic Messages schema, which Workers AI `@cf/` models do not serve — use LangGraph or PI Agent for these models. Other notable catalog entries: `@cf/zai-org/glm-4.7-flash` (cheap, 131K context) and `@cf/moonshotai/kimi-k2.7-code` (262K context, vision).
+The direct Workers AI endpoint works on the LangGraph and PI Agent harnesses
+through its OpenAI-compatible path; `@cf/zai-org/glm-5.2` is verified there for
+tool calling and streaming. Workers AI does not itself expose the Anthropic
+Messages schema required by Claude Agents. A CTXMILL deployment with LiteLLM
+can bridge that protocol: configure the Claude harness with `provider:
+anthropic` and the LiteLLM alias (for example `cf-glm-5.2`), omit `apiKeyRef`
+and `baseUrl`, and let the deployment gateway translate `/v1/messages` to the
+Workers backend. Treat each LiteLLM version/model pair as a certification row,
+especially for streaming tool arguments. Other notable catalog entries:
+`@cf/zai-org/glm-4.7-flash` (cheap, 131K context) and
+`@cf/moonshotai/kimi-k2.7-code` (262K context, vision).
 
 ### Authenticated Gateways caveat
 
