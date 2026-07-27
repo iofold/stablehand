@@ -587,6 +587,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
       const registrationFields = validateArtifactRegistrationFields({
         kind: artifact.kind || undefined,
         metadata: rawMetadata,
+        sha256: artifact.sha256 || undefined,
       });
       if (!registrationFields.success) {
         throw new ConnectError(
@@ -626,6 +627,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
             bucket: artifact.bucket,
             ...(registrationFields.kind ? { kind: registrationFields.kind } : {}),
             ...(registrationFields.metadata ? { metadata: registrationFields.metadata } : {}),
+            ...(registrationFields.sha256 ? { sha256: registrationFields.sha256 } : {}),
           }, {
             turnId,
             sandboxSessionId,
@@ -715,6 +717,7 @@ export function createOrchestratorServiceImpl(deps: OrchestratorServiceDeps) {
             metadataJson: row.metadata ? JSON.stringify(row.metadata) : '',
             createdAt: BigInt(row.createdAt),
             kind: row.kind ?? '',
+            sha256: row.sha256 ?? '',
           }),
         });
       } catch (err) {

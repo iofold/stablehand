@@ -43,6 +43,7 @@ async function createApp(
 }
 
 describe('artifact routes', () => {
+  const sha256 = 'a'.repeat(64);
   const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
 
   afterEach(async () => {
@@ -62,6 +63,7 @@ describe('artifact routes', () => {
       bucket: 'artifacts',
       kind: 'eval_report',
       metadata: { suite: 'smoke' },
+      sha256,
       status: 'pending_upload',
       expiresAt: 123,
       createdAt: 1,
@@ -86,6 +88,7 @@ describe('artifact routes', () => {
         sizeBytes: 12,
         kind: 'eval_report',
         metadata: { suite: 'smoke' },
+        sha256,
       },
     });
 
@@ -93,13 +96,37 @@ describe('artifact routes', () => {
     expect(repository.saveArtifact).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'eval_report',
       metadata: { suite: 'smoke' },
+      sha256,
       sizeBytes: 12,
     }));
     expect(emit).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenCalledWith('artifact.created', expect.objectContaining({
       artifactId: expect.any(String),
       kind: 'eval_report',
+      sha256,
     }));
+  });
+
+  it('rejects malformed uploader-attested hashes before registration', async () => {
+    const repository = { saveArtifact: vi.fn() };
+    const artifactStore = { getSignedUploadUrl: vi.fn() };
+    const app = await createApp(repository, artifactStore);
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/artifacts/upload-url',
+      payload: {
+        agentId: 'agent-1',
+        name: 'report.json',
+        mimeType: 'application/json',
+        sha256: 'not-a-sha256',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(repository.saveArtifact).not.toHaveBeenCalled();
+    expect(artifactStore.getSignedUploadUrl).not.toHaveBeenCalled();
   });
 
   it('rejects oversized artifact metadata before storage or persistence', async () => {
@@ -159,6 +186,7 @@ describe('artifact routes', () => {
       bucket: 'artifacts',
       kind: 'eval_report',
       metadata: { suite: 'smoke' },
+      sha256,
       status: 'pending_upload',
       expiresAt: null,
       createdAt: 1,
@@ -186,6 +214,7 @@ describe('artifact routes', () => {
         name: 'report.txt',
         kind: 'eval_report',
         metadata: '{"suite":"smoke"}',
+        sha256,
       },
       { field: 'file', filename: 'report.txt', contentType: 'text/plain', body: 'artifact body' },
     );
@@ -201,16 +230,19 @@ describe('artifact routes', () => {
     expect(repository.saveArtifact).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'eval_report',
       metadata: { suite: 'smoke' },
+      sha256,
       sizeBytes: 13,
     }));
     expect(response.json()).toMatchObject({
       kind: 'eval_report',
       metadata: { suite: 'smoke' },
+      sha256,
     });
     expect(emit).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenCalledWith('artifact.created', expect.objectContaining({
       kind: 'eval_report',
       sizeBytes: 13,
+      sha256,
     }));
   });
 

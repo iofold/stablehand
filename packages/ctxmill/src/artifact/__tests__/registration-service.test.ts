@@ -16,6 +16,7 @@ function artifactRow(overrides: Record<string, unknown> = {}) {
     bucket: 'artifacts',
     kind: 'eval_report',
     metadata: { suite: 'smoke' },
+    sha256: 'a'.repeat(64),
     status: 'active',
     expiresAt: null,
     createdAt: 1,
@@ -46,8 +47,28 @@ describe('ArtifactRegistrationService', () => {
       mimeType: 'application/json',
       sizeBytes: 42,
       kind: 'eval_report',
+      sha256: 'a'.repeat(64),
       timestamp: 123,
     });
+  });
+
+  it('keeps legacy registrations hashless when no attestation is supplied', async () => {
+    const row = artifactRow({ sha256: null });
+    const repository = { saveArtifact: vi.fn().mockResolvedValue(row) };
+    const eventBus = new TypedEventBus();
+    const emit = vi.spyOn(eventBus, 'emit');
+    const service = new ArtifactRegistrationService({
+      repository: repository as never,
+      eventBus,
+      now: () => 123,
+    });
+
+    await service.register(row as never);
+
+    expect(emit).toHaveBeenCalledWith(
+      'artifact.created',
+      expect.not.objectContaining({ sha256: expect.anything() }),
+    );
   });
 
   it('does not emit when a fenced registration loses delivery ownership', async () => {

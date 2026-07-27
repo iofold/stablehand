@@ -143,6 +143,7 @@ export async function artifactRoutes(
       sizeBytes?: number;
       kind?: unknown;
       metadata?: unknown;
+      sha256?: unknown;
     };
 
     if (!body?.agentId || !body.name || !body.mimeType) {
@@ -174,6 +175,7 @@ export async function artifactRoutes(
       expiresAt: Date.now() + ttl * 1000,
       ...(registrationFields.kind ? { kind: registrationFields.kind } : {}),
       ...(registrationFields.metadata ? { metadata: registrationFields.metadata } : {}),
+      ...(registrationFields.sha256 ? { sha256: registrationFields.sha256 } : {}),
     });
 
     return reply.send({
@@ -234,6 +236,7 @@ export async function artifactRoutes(
     const registrationFields = validateArtifactRegistrationFields({
       kind: fields.kind,
       metadata,
+      sha256: fields.sha256,
     });
     if (!registrationFields.success) {
       return reply
@@ -255,6 +258,7 @@ export async function artifactRoutes(
       status: 'pending_upload',
       ...(registrationFields.kind ? { kind: registrationFields.kind } : {}),
       ...(registrationFields.metadata ? { metadata: registrationFields.metadata } : {}),
+      ...(registrationFields.sha256 ? { sha256: registrationFields.sha256 } : {}),
     });
 
     try {
@@ -308,6 +312,7 @@ export async function artifactRoutes(
       status: artifact.status,
       kind: artifact.kind,
       metadata: artifact.metadata,
+      sha256: artifact.sha256,
     });
   });
 

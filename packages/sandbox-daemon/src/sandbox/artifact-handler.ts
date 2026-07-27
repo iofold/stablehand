@@ -1,6 +1,8 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, relative, resolve } from 'node:path';
+import { Transform } from 'node:stream';
 import { create } from '@bufbuild/protobuf';
 import { ArtifactKindSchema, ArtifactMetadataSchema } from '@ctxmill/contracts';
 import {
@@ -133,10 +135,13 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
     }
 
     try {
-      const fileBuffer = await readFile(fullPath);
-      if (fileBuffer.byteLength > MAX_ARTIFACT_SIZE_BYTES) {
+      const fileStats = await stat(fullPath);
+      if (!fileStats.isFile()) {
+        return stringifyJsonWithBigInts({ error: `Path is not a regular file: ${input.path}` });
+      }
+      if (fileStats.size > MAX_ARTIFACT_SIZE_BYTES) {
         return stringifyJsonWithBigInts({
-          error: `File exceeds max artifact size: ${fileBuffer.byteLength} bytes > ${MAX_ARTIFACT_SIZE_BYTES} bytes`,
+          error: `File exceeds max artifact size: ${fileStats.size} bytes > ${MAX_ARTIFACT_SIZE_BYTES} bytes`,
         });
       }
 
@@ -147,8 +152,29 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       const storageKey = buildArtifactStorageKey(artifactId, filename);
 
       assertTurnDeliveryContextCurrent(deliveryContext);
-      await artifactStore.upload(storageKey, fileBuffer, mimeType);
-      logger.info(`[artifact] uploaded ${storageKey} (${fileBuffer.byteLength} bytes)`);
+      const contentHash = createHash('sha256');
+      let streamedBytes = 0;
+      const hashingStream = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          streamedBytes += chunk.byteLength;
+          if (streamedBytes > MAX_ARTIFACT_SIZE_BYTES) {
+            callback(new Error(
+              `File exceeds max artifact size while streaming: ${streamedBytes} bytes > ${MAX_ARTIFACT_SIZE_BYTES} bytes`,
+            ));
+            return;
+          }
+          contentHash.update(chunk);
+          callback(null, chunk);
+        },
+      });
+      await artifactStore.upload(
+        storageKey,
+        createReadStream(fullPath).pipe(hashingStream),
+        mimeType,
+        fileStats.size,
+      );
+      const sha256 = contentHash.digest('hex');
+      logger.info(`[artifact] uploaded ${storageKey} (${streamedBytes} bytes)`);
 
       let response: Awaited<ReturnType<OrchestratorServiceClient['registerArtifact']>>;
       try {
@@ -164,12 +190,13 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
               turnId: effectiveTurnId,
               name: filename,
               mimeType,
-              sizeBytes: BigInt(fileBuffer.byteLength),
+              sizeBytes: BigInt(streamedBytes),
               storageKey,
               bucket: artifactStore.getBucket(),
               metadataJson: metadata?.success ? stringifyJsonWithBigInts(metadata.data) : '',
               createdAt: BigInt(Date.now()),
               kind: kind?.success ? kind.data : '',
+              sha256,
             }),
           }),
           { signal: deliveryContext.abortController.signal },
@@ -196,7 +223,8 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
         artifactId: response.artifactId || artifactId,
         name: filename,
         mimeType,
-        sizeBytes: fileBuffer.byteLength,
+        sizeBytes: streamedBytes,
+        sha256,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

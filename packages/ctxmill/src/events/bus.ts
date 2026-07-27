@@ -93,6 +93,7 @@ export type EventMap = {
     mimeType: string;
     sizeBytes: number;
     kind?: string;
+    sha256?: string;
     timestamp: number;
   };
   'feedback.received': {

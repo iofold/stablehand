@@ -323,8 +323,11 @@ describe('@ctxmill/contracts', () => {
   });
 
   it('validates artifact kind, metadata size, and canonical records', () => {
+    const sha256 = 'a'.repeat(64);
     expect(contracts.ArtifactKindSchema.parse('eval_report')).toBe('eval_report');
     expect(() => contracts.ArtifactKindSchema.parse('Eval Report')).toThrow();
+    expect(contracts.ArtifactSha256Schema.parse(sha256)).toBe(sha256);
+    expect(() => contracts.ArtifactSha256Schema.parse('not-a-sha256')).toThrow();
     expect(contracts.ArtifactMetadataSchema.parse({
       content: 'x'.repeat((16 * 1024) - 14),
     })).toBeDefined();
@@ -344,11 +347,19 @@ describe('@ctxmill/contracts', () => {
       bucket: 'artifacts',
       kind: 'eval_report',
       metadata: { suite: 'smoke' },
+      sha256,
       status: 'active',
       expiresAt: null,
       createdAt: 1,
       updatedAt: 2,
-    })).toMatchObject({ kind: 'eval_report' });
+    })).toMatchObject({ kind: 'eval_report', sha256 });
+
+    expect(contracts.ArtifactUploadUrlInputSchema.parse({
+      agentId: 'agent-1',
+      name: 'report.json',
+      mimeType: 'application/json',
+      sha256,
+    })).toMatchObject({ sha256 });
   });
 
   it('validates correlated persisted-event list contracts', () => {
@@ -733,6 +744,7 @@ describe('@ctxmill/contracts', () => {
         mimeType: 'application/json',
         sizeBytes: 42,
         kind: 'eval_report',
+        sha256: 'a'.repeat(64),
         timestamp: 11,
       },
     } as const;

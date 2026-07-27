@@ -1021,6 +1021,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       bucket TEXT NOT NULL,
       kind TEXT,
       metadata JSONB,
+      sha256 TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       expires_at BIGINT,
       created_at BIGINT NOT NULL,
@@ -1028,6 +1029,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
     )
   `;
   await sql`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS kind TEXT`;
+  await sql`ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS sha256 TEXT`;
   await renameColumn(sql, 'artifacts', 'session_id', 'turn_id');
 
   // ── 20. secrets (raw SQL usage — not in Drizzle schema) ────────────

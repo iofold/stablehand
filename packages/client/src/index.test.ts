@@ -804,6 +804,7 @@ describe('CtxmillAgUiClient', () => {
   });
 
   it('uses canonical artifact registration and read contracts', async () => {
+    const sha256 = 'a'.repeat(64);
     const artifact = {
       id: 'artifact-1',
       agentId: 'agent-1',
@@ -816,6 +817,7 @@ describe('CtxmillAgUiClient', () => {
       bucket: 'artifacts',
       kind: 'eval_report',
       metadata: { suite: 'smoke' },
+      sha256,
       status: 'active',
       expiresAt: null,
       createdAt: 1,
@@ -842,6 +844,7 @@ describe('CtxmillAgUiClient', () => {
       sizeBytes: 42,
       kind: 'eval_report',
       metadata: { suite: 'smoke' },
+      sha256,
     });
     await expect(client.artifacts.get('artifact-1')).resolves.toEqual(artifact);
 
@@ -855,6 +858,7 @@ describe('CtxmillAgUiClient', () => {
         sizeBytes: 42,
         kind: 'eval_report',
         metadata: { suite: 'smoke' },
+        sha256,
       }),
     }));
     expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://ctxmill.test/api/artifacts/artifact-1');

@@ -820,6 +820,7 @@ describe('OrchestratorService — RegisterArtifact', () => {
         name: 'live.txt',
         kind: 'eval_report',
         metadataJson: '{"suite":"smoke"}',
+        sha256: 'a'.repeat(64),
       }),
       }),
     ));
@@ -833,6 +834,7 @@ describe('OrchestratorService — RegisterArtifact', () => {
         name: 'live.txt',
         kind: 'eval_report',
         metadata: { suite: 'smoke' },
+        sha256: 'a'.repeat(64),
       }),
       {
         turnId: 'run-1',
@@ -853,10 +855,11 @@ describe('OrchestratorService — RegisterArtifact', () => {
       agentId: 'agent-1',
       turnId: 'run-1',
       kind: 'eval_report',
+      sha256: 'a'.repeat(64),
     }));
   });
 
-  it('rejects invalid kind and oversized metadata at the gRPC boundary', async () => {
+  it('rejects invalid kind, sha256, and oversized metadata at the gRPC boundary', async () => {
     const repository = makeDedupRepository();
     const svc = createOrchestratorServiceImpl({
       eventBus: makeEventBus(),
@@ -881,6 +884,23 @@ describe('OrchestratorService — RegisterArtifact', () => {
 
     await expectConnectError(
       svc.registerArtifact(request('Invalid Kind', '{}')),
+      Code.InvalidArgument,
+    );
+    await expectConnectError(
+      svc.registerArtifact(withLiveDeliveryCapability(
+        create(RegisterArtifactRequestSchema, {
+          turnId: 'run-1',
+          sandboxSessionId: 'sandbox-1',
+          agentId: 'agent-1',
+          artifact: create(ArtifactMetaSchema, {
+            id: 'artifact-invalid-hash',
+            turnId: 'run-1',
+            agentId: 'agent-1',
+            name: 'invalid-hash.txt',
+            sha256: 'NOT-A-SHA256',
+          }),
+        }),
+      )),
       Code.InvalidArgument,
     );
     await expectConnectError(
@@ -1496,7 +1516,10 @@ describe('OrchestratorService — ResolveArtifact ownership', () => {
 
   it('resolves an artifact owned by the authenticated agent', async () => {
     const eventBus = makeEventBus();
-    const { repository } = makeArtifactRepository(makeArtifactRow({ agentId: 'agent-a' }));
+    const { repository } = makeArtifactRepository(makeArtifactRow({
+      agentId: 'agent-a',
+      sha256: 'a'.repeat(64),
+    }));
     const svc = createOrchestratorServiceImpl({ eventBus, toolRegistry: makeRegistry(), repository });
 
     const resp = await svc.resolveArtifact(withLiveDeliveryCapability(
@@ -1511,6 +1534,7 @@ describe('OrchestratorService — ResolveArtifact ownership', () => {
     expect(resp.error).toBeFalsy();
     expect(resp.artifact?.id).toBe('artifact-1');
     expect(resp.artifact?.storageKey).toBe('agents/agent-a/report.pdf');
+    expect(resp.artifact?.sha256).toBe('a'.repeat(64));
   });
 
   it('denies cross-agent artifact resolution as not-found (IDOR guard)', async () => {

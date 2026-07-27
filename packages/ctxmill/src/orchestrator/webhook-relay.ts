@@ -140,6 +140,7 @@ const WEBHOOK_PAYLOAD_FIELDS = {
     'mimeType',
     'sizeBytes',
     'kind',
+    'sha256',
     'timestamp',
   ],
 } as const satisfies Record<BuiltinWebhookEventName, readonly string[]>;

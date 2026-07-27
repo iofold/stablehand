@@ -238,7 +238,7 @@ describe('database migration baseline guard', () => {
     expect(retiredColumns).toEqual([]);
   });
 
-  it('adds artifact kind idempotently', async () => {
+  it('adds artifact routing metadata and content hash idempotently', async () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
     await runMigrations(conn.pgClient);
@@ -248,13 +248,14 @@ describe('database migration baseline guard', () => {
       FROM information_schema.columns
       WHERE table_schema = 'public'
         AND table_name = 'artifacts'
-        AND column_name IN ('kind', 'metadata')
+        AND column_name IN ('kind', 'metadata', 'sha256')
       ORDER BY column_name
     `;
 
     expect(columns).toEqual([
       { column_name: 'kind' },
       { column_name: 'metadata' },
+      { column_name: 'sha256' },
     ]);
   });
 

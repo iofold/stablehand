@@ -625,6 +625,7 @@ export const artifacts = pgTable('artifacts', {
   bucket: text('bucket').notNull(),
   kind: text('kind'),
   metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+  sha256: text('sha256'),
   status: text('status').notNull().default('active'),
   expiresAt: bigint('expires_at', { mode: 'number' }),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),

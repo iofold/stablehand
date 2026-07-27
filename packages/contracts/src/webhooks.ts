@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   ArtifactKindSchema,
+  ArtifactSha256Schema,
   CustomEventNameSchema,
   CustomEventPayloadSchema,
   WebhookEventNameSchema,
@@ -165,10 +166,11 @@ export const ArtifactCreatedWebhookPayloadSchema = z.strictObject({
   mimeType: z.string(),
   sizeBytes: z.number().int().nonnegative(),
   kind: ArtifactKindSchema.optional(),
+  sha256: ArtifactSha256Schema.optional(),
   timestamp: TimestampSchema,
 });
 
-/** @experimental Pack-to-pack custom webhook envelope. */
+/** @experimental Extension-to-extension custom webhook envelope. */
 export const CustomWebhookPayloadSchema = z.looseObject({
   type: CustomEventNameSchema,
   agentId: AgentIdSchema,

@@ -2,6 +2,7 @@ import {
   ARTIFACT_METADATA_MAX_BYTES,
   ArtifactKindSchema,
   ArtifactMetadataSchema,
+  ArtifactSha256Schema,
   serializedJsonByteLength,
 } from '@ctxmill/contracts';
 
@@ -10,16 +11,18 @@ export type ArtifactRegistrationFieldsResult =
       success: true;
       kind?: string;
       metadata?: Record<string, unknown>;
+      sha256?: string;
     }
   | {
       success: false;
-      reason: 'invalid_kind' | 'invalid_metadata' | 'metadata_too_large';
+      reason: 'invalid_kind' | 'invalid_metadata' | 'metadata_too_large' | 'invalid_sha256';
       error: string;
     };
 
 export function validateArtifactRegistrationFields(input: {
   kind?: unknown;
   metadata?: unknown;
+  sha256?: unknown;
 }): ArtifactRegistrationFieldsResult {
   let kind: string | undefined;
   if (input.kind !== undefined) {
@@ -66,9 +69,23 @@ export function validateArtifactRegistrationFields(input: {
     metadata = parsedMetadata.data;
   }
 
+  let sha256: string | undefined;
+  if (input.sha256 !== undefined) {
+    const parsedSha256 = ArtifactSha256Schema.safeParse(input.sha256);
+    if (!parsedSha256.success) {
+      return {
+        success: false,
+        reason: 'invalid_sha256',
+        error: 'sha256 must be 64 lowercase hex characters',
+      };
+    }
+    sha256 = parsedSha256.data;
+  }
+
   return {
     success: true,
     ...(kind ? { kind } : {}),
     ...(metadata ? { metadata } : {}),
+    ...(sha256 ? { sha256 } : {}),
   };
 }

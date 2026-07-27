@@ -1255,6 +1255,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
       "bucket": "ctxmill-artifacts",
       "kind": "eval_report",
       "metadata": { "suite": "weekly" },
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "status": "active",
       "createdAt": 1712140000000
     }
@@ -1310,7 +1311,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   "mimeType": "application/pdf",
   "sizeBytes": 23456,
   "kind": "eval_report",
-  "metadata": { "suite": "weekly" }
+  "metadata": { "suite": "weekly" },
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 }
 ```
 
@@ -1326,7 +1328,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 }
 ```
 
-- **Notes:** `kind` is optional and must match `^[a-z0-9][a-z0-9_-]{0,63}$`. `metadata` is an optional JSON object capped at 16 KiB after UTF-8 serialization. The metadata row starts as `pending_upload` and is hidden from list endpoints until the object exists and a download/download-url request confirms it. Registration emits `artifact.created`; that event means metadata was registered, not that a signed-upload object is already readable. Direct multipart upload is available at `POST /api/artifacts/upload` with `kind` and JSON-encoded `metadata` form fields; daemon-side direct uploads use the same fields on the `artifact_upload` tool. Artifact object keys are globally scoped by artifact ID, not by agent ID, so deleting an agent does not imply artifact-object cleanup. Bundled clients can call `client.artifacts.requestUploadUrl(...)`.
+- **Notes:** `kind` is optional and must match `^[a-z0-9][a-z0-9_-]{0,63}$`. `metadata` is an optional JSON object capped at 16 KiB after UTF-8 serialization. `sha256` is optional and, when present, must be exactly 64 lowercase hexadecimal characters. REST and signed-upload callers attest that hash: the orchestrator stores it but does not stream or verify artifact bytes. The sandbox daemon instead computes the authoritative SHA-256 incrementally as it streams an `artifact_upload` to object storage. Artifacts created before this field, and callers that omit it, continue to return a null or absent hash; integrity-sensitive consumers must rehash downloaded bytes before trusting them. The metadata row starts as `pending_upload` and is hidden from list endpoints until the object exists and a download/download-url request confirms it. Registration emits `artifact.created`; that event means metadata was registered, not that a signed-upload object is already readable. Direct multipart upload is available at `POST /api/artifacts/upload` with `kind`, JSON-encoded `metadata`, and uploader-attested `sha256` form fields. Daemon-side `artifact_upload` accepts `kind` and `metadata` and supplies its computed hash automatically. Artifact object keys are globally scoped by artifact ID, not by agent ID, so deleting an agent does not imply artifact-object cleanup. Bundled clients can call `client.artifacts.requestUploadUrl(...)`.
 
 #### `DELETE /api/artifacts/:id`
 
@@ -1920,7 +1922,7 @@ es.onerror = (err) => {
 - `feedback.received`
 - `budget.threshold`
 - `artifact.created`
-- any experimental pack event matching `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`
+- any experimental extension event matching `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`
 
 ### Delivery format
 
@@ -2003,9 +2005,14 @@ Body = raw JSON payload for the event.
   "mimeType": "application/pdf",
   "sizeBytes": 23456,
   "kind": "eval_report",
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "timestamp": 1712140001200
 }
 ```
+
+`sha256` is optional for legacy and externally registered artifacts. When
+present, it follows the same authority rules as the artifact metadata returned
+by the REST API.
 
 Experimental `custom.*` example payload:
 

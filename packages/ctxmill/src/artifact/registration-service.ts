@@ -50,6 +50,7 @@ export class ArtifactRegistrationService {
       mimeType: data.mimeType,
       sizeBytes: data.sizeBytes,
       ...(data.kind ? { kind: data.kind } : {}),
+      ...(data.sha256 ? { sha256: data.sha256 } : {}),
       timestamp: this.now(),
     });
   }

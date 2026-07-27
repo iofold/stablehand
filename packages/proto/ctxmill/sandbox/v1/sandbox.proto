@@ -304,6 +304,7 @@ message ArtifactMeta {
   string metadata_json = 9;
   int64 created_at = 10;
   string kind = 11;
+  string sha256 = 12;
 }
 
 message RegisterArtifactRequest {
