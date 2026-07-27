@@ -1,5 +1,8 @@
-import type { FastifyInstance } from 'fastify';
-import { ModelGatewayStatusSchema } from '@ctxmill/contracts';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import {
+  ModelGatewayQuarantineSchema,
+  ModelGatewayStatusSchema,
+} from '@ctxmill/contracts';
 
 import type { DatabaseRepository } from '../../database/repository.js';
 
@@ -7,6 +10,7 @@ type ModelGatewayStatusStore = Pick<
   DatabaseRepository,
   | 'getModelGatewayReconciliationState'
   | 'getModelGatewayReconciliationMetrics'
+  | 'getModelGatewayQuarantineSummary'
 >;
 
 export type ModelGatewayStatusConfig =
@@ -21,6 +25,9 @@ interface ModelGatewayRouteOptions {
 }
 
 const DEFAULT_DEGRADED_LAG_MS = 2 * 60_000;
+const DEFAULT_QUARANTINE_RECENT_MS = 24 * 60 * 60_000;
+const DEFAULT_QUARANTINE_LIMIT = 20;
+const MAX_QUARANTINE_LIMIT = 100;
 
 export async function modelGatewayRoutes(
   app: FastifyInstance,
@@ -79,4 +86,55 @@ export async function modelGatewayRoutes(
       ...metrics,
     });
   });
+
+  app.get(
+    '/quarantine',
+    async (
+      request: FastifyRequest<{ Querystring: { since?: string; limit?: string } }>,
+      reply: FastifyReply,
+    ) => {
+      if (!opts.config.enabled) {
+        return ModelGatewayQuarantineSchema.parse({
+          enabled: false,
+          profile: null,
+          recentSince: null,
+          total: 0,
+          recentTotal: 0,
+          reasons: [],
+          recent: [],
+        });
+      }
+
+      const now = (opts.now ?? Date.now)();
+      const sinceRaw = request.query.since;
+      const since = sinceRaw === undefined ? now - DEFAULT_QUARANTINE_RECENT_MS : Number(sinceRaw);
+      if (!Number.isSafeInteger(since) || since < 0) {
+        return reply.status(400).send({
+          error: 'since must be a nonnegative epoch-milliseconds integer',
+        });
+      }
+      const limitRaw = request.query.limit;
+      const limit = limitRaw === undefined ? DEFAULT_QUARANTINE_LIMIT : Number(limitRaw);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_QUARANTINE_LIMIT) {
+        return reply.status(400).send({
+          error: `limit must be an integer between 1 and ${MAX_QUARANTINE_LIMIT}`,
+        });
+      }
+
+      const summary = await opts.db.getModelGatewayQuarantineSummary(
+        opts.config.profile,
+        { recentSinceMs: since, limit },
+      );
+
+      return ModelGatewayQuarantineSchema.parse({
+        enabled: true,
+        profile: opts.config.profile,
+        recentSince: since,
+        total: summary.reasons.reduce((sum, row) => sum + row.total, 0),
+        recentTotal: summary.reasons.reduce((sum, row) => sum + row.recentTotal, 0),
+        reasons: summary.reasons,
+        recent: summary.recent,
+      });
+    },
+  );
 }

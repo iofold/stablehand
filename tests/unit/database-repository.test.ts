@@ -6942,6 +6942,80 @@ describe('DatabaseRepository', () => {
         costUsd: 0.001,
       });
     });
+
+    it('summarizes quarantined transactions by reason with recency', async () => {
+      const now = Date.now();
+      const profile = 'quarantine-summary-profile';
+      const lease = await repo.claimModelGatewayReconciliationLease({
+        gatewayProfile: profile,
+        gatewayRevision: 'dev1-r1',
+        ownerId: 'worker-q',
+        nowMs: now,
+        leaseMs: 30_000,
+      });
+      await repo.reconcileModelGatewaySpend({
+        gatewayProfile: profile,
+        gatewayRevision: 'dev1-r1',
+        ownerId: 'worker-q',
+        fenceToken: lease!.fenceToken,
+        nowMs: now + 1,
+        processedThroughMs: now,
+        settleBeforeMs: now,
+        records: [{
+          transactionId: 'summary-orphan-tx',
+          correlationId: 'ct_0123456789abcdef0123456789abcdef',
+          requestedModel: 'gpt-5.4-mini',
+          status: 'success',
+          inputTokens: 2,
+          outputTokens: 1,
+          totalTokens: 3,
+          costUsd: 0.001,
+          costState: 'priced' as const,
+          startedAt: now - 100,
+          endedAt: now - 50,
+        }],
+        invalid: [
+          {
+            transactionId: 'summary-invalid-tx-1',
+            reason: 'missing_correlation',
+            safeFields: { model: 'gpt-5.4-mini', status: 'success' },
+          },
+          {
+            transactionId: 'summary-invalid-tx-2',
+            reason: 'missing_correlation',
+            safeFields: { status: 'success' },
+          },
+        ],
+      });
+
+      const summary = await repo.getModelGatewayQuarantineSummary(profile, {
+        recentSinceMs: now - 1_000,
+        limit: 2,
+      });
+      expect(summary.reasons).toEqual([
+        expect.objectContaining({
+          reason: 'missing_correlation',
+          total: 2,
+          recentTotal: 2,
+        }),
+        expect.objectContaining({
+          reason: 'unknown_turn',
+          total: 1,
+          recentTotal: 1,
+        }),
+      ]);
+      expect(summary.recent).toHaveLength(2);
+      expect(summary.recent[0]).toMatchObject({
+        occurrences: 1,
+        sanitizedPayload: expect.objectContaining({ status: 'success' }),
+      });
+
+      const stale = await repo.getModelGatewayQuarantineSummary(profile, {
+        recentSinceMs: now + 60_000,
+        limit: 10,
+      });
+      expect(stale.reasons.map((row) => row.recentTotal)).toEqual([0, 0]);
+    });
   });
 
   describe('Budget spend queries', () => {

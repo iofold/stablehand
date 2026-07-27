@@ -6295,6 +6295,65 @@ export class DatabaseRepository {
     };
   }
 
+  async getModelGatewayQuarantineSummary(
+    gatewayProfile: string,
+    options: { recentSinceMs: number; limit: number },
+  ): Promise<{
+    reasons: Array<{
+      reason: string;
+      total: number;
+      recentTotal: number;
+      lastSeenAt: number | null;
+    }>;
+    recent: Array<{
+      transactionId: string;
+      correlationId: string | null;
+      reason: string;
+      occurrences: number;
+      firstSeenAt: number;
+      lastSeenAt: number;
+      sanitizedPayload: Record<string, unknown>;
+    }>;
+  }> {
+    const profile = sanitizeDbText(
+      gatewayProfile,
+      'modelGatewayQuarantine.summary.gatewayProfile',
+    );
+    const quarantine = this.schema.modelGatewaySpendQuarantine;
+    const [reasons, recentRows] = await Promise.all([
+      this.db
+        .select({
+          reason: quarantine.reason,
+          total: sql<number>`count(*)::int`,
+          recentTotal: sql<number>`
+            count(*) FILTER (
+              where ${quarantine.lastSeenAt} >= ${options.recentSinceMs}
+            )::int
+          `,
+          lastSeenAt: sql<number | null>`max(${quarantine.lastSeenAt})::float8`,
+        })
+        .from(quarantine)
+        .where(eq(quarantine.gatewayProfile, profile))
+        .groupBy(quarantine.reason)
+        .orderBy(sql`count(*) desc`),
+      this.db
+        .select({
+          transactionId: quarantine.gatewayTransactionId,
+          correlationId: quarantine.correlationId,
+          reason: quarantine.reason,
+          occurrences: quarantine.occurrences,
+          firstSeenAt: quarantine.firstSeenAt,
+          lastSeenAt: quarantine.lastSeenAt,
+          sanitizedPayload: quarantine.sanitizedPayload,
+        })
+        .from(quarantine)
+        .where(eq(quarantine.gatewayProfile, profile))
+        .orderBy(desc(quarantine.lastSeenAt))
+        .limit(options.limit),
+    ]);
+    return { reasons, recent: recentRows };
+  }
+
   // ── Sandbox Sessions ───────────────────────────────────────
 
   async createSandboxSession(session: {

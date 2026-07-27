@@ -19,3 +19,49 @@ export const ModelGatewayStatusSchema = z.strictObject({
 });
 
 export type ModelGatewayStatus = z.infer<typeof ModelGatewayStatusSchema>;
+
+export const ModelGatewayQuarantineReasonSchema = z.enum([
+  'invalid_payload',
+  'missing_correlation',
+  'invalid_correlation',
+  'correlation_mismatch',
+  'unknown_turn',
+]);
+
+export const ModelGatewayQuarantineReasonCountSchema = z.strictObject({
+  reason: ModelGatewayQuarantineReasonSchema,
+  total: z.number().int().nonnegative(),
+  recentTotal: z.number().int().nonnegative(),
+  lastSeenAt: EpochMillisecondsSchema.nullable(),
+});
+
+export const ModelGatewayQuarantineEntrySchema = z.strictObject({
+  transactionId: z.string().min(1),
+  correlationId: z.string().nullable(),
+  reason: ModelGatewayQuarantineReasonSchema,
+  occurrences: z.number().int().positive(),
+  firstSeenAt: EpochMillisecondsSchema,
+  lastSeenAt: EpochMillisecondsSchema,
+  // Only reconciler-sanitized safe fields (model, provider, status); never a
+  // raw gateway payload.
+  sanitizedPayload: z.record(z.string(), z.unknown()),
+});
+
+/**
+ * Breakdown of gateway spend transactions that could not be attached to a
+ * turn, grouped by reason with recency so operators can tell a growing
+ * problem from historical noise. unknown_turn entries are real spend that
+ * matched no turn; every other reason is a record that failed validation.
+ */
+export const ModelGatewayQuarantineSchema = z.strictObject({
+  enabled: z.boolean(),
+  profile: z.string().trim().min(1).nullable(),
+  recentSince: EpochMillisecondsSchema.nullable(),
+  total: z.number().int().nonnegative(),
+  recentTotal: z.number().int().nonnegative(),
+  reasons: z.array(ModelGatewayQuarantineReasonCountSchema),
+  recent: z.array(ModelGatewayQuarantineEntrySchema),
+});
+
+export type ModelGatewayQuarantine = z.infer<typeof ModelGatewayQuarantineSchema>;
+export type ModelGatewayQuarantineReason = z.infer<typeof ModelGatewayQuarantineReasonSchema>;
