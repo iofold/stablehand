@@ -27,6 +27,11 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { isNewConversationPath } from '@/lib/routes';
+import {
+  describeBudgetBlock,
+  parseBudgetBlock,
+  type BudgetBlock,
+} from '@/lib/budget-block';
 
 function humanizeError(raw: string): { summary: string; details: string } {
   if (raw.includes('ConnectError') || raw.includes('stream closed')) {
@@ -72,6 +77,7 @@ export function SessionPage() {
   const sseStatus = useSSEStatus();
 
   const [error, setError] = useState<string | null>(null);
+  const [budgetBlock, setBudgetBlock] = useState<BudgetBlock | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [pastRunError, setPastRunError] = useState<string | null>(null);
   const [lastFailedTurn, setLastFailedTurn] = useState<{
@@ -268,6 +274,7 @@ export function SessionPage() {
     async (content: string, requestedTurnId: string = globalThis.crypto.randomUUID()) => {
       if (!id || !streamReady) return;
       setError(null);
+      setBudgetBlock(null);
       setPastRunError(null);
       setLastFailedTurn(null);
       const optimisticMessageId = addUserMessage(content);
@@ -285,7 +292,12 @@ export function SessionPage() {
       } catch (err) {
         discardOptimisticUserMessage(optimisticMessageId);
         console.debug('[Session] Failed to send message:', err);
-        setError(err instanceof Error ? err.message : String(err));
+        const block = parseBudgetBlock(err);
+        if (block) {
+          setBudgetBlock(block);
+        } else {
+          setError(err instanceof Error ? err.message : String(err));
+        }
         setLastFailedTurn({ content, requestedTurnId });
       }
     },
@@ -500,6 +512,51 @@ export function SessionPage() {
             </div>
           )}
 
+          {budgetBlock && (
+            <div
+              data-testid="session-budget-block"
+              className="mx-auto w-full max-w-3xl px-4 pb-1"
+            >
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-amber-200">
+                      {describeBudgetBlock(budgetBlock).summary}
+                    </p>
+                    <p className="mt-1 text-xs text-amber-300/80">
+                      {describeBudgetBlock(budgetBlock).detail}
+                    </p>
+                    <div className="mt-2 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => navigate('/settings#budgets')}
+                        className="text-xs font-medium text-amber-200 underline underline-offset-2 hover:text-amber-100"
+                      >
+                        Review budget policies
+                      </button>
+                      {lastFailedTurn && (
+                        <button
+                          type="button"
+                          onClick={() => handleSend(lastFailedTurn.content, lastFailedTurn.requestedTurnId)}
+                          className="text-xs text-amber-300/80 hover:text-amber-200"
+                        >
+                          Try again
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => { setBudgetBlock(null); setLastFailedTurn(null); }}
+                        className="text-xs text-amber-300/60 hover:text-amber-200"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           {error && (
             <div
                 data-testid="session-error"

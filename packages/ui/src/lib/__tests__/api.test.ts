@@ -207,6 +207,8 @@ describe('fetchConversationSummaries', () => {
     latestTurnId: null,
     sandboxSessionId: null,
     totalTokens: null,
+    knownCostUsd: null,
+    incompleteCostTurnCount: 0,
   };
 
   it('accepts the canonical nullable summary fields', async () => {

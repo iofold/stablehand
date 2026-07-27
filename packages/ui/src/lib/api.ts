@@ -96,6 +96,22 @@ async function readErrorDetail(res: Response): Promise<string> {
   }
 }
 
+/**
+ * Error from a non-2xx API response, keeping the parsed body so callers can
+ * react to structured error codes (e.g. budget_exceeded) instead of string
+ * matching on the message.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: unknown,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, withApiAuth(init));
   if (res.status === 401) {
@@ -104,8 +120,19 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const method = init?.method ?? 'GET';
     const baseMessage = `API ${method} ${url} failed: ${res.status}`;
-    const errorDetail = await readErrorDetail(res);
-    throw new Error(errorDetail ? `${baseMessage} - ${errorDetail}` : baseMessage);
+    let body: unknown = null;
+    let errorDetail = '';
+    try {
+      body = await res.json();
+      errorDetail = extractErrorDetail(body);
+    } catch {
+      errorDetail = await res.text().catch(() => '');
+    }
+    throw new ApiError(
+      errorDetail ? `${baseMessage} - ${errorDetail}` : baseMessage,
+      res.status,
+      body,
+    );
   }
   // 204 No Content — nothing to parse
   if (res.status === 204) return undefined as unknown as T;

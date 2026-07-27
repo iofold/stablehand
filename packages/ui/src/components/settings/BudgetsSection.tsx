@@ -268,7 +268,7 @@ export function BudgetsSection() {
   };
 
   return (
-    <div className="card p-0 lg:col-span-2" data-testid="budgets-section">
+    <div id="budgets" className="card scroll-mt-6 p-0 lg:col-span-2" data-testid="budgets-section">
       <div className="flex items-center gap-3 border-b border-surface-700 px-5 py-4">
         <Wallet className="h-5 w-5 text-accent-400" />
         <div className="flex-1">
