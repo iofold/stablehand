@@ -1478,6 +1478,65 @@ describe('DatabaseRepository', () => {
       const summary = summaries.find((s) => s.id === conv.id);
       expect(summary!.completedAt).toBeNull();
     });
+
+    it('rolls up known cost and incomplete-cost turn counts', async () => {
+      const conv = await repo.createConversation(agentId);
+      const startedAt = Date.now() - 60_000;
+      await repo.createTurn({
+        agentId,
+        conversationId: conv.id,
+        status: 'completed',
+        startedAt,
+        completedAt: startedAt + 1_000,
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        costUsd: 0.01,
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 15,
+          modelCalls: { observed: 1, costKnown: 1, expected: 1 },
+          cost: { totalUsd: 0.01, knownUsd: 0.01, coverage: 'complete' },
+        },
+      });
+      await repo.createTurn({
+        agentId,
+        conversationId: conv.id,
+        status: 'completed',
+        startedAt: startedAt + 2_000,
+        completedAt: startedAt + 3_000,
+        inputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 30,
+        gatewayMode: 'gateway_only',
+      });
+      await repo.createTurn({
+        agentId,
+        conversationId: conv.id,
+        status: 'completed',
+        startedAt: startedAt + 4_000,
+        completedAt: startedAt + 5_000,
+      });
+
+      const summaries = await repo.getConversationSummaries(agentId);
+      const summary = summaries.find((s) => s.id === conv.id);
+      expect(summary!.knownCostUsd).toBeCloseTo(0.01, 6);
+      expect(summary!.incompleteCostTurnCount).toBe(2);
+
+      const bareConv = await repo.createConversation(agentId);
+      await repo.createTurn({
+        agentId,
+        conversationId: bareConv.id,
+        status: 'completed',
+        startedAt: startedAt + 6_000,
+        completedAt: startedAt + 7_000,
+      });
+      const bareSummary = (await repo.getConversationSummaries(agentId))
+        .find((s) => s.id === bareConv.id);
+      expect(bareSummary!.knownCostUsd).toBeNull();
+      expect(bareSummary!.incompleteCostTurnCount).toBe(1);
+    });
   });
 
   describe('Sandbox Sessions', () => {
@@ -4658,6 +4717,7 @@ describe('DatabaseRepository', () => {
         bucket: 'artifacts',
         kind: 'eval_report',
         metadata: { suite: 'delivery-fence' },
+        sha256: 'a'.repeat(64),
       }, {
         turnId: turn.id,
         sandboxSessionId: sandboxSession.id,
@@ -4670,6 +4730,7 @@ describe('DatabaseRepository', () => {
         turnId: turn.id,
         kind: 'eval_report',
         metadata: { suite: 'delivery-fence' },
+        sha256: 'a'.repeat(64),
       });
 
       await expireTurnDeliveryLease(turn.id);

@@ -603,21 +603,7 @@ export class DatabaseRepository {
       throw new Error('Analytics range exceeds 720 buckets');
     }
 
-    const costCoverage = sql<string>`
-      CASE
-        WHEN ${this.schema.turns.usage} #>> '{cost,coverage}'
-          IN ('complete', 'partial', 'pending', 'unpriced')
-          THEN ${this.schema.turns.usage} #>> '{cost,coverage}'
-        WHEN ${this.schema.turns.costUsd} IS NOT NULL THEN 'complete'
-        WHEN ${this.schema.turns.gatewayMode} IN ('gateway_only', 'mixed')
-          THEN 'pending'
-        WHEN ${this.schema.turns.completedAt} IS NULL
-          AND ${this.schema.turns.error} IS NULL
-          AND ${this.schema.turns.status} NOT IN ('completed', 'failed')
-          THEN 'pending'
-        ELSE 'unpriced'
-      END
-    `;
+    const costCoverage = this.turnCostCoverageSql();
     const knownCost = sql<number>`
       CASE
         WHEN ${this.schema.turns.usage} IS NOT NULL THEN
@@ -6933,6 +6919,30 @@ export class DatabaseRepository {
     return result;
   }
 
+  /**
+   * Canonical per-turn cost-coverage classification, shared by analytics and
+   * conversation summaries and mirrored by materializeTurnUsage for the turns
+   * API: a reconciled envelope wins, gateway-attributed and still-open turns
+   * are pending, and a terminal direct turn without cost stays unpriced.
+   */
+  private turnCostCoverageSql() {
+    return sql<string>`
+      CASE
+        WHEN ${this.schema.turns.usage} #>> '{cost,coverage}'
+          IN ('complete', 'partial', 'pending', 'unpriced')
+          THEN ${this.schema.turns.usage} #>> '{cost,coverage}'
+        WHEN ${this.schema.turns.costUsd} IS NOT NULL THEN 'complete'
+        WHEN ${this.schema.turns.gatewayMode} IN ('gateway_only', 'mixed')
+          THEN 'pending'
+        WHEN ${this.schema.turns.completedAt} IS NULL
+          AND ${this.schema.turns.error} IS NULL
+          AND ${this.schema.turns.status} NOT IN ('completed', 'failed')
+          THEN 'pending'
+        ELSE 'unpriced'
+      END
+    `;
+  }
+
   private async queryConversationSummaries(options: {
     agentId?: string;
     sandboxStatuses?: SandboxSessionStatus[];
@@ -6944,6 +6954,20 @@ export class DatabaseRepository {
         startedAt: sql<number | null>`min(${this.schema.turns.startedAt})::float8`.as('started_at'),
         turnCount: sql<number>`count(*)::int`.as('turn_count'),
         totalTokens: sql<number | null>`sum(${this.schema.turns.totalTokens})::float8`.as('total_tokens'),
+        // Known cost per turn mirrors analytics; a turn with neither a usage
+        // envelope nor a scalar cost contributes NULL so a conversation with
+        // no cost data at all rolls up to NULL rather than a misleading zero.
+        knownCostUsd: sql<number | null>`sum(
+          CASE
+            WHEN ${this.schema.turns.usage} IS NOT NULL
+              THEN COALESCE((${this.schema.turns.usage} #>> '{cost,knownUsd}')::float8, 0)
+            WHEN ${this.schema.turns.costUsd} IS NOT NULL THEN ${this.schema.turns.costUsd}
+            ELSE NULL
+          END
+        )::float8`.as('known_cost_usd'),
+        incompleteCostTurnCount: sql<number>`
+          count(*) FILTER (WHERE ${this.turnCostCoverageSql()} <> 'complete')::int
+        `.as('incomplete_cost_turn_count'),
       })
       .from(this.schema.turns)
       .where(isNotNull(this.schema.turns.conversationId))
@@ -7013,6 +7037,8 @@ export class DatabaseRepository {
       sandboxSessionId: string | null;
       sandboxStatus: string | null;
       totalTokens: number | null;
+      knownCostUsd: number | null;
+      incompleteCostTurnCount: number | null;
     }> = await this.db
       .select({
         id: this.schema.conversations.id,
@@ -7022,6 +7048,8 @@ export class DatabaseRepository {
         startedAt: turnStats.startedAt,
         turnCount: turnStats.turnCount,
         totalTokens: turnStats.totalTokens,
+        knownCostUsd: turnStats.knownCostUsd,
+        incompleteCostTurnCount: turnStats.incompleteCostTurnCount,
         messageCount: messageCounts.messageCount,
         latestTurnId: latestTurnCandidates.latestTurnId,
         mode: latestTurnCandidates.mode,
@@ -7077,6 +7105,8 @@ export class DatabaseRepository {
         latestTurnId: row.latestTurnId ?? null,
         sandboxSessionId: row.sandboxSessionId ?? null,
         totalTokens: row.totalTokens ?? null,
+        knownCostUsd: row.knownCostUsd ?? null,
+        incompleteCostTurnCount: row.incompleteCostTurnCount ?? 0,
       };
     });
   }

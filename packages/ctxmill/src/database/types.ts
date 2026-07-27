@@ -87,4 +87,8 @@ export interface ConversationSummaryRow {
   sandboxSessionId: string | null;
   /** Sum of harness-reported tokens across the conversation's turns; null when none reported. */
   totalTokens: number | null;
+  /** Sum of known cost across turns; null when no turn carries any cost data. */
+  knownCostUsd: number | null;
+  /** Turns whose cost coverage is not yet complete (pending, partial, or unpriced). */
+  incompleteCostTurnCount: number;
 }

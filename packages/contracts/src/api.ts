@@ -41,6 +41,9 @@ export function serializedJsonByteLength(value: unknown): number {
 export const ArtifactKindSchema = z.string()
   .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
 
+export const ArtifactSha256Schema = z.string()
+  .regex(/^[a-f0-9]{64}$/, 'Artifact sha256 must be 64 lowercase hex characters');
+
 export const CustomEventNameSchema = z.string().regex(
   CUSTOM_EVENT_NAME_PATTERN,
   'Custom event names must match ^custom\\.[a-z0-9][a-z0-9_.-]{0,126}$',
@@ -438,6 +441,11 @@ export const ConversationSummarySchema = z.strictObject({
   latestTurnId: TurnIdSchema.nullable(),
   sandboxSessionId: SandboxSessionIdSchema.nullable(),
   totalTokens: z.number().int().nonnegative().nullable(),
+  // Sum of known cost across the conversation's turns; null when no turn
+  // carries any cost data (distinct from a real $0).
+  knownCostUsd: z.number().nonnegative().nullable(),
+  // Turns whose cost is not yet fully known (pending, partial, or unpriced).
+  incompleteCostTurnCount: z.number().int().nonnegative(),
 });
 
 export const ConversationSummaryListResponseSchema = z.strictObject({
@@ -593,6 +601,7 @@ export const ArtifactSchema = z.strictObject({
   bucket: z.string().trim().min(1),
   kind: ArtifactKindSchema.nullable(),
   metadata: ArtifactMetadataSchema.nullable(),
+  sha256: ArtifactSha256Schema.nullable().optional(),
   status: ArtifactStatusSchema,
   expiresAt: EpochMillisecondsSchema.nullable(),
   createdAt: EpochMillisecondsSchema,
@@ -619,6 +628,7 @@ export const ArtifactUploadUrlInputSchema = z.strictObject({
   sizeBytes: z.number().int().nonnegative().optional(),
   kind: ArtifactKindSchema.optional(),
   metadata: ArtifactMetadataSchema.optional(),
+  sha256: ArtifactSha256Schema.optional(),
 });
 
 export const ArtifactUploadUrlResponseSchema = z.strictObject({
