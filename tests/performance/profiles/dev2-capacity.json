@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "dev2-capacity",
+  "expectedOutput": "BENCHMARK_OK",
   "target": {
     "apiBase": "https://stablehand.staging.example.com/api",
     "kubernetesNamespace": "ctxmill"

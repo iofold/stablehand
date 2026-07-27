@@ -1,4 +1,13 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -655,6 +664,8 @@ describe('performance profile', () => {
       Object.keys(stage.harnessConfig).sort().join(',') === 'model,provider')).toBe(true);
     expect(gatewayProfiles.every((profile) =>
       profile.requirements.modelGateway === 'required')).toBe(true);
+    expect(gatewayProfiles.every((profile) =>
+      profile.expectedOutput === 'BENCHMARK_OK')).toBe(true);
     expect(gatewayProfiles.flatMap((profile) => profile.stages).every((stage) =>
       stage.harnessConfig.apiKeyRef == null
       && stage.harnessConfig.baseUrl == null)).toBe(true);
@@ -716,6 +727,66 @@ describe('performance profile', () => {
       'utf8',
     );
     expect(traceCollector).toContain("resources_string['ctxmill.session.id']");
+  });
+
+  it('correlates failed-run sandbox traces from persisted turn samples', () => {
+    const tempDir = mkdtempSync(join(process.cwd(), '.tmp/performance-trace-test-'));
+    const runPath = join(tempDir, 'trace-window.json');
+    const turnIdsPath = join(tempDir, 'turn-ids.txt');
+    const turnsPath = join(tempDir, 'turns.jsonl');
+    const outputPath = join(tempDir, 'traces.jsonl');
+    const kubectlPath = join(tempDir, 'kubectl');
+    const collectorPath = fileURLToPath(
+      new URL('./scripts/collect-dev2-traces.sh', import.meta.url),
+    );
+
+    try {
+      writeFileSync(runPath, JSON.stringify({
+        startedAt: '2026-07-27T12:00:00.000Z',
+        completedAt: '2026-07-27T12:01:00.000Z',
+        stages: [],
+      }));
+      writeFileSync(turnIdsPath, 'turn-from-failed-run\n');
+      writeFileSync(turnsPath, `${JSON.stringify({
+        sandboxSessionId: 'session-from-failed-run',
+      })}\n`);
+      writeFileSync(kubectlPath, `#!/usr/bin/env bash
+set -euo pipefail
+if [[ " $* " == *" get pods "* ]]; then
+  printf 'clickhouse-0'
+  exit 0
+fi
+while (( $# > 0 )); do
+  if [[ "$1" == '--query' ]]; then
+    printf '%s' "$2"
+    exit 0
+  fi
+  shift
+done
+exit 1
+`);
+      chmodSync(kubectlPath, 0o755);
+
+      const collected = spawnSync('bash', [
+        collectorPath,
+        runPath,
+        turnIdsPath,
+        outputPath,
+      ], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          KUBECTL: kubectlPath,
+        },
+      });
+
+      expect(collected.status, collected.stderr).toBe(0);
+      expect(readFileSync(outputPath, 'utf8')).toContain(
+        "resources_string['ctxmill.session.id'] IN ('session-from-failed-run')",
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('ships bounded warm and resume parity lanes for Deep Agents and PI', () => {

@@ -12,8 +12,14 @@ if (( ${#turn_ids[@]} == 0 )); then
   : >"$OUTPUT_PATH"
   exit 0
 fi
+turn_samples_path="$(dirname "$TURN_IDS_PATH")/turns.jsonl"
 mapfile -t session_ids < <(
-  jq -r '.stages[].samples[].sandboxSessionId // empty' "$RUN_JSON" | sort -u
+  {
+    jq -r '.stages[].samples[].sandboxSessionId // empty' "$RUN_JSON"
+    if [[ -f "$turn_samples_path" ]]; then
+      jq -r '.sandboxSessionId // empty' "$turn_samples_path"
+    fi
+  } | sort -u
 )
 for identifier in "${turn_ids[@]}" "${session_ids[@]}"; do
   if [[ ! "$identifier" =~ ^[A-Za-z0-9._:-]+$ ]]; then
