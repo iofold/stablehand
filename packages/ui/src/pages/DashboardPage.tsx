@@ -13,7 +13,8 @@ import {
 import type { ConversationSummary } from '@ctxmill/contracts';
 import { PageShell } from '@/components/ui/PageShell';
 import { StatsRow } from '@/components/ui/StatsRow';
-import { formatDurationBetween, formatRunningDuration } from '@/lib/format';
+import { formatCompactNumber, formatDurationBetween, formatRunningDuration } from '@/lib/format';
+import { describeConversationCostRollup } from '@/lib/usage-cost';
 
 export function DashboardPage() {
   const agents = useAgentsStore((s) => s.agents);
@@ -152,6 +153,7 @@ export function DashboardPage() {
                     <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Agent Name</th>
                     <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Status</th>
                     <th className="px-4 py-3 text-label border-b border-surface-700 font-medium">Task Description</th>
+                    <th className="px-4 py-3 text-label border-b border-surface-700 font-medium text-right">Usage</th>
                     <th className="px-4 py-3 text-label border-b border-surface-700 font-medium text-right">Duration</th>
                     <th className="px-4 py-3 border-b border-surface-700"></th>
                   </tr>
@@ -175,6 +177,17 @@ export function DashboardPage() {
                           <div className="max-w-[200px] sm:max-w-xs md:max-w-md truncate">
                             {conv.taskDescription || '--'}
                           </div>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-surface-400 tabular-nums text-right">
+                          {conv.totalTokens !== null
+                            ? `${formatCompactNumber(conv.totalTokens)} tok`
+                            : '—'}
+                          {(() => {
+                            const cost = describeConversationCostRollup(conv);
+                            return cost
+                              ? <span className="ml-2" title={cost.title}>{cost.label}</span>
+                              : null;
+                          })()}
                         </td>
                         <td
                           data-testid="conversation-duration"

@@ -81,6 +81,8 @@ describe('DashboardPage', () => {
         latestTurnId: 'turn-1',
         sandboxSessionId: 'sandbox-1',
         totalTokens: null,
+        knownCostUsd: null,
+        incompleteCostTurnCount: 0,
       }),
     ]);
     fetchConversationSummariesMock.mockResolvedValue({ conversations: [] });
@@ -146,6 +148,8 @@ describe('DashboardPage', () => {
         latestTurnId: 'turn-done',
         sandboxSessionId: 'sandbox-done',
         totalTokens: null,
+        knownCostUsd: null,
+        incompleteCostTurnCount: 0,
       }),
     ]);
 
@@ -176,6 +180,8 @@ describe('DashboardPage', () => {
         latestTurnId: 'turn-error',
         sandboxSessionId: 'sandbox-error',
         totalTokens: null,
+        knownCostUsd: null,
+        incompleteCostTurnCount: 0,
       }),
     ]);
 
@@ -205,6 +211,8 @@ describe('DashboardPage', () => {
         latestTurnId: 'turn-live',
         sandboxSessionId: 'sandbox-live',
         totalTokens: null,
+        knownCostUsd: null,
+        incompleteCostTurnCount: 0,
       }),
     ]);
 

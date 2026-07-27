@@ -25,7 +25,9 @@ import {
   FileReadResponseSchema,
   FileWriteResponseSchema,
   InterruptResolveInputSchema,
+  ModelGatewayQuarantineSchema,
   ModelGatewayStatusSchema,
+  type ModelGatewayQuarantine,
   SecretListResponseSchema,
   SecretPutInputSchema,
   SecretPutResponseSchema,
@@ -683,6 +685,11 @@ export async function fetchAgentBudgetStatuses(): Promise<AgentBudgetStatus[]> {
 export async function fetchModelGatewayStatus(): Promise<ModelGatewayStatus> {
   const response = await apiFetch<unknown>(`${API_BASE}/model-gateway/status`);
   return ModelGatewayStatusSchema.parse(response);
+}
+
+export async function fetchModelGatewayQuarantine(): Promise<ModelGatewayQuarantine> {
+  const response = await apiFetch<unknown>(`${API_BASE}/model-gateway/quarantine`);
+  return ModelGatewayQuarantineSchema.parse(response);
 }
 
 export async function fetchAnalyticsOverview(

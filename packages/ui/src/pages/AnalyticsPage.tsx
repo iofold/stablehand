@@ -22,6 +22,7 @@ import type {
   AnalyticsOverview,
   AnalyticsWindow,
   BudgetPolicy,
+  ModelGatewayQuarantine,
   ModelGatewayStatus,
 } from '@ctxmill/contracts';
 
@@ -29,6 +30,7 @@ import {
   fetchAgentBudgetStatuses,
   fetchAnalyticsOverview,
   fetchBudgetPolicies,
+  fetchModelGatewayQuarantine,
   fetchModelGatewayStatus,
 } from '@/lib/api';
 import { BudgetPolicyLedger } from '@/components/analytics/BudgetPolicyLedger';
@@ -66,6 +68,36 @@ function windowDescription(window: AnalyticsWindow): string {
   if (window === '24h') return 'the last 24 hours';
   if (window === '7d') return 'the last 7 days';
   return 'the last 30 days';
+}
+
+function describeGatewayState(gateway: ModelGatewayStatus | null): string {
+  if (!gateway) return 'Cost tracking unavailable';
+  if (!gateway.enabled || gateway.state === 'disabled') return 'Direct metering — no gateway';
+  if (gateway.state === 'healthy') return 'Cost tracking up to date';
+  if (gateway.state === 'initializing') return 'Cost tracking starting';
+  return 'Cost tracking delayed';
+}
+
+const QUARANTINE_REASON_LABELS: Record<string, string> = {
+  invalid_payload: 'malformed record',
+  missing_correlation: 'no run reference',
+  invalid_correlation: 'unreadable run reference',
+  correlation_mismatch: 'run reference mismatch',
+  unknown_turn: 'no matching run',
+};
+
+function quarantineBreakdownTitle(quarantine: ModelGatewayQuarantine | null): string | undefined {
+  if (!quarantine || quarantine.reasons.length === 0) return undefined;
+  return quarantine.reasons
+    .map((row) => `${row.total} × ${QUARANTINE_REASON_LABELS[row.reason] ?? row.reason}`)
+    .join(' · ');
+}
+
+function describeQuarantineRecency(quarantine: ModelGatewayQuarantine | null): string {
+  if (!quarantine) return '';
+  return quarantine.recentTotal > 0
+    ? ` (${quarantine.recentTotal} new in the last 24h)`
+    : ' (none recent)';
 }
 
 function stateTone(state: 'ok' | 'warning' | 'blocked'): string {
@@ -130,6 +162,7 @@ export function AnalyticsPage() {
   const [policies, setPolicies] = useState<BudgetPolicy[] | null>(null);
   const [budgetStatuses, setBudgetStatuses] = useState<AgentBudgetStatus[] | null>(null);
   const [gateway, setGateway] = useState<ModelGatewayStatus | null>(null);
+  const [quarantine, setQuarantine] = useState<ModelGatewayQuarantine | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [supplementalWarning, setSupplementalWarning] = useState(false);
@@ -147,7 +180,8 @@ export function AnalyticsPage() {
       fetchBudgetPolicies(),
       fetchAgentBudgetStatuses(),
       fetchModelGatewayStatus(),
-    ]).then(([analyticsResult, policiesResult, statusesResult, gatewayResult]) => {
+      fetchModelGatewayQuarantine(),
+    ]).then(([analyticsResult, policiesResult, statusesResult, gatewayResult, quarantineResult]) => {
       if (cancelled) return;
 
       if (analyticsResult.status === 'fulfilled') {
@@ -161,6 +195,7 @@ export function AnalyticsPage() {
       setPolicies(policiesResult.status === 'fulfilled' ? policiesResult.value : null);
       setBudgetStatuses(statusesResult.status === 'fulfilled' ? statusesResult.value : null);
       setGateway(gatewayResult.status === 'fulfilled' ? gatewayResult.value : null);
+      setQuarantine(quarantineResult.status === 'fulfilled' ? quarantineResult.value : null);
       setSupplementalWarning(
         policiesResult.status === 'rejected'
         || statusesResult.status === 'rejected'
@@ -308,7 +343,7 @@ export function AnalyticsPage() {
         <Metric
           label="Reported tokens"
           value={formatCompactNumber(totals.totalTokens)}
-          detail={`${tokenCoverage}% of turns reported`}
+          detail={`${formatCompactNumber(totals.inputTokens)} in · ${formatCompactNumber(totals.outputTokens)} out · ${tokenCoverage}% reported`}
         />
         <Metric
           label="Known model cost"
@@ -457,31 +492,45 @@ export function AnalyticsPage() {
                   {gateway?.state === 'healthy'
                     ? <CheckCircle2 className="h-4 w-4 text-accent-400" />
                     : <AlertTriangle className="h-4 w-4 text-amber-400" />}
-                  {gateway ? `Gateway ${gateway.state}` : 'Gateway unavailable'}
+                  {describeGatewayState(gateway)}
                 </span>
                 {gateway?.lagMs !== null && gateway?.lagMs !== undefined ? (
                   <span className="text-xs tabular-nums text-surface-400">
-                    {Math.round(gateway.lagMs / 1000)}s lag
+                    {Math.round(gateway.lagMs / 1000)}s behind
                   </span>
                 ) : null}
               </div>
+              {gateway?.lastError ? (
+                <p className="mt-2 break-words text-xs text-rose-300">
+                  {gateway.lastError}
+                </p>
+              ) : null}
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div className="rounded-lg bg-surface-900/70 p-3">
-                  <p className="text-label">Current pending</p>
+                  <p className="text-label">Awaiting cost data</p>
                   <p className="mt-1 text-lg font-semibold tabular-nums text-surface-200">
                     {gateway?.pendingCalls ?? '—'}
                   </p>
                 </div>
                 <div className="rounded-lg bg-surface-900/70 p-3">
-                  <p className="text-label">Current unpriced</p>
+                  <p className="text-label">No price configured</p>
                   <p className="mt-1 text-lg font-semibold tabular-nums text-surface-200">
                     {gateway?.unpricedCalls ?? '—'}
                   </p>
                 </div>
               </div>
-              {gateway && (gateway.quarantinedTransactions > 0 || gateway.orphanTransactions > 0) ? (
-                <p className="mt-3 text-xs text-amber-300">
-                  {gateway.quarantinedTransactions} quarantined · {gateway.orphanTransactions} orphan transactions
+              {gateway && gateway.orphanTransactions > 0 ? (
+                <p className="mt-3 text-xs text-amber-300" title={quarantineBreakdownTitle(quarantine)}>
+                  {gateway.orphanTransactions} gateway
+                  {gateway.orphanTransactions === 1 ? ' charge' : ' charges'} couldn't be
+                  matched to any run — totals may undercount
+                  {describeQuarantineRecency(quarantine)}
+                </p>
+              ) : gateway && gateway.quarantinedTransactions > 0 ? (
+                <p className="mt-3 text-xs text-surface-500" title={quarantineBreakdownTitle(quarantine)}>
+                  {gateway.quarantinedTransactions} gateway
+                  {gateway.quarantinedTransactions === 1 ? ' record' : ' records'} ignored — not
+                  from agent runs{describeQuarantineRecency(quarantine)}
                 </p>
               ) : null}
             </div>
@@ -546,8 +595,11 @@ export function AnalyticsPage() {
                           </span>
                         ) : null}
                         {incompleteCostTurns > 0 ? (
-                          <span className="shrink-0 rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-300">
-                            {incompleteCostTurns} cost gap{incompleteCostTurns === 1 ? '' : 's'}
+                          <span
+                            title={`${agent.costCoverage.pending} awaiting sync · ${agent.costCoverage.partial} partially priced · ${agent.costCoverage.unpriced} without a configured price`}
+                            className="shrink-0 rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-300"
+                          >
+                            costs incomplete ({incompleteCostTurns})
                           </span>
                         ) : null}
                       </div>

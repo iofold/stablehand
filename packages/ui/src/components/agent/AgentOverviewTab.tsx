@@ -8,6 +8,7 @@ import { StatusBadge } from '@/components/dashboard/StatusBadge';
 import { cn } from '@/lib/utils';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { formatCompactNumber } from '@/lib/format';
+import { describeConversationCostRollup } from '@/lib/usage-cost';
 
 /* ------------------------------------------------------------------ */
 /*  StatCard                                                           */
@@ -131,6 +132,17 @@ export function AgentOverviewTab({
                   <span className="col-span-2 flex items-center gap-3 text-xs text-surface-400 sm:col-span-1">
                     <span>{conversation.turnCount} {conversation.turnCount === 1 ? 'turn' : 'turns'}</span>
                     <span>{conversation.messageCount} {conversation.messageCount === 1 ? 'message' : 'messages'}</span>
+                    {conversation.totalTokens !== null && (
+                      <span className="tabular-nums">
+                        {formatCompactNumber(conversation.totalTokens)} tokens
+                      </span>
+                    )}
+                    {(() => {
+                      const cost = describeConversationCostRollup(conversation);
+                      return cost
+                        ? <span className="tabular-nums" title={cost.title}>{cost.label}</span>
+                        : null;
+                    })()}
                   </span>
                   <RelativeTime
                     timestamp={conversation.updatedAt}

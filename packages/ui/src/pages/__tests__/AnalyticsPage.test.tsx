@@ -30,6 +30,7 @@ vi.mock('@/lib/api', () => ({
   fetchAnalyticsOverview: vi.fn(),
   fetchBudgetPolicies: vi.fn(),
   fetchBudgetSpend: vi.fn(),
+  fetchModelGatewayQuarantine: vi.fn(),
   fetchModelGatewayStatus: vi.fn(),
 }));
 
@@ -258,14 +259,14 @@ describe('AnalyticsPage', () => {
     expect(container.textContent).toContain('$0.0240');
     expect(container.textContent).toContain('Close analyst');
     expect(container.textContent).toContain('Variance reviewer');
-    expect(container.textContent).toContain('1 cost gap');
+    expect(container.textContent).toContain('costs incomplete (1)');
     expect(container.textContent).toContain('2 of 3 turns fully priced');
     expect(container.textContent).toContain('Finance daily cap');
     expect(container.textContent).toContain('85%');
-    expect(container.textContent).toContain('Gateway healthy');
+    expect(container.textContent).toContain('Cost tracking up to date');
     expect(container.textContent).toContain('Reported tokens');
-    expect(container.textContent).toContain('Current pending');
-    expect(container.textContent).toContain('Current unpriced');
+    expect(container.textContent).toContain('Awaiting cost data');
+    expect(container.textContent).toContain('No price configured');
     expect(container.querySelector('[data-testid="activity-chart"]')).not.toBeNull();
     expect(fetchAnalyticsOverviewMock).toHaveBeenCalledWith('24h');
   });
