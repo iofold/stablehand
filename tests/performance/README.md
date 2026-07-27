@@ -57,9 +57,10 @@ stops a stage when its measured turn error rate crosses the declared threshold.
 - `dev2-sse-fanout.json`: three hot-agent conversations with 10 and then 50
   durable SSE consumers. It isolates server-side stream fanout more than the
   ordinary capacity profile.
-- `dev2-harness-lifecycle.json`: bounded concurrency-one warm and
-  checkpoint/restore parity lanes for Deep Agents and PI Agent. It measures two
-  turns after one explicit warmup in each mode without claiming capacity.
+- `dev2-harness-lifecycle.json`: bounded concurrency-one cold, warm, and
+  checkpoint/restore parity lanes for Deep Agents, PI Agent, and Claude Agents.
+  It measures ten turns per lane, with one additional warmup in each warm and
+  resume lane, without claiming capacity.
 - `dev2-model-matrix.json`: 27 bounded turns across Deep Agents and PI Agent.
   It covers GPT-5.6 Sol, Terra, and Luna; Claude Opus 5, Sonnet 5, and Haiku
   4.5; Gemini 3.6 Flash and 3.5 Flash-Lite; all five curated Workers AI
@@ -150,7 +151,7 @@ use these operating envelopes:
 | Profile | Planned turns | Estimated model calls | Expected spend | Reserve | Hard policy ceiling |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `dev2-model-matrix` | 27 | 31 | $0.20-$0.60 | $1 | $1 |
-| `dev2-harness-lifecycle` | 96 | 96 | $1-$4 | $5 | $6 |
+| `dev2-harness-lifecycle` | 96 | 96 minimum | $1-$4 | $5 | $6 |
 | `dev2-scale-10` | 262 | 262 | $0.50-$1.50 | $5 | $6 |
 | Matrix + scale once | 289 | 293 | $0.70-$2.10 | $6 | $7 |
 | Full adaptive worst case | 1,182 | 1,182 | $2-$6 | $10 | $15 |
@@ -158,7 +159,9 @@ use these operating envelopes:
 The range assumes roughly 3,000-10,000 input tokens and short fixed responses.
 The current Claude models allow a larger output ceiling because adaptive
 thinking shares the output budget; the test still requires exactly one visible
-token string. The mixed Deep Agents lane is budgeted as five calls. Provider
+token string. The mixed Deep Agents lane is budgeted as five calls. The
+lifecycle call estimate is a minimum because Claude SDK protocol retries or
+auxiliary requests can make more than one model call per CTXMILL turn. Provider
 retries, model-side reasoning, tool loops, and pricing changes can move actual
 spend, which is why the deployment gateway policy—not this estimate—must hold
 the hard ceiling. Repeat capacity runs require multiplying the reserve by the
