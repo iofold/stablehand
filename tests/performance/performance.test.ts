@@ -772,6 +772,52 @@ describe('performance profile', () => {
     expect(traceCollector).toContain("resources_string['ctxmill.session.id']");
   });
 
+  it('ships a mixed-provider exploratory ramp through concurrency 48', () => {
+    const ramp = parseCapacityRamp(JSON.parse(readFileSync(
+      new URL('./profiles/dev2-edge-capacity-mixed.json', import.meta.url),
+      'utf8',
+    )));
+
+    expect(ramp.levels).toEqual([8, 12, 16, 24, 32, 48]);
+    expect(ramp.maxGlobalContainers).toBe(48);
+    expect(ramp.gates.maxNodeCpuPercent).toBe(100);
+    expect(ramp.pendingPodGraceSeconds).toBeGreaterThanOrEqual(600);
+    expect(ramp.harnesses.map((stage) => ({
+      harness: stage.harness,
+      provider: stage.harnessConfig.provider,
+      model: stage.harnessConfig.model,
+    }))).toEqual([
+      {
+        harness: 'langgraph',
+        provider: 'openai',
+        model: 'gpt-5.6-terra',
+      },
+      {
+        harness: 'pi-agent',
+        provider: 'google',
+        model: 'gemini-3.6-flash',
+      },
+      {
+        harness: 'langgraph',
+        provider: 'openai',
+        model: 'cf-gpt-oss-120b',
+      },
+    ]);
+
+    const controller = readFileSync(
+      new URL('./scripts/run-dev2-edge-capacity.sh', import.meta.url),
+      'utf8',
+    );
+    expect(controller).toContain('set_limit "$temporary_limit"');
+    expect(controller).toContain('restore_limit');
+    expect(controller).toContain('ensure_clean_boundary');
+    expect(controller).toContain('core_services_healthy');
+    expect(controller).toContain('capacity-observation.json');
+    expect(controller).toContain('capacity-decision.json');
+    expect(controller).toContain('explorationDecision');
+    expect(controller).not.toContain('set_limit "$highest_passed"');
+  });
+
   it('correlates failed-run sandbox traces from persisted turn samples', () => {
     const tempDir = mkdtempSync(join(process.cwd(), '.tmp/performance-trace-test-'));
     const runPath = join(tempDir, 'trace-window.json');

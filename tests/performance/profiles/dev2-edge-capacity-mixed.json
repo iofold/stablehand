@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "name": "dev2-edge-capacity-mixed",
+  "target": {
+    "apiBase": "https://stablehand.staging.example.com/api",
+    "kubernetesNamespace": "ctxmill"
+  },
+  "levels": [8, 12, 16, 24, 32, 48],
+  "maxGlobalContainers": 48,
+  "discoveryRuns": 1,
+  "confirmationRuns": 3,
+  "sseClientsPerAgent": 2,
+  "settleMs": 5000,
+  "pendingPodGraceSeconds": 600,
+  "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+  "expectedOutput": "BENCHMARK_OK",
+  "gates": {
+    "maxErrorRate": 1,
+    "maxTimeToFirstTokenP95Ms": 900000,
+    "maxCompletionP95Ms": 900000,
+    "maxNodeCpuPercent": 100,
+    "maxNodeMemoryPercent": 90,
+    "minTraceTurnCoverage": 0,
+    "minSandboxMetricCoverage": 0
+  },
+  "harnesses": [
+    {
+      "name": "deepagents-openai-terra",
+      "harness": "langgraph",
+      "agentPrefix": "perf-edge-da-terra",
+      "timeoutMs": 600000,
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.6-terra",
+        "maxTokens": 128,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "pi-google-gemini-flash",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-edge-pi-gemini",
+      "timeoutMs": 600000,
+      "harnessConfig": {
+        "provider": "google",
+        "model": "gemini-3.6-flash",
+        "maxTokens": 128,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "deepagents-cloudflare-gpt-oss",
+      "harness": "langgraph",
+      "agentPrefix": "perf-edge-da-cf-gpt-oss",
+      "timeoutMs": 600000,
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gpt-oss-120b",
+        "maxTokens": 256,
+        "reasoning": "off"
+      }
+    }
+  ]
+}
