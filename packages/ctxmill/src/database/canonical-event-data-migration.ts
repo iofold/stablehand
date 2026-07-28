@@ -3,6 +3,8 @@ import { CUSTOM_EVENT_NAME_PATTERN_SOURCE } from '@ctxmill/contracts';
 
 export const TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID = 'canonical-text-message-end-contract';
 export const TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION = 1;
+export const CANONICAL_EVENT_CONTRACTS_MIGRATION_ID = 'canonical-event-contracts';
+export const CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION = 1;
 
 /**
  * One-way persisted-data migration for the canonical event vocabulary.
@@ -11,6 +13,15 @@ export const TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION = 1;
  * rewritten before readers, trigger dispatch, or webhook delivery resume.
  */
 export async function canonicalizePersistedEventContracts(sql: postgres.Sql): Promise<void> {
+  const [applied] = await sql`
+    SELECT version
+    FROM ctxmill_schema_version
+    WHERE id = ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}
+  `;
+  if (Number(applied?.version ?? 0) >= CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION) {
+    return;
+  }
+
   // Unsupported provider telemetry never had a public contract.
   await sql`
     DELETE FROM event_store
@@ -279,6 +290,17 @@ export async function canonicalizePersistedEventContracts(sql: postgres.Sql): Pr
   await repairTextMessageEndContract(sql);
   await canonicalizeCustomFrames(sql);
   await canonicalizeSubscriptionsAndDeliveries(sql);
+
+  await sql`
+    INSERT INTO ctxmill_schema_version (id, version, baseline)
+    VALUES (
+      ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID},
+      ${CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION},
+      'data-migration'
+    )
+    ON CONFLICT (id) DO UPDATE
+    SET version = EXCLUDED.version, baseline = EXCLUDED.baseline
+  `;
 }
 
 async function repairTextMessageEndContract(sql: postgres.Sql): Promise<void> {

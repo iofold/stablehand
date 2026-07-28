@@ -5,13 +5,14 @@ import {
 } from '@ctxmill/contracts';
 import { createDatabase, type DatabaseConnection } from '../../packages/ctxmill/src/database/connection.js';
 import {
+  CANONICAL_EVENT_CONTRACTS_MIGRATION_ID,
+  CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION,
   MIGRATION_ADVISORY_LOCK_ID,
   runMigrations,
+  TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID,
+  TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION,
 } from '../../packages/ctxmill/src/database/migrations.js';
 import { resolveTestDatabaseUrl } from '../utils/test-db.js';
-
-const TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID = 'canonical-text-message-end-contract';
-const TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION = 1;
 
 async function dropAllPublicTables(conn: DatabaseConnection): Promise<void> {
   const tables = await conn.pgClient`
@@ -278,6 +279,10 @@ describe('database migration baseline guard', () => {
   it('hard-migrates persisted event, trigger, wait, and webhook contracts', async () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
+    await conn.pgClient`
+      DELETE FROM ctxmill_schema_version
+      WHERE id = ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}
+    `;
 
     await conn.pgClient`
       INSERT INTO agents (
@@ -510,7 +515,10 @@ describe('database migration baseline guard', () => {
     await runMigrations(conn.pgClient);
     await conn.pgClient`
       DELETE FROM ctxmill_schema_version
-      WHERE id = ${TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID}
+      WHERE id IN (
+        ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID},
+        ${TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID}
+      )
     `;
 
     await conn.pgClient`
@@ -566,9 +574,70 @@ describe('database migration baseline guard', () => {
     expect(secondRepair.payload).toBe(firstRepair.payload);
   });
 
+  it('does not rewrite canonical event history after the migration version is recorded', async () => {
+    await dropAllPublicTables(conn);
+    await runMigrations(conn.pgClient);
+    await conn.pgClient`
+      DELETE FROM ctxmill_schema_version
+      WHERE id = ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}
+    `;
+    await conn.pgClient`
+      INSERT INTO agents (
+        id, name, harness, harness_config, system_prompt, tools,
+        created_at, updated_at
+      )
+      VALUES ('agent-1', 'agent', 'langgraph', '{}', 'prompt', '[]', 1, 1)
+    `;
+    await conn.pgClient`
+      INSERT INTO event_store (
+        type, agent_id, payload, created_at, turn_id, conversation_id,
+        channel, source_type, source_payload
+      )
+      VALUES (
+        'CUSTOM',
+        'agent-1',
+        '{"type":"CUSTOM","name":"ctxmill.turn.pending","agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","mode":"interactive","timestamp":10}',
+        10,
+        'turn-1',
+        'conversation-1',
+        'run',
+        'turn.pending',
+        '{"turnId":"turn-1","agentId":"agent-1","conversationId":"conversation-1","mode":"interactive","timestamp":10}'
+      )
+    `;
+
+    await runMigrations(conn.pgClient);
+    const [firstStart] = await conn.pgClient`
+      SELECT xmin::text AS row_version, payload
+      FROM event_store
+      WHERE type = 'CUSTOM'
+    `;
+    const [applied] = await conn.pgClient`
+      SELECT version
+      FROM ctxmill_schema_version
+      WHERE id = ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}
+    `;
+
+    expect(Number(applied?.version)).toBe(CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION);
+
+    await runMigrations(conn.pgClient);
+    const [secondStart] = await conn.pgClient`
+      SELECT xmin::text AS row_version, payload
+      FROM event_store
+      WHERE type = 'CUSTOM'
+    `;
+
+    expect(secondStart?.payload).toBe(firstStart?.payload);
+    expect(secondStart?.row_version).toBe(firstStart?.row_version);
+  });
+
   it('retains strict message.updated frames and webhook subscriptions across restarts', async () => {
     await dropAllPublicTables(conn);
     await runMigrations(conn.pgClient);
+    await conn.pgClient`
+      DELETE FROM ctxmill_schema_version
+      WHERE id = ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}
+    `;
     await conn.pgClient`
       INSERT INTO agents (
         id, name, harness, harness_config, system_prompt, tools,
