@@ -30,7 +30,7 @@
       "harnessConfig": {
         "provider": "openai",
         "model": "cf-gpt-oss-120b",
-        "maxTokens": 64,
+        "maxTokens": 256,
         "reasoning": "off"
       }
     },
@@ -48,7 +48,7 @@
       "harnessConfig": {
         "provider": "openai",
         "model": "cf-gpt-oss-120b",
-        "maxTokens": 64,
+        "maxTokens": 256,
         "reasoning": "off"
       }
     },
@@ -66,7 +66,7 @@
       "harnessConfig": {
         "provider": "openai",
         "model": "cf-gpt-oss-120b",
-        "maxTokens": 64,
+        "maxTokens": 256,
         "reasoning": "off"
       }
     },
@@ -84,7 +84,7 @@
       "harnessConfig": {
         "provider": "openai",
         "model": "cf-gpt-oss-120b",
-        "maxTokens": 64,
+        "maxTokens": 256,
         "reasoning": true,
         "thinkingLevel": "minimal"
       }
@@ -120,7 +120,7 @@
       "harnessConfig": {
         "provider": "openai",
         "model": "cf-gpt-oss-120b",
-        "maxTokens": 64,
+        "maxTokens": 256,
         "reasoning": "off"
       }
     },
@@ -139,7 +139,7 @@
       "harnessConfig": {
         "provider": "openai",
         "model": "cf-gpt-oss-120b",
-        "maxTokens": 64,
+        "maxTokens": 256,
         "reasoning": "off"
       }
     }

@@ -636,8 +636,10 @@ describe('performance profile', () => {
     expect(volumetricStages.every((stage) =>
       stage.harnessConfig.provider === 'openai'
       && stage.harnessConfig.model === 'cf-gpt-oss-120b')).toBe(true);
-    expect(volumetricStages.every((stage) =>
-      stage.harnessConfig.maxTokens === 64)).toBe(true);
+    const capacityGptOssStages = capacity.stages.filter((stage) =>
+      stage.harnessConfig.model === 'cf-gpt-oss-120b');
+    expect(capacityGptOssStages.every((stage) =>
+      Number(stage.harnessConfig.maxTokens) >= 256)).toBe(true);
     expect(volumetricStages.filter((stage) => stage.harness === 'langgraph')
       .every((stage) => stage.harnessConfig.reasoning === 'off')).toBe(true);
     expect(volumetricStages.filter((stage) => stage.harness === 'pi-agent')
