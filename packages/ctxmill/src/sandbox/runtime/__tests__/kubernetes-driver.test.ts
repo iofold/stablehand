@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { hasStatusCode } from '../../../util/status-code-error.js';
+import { hasStatusCode, statusCodeError } from '../../../util/status-code-error.js';
 import { KubernetesContainerDriver } from '../kubernetes-driver.js';
 
 const runningPod = {
@@ -101,6 +101,46 @@ describe('KubernetesContainerDriver pod scheduling wait', () => {
     stubFindPod(driver, [{ metadata: { name: 'p' }, status: { phase: 'Failed' } }]);
 
     await expect(driver.startContainer('ctxmill-sandbox-test')).rejects.toThrow(/exited before becoming ready/);
+  });
+
+  it('does not finish Job removal until Kubernetes reports the Job absent', async () => {
+    const driver = createDriver();
+    const requests: Array<{ method: string; path: string }> = [];
+    let jobReads = 0;
+    (driver as unknown as {
+      requestJson: (method: string, path: string, body?: unknown) => Promise<unknown>;
+    }).requestJson = vi.fn(async (method: string, path: string) => {
+      requests.push({ method, path });
+      if (method === 'DELETE') {
+        return {};
+      }
+      jobReads += 1;
+      if (jobReads < 3) {
+        return { metadata: { deletionTimestamp: '2026-07-28T00:00:00Z' } };
+      }
+      throw statusCodeError(404, 'Job not found');
+    });
+
+    await driver.removeContainer('ctxmill-sandbox-test');
+
+    expect(requests).toEqual([
+      {
+        method: 'DELETE',
+        path: '/apis/batch/v1/namespaces/test/jobs/ctxmill-sandbox-test?propagationPolicy=Foreground',
+      },
+      {
+        method: 'GET',
+        path: '/apis/batch/v1/namespaces/test/jobs/ctxmill-sandbox-test',
+      },
+      {
+        method: 'GET',
+        path: '/apis/batch/v1/namespaces/test/jobs/ctxmill-sandbox-test',
+      },
+      {
+        method: 'GET',
+        path: '/apis/batch/v1/namespaces/test/jobs/ctxmill-sandbox-test',
+      },
+    ]);
   });
 
   it('creates a Job-owned Secret without placing credential values in the Job', async () => {

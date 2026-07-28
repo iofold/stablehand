@@ -519,7 +519,6 @@ export class KubernetesContainerDriver {
 
   private async deleteJob(jobName: string): Promise<void> {
     const namespace = await this.namespacePromise;
-    let jobDeleteError: unknown;
     try {
       await this.requestJson(
         'DELETE',
@@ -531,13 +530,32 @@ export class KubernetesContainerDriver {
         },
       );
     } catch (err) {
-      if (!hasStatusCode(err, 404)) {
-        jobDeleteError = err;
+      if (hasStatusCode(err, 404)) {
+        return;
       }
+      throw err;
     }
 
-    if (jobDeleteError) {
-      throw jobDeleteError;
+    const deadline = Date.now() + this.podReadyTimeoutMs;
+    while (true) {
+      try {
+        await this.requestJson<KubeJob>(
+          'GET',
+          `/apis/batch/v1/namespaces/${namespace}/jobs/${jobName}`,
+        );
+      } catch (err) {
+        if (hasStatusCode(err, 404)) {
+          return;
+        }
+        throw err;
+      }
+
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Timed out waiting for sandbox Job ${jobName} deletion after ${this.podReadyTimeoutMs}ms`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, this.podPollIntervalMs));
     }
   }
 
