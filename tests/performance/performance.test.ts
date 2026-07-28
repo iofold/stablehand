@@ -583,11 +583,14 @@ describe('performance profile', () => {
     const fanout = readProfile('dev2-sse-fanout');
     const scale = readProfile('dev2-scale-10');
     const scalePlan = summarizePerformancePlan(scale);
+    const endurance = readProfile('dev2-endurance-wave-c8');
+    const endurancePlan = summarizePerformancePlan(endurance);
     const gatewayProfiles = [
       smoke,
       capacity,
       fanout,
       scale,
+      endurance,
     ];
 
     expect(new Set(matrix.stages.map((stage) => stage.harness))).toEqual(
@@ -678,6 +681,44 @@ describe('performance profile', () => {
       peakConcurrency: 10,
       peakSseConnections: 20,
     });
+    expect(new Set(endurance.stages.map((stage) => stage.harness))).toEqual(
+      new Set(['claude-agents', 'langgraph', 'pi-agent']),
+    );
+    expect(endurance.stages.filter((stage) =>
+      stage.harnessConfig.model === 'cf-gpt-oss-120b').every((stage) =>
+      Number(stage.harnessConfig.maxTokens) >= 256)).toBe(true);
+    expect(endurance.stages.filter((stage) => stage.harness === 'claude-agents'))
+      .toEqual([expect.objectContaining({
+        concurrency: 1,
+        iterations: 1,
+        harnessConfig: { provider: 'anthropic', model: 'claude-sonnet-5' },
+      })]);
+    expect(endurance.requirements.minGlobalContainers).toBe(8);
+    expect(endurancePlan).toMatchObject({
+      measuredTurns: 243,
+      warmupTurns: 20,
+      totalTurns: 263,
+      estimatedModelCalls: 263,
+      peakConcurrency: 8,
+      peakSseConnections: 16,
+    });
+    const enduranceController = readFileSync(
+      new URL('./scripts/run-dev2-endurance-10x.sh', import.meta.url),
+      'utf8',
+    );
+    expect(enduranceController).toContain(
+      'WAVES="${CTXMILL_PERF_ENDURANCE_WAVES:-10}"',
+    );
+    expect(enduranceController).toContain(
+      'theoretical_calls=$((calls_per_wave * WAVES))',
+    );
+    expect(enduranceController).toContain(
+      'CTXMILL_PERF_RAMP_PATH="$GATES_PATH"',
+    );
+    expect(enduranceController).toContain('run-dev2.sh');
+    expect(enduranceController).toContain('capacity-decision.json');
+    expect(enduranceController).not.toContain('/settings');
+    expect(enduranceController).not.toContain('set_limit');
   });
 
   it('ships a monotonic adaptive ramp through the global ceiling', () => {

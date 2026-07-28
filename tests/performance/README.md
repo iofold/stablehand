@@ -29,6 +29,18 @@ changed permanently only after three passes at the candidate capacity):
 tests/performance/scripts/run-dev2-adaptive-capacity.sh
 ```
 
+Run the ten-wave endurance certification at the already-applied concurrency
+limit of eight:
+
+```bash
+tests/performance/scripts/run-dev2-endurance-10x.sh
+```
+
+The endurance controller never changes runtime settings. It runs ten ordinary
+strict waves sequentially, applies the adaptive suite's correctness, telemetry,
+resource, cleanup, and accounting gates after every wave, and stops at the
+first rejected wave. Its hard envelope is 2,630 model calls by default.
+
 Inspect the exact load without a token or network call:
 
 ```bash
@@ -71,6 +83,11 @@ stops a stage when its measured turn error rate crosses the declared threshold.
   exact ceiling is 262 CTXMILL turns/model calls and 20 simultaneous SSE
   connections. Run it only after dev2 is configured for at least ten global
   sandboxes and a quiet test window is reserved.
+- `dev2-endurance-wave-c8.json`: one reproducible 263-call endurance wave at
+  the certified concurrency limit of eight. It contains 243 measured turns,
+  20 warmups, a single Claude Sonnet 5 canary, Deep Agents and PI cold ramps,
+  warm reuse, checkpoint/restore, and up to 16 simultaneous SSE consumers.
+  The controller repeats this exact wave ten times without raising capacity.
 - `dev2-adaptive-capacity.json`: the controller contract for separate Deep
   Agents and PI Agent cold waves at 1 through 100 concurrency. It is expanded
   into one ordinary strict performance profile per wave so every result and
@@ -153,6 +170,7 @@ use these operating envelopes:
 | `dev2-model-matrix` | 27 | 31 | $0.20-$0.60 | $1 | $1 |
 | `dev2-harness-lifecycle` | 96 | 96 minimum | $1-$4 | $5 | $6 |
 | `dev2-scale-10` | 262 | 262 | $0.50-$1.50 | $5 | $6 |
+| Ten-wave c8 endurance | 2,630 | 2,630 | $12-$20 | $25 | $50 |
 | Matrix + scale once | 289 | 293 | $0.70-$2.10 | $6 | $7 |
 | Full adaptive worst case | 1,182 | 1,182 | $2-$6 | $10 | $15 |
 
