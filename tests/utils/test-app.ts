@@ -34,6 +34,9 @@ interface CreateTestAppOptions {
   containerRetriesOnAlreadyExists?: number;
 }
 
+const TEST_CONTAINER_CLEANUP_TIMEOUT_MS = 5_000;
+const TEST_CONTAINER_CLEANUP_POLL_MS = 25;
+
 function buildContainerConfig(options: CreateTestAppOptions): CTXMillConfig {
   return {
     ...(options.config ?? {}),
@@ -65,19 +68,41 @@ async function createContainerWithRetry(
 }
 
 async function removeScopedTestContainers(container: AppContainer): Promise<void> {
-  const managedContainers = await container.containerManager.listManagedContainers();
-  const removals = await Promise.allSettled(
-    managedContainers.map(async (managedContainer) => {
-      await container.containerManager.removeContainer(managedContainer.containerId, true);
-      return managedContainer.containerId;
-    }),
-  );
-  const failures = removals.flatMap((result, index) => {
-    if (result.status === 'fulfilled') return [];
-    const containerId = managedContainers[index]?.containerId ?? 'unknown';
-    const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-    return [{ containerId, reason, error: result.reason }];
-  });
+  const failures: Array<{ containerId: string; reason: string; error: unknown }> = [];
+  const deadline = Date.now() + TEST_CONTAINER_CLEANUP_TIMEOUT_MS;
+
+  while (true) {
+    const managedContainers = await container.containerManager.listManagedContainers();
+    const removals = await Promise.allSettled(
+      managedContainers.map(async (managedContainer) => {
+        await container.containerManager.removeContainer(managedContainer.containerId, true);
+        return managedContainer.containerId;
+      }),
+    );
+    failures.push(...removals.flatMap((result, index) => {
+      if (result.status === 'fulfilled') return [];
+      const containerId = managedContainers[index]?.containerId ?? 'unknown';
+      const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      return [{ containerId, reason, error: result.reason }];
+    }));
+
+    const hasInFlightWork = container.containerManager.getActiveCount() > 0
+      || container.containerManager.getQueuedCount() > 0;
+    if (!hasInFlightWork && managedContainers.length === 0) {
+      break;
+    }
+    if (Date.now() >= deadline) {
+      failures.push({
+        containerId: 'scope',
+        reason: 'test sandbox cleanup did not become idle before timeout',
+        error: new Error('test sandbox cleanup did not become idle before timeout'),
+      });
+      break;
+    }
+
+    await new Promise<void>((resolve) => setTimeout(resolve, TEST_CONTAINER_CLEANUP_POLL_MS));
+  }
+
   if (failures.length === 0) return;
 
   throw new AggregateError(
