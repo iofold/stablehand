@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   createContainer,
   type AppContainer,
+  type AppContainerOptions,
 } from '../../packages/ctxmill/src/config/container.js';
 import type { CTXMillConfig } from '../../packages/ctxmill/src/config/types.js';
 import {
@@ -47,10 +48,11 @@ async function createContainerWithRetry(
   config: CTXMillConfig,
   dataDir: string,
   retries: number,
+  options: AppContainerOptions,
 ): Promise<AppContainer> {
   for (let attempt = 0; attempt < retries; attempt += 1) {
     try {
-      return await createContainer(config, dataDir);
+      return await createContainer(config, dataDir, options);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!message.includes('already exists') || attempt === retries - 1) {
@@ -60,6 +62,30 @@ async function createContainerWithRetry(
   }
 
   throw new Error('unreachable');
+}
+
+async function removeScopedTestContainers(container: AppContainer): Promise<void> {
+  const managedContainers = await container.containerManager.listManagedContainers();
+  const removals = await Promise.allSettled(
+    managedContainers.map(async (managedContainer) => {
+      await container.containerManager.removeContainer(managedContainer.containerId, true);
+      return managedContainer.containerId;
+    }),
+  );
+  const failures = removals.flatMap((result, index) => {
+    if (result.status === 'fulfilled') return [];
+    const containerId = managedContainers[index]?.containerId ?? 'unknown';
+    const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+    return [{ containerId, reason, error: result.reason }];
+  });
+  if (failures.length === 0) return;
+
+  throw new AggregateError(
+    failures.map((failure) => failure.error),
+    `Failed to remove test sandbox containers: ${failures
+      .map((failure) => `${failure.containerId}: ${failure.reason}`)
+      .join('; ')}`,
+  );
 }
 
 function defaultServerOptions(container: AppContainer, dataDir: string): ServerOptions {
@@ -113,6 +139,7 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     buildContainerConfig(options),
     dataDir,
     options.containerRetriesOnAlreadyExists ?? 1,
+    { containerScopeIdentity: `test:${dataDir}` },
   );
   let app = await buildServer(container, dataDir, options.serverOptions);
 
@@ -130,7 +157,11 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     async close() {
       await app.close().catch(() => undefined);
       await container.close().catch(() => undefined);
-      rmSync(dataDir, { recursive: true, force: true });
+      try {
+        await removeScopedTestContainers(container);
+      } finally {
+        rmSync(dataDir, { recursive: true, force: true });
+      }
     },
   };
 }

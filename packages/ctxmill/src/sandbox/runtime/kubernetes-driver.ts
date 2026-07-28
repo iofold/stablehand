@@ -163,7 +163,7 @@ export class KubernetesContainerDriver {
     this.apiHost = process.env.KUBERNETES_SERVICE_HOST ?? 'kubernetes.default.svc';
     this.apiPort = process.env.KUBERNETES_SERVICE_PORT ?? '443';
     this.imagePrefix = options.imagePrefix ?? process.env.CTXMILL_IMAGE_PREFIX ?? 'ctxmill/harness';
-    this.scopeId = resolveContainerScopeId();
+    this.scopeId = resolveContainerScopeId(options.scopeIdentity);
     this.defaults = resolveSandboxRuntimeDefaults(options);
     this.dataHostPathRoot = options.dataHostPathRoot ?? process.env.CTXMILL_K8S_DATA_HOST_PATH ?? process.env.CTXMILL_DATA_DIR ?? '/var/lib/ctxmill/data';
     this.podReadyTimeoutMs = options.podReadyTimeoutMs ?? envNumber('CTXMILL_K8S_POD_READY_TIMEOUT_MS') ?? 60_000;

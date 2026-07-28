@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createHash } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import type { Writable } from 'node:stream';
 import type Dockerode from 'dockerode';
@@ -134,6 +135,27 @@ describe('ContainerManager', () => {
   // ── createContainer ─────────────────────────────────────
 
   describe('createContainer', () => {
+    it('uses an explicitly injected scope identity for test isolation', async () => {
+      vi.stubEnv('CTXMILL_CONTAINER_SCOPE', 'production-scope');
+      const options = { scopeIdentity: 'test-run-123' } as ContainerManagerOptions;
+      manager = new ContainerManager(options, docker as unknown as Dockerode);
+
+      await manager.createContainer(defaultCreateOpts());
+
+      const expectedScopeId = `s-${createHash('sha256')
+        .update('test-run-123')
+        .digest('hex')
+        .slice(0, 24)}`;
+      const createOptions = docker.createContainer.mock.calls[0][0];
+      expect(createOptions.Labels[CONTAINER_SCOPE_LABEL]).toBe(expectedScopeId);
+
+      await manager.listManagedContainers();
+      expect(docker.listContainers).toHaveBeenCalledWith({
+        all: true,
+        filters: { label: ['ctxmill.managed=true', `${CONTAINER_SCOPE_LABEL}=${expectedScopeId}`] },
+      });
+    });
+
     it('produces correct config with labels, resource limits, network, and env', async () => {
       const info = await manager.createContainer(defaultCreateOpts());
 

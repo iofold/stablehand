@@ -61,7 +61,7 @@ export class DockerContainerDriver {
     this.docker = dockerInstance ?? new Dockerode();
     this.networkName = options?.networkName ?? 'ctxmill-agents';
     this.imagePrefix = options?.imagePrefix ?? process.env.CTXMILL_IMAGE_PREFIX ?? 'ctxmill/harness';
-    this.scopeId = resolveContainerScopeId();
+    this.scopeId = resolveContainerScopeId(options?.scopeIdentity);
     this.dataVolume = process.env.CTXMILL_DATA_VOLUME;
     this.defaults = resolveSandboxRuntimeDefaults(options);
     this.startupGraceMs = resolveContainerStartupGraceMs(options?.startupGraceMs);

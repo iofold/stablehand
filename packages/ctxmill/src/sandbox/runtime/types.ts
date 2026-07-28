@@ -1,4 +1,6 @@
 export interface ContainerManagerOptions {
+  /** Explicit logical owner for runtime isolation. Defaults to deployment environment identity. */
+  scopeIdentity?: string;
   /** Docker bridge network name for agent containers. Default: 'ctxmill-agents' */
   networkName?: string;
   /** Image name prefix. Container image = `${imagePrefix}-${harnessName}:latest` */

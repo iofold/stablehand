@@ -115,6 +115,11 @@ export interface AppContainer {
   close: () => Promise<void>;
 }
 
+export interface AppContainerOptions {
+  /** Override sandbox ownership identity for isolated embedders and test runtimes. */
+  containerScopeIdentity?: string;
+}
+
 export { VALID_WEBHOOK_EVENTS };
 
 interface TriggerRunCallbackDeps {
@@ -183,6 +188,7 @@ export function createTriggerRunCallback({
 export async function createContainer(
   userConfig: CTXMillConfig,
   dataDir: string,
+  options: AppContainerOptions = {},
 ): Promise<AppContainer> {
   const modelGatewayConfig = resolveModelGatewayConfig();
   const config: ResolvedConfig = {
@@ -339,6 +345,9 @@ export async function createContainer(
   const containerManager: SandboxContainerManager =
     sandboxRuntime === 'kubernetes' || sandboxRuntime === 'k8s'
       ? new KubernetesContainerManager({
+        ...(options.containerScopeIdentity
+          ? { scopeIdentity: options.containerScopeIdentity }
+          : {}),
         maxGlobalContainers: startupSettings.maxGlobalContainers,
         queueTimeoutMs: startupSettings.queueTimeoutMs,
         defaultCpus: startupSettings.defaultCpus,
@@ -347,6 +356,9 @@ export async function createContainer(
         defaultTimeoutSec: startupSettings.defaultTimeoutSec,
       })
       : new ContainerManager({
+        ...(options.containerScopeIdentity
+          ? { scopeIdentity: options.containerScopeIdentity }
+          : {}),
         maxGlobalContainers: startupSettings.maxGlobalContainers,
         queueTimeoutMs: startupSettings.queueTimeoutMs,
         defaultCpus: startupSettings.defaultCpus,
