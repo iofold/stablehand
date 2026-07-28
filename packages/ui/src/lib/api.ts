@@ -123,7 +123,7 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     const method = init?.method ?? 'GET';
     const baseMessage = `API ${method} ${url} failed: ${res.status}`;
     let body: unknown = null;
-    let errorDetail = '';
+    let errorDetail: string;
     try {
       body = await res.json();
       errorDetail = extractErrorDetail(body);
