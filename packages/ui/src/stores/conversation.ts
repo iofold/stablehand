@@ -210,6 +210,7 @@ function normalizeEventToolCall(
     result: typeof value.result === 'string' ? value.result : undefined,
     error,
     status: normalizeToolCallStatus(value.status, error),
+    ...(typeof value.durationMs === 'number' ? { durationMs: value.durationMs } : {}),
   };
 }
 
@@ -238,6 +239,9 @@ function mergeCommittedToolCall(
     result: hasCanonicalOutcome ? canonical.result : preview.result,
     error: hasCanonicalOutcome ? canonical.error : preview.error,
     status,
+    ...(canonical.durationMs ?? preview.durationMs
+      ? { durationMs: canonical.durationMs ?? preview.durationMs }
+      : {}),
   };
 }
 

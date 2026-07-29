@@ -91,24 +91,35 @@ interface TurnSegment {
 }
 
 /**
- * Split the flat message list into per-turn segments. Messages without a
- * turnId (optimistic sends, legacy rows) ride with the segment they follow.
+ * Split the flat message list into per-turn segments. User prompts persist
+ * without a turnId, so unattributed messages belong to the NEXT attributed
+ * turn — a turn starts with the prompt that requested it.
  */
 function segmentMessagesByTurn(messages: Message[]): TurnSegment[] {
   const segments: TurnSegment[] = [];
+  let pending: Message[] = [];
   for (const msg of messages) {
     const turnId = msg.turnId ?? null;
+    if (turnId === null) {
+      pending.push(msg);
+      continue;
+    }
     const current = segments[segments.length - 1];
-    if (!current) {
-      segments.push({ turnId, messages: [msg] });
-    } else if (turnId === null || turnId === current.turnId) {
-      current.messages.push(msg);
-    } else if (current.turnId === null) {
-      // The segment started with not-yet-attributed messages; adopt the turn.
-      current.turnId = turnId;
-      current.messages.push(msg);
+    if (current && current.turnId === turnId) {
+      current.messages.push(...pending, msg);
     } else {
-      segments.push({ turnId, messages: [msg] });
+      segments.push({ turnId, messages: [...pending, msg] });
+    }
+    pending = [];
+  }
+  if (pending.length > 0) {
+    // Trailing unattributed messages: usually the optimistic prompt of a turn
+    // that has not committed anything yet. Keep them visible at the end.
+    const last = segments[segments.length - 1];
+    if (last) {
+      last.messages.push(...pending);
+    } else {
+      segments.push({ turnId: null, messages: pending });
     }
   }
   return segments;

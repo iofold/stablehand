@@ -308,10 +308,15 @@ export function EventsPage() {
     return map;
   }, [agents]);
 
+  // A turn or conversation scope pins the result set precisely; applying the
+  // rolling time window on top would hide older turns behind an empty list.
+  const scopeActive = Boolean(turnIdFilter || conversationIdFilter);
+
   const sinceMs = useMemo(() => {
+    if (scopeActive) return undefined;
     const range = TIME_RANGES.find((r) => r.value === timeRange);
     return range ? Date.now() - range.ms : undefined;
-  }, [timeRange]);
+  }, [timeRange, scopeActive]);
 
   const loadEventTypes = useCallback(async () => {
     setEventTypesError(null);
@@ -514,24 +519,26 @@ export function EventsPage() {
             ))}
           </select>
 
-          {/* Time range */}
-          <div className="flex rounded-lg border border-surface-700 overflow-hidden">
-            {TIME_RANGES.map((r) => (
-              <button
-                key={r.value}
-                type="button"
-                onClick={() => setTimeRange(r.value)}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium transition-colors',
-                  timeRange === r.value
-                    ? 'bg-surface-700 text-surface-100'
-                    : 'bg-surface-800 text-surface-400 hover:text-surface-200',
-                )}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
+          {/* Time range — hidden while a turn/conversation scope pins the results */}
+          {!scopeActive && (
+            <div className="flex rounded-lg border border-surface-700 overflow-hidden">
+              {TIME_RANGES.map((r) => (
+                <button
+                  key={r.value}
+                  type="button"
+                  onClick={() => setTimeRange(r.value)}
+                  className={cn(
+                    'px-3 py-1.5 text-xs font-medium transition-colors',
+                    timeRange === r.value
+                      ? 'bg-surface-700 text-surface-100'
+                      : 'bg-surface-800 text-surface-400 hover:text-surface-200',
+                  )}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Group by */}
           <select
