@@ -63,6 +63,7 @@ function normalizeStoredToolCalls(value: unknown, messageId: string): ToolCallSt
           : undefined,
       error,
       status: normalizeToolCallStatus(raw.status, error),
+      ...(typeof raw.durationMs === 'number' ? { durationMs: raw.durationMs } : {}),
     };
 
     return [toolCall];
@@ -99,6 +100,7 @@ export function normalizeConversationMessage(
             result: raw.result as string | undefined,
             error: raw.error as string | undefined,
             status: normalizeToolCallStatus(raw.status, raw.error as string | undefined),
+            ...(typeof raw.durationMs === 'number' ? { durationMs: raw.durationMs } : {}),
           });
         }
       }
@@ -799,6 +801,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           result,
           error,
           status: error ? 'error' : 'complete',
+          ...(typeof event.durationMs === 'number' ? { durationMs: event.durationMs } : {}),
         };
 
         set((prev) => {

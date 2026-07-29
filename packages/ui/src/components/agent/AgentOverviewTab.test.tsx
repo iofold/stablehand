@@ -1,9 +1,17 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent, ConversationSummary } from '@ctxmill/contracts';
 
 import { AgentOverviewTab } from './AgentOverviewTab';
+
+// The embedded budget card loads live budget status; keep these tests focused
+// on the overview content.
+vi.mock('@/lib/api', () => ({
+  fetchAgentBudgetStatuses: vi.fn(async () => []),
+  fetchBudgetPolicies: vi.fn(async () => []),
+}));
 
 const AGENT = {
   id: 'agent-1',
@@ -62,23 +70,25 @@ describe('AgentOverviewTab recent conversations', () => {
     container.remove();
   });
 
-  it('shows a useful set of distinct recent conversations rather than turn rows', () => {
+  it('shows a useful set of distinct recent conversations rather than turn rows', async () => {
     const onOpenConversation = vi.fn();
     const onViewAllConversations = vi.fn();
     const conversations = Array.from({ length: 8 }, (_, index) => conversation(index));
 
-    act(() => root.render(
-      <AgentOverviewTab
-        agent={AGENT}
-        conversationCount={20}
-        activeSandboxSessions={1}
-        toolsCount={0}
-        recentConversations={conversations}
-        conversationsLoading={false}
-        conversationsError={null}
-        onOpenConversation={onOpenConversation}
-        onViewAllConversations={onViewAllConversations}
-      />,
+    await act(async () => root.render(
+      <MemoryRouter>
+        <AgentOverviewTab
+          agent={AGENT}
+          conversationCount={20}
+          activeSandboxSessions={1}
+          toolsCount={0}
+          recentConversations={conversations}
+          conversationsLoading={false}
+          conversationsError={null}
+          onOpenConversation={onOpenConversation}
+          onViewAllConversations={onViewAllConversations}
+        />
+      </MemoryRouter>,
     ));
 
     expect(container.textContent).toContain('Recent Conversations');
@@ -99,21 +109,23 @@ describe('AgentOverviewTab recent conversations', () => {
     expect(onViewAllConversations).toHaveBeenCalledOnce();
   });
 
-  it('distinguishes a load failure from an empty history', () => {
+  it('distinguishes a load failure from an empty history', async () => {
     const retry = vi.fn();
-    act(() => root.render(
-      <AgentOverviewTab
-        agent={AGENT}
-        conversationCount={4}
-        activeSandboxSessions={0}
-        toolsCount={0}
-        recentConversations={[]}
-        conversationsLoading={false}
-        conversationsError="Conversation index unavailable"
-        onOpenConversation={vi.fn()}
-        onViewAllConversations={vi.fn()}
-        onRetryConversations={retry}
-      />,
+    await act(async () => root.render(
+      <MemoryRouter>
+        <AgentOverviewTab
+          agent={AGENT}
+          conversationCount={4}
+          activeSandboxSessions={0}
+          toolsCount={0}
+          recentConversations={[]}
+          conversationsLoading={false}
+          conversationsError="Conversation index unavailable"
+          onOpenConversation={vi.fn()}
+          onViewAllConversations={vi.fn()}
+          onRetryConversations={retry}
+        />
+      </MemoryRouter>,
     ));
 
     expect(container.querySelector('[role="alert"]')?.textContent).toContain('Conversation index unavailable');
@@ -126,19 +138,21 @@ describe('AgentOverviewTab recent conversations', () => {
     expect(retry).toHaveBeenCalledOnce();
   });
 
-  it('shows the canonical API response instead of a handwritten partial config', () => {
-    act(() => root.render(
-      <AgentOverviewTab
-        agent={AGENT}
-        conversationCount={0}
-        activeSandboxSessions={0}
-        toolsCount={0}
-        recentConversations={[]}
-        conversationsLoading={false}
-        conversationsError={null}
-        onOpenConversation={vi.fn()}
-        onViewAllConversations={vi.fn()}
-      />,
+  it('shows the canonical API response instead of a handwritten partial config', async () => {
+    await act(async () => root.render(
+      <MemoryRouter>
+        <AgentOverviewTab
+          agent={AGENT}
+          conversationCount={0}
+          activeSandboxSessions={0}
+          toolsCount={0}
+          recentConversations={[]}
+          conversationsLoading={false}
+          conversationsError={null}
+          onOpenConversation={vi.fn()}
+          onViewAllConversations={vi.fn()}
+        />
+      </MemoryRouter>,
     ));
 
     act(() => {

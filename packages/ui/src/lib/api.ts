@@ -32,6 +32,7 @@ import {
   SecretPutInputSchema,
   SecretPutResponseSchema,
   SandboxSessionListResponseSchema,
+  TurnDetailResponseSchema,
   TurnListResponseSchema,
   WorkspaceReplaceResponseSchema,
   type Conversation,
@@ -56,6 +57,7 @@ import {
   type PersistedEvent,
   type SandboxSession,
   type Turn,
+  type TurnDetailResponse,
 } from '@ctxmill/contracts';
 
 const API_BASE = '/api';
@@ -179,6 +181,14 @@ export async function fetchAgent(id: string): Promise<Agent> {
 export async function fetchAgentTurns(agentId: string): Promise<Turn[]> {
   const response = await apiFetch<unknown>(`${API_BASE}/agents/${agentId}/turns`);
   return TurnListResponseSchema.parse(response).turns;
+}
+
+export async function fetchTurnDetail(
+  agentId: string,
+  turnId: string,
+): Promise<TurnDetailResponse> {
+  const response = await apiFetch<unknown>(`${API_BASE}/agents/${agentId}/turns/${turnId}`);
+  return TurnDetailResponseSchema.parse(response);
 }
 
 export async function fetchActiveSandboxSessions(): Promise<SandboxSession[]> {

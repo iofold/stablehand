@@ -3,6 +3,7 @@ import type { ApiA2UIBlock } from '@ctxmill/shared';
 import { cn } from '@/lib/utils';
 import type { ToolCallState } from '@/stores/conversation';
 import { A2UIBlock } from '@/components/a2ui/A2UIBlock';
+import { formatEventDuration } from '@/lib/format';
 
 interface ToolCallCardProps {
   toolCall: ToolCallState;
@@ -88,6 +89,11 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
             <span data-testid="tool-call-name" className="break-all text-surface-300">
               {toolCall.name}
             </span>
+            {toolCall.durationMs != null && (
+              <span className="text-[10px] text-surface-500 tabular-nums">
+                {formatEventDuration(toolCall.durationMs)}
+              </span>
+            )}
           </span>
           {!expanded && truncatedArgs && (
             <span className="mt-1 block line-clamp-2 break-all text-[11px] leading-4 text-surface-500">

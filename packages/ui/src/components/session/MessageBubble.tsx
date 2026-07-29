@@ -13,14 +13,33 @@ interface MessageBubbleProps {
   conversationId?: string;
 }
 
+function messageTime(createdAt: string | number | undefined): { short: string; full: string } | null {
+  if (createdAt == null) return null;
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return {
+    short: date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    full: date.toLocaleString(),
+  };
+}
+
 export function MessageBubble({ message, isStreaming, agentId, conversationId }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
+  const time = isStreaming ? null : messageTime(message.createdAt);
 
   /* ── User message ── */
   if (isUser) {
     return (
-      <div data-testid="message-bubble-user" className="flex justify-end py-3 animate-fade-in">
+      <div data-testid="message-bubble-user" className="group flex items-end justify-end gap-2 py-3 animate-fade-in">
+        {time && (
+          <span
+            className="mb-1 text-[10px] text-surface-500 tabular-nums opacity-0 transition-opacity group-hover:opacity-100"
+            title={time.full}
+          >
+            {time.short}
+          </span>
+        )}
         <div className="max-w-[75%] min-w-0 bg-surface-700 border border-surface-600 rounded-lg px-4 py-3 text-surface-200">
           <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{message.content}</p>
         </div>
@@ -90,8 +109,16 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
   return (
     <div
       data-testid="message-bubble-assistant"
-      className="flex flex-col gap-1 py-3 animate-fade-in"
+      className="group relative flex flex-col gap-1 py-3 animate-fade-in"
     >
+      {time && (
+        <span
+          className="absolute right-0 top-3 text-[10px] text-surface-500 tabular-nums opacity-0 transition-opacity group-hover:opacity-100"
+          title={time.full}
+        >
+          {time.short}
+        </span>
+      )}
       <div className="min-w-0 max-w-[85%] border-l-2 border-surface-700 pl-4 py-2">
         <div
           className={cn(

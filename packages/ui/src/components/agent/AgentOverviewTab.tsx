@@ -7,8 +7,9 @@ import type { Agent, ConversationSummary } from '@ctxmill/contracts';
 import { StatusBadge } from '@/components/dashboard/StatusBadge';
 import { cn } from '@/lib/utils';
 import { RelativeTime } from '@/components/ui/RelativeTime';
-import { formatCompactNumber } from '@/lib/format';
+import { formatCompactNumber, formatTimestamp } from '@/lib/format';
 import { describeConversationCostRollup } from '@/lib/usage-cost';
+import { AgentBudgetCard } from './AgentBudgetCard';
 
 /* ------------------------------------------------------------------ */
 /*  StatCard                                                           */
@@ -85,6 +86,8 @@ export function AgentOverviewTab({
           />
         </div>
       </div>
+
+      <AgentBudgetCard agentId={agent.id} />
 
       <div className="rounded-lg border border-surface-700 bg-surface-800 p-6">
         <h3 className="text-label mb-4">
@@ -195,6 +198,16 @@ export function AgentOverviewTab({
               <ConfigField
                 label="Tools"
                 value={agent.tools && agent.tools.length > 0 ? `${agent.tools.length} configured` : 'None'}
+              />
+              <ConfigField
+                label="Sandbox limits"
+                value={agent.resourceLimits
+                  ? `${agent.resourceLimits.cpus} CPU · ${agent.resourceLimits.memoryMb} MB · ${agent.resourceLimits.timeoutSec}s timeout`
+                  : undefined}
+              />
+              <ConfigField
+                label="Last activity"
+                value={agent.lastActivity != null ? formatTimestamp(agent.lastActivity) : 'No activity yet'}
               />
               {agent.description && (
                 <div className="sm:col-span-2 lg:col-span-2">

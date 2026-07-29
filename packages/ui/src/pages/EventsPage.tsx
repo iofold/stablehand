@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
+import type { EventListInput } from '@ctxmill/contracts';
 import {
   Activity,
   ChevronDown,
@@ -278,10 +279,22 @@ export function EventsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [eventTypesError, setEventTypesError] = useState<string | null>(null);
 
-  // Filters
+  // Filters. Turn/conversation scoping arrives via deep links from the turn
+  // inspector, so those two live in the URL rather than local state.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const turnIdFilter = searchParams.get('turnId') ?? '';
+  const conversationIdFilter = searchParams.get('conversationId') ?? '';
   const [typeFilter, setTypeFilter] = useState<string>('');
-  const [agentFilter, setAgentFilter] = useState<string>('');
+  const [agentFilter, setAgentFilter] = useState<string>(() => searchParams.get('agentId') ?? '');
   const [timeRange, setTimeRange] = useState<string>('24h');
+
+  const clearScopeParam = useCallback((key: 'turnId' | 'conversationId') => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete(key);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [groupBy, setGroupBy] = useState<'none' | 'type' | 'agent'>('none');
@@ -327,8 +340,10 @@ export function EventsPage() {
             limit: 50,
             type: typeFilter || undefined,
             agentId: agentFilter || undefined,
+            turnId: turnIdFilter || undefined,
+            conversationId: conversationIdFilter || undefined,
             since: sinceMs,
-          }),
+          } as EventListInput),
           fetchEventStats(timeRange),
         ]);
 
@@ -348,7 +363,7 @@ export function EventsPage() {
         setLoadingMore(false);
       }
     },
-    [typeFilter, agentFilter, timeRange, sinceMs],
+    [typeFilter, agentFilter, turnIdFilter, conversationIdFilter, timeRange, sinceMs],
   );
 
   // Initial load + fetch agents and event types
@@ -382,9 +397,16 @@ export function EventsPage() {
     setTypeFilter('');
     setAgentFilter('');
     setTimeRange('24h');
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('turnId');
+      next.delete('conversationId');
+      next.delete('agentId');
+      return next;
+    }, { replace: true });
   };
 
-  const hasActiveFilters = typeFilter || agentFilter || timeRange !== '24h';
+  const hasActiveFilters = typeFilter || agentFilter || turnIdFilter || conversationIdFilter || timeRange !== '24h';
 
   // Grouped events
   const groupedEvents = useMemo(() => {
@@ -521,6 +543,42 @@ export function EventsPage() {
             <option value="type">Group by type</option>
             <option value="agent">Group by agent</option>
           </select>
+
+          {/* Turn / conversation scope chips (arrive via deep links) */}
+          {turnIdFilter && (
+            <span
+              data-testid="events-turn-scope"
+              className="inline-flex items-center gap-1.5 rounded-full border border-accent-500/30 bg-accent-600/10 px-2.5 py-1 font-mono text-[11px] text-accent-300"
+              title={turnIdFilter}
+            >
+              turn {turnIdFilter.slice(0, 8)}…
+              <button
+                type="button"
+                onClick={() => clearScopeParam('turnId')}
+                aria-label="Stop filtering by turn"
+                className="text-accent-400 transition-colors hover:text-accent-200"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
+          {conversationIdFilter && (
+            <span
+              data-testid="events-conversation-scope"
+              className="inline-flex items-center gap-1.5 rounded-full border border-accent-500/30 bg-accent-600/10 px-2.5 py-1 font-mono text-[11px] text-accent-300"
+              title={conversationIdFilter}
+            >
+              conversation {conversationIdFilter.slice(0, 8)}…
+              <button
+                type="button"
+                onClick={() => clearScopeParam('conversationId')}
+                aria-label="Stop filtering by conversation"
+                className="text-accent-400 transition-colors hover:text-accent-200"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          )}
 
           {hasActiveFilters && (
             <button

@@ -5,9 +5,11 @@ import {
   Radio,
   AlertTriangle,
 } from 'lucide-react';
+import type { Turn } from '@ctxmill/contracts';
 import { SessionThread } from '@/components/session/SessionThread';
 import { SessionInput } from '@/components/session/SessionInput';
 import { ErrorDisplay } from '@/components/session/ErrorDisplay';
+import { TurnInspectorPanel } from '@/components/agent/TurnInspectorPanel';
 import { ApprovalCard } from '@/components/hitl/ApprovalCard';
 import { EditableDocument } from '@/components/hitl/EditableDocument';
 import { FieldRequestForm } from '@/components/hitl/FieldRequestForm';
@@ -86,6 +88,8 @@ export function SessionPage() {
     requestedTurnId: string;
   } | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>(routeConversationId);
+  const [conversationTurns, setConversationTurns] = useState<Turn[]>([]);
+  const [inspectedTurnId, setInspectedTurnId] = useState<string | null>(null);
 
   // Budget-attribution tags for a NEW conversation, deep-linked via
   // ?tags=team%3Dgrowth,env%3Dprod. Applied to the first turn only; the
@@ -131,7 +135,9 @@ export function SessionPage() {
     loadMessages([]);
     setStreamBoundary(null);
     setPastRunError(null);
-    setIsReadOnly(false);  
+    setIsReadOnly(false);
+    setConversationTurns([]);
+    setInspectedTurnId(null);
 
     async function loadHistory() {
       try {
@@ -218,6 +224,7 @@ export function SessionPage() {
                 .sort(
                   (a, b) => b.startedAt - a.startedAt,
                 );
+              setConversationTurns(convTurns);
               const lastTurn = convTurns[0];
               if (lastTurn?.error) {
                 setPastRunError(lastTurn.error as string);
@@ -493,6 +500,8 @@ export function SessionPage() {
             agentId={id}
             conversationId={conversationId}
             pastRunError={pastRunError}
+            turns={conversationTurns}
+            onInspectTurn={id ? setInspectedTurnId : undefined}
           />
 
           {/* HITL interrupt components */}
@@ -613,6 +622,15 @@ export function SessionPage() {
           )}
         </div>
       </div>
+
+      {/* Per-turn inspector */}
+      {inspectedTurnId && id && (
+        <TurnInspectorPanel
+          agentId={id}
+          turnId={inspectedTurnId}
+          onClose={() => setInspectedTurnId(null)}
+        />
+      )}
 
       {/* Run finished marker for tests */}
       {!isStreaming && messages.length > 0 && (

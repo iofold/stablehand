@@ -14,6 +14,7 @@ import { AgentFormModal } from '@/components/agents/AgentFormModal';
 import { useAgentDetail } from '@/hooks/useAgentDetail';
 import { useAgentTurns } from '@/hooks/useAgentTurns';
 import { parseTagsInput } from '@/lib/tags';
+import { TurnInspectorPanel } from '@/components/agent/TurnInspectorPanel';
 
 import {
   AgentOverviewTab,
@@ -90,6 +91,20 @@ export function AgentDetailPage() {
 
   // Conversation-scoped file viewing: when set, Files shows the durable workspace.
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+
+  // Turn inspector state lives in the URL so a specific turn can be deep-linked.
+  const inspectedTurnId = searchParams.get('inspect');
+  const setInspectedTurnId = (turnId: string | null) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (turnId) {
+        next.set('inspect', turnId);
+      } else {
+        next.delete('inspect');
+      }
+      return next;
+    }, { replace: true });
+  };
 
   // Custom hooks
   const {
@@ -358,6 +373,7 @@ export function AgentDetailPage() {
             }}
             onContinueConversation={(conversationId) => navigate(`/agents/${id}/conversations/${conversationId}`)}
             onRetry={() => { void loadTurns(); }}
+            onInspectTurn={setInspectedTurnId}
           />
         )}
 
@@ -406,6 +422,15 @@ export function AgentDetailPage() {
         onClose={() => setShowEditModal(false)}
         agent={agent}
       />
+
+      {/* Per-turn inspector */}
+      {inspectedTurnId && id && (
+        <TurnInspectorPanel
+          agentId={id}
+          turnId={inspectedTurnId}
+          onClose={() => setInspectedTurnId(null)}
+        />
+      )}
     </div>
   );
 }

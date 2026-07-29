@@ -366,6 +366,7 @@ export const ToolCallStateSchema = z.strictObject({
   result: z.string().optional(),
   error: z.string().optional(),
   status: z.enum(['pending', 'running', 'complete', 'error']),
+  durationMs: z.number().nonnegative().optional(),
 });
 
 export const MessagePartSchema = z.discriminatedUnion('type', [
@@ -381,6 +382,7 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
     result: z.string().optional(),
     error: z.string().optional(),
     status: ToolCallStateSchema.shape.status,
+    durationMs: z.number().nonnegative().optional(),
   }),
 ]);
 
@@ -794,6 +796,7 @@ export type AgentCreateInput = z.input<typeof AgentCreateInputSchema>;
 export type AgentPatchInput = z.input<typeof AgentPatchInputSchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type Turn = z.infer<typeof TurnSchema>;
+export type TurnDetailResponse = z.infer<typeof TurnDetailResponseSchema>;
 export type Message = z.infer<typeof MessageSchema>;
 export type ConversationSnapshot = z.infer<typeof ConversationSnapshotResponseSchema>;
 export type Conversation = z.infer<typeof ConversationSchema>;

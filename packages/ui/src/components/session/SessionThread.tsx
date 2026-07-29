@@ -8,12 +8,16 @@ import {
   ArrowDown,
   ChevronDown,
   ChevronRight,
+  Info,
   Wrench,
 } from 'lucide-react';
+import type { Turn } from '@ctxmill/contracts';
 import { MessageBubble } from './MessageBubble';
 import { ToolCallCard } from './ToolCallCard';
 import { ErrorDisplay } from './ErrorDisplay';
 import { cn } from '@/lib/utils';
+import { formatDurationBetween } from '@/lib/format';
+import { describeTurnCost } from '@/lib/usage-cost';
 import type { Message, ToolCallState, MessagePart } from '@/stores/conversation';
 
 export interface SessionThreadProps {
@@ -26,6 +30,10 @@ export interface SessionThreadProps {
   agentId?: string;
   conversationId?: string;
   pastRunError?: string | null;
+  /** Turn rows for this conversation; enriches the per-turn dividers. */
+  turns?: Turn[];
+  /** When set, each turn divider gets an info button that opens the turn inspector. */
+  onInspectTurn?: (turnId: string) => void;
 }
 
 const TOOL_CALL_COLLAPSE_THRESHOLD = 1;
@@ -77,6 +85,79 @@ function CollapsibleToolCalls({ toolCalls }: { toolCalls: ToolCallState[] }) {
   );
 }
 
+interface TurnSegment {
+  turnId: string | null;
+  messages: Message[];
+}
+
+/**
+ * Split the flat message list into per-turn segments. Messages without a
+ * turnId (optimistic sends, legacy rows) ride with the segment they follow.
+ */
+function segmentMessagesByTurn(messages: Message[]): TurnSegment[] {
+  const segments: TurnSegment[] = [];
+  for (const msg of messages) {
+    const turnId = msg.turnId ?? null;
+    const current = segments[segments.length - 1];
+    if (!current) {
+      segments.push({ turnId, messages: [msg] });
+    } else if (turnId === null || turnId === current.turnId) {
+      current.messages.push(msg);
+    } else if (current.turnId === null) {
+      // The segment started with not-yet-attributed messages; adopt the turn.
+      current.turnId = turnId;
+      current.messages.push(msg);
+    } else {
+      segments.push({ turnId, messages: [msg] });
+    }
+  }
+  return segments;
+}
+
+function TurnDivider({
+  index,
+  turn,
+  onInspect,
+}: {
+  index: number;
+  turn?: Turn;
+  onInspect?: () => void;
+}) {
+  const cost = turn?.usage ? describeTurnCost(turn.usage) : null;
+  return (
+    <div data-testid="turn-divider" className="flex select-none items-center gap-2 pb-1 pt-4">
+      <div className="h-px flex-1 bg-surface-800" />
+      <span className="text-[10px] uppercase tracking-wider text-surface-500">Turn {index}</span>
+      {turn?.completedAt != null && (
+        <span className="text-[10px] text-surface-500 tabular-nums">
+          {formatDurationBetween(turn.startedAt, turn.completedAt)}
+        </span>
+      )}
+      {cost && cost.state === 'complete' && (
+        <span className="text-[10px] text-surface-500 tabular-nums" title={cost.title}>
+          {cost.label}
+        </span>
+      )}
+      {turn?.error && (
+        <span className="text-[10px] font-medium text-red-400">failed</span>
+      )}
+      {onInspect && (
+        <button
+          type="button"
+          data-testid="turn-divider-inspect"
+          onClick={onInspect}
+          title="Turn details"
+          aria-label={`Details for turn ${index}`}
+          className="rounded p-0.5 text-surface-500 transition-colors hover:bg-surface-800 hover:text-surface-200"
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      )}
+      <div className="h-px flex-1 bg-surface-800" />
+    </div>
+  );
+}
+
 const SUGGESTED_PROMPTS = [
   { icon: FileSearch, label: 'Analyze data', prompt: 'Analyze the data and surface key insights' },
   { icon: Code2, label: 'Generate code', prompt: 'Help me write a function that' },
@@ -94,6 +175,8 @@ export function SessionThread({
   agentId,
   conversationId,
   pastRunError,
+  turns = [],
+  onInspectTurn,
 }: SessionThreadProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -218,6 +301,8 @@ export function SessionThread({
 
   /* ── Message list ── */
   const activeToolCalls = Array.from(toolCalls.values()) as ToolCallState[];
+  const segments = segmentMessagesByTurn(mergedMessages);
+  const turnById = new Map<string, Turn>(turns.map((turn) => [turn.id, turn]));
 
   return (
     <div className="relative flex-1 min-h-0 overflow-hidden">
@@ -227,7 +312,16 @@ export function SessionThread({
         className="h-full overflow-y-auto px-4 py-6"
       >
         <div className="mx-auto max-w-3xl space-y-1">
-          {mergedMessages.map((msg) => (
+          {segments.map((segment, segmentIndex) => (
+            <div key={segment.turnId ?? `segment-${segmentIndex}`} className="space-y-1">
+              {segment.turnId && (
+                <TurnDivider
+                  index={segmentIndex + 1}
+                  turn={turnById.get(segment.turnId)}
+                  onInspect={onInspectTurn ? () => onInspectTurn(segment.turnId!) : undefined}
+                />
+              )}
+              {segment.messages.map((msg) => (
             <div key={msg.id} className="space-y-1">
               {msg.parts && msg.parts.length > 0 ? (
                 msg.parts.map((part: MessagePart) => (
@@ -248,6 +342,7 @@ export function SessionThread({
                         result: part.result,
                         error: part.error,
                         status: part.status,
+                        durationMs: part.durationMs,
                       }}
                     />
                   )
@@ -263,6 +358,8 @@ export function SessionThread({
               ) : (
                 <MessageBubble message={msg} agentId={agentId} conversationId={conversationId} />
               )}
+            </div>
+              ))}
             </div>
           ))}
 

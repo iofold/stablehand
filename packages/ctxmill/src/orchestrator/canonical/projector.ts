@@ -167,6 +167,7 @@ export class CanonicalProjector {
             toolCallId: p.toolCallId,
             result: p.result,
             ...(p.error ? { error: p.error } : {}),
+            ...(typeof p.durationMs === 'number' && p.durationMs > 0 ? { durationMs: p.durationMs } : {}),
             timestamp: p.timestamp,
           }),
         ];

@@ -2,6 +2,7 @@ import { useState, useMemo, Fragment, useCallback } from 'react';
 import {
   ChevronDown,
   ChevronRight,
+  Info,
   MessageSquare,
   RefreshCw,
 } from 'lucide-react';
@@ -35,6 +36,8 @@ export interface AgentTurnsTabProps {
   onViewConversationFiles?: (conversationId: string) => void;
   onContinueConversation?: (conversationId: string) => void;
   onRetry?: () => void;
+  /** Opens the turn inspector panel for one turn. */
+  onInspectTurn?: (turnId: string) => void;
 }
 
 export function AgentTurnsTab({
@@ -47,6 +50,7 @@ export function AgentTurnsTab({
   onViewConversationFiles,
   onContinueConversation,
   onRetry,
+  onInspectTurn,
 }: AgentTurnsTabProps) {
   const [expandedConversationId, setExpandedConversationId] = useState<string | null>(null);
   // Per-turn restore request state (ADR 013). Map of turnId → pending or an error.
@@ -335,6 +339,19 @@ export function AgentTurnsTab({
                                           </span>
                                         ))}
                                       </div>
+                                      <div className="flex items-center gap-1.5">
+                                      {onInspectTurn && (
+                                        <button
+                                          type="button"
+                                          data-testid="turn-inspect-button"
+                                          onClick={(e) => { e.stopPropagation(); onInspectTurn(entry.id); }}
+                                          title="Turn details"
+                                          aria-label={`Details for turn ${idx + 1}`}
+                                          className="rounded p-1 text-surface-500 transition-colors hover:bg-surface-700/60 hover:text-surface-200"
+                                        >
+                                          <Info className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
                                       {showRetryRestore && (
                                         <button
                                           type="button"
@@ -348,6 +365,7 @@ export function AgentTurnsTab({
                                           {restore === 'pending' ? 'Retrying…' : 'Retry restore'}
                                         </button>
                                       )}
+                                      </div>
                                     </div>
 
                                     {showRetryRestore && entry.lastRestoreError && (

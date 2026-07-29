@@ -58,7 +58,7 @@ export interface ApiMessage {
 /** Ordered content part within a message. Preserves text ↔ tool_call interleaving. */
 export type ApiMessagePart =
   | { type: 'text'; content: string }
-  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: ApiToolCallState['status'] };
+  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: ApiToolCallState['status']; durationMs?: number };
 
 /** Tool call state tracked during streaming */
 export interface ApiToolCallState {
@@ -68,6 +68,8 @@ export interface ApiToolCallState {
   result?: string;
   error?: string;
   status: 'pending' | 'running' | 'complete' | 'error';
+  /** Harness-measured execution time; absent when the harness does not report one. */
+  durationMs?: number;
 }
 
 /** A2UI component block rendered via the a2ui-render tool */
