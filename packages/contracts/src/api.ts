@@ -188,6 +188,9 @@ export const TurnSchema = z.strictObject({
   // Model-gateway attribution; null means the turn ran on direct provider
   // credentials and no spend reconciliation is expected for it.
   gatewayMode: z.enum(['gateway_only', 'mixed']).nullable().optional(),
+  // Join key into the model-gateway spend ledger; absent for direct turns.
+  gatewayCorrelationId: z.string().optional(),
+  usageReconciledAt: EpochMillisecondsSchema.optional(),
 });
 
 export const SandboxSessionsByStatusSchema = z.strictObject({
@@ -446,6 +449,8 @@ export const ConversationSummarySchema = z.strictObject({
   knownCostUsd: z.number().nonnegative().nullable(),
   // Turns whose cost is not yet fully known (pending, partial, or unpriced).
   incompleteCostTurnCount: z.number().int().nonnegative(),
+  // Budget-attribution tags fixed at conversation creation.
+  tags: StringRecordSchema.optional(),
 });
 
 export const ConversationSummaryListResponseSchema = z.strictObject({
@@ -564,6 +569,11 @@ export const PersistedEventSchema = z.strictObject({
   conversationId: ConversationIdSchema.nullable(),
   payload: z.string(),
   createdAt: EpochMillisecondsSchema,
+  // Bus provenance (ADR-016): which channel persisted the event and, for
+  // bridged events, the upstream source record it was derived from.
+  channel: z.string().optional(),
+  sourceType: z.string().nullable().optional(),
+  sourcePayload: z.string().nullable().optional(),
 });
 
 export const EventListInputSchema = z.strictObject({

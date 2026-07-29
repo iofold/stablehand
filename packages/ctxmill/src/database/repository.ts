@@ -4096,6 +4096,9 @@ export class DatabaseRepository {
     conversationId: string | null;
     payload: string;
     createdAt: number;
+    channel: string;
+    sourceType: string | null;
+    sourcePayload: string | null;
   }>> {
     const {
       cursor,
@@ -4126,6 +4129,9 @@ export class DatabaseRepository {
         conversationId: this.schema.eventStore.conversationId,
         payload: this.schema.eventStore.payload,
         createdAt: this.schema.eventStore.createdAt,
+        channel: this.schema.eventStore.channel,
+        sourceType: this.schema.eventStore.sourceType,
+        sourcePayload: this.schema.eventStore.sourcePayload,
       })
       .from(this.schema.eventStore)
       .where(whereClause)
@@ -7098,10 +7104,12 @@ export class DatabaseRepository {
       totalTokens: number | null;
       knownCostUsd: number | null;
       incompleteCostTurnCount: number | null;
+      tags: Record<string, string> | null;
     }> = await this.db
       .select({
         id: this.schema.conversations.id,
         agentId: this.schema.conversations.agentId,
+        tags: this.schema.conversations.tags,
         updatedAt: this.schema.conversations.updatedAt,
         conversationCreatedAt: this.schema.conversations.createdAt,
         startedAt: turnStats.startedAt,
@@ -7166,6 +7174,7 @@ export class DatabaseRepository {
         totalTokens: row.totalTokens ?? null,
         knownCostUsd: row.knownCostUsd ?? null,
         incompleteCostTurnCount: row.incompleteCostTurnCount ?? 0,
+        tags: row.tags ?? {},
       };
     });
   }

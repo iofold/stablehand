@@ -91,4 +91,6 @@ export interface ConversationSummaryRow {
   knownCostUsd: number | null;
   /** Turns whose cost coverage is not yet complete (pending, partial, or unpriced). */
   incompleteCostTurnCount: number;
+  /** Budget-attribution tags fixed at conversation creation (caller + agent defaults). */
+  tags: Record<string, string>;
 }
