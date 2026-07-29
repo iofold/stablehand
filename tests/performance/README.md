@@ -5,6 +5,14 @@ This suite drives the real Kubernetes CTXMILL deployment at
 namespace. It uses the public `@ctxmill/client` control and durable SSE
 contracts; it never calls a harness adapter directly.
 
+## Evergreen findings
+
+The maintained conclusions, operating envelope, known bottlenecks, and open
+correctness risks from accepted and rejected runs live in
+[`docs/performance-findings.md`](../../docs/performance-findings.md). Use the
+dated reports in `docs/verification/` as immutable evidence and update the
+synthesis only when a later accepted run changes a conclusion.
+
 ## Run it
 
 The smoke profile is the default and is intentionally bounded to concurrency
