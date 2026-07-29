@@ -5623,10 +5623,10 @@ export class DatabaseRepository {
     const [row] = await this.db
       .select({
         totalTokens: sql<number | null>`sum(${this.schema.turns.totalTokens})::float8`,
-        costUsd: sql<number | null>`sum(${this.schema.turns.costUsd})::float8`,
+        costUsd: sql<number | null>`sum(${this.turnKnownCostSql()})::float8`,
         turns: sql<number>`count(*)::int`,
         tokenReportedTurnCount: sql<number>`count(${this.schema.turns.totalTokens})::int`,
-        costReportedTurnCount: sql<number>`count(${this.schema.turns.costUsd})::int`,
+        costReportedTurnCount: sql<number>`count(${this.turnKnownCostSql()})::int`,
       })
       .from(this.schema.turns)
       .where(and(...conditions));
@@ -5663,10 +5663,10 @@ export class DatabaseRepository {
       .select({
         bucket: sql<string | null>`${this.schema.turns.tags} ->> ${groupByKey}`.as('bucket'),
         totalTokens: sql<number | null>`sum(${this.schema.turns.totalTokens})::float8`,
-        costUsd: sql<number | null>`sum(${this.schema.turns.costUsd})::float8`,
+        costUsd: sql<number | null>`sum(${this.turnKnownCostSql()})::float8`,
         turns: sql<number>`count(*)::int`,
         tokenReportedTurnCount: sql<number>`count(${this.schema.turns.totalTokens})::int`,
-        costReportedTurnCount: sql<number>`count(${this.schema.turns.costUsd})::int`,
+        costReportedTurnCount: sql<number>`count(${this.turnKnownCostSql()})::int`,
       })
       .from(this.schema.turns)
       .where(and(...conditions))
@@ -7008,6 +7008,25 @@ export class DatabaseRepository {
     `;
   }
 
+  /**
+   * Known cost for one turn: a reconciled usage envelope wins, then the
+   * legacy scalar column, and NULL when the turn carries no cost data at all
+   * (so aggregates can distinguish "no data" from a real $0). Budget
+   * enforcement must price turns exactly the way analytics and conversation
+   * summaries do — the gateway reconciler writes cost into the envelope
+   * without backfilling the scalar (ctx-vjdb).
+   */
+  private turnKnownCostSql() {
+    return sql<number | null>`
+      CASE
+        WHEN ${this.schema.turns.usage} IS NOT NULL
+          THEN COALESCE((${this.schema.turns.usage} #>> '{cost,knownUsd}')::float8, 0)
+        WHEN ${this.schema.turns.costUsd} IS NOT NULL THEN ${this.schema.turns.costUsd}
+        ELSE NULL
+      END
+    `;
+  }
+
   private async queryConversationSummaries(options: {
     agentId?: string;
     sandboxStatuses?: SandboxSessionStatus[];
@@ -7019,17 +7038,7 @@ export class DatabaseRepository {
         startedAt: sql<number | null>`min(${this.schema.turns.startedAt})::float8`.as('started_at'),
         turnCount: sql<number>`count(*)::int`.as('turn_count'),
         totalTokens: sql<number | null>`sum(${this.schema.turns.totalTokens})::float8`.as('total_tokens'),
-        // Known cost per turn mirrors analytics; a turn with neither a usage
-        // envelope nor a scalar cost contributes NULL so a conversation with
-        // no cost data at all rolls up to NULL rather than a misleading zero.
-        knownCostUsd: sql<number | null>`sum(
-          CASE
-            WHEN ${this.schema.turns.usage} IS NOT NULL
-              THEN COALESCE((${this.schema.turns.usage} #>> '{cost,knownUsd}')::float8, 0)
-            WHEN ${this.schema.turns.costUsd} IS NOT NULL THEN ${this.schema.turns.costUsd}
-            ELSE NULL
-          END
-        )::float8`.as('known_cost_usd'),
+        knownCostUsd: sql<number | null>`sum(${this.turnKnownCostSql()})::float8`.as('known_cost_usd'),
         incompleteCostTurnCount: sql<number>`
           count(*) FILTER (WHERE ${this.turnCostCoverageSql()} <> 'complete')::int
         `.as('incomplete_cost_turn_count'),

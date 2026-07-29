@@ -7148,5 +7148,62 @@ describe('DatabaseRepository', () => {
         costReportedTurnCount: 0,
       });
     });
+
+    it('prices reconciled-envelope turns whose scalar cost column is null (ctx-vjdb)', async () => {
+      const agent = await repo.createAgent({
+        name: 'Budget Envelope Agent',
+        harness: 'langgraph',
+        harnessConfig: JSON.stringify({ model: 'gpt-5.4-mini' }),
+        systemPrompt: 'test',
+        tools: [],
+      });
+      const conversation = await repo.createConversation(agent.id, undefined, { team: 'vjdb' });
+      const now = Date.now();
+      const mkTurn = async (updates: {
+        costUsd?: number;
+        usage?: Parameters<typeof repo.finalizeTurnIfOpen>[1]['usage'];
+      }) => {
+        const turn = await repo.createTurn({
+          agentId: agent.id,
+          conversationId: conversation.id,
+          mode: 'background',
+          status: 'completed',
+          startedAt: now,
+          tags: { team: 'vjdb' },
+        });
+        await repo.finalizeTurnIfOpen(turn.id, {
+          completedAt: now,
+          error: null,
+          status: 'completed',
+          inputTokens: 30,
+          outputTokens: 10,
+          totalTokens: 40,
+          ...updates,
+        });
+      };
+      const envelope = (knownUsd: number) => ({
+        inputTokens: 30,
+        outputTokens: 10,
+        totalTokens: 40,
+        modelCalls: { observed: 1, costKnown: 1, expected: 1 },
+        cost: { totalUsd: knownUsd, knownUsd, coverage: 'complete' as const },
+      });
+
+      // The gateway reconciler writes cost into the usage envelope without
+      // backfilling the cost_usd scalar; enforcement must still price it.
+      await mkTurn({ usage: envelope(0.25) });
+      // When both exist the envelope wins — no double counting, no stale scalar.
+      await mkTurn({ usage: envelope(0.25), costUsd: 0.99 });
+
+      const spend = await repo.getBudgetSpend({ team: 'vjdb' }, now - 1000);
+      expect(spend.turns).toBe(2);
+      expect(spend.costUsd).toBeCloseTo(0.5, 10);
+      expect(spend.costReportedTurnCount).toBe(2);
+
+      const buckets = await repo.getBudgetSpendBuckets({ team: 'vjdb' }, now - 1000, 'team');
+      expect(buckets).toHaveLength(1);
+      expect(buckets[0]!.costUsd).toBeCloseTo(0.5, 10);
+      expect(buckets[0]!.costReportedTurnCount).toBe(2);
+    });
   });
 });
