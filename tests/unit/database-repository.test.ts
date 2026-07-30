@@ -7205,5 +7205,41 @@ describe('DatabaseRepository', () => {
       expect(buckets[0]!.costUsd).toBeCloseTo(0.5, 10);
       expect(buckets[0]!.costReportedTurnCount).toBe(2);
     });
+
+    it('counts only completed unreconciled gateway turns as awaiting prices (ctx-fpi1)', async () => {
+      const agent = await repo.createAgent({
+        name: 'Gateway Backlog Agent',
+        harness: 'langgraph',
+        harnessConfig: JSON.stringify({ model: 'gpt-5.4-mini' }),
+        systemPrompt: 'test',
+        tools: [],
+      });
+      const conversation = await repo.createConversation(agent.id);
+      const now = Date.now();
+      const baseline = await repo.getGatewayTurnsAwaitingReconciliation();
+
+      const mkTurn = (overrides: Record<string, unknown>) => repo.createTurn({
+        agentId: agent.id,
+        conversationId: conversation.id,
+        mode: 'background',
+        status: 'completed',
+        startedAt: now - 10_000,
+        ...overrides,
+      } as Parameters<typeof repo.createTurn>[0]);
+
+      // Counted: gateway-attributed, completed, never reconciled.
+      await mkTurn({ gatewayMode: 'gateway_only', completedAt: now - 9_000 });
+      // Not counted: reconciled.
+      await mkTurn({ gatewayMode: 'gateway_only', completedAt: now - 8_000, usageReconciledAt: now });
+      // Not counted: direct turn.
+      await mkTurn({ completedAt: now - 7_000 });
+      // Not counted: still open.
+      await mkTurn({ gatewayMode: 'gateway_only', status: 'running', completedAt: null });
+
+      const after = await repo.getGatewayTurnsAwaitingReconciliation();
+      expect(after.count).toBe(baseline.count + 1);
+      expect(after.oldestCompletedAt).not.toBeNull();
+      expect(after.oldestCompletedAt!).toBeLessThanOrEqual(now - 9_000);
+    });
   });
 });

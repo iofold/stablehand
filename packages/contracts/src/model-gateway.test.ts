@@ -18,6 +18,8 @@ describe('ModelGatewayStatusSchema', () => {
       unpricedCalls: 0,
       quarantinedTransactions: 0,
       orphanTransactions: 0,
+      awaitingTurns: 0,
+      oldestAwaitingAt: null,
     }).state).toBe('disabled');
 
     expect(ModelGatewayStatusSchema.parse({
@@ -34,6 +36,8 @@ describe('ModelGatewayStatusSchema', () => {
       unpricedCalls: 1,
       quarantinedTransactions: 3,
       orphanTransactions: 1,
+      awaitingTurns: 4,
+      oldestAwaitingAt: 50,
     }).enabled).toBe(true);
   });
 

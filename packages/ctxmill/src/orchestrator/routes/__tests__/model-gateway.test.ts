@@ -19,6 +19,10 @@ describe('model gateway status route', () => {
       getModelGatewayReconciliationState: vi.fn(),
       getModelGatewayReconciliationMetrics: vi.fn(),
       getModelGatewayQuarantineSummary: vi.fn(),
+      getGatewayTurnsAwaitingReconciliation: vi.fn().mockResolvedValue({
+        count: 0,
+        oldestCompletedAt: null,
+      }),
     };
     const app = Fastify({ logger: false });
     apps.push(app);
@@ -35,14 +39,97 @@ describe('model gateway status route', () => {
     expect(ModelGatewayStatusSchema.parse(response.json())).toMatchObject({
       enabled: false,
       state: 'disabled',
+      awaitingTurns: 0,
     });
     expect(db.getModelGatewayReconciliationState).not.toHaveBeenCalled();
+  });
+
+  it('reports degraded when ingestion is off but gateway turns await prices', async () => {
+    const db = {
+      getModelGatewayReconciliationState: vi.fn(),
+      getModelGatewayReconciliationMetrics: vi.fn(),
+      getModelGatewayQuarantineSummary: vi.fn(),
+      getGatewayTurnsAwaitingReconciliation: vi.fn().mockResolvedValue({
+        count: 7,
+        oldestCompletedAt: 111_000,
+      }),
+    };
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(modelGatewayRoutes, {
+      prefix: '/api/model-gateway',
+      db,
+      config: { enabled: false },
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/model-gateway/status',
+    });
+    const parsed = ModelGatewayStatusSchema.parse(response.json());
+    expect(parsed).toMatchObject({
+      enabled: false,
+      state: 'degraded',
+      awaitingTurns: 7,
+      oldestAwaitingAt: 111_000,
+    });
+    expect(parsed.lastError).toContain('not configured');
+    expect(db.getModelGatewayReconciliationState).not.toHaveBeenCalled();
+  });
+
+  it('reports degraded when a turn waits past the settlement grace period', async () => {
+    const db = {
+      getModelGatewayReconciliationState: vi.fn().mockResolvedValue({
+        gatewayProfile: 'default',
+        gatewayRevision: 'dev1-r1',
+        watermarkMs: 199_000,
+        lastAttemptAt: 199_500,
+        lastSuccessAt: 199_500,
+        lastError: null,
+      }),
+      getModelGatewayReconciliationMetrics: vi.fn().mockResolvedValue({
+        pendingCalls: 0,
+        unpricedCalls: 0,
+        quarantinedTransactions: 0,
+        orphanTransactions: 0,
+      }),
+      getModelGatewayQuarantineSummary: vi.fn(),
+      getGatewayTurnsAwaitingReconciliation: vi.fn().mockResolvedValue({
+        count: 1,
+        oldestCompletedAt: 100_000,
+      }),
+    };
+    const app = Fastify({ logger: false });
+    apps.push(app);
+    await app.register(modelGatewayRoutes, {
+      prefix: '/api/model-gateway',
+      db,
+      config: { enabled: true, profile: 'default', revision: 'dev1-r1' },
+      now: () => 200_000,
+      degradedLagMs: 10_000,
+      awaitingGraceMs: 60_000,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/model-gateway/status',
+    });
+    const parsed = ModelGatewayStatusSchema.parse(response.json());
+    // Watermark lag is only 1s (healthy), yet the lost-row turn from 100s
+    // ago must still flip the state.
+    expect(parsed.state).toBe('degraded');
+    expect(parsed.lastError).toContain('grace period');
+    expect(parsed.awaitingTurns).toBe(1);
   });
 
   it('serves a reason-grouped quarantine breakdown with recency', async () => {
     const db = {
       getModelGatewayReconciliationState: vi.fn(),
       getModelGatewayReconciliationMetrics: vi.fn(),
+      getGatewayTurnsAwaitingReconciliation: vi.fn().mockResolvedValue({
+        count: 0,
+        oldestCompletedAt: null,
+      }),
       getModelGatewayQuarantineSummary: vi.fn().mockResolvedValue({
         reasons: [
           {
@@ -125,6 +212,10 @@ describe('model gateway status route', () => {
       getModelGatewayReconciliationState: vi.fn(),
       getModelGatewayReconciliationMetrics: vi.fn(),
       getModelGatewayQuarantineSummary: vi.fn(),
+      getGatewayTurnsAwaitingReconciliation: vi.fn().mockResolvedValue({
+        count: 0,
+        oldestCompletedAt: null,
+      }),
     };
     const app = Fastify({ logger: false });
     apps.push(app);
@@ -163,6 +254,10 @@ describe('model gateway status route', () => {
         orphanTransactions: 1,
       }),
       getModelGatewayQuarantineSummary: vi.fn(),
+      getGatewayTurnsAwaitingReconciliation: vi.fn().mockResolvedValue({
+        count: 0,
+        oldestCompletedAt: null,
+      }),
     };
     const app = Fastify({ logger: false });
     apps.push(app);
@@ -196,6 +291,8 @@ describe('model gateway status route', () => {
       unpricedCalls: 1,
       quarantinedTransactions: 3,
       orphanTransactions: 1,
+      awaitingTurns: 0,
+      oldestAwaitingAt: null,
     });
   });
 });

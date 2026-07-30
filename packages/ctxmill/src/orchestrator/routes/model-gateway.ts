@@ -11,6 +11,7 @@ type ModelGatewayStatusStore = Pick<
   | 'getModelGatewayReconciliationState'
   | 'getModelGatewayReconciliationMetrics'
   | 'getModelGatewayQuarantineSummary'
+  | 'getGatewayTurnsAwaitingReconciliation'
 >;
 
 export type ModelGatewayStatusConfig =
@@ -22,9 +23,13 @@ interface ModelGatewayRouteOptions {
   config: ModelGatewayStatusConfig;
   now?: () => number;
   degradedLagMs?: number;
+  awaitingGraceMs?: number;
 }
 
 const DEFAULT_DEGRADED_LAG_MS = 2 * 60_000;
+// A completed gateway turn should be priced within one settlement cycle;
+// past this age an unreconciled turn means a lost spend row or dead ingestion.
+const DEFAULT_AWAITING_GRACE_MS = 15 * 60_000;
 const DEFAULT_QUARANTINE_RECENT_MS = 24 * 60 * 60_000;
 const DEFAULT_QUARANTINE_LIMIT = 20;
 const MAX_QUARANTINE_LIMIT = 100;
@@ -34,35 +39,51 @@ export async function modelGatewayRoutes(
   opts: ModelGatewayRouteOptions,
 ): Promise<void> {
   app.get('/status', async () => {
+    const now = (opts.now ?? Date.now)();
+    const awaitingGraceMs = opts.awaitingGraceMs ?? DEFAULT_AWAITING_GRACE_MS;
+
     if (!opts.config.enabled) {
+      // Ingestion being off is only benign while nothing waits on it. Any
+      // gateway-attributed turn without reconciled usage means budgets and
+      // analytics under-count — report degraded, not a quiet zero-state.
+      const awaiting = await opts.db.getGatewayTurnsAwaitingReconciliation();
       return ModelGatewayStatusSchema.parse({
         enabled: false,
         profile: null,
         revision: null,
-        state: 'disabled',
+        state: awaiting.count > 0 ? 'degraded' : 'disabled',
         watermarkAt: null,
         lastAttemptAt: null,
         lastSuccessAt: null,
         lagMs: null,
-        lastError: null,
+        lastError: awaiting.count > 0
+          ? 'Spend ingestion is not configured, but completed gateway turns are awaiting prices'
+          : null,
         pendingCalls: 0,
         unpricedCalls: 0,
         quarantinedTransactions: 0,
         orphanTransactions: 0,
+        awaitingTurns: awaiting.count,
+        oldestAwaitingAt: awaiting.oldestCompletedAt,
       });
     }
 
-    const [reconciliation, metrics] = await Promise.all([
+    const [reconciliation, metrics, awaiting] = await Promise.all([
       opts.db.getModelGatewayReconciliationState(opts.config.profile),
       opts.db.getModelGatewayReconciliationMetrics(opts.config.profile),
+      opts.db.getGatewayTurnsAwaitingReconciliation(),
     ]);
-    const now = (opts.now ?? Date.now)();
     const watermarkAt = reconciliation?.watermarkMs
       ? reconciliation.watermarkMs
       : null;
     const lagMs = watermarkAt === null
       ? null
       : Math.max(0, now - watermarkAt);
+    // A turn still unreconciled long after completion is a lost spend row:
+    // the watermark keeps advancing, so lag alone never notices it.
+    const staleAwaiting = awaiting.count > 0
+      && awaiting.oldestCompletedAt !== null
+      && now - awaiting.oldestCompletedAt > awaitingGraceMs;
     const state = !reconciliation?.lastSuccessAt
       ? reconciliation?.lastError
         ? 'degraded'
@@ -70,6 +91,7 @@ export async function modelGatewayRoutes(
       : reconciliation.lastError
         || lagMs === null
         || lagMs > (opts.degradedLagMs ?? DEFAULT_DEGRADED_LAG_MS)
+        || staleAwaiting
         ? 'degraded'
         : 'healthy';
 
@@ -82,8 +104,13 @@ export async function modelGatewayRoutes(
       lastAttemptAt: reconciliation?.lastAttemptAt ?? null,
       lastSuccessAt: reconciliation?.lastSuccessAt ?? null,
       lagMs,
-      lastError: reconciliation?.lastError ?? null,
+      lastError: reconciliation?.lastError
+        ?? (staleAwaiting
+          ? 'Completed gateway turns have waited past the settlement grace period for prices'
+          : null),
       ...metrics,
+      awaitingTurns: awaiting.count,
+      oldestAwaitingAt: awaiting.oldestCompletedAt,
     });
   });
 

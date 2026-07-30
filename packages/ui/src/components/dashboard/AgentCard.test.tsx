@@ -160,6 +160,8 @@ describe('AgentCard', () => {
             unpricedCalls: 1,
             quarantinedTransactions: 0,
             orphanTransactions: 0,
+            awaitingTurns: 0,
+            oldestAwaitingAt: null,
           }}
         />,
       );

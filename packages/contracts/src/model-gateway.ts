@@ -16,6 +16,11 @@ export const ModelGatewayStatusSchema = z.strictObject({
   unpricedCalls: z.number().int().nonnegative(),
   quarantinedTransactions: z.number().int().nonnegative(),
   orphanTransactions: z.number().int().nonnegative(),
+  // Completed gateway-attributed turns whose usage was never reconciled.
+  // Nonzero while ingestion is disabled (config lost) or when a spend row
+  // was lost upstream — both must read as degraded, never as silence.
+  awaitingTurns: z.number().int().nonnegative(),
+  oldestAwaitingAt: EpochMillisecondsSchema.nullable(),
 });
 
 export type ModelGatewayStatus = z.infer<typeof ModelGatewayStatusSchema>;

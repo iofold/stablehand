@@ -231,6 +231,8 @@ describe('AnalyticsPage', () => {
       unpricedCalls: 0,
       quarantinedTransactions: 0,
       orphanTransactions: 0,
+      awaitingTurns: 0,
+      oldestAwaitingAt: null,
     });
   });
 

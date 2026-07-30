@@ -6301,6 +6301,33 @@ export class DatabaseRepository {
     };
   }
 
+  /**
+   * Completed gateway-attributed turns whose usage was never reconciled.
+   * Deliberately independent of the reconciliation-state tables so the
+   * backlog is visible even when ingestion is disabled or misconfigured
+   * (ctx-fpi1: degradation must be explicit, never silent).
+   */
+  async getGatewayTurnsAwaitingReconciliation(): Promise<{
+    count: number;
+    oldestCompletedAt: number | null;
+  }> {
+    const [row] = await this.db
+      .select({
+        count: sql<number>`count(*)::int`,
+        oldestCompletedAt: sql<number | null>`min(${this.schema.turns.completedAt})::float8`,
+      })
+      .from(this.schema.turns)
+      .where(and(
+        isNotNull(this.schema.turns.gatewayMode),
+        isNotNull(this.schema.turns.completedAt),
+        isNull(this.schema.turns.usageReconciledAt),
+      ));
+    return {
+      count: row?.count ?? 0,
+      oldestCompletedAt: row?.oldestCompletedAt ?? null,
+    };
+  }
+
   async getModelGatewayQuarantineSummary(
     gatewayProfile: string,
     options: { recentSinceMs: number; limit: number },

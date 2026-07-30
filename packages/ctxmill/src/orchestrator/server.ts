@@ -276,6 +276,22 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     db,
     config: opts.modelGateway ?? { enabled: false },
   });
+  if (!opts.modelGateway?.enabled) {
+    // Losing the gateway overlay env silently strands priced-usage turns
+    // (ctx-fpi1). Make the misconfiguration loud at boot instead.
+    try {
+      const awaiting = await db.getGatewayTurnsAwaitingReconciliation();
+      if (awaiting.count > 0) {
+        app.log.warn(
+          `Model gateway spend ingestion is disabled, but ${awaiting.count} completed gateway turn(s) `
+          + 'are awaiting prices — budgets and analytics under-count until '
+          + 'CTXMILL_MODEL_GATEWAY_* configuration is restored.',
+        );
+      }
+    } catch (error) {
+      app.log.debug({ err: error }, 'Gateway reconciliation backlog check failed at startup');
+    }
+  }
   if (triggerManager) {
     await app.register(triggerRoutes, { prefix: '/api/triggers', triggerManager, db });
   }

@@ -72,6 +72,9 @@ function windowDescription(window: AnalyticsWindow): string {
 
 function describeGatewayState(gateway: ModelGatewayStatus | null): string {
   if (!gateway) return 'Cost tracking unavailable';
+  if (gateway.state === 'degraded') {
+    return gateway.enabled ? 'Cost tracking delayed' : 'Cost tracking off with unpriced runs';
+  }
   if (!gateway.enabled || gateway.state === 'disabled') return 'Direct metering — no gateway';
   if (gateway.state === 'healthy') return 'Cost tracking up to date';
   if (gateway.state === 'initializing') return 'Cost tracking starting';
@@ -326,6 +329,23 @@ export function AnalyticsPage() {
         <div role="status" className="mt-5 flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           Budget and gateway health is temporarily unavailable. Core activity remains current.
+        </div>
+      ) : null}
+      {gateway && gateway.awaitingTurns > 0 && gateway.state === 'degraded' ? (
+        <div
+          role="alert"
+          data-testid="gateway-degraded-banner"
+          className="mt-5 flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            {gateway.awaitingTurns} completed {gateway.awaitingTurns === 1 ? 'run has' : 'runs have'} no
+            model prices yet
+            {gateway.oldestAwaitingAt != null
+              ? ` (oldest from ${new Date(gateway.oldestAwaitingAt).toLocaleString()})`
+              : ''}
+            . Spend totals and budget limits are under-counting until prices sync.
+          </span>
         </div>
       ) : null}
       {error ? (
