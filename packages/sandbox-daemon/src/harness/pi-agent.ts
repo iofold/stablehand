@@ -624,12 +624,104 @@ class PiAgentSession implements HarnessSession {
     this.transcript.push(...messages);
   }
 
+  /**
+   * Project the canonical transcript into the PI SDK's native history with
+   * roles preserved (ctx-j46h): user/assistant/toolResult map one-to-one.
+   * Mid-transcript system notices keep the bracketed-user fallback because
+   * PI history has no system role — the session system prompt itself is
+   * wired through the resource loader. Tool pairs are only emitted when both
+   * sides exist; strict providers reject unpaired toolCall/toolResult rows.
+   */
   private buildNativeHistoryMessages(messages: Message[]): Array<Record<string, unknown>> {
-    return messages.map((message, index) => ({
-      role: 'user',
-      content: this.formatTranscriptMessage(message),
-      timestamp: this.toNativeTimestamp(message.createdAt, index),
-    }));
+    const resultToolCallIds = new Set(
+      messages
+        .filter((message) => message.role === 'tool' && message.toolCallId)
+        .map((message) => message.toolCallId as string),
+    );
+    const modelApi = typeof this.model.api === 'string' ? this.model.api : 'openai-completions';
+    const modelProvider = typeof this.model.provider === 'string' ? this.model.provider : 'openai';
+    const modelId = typeof this.model.id === 'string' ? this.model.id : 'unknown';
+    const zeroUsage = () => ({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    });
+
+    const emittedToolCalls = new Map<string, string>();
+    const native: Array<Record<string, unknown>> = [];
+    for (const [index, message] of messages.entries()) {
+      const timestamp = this.toNativeTimestamp(message.createdAt, index);
+      switch (message.role) {
+        case 'user':
+          native.push({ role: 'user', content: message.content, timestamp });
+          break;
+        case 'assistant': {
+          const content: Array<Record<string, unknown>> = [];
+          if (message.content) {
+            content.push({ type: 'text', text: message.content });
+          }
+          const pairedToolCalls = (message.toolCalls ?? [])
+            .filter((toolCall) => resultToolCallIds.has(toolCall.id));
+          for (const toolCall of pairedToolCalls) {
+            emittedToolCalls.set(toolCall.id, toolCall.name);
+            content.push({
+              type: 'toolCall',
+              id: toolCall.id,
+              name: toolCall.name,
+              arguments: toolCall.arguments ?? {},
+            });
+          }
+          if (content.length === 0) {
+            break;
+          }
+          native.push({
+            role: 'assistant',
+            content,
+            api: modelApi,
+            provider: modelProvider,
+            model: modelId,
+            usage: zeroUsage(),
+            stopReason: pairedToolCalls.length > 0 ? 'toolUse' : 'stop',
+            timestamp,
+          });
+          break;
+        }
+        case 'tool': {
+          const toolName = message.toolCallId
+            ? emittedToolCalls.get(message.toolCallId)
+            : undefined;
+          if (!message.toolCallId || !toolName) {
+            native.push({
+              role: 'user',
+              content: this.formatTranscriptMessage(message),
+              timestamp,
+            });
+            break;
+          }
+          native.push({
+            role: 'toolResult',
+            toolCallId: message.toolCallId,
+            toolName,
+            content: [{ type: 'text', text: message.content }],
+            isError: false,
+            timestamp,
+          });
+          break;
+        }
+        case 'system':
+        default:
+          native.push({
+            role: 'user',
+            content: this.formatTranscriptMessage(message),
+            timestamp,
+          });
+          break;
+      }
+    }
+    return native;
   }
 
   private formatTranscriptMessage(message: Message): string {

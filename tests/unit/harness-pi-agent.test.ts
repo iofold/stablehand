@@ -582,10 +582,12 @@ describe('PIAgentHarness native tool flow', () => {
         nativePersistence: true,
       },
     });
+    // Restored assistant history keeps its canonical role (ctx-j46h).
     expect(replaceMessages).toHaveBeenCalledWith([
       expect.objectContaining({
-        role: 'user',
-        content: '[Previous assistant response]\nRestored reply',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Restored reply' }],
+        stopReason: 'stop',
       }),
     ]);
 

@@ -815,11 +815,26 @@ describe('PIAgentHarness transcript syncing', () => {
         content: 'Earlier question',
         timestamp: new Date('2026-04-05T10:00:01.000Z').getTime() + 1,
       },
+      // Assistant history keeps its canonical role (ctx-j46h).
       {
-        role: 'user',
-        content: '[Previous assistant response]\nEarlier answer',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Earlier answer' }],
+        api: 'openai-completions',
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop',
         timestamp: new Date('2026-04-05T10:00:02.000Z').getTime() + 2,
       },
+      // The tool result has no paired assistant toolCall in the transcript,
+      // so it stays in the bracketed-user fallback a strict provider accepts.
       {
         role: 'user',
         content: '[Previous tool result (tool-1)]\nWeather tool result',
@@ -832,6 +847,71 @@ describe('PIAgentHarness transcript syncing', () => {
     expect(events.at(-1)).toEqual({
       type: 'done',
     });
+
+    await session.close();
+  });
+
+  it('preserves paired toolCall and toolResult roles in native history (ctx-j46h)', async () => {
+    const replaceMessages = vi.fn();
+    const prompt = vi.fn(async () => {
+      listener?.({ type: 'agent_end', messages: [] });
+    });
+    let listener: ((event: Record<string, unknown>) => void) | undefined;
+
+    mockCreateAgentSession.mockResolvedValue({
+      session: {
+        subscribe: (next: (event: Record<string, unknown>) => void) => {
+          listener = next;
+          return () => {
+            listener = undefined;
+          };
+        },
+        prompt,
+        abort: vi.fn(async () => undefined),
+        dispose: vi.fn(),
+        state: createNativeState(replaceMessages),
+        setModel: vi.fn(),
+      },
+    });
+
+    const harness = new PIAgentHarness();
+    const session = await harness.openSession(makeConfig());
+
+    await collectEvents(session.deliverTurn({
+      turnId: 'turn-1',
+      messages: [
+        makeMessage('user', 'What is the weather?', '2026-04-05T10:00:00.000Z'),
+        makeMessage('assistant', 'Checking.', '2026-04-05T10:00:01.000Z', {
+          toolCalls: [
+            { id: 'call-1', name: 'weather', arguments: { city: 'Pune' } },
+            // No result row for this one — it must be dropped, not sent unpaired.
+            { id: 'call-orphan', name: 'weather', arguments: {} },
+          ],
+        }),
+        makeMessage('tool', 'Sunny, 31C', '2026-04-05T10:00:02.000Z', { toolCallId: 'call-1' }),
+        makeMessage('user', 'And tomorrow?', '2026-04-05T10:00:03.000Z'),
+      ],
+    }, {}));
+
+    const nativeHistory = replaceMessages.mock.calls[0]![0] as Array<Record<string, unknown>>;
+    expect(nativeHistory.map((m) => m.role)).toEqual(['user', 'assistant', 'toolResult']);
+    expect(nativeHistory[1]).toMatchObject({
+      role: 'assistant',
+      stopReason: 'toolUse',
+      content: [
+        { type: 'text', text: 'Checking.' },
+        { type: 'toolCall', id: 'call-1', name: 'weather', arguments: { city: 'Pune' } },
+      ],
+    });
+    expect(nativeHistory[2]).toEqual({
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'weather',
+      content: [{ type: 'text', text: 'Sunny, 31C' }],
+      isError: false,
+      timestamp: new Date('2026-04-05T10:00:02.000Z').getTime() + 2,
+    });
+    expect(prompt).toHaveBeenCalledWith('And tomorrow?');
 
     await session.close();
   });
@@ -880,28 +960,41 @@ describe('PIAgentHarness transcript syncing', () => {
     }, {}));
 
     expect(replaceMessages).toHaveBeenCalledOnce();
-    const restoredNativeMessages = replaceMessages.mock.calls[0]?.[0] as Array<{ content: string }> | undefined;
-    assertRestorePromptShape(restoredNativeMessages?.map((message) => message.content) ?? [], [
-      'Restore user',
-      '[Previous tool result (tool-restore)]\nRestored tool output',
-      '[Previous assistant response]\nRestored assistant reply',
-    ]);
+    const restoredNativeMessages = replaceMessages.mock.calls[0]?.[0] as
+      | Array<{ content: string | Array<{ type: string; text?: string }> }>
+      | undefined;
+    assertRestorePromptShape(
+      restoredNativeMessages?.map((message) => (typeof message.content === 'string'
+        ? message.content
+        : message.content
+          .filter((part) => part.type === 'text')
+          .map((part) => part.text ?? '')
+          .join('\n'))) ?? [],
+      [
+        'Restore user',
+        '[Previous tool result (tool-restore)]\nRestored tool output',
+        'Restored assistant reply',
+      ],
+    );
     expect(replaceMessages).toHaveBeenCalledWith([
       {
         role: 'user',
         content: 'Restore user',
         timestamp: new Date('2026-04-05T11:00:00.000Z').getTime(),
       },
+      // Orphan tool result (no paired assistant toolCall) keeps the fallback.
       {
         role: 'user',
         content: '[Previous tool result (tool-restore)]\nRestored tool output',
         timestamp: new Date('2026-04-05T11:00:01.000Z').getTime() + 1,
       },
-      {
-        role: 'user',
-        content: '[Previous assistant response]\nRestored assistant reply',
+      // Restored assistant history keeps its canonical role (ctx-j46h).
+      expect.objectContaining({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Restored assistant reply' }],
+        stopReason: 'stop',
         timestamp: new Date('2026-04-05T11:00:02.000Z').getTime() + 2,
-      },
+      }),
     ]);
     expect(prompt).toHaveBeenCalledWith('Continue from restore');
 
