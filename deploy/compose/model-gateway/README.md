@@ -76,3 +76,19 @@ internal `ctxmill-agents` network. Message/response logging is disabled.
 CTXMILL polls sanitized spend records asynchronously; gateway or metering
 failure never causes a synchronous budget API dependency or silent direct
 fallback.
+
+## Operational trap: partial compose invocations
+
+This overlay is only active when it is part of the compose file list. A plain
+`docker compose up -d orchestrator` from the repo root recreates the
+orchestrator **without** any `CTXMILL_MODEL_GATEWAY_*` variables — spend
+ingestion turns off silently while turns keep running (ctx-fpi1). On dev1 this
+is prevented by pinning the full file list in `.env`:
+
+```
+COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:deploy/compose/model-gateway/docker-compose.yml
+```
+
+If ingestion is ever off with gateway turns waiting, `/api/model-gateway/status`
+reports `state: degraded` with an `awaitingTurns` count, the orchestrator warns
+at boot, and Analytics shows an under-counting banner.
