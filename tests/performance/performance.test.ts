@@ -514,6 +514,8 @@ describe('performance profile', () => {
       unpricedCalls: 0,
       quarantinedTransactions: 0,
       orphanTransactions: 0,
+      awaitingTurns: 0,
+      oldestAwaitingAt: null,
     })).toThrow(/requires a healthy model gateway.*disabled/);
   });
 
@@ -537,6 +539,8 @@ describe('performance profile', () => {
           unpricedCalls: 0,
           quarantinedTransactions: 0,
           orphanTransactions: 0,
+          awaitingTurns: 0,
+          oldestAwaitingAt: null,
         }), {
           status: 200,
           headers: { 'content-type': 'application/json' },

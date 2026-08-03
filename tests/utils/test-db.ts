@@ -59,6 +59,7 @@ export function resolveTestDatabaseUrl(env: Record<string, string | undefined> =
 /** Tables to drop for test isolation (order matters for FK constraints) */
 const ALL_TABLES = [
   SCHEMA_VERSION_TABLE,
+  'api_keys',
   'secrets',
   'tool_request_dedup',
   'budget_policies',

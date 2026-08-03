@@ -105,6 +105,7 @@ describe('DatabaseRepository', () => {
         'agent_event_heads',
         'agent_workspace_state',
         'agents',
+        'api_keys',
         'artifacts',
         'budget_policies',
         'callback_outbox',
