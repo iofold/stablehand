@@ -139,6 +139,7 @@ export const ToolCallResultEventSchema = z.strictObject({
   toolCallId: ToolCallIdSchema,
   result: z.unknown().optional(),
   error: z.string().optional(),
+  durationMs: z.number().nonnegative().optional(),
 });
 
 export const StateDeltaEventSchema = z.strictObject({
