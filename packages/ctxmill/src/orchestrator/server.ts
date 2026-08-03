@@ -14,6 +14,7 @@ import { eventRoutes } from './routes/events.js';
 import { interruptRoutes } from './routes/interrupts.js';
 import { settingsRoutes } from './routes/settings.js';
 import { budgetRoutes } from './routes/budgets.js';
+import { apiKeyRoutes } from './routes/keys.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import {
   modelGatewayRoutes,
@@ -150,7 +151,13 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     },
   });
 
-  registerApiAuth(app, resolveApiAuthConfig());
+  registerApiAuth(app, resolveApiAuthConfig(), {
+    findLiveKeyByTokenHash: async (tokenHash) => {
+      const row = await db.findLiveApiKeyByTokenHash(tokenHash);
+      return row ? { keyId: row.id, name: row.name, capabilities: row.capabilities } : null;
+    },
+    touchLastUsed: (keyId) => db.touchApiKeyLastUsed(keyId),
+  });
 
   // Decorate the app instance so other plugins can access shared state
   app.decorate('sse', sse);
@@ -270,6 +277,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   await app.register(eventRoutes, { prefix: '/api/events', db });
   await app.register(interruptRoutes, { prefix: '/api/interrupts', db });
   await app.register(budgetRoutes, { prefix: '/api/budgets', db });
+  await app.register(apiKeyRoutes, { prefix: '/api/keys', db });
   await app.register(analyticsRoutes, { prefix: '/api/analytics', db });
   await app.register(modelGatewayRoutes, {
     prefix: '/api/model-gateway',

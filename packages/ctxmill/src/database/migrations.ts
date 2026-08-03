@@ -999,6 +999,22 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // Drop retired keys (idempotent).
   await sql`DELETE FROM system_settings WHERE key = 'maxCheckpointBytes'`;
 
+  // ── 18a2. api_keys (WO-5 scoped extension keys; sha256-only storage) ─
+  await sql`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL UNIQUE,
+      token_hash TEXT NOT NULL UNIQUE,
+      capabilities TEXT[] NOT NULL,
+      note TEXT,
+      created_at BIGINT NOT NULL,
+      created_by TEXT,
+      expires_at BIGINT,
+      last_used_at BIGINT,
+      revoked_at BIGINT
+    )
+  `;
+
   // ── 18b. budget_policies (tag-based budget policies) ───────────────
   await sql`
     CREATE TABLE IF NOT EXISTS budget_policies (

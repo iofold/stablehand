@@ -60,6 +60,7 @@ import type {
   TurnStatus,
   WebhookInsert,
   WebhookRow,
+  ApiKeyRow,
   BudgetPolicyRow,
 } from './types.js';
 
@@ -5543,6 +5544,65 @@ export class DatabaseRepository {
       .where(and(eq(this.schema.webhooks.id, id), eq(this.schema.webhooks.agentId, agentId)))
       .returning();
     return row;
+  }
+
+  // ── API Keys (WO-5 scoped extension keys) ──────────────────
+
+  async createApiKey(data: {
+    name: string;
+    tokenHash: string;
+    capabilities: string[];
+    note?: string | null;
+    createdBy?: string | null;
+    expiresAt?: number | null;
+  }): Promise<ApiKeyRow> {
+    return this.insertOne(
+      this.db.insert(this.schema.apiKeys).values(data).returning(),
+      'api key',
+    );
+  }
+
+  async listApiKeys(): Promise<ApiKeyRow[]> {
+    return this.db.select().from(this.schema.apiKeys).orderBy(asc(this.schema.apiKeys.createdAt));
+  }
+
+  async getApiKey(id: string): Promise<ApiKeyRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(this.schema.apiKeys)
+      .where(eq(this.schema.apiKeys.id, id));
+    return row;
+  }
+
+  /** Soft revoke; the row is kept for audit. Idempotent — re-revoking keeps the first timestamp. */
+  async revokeApiKey(id: string): Promise<ApiKeyRow | undefined> {
+    const [row] = await this.db
+      .update(this.schema.apiKeys)
+      .set({ revokedAt: Date.now() })
+      .where(and(eq(this.schema.apiKeys.id, id), isNull(this.schema.apiKeys.revokedAt)))
+      .returning();
+    if (row) return row;
+    return this.getApiKey(id);
+  }
+
+  /** Live = not revoked and not expired at `now`. Lookup is by sha256 hash only. */
+  async findLiveApiKeyByTokenHash(tokenHash: string, now = Date.now()): Promise<ApiKeyRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(this.schema.apiKeys)
+      .where(and(
+        eq(this.schema.apiKeys.tokenHash, tokenHash),
+        isNull(this.schema.apiKeys.revokedAt),
+        or(isNull(this.schema.apiKeys.expiresAt), gt(this.schema.apiKeys.expiresAt, now)),
+      ));
+    return row;
+  }
+
+  async touchApiKeyLastUsed(id: string, at = Date.now()): Promise<void> {
+    await this.db
+      .update(this.schema.apiKeys)
+      .set({ lastUsedAt: at })
+      .where(eq(this.schema.apiKeys.id, id));
   }
 
   // ── Budget Policies ────────────────────────────────────────

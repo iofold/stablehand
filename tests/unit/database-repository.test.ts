@@ -345,6 +345,66 @@ describe('DatabaseRepository', () => {
 
   // --- Agents CRUD (CFG-05) ---
 
+  describe('API keys (WO-5 Phase A)', () => {
+    const hash = (n: number) => n.toString(16).padStart(64, '0');
+
+    it('round-trips create → live lookup → revoke → dead lookup', async () => {
+      const created = await repo.createApiKey({
+        name: 'ext-roundtrip',
+        tokenHash: hash(1),
+        capabilities: ['events:read', 'triggers:emit:custom.eval.*'],
+        note: 'round trip',
+        createdBy: 'master',
+      });
+      expect(created.id).toMatch(/^key_/);
+
+      const live = await repo.findLiveApiKeyByTokenHash(hash(1));
+      expect(live?.id).toBe(created.id);
+      expect(live?.capabilities).toEqual(['events:read', 'triggers:emit:custom.eval.*']);
+
+      const revoked = await repo.revokeApiKey(created.id);
+      expect(revoked?.revokedAt).toBeTypeOf('number');
+      expect(await repo.findLiveApiKeyByTokenHash(hash(1))).toBeUndefined();
+
+      const reRevoked = await repo.revokeApiKey(created.id);
+      expect(reRevoked?.revokedAt).toBe(revoked?.revokedAt);
+    });
+
+    it('treats expiry as a liveness bound and null expiry as non-expiring', async () => {
+      await repo.createApiKey({
+        name: 'ext-expired',
+        tokenHash: hash(2),
+        capabilities: ['events:read'],
+        expiresAt: Date.now() - 1_000,
+      });
+      expect(await repo.findLiveApiKeyByTokenHash(hash(2))).toBeUndefined();
+
+      await repo.createApiKey({
+        name: 'ext-forever',
+        tokenHash: hash(3),
+        capabilities: ['events:read'],
+        expiresAt: null,
+      });
+      expect((await repo.findLiveApiKeyByTokenHash(hash(3)))?.name).toBe('ext-forever');
+    });
+
+    it('enforces unique names and stamps last_used_at', async () => {
+      const first = await repo.createApiKey({
+        name: 'ext-unique',
+        tokenHash: hash(4),
+        capabilities: ['events:read'],
+      });
+      await expect(repo.createApiKey({
+        name: 'ext-unique',
+        tokenHash: hash(5),
+        capabilities: ['events:read'],
+      })).rejects.toSatisfy(isUniqueConstraintViolation);
+
+      await repo.touchApiKeyLastUsed(first.id, 12_345);
+      expect((await repo.getApiKey(first.id))?.lastUsedAt).toBe(12_345);
+    });
+  });
+
   describe('CFG-05: Agent CRUD', () => {
     const agentData = (name: string) => ({
       name,

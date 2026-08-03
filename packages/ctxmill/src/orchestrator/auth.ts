@@ -1,9 +1,38 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteOptions } from 'fastify';
+import { API_KEY_TOKEN_PREFIX, capabilitySatisfies, type CapabilityVerb } from '@ctxmill/contracts';
 
 export type ApiAuthConfig =
   | { mode: 'enforce'; token: string }
   | { mode: 'open' };
+
+/** Attached to the request when a scoped key (WO-5) authenticated it. */
+export interface ApiKeyPrincipal {
+  keyId: string;
+  name: string;
+  capabilities: readonly string[];
+}
+
+/** Storage seam for scoped keys; implemented by the database repository. */
+export interface ApiKeyStore {
+  findLiveKeyByTokenHash(tokenHash: string): Promise<ApiKeyPrincipal | null>;
+  /** Fire-and-forget audit stamp; the middleware debounces calls per key. */
+  touchLastUsed(keyId: string): Promise<void>;
+}
+
+const LAST_USED_DEBOUNCE_MS = 60_000;
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** Scoped-key principal (WO-5); null for master-token and open-mode requests. */
+    apiPrincipal: ApiKeyPrincipal | null;
+  }
+
+  interface FastifyContextConfig {
+    /** Capability required for scoped keys (WO-5); undeclared = master-only, fail-closed. */
+    capability?: string;
+  }
+}
 
 export interface ApiRouteRecord {
   method: string;
@@ -126,6 +155,31 @@ function unauthorized(reply: FastifyReply) {
     .send(UNAUTHORIZED_BODY);
 }
 
+function forbiddenMissingCapability(reply: FastifyReply, required: string) {
+  return reply.code(403).send({
+    error: `Forbidden: this route requires the '${required}' capability`,
+    required_capability: required,
+  });
+}
+
+function forbiddenMasterOnly(reply: FastifyReply) {
+  // Fail-closed (WO-5 D3): routes without a declared capability are
+  // master-only forever; a forgotten annotation can only narrow access.
+  return reply.code(403).send({
+    error: 'Forbidden: this route requires the master API token',
+    required_capability: null,
+  });
+}
+
+function sha256Hex(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function readRouteCapability(config: FastifyRequest['routeOptions']['config'] | undefined): string | undefined {
+  const capability = (config as Record<string, unknown> | undefined)?.capability;
+  return typeof capability === 'string' ? capability : undefined;
+}
+
 function recordRoute(routeTable: ApiRouteRecord[], route: RouteOptions): void {
   const methods = Array.isArray(route.method) ? route.method : [route.method];
   for (const method of methods) {
@@ -167,11 +221,17 @@ export function resolveApiAuthConfig(
   return { mode: 'open' };
 }
 
-export function registerApiAuth(app: FastifyInstance, config: ApiAuthConfig): void {
+export function registerApiAuth(
+  app: FastifyInstance,
+  config: ApiAuthConfig,
+  keyStore?: ApiKeyStore,
+): void {
   const routeTable: ApiRouteRecord[] = [];
+  const lastUsedTouchedAt = new Map<string, number>();
 
   app.decorate<ApiAuthConfig>('apiAuth', config);
   app.decorate<ApiRouteRecord[]>('apiRouteTable', routeTable);
+  app.decorateRequest<ApiKeyPrincipal | null>('apiPrincipal', null);
 
   app.addHook('onRoute', (route) => {
     recordRoute(routeTable, route);
@@ -192,8 +252,42 @@ export function registerApiAuth(app: FastifyInstance, config: ApiAuthConfig): vo
       readBearerToken(request)
       ?? (configForRoute?.allowTokenQuery === true ? readQueryToken(request) : undefined);
 
-    if (!presented || !tokensEqual(presented, config.token)) {
+    if (!presented) {
       return unauthorized(reply);
+    }
+
+    if (tokensEqual(presented, config.token)) {
+      return; // master token — full access, unchanged behavior
+    }
+
+    if (!keyStore || !presented.startsWith(API_KEY_TOKEN_PREFIX)) {
+      return unauthorized(reply);
+    }
+
+    const principal = await keyStore.findLiveKeyByTokenHash(sha256Hex(presented));
+    if (!principal) {
+      return unauthorized(reply);
+    }
+
+    request.apiPrincipal = principal;
+
+    const now = Date.now();
+    const touchedAt = lastUsedTouchedAt.get(principal.keyId) ?? 0;
+    if (now - touchedAt >= LAST_USED_DEBOUNCE_MS) {
+      lastUsedTouchedAt.set(principal.keyId, now);
+      void keyStore.touchLastUsed(principal.keyId).catch((err) => {
+        request.log.warn({ err, keyId: principal.keyId }, 'failed to stamp api key last_used_at');
+      });
+    }
+
+    request.log.info({ keyId: principal.keyId, keyName: principal.name }, 'scoped api key request');
+
+    const requiredCapability = readRouteCapability(configForRoute);
+    if (requiredCapability === undefined) {
+      return forbiddenMasterOnly(reply);
+    }
+    if (!capabilitySatisfies(principal.capabilities, requiredCapability as CapabilityVerb)) {
+      return forbiddenMissingCapability(reply, requiredCapability);
     }
   });
 }

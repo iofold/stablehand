@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -7,20 +9,28 @@ import {
   resolveApiAuthConfig,
   serializeRequestForLog,
   type ApiAuthConfig,
+  type ApiKeyPrincipal,
+  type ApiKeyStore,
 } from '../auth.js';
 
 async function withApp<T>(
   config: ApiAuthConfig,
   run: (app: ReturnType<typeof Fastify>) => Promise<T>,
+  keyStore?: ApiKeyStore,
 ): Promise<T> {
   const app = Fastify({ logger: false });
-  registerApiAuth(app, config);
+  registerApiAuth(app, config, keyStore);
   app.get('/health', { config: { public: true } }, async () => ({ ok: true }));
   app.get('/api/health', { config: { public: true } }, async () => ({ ok: true }));
   app.get('/public-info', async () => ({ ok: true }));
   app.get('/api/private', async () => ({ ok: true }));
   app.get('/api/stream', { config: { allowTokenQuery: true } }, async () => ({ ok: true }));
   app.post('/api/private', async () => ({ ok: true }));
+  app.get('/api/scoped-events', { config: { capability: 'events:read' } }, async (request) => ({
+    ok: true,
+    principal: request.apiPrincipal,
+  }));
+  app.post('/api/scoped-emit', { config: { capability: 'triggers:emit' } }, async () => ({ ok: true }));
   await app.ready();
 
   try {
@@ -28,6 +38,20 @@ async function withApp<T>(
   } finally {
     await app.close();
   }
+}
+
+const SCOPED_TOKEN = `cmk_${'a'.repeat(43)}`;
+const SCOPED_TOKEN_HASH = createHash('sha256').update(SCOPED_TOKEN).digest('hex');
+
+function storeWith(principal: ApiKeyPrincipal | null): ApiKeyStore & { touched: string[] } {
+  const touched: string[] = [];
+  return {
+    touched,
+    findLiveKeyByTokenHash: async (hash) => (hash === SCOPED_TOKEN_HASH ? principal : null),
+    touchLastUsed: async (keyId) => {
+      touched.push(keyId);
+    },
+  };
 }
 
 describe('resolveApiAuthConfig', () => {
@@ -130,6 +154,123 @@ describe('registerApiAuth', () => {
         expect.objectContaining({ method: 'POST', url: '/api/private', public: false }),
       ]));
     });
+  });
+});
+
+describe('scoped api keys (WO-5)', () => {
+  const principal: ApiKeyPrincipal = {
+    keyId: 'key_1',
+    name: 'ext-test',
+    capabilities: ['events:read'],
+  };
+
+  it('keeps the master token on full access, bypassing the key store', async () => {
+    const store = storeWith(principal);
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/private',
+        headers: { Authorization: 'Bearer secret' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(store.touched).toEqual([]);
+    }, store);
+  });
+
+  it('rejects a scoped key on an undeclared route — fail-closed master-only', async () => {
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/private',
+        headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({
+        error: 'Forbidden: this route requires the master API token',
+        required_capability: null,
+      });
+    }, storeWith(principal));
+  });
+
+  it('grants a declared route when the capability is held, attaching the principal', async () => {
+    const store = storeWith(principal);
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/scoped-events',
+        headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().principal).toEqual(principal);
+      expect(store.touched).toEqual(['key_1']);
+    }, store);
+  });
+
+  it('returns a typed 403 naming the missing capability', async () => {
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/scoped-emit',
+        headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({
+        error: "Forbidden: this route requires the 'triggers:emit' capability",
+        required_capability: 'triggers:emit',
+      });
+    }, storeWith(principal));
+  });
+
+  it('lets a parameterized emit grant unlock the flat emit route', async () => {
+    const emitPrincipal: ApiKeyPrincipal = {
+      keyId: 'key_2',
+      name: 'ext-emit',
+      capabilities: ['triggers:emit:custom.eval.*'],
+    };
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/scoped-emit',
+        headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+    }, storeWith(emitPrincipal));
+  });
+
+  it('rejects revoked/expired/unknown keys with 401', async () => {
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/scoped-events',
+        headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+      });
+      expect(res.statusCode).toBe(401);
+    }, storeWith(null)); // store returns no live key — covers revoked, expired, and unknown alike
+  });
+
+  it('rejects cmk_ tokens outright when no key store is wired', async () => {
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/scoped-events',
+        headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+      });
+      expect(res.statusCode).toBe(401);
+    });
+  });
+
+  it('debounces last_used_at stamping within the window', async () => {
+    const store = storeWith(principal);
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      for (let i = 0; i < 3; i += 1) {
+        await app.inject({
+          method: 'GET',
+          url: '/api/scoped-events',
+          headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+        });
+      }
+      expect(store.touched).toEqual(['key_1']);
+    }, store);
   });
 });
 

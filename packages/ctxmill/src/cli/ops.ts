@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   AgentCreateInputSchema,
   AgentPatchInputSchema,
+  ApiKeyCreateInputSchema,
   BackgroundTurnStartInputSchema,
   ConversationTurnStartInputSchema,
   CustomEventEmitInputSchema,
@@ -157,6 +158,8 @@ async function executeCommand(
       return scheduleCommand(action, third, args.flags);
     case 'secrets':
       return secretCommand(action, third, fourth, args.flags);
+    case 'keys':
+      return apiKeyCommand(action, third, args.flags);
     case 'settings':
       return settingsCommand(action, args.flags);
     case 'feedback':
@@ -581,6 +584,39 @@ async function secretCommand(action: string | undefined, agentId: string | undef
       return requestCommand('secrets delete', 'DELETE', `${base}/${encodeURIComponent(key)}`, undefined, formatJsonSummary, flags);
     default:
       throw new UsageError(`Unknown secrets command: ${action}`);
+  }
+}
+
+async function apiKeyCommand(action: string | undefined, third: string | undefined, flags: Flags): Promise<CommandResult> {
+  const base = '/api/keys';
+  switch (action) {
+    case 'list':
+    case undefined:
+      return getCommand('keys list', 'GET', base, formatJsonSummary, flags);
+    case 'create': {
+      const name = flagString(flags, 'name') ?? third;
+      const caps = flagString(flags, 'cap', 'capabilities');
+      requireArg(name, 'name via --name');
+      requireArg(caps, 'capabilities via --cap (comma-separated)');
+      const body: JsonRecord = {
+        name,
+        capabilities: caps!.split(',').map((cap) => cap.trim()).filter(Boolean),
+      };
+      const note = flagString(flags, 'note');
+      if (note) body.note = note;
+      const expiresAt = flagString(flags, 'expires-at');
+      if (expiresAt) body.expiresAt = Number(expiresAt);
+      // The response carries the token exactly once; it is never retrievable again.
+      return requestCommand('keys create', 'POST', base, body, formatJsonSummary, flags, ApiKeyCreateInputSchema);
+    }
+    case 'revoke': {
+      const id = flagString(flags, 'id') ?? third;
+      requireArg(id, 'key id');
+      confirmDestructive(`keys revoke ${id}`, flags);
+      return requestCommand('keys revoke', 'DELETE', `${base}/${encodeURIComponent(id!)}`, undefined, formatJsonSummary, flags);
+    }
+    default:
+      throw new UsageError(`Unknown keys command: ${action}`);
   }
 }
 
@@ -1623,6 +1659,10 @@ Mutation commands:
 
   secrets set <agentId> --key <k> --value <v>
   secrets delete <agentId> <key>                       [--yes]
+
+  keys list                                            Scoped api keys (WO-5; master token only)
+  keys create --name <n> --cap <cap1,cap2,...> [--note <t>] [--expires-at <ms>]   Token shown once
+  keys revoke <keyId>                                  [--yes]
 
   settings set --from-file <path>
 

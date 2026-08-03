@@ -604,6 +604,19 @@ export const systemSettings = pgTable('system_settings', {
  * Declarative tag-based budget policies (2026-07-15 proposal). `doc` holds
  * the validated policy document: selector, groupBy, window, limits, actions.
  */
+export const apiKeys = pgTable('api_keys', {
+  id: text('id').primaryKey().$defaultFn(() => `key_${randomUUID()}`),
+  name: text('name').notNull().unique(),
+  tokenHash: text('token_hash').notNull().unique(),
+  capabilities: text('capabilities').array().notNull().$type<string[]>(),
+  note: text('note'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
+  createdBy: text('created_by'),
+  expiresAt: bigint('expires_at', { mode: 'number' }),
+  lastUsedAt: bigint('last_used_at', { mode: 'number' }),
+  revokedAt: bigint('revoked_at', { mode: 'number' }),
+});
+
 export const budgetPolicies = pgTable('budget_policies', {
   id: text('id').primaryKey().$defaultFn(() => randomUUID()),
   name: text('name').notNull(),
