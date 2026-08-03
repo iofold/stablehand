@@ -34,6 +34,16 @@ export function turnErrorSandboxStreamEndedWithoutCompletion(eventCount: number)
 export const TURN_ERROR_RUNNING_TOOL_CALLS_AT_END =
   'Turn ended with running tool call(s); the turn was closed as interrupted instead of completed.';
 
+/**
+ * A turn's stream ended successfully but provably produced nothing — no
+ * assistant text, no committed message, no tool activity, no interrupt, and
+ * no usage (ctx-w03u). The sandbox retries such streams once in place; a turn
+ * that is still empty after that must not be recorded as a success.
+ */
+export const TURN_ERROR_EMPTY_MODEL_OUTPUT =
+  'Model stream completed without any assistant output, tool activity, or usage; '
+  + 'the turn was closed as an error instead of an empty success. Please retry.';
+
 /** A tool call was still running when its turn reached a terminal state. */
 export const TOOL_CALL_INTERRUPTED_ERROR =
   'Tool call was still running when the turn ended and was closed without a result.';

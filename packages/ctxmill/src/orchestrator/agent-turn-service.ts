@@ -17,6 +17,7 @@ import type { TurnSecrets } from './session-manager/turn-secrets.js';
 import { TURN_CANCELLED_MESSAGE, isTurnCancelled } from './turn-cancellation.js';
 import {
   TOOL_CALL_INTERRUPTED_ERROR,
+  TURN_ERROR_EMPTY_MODEL_OUTPUT,
   TURN_ERROR_RUNNING_TOOL_CALLS_AT_END,
   TurnFinalizer,
 } from './turn-finalizer.js';
@@ -174,6 +175,10 @@ export class AgentTurnService {
     const pendingToolCalls = new Map<string, { id: string; name: string; args: string; result?: string; error?: string; status: string }>();
     let streamingParts: StreamingPart[] = [];
     let accumulatedText = '';
+    let sawToolActivity = false;
+    let sawCommittedMessage = false;
+    let sawInterruptRequest = false;
+    let sawRunResult = false;
     let assistantFlushedForBatch = false;
     let flushedAssistantMessageId: string | null = null;
     let flushedAssistantMessageSeq: number | null = null;
@@ -525,6 +530,30 @@ export class AgentTurnService {
         turnError = new Error(TURN_ERROR_RUNNING_TOOL_CALLS_AT_END);
       }
 
+      // ctx-w03u: a "successful" turn that provably produced nothing — no
+      // text, no committed message, no tool or interrupt activity, and no
+      // usage — must not be recorded as completed. The sandbox has already
+      // spent its one in-place retry by the time this stream ends.
+      const reportedUsage = turnUsage
+        ? turnUsage.inputTokens + turnUsage.outputTokens + turnUsage.totalTokens
+        : 0;
+      if (
+        !wasCancelled
+        && !turnError
+        && !isInterruptContinuation
+        && !tokenObserved
+        && accumulatedText.length === 0
+        && !flushedAssistantMessageId
+        && !sawCommittedMessage
+        && !sawToolActivity
+        && !sawInterruptRequest
+        && !sawRunResult
+        && pendingToolCalls.size === 0
+        && reportedUsage === 0
+      ) {
+        turnError = new Error(TURN_ERROR_EMPTY_MODEL_OUTPUT);
+      }
+
       const status: 'completed' | 'error' | 'cancelled' =
         wasCancelled
           ? 'cancelled'
@@ -811,6 +840,9 @@ export class AgentTurnService {
         }
 
         if (event.type === 'RUN_FINISHED') {
+          if ('result' in event && typeof event.result === 'string' && event.result.length > 0) {
+            sawRunResult = true;
+          }
           const usage = event.usage;
           if (usage && typeof usage === 'object') {
             const u = usage as Record<string, unknown>;
@@ -824,6 +856,7 @@ export class AgentTurnService {
         }
 
         if (event.type === 'TOOL_CALL_START') {
+          sawToolActivity = true;
           currentStreamedMessageId = undefined;
           const e = event as Record<string, unknown>;
           const tcId = (e.toolCallId as string) || `tc-${Date.now()}`;
@@ -924,6 +957,20 @@ export class AgentTurnService {
 
         if (event.type === 'MESSAGE_COMMITTED') {
           const committed = event as unknown as MessageCommittedEvent;
+          if (committed.role !== 'assistant' && committed.role !== 'tool') {
+            // ctx-w03u: never coerce unknown-role output into an assistant
+            // message. Preserve the original payload in telemetry and close
+            // the turn as an error instead of persisting a guessed role.
+            console.error(
+              `[AgentTurnService] Turn ${turnId} received MESSAGE_COMMITTED with unknown role; original payload preserved:`,
+              JSON.stringify(committed),
+            );
+            turnError = new Error(
+              `Harness committed a message with unknown role '${String(committed.role)}'; refusing to persist it as assistant output`,
+            );
+            continue;
+          }
+          sawCommittedMessage = true;
           if (assistantFlushedForBatch) {
             // The tool-carrying assistant message was already persisted at the
             // first tool result; the final message owns only content produced
@@ -1009,6 +1056,7 @@ export class AgentTurnService {
           } as unknown as EventMap['tool_call.started']);
         }
         if (event.type === 'TOOL_CALL_RESULT' && 'result' in event) {
+          sawToolActivity = true;
           const toolResult = event as unknown as ToolCallResultEvent;
           const toolCallId = toolResult.toolCallId ?? '';
           const knownToolName = toolCallId ? pendingToolCalls.get(toolCallId)?.name : undefined;
@@ -1028,6 +1076,7 @@ export class AgentTurnService {
         }
 
         if (event.type === 'INTERRUPT_REQUESTED') {
+          sawInterruptRequest = true;
           void (event as unknown as InterruptRequestedEvent);
         }
       }

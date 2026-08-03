@@ -899,6 +899,35 @@ export async function renewTurnDeliveryCapability(
 }
 
 /**
+ * True when the event proves the model/harness produced something — text,
+ * tool or approval activity, a committed message, an error, or usage. A turn
+ * whose stream carried none of these before its clean end is "provably
+ * empty" (ctx-w03u) and safe to re-deliver: no side effect can have occurred.
+ */
+export function agentEventCarriesOutput(event: AgentEvent): boolean {
+  switch (event.type) {
+    case 'text_delta':
+      return event.content.length > 0;
+    case 'tool_call_start':
+    case 'tool_call_end':
+    case 'approval_needed':
+    case 'approval_resolved':
+    case 'custom_agui_event':
+    case 'message_committed':
+    case 'error':
+      return true;
+    case 'done':
+      return Boolean(
+        (event.result && event.result.length > 0)
+        || (event.usage
+          && (event.usage.inputTokens + event.usage.outputTokens + event.usage.totalTokens) > 0),
+      );
+    default:
+      return false;
+  }
+}
+
+/**
  * Deliver a turn to the active session and stream back SessionEvent envelopes.
  *
  * Yields AG-UI events and MessageCommitted frames as they arrive, then yields
@@ -934,6 +963,8 @@ export async function* deliverTurn(
   const delivery = await admitTurnDelivery(ctx, req, opts?.signal);
   let seq = 0;
   let sawSemanticEnd = false;
+  let attemptSawOutput = false;
+  let emptyRetryUsed = false;
   let suspendBreak = false;
   let abortBreak = false;
   let phaseStarted = false;
@@ -1109,15 +1140,18 @@ export async function* deliverTurn(
 
     // The capability deadline is checked once immediately before obtaining the
     // harness iterator and again before every state-advancing next() call.
-    assertTurnDeliveryContextCurrent(delivery.context);
-    const iterable = runWithTurnDeliveryContext(
-      delivery.context,
-      () => ctx.session.deliverTurn(input, context),
-    );
-    iterator = runWithTurnDeliveryContext(
-      delivery.context,
-      () => iterable[Symbol.asyncIterator](),
-    );
+    const obtainIterator = () => {
+      assertTurnDeliveryContextCurrent(delivery.context);
+      const iterable = runWithTurnDeliveryContext(
+        delivery.context,
+        () => ctx.session.deliverTurn(input, context),
+      );
+      return runWithTurnDeliveryContext(
+        delivery.context,
+        () => iterable[Symbol.asyncIterator](),
+      );
+    };
+    iterator = obtainIterator();
 
     while (true) {
       assertTurnDeliveryContextCurrent(delivery.context);
@@ -1132,6 +1166,25 @@ export async function* deliverTurn(
         break;
       }
       if (next.done) {
+        // ctx-w03u: a stream that ended cleanly but provably produced nothing
+        // (no text, no tool or approval activity, no committed message, no
+        // usage) gets exactly one in-place re-delivery. Nothing external has
+        // happened, so retrying cannot double a side effect; the retried
+        // attempt continues the same gRPC stream.
+        if (
+          !emptyRetryUsed
+          && sawSemanticEnd
+          && !attemptSawOutput
+          && pendingTurnRequests.size === 0
+        ) {
+          emptyRetryUsed = true;
+          sawSemanticEnd = false;
+          console.error(
+            `[sandbox] turn ${turnId} model stream completed provably empty after ${seq} events — retrying delivery once`,
+          );
+          iterator = obtainIterator();
+          continue;
+        }
         iteratorDone = true;
         break;
       }
@@ -1139,6 +1192,9 @@ export async function* deliverTurn(
       if (!event || !event.type) continue;
 
       seq++;
+      if (agentEventCarriesOutput(event)) {
+        attemptSawOutput = true;
+      }
 
       const newPhase = phaseForEvent(event);
       if (newPhase) {

@@ -666,7 +666,10 @@ describe('AgentTurnService', () => {
   });
 
   it('completes the current rebound sandbox session when the turn row was rebound during delivery', async () => {
-    const { db, sessionManager } = await executeEvents([], {
+    const { db, sessionManager } = await executeEvents([
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', delta: 'ok' },
+      { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
+    ], {
       deps: {
         db: {
           addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
@@ -1127,7 +1130,10 @@ describe('AgentTurnService', () => {
   });
 
   it('calls completeSession after a successful turn', async () => {
-    const { sessionManager } = await executeEvents([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }]);
+    const { sessionManager } = await executeEvents([
+      { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', delta: 'ok' },
+      { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
+    ]);
 
     expect(sessionManager.completeTurn).toHaveBeenCalledWith(
       'sandbox-1',
@@ -1339,11 +1345,91 @@ describe('AgentTurnService', () => {
     expect(eventBus.emit).not.toHaveBeenCalledWith('ag_ui.event', expect.anything());
   });
 
+  describe('empty successful streams (ctx-w03u)', () => {
+    it('closes a provably empty successful stream as an error, never a completed turn', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const ctx = await executeEvents([
+        { type: 'RUN_STARTED', timestamp: 1, runId: 'run-1' },
+        { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
+      ]);
+
+      expect(ctx.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'error',
+          error: expect.stringContaining('without any assistant output'),
+        }),
+        expectedDeliveryFence(),
+      );
+      expect(ctx.db.addCanonicalMessage).not.toHaveBeenCalled();
+    });
+
+    it('does not flag a stream whose RUN_FINISHED reported real usage', async () => {
+      const ctx = await executeEvents([
+        { type: 'RUN_STARTED', timestamp: 1, runId: 'run-1' },
+        {
+          type: 'RUN_FINISHED',
+          timestamp: 2,
+          runId: 'run-1',
+          usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
+        },
+      ]);
+
+      expect(ctx.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({ status: 'completed' }),
+        expectedDeliveryFence(),
+      );
+    });
+
+    it('keeps a text-producing stream completing normally', async () => {
+      const ctx = await executeEvents([
+        { type: 'RUN_STARTED', timestamp: 1, runId: 'run-1' },
+        { type: 'TEXT_MESSAGE_CONTENT', timestamp: 2, runId: 'run-1', delta: 'hello' },
+        makeCommittedEvent({ content: 'hello' }),
+        { type: 'RUN_FINISHED', timestamp: 3, runId: 'run-1' },
+      ]);
+
+      expect(ctx.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({ status: 'completed' }),
+        expectedDeliveryFence(),
+      );
+    });
+
+    it('refuses to persist a committed message with an unknown role and errors the turn', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const ctx = await executeEvents([
+        { type: 'RUN_STARTED', timestamp: 1, runId: 'run-1' },
+        makeCommittedEvent({ role: 'narrator' as never, content: 'not yours to say' }),
+        { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
+      ]);
+
+      expect(ctx.db.addCanonicalMessage).not.toHaveBeenCalled();
+      expect(ctx.db.finalizeTurnIfOpen).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'error',
+          error: expect.stringContaining("unknown role 'narrator'"),
+        }),
+        expectedDeliveryFence(),
+      );
+      // The original payload must survive in telemetry, not be coerced.
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('original payload preserved'),
+        expect.stringContaining('not yours to say'),
+      );
+    });
+  });
+
   describe('event bus integration', () => {
     it('does not forward streamed RUN_FINISHED as ag_ui.event because turn completion is emitted canonically after finalize', async () => {
       const eventBus = createEventBusMock();
       const { sessionManager } = await executeEvents(
-        [{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }],
+        [
+          { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', delta: 'ok' },
+          { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
+        ],
         { deps: { eventBus } },
       );
 
@@ -1829,7 +1915,10 @@ describe('AgentTurnService', () => {
         completeTurn: vi.fn().mockResolvedValue(undefined),
       };
 
-      await executeEvents([{ type: 'RUN_FINISHED', timestamp: 1, runId: 'run-1' }], {
+      await executeEvents([
+        { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', delta: 'ok' },
+        { type: 'RUN_FINISHED', timestamp: 2, runId: 'run-1' },
+      ], {
         deps: { eventBus, sessionManager },
       });
 
