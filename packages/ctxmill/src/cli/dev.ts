@@ -268,6 +268,7 @@ export async function startDev() {
     harnessSchemas: container.harnessSchemas,
     dataDir,
     triggerManager: container.triggerManager,
+    turnDispatcher: container.turnDispatcher,
     scheduleService: container.scheduleService,
     sse: container.sseManager,
     interrupts: container.interruptManager,

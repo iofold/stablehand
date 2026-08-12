@@ -15,6 +15,8 @@ import { interruptRoutes } from './routes/interrupts.js';
 import { settingsRoutes } from './routes/settings.js';
 import { budgetRoutes } from './routes/budgets.js';
 import { apiKeyRoutes } from './routes/keys.js';
+import { queueRoutes } from './routes/queue.js';
+import type { TurnDispatcher } from './turn-dispatcher.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import {
   modelGatewayRoutes,
@@ -66,6 +68,7 @@ export interface ServerOptions {
   dataDir?: string;
   /** Event trigger manager for pub/sub trigger system. */
   triggerManager?: EventTriggerManager;
+  turnDispatcher?: TurnDispatcher;
   scheduleService?: ScheduleService;
   sse: SSEManager;
   interrupts: InterruptManager;
@@ -278,6 +281,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   await app.register(interruptRoutes, { prefix: '/api/interrupts', db });
   await app.register(budgetRoutes, { prefix: '/api/budgets', db });
   await app.register(apiKeyRoutes, { prefix: '/api/keys', db });
+  await app.register(queueRoutes, { prefix: '/api/queue', db, ...(opts.turnDispatcher ? { dispatcher: opts.turnDispatcher } : {}) });
   await app.register(analyticsRoutes, { prefix: '/api/analytics', db });
   await app.register(modelGatewayRoutes, {
     prefix: '/api/model-gateway',
