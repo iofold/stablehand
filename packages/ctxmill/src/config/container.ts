@@ -20,6 +20,7 @@ import { CallbackDispatcher } from '../orchestrator/callback-dispatcher.js';
 import { createGuardedFetch } from '../util/egress.js';
 import { createWebhookRelaySpineConsumer } from '../orchestrator/webhook-relay.js';
 import { TurnStartupService } from '../orchestrator/turn-startup-service.js';
+import { createTurnQueueAdmission } from '../orchestrator/turn-queue-admission.js';
 import { TurnSecretEnvelopeCodec } from '../orchestrator/turn-secret-envelope.js';
 import { TurnFinalizer } from '../orchestrator/turn-finalizer.js';
 import { reconcileStrandedTurnsOnStartup } from '../orchestrator/turn-reconciler.js';
@@ -614,6 +615,16 @@ export async function createContainer(
     sessionManager: realSessionManager,
     agentTurnService,
     budgetEnforcer,
+    queueAdmission: createTurnQueueAdmission({
+      db,
+      settings: async () => {
+        const settings = await settingsService.getAll();
+        return {
+          maxQueuedTurnsGlobal: settings.maxQueuedTurnsGlobal,
+          maxQueuedTurnsPerAgent: settings.maxQueuedTurnsPerAgent,
+        };
+      },
+    }),
   });
   await triggerManager.start();
   await spineConsumerRunner.start();

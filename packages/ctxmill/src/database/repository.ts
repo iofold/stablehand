@@ -5546,6 +5546,23 @@ export class DatabaseRepository {
     return row;
   }
 
+  // ── Turn queue (ctx-z5k0) ──────────────────────────────────
+
+  /** Global and per-agent queued-turn depth in one round trip. */
+  async countQueuedTurns(agentId: string): Promise<{ global: number; agent: number }> {
+    const [row] = await this.db
+      .select({
+        global: sql<number>`count(*)::int`,
+        agent: sql<number>`count(*) filter (where ${this.schema.turns.agentId} = ${agentId})::int`,
+      })
+      .from(this.schema.turns)
+      .where(and(
+        eq(this.schema.turns.status, 'queued'),
+        isNull(this.schema.turns.completedAt),
+      ));
+    return { global: row?.global ?? 0, agent: row?.agent ?? 0 };
+  }
+
   // ── API Keys (WO-5 scoped extension keys) ──────────────────
 
   async createApiKey(data: {

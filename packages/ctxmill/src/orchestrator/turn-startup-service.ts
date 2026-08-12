@@ -11,6 +11,7 @@ import type { ConcurrencyReservation } from './session-manager/session-turn-orch
 import type { TurnSecrets } from './session-manager/turn-secrets.js';
 import { TurnFinalizer } from './turn-finalizer.js';
 import type { BudgetEnforcer } from './budget-enforcer.js';
+import type { TurnQueueAdmission } from './turn-queue-admission.js';
 import { TagConflictError, readBudgetDimensions, readDefaultTags } from './budgets.js';
 import type { TurnDeliveryContext } from './turn-delivery-fence.js';
 import type { TurnSecretEnvelopeCodec } from './turn-secret-envelope.js';
@@ -64,6 +65,7 @@ type ExecutionDeps = {
   } | null;
   agentTurnService: Pick<AgentTurnService, 'executeTurn'>;
   budgetEnforcer?: Pick<BudgetEnforcer, 'checkAdmission'> | null;
+  queueAdmission?: TurnQueueAdmission | null;
 };
 
 export interface PrepareTurnStartParams {
@@ -205,6 +207,13 @@ export class TurnStartupService {
         tags: turnTags,
         budgetDimensions: readBudgetDimensions(agentMetadata),
       });
+    }
+
+    // Queue admission (ctx-z5k0) also runs before any write: a queue_full
+    // rejection leaves no message and no turn behind — the caller owns the
+    // retry with nothing half-accepted. Redispatches never pass through here.
+    if (executionDeps.queueAdmission) {
+      await executionDeps.queueAdmission.check(agentId);
     }
 
     const resolvedConversationId = await this.resolveConversationId(

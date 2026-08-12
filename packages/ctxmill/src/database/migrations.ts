@@ -1086,6 +1086,13 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
 
   // ── Indexes ────────────────────────────────────────────────────────
 
+  // turns queue (ctx-z5k0): serves cap counts and dispatcher claim ordering
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_turns_queued_dispatch
+    ON turns(agent_id, started_at)
+    WHERE status = 'queued' AND completed_at IS NULL
+  `;
+
   // conversations
   await sql`CREATE INDEX IF NOT EXISTS idx_conversations_agent_updated ON conversations(agent_id, updated_at)`;
 

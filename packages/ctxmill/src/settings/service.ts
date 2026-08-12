@@ -6,6 +6,9 @@ export const DEFAULT_TURN_TIMEOUT_MS              = 1_800_000;
 export const DEFAULT_RECONCILIATION_INTERVAL_MS   = 300_000;
 export const DEFAULT_MAX_GLOBAL_CONTAINERS        = 20;
 export const DEFAULT_QUEUE_TIMEOUT_MS             = 600_000;
+export const DEFAULT_MAX_QUEUED_TURNS_GLOBAL      = 1_000;
+export const DEFAULT_MAX_QUEUED_TURNS_PER_AGENT   = 100;
+export const DEFAULT_QUEUED_TURN_TIMEOUT_MS       = 1_800_000;
 export const DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT = 20;
 export const DEFAULT_MAX_TRIGGER_DEPTH            = 5;
 export const DEFAULT_DEFAULT_CPUS                 = 1.0;
@@ -21,6 +24,9 @@ export const SETTINGS_KEYS = {
   reconciliationIntervalMs:    'reconciliationIntervalMs',
   maxGlobalContainers:         'maxGlobalContainers',
   queueTimeoutMs:              'queueTimeoutMs',
+  maxQueuedTurnsGlobal:        'maxQueuedTurnsGlobal',
+  maxQueuedTurnsPerAgent:      'maxQueuedTurnsPerAgent',
+  queuedTurnTimeoutMs:         'queuedTurnTimeoutMs',
   maxConcurrentSessionsPerAgent: 'maxConcurrentSessionsPerAgent',
   maxTriggerDepth:             'maxTriggerDepth',
   defaultCpus:                 'defaultCpus',
@@ -39,6 +45,9 @@ export const ENV_KEYS: Record<SettingsKey, string> = {
   reconciliationIntervalMs:  'CTXMILL_RECONCILIATION_INTERVAL_MS',
   maxGlobalContainers:       'CTXMILL_MAX_GLOBAL_CONTAINERS',
   queueTimeoutMs:            'CTXMILL_QUEUE_TIMEOUT_MS',
+  maxQueuedTurnsGlobal:      'CTXMILL_MAX_QUEUED_TURNS_GLOBAL',
+  maxQueuedTurnsPerAgent:    'CTXMILL_MAX_QUEUED_TURNS_PER_AGENT',
+  queuedTurnTimeoutMs:       'CTXMILL_QUEUED_TURN_TIMEOUT_MS',
   maxConcurrentSessionsPerAgent: 'CTXMILL_MAX_CONCURRENT_SESSIONS_PER_AGENT',
   maxTriggerDepth:           'CTXMILL_MAX_TRIGGER_DEPTH',
   defaultCpus:               'CTXMILL_DEFAULT_CPUS',
@@ -55,6 +64,9 @@ export interface SystemSettings {
   reconciliationIntervalMs:    number;
   maxGlobalContainers:         number;
   queueTimeoutMs:              number;
+  maxQueuedTurnsGlobal:        number;
+  maxQueuedTurnsPerAgent:      number;
+  queuedTurnTimeoutMs:         number;
   maxConcurrentSessionsPerAgent: number;
   maxTriggerDepth:             number;
   defaultCpus:                 number;
@@ -107,6 +119,9 @@ export class SystemSettingsService {
       reconciliationIntervalMs:  parseIntSetting(raw[SETTINGS_KEYS.reconciliationIntervalMs],  envInt('reconciliationIntervalMs', DEFAULT_RECONCILIATION_INTERVAL_MS)),
       maxGlobalContainers:       parseIntSetting(raw[SETTINGS_KEYS.maxGlobalContainers],       envInt('maxGlobalContainers', DEFAULT_MAX_GLOBAL_CONTAINERS)),
       queueTimeoutMs:            parseIntSetting(raw[SETTINGS_KEYS.queueTimeoutMs],            envInt('queueTimeoutMs', DEFAULT_QUEUE_TIMEOUT_MS)),
+      maxQueuedTurnsGlobal:      parseIntSetting(raw[SETTINGS_KEYS.maxQueuedTurnsGlobal],      envInt('maxQueuedTurnsGlobal', DEFAULT_MAX_QUEUED_TURNS_GLOBAL)),
+      maxQueuedTurnsPerAgent:    parseIntSetting(raw[SETTINGS_KEYS.maxQueuedTurnsPerAgent],    envInt('maxQueuedTurnsPerAgent', DEFAULT_MAX_QUEUED_TURNS_PER_AGENT)),
+      queuedTurnTimeoutMs:       parseIntSetting(raw[SETTINGS_KEYS.queuedTurnTimeoutMs],       envInt('queuedTurnTimeoutMs', DEFAULT_QUEUED_TURN_TIMEOUT_MS)),
       maxConcurrentSessionsPerAgent: parseIntSetting(raw[SETTINGS_KEYS.maxConcurrentSessionsPerAgent], envInt('maxConcurrentSessionsPerAgent', DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT)),
       maxTriggerDepth:           parseIntSetting(raw[SETTINGS_KEYS.maxTriggerDepth],           envInt('maxTriggerDepth', DEFAULT_MAX_TRIGGER_DEPTH)),
       defaultCpus:               parseFloatSetting(raw[SETTINGS_KEYS.defaultCpus],             envFloat('defaultCpus', DEFAULT_DEFAULT_CPUS)),
