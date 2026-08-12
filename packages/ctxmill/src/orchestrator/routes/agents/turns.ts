@@ -299,7 +299,7 @@ export async function turnRoutes(
         if (ledger) {
           await db.completeTurnStartRequest(ledger.id, ledger.requestHash, response);
         }
-        void turnStartupService.launchPreparedTurn(start, id);
+        turnStartupService.requestDispatch(start, id);
         return reply.status(201).send(response);
       } catch (err) {
         if (ledger && !await db.getTurn(ledger.turnId)) {
@@ -406,7 +406,7 @@ export async function turnRoutes(
         if (ledger) {
           await db.completeTurnStartRequest(ledger.id, ledger.requestHash, response);
         }
-        void turnStartupService.launchPreparedTurn(start, id);
+        turnStartupService.requestDispatch(start, id);
         return reply.status(201).send(response);
       } catch (err) {
         if (ledger && !await db.getTurn(ledger.turnId)) {

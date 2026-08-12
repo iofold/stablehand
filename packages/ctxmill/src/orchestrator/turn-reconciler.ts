@@ -170,12 +170,13 @@ export async function reconcileStrandedTurnsOnStartup(
         continue;
       }
 
-      if (deps.redispatchQueuedTurn && turn.status === 'queued') {
-        const queuedCandidate = await buildQueuedRedispatchCandidate(deps, turn);
-        if (queuedCandidate) {
-          queuedCandidates.push(queuedCandidate);
-          continue;
-        }
+      if (turn.status === 'queued' && turn.conversationId && turn.userMessageId) {
+        // ctx-z5k0: queued turns are durable dispatcher work, not boot debt.
+        // The TurnDispatcher drains them after listen(); executing them here
+        // was the boot barrier (server down until the backlog completed).
+        // Queued rows missing their conversation/user message fall through
+        // to the stranded path below and are failed honestly.
+        continue;
       }
 
       strandedTurns.push(turn);
@@ -338,51 +339,6 @@ export async function repairConversationRunningToolCalls(
       options.signal?.throwIfAborted();
     }
   }
-}
-
-async function buildQueuedRedispatchCandidate(
-  deps: TurnReconcilerDeps,
-  turn: TurnSelect,
-): Promise<QueuedRedispatchCandidate | null> {
-  if (!turn.conversationId || !turn.userMessageId) {
-    deps.logger.warn(`${TAG} queued turn ${turn.id} is missing conversation/user-message linkage; failing as stranded`);
-    return null;
-  }
-
-  const messages = await deps.db.getMessages(turn.conversationId);
-  const userMessageIndex = messages.findIndex((message) => message.id === turn.userMessageId);
-  if (userMessageIndex < 0) {
-    deps.logger.warn(`${TAG} queued turn ${turn.id} user message ${turn.userMessageId} not found; failing as stranded`);
-    return null;
-  }
-
-  const userMessage = messages[userMessageIndex]!;
-  const messagesForTurn = messages.slice(0, userMessageIndex + 1);
-  const recoveryUserMessage = turn.mode !== 'background'
-    ? {
-        turnId: turn.id,
-        agentId: turn.agentId,
-        conversationId: turn.conversationId,
-        messageId: turn.userMessageId,
-        content: userMessage.content,
-        timestamp: userMessage.createdAt,
-      }
-    : undefined;
-
-  return {
-    turn,
-    order: userMessageIndex,
-    ...(recoveryUserMessage ? { recoveryUserMessage } : {}),
-    params: {
-      turnId: turn.id,
-      agentId: turn.agentId,
-      conversationId: turn.conversationId,
-      mode: turn.mode === 'background' ? 'background' : 'interactive',
-      taskDescription: turn.taskDescription ?? messages[userMessageIndex]?.content ?? '',
-      userMessageId: turn.userMessageId,
-      messages: mapMessagesToInternal(messagesForTurn, turn.agentId),
-    },
-  };
 }
 
 async function failStrandedTurn(

@@ -7,7 +7,10 @@ import { CanonicalLog } from '../../packages/ctxmill/src/orchestrator/canonical/
 import { reconcilePendingMessagePublishesOnStartup } from '../../packages/ctxmill/src/orchestrator/message-publisher.js';
 import { reconcileStrandedTurnsOnStartup } from '../../packages/ctxmill/src/orchestrator/turn-reconciler.js';
 import { TurnFinalizer } from '../../packages/ctxmill/src/orchestrator/turn-finalizer.js';
-import type { RedispatchQueuedTurnParams } from '../../packages/ctxmill/src/orchestrator/turn-startup-service.js';
+import { TurnStartupService } from '../../packages/ctxmill/src/orchestrator/turn-startup-service.js';
+import { TurnSecretEnvelopeCodec } from '../../packages/ctxmill/src/orchestrator/turn-secret-envelope.js';
+
+const TEST_TURN_SECRET_CODEC = new TurnSecretEnvelopeCodec(Buffer.alloc(32, 7));
 import { MessageListResponseSchema } from '../../packages/contracts/src/index.js';
 import { toApiMessage } from '../../packages/ctxmill/src/orchestrator/routes/agent-helpers.js';
 import { createWebhookRelaySpineConsumer } from '../../packages/ctxmill/src/orchestrator/webhook-relay.js';
@@ -498,7 +501,7 @@ describe('Agent turn message persistence integration', () => {
     runner.stop();
   });
 
-  it('durably republishes a pre-frame interactive prompt before startup redispatch', async () => {
+  it('leaves queued turns for the dispatcher instead of executing them at boot (ctx-z5k0)', async () => {
     const agent = await testDb.repo.createAgent({
       name: 'queued-recovery-agent',
       harness: 'langgraph',
@@ -522,7 +525,14 @@ describe('Agent turn message persistence integration', () => {
       status: 'queued',
       startedAt: 20,
     });
-    expect(await testDb.repo.getTurnFrames(turn.id)).toEqual([]);
+    // Stranded-shaped queued row (no user message) still fails honestly.
+    const orphan = await testDb.repo.createTurn({
+      agentId: agent.id,
+      conversationId: conversation.id,
+      mode: 'interactive',
+      status: 'queued',
+      startedAt: 21,
+    });
 
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const canonicalLog = new CanonicalLog({ db: testDb.repo, logger });
@@ -531,310 +541,154 @@ describe('Agent turn message persistence integration', () => {
         await canonicalLog.ingest(type, parsedPayload ?? {}, context);
       },
     });
-    const redispatchQueuedTurn = vi.fn(async (params: RedispatchQueuedTurnParams) => {
-      await eventBus.emitAsync(
-        'user.message',
-        params.deliveryContext.userMessage!,
-        { deliveryFence: params.deliveryContext.fence },
-      );
-      const framesAtRedispatch = await testDb.repo.getTurnFrames(turn.id);
-      expect(framesAtRedispatch.map(({ type }) => type)).toEqual([
-        'TEXT_MESSAGE_START',
-        'TEXT_MESSAGE_CONTENT',
-        'TEXT_MESSAGE_END',
-      ]);
-      expect(framesAtRedispatch[0]).toMatchObject({
-        sourceType: 'user.message',
-        turnId: turn.id,
-        conversationId: conversation.id,
-      });
-    });
     const finalizer = new TurnFinalizer({ db: testDb.repo, eventBus, logger });
 
-    const first = await reconcileStrandedTurnsOnStartup({
+    const result = await reconcileStrandedTurnsOnStartup({
       db: testDb.repo,
       eventBus,
       finalizer,
       logger,
-      redispatchQueuedTurn,
     }, 30);
 
-    expect(first).toEqual(expect.objectContaining({ failed: 0, redispatched: 1 }));
-    expect(redispatchQueuedTurn).toHaveBeenCalledTimes(1);
-
-    expect((await testDb.repo.getTurnFrames(turn.id)).map(({ type }) => type)).toEqual([
-      'TEXT_MESSAGE_START',
-      'TEXT_MESSAGE_CONTENT',
-      'TEXT_MESSAGE_END',
-    ]);
-  });
-
-  it('lets only one replica republish and redispatch the same queued turn', async () => {
-    const agent = await testDb.repo.createAgent({
-      name: 'active-active-recovery-agent',
-      harness: 'langgraph',
-      harnessConfig: '{}',
-      systemPrompt: 'test',
-      tools: [],
-    });
-    const conversation = await testDb.repo.createConversation(agent.id);
-    const userMessage = await testDb.repo.addMessage({
-      agentId: agent.id,
-      conversationId: conversation.id,
-      role: 'user',
-      content: 'dispatch exactly once',
-      createdAt: 10,
-    });
-    const turn = await testDb.repo.createTurn({
-      agentId: agent.id,
-      conversationId: conversation.id,
-      userMessageId: userMessage.id,
-      mode: 'interactive',
-      status: 'queued',
-      startedAt: 20,
-    });
-
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const canonicalLog = new CanonicalLog({ db: testDb.repo, logger });
-    const eventBus = new TypedEventBus({
-      persistEvent: async (type, _agentId, _payload, parsedPayload, context) => {
-        await canonicalLog.ingest(type, parsedPayload ?? {}, context);
-      },
-    });
-    const finalizer = new TurnFinalizer({ db: testDb.repo, eventBus, logger });
-    let releaseDispatch!: () => void;
-    let markDispatchStarted!: () => void;
-    const dispatchRelease = new Promise<void>((resolve) => {
-      releaseDispatch = resolve;
-    });
-    const dispatchStarted = new Promise<void>((resolve) => {
-      markDispatchStarted = resolve;
-    });
-    let settledClaimAttempts = 0;
-    let markBothClaimAttemptsSettled!: () => void;
-    const bothClaimAttemptsSettled = new Promise<void>((resolve) => {
-      markBothClaimAttemptsSettled = resolve;
-    });
-    const claimTurnDeliveryLease =
-      testDb.repo.claimTurnDeliveryLease.bind(testDb.repo);
-    vi.spyOn(testDb.repo, 'claimTurnDeliveryLease').mockImplementation(
-      async (input) => {
-        try {
-          return await claimTurnDeliveryLease(input);
-        } finally {
-          settledClaimAttempts += 1;
-          if (settledClaimAttempts === 2) {
-            markBothClaimAttemptsSettled();
-          }
-        }
-      },
-    );
-    const redispatchQueuedTurn = vi.fn(async (params: RedispatchQueuedTurnParams) => {
-      markDispatchStarted();
-      await eventBus.emitAsync(
-        'user.message',
-        params.deliveryContext.userMessage!,
-        { deliveryFence: params.deliveryContext.fence },
-      );
-      await dispatchRelease;
-    });
-    const sharedDeps = {
-      db: testDb.repo,
-      eventBus,
-      finalizer,
-      logger,
-      redispatchQueuedTurn,
-    };
-
-    const reconciliations = [
-      reconcileStrandedTurnsOnStartup(sharedDeps, 30, {
-        ownerId: 'replica-a',
-        leaseMs: 60_000,
-        heartbeatMs: 20_000,
-      }),
-      reconcileStrandedTurnsOnStartup(sharedDeps, 30, {
-        ownerId: 'replica-b',
-        leaseMs: 60_000,
-        heartbeatMs: 20_000,
-      }),
-    ];
-    await Promise.all([dispatchStarted, bothClaimAttemptsSettled]);
-    releaseDispatch();
-    const results = await Promise.all(reconciliations);
-
-    expect(redispatchQueuedTurn).toHaveBeenCalledTimes(1);
-    expect(results.reduce((total, result) => total + result.redispatched, 0)).toBe(1);
-    const frames = await testDb.repo.getTurnFrames(turn.id);
-    expect(frames.map(({ type }) => type)).toEqual([
-      'TEXT_MESSAGE_START',
-      'TEXT_MESSAGE_CONTENT',
-      'TEXT_MESSAGE_END',
-    ]);
-    expect(frames.filter(({ sourceType }) => sourceType === 'user.message')).toHaveLength(1);
-    expect(logger.error).not.toHaveBeenCalled();
-  });
-
-  it('fences A-expire/B-take/A-wake queued-turn recovery across real repositories', async () => {
-    const agent = await testDb.repo.createAgent({
-      name: 'authorization-crash-recovery-agent',
-      harness: 'langgraph',
-      harnessConfig: '{}',
-      systemPrompt: 'test',
-      tools: [],
-    });
-    const conversation = await testDb.repo.createConversation(agent.id);
-    const userMessage = await testDb.repo.addMessage({
-      agentId: agent.id,
-      conversationId: conversation.id,
-      role: 'user',
-      content: 'remain queued until delivery',
-      createdAt: 10,
-    });
-    const turn = await testDb.repo.createTurn({
-      agentId: agent.id,
-      conversationId: conversation.id,
-      userMessageId: userMessage.id,
-      mode: 'interactive',
-      status: 'queued',
-      startedAt: 20,
-    });
-
-    const ownerA = await testDb.repo.claimTurnDeliveryLease({
-      turnId: turn.id,
-      ownerId: 'replica-a',
-      leaseDurationMs: 60_000,
-    });
-    expect(ownerA).toBeDefined();
+    expect(result).toEqual(expect.objectContaining({
+      failed: 1,
+      redispatched: 0,
+      skippedHitlParked: 0,
+    }));
+    // The dispatchable queued turn is untouched boot debt no longer.
     expect((await testDb.repo.getTurn(turn.id))?.status).toBe('queued');
     expect(await testDb.repo.getTurnFrames(turn.id)).toEqual([]);
-    expect(await testDb.repo.claimTurnDeliveryLease({
-      turnId: turn.id,
-      ownerId: 'replica-b',
-      leaseDurationMs: 60_000,
-    })).toBeUndefined();
-    await testDb.conn.pgClient`
-      UPDATE turn_delivery_leases
-      SET
-        lease_expires_at = floor(extract(epoch from clock_timestamp()) * 1000)::bigint - 1,
-        updated_at = floor(extract(epoch from clock_timestamp()) * 1000)::bigint
-      WHERE turn_id = ${turn.id}
-    `;
+    expect((await testDb.repo.getTurn(orphan.id))?.status).toBe('error');
+  });
 
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const canonicalLog = new CanonicalLog({ db: testDb.repo, logger });
-    const eventBus = new TypedEventBus({
-      persistEvent: async (type, _agentId, _payload, parsedPayload, context) => {
-        await canonicalLog.ingest(type, parsedPayload ?? {}, context);
+  it('dispatchQueuedTurn recovers a pre-boot queued turn under a fenced lease with prompt republication', async () => {
+    const agent = await testDb.repo.createAgent({
+      name: 'dispatch-recovery-agent',
+      harness: 'langgraph',
+      harnessConfig: '{}',
+      systemPrompt: 'test',
+      tools: [],
+    });
+    const conversation = await testDb.repo.createConversation(agent.id);
+    const userMessage = await testDb.repo.addMessage({
+      agentId: agent.id,
+      conversationId: conversation.id,
+      role: 'user',
+      content: 'recover me with my prompt frames',
+      createdAt: 10,
+    });
+    const turnId = 'dispatch-recovery-turn-1';
+    await testDb.repo.createTurnWithSecretEnvelope({
+      id: turnId,
+      agentId: agent.id,
+      conversationId: conversation.id,
+      userMessageId: userMessage.id,
+      mode: 'interactive',
+      status: 'queued',
+      startedAt: 20,
+    }, TEST_TURN_SECRET_CODEC.seal(turnId, {}));
+
+    let captured: Record<string, unknown> | undefined;
+    let releaseExecution: (() => void) | undefined;
+    const executeTurn = vi.fn(async (params: Record<string, unknown>) => {
+      captured = params;
+      await new Promise<void>((resolve) => { releaseExecution = resolve; });
+    });
+    const service = new TurnStartupService({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      turnSecretEnvelopeCodec: TEST_TURN_SECRET_CODEC,
+    });
+    service.configureExecution({
+      db: testDb.repo,
+      agentTurnService: { executeTurn } as never,
+    });
+
+    expect(await service.dispatchQueuedTurn({
+      turnId,
+      agentId: agent.id,
+      conversationId: conversation.id,
+    })).toBe('dispatched');
+
+    await vi.waitFor(() => expect(captured).toBeDefined());
+    expect(captured).toMatchObject({
+      turnId,
+      suppressTurnStartedEvent: true,
+      deliveryContext: {
+        fence: { fenceToken: 1 },
+        userMessage: {
+          messageId: userMessage.id,
+          content: 'recover me with my prompt frames',
+        },
       },
     });
-    const finalizer = new TurnFinalizer({ db: testDb.repo, eventBus, logger });
-    const sandboxSession = await testDb.repo.createSandboxSession({
-      conversationId: conversation.id,
+
+    // While the recovery lease is held, a second dispatch is a silent skip.
+    expect(await service.dispatchQueuedTurn({
+      turnId,
       agentId: agent.id,
-      harnessName: 'langgraph',
-    });
-    let ownerBFence: { ownerId: string; fenceToken: number } | undefined;
-    const redispatchQueuedTurn = vi.fn(async (params: {
-      turnId: string;
-      agentId: string;
-      conversationId: string;
-      mode: 'interactive' | 'background';
-      taskDescription: string;
-      userMessageId: string;
-      messages: Message[];
-      deliveryContext: {
-        fence: { ownerId: string; fenceToken: number };
-        userMessage?: {
-          turnId: string;
-          agentId: string;
-          conversationId: string;
-          messageId: string;
-          content: string;
-          timestamp: number;
-        };
-      };
-    }) => {
-      ownerBFence = params.deliveryContext.fence;
-      expect(await testDb.repo.activateTurnDelivery({
-        turnId: params.turnId,
-        sandboxSessionId: sandboxSession.id,
-        ownerId: ownerBFence.ownerId,
-        fenceToken: ownerBFence.fenceToken,
-        expectedActiveGeneration: {
-          restoreFenceToken: sandboxSession.restoreFenceToken,
-          containerId: sandboxSession.containerId,
-        },
-      })).toBe(true);
-      const persistenceContext = { deliveryFence: ownerBFence };
-      await eventBus.emitAsync(
-        'user.message',
-        params.deliveryContext.userMessage!,
-        persistenceContext,
-      );
-      await eventBus.emitAsync('turn.started', {
-        turnId: params.turnId,
-        sandboxSessionId: sandboxSession.id,
-        agentId: params.agentId,
-        conversationId: params.conversationId,
-        mode: params.mode,
-        taskDescription: params.taskDescription,
-        timestamp: Date.now(),
-      }, persistenceContext);
-      await finalizer.finalize({
-        turnId: params.turnId,
-        sandboxSessionId: sandboxSession.id,
-        agentId: params.agentId,
-        conversationId: params.conversationId,
-        status: 'completed',
-        durationMs: 1,
-        expectedDeliveryFence: ownerBFence,
+      conversationId: conversation.id,
+    })).toBe('skipped');
+
+    releaseExecution?.();
+    // The lease is released once the launch settles: the next claim succeeds
+    // with a bumped fence, proving release + monotonic takeover.
+    await vi.waitFor(async () => {
+      const lease = await testDb.repo.claimTurnDeliveryLease({
+        turnId,
+        ownerId: 'verifier',
+        leaseDurationMs: 5_000,
       });
+      expect(lease?.fenceToken).toBe(2);
     });
+  });
 
-    const recovered = await reconcileStrandedTurnsOnStartup({
-      db: testDb.repo,
-      eventBus,
-      finalizer,
-      logger,
-      redispatchQueuedTurn,
-    }, 30, {
-      ownerId: 'replica-b',
-      leaseMs: 60_000,
-      heartbeatMs: 20_000,
+  it('dispatchQueuedTurn launches fresh post-boot turns without a recovery lease', async () => {
+    const agent = await testDb.repo.createAgent({
+      name: 'dispatch-fresh-agent',
+      harness: 'langgraph',
+      harnessConfig: '{}',
+      systemPrompt: 'test',
+      tools: [],
     });
-    await recovered.redispatchComplete;
-
-    expect(redispatchQueuedTurn).toHaveBeenCalledTimes(1);
-    expect(recovered.redispatched).toBe(1);
-    expect((await testDb.repo.getTurn(turn.id))?.status).toBe('completed');
-    const frames = await testDb.repo.getTurnFrames(turn.id);
-    expect(frames.map(({ type }) => type)).toEqual([
-      'TEXT_MESSAGE_START',
-      'TEXT_MESSAGE_CONTENT',
-      'TEXT_MESSAGE_END',
-      'RUN_STARTED',
-      'RUN_FINISHED',
-    ]);
-    expect(frames.filter(({ sourceType }) => sourceType === 'user.message')).toHaveLength(1);
-    expect(await testDb.repo.addCanonicalMessage({
-      id: `stale-a-${turn.id}`,
+    const conversation = await testDb.repo.createConversation(agent.id);
+    const userMessage = await testDb.repo.addMessage({
       agentId: agent.id,
       conversationId: conversation.id,
-      turnId: turn.id,
-      role: 'assistant',
-      content: 'stale A woke up',
-    }, {
-      ownerId: ownerA!.ownerId,
-      fenceToken: ownerA!.fenceToken,
-    })).toBeUndefined();
-    expect(await testDb.repo.finalizeTurnIfOpen(turn.id, {
-      completedAt: Date.now(),
-      error: 'stale A terminal',
-      status: 'error',
-    }, {
-      ownerId: ownerA!.ownerId,
-      fenceToken: ownerA!.fenceToken,
-    })).toBe(false);
-    expect(ownerBFence).toMatchObject({ ownerId: 'replica-b', fenceToken: 2 });
+      role: 'user',
+      content: 'fresh enqueue',
+      createdAt: Date.now(),
+    });
+    const turnId = 'dispatch-fresh-turn-1';
+    await testDb.repo.createTurnWithSecretEnvelope({
+      id: turnId,
+      agentId: agent.id,
+      conversationId: conversation.id,
+      userMessageId: userMessage.id,
+      mode: 'interactive',
+      status: 'queued',
+      startedAt: Date.now() + 60_000,
+    }, TEST_TURN_SECRET_CODEC.seal(turnId, {}));
+
+    let captured: Record<string, unknown> | undefined;
+    const executeTurn = vi.fn(async (params: Record<string, unknown>) => {
+      captured = params;
+    });
+    const service = new TurnStartupService({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      turnSecretEnvelopeCodec: TEST_TURN_SECRET_CODEC,
+    });
+    service.configureExecution({
+      db: testDb.repo,
+      agentTurnService: { executeTurn } as never,
+    });
+
+    expect(await service.dispatchQueuedTurn({
+      turnId,
+      agentId: agent.id,
+      conversationId: conversation.id,
+    })).toBe('dispatched');
+    await vi.waitFor(() => expect(captured).toBeDefined());
+    expect(captured?.deliveryContext).toBeUndefined();
+    expect(captured?.suppressTurnStartedEvent).toBeUndefined();
   });
 });

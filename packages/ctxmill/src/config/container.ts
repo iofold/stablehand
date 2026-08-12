@@ -21,6 +21,7 @@ import { createGuardedFetch } from '../util/egress.js';
 import { createWebhookRelaySpineConsumer } from '../orchestrator/webhook-relay.js';
 import { TurnStartupService } from '../orchestrator/turn-startup-service.js';
 import { createTurnQueueAdmission } from '../orchestrator/turn-queue-admission.js';
+import { TurnDispatcher } from '../orchestrator/turn-dispatcher.js';
 import { TurnSecretEnvelopeCodec } from '../orchestrator/turn-secret-envelope.js';
 import { TurnFinalizer } from '../orchestrator/turn-finalizer.js';
 import { reconcileStrandedTurnsOnStartup } from '../orchestrator/turn-reconciler.js';
@@ -91,6 +92,7 @@ export interface AppContainer {
   secretProvider: SecretProvider;
   callbackDispatcher: CallbackDispatcher;
   turnStartupService: TurnStartupService;
+  turnDispatcher: TurnDispatcher;
   /** Container manager for sandbox lifecycle. */
   containerManager: SandboxContainerManager;
   workspaceDiffService: WorkspaceDiffService;
@@ -626,6 +628,27 @@ export async function createContainer(
       },
     }),
   });
+  // ctx-z5k0: the durable queue dispatcher. Enqueue paths kick it for
+  // sub-poll latency; it drains any pre-restart backlog in the background
+  // instead of blocking startup (the old boot barrier).
+  const turnDispatcher = new TurnDispatcher({
+    db,
+    dispatchTurn: (candidate) => turnStartupService.dispatchQueuedTurn(candidate),
+    expireTurn: (turn) => turnStartupService.expireQueuedTurn(turn),
+    hasSlotHeadroom: () => {
+      const metrics = containerManager.getMetrics();
+      return metrics.active + metrics.queued < metrics.maxGlobalContainers;
+    },
+    queuedTurnTimeoutMs: async () => (await settingsService.getAll()).queuedTurnTimeoutMs,
+    logger: {
+      info: (msg: string) => console.log(msg),
+      warn: (msg: string) => console.warn(msg),
+      error: (msg: string, err?: unknown) => console.error(msg, err),
+    },
+  });
+  turnStartupService.setDispatchKick(() => turnDispatcher.kick());
+  turnDispatcher.start();
+
   await triggerManager.start();
   await spineConsumerRunner.start();
   // Crash/event-store recovery must finish before createContainer returns and
@@ -660,6 +683,7 @@ export async function createContainer(
     secretProvider,
     callbackDispatcher,
     turnStartupService,
+    turnDispatcher,
     containerManager,
     workspaceDiffService,
     settingsService,
@@ -679,8 +703,6 @@ export async function createContainer(
         eventBus,
         finalizer: new TurnFinalizer({ db, eventBus, logger: console }),
         logger: console,
-        redispatchQueuedTurn: (params, signal) =>
-          turnStartupService.redispatchQueuedTurn(params, signal),
         resetStrandedSession: (sessionId, lifecycleOperation) =>
           realSessionManager.killSession(sessionId, { lifecycleOperation }),
       },
@@ -689,6 +711,7 @@ export async function createContainer(
     artifactStore,
     sessionManager: realSessionManager,
     close: async () => {
+      turnDispatcher.stop();
       lifecyclePolicy.stop();
       await modelGatewayReconciler?.stop();
       await scheduleService.stop();

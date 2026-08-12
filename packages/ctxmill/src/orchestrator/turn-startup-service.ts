@@ -14,6 +14,7 @@ import type { BudgetEnforcer } from './budget-enforcer.js';
 import type { TurnQueueAdmission } from './turn-queue-admission.js';
 import { TagConflictError, readBudgetDimensions, readDefaultTags } from './budgets.js';
 import type { TurnDeliveryContext } from './turn-delivery-fence.js';
+import { acquireTurnDeliveryLease } from './turn-delivery-lease.js';
 import type { TurnSecretEnvelopeCodec } from './turn-secret-envelope.js';
 import {
   resolveModelGatewayTurnAttribution,
@@ -56,7 +57,7 @@ export class AgentModeNotAllowedError extends Error {
 type ExecutionDeps = {
   db: Pick<
     DatabaseRepository,
-    'addMessage' | 'createConversation' | 'createTurnWithSecretEnvelope' | 'deleteMessage' | 'finalizeTurnIfOpen' | 'finalizeTurnAndMarkLifecycleDraining' | 'getAgent' | 'getConversation' | 'getMessages' | 'getTurn' | 'getTurnSecretEnvelope'
+    'addMessage' | 'claimTurnDeliveryLease' | 'createConversation' | 'createTurnWithSecretEnvelope' | 'deleteMessage' | 'finalizeTurnIfOpen' | 'finalizeTurnAndMarkLifecycleDraining' | 'getAgent' | 'getConversation' | 'getMessages' | 'getTurn' | 'getTurnSecretEnvelope' | 'releaseTurnDeliveryLease' | 'renewTurnDeliveryLease'
   >;
   eventBus?: Pick<TypedEventBus, 'emit'> & Partial<Pick<TypedEventBus, 'emitAsync'>>;
   sessionManager?: {
@@ -132,6 +133,8 @@ async function emitStartupEvent<K extends Parameters<TypedEventBus['emit']>[0]>(
 export class TurnStartupService {
   private executionDeps: ExecutionDeps | null = null;
   private turnFinalizer: TurnFinalizer | null = null;
+  private dispatchKick: (() => void) | null = null;
+  private readonly processStartedAtMs = Date.now();
 
   constructor(private readonly deps: TurnStartupServiceDeps) {}
 
@@ -389,6 +392,167 @@ export class TurnStartupService {
       }).catch((dbErr) => {
         this.deps.logger.error(`[TurnStartupService] failed to finalize turn ${start.turnId} after session error:`, dbErr);
       });
+    });
+  }
+
+  /**
+   * Route a freshly prepared turn to execution (ctx-z5k0). With a dispatcher
+   * wired, the durable queued row is the handoff and the dispatcher claims
+   * it on its next pass; without one (tests, embedded use) this falls back
+   * to the legacy direct launch so behavior is unchanged.
+   */
+  requestDispatch(start: PreparedTurnStart, agentId: string): void {
+    if (this.dispatchKick) {
+      this.dispatchKick();
+      return;
+    }
+    void this.launchPreparedTurn(start, agentId);
+  }
+
+  setDispatchKick(kick: () => void): void {
+    this.dispatchKick = kick;
+  }
+
+  /**
+   * Dispatcher claim-and-launch (ctx-z5k0): rehydrates a queued turn from
+   * its durable row, takes ONE concurrency reservation attempt (no_capacity
+   * leaves the row queued for a later pass — never a permanent error), and
+   * launches without awaiting execution. The delivery lease inside
+   * executeTurn remains the authoritative claim; losing it is a silent skip.
+   */
+  async dispatchQueuedTurn(params: {
+    turnId: string;
+    agentId: string;
+    conversationId: string | null;
+  }): Promise<'dispatched' | 'no_capacity' | 'skipped'> {
+    const executionDeps = this.getExecutionDeps();
+    const turn = await executionDeps.db.getTurn(params.turnId);
+    if (!turn || turn.status !== 'queued' || turn.completedAt !== null) {
+      return 'skipped';
+    }
+    if (!turn.conversationId || !turn.userMessageId) {
+      return 'skipped'; // stranded-shaped; boot reconciliation owns these
+    }
+
+    let concurrencyReservation: ConcurrencyReservation | undefined;
+    try {
+      if (executionDeps.sessionManager?.reserveConcurrencySlot) {
+        concurrencyReservation = executionDeps.sessionManager.reserveConcurrencySlot(turn.agentId);
+      } else {
+        executionDeps.sessionManager?.checkConcurrencyLimit(turn.agentId);
+      }
+    } catch (err) {
+      if (err instanceof ConcurrencyLimitError) {
+        return 'no_capacity';
+      }
+      throw err;
+    }
+
+    try {
+      const agent = await executionDeps.db.getAgent(turn.agentId);
+      if (!agent?.harness) {
+        throw new Error(`Agent ${turn.agentId} not found or has no harness for queued turn ${turn.id}`);
+      }
+      const secretEnvelope = await executionDeps.db.getTurnSecretEnvelope(turn.id);
+      if (!secretEnvelope) {
+        throw new Error(`Encrypted turn credentials are missing for queued turn ${turn.id}`);
+      }
+      const turnSecrets = this.deps.turnSecretEnvelopeCodec.open(turn.id, secretEnvelope);
+      const rawMessages = await executionDeps.db.getMessages(turn.conversationId);
+      const mapped = mapMessagesToInternal(rawMessages, turn.agentId);
+      const userMessageIndex = mapped.findIndex((message) => message.id === turn.userMessageId);
+      if (userMessageIndex < 0) {
+        throw new Error(`Queued turn ${turn.id} user message ${turn.userMessageId} not found`);
+      }
+
+      // Turns enqueued before this process booted are crash recoveries: they
+      // already emitted their start events in a prior life, and their prompt
+      // frames may be missing (crash between message persist and frame
+      // ingest). Claim the delivery lease here — the fenced activation path
+      // republishes deliveryContext.userMessage idempotently — exactly the
+      // old boot-redispatch semantics, minus the boot barrier.
+      const preBoot = turn.startedAt < this.processStartedAtMs;
+      let deliveryContext: TurnDeliveryContext | undefined;
+      let releaseLease: (() => Promise<void>) | undefined;
+      let leaseSignal: AbortSignal | undefined;
+      if (preBoot) {
+        const guard = await acquireTurnDeliveryLease(
+          { db: executionDeps.db, logger: this.deps.logger },
+          turn.id,
+          {},
+        );
+        if (!guard) {
+          concurrencyReservation?.release();
+          return 'skipped'; // owned elsewhere (another replica / resume worker)
+        }
+        releaseLease = guard.release;
+        leaseSignal = guard.signal;
+        const userMessage = mapped[userMessageIndex];
+        deliveryContext = {
+          fence: guard.fence,
+          ...(turn.mode !== 'background' && userMessage
+            ? {
+              userMessage: {
+                turnId: turn.id,
+                agentId: turn.agentId,
+                conversationId: turn.conversationId,
+                messageId: turn.userMessageId,
+                content: userMessage.content ?? '',
+                timestamp: userMessage.createdAt instanceof Date
+                  ? userMessage.createdAt.getTime()
+                  : Date.now(),
+              },
+            }
+            : {}),
+        };
+      }
+
+      const launch = this.launchPreparedTurn({
+        agentDef: buildAgentDefinition(agent),
+        conversationId: turn.conversationId,
+        turnId: turn.id,
+        messageId: turn.userMessageId,
+        messages: mapped.slice(0, userMessageIndex + 1),
+        mode: turn.mode === 'background' ? 'background' : 'interactive',
+        taskDescription: turn.taskDescription ?? mapped[userMessageIndex]?.content ?? '',
+        turnSecrets,
+        ...(concurrencyReservation ? { concurrencyReservation } : {}),
+        ...(deliveryContext ? { deliveryContext, suppressTurnStartedEvent: true } : {}),
+      }, turn.agentId, leaseSignal ? { signal: leaseSignal } : undefined);
+      if (releaseLease) {
+        const release = releaseLease;
+        void launch.finally(() => {
+          void release().catch((err) => {
+            this.deps.logger.error(`[TurnStartupService] failed to release dispatch lease for turn ${turn.id}:`, err);
+          });
+        });
+      }
+      return 'dispatched';
+    } catch (err) {
+      concurrencyReservation?.release();
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      this.deps.logger.error(`[TurnStartupService] failed to dispatch queued turn ${params.turnId}:`, err);
+      await this.getTurnFinalizer().finalize({
+        turnId: params.turnId,
+        agentId: params.agentId,
+        conversationId: turn.conversationId,
+        status: 'error',
+        error: errorMessage,
+      }).catch((dbErr) => {
+        this.deps.logger.error(`[TurnStartupService] failed to finalize queued turn ${params.turnId} after dispatch error:`, dbErr);
+      });
+      return 'skipped';
+    }
+  }
+
+  /** Honest queue-residency bound (ctx-z5k0): finalize an expired queued turn. */
+  async expireQueuedTurn(turn: { turnId: string; agentId: string; conversationId: string | null }): Promise<void> {
+    await this.getTurnFinalizer().finalize({
+      turnId: turn.turnId,
+      agentId: turn.agentId,
+      conversationId: turn.conversationId ?? '',
+      status: 'error',
+      error: 'Queued turn expired before dispatch (queue_expired). Please retry.',
     });
   }
 

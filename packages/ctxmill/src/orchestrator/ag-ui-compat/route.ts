@@ -249,7 +249,7 @@ export async function agUiCompatRoutes(
       // stable ids (ctx-4fs); fresh runs pick up the frames prepareTurnStart
       // persisted before this subscription existed (ctxmill.turn.pending,
       // user.message) so clients get provisioning feedback immediately —
-      // launchPreparedTurn only fires below, so nothing can slip between
+      // dispatch is requested only below, so nothing can slip between
       // this replay and the live subscription.
       for (const frame of await canonicalLog.replayTurnTail(activeTurn.id)) {
         if (frame.channel === 'run') {
@@ -286,7 +286,7 @@ export async function agUiCompatRoutes(
     });
 
     if (executionParams) {
-      void turnStartupService.launchPreparedTurn(executionParams, id);
+      turnStartupService.requestDispatch(executionParams, id);
     }
 
     return reply;
