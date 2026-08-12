@@ -5563,6 +5563,79 @@ export class DatabaseRepository {
     return { global: row?.global ?? 0, agent: row?.agent ?? 0 };
   }
 
+  /**
+   * Dispatch candidates (ctx-z5k0): per-conversation head-of-line queued
+   * turns with no running sibling, oldest first, annotated with the live
+   * session status so the dispatcher can lane them (warm vs slot) at claim
+   * time. Plain SELECT — claimTurnDeliveryLease is the authoritative,
+   * fenced claim; a stale candidate simply fails its claim and is skipped.
+   */
+  async getDispatchableQueuedTurns(limit: number): Promise<Array<{
+    turnId: string;
+    agentId: string;
+    conversationId: string | null;
+    startedAt: number;
+    sessionStatus: string | null;
+  }>> {
+    const bounded = Math.max(1, Math.min(Math.trunc(limit), 200));
+    const result = await this.db.execute(sql`
+      SELECT t.id AS turn_id, t.agent_id, t.conversation_id, t.started_at,
+             s.status AS session_status
+      FROM turns t
+      LEFT JOIN sandbox_sessions s
+        ON s.conversation_id = t.conversation_id
+       AND s.status IN ('ACTIVE', 'RESTORING')
+      WHERE t.status = 'queued' AND t.completed_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM turns r
+          WHERE r.conversation_id = t.conversation_id
+            AND r.completed_at IS NULL
+            AND (r.status = 'running' OR r.started_at < t.started_at)
+        )
+      ORDER BY t.started_at ASC, t.id ASC
+      LIMIT ${bounded}
+    `);
+    return Array.from(result as Iterable<Record<string, unknown>>).map((row) => ({
+      turnId: String(row.turn_id),
+      agentId: String(row.agent_id),
+      conversationId: row.conversation_id === null ? null : String(row.conversation_id),
+      startedAt: Number(row.started_at),
+      sessionStatus: row.session_status === null ? null : String(row.session_status),
+    }));
+  }
+
+  /** Queued turns older than the cutoff, for honest expiry (queue_expired). */
+  async getExpiredQueuedTurns(cutoffMs: number, limit = 100): Promise<Array<{ turnId: string; agentId: string; conversationId: string | null }>> {
+    const rows = await this.db
+      .select({
+        turnId: this.schema.turns.id,
+        agentId: this.schema.turns.agentId,
+        conversationId: this.schema.turns.conversationId,
+      })
+      .from(this.schema.turns)
+      .where(and(
+        eq(this.schema.turns.status, 'queued'),
+        isNull(this.schema.turns.completedAt),
+        lt(this.schema.turns.startedAt, cutoffMs),
+      ))
+      .orderBy(asc(this.schema.turns.startedAt))
+      .limit(Math.max(1, Math.min(Math.trunc(limit), 500)));
+    return rows;
+  }
+
+  /** Oldest queued turn age in ms (null when the queue is empty). */
+  async getOldestQueuedTurnAgeMs(): Promise<number | null> {
+    const [row] = await this.db
+      .select({ oldest: sql<number | null>`min(${this.schema.turns.startedAt})` })
+      .from(this.schema.turns)
+      .where(and(
+        eq(this.schema.turns.status, 'queued'),
+        isNull(this.schema.turns.completedAt),
+      ));
+    const oldest = row?.oldest;
+    return oldest === null || oldest === undefined ? null : Date.now() - Number(oldest);
+  }
+
   // ── API Keys (WO-5 scoped extension keys) ──────────────────
 
   async createApiKey(data: {
