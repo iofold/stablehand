@@ -669,6 +669,9 @@ describe('SandboxSessionManager contract', () => {
         'sess-1',
         'c-1',
         expect.any(Object),
+        // ctx-bukh: startup reconnection resumes the idle deadline from
+        // last_activity_at instead of resetting to a full fresh window.
+        { resumeFromLastActivity: true },
       );
     });
 

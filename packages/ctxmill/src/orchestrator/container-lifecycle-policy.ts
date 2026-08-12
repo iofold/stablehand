@@ -37,6 +37,7 @@ const DEFAULT_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_LIFECYCLE_RECOVERY_INTERVAL_MS = 5_000;
 const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
 const MAX_IDLE_CHECKPOINT_FAILURES = 3;
+const MAX_CONCURRENT_IDLE_CHECKPOINTS = 3;
 
 export type PauseState = 'none' | 'promoting';
 
@@ -130,6 +131,7 @@ export class ContainerLifecyclePolicy {
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
   private lifecycleRecoveryTimer: ReturnType<typeof setInterval> | null = null;
   private reconciliationRunning = false;
+  private activeIdleCheckpoints = 0;
   private lifecycleRecoveryRunning = false;
   private readonly removingContainers = new Set<string>();
 
@@ -268,14 +270,46 @@ export class ContainerLifecyclePolicy {
     return this.entries.get(sessionId)?.state ?? 'none';
   }
 
-  private armIdleTimer(sessionId: string, entry: PauseEntry): void {
+  private armIdleTimer(sessionId: string, entry: PauseEntry, delayMs = this.idleTimeoutMs): void {
     clearTimeoutSafe(entry.idleTimer);
     entry.idleTimer = setTimeout(() => {
       void this.executeIdleCheckpoint(sessionId).catch((err) => {
         this.logger.warn(`${TAG} idle checkpoint failed for session ${sessionId}:`, err);
       });
-    }, this.idleTimeoutMs);
+    }, delayMs);
     unrefTimer(entry.idleTimer);
+  }
+
+  /**
+   * ctx-bukh: idleness must survive restarts. Timers are process-local, but
+   * sandbox_sessions.last_activity_at is durable — on adoption/reconnect the
+   * deadline resumes from it instead of resetting to a fresh full window
+   * (which let crash-loops faster than the timeout suspend nothing, ever).
+   * Jitter breaks the post-restart lockstep herd.
+   */
+  private adjustIdleTimerFromLastActivity(sessionId: string, entry: PauseEntry): void {
+    void (async () => {
+      try {
+        const session = await this.db.getSandboxSession(sessionId);
+        const lastActivityAt = session?.lastActivityAt;
+        if (typeof lastActivityAt !== 'number' || lastActivityAt <= 0) return;
+        const current = this.entries.get(sessionId);
+        if (current !== entry || entry.state !== 'none' || !entry.idleCallbacks) return;
+        const elapsed = Date.now() - lastActivityAt;
+        if (elapsed <= 0) return;
+        const remaining = Math.max(
+          5_000 + Math.floor(Math.random() * 10_000),
+          this.idleTimeoutMs - elapsed,
+        );
+        if (remaining >= this.idleTimeoutMs) return;
+        this.armIdleTimer(sessionId, entry, remaining);
+        this.logger.debug(
+          `${TAG} resumed idle deadline for session ${sessionId}: ${remaining}ms remaining of ${this.idleTimeoutMs}ms`,
+        );
+      } catch (err) {
+        this.logger.warn(`${TAG} failed to resume idle deadline for session ${sessionId}:`, err);
+      }
+    })();
   }
 
   private rearmIdleTimers(): void {
@@ -289,7 +323,12 @@ export class ContainerLifecyclePolicy {
     }
   }
 
-  scheduleIdleTimeout(sessionId: string, containerId: string, callbacks: IdleCallbacks): void {
+  scheduleIdleTimeout(
+    sessionId: string,
+    containerId: string,
+    callbacks: IdleCallbacks,
+    options?: { resumeFromLastActivity?: boolean },
+  ): void {
     void this.cancelIdleTimeout(sessionId).catch((err) => {
       this.logger.warn(`${TAG} cancelIdleTimeout failed during reschedule for ${sessionId}:`, err);
     });
@@ -308,6 +347,9 @@ export class ContainerLifecyclePolicy {
 
     this.entries.set(sessionId, entry);
     this.logger.debug(`${TAG} scheduled idle timeout for session ${sessionId} in ${this.idleTimeoutMs}ms`);
+    if (options?.resumeFromLastActivity) {
+      this.adjustIdleTimerFromLastActivity(sessionId, entry);
+    }
   }
 
   async cancelIdleTimeout(sessionId: string): Promise<void> {
@@ -434,10 +476,23 @@ export class ContainerLifecyclePolicy {
       return;
     }
 
+    // ctx-bukh: bound simultaneous workspace captures. A synchronized idle
+    // wave (batch completion, post-restart) must drain in bounded batches,
+    // not as N concurrent tar captures. Staggered re-arm, not a failure.
+    if (this.activeIdleCheckpoints >= MAX_CONCURRENT_IDLE_CHECKPOINTS) {
+      this.armIdleTimer(sessionId, entry, 10_000 + Math.floor(Math.random() * 10_000));
+      this.entries.set(sessionId, entry);
+      this.logger.debug(
+        `${TAG} deferred idle checkpoint for session ${sessionId}; ${this.activeIdleCheckpoints} captures already running`,
+      );
+      return;
+    }
+
     entry.state = 'promoting';
     this.entries.set(sessionId, entry);
     this.logger.debug(`${TAG} idle timeout reached for session ${sessionId}, checkpointing directly`);
 
+    this.activeIdleCheckpoints += 1;
     try {
       await retryWithBackoff(() => callbacks.onCheckpoint(sessionId), {
         delays: [1_000, 2_000],
@@ -469,6 +524,8 @@ export class ContainerLifecyclePolicy {
         this.logger.error(`${TAG} failed to checkpoint idle session ${sessionId}:`, err);
         this.rescheduleIdleCheckpointRetry(sessionId, entry, callbacks);
       }
+    } finally {
+      this.activeIdleCheckpoints -= 1;
     }
   }
 

@@ -7693,10 +7693,26 @@ export class DatabaseRepository {
     });
   }
 
-  async cleanupToolDedup(maxAgeMs: number = 10 * 60 * 1000): Promise<number> {
-    const cutoff = Date.now() - maxAgeMs;
+  /**
+   * Dedup retention (ctx-jnnn): terminal rows age out fast, but in_progress
+   * rows must outlive the longest legitimate tool execution — sweeping a
+   * live row lets a replay of the same request_id re-execute the tool. The
+   * in-progress ceiling sits above the 30-minute turn timeout so only rows
+   * from genuinely dead deliveries are reaped.
+   */
+  async cleanupToolDedup(
+    maxAgeMs: number = 10 * 60 * 1000,
+    inProgressMaxAgeMs: number = 45 * 60 * 1000,
+  ): Promise<number> {
+    const now = Date.now();
     const deleted = await this.db.delete(this.schema.toolRequestDedup)
-      .where(lt(this.schema.toolRequestDedup.createdAt, cutoff))
+      .where(or(
+        and(
+          inArray(this.schema.toolRequestDedup.status, ['completed', 'failed']),
+          lt(this.schema.toolRequestDedup.createdAt, now - maxAgeMs),
+        ),
+        lt(this.schema.toolRequestDedup.createdAt, now - inProgressMaxAgeMs),
+      ))
       .returning();
     return deleted.length;
   }

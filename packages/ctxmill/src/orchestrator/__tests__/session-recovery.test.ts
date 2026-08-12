@@ -706,6 +706,7 @@ describe('SandboxSessionManager session recovery', () => {
         session.sessionId,
         expect.any(String),
         expect.any(Object),
+        undefined,
       );
     });
 

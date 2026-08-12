@@ -229,10 +229,15 @@ export async function triggerRoutes(
         });
       }
 
+      // ctx-mcef: _triggerDepth is internal cascade bookkeeping. An external
+      // caller must never set it — stripping here means every HTTP emit
+      // starts a fresh cascade at depth zero, and the maxTriggerDepth guard
+      // is enforced rather than advisory.
+      const { _triggerDepth: _clientDepth, ...payload } = validated.data.payload;
       await triggerManager.emitCustomEventAsync(
         validated.data.type,
         validated.data.agentId,
-        validated.data.payload,
+        payload,
       );
 
       return { ok: true, type: validated.data.type };

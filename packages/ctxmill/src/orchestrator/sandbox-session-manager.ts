@@ -82,7 +82,7 @@ export class SandboxSessionManager {
       getExistingConversationWorkspaceDir: (agentId, conversationId) =>
         this.getExistingConversationWorkspaceDir(agentId, conversationId),
       onActiveSessionReconnected: (record) => {
-        this.turnOrchestrator.scheduleIdleTimeoutForActiveSession(record.sessionId, record);
+        this.turnOrchestrator.scheduleIdleTimeoutForActiveSession(record.sessionId, record, { resumeFromLastActivity: true });
         return {
           revoke: () => deps.lifecyclePolicy.cancelIdleTimeout(
             record.sessionId,

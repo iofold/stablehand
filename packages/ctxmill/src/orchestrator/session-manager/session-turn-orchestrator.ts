@@ -835,7 +835,11 @@ export class SessionTurnOrchestrator {
     this.scheduleIdleTimeoutForActiveSession(sessionId, record);
   }
 
-  scheduleIdleTimeoutForActiveSession(sessionId: string, record: SessionRecord): void {
+  scheduleIdleTimeoutForActiveSession(
+    sessionId: string,
+    record: SessionRecord,
+    options?: { resumeFromLastActivity?: boolean },
+  ): void {
     this.deps.lifecyclePolicy.scheduleIdleTimeout(sessionId, record.containerId, {
       onCheckpoint: async (sid) => {
         await this.deps.onCheckpoint(sid);
@@ -843,7 +847,7 @@ export class SessionTurnOrchestrator {
       onContainerGone: async (sid) => {
         await this.handleContainerGone(sid);
       },
-    });
+    }, options);
   }
 
   private async handleContainerGone(sessionId: string): Promise<void> {

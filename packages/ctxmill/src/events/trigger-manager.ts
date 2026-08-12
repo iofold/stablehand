@@ -363,6 +363,7 @@ export class EventTriggerManager {
     }
 
     const firedAgents = new Set<string>();
+    const fireFailures: unknown[] = [];
 
     for (const trigger of this.triggers.values()) {
       if (!trigger.enabled) continue;
@@ -392,7 +393,8 @@ export class EventTriggerManager {
         : payloadObj;
       const task = interpolateTemplate(trigger.taskTemplate, flatPayload);
 
-      // Fire the run — errors are isolated per trigger
+      // Fire the run — errors are isolated per trigger within this event,
+      // then rethrown so the spine cursor holds (ADR-017, ctx-mcef).
       const operation = this.fireTrigger(
         trigger,
         task,
@@ -410,7 +412,16 @@ export class EventTriggerManager {
           `[EventTriggerManager] failed to fire trigger ${trigger.id} for agent ${trigger.agentId}:`,
           err,
         );
+        fireFailures.push(err);
       }
+    }
+
+    if (fireFailures.length > 0) {
+      // ctx-mcef: swallowing this let the cursor advance and lost the
+      // dispatch forever. Rethrowing holds the cursor; catch-up replays in
+      // ~30s, and the deterministic trigger turn id plus the firing-row
+      // unique index make the retry effectively-once.
+      throw fireFailures[0];
     }
   }
 
