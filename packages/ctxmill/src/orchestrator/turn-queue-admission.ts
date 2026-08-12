@@ -25,6 +25,18 @@ export class QueueFullError extends Error {
   }
 }
 
+/** The dispatcher has stopped making passes while work is queued (503). */
+export class DispatchStalledError extends Error {
+  readonly code = 'dispatch_stalled';
+  readonly statusCode = 503;
+  readonly retryAfterSec = 15;
+
+  constructor() {
+    super('Turn dispatch is stalled; the queue is not draining. Retry later.');
+    this.name = 'DispatchStalledError';
+  }
+}
+
 export interface TurnQueueAdmission {
   check(agentId: string): Promise<void>;
 }
@@ -32,6 +44,7 @@ export interface TurnQueueAdmission {
 export interface TurnQueueAdmissionDeps {
   db: Pick<DatabaseRepository, 'countQueuedTurns'>;
   settings: () => Promise<{ maxQueuedTurnsGlobal: number; maxQueuedTurnsPerAgent: number }>;
+  isDispatchStalled?: () => boolean;
 }
 
 export function createTurnQueueAdmission(deps: TurnQueueAdmissionDeps): TurnQueueAdmission {
@@ -41,6 +54,12 @@ export function createTurnQueueAdmission(deps: TurnQueueAdmissionDeps): TurnQueu
         deps.settings(),
         deps.db.countQueuedTurns(agentId),
       ]);
+      // Accepting work a stalled dispatcher will never drain is dishonest —
+      // but an empty queue with a stalled loop is indistinguishable from a
+      // freshly booted one, so only reject when work is actually waiting.
+      if (counts.global > 0 && deps.isDispatchStalled?.()) {
+        throw new DispatchStalledError();
+      }
       if (counts.global >= settings.maxQueuedTurnsGlobal) {
         throw new QueueFullError('global', agentId, counts.global, settings.maxQueuedTurnsGlobal);
       }

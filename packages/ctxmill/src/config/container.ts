@@ -127,7 +127,7 @@ export { VALID_WEBHOOK_EVENTS };
 
 interface TriggerRunCallbackDeps {
   db: Pick<DatabaseRepository, 'getAgent'>;
-  turnStartupService: Pick<TurnStartupService, 'prepareTurnStart' | 'launchPreparedTurn'>;
+  turnStartupService: Pick<TurnStartupService, 'prepareTurnStart' | 'requestDispatch'>;
   eventBus: Pick<TypedEventBus, 'emit'>;
 }
 
@@ -166,7 +166,7 @@ export function createTriggerRunCallback({
     // Fire-and-forget — AgentTurnService handles SSE broadcasting, message.delta events,
     // message persistence, and session completion. trigger.fired preserves the cascade
     // depth that EventTriggerManager already computed for this triggered run.
-    void turnStartupService.launchPreparedTurn(start, agentId, {
+    turnStartupService.requestDispatch(start, agentId, {
       onSuccess: () => {
         eventBus.emit('trigger.fired', {
           triggerId,
@@ -611,23 +611,6 @@ export async function createContainer(
       revision: modelGatewayConfig.revision,
     })
     : undefined;
-  turnStartupService.configureExecution({
-    db,
-    eventBus,
-    sessionManager: realSessionManager,
-    agentTurnService,
-    budgetEnforcer,
-    queueAdmission: createTurnQueueAdmission({
-      db,
-      settings: async () => {
-        const settings = await settingsService.getAll();
-        return {
-          maxQueuedTurnsGlobal: settings.maxQueuedTurnsGlobal,
-          maxQueuedTurnsPerAgent: settings.maxQueuedTurnsPerAgent,
-        };
-      },
-    }),
-  });
   // ctx-z5k0: the durable queue dispatcher. Enqueue paths kick it for
   // sub-poll latency; it drains any pre-restart backlog in the background
   // instead of blocking startup (the old boot barrier).
@@ -649,6 +632,25 @@ export async function createContainer(
   turnStartupService.setDispatchKick(() => turnDispatcher.kick());
   turnDispatcher.start();
 
+
+  turnStartupService.configureExecution({
+    db,
+    eventBus,
+    sessionManager: realSessionManager,
+    agentTurnService,
+    budgetEnforcer,
+    queueAdmission: createTurnQueueAdmission({
+      db,
+      settings: async () => {
+        const settings = await settingsService.getAll();
+        return {
+          maxQueuedTurnsGlobal: settings.maxQueuedTurnsGlobal,
+          maxQueuedTurnsPerAgent: settings.maxQueuedTurnsPerAgent,
+        };
+      },
+      isDispatchStalled: () => turnDispatcher.isStalled(),
+    }),
+  });
   await triggerManager.start();
   await spineConsumerRunner.start();
   // Crash/event-store recovery must finish before createContainer returns and

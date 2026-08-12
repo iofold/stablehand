@@ -5623,6 +5623,22 @@ export class DatabaseRepository {
     return rows;
   }
 
+  /**
+   * Idle veto (ctx-z5k0, full-veto sign-off): a session whose conversation
+   * has queued turns is not idle — suspending it would only be whiplash
+   * (release the slot, restore seconds later when the dispatcher arrives).
+   */
+  async hasQueuedTurnsForSandboxSession(sandboxSessionId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1 FROM turns t
+      JOIN sandbox_sessions s ON s.conversation_id = t.conversation_id
+      WHERE s.id = ${sandboxSessionId}
+        AND t.status = 'queued' AND t.completed_at IS NULL
+      LIMIT 1
+    `);
+    return Array.from(result as Iterable<unknown>).length > 0;
+  }
+
   /** Oldest queued turn age in ms (null when the queue is empty). */
   async getOldestQueuedTurnAgeMs(): Promise<number | null> {
     const [row] = await this.db

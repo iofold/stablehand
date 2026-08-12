@@ -398,7 +398,11 @@ export class ContainerLifecyclePolicy {
 
     let hasLiveDelivery: boolean;
     try {
-      hasLiveDelivery = await this.db.hasLiveTurnDeliveryForSandboxSession(sessionId);
+      hasLiveDelivery = await this.db.hasLiveTurnDeliveryForSandboxSession(sessionId)
+        // ctx-z5k0 full idle veto: queued work for this session's
+        // conversation means it is not idle — suspending would be
+        // suspend/restore whiplash the moment the dispatcher arrives.
+        || await this.db.hasQueuedTurnsForSandboxSession(sessionId);
     } catch (err) {
       if (this.entries.get(sessionId) !== entry || entry.idleCallbacks !== callbacks) {
         return;

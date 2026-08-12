@@ -3,7 +3,7 @@ import type { FastifyReply } from 'fastify';
 import { ConcurrencyLimitError } from './session-manager/concurrency-limit-error.js';
 import { BudgetExceededError, TagConflictError, TagNotProvisionedError } from './budgets.js';
 import { AgentModeNotAllowedError } from './turn-startup-service.js';
-import { QueueFullError } from './turn-queue-admission.js';
+import { DispatchStalledError, QueueFullError } from './turn-queue-admission.js';
 
 export function sendTurnStartError(reply: FastifyReply, err: unknown): boolean {
   if (err instanceof AgentModeNotAllowedError) {
@@ -32,6 +32,14 @@ export function sendTurnStartError(reply: FastifyReply, err: unknown): boolean {
 
   if (err instanceof TagConflictError || err instanceof TagNotProvisionedError) {
     reply.status(err.statusCode).send({ error: err.message, code: err.code });
+    return true;
+  }
+
+  if (err instanceof DispatchStalledError) {
+    reply
+      .status(err.statusCode)
+      .header('Retry-After', String(err.retryAfterSec))
+      .send({ error: err.message, code: err.code, retryAfterSec: err.retryAfterSec });
     return true;
   }
 

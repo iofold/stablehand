@@ -734,14 +734,17 @@ describe('Events and Triggers Integration', () => {
           () => expect(launchTriggeredTurn).toHaveBeenCalledOnce(),
           { timeout: 2_000, interval: 25 },
         );
-        launchTriggeredTurn.mockClear();
-
         const deleted = await app.inject({
           method: 'DELETE',
           url: `/api/agents/${doomedAgentId}`,
         });
         expect(deleted.statusCode).toBe(204);
-        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        // Dispatch is deferred (ctx-z5k0): a fire enqueued just before the
+        // delete may surface its launch shortly after it. Let in-flight
+        // dispatch settle, then observe that deletion stopped the cycle.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        launchTriggeredTurn.mockClear();
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
 
         expect(launchTriggeredTurn).not.toHaveBeenCalled();
         const events = await app.inject({

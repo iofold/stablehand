@@ -46,6 +46,8 @@ const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_BATCH_LIMIT = 32;
 /** A pass this stale while work is queued reads as dispatch_stalled (503). */
 export const DISPATCHER_STALL_MS = 30_000;
+/** Re-dispatch grace for launched-but-not-yet-activated turns. */
+export const DISPATCH_COOLDOWN_MS = 30_000;
 
 export class TurnDispatcher {
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -55,6 +57,14 @@ export class TurnDispatcher {
   private startedAt = 0;
   private serveSeq = 0;
   private readonly lastServedByAgent = new Map<string, number>();
+  /**
+   * Turns launched but possibly not yet activated (queued→running is async):
+   * without this, a candidate re-selects within the same pass and the loop
+   * double-dispatches. The delivery lease arbitrates correctness; this map
+   * just stops the waste. Stuck-queued rows retry after the cooldown and are
+   * ultimately owned by the expiry sweep.
+   */
+  private readonly recentlyDispatched = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(private readonly deps: TurnDispatcherDeps) {
@@ -146,7 +156,15 @@ export class TurnDispatcher {
         return a.startedAt - b.startedAt || a.turnId.localeCompare(b.turnId);
       });
 
+      const now = this.now();
+      for (const [turnId, dispatchedAt] of this.recentlyDispatched) {
+        if (now - dispatchedAt >= DISPATCH_COOLDOWN_MS) this.recentlyDispatched.delete(turnId);
+      }
+
       for (const candidate of ordered) {
+        if (this.recentlyDispatched.has(candidate.turnId)) {
+          continue; // launched; waiting on queued→running activation
+        }
         const warm = candidate.sessionStatus === 'ACTIVE';
         if (!warm && !this.deps.hasSlotHeadroom()) {
           continue; // slot lane blocked; warm candidates later in the batch still flow
@@ -154,6 +172,7 @@ export class TurnDispatcher {
         try {
           const result = await this.deps.dispatchTurn(candidate);
           if (result === 'dispatched') {
+            this.recentlyDispatched.set(candidate.turnId, this.now());
             this.serveSeq += 1;
             this.lastServedByAgent.set(candidate.agentId, this.serveSeq);
             progressed = true;

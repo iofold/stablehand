@@ -29,6 +29,7 @@ const mockDb = {
   getRestoringSandboxSessions: vi.fn(),
   getExpiredSandboxSessionRestores: vi.fn(),
   hasLiveTurnDeliveryForSandboxSession: vi.fn(),
+  hasQueuedTurnsForSandboxSession: vi.fn(),
   hasUnfinishedSandboxSessionLifecycleOperation: vi.fn(),
   getRecoverableSandboxSessionLifecycleOperations: vi.fn(),
   getSandboxSession: vi.fn(),
@@ -170,6 +171,7 @@ describe('ContainerLifecyclePolicy', () => {
     mockDb.getRestoringSandboxSessions.mockResolvedValue([]);
     mockDb.getExpiredSandboxSessionRestores.mockResolvedValue([]);
     mockDb.hasLiveTurnDeliveryForSandboxSession.mockResolvedValue(false);
+    mockDb.hasQueuedTurnsForSandboxSession.mockResolvedValue(false);
     mockDb.hasUnfinishedSandboxSessionLifecycleOperation.mockResolvedValue(false);
     mockDb.getRecoverableSandboxSessionLifecycleOperations.mockResolvedValue([]);
     mockDb.getSandboxSession.mockResolvedValue(null);
@@ -1226,6 +1228,7 @@ describe('ContainerLifecyclePolicy', () => {
       vi.setSystemTime(now);
       mockDb.getActiveSandboxSessions.mockResolvedValue([createSession()]);
       mockDb.hasLiveTurnDeliveryForSandboxSession.mockResolvedValue(false);
+    mockDb.hasQueuedTurnsForSandboxSession.mockResolvedValue(false);
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           labels: { 'ctxmill.sandbox-session-id': 'session-1' },

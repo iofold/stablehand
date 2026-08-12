@@ -134,6 +134,7 @@ export class TurnStartupService {
   private executionDeps: ExecutionDeps | null = null;
   private turnFinalizer: TurnFinalizer | null = null;
   private dispatchKick: (() => void) | null = null;
+  private readonly pendingDispatchHooks = new Map<string, { onSuccess?: () => void }>();
   private readonly processStartedAtMs = Date.now();
 
   constructor(private readonly deps: TurnStartupServiceDeps) {}
@@ -401,12 +402,25 @@ export class TurnStartupService {
    * it on its next pass; without one (tests, embedded use) this falls back
    * to the legacy direct launch so behavior is unchanged.
    */
-  requestDispatch(start: PreparedTurnStart, agentId: string): void {
+  requestDispatch(
+    start: PreparedTurnStart,
+    agentId: string,
+    options?: { onSuccess?: () => void },
+  ): void {
     if (this.dispatchKick) {
+      if (options?.onSuccess) {
+        // In-memory only, matching the direct-launch contract it replaces:
+        // a crash between enqueue and dispatch also lost the hook before.
+        if (this.pendingDispatchHooks.size >= 1_000) {
+          const oldest = this.pendingDispatchHooks.keys().next().value;
+          if (oldest !== undefined) this.pendingDispatchHooks.delete(oldest);
+        }
+        this.pendingDispatchHooks.set(start.turnId, { onSuccess: options.onSuccess });
+      }
       this.dispatchKick();
       return;
     }
-    void this.launchPreparedTurn(start, agentId);
+    void this.launchPreparedTurn(start, agentId, options);
   }
 
   setDispatchKick(kick: () => void): void {
@@ -507,6 +521,14 @@ export class TurnStartupService {
         };
       }
 
+      const hooks = this.pendingDispatchHooks.get(turn.id);
+      this.pendingDispatchHooks.delete(turn.id);
+      const launchOptions = hooks?.onSuccess || leaseSignal
+        ? {
+          ...(hooks?.onSuccess ? { onSuccess: hooks.onSuccess } : {}),
+          ...(leaseSignal ? { signal: leaseSignal } : {}),
+        }
+        : undefined;
       const launch = this.launchPreparedTurn({
         agentDef: buildAgentDefinition(agent),
         conversationId: turn.conversationId,
@@ -518,7 +540,7 @@ export class TurnStartupService {
         turnSecrets,
         ...(concurrencyReservation ? { concurrencyReservation } : {}),
         ...(deliveryContext ? { deliveryContext, suppressTurnStartedEvent: true } : {}),
-      }, turn.agentId, leaseSignal ? { signal: leaseSignal } : undefined);
+      }, turn.agentId, launchOptions);
       if (releaseLease) {
         const release = releaseLease;
         void launch.finally(() => {
