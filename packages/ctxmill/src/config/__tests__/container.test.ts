@@ -12,9 +12,9 @@ describe('createTriggerRunCallback', () => {
     const db: Pick<DatabaseRepository, 'getAgent'> = {
       getAgent: vi.fn().mockResolvedValue(agent),
     };
-    const turnStartupService: Pick<TurnStartupService, 'prepareTurnStart' | 'launchPreparedTurn'> = {
+    const turnStartupService: Pick<TurnStartupService, 'prepareTurnStart' | 'requestDispatch'> = {
       prepareTurnStart: vi.fn().mockResolvedValue(preparedRun),
-      launchPreparedTurn: vi.fn(async (_start: unknown, _agentId: string, options?: { onSuccess?: () => void }) => {
+      requestDispatch: vi.fn((_start: unknown, _agentId: string, options?: { onSuccess?: () => void }) => {
         options?.onSuccess?.();
       }),
     };
@@ -33,7 +33,7 @@ describe('createTriggerRunCallback', () => {
       mode: 'background',
       emitUserMessageEvent: false,
     }));
-    expect(turnStartupService.launchPreparedTurn).toHaveBeenCalledWith(
+    expect(turnStartupService.requestDispatch).toHaveBeenCalledWith(
       preparedRun,
       'agent-1',
       { onSuccess: expect.any(Function) },
@@ -52,9 +52,9 @@ describe('createTriggerRunCallback', () => {
     const db: Pick<DatabaseRepository, 'getAgent'> = {
       getAgent: vi.fn().mockResolvedValue(agent),
     };
-    const turnStartupService: Pick<TurnStartupService, 'prepareTurnStart' | 'launchPreparedTurn'> = {
+    const turnStartupService: Pick<TurnStartupService, 'prepareTurnStart' | 'requestDispatch'> = {
       prepareTurnStart: vi.fn().mockResolvedValue(preparedRun),
-      launchPreparedTurn: vi.fn(async (_start: unknown, _agentId: string, options?: { onSuccess?: () => void }) => {
+      requestDispatch: vi.fn((_start: unknown, _agentId: string, options?: { onSuccess?: () => void }) => {
         options?.onSuccess?.();
       }),
     };
