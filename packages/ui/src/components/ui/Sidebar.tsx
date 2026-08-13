@@ -2,6 +2,9 @@ import { Link, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Activity, Zap, Settings, Wrench, GitBranch, Menu, X, Archive, ChartNoAxesCombined } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
+import { BrandMark } from './BrandMark';
+import { PRODUCT_NAME } from '@/branding';
+import { useSSEHasSubscription, useSSEStatus } from '@/lib/useSSE';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
@@ -14,12 +17,24 @@ const navItems = [
   { icon: Settings, label: 'Settings', path: '/settings' },
 ];
 
+const STATUS_META = {
+  connected: { dot: 'bg-teal-400', label: 'Live updates connected' },
+  connecting: { dot: 'bg-amber-400 animate-pulse', label: 'Connecting live updates…' },
+  disconnected: { dot: 'bg-red-400', label: 'Live updates offline' },
+  idle: { dot: 'bg-surface-600', label: 'Live updates idle' },
+} as const;
+
 export function Sidebar() {
-  const [expanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const location = useLocation();
   const pathname = location.pathname;
+  const sseStatus = useSSEStatus();
+  const hasSubscription = useSSEHasSubscription();
+  const status = hasSubscription
+    ? STATUS_META[sseStatus] ?? STATUS_META.connecting
+    : STATUS_META.idle;
 
   // Detect mobile viewport
   useEffect(() => {
@@ -52,43 +67,48 @@ export function Sidebar() {
     }
   }, [mobileOpen, handleKeyDown]);
 
+  // Labels are visible while hover-expanded on desktop, always on mobile.
+  const expanded = hovered || isMobile;
+
   const sidebarContent = (
     <nav
       aria-label="Main navigation"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       className={cn(
-        'flex flex-col border-r border-surface-700 bg-surface-850 h-full',
-        // Desktop: fixed sidebar with expand/collapse
-        !isMobile && 'fixed left-0 top-0 h-screen z-20 transition-all duration-200',
-        !isMobile && 'w-12',
+        'flex h-full flex-col border-r border-surface-700 bg-surface-850',
+        // Desktop: fixed rail that expands on hover above the content.
+        !isMobile && 'fixed left-0 top-0 z-30 h-screen transition-[width] duration-200',
+        !isMobile && (expanded ? 'w-52 shadow-xl shadow-black/40' : 'w-12'),
         // Mobile: full width in overlay
         isMobile && 'w-64',
       )}
     >
-      {/* Logo */}
-      <div className="flex h-14 items-center border-b border-surface-700/30 px-3">
+      {/* Brand */}
+      <div className="flex h-14 shrink-0 items-center overflow-hidden border-b border-surface-700/30 px-2.5">
         {isMobile && (
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
-            className="mr-2 text-surface-400 hover:text-surface-200 transition-colors"
+            className="mr-2 text-surface-400 transition-colors hover:text-surface-200"
             aria-label="Close navigation menu"
           >
             <X className="h-5 w-5" />
           </button>
         )}
-        <span className="text-accent-400 font-bold text-lg flex-shrink-0">&#9881;</span>
+        <BrandMark size={26} className="shrink-0 text-accent-400" data-testid="brand-mark" />
         <span
           className={cn(
-            'whitespace-nowrap transition-all duration-200 overflow-hidden text-sm font-semibold text-surface-100',
-            (expanded || isMobile) ? 'opacity-100 ml-3 max-w-[150px]' : 'opacity-0 max-w-0',
+            'overflow-hidden whitespace-nowrap text-sm font-semibold tracking-tight text-surface-100 transition-all duration-200',
+            expanded ? 'ml-2.5 max-w-[150px] opacity-100' : 'max-w-0 opacity-0',
           )}
         >
-          CTXMill
+          {PRODUCT_NAME}
         </span>
       </div>
 
       {/* Nav items */}
-      <nav className="flex-1 py-3 space-y-1">
+      <nav className="flex-1 space-y-1 overflow-y-auto overflow-x-hidden py-3">
         {navItems.map((item) => {
           const isActive =
             pathname === item.path ||
@@ -100,58 +120,47 @@ export function Sidebar() {
               aria-label={item.label}
               aria-current={isActive ? 'page' : undefined}
               className={cn(
-                'group relative flex items-center px-4 py-2.5 text-sm transition-colors border-l-2',
+                'flex items-center overflow-hidden border-l-2 px-[11px] py-2.5 text-sm transition-colors',
                 isActive
-                  ? 'text-surface-100 border-accent-400 bg-accent-400/5 font-medium'
-                  : 'text-surface-400 hover:text-surface-200 border-transparent',
+                  ? 'border-accent-400 bg-accent-400/5 font-medium text-surface-100'
+                  : 'border-transparent text-surface-400 hover:bg-surface-800/60 hover:text-surface-200',
               )}
             >
               <item.icon className={cn(
-                "h-5 w-5 flex-shrink-0 transition-colors",
-                isActive ? "text-accent-400" : "text-surface-400"
+                'h-5 w-5 shrink-0 transition-colors',
+                isActive ? 'text-accent-400' : 'text-surface-400',
               )} />
-              {/* Visible label (shown when expanded or mobile) */}
               <span
                 className={cn(
-                  'whitespace-nowrap transition-all duration-200 overflow-hidden',
-                  (expanded || isMobile) ? 'opacity-100 ml-3 max-w-[150px]' : 'opacity-0 max-w-0',
+                  'overflow-hidden whitespace-nowrap transition-all duration-200',
+                  expanded ? 'ml-3 max-w-[150px] opacity-100' : 'max-w-0 opacity-0',
                 )}
               >
                 {item.label}
               </span>
-              {/* Tooltip (shown on hover when collapsed on desktop) */}
-              {!expanded && !isMobile && (
-                <span className="absolute left-full ml-2 px-2 py-1 bg-gray-800 text-xs text-white rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap transition-opacity z-50">
-                  {item.label}
-                </span>
-              )}
             </Link>
           );
         })}
       </nav>
 
-      {/* Status indicator */}
-      <div className="px-3 pb-4">
-        <div className="flex items-center">
-          <div className="flex items-center w-full px-2">
-            <span className="w-2 h-2 rounded-full bg-accent-500 flex-shrink-0 animate-pulse" />
-            <span
-              className={cn(
-                'whitespace-nowrap transition-all duration-200 overflow-hidden text-[11px] text-surface-400',
-                (expanded || isMobile) ? 'opacity-100 ml-3 max-w-[150px]' : 'opacity-0 max-w-0',
-              )}
-            >
-              System Online
-            </span>
-            {/* Tooltip for collapsed state */}
-            {!expanded && !isMobile && (
-              <span className="sr-only">System Online</span>
+      {/* Live-updates status (SSE connection) */}
+      <div
+        className="shrink-0 px-[15px] pb-4"
+        data-testid="sidebar-connection-status"
+        title={status.label}
+      >
+        <div className="flex items-center overflow-hidden">
+          <span className={cn('h-2 w-2 shrink-0 rounded-full', status.dot)} />
+          <span
+            className={cn(
+              'overflow-hidden whitespace-nowrap text-[11px] text-surface-400 transition-all duration-200',
+              expanded ? 'ml-3 max-w-[150px] opacity-100' : 'max-w-0 opacity-0',
             )}
-          </div>
+          >
+            {status.label}
+          </span>
         </div>
       </div>
-
-      {/* Desktop: always collapsed icon-only with tooltips. Mobile: full labels. */}
     </nav>
   );
 
@@ -160,16 +169,19 @@ export function Sidebar() {
     return (
       <>
         {/* Hamburger button - fixed top bar */}
-        <div className="fixed top-0 left-0 right-0 z-30 flex items-center h-12 px-3 bg-surface-900 border-b border-surface-700/30">
+        <div className="fixed left-0 right-0 top-0 z-30 flex h-12 items-center border-b border-surface-700/30 bg-surface-900 px-3">
           <button
             type="button"
             onClick={() => setMobileOpen(true)}
             aria-label="Open navigation menu"
-            className="p-1.5 text-surface-400 hover:text-surface-200 transition-colors"
+            className="p-1.5 text-surface-400 transition-colors hover:text-surface-200"
           >
             <Menu className="h-5 w-5" />
           </button>
-          <span className="ml-2 text-accent-400 font-bold text-sm">CTXMill</span>
+          <span className="ml-2 flex items-center gap-2 text-sm font-semibold text-surface-100">
+            <BrandMark size={20} className="text-accent-400" />
+            {PRODUCT_NAME}
+          </span>
         </div>
 
         {/* Overlay backdrop */}
@@ -194,6 +206,6 @@ export function Sidebar() {
     );
   }
 
-  // Desktop: standard fixed sidebar
+  // Desktop: fixed rail, expands on hover
   return sidebarContent;
 }

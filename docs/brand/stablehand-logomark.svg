@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" fill="none">
+  <!-- Stablehand logomark: a horseshoe arch sheltering a single node — the
+       stablehand tends the agent. Teal on transparent; recolor via the
+       stroke/fill values below. -->
+  <path d="M4.7 19.3h2.5v-6.5a4.8 4.8 0 0 1 9.6 0v6.5h2.5"
+        stroke="#2dd4bf" stroke-width="2.4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="12" cy="15" r="2" fill="#2dd4bf"/>
+  <circle cx="7.2" cy="15.6" r="0.55" fill="#0b0b0d"/>
+  <circle cx="16.8" cy="15.6" r="0.55" fill="#0b0b0d"/>
+  <circle cx="8.7" cy="9.4" r="0.55" fill="#0b0b0d"/>
+  <circle cx="15.3" cy="9.4" r="0.55" fill="#0b0b0d"/>
+</svg>

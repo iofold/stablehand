@@ -14,17 +14,32 @@ const SSE_DISCONNECT_GRACE_MS = 5_000;
 
 interface SSEStatusStore {
   status: SSEStatus;
+  /** Number of mounted stream subscriptions; 0 means status is stale. */
+  activeSubscriptions: number;
   setStatus: (status: SSEStatus) => void;
+  adjustActive: (delta: number) => void;
 }
 
 const useSSEStatusStore = create<SSEStatusStore>((set) => ({
   status: 'connecting',
+  activeSubscriptions: 0,
   setStatus: (status) => set({ status }),
+  adjustActive: (delta) => set((s) => ({
+    activeSubscriptions: Math.max(0, s.activeSubscriptions + delta),
+  })),
 }));
 
 /** Read the current SSE connection status (for ConnectionBanner etc.) */
 export function useSSEStatus(): SSEStatus {
   return useSSEStatusStore((s) => s.status);
+}
+
+/**
+ * True while at least one live stream subscription is mounted; when false the
+ * connection status is stale and should read as idle, not as an outage.
+ */
+export function useSSEHasSubscription(): boolean {
+  return useSSEStatusStore((s) => s.activeSubscriptions > 0);
 }
 
 export function useSSE(
@@ -104,6 +119,7 @@ export function useSSE(
     }
 
     setStatus('connecting');
+    useSSEStatusStore.getState().adjustActive(1);
     useConversationStore.getState().seenEventIds?.clear();
     const es = createSSEConnection(agentId, eventCursor);
     let hasOpened = false;
@@ -152,6 +168,7 @@ export function useSSE(
       es.onmessage = null;
       es.onerror = null;
       es.close();
+      useSSEStatusStore.getState().adjustActive(-1);
       if (eventSourceRef.current === es) {
         eventSourceRef.current = null;
       }
