@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
   CustomEventEmitInputSchema,
+  emitGrantAllows,
   serializedJsonByteLength,
   type CustomEventPayloadTooLargeError,
 } from '@ctxmill/contracts';
@@ -190,6 +191,7 @@ export async function triggerRoutes(
   // POST /api/triggers/emit — Emit a custom event (for external integrations)
   app.post(
     '/emit',
+    { config: { capability: 'triggers:emit' } },
     async (
       request: FastifyRequest<{
         Body: {
@@ -234,10 +236,18 @@ export async function triggerRoutes(
       // starts a fresh cascade at depth zero, and the maxTriggerDepth guard
       // is enforced rather than advisory.
       const { _triggerDepth: _clientDepth, ...payload } = validated.data.payload;
+      const principal = request.apiPrincipal;
+      if (principal && !emitGrantAllows(principal.capabilities, validated.data.type)) {
+        return reply.status(403).send({
+          error: `Forbidden: this key cannot emit event type '${validated.data.type}'`,
+          required_capability: 'triggers:emit',
+        });
+      }
       await triggerManager.emitCustomEventAsync(
         validated.data.type,
         validated.data.agentId,
         payload,
+        principal ? { keyId: principal.keyId } : undefined,
       );
 
       return { ok: true, type: validated.data.type };

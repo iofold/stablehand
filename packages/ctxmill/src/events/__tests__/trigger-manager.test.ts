@@ -65,6 +65,28 @@ describe('EventTriggerManager durable mutations', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  it('stamps scoped HTTP key provenance outside the caller payload', async () => {
+    const { bus, manager } = createManager();
+    const emit = vi.spyOn(bus, 'emitCustomAsync').mockResolvedValue(undefined);
+
+    await manager.emitCustomEventAsync(
+      'custom.gallery.published',
+      'agent-1',
+      { artifactId: 'artifact-1' },
+      { keyId: 'key_gallery' },
+    );
+
+    expect(emit).toHaveBeenCalledWith(
+      'custom.gallery.published',
+      'agent-1',
+      expect.objectContaining({
+        keyId: 'key_gallery',
+        payload: { artifactId: 'artifact-1' },
+      }),
+    );
+    expect(emit.mock.calls[0]?.[2]).not.toHaveProperty('payload.keyId');
+  });
+
   it('does not add a trigger to memory when DB registration fails', async () => {
     const db = createDbMock();
     db.saveTrigger.mockRejectedValueOnce(new Error('db unavailable'));

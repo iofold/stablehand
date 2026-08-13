@@ -1,6 +1,11 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteOptions } from 'fastify';
-import { API_KEY_TOKEN_PREFIX, capabilitySatisfies, type CapabilityVerb } from '@ctxmill/contracts';
+import {
+  API_KEY_TOKEN_PREFIX,
+  CAPABILITY_VERBS,
+  capabilitySatisfies,
+  type CapabilityVerb,
+} from '@ctxmill/contracts';
 
 export type ApiAuthConfig =
   | { mode: 'enforce'; token: string }
@@ -16,6 +21,8 @@ export interface ApiKeyPrincipal {
 /** Storage seam for scoped keys; implemented by the database repository. */
 export interface ApiKeyStore {
   findLiveKeyByTokenHash(tokenHash: string): Promise<ApiKeyPrincipal | null>;
+  /** Cheap database-backed liveness check for already-authenticated streams. */
+  isLiveKey(keyId: string): Promise<boolean>;
   /** Fire-and-forget audit stamp; the middleware debounces calls per key. */
   touchLastUsed(keyId: string): Promise<void>;
 }
@@ -26,11 +33,13 @@ declare module 'fastify' {
   interface FastifyRequest {
     /** Scoped-key principal (WO-5); null for master-token and open-mode requests. */
     apiPrincipal: ApiKeyPrincipal | null;
+    /** Rechecks expiry/revocation for a scoped principal; null for master/open requests. */
+    revalidateApiPrincipal: (() => Promise<boolean>) | null;
   }
 
   interface FastifyContextConfig {
     /** Capability required for scoped keys (WO-5); undeclared = master-only, fail-closed. */
-    capability?: string;
+    capability?: CapabilityVerb;
   }
 }
 
@@ -39,6 +48,7 @@ export interface ApiRouteRecord {
   url: string;
   public: boolean;
   allowTokenQuery: boolean;
+  capability?: CapabilityVerb;
 }
 
 interface ApiAuthLogger {
@@ -50,6 +60,7 @@ type ApiAuthEnv = Readonly<Record<string, string | undefined>>;
 const BEARER_REALM = 'Bearer realm="ctxmill"';
 const UNAUTHORIZED_BODY = { error: 'Unauthorized: missing or invalid API token' };
 const REDACTED_QUERY_VALUE = 'REDACTED';
+const ROUTE_CAPABILITIES: ReadonlySet<string> = new Set(CAPABILITY_VERBS);
 
 function isApiPath(pathname: string): boolean {
   return pathname === '/api' || pathname.startsWith('/api/');
@@ -175,12 +186,24 @@ function sha256Hex(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-function readRouteCapability(config: FastifyRequest['routeOptions']['config'] | undefined): string | undefined {
+function readRouteCapability(
+  config: FastifyRequest['routeOptions']['config'] | undefined,
+): CapabilityVerb | undefined {
   const capability = (config as Record<string, unknown> | undefined)?.capability;
-  return typeof capability === 'string' ? capability : undefined;
+  return typeof capability === 'string' && ROUTE_CAPABILITIES.has(capability)
+    ? capability as CapabilityVerb
+    : undefined;
 }
 
 function recordRoute(routeTable: ApiRouteRecord[], route: RouteOptions): void {
+  const configuredCapability = (route.config as Record<string, unknown> | undefined)?.capability;
+  if (configuredCapability !== undefined && (
+    typeof configuredCapability !== 'string'
+    || !ROUTE_CAPABILITIES.has(configuredCapability)
+  )) {
+    throw new Error(`Unknown API route capability '${String(configuredCapability)}'`);
+  }
+  const capability = configuredCapability as CapabilityVerb | undefined;
   const methods = Array.isArray(route.method) ? route.method : [route.method];
   for (const method of methods) {
     routeTable.push({
@@ -188,6 +211,7 @@ function recordRoute(routeTable: ApiRouteRecord[], route: RouteOptions): void {
       url: route.url,
       public: route.config?.public === true,
       allowTokenQuery: route.config?.allowTokenQuery === true,
+      ...(capability ? { capability } : {}),
     });
   }
 }
@@ -232,6 +256,7 @@ export function registerApiAuth(
   app.decorate<ApiAuthConfig>('apiAuth', config);
   app.decorate<ApiRouteRecord[]>('apiRouteTable', routeTable);
   app.decorateRequest<ApiKeyPrincipal | null>('apiPrincipal', null);
+  app.decorateRequest<(() => Promise<boolean>) | null>('revalidateApiPrincipal', null);
 
   app.addHook('onRoute', (route) => {
     recordRoute(routeTable, route);
@@ -270,6 +295,7 @@ export function registerApiAuth(
     }
 
     request.apiPrincipal = principal;
+    request.revalidateApiPrincipal = () => keyStore.isLiveKey(principal.keyId);
 
     const now = Date.now();
     const touchedAt = lastUsedTouchedAt.get(principal.keyId) ?? 0;
@@ -286,7 +312,7 @@ export function registerApiAuth(
     if (requiredCapability === undefined) {
       return forbiddenMasterOnly(reply);
     }
-    if (!capabilitySatisfies(principal.capabilities, requiredCapability as CapabilityVerb)) {
+    if (!capabilitySatisfies(principal.capabilities, requiredCapability)) {
       return forbiddenMissingCapability(reply, requiredCapability);
     }
   });

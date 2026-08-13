@@ -46,7 +46,7 @@ export async function artifactRoutes(
     }) ?? artifact;
   };
 
-  app.get('/', async (req, reply) => {
+  app.get('/', { config: { capability: 'artifacts:read' } }, async (req, reply) => {
     const { agentId, turnId, limit, offset, search } = req.query as {
       agentId?: string;
       turnId?: string;
@@ -77,7 +77,7 @@ export async function artifactRoutes(
     return reply.send({ artifacts });
   });
 
-  app.get('/:id', async (req, reply) => {
+  app.get('/:id', { config: { capability: 'artifacts:read' } }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const artifact = await repository.getArtifact(id);
     if (!artifact) {
@@ -86,7 +86,7 @@ export async function artifactRoutes(
     return reply.send(artifact);
   });
 
-  app.get('/:id/download', async (req, reply) => {
+  app.get('/:id/download', { config: { capability: 'artifacts:read' } }, async (req, reply) => {
     const { id } = req.params as { id: string };
 
     const artifact = await resolveArtifactForRead(id);
@@ -110,7 +110,7 @@ export async function artifactRoutes(
       .send(body);
   });
 
-  app.get('/:id/download-url', async (req, reply) => {
+  app.get('/:id/download-url', { config: { capability: 'artifacts:read' } }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const { expiresIn } = req.query as { expiresIn?: string };
 
@@ -135,7 +135,7 @@ export async function artifactRoutes(
     });
   });
 
-  app.post('/upload-url', async (req, reply) => {
+  app.post('/upload-url', { config: { capability: 'artifacts:write' } }, async (req, reply) => {
     const body = req.body as {
       agentId?: string;
       name?: string;
@@ -186,7 +186,7 @@ export async function artifactRoutes(
     });
   });
 
-  app.post('/upload', async (req, reply) => {
+  app.post('/upload', { config: { capability: 'artifacts:write' } }, async (req, reply) => {
     // Use req.parts() to iterate through all parts and collect fields + file
     const parts = req.parts();
     let fileBuffer: Buffer | null = null;

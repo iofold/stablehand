@@ -16,7 +16,7 @@ export async function eventRoutes(
   const { db } = opts;
 
   // GET /api/events — paginated event list with optional filters
-  app.get('/', async (request) => {
+  app.get('/', { config: { capability: 'events:read' } }, async (request) => {
     const query = request.query as {
       cursor?: string;
       limit?: string;
@@ -55,7 +55,7 @@ export async function eventRoutes(
   });
 
   // GET /api/events/stats — aggregate event statistics
-  app.get('/stats', async (request) => {
+  app.get('/stats', { config: { capability: 'events:read' } }, async (request) => {
     const query = request.query as { range?: string };
 
     let since: number | undefined;
@@ -76,7 +76,7 @@ export async function eventRoutes(
   });
 
   // GET /api/events/types — distinct event types
-  app.get('/types', async () => {
+  app.get('/types', { config: { capability: 'events:read' } }, async () => {
     const types = await db.getEventTypes();
     return { types };
   });

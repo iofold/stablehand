@@ -68,7 +68,10 @@ export async function webhookRoutes(
 ): Promise<void> {
   const { db, loadAgent } = opts;
 
-  app.post('/:id/webhooks', { preHandler: [loadAgent] }, async (request, reply) => {
+  app.post('/:id/webhooks', {
+    preHandler: [loadAgent],
+    config: { capability: 'webhooks:manage' },
+  }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const validated = validateWebhookCreateBody(request.body);
     if (!validated.ok) {
@@ -90,7 +93,10 @@ export async function webhookRoutes(
     return reply.status(201).send(toApiWebhook(webhook));
   });
 
-  app.patch('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {
+  app.patch('/:id/webhooks/:webhookId', {
+    preHandler: [loadAgent],
+    config: { capability: 'webhooks:manage' },
+  }, async (request, reply) => {
     const { id, webhookId } = request.params as { id: string; webhookId: string };
     const validated = validateWebhookPatchBody(request.body);
     if (!validated.ok) {
@@ -110,13 +116,19 @@ export async function webhookRoutes(
     return reply.send(toApiWebhook(updated));
   });
 
-  app.get('/:id/webhooks', { preHandler: [loadAgent] }, async (request, reply) => {
+  app.get('/:id/webhooks', {
+    preHandler: [loadAgent],
+    config: { capability: 'webhooks:manage' },
+  }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const hooks = await db.listWebhooks(id);
     return reply.send(hooks.map(toApiWebhook));
   });
 
-  app.delete('/:id/webhooks/:webhookId', { preHandler: [loadAgent] }, async (request, reply) => {
+  app.delete('/:id/webhooks/:webhookId', {
+    preHandler: [loadAgent],
+    config: { capability: 'webhooks:manage' },
+  }, async (request, reply) => {
     const { id, webhookId } = request.params as { id: string; webhookId: string };
     const deleted = await db.deleteWebhookForAgent(webhookId, id);
     if (!deleted) {

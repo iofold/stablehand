@@ -54,11 +54,14 @@ export async function scheduleRoutes(
   app: FastifyInstance,
   { service }: ScheduleRouteOptions,
 ): Promise<void> {
-  app.get('/', async () => ScheduleListResponseSchema.parse({
+  app.get('/', { config: { capability: 'schedules:manage' } }, async () => ScheduleListResponseSchema.parse({
     schedules: await service.list(),
   }));
 
-  app.post('/', async (request: FastifyRequest<{ Body: unknown }>, reply) => {
+  app.post('/', { config: { capability: 'schedules:manage' } }, async (
+    request: FastifyRequest<{ Body: unknown }>,
+    reply,
+  ) => {
     const raw = request.body as { payload?: unknown } | undefined;
     if (payloadTooLarge(raw?.payload)) {
       return reply.status(413).send({
@@ -76,7 +79,7 @@ export async function scheduleRoutes(
     }
   });
 
-  app.get('/:id', async (
+  app.get('/:id', { config: { capability: 'schedules:manage' } }, async (
     request: FastifyRequest<{ Params: { id: string } }>,
     reply,
   ) => {
@@ -85,7 +88,7 @@ export async function scheduleRoutes(
     return ScheduleSchema.parse(schedule);
   });
 
-  app.patch('/:id', async (
+  app.patch('/:id', { config: { capability: 'schedules:manage' } }, async (
     request: FastifyRequest<{ Params: { id: string }; Body: unknown }>,
     reply,
   ) => {
@@ -107,7 +110,7 @@ export async function scheduleRoutes(
     }
   });
 
-  app.delete('/:id', async (
+  app.delete('/:id', { config: { capability: 'schedules:manage' } }, async (
     request: FastifyRequest<{ Params: { id: string } }>,
     reply,
   ) => {

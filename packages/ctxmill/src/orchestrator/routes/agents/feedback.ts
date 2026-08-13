@@ -15,7 +15,7 @@ export async function feedbackRoutes(
 
   app.post(
     '/:id/feedback',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'feedback:write' } },
     async (
       request: FastifyRequest<{
         Params: { id: string };

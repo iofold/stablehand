@@ -22,7 +22,7 @@ export async function activeConversationRoutes(
 ): Promise<void> {
   const { db } = opts;
 
-  app.get('/', async (
+  app.get('/', { config: { capability: 'agents:read' } }, async (
     request: FastifyRequest<{ Querystring: { status?: string } }>,
     reply: FastifyReply,
   ) => {
@@ -36,7 +36,7 @@ export async function activeConversationRoutes(
   // Cross-agent recent conversations, newest activity first. One request for
   // the dashboard instead of a per-agent summary fan-out; `before` (epoch ms
   // updatedAt cursor) pages older history.
-  app.get('/recent', async (
+  app.get('/recent', { config: { capability: 'agents:read' } }, async (
     request: FastifyRequest<{
       Querystring: { limit?: string; before?: string; agentId?: string };
     }>,
@@ -67,7 +67,7 @@ export async function activeSandboxSessionRoutes(
 ): Promise<void> {
   const { db, lifecyclePolicy, sessionManager } = opts;
 
-  app.get('/', async (
+  app.get('/', { config: { capability: 'agents:read' } }, async (
     request: FastifyRequest<{ Querystring: { status?: string } }>,
     reply: FastifyReply,
   ) => {

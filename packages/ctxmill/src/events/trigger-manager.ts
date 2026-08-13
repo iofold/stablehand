@@ -16,6 +16,10 @@ import type { SpineConsumer, SpineRawEvent } from './spine-consumer-runner.js';
 /** Maximum trigger depth to prevent infinite trigger chains. */
 export const MAX_TRIGGER_DEPTH = 5;
 
+export interface CustomEventProvenance {
+  keyId: string;
+}
+
 export class TriggerConflictError extends Error {
   constructor(message: string) {
     super(message);
@@ -295,7 +299,12 @@ export class EventTriggerManager {
    * Awaitable custom event emit for HTTP/RPC ACK boundaries that must not
    * report success before durable persistence accepts the event.
    */
-  async emitCustomEventAsync(type: string, agentId: string | undefined, payload: Record<string, unknown>): Promise<void> {
+  async emitCustomEventAsync(
+    type: string,
+    agentId: string | undefined,
+    payload: Record<string, unknown>,
+    provenance?: CustomEventProvenance,
+  ): Promise<void> {
     const parsed = CustomEventEmitInputSchema.parse({
       type,
       ...(agentId === undefined ? {} : { agentId }),
@@ -310,6 +319,7 @@ export class EventTriggerManager {
       payload: parsed.payload,
       ...(turnId.success ? { turnId: turnId.data } : {}),
       ...(conversationId.success ? { conversationId: conversationId.data } : {}),
+      ...(provenance ? { keyId: provenance.keyId } : {}),
       timestamp: Date.now(),
     };
 

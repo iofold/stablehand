@@ -4,7 +4,11 @@ import { EventEmitter } from 'node:events';
 
 import { SSEManager, formatSeqId, parseSeqId } from '../sse.js';
 
-function createReply(): { reply: FastifyReply; written: string[] } {
+function createReply(): {
+  reply: FastifyReply;
+  written: string[];
+  raw: { end: ReturnType<typeof vi.fn> };
+} {
   const written: string[] = [];
   const raw = {
     write: vi.fn((data: string) => { written.push(data); return true; }),
@@ -13,7 +17,7 @@ function createReply(): { reply: FastifyReply; written: string[] } {
     writableEnded: false,
     destroyed: false,
   };
-  return { reply: { raw } as unknown as FastifyReply, written };
+  return { reply: { raw } as unknown as FastifyReply, written, raw };
 }
 
 function writtenIds(written: string[]): string[] {
@@ -44,6 +48,22 @@ describe('durable SSE serving (Stage 4 A2, ADR-015)', () => {
     expect(writtenIds(written)).toEqual(['000000000007']);
     expect(written.some((chunk) => chunk.includes('"RUN_STARTED"'))).toBe(true);
     manager.shutdown();
+  });
+
+  it('closes a scoped connection when its authorization is revoked', async () => {
+    vi.useFakeTimers();
+    const manager = new SSEManager();
+    const { reply, raw } = createReply();
+    const revalidate = vi.fn().mockResolvedValue(false);
+
+    manager.subscribe('agent-1', reply, revalidate);
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(revalidate).toHaveBeenCalledOnce();
+    expect(raw.end).toHaveBeenCalledOnce();
+    expect(manager.getClientCount('agent-1')).toBe(0);
+    manager.shutdown();
+    vi.useRealTimers();
   });
 
   it('subscribeDurable replays the database tail in durable sequence order', async () => {

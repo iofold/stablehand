@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { parseSeqId, writeSseHead } from '../../sse.js';
+import { parseSeqId, writeSseHead, type StreamAuthorizationCheck } from '../../sse.js';
 import type { AgentSubRouteOptions } from './types.js';
 
 export function resolveStreamCursor(
@@ -23,7 +23,10 @@ export async function streamRoutes(
 
   app.get(
     '/:id/stream',
-    { preHandler: [loadAgent], config: { allowTokenQuery: true } },
+    {
+      preHandler: [loadAgent],
+      config: { allowTokenQuery: true, capability: 'agents:read' },
+    },
     async (
       request: FastifyRequest<{
         Params: { id: string };
@@ -55,6 +58,7 @@ export async function streamRoutes(
         agentId: id,
         afterSeq: resolvedCursor.afterSeq,
         reply,
+        authorizationCheck: request.revalidateApiPrincipal ?? undefined,
       });
     },
   );
@@ -76,8 +80,9 @@ async function serveDurableStream(input: {
   agentId: string;
   afterSeq: number | null;
   reply: FastifyReply;
+  authorizationCheck?: StreamAuthorizationCheck;
 }): Promise<void> {
-  const { db, sse, canonicalLog, agentId, afterSeq, reply } = input;
+  const { db, sse, canonicalLog, agentId, afterSeq, reply, authorizationCheck } = input;
 
   const [sandboxSessions, openTurns, latestSeq] = await Promise.all([
     db.getSandboxSessionsByAgent(agentId),
@@ -132,5 +137,6 @@ async function serveDurableStream(input: {
         }));
       },
     },
+    authorizationCheck,
   );
 }

@@ -159,6 +159,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
       const row = await db.findLiveApiKeyByTokenHash(tokenHash);
       return row ? { keyId: row.id, name: row.name, capabilities: row.capabilities } : null;
     },
+    isLiveKey: (keyId) => db.isLiveApiKey(keyId),
     touchLastUsed: (keyId) => db.touchApiKeyLastUsed(keyId),
   });
 

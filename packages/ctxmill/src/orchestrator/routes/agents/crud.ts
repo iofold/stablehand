@@ -233,7 +233,10 @@ export async function crudRoutes(
     loadAgent,
   } = opts;
 
-  app.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
+  app.get('/', { config: { capability: 'agents:read' } }, async (
+    _request: FastifyRequest,
+    reply: FastifyReply,
+  ) => {
     const agentList = await db.listAgents();
     const [conversationCounts, sessionStatusMap] = await Promise.all([
       Promise.all(agentList.map((agent) => db.getConversationCount(agent.id))),
@@ -261,6 +264,7 @@ export async function crudRoutes(
 
   app.post(
     '/',
+    { config: { capability: 'agents:write' } },
     async (
       request: FastifyRequest<{
         Body: unknown;
@@ -423,7 +427,7 @@ export async function crudRoutes(
 
   app.patch(
     '/:id',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'agents:write' } },
     async (
       request: FastifyRequest<{
         Params: { id: string };
@@ -659,7 +663,7 @@ export async function crudRoutes(
 
   app.delete(
     '/:id',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'agents:write' } },
     async (
       request: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply,
@@ -733,7 +737,7 @@ export async function crudRoutes(
 
   app.get(
     '/:id',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'agents:read' } },
     async (
       request: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply,

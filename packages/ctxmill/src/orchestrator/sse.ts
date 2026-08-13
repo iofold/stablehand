@@ -44,6 +44,7 @@ export function writeSseHead(reply: FastifyReply): void {
 }
 
 const MAX_HEARTBEAT_FAILURES = 3;
+export type StreamAuthorizationCheck = () => Promise<boolean>;
 
 interface ConnectionState {
   queue: string[];
@@ -54,6 +55,8 @@ interface ConnectionState {
   agentId: string;
   clientId: string;
   durableTail: DurableTailState | null;
+  authorizationCheck: StreamAuthorizationCheck | null;
+  authorizationCheckInFlight: boolean;
 }
 
 export interface DurableSseFrame {
@@ -97,8 +100,12 @@ export class SSEManager {
    * Subscribe a client connection to an agent's event stream.
    * Sets up heartbeat and cleanup on disconnect.
    */
-  subscribe(agentId: string, reply: FastifyReply): void {
-    this.registerConnection(agentId, reply, null);
+  subscribe(
+    agentId: string,
+    reply: FastifyReply,
+    authorizationCheck?: StreamAuthorizationCheck,
+  ): void {
+    this.registerConnection(agentId, reply, null, authorizationCheck ?? null);
   }
 
   /**
@@ -112,6 +119,7 @@ export class SSEManager {
     afterSeq: number,
     initialThroughSeq: number,
     source: DurableTailSource,
+    authorizationCheck?: StreamAuthorizationCheck,
   ): Promise<void> {
     const durableTail: DurableTailState = {
       cursor: afterSeq,
@@ -120,7 +128,7 @@ export class SSEManager {
       rerun: false,
       pollInterval: null,
     };
-    this.registerConnection(agentId, reply, durableTail);
+    this.registerConnection(agentId, reply, durableTail, authorizationCheck ?? null);
     try {
       await this.drainDurableTail(reply, initialThroughSeq);
     } catch (error) {
@@ -142,6 +150,7 @@ export class SSEManager {
     agentId: string,
     reply: FastifyReply,
     durableTail: DurableTailState | null,
+    authorizationCheck: StreamAuthorizationCheck | null,
   ): void {
     const clientId = randomUUID();
     const state: ConnectionState = {
@@ -153,6 +162,8 @@ export class SSEManager {
       agentId,
       clientId,
       durableTail,
+      authorizationCheck,
+      authorizationCheckInFlight: false,
     };
     this.connectionState.set(reply, state);
 
@@ -197,30 +208,57 @@ export class SSEManager {
 
     // Send heartbeat comment every 15s to keep connection alive
     const interval = setInterval(() => {
-      const st = this.connectionState.get(reply);
-      try {
-        reply.raw.write(': heartbeat\n\n');
-        // Reset consecutive failures on success
-        if (st) {
-          st.consecutiveHeartbeatFailures = 0;
-        }
-      } catch (err) {
-        console.warn('[SSE] Heartbeat failed for agent', agentId, err);
-        if (st) {
-          st.consecutiveHeartbeatFailures++;
-          if (st.consecutiveHeartbeatFailures >= MAX_HEARTBEAT_FAILURES) {
-            this.unsubscribe(agentId, reply);
-          }
-        } else {
-          // No state means we should clean up
-          this.unsubscribe(agentId, reply);
-        }
-      }
+      void this.sendHeartbeat(agentId, reply);
     }, 15_000);
     this.heartbeatIntervals.set(reply, interval);
 
     // Cleanup on close
     reply.raw.on('close', () => this.unsubscribe(agentId, reply));
+  }
+
+  private async sendHeartbeat(agentId: string, reply: FastifyReply): Promise<void> {
+    const state = this.connectionState.get(reply);
+    if (!state) {
+      this.unsubscribe(agentId, reply);
+      return;
+    }
+
+    if (state.authorizationCheck) {
+      if (state.authorizationCheckInFlight) return;
+      state.authorizationCheckInFlight = true;
+      let live = false;
+      try {
+        live = await state.authorizationCheck();
+      } catch (error) {
+        console.warn('[SSE] Scoped key revalidation failed for agent', agentId, error);
+      }
+
+      const current = this.connectionState.get(reply);
+      if (!current) return;
+      current.authorizationCheckInFlight = false;
+      if (!live) {
+        this.unsubscribe(agentId, reply);
+        try {
+          reply.raw.end();
+        } catch (error) {
+          console.debug('[SSE] Failed to close unauthorized stream for agent', agentId, error);
+        }
+        return;
+      }
+    }
+
+    const current = this.connectionState.get(reply);
+    if (!current) return;
+    try {
+      reply.raw.write(': heartbeat\n\n');
+      current.consecutiveHeartbeatFailures = 0;
+    } catch (error) {
+      console.warn('[SSE] Heartbeat failed for agent', agentId, error);
+      current.consecutiveHeartbeatFailures++;
+      if (current.consecutiveHeartbeatFailures >= MAX_HEARTBEAT_FAILURES) {
+        this.unsubscribe(agentId, reply);
+      }
+    }
   }
 
   /**

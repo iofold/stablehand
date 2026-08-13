@@ -12,7 +12,7 @@ export async function conversationRoutes(
 
   app.get(
     '/:id/conversations',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'agents:read' } },
     async (
       request: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply,
@@ -26,7 +26,7 @@ export async function conversationRoutes(
 
   app.get(
     '/:id/conversations/summary',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'agents:read' } },
     async (
       request: FastifyRequest<{ Params: { id: string } }>,
       reply: FastifyReply,
@@ -40,7 +40,7 @@ export async function conversationRoutes(
 
   app.get(
     '/:id/conversations/:convId/snapshot',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'agents:read' } },
     async (
       request: FastifyRequest<{ Params: { id: string; convId: string } }>,
       reply: FastifyReply,

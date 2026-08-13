@@ -17,7 +17,7 @@ export async function interruptRoutes(
   app: FastifyInstance,
   options: InterruptRouteOptions,
 ): Promise<void> {
-  app.get('/', async (request, reply) => {
+  app.get('/', { config: { capability: 'interrupts:read' } }, async (request, reply) => {
     const query = request.query as {
       status?: string;
       agentId?: string;

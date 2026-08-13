@@ -208,6 +208,7 @@ export async function agUiCompatRoutes(
     const unsubscribers: Array<() => void> = [];
     let cleanedUp = false;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let authorizationCheckInFlight = false;
 
     const cleanup = (): void => {
       if (cleanedUp) {
@@ -273,12 +274,38 @@ export async function agUiCompatRoutes(
       }));
     }
 
-    heartbeat = setInterval(() => {
+    const sendHeartbeat = async (): Promise<void> => {
       if (reply.raw.writableEnded || reply.raw.destroyed) {
         cleanup();
         return;
       }
+
+      const authorizationCheck = request.revalidateApiPrincipal;
+      if (authorizationCheck) {
+        if (authorizationCheckInFlight) return;
+        authorizationCheckInFlight = true;
+        let live = false;
+        try {
+          live = await authorizationCheck();
+        } catch (error) {
+          console.warn('[AG-UI] Scoped key revalidation failed', error);
+        } finally {
+          authorizationCheckInFlight = false;
+        }
+        if (!live) {
+          cleanup();
+          if (!reply.raw.writableEnded && !reply.raw.destroyed) {
+            reply.raw.end();
+          }
+          return;
+        }
+      }
+
       reply.raw.write(': heartbeat\n\n');
+    };
+
+    heartbeat = setInterval(() => {
+      void sendHeartbeat();
     }, 15000);
 
     request.raw.on('close', () => {
@@ -292,5 +319,9 @@ export async function agUiCompatRoutes(
     return reply;
   };
 
-  app.post('/:id/run', runHandler);
+  app.post(
+    '/:id/run',
+    { config: { capability: 'conversations:write' } },
+    runHandler,
+  );
 }

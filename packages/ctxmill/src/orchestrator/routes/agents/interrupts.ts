@@ -58,7 +58,7 @@ export async function interruptRoutes(
 
   app.get(
     '/:id/interrupts',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'interrupts:read' } },
     async (
       request: FastifyRequest<{
         Params: { id: string };
@@ -128,6 +128,7 @@ export async function interruptRoutes(
 
   app.post(
     '/:id/interrupt',
+    { config: { capability: 'interrupts:resolve' } },
     async (
       request: FastifyRequest<{
         Params: { id: string };

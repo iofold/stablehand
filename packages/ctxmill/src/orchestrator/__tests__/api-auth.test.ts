@@ -30,6 +30,12 @@ async function withApp<T>(
     ok: true,
     principal: request.apiPrincipal,
   }));
+  app.get('/api/scoped-live', { config: { capability: 'events:read' } }, async (request) => {
+    const authenticatedRequest = request as FastifyRequest & {
+      revalidateApiPrincipal: () => Promise<boolean>;
+    };
+    return { live: await authenticatedRequest.revalidateApiPrincipal() };
+  });
   app.post('/api/scoped-emit', { config: { capability: 'triggers:emit' } }, async () => ({ ok: true }));
   await app.ready();
 
@@ -43,15 +49,24 @@ async function withApp<T>(
 const SCOPED_TOKEN = `cmk_${'a'.repeat(43)}`;
 const SCOPED_TOKEN_HASH = createHash('sha256').update(SCOPED_TOKEN).digest('hex');
 
-function storeWith(principal: ApiKeyPrincipal | null): ApiKeyStore & { touched: string[] } {
+function storeWith(
+  principal: ApiKeyPrincipal | null,
+  live = true,
+): ApiKeyStore & { touched: string[]; checked: string[] } {
   const touched: string[] = [];
+  const checked: string[] = [];
   return {
     touched,
+    checked,
     findLiveKeyByTokenHash: async (hash) => (hash === SCOPED_TOKEN_HASH ? principal : null),
+    isLiveKey: async (keyId: string) => {
+      checked.push(keyId);
+      return live;
+    },
     touchLastUsed: async (keyId) => {
       touched.push(keyId);
     },
-  };
+  } as ApiKeyStore & { touched: string[]; checked: string[] };
 }
 
 describe('resolveApiAuthConfig', () => {
@@ -151,9 +166,27 @@ describe('registerApiAuth', () => {
       expect(app.apiRouteTable).toEqual(expect.arrayContaining([
         expect.objectContaining({ method: 'GET', url: '/api/health', public: true }),
         expect.objectContaining({ method: 'GET', url: '/api/stream', allowTokenQuery: true }),
+        expect.objectContaining({
+          method: 'GET',
+          url: '/api/scoped-events',
+          capability: 'events:read',
+        }),
         expect.objectContaining({ method: 'POST', url: '/api/private', public: false }),
       ]));
     });
+  });
+
+  it('rejects an unknown route capability while the route is registered', async () => {
+    const app = Fastify({ logger: false });
+    registerApiAuth(app, { mode: 'open' });
+
+    expect(() => app.get(
+      '/api/typo',
+      { config: { capability: 'events:reed' as never } },
+      async () => ({ ok: true }),
+    )).toThrow("Unknown API route capability 'events:reed'");
+
+    await app.close();
   });
 });
 
@@ -270,6 +303,21 @@ describe('scoped api keys (WO-5)', () => {
         });
       }
       expect(store.touched).toEqual(['key_1']);
+    }, store);
+  });
+
+  it('attaches a principal revalidator for long-lived streams', async () => {
+    const store = storeWith(principal, false);
+    await withApp({ mode: 'enforce', token: 'secret' }, async (app) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/scoped-live',
+        headers: { Authorization: `Bearer ${SCOPED_TOKEN}` },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ live: false });
+      expect(store.checked).toEqual(['key_1']);
     }, store);
   });
 });

@@ -219,7 +219,7 @@ export async function turnRoutes(
 
   app.post(
     '/:id/message',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'conversations:write' } },
     async (
       request: FastifyRequest<{
         Params: { id: string };
@@ -324,7 +324,7 @@ export async function turnRoutes(
 
   app.post(
     '/:id/turns',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'conversations:write' } },
     async (
       request: FastifyRequest<{
         Params: { id: string };
@@ -428,7 +428,7 @@ export async function turnRoutes(
 
   app.post(
     '/:id/turns/:turnId/cancel',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'conversations:write' } },
     async (
       request: FastifyRequest<{ Params: { id: string; turnId: string } }>,
       reply: FastifyReply,
@@ -494,7 +494,7 @@ export async function turnRoutes(
 
   app.get(
     '/:id/turns/:turnId',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'agents:read' } },
     async (
       request: FastifyRequest<{ Params: { id: string; turnId: string } }>,
       reply: FastifyReply,
@@ -522,7 +522,7 @@ export async function turnRoutes(
 
   app.get(
     '/:id/turns',
-    { preHandler: [loadAgent] },
+    { preHandler: [loadAgent], config: { capability: 'agents:read' } },
     async (
       request: FastifyRequest<{
         Params: { id: string };

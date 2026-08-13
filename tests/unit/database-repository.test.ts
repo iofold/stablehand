@@ -362,10 +362,12 @@ describe('DatabaseRepository', () => {
       const live = await repo.findLiveApiKeyByTokenHash(hash(1));
       expect(live?.id).toBe(created.id);
       expect(live?.capabilities).toEqual(['events:read', 'triggers:emit:custom.eval.*']);
+      expect(await repo.isLiveApiKey(created.id)).toBe(true);
 
       const revoked = await repo.revokeApiKey(created.id);
       expect(revoked?.revokedAt).toBeTypeOf('number');
       expect(await repo.findLiveApiKeyByTokenHash(hash(1))).toBeUndefined();
+      expect(await repo.isLiveApiKey(created.id)).toBe(false);
 
       const reRevoked = await repo.revokeApiKey(created.id);
       expect(reRevoked?.revokedAt).toBe(revoked?.revokedAt);
@@ -379,6 +381,9 @@ describe('DatabaseRepository', () => {
         expiresAt: Date.now() - 1_000,
       });
       expect(await repo.findLiveApiKeyByTokenHash(hash(2))).toBeUndefined();
+      const expired = (await repo.listApiKeys()).find((key) => key.name === 'ext-expired');
+      expect(expired).toBeDefined();
+      expect(await repo.isLiveApiKey(expired!.id)).toBe(false);
 
       await repo.createApiKey({
         name: 'ext-forever',

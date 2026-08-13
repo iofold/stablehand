@@ -5723,6 +5723,19 @@ export class DatabaseRepository {
     return row;
   }
 
+  /** Revalidate an already-authenticated key without retaining or rehashing its token. */
+  async isLiveApiKey(id: string, now = Date.now()): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: this.schema.apiKeys.id })
+      .from(this.schema.apiKeys)
+      .where(and(
+        eq(this.schema.apiKeys.id, id),
+        isNull(this.schema.apiKeys.revokedAt),
+        or(isNull(this.schema.apiKeys.expiresAt), gt(this.schema.apiKeys.expiresAt, now)),
+      ));
+    return row !== undefined;
+  }
+
   async touchApiKeyLastUsed(id: string, at = Date.now()): Promise<void> {
     await this.db
       .update(this.schema.apiKeys)
