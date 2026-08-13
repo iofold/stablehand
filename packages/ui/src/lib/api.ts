@@ -519,6 +519,9 @@ export interface SystemSettings {
   reconciliationIntervalMs:    number;
   maxGlobalContainers:         number;
   queueTimeoutMs:              number;
+  maxQueuedTurnsGlobal:        number;
+  maxQueuedTurnsPerAgent:      number;
+  queuedTurnTimeoutMs:         number;
   maxConcurrentSessionsPerAgent: number;
   maxTriggerDepth:             number;
   defaultCpus:                 number;
