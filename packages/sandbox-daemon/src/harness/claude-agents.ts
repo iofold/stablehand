@@ -688,6 +688,27 @@ export class ClaudeAgentsHarness implements AgentHarness {
     };
   }
 
+  /**
+   * Subagent children start streaming before the parent-side assistant
+   * message (whose complete blocks record the map), so fall back to the
+   * streamed-args buffer: by the time a child exists, the spawning call's
+   * input has fully streamed.
+   */
+  private lookupSubagentType(streamState: StreamMappingState, taskId: string): string | undefined {
+    const known = streamState.subagentTypeByTaskId.get(taskId);
+    if (known) return known;
+    const buffered = streamState.toolArgsJsonByCallId.get(taskId);
+    if (!buffered) return undefined;
+    try {
+      const parsed = JSON.parse(buffered) as { subagent_type?: unknown };
+      if (typeof parsed.subagent_type === 'string' && parsed.subagent_type.length > 0) {
+        streamState.subagentTypeByTaskId.set(taskId, parsed.subagent_type);
+        return parsed.subagent_type;
+      }
+    } catch { /* input still streaming or non-JSON — no label */ }
+    return undefined;
+  }
+
   *mapSDKMessage(
     message: SDKMessage,
     toolStartTimes: Map<string, number>,
@@ -781,13 +802,18 @@ export class ClaudeAgentsHarness implements AgentHarness {
           }
 
           const args = toolUseBlock.input ?? this.readBufferedToolArgs(streamState, callId) ?? {};
-          if (!parentTaskId && toolUseBlock.name === 'Task') {
+          // The subagent-spawning tool is named 'Task' in older SDKs and
+          // 'Agent' in current ones; the args shape is the same.
+          if (!parentTaskId && (toolUseBlock.name === 'Task' || toolUseBlock.name === 'Agent')) {
             const subagentType = (args as { subagent_type?: unknown }).subagent_type;
             if (typeof subagentType === 'string' && subagentType.length > 0) {
               streamState.subagentTypeByTaskId.set(callId, subagentType);
             }
           }
 
+          const agentName = parentTaskId
+            ? this.lookupSubagentType(streamState, parentTaskId)
+            : undefined;
           yield {
             type: 'tool_call_start',
             id: callId,
@@ -796,9 +822,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
             ...(parentTaskId
               ? {
                 parentToolCallId: parentTaskId,
-                ...(streamState.subagentTypeByTaskId.has(parentTaskId)
-                  ? { agentName: streamState.subagentTypeByTaskId.get(parentTaskId) }
-                  : {}),
+                ...(agentName ? { agentName } : {}),
               }
               : {}),
           };

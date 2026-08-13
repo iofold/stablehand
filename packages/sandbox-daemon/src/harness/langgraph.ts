@@ -253,24 +253,42 @@ class LangGraphSession implements HarnessSession {
         name: string;
         parentToolCallId?: string;
       }>();
-      // ctx-5myn: deepagents marks subagent-context events with metadata
-      // ls_agent_type === 'subagent' (+ lc_agent_name). The spawning `task`
-      // tool call is found by walking the recorded run-parent chain up to the
-      // nearest tracked task tool run.
+      // ctx-5myn: deepagents stamps subagent-context events with metadata
+      // lc_agent_name = subagent_type (1.11 adds no ls_agent_type; accept
+      // either). The spawning `task` tool call is found, in order of
+      // reliability: by the event's pipe-nested checkpoint_ns (its first
+      // segment is the task run's own namespace — live-verified on 1.11.1),
+      // by walking the recorded run-parent chain, then by the
+      // single-live-task fallback.
+      const taskCallIdByCheckpointNs = new Map<string, string>();
+      const eventMetadata = (streamEv: StreamEvent): Record<string, unknown> | undefined =>
+        (streamEv as { metadata?: Record<string, unknown> }).metadata;
       const subagentContext = (streamEv: StreamEvent): { name?: string } | undefined => {
-        const md = (streamEv as { metadata?: Record<string, unknown> }).metadata;
-        if (!md || md.ls_agent_type !== 'subagent') return undefined;
-        return { name: typeof md.lc_agent_name === 'string' ? md.lc_agent_name : undefined };
+        const md = eventMetadata(streamEv);
+        if (!md) return undefined;
+        const name = typeof md.lc_agent_name === 'string' && md.lc_agent_name.length > 0
+          ? md.lc_agent_name
+          : undefined;
+        if (md.ls_agent_type === 'subagent' || name) return { name };
+        return undefined;
       };
-      const resolveSpawningTask = (runId: string | undefined): string | undefined => {
+      const isTaskInfo = (info: { name: string }) => info.name === 'task' || info.name === 'Task';
+      const resolveSpawningTask = (
+        streamEv: StreamEvent,
+        runId: string | undefined,
+      ): string | undefined => {
+        const ns = eventMetadata(streamEv)?.checkpoint_ns;
+        if (typeof ns === 'string' && ns.includes('|')) {
+          const fromNs = taskCallIdByCheckpointNs.get(ns.split('|')[0]);
+          if (fromNs) return fromNs;
+        }
         let current = runId;
         for (let hops = 0; current && hops < 64; hops++) {
           const info = toolRunIdToInfo.get(current);
-          if (info && (info.name === 'task' || info.name === 'Task')) return info.toolCallId;
+          if (info && isTaskInfo(info)) return info.toolCallId;
           current = runParents.get(current);
         }
-        // Fallback: a single live task run is unambiguous even without a chain.
-        const live = [...toolRunIdToInfo.values()].filter((i) => i.name === 'task' || i.name === 'Task');
+        const live = [...toolRunIdToInfo.values()].filter(isTaskInfo);
         return live.length === 1 ? live[0].toolCallId : undefined;
       };
       const usageByModelRunId = new Map<string, TokenUsage>();
@@ -371,7 +389,13 @@ class LangGraphSession implements HarnessSession {
           if (fullArgs == null) fullArgs = {};
 
           const subagent = subagentContext(ev);
-          const parentToolCallId = subagent ? resolveSpawningTask(toolRunId) : undefined;
+          const parentToolCallId = subagent ? resolveSpawningTask(ev, toolRunId) : undefined;
+          if (!subagent && (toolName === 'task' || toolName === 'Task')) {
+            const ns = eventMetadata(ev)?.checkpoint_ns;
+            if (typeof ns === 'string' && ns.length > 0) {
+              taskCallIdByCheckpointNs.set(ns, toolCallId);
+            }
+          }
 
           yield {
             type: 'tool_call_start',

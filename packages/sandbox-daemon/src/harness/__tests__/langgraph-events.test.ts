@@ -682,11 +682,19 @@ describe('LangGraphHarness', () => {
 
 describe('LangGraphHarness subagent annotation (ctx-5myn)', () => {
   it('annotates subagent tool activity with the spawning task call and suppresses subagent prose', async () => {
-    const subagentMeta = { ls_agent_type: 'subagent', lc_agent_name: 'research-bot' };
+    // Metadata shape live-verified against deepagents 1.11.1 (dev1,
+    // 2026-08-13): subagent events carry lc_agent_name (no ls_agent_type)
+    // and a pipe-nested checkpoint_ns whose first segment is the spawning
+    // task run's own namespace.
+    const taskNs = 'tools:b90b7581-aaaa-bbbb-cccc-000000000001';
+    const subagentMeta = {
+      lc_agent_name: 'research-bot',
+      checkpoint_ns: `${taskNs}|tools:36e00088-dddd-eeee-ffff-000000000002`,
+    };
     mockStreamEvents.mockImplementation(() => langGraphStream([
       // Parent-level prose and the spawning deepagents task tool.
       { event: 'on_chat_model_stream', data: { chunk: { content: 'Delegating.' } } },
-      { event: 'on_tool_start', data: { name: 'task', input: { description: 'research' } }, run_id: 'task-run' },
+      { event: 'on_tool_start', data: { name: 'task', input: { description: 'research' } }, run_id: 'task-run', metadata: { checkpoint_ns: taskNs } },
       // Subagent activity: prose must not splice into the parent stream;
       // tool calls ride flat with the parent pointer.
       { event: 'on_chat_model_stream', data: { chunk: { content: 'thinking...' } }, metadata: subagentMeta },
