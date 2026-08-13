@@ -232,6 +232,14 @@ class LangGraphSession implements HarnessSession {
       const toolRunIdToInfo = new Map<string, { toolCallId: string; startTime: number }>();
       const usageByModelRunId = new Map<string, TokenUsage>();
       let turnOnlyUsage: TokenUsage | undefined;
+      // ctx-kdue: LangSmith tracing + deepagents subagents registers the
+      // parent stream handler twice on subagent runs, dispatching the SAME
+      // chunk object through both handlers back-to-back. Reference equality
+      // is the safe discriminator — legitimately repeated tokens ("ha ha")
+      // are distinct chunk objects with identical content. Tool starts are
+      // deduped by run_id: a tool run starts exactly once.
+      let lastStreamChunkRef: unknown = null;
+      const seenToolStartRunIds = new Set<string>();
 
       for await (const ev of makeIterableAbortable(eventStream, ac.signal)) {
         for (const queuedEvent of drainQueuedEvents()) {
@@ -244,6 +252,8 @@ class LangGraphSession implements HarnessSession {
         if (event === 'on_chat_model_stream') {
           const chunk = data.chunk;
           if (!chunk) continue;
+          if (chunk === lastStreamChunkRef) continue; // doubled dispatch (ctx-kdue)
+          lastStreamChunkRef = chunk;
           const observedUsage = this.extractUsage(data);
           if (observedUsage) {
             if (typeof ev.run_id === 'string' && ev.run_id.length > 0) {
@@ -282,6 +292,10 @@ class LangGraphSession implements HarnessSession {
         }
 
         if (event === 'on_tool_start') {
+          if (typeof ev.run_id === 'string' && ev.run_id.length > 0) {
+            if (seenToolStartRunIds.has(ev.run_id)) continue; // doubled dispatch (ctx-kdue)
+            seenToolStartRunIds.add(ev.run_id);
+          }
           const evData = ev as Record<string, unknown>;
           const rawName = (data as Record<string, unknown>).name ?? evData.name;
           const toolNameFromEvent = typeof rawName === 'string' ? rawName : undefined;
@@ -333,6 +347,9 @@ class LangGraphSession implements HarnessSession {
         if (event === 'on_tool_end') {
           const toolRunId: string | undefined = ev.run_id;
           const info = toolRunId ? toolRunIdToInfo.get(toolRunId) : undefined;
+          if (!info && toolRunId && seenToolStartRunIds.has(toolRunId)) {
+            continue; // doubled dispatch after the real end consumed the run (ctx-kdue)
+          }
           const toolCallId = info?.toolCallId || randomUUID();
           const startTime = info?.startTime || Date.now();
           const durationMs = Date.now() - startTime;
@@ -361,6 +378,9 @@ class LangGraphSession implements HarnessSession {
         if (event === 'on_tool_error') {
           const toolRunId: string | undefined = ev.run_id;
           const info = toolRunId ? toolRunIdToInfo.get(toolRunId) : undefined;
+          if (!info && toolRunId && seenToolStartRunIds.has(toolRunId)) {
+            continue; // doubled dispatch after the real end consumed the run (ctx-kdue)
+          }
           const toolCallId = info?.toolCallId || randomUUID();
           const startTime = info?.startTime || Date.now();
           const durationMs = Date.now() - startTime;

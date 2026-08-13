@@ -380,6 +380,54 @@ describe('LangGraphHarness', () => {
     ]);
   });
 
+  it('drops doubled-dispatch stream events (ctx-kdue: LangSmith + subagents)', async () => {
+    // Doubled dispatch delivers the SAME chunk object and the same tool
+    // run_id twice, back-to-back — the shape LangSmith tracing + deepagents
+    // subagent config-spreading produces.
+    const chunkA = { content: 'Spring' };
+    const chunkB = { content: ' wakes' };
+    mockStreamEvents.mockImplementation(() => langGraphStream([
+      { event: 'on_chat_model_stream', data: { chunk: chunkA } },
+      { event: 'on_chat_model_stream', data: { chunk: chunkA } },
+      { event: 'on_chat_model_stream', data: { chunk: chunkB } },
+      { event: 'on_chat_model_stream', data: { chunk: chunkB } },
+      { event: 'on_tool_start', data: { name: 'weather', input: { city: 'NYC' } }, run_id: 'run_1' },
+      { event: 'on_tool_start', data: { name: 'weather', input: { city: 'NYC' } }, run_id: 'run_1' },
+      { event: 'on_tool_end', data: { output: 'Sunny' }, run_id: 'run_1' },
+      { event: 'on_tool_end', data: { output: 'Sunny' }, run_id: 'run_1' },
+    ]));
+
+    const { session } = await openTestSession();
+    const events = await collectEvents(session.deliverTurn({
+      messages: [makeMessage('user', 'Report the weather poetically.')],
+      turnId: 'turn-dedup-1',
+    }, {}));
+
+    const textDeltas = events.filter((e) => e.type === 'text_delta');
+    expect(textDeltas.map((e) => (e as { content: string }).content)).toEqual(['Spring', ' wakes']);
+    expect(events.filter((e) => e.type === 'tool_call_start')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'tool_call_end')).toHaveLength(1);
+    const committed = events.find((e) => e.type === 'message_committed') as { content: string } | undefined;
+    expect(committed?.content).toBe('Spring wakes');
+  });
+
+  it('preserves legitimately repeated tokens — distinct chunk objects with identical content', async () => {
+    mockStreamEvents.mockImplementation(() => langGraphStream([
+      { event: 'on_chat_model_stream', data: { chunk: { content: ' ha' } } },
+      { event: 'on_chat_model_stream', data: { chunk: { content: ' ha' } } },
+      { event: 'on_chat_model_stream', data: { chunk: { content: ' ha' } } },
+    ]));
+
+    const { session } = await openTestSession();
+    const events = await collectEvents(session.deliverTurn({
+      messages: [makeMessage('user', 'Laugh three times.')],
+      turnId: 'turn-dedup-2',
+    }, {}));
+
+    const committed = events.find((e) => e.type === 'message_committed') as { content: string } | undefined;
+    expect(committed?.content).toBe(' ha ha ha');
+  });
+
   it('includes a single tool call in message_committed events', async () => {
     mockStreamEvents.mockImplementation(() => langGraphStream([
       {
