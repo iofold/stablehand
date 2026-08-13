@@ -1267,6 +1267,25 @@ export class DatabaseRepository {
     return this.queryConversationSummaries({ sandboxStatuses: ['ACTIVE', 'RESTORING'] });
   }
 
+  /**
+   * Cross-agent recent conversations, newest activity first, with an
+   * updatedAt cursor for paging. One query for the dashboard instead of a
+   * per-agent summary fan-out.
+   */
+  async getRecentConversationSummaries(options: {
+    limit: number;
+    beforeUpdatedAtMs?: number;
+    agentId?: string;
+  }): Promise<ConversationSummaryRow[]> {
+    return this.queryConversationSummaries({
+      ...(options.agentId ? { agentId: options.agentId } : {}),
+      limit: Math.max(1, Math.min(Math.trunc(options.limit), 100)),
+      ...(options.beforeUpdatedAtMs !== undefined
+        ? { beforeUpdatedAtMs: options.beforeUpdatedAtMs }
+        : {}),
+    });
+  }
+
   async createTurn(data: TurnInsert): Promise<TurnSelect> {
     const sanitizedData = sanitizeTypedDbValue(data, 'turns.insert');
     return this.insertOne(
@@ -7273,6 +7292,8 @@ export class DatabaseRepository {
   private async queryConversationSummaries(options: {
     agentId?: string;
     sandboxStatuses?: SandboxSessionStatus[];
+    limit?: number;
+    beforeUpdatedAtMs?: number;
   }): Promise<ConversationSummaryRow[]> {
     const turnStats = this.db
       .select({
@@ -7336,6 +7357,9 @@ export class DatabaseRepository {
     }
     if (options.sandboxStatuses?.length) {
       filters.push(inArray(latestSandboxCandidates.sandboxStatus, options.sandboxStatuses));
+    }
+    if (options.beforeUpdatedAtMs !== undefined) {
+      filters.push(lt(this.schema.conversations.updatedAt, options.beforeUpdatedAtMs));
     }
 
     const rows: Array<{
@@ -7402,7 +7426,9 @@ export class DatabaseRepository {
         ),
       )
       .where(and(...filters))
-      .orderBy(desc(this.schema.conversations.updatedAt));
+      .orderBy(desc(this.schema.conversations.updatedAt))
+      // Unlimited callers get a generous guard rather than an unbounded scan.
+      .limit(options.limit ?? 10_000);
 
     return rows.map((row): ConversationSummaryRow => {
       const status = projectConversationStatus(

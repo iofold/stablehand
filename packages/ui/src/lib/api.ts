@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { getApiToken, markAuthRequired, withApiAuth } from './auth';
 import type {
   ApiFeedbackRequest,
@@ -209,6 +210,39 @@ export async function fetchConversations(agentId: string): Promise<Conversation[
 export async function fetchConversationSummaries(agentId: string): Promise<{ conversations: ConversationSummary[] }> {
   const response = await apiFetch<unknown>(`${API_BASE}/agents/${agentId}/conversations/summary`);
   return ConversationSummaryListResponseSchema.parse(response);
+}
+
+/** Cross-agent recent conversations, newest activity first (one request). */
+export async function fetchRecentConversations(options: {
+  limit?: number;
+  before?: number;
+  agentId?: string;
+} = {}): Promise<{ conversations: ConversationSummary[] }> {
+  const response = await apiFetch<unknown>(withQuery(
+    `${API_BASE}/conversations/recent`,
+    {
+      ...(options.limit !== undefined ? { limit: String(options.limit) } : {}),
+      ...(options.before !== undefined ? { before: String(options.before) } : {}),
+      ...(options.agentId ? { agentId: options.agentId } : {}),
+    },
+  ));
+  return ConversationSummaryListResponseSchema.parse(response);
+}
+
+const QueueStatusSchema = z.object({
+  queuedTurns: z.number().int().nonnegative(),
+  oldestQueuedAgeMs: z.number().nullable(),
+  dispatcher: z.object({
+    stalled: z.boolean(),
+    lastPassCompletedAt: z.number().nullable(),
+  }),
+  state: z.string(),
+});
+export type QueueStatus = z.infer<typeof QueueStatusSchema>;
+
+export async function fetchQueueStatus(): Promise<QueueStatus> {
+  const response = await apiFetch<unknown>(`${API_BASE}/queue/status`);
+  return QueueStatusSchema.parse(response);
 }
 
 export async function fetchConversationSnapshot(

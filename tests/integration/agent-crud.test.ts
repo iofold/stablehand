@@ -1365,6 +1365,55 @@ describe('Agent CRUD & related endpoints', () => {
     });
   });
 
+  // ── GET /api/conversations/recent ──────────────────────────
+
+  describe('GET /api/conversations/recent', () => {
+    it('returns cross-agent conversations newest-first with cursor paging', async () => {
+      const created = await createAgent({ name: 'recent-conv-agent' });
+      const agentId = created.json().id;
+      const older = await container.db.createConversation(agentId);
+      const newer = await container.db.createConversation(agentId);
+
+      const res = await app.inject({ method: 'GET', url: '/api/conversations/recent?limit=50' });
+      expect(res.statusCode).toBe(200);
+      const { conversations } = res.json();
+      expect(Array.isArray(conversations)).toBe(true);
+      const ids = conversations.map((c: { id: string }) => c.id);
+      expect(ids).toContain(older.id);
+      expect(ids).toContain(newer.id);
+      expect(ids.indexOf(newer.id)).toBeLessThan(ids.indexOf(older.id));
+      const updatedAts = conversations.map((c: { updatedAt: number }) => c.updatedAt);
+      expect([...updatedAts].sort((a, b) => b - a)).toEqual(updatedAts);
+
+      // Cursor pages strictly older activity.
+      const newerRow = conversations.find((c: { id: string }) => c.id === newer.id);
+      const paged = await app.inject({
+        method: 'GET',
+        url: `/api/conversations/recent?limit=50&before=${newerRow.updatedAt}`,
+      });
+      expect(paged.statusCode).toBe(200);
+      const pagedIds = paged.json().conversations.map((c: { id: string }) => c.id);
+      expect(pagedIds).not.toContain(newer.id);
+
+      // Agent filter narrows to that agent only.
+      const filtered = await app.inject({
+        method: 'GET',
+        url: `/api/conversations/recent?agentId=${agentId}`,
+      });
+      expect(filtered.statusCode).toBe(200);
+      for (const conv of filtered.json().conversations) {
+        expect(conv.agentId).toBe(agentId);
+      }
+    });
+
+    it('rejects invalid paging params', async () => {
+      const badLimit = await app.inject({ method: 'GET', url: '/api/conversations/recent?limit=0' });
+      expect(badLimit.statusCode).toBe(400);
+      const badBefore = await app.inject({ method: 'GET', url: '/api/conversations/recent?before=nope' });
+      expect(badBefore.statusCode).toBe(400);
+    });
+  });
+
   // ── Removed agent version history ──────────────────────────
 
   describe('GET /api/agents/:id/versions', () => {
