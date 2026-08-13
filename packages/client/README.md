@@ -20,6 +20,33 @@ const turn = await ctxmill.turns.startBackground(
 );
 ```
 
+For an extension, inject a dedicated scoped key instead of the operator master
+token:
+
+```ts
+import { CtxmillApiError, CtxmillControlClient } from '@ctxmill/client';
+
+const ctxmill = new CtxmillControlClient({
+  apiBase: process.env.CTXMILL_API_URL,
+  token: () => process.env.CTXMILL_EXTENSION_TOKEN!,
+});
+
+try {
+  await ctxmill.artifacts.list();
+} catch (error) {
+  if (error instanceof CtxmillApiError && error.status === 403) {
+    console.error('Required capability:', error.requiredCapability);
+  }
+  throw error;
+}
+```
+
+`requiredCapability` is a capability verb for a missing grant and `null` for a
+master-only route. A scoped integration should probe an endpoint it actually
+uses; `config.get()` is master-only. See the repository's
+[scoped-key guide](../../docs/scoped-api-keys.md) for the capability map and
+rotation contract.
+
 Use `CtxmillAgUiClient` at an AG-UI boundary:
 
 ```ts

@@ -7,23 +7,28 @@
 - **Exceptions:**
   - `GET /api/agents/:id/stream` uses `text/event-stream`
   - `POST /api/agents/:id/workspace` expects `application/gzip` or `application/x-gzip`
-- **Authentication:** HTTP API routes are protected by a static bearer token when `CTXMILL_API_TOKEN` is set. Production startup fails without that token unless `CTXMILL_AUTH_DISABLED=true` is explicitly set.
+- **Authentication:** `CTXMILL_API_TOKEN` is the operator master token. Capability-scoped `cmk_...` keys are available for extensions. Production startup fails without a master token unless `CTXMILL_AUTH_DISABLED=true` is explicitly set.
 - **Canonical API contracts:** CTXMill exports strict schemas and inferred types from `@ctxmill/contracts` (for example `AgentSchema`, `TurnSchema`, `ConversationSummarySchema`, `Agent`, and `Turn`). Streaming-only types remain in `@ctxmill/shared`.
 
 ### Authentication
 
-Set `CTXMILL_API_TOKEN` to a high-entropy value and pass it on control-plane API requests:
+Set `CTXMILL_API_TOKEN` to a high-entropy value and pass it on operator control-plane requests:
 
 ```bash
 curl -H "Authorization: Bearer $CTXMILL_API_TOKEN" \
   http://localhost:3002/api/agents
 ```
 
-`GET /health` and `GET /api/health` are public for load balancers and container health checks. Other `/api/*` routes return `401 Unauthorized` when the token is missing or invalid.
+Create a separate scoped key for each extension or integration. Scoped keys are
+deployment-wide but capability-bounded; they cannot administer keys, settings,
+secrets, workspaces, or other master-only routes. See the complete
+[capability map and lifecycle guide](scoped-api-keys.md).
 
-Browser `EventSource` cannot set custom headers, so `GET /api/agents/:id/stream` also accepts `?access_token=...` for SSE clients. Query-token authentication is intentionally limited to that route.
+`GET /health` and `GET /api/health` are public for load balancers and container health checks. Other `/api/*` routes return `401 Unauthorized` when the token is missing, invalid, expired, or revoked. A valid scoped key receives `403 Forbidden` when it lacks the route capability or attempts a master-only route.
 
-This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy auth, network allowlists, TLS, and rate limits in front of any shared deployment. Sandbox ConnectRPC callbacks are additionally protected by session-scoped HMAC credentials derived from `CTXMILL_CALLBACK_TOKEN_SECRET` or `CTXMILL_API_TOKEN`, but the ConnectRPC surface should still remain on private networks.
+Browser `EventSource` cannot set custom headers, so `GET /api/agents/:id/stream` also accepts `?access_token=...` for SSE clients. Query-token authentication is intentionally limited to that route. Prefer an authorization header whenever the client permits it because query values can escape into browser history and intermediary logs; CTXMill redacts the value in its own request logs.
+
+Capability scoping is not resource or tenant isolation. Keep reverse-proxy auth, network allowlists, TLS, and rate limits in front of any shared deployment. Sandbox ConnectRPC callbacks are additionally protected by session-scoped HMAC credentials derived from `CTXMILL_CALLBACK_TOKEN_SECRET` or `CTXMILL_API_TOKEN`, but the ConnectRPC surface should still remain on private networks.
 
 ## 2. Quick Reference Table
 
@@ -84,6 +89,10 @@ This HTTP API token is a coarse local control-plane guard. Keep reverse-proxy au
 | **Settings** |  |  |
 | GET | `/api/settings` | Get system settings |
 | PUT | `/api/settings` | Update system settings |
+| **Access Keys** |  |  |
+| GET | `/api/keys` | List scoped keys (master-only) |
+| POST | `/api/keys` | Create a scoped key and return its token once (master-only) |
+| DELETE | `/api/keys/:id` | Revoke a scoped key (master-only) |
 | **Artifacts** |  |  |
 | GET | `/api/artifacts` | List artifacts |
 | GET | `/api/artifacts/:id` | Get artifact metadata |
@@ -147,6 +156,17 @@ Most errors use:
 
 Some endpoints also add endpoint-specific fields such as `details`, `turnId`, `sandboxSessionId`, `agentId`, `validEvents`, `activeSessions`, `size`, or `maxSize`.
 
+Scoped authorization failures add `required_capability`:
+
+```json
+{
+  "error": "Forbidden: this route requires the 'events:read' capability",
+  "required_capability": "events:read"
+}
+```
+
+`required_capability: null` means the route requires the master token.
+
 ### Status codes
 
 Common codes used across the API:
@@ -156,15 +176,15 @@ Common codes used across the API:
 - `202 Accepted`
 - `204 No Content`
 - `401 Unauthorized`
+- `403 Forbidden`
 - `400 Bad Request`
 - `404 Not Found`
 - `500 Internal Server Error`
 - `501 Not Implemented`
 - `503 Service Unavailable`
 
-Also used by specific file/workspace endpoints:
+Also used by specific endpoints:
 
-- `403 Forbidden`
 - `409 Conflict`
 - `413 Payload Too Large`
 - `415 Unsupported Media Type`
@@ -198,7 +218,7 @@ Per-agent sandbox resource limits:
 #### `GET /health`
 
 - **Description:** Direct health check.
-- **Query params:** `access_token` for browser EventSource auth.
+- **Query params:** None.
 - **Response:**
 
 ```json
@@ -237,10 +257,6 @@ Per-agent sandbox resource limits:
 
 ```json
 {
-  "llm": {
-    "provider": "openai",
-    "model": "gpt-5.4-mini"
-  },
   "system": {
     "version": "0.1.0",
     "uptime": 123456,
@@ -250,11 +266,17 @@ Per-agent sandbox resource limits:
     "harness": "langgraph",
     "temperature": 0.7,
     "maxTokens": 4096
+  },
+  "authentication": {
+    "mode": "enforced"
   }
 }
 ```
 
-- **Notes:** `uptime` is milliseconds since process start.
+- **Notes:** `uptime` is milliseconds since process start. `authentication.mode`
+  is `enforced` or `disabled`. This route is master-only, so extensions should
+  probe a capability-bearing endpoint they actually use instead of treating
+  config as scoped-key introspection.
 
 ### b. Agents (`/api/agents`)
 
@@ -1686,6 +1708,91 @@ history identical for manual and scheduled emissions.
 
 - **Notes:** Only available when sandbox container management is enabled.
 
+### s. Scoped Access Keys (`/api/keys`)
+
+All key-management routes require the master `CTXMILL_API_TOKEN`. A scoped key
+receives `403` with `required_capability: null` on these routes, even if it holds
+every grant.
+
+#### `POST /api/keys`
+
+- **Description:** Creates a named scoped key. The plaintext token is returned
+  by this response only.
+- **Request body:**
+
+```json
+{
+  "name": "artifact-gallery-prod",
+  "capabilities": ["artifacts:read", "webhooks:manage"],
+  "note": "Production artifact gallery",
+  "expiresAt": null
+}
+```
+
+- **Response:** `201 Created` with `Cache-Control: no-store`.
+
+```json
+{
+  "id": "key_123",
+  "name": "artifact-gallery-prod",
+  "capabilities": ["artifacts:read", "webhooks:manage"],
+  "note": "Production artifact gallery",
+  "status": "active",
+  "createdAt": 1786665600000,
+  "createdBy": "master",
+  "expiresAt": null,
+  "lastUsedAt": null,
+  "revokedAt": null,
+  "token": "cmk_<43-base62-characters>"
+}
+```
+
+- **Validation:** `name` is 1–128 lowercase alphanumeric or hyphen characters
+  and must start alphanumeric. `capabilities` contains 1–32 unique valid grants.
+  `expiresAt` is `null`, omitted, or a future epoch-millisecond timestamp. `note`
+  is optional and at most 1024 characters.
+- **Errors:** `400` for an invalid request and `409` for a duplicate name.
+- **Security:** CTXMill stores only the SHA-256 token hash. Losing the returned
+  token requires rotation; it cannot be fetched later.
+
+#### `GET /api/keys`
+
+- **Description:** Lists key metadata and computed lifecycle status. Never
+  returns plaintext tokens or hashes.
+- **Response:**
+
+```json
+{
+  "keys": [
+    {
+      "id": "key_123",
+      "name": "artifact-gallery-prod",
+      "capabilities": ["artifacts:read", "webhooks:manage"],
+      "note": "Production artifact gallery",
+      "status": "active",
+      "createdAt": 1786665600000,
+      "createdBy": "master",
+      "expiresAt": null,
+      "lastUsedAt": 1786665660000,
+      "revokedAt": null
+    }
+  ]
+}
+```
+
+- **Notes:** `status` is `active`, `expired`, or `revoked`. `lastUsedAt` means
+  last successful authentication, not necessarily a route-authorized request,
+  and is write-debounced to at most once per minute.
+
+#### `DELETE /api/keys/:id`
+
+- **Description:** Soft-revokes a key and returns its updated metadata.
+- **Errors:** `404` when the key ID does not exist.
+- **Notes:** New requests fail with `401`. Scoped SSE and AG-UI streams recheck
+  liveness on their 15-second heartbeat and close. Revocation does not cancel
+  running turns or remove resources the key previously created; see
+  [Scoped API keys](scoped-api-keys.md#expiration-use-rotation-and-revocation).
+
 ## 5. SSE Streaming Protocol
 
 - **Connection:** `GET /api/agents/:id/stream`
@@ -1741,6 +1848,8 @@ Notes on actual stream behavior today:
 
 ```
 
+- A scoped-key stream revalidates expiry/revocation on each heartbeat and
+  closes when the key is no longer live.
 - Idle connections are closed after **5 minutes** without events.
 - Reconnect using the standard SSE `Last-Event-ID` header.
 

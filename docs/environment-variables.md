@@ -103,13 +103,18 @@ Used for persistent artifact storage (file uploads/downloads).
 | Name | Default | Required? | Description | Example |
 | :--- | :--- | :--- | :--- | :--- |
 | `SECRET_MASTER_KEY` | Development fallback outside production | **Yes in production** | Master key for per-agent secret encryption (AES-256-GCM). Production startup fails if this is unset, the development fallback, or shorter than 16 characters. | `openssl rand -hex 32` |
-| `CTXMILL_API_TOKEN` | - | **Yes in production** | Static bearer token required for HTTP control-plane API routes. Production startup fails if this is unset unless `CTXMILL_AUTH_DISABLED=true`. | `openssl rand -hex 32` |
+| `CTXMILL_API_TOKEN` | - | **Yes in production** | Operator master bearer token with full HTTP control-plane access. Production startup fails if this is unset unless `CTXMILL_AUTH_DISABLED=true`. Create database-backed scoped keys for extensions instead of sharing this value. | `openssl rand -hex 32` |
 | `CTXMILL_CALLBACK_TOKEN_SECRET` | `CTXMILL_API_TOKEN` | No | Optional separate HMAC secret for session-scoped sandbox ConnectRPC callback tokens. Set this when you want callback auth independent from the HTTP API token. | `openssl rand -hex 32` |
-| `CTXMILL_AUTH_DISABLED` | `false` | No | Allows open HTTP API and callback auth mode only when no token/secret is configured. If `CTXMILL_API_TOKEN` or `CTXMILL_CALLBACK_TOKEN_SECRET` is set, auth still enforces. Use only for isolated local development or trusted private test stacks. | `true` |
+| `CTXMILL_AUTH_DISABLED` | `false` | No | Allows an open HTTP API when `CTXMILL_API_TOKEN` is absent. A configured `CTXMILL_CALLBACK_TOKEN_SECRET` still protects sandbox callbacks independently. Scoped keys provide no isolation while HTTP auth is open. Use only for isolated local development or trusted private test stacks. | `true` |
 | `CTXMILL_EGRESS_ENFORCE` | `true` | No | Egress guard for orchestrator-originated HTTP tool and webhook/callback requests. When enabled, destinations resolving to private, loopback, link-local (incl. `169.254.169.254` metadata), or reserved ranges are blocked before the request is made, and each redirect hop is re-validated. Set `false` only for local development. | `false` |
 | `CTXMILL_EGRESS_ALLOWLIST` | - | No | Comma-separated hosts allowed to bypass the egress block so agents can reach internal services on purpose. Matches exact host, parent domain, and `*.wildcard` patterns. | `hooks.internal.example.com,*.corp.example` |
 | `CTXMILL_EGRESS_ALLOWLIST_ONLY` | `false` | No | When `true`, only allowlisted hosts are reachable (deny public destinations by default). | `true` |
 | `CTXMILL_EGRESS_MAX_REDIRECTS` | `5` | No | Maximum redirects the egress guard follows while re-validating each hop. | `3` |
+
+Scoped `cmk_...` keys are database records, not orchestrator environment
+variables. Create them with **Settings → Access keys**, `ctxmill ops keys`, or
+the master-only `/api/keys` API, then place the one-time value in the consuming
+extension's secret store.
 
 ## Debug / Development
 
@@ -188,12 +193,13 @@ CORS_ORIGINS=http://localhost:3200,http://127.0.0.1:3200
 # Master key for per-agent secret encryption. Required in production.
 # Generate with: openssl rand -hex 32
 SECRET_MASTER_KEY=
-# Static bearer token for HTTP control-plane API routes. Required in production.
+# Operator master bearer token for HTTP control-plane API routes. Required in production.
 # Generate with: openssl rand -hex 32
 CTXMILL_API_TOKEN=
 # Optional separate HMAC secret for sandbox callback tokens.
 CTXMILL_CALLBACK_TOKEN_SECRET=
-# Allows open auth only when CTXMILL_API_TOKEN/CTXMILL_CALLBACK_TOKEN_SECRET are absent.
-# Set only for isolated local development or trusted private test stacks.
+# Allows an open HTTP API when CTXMILL_API_TOKEN is absent. A separately set
+# CTXMILL_CALLBACK_TOKEN_SECRET continues to protect sandbox callbacks.
+# Use only for isolated local development or trusted private test stacks.
 CTXMILL_AUTH_DISABLED=
 ```

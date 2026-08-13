@@ -8,7 +8,7 @@ CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persi
 
 - **Multi-harness agent runtime**: LangGraph, Claude Agents, and PI Agent
 - **Streaming UI**: durable SSE-based run and message streaming to the frontend
-- **Control-plane auth**: production bearer-token API auth plus a UI TokenGate
+- **Control-plane auth**: operator master token plus revocable, capability-scoped keys for extensions
 - **A2UI chart rendering**: agent-driven charts and structured visual blocks
 - **Human-in-the-loop (HITL)**: approval cards, editable documents, and structured field requests
 - **Canonical event spine**: persisted `event_store` replay plus background-run triggers
@@ -46,7 +46,7 @@ docker compose up --build -d
 
 # 4. Open the UI
 # http://localhost:3200
-# Enter CTXMILL_API_TOKEN when the TokenGate prompts.
+# Enter the master CTXMILL_API_TOKEN when the TokenGate prompts.
 ```
 
 > Sandbox harness images are included in the default compose stack. They build automatically with `docker compose up --build -d`.
@@ -138,6 +138,7 @@ The shipped UI includes:
 - Triggers
 - Artifacts
 - Settings
+- Settings → Access keys for scoped extension credentials
 - Agent conversation/session views
 - Agent detail with overview, sessions, tools, files, artifacts, and secrets tabs
 
@@ -164,6 +165,8 @@ The shipped UI includes:
 | [Codebase Map](docs/codebase-map.md) | Current package map, runtime flows, capabilities, and gotchas |
 | [One-Pager](docs/ctxmill-one-pager.md) | High-level overview of what CTXMill is and does |
 | [API Reference](docs/api-reference.md) | Complete REST API and SSE streaming protocol reference |
+| [Extending CTXMill](EXTENDING.md) | Current Git-first extension handshake, state ownership, and UI boundary |
+| [Scoped API Keys](docs/scoped-api-keys.md) | Capability map, creation, rotation, revocation, and verification |
 | [Environment Variables](docs/environment-variables.md) | Complete env var reference — core, sandbox, AI, storage, and system settings |
 | [Harness Comparison](docs/harness-comparison.md) | Feature matrix for choosing between LangGraph, Claude Agents, and PI Agent |
 | [Custom Providers](docs/custom-providers.md) | Using OpenRouter, Cloudflare AI Gateway, or any OpenAI-compatible endpoint |
