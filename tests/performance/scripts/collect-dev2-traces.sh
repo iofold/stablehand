@@ -97,9 +97,27 @@ WHERE timestamp >= parseDateTime64BestEffort('$started_at') - INTERVAL 1 MINUTE
       AND ($correlation_predicate)
   )
 ORDER BY timestamp, trace_id, span_id
+SETTINGS max_bytes_before_external_sort = 268435456,
+         max_bytes_before_external_group_by = 268435456
 FORMAT JSONEachRow
 SQL
 
 mkdir -p "$(dirname "$OUTPUT_PATH")"
-$KUBECTL -n "$OBSERVABILITY_NAMESPACE" exec "$clickhouse_pod" \
-  -- clickhouse-client --query "$query" >"$OUTPUT_PATH"
+# Traces are supplementary diagnostics, not certification substance: the turn
+# and settlement evidence stands on its own. A ClickHouse failure here (e.g.
+# memory-limit exceeded under accumulated trace volume, dev2 2026-08-13) must
+# not veto an otherwise green run — but the gap must be visible, so a failed
+# collection leaves an explicit marker instead of silence.
+collect_traces() {
+  $KUBECTL -n "$OBSERVABILITY_NAMESPACE" exec "$clickhouse_pod" \
+    -- clickhouse-client --query "$query" >"$OUTPUT_PATH"
+}
+if ! collect_traces; then
+  sleep 10
+  if ! collect_traces; then
+    printf 'WARNING: trace collection failed twice; continuing without traces\n' >&2
+    printf 'Trace collection failed (ClickHouse error); turn and settlement evidence unaffected.\n' \
+      >"${OUTPUT_PATH%.jsonl}-collection-failed.txt"
+    : >"$OUTPUT_PATH"
+  fi
+fi
