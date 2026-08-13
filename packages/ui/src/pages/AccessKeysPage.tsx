@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import {
   CAPABILITY_VERBS,
+  CapabilitySchema,
   type ApiKey,
   type ApiKeyCreateInput,
   type CapabilityVerb,
@@ -150,8 +151,8 @@ function statusStyle(status: ApiKey['status']): string {
 
 function namespaceGrant(namespace: string): string | null {
   const trimmed = namespace.trim();
-  if (!/^[a-z0-9][a-z0-9_.-]{0,99}$/.test(trimmed)) return null;
-  return `triggers:emit:custom.${trimmed}.*`;
+  const candidate = `triggers:emit:custom.${trimmed}.*`;
+  return CapabilitySchema.safeParse(candidate).success ? candidate : null;
 }
 
 export function AccessKeysPage() {

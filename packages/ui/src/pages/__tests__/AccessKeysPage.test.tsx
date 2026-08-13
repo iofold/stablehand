@@ -168,6 +168,19 @@ describe('AccessKeysPage', () => {
     expect(container.textContent).toContain('Only custom.gallery.* events');
   });
 
+  it('accepts the full namespace length allowed by the capability contract', async () => {
+    await render();
+    act(() => button('Create access key').click());
+    act(() => button('Custom').click());
+    act(() => container.querySelector<HTMLInputElement>('#capability-triggers-emit')!.click());
+    act(() => button('Limit namespace').click());
+
+    const namespace = 'a'.repeat(125);
+    setInput(container.querySelector<HTMLInputElement>('#event-namespace')!, namespace);
+
+    expect(container.textContent).toContain(`triggers:emit:custom.${namespace}.*`);
+  });
+
   it('disables key creation when API authentication is disabled', async () => {
     fetchConfigMock.mockResolvedValue({
       ...enforcedConfig,
