@@ -57,19 +57,26 @@ model_list:
   # only tokens we had there were short-lived cfoat_ OAuth tokens that expire
   # and 401 mid-flight (dev2, 2026-08-13). The gateway token is long-lived and
   # already the auth used everywhere else Workers AI is reached.
+  #
+  # The together_ai/ prefix is deliberate and load-bearing despite the target
+  # being Cloudflare: it selects an OpenAI-compatible adapter that LiteLLM does
+  # NOT consider Responses-API-native, so proxy /v1/responses calls (the PI
+  # harness uses them) are bridged to chat completions instead of forwarded to
+  # the compat endpoint, which rejects /responses (error 2019). openai/ and
+  # hosted_vllm/ both forward /responses natively and break PI agents.
   - model_name: cf-gpt-oss-120b
     litellm_params:
-      model: openai/workers-ai/@cf/openai/gpt-oss-120b
+      model: together_ai/workers-ai/@cf/openai/gpt-oss-120b
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
   - model_name: cf-kimi-k2.7-code
     litellm_params:
-      model: openai/workers-ai/@cf/moonshotai/kimi-k2.7-code
+      model: together_ai/workers-ai/@cf/moonshotai/kimi-k2.7-code
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
   - model_name: cf-glm-5.2
     litellm_params:
-      model: openai/workers-ai/@cf/zai-org/glm-5.2
+      model: together_ai/workers-ai/@cf/zai-org/glm-5.2
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
   # Workers AI exposes GLM thinking control through chat_template_kwargs. The
@@ -78,7 +85,7 @@ model_list:
   # route above.
   - model_name: cf-glm-5.2-no-thinking
     litellm_params:
-      model: openai/workers-ai/@cf/zai-org/glm-5.2
+      model: together_ai/workers-ai/@cf/zai-org/glm-5.2
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
       allowed_openai_params:
@@ -87,12 +94,12 @@ model_list:
         enable_thinking: false
   - model_name: cf-gemma-4-26b
     litellm_params:
-      model: openai/workers-ai/@cf/google/gemma-4-26b-a4b-it
+      model: together_ai/workers-ai/@cf/google/gemma-4-26b-a4b-it
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
   - model_name: cf-qwen3-30b
     litellm_params:
-      model: openai/workers-ai/@cf/qwen/qwen3-30b-a3b-fp8
+      model: together_ai/workers-ai/@cf/qwen/qwen3-30b-a3b-fp8
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
 litellm_settings:
