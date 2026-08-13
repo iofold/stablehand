@@ -235,7 +235,8 @@ export async function triggerRoutes(
       // caller must never set it — stripping here means every HTTP emit
       // starts a fresh cascade at depth zero, and the maxTriggerDepth guard
       // is enforced rather than advisory.
-      const { _triggerDepth: _clientDepth, ...payload } = validated.data.payload;
+      const payload = { ...validated.data.payload };
+      delete payload._triggerDepth;
       const principal = request.apiPrincipal;
       if (principal && !emitGrantAllows(principal.capabilities, validated.data.type)) {
         return reply.status(403).send({
