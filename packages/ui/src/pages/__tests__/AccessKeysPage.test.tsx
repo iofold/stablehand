@@ -151,6 +151,22 @@ describe('AccessKeysPage', () => {
     expect(container.textContent).not.toContain(token);
   });
 
+  it('keeps key metadata and revocation visible in a responsive mobile row', async () => {
+    await render();
+
+    const table = container.querySelector('table');
+    const row = Array.from(container.querySelectorAll('tbody tr')).find(
+      (candidate) => candidate.textContent?.includes(activeKey.name),
+    );
+    expect(table?.className).toContain('max-sm:block');
+    expect(row?.className).toContain('max-sm:grid');
+    expect(row?.textContent).toContain('Capabilities');
+    expect(row?.textContent).toContain('Expires');
+    expect(row?.textContent).toContain('Created');
+    expect(row?.textContent).toContain('Last authenticated');
+    expect(row?.querySelector<HTMLButtonElement>('button')?.textContent).toContain('Revoke');
+  });
+
   it('builds a namespace-limited custom event grant in the receipt', async () => {
     await render();
     act(() => button('Create access key').click());

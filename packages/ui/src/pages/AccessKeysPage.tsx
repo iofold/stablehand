@@ -277,9 +277,9 @@ export function AccessKeysPage() {
               <p className="mt-1 text-xs text-surface-400">Create one when an extension is ready to connect.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] text-left">
-                <thead className="bg-surface-950/60 text-[10px] uppercase tracking-[0.14em] text-surface-500">
+            <div className="overflow-x-auto max-sm:overflow-visible">
+              <table className="w-full text-left sm:min-w-[980px] max-sm:block">
+                <thead className="bg-surface-950/60 text-[10px] uppercase tracking-[0.14em] text-surface-500 max-sm:hidden">
                   <tr>
                     <th className="px-5 py-3 font-medium">Identity</th>
                     <th className="px-4 py-3 font-medium">Capabilities</th>
@@ -289,12 +289,15 @@ export function AccessKeysPage() {
                     <th className="px-5 py-3 text-right font-medium">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-surface-700/70">
+                <tbody className="divide-y divide-surface-700/70 max-sm:block">
                   {keys.map((key) => (
-                    <tr key={key.id} className="align-top transition-colors hover:bg-surface-800/35">
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm text-surface-100">{key.name}</span>
+                    <tr
+                      key={key.id}
+                      className="align-top transition-colors hover:bg-surface-800/35 max-sm:grid max-sm:grid-cols-2 max-sm:gap-x-4 max-sm:gap-y-3 max-sm:px-5 max-sm:py-4"
+                    >
+                      <td className="px-5 py-4 max-sm:col-span-2 max-sm:p-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-sm text-surface-100 max-sm:break-all">{key.name}</span>
                           <span className={cn(
                             'rounded-full border px-2 py-0.5 text-[10px] font-semibold capitalize',
                             statusStyle(key.status),
@@ -304,33 +307,45 @@ export function AccessKeysPage() {
                         </div>
                         <p className="mt-1 max-w-xs text-xs text-surface-500">{key.note || 'No note'}</p>
                       </td>
-                      <td className="px-4 py-4">
+                      <td className="px-4 py-4 max-sm:col-span-2 max-sm:p-0">
+                        <span className="mb-2 hidden text-[10px] font-medium uppercase tracking-[0.14em] text-surface-500 max-sm:block">
+                          Capabilities
+                        </span>
                         <div className="flex max-w-md flex-wrap gap-1.5">
                           {key.capabilities.map((capability) => (
                             <span
                               key={capability}
-                              className="rounded border border-accent-500/20 bg-accent-500/5 px-1.5 py-0.5 font-mono text-[10px] text-accent-300"
+                              className="rounded border border-accent-500/20 bg-accent-500/5 px-1.5 py-0.5 font-mono text-[10px] text-accent-300 max-sm:break-all"
                             >
                               {capability}
                             </span>
                           ))}
                         </div>
                       </td>
-                      <td className="whitespace-nowrap px-4 py-4 text-xs text-surface-300">
-                        {dateTime(key.expiresAt, 'Never')}
+                      <td className="whitespace-nowrap px-4 py-4 text-xs text-surface-300 max-sm:p-0">
+                        <span className="mb-1 hidden text-[10px] font-medium uppercase tracking-[0.14em] text-surface-500 max-sm:block">
+                          Expires
+                        </span>
+                        <span>{dateTime(key.expiresAt, 'Never')}</span>
                       </td>
-                      <td className="whitespace-nowrap px-4 py-4 text-xs text-surface-400">
-                        {dateTime(key.createdAt, 'Unknown')}
+                      <td className="whitespace-nowrap px-4 py-4 text-xs text-surface-400 max-sm:p-0">
+                        <span className="mb-1 hidden text-[10px] font-medium uppercase tracking-[0.14em] text-surface-500 max-sm:block">
+                          Created
+                        </span>
+                        <span>{dateTime(key.createdAt, 'Unknown')}</span>
                       </td>
-                      <td className="whitespace-nowrap px-4 py-4 text-xs text-surface-400">
-                        {dateTime(key.lastUsedAt, 'Never authenticated')}
+                      <td className="whitespace-nowrap px-4 py-4 text-xs text-surface-400 max-sm:p-0">
+                        <span className="mb-1 hidden text-[10px] font-medium uppercase tracking-[0.14em] text-surface-500 max-sm:block">
+                          Last authenticated
+                        </span>
+                        <span>{dateTime(key.lastUsedAt, 'Never authenticated')}</span>
                       </td>
-                      <td className="px-5 py-4 text-right">
+                      <td className="px-5 py-4 text-right max-sm:flex max-sm:items-end max-sm:justify-end max-sm:p-0">
                         <button
                           type="button"
                           onClick={() => void handleRevoke(key)}
                           disabled={key.status === 'revoked' || revokingId === key.id}
-                          className="rounded-md border border-red-500/25 px-2.5 py-1.5 text-xs font-medium text-red-300 transition-colors hover:bg-red-500/10 disabled:cursor-not-allowed disabled:border-surface-700 disabled:text-surface-600"
+                          className="rounded-md border border-red-500/25 px-2.5 py-1.5 text-xs font-medium text-red-300 transition-colors hover:bg-red-500/10 disabled:cursor-not-allowed disabled:border-surface-700 disabled:text-surface-600 max-sm:px-3 max-sm:py-2"
                         >
                           {revokingId === key.id ? 'Revoking…' : key.status === 'revoked' ? 'Revoked' : 'Revoke'}
                         </button>
