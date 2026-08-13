@@ -1,5 +1,6 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SettingsPage } from '../SettingsPage';
@@ -39,6 +40,7 @@ describe('SettingsPage setting limits', () => {
     fetchConfigMock.mockResolvedValue({
       system: { version: 'test', uptime: 1_000, dbPath: '/tmp/test.db' },
       agentDefaults: { harness: 'test', temperature: 0, maxTokens: 100 },
+      authentication: { mode: 'enforced' },
     });
     fetchSettingsMock.mockResolvedValue({
       maxWorkspaceTarBytes: 100 * 1024 * 1024,
@@ -96,7 +98,7 @@ describe('SettingsPage setting limits', () => {
     ['Default Session Timeout', '60', '43200', ''],
   ])('uses the server-supported bounds for %s', async (label, min, max, step) => {
     act(() => {
-      root.render(<SettingsPage />);
+      root.render(<MemoryRouter><SettingsPage /></MemoryRouter>);
     });
     await flushEffects();
 
@@ -105,7 +107,7 @@ describe('SettingsPage setting limits', () => {
 
   it('blocks an out-of-range draft before sending the settings mutation', async () => {
     act(() => {
-      root.render(<SettingsPage />);
+      root.render(<MemoryRouter><SettingsPage /></MemoryRouter>);
     });
     await flushEffects();
 

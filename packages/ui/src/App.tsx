@@ -7,6 +7,7 @@ import { ToolRegistryPage } from './pages/ToolRegistryPage';
 import { AgentFlowPage } from './pages/AgentFlowPage';
 import { TriggersPage } from './pages/TriggersPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AccessKeysPage } from './pages/AccessKeysPage';
 import { ArtifactsPage } from './pages/ArtifactsPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { Sidebar } from './components/ui/Sidebar';
@@ -37,6 +38,7 @@ export function App() {
             <Route path="/artifacts" element={<ArtifactsPage />} />
             <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/access-keys" element={<AccessKeysPage />} />
             <Route path={NEW_CONVERSATION_ROUTE} element={<SessionPage />} />
             <Route path={CONVERSATION_ROUTE} element={<SessionPage />} />
             <Route path="/agents/:id" element={<AgentDetailPage />} />

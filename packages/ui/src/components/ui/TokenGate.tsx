@@ -1,7 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { KeyRound, LockKeyhole } from 'lucide-react';
 
-import { fetchConfig } from '@/lib/api';
+import { ApiError, fetchConfig } from '@/lib/api';
 import { useApiAuthStore } from '@/lib/auth';
 
 export function TokenGate() {
@@ -30,9 +30,19 @@ export function TokenGate() {
       await fetchConfig();
       setAuthRequired(false);
       setValue('');
-    } catch {
+    } catch (caught) {
       clearToken();
-      setError('Token was not accepted.');
+      const body = caught instanceof ApiError
+        && caught.body
+        && typeof caught.body === 'object'
+        && !Array.isArray(caught.body)
+        ? caught.body as Record<string, unknown>
+        : null;
+      if (caught instanceof ApiError && caught.status === 403 && body?.required_capability === null) {
+        setError('Scoped keys cannot unlock the dashboard. Enter the master CTXMILL_API_TOKEN.');
+      } else {
+        setError('Token was not accepted.');
+      }
     } finally {
       setChecking(false);
     }

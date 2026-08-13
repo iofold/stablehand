@@ -31,6 +31,9 @@ import {
   uploadArtifactDirect,
   uploadArtifactToSignedUrl,
   fetchAnalyticsOverview,
+  fetchApiKeys,
+  createApiKey,
+  fetchConfig,
 } from '../api';
 import { useApiAuthStore } from '../auth';
 
@@ -132,6 +135,72 @@ describe('fetchAgent', () => {
     mockJson.mockResolvedValue({ id: 'a1', name: 'Incomplete Agent' });
 
     await expect(fetchAgent('a1')).rejects.toThrow();
+  });
+});
+
+describe('access key contracts', () => {
+  const key = {
+    id: 'key_1',
+    name: 'artifact-gallery',
+    capabilities: ['artifacts:read'],
+    note: null,
+    status: 'active',
+    createdAt: 1,
+    createdBy: 'master',
+    expiresAt: null,
+    lastUsedAt: null,
+    revokedAt: null,
+  };
+
+  it('strictly parses list responses', async () => {
+    mockJson.mockResolvedValue({ keys: [key] });
+    await expect(fetchApiKeys()).resolves.toEqual({ keys: [key] });
+
+    mockJson.mockResolvedValue({ keys: [{ ...key, status: undefined }] });
+    await expect(fetchApiKeys()).rejects.toThrow();
+  });
+
+  it('validates create input before posting and parses the one-time response', async () => {
+    const token = `cmk_${'a'.repeat(43)}`;
+    mockJson.mockResolvedValue({ ...key, token });
+
+    await expect(createApiKey({
+      name: 'artifact-gallery',
+      capabilities: ['artifacts:read'],
+      expiresAt: null,
+    })).resolves.toMatchObject({ token });
+    expect(mockFetch).toHaveBeenCalledWith('/api/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'artifact-gallery',
+        capabilities: ['artifacts:read'],
+        expiresAt: null,
+      }),
+    });
+
+    mockFetch.mockClear();
+    await expect(createApiKey({
+      name: 'artifact-gallery',
+      capabilities: ['artifacts:read', 'artifacts:read'],
+    })).rejects.toThrow();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('requires the authentication mode in config responses', async () => {
+    const config = {
+      system: { version: 'test', uptime: 1, dbPath: '.ctxmill' },
+      agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
+      authentication: { mode: 'enforced' },
+    };
+    mockJson.mockResolvedValue(config);
+    await expect(fetchConfig()).resolves.toEqual(config);
+
+    mockJson.mockResolvedValue({
+      system: config.system,
+      agentDefaults: config.agentDefaults,
+    });
+    await expect(fetchConfig()).rejects.toThrow();
   });
 });
 

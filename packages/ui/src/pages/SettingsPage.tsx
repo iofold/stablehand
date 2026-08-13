@@ -20,6 +20,7 @@ import { fetchConfig, fetchSettings, updateSettings } from '@/lib/api';
 import type { AppConfig, SystemSettings } from '@/lib/api';
 import { PageShell } from '@/components/ui/PageShell';
 import { BudgetsSection } from '@/components/settings/BudgetsSection';
+import { SettingsNav } from '@/components/settings/SettingsNav';
 
 const MB = 1024 * 1024;
 const SECOND_MS = 1000;
@@ -222,6 +223,7 @@ export function SettingsPage() {
           description="System configuration and defaults."
           icon={<Settings className="h-6 w-6 text-surface-400" />}
         />
+        <SettingsNav />
 
         {loading ? (
           <div className="flex items-center justify-center py-20">

@@ -13,6 +13,10 @@ import {
   AgentSchema,
   AnalyticsOverviewSchema,
   AnalyticsWindowSchema,
+  ApiKeyCreateInputSchema,
+  ApiKeyCreatedSchema,
+  ApiKeyListResponseSchema,
+  ApiKeySchema,
   BudgetPolicyCreateInputSchema,
   BudgetPolicyListResponseSchema,
   BudgetPolicyPatchInputSchema,
@@ -22,6 +26,7 @@ import {
   ConversationSnapshotResponseSchema,
   ConversationSummaryListResponseSchema,
   ConversationTurnStartInputSchema,
+  ConfigResponseSchema,
   FileListResponseSchema,
   FileReadResponseSchema,
   FileWriteResponseSchema,
@@ -43,6 +48,10 @@ import {
   type AgentPatchInput,
   type AgentBudgetStatus,
   type Artifact,
+  type ApiKey,
+  type ApiKeyCreateInput,
+  type ApiKeyCreated,
+  type ApiKeyListResponse,
   type AnalyticsOverview,
   type AnalyticsWindow,
   type BudgetPolicy,
@@ -51,6 +60,7 @@ import {
   type BudgetSpendResponse,
   type ConversationSummary,
   type ConversationTurnStartInput,
+  type ConfigResponse,
   type EventListInput,
   type EventListResponse,
   type InterruptResolveInput,
@@ -525,22 +535,29 @@ export async function testTool(toolName: string, input?: Record<string, unknown>
 
 // ── Config operations ───────────────────────────────────────────────
 
-export interface AppConfig {
-  system?: {
-    version?: string;
-    uptime?: number;
-    dbPath?: string;
-  };
-  agentDefaults?: {
-    harness?: string;
-    temperature?: number;
-    maxTokens?: number;
-  };
-  [key: string]: unknown;
-}
+export type AppConfig = ConfigResponse;
 
 export async function fetchConfig(): Promise<AppConfig> {
-  return apiFetch<AppConfig>(`${API_BASE}/config`);
+  const response = await apiFetch<unknown>(`${API_BASE}/config`);
+  return ConfigResponseSchema.parse(response);
+}
+
+// ── Scoped access key operations ───────────────────────────────────
+
+export async function fetchApiKeys(): Promise<ApiKeyListResponse> {
+  const response = await apiFetch<unknown>(`${API_BASE}/keys`);
+  return ApiKeyListResponseSchema.parse(response);
+}
+
+export async function createApiKey(input: ApiKeyCreateInput): Promise<ApiKeyCreated> {
+  const body = ApiKeyCreateInputSchema.parse(input);
+  const response = await apiMutate<unknown>(`${API_BASE}/keys`, 'POST', body);
+  return ApiKeyCreatedSchema.parse(response);
+}
+
+export async function revokeApiKey(id: string): Promise<ApiKey> {
+  const response = await apiMutate<unknown>(`${API_BASE}/keys/${encodeURIComponent(id)}`, 'DELETE');
+  return ApiKeySchema.parse(response);
 }
 
 // ── Workspace Size Limit Settings ───────────────────────────

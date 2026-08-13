@@ -780,6 +780,8 @@ export const ConfigResponseSchema = z.strictObject({
   }),
 });
 
+export type ConfigResponse = z.infer<typeof ConfigResponseSchema>;
+
 export const SandboxMetricsResponseSchema = z.strictObject({
   execution_mode: z.literal('sandbox'),
   containers: z.strictObject({

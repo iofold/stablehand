@@ -53,6 +53,10 @@ vi.mock('./pages/SettingsPage', () => ({
   SettingsPage: () => <div data-testid="settings-page">settings</div>,
 }));
 
+vi.mock('./pages/AccessKeysPage', () => ({
+  AccessKeysPage: () => <div data-testid="access-keys-page">access keys</div>,
+}));
+
 vi.mock('./pages/ArtifactsPage', () => ({
   ArtifactsPage: () => <div data-testid="artifacts-page">artifacts</div>,
 }));
@@ -105,5 +109,10 @@ describe('App routes', () => {
   it('renders the dedicated analytics page', () => {
     renderAt('/analytics');
     expect(container.querySelector('[data-testid="analytics-page"]')).not.toBeNull();
+  });
+
+  it('renders access keys under settings without a top-level extension route', () => {
+    renderAt('/settings/access-keys');
+    expect(container.querySelector('[data-testid="access-keys-page"]')).not.toBeNull();
   });
 });

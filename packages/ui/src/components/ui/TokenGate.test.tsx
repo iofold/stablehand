@@ -16,7 +16,11 @@ describe('TokenGate', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     window.localStorage.clear();
     useApiAuthStore.setState({ token: '', authRequired: false });
-    mockJson.mockResolvedValue({});
+    mockJson.mockResolvedValue({
+      system: { version: 'test', uptime: 1, dbPath: '.ctxmill' },
+      agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
+      authentication: { mode: 'enforced' },
+    });
     mockFetch.mockResolvedValue({ ok: true, status: 200, json: mockJson });
     globalThis.fetch = mockFetch as unknown as typeof fetch;
     container = document.createElement('div');
@@ -77,5 +81,32 @@ describe('TokenGate', () => {
     });
     expect(useApiAuthStore.getState().authRequired).toBe(false);
     expect(container.textContent).not.toContain('API token required');
+  });
+
+  it('explains that a scoped key cannot unlock master-only dashboard access', async () => {
+    mockJson.mockResolvedValue({
+      error: 'Forbidden: this route requires the master API token',
+      required_capability: null,
+    });
+    mockFetch.mockResolvedValue({ ok: false, status: 403, json: mockJson });
+    act(() => useApiAuthStore.getState().setAuthRequired(true));
+    render();
+
+    const input = container.querySelector('input');
+    const form = container.querySelector('form');
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      setter?.call(input, `cmk_${'a'.repeat(43)}`);
+      input!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain('Scoped keys cannot unlock the dashboard');
+    expect(container.textContent).toContain('master CTXMILL_API_TOKEN');
   });
 });
