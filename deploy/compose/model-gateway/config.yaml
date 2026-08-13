@@ -58,27 +58,53 @@ model_list:
   # and 401 mid-flight (dev2, 2026-08-13). The gateway token is long-lived and
   # already the auth used everywhere else Workers AI is reached.
   #
-  # The together_ai/ prefix is deliberate and load-bearing despite the target
-  # being Cloudflare: it selects an OpenAI-compatible adapter that LiteLLM does
-  # NOT consider Responses-API-native, so proxy /v1/responses calls (the PI
-  # harness uses them) are bridged to chat completions instead of forwarded to
-  # the compat endpoint, which rejects /responses (error 2019). openai/ and
-  # hosted_vllm/ both forward /responses natively and break PI agents.
+  # Three litellm_params here are deliberate and load-bearing (2026-08-13):
+  #
+  # 1. The together_ai/ prefix, despite the target being Cloudflare: it selects
+  #    an OpenAI-compatible adapter that LiteLLM does NOT consider
+  #    Responses-API-native, so proxy /v1/responses calls (the PI harness uses
+  #    them) are bridged to chat completions instead of forwarded to the compat
+  #    endpoint, which rejects /responses (error 2019). openai/ and
+  #    hosted_vllm/ both forward /responses natively and break PI agents.
+  #
+  # 2. Explicit input/output_cost_per_token, mirroring LiteLLM's own
+  #    cloudflare/@cf/* price map: under the together_ai/ prefix the built-in
+  #    map misses, spend logs record $0, and the orchestrator's settlement
+  #    detector correctly turns the gateway state degraded (unpriced calls).
+  #    model_info.base_model alone does NOT price these routes.
+  #
+  # 3. cf-aig-skip-cache: the AI Gateway caches identical requests and replays
+  #    the SAME response id; LiteLLM dedupes SpendLogs on request_id, so the
+  #    second identical call across any turn produces NO spend row and that
+  #    turn can never settle. Skipping the gateway cache restores per-call
+  #    billing evidence (native-provider semantics).
   - model_name: cf-gpt-oss-120b
     litellm_params:
       model: together_ai/workers-ai/@cf/openai/gpt-oss-120b
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
+      input_cost_per_token: 3.5e-07
+      output_cost_per_token: 7.5e-07
+      extra_headers:
+        cf-aig-skip-cache: "true"
   - model_name: cf-kimi-k2.7-code
     litellm_params:
       model: together_ai/workers-ai/@cf/moonshotai/kimi-k2.7-code
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
+      input_cost_per_token: 9.5e-07
+      output_cost_per_token: 4e-06
+      extra_headers:
+        cf-aig-skip-cache: "true"
   - model_name: cf-glm-5.2
     litellm_params:
       model: together_ai/workers-ai/@cf/zai-org/glm-5.2
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
+      input_cost_per_token: 1.4e-06
+      output_cost_per_token: 4.4e-06
+      extra_headers:
+        cf-aig-skip-cache: "true"
   # Workers AI exposes GLM thinking control through chat_template_kwargs. The
   # OpenAI adapter does not include that field in its supported parameter set,
   # so this explicit alias opts it in without changing the reasoning-enabled
@@ -88,6 +114,10 @@ model_list:
       model: together_ai/workers-ai/@cf/zai-org/glm-5.2
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
+      input_cost_per_token: 1.4e-06
+      output_cost_per_token: 4.4e-06
+      extra_headers:
+        cf-aig-skip-cache: "true"
       allowed_openai_params:
         - chat_template_kwargs
       chat_template_kwargs:
@@ -97,11 +127,19 @@ model_list:
       model: together_ai/workers-ai/@cf/google/gemma-4-26b-a4b-it
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
+      input_cost_per_token: 1e-07
+      output_cost_per_token: 3e-07
+      extra_headers:
+        cf-aig-skip-cache: "true"
   - model_name: cf-qwen3-30b
     litellm_params:
       model: together_ai/workers-ai/@cf/qwen/qwen3-30b-a3b-fp8
       api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
+      input_cost_per_token: 5.09e-08
+      output_cost_per_token: 3.35e-07
+      extra_headers:
+        cf-aig-skip-cache: "true"
 litellm_settings:
   turn_off_message_logging: true
   drop_params: true
