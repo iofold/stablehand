@@ -51,26 +51,35 @@ model_list:
       model: anthropic/claude-opus-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
   # Curated Workers AI inventory. These aliases keep harness configuration
-  # provider-neutral while LiteLLM owns the Cloudflare protocol translation.
+  # provider-neutral. Routed through the Cloudflare AI Gateway compat endpoint
+  # (CLOUDFLARE_AI_GATEWAY_COMPAT_URL) instead of LiteLLM's native cloudflare
+  # provider: the native provider needs an api.cloudflare.com API token, and the
+  # only tokens we had there were short-lived cfoat_ OAuth tokens that expire
+  # and 401 mid-flight (dev2, 2026-08-13). The gateway token is long-lived and
+  # already the auth used everywhere else Workers AI is reached.
   - model_name: cf-gpt-oss-120b
     litellm_params:
-      model: cloudflare/@cf/openai/gpt-oss-120b
+      model: openai/workers-ai/@cf/openai/gpt-oss-120b
+      api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
   - model_name: cf-kimi-k2.7-code
     litellm_params:
-      model: cloudflare/@cf/moonshotai/kimi-k2.7-code
+      model: openai/workers-ai/@cf/moonshotai/kimi-k2.7-code
+      api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
   - model_name: cf-glm-5.2
     litellm_params:
-      model: cloudflare/@cf/zai-org/glm-5.2
+      model: openai/workers-ai/@cf/zai-org/glm-5.2
+      api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
-  # Workers AI exposes GLM thinking control through chat_template_kwargs.
-  # LiteLLM's Cloudflare adapter does not currently include that field in its
-  # supported OpenAI parameter set, so this explicit alias opts it in without
-  # changing the reasoning-enabled route above.
+  # Workers AI exposes GLM thinking control through chat_template_kwargs. The
+  # OpenAI adapter does not include that field in its supported parameter set,
+  # so this explicit alias opts it in without changing the reasoning-enabled
+  # route above.
   - model_name: cf-glm-5.2-no-thinking
     litellm_params:
-      model: cloudflare/@cf/zai-org/glm-5.2
+      model: openai/workers-ai/@cf/zai-org/glm-5.2
+      api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
       allowed_openai_params:
         - chat_template_kwargs
@@ -78,11 +87,13 @@ model_list:
         enable_thinking: false
   - model_name: cf-gemma-4-26b
     litellm_params:
-      model: cloudflare/@cf/google/gemma-4-26b-a4b-it
+      model: openai/workers-ai/@cf/google/gemma-4-26b-a4b-it
+      api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
   - model_name: cf-qwen3-30b
     litellm_params:
-      model: cloudflare/@cf/qwen/qwen3-30b-a3b-fp8
+      model: openai/workers-ai/@cf/qwen/qwen3-30b-a3b-fp8
+      api_base: os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL
       api_key: os.environ/CLOUDFLARE_API_KEY
 litellm_settings:
   turn_off_message_logging: true

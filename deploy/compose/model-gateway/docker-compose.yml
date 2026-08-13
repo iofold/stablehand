@@ -27,6 +27,7 @@ services:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       CLOUDFLARE_API_KEY: ${CLOUDFLARE_API_KEY:-}
+      CLOUDFLARE_AI_GATEWAY_COMPAT_URL: ${CLOUDFLARE_AI_GATEWAY_COMPAT_URL:-}
     command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
     depends_on:
       litellm-db:
