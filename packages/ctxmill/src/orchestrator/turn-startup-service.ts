@@ -408,6 +408,13 @@ export class TurnStartupService {
     options?: { onSuccess?: () => void },
   ): void {
     if (this.dispatchKick) {
+      // The durable queued row is the entire handoff: dispatchQueuedTurn takes
+      // its own reservation at claim time, so the admission-time reservation
+      // must be returned here. Holding it leaks one unit per admitted turn and
+      // permanently starves the agent once the leak reaches
+      // maxConcurrentSessionsPerAgent (dev2, 2026-08-13: every dispatch
+      // returned silent no_capacity with zero real sessions).
+      start.concurrencyReservation?.release();
       if (options?.onSuccess) {
         // In-memory only, matching the direct-launch contract it replaces:
         // a crash between enqueue and dispatch also lost the hook before.
