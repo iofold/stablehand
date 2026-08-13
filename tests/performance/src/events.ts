@@ -9,6 +9,8 @@ export interface TurnEventObservation {
   terminalServerEventAtMs?: number;
   eventCount?: number;
   terminalType?: 'RUN_FINISHED';
+  /** Assistant deltas (post-RUN_STARTED) concatenated in arrival order. */
+  streamedAssistantText?: string;
 }
 
 export function eventTurnId(
@@ -43,6 +45,8 @@ export function observeTurnEvent(
     && observation.runStartedAtMs !== undefined
   ) {
     observation.firstTokenAtMs ??= receivedAtMs;
+    observation.streamedAssistantText =
+      (observation.streamedAssistantText ?? '') + event.delta;
   }
   if (event.type === 'RUN_FINISHED' && observation.terminalAtMs === undefined) {
     observation.terminalAtMs = receivedAtMs;

@@ -177,13 +177,30 @@ export async function executeMeasuredTurn(
     const assistantMessage = [...detail.messages]
       .reverse()
       .find((message) => message.role === 'assistant');
-    const outputError = terminal === 'completed' && options.expectedOutput !== undefined
-      ? assistantMessage === undefined || assistantMessage.content.trim().length === 0
-        ? 'Expected exact assistant output was not persisted'
-        : assistantMessage.content.trim() !== options.expectedOutput.trim()
-          ? 'Persisted assistant output did not match the exact expected output'
-          : undefined
-      : undefined;
+    // Output integrity is judged against what the platform actually streamed,
+    // not against model obedience: persisted-vs-streamed divergence is real
+    // corruption (the kdue class) and fails hard, while a model deviating from
+    // the exact echo prompt (~1% for gpt-oss under reasoning; dev2 wave
+    // evidence 2026-08-13: platform persisted the lone "_OK" delta faithfully
+    // end-to-end) is recorded as a deviation, not a platform failure.
+    let outputError: string | undefined;
+    let modelEchoDeviation = false;
+    if (terminal === 'completed' && options.expectedOutput !== undefined) {
+      const persisted = assistantMessage?.content.trim() ?? '';
+      const streamedText = observation.streamedAssistantText?.trim();
+      if (persisted.length === 0) {
+        outputError = 'Expected exact assistant output was not persisted';
+      } else if (streamedText !== undefined && persisted !== streamedText) {
+        outputError = 'Persisted assistant output diverged from streamed deltas';
+      } else if (persisted !== options.expectedOutput.trim()) {
+        modelEchoDeviation = true;
+        console.warn(
+          `[perf] model deviated from exact echo on turn ${turnId} `
+          + `(expected ${JSON.stringify(options.expectedOutput.trim())}, `
+          + `got ${JSON.stringify(persisted)}); platform stream/persistence agree`,
+        );
+      }
+    }
     return {
       runId: options.runId,
       stageName: options.stageName,
@@ -223,6 +240,7 @@ export async function executeMeasuredTurn(
       totalCostUsd: usage?.cost.totalUsd ?? undefined,
       costCoverage: usage?.cost.coverage,
       error: detail.turn.error ?? outputError,
+      ...(modelEchoDeviation ? { modelEchoDeviation } : {}),
     };
   } catch (error) {
     options.hub.cancelTurn(turnId, error);

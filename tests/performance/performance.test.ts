@@ -204,6 +204,7 @@ describe('stream event observation', () => {
       terminalServerEventAtMs: 30,
       eventCount: 4,
       terminalType: 'RUN_FINISHED',
+      streamedAssistantText: 'hello again',
     });
   });
 

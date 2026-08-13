@@ -31,6 +31,11 @@ export interface TurnSample {
   totalCostUsd?: number;
   costCoverage?: 'pending' | 'complete' | 'partial' | 'unpriced';
   error?: string;
+  /**
+   * The platform streamed and persisted identically, but the model deviated
+   * from the exact echo prompt — a model-behavior note, not a platform error.
+   */
+  modelEchoDeviation?: boolean;
 }
 
 export interface DistributionSummary {
