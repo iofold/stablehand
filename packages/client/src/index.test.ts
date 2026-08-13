@@ -334,6 +334,8 @@ describe('CtxmillControlClient', () => {
       unpricedCalls: 0,
       quarantinedTransactions: 0,
       orphanTransactions: 0,
+      awaitingTurns: 0,
+      oldestAwaitingAt: null,
     };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(status));
     const client = new clientModule.CtxmillControlClient({
