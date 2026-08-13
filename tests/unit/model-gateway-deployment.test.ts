@@ -151,64 +151,59 @@ describe('model gateway deployment', () => {
     const compose = readYaml<ModelGatewayCompose>(
       'deploy/compose/model-gateway/docker-compose.yml',
     );
-    const cloudflareModels = config.model_list?.filter(
-      (entry) => entry.litellm_params?.model?.startsWith('cloudflare/'),
-    );
+    const workersAiModels = config.model_list?.filter(
+      (entry) => entry.litellm_params?.model?.startsWith('together_ai/workers-ai/'),
+    ) ?? [];
 
-    expect(cloudflareModels).toEqual([
-      {
-        model_name: 'cf-gpt-oss-120b',
-        litellm_params: {
-          model: 'cloudflare/@cf/openai/gpt-oss-120b',
-          api_key: 'os.environ/CLOUDFLARE_API_KEY',
-        },
-      },
-      {
-        model_name: 'cf-kimi-k2.7-code',
-        litellm_params: {
-          model: 'cloudflare/@cf/moonshotai/kimi-k2.7-code',
-          api_key: 'os.environ/CLOUDFLARE_API_KEY',
-        },
-      },
-      {
-        model_name: 'cf-glm-5.2',
-        litellm_params: {
-          model: 'cloudflare/@cf/zai-org/glm-5.2',
-          api_key: 'os.environ/CLOUDFLARE_API_KEY',
-        },
-      },
-      {
-        model_name: 'cf-glm-5.2-no-thinking',
-        litellm_params: {
-          model: 'cloudflare/@cf/zai-org/glm-5.2',
-          api_key: 'os.environ/CLOUDFLARE_API_KEY',
-          allowed_openai_params: ['chat_template_kwargs'],
-          chat_template_kwargs: {
-            enable_thinking: false,
-          },
-        },
-      },
-      {
-        model_name: 'cf-gemma-4-26b',
-        litellm_params: {
-          model: 'cloudflare/@cf/google/gemma-4-26b-a4b-it',
-          api_key: 'os.environ/CLOUDFLARE_API_KEY',
-        },
-      },
-      {
-        model_name: 'cf-qwen3-30b',
-        litellm_params: {
-          model: 'cloudflare/@cf/qwen/qwen3-30b-a3b-fp8',
-          api_key: 'os.environ/CLOUDFLARE_API_KEY',
-        },
-      },
-    ]);
+    // The routing shape is load-bearing (dev2 endurance gauntlet, 2026-08-13):
+    // together_ai/ keeps LiteLLM's /v1/responses bridge for the PI harness,
+    // the compat api_base replaces the expiring api.cloudflare.com token,
+    // explicit per-token costs price what the built-in map misses under this
+    // prefix, and cf-aig-skip-cache preserves per-call billing evidence.
+    const expectedModels: Record<string, string> = {
+      'cf-gpt-oss-120b': 'together_ai/workers-ai/@cf/openai/gpt-oss-120b',
+      'cf-kimi-k2.7-code': 'together_ai/workers-ai/@cf/moonshotai/kimi-k2.7-code',
+      'cf-glm-5.2': 'together_ai/workers-ai/@cf/zai-org/glm-5.2',
+      'cf-glm-5.2-no-thinking': 'together_ai/workers-ai/@cf/zai-org/glm-5.2',
+      'cf-gemma-4-26b': 'together_ai/workers-ai/@cf/google/gemma-4-26b-a4b-it',
+      'cf-qwen3-30b': 'together_ai/workers-ai/@cf/qwen/qwen3-30b-a3b-fp8',
+    };
+    expect(workersAiModels.map((entry) => entry.model_name)).toEqual(
+      Object.keys(expectedModels),
+    );
+    for (const entry of workersAiModels) {
+      const params = entry.litellm_params as Record<string, unknown>;
+      expect(params.model).toBe(expectedModels[entry.model_name as string]);
+      expect(params.api_base).toBe('os.environ/CLOUDFLARE_AI_GATEWAY_COMPAT_URL');
+      expect(params.api_key).toBe('os.environ/CLOUDFLARE_API_KEY');
+      expect(typeof params.input_cost_per_token).toBe('number');
+      expect(typeof params.output_cost_per_token).toBe('number');
+      expect(params.input_cost_per_token as number).toBeGreaterThan(0);
+      expect(params.output_cost_per_token as number).toBeGreaterThan(0);
+      expect(params.extra_headers).toEqual({ 'cf-aig-skip-cache': 'true' });
+    }
+    const noThinking = workersAiModels.find(
+      (entry) => entry.model_name === 'cf-glm-5.2-no-thinking',
+    );
+    expect(noThinking?.litellm_params).toMatchObject({
+      allowed_openai_params: ['chat_template_kwargs'],
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    // The native cloudflare/ provider must stay retired: its only credential
+    // was a short-lived cfoat_ OAuth token that expired mid-flight.
+    expect(config.model_list?.some(
+      (entry) => entry.litellm_params?.model?.startsWith('cloudflare/'),
+    )).toBe(false);
+
     expect(
       compose.services?.litellm?.environment?.CLOUDFLARE_ACCOUNT_ID,
     ).toBe('${CLOUDFLARE_ACCOUNT_ID:-}');
     expect(
       compose.services?.litellm?.environment?.CLOUDFLARE_API_KEY,
     ).toBe('${CLOUDFLARE_API_KEY:-}');
+    expect(
+      compose.services?.litellm?.environment?.CLOUDFLARE_AI_GATEWAY_COMPAT_URL,
+    ).toBe('${CLOUDFLARE_AI_GATEWAY_COMPAT_URL:-}');
     expect(config.model_list).not.toContainEqual(expect.objectContaining({
       model_name: 'glm-5.2',
     }));
