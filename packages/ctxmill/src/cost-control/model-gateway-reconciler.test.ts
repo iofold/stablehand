@@ -36,6 +36,7 @@ function createDeps() {
         }],
         watermarkMs: NOW - 10_000,
       }),
+      settleAbandonedGatewayTurns: vi.fn().mockResolvedValue([]),
     },
     spendClient: {
       listSpend: vi.fn().mockResolvedValue({
@@ -77,6 +78,7 @@ describe('ModelGatewayReconciler', () => {
       status: 'success',
       attached: 1,
       quarantined: 0,
+      settledUnpriced: 0,
       affectedTurnIds: ['turn-1'],
       watermarkMs: NOW - 10_000,
     });
@@ -100,6 +102,33 @@ describe('ModelGatewayReconciler', () => {
       previousUsage: PENDING_USAGE,
       usage: COMPLETE_USAGE,
     });
+  });
+
+  it('settles abandoned turns as unpriced past the grace and logs each loss', async () => {
+    const deps = createDeps();
+    deps.db.settleAbandonedGatewayTurns.mockResolvedValue([
+      { turnId: 'turn-lost', correlationId: 'ct_deadbeefdeadbeefdeadbeefdeadbeef' },
+    ]);
+    const reconciler = new ModelGatewayReconciler(deps, {
+      profile: 'default',
+      revision: 'dev1-r1',
+      ownerId: 'worker-1',
+      now: () => NOW,
+      abandonedGraceMs: 10 * 60_000,
+    });
+
+    const result = await reconciler.runOnce();
+    expect(result).toMatchObject({ status: 'success', settledUnpriced: 1 });
+    expect(deps.db.settleAbandonedGatewayTurns).toHaveBeenCalledWith({
+      nowMs: NOW,
+      abandonedBeforeMs: NOW - 10 * 60_000,
+    });
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('turn-lost'),
+    );
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('settled as unpriced'),
+    );
   });
 
   it('does no gateway I/O when another replica owns the lease', async () => {

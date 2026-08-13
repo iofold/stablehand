@@ -6494,6 +6494,56 @@ export class DatabaseRepository {
     };
   }
 
+  /**
+   * Settle gateway-attributed turns whose spend evidence never arrived
+   * (ctx-qqqp). Past the abandonment grace a missing spend row is permanently
+   * missing — the reconciler's read window has long advanced beyond the call's
+   * time range — so the envelope is stamped coverage=unpriced with token
+   * telemetry preserved: the same honest correction previously applied by
+   * hand, and the per-turn coverage value keeps every loss queryable. Covers
+   * both completed turns (lost spend row) and error turns that never made a
+   * billable call.
+   */
+  async settleAbandonedGatewayTurns(input: {
+    nowMs: number;
+    abandonedBeforeMs: number;
+    limit?: number;
+  }): Promise<Array<{ turnId: string; correlationId: string | null }>> {
+    const limit = Math.max(1, Math.min(Math.trunc(input.limit ?? 100), 500));
+    const unpricedCost = JSON.stringify({ coverage: 'unpriced', knownUsd: 0, totalUsd: null });
+    const emptyEnvelope = JSON.stringify({
+      cost: { coverage: 'unpriced', knownUsd: 0, totalUsd: null },
+      modelCalls: { expected: null, observed: 0, costKnown: 0 },
+      inputTokens: 0,
+      totalTokens: 0,
+      outputTokens: 0,
+    });
+    const result = await this.db.execute(sql`
+      UPDATE turns SET
+        usage = CASE
+          WHEN usage IS NULL THEN ${emptyEnvelope}::jsonb
+          ELSE jsonb_set(usage, '{cost}', ${unpricedCost}::jsonb)
+        END,
+        usage_reconciled_at = ${input.nowMs}
+      WHERE id IN (
+        SELECT id FROM turns
+        WHERE gateway_mode IS NOT NULL
+          AND completed_at IS NOT NULL
+          AND completed_at < ${input.abandonedBeforeMs}
+          AND usage_reconciled_at IS NULL
+        ORDER BY completed_at ASC
+        LIMIT ${limit}
+      )
+      RETURNING id AS turn_id, gateway_correlation_id
+    `);
+    return Array.from(result as Iterable<Record<string, unknown>>).map((row) => ({
+      turnId: String(row.turn_id),
+      correlationId: row.gateway_correlation_id === null
+        ? null
+        : String(row.gateway_correlation_id),
+    }));
+  }
+
   async getModelGatewayQuarantineSummary(
     gatewayProfile: string,
     options: { recentSinceMs: number; limit: number },

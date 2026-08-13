@@ -11,6 +11,14 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_OVERLAP_MS = 60_000;
 const DEFAULT_SETTLEMENT_DELAY_MS = 10_000;
 const DEFAULT_INITIAL_LOOKBACK_MS = 15 * 60_000;
+/**
+ * Age past which a turn's missing spend evidence is treated as permanently
+ * lost and the turn settles as unpriced (ctx-qqqp). Must stay below the
+ * status route's awaiting-grace threshold (15 min) so a bounded per-turn loss
+ * settles honestly instead of pinning the gateway state degraded forever;
+ * systemic ingestion failure is still caught by the watermark-lag arm.
+ */
+const DEFAULT_ABANDONED_GRACE_MS = 10 * 60_000;
 const TAG = '[ModelGatewayReconciler]';
 
 type ModelGatewayReconciliationStore = Pick<
@@ -18,6 +26,7 @@ type ModelGatewayReconciliationStore = Pick<
   | 'claimModelGatewayReconciliationLease'
   | 'recordModelGatewayReconciliationFailure'
   | 'reconcileModelGatewaySpend'
+  | 'settleAbandonedGatewayTurns'
 >;
 
 interface Logger {
@@ -49,6 +58,7 @@ interface ModelGatewayReconcilerOptions {
   overlapMs?: number;
   settlementDelayMs?: number;
   initialLookbackMs?: number;
+  abandonedGraceMs?: number;
   now?: () => number;
 }
 
@@ -58,6 +68,7 @@ export type ModelGatewayReconciliationResult =
       status: 'success';
       attached: number;
       quarantined: number;
+      settledUnpriced: number;
       affectedTurnIds: string[];
       watermarkMs: number;
     }
@@ -89,6 +100,8 @@ export class ModelGatewayReconciler {
   private readonly settlementDelayMs: number;
 
   private readonly initialLookbackMs: number;
+
+  private readonly abandonedGraceMs: number;
 
   private readonly now: () => number;
 
@@ -125,6 +138,10 @@ export class ModelGatewayReconciler {
     this.initialLookbackMs = positiveOption(
       'Model gateway reconciliation initial lookback',
       options.initialLookbackMs ?? DEFAULT_INITIAL_LOOKBACK_MS,
+    );
+    this.abandonedGraceMs = positiveOption(
+      'Model gateway reconciliation abandoned grace',
+      options.abandonedGraceMs ?? DEFAULT_ABANDONED_GRACE_MS,
     );
     this.now = options.now ?? Date.now;
   }
@@ -220,10 +237,27 @@ export class ModelGatewayReconciler {
           );
         }
       }
+
+      // ctx-qqqp: turns whose spend evidence never arrived settle as unpriced
+      // once the read window can no longer recover them. Each loss is logged
+      // individually — settlement keeps the gateway state honest without
+      // making the loss silent.
+      const settled = await this.deps.db.settleAbandonedGatewayTurns({
+        nowMs,
+        abandonedBeforeMs: nowMs - this.abandonedGraceMs,
+      });
+      for (const turn of settled) {
+        this.deps.logger.warn(
+          `${TAG} spend evidence never arrived for turn ${turn.turnId}`
+          + ` (correlation ${turn.correlationId ?? 'none'}); settled as unpriced`,
+        );
+      }
+
       return {
         status: 'success',
         attached: committed.attached,
         quarantined: committed.quarantined,
+        settledUnpriced: settled.length,
         affectedTurnIds: committed.affectedTurnIds,
         watermarkMs: committed.watermarkMs,
       };
