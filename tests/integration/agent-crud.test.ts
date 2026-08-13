@@ -1440,6 +1440,9 @@ describe('Agent CRUD & related endpoints', () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body).toEqual(expect.objectContaining({ system: expect.any(Object), agentDefaults: expect.any(Object) }));
+      expect(body.authentication).toEqual({
+        mode: app.apiAuth.mode === 'enforce' ? 'enforced' : 'disabled',
+      });
       expect(body.agentDefaults).not.toHaveProperty('model');
       expect(body).not.toHaveProperty('llm');
     });

@@ -1,5 +1,11 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { ApiKeyCreateInputSchema, type ApiKey, type ApiKeyCreated } from '@ctxmill/contracts';
+import {
+  ApiKeyCreateInputSchema,
+  ApiKeyListResponseSchema,
+  type ApiKey,
+  type ApiKeyCreated,
+  type ApiKeyStatus,
+} from '@ctxmill/contracts';
 
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { ApiKeyRow } from '../../database/types.js';
@@ -13,12 +19,19 @@ export interface ApiKeyRouteOptions {
 // fail-closed default they are master-only, which is the "key management is
 // never grantable" rule enforced structurally rather than by exception.
 
-function toPublicApiKey(row: ApiKeyRow): ApiKey {
+function apiKeyStatus(row: ApiKeyRow, now = Date.now()): ApiKeyStatus {
+  if (row.revokedAt !== null) return 'revoked';
+  if (row.expiresAt !== null && row.expiresAt <= now) return 'expired';
+  return 'active';
+}
+
+function toPublicApiKey(row: ApiKeyRow, now = Date.now()): ApiKey {
   return {
     id: row.id,
     name: row.name,
     capabilities: row.capabilities,
     note: row.note ?? null,
+    status: apiKeyStatus(row, now),
     createdAt: row.createdAt,
     createdBy: row.createdBy ?? null,
     expiresAt: row.expiresAt ?? null,
@@ -59,7 +72,7 @@ export async function apiKeyRoutes(app: FastifyInstance, opts: ApiKeyRouteOption
         expiresAt: parsed.data.expiresAt ?? null,
       });
       const body: ApiKeyCreated = { ...toPublicApiKey(row), token };
-      return reply.status(201).send(body);
+      return reply.header('Cache-Control', 'no-store').status(201).send(body);
     } catch (err) {
       if (isUniqueViolation(err)) {
         return reply.status(409).send({ error: `An api key named '${parsed.data.name}' already exists` });
@@ -70,7 +83,8 @@ export async function apiKeyRoutes(app: FastifyInstance, opts: ApiKeyRouteOption
 
   app.get('/', async () => {
     const rows = await db.listApiKeys();
-    return { keys: rows.map(toPublicApiKey) };
+    const now = Date.now();
+    return ApiKeyListResponseSchema.parse({ keys: rows.map((row) => toPublicApiKey(row, now)) });
   });
 
   app.delete('/:id', async (request, reply) => {

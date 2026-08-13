@@ -67,6 +67,76 @@ describe('versioned operational CLI', () => {
     });
   });
 
+  it('keeps the one-time key token visible and accumulates repeated capability flags', async () => {
+    const token = `cmk_${'a'.repeat(43)}`;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => new Response(
+      JSON.stringify({
+        id: 'key_1',
+        name: 'ext-gallery',
+        capabilities: ['artifacts:read', 'webhooks:manage'],
+        note: null,
+        status: 'active',
+        createdAt: 1,
+        createdBy: 'master',
+        expiresAt: null,
+        lastUsedAt: null,
+        revokedAt: null,
+        token,
+        apiToken: 'must-stay-redacted',
+        requestBody: init?.body,
+      }),
+      { status: 201, headers: { 'content-type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const exitCode = await runOpsCli([
+      'keys',
+      'create',
+      '--name',
+      'ext-gallery',
+      '--cap',
+      'artifacts:read',
+      '--cap',
+      'webhooks:manage',
+      '--json',
+    ]);
+
+    expect(exitCode).toBe(0);
+    const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(requestBody.capabilities).toEqual(['artifacts:read', 'webhooks:manage']);
+    expect(JSON.parse(String(stdout.mock.calls[0]?.[0])).data).toMatchObject({
+      token,
+      apiToken: '[REDACTED]',
+    });
+  });
+
+  it('rejects generic output capture for a live one-time key response before requesting it', async () => {
+    const fetchMock = vi.fn(() => {
+      throw new Error('keys create must fail before the request');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const exitCode = await runOpsCli([
+      'keys',
+      'create',
+      '--name',
+      'ext-gallery',
+      '--cap',
+      'artifacts:read',
+      '--out',
+      '.tmp/forbidden-key-output',
+      '--json',
+    ]);
+
+    expect(exitCode).toBe(2);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toMatchObject({
+      error: 'usage_error',
+    });
+  });
+
   it('forwards event correlation filters without payload parsing', async () => {
     const fetchMock = vi.fn(async () => new Response(
       JSON.stringify({ events: [] }),

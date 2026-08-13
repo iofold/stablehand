@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CAPABILITY_VERBS, type CapabilityVerb } from '@ctxmill/contracts';
 
 import { CtxmillApiError, CtxmillContractError, CtxmillTimeoutError } from './errors.js';
 
@@ -40,6 +41,7 @@ interface TransportRequest<T> extends CtxmillRequestOptions {
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const REDACTED = '[REDACTED]';
 const SENSITIVE_KEY = /(?:authorization|cookie|token|secret|api[-_]?key|password|credential|value)/i;
+const CAPABILITY_VERB_SET: ReadonlySet<string> = new Set(CAPABILITY_VERBS);
 
 function normalizeBaseUrl(base: string): string {
   if (base.length > 1 && base.endsWith('/')) {
@@ -83,12 +85,26 @@ async function parseBody(response: Response): Promise<unknown> {
   }
 }
 
-function errorFields(body: unknown): { code?: string; detail?: string } {
+function errorFields(body: unknown): {
+  code?: string;
+  detail?: string;
+  requiredCapability?: CapabilityVerb | null;
+} {
   if (!isRecord(body)) return {};
   const code = typeof body.code === 'string' ? body.code : undefined;
   const detailCandidate = body.detail ?? body.error ?? body.message;
   const detail = typeof detailCandidate === 'string' ? detailCandidate : undefined;
-  return { code, detail };
+  const required = body.required_capability;
+  const requiredCapability = required === null
+    ? null
+    : typeof required === 'string' && CAPABILITY_VERB_SET.has(required)
+      ? required as CapabilityVerb
+      : undefined;
+  return {
+    code,
+    detail,
+    ...(requiredCapability !== undefined ? { requiredCapability } : {}),
+  };
 }
 
 function abortContext(signal: AbortSignal | undefined, timeoutMs: number): {

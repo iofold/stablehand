@@ -775,6 +775,9 @@ export const ConfigResponseSchema = z.strictObject({
     temperature: z.number(),
     maxTokens: z.number().int().positive(),
   }),
+  authentication: z.strictObject({
+    mode: z.enum(['enforced', 'disabled']),
+  }),
 });
 
 export const SandboxMetricsResponseSchema = z.strictObject({

@@ -84,16 +84,38 @@ export const ApiKeyCreateInputSchema = z.strictObject({
   capabilities: z.array(CapabilitySchema).min(1).max(32),
   note: z.string().max(1024).optional(),
   expiresAt: z.number().int().positive().nullable().optional(),
+}).superRefine((value, ctx) => {
+  const duplicate = value.capabilities.find(
+    (capability, index) => value.capabilities.indexOf(capability) !== index,
+  );
+  if (duplicate) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['capabilities'],
+      message: `Capabilities must be unique; duplicate '${duplicate}'`,
+    });
+  }
+  if (value.expiresAt !== null && value.expiresAt !== undefined && value.expiresAt <= Date.now()) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['expiresAt'],
+      message: 'Expiration must be in the future',
+    });
+  }
 });
 
 export type ApiKeyCreateInput = z.infer<typeof ApiKeyCreateInputSchema>;
 
 /** Public shape — never carries the token or its hash. */
-export const ApiKeySchema = z.object({
+export const ApiKeyStatusSchema = z.enum(['active', 'expired', 'revoked']);
+export type ApiKeyStatus = z.infer<typeof ApiKeyStatusSchema>;
+
+export const ApiKeySchema = z.strictObject({
   id: z.string(),
   name: z.string(),
   capabilities: z.array(z.string()),
   note: z.string().nullable(),
+  status: ApiKeyStatusSchema,
   createdAt: z.number().int(),
   createdBy: z.string().nullable(),
   expiresAt: z.number().int().nullable(),
@@ -102,6 +124,12 @@ export const ApiKeySchema = z.object({
 });
 
 export type ApiKey = z.infer<typeof ApiKeySchema>;
+
+export const ApiKeyListResponseSchema = z.strictObject({
+  keys: z.array(ApiKeySchema),
+});
+
+export type ApiKeyListResponse = z.infer<typeof ApiKeyListResponseSchema>;
 
 /** POST /api/keys response — the only time the token is ever shown. */
 export const ApiKeyCreatedSchema = ApiKeySchema.extend({

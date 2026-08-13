@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { CapabilityVerb } from '@ctxmill/contracts';
 
 export type CtxmillContractDirection = 'request' | 'response' | 'stream';
 
@@ -27,6 +28,7 @@ export class CtxmillApiError extends Error {
   readonly status: number;
   readonly code?: string;
   readonly detail?: string;
+  readonly requiredCapability?: CapabilityVerb | null;
   readonly body: unknown;
   readonly method: string;
   readonly path: string;
@@ -35,6 +37,7 @@ export class CtxmillApiError extends Error {
     status: number;
     code?: string;
     detail?: string;
+    requiredCapability?: CapabilityVerb | null;
     body: unknown;
     method: string;
     path: string;
@@ -45,6 +48,7 @@ export class CtxmillApiError extends Error {
     this.status = input.status;
     this.code = input.code;
     this.detail = input.detail;
+    this.requiredCapability = input.requiredCapability;
     this.body = input.body;
     this.method = input.method;
     this.path = input.path;

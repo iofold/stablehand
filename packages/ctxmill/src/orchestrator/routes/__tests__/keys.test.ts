@@ -1,6 +1,10 @@
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import { API_KEY_TOKEN_PATTERN } from '@ctxmill/contracts';
+import {
+  API_KEY_TOKEN_PATTERN,
+  ApiKeyCreatedSchema,
+  ApiKeyListResponseSchema,
+} from '@ctxmill/contracts';
 
 import { apiKeyRoutes } from '../keys.js';
 import type { ApiKeyRow } from '../../../database/types.js';
@@ -81,6 +85,8 @@ describe('api key routes', () => {
     });
     expect(res.statusCode).toBe(201);
     const body = res.json();
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(ApiKeyCreatedSchema.parse(body)).toEqual(body);
     expect(body.token).toMatch(API_KEY_TOKEN_PATTERN);
     expect(body).not.toHaveProperty('tokenHash');
     expect(body.createdBy).toBe('master');
@@ -89,9 +95,11 @@ describe('api key routes', () => {
 
     const list = await app.inject({ method: 'GET', url: '/api/keys' });
     expect(list.statusCode).toBe(200);
-    expect(list.json().keys).toHaveLength(1);
-    expect(list.json().keys[0]).not.toHaveProperty('token');
-    expect(list.json().keys[0]).not.toHaveProperty('tokenHash');
+    const listed = ApiKeyListResponseSchema.parse(list.json());
+    expect(listed.keys).toHaveLength(1);
+    expect(listed.keys[0]?.status).toBe('active');
+    expect(listed.keys[0]).not.toHaveProperty('token');
+    expect(listed.keys[0]).not.toHaveProperty('tokenHash');
   });
 
   it('rejects invalid capabilities with a 400 naming the issue', async () => {
@@ -116,6 +124,55 @@ describe('api key routes', () => {
     expect((await app.inject({ method: 'POST', url: '/api/keys', payload })).statusCode).toBe(201);
     const dup = await app.inject({ method: 'POST', url: '/api/keys', payload });
     expect(dup.statusCode).toBe(409);
+  });
+
+  it.each([
+    [
+      'duplicate capabilities',
+      { name: 'ext-duplicate-cap', capabilities: ['events:read', 'events:read'] },
+    ],
+    [
+      'an expiry in the past',
+      { name: 'ext-past-expiry', capabilities: ['events:read'], expiresAt: Date.now() - 1 },
+    ],
+  ])('rejects %s before creating a key', async (_caseName, payload) => {
+    const db = new FakeKeyDb();
+    const app = await createApp(db);
+    apps.push(app);
+
+    const res = await app.inject({ method: 'POST', url: '/api/keys', payload });
+
+    expect(res.statusCode).toBe(400);
+    expect(db.rows).toEqual([]);
+  });
+
+  it('computes active, expired, and revoked status in list responses', async () => {
+    const db = new FakeKeyDb();
+    const app = await createApp(db);
+    apps.push(app);
+    const future = Date.now() + 60_000;
+    for (const [name, expiresAt] of [
+      ['ext-active', future],
+      ['ext-expired', future],
+      ['ext-revoked', future],
+    ] as const) {
+      await app.inject({
+        method: 'POST',
+        url: '/api/keys',
+        payload: { name, capabilities: ['events:read'], expiresAt },
+      });
+    }
+    db.rows[1]!.expiresAt = Date.now() - 1;
+    db.rows[2]!.revokedAt = Date.now();
+
+    const res = await app.inject({ method: 'GET', url: '/api/keys' });
+    const keys = ApiKeyListResponseSchema.parse(res.json()).keys;
+
+    expect(keys.map(({ name, status }) => [name, status])).toEqual([
+      ['ext-active', 'active'],
+      ['ext-expired', 'expired'],
+      ['ext-revoked', 'revoked'],
+    ]);
   });
 
   it('revokes idempotently and 404s unknown ids', async () => {

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   API_KEY_TOKEN_PATTERN,
   ApiKeyCreateInputSchema,
+  ApiKeyCreatedSchema,
+  ApiKeyListResponseSchema,
   CapabilitySchema,
   capabilitySatisfies,
   emitGrantAllows,
@@ -92,6 +94,42 @@ describe('ApiKeyCreateInputSchema', () => {
     expect(ApiKeyCreateInputSchema.safeParse({ name: 'Ext Evals', capabilities: ['events:read'] }).success).toBe(false);
     expect(ApiKeyCreateInputSchema.safeParse({ name: 'ext-evals', capabilities: [] }).success).toBe(false);
     expect(ApiKeyCreateInputSchema.safeParse({ name: 'ext-evals', capabilities: ['events:read'], extra: 1 }).success).toBe(false);
+  });
+
+  it('rejects duplicate capabilities and expirations that are already past', () => {
+    expect(ApiKeyCreateInputSchema.safeParse({
+      name: 'ext-duplicate',
+      capabilities: ['events:read', 'events:read'],
+    }).success).toBe(false);
+    expect(ApiKeyCreateInputSchema.safeParse({
+      name: 'ext-expired',
+      capabilities: ['events:read'],
+      expiresAt: Date.now() - 1,
+    }).success).toBe(false);
+  });
+});
+
+describe('api key response schemas', () => {
+  const key = {
+    id: 'key_1',
+    name: 'ext-evals',
+    capabilities: ['events:read'],
+    note: null,
+    status: 'active',
+    createdAt: 1,
+    createdBy: 'master',
+    expiresAt: null,
+    lastUsedAt: null,
+    revokedAt: null,
+  };
+
+  it('strictly parses list status and the one-time token response', () => {
+    expect(ApiKeyListResponseSchema.parse({ keys: [key] })).toEqual({ keys: [key] });
+    expect(ApiKeyCreatedSchema.parse({
+      ...key,
+      token: `cmk_${'a'.repeat(43)}`,
+    })).toMatchObject({ status: 'active' });
+    expect(() => ApiKeyListResponseSchema.parse({ keys: [key], extra: true })).toThrow();
   });
 });
 

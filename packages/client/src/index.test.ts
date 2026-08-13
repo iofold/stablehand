@@ -496,6 +496,29 @@ describe('CtxmillControlClient', () => {
     expect(String(error)).not.toContain('also-secret');
   });
 
+  it.each([
+    ['events:read', 'events:read'],
+    [null, null],
+  ] as const)('surfaces the required capability from a 403 response (%s)', async (
+    requiredCapability,
+    expected,
+  ) => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      error: 'Forbidden',
+      required_capability: requiredCapability,
+    }, 403));
+    const client = new clientModule.CtxmillControlClient({
+      apiBase: 'https://ctxmill.test/api',
+      fetch: fetchImpl,
+      retry: { maxAttempts: 1 },
+    });
+
+    await expect(client.events.list()).rejects.toMatchObject({
+      status: 403,
+      requiredCapability: expected,
+    });
+  });
+
   it('preserves SSE ids and heartbeats while carrying snapshot and reconnect cursors distinctly', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(streamFromText([
       ': heartbeat',

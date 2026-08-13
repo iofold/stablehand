@@ -19,7 +19,8 @@ import type { ZodType } from 'zod';
 import { redactSensitiveFields as redact } from './redaction.js';
 
 type JsonRecord = Record<string, unknown>;
-type Flags = Record<string, string | boolean>;
+type FlagValue = string | boolean;
+type Flags = Record<string, FlagValue | FlagValue[]>;
 
 interface ParsedArgs {
   positionals: string[];
@@ -97,20 +98,31 @@ function parseArgs(argv: string[]): ParsedArgs {
     const withoutPrefix = arg.slice(2);
     const eq = withoutPrefix.indexOf('=');
     if (eq !== -1) {
-      flags[withoutPrefix.slice(0, eq)] = withoutPrefix.slice(eq + 1);
+      appendFlag(flags, withoutPrefix.slice(0, eq), withoutPrefix.slice(eq + 1));
       continue;
     }
 
     const next = argv[i + 1];
     if (next !== undefined && !next.startsWith('--')) {
-      flags[withoutPrefix] = next;
+      appendFlag(flags, withoutPrefix, next);
       i += 1;
     } else {
-      flags[withoutPrefix] = true;
+      appendFlag(flags, withoutPrefix, true);
     }
   }
 
   return { positionals, flags };
+}
+
+function appendFlag(flags: Flags, name: string, value: FlagValue): void {
+  const existing = flags[name];
+  if (existing === undefined) {
+    flags[name] = value;
+  } else if (Array.isArray(existing)) {
+    existing.push(value);
+  } else {
+    flags[name] = [existing, value];
+  }
 }
 
 async function executeCommand(
@@ -595,12 +607,22 @@ async function apiKeyCommand(action: string | undefined, third: string | undefin
       return getCommand('keys list', 'GET', base, formatJsonSummary, flags);
     case 'create': {
       const name = flagString(flags, 'name') ?? third;
-      const caps = flagString(flags, 'cap', 'capabilities');
+      const caps = flagStrings(flags, 'cap', 'capabilities')
+        .flatMap((value) => value.split(','))
+        .map((cap) => cap.trim())
+        .filter(Boolean);
       requireArg(name, 'name via --name');
-      requireArg(caps, 'capabilities via --cap (comma-separated)');
+      if (caps.length === 0) {
+        throw new UsageError('Missing required capabilities via --cap (repeatable or comma-separated)');
+      }
+      if (flagString(flags, 'out') && !hasFlag(flags, 'dry-run')) {
+        throw new UsageError(
+          'keys create returns a one-time secret; --out is disabled for this command',
+        );
+      }
       const body: JsonRecord = {
         name,
-        capabilities: caps!.split(',').map((cap) => cap.trim()).filter(Boolean),
+        capabilities: caps,
       };
       const note = flagString(flags, 'note');
       if (note) body.note = note;
@@ -1066,7 +1088,7 @@ function urlHasAccessToken(url: string): boolean {
 }
 
 async function emitResult(result: CommandResult, flags: Flags): Promise<void> {
-  const redacted = shouldRedact(flags) ? redact(result.data) : result.data;
+  const redacted = redactResultData(result, flags);
   const envelope = {
     command: result.command,
     baseUrl: getBaseUrl(flags),
@@ -1092,6 +1114,20 @@ async function emitResult(result: CommandResult, flags: Flags): Promise<void> {
   }
 
   console.log(result.pretty(redacted));
+}
+
+function redactResultData(result: CommandResult, flags: Flags): unknown {
+  if (!shouldRedact(flags)) return result.data;
+  const redacted = redact(result.data);
+  if (
+    result.command === 'keys create'
+    && isRecord(result.data)
+    && typeof result.data.token === 'string'
+    && isRecord(redacted)
+  ) {
+    return { ...redacted, token: result.data.token };
+  }
+  return redacted;
 }
 
 function emitError(
@@ -1153,14 +1189,30 @@ function requireArg(value: string | undefined, name: string): asserts value is s
 function flagString(flags: Flags, ...names: string[]): string | undefined {
   for (const name of names) {
     const value = flags[name];
-    if (typeof value === 'string') return value;
-    if (value === true) return 'true';
+    const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      const candidate = values[index];
+      if (typeof candidate === 'string') return candidate;
+      if (candidate === true) return 'true';
+    }
   }
   return undefined;
 }
 
+function flagStrings(flags: Flags, ...names: string[]): string[] {
+  return names.flatMap((name) => {
+    const value = flags[name];
+    const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    return values.filter((candidate): candidate is string => typeof candidate === 'string');
+  });
+}
+
 function hasFlag(flags: Flags, ...names: string[]): boolean {
-  return names.some((name) => flags[name] === true || flags[name] === 'true');
+  return names.some((name) => {
+    const value = flags[name];
+    const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    return values.some((candidate) => candidate === true || candidate === 'true');
+  });
 }
 
 function shouldRedact(flags: Flags): boolean {
@@ -1661,7 +1713,7 @@ Mutation commands:
   secrets delete <agentId> <key>                       [--yes]
 
   keys list                                            Scoped api keys (WO-5; master token only)
-  keys create --name <n> --cap <cap1,cap2,...> [--note <t>] [--expires-at <ms>]   Token shown once
+  keys create --name <n> --cap <cap1> [--cap <cap2>] [--note <t>] [--expires-at <ms>]   Token shown once; --out disabled
   keys revoke <keyId>                                  [--yes]
 
   settings set --from-file <path>

@@ -5,6 +5,20 @@ import { describe, expect, it } from 'vitest';
 import * as contracts from './index.js';
 
 describe('@ctxmill/contracts', () => {
+  it('requires the server authentication mode in the config boundary', () => {
+    const config = {
+      system: { version: '1.0.0', uptime: 10, dbPath: '.ctxmill' },
+      agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
+      authentication: { mode: 'enforced' },
+    };
+
+    expect(contracts.ConfigResponseSchema.parse(config)).toEqual(config);
+    expect(() => contracts.ConfigResponseSchema.parse({
+      system: config.system,
+      agentDefaults: config.agentDefaults,
+    })).toThrow();
+  });
+
   it('defines one strict analytics overview contract for API and SDK consumers', () => {
     const schema = (contracts as Record<string, unknown>).AnalyticsOverviewSchema;
     expect(schema).toBeDefined();

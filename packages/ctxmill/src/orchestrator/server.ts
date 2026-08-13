@@ -251,6 +251,9 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         temperature: 0.7,
         maxTokens: 4096,
       },
+      authentication: {
+        mode: app.apiAuth.mode === 'enforce' ? 'enforced' : 'disabled',
+      },
     };
   });
 
