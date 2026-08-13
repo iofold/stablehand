@@ -74,7 +74,7 @@ interface InterruptRequestedEvent {
 
 type StreamingPart =
   | { type: 'text'; content: string }
-  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: string };
+  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: string; parentToolCallId?: string; agentName?: string };
 
 export interface AgentTurnServiceDeps {
   db: DatabaseRepository;
@@ -865,6 +865,10 @@ export class AgentTurnService {
             : e.args === undefined
               ? ''
               : JSON.stringify(e.args);
+          // Subagent annotation (ctx-5myn): calls spawned by a Task tool ride
+          // flat with a parent pointer; the UI computes nesting.
+          const parentToolCallId = typeof e.parentToolCallId === 'string' ? e.parentToolCallId : undefined;
+          const subagentName = typeof e.agentName === 'string' ? e.agentName : undefined;
           pendingToolCalls.set(tcId, {
             id: tcId,
             name: (e.toolCallName as string) || 'unknown',
@@ -877,6 +881,8 @@ export class AgentTurnService {
             name: (e.toolCallName as string) || 'unknown',
             args: toolArgs,
             status: 'running',
+            ...(parentToolCallId ? { parentToolCallId } : {}),
+            ...(subagentName ? { agentName: subagentName } : {}),
           });
           if (assistantFlushedForBatch) {
             flushedAssistantProjectionDirty = true;
@@ -1045,6 +1051,7 @@ export class AgentTurnService {
 
         if (event.type === 'TOOL_CALL_START' && 'toolCallName' in event) {
           const toolStart = event as unknown as ToolCallStartEvent;
+          const rawStart = event as Record<string, unknown>;
           emitTurnEvent('tool_call.started', {
             turnId,
             agentId,
@@ -1052,6 +1059,12 @@ export class AgentTurnService {
             toolCallId: toolStart.toolCallId ?? '',
             toolCallName: toolStart.toolCallName,
             args: toolStart.args ?? {},
+            ...(typeof rawStart.parentToolCallId === 'string'
+              ? { parentToolCallId: rawStart.parentToolCallId }
+              : {}),
+            ...(typeof rawStart.agentName === 'string'
+              ? { agentName: rawStart.agentName }
+              : {}),
             timestamp: Date.now(),
           } as unknown as EventMap['tool_call.started']);
         }

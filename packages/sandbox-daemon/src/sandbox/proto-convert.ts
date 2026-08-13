@@ -416,6 +416,8 @@ function convertAgentEvent(event: AgentEvent): ProtoAgentEvent {
             id: event.id,
             name: event.name,
             argsJson: stringifyProtoJsonPayload(event.args),
+            parentToolCallId: event.parentToolCallId,
+            agentName: event.agentName,
           }),
         },
       });
@@ -429,6 +431,7 @@ function convertAgentEvent(event: AgentEvent): ProtoAgentEvent {
             result: event.result,
             error: event.error,
             durationMs: BigInt(event.durationMs),
+            parentToolCallId: event.parentToolCallId,
           }),
         },
       });
@@ -588,6 +591,8 @@ export function protoAgentEventToAGUI(
         toolCallId: v.id,
         toolCallName: v.name,
         args: v.argsJson ? JSON.parse(v.argsJson) : {},
+        ...(v.parentToolCallId !== undefined ? { parentToolCallId: v.parentToolCallId } : {}),
+        ...(v.agentName !== undefined ? { agentName: v.agentName } : {}),
       };
     }
 
@@ -602,6 +607,7 @@ export function protoAgentEventToAGUI(
         result: v.result,
         error: v.error,
         durationMs: Number(v.durationMs),
+        ...(v.parentToolCallId !== undefined ? { parentToolCallId: v.parentToolCallId } : {}),
       };
     }
 

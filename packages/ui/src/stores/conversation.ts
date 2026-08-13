@@ -101,6 +101,8 @@ export function normalizeConversationMessage(
             error: raw.error as string | undefined,
             status: normalizeToolCallStatus(raw.status, raw.error as string | undefined),
             ...(typeof raw.durationMs === 'number' ? { durationMs: raw.durationMs } : {}),
+            ...(typeof raw.parentToolCallId === 'string' ? { parentToolCallId: raw.parentToolCallId } : {}),
+            ...(typeof raw.agentName === 'string' ? { agentName: raw.agentName } : {}),
           });
         }
       }
@@ -746,6 +748,12 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           name: (event.toolCallName as string) || 'unknown',
           args: '',
           status: 'running',
+          ...(typeof event.parentToolCallId === 'string'
+            ? { parentToolCallId: event.parentToolCallId }
+            : {}),
+          ...(typeof event.agentName === 'string'
+            ? { agentName: event.agentName }
+            : {}),
         };
         set((state) => {
           const next = new Map(state.toolCalls);

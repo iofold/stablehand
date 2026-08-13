@@ -36,31 +36,112 @@ export interface SessionThreadProps {
   onInspectTurn?: (turnId: string) => void;
 }
 
-const TOOL_CALL_COLLAPSE_THRESHOLD = 1;
+/** Runs of more than this many top-level cards collapse by default (ctx-q201). */
+const TOOL_CALL_COLLAPSE_THRESHOLD = 2;
+
+/**
+ * A tool call plus the calls that ran inside the subagent it spawned
+ * (ctx-5myn). Children arrive flat with a parentToolCallId annotation;
+ * grouping is purely presentational.
+ */
+interface ToolCallGroup {
+  call: ToolCallState;
+  children: ToolCallState[];
+}
+
+function groupToolCalls(calls: ToolCallState[]): ToolCallGroup[] {
+  const groups: ToolCallGroup[] = [];
+  const groupById = new Map<string, ToolCallGroup>();
+  const orphans: ToolCallState[] = [];
+  for (const call of calls) {
+    if (call.parentToolCallId) {
+      orphans.push(call);
+      continue;
+    }
+    const group: ToolCallGroup = { call, children: [] };
+    groups.push(group);
+    groupById.set(call.id, group);
+  }
+  for (const child of orphans) {
+    const parent = child.parentToolCallId ? groupById.get(child.parentToolCallId) : undefined;
+    if (parent) {
+      parent.children.push(child);
+    } else {
+      // Parent not in this batch (e.g. split across messages): show flat
+      // rather than dropping the activity.
+      groups.push({ call: child, children: [] });
+    }
+  }
+  return groups;
+}
+
+function statusSummary(calls: ToolCallState[]): { suffix: string; running: number } {
+  const running = calls.filter((tc) => tc.status === 'running' || tc.status === 'pending').length;
+  const complete = calls.filter((tc) => tc.status === 'complete').length;
+  const errored = calls.filter((tc) => tc.status === 'error').length;
+  const parts: string[] = [];
+  if (running > 0) parts.push(`${running} running`);
+  if (complete > 0) parts.push(`${complete} done`);
+  if (errored > 0) parts.push(`${errored} failed`);
+  return { suffix: parts.length > 0 ? ` (${parts.join(', ')})` : '', running };
+}
+
+/**
+ * The spawning Task card with its subagent's activity nested beneath it,
+ * collapsed by default behind a badge naming the subagent.
+ */
+function SubagentGroupCard({ group }: { group: ToolCallGroup }) {
+  const [expanded, setExpanded] = useState(false);
+  const label = group.children.find((c) => c.agentName)?.agentName ?? 'subagent';
+  const { suffix, running } = statusSummary(group.children);
+  return (
+    <div>
+      <ToolCallCard toolCall={group.call} />
+      <div className="ml-4 border-l border-surface-700 pl-2">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex items-center gap-1.5 text-xs text-surface-400 hover:text-surface-300 transition-colors"
+        >
+          {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          <Sparkles className="h-3 w-3" />
+          <span>{label} · {group.children.length} call{group.children.length === 1 ? '' : 's'}{suffix}</span>
+          {running > 0 && <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 animate-pulse" />}
+        </button>
+        {expanded && (
+          <div className="mt-1 space-y-0.5">
+            {group.children.map((tc) => (
+              <ToolCallCard key={tc.id} toolCall={tc} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ToolCallGroupCard({ group }: { group: ToolCallGroup }) {
+  return group.children.length > 0
+    ? <SubagentGroupCard group={group} />
+    : <ToolCallCard toolCall={group.call} />;
+}
 
 function CollapsibleToolCalls({ toolCalls }: { toolCalls: ToolCallState[] }) {
   const [expanded, setExpanded] = useState(false);
-  if (toolCalls.length === 0) return null;
+  const groups = groupToolCalls(toolCalls);
+  if (groups.length === 0) return null;
 
-  if (toolCalls.length <= TOOL_CALL_COLLAPSE_THRESHOLD) {
+  if (groups.length <= TOOL_CALL_COLLAPSE_THRESHOLD) {
     return (
       <>
-        {toolCalls.map((tc) => (
-          <ToolCallCard key={tc.id} toolCall={tc} />
+        {groups.map((group) => (
+          <ToolCallGroupCard key={group.call.id} group={group} />
         ))}
       </>
     );
   }
 
-  const running = toolCalls.filter((tc) => tc.status === 'running' || tc.status === 'pending').length;
-  const complete = toolCalls.filter((tc) => tc.status === 'complete').length;
-  const errored = toolCalls.filter((tc) => tc.status === 'error').length;
-
-  const parts: string[] = [];
-  if (running > 0) parts.push(`${running} running`);
-  if (complete > 0) parts.push(`${complete} done`);
-  if (errored > 0) parts.push(`${errored} failed`);
-  const statusSuffix = parts.length > 0 ? ` (${parts.join(', ')})` : '';
+  const { suffix, running } = statusSummary(toolCalls);
 
   return (
     <div className="my-1">
@@ -71,18 +152,51 @@ function CollapsibleToolCalls({ toolCalls }: { toolCalls: ToolCallState[] }) {
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <Wrench className="h-3 w-3" />
-        <span>{toolCalls.length} tool calls{statusSuffix}</span>
+        <span>{toolCalls.length} tool calls{suffix}</span>
         {running > 0 && <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 animate-pulse" />}
       </button>
       {expanded && (
         <div className="mt-1 space-y-0.5">
-          {toolCalls.map((tc) => (
-            <ToolCallCard key={tc.id} toolCall={tc} />
+          {groups.map((group) => (
+            <ToolCallGroupCard key={group.call.id} group={group} />
           ))}
         </div>
       )}
     </div>
   );
+}
+
+type PartRun =
+  | { kind: 'text'; part: Extract<MessagePart, { type: 'text' }> }
+  | { kind: 'tools'; calls: ToolCallState[] };
+
+/** Split ordered message parts into text items and consecutive tool-call runs. */
+function segmentPartsIntoRuns(parts: MessagePart[]): PartRun[] {
+  const runs: PartRun[] = [];
+  for (const part of parts) {
+    if (part.type === 'text') {
+      runs.push({ kind: 'text', part });
+      continue;
+    }
+    const last = runs[runs.length - 1];
+    const call: ToolCallState = {
+      id: part.id,
+      name: part.name,
+      args: part.args,
+      result: part.result,
+      error: part.error,
+      status: part.status,
+      durationMs: part.durationMs,
+      ...(part.parentToolCallId ? { parentToolCallId: part.parentToolCallId } : {}),
+      ...(part.agentName ? { agentName: part.agentName } : {}),
+    };
+    if (last && last.kind === 'tools') {
+      last.calls.push(call);
+    } else {
+      runs.push({ kind: 'tools', calls: [call] });
+    }
+  }
+  return runs;
 }
 
 interface TurnSegment {
@@ -335,26 +449,21 @@ export function SessionThread({
               {segment.messages.map((msg) => (
             <div key={msg.id} className="space-y-1">
               {msg.parts && msg.parts.length > 0 ? (
-                msg.parts.map((part: MessagePart) => (
-                  part.type === 'text' ? (
+                // Interleaving preserved: text renders in place, while each
+                // consecutive run of tool calls renders through the grouping
+                // component (subagent nesting + collapse past the threshold).
+                segmentPartsIntoRuns(msg.parts).map((run, runIndex) => (
+                  run.kind === 'text' ? (
                     <MessageBubble
-                      key={`${msg.id}-text-${part.content}`}
-                      message={{ ...msg, content: part.content, parts: [part] }}
+                      key={`${msg.id}-text-${runIndex}`}
+                      message={{ ...msg, content: run.part.content, parts: [run.part] }}
                       agentId={agentId}
                       conversationId={conversationId}
                     />
                   ) : (
-                    <ToolCallCard
-                      key={`${msg.id}-tool-${part.id}`}
-                      toolCall={{
-                        id: part.id,
-                        name: part.name,
-                        args: part.args,
-                        result: part.result,
-                        error: part.error,
-                        status: part.status,
-                        durationMs: part.durationMs,
-                      }}
+                    <CollapsibleToolCalls
+                      key={`${msg.id}-tools-${runIndex}`}
+                      toolCalls={run.calls}
                     />
                   )
                 ))

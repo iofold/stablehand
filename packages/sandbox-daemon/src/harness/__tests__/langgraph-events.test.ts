@@ -679,3 +679,43 @@ describe('LangGraphHarness', () => {
     });
   });
 });
+
+describe('LangGraphHarness subagent annotation (ctx-5myn)', () => {
+  it('annotates subagent tool activity with the spawning task call and suppresses subagent prose', async () => {
+    const subagentMeta = { ls_agent_type: 'subagent', lc_agent_name: 'research-bot' };
+    mockStreamEvents.mockImplementation(() => langGraphStream([
+      // Parent-level prose and the spawning deepagents task tool.
+      { event: 'on_chat_model_stream', data: { chunk: { content: 'Delegating.' } } },
+      { event: 'on_tool_start', data: { name: 'task', input: { description: 'research' } }, run_id: 'task-run' },
+      // Subagent activity: prose must not splice into the parent stream;
+      // tool calls ride flat with the parent pointer.
+      { event: 'on_chat_model_stream', data: { chunk: { content: 'thinking...' } }, metadata: subagentMeta },
+      { event: 'on_tool_start', data: { name: 'web_search', input: { q: 'ctxmill' } }, run_id: 'sub-run', metadata: subagentMeta },
+      { event: 'on_tool_end', data: { output: 'results' }, run_id: 'sub-run', metadata: subagentMeta },
+      { event: 'on_tool_end', data: { output: 'subagent report' }, run_id: 'task-run' },
+    ]));
+
+    const { session } = await openTestSession();
+    const events = await collectEvents(session.deliverTurn({
+      messages: [makeMessage('user', 'Research this.')],
+      turnId: 'turn-subagent-1',
+    }, {}));
+
+    const textDeltas = events.filter((e) => e.type === 'text_delta');
+    expect(textDeltas.map((e) => (e as { content: string }).content)).toEqual(['Delegating.']);
+
+    const starts = events.filter((e) => e.type === 'tool_call_start') as Array<Record<string, unknown>>;
+    expect(starts).toHaveLength(2);
+    const taskStart = starts.find((s) => s.name === 'task');
+    const childStart = starts.find((s) => s.name === 'web_search');
+    expect(taskStart?.parentToolCallId).toBeUndefined();
+    expect(childStart?.parentToolCallId).toBe(taskStart?.id);
+    expect(childStart?.agentName).toBe('research-bot');
+
+    const ends = events.filter((e) => e.type === 'tool_call_end') as Array<Record<string, unknown>>;
+    const childEnd = ends.find((e) => e.id === childStart?.id);
+    expect(childEnd?.parentToolCallId).toBe(taskStart?.id);
+    const taskEnd = ends.find((e) => e.id === taskStart?.id);
+    expect(taskEnd?.parentToolCallId).toBeUndefined();
+  });
+});

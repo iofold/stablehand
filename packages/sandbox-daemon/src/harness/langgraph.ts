@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { tool as lcTool } from '@langchain/core/tools';
+import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseLanguageModel } from '@langchain/core/language_models/base';
 import type { StreamEvent } from '@langchain/core/types/stream';
@@ -49,6 +50,7 @@ interface StreamableAgent {
     },
     options: {
       version: 'v1' | 'v2';
+      callbacks?: unknown[];
       configurable?: {
         harnessConfig: LangGraphConfig;
         agentId: string;
@@ -214,11 +216,27 @@ class LangGraphSession implements HarnessSession {
       const langchainMessages = this.transcript
         .map((m) => this.toDeepAgentMessage(m));
 
+      // Run-tree tracker (ctx-5myn): JS langchain-core exposes no parent_ids
+      // on stream events, so subagent tool runs are correlated to their
+      // spawning deepagents `task` tool call by recording parent links from
+      // callback invocations and walking up at dispatch time.
+      const runParents = new Map<string, string>();
+      const recordParent = (runId: string, parentRunId?: string) => {
+        if (parentRunId && runId) runParents.set(runId, parentRunId);
+      };
+      const runTreeTracker = BaseCallbackHandler.fromMethods({
+        handleChainStart: (_chain, _inputs, runId, parentRunId) => recordParent(runId, parentRunId),
+        handleLLMStart: (_llm, _prompts, runId, parentRunId) => recordParent(runId, parentRunId),
+        handleChatModelStart: (_llm, _messages, runId, parentRunId) => recordParent(runId, parentRunId),
+        handleToolStart: (_tool, _input, runId, parentRunId) => recordParent(runId, parentRunId),
+      });
+
       // Step 7: Stream events from the agent, accumulating assistant text for transcript
       const eventStream = agent.streamEvents(
         { messages: langchainMessages },
         {
           version: 'v2',
+          callbacks: [runTreeTracker],
           configurable: {
             harnessConfig: this.harnessConfig,
             agentId: this.config.agentId,
@@ -229,7 +247,32 @@ class LangGraphSession implements HarnessSession {
       );
 
       const pendingToolCalls: Array<{ id: string; name: string }> = [];
-      const toolRunIdToInfo = new Map<string, { toolCallId: string; startTime: number }>();
+      const toolRunIdToInfo = new Map<string, {
+        toolCallId: string;
+        startTime: number;
+        name: string;
+        parentToolCallId?: string;
+      }>();
+      // ctx-5myn: deepagents marks subagent-context events with metadata
+      // ls_agent_type === 'subagent' (+ lc_agent_name). The spawning `task`
+      // tool call is found by walking the recorded run-parent chain up to the
+      // nearest tracked task tool run.
+      const subagentContext = (streamEv: StreamEvent): { name?: string } | undefined => {
+        const md = (streamEv as { metadata?: Record<string, unknown> }).metadata;
+        if (!md || md.ls_agent_type !== 'subagent') return undefined;
+        return { name: typeof md.lc_agent_name === 'string' ? md.lc_agent_name : undefined };
+      };
+      const resolveSpawningTask = (runId: string | undefined): string | undefined => {
+        let current = runId;
+        for (let hops = 0; current && hops < 64; hops++) {
+          const info = toolRunIdToInfo.get(current);
+          if (info && (info.name === 'task' || info.name === 'Task')) return info.toolCallId;
+          current = runParents.get(current);
+        }
+        // Fallback: a single live task run is unambiguous even without a chain.
+        const live = [...toolRunIdToInfo.values()].filter((i) => i.name === 'task' || i.name === 'Task');
+        return live.length === 1 ? live[0].toolCallId : undefined;
+      };
       const usageByModelRunId = new Map<string, TokenUsage>();
       let turnOnlyUsage: TokenUsage | undefined;
       // ctx-kdue: LangSmith tracing + deepagents subagents registers the
@@ -263,9 +306,14 @@ class LangGraphSession implements HarnessSession {
             }
           }
 
-          for (const textDelta of normalizeStreamTextDeltas(chunk.content)) {
-            yield accumulator.appendText(textDelta);
+          if (!subagentContext(ev)) {
+            for (const textDelta of normalizeStreamTextDeltas(chunk.content)) {
+              yield accumulator.appendText(textDelta);
+            }
           }
+          // Subagent prose stays out of the parent stream (ctx-5myn): the
+          // task tool's result carries the subagent's report. Usage above and
+          // tool_call_chunks below still count/correlate regardless.
 
           const toolCallChunks = chunk.tool_call_chunks;
           if (toolCallChunks && Array.isArray(toolCallChunks) && toolCallChunks.length > 0) {
@@ -322,13 +370,17 @@ class LangGraphSession implements HarnessSession {
           }
           if (fullArgs == null) fullArgs = {};
 
-          const toolStartEvent = {
+          const subagent = subagentContext(ev);
+          const parentToolCallId = subagent ? resolveSpawningTask(toolRunId) : undefined;
+
+          yield {
             type: 'tool_call_start',
             id: toolCallId,
             name: toolName,
             args: fullArgs,
-          } as const;
-          yield toolStartEvent;
+            ...(parentToolCallId ? { parentToolCallId } : {}),
+            ...(parentToolCallId && subagent?.name ? { agentName: subagent.name } : {}),
+          };
 
           accumulator.recordToolStart({
             id: toolCallId,
@@ -340,6 +392,8 @@ class LangGraphSession implements HarnessSession {
             toolRunIdToInfo.set(toolRunId, {
               toolCallId,
               startTime: Date.now(),
+              name: toolName,
+              ...(parentToolCallId ? { parentToolCallId } : {}),
             });
           }
         }
@@ -371,6 +425,7 @@ class LangGraphSession implements HarnessSession {
             id: toolCallId,
             result: resultStr,
             durationMs,
+            ...(info?.parentToolCallId ? { parentToolCallId: info.parentToolCallId } : {}),
           };
           accumulator.recordToolEnd({ id: toolCallId, result: resultStr });
         }
@@ -398,6 +453,7 @@ class LangGraphSession implements HarnessSession {
             result: errMsg,
             error: errMsg,
             durationMs,
+            ...(info?.parentToolCallId ? { parentToolCallId: info.parentToolCallId } : {}),
           };
           accumulator.recordToolEnd({ id: toolCallId, result: errMsg, error: errMsg });
         }

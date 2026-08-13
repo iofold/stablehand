@@ -1250,3 +1250,96 @@ describe('toSdkSessionId (ctx-0u1b: SDK requires UUID sessionId)', () => {
     expect(toSdkSessionId('different-key')).not.toBe(a);
   });
 });
+
+describe('ClaudeAgentsHarness subagent mapping (ctx-5myn)', () => {
+  it('annotates subagent tool activity with the spawning Task id and suppresses subagent prose', () => {
+    const harness = new ClaudeAgentsHarness();
+    const toolStartTimes = new Map<string, number>();
+    const streamState = harness.createStreamMappingState();
+
+    // Parent spawns a Task subagent — records subagent_type for its children.
+    const taskStart = [...harness.mapSDKMessage({
+      type: 'assistant',
+      message: {
+        content: [{
+          type: 'tool_use',
+          id: 'task-1',
+          name: 'Task',
+          input: { subagent_type: 'researcher', prompt: 'dig' },
+        }],
+      },
+    } as never, toolStartTimes, streamState)];
+    expect(taskStart).toEqual([
+      {
+        type: 'tool_call_start',
+        id: 'task-1',
+        name: 'Task',
+        args: { subagent_type: 'researcher', prompt: 'dig' },
+      },
+    ]);
+
+    // Subagent prose (parent_tool_use_id set) stays out of the parent stream.
+    const subagentDelta = [...harness.mapSDKMessage({
+      type: 'stream_event',
+      parent_tool_use_id: 'task-1',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'internal narration' },
+      },
+    } as never, toolStartTimes, streamState)];
+    expect(subagentDelta).toEqual([]);
+
+    const subagentAssistant = [...harness.mapSDKMessage({
+      type: 'assistant',
+      parent_tool_use_id: 'task-1',
+      message: {
+        content: [
+          { type: 'text', text: 'more narration' },
+          { type: 'tool_use', id: 'child-1', name: 'Read', input: { path: '/x' } },
+        ],
+      },
+    } as never, toolStartTimes, streamState)];
+    expect(subagentAssistant).toEqual([
+      {
+        type: 'tool_call_start',
+        id: 'child-1',
+        name: 'Read',
+        args: { path: '/x' },
+        parentToolCallId: 'task-1',
+        agentName: 'researcher',
+      },
+    ]);
+
+    // Subagent tool result carries the parent pointer too.
+    const subagentResult = [...harness.mapSDKMessage({
+      type: 'user',
+      parent_tool_use_id: 'task-1',
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'child-1',
+          content: 'file contents',
+        }],
+      },
+    } as never, toolStartTimes, streamState)];
+    expect(subagentResult).toHaveLength(1);
+    expect(subagentResult[0]).toMatchObject({
+      type: 'tool_call_end',
+      id: 'child-1',
+      result: 'file contents',
+      parentToolCallId: 'task-1',
+    });
+
+    // Parent-level activity stays unannotated.
+    const parentTool = [...harness.mapSDKMessage({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', id: 'p-1', name: 'Bash', input: { cmd: 'ls' } }],
+      },
+    } as never, toolStartTimes, streamState)];
+    expect(parentTool).toEqual([
+      { type: 'tool_call_start', id: 'p-1', name: 'Bash', args: { cmd: 'ls' } },
+    ]);
+  });
+});

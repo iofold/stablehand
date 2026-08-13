@@ -383,6 +383,10 @@ export const MessagePartSchema = z.discriminatedUnion('type', [
     error: z.string().optional(),
     status: ToolCallStateSchema.shape.status,
     durationMs: z.number().nonnegative().optional(),
+    // Subagent annotation (ctx-5myn): the spawning Task tool call's id and
+    // the subagent's display identity. Parts stay flat; the UI nests.
+    parentToolCallId: ToolCallIdSchema.optional(),
+    agentName: z.string().optional(),
   }),
 ]);
 

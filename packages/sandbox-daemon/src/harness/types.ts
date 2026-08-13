@@ -36,8 +36,13 @@ export interface MessageCommittedAgentEvent {
 
 export type AgentEvent =
   | { type: 'text_delta'; content: string }
-  | { type: 'tool_call_start'; id: string; name: string; args: unknown }
-  | { type: 'tool_call_end'; id: string; result: string; error?: string; durationMs: number }
+  // parentToolCallId marks a call that ran inside a subagent: the id of the
+  // spawning Task tool call in the parent transcript (ctx-5myn). Events stay
+  // flat on the wire — subagent events stream before the parent Task ends,
+  // so nesting is computed UI-side. agentName is the subagent's display
+  // identity (e.g. claude subagent_type).
+  | { type: 'tool_call_start'; id: string; name: string; args: unknown; parentToolCallId?: string; agentName?: string }
+  | { type: 'tool_call_end'; id: string; result: string; error?: string; durationMs: number; parentToolCallId?: string }
   | { type: 'approval_needed'; id: string; tool: string; args: unknown }
   | { type: 'approval_resolved'; id: string; action: 'approve' | 'reject' }
   | { type: 'custom_agui_event'; event: AgentSessionEvent }

@@ -27,6 +27,13 @@ export type EventMap = {
     toolCallName: string;
     args: Record<string, unknown>;
     requiresApproval?: boolean;
+    /**
+     * Subagent annotation (ctx-5myn): the spawning Task tool call's id and
+     * the subagent's display identity. Rides the bus because the UI's
+     * TOOL_CALL_* frames are projector-synthesized from these payloads.
+     */
+    parentToolCallId?: string;
+    agentName?: string;
     timestamp: number;
   };
   'tool_call.completed': {

@@ -36,6 +36,10 @@ const StreamMessagePartSchema = z.discriminatedUnion('type', [
     result: z.string().optional(),
     error: z.string().optional(),
     status: z.enum(['pending', 'running', 'complete', 'error']),
+    // Subagent annotation (ctx-5myn): the spawning Task tool call's id and
+    // the subagent's display identity. Parts stay flat; the UI nests.
+    parentToolCallId: ToolCallIdSchema.optional(),
+    agentName: z.string().optional(),
   }),
 ]);
 
@@ -118,6 +122,10 @@ export const ToolCallStartEventSchema = z.strictObject({
   toolCallId: ToolCallIdSchema,
   toolCallName: z.string(),
   parentMessageId: MessageIdSchema.optional(),
+  // ctx-5myn: set when the call ran inside a subagent — the spawning Task
+  // tool call's id, plus the subagent's display identity.
+  parentToolCallId: ToolCallIdSchema.optional(),
+  agentName: z.string().optional(),
 });
 
 export const ToolCallArgsEventSchema = z.strictObject({
@@ -131,6 +139,7 @@ export const ToolCallEndEventSchema = z.strictObject({
   type: z.literal('TOOL_CALL_END'),
   ...RunFrameIdentity,
   toolCallId: ToolCallIdSchema,
+  parentToolCallId: ToolCallIdSchema.optional(),
 });
 
 export const ToolCallResultEventSchema = z.strictObject({

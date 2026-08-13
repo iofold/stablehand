@@ -117,6 +117,12 @@ type StreamMappingState = {
   sawTextDeltaSinceAssistant: boolean;
   toolCallIdsByIndex: Map<number, string>;
   toolArgsJsonByCallId: Map<string, string>;
+  /**
+   * Task tool_use id → subagent_type, recorded when the parent spawns the
+   * Task. Children arriving with that parent_tool_use_id get labeled with
+   * the subagent's identity (ctx-5myn).
+   */
+  subagentTypeByTaskId: Map<string, string>;
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -678,6 +684,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
       sawTextDeltaSinceAssistant: false,
       toolCallIdsByIndex: new Map<number, string>(),
       toolArgsJsonByCallId: new Map<string, string>(),
+      subagentTypeByTaskId: new Map<string, string>(),
     };
   }
 
@@ -686,6 +693,15 @@ export class ClaudeAgentsHarness implements AgentHarness {
     toolStartTimes: Map<string, number>,
     streamState: StreamMappingState = this.createStreamMappingState(),
   ): Generator<AgentEvent> {
+    // Non-null on every message emitted inside a Task subagent (including
+    // stream deltas): the id of the spawning Task tool_use. Subagent tool
+    // activity is annotated with it so the UI can nest; subagent prose is
+    // suppressed from the parent stream — the Task card's result carries the
+    // subagent's report, and splicing narration into the parent's committed
+    // message corrupts it (ctx-5myn).
+    const parentTaskId = typeof (message as { parent_tool_use_id?: unknown }).parent_tool_use_id === 'string'
+      ? (message as { parent_tool_use_id: string }).parent_tool_use_id
+      : undefined;
     switch (message.type) {
       case 'system': {
         const hookEvent = this.toHookTelemetryEvent(message);
@@ -727,6 +743,9 @@ export class ClaudeAgentsHarness implements AgentHarness {
           const delta = event.delta;
           if (delta?.type === 'text_delta' && typeof delta.text === 'string' && delta.text.length > 0) {
             streamState.sawTextDeltaSinceAssistant = true;
+            if (parentTaskId) {
+              break; // subagent prose stays out of the parent stream
+            }
             yield { type: 'text_delta', content: delta.text };
             break;
           }
@@ -741,7 +760,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
       case 'assistant': {
         const contentBlocks = this.getContentBlocks(message.message);
 
-        if (!streamState.sawTextDeltaSinceAssistant) {
+        if (!streamState.sawTextDeltaSinceAssistant && !parentTaskId) {
           for (const contentBlock of contentBlocks) {
             const textBlock = this.asTextBlock(contentBlock);
             if (textBlock?.text) {
@@ -761,11 +780,27 @@ export class ClaudeAgentsHarness implements AgentHarness {
             continue;
           }
 
+          const args = toolUseBlock.input ?? this.readBufferedToolArgs(streamState, callId) ?? {};
+          if (!parentTaskId && toolUseBlock.name === 'Task') {
+            const subagentType = (args as { subagent_type?: unknown }).subagent_type;
+            if (typeof subagentType === 'string' && subagentType.length > 0) {
+              streamState.subagentTypeByTaskId.set(callId, subagentType);
+            }
+          }
+
           yield {
             type: 'tool_call_start',
             id: callId,
             name: toolUseBlock.name ?? 'unknown',
-            args: toolUseBlock.input ?? this.readBufferedToolArgs(streamState, callId) ?? {},
+            args,
+            ...(parentTaskId
+              ? {
+                parentToolCallId: parentTaskId,
+                ...(streamState.subagentTypeByTaskId.has(parentTaskId)
+                  ? { agentName: streamState.subagentTypeByTaskId.get(parentTaskId) }
+                  : {}),
+              }
+              : {}),
           };
         }
 
@@ -792,6 +827,7 @@ export class ClaudeAgentsHarness implements AgentHarness {
             result,
             ...(error ? { error } : {}),
             durationMs,
+            ...(parentTaskId ? { parentToolCallId: parentTaskId } : {}),
           };
         }
         break;

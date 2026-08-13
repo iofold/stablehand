@@ -140,6 +140,8 @@ export class CanonicalProjector {
             threadId: p.conversationId,
             toolCallId: p.toolCallId,
             toolCallName: p.toolCallName,
+            ...(p.parentToolCallId ? { parentToolCallId: p.parentToolCallId } : {}),
+            ...(p.agentName ? { agentName: p.agentName } : {}),
             timestamp: p.timestamp,
           }),
           this.runFrame('TOOL_CALL_ARGS', p.agentId, p.turnId, p.conversationId, {

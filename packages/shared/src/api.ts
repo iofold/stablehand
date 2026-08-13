@@ -58,7 +58,10 @@ export interface ApiMessage {
 /** Ordered content part within a message. Preserves text ↔ tool_call interleaving. */
 export type ApiMessagePart =
   | { type: 'text'; content: string }
-  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: ApiToolCallState['status']; durationMs?: number };
+  // parentToolCallId/agentName mark a call that ran inside a subagent: the
+  // spawning Task tool call's id and the subagent's display identity
+  // (ctx-5myn). Parts stay flat; the UI computes nesting.
+  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: ApiToolCallState['status']; durationMs?: number; parentToolCallId?: string; agentName?: string };
 
 /** Tool call state tracked during streaming */
 export interface ApiToolCallState {
@@ -70,6 +73,10 @@ export interface ApiToolCallState {
   status: 'pending' | 'running' | 'complete' | 'error';
   /** Harness-measured execution time; absent when the harness does not report one. */
   durationMs?: number;
+  /** Set when this call ran inside a subagent: the spawning Task call's id (ctx-5myn). */
+  parentToolCallId?: string;
+  /** Subagent display identity (e.g. claude subagent_type). */
+  agentName?: string;
 }
 
 /** A2UI component block rendered via the a2ui-render tool */
