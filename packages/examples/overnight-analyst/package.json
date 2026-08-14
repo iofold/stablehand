@@ -1,0 +1,19 @@
+{
+  "name": "@ctxmill/example-overnight-analyst",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "Flagship example: scheduled browser analyst publishing daily HTML briefs",
+  "scripts": {
+    "seed": "npx tsx seed.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ctxmill/manifest": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.3"
+  }
+}
