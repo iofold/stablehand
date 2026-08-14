@@ -17,7 +17,8 @@ CTXMill ships a Docker-first stack with a Fastify orchestrator, PostgreSQL persi
 - **System settings**: runtime-configurable knobs with DB persistence and Settings UI
 - **External learning hooks**: run lifecycle, message, tool, and feedback events for webhook-driven learners
 - **PostgreSQL persistence**: agents, runs, messages, events, triggers, and secrets
-- **React operations UI**: dashboard, chat, knowledge, files, triggers, tools, and run detail views
+- **React operations UI**: dashboard, chat, analytics, events, artifacts, triggers, tools, access keys, and session detail views
+- **Cost control**: per-agent and per-tag budget policies, model-gateway routing, and spend reconciliation with honest settlement of lost evidence
 - **Scaffold CLI**: `create-ctxmill` for a generic starter project
 
 ## Current Boundaries

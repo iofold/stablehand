@@ -481,9 +481,19 @@ Per-agent sandbox resource limits:
 
 - **Notes:**
   - If `conversationId` is omitted, CTXMill creates one.
-  - The actual run starts asynchronously.
+  - The actual run starts asynchronously through the durable turn queue.
   - SSE clients receive `TEXT_MESSAGE_*` user-message bootstrap events plus
     `CUSTOM name: ctxmill.turn.pending` before the canonical `RUN_STARTED`.
+- **Queue rejections** (applies to every turn-creating route — this one,
+  `POST /api/agents/:id/turns`, and trigger-driven starts):
+  - `429` with body `{ "code": "queue_full", "scope": "global" | "agent",
+    "queued": <n>, "limit": <n>, "retryAfterSec": 5 }` and a `Retry-After`
+    header when the global or per-agent queued-turn cap is reached.
+    Rejection happens **before any write**: no message and no turn row are
+    created, and the caller owns the retry — nothing is half-accepted.
+  - `503` with body `{ "code": "dispatch_stalled", "retryAfterSec": 15 }`
+    when turns are queued but the dispatcher has not completed a pass
+    recently. Accepted turns are durable and survive restarts.
 
 #### `POST /api/agents/:id/turns`
 

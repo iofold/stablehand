@@ -1,6 +1,6 @@
 # CTXMill Architecture
 
-> Status: Current shipped architecture as of 2026-07-06.
+> Status: Current shipped architecture as of 2026-08-14.
 > The sandbox execution migration shipped; its requirements spec is archived at [docs/plans/shipped/2026-03-17-sandbox-execution-requirements.md](plans/shipped/2026-03-17-sandbox-execution-requirements.md).
 
 ## Purpose
@@ -9,7 +9,7 @@ CTXMill is a self-hosted framework for running tool-using agents behind a Fastif
 
 - A Node.js orchestrator process
 - PostgreSQL persistence
-- Production bearer-token auth for `/api/*`
+- Operator master token plus revocable, capability-scoped API keys for `/api/*` (fail-closed: unannotated routes are master-only)
 - A multi-harness agent runtime
 - Durable canonical SSE streaming to the UI
 - Durable HITL interrupt handling
@@ -218,11 +218,16 @@ Relevant code:
 3. A background run is created for the target agent.
 4. The same run service handles execution, persistence, and SSE.
 
-### Restart and queued-turn flow
+### Turn admission, durable queue, and dispatch (ctx-z5k0)
 
-1. Incoming turns get durable status and a user-message link before execution.
-2. Startup reconciliation fails stranded running turns, skips HITL-parked turns, and re-dispatches queued turns that never started.
-3. `turn.started` emission is idempotent for redispatched turns, so replay does not double-count run starts.
+1. Admission checks global and per-agent queue depth **before any write** and rejects with `429 queue_full` (typed body, `Retry-After`) or `503 dispatch_stalled` — a rejected request leaves no message and no turn row behind; the caller owns the retry.
+2. Accepted turns land as `turns.status='queued'` rows — the queued rows *are* the queue; there is no in-process waiter list.
+3. A single-flight dispatcher loop (1s poll, batch 32, kick-coalescing from enqueue paths) claims candidates through the delivery lease and a per-agent concurrency reservation. Lane temperature is a claim-time predicate, never stored: a conversation with an ACTIVE sandbox session dispatches on the warm lane regardless of container slots; everything else needs slot headroom.
+4. Fairness is oldest-turn-of-least-recently-served-agent, with per-conversation head-of-line ordering. Stale candidates simply fail their lease claim and are skipped — the loop takes no row locks.
+5. Queued turns past `queuedTurnTimeoutMs` finalize honestly as `turn.failed reason=queue_expired`.
+6. Startup reconciliation fails stranded running turns and skips HITL-parked turns; queued rows are dispatcher work, not boot debt — the dispatcher drains any pre-restart backlog in the background after listen. `turn.started` emission stays idempotent for pre-boot recoveries, so replay does not double-count run starts.
+
+Relevant code: `packages/ctxmill/src/orchestrator/turn-queue-admission.ts`, `packages/ctxmill/src/orchestrator/turn-dispatcher.ts`, `packages/ctxmill/src/orchestrator/turn-startup-service.ts`.
 
 ## Persistence Model
 
@@ -242,6 +247,9 @@ PostgreSQL is the current system of record for:
 - `callbackOutbox` — Outbound webhook delivery queue with retry
 - `webhooks` — Registered webhook endpoints per agent
 - `artifacts` — S3/MinIO artifact metadata
+- `api_keys` — Scoped API key hashes, capabilities, expiry, and revocation state
+- `turn_delivery_leases` — Dispatcher claim leases (monotonic fence) for queued turns
+- Model-gateway spend ledger tables — per-call spend attribution, reconciliation watermarks, and quarantine (see [docs/specs/cost-control-and-model-gateway.md](specs/cost-control-and-model-gateway.md))
 - `systemSettings` — Runtime configuration overrides
 
 Relevant code:
