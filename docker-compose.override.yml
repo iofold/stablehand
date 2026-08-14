@@ -1,8 +1,0 @@
-# Local dev1 customization (auto-merged by docker compose; not committed).
-# The client gateway on the docker host receives signed webhook callbacks at
-# http://172.19.0.1:8899 — allowlist the bridge IP so the SSRF egress guard
-# permits callback delivery to the host.
-services:
-  orchestrator:
-    environment:
-      CTXMILL_EGRESS_ALLOWLIST: "172.19.0.1"

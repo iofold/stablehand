@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "docker compose up --build",
     "build": "pnpm -r build",
-    "test": "pnpm test:backend",
+    "test": "pnpm test:backend && pnpm test:react",
     "lint": "eslint packages/ tests/",
     "test:e2e": "playwright test --config=playwright.config.ts",
     "test:e2e:smoke": "playwright test --config=playwright.smoke.config.ts --project=chromium",
@@ -19,6 +19,7 @@
     "docker:clean": "docker compose down -v",
     "test:backend": "NODE_OPTIONS='--max-old-space-size=4096' timeout 240 vitest run",
     "test:ui": "pnpm -C packages/ui test",
+    "test:react": "pnpm -C packages/react test",
     "verify:stabilization": "node scripts/verify-stabilization.mjs",
     "test:e2e:required": "playwright test --config=playwright.config.ts --project=chromium --grep @smoke",
     "test:e2e:harness-matrix:extended": "playwright test --config=playwright.harness-matrix.config.ts",

@@ -35,6 +35,8 @@ jobs:
           CTXMILL_STRICT_TESTS: '1'
       - name: UI tests
         run: pnpm test:ui
+      - name: React package tests
+        run: pnpm test:react
 
   audit:
     name: Dependency audit

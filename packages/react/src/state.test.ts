@@ -212,6 +212,7 @@ describe('@ctxmill/react chat reducer', () => {
         type: 'RUN_FINISHED',
         runId: 'turn-1',
         threadId: 'conversation-1',
+        usage: null,
         timestamp: 7,
       },
     });
@@ -919,7 +920,7 @@ describe('@ctxmill/react chat reducer', () => {
     };
     emit(finalCommit);
     emit(finalCommit);
-    emit({ type: 'RUN_FINISHED', ...runIdentity, status: 'completed', timestamp: 19 });
+    emit({ type: 'RUN_FINISHED', ...runIdentity, status: 'completed', usage: null, timestamp: 19 });
 
     expect(state.messages.map((message) => message.id)).toEqual([
       'message-tools',

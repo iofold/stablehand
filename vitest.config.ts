@@ -22,7 +22,17 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['tests/**/*.test.ts', 'packages/ctxmill/**/*.test.ts', 'packages/manifest/**/*.test.ts', 'packages/sandbox-daemon/**/*.test.ts', 'packages/examples/**/*.test.ts'],
+    include: [
+      'tests/**/*.test.ts',
+      'packages/ctxmill/**/*.test.ts',
+      'packages/manifest/**/*.test.ts',
+      'packages/sandbox-daemon/**/*.test.ts',
+      'packages/examples/**/*.test.ts',
+      // Contract/client/react suites used to live outside every CI entry
+      // point — passing locally, guarded by nothing.
+      'packages/contracts/**/*.test.ts',
+      'packages/client/**/*.test.ts',
+    ],
     exclude: ['tests/e2e/**', '**/node_modules/**', '**/dist/**'],
     setupFiles: ['./tests/setup-strict.ts'],
     fileParallelism: false,
