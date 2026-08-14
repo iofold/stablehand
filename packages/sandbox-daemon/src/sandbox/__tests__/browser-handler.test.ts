@@ -15,6 +15,7 @@ const WORKSPACE = mkdtempSync(join(tmpdir(), 'browser-handler-test-'));
 function mockBrowser() {
   const page = {
     setDefaultNavigationTimeout: vi.fn(),
+    setDefaultTimeout: vi.fn(),
     goto: vi.fn(async () => undefined),
     waitForSelector: vi.fn(async () => undefined),
     waitForLoadState: vi.fn(async () => undefined),
@@ -24,12 +25,14 @@ function mockBrowser() {
     screenshot: vi.fn(async () => undefined),
   };
   const context = { newPage: vi.fn(async () => page) };
+  const kill = vi.fn();
   const browser = {
     newContext: vi.fn(async () => context),
     close: vi.fn(async () => undefined),
+    process: vi.fn(() => ({ kill })),
   };
   launchMock.mockResolvedValue(browser);
-  return { browser, page };
+  return { browser, page, kill };
 }
 
 describe('browser-handler (ctx-lqas)', () => {
@@ -75,6 +78,22 @@ describe('browser-handler (ctx-lqas)', () => {
       url: 'https://example.com',
       path: '../outside.png',
     })).rejects.toThrow(/inside the workspace/);
+  });
+
+  it('cuts off a call wedged inside evaluate and SIGKILLs the browser', async () => {
+    const { browser, page, kill } = mockBrowser();
+    // Playwright gives evaluate no timeout: simulate a wedged page.
+    page.evaluate.mockImplementation(() => new Promise(() => undefined));
+    const handlers = createBrowserHandlers({
+      workspaceDir: WORKSPACE,
+      hardCallTimeoutMs: 50,
+      closeTimeoutMs: 20,
+    });
+
+    await expect(handlers.get('browse')!({ url: 'https://example.com' }))
+      .rejects.toThrow(/cut off/);
+    expect(browser.close).toHaveBeenCalled();
+    expect(kill).toHaveBeenCalledWith('SIGKILL');
   });
 
   it('closes the browser even when the page load fails', async () => {

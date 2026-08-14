@@ -13,12 +13,25 @@ import { mkdir } from 'node:fs/promises';
 
 const NAVIGATION_TIMEOUT_MS = 20_000;
 const SELECTOR_TIMEOUT_MS = 10_000;
+/**
+ * Absolute ceiling for one browse/screenshot call. Navigation timeouts do not
+ * cover everything: page.evaluate has no timeout at all in Playwright, and a
+ * wedged Chromium can hang browser.close() — either one used to strand the
+ * tool call and hang the whole turn (observed live on alternating scheduled
+ * runs). The race below is the guarantee; per-action timeouts are the polish.
+ */
+const HARD_CALL_TIMEOUT_MS = 60_000;
+const CLOSE_TIMEOUT_MS = 5_000;
 const TEXT_LIMIT = 40_000;
 const LINK_LIMIT = 50;
 
 interface BrowserHandlerOptions {
   workspaceDir: string;
   logger?: { warn(msg: string): void };
+  /** Test override for the per-call ceiling; production uses the default. */
+  hardCallTimeoutMs?: number;
+  /** Test override for the close grace; production uses the default. */
+  closeTimeoutMs?: number;
 }
 
 function assertHttpUrl(raw: unknown): string {
@@ -40,8 +53,18 @@ function workspacePath(workspaceDir: string, requested: string): string {
   return resolved;
 }
 
+function deadline(ms: number, message: string): { promise: Promise<never>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+    timer.unref?.();
+  });
+  return { promise, cancel: () => clearTimeout(timer) };
+}
+
 async function withPage<T>(
   run: (page: import('playwright').Page) => Promise<T>,
+  timeouts: { hardCallTimeoutMs: number; closeTimeoutMs: number },
 ): Promise<T> {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({
@@ -50,13 +73,37 @@ async function withPage<T>(
       : {}),
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
+  const hardDeadline = deadline(
+    timeouts.hardCallTimeoutMs,
+    `Browser call exceeded ${timeouts.hardCallTimeoutMs / 1000}s and was cut off`,
+  );
   try {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const page = await context.newPage();
-    page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-    return await run(page);
+    return await Promise.race([
+      hardDeadline.promise,
+      (async () => {
+        const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+        const page = await context.newPage();
+        page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
+        page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
+        return run(page);
+      })(),
+    ]);
   } finally {
-    await browser.close().catch(() => undefined);
+    hardDeadline.cancel();
+    const closeDeadline = deadline(timeouts.closeTimeoutMs, 'close timed out');
+    await Promise.race([
+      browser.close().catch(() => undefined),
+      closeDeadline.promise.catch(() => undefined),
+    ]);
+    closeDeadline.cancel();
+    // A wedged Chromium survives close(); the process handle is the only
+    // reliable cleanup. Killing an already-closed browser is a no-op error.
+    try {
+      // Not on the public Browser type, but present on launched browsers.
+      const proc = (browser as unknown as { process?: () => { kill(sig: string): void } | null })
+        .process?.();
+      proc?.kill('SIGKILL');
+    } catch { /* already gone */ }
   }
 }
 
@@ -78,6 +125,10 @@ export function createBrowserHandlers(
   options: BrowserHandlerOptions,
 ): Map<string, (input: unknown) => Promise<string>> {
   const handlers = new Map<string, (input: unknown) => Promise<string>>();
+  const timeouts = {
+    hardCallTimeoutMs: options.hardCallTimeoutMs ?? HARD_CALL_TIMEOUT_MS,
+    closeTimeoutMs: options.closeTimeoutMs ?? CLOSE_TIMEOUT_MS,
+  };
 
   handlers.set('browse', async (rawInput: unknown) => {
     const input = (rawInput ?? {}) as Record<string, unknown>;
@@ -105,7 +156,7 @@ export function createBrowserHandlers(
         );
       }
       return JSON.stringify(result);
-    });
+    }, timeouts);
   });
 
   handlers.set('screenshot', async (rawInput: unknown) => {
@@ -130,7 +181,7 @@ export function createBrowserHandlers(
         path: path.relative(options.workspaceDir, target),
         note: 'Saved into the workspace; use artifact_upload to publish it.',
       });
-    });
+    }, timeouts);
   });
 
   return handlers;
