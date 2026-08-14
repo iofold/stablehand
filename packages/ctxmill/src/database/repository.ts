@@ -7194,6 +7194,43 @@ export class DatabaseRepository {
     });
   }
 
+  /**
+   * Durable evidence of an idle-checkpoint failure (ctx-vsf8): the in-memory
+   * retry counter dies with the process, but the operator question "why is
+   * this session still holding a slot" needs a persisted answer. Returns the
+   * new failure count.
+   */
+  async recordSandboxSessionCheckpointFailure(
+    sessionId: string,
+    error: string,
+    nowMs: number,
+  ): Promise<number> {
+    const rows = await this.db
+      .update(this.schema.sandboxSessions)
+      .set({
+        checkpointFailures: sql<number>`${this.schema.sandboxSessions.checkpointFailures} + 1`,
+        lastCheckpointError: sanitizeDbText(
+          error.slice(0, 2_000),
+          'sandboxSession.lastCheckpointError',
+        ),
+        updatedAt: nowMs,
+      })
+      .where(eq(this.schema.sandboxSessions.id, sessionId))
+      .returning({ checkpointFailures: this.schema.sandboxSessions.checkpointFailures });
+    return rows[0]?.checkpointFailures ?? 0;
+  }
+
+  /** A successful checkpoint clears the failure evidence. */
+  async clearSandboxSessionCheckpointFailures(sessionId: string, nowMs: number): Promise<void> {
+    await this.db
+      .update(this.schema.sandboxSessions)
+      .set({ checkpointFailures: 0, lastCheckpointError: null, updatedAt: nowMs })
+      .where(and(
+        eq(this.schema.sandboxSessions.id, sessionId),
+        gt(this.schema.sandboxSessions.checkpointFailures, 0),
+      ));
+  }
+
   async updateSandboxSessionMetadata(
     id: string,
     status: SandboxSessionStatus,

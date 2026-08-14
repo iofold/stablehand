@@ -283,6 +283,9 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS restore_fence_token BIGINT NOT NULL DEFAULT 0`;
   await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS restore_lease_expires_at BIGINT`;
   await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS runtime_definition_hash TEXT`;
+  // ctx-vsf8: durable evidence of repeated checkpoint failures.
+  await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS checkpoint_failures INTEGER NOT NULL DEFAULT 0`;
+  await sql`ALTER TABLE sandbox_sessions ADD COLUMN IF NOT EXISTS last_checkpoint_error TEXT`;
   // Durable lifecycle intent blocks new turn admission while a sandbox is
   // being checkpointed, terminated, reset, or adopted by a startup worker.
   // A lease may expire for worker takeover, but the unfinished intent remains

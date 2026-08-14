@@ -9,6 +9,7 @@ import type {
   SandboxSessionActiveGeneration,
   SandboxSessionRow,
 } from '../database/repository.js';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { retryWithBackoff } from '@ctxmill/sandbox-daemon';
 import { hasStatusCode } from '../util/status-code-error.js';
 import { parsePositiveMs, unrefTimer } from '../util/timing.js';
@@ -44,6 +45,12 @@ export type PauseState = 'none' | 'promoting';
 export interface IdleCallbacks {
   onCheckpoint: (sessionId: string) => Promise<void>;
   onContainerGone?: (sessionId: string) => Promise<void>;
+  /**
+   * Deterministic cleanup for a session whose checkpoints provably cannot
+   * succeed (repeated size-limit failures): the session must not keep its
+   * slot just because it cannot be preserved (ctx-vsf8).
+   */
+  onForceTerminate?: (sessionId: string) => Promise<void>;
 }
 
 export interface PauseEntry {
@@ -55,6 +62,20 @@ export interface PauseEntry {
 }
 
 type ManagedContainerWithLabels = ContainerInfo & { labels: Record<string, string> };
+
+/**
+ * Checkpoint failures that are deterministic, not transient: an oversized
+ * harness checkpoint (daemon rejects with gRPC RESOURCE_EXHAUSTED) or an
+ * oversized workspace tar. Retrying these can never succeed.
+ */
+export function isCheckpointSizeError(err: unknown): boolean {
+  if (err instanceof ConnectError && err.code === Code.ResourceExhausted) {
+    return true;
+  }
+  return typeof err === 'object'
+    && err !== null
+    && (err as { code?: unknown }).code === 'workspace_diff_too_large';
+}
 
 interface Logger {
   info(msg: string, ...args: unknown[]): void;
@@ -395,16 +416,47 @@ export class ContainerLifecyclePolicy {
     this.entries.set(sessionId, entry);
   }
 
-  private rescheduleIdleCheckpointRetry(sessionId: string, entry: PauseEntry, callbacks: IdleCallbacks): void {
+  private rescheduleIdleCheckpointRetry(
+    sessionId: string,
+    entry: PauseEntry,
+    callbacks: IdleCallbacks,
+    cause?: unknown,
+  ): void {
     const failureCount = (entry.idleFailureCount ?? 0) + 1;
     entry.idleFailureCount = failureCount;
     entry.state = 'none';
     entry.idleCallbacks = callbacks;
 
+    if (cause !== undefined) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      void this.db.recordSandboxSessionCheckpointFailure(sessionId, message, Date.now())
+        .catch((recordErr: unknown) => {
+          this.logger.warn(
+            `${TAG} failed to persist checkpoint-failure evidence for session ${sessionId}:`,
+            recordErr,
+          );
+        });
+    }
+
     if (failureCount > MAX_IDLE_CHECKPOINT_FAILURES) {
-      this.logger.error(
-        `${TAG} idle checkpoint retry limit reached for session ${sessionId}; idle monitoring disabled until activity reschedules it`,
-      );
+      if (cause !== undefined && isCheckpointSizeError(cause) && callbacks.onForceTerminate) {
+        // Retrying an oversized checkpoint is deterministic failure; without
+        // this the session silently kept its container slot forever.
+        this.logger.error(
+          `${TAG} session ${sessionId} cannot be checkpointed (size limit) after `
+          + `${MAX_IDLE_CHECKPOINT_FAILURES} attempts; forcing cleanup`,
+        );
+        void callbacks.onForceTerminate(sessionId).catch((forceErr: unknown) => {
+          this.logger.error(
+            `${TAG} forced cleanup failed for un-checkpointable session ${sessionId}:`,
+            forceErr,
+          );
+        });
+      } else {
+        this.logger.error(
+          `${TAG} idle checkpoint retry limit reached for session ${sessionId}; idle monitoring disabled until activity reschedules it`,
+        );
+      }
       this.clearEntryTimers(entry);
       entry.idleCallbacks = undefined;
       this.entries.delete(sessionId);
@@ -453,7 +505,7 @@ export class ContainerLifecyclePolicy {
         `${TAG} failed to verify turn delivery before idle checkpoint for session ${sessionId}:`,
         err,
       );
-      this.rescheduleIdleCheckpointRetry(sessionId, entry, callbacks);
+      this.rescheduleIdleCheckpointRetry(sessionId, entry, callbacks, err);
       return;
     }
 
@@ -507,6 +559,13 @@ export class ContainerLifecyclePolicy {
 
       this.clearEntryTimers(entry);
       this.entries.delete(sessionId);
+      void this.db.clearSandboxSessionCheckpointFailures(sessionId, Date.now())
+        .catch((clearErr: unknown) => {
+          this.logger.warn(
+            `${TAG} failed to clear checkpoint-failure evidence for session ${sessionId}:`,
+            clearErr,
+          );
+        });
       this.logger.debug(`${TAG} idle session ${sessionId} checkpointed successfully`);
     } catch (err) {
       if (hasStatusCode(err, 404)) {
@@ -522,7 +581,7 @@ export class ContainerLifecyclePolicy {
         this.entries.delete(sessionId);
       } else {
         this.logger.error(`${TAG} failed to checkpoint idle session ${sessionId}:`, err);
-        this.rescheduleIdleCheckpointRetry(sessionId, entry, callbacks);
+        this.rescheduleIdleCheckpointRetry(sessionId, entry, callbacks, err);
       }
     } finally {
       this.activeIdleCheckpoints -= 1;
@@ -1072,7 +1131,7 @@ export class ContainerLifecyclePolicy {
 
         const decision = cleanupReasons.has(container.containerId) || !hasLiveSession
           ? 'kill'
-          : await this.shouldKillContainer(container.containerId, sessionId);
+          : await this.shouldKillContainer(container.containerId, sessionId, undefined, isExpired);
 
         if (decision !== 'kill') {
           continue;
@@ -1293,6 +1352,7 @@ export class ContainerLifecyclePolicy {
     containerId: string,
     sessionId?: string,
     currentStatus?: SandboxSessionRow['status'],
+    expired = false,
   ): Promise<ContainerCleanupDecision> {
     if (!sessionId) {
       return 'kill';
@@ -1315,7 +1375,20 @@ export class ContainerLifecyclePolicy {
 
     const alive = await this.containerManager.isContainerAlive(containerId);
     if (alive) {
-      return 'skip';
+      if (!expired) {
+        return 'skip';
+      }
+      // Hard lifetime boundary (ctx-vsf8): an ACTIVE session must not outlive
+      // its configured timeout just because its container is healthy — a
+      // stalled checkpoint pipeline otherwise holds a global slot forever.
+      // Killing the container lets the existing dead-container path demote
+      // the session (with checkpoint promotion when one exists) on the next
+      // reconciliation pass. In-flight lifecycle operations and live turn
+      // deliveries were already given way above.
+      this.logger.warn(
+        `${TAG} session ${sessionId} exceeded its container lifetime while alive; enforcing cleanup`,
+      );
+      return 'kill';
     }
 
     const observedSession = await this.db.getSandboxSession(sessionId);

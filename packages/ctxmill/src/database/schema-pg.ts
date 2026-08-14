@@ -450,6 +450,8 @@ export const sandboxSessions = pgTable('sandbox_sessions', {
   lastActivityAt: bigint('last_activity_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   restoreAttempts: integer('restore_attempts').notNull().default(0),
   lastRestoreError: text('last_restore_error'),
+  checkpointFailures: integer('checkpoint_failures').notNull().default(0),
+  lastCheckpointError: text('last_checkpoint_error'),
   restoreOwnerId: text('restore_owner_id'),
   restoreFenceToken: bigint('restore_fence_token', { mode: 'number' })
     .notNull()

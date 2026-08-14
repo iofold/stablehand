@@ -1645,6 +1645,38 @@ describe('DatabaseRepository', () => {
       );
     });
 
+    it('accumulates and clears checkpoint-failure evidence (ctx-vsf8)', async () => {
+      const session = await repo.createSandboxSession({
+        conversationId,
+        agentId,
+        containerName: 'ctxmill-session-cpf',
+        containerId: 'container-cpf',
+        harnessName: 'langgraph',
+      });
+
+      const now = Date.now();
+      await expect(repo.recordSandboxSessionCheckpointFailure(
+        session.id,
+        'Workspace diff too large: 200 MiB',
+        now,
+      )).resolves.toBe(1);
+      await expect(repo.recordSandboxSessionCheckpointFailure(
+        session.id,
+        'Workspace diff too large: 201 MiB',
+        now + 1,
+      )).resolves.toBe(2);
+      expect(await repo.getSandboxSession(session.id)).toMatchObject({
+        checkpointFailures: 2,
+        lastCheckpointError: 'Workspace diff too large: 201 MiB',
+      });
+
+      await repo.clearSandboxSessionCheckpointFailures(session.id, now + 2);
+      expect(await repo.getSandboxSession(session.id)).toMatchObject({
+        checkpointFailures: 0,
+        lastCheckpointError: null,
+      });
+    });
+
     it('rejects non-canonical and unowned RESTORING statuses at the repository boundary', async () => {
       await expect(repo.createSandboxSession({
         conversationId,

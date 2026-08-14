@@ -30,6 +30,8 @@ const mockDb = {
   getExpiredSandboxSessionRestores: vi.fn(),
   hasLiveTurnDeliveryForSandboxSession: vi.fn(),
   hasQueuedTurnsForSandboxSession: vi.fn(),
+  recordSandboxSessionCheckpointFailure: vi.fn().mockResolvedValue(1),
+  clearSandboxSessionCheckpointFailures: vi.fn().mockResolvedValue(undefined),
   hasUnfinishedSandboxSessionLifecycleOperation: vi.fn(),
   getRecoverableSandboxSessionLifecycleOperations: vi.fn(),
   getSandboxSession: vi.fn(),
@@ -172,6 +174,8 @@ describe('ContainerLifecyclePolicy', () => {
     mockDb.getExpiredSandboxSessionRestores.mockResolvedValue([]);
     mockDb.hasLiveTurnDeliveryForSandboxSession.mockResolvedValue(false);
     mockDb.hasQueuedTurnsForSandboxSession.mockResolvedValue(false);
+    mockDb.recordSandboxSessionCheckpointFailure.mockResolvedValue(1);
+    mockDb.clearSandboxSessionCheckpointFailures.mockResolvedValue(undefined);
     mockDb.hasUnfinishedSandboxSessionLifecycleOperation.mockResolvedValue(false);
     mockDb.getRecoverableSandboxSessionLifecycleOperations.mockResolvedValue([]);
     mockDb.getSandboxSession.mockResolvedValue(null);
@@ -445,6 +449,60 @@ describe('ContainerLifecyclePolicy', () => {
       expect(callbacks.onCheckpoint).toHaveBeenCalledTimes(1);
       expect(callbacks.onContainerGone).toHaveBeenCalledWith('session-1');
       expect(entries.has('session-1')).toBe(false);
+    });
+
+    it('forces cleanup after repeated checkpoint-size failures instead of going quiet (ctx-vsf8)', async () => {
+      const sizeError = Object.assign(
+        new Error('Workspace diff too large: 200 MiB > 100 MiB'),
+        { code: 'workspace_diff_too_large' },
+      );
+      const callbacks = {
+        onCheckpoint: vi.fn().mockRejectedValue(sizeError),
+        onForceTerminate: vi.fn().mockResolvedValue(undefined),
+      };
+      const entries = Reflect.get(policy, 'entries') as Map<string, unknown>;
+      entries.set('session-1', {
+        containerId: 'container-1',
+        state: 'none',
+        idleCallbacks: callbacks,
+        idleFailureCount: 3,
+      });
+      const executeIdleCheckpoint = getExecuteIdleCheckpoint(policy);
+
+      const attempt = executeIdleCheckpoint('session-1');
+      await vi.advanceTimersByTimeAsync(3_000);
+      await attempt;
+
+      expect(callbacks.onForceTerminate).toHaveBeenCalledWith('session-1');
+      expect(entries.has('session-1')).toBe(false);
+      expect(mockDb.recordSandboxSessionCheckpointFailure).toHaveBeenCalledWith(
+        'session-1',
+        expect.stringContaining('too large'),
+        expect.any(Number),
+      );
+    });
+
+    it('only disables monitoring for repeated transient failures, never force-terminates', async () => {
+      const callbacks = {
+        onCheckpoint: vi.fn().mockRejectedValue(new Error('temporary checkpoint failure')),
+        onForceTerminate: vi.fn().mockResolvedValue(undefined),
+      };
+      const entries = Reflect.get(policy, 'entries') as Map<string, unknown>;
+      entries.set('session-1', {
+        containerId: 'container-1',
+        state: 'none',
+        idleCallbacks: callbacks,
+        idleFailureCount: 3,
+      });
+      const executeIdleCheckpoint = getExecuteIdleCheckpoint(policy);
+
+      const attempt = executeIdleCheckpoint('session-1');
+      await vi.advanceTimersByTimeAsync(3_000);
+      await attempt;
+
+      expect(callbacks.onForceTerminate).not.toHaveBeenCalled();
+      expect(entries.has('session-1')).toBe(false);
+      expect(mockDb.recordSandboxSessionCheckpointFailure).toHaveBeenCalled();
     });
 
     it('cancelIdleTimeout after a retryable checkpoint failure prevents the re-armed retry', async () => {
@@ -1644,10 +1702,57 @@ describe('ContainerLifecyclePolicy', () => {
       expect(mockContainerManager.removeContainer).toHaveBeenCalledWith('externally-removed', true);
     });
 
-    it('containers with active sessions skip timeout-based cleanup', async () => {
+    it('containers with active unexpired sessions skip timeout-based cleanup', async () => {
       const session = createSession();
 
       mockDb.getActiveSandboxSessions.mockResolvedValue([session]);
+      mockContainerManager.isContainerAlive.mockResolvedValue(true);
+      mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
+        createContainer({
+          status: 'running',
+          labels: {
+            'ctxmill.sandbox-session-id': 'session-1',
+            'ctxmill.timeout': '3600',
+            'ctxmill.started-at': new Date(Date.now() - 10_000).toISOString(),
+          },
+        }),
+      ]);
+
+      await getRunReconciliation(policy)();
+
+      expect(mockContainerManager.stopContainer).not.toHaveBeenCalled();
+      expect(mockContainerManager.removeContainer).not.toHaveBeenCalled();
+    });
+
+    it('enforces the hard lifetime on a live container whose active session expired (ctx-vsf8)', async () => {
+      const session = createSession();
+
+      mockDb.getActiveSandboxSessions.mockResolvedValue([session]);
+      mockDb.hasLiveTurnDeliveryForSandboxSession.mockResolvedValue(false);
+      mockContainerManager.isContainerAlive.mockResolvedValue(true);
+      mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
+        createContainer({
+          status: 'running',
+          labels: {
+            'ctxmill.sandbox-session-id': 'session-1',
+            'ctxmill.timeout': '1',
+            'ctxmill.started-at': new Date(Date.now() - 10_000).toISOString(),
+          },
+        }),
+      ]);
+
+      await getRunReconciliation(policy)();
+
+      expect(mockContainerManager.stopContainer).toHaveBeenCalledWith('container-1', 10);
+      expect(mockContainerManager.removeContainer).toHaveBeenCalledWith('container-1', true);
+    });
+
+    it('defers hard-lifetime cleanup while a turn delivery is live', async () => {
+      const session = createSession();
+
+      mockDb.getActiveSandboxSessions.mockResolvedValue([session]);
+      mockDb.hasLiveTurnDeliveryForSandboxSession.mockResolvedValue(true);
+      mockContainerManager.isContainerAlive.mockResolvedValue(true);
       mockContainerManager.listManagedContainersWithLabels.mockResolvedValue([
         createContainer({
           status: 'running',

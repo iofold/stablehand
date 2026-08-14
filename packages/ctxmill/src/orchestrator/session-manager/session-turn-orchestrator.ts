@@ -847,6 +847,13 @@ export class SessionTurnOrchestrator {
       onContainerGone: async (sid) => {
         await this.handleContainerGone(sid);
       },
+      onForceTerminate: async (sid) => {
+        this.deps.logger.error(
+          `${TAG} forcing a fenced reset for session ${sid}: `
+          + 'repeated un-checkpointable failures (ctx-vsf8)',
+        );
+        await this.deps.resetSession(sid);
+      },
     }, options);
   }
 
