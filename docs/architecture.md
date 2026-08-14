@@ -194,7 +194,7 @@ config. The model-call cap always cancels the turn — it is the universal
 backstop, since even denied tool calls consume a model call. Tool and
 subagent caps soft-deny on harnesses with a deny channel (LangGraph
 middleware) and cancel elsewhere. A tripped cap emits one
-`ctxmill.fanout.limit` telemetry event and a plain-language error naming the
+`harness.fanout.limit` telemetry event and a plain-language error naming the
 config knob. This is the first real implementation of the harness enforcement
 seam reserved by [cost-control-and-model-gateway.md](specs/cost-control-and-model-gateway.md).
 

@@ -187,10 +187,14 @@ export class FanoutLimitHarnessTurnEnforcer implements HarnessTurnEnforcer {
   }
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
 const REASON_DESCRIPTIONS: Partial<Record<TurnEnforcementReason, (l: ResolvedTurnFanoutLimits) => string>> = {
-  model_call_limit: (l) => `made ${l.maxModelCalls} model calls`,
-  tool_call_limit: (l) => `ran ${l.maxToolCalls} tools`,
-  subagent_limit: (l) => `spawned ${l.maxSubagents} subagents`,
+  model_call_limit: (l) => `made ${plural(l.maxModelCalls, 'model call')}`,
+  tool_call_limit: (l) => `ran ${plural(l.maxToolCalls, 'tool')}`,
+  subagent_limit: (l) => `spawned ${plural(l.maxSubagents, 'subagent')}`,
 };
 
 const REASON_CONFIG_KEYS: Partial<Record<TurnEnforcementReason, string>> = {
@@ -243,7 +247,9 @@ export function fanoutTelemetryEvent(
     type: 'CUSTOM',
     timestamp: Date.now(),
     runId: '',
-    name: 'ctxmill.fanout.limit',
+    // Not 'ctxmill.*': the canonical projector reserves that namespace for
+    // orchestrator-generated frames and drops harness customs using it.
+    name: 'harness.fanout.limit',
     subtype: 'turn_fanout_limit',
     source,
     reason,

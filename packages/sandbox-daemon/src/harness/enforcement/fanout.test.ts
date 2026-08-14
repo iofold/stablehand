@@ -134,7 +134,7 @@ describe('fanout messages and telemetry', () => {
     const event = fanoutTelemetryEvent('pi-agent', 'model_call_limit', 'cancel_turn', enforcer.snapshot());
     expect(event).toMatchObject({
       type: 'CUSTOM',
-      name: 'ctxmill.fanout.limit',
+      name: 'harness.fanout.limit',
       source: 'pi-agent',
       reason: 'model_call_limit',
       action: 'cancel_turn',
