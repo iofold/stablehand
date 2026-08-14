@@ -45,6 +45,14 @@ export const SAFE_SUSPEND_PHASES: ReadonlySet<ExecutionPhase> = new Set([
  */
 export class ExecutionPhaseTracker {
   private phase: ExecutionPhase = 'idle';
+  /**
+   * Branch-aware activity accounting (ctx-5abv). The scalar phase follows the
+   * LAST event, so under parallel tools or subagent branches one branch's
+   * safe-looking event (a committed parent message) can mask a sibling whose
+   * tool is still mid-flight. Every open tool span — parent or subagent —
+   * must close before a suspend decision may treat a safe phase as safe.
+   */
+  private readonly activeToolSpans = new Set<string>();
   private suspendRequested = false;
   private suspendResolve?: (value: void) => void;
   private suspendPromise?: Promise<void>;
@@ -65,15 +73,40 @@ export class ExecutionPhaseTracker {
   setPhase(phase: ExecutionPhase): void {
     this.phase = phase;
 
-    // If entering a safe phase and suspend was requested, resolve the promise
-    if (this.suspendRequested && SAFE_SUSPEND_PHASES.has(phase)) {
+    // If entering a quiescent safe state and suspend was requested, resolve.
+    if (this.suspendRequested && this.isSuspendSafe()) {
       this.resolvePendingSuspend();
     }
   }
 
-  /** Check if the current phase is safe for suspension. */
+  /**
+   * Record an opened tool span (parent or subagent branch). Span ids are the
+   * tool-call ids, unique across branches.
+   */
+  noteToolSpanStart(id: string): void {
+    this.activeToolSpans.add(id);
+  }
+
+  /** Close a tool span; may unblock a pending suspend at a safe phase. */
+  noteToolSpanEnd(id: string): void {
+    this.activeToolSpans.delete(id);
+    if (this.suspendRequested && this.isSuspendSafe()) {
+      this.resolvePendingSuspend();
+    }
+  }
+
+  /** Number of tool spans currently open across all branches. */
+  getActiveToolSpanCount(): number {
+    return this.activeToolSpans.size;
+  }
+
+  /**
+   * Check if suspension is currently safe: the scalar phase must be a safe
+   * point AND every branch's tool span must have closed. Approval waits do
+   * not block suspension — durable interrupts exist to suspend across them.
+   */
   isSuspendSafe(): boolean {
-    return SAFE_SUSPEND_PHASES.has(this.phase);
+    return SAFE_SUSPEND_PHASES.has(this.phase) && this.activeToolSpans.size === 0;
   }
 
   /**
@@ -93,8 +126,8 @@ export class ExecutionPhaseTracker {
 
     this.suspendRequested = true;
 
-    // If we're at a safe point right now, resolve immediately
-    if (SAFE_SUSPEND_PHASES.has(this.phase)) {
+    // If we're at a quiescent safe point right now, resolve immediately
+    if (this.isSuspendSafe()) {
       this.suspendPromise = Promise.resolve();
       return this.suspendPromise;
     }
@@ -115,7 +148,7 @@ export class ExecutionPhaseTracker {
   checkSuspendAtSafePoint(): boolean {
     if (!this.suspendRequested) return false;
 
-    if (SAFE_SUSPEND_PHASES.has(this.phase)) {
+    if (this.isSuspendSafe()) {
       this.resolvePendingSuspend();
       return true;
     }
@@ -129,6 +162,9 @@ export class ExecutionPhaseTracker {
   startTurn(turnId: string): void {
     this.currentTurnId = turnId;
     this.turnCount++;
+    // A crashed branch can leave its span open forever; each turn's stream is
+    // authoritative, so stale spans must not block every future suspend.
+    this.activeToolSpans.clear();
     this.setPhase('before_llm');
   }
 
@@ -137,6 +173,7 @@ export class ExecutionPhaseTracker {
    */
   endTurn(): void {
     this.currentTurnId = undefined;
+    this.activeToolSpans.clear();
     this.setPhase('idle');
   }
 

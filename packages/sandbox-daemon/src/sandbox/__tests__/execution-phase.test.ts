@@ -345,6 +345,72 @@ describe('ExecutionPhaseTracker', () => {
       expect(resolved).toBe(true);
     });
 
+    it('holds a suspend while any parallel tool branch is still mid-flight (ctx-5abv)', async () => {
+      // Two concurrent tool branches open; a committed parent message then
+      // moves the scalar phase to a "safe" value — the exact masking bug.
+      tracker.noteToolSpanStart('tool-a');
+      tracker.setPhase('tool_execution');
+      tracker.noteToolSpanStart('tool-b');
+      tracker.setPhase('after_llm');
+
+      expect(tracker.isSuspendSafe()).toBe(false);
+      let resolved = false;
+      const promise = tracker.requestSuspend().then(() => {
+        resolved = true;
+      });
+      expect(tracker.checkSuspendAtSafePoint()).toBe(false);
+
+      tracker.noteToolSpanEnd('tool-a');
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      // Last sibling closes at a safe phase: now quiescent.
+      tracker.noteToolSpanEnd('tool-b');
+      await promise;
+      expect(resolved).toBe(true);
+      expect(tracker.getActiveToolSpanCount()).toBe(0);
+    });
+
+    it('holds a suspend across an open subagent branch and its nested tools', async () => {
+      // A Task spawn is itself a tool span; the subagent's inner tool calls
+      // arrive as additional spans with their own ids.
+      tracker.noteToolSpanStart('task-1');
+      tracker.setPhase('tool_execution');
+      tracker.noteToolSpanStart('task-1-inner-bash');
+      tracker.setPhase('after_llm');
+
+      let resolved = false;
+      tracker.requestSuspend().then(() => {
+        resolved = true;
+      });
+      tracker.noteToolSpanEnd('task-1-inner-bash');
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      tracker.noteToolSpanEnd('task-1');
+      await Promise.resolve();
+      expect(resolved).toBe(true);
+    });
+
+    it('requestSuspend resolves immediately only when phase-safe AND quiescent', () => {
+      tracker.setPhase('after_llm');
+      tracker.noteToolSpanStart('tool-a');
+      expect(tracker.isSuspendSafe()).toBe(false);
+      tracker.noteToolSpanEnd('tool-a');
+      expect(tracker.isSuspendSafe()).toBe(true);
+    });
+
+    it('clears stale spans at turn boundaries so a crashed branch cannot block forever', () => {
+      tracker.noteToolSpanStart('leaked-tool');
+      tracker.startTurn('turn-2');
+      tracker.setPhase('after_llm');
+      expect(tracker.isSuspendSafe()).toBe(true);
+
+      tracker.noteToolSpanStart('leaked-again');
+      tracker.endTurn();
+      expect(tracker.isSuspendSafe()).toBe(true);
+    });
+
     it('does not resolve when transitioning between unsafe phases', async () => {
       tracker.setPhase('before_tool');
 

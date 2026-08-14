@@ -1208,6 +1208,11 @@ export async function* deliverTurn(
         attemptSawOutput = true;
       }
 
+      if (event.type === 'tool_call_start' && typeof event.id === 'string') {
+        ctx.phaseTracker.noteToolSpanStart(event.id);
+      } else if (event.type === 'tool_call_end' && typeof event.id === 'string') {
+        ctx.phaseTracker.noteToolSpanEnd(event.id);
+      }
       const newPhase = phaseForEvent(event);
       if (newPhase) {
         ctx.phaseTracker.setPhase(newPhase);
