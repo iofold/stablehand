@@ -32,6 +32,7 @@ export default defineConfig({
       // point — passing locally, guarded by nothing.
       'packages/contracts/**/*.test.ts',
       'packages/client/**/*.test.ts',
+      'extensions/**/*.test.ts',
     ],
     exclude: ['tests/e2e/**', '**/node_modules/**', '**/dist/**'],
     setupFiles: ['./tests/setup-strict.ts'],

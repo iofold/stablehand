@@ -1,0 +1,15 @@
+{
+  "name": "@ctxmill-ext/artifact-gallery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reference CTXMill extension: a public gallery of agent-published artifacts, fed by webhooks and the read API on a least-privilege scoped key.",
+  "scripts": {
+    "start": "bun run src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  }
+}
