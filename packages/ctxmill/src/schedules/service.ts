@@ -38,7 +38,15 @@ interface ScheduleRepository {
     >>,
   ): Promise<ScheduleRow | undefined>;
   deleteSchedule(id: string): Promise<boolean>;
-  markScheduleFired(id: string, firedAt: number): Promise<void>;
+  claimScheduleFire(id: string, nowMs: number): Promise<
+    { claimed: true; previousLastFiredAt: number | null } | { claimed: false }
+  >;
+  restoreScheduleFireClaim(
+    id: string,
+    claimStampMs: number,
+    previousLastFiredAt: number | null,
+  ): Promise<void>;
+  recordScheduleMissedFires(id: string, count: number, nowMs: number): Promise<void>;
 }
 
 interface CustomEventEmitter {
@@ -98,6 +106,31 @@ export function validateRecurringCron(
   }
 }
 
+const MISSED_FIRE_AUDIT_CAP = 1_000;
+
+/** Count cron slots strictly inside (fromMs, toMs), capped for hot schedules. */
+export function countMissedWindows(
+  schedule: Pick<ScheduleRow, 'cronExpression' | 'timezone'>,
+  fromMs: number,
+  toMs: number,
+): number {
+  let probe: Cron | undefined;
+  try {
+    probe = new Cron(schedule.cronExpression, { paused: true, timezone: schedule.timezone });
+    let cursor = new Date(fromMs);
+    let missed = 0;
+    while (missed < MISSED_FIRE_AUDIT_CAP) {
+      const next = probe.nextRun(cursor);
+      if (!next || next.getTime() >= toMs) break;
+      missed++;
+      cursor = next;
+    }
+    return missed;
+  } finally {
+    probe?.stop();
+  }
+}
+
 export class ScheduleService {
   private readonly repository: ScheduleRepository;
   private readonly triggerManager: CustomEventEmitter;
@@ -141,6 +174,9 @@ export class ScheduleService {
         if (schedule.enabled) this.install(schedule);
       }
       this.logger.info(`[ScheduleService] loaded ${this.jobs.size} enabled schedule(s)`);
+      await this.auditMissedFires(schedules).catch((error) => {
+        this.logger.error('[ScheduleService] missed-fire audit failed', error);
+      });
     } catch (error) {
       this.started = false;
       this.stopJobs();
@@ -296,12 +332,72 @@ export class ScheduleService {
       || (schedule.agentId !== null && this.retiredAgentIds.has(schedule.agentId))
       || this.generations.get(schedule.id) !== generation
     ) return;
-    await this.triggerManager.emitCustomEventAsync(
-      schedule.eventType,
-      schedule.agentId ?? undefined,
-      schedule.payload,
-    );
-    await this.repository.markScheduleFired(schedule.id, Date.now());
+    // Claim the window BEFORE emitting: the claim is the cross-process
+    // dedupe boundary, so a second orchestrator replica firing the same cron
+    // slot backs off instead of double-firing (ctx-hljx). A failed emission
+    // restores the claim so it is never recorded as fired.
+    const nowMs = Date.now();
+    const claim = await this.repository.claimScheduleFire(schedule.id, nowMs);
+    if (!claim.claimed) {
+      this.logger.warn(
+        `[ScheduleService] another process already fired this window for ${schedule.id}; skipping`,
+      );
+      return;
+    }
+    try {
+      await this.triggerManager.emitCustomEventAsync(
+        schedule.eventType,
+        schedule.agentId ?? undefined,
+        schedule.payload,
+      );
+    } catch (error) {
+      await this.repository
+        .restoreScheduleFireClaim(schedule.id, nowMs, claim.previousLastFiredAt)
+        .catch((restoreError) => {
+          this.logger.error(
+            `[ScheduleService] failed to roll back unfired claim for ${schedule.id}`,
+            restoreError,
+          );
+        });
+      throw error;
+    }
+  }
+
+  /**
+   * Record — never backfill — cron windows that provably did not fire while
+   * no service was running (ctx-hljx). Croner only schedules future slots,
+   * so anything between the last recorded fire and boot is gone; without
+   * this, a stale last_fired_at is the only evidence.
+   */
+  private async auditMissedFires(schedules: ScheduleRow[]): Promise<void> {
+    const nowMs = Date.now();
+    for (const schedule of schedules) {
+      if (!schedule.enabled || schedule.lastFiredAt === null) continue;
+      const missed = countMissedWindows(schedule, schedule.lastFiredAt, nowMs);
+      if (missed === 0) continue;
+      this.logger.warn(
+        `[ScheduleService] schedule ${schedule.name} (${schedule.id}) missed `
+        + `${missed}${missed >= MISSED_FIRE_AUDIT_CAP ? '+' : ''} fire window(s) `
+        + 'while no scheduler was running; recorded without backfill',
+      );
+      await this.repository.recordScheduleMissedFires(schedule.id, missed, nowMs);
+      await this.triggerManager.emitCustomEventAsync(
+        'custom.schedule.missed_fires',
+        schedule.agentId ?? undefined,
+        {
+          scheduleId: schedule.id,
+          scheduleName: schedule.name,
+          missedFires: missed,
+          from: schedule.lastFiredAt,
+          to: nowMs,
+        },
+      ).catch((error) => {
+        this.logger.error(
+          `[ScheduleService] failed to emit missed-fire event for ${schedule.id}`,
+          error,
+        );
+      });
+    }
   }
 
   private project(row: ScheduleRow): Schedule {

@@ -20,6 +20,7 @@ const stored = {
   createdAt: 1,
   updatedAt: 1,
   lastFiredAt: null,
+  missedFireCount: 0,
   nextRun: 2,
 };
 

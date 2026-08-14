@@ -19,6 +19,7 @@ const schedule = {
   createdAt: 1,
   updatedAt: 2,
   lastFiredAt: null,
+  missedFireCount: 0,
   nextRun: 3,
 };
 

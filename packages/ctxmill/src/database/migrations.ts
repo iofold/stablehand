@@ -772,6 +772,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedules_name ON schedules(name)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_schedules_agent ON schedules(agent_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_schedules_enabled ON schedules(enabled)`;
+  await sql`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS missed_fire_count BIGINT NOT NULL DEFAULT 0`;
 
   // ── 11. pending_interrupts (→ turns, agents) ───────────────────────
   await sql`

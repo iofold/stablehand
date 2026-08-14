@@ -4363,10 +4363,69 @@ export class DatabaseRepository {
     return rows.length > 0;
   }
 
-  async markScheduleFired(id: string, firedAt: number): Promise<void> {
+  /**
+   * Atomically claim one cron window before emitting (ctx-hljx). The window
+   * key is the fire's UTC second — cron's minimum slot width (croner accepts
+   * 6-field expressions): a second process firing the same slot lands in the
+   * same second and backs off, so two orchestrator replicas cannot
+   * double-fire a schedule. Replicas skewed across a second boundary are not
+   * covered; that is the accepted approximation of a per-fire lock. Returns
+   * the prior last_fired_at so a failed emission can restore it.
+   */
+  async claimScheduleFire(id: string, nowMs: number): Promise<
+    { claimed: true; previousLastFiredAt: number | null } | { claimed: false }
+  > {
+    const windowStartMs = Math.floor(nowMs / 1_000) * 1_000;
+    return this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          enabled: this.schema.schedules.enabled,
+          lastFiredAt: this.schema.schedules.lastFiredAt,
+        })
+        .from(this.schema.schedules)
+        .where(eq(this.schema.schedules.id, id))
+        .for('update');
+      if (!current || !current.enabled) {
+        return { claimed: false };
+      }
+      if (current.lastFiredAt !== null && current.lastFiredAt >= windowStartMs) {
+        return { claimed: false };
+      }
+      await tx
+        .update(this.schema.schedules)
+        .set({ lastFiredAt: nowMs, updatedAt: nowMs })
+        .where(eq(this.schema.schedules.id, id));
+      return { claimed: true, previousLastFiredAt: current.lastFiredAt };
+    });
+  }
+
+  /**
+   * Roll a claimed-but-unfired window back so a failed emission is not
+   * recorded as fired. Guarded on the claim stamp: a newer successful fire
+   * is never overwritten.
+   */
+  async restoreScheduleFireClaim(
+    id: string,
+    claimStampMs: number,
+    previousLastFiredAt: number | null,
+  ): Promise<void> {
     await this.db
       .update(this.schema.schedules)
-      .set({ lastFiredAt: firedAt })
+      .set({ lastFiredAt: previousLastFiredAt })
+      .where(and(
+        eq(this.schema.schedules.id, id),
+        eq(this.schema.schedules.lastFiredAt, claimStampMs),
+      ));
+  }
+
+  /** Record windows that provably never fired (ctx-hljx); no backfill. */
+  async recordScheduleMissedFires(id: string, count: number, nowMs: number): Promise<void> {
+    await this.db
+      .update(this.schema.schedules)
+      .set({
+        missedFireCount: sql<number>`${this.schema.schedules.missedFireCount} + ${count}`,
+        updatedAt: nowMs,
+      })
       .where(eq(this.schema.schedules.id, id));
   }
 

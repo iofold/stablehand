@@ -45,6 +45,7 @@ export const ScheduleSchema = z.strictObject({
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
   lastFiredAt: z.number().int().nonnegative().nullable(),
+  missedFireCount: z.number().int().nonnegative(),
   nextRun: z.number().int().nonnegative().nullable(),
 });
 

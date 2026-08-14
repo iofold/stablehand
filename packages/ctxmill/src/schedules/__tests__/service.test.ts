@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ScheduleService, type ScheduleJobFactory } from '../service.js';
+import { ScheduleService, countMissedWindows, type ScheduleJobFactory } from '../service.js';
 
 function row(overrides: Record<string, unknown> = {}) {
   return {
@@ -15,6 +15,7 @@ function row(overrides: Record<string, unknown> = {}) {
     createdAt: 1,
     updatedAt: 1,
     lastFiredAt: null,
+    missedFireCount: 0,
     ...overrides,
   };
 }
@@ -40,7 +41,9 @@ function harness(initial = [row()]) {
     createSchedule: vi.fn(),
     updateSchedule: vi.fn(),
     deleteSchedule: vi.fn(),
-    markScheduleFired: vi.fn().mockResolvedValue(undefined),
+    claimScheduleFire: vi.fn().mockResolvedValue({ claimed: true, previousLastFiredAt: null }),
+    restoreScheduleFireClaim: vi.fn().mockResolvedValue(undefined),
+    recordScheduleMissedFires: vi.fn().mockResolvedValue(undefined),
   };
   const triggerManager = { emitCustomEventAsync: vi.fn().mockResolvedValue(undefined) };
   const service = new ScheduleService({
@@ -80,7 +83,7 @@ describe('ScheduleService', () => {
     expect(oversized.jobs.size).toBe(0);
   });
 
-  it('emits through the custom-event choke point and records success only afterward', async () => {
+  it('claims the fire window before emitting through the custom-event choke point', async () => {
     const { callbacks, repository, service, triggerManager } = harness();
     await service.start();
 
@@ -92,9 +95,24 @@ describe('ScheduleService', () => {
       'agent-1',
       { source: 'canary' },
     );
-    expect(repository.markScheduleFired).toHaveBeenCalledTimes(1);
-    expect(triggerManager.emitCustomEventAsync.mock.invocationCallOrder[0])
-      .toBeLessThan(repository.markScheduleFired.mock.invocationCallOrder[0]!);
+    // The claim is the cross-process dedupe boundary, so it must precede
+    // the emission (ctx-hljx).
+    expect(repository.claimScheduleFire).toHaveBeenCalledTimes(1);
+    expect(repository.claimScheduleFire.mock.invocationCallOrder[0])
+      .toBeLessThan(triggerManager.emitCustomEventAsync.mock.invocationCallOrder[0]!);
+    expect(repository.restoreScheduleFireClaim).not.toHaveBeenCalled();
+    await service.stop();
+  });
+
+  it('skips the emission entirely when another process already claimed the window', async () => {
+    const { callbacks, repository, service, triggerManager } = harness();
+    repository.claimScheduleFire.mockResolvedValue({ claimed: false });
+    await service.start();
+
+    callbacks.get('schedule-1')?.();
+    await service.drain();
+
+    expect(triggerManager.emitCustomEventAsync).not.toHaveBeenCalled();
     await service.stop();
   });
 
@@ -114,16 +132,61 @@ describe('ScheduleService', () => {
     await service.stop();
   });
 
-  it('does not mark a failed emission as fired', async () => {
+  it('does not leave a failed emission recorded as fired', async () => {
     const { callbacks, repository, service, triggerManager } = harness();
+    repository.claimScheduleFire.mockResolvedValue({
+      claimed: true,
+      previousLastFiredAt: 777,
+    });
     triggerManager.emitCustomEventAsync.mockRejectedValueOnce(new Error('persist failed'));
     await service.start();
 
     callbacks.get('schedule-1')?.();
     await service.drain();
 
-    expect(repository.markScheduleFired).not.toHaveBeenCalled();
+    expect(repository.restoreScheduleFireClaim).toHaveBeenCalledWith(
+      'schedule-1',
+      expect.any(Number),
+      777,
+    );
     await service.stop();
+  });
+
+  it('records missed windows on boot without backfilling them', async () => {
+    // Every-minute cron whose last fire was ~3.5 minutes ago: at least two
+    // whole windows in between provably never fired.
+    const stale = row({ lastFiredAt: Date.now() - 210_000 });
+    const { repository, service, triggerManager } = harness([stale]);
+    await service.start();
+
+    expect(repository.recordScheduleMissedFires).toHaveBeenCalledWith(
+      'schedule-1',
+      expect.any(Number),
+      expect.any(Number),
+    );
+    const [, missed] = repository.recordScheduleMissedFires.mock.calls[0]!;
+    expect(missed).toBeGreaterThanOrEqual(2);
+    expect(triggerManager.emitCustomEventAsync).toHaveBeenCalledWith(
+      'custom.schedule.missed_fires',
+      'agent-1',
+      expect.objectContaining({
+        scheduleId: 'schedule-1',
+        scheduleName: 'weekly-canary',
+        missedFires: missed,
+      }),
+    );
+    await service.stop();
+  });
+
+  it('counts missed windows deterministically and strictly inside the gap', () => {
+    const schedule = { cronExpression: '* * * * *', timezone: 'UTC' };
+    const from = Date.UTC(2026, 7, 14, 10, 0, 30);
+    // 10:01, 10:02, 10:03 are inside; the 10:03:30 boundary slot is upcoming.
+    expect(countMissedWindows(schedule, from, Date.UTC(2026, 7, 14, 10, 3, 30))).toBe(3);
+    // Nothing missed inside a sub-minute gap.
+    expect(countMissedWindows(schedule, from, Date.UTC(2026, 7, 14, 10, 0, 55))).toBe(0);
+    // A slot exactly at the boundary is upcoming, not missed.
+    expect(countMissedWindows(schedule, Date.UTC(2026, 7, 14, 10, 0, 0), Date.UTC(2026, 7, 14, 10, 1, 0))).toBe(0);
   });
 
   it('stops a replaced generation and ignores its already-queued callback', async () => {

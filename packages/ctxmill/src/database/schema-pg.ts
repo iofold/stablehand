@@ -386,6 +386,7 @@ export const schedules = pgTable('schedules', {
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   updatedAt: bigint('updated_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   lastFiredAt: bigint('last_fired_at', { mode: 'number' }),
+  missedFireCount: bigint('missed_fire_count', { mode: 'number' }).notNull().default(0),
 }, (table) => ({
   nameIdx: uniqueIndex('idx_schedules_name').on(table.name),
   agentIdx: index('idx_schedules_agent').on(table.agentId),

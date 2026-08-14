@@ -2549,8 +2549,44 @@ describe('DatabaseRepository', () => {
         payload: { source: 'updated' },
       });
 
-      await repo.markScheduleFired(created.id, 1234);
-      expect(await repo.getSchedule(created.id)).toMatchObject({ lastFiredAt: 1234 });
+      // Disabled schedules cannot claim a fire window.
+      await expect(repo.claimScheduleFire(created.id, 1234)).resolves.toEqual({
+        claimed: false,
+      });
+      await repo.updateSchedule(created.id, { enabled: true });
+
+      // First claim of a window wins and reports the prior fire stamp.
+      const windowMs = 1_786_700_040_000; // second-aligned UTC base
+      await expect(repo.claimScheduleFire(created.id, windowMs + 20_000)).resolves.toEqual({
+        claimed: true,
+        previousLastFiredAt: null,
+      });
+      expect(await repo.getSchedule(created.id)).toMatchObject({
+        lastFiredAt: windowMs + 20_000,
+      });
+      // A rival process firing the same cron slot (same second) backs off.
+      await expect(repo.claimScheduleFire(created.id, windowMs + 20_999)).resolves.toEqual({
+        claimed: false,
+      });
+      // The next slot claims cleanly and carries the previous stamp.
+      await expect(repo.claimScheduleFire(created.id, windowMs + 21_000)).resolves.toEqual({
+        claimed: true,
+        previousLastFiredAt: windowMs + 20_000,
+      });
+      // A failed emission rolls its claim back — but never a newer one.
+      await repo.restoreScheduleFireClaim(created.id, windowMs + 21_000, windowMs + 20_000);
+      expect(await repo.getSchedule(created.id)).toMatchObject({
+        lastFiredAt: windowMs + 20_000,
+      });
+      await repo.restoreScheduleFireClaim(created.id, windowMs + 999_000, null);
+      expect(await repo.getSchedule(created.id)).toMatchObject({
+        lastFiredAt: windowMs + 20_000,
+      });
+
+      await repo.recordScheduleMissedFires(created.id, 3, windowMs + 90_000);
+      await repo.recordScheduleMissedFires(created.id, 2, windowMs + 95_000);
+      expect(await repo.getSchedule(created.id)).toMatchObject({ missedFireCount: 5 });
+
       await expect(repo.deleteSchedule(created.id)).resolves.toBe(true);
       await expect(repo.deleteSchedule(global.id)).resolves.toBe(true);
       await expect(repo.getSchedule(created.id)).resolves.toBeUndefined();
