@@ -34,31 +34,96 @@ const DEFAULT_QUARANTINE_RECENT_MS = 24 * 60 * 60_000;
 const DEFAULT_QUARANTINE_LIMIT = 20;
 const MAX_QUARANTINE_LIMIT = 100;
 
+/**
+ * Compact ingestion-health summary shared by /api/model-gateway/status and
+ * the /health gateway arm (ctx-iou3): a stalled spend pipeline should show
+ * up where operators already look, not only on a dedicated status page.
+ */
+export async function summarizeModelGatewayHealth(
+  db: Pick<
+    ModelGatewayStatusStore,
+    'getModelGatewayReconciliationState' | 'getGatewayTurnsAwaitingReconciliation'
+  >,
+  config: ModelGatewayStatusConfig,
+  options?: { now?: () => number; degradedLagMs?: number; awaitingGraceMs?: number },
+): Promise<{
+  enabled: boolean;
+  state: 'disabled' | 'initializing' | 'healthy' | 'degraded';
+  lagMs: number | null;
+  awaitingTurns: number;
+  lastError: string | null;
+}> {
+  const now = (options?.now ?? Date.now)();
+  const awaitingGraceMs = options?.awaitingGraceMs ?? DEFAULT_AWAITING_GRACE_MS;
+  if (!config.enabled) {
+    const awaiting = await db.getGatewayTurnsAwaitingReconciliation();
+    return {
+      enabled: false,
+      state: awaiting.count > 0 ? 'degraded' : 'disabled',
+      lagMs: null,
+      awaitingTurns: awaiting.count,
+      lastError: awaiting.count > 0
+        ? 'Spend ingestion is not configured, but completed gateway turns are awaiting prices'
+        : null,
+    };
+  }
+  const [reconciliation, awaiting] = await Promise.all([
+    db.getModelGatewayReconciliationState(config.profile),
+    db.getGatewayTurnsAwaitingReconciliation(),
+  ]);
+  const watermarkAt = reconciliation?.watermarkMs ? reconciliation.watermarkMs : null;
+  const lagMs = watermarkAt === null ? null : Math.max(0, now - watermarkAt);
+  const staleAwaiting = awaiting.count > 0
+    && awaiting.oldestCompletedAt !== null
+    && now - awaiting.oldestCompletedAt > awaitingGraceMs;
+  const state = !reconciliation?.lastSuccessAt
+    ? reconciliation?.lastError
+      ? 'degraded'
+      : 'initializing'
+    : reconciliation.lastError
+      || lagMs === null
+      || lagMs > (options?.degradedLagMs ?? DEFAULT_DEGRADED_LAG_MS)
+      || staleAwaiting
+      ? 'degraded'
+      : 'healthy';
+  return {
+    enabled: true,
+    state,
+    lagMs,
+    awaitingTurns: awaiting.count,
+    lastError: reconciliation?.lastError
+      ?? (staleAwaiting
+        ? 'Completed gateway turns have waited past the settlement grace period for prices'
+        : null),
+  };
+}
+
 export async function modelGatewayRoutes(
   app: FastifyInstance,
   opts: ModelGatewayRouteOptions,
 ): Promise<void> {
   app.get('/status', async () => {
-    const now = (opts.now ?? Date.now)();
-    const awaitingGraceMs = opts.awaitingGraceMs ?? DEFAULT_AWAITING_GRACE_MS;
+    const summary = await summarizeModelGatewayHealth(opts.db, opts.config, {
+      ...(opts.now ? { now: opts.now } : {}),
+      ...(opts.degradedLagMs !== undefined ? { degradedLagMs: opts.degradedLagMs } : {}),
+      ...(opts.awaitingGraceMs !== undefined ? { awaitingGraceMs: opts.awaitingGraceMs } : {}),
+    });
+    const awaiting = await opts.db.getGatewayTurnsAwaitingReconciliation();
 
     if (!opts.config.enabled) {
       // Ingestion being off is only benign while nothing waits on it. Any
       // gateway-attributed turn without reconciled usage means budgets and
       // analytics under-count — report degraded, not a quiet zero-state.
-      const awaiting = await opts.db.getGatewayTurnsAwaitingReconciliation();
       return ModelGatewayStatusSchema.parse({
         enabled: false,
         profile: null,
         revision: null,
-        state: awaiting.count > 0 ? 'degraded' : 'disabled',
+        state: summary.state,
         watermarkAt: null,
         lastAttemptAt: null,
         lastSuccessAt: null,
         lagMs: null,
-        lastError: awaiting.count > 0
-          ? 'Spend ingestion is not configured, but completed gateway turns are awaiting prices'
-          : null,
+        lastError: summary.lastError,
         pendingCalls: 0,
         unpricedCalls: 0,
         quarantinedTransactions: 0,
@@ -68,46 +133,20 @@ export async function modelGatewayRoutes(
       });
     }
 
-    const [reconciliation, metrics, awaiting] = await Promise.all([
+    const [reconciliation, metrics] = await Promise.all([
       opts.db.getModelGatewayReconciliationState(opts.config.profile),
       opts.db.getModelGatewayReconciliationMetrics(opts.config.profile),
-      opts.db.getGatewayTurnsAwaitingReconciliation(),
     ]);
-    const watermarkAt = reconciliation?.watermarkMs
-      ? reconciliation.watermarkMs
-      : null;
-    const lagMs = watermarkAt === null
-      ? null
-      : Math.max(0, now - watermarkAt);
-    // A turn still unreconciled long after completion is a lost spend row:
-    // the watermark keeps advancing, so lag alone never notices it.
-    const staleAwaiting = awaiting.count > 0
-      && awaiting.oldestCompletedAt !== null
-      && now - awaiting.oldestCompletedAt > awaitingGraceMs;
-    const state = !reconciliation?.lastSuccessAt
-      ? reconciliation?.lastError
-        ? 'degraded'
-        : 'initializing'
-      : reconciliation.lastError
-        || lagMs === null
-        || lagMs > (opts.degradedLagMs ?? DEFAULT_DEGRADED_LAG_MS)
-        || staleAwaiting
-        ? 'degraded'
-        : 'healthy';
-
     return ModelGatewayStatusSchema.parse({
       enabled: true,
       profile: opts.config.profile,
       revision: opts.config.revision,
-      state,
-      watermarkAt,
+      state: summary.state,
+      watermarkAt: reconciliation?.watermarkMs ? reconciliation.watermarkMs : null,
       lastAttemptAt: reconciliation?.lastAttemptAt ?? null,
       lastSuccessAt: reconciliation?.lastSuccessAt ?? null,
-      lagMs,
-      lastError: reconciliation?.lastError
-        ?? (staleAwaiting
-          ? 'Completed gateway turns have waited past the settlement grace period for prices'
-          : null),
+      lagMs: summary.lagMs,
+      lastError: summary.lastError,
       ...metrics,
       awaitingTurns: awaiting.count,
       oldestAwaitingAt: awaiting.oldestCompletedAt,

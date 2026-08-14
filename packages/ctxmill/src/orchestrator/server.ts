@@ -20,6 +20,7 @@ import type { TurnDispatcher } from './turn-dispatcher.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import {
   modelGatewayRoutes,
+  summarizeModelGatewayHealth,
   type ModelGatewayStatusConfig,
 } from './routes/model-gateway.js';
 import { triggerRoutes } from './routes/triggers.js';
@@ -219,6 +220,25 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
         limits: {
           max_global_containers: metrics.maxGlobalContainers,
         },
+      };
+    }
+
+    // Gateway spend ingestion health (ctx-iou3): a stalled pipeline
+    // under-counts budgets and analytics, so it belongs on /health.
+    try {
+      response.model_gateway = await summarizeModelGatewayHealth(
+        db,
+        opts.modelGateway ?? { enabled: false },
+      );
+    } catch (gatewayHealthError) {
+      response.model_gateway = {
+        enabled: opts.modelGateway?.enabled ?? false,
+        state: 'degraded',
+        lagMs: null,
+        awaitingTurns: 0,
+        lastError: gatewayHealthError instanceof Error
+          ? gatewayHealthError.message
+          : String(gatewayHealthError),
       };
     }
 
