@@ -6834,6 +6834,7 @@ describe('DatabaseRepository', () => {
       expect(first).toEqual({
         attached: 1,
         quarantined: 0,
+        anomalies: [],
         affectedTurnIds: [turn.id],
         usageChanges: [{
           turnId: turn.id,
@@ -7007,6 +7008,151 @@ describe('DatabaseRepository', () => {
       expect(await repo.getTurn(turn.id)).toMatchObject({
         costUsd: 0.001,
       });
+    });
+
+    it('quarantines a transaction claimed by another turn instead of aborting the batch', async () => {
+      const now = Date.now();
+      const profile = 'attached-elsewhere-profile';
+      const makeTurn = async (name: string, correlationId: string) => {
+        const agent = await repo.createAgent({
+          name,
+          harness: 'langgraph',
+          harnessConfig: JSON.stringify({ provider: 'openai', model: 'gpt-5.4-mini' }),
+          systemPrompt: 'test',
+          tools: [],
+        });
+        const conversation = await repo.createConversation(agent.id);
+        const turn = await repo.createTurn({
+          agentId: agent.id,
+          conversationId: conversation.id,
+          mode: 'interactive',
+          status: 'running',
+          gatewayCorrelationId: correlationId,
+          gatewayProfile: profile,
+          gatewayRevision: 'dev1-r1',
+          gatewayMode: 'gateway_only',
+        });
+        await repo.finalizeTurnIfOpen(turn.id, {
+          completedAt: now,
+          error: null,
+          status: 'completed',
+          inputTokens: 2,
+          outputTokens: 1,
+          totalTokens: 3,
+        });
+        return turn;
+      };
+      const turnA = await makeTurn('Fanout Turn A', 'ct_aaaa0000aaaa0000aaaa0000aaaa0000');
+      await makeTurn('Fanout Turn B', 'ct_bbbb0000bbbb0000bbbb0000bbbb0000');
+      const spendFor = (correlationId: string) => ({
+        transactionId: 'contested-tx',
+        correlationId,
+        status: 'success',
+        inputTokens: 2,
+        outputTokens: 1,
+        totalTokens: 3,
+        costUsd: 0.001,
+        costState: 'priced' as const,
+        startedAt: now - 100,
+        endedAt: now - 50,
+      });
+
+      const lease = await repo.claimModelGatewayReconciliationLease({
+        gatewayProfile: profile,
+        gatewayRevision: 'dev1-r1',
+        ownerId: 'worker-a',
+        nowMs: now,
+        leaseMs: 30_000,
+      });
+      const first = await repo.reconcileModelGatewaySpend({
+        gatewayProfile: profile,
+        gatewayRevision: 'dev1-r1',
+        ownerId: 'worker-a',
+        fenceToken: lease!.fenceToken,
+        nowMs: now + 1,
+        processedThroughMs: now,
+        settleBeforeMs: now,
+        records: [spendFor('ct_aaaa0000aaaa0000aaaa0000aaaa0000')],
+        invalid: [],
+      });
+      expect(first.attached).toBe(1);
+      expect(await repo.getTurn(turnA.id)).toMatchObject({ costUsd: 0.001 });
+
+      // Same gateway transaction re-presented under a different turn's
+      // correlation: previously a thrown error rolled back the whole batch
+      // and pinned the watermark forever. Now it quarantines and moves on.
+      const lease2 = await repo.claimModelGatewayReconciliationLease({
+        gatewayProfile: profile,
+        gatewayRevision: 'dev1-r1',
+        ownerId: 'worker-b',
+        nowMs: now + 2,
+        leaseMs: 30_000,
+      });
+      const second = await repo.reconcileModelGatewaySpend({
+        gatewayProfile: profile,
+        gatewayRevision: 'dev1-r1',
+        ownerId: 'worker-b',
+        fenceToken: lease2!.fenceToken,
+        nowMs: now + 3,
+        processedThroughMs: now + 2,
+        settleBeforeMs: now + 1,
+        records: [spendFor('ct_bbbb0000bbbb0000bbbb0000bbbb0000')],
+        invalid: [],
+      });
+      expect(second.attached).toBe(0);
+      expect(second.quarantined).toBe(1);
+      expect(second.watermarkMs).toBe(now + 2);
+      const quarantine = await testDb.conn.pgClient`
+        SELECT reason FROM model_gateway_spend_quarantine
+        WHERE gateway_profile = ${profile} AND gateway_transaction_id = 'contested-tx'
+      `;
+      expect(quarantine).toEqual([{ reason: 'attached_elsewhere' }]);
+      // Turn A's original attachment is untouched.
+      expect(await repo.getTurn(turnA.id)).toMatchObject({ costUsd: 0.001 });
+    });
+
+    it('extends a held reconciliation lease and refuses once it is lost', async () => {
+      const now = Date.now();
+      const profile = 'lease-extension-profile';
+      const lease = await repo.claimModelGatewayReconciliationLease({
+        gatewayProfile: profile,
+        gatewayRevision: 'dev1-r1',
+        ownerId: 'worker-a',
+        nowMs: now,
+        leaseMs: 30_000,
+      });
+      await expect(repo.extendModelGatewayReconciliationLease({
+        gatewayProfile: profile,
+        ownerId: 'worker-a',
+        fenceToken: lease!.fenceToken,
+        nowMs: now + 10_000,
+        leaseMs: 30_000,
+      })).resolves.toBe(true);
+      // Extension moved expiry to now+40s: a rival claim at now+35s must fail.
+      await expect(repo.claimModelGatewayReconciliationLease({
+        gatewayProfile: profile,
+        gatewayRevision: 'dev1-r1',
+        ownerId: 'worker-b',
+        nowMs: now + 35_000,
+        leaseMs: 30_000,
+      })).resolves.toBeUndefined();
+
+      // After true expiry a rival takes over and the old owner cannot extend.
+      const rival = await repo.claimModelGatewayReconciliationLease({
+        gatewayProfile: profile,
+        gatewayRevision: 'dev1-r1',
+        ownerId: 'worker-b',
+        nowMs: now + 41_000,
+        leaseMs: 30_000,
+      });
+      expect(rival).toBeDefined();
+      await expect(repo.extendModelGatewayReconciliationLease({
+        gatewayProfile: profile,
+        ownerId: 'worker-a',
+        fenceToken: lease!.fenceToken,
+        nowMs: now + 42_000,
+        leaseMs: 30_000,
+      })).resolves.toBe(false);
     });
 
     it('summarizes quarantined transactions by reason with recency', async () => {

@@ -157,16 +157,28 @@ export class LiteLLMSpendClient {
   }): Promise<{
     records: LiteLLMSpendRecord[];
     invalid: InvalidLiteLLMSpendRecord[];
+    /**
+     * Set when pagination stopped at the safety limit before covering endMs.
+     * Pages are sorted by startTime ascending, so every row that ENDED at or
+     * before the last fetched row's startTime has been observed — the caller
+     * may advance its watermark to this boundary but no further. Undefined
+     * when the window was fully covered.
+     */
+    truncatedAtMs?: number;
   }> {
     const records: LiteLLMSpendRecord[] = [];
     const invalid: InvalidLiteLLMSpendRecord[] = [];
     let totalPages = 1;
+    let truncated = false;
+    let maxObservedStartMs: number | undefined;
 
     for (let page = 1; page <= totalPages; page++) {
       if (page > this.maxPages) {
-        throw new Error(
-          `LiteLLM spend pagination exceeded the configured ${this.maxPages}-page safety limit`,
-        );
+        // A backlog larger than one fetch window is ingestion lag, not a
+        // permanent failure: commit the safe prefix instead of throwing,
+        // which used to pin the watermark forever (ctx-wpln b).
+        truncated = true;
+        break;
       }
       const query = new URLSearchParams({
         start_date: dateOnly(input.startMs),
@@ -251,6 +263,11 @@ export class LiteLLMSpendClient {
 
         const startedAt = Date.parse(row.startTime);
         const endedAt = Date.parse(row.endTime);
+        if (Number.isFinite(startedAt)) {
+          maxObservedStartMs = maxObservedStartMs === undefined
+            ? startedAt
+            : Math.max(maxObservedStartMs, startedAt);
+        }
         // A spend row becomes durable only after the provider call finishes.
         // Cursor on that finalized boundary so a call that lasts longer than
         // the reconciler overlap cannot start before the window and disappear
@@ -312,6 +329,16 @@ export class LiteLLMSpendClient {
       left.startedAt - right.startedAt
       || left.transactionId.localeCompare(right.transactionId)
     ));
-    return { records, invalid };
+    if (!truncated) {
+      return { records, invalid };
+    }
+    // No parseable boundary (e.g. every row invalid) means no safe progress:
+    // report the window start so the watermark holds still and the lag is
+    // visible to the stall detector rather than silently skipped past.
+    const truncatedAtMs = Math.min(
+      Math.max(maxObservedStartMs ?? input.startMs, input.startMs),
+      input.endMs,
+    );
+    return { records, invalid, truncatedAtMs };
   }
 }

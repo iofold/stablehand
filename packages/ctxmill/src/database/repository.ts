@@ -101,6 +101,8 @@ export interface AnalyticsSnapshot {
 
 const sanitizeTypedDbValue = <T>(value: T, context: string): T => sanitizeDbValue(value, context) as T;
 const DEFAULT_CLAIM_LEASE_MS = 60_000;
+/** Quarantined gateway spend rows not re-seen for this long are dropped. */
+const MODEL_GATEWAY_QUARANTINE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CALLBACK_EVENT_SEQ_DEDUPE_INDEX = 'idx_outbox_callback_event_seq';
 const LIVE_SANDBOX_SESSION_INDEX = 'idx_sandbox_sessions_conversation_live';
 const RUNNING_CONVERSATION_TURN_INDEX = 'idx_turns_conversation_running';
@@ -6033,6 +6035,8 @@ export class DatabaseRepository {
       previousUsage: TurnUsage | null;
       usage: TurnUsage;
     }>;
+    /** Turns skipped mid-batch instead of aborting it (e.g. lost attribution). */
+    anomalies: Array<{ turnId: string; reason: string }>;
     watermarkMs: number;
   }> {
     const gatewayProfile = sanitizeDbText(
@@ -6195,9 +6199,24 @@ export class DatabaseRepository {
           existingAttempt
           && existingAttempt.modelCallUsageId !== aggregate.id
         ) {
-          throw new Error(
-            `Gateway transaction ${record.transactionId} is already attached to another turn`,
-          );
+          // Poison pill: throwing here aborted the whole batch with the
+          // offending record pinned inside the read window, stalling the
+          // watermark forever (ctx-wpln c). Quarantine it and move on.
+          await quarantine({
+            transactionId: record.transactionId,
+            correlationId: record.correlationId,
+            reason: 'attached_elsewhere',
+            safeFields: {
+              ...(record.requestedModel
+                ? { modelGroup: record.requestedModel }
+                : {}),
+              ...(record.resolvedModel ? { model: record.resolvedModel } : {}),
+              ...(record.provider ? { provider: record.provider } : {}),
+              status: record.status,
+            },
+          });
+          quarantined++;
+          continue;
         }
         await tx
           .insert(this.schema.modelCallAttemptUsage)
@@ -6268,6 +6287,7 @@ export class DatabaseRepository {
         previousUsage: TurnUsage | null;
         usage: TurnUsage;
       }> = [];
+      const anomalies: Array<{ turnId: string; reason: string }> = [];
       for (const turnId of affectedTurnIds) {
         const [turn] = await tx
           .select()
@@ -6280,7 +6300,10 @@ export class DatabaseRepository {
           .where(eq(this.schema.modelCallUsage.turnId, turnId))
           .limit(1);
         if (!turn || !aggregate || !turn.gatewayMode) {
-          throw new Error(`Gateway usage turn ${turnId} lost its attribution row`);
+          // Poison pill: aborting here re-pinned the whole batch on one
+          // inconsistent turn (ctx-wpln c). Skip it and let the caller log.
+          anomalies.push({ turnId, reason: 'lost_attribution_row' });
+          continue;
         }
         const attempts = await tx
           .select()
@@ -6426,14 +6449,88 @@ export class DatabaseRepository {
           `Model gateway reconciliation lease ${gatewayProfile}/${input.fenceToken} was lost before commit`,
         );
       }
+      // Quarantine rows either resolve (deleted on successful attach) or go
+      // stale; without a TTL the table grows without bound (ctx-wpln).
+      await tx
+        .delete(this.schema.modelGatewaySpendQuarantine)
+        .where(and(
+          eq(
+            this.schema.modelGatewaySpendQuarantine.gatewayProfile,
+            gatewayProfile,
+          ),
+          lt(
+            this.schema.modelGatewaySpendQuarantine.lastSeenAt,
+            input.nowMs - MODEL_GATEWAY_QUARANTINE_TTL_MS,
+          ),
+        ));
+
       return {
         attached,
         quarantined,
         affectedTurnIds: [...affectedTurnIds],
         usageChanges,
+        anomalies,
         watermarkMs: committed.watermarkMs,
       };
     });
+  }
+
+  /**
+   * Extend the reconciliation lease mid-run so long fetch/commit cycles do
+   * not expire underneath their own work (ctx-wpln e). Returns false when the
+   * lease is no longer this owner's — the caller must abandon the run.
+   */
+  async extendModelGatewayReconciliationLease(input: {
+    gatewayProfile: string;
+    ownerId: string;
+    fenceToken: number;
+    nowMs: number;
+    leaseMs: number;
+  }): Promise<boolean> {
+    const gatewayProfile = sanitizeDbText(
+      input.gatewayProfile,
+      'modelGatewayReconciliation.extend.gatewayProfile',
+    );
+    const ownerId = sanitizeDbText(
+      input.ownerId,
+      'modelGatewayReconciliation.extend.ownerId',
+    );
+    const nowMs = sanitizeTypedDbValue(
+      input.nowMs,
+      'modelGatewayReconciliation.extend.nowMs',
+    );
+    const updated = await this.db
+      .update(this.schema.modelGatewayReconciliationState)
+      .set({
+        leaseExpiresAt: nowMs + sanitizeTypedDbValue(
+          input.leaseMs,
+          'modelGatewayReconciliation.extend.leaseMs',
+        ),
+        updatedAt: nowMs,
+      })
+      .where(and(
+        eq(
+          this.schema.modelGatewayReconciliationState.gatewayProfile,
+          gatewayProfile,
+        ),
+        eq(
+          this.schema.modelGatewayReconciliationState.leaseOwnerId,
+          ownerId,
+        ),
+        eq(
+          this.schema.modelGatewayReconciliationState.leaseFenceToken,
+          input.fenceToken,
+        ),
+        gt(
+          this.schema.modelGatewayReconciliationState.leaseExpiresAt,
+          nowMs,
+        ),
+      ))
+      .returning({
+        gatewayProfile:
+          this.schema.modelGatewayReconciliationState.gatewayProfile,
+      });
+    return updated.length > 0;
   }
 
   async getModelGatewayReconciliationState(

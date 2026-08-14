@@ -309,6 +309,80 @@ describe('LiteLLMSpendClient', () => {
     expect(JSON.stringify(result)).not.toContain('must-not-leak');
   });
 
+  it('returns partial progress with a safe boundary when pagination truncates', async () => {
+    const row = (requestId: string, correlationId: string, startTime: string, endTime: string) => ({
+      request_id: requestId,
+      spend: 0.001,
+      prompt_tokens: 10,
+      completion_tokens: 1,
+      total_tokens: 11,
+      startTime,
+      endTime,
+      model: 'openai/gpt-5.4-mini',
+      model_group: 'gpt-5.4-mini',
+      custom_llm_provider: 'openai',
+      session_id: correlationId,
+      status: 'success',
+    });
+    const pages = [
+      [row('tx-1', 'ct_00000000000000000000000000000000', '2026-07-23T10:00:00.000Z', '2026-07-23T10:00:01.000Z')],
+      [row('tx-2', 'ct_11111111111111111111111111111111', '2026-07-23T10:05:00.000Z', '2026-07-23T10:05:01.000Z')],
+    ];
+    const fetchImpl = vi.fn().mockImplementation((input: string) => {
+      const page = Number(new URL(String(input)).searchParams.get('page'));
+      return Promise.resolve(jsonResponse({
+        data: pages[page - 1] ?? [],
+        page,
+        page_size: 1,
+        total: 5,
+        total_pages: 5,
+      }));
+    });
+    const client = new LiteLLMSpendClient({
+      baseUrl: 'http://litellm:4000',
+      meteringKey: 'metering-key',
+      pageSize: 1,
+      maxPages: 2,
+      fetchImpl,
+    });
+
+    const result = await client.listSpend({
+      startMs: Date.parse('2026-07-23T09:00:00.000Z'),
+      endMs: Date.parse('2026-07-23T11:00:00.000Z'),
+    });
+
+    // Both fetched rows are ingested; the boundary is the last row's start
+    // time, so every row that ENDED before it has provably been observed.
+    expect(result.records.map((record) => record.transactionId)).toEqual(['tx-1', 'tx-2']);
+    expect(result.truncatedAtMs).toBe(Date.parse('2026-07-23T10:05:00.000Z'));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds the boundary at the window start when truncation observes no parseable rows', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
+      data: [{ garbage: true }],
+      page: 1,
+      page_size: 1,
+      total: 5,
+      total_pages: 5,
+    }));
+    const client = new LiteLLMSpendClient({
+      baseUrl: 'http://litellm:4000',
+      meteringKey: 'metering-key',
+      pageSize: 1,
+      maxPages: 1,
+      fetchImpl,
+    });
+
+    const startMs = Date.parse('2026-07-23T09:00:00.000Z');
+    const result = await client.listSpend({
+      startMs,
+      endMs: Date.parse('2026-07-23T11:00:00.000Z'),
+    });
+    expect(result.truncatedAtMs).toBe(startMs);
+    expect(result.invalid).toHaveLength(1);
+  });
+
   it('fails the poll when the spend endpoint or envelope is invalid', async () => {
     const denied = new LiteLLMSpendClient({
       baseUrl: 'http://litellm:4000',

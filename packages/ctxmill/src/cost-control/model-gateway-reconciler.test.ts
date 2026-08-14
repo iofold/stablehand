@@ -23,6 +23,7 @@ function createDeps() {
         fenceToken: 7,
         watermarkMs: NOW - 60_000,
       }),
+      extendModelGatewayReconciliationLease: vi.fn().mockResolvedValue(true),
       recordModelGatewayReconciliationFailure: vi.fn().mockResolvedValue(true),
       reconcileModelGatewaySpend: vi.fn().mockResolvedValue({
         attached: 1,
@@ -34,6 +35,7 @@ function createDeps() {
           previousUsage: PENDING_USAGE,
           usage: COMPLETE_USAGE,
         }],
+        anomalies: [],
         watermarkMs: NOW - 10_000,
       }),
       settleAbandonedGatewayTurns: vi.fn().mockResolvedValue([]),
@@ -81,10 +83,12 @@ describe('ModelGatewayReconciler', () => {
       settledUnpriced: 0,
       affectedTurnIds: ['turn-1'],
       watermarkMs: NOW - 10_000,
+      truncated: false,
     });
     expect(deps.spendClient.listSpend).toHaveBeenCalledWith({
       startMs: NOW - 90_000,
       endMs: NOW - 10_000,
+      signal: expect.any(AbortSignal),
     });
     expect(deps.db.reconcileModelGatewaySpend).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -189,6 +193,170 @@ describe('ModelGatewayReconciler', () => {
     expect(deps.spendClient.listSpend).toHaveBeenCalledWith({
       startMs: NOW - 310_000,
       endMs: NOW - 10_000,
+      signal: expect.any(AbortSignal),
     });
+  });
+
+  it('backs off exponentially after failures and resumes after the gap', async () => {
+    const deps = createDeps();
+    deps.spendClient.listSpend.mockRejectedValue(new Error('gateway unavailable'));
+    let nowMs = NOW;
+    const reconciler = new ModelGatewayReconciler(deps, {
+      profile: 'default',
+      revision: 'dev1-r1',
+      ownerId: 'worker-1',
+      now: () => nowMs,
+      pollIntervalMs: 5_000,
+    });
+
+    await expect(reconciler.runOnce()).resolves.toMatchObject({ status: 'failed' });
+    // Immediately after a failure the next poll is skipped, not re-fetched.
+    await expect(reconciler.runOnce()).resolves.toEqual({
+      status: 'backed_off',
+      retryAtMs: NOW + 10_000,
+    });
+    expect(deps.spendClient.listSpend).toHaveBeenCalledTimes(1);
+
+    // Past the gap it retries; a success clears the backoff entirely.
+    nowMs = NOW + 10_000;
+    deps.spendClient.listSpend.mockResolvedValue({ records: [], invalid: [] });
+    await expect(reconciler.runOnce()).resolves.toMatchObject({ status: 'success' });
+    await expect(reconciler.runOnce()).resolves.toMatchObject({ status: 'success' });
+  });
+
+  it('commits partial progress when spend pagination truncates', async () => {
+    const deps = createDeps();
+    deps.spendClient.listSpend.mockResolvedValue({
+      records: [],
+      invalid: [],
+      truncatedAtMs: NOW - 40_000,
+    });
+    const reconciler = new ModelGatewayReconciler(deps, {
+      profile: 'default',
+      revision: 'dev1-r1',
+      ownerId: 'worker-1',
+      now: () => NOW,
+      settlementDelayMs: 10_000,
+    });
+
+    await expect(reconciler.runOnce()).resolves.toMatchObject({
+      status: 'success',
+      truncated: true,
+    });
+    // Watermark and settlement stop at the fetch boundary, not the window end.
+    expect(deps.db.reconcileModelGatewaySpend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        processedThroughMs: NOW - 40_000,
+        settleBeforeMs: NOW - 40_000,
+      }),
+    );
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('partial progress'),
+    );
+  });
+
+  it('never moves the effective boundary behind the claimed watermark', async () => {
+    const deps = createDeps();
+    deps.db.claimModelGatewayReconciliationLease.mockResolvedValue({
+      fenceToken: 7,
+      watermarkMs: NOW - 20_000,
+    });
+    deps.spendClient.listSpend.mockResolvedValue({
+      records: [],
+      invalid: [],
+      truncatedAtMs: NOW - 300_000,
+    });
+    const reconciler = new ModelGatewayReconciler(deps, {
+      profile: 'default',
+      revision: 'dev1-r1',
+      ownerId: 'worker-1',
+      now: () => NOW,
+    });
+
+    await reconciler.runOnce();
+    expect(deps.db.reconcileModelGatewaySpend).toHaveBeenCalledWith(
+      expect.objectContaining({ processedThroughMs: NOW - 20_000 }),
+    );
+  });
+
+  it('logs turns skipped as anomalies instead of failing the run', async () => {
+    const deps = createDeps();
+    deps.db.reconcileModelGatewaySpend.mockResolvedValue({
+      attached: 0,
+      quarantined: 0,
+      affectedTurnIds: [],
+      usageChanges: [],
+      anomalies: [{ turnId: 'turn-odd', reason: 'lost_attribution_row' }],
+      watermarkMs: NOW - 10_000,
+    });
+    const reconciler = new ModelGatewayReconciler(deps, {
+      profile: 'default',
+      revision: 'dev1-r1',
+      now: () => NOW,
+    });
+
+    await expect(reconciler.runOnce()).resolves.toMatchObject({ status: 'success' });
+    expect(deps.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('turn-odd'),
+    );
+  });
+
+  it('aborts a run whose lease heartbeat reports the lease lost', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = createDeps();
+      deps.db.extendModelGatewayReconciliationLease.mockResolvedValue(false);
+      deps.spendClient.listSpend.mockImplementation(
+        ({ signal }: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        }),
+      );
+      const reconciler = new ModelGatewayReconciler(deps, {
+        profile: 'default',
+        revision: 'dev1-r1',
+        ownerId: 'worker-1',
+        now: () => NOW,
+        leaseMs: 60_000,
+        heartbeatMs: 20_000,
+      });
+
+      const run = reconciler.runOnce();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(run).resolves.toMatchObject({
+        status: 'failed',
+        error: expect.stringContaining('lease lost'),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts a spend fetch that outlives the lease duration', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = createDeps();
+      deps.spendClient.listSpend.mockImplementation(
+        ({ signal }: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        }),
+      );
+      const reconciler = new ModelGatewayReconciler(deps, {
+        profile: 'default',
+        revision: 'dev1-r1',
+        ownerId: 'worker-1',
+        now: () => NOW,
+        leaseMs: 60_000,
+        heartbeatMs: 20_000,
+      });
+
+      const run = reconciler.runOnce();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(run).resolves.toMatchObject({
+        status: 'failed',
+        error: expect.stringContaining('exceeded'),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

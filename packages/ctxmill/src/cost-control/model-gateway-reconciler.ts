@@ -7,7 +7,9 @@ import { unrefTimer } from '../util/timing.js';
 import type { LiteLLMSpendClient } from './litellm-spend-client.js';
 
 const DEFAULT_LEASE_MS = 60_000;
+const DEFAULT_HEARTBEAT_MS = 20_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
+const MAX_BACKOFF_MS = 5 * 60_000;
 const DEFAULT_OVERLAP_MS = 60_000;
 const DEFAULT_SETTLEMENT_DELAY_MS = 10_000;
 const DEFAULT_INITIAL_LOOKBACK_MS = 15 * 60_000;
@@ -24,6 +26,7 @@ const TAG = '[ModelGatewayReconciler]';
 type ModelGatewayReconciliationStore = Pick<
   DatabaseRepository,
   | 'claimModelGatewayReconciliationLease'
+  | 'extendModelGatewayReconciliationLease'
   | 'recordModelGatewayReconciliationFailure'
   | 'reconcileModelGatewaySpend'
   | 'settleAbandonedGatewayTurns'
@@ -54,6 +57,7 @@ interface ModelGatewayReconcilerOptions {
   revision: string;
   ownerId?: string;
   leaseMs?: number;
+  heartbeatMs?: number;
   pollIntervalMs?: number;
   overlapMs?: number;
   settlementDelayMs?: number;
@@ -64,6 +68,7 @@ interface ModelGatewayReconcilerOptions {
 
 export type ModelGatewayReconciliationResult =
   | { status: 'not_owner' }
+  | { status: 'backed_off'; retryAtMs: number }
   | {
       status: 'success';
       attached: number;
@@ -71,6 +76,7 @@ export type ModelGatewayReconciliationResult =
       settledUnpriced: number;
       affectedTurnIds: string[];
       watermarkMs: number;
+      truncated: boolean;
     }
   | { status: 'failed'; error: string };
 
@@ -105,11 +111,17 @@ export class ModelGatewayReconciler {
 
   private readonly now: () => number;
 
+  private readonly heartbeatMs: number;
+
   private timer?: ReturnType<typeof setInterval>;
 
   private activeRun?: Promise<ModelGatewayReconciliationResult>;
 
   private stopping = false;
+
+  private consecutiveFailures = 0;
+
+  private backoffUntilMs = 0;
 
   constructor(
     private readonly deps: ModelGatewayReconcilerDeps,
@@ -123,6 +135,13 @@ export class ModelGatewayReconciler {
       'Model gateway reconciliation lease',
       options.leaseMs ?? DEFAULT_LEASE_MS,
     );
+    this.heartbeatMs = positiveOption(
+      'Model gateway reconciliation heartbeat',
+      options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
+    );
+    if (this.heartbeatMs >= this.leaseMs) {
+      throw new Error('Model gateway reconciliation heartbeat must be shorter than the lease');
+    }
     this.pollIntervalMs = positiveOption(
       'Model gateway reconciliation poll interval',
       options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
@@ -186,6 +205,31 @@ export class ModelGatewayReconciler {
 
   private async reconcile(): Promise<ModelGatewayReconciliationResult> {
     const nowMs = this.now();
+    // (a) Exponential backoff: during a LiteLLM outage every poll used to
+    // re-fetch the full growing window from page 1. Failures now widen the
+    // retry gap up to MAX_BACKOFF_MS; any success resets it.
+    if (nowMs < this.backoffUntilMs) {
+      return { status: 'backed_off', retryAtMs: this.backoffUntilMs };
+    }
+    const result = await this.reconcileOnce(nowMs);
+    if (result.status === 'failed') {
+      this.consecutiveFailures += 1;
+      const backoffMs = Math.min(
+        this.pollIntervalMs * 2 ** this.consecutiveFailures,
+        MAX_BACKOFF_MS,
+      );
+      this.backoffUntilMs = this.now() + backoffMs;
+      this.deps.logger.warn(
+        `${TAG} backing off ${backoffMs}ms after ${this.consecutiveFailures} consecutive failure(s)`,
+      );
+    } else {
+      this.consecutiveFailures = 0;
+      this.backoffUntilMs = 0;
+    }
+    return result;
+  }
+
+  private async reconcileOnce(nowMs: number): Promise<ModelGatewayReconciliationResult> {
     let lease: Awaited<
       ReturnType<ModelGatewayReconciliationStore['claimModelGatewayReconciliationLease']>
     >;
@@ -206,6 +250,35 @@ export class ModelGatewayReconciler {
       return { status: 'not_owner' };
     }
 
+    // (e) Heartbeat: a run longer than the lease used to expire underneath
+    // itself and roll back all work — sustained backlog livelocked. Extend
+    // the lease on a cadence; losing it aborts the in-flight fetch.
+    const runAbort = new AbortController();
+    const heartbeat = setInterval(() => {
+      void this.deps.db.extendModelGatewayReconciliationLease({
+        gatewayProfile: this.options.profile,
+        ownerId: this.ownerId,
+        fenceToken: lease.fenceToken,
+        nowMs: this.now(),
+        leaseMs: this.leaseMs,
+      }).then((extended) => {
+        if (!extended) {
+          this.deps.logger.warn(`${TAG} lost reconciliation lease mid-run; aborting`);
+          runAbort.abort(new Error('reconciliation lease lost mid-run'));
+        }
+      }).catch((error) => {
+        this.deps.logger.warn(`${TAG} lease heartbeat failed:`, error);
+      });
+    }, this.heartbeatMs);
+    unrefTimer(heartbeat);
+    // (d) A hung spend fetch used to park activeRun (and stop()) forever.
+    // Bound every fetch by the lease duration — past that the lease is gone
+    // and the work would roll back anyway.
+    const fetchTimeout = setTimeout(() => {
+      runAbort.abort(new Error(`spend fetch exceeded ${this.leaseMs}ms`));
+    }, this.leaseMs);
+    unrefTimer(fetchTimeout);
+
     try {
       const processedThroughMs = Math.max(0, nowMs - this.settlementDelayMs);
       const startMs = lease.watermarkMs > 0
@@ -214,18 +287,37 @@ export class ModelGatewayReconciler {
       const spend = await this.deps.spendClient.listSpend({
         startMs,
         endMs: processedThroughMs,
+        signal: runAbort.signal,
       });
+      // (b) Truncated pagination commits the safe prefix: the watermark
+      // advances to the fetch boundary instead of stalling forever once the
+      // backlog outgrows one window. Settlement must not outrun coverage.
+      const effectiveThroughMs = spend.truncatedAtMs !== undefined
+        ? Math.max(lease.watermarkMs, Math.min(processedThroughMs, spend.truncatedAtMs))
+        : processedThroughMs;
+      if (spend.truncatedAtMs !== undefined) {
+        this.deps.logger.warn(
+          `${TAG} spend backlog exceeds one fetch window;`
+          + ` committing partial progress through ${new Date(effectiveThroughMs).toISOString()}`,
+        );
+      }
       const committed = await this.deps.db.reconcileModelGatewaySpend({
         gatewayProfile: this.options.profile,
         gatewayRevision: this.options.revision,
         ownerId: this.ownerId,
         fenceToken: lease.fenceToken,
         nowMs,
-        processedThroughMs,
-        settleBeforeMs: processedThroughMs,
+        processedThroughMs: effectiveThroughMs,
+        settleBeforeMs: effectiveThroughMs,
         records: spend.records,
         invalid: spend.invalid,
       });
+      for (const anomaly of committed.anomalies) {
+        this.deps.logger.error(
+          `${TAG} skipped inconsistent turn ${anomaly.turnId} (${anomaly.reason});`
+          + ' spend batch continued without it',
+        );
+      }
 
       for (const change of committed.usageChanges) {
         try {
@@ -260,6 +352,7 @@ export class ModelGatewayReconciler {
         settledUnpriced: settled.length,
         affectedTurnIds: committed.affectedTurnIds,
         watermarkMs: committed.watermarkMs,
+        truncated: spend.truncatedAtMs !== undefined,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -282,6 +375,9 @@ export class ModelGatewayReconciler {
         error,
       );
       return { status: 'failed', error: message };
+    } finally {
+      clearInterval(heartbeat);
+      clearTimeout(fetchTimeout);
     }
   }
 }
