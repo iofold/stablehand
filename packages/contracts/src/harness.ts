@@ -70,6 +70,17 @@ const HarnessSetupSchema = z.strictObject({
 
 const OpenAIReasoningSchema = z.enum(['off', 'low', 'medium', 'high']);
 
+/**
+ * Per-turn fan-out caps enforced inside the sandbox. Every harness applies
+ * bounded defaults when a field is omitted — a cap can be raised per agent
+ * but never removed, so one turn can't loop or branch without limit.
+ */
+export const HarnessTurnLimitsSchema = z.strictObject({
+  maxModelCalls: z.number().int().positive().max(100_000).optional(),
+  maxToolCalls: z.number().int().positive().max(100_000).optional(),
+  maxSubagents: z.number().int().positive().max(10_000).optional(),
+});
+
 const LangGraphSubagentSchema = z.strictObject({
   name: z.string().min(1),
   description: z.string(),
@@ -95,6 +106,7 @@ export const LangGraphConfigSchema = z.strictObject({
   setup: HarnessSetupSchema.optional(),
   subagents: z.array(LangGraphSubagentSchema).optional(),
   middleware: z.array(z.string().min(1)).optional(),
+  limits: HarnessTurnLimitsSchema.optional(),
 }).superRefine((config, context) => {
   if (config.reasoning !== undefined && config.provider !== 'openai') {
     context.addIssue({
@@ -154,6 +166,7 @@ export const ClaudeAgentsConfigSchema = z.strictObject({
   maxTurns: z.number().int().positive().optional(),
   setup: HarnessSetupSchema.optional(),
   subagents: z.record(z.string().min(1), ClaudeAgentDefinitionSchema).optional(),
+  limits: HarnessTurnLimitsSchema.optional(),
 });
 
 export const PIAgentConfigSchema = z.strictObject({
@@ -172,8 +185,10 @@ export const PIAgentConfigSchema = z.strictObject({
     'max',
   ]).optional(),
   extensions: z.array(WorkspaceRelativePathSchema).optional(),
+  limits: HarnessTurnLimitsSchema.optional(),
 });
 
+export type HarnessTurnLimits = z.infer<typeof HarnessTurnLimitsSchema>;
 export type LangGraphConfig = z.infer<typeof LangGraphConfigSchema>;
 export type ClaudeAgentsConfig = z.infer<typeof ClaudeAgentsConfigSchema>;
 export type PIAgentConfig = z.infer<typeof PIAgentConfigSchema>;

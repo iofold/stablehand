@@ -36,7 +36,13 @@ import {
   createGatewayCorrelationHeaders,
   resolveHarnessModelConnection,
 } from './model-gateway.js';
-import { TURN_ONLY_ENFORCEMENT_CAPABILITIES } from './enforcement/types.js';
+import type { HarnessTurnEnforcer, ModelCallDecision, TurnEnforcementReason } from './enforcement/types.js';
+import {
+  FanoutLimitHarnessTurnEnforcer,
+  fanoutDenialMessage,
+  fanoutLimitMessage,
+  fanoutTelemetryEvent,
+} from './enforcement/fanout.js';
 
 /**
  * Minimal interface for a deep agent that supports streamEvents.
@@ -88,8 +94,11 @@ interface DeepAgentMessage {
 export class LangGraphHarness implements AgentHarness {
   readonly name = 'langgraph';
   readonly configSchema = LangGraphConfigSchema;
-  readonly enforcementCapabilities =
-    TURN_ONLY_ENFORCEMENT_CAPABILITIES;
+  readonly enforcementCapabilities = {
+    observationBoundary: 'before_and_after',
+    activeCallCancellation: false,
+    softStop: true,
+  } as const;
 
   async openSession(config: HarnessSessionConfig, restore?: HarnessRestorePoint): Promise<HarnessSession> {
     const session = new LangGraphSession(config);
@@ -127,12 +136,21 @@ class LangGraphSession implements HarnessSession {
 
     const ac = new AbortController();
     const unlinkAbort = linkTurnAbort(this.config.signal, context.signal, () => ac.abort());
+    const queuedEvents: AgentEvent[] = [];
+    const drainQueuedEvents = () => queuedEvents.splice(0);
+    const fanoutMiddleware = this.config.turnEnforcer
+      ? createFanoutLimitMiddleware({
+        enforcer: this.config.turnEnforcer,
+        turnId: input.turnId,
+        provider: this.harnessConfig.provider,
+        model: this.harnessConfig.model,
+        onTrip: (event) => queuedEvents.push(event),
+      })
+      : undefined;
 
     try {
       this.transcript = [...input.messages];
       const accumulator = new TurnAccumulator({ turnId: input.turnId });
-      const queuedEvents: AgentEvent[] = [];
-      const drainQueuedEvents = () => queuedEvents.splice(0);
 
       // Step 1: Resolve the chat model from config + secrets
       const chatModel = await this.buildModelFromConfig(
@@ -180,7 +198,7 @@ class LangGraphSession implements HarnessSession {
       const resolvedSubagents = await this.buildSubagentParams(
         this.harnessConfig.subagents,
         lcTools,
-        workspaceMiddleware,
+        [...(fanoutMiddleware ? [fanoutMiddleware] : []), ...workspaceMiddleware],
         effectiveSecrets,
         input.turnId,
       );
@@ -195,6 +213,7 @@ class LangGraphSession implements HarnessSession {
       if (!hasSystemMessage) deepAgentParams.systemPrompt = systemPrompt;
       if (resolvedSubagents) deepAgentParams.subagents = resolvedSubagents;
       const middlewares: Record<string, unknown>[] = [
+        ...(fanoutMiddleware ? [fanoutMiddleware] : []),
         createSystemMessageCompatibilityMiddleware(),
         createToolErrorBoundaryMiddleware(),
       ];
@@ -500,6 +519,9 @@ class LangGraphSession implements HarnessSession {
         return;
       }
       console.error('[langgraph] deliverTurn error:', err);
+      for (const queuedEvent of drainQueuedEvents()) {
+        yield queuedEvent;
+      }
       yield { type: 'error', error: String(err) };
     } finally {
       unlinkAbort();
@@ -835,6 +857,76 @@ function createSystemMessageCompatibilityMiddleware(): Record<string, unknown> {
         ...request,
         systemMessage: new SystemMessage({ content: textParts.join('\n') }),
       });
+    },
+  };
+}
+
+/**
+ * Per-turn fan-out caps as deepagents middleware. Model-call cap is the hard
+ * backstop (throws — the loop cannot proceed without a model call); tool and
+ * subagent caps soft-deny with a ToolMessage so the model can wrap up. Every
+ * denied tool call still consumes a model call, so a capped turn terminates.
+ * Registered on the main agent and every subagent graph — subagent fan-out
+ * counts toward the same turn budget.
+ */
+function createFanoutLimitMiddleware(opts: {
+  enforcer: HarnessTurnEnforcer;
+  turnId: string;
+  provider: string;
+  model: string;
+  onTrip: (event: AgentEvent) => void;
+}): Record<string, unknown> {
+  const { enforcer, turnId, provider, model, onTrip } = opts;
+
+  const handleTrip = (decision: Exclude<ModelCallDecision, { action: 'continue' }>): void => {
+    if (enforcer instanceof FanoutLimitHarnessTurnEnforcer
+      && enforcer.takeFirstTrip(decision.reason)) {
+      onTrip({
+        type: 'custom_agui_event',
+        event: fanoutTelemetryEvent('langgraph', decision.reason, decision.action, enforcer.snapshot()),
+      });
+    }
+  };
+  const messageFor = (reason: TurnEnforcementReason, denial: boolean): string => {
+    if (enforcer instanceof FanoutLimitHarnessTurnEnforcer) {
+      return denial ? fanoutDenialMessage(reason, enforcer.limits) : fanoutLimitMessage(reason, enforcer.limits);
+    }
+    return `Turn stopped: the ${reason} safety cap was reached.`;
+  };
+
+  return {
+    name: 'ctxmill-turn-fanout-limits',
+    wrapModelCall: async (
+      request: Record<string, unknown>,
+      handler: (req: Record<string, unknown>) => Promise<unknown>,
+    ) => {
+      const decision = await enforcer.beforeModelCall({ turnId, provider, model });
+      if (decision.action !== 'continue') {
+        handleTrip(decision);
+        throw new Error(messageFor(decision.reason, false));
+      }
+      return handler(request);
+    },
+    wrapToolCall: async (
+      request: { toolCall: { id?: string; name: string }; [k: string]: unknown },
+      handler: (req: unknown) => Promise<unknown>,
+    ) => {
+      const toolName = request.toolCall.name;
+      const decision = await enforcer.onToolBoundary?.({
+        turnId,
+        toolName,
+        subagent: toolName === 'task',
+      });
+      if (decision && decision.action !== 'continue') {
+        handleTrip(decision);
+        console.error(`[langgraph] fanout cap denied tool '${toolName}' (${decision.reason})`);
+        return new ToolMessage({
+          content: messageFor(decision.reason, true),
+          tool_call_id: request.toolCall.id ?? '',
+          name: toolName,
+        });
+      }
+      return handler(request);
     },
   };
 }

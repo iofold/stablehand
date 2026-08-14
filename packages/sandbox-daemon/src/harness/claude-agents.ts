@@ -37,7 +37,12 @@ import {
   resolveHarnessModelConnection,
   type HarnessModelConnection,
 } from './model-gateway.js';
-import { TURN_ONLY_ENFORCEMENT_CAPABILITIES } from './enforcement/types.js';
+import type { ModelCallDecision } from './enforcement/types.js';
+import {
+  FanoutLimitHarnessTurnEnforcer,
+  fanoutLimitMessage,
+  fanoutTelemetryEvent,
+} from './enforcement/fanout.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -226,6 +231,7 @@ class ClaudeSession implements HarnessSession {
     const toolStartTimes = new Map<string, number>();
     const streamState = this.harness.createStreamMappingState();
     const accumulator = new TurnAccumulator({ turnId: input.turnId });
+    let fanoutError: string | undefined;
 
     try {
       const maxTurns = this.harnessConfig.maxTurns;
@@ -258,9 +264,39 @@ class ClaudeSession implements HarnessSession {
         },
       } as Parameters<typeof sdkQuery>[0]);
 
+      const enforcer = this.config.turnEnforcer;
       for await (const message of q) {
         yield* this.flushQueuedEvents();
+        // One completed assistant message per model call — parent and
+        // subagent alike — so counting them enforces the cap across every
+        // parallel Task branch the out-of-process SDK spawns.
+        if (enforcer && !fanoutError && message.type === 'assistant') {
+          const decision = await enforcer.afterModelCall({
+            turnId: input.turnId,
+            provider: 'anthropic',
+            model: this.harnessConfig.model,
+          });
+          if (decision.action !== 'continue') {
+            const trip = this.buildFanoutTrip(decision);
+            yield* trip.events;
+            fanoutError = trip.message;
+            abortController.abort();
+          }
+        }
         for (const event of this.harness.mapSDKMessage(message, toolStartTimes, streamState)) {
+          if (event.type === 'tool_call_start' && enforcer?.onToolBoundary && !fanoutError) {
+            const decision = await enforcer.onToolBoundary({
+              turnId: input.turnId,
+              toolName: event.name,
+              subagent: event.name === 'Task' || event.name === 'Agent',
+            });
+            if (decision.action !== 'continue') {
+              const trip = this.buildFanoutTrip(decision);
+              yield* trip.events;
+              fanoutError = trip.message;
+              abortController.abort();
+            }
+          }
           if (event.type === 'text_delta' && typeof event.content === 'string') {
             accumulator.appendText(event.content);
           }
@@ -297,6 +333,10 @@ class ClaudeSession implements HarnessSession {
       }
 
       yield* this.flushQueuedEvents();
+      if (fanoutError) {
+        yield { type: 'error', error: fanoutError };
+        fanoutError = undefined;
+      }
       yield* finalizeTurn(
         accumulator,
         this.transcript,
@@ -305,7 +345,7 @@ class ClaudeSession implements HarnessSession {
     } catch (error) {
       console.error('[claude-agents] deliverTurn error:', error);
       yield* this.flushQueuedEvents();
-      yield { type: 'error', error: errorMessage(error) };
+      yield { type: 'error', error: fanoutError ?? errorMessage(error) };
     } finally {
       cleanupAbort();
     }
@@ -335,6 +375,24 @@ class ClaudeSession implements HarnessSession {
   }
 
   async close(): Promise<void> {}
+
+  private buildFanoutTrip(
+    decision: Exclude<ModelCallDecision, { action: 'continue' }>,
+  ): { events: AgentEvent[]; message: string } {
+    const enforcer = this.config.turnEnforcer;
+    const events: AgentEvent[] = [];
+    let message = `Turn stopped: the ${decision.reason} safety cap was reached.`;
+    if (enforcer instanceof FanoutLimitHarnessTurnEnforcer) {
+      message = fanoutLimitMessage(decision.reason, enforcer.limits);
+      if (enforcer.takeFirstTrip(decision.reason)) {
+        events.push({
+          type: 'custom_agui_event',
+          event: fanoutTelemetryEvent('claude-agents', decision.reason, decision.action, enforcer.snapshot()),
+        });
+      }
+    }
+    return { events, message };
+  }
 
   private makeApprovalDelegate(): ApprovalCallback {
     return async (req: ApprovalRequest) => {
@@ -559,8 +617,11 @@ class ClaudeSession implements HarnessSession {
 export class ClaudeAgentsHarness implements AgentHarness {
   readonly name = 'claude-agents';
   readonly configSchema = ClaudeAgentsConfigSchema;
-  readonly enforcementCapabilities =
-    TURN_ONLY_ENFORCEMENT_CAPABILITIES;
+  readonly enforcementCapabilities = {
+    observationBoundary: 'after_only',
+    activeCallCancellation: true,
+    softStop: false,
+  } as const;
 
   protected async loadSdkModule(): Promise<ClaudeSdkModule> {
     const baseSdk: ClaudeSdkModule = {

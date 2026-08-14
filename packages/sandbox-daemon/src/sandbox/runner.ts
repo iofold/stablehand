@@ -83,7 +83,7 @@ import {
   runWithTurnDeliveryContext,
   type TurnDeliveryContext,
 } from './turn-delivery-context.js';
-import { PassThroughHarnessTurnEnforcer } from '../harness/enforcement/pass-through.js';
+import { FanoutLimitHarnessTurnEnforcer, resolveTurnFanoutLimits } from '../harness/enforcement/fanout.js';
 
 async function mkdirSafe(dir: string): Promise<void> {
   try {
@@ -492,8 +492,9 @@ export async function openSession(
       await mkdirSafe(config.workspaceDir);
 
       const harness = await resolveHarness(harnessName);
-      config.turnEnforcer = new PassThroughHarnessTurnEnforcer(
+      config.turnEnforcer = new FanoutLimitHarnessTurnEnforcer(
         harness.enforcementCapabilities,
+        resolveTurnFanoutLimits(config.harnessConfigJson),
       );
       session = await harness.openSession(config);
     } else if (req.bootstrap.case === 'restore') {
@@ -563,8 +564,9 @@ export async function openSession(
       await mkdirSafe(config.workspaceDir);
 
       const harness = await resolveHarness(harnessName);
-      config.turnEnforcer = new PassThroughHarnessTurnEnforcer(
+      config.turnEnforcer = new FanoutLimitHarnessTurnEnforcer(
         harness.enforcementCapabilities,
+        resolveTurnFanoutLimits(config.harnessConfigJson),
       );
       session = await harness.openSession(config, restorePoint);
     } else {

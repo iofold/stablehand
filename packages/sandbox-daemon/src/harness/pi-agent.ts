@@ -39,7 +39,12 @@ import {
   resolveHarnessModelConnection,
   type HarnessModelConnection,
 } from './model-gateway.js';
-import { TURN_ONLY_ENFORCEMENT_CAPABILITIES } from './enforcement/types.js';
+import type { ModelCallDecision } from './enforcement/types.js';
+import {
+  FanoutLimitHarnessTurnEnforcer,
+  fanoutLimitMessage,
+  fanoutTelemetryEvent,
+} from './enforcement/fanout.js';
 
 let _sdk: {
   createAgentSession: any;
@@ -443,8 +448,11 @@ type NativePiSession = {
 export class PIAgentHarness implements AgentHarness {
   readonly name = 'pi-agent';
   readonly configSchema = PIAgentConfigSchema;
-  readonly enforcementCapabilities =
-    TURN_ONLY_ENFORCEMENT_CAPABILITIES;
+  readonly enforcementCapabilities = {
+    observationBoundary: 'before_and_after',
+    activeCallCancellation: true,
+    softStop: false,
+  } as const;
 
   async openSession(config: HarnessSessionConfig, restore?: HarnessRestorePoint): Promise<HarnessSession> {
     const sdk = await getSDK();
@@ -765,6 +773,31 @@ class PiAgentSession implements HarnessSession {
 
     try {
       this.turnRef.queuedEvents = eventQueue;
+      const abortNativeSession = () => {
+        aborted = true;
+        void Promise.resolve(this.nativeSession.abort()).catch((err) => {
+          console.error('[pi-agent] abort failed:', err);
+        });
+      };
+      const enforcer = this.config.turnEnforcer;
+      // pi has no soft-stop channel, so every tripped cap cancels the turn.
+      // The decision arrives on a floating promise because the SDK event
+      // callback is synchronous; abort is idempotent, so the one-event race
+      // is harmless.
+      const applyFanoutDecision = (decision: ModelCallDecision) => {
+        if (decision.action === 'continue') return;
+        if (enforcer instanceof FanoutLimitHarnessTurnEnforcer
+          && enforcer.takeFirstTrip(decision.reason)) {
+          eventQueue.push({
+            type: 'custom_agui_event',
+            event: fanoutTelemetryEvent('pi-agent', decision.reason, decision.action, enforcer.snapshot()),
+          });
+          eventQueue.push({ type: 'error', error: fanoutLimitMessage(decision.reason, enforcer.limits) });
+        }
+        abortNativeSession();
+      };
+      const modelId = typeof this.model.id === 'string' ? this.model.id : '';
+      const providerId = typeof this.model.provider === 'string' ? this.model.provider : 'pi';
       unsubscribe = this.nativeSession.subscribe((piEvent: Record<string, unknown>) => {
         const eventType = typeof piEvent.type === 'string' ? piEvent.type : 'unknown';
         const eventKeys = Object.keys(piEvent).filter((k) => k !== 'type').join(',');
@@ -790,6 +823,11 @@ class PiAgentSession implements HarnessSession {
             }
           }
         }
+        if (piEvent.type === 'turn_start' && enforcer && !aborted) {
+          void enforcer.beforeModelCall({ turnId: input.turnId, provider: providerId, model: modelId })
+            .then(applyFanoutDecision)
+            .catch((err) => console.error('[pi-agent] fanout enforcement error:', err));
+        }
         totalUsage = _piUpdateUsage(
           totalUsage,
           piEvent,
@@ -808,6 +846,11 @@ class PiAgentSession implements HarnessSession {
             }
           } else {
             if (mapped.type === 'tool_call_start') {
+              if (enforcer?.onToolBoundary && !aborted) {
+                void enforcer.onToolBoundary({ turnId: input.turnId, toolName: mapped.name })
+                  .then(applyFanoutDecision)
+                  .catch((err) => console.error('[pi-agent] fanout enforcement error:', err));
+              }
               accumulator.recordToolStart({
                 id: mapped.id,
                 name: mapped.name,
@@ -829,12 +872,6 @@ class PiAgentSession implements HarnessSession {
         }
       });
 
-      const abortNativeSession = () => {
-        aborted = true;
-        void Promise.resolve(this.nativeSession.abort()).catch((err) => {
-          console.error('[pi-agent] abort failed:', err);
-        });
-      };
       unlinkAbort = linkTurnAbort(this.config.signal, context.signal, abortNativeSession);
 
       if (!lastUserMsg) {

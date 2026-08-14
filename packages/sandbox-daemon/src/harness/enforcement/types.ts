@@ -32,10 +32,14 @@ export interface ModelCallObservation extends ModelCallAttempt {
 export interface ToolBoundary {
   turnId: string;
   toolName: string;
+  /** True when this tool call spawns a subagent branch (Task/task/Agent). */
+  subagent?: boolean;
 }
 
 export type TurnEnforcementReason =
   | 'model_call_limit'
+  | 'tool_call_limit'
+  | 'subagent_limit'
   | 'token_limit'
   | 'cost_limit'
   | 'turn_cancelled';

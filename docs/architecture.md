@@ -182,6 +182,27 @@ Relevant code:
 - [manifest/index.ts](/path/to/stablehand/packages/manifest/src/index.ts)
 - [harness/index.ts](/path/to/stablehand/packages/ctxmill/src/harness/index.ts)
 
+### 10a. Per-Turn Fan-out Caps
+
+Admission counts sandbox containers, but one sandbox can multiply provider and
+tool concurrency without bound (parallel Task subagents, parallel tool
+batches, unbounded agentic loops). Every turn therefore runs under fan-out
+caps enforced inside the sandbox daemon: model calls, tool executions, and
+subagent spawns are counted per turn against bounded defaults
+(200/500/16), overridable upward per agent via `limits` in the harness
+config. The model-call cap always cancels the turn — it is the universal
+backstop, since even denied tool calls consume a model call. Tool and
+subagent caps soft-deny on harnesses with a deny channel (LangGraph
+middleware) and cancel elsewhere. A tripped cap emits one
+`ctxmill.fanout.limit` telemetry event and a plain-language error naming the
+config knob. This is the first real implementation of the harness enforcement
+seam reserved by [cost-control-and-model-gateway.md](specs/cost-control-and-model-gateway.md).
+
+Relevant code:
+
+- [enforcement/fanout.ts](/path/to/stablehand/packages/sandbox-daemon/src/harness/enforcement/fanout.ts)
+- [contracts harness.ts `HarnessTurnLimitsSchema`](/path/to/stablehand/packages/contracts/src/harness.ts)
+
 ### 11. Configuration and DI
 
 The `docker` execution preset, config resolver, and dependency injection container wire runtime services together.
