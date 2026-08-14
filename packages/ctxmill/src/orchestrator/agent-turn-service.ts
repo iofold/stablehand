@@ -13,6 +13,7 @@ import type { SessionTurnExecutor } from './session-turn-service.js';
 import type { SandboxSessionManager, SessionRecord } from './sandbox-session-manager.js';
 import type { ConcurrencyReservation } from './session-manager/session-turn-orchestrator.js';
 import { sanitizeDbText } from '../util/sanitize.js';
+import { isA2UIRenderTool } from '../a2ui/extract.js';
 import type { TurnSecrets } from './session-manager/turn-secrets.js';
 import { TURN_CANCELLED_MESSAGE, isTurnCancelled } from './turn-cancellation.js';
 import {
@@ -44,6 +45,20 @@ const INDIVIDUALLY_HANDLED = new Set([
   'RUN_FINISHED',
   'INTERRUPT_REQUESTED',
 ]);
+
+/** Cap on tool results carried in `tool_call.completed`, keeping the event log bounded. */
+const TOOL_RESULT_EVENT_MAX_LENGTH = 500;
+
+/**
+ * a2ui-render results are exempt from the cap: the canonical projector reparses
+ * this string to build the `ctxmill.a2ui.render` block, so a truncated payload
+ * fails JSON.parse and the render block is dropped without any error surfacing.
+ * TableView and chart payloads routinely exceed the cap.
+ */
+export function toolResultForEvent(toolCallName: string, result: unknown): string {
+  const serialized = String(result);
+  return isA2UIRenderTool(toolCallName) ? serialized : serialized.slice(0, TOOL_RESULT_EVENT_MAX_LENGTH);
+}
 
 /** Extended AG-UI event fields used when extracting tool/message data. */
 interface TextContentEvent {
@@ -1082,7 +1097,7 @@ export class AgentTurnService {
             conversationId,
             toolCallId,
             toolCallName,
-            result: String(toolResult.result).slice(0, 500),
+            result: toolResultForEvent(toolCallName, toolResult.result),
             durationMs: toolResult.durationMs ?? 0,
             timestamp: Date.now(),
           } as unknown as EventMap['tool_call.completed']);

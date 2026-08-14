@@ -1,5 +1,6 @@
 import type { EventMap } from '../../events/bus.js';
 import { materializeTurnUsage } from '../usage.js';
+import { isA2UIRenderTool } from '../../a2ui/extract.js';
 import { classifyChannel, type CanonicalFrame } from './frames.js';
 
 interface A2UIRenderBlock {
@@ -10,10 +11,6 @@ interface A2UIRenderBlock {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isA2UIRenderTool(toolName: string): boolean {
-  return toolName === 'a2ui-render' || toolName.endsWith('__a2ui-render');
 }
 
 function parseA2UIRenderBlock(toolCallId: string, result: string): A2UIRenderBlock | null {

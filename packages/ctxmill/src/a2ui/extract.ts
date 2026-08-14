@@ -156,3 +156,12 @@ export function sanitizeProps(
 export function isAllowedComponent(name: string): boolean {
   return ALLOWED_COMPONENTS.has(baseComponentName(name));
 }
+
+/**
+ * Check if a tool name refers to the intrinsic a2ui-render tool. Harnesses
+ * that host tools on an MCP server prefix the name (e.g.
+ * `mcp__ctxmill__a2ui-render`), so match the suffix as well.
+ */
+export function isA2UIRenderTool(toolName: string): boolean {
+  return toolName === 'a2ui-render' || toolName.endsWith('__a2ui-render');
+}
