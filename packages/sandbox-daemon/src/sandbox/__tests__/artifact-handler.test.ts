@@ -117,7 +117,7 @@ describe('artifact handlers', () => {
     expect(artifactStore.deleteObject).toHaveBeenCalledWith(expect.stringMatching(/^artifacts\/.+\/report\.txt$/));
   });
 
-  it('streams sandbox uploads while registering the exact content sha256', async () => {
+  it('uploads small files as retry-safe buffers while registering the exact content sha256', async () => {
     const content = Buffer.from('artifact body');
     const expectedSha256 = createHash('sha256').update(content).digest('hex');
     await writeFile(join(workspaceDir, 'report.txt'), content);
@@ -125,12 +125,13 @@ describe('artifact handlers', () => {
     let uploaded = Buffer.alloc(0);
     const upload = vi.fn().mockImplementation(async (
       _key: string,
-      body: AsyncIterable<Uint8Array>,
+      body: Buffer | AsyncIterable<Uint8Array>,
     ) => {
-      expect(Buffer.isBuffer(body)).toBe(false);
-      for await (const chunk of body) {
-        uploaded = Buffer.concat([uploaded, Buffer.from(chunk)]);
-      }
+      // Small files must arrive as Buffers: a Readable body is not
+      // retry-safe in the S3 client (drained stream + fixed Content-Length
+      // on retry ⇒ IncompleteBody).
+      expect(Buffer.isBuffer(body)).toBe(true);
+      uploaded = Buffer.from(body as Buffer);
     });
     const artifactStore = {
       upload,

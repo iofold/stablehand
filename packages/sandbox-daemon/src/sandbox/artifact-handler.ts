@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, relative, resolve } from 'node:path';
 import { Transform } from 'node:stream';
@@ -62,6 +63,8 @@ const MIME_TYPES: Record<string, string> = {
 
 const _maxSizeMb = Number(process.env.CTXMILL_MAX_ARTIFACT_SIZE_MB ?? 100);
 const MAX_ARTIFACT_SIZE_BYTES = (Number.isFinite(_maxSizeMb) && _maxSizeMb > 0 ? _maxSizeMb : 100) * 1024 * 1024;
+/** Files at or below this size upload as retry-safe buffers instead of streams. */
+const BUFFERED_UPLOAD_MAX_BYTES = 32 * 1024 * 1024;
 
 function buildArtifactStorageKey(artifactId: string, name: string): string {
   const safeName = name.trim().replace(/[/\\]+/g, '_') || 'artifact';
@@ -154,25 +157,42 @@ export function createArtifactHandlers(deps: ArtifactHandlerDeps): Map<string, (
       assertTurnDeliveryContextCurrent(deliveryContext);
       const contentHash = createHash('sha256');
       let streamedBytes = 0;
-      const hashingStream = new Transform({
-        transform(chunk: Buffer, _encoding, callback) {
-          streamedBytes += chunk.byteLength;
-          if (streamedBytes > MAX_ARTIFACT_SIZE_BYTES) {
-            callback(new Error(
-              `File exceeds max artifact size while streaming: ${streamedBytes} bytes > ${MAX_ARTIFACT_SIZE_BYTES} bytes`,
-            ));
-            return;
-          }
-          contentHash.update(chunk);
-          callback(null, chunk);
-        },
-      });
-      await artifactStore.upload(
-        storageKey,
-        createReadStream(fullPath).pipe(hashingStream),
-        mimeType,
-        fileStats.size,
-      );
+      if (fileStats.size <= BUFFERED_UPLOAD_MAX_BYTES) {
+        // Buffered path: a Readable body is not retry-safe in the S3 client —
+        // a transient failure drains the stream, and the retry then sends an
+        // empty body against the original Content-Length ("You did not
+        // provide the number of bytes specified by the Content-Length
+        // header"). Buffers retry cleanly.
+        const bytes = await readFile(fullPath);
+        streamedBytes = bytes.byteLength;
+        if (streamedBytes > MAX_ARTIFACT_SIZE_BYTES) {
+          return stringifyJsonWithBigInts({
+            error: `File exceeds max artifact size: ${streamedBytes} bytes > ${MAX_ARTIFACT_SIZE_BYTES} bytes`,
+          });
+        }
+        contentHash.update(bytes);
+        await artifactStore.upload(storageKey, bytes, mimeType, streamedBytes);
+      } else {
+        const hashingStream = new Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            streamedBytes += chunk.byteLength;
+            if (streamedBytes > MAX_ARTIFACT_SIZE_BYTES) {
+              callback(new Error(
+                `File exceeds max artifact size while streaming: ${streamedBytes} bytes > ${MAX_ARTIFACT_SIZE_BYTES} bytes`,
+              ));
+              return;
+            }
+            contentHash.update(chunk);
+            callback(null, chunk);
+          },
+        });
+        await artifactStore.upload(
+          storageKey,
+          createReadStream(fullPath).pipe(hashingStream),
+          mimeType,
+          fileStats.size,
+        );
+      }
       const sha256 = contentHash.digest('hex');
       logger.info(`[artifact] uploaded ${storageKey} (${streamedBytes} bytes)`);
 
