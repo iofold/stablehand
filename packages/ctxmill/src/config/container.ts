@@ -45,6 +45,7 @@ import { SessionStatusCoordinator } from '../orchestrator/session-manager/sessio
 import { DefaultToolRegistry } from '../tool/registry.js';
 import { LocalToolProvider } from '../tool/providers/local.js';
 import { ArtifactToolProvider } from '../tool/providers/artifact.js';
+import { BrowserToolProvider } from '../tool/providers/browser.js';
 import {
   builtinNamesAllowedByPolicy,
   builtinTools,
@@ -269,6 +270,7 @@ export async function createContainer(
     });
     await artifactStore.ensureBucket();
     toolRegistry.addProvider(new ArtifactToolProvider());
+    toolRegistry.addProvider(new BrowserToolProvider());
   }
 
   await toolRegistry.refresh();

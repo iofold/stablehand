@@ -40,6 +40,7 @@ import {
 } from '@ctxmill/proto/sandbox/v1';
 
 import { ArtifactStore } from '../artifact/artifact-store.js';
+import { createBrowserHandlers } from './browser-handler.js';
 import type {
   AgentHarness,
   HarnessSession,
@@ -102,31 +103,40 @@ function createDaemonHandlersForSession(
   agentId: string,
   workspaceDir: string,
 ): Map<string, (input: unknown) => Promise<string>> | undefined {
+  // Browser tools (ctx-lqas) need only the Chromium baked into the image, so
+  // they are always available; artifact tools additionally require S3 +
+  // orchestrator wiring. A DAEMON-location tool whose handler is absent still
+  // fails fast per-tool at proto conversion.
+  const handlers = createBrowserHandlers({ workspaceDir });
+
   const s3Endpoint = secrets.S3_ENDPOINT;
   const s3AccessKey = secrets.S3_ACCESS_KEY;
   const s3SecretKey = secrets.S3_SECRET_KEY;
   const s3Bucket = secrets.S3_BUCKET || 'ctxmill-artifacts';
   const s3Region = secrets.S3_REGION || 'us-east-1';
 
-  if (!s3Endpoint || !s3AccessKey || !s3SecretKey || !orcClient) {
-    return undefined;
+  if (s3Endpoint && s3AccessKey && s3SecretKey && orcClient) {
+    const artifactStore = new ArtifactStore({
+      s3Endpoint,
+      s3Region,
+      s3AccessKey,
+      s3SecretKey,
+      bucket: s3Bucket,
+    });
+
+    const artifactHandlers = createArtifactHandlers({
+      artifactStore,
+      orchestratorClient: orcClient,
+      sandboxSessionId,
+      agentId,
+      workspaceDir,
+    });
+    for (const [name, handler] of artifactHandlers) {
+      handlers.set(name, handler);
+    }
   }
 
-  const artifactStore = new ArtifactStore({
-    s3Endpoint,
-    s3Region,
-    s3AccessKey,
-    s3SecretKey,
-    bucket: s3Bucket,
-  });
-
-  return createArtifactHandlers({
-    artifactStore,
-    orchestratorClient: orcClient,
-    sandboxSessionId,
-    agentId,
-    workspaceDir,
-  });
+  return handlers;
 }
 
 function createToolContext(
