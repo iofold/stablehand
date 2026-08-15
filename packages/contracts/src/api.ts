@@ -762,6 +762,14 @@ export const HealthResponseSchema = z.strictObject({
       max_global_containers: z.number().int().positive(),
     }),
   }).optional(),
+  // Optional so the client keeps accepting servers predating the arm.
+  model_gateway: z.strictObject({
+    enabled: z.boolean(),
+    state: z.enum(['disabled', 'initializing', 'healthy', 'degraded']),
+    lagMs: z.number().nonnegative().nullable(),
+    awaitingTurns: z.number().int().nonnegative(),
+    lastError: z.string().nullable(),
+  }).optional(),
 });
 
 export const ConfigResponseSchema = z.strictObject({
