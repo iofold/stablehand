@@ -308,6 +308,41 @@ describe('performance profile', () => {
     });
   });
 
+  it('groups consecutive parallelGroup stages while keeping profile order', () => {
+    const stage = (name: string, group?: string) => ({
+      name,
+      harness: 'langgraph',
+      agentPrefix: `perf-${name}`,
+      topology: 'unique-agents',
+      sessionMode: 'cold',
+      concurrency: 1,
+      iterations: 1,
+      prompt: 'Reply with exactly BENCHMARK_OK.',
+      ...(group ? { parallelGroup: group } : {}),
+      harnessConfig: {
+        provider: 'openai',
+        model: 'gpt-5.4-mini',
+      },
+    });
+    const profile = parsePerformanceProfile({
+      schemaVersion: 1,
+      name: 'dev2-parallel-groups',
+      target: {
+        apiBase: 'https://stablehand.staging.example.com/api',
+        kubernetesNamespace: 'ctxmill',
+      },
+      stages: [
+        stage('solo-first'),
+        stage('mixed-a', 'mixed'),
+        stage('mixed-b', 'mixed'),
+        stage('solo-last'),
+      ],
+    });
+    expect(profile.stages.map((entry) => entry.parallelGroup)).toEqual([
+      undefined, 'mixed', 'mixed', undefined,
+    ]);
+  });
+
   it('rejects stages above the declared safety ceiling', () => {
     expect(() => parsePerformanceProfile({
       schemaVersion: 1,

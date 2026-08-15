@@ -412,7 +412,9 @@ export async function runPerformanceProfile(
   const clock = await calibrateClock(options.client, now, options.signal);
   const stages: PerformanceStageResult[] = [];
 
-  for (const stage of options.profile.stages) {
+  const runSingleStage = async (
+    stage: PerformanceStage,
+  ): Promise<PerformanceStageResult> => {
     options.signal?.throwIfAborted();
     const stageStartedAt = now();
     const agents = await reconcileBenchmarkAgents(options.client, stage);
@@ -643,8 +645,8 @@ export async function runPerformanceProfile(
         samples,
         summary,
       };
-      stages.push(result);
       await options.onStage?.(result);
+      return result;
     } finally {
       if (stage.sessionMode === 'resume') {
         await Promise.allSettled(
@@ -676,6 +678,25 @@ export async function runPerformanceProfile(
         Array.from(hubs.values(), (hub) => hub.stop()),
       );
     }
+  };
+
+  // Consecutive stages sharing a parallelGroup run simultaneously; groups
+  // run in profile order. Results keep configuration order either way.
+  const stageGroups: PerformanceStage[][] = [];
+  for (const stage of options.profile.stages) {
+    const currentGroup = stageGroups[stageGroups.length - 1];
+    if (
+      stage.parallelGroup !== undefined
+      && currentGroup?.[0]?.parallelGroup === stage.parallelGroup
+    ) {
+      currentGroup.push(stage);
+    } else {
+      stageGroups.push([stage]);
+    }
+  }
+  for (const group of stageGroups) {
+    const results = await Promise.all(group.map((stage) => runSingleStage(stage)));
+    stages.push(...results);
   }
 
   const completedAtMs = now();

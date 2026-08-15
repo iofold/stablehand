@@ -40,6 +40,12 @@ const StageSchema = z.strictObject({
   timeoutMs: z.number().int().positive().default(120_000),
   settleMs: z.number().int().nonnegative().default(2_000),
   harnessConfig: z.record(z.string(), z.unknown()),
+  /**
+   * Consecutive stages sharing a parallelGroup run simultaneously instead of
+   * sequentially — the only way to certify mixed simultaneous harness
+   * traffic (ctx-31w1). Groups still run in profile order.
+   */
+  parallelGroup: z.string().trim().min(1).optional(),
   systemPrompt: z.string().trim().min(1).default(
     'You are a performance-test agent. Follow the user request directly and respond concisely.',
   ),

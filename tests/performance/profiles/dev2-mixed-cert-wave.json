@@ -1,0 +1,253 @@
+{
+  "schemaVersion": 1,
+  "name": "dev2-mixed-cert-wave",
+  "expectedOutput": "BENCHMARK_OK",
+  "target": {
+    "apiBase": "https://stablehand.staging.example.com/api",
+    "kubernetesNamespace": "ctxmill"
+  },
+  "requirements": {
+    "modelGateway": "required",
+    "minGlobalContainers": 8
+  },
+  "safety": {
+    "maxConcurrency": 8,
+    "maxTurns": 80,
+    "maxEstimatedModelCalls": 300,
+    "abortErrorRate": 0.05,
+    "maxNodeCpuPercent": 75,
+    "maxNodeMemoryPercent": 75
+  },
+  "stages": [
+    {
+      "name": "claude-cold-c2",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-cert-claude-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 2,
+      "iterations": 2,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 300000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5"
+      }
+    },
+    {
+      "name": "claude-cold-c4",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-cert-claude-cold",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 4,
+      "iterations": 2,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 300000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5"
+      }
+    },
+    {
+      "name": "claude-warm-c4",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-cert-claude-warm",
+      "topology": "unique-agents",
+      "sessionMode": "warm",
+      "concurrency": 4,
+      "iterations": 2,
+      "warmupTurns": 1,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 300000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5"
+      }
+    },
+    {
+      "name": "claude-subagents-parallel-c2",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-cert-claude-sub",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 2,
+      "iterations": 2,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 420000,
+      "expectedModelCallsPerTurn": 5,
+      "prompt": "Use the Agent tool to run both the echo-a and echo-b subagents in parallel; each just reports its own name. After both return, reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "subagents": {
+          "echo-a": {
+            "description": "Reports its own name",
+            "prompt": "Reply with exactly: echo-a",
+            "maxTurns": 3
+          },
+          "echo-b": {
+            "description": "Reports its own name",
+            "prompt": "Reply with exactly: echo-b",
+            "maxTurns": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "deepagents-subagents-parallel-c2",
+      "harness": "langgraph",
+      "agentPrefix": "perf-cert-da-sub",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 2,
+      "iterations": 2,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 420000,
+      "expectedModelCallsPerTurn": 5,
+      "prompt": "Use the task tool twice in the same response to run the echo-a and echo-b subagents in parallel; each just reports its own name. After both return, reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.6-terra",
+        "maxTokens": 2000,
+        "reasoning": "off",
+        "subagents": [
+          {
+            "name": "echo-a",
+            "description": "Reports its own name",
+            "systemPrompt": "Reply with exactly: echo-a"
+          },
+          {
+            "name": "echo-b",
+            "description": "Reports its own name",
+            "systemPrompt": "Reply with exactly: echo-b"
+          }
+        ]
+      }
+    },
+    {
+      "name": "tool-heavy-deepagents-c4",
+      "harness": "langgraph",
+      "agentPrefix": "perf-cert-da-tools",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 4,
+      "iterations": 2,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 420000,
+      "expectedModelCallsPerTurn": 6,
+      "prompt": "Using your file tools with separate tool calls: write files one.txt, two.txt, and three.txt containing 1, 2, and 3, then read one.txt back. Finally reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "gpt-5.6-terra",
+        "maxTokens": 2000,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "tool-heavy-pi-c4",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-cert-pi-tools",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 4,
+      "iterations": 2,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 420000,
+      "expectedModelCallsPerTurn": 5,
+      "prompt": "Run these three commands with separate bash tool calls: echo alpha, then echo beta, then echo gamma. Then reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "google",
+        "model": "gemini-3.6-flash",
+        "maxTokens": 2000,
+        "thinkingLevel": "minimal"
+      }
+    },
+    {
+      "name": "tool-heavy-claude-c2",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-cert-claude-tools",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 2,
+      "iterations": 2,
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 420000,
+      "expectedModelCallsPerTurn": 5,
+      "prompt": "Run echo alpha, then echo beta, then echo gamma as three separate Bash tool calls. Then reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5"
+      }
+    },
+    {
+      "name": "mixed-sim-claude-c2",
+      "harness": "claude-agents",
+      "agentPrefix": "perf-cert-mix-claude",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 2,
+      "iterations": 2,
+      "parallelGroup": "mixed-sim",
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 300000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5"
+      }
+    },
+    {
+      "name": "mixed-sim-deepagents-c3",
+      "harness": "langgraph",
+      "agentPrefix": "perf-cert-mix-da",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 3,
+      "iterations": 2,
+      "parallelGroup": "mixed-sim",
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 300000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "openai",
+        "model": "cf-gpt-oss-120b",
+        "maxTokens": 256,
+        "reasoning": "off"
+      }
+    },
+    {
+      "name": "mixed-sim-pi-c3",
+      "harness": "pi-agent",
+      "agentPrefix": "perf-cert-mix-pi",
+      "topology": "unique-agents",
+      "sessionMode": "cold",
+      "concurrency": 3,
+      "iterations": 2,
+      "parallelGroup": "mixed-sim",
+      "sseClientsPerAgent": 2,
+      "settleMs": 3000,
+      "timeoutMs": 300000,
+      "prompt": "Reply with exactly BENCHMARK_OK and nothing else.",
+      "harnessConfig": {
+        "provider": "google",
+        "model": "gemini-3.6-flash",
+        "maxTokens": 256,
+        "thinkingLevel": "minimal"
+      }
+    }
+  ]
+}
