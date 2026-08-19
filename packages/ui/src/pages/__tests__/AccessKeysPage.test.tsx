@@ -28,6 +28,7 @@ const activeKey = {
   name: 'artifact-gallery',
   capabilities: ['artifacts:read', 'webhooks:manage'],
   note: 'Gallery extension',
+  agentId: null,
   status: 'active' as const,
   createdAt: 1_786_000_000_000,
   createdBy: 'master',

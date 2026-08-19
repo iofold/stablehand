@@ -572,6 +572,7 @@ export interface SystemSettings {
   queueTimeoutMs:              number;
   maxQueuedTurnsGlobal:        number;
   maxQueuedTurnsPerAgent:      number;
+  maxIngestQueueDepth:         number;
   queuedTurnTimeoutMs:         number;
   maxConcurrentSessionsPerAgent: number;
   maxTriggerDepth:             number;

@@ -51,6 +51,7 @@ describe('SettingsPage setting limits', () => {
       maxGlobalContainers: 20,
       maxQueuedTurnsGlobal: 1000,
   maxQueuedTurnsPerAgent: 100,
+  maxIngestQueueDepth: 10_000,
   queuedTurnTimeoutMs: 1_800_000,
   queueTimeoutMs: 600_000,
       maxConcurrentSessionsPerAgent: 20,

@@ -177,6 +177,7 @@ export function SettingsPage() {
         queueTimeoutMs:            Math.round(Number(draftQueueSec) * SECOND_MS),
         maxQueuedTurnsGlobal:      settings?.maxQueuedTurnsGlobal ?? 1000,
         maxQueuedTurnsPerAgent:    settings?.maxQueuedTurnsPerAgent ?? 100,
+        maxIngestQueueDepth:       settings?.maxIngestQueueDepth ?? 10_000,
         queuedTurnTimeoutMs:       settings?.queuedTurnTimeoutMs ?? 1_800_000,
         maxConcurrentSessionsPerAgent: Math.round(Number(draftMaxRunsPerAgent)),
         maxTriggerDepth:           Math.round(Number(draftTriggerDepth)),
