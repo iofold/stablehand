@@ -39,6 +39,8 @@ export class DispatchStalledError extends Error {
 
 export interface TurnQueueAdmission {
   check(agentId: string): Promise<void>;
+  /** Current caps, for the authoritative in-transaction re-check (ctx-xrrc). */
+  limits(): Promise<{ maxQueuedTurnsGlobal: number; maxQueuedTurnsPerAgent: number }>;
 }
 
 export interface TurnQueueAdmissionDeps {
@@ -49,6 +51,7 @@ export interface TurnQueueAdmissionDeps {
 
 export function createTurnQueueAdmission(deps: TurnQueueAdmissionDeps): TurnQueueAdmission {
   return {
+    limits: () => deps.settings(),
     async check(agentId: string): Promise<void> {
       const [settings, counts] = await Promise.all([
         deps.settings(),

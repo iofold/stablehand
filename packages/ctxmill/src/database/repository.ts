@@ -194,6 +194,29 @@ export class SandboxSessionStatusConflictError extends Error {
   }
 }
 
+/**
+ * ctx-xrrc: xact-scoped advisory-lock key serializing the turn-queue cap
+ * count+insert. Distinct from MIGRATION_ADVISORY_LOCK_ID (424242).
+ */
+export const TURN_QUEUE_ADMISSION_LOCK_ID = 424243;
+
+/**
+ * Thrown by createTurnWithSecretEnvelope when the authoritative in-transaction
+ * queue-cap check rejects a queued turn (the race the pre-insert admission
+ * fast-path cannot catch). The orchestrator maps this to a 429 QueueFullError.
+ */
+export class QueueCapExceededError extends Error {
+  constructor(
+    readonly scope: 'global' | 'agent',
+    readonly agentId: string,
+    readonly queued: number,
+    readonly limit: number,
+  ) {
+    super(`Turn queue ${scope} cap exceeded (${queued}/${limit} queued turns)`);
+    this.name = 'QueueCapExceededError';
+  }
+}
+
 export class LiveSandboxSessionConflictError extends Error {
   constructor(readonly conversationId: string) {
     super(`Conversation ${conversationId} already has an ACTIVE or RESTORING sandbox session`);
@@ -1299,6 +1322,7 @@ export class DatabaseRepository {
   async createTurnWithSecretEnvelope(
     data: TurnInsert,
     secretEnvelope: TurnSecretEnvelopeInsert,
+    admissionLimits?: { maxQueuedTurnsGlobal: number; maxQueuedTurnsPerAgent: number },
   ): Promise<TurnSelect> {
     const sanitizedData = sanitizeTypedDbValue(data, 'turns.insert');
     const sanitizedEnvelope = sanitizeTypedDbValue(
@@ -1306,6 +1330,32 @@ export class DatabaseRepository {
       'turnSecretEnvelopes.insert',
     );
     return this.db.transaction(async (tx) => {
+      // ctx-xrrc: the pre-insert queueAdmission.check is a cheap fast path but
+      // races under concurrent submission (read-then-insert). When limits are
+      // supplied for a queued turn, make the cap authoritative by counting and
+      // inserting under one xact-scoped advisory lock — sub-ms, auto-released
+      // at commit/rollback, one global key covering the global + per-agent cap.
+      if (admissionLimits && sanitizedData.status === 'queued') {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(${TURN_QUEUE_ADMISSION_LOCK_ID})`);
+        const [counts] = await tx
+          .select({
+            global: sql<number>`count(*)::int`,
+            agent: sql<number>`count(*) filter (where ${this.schema.turns.agentId} = ${sanitizedData.agentId})::int`,
+          })
+          .from(this.schema.turns)
+          .where(and(
+            eq(this.schema.turns.status, 'queued'),
+            isNull(this.schema.turns.completedAt),
+          ));
+        const globalQueued = counts?.global ?? 0;
+        const agentQueued = counts?.agent ?? 0;
+        if (globalQueued >= admissionLimits.maxQueuedTurnsGlobal) {
+          throw new QueueCapExceededError('global', sanitizedData.agentId, globalQueued, admissionLimits.maxQueuedTurnsGlobal);
+        }
+        if (agentQueued >= admissionLimits.maxQueuedTurnsPerAgent) {
+          throw new QueueCapExceededError('agent', sanitizedData.agentId, agentQueued, admissionLimits.maxQueuedTurnsPerAgent);
+        }
+      }
       const [turn] = await tx
         .insert(this.schema.turns)
         .values(sanitizedData)

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { TypedEventBus } from '../events/bus.js';
-import type { DatabaseRepository } from '../database/repository.js';
+import { QueueCapExceededError, type DatabaseRepository } from '../database/repository.js';
 import type { AgentDefinition } from '@ctxmill/sandbox-daemon';
 import { buildAgentDefinition, type StoredAgent } from './agent-definition.js';
 import type { AgentTurnService } from './agent-turn-service.js';
@@ -11,7 +11,7 @@ import type { ConcurrencyReservation } from './session-manager/session-turn-orch
 import type { TurnSecrets } from './session-manager/turn-secrets.js';
 import { TurnFinalizer } from './turn-finalizer.js';
 import type { BudgetEnforcer } from './budget-enforcer.js';
-import type { TurnQueueAdmission } from './turn-queue-admission.js';
+import { QueueFullError, type TurnQueueAdmission } from './turn-queue-admission.js';
 import { TagConflictError, readBudgetDimensions, readDefaultTags } from './budgets.js';
 import type { TurnDeliveryContext } from './turn-delivery-fence.js';
 import { acquireTurnDeliveryLease } from './turn-delivery-lease.js';
@@ -216,8 +216,12 @@ export class TurnStartupService {
     // Queue admission (ctx-z5k0) also runs before any write: a queue_full
     // rejection leaves no message and no turn behind — the caller owns the
     // retry with nothing half-accepted. Redispatches never pass through here.
+    // This check is the cheap fast path; the authoritative cap is enforced
+    // atomically at insert time (ctx-xrrc) with the limits captured here.
+    let admissionLimits: { maxQueuedTurnsGlobal: number; maxQueuedTurnsPerAgent: number } | undefined;
     if (executionDeps.queueAdmission) {
       await executionDeps.queueAdmission.check(agentId);
+      admissionLimits = await executionDeps.queueAdmission.limits();
     }
 
     const resolvedConversationId = await this.resolveConversationId(
@@ -267,12 +271,12 @@ export class TurnStartupService {
         allocatedTurnId,
         turnSecrets ?? {},
       );
-      turn = await executionDeps.db.createTurnWithSecretEnvelope({
+      const turnInsert = {
         id: allocatedTurnId,
         agentId,
         conversationId: resolvedConversationId,
         mode,
-        status: 'queued',
+        status: 'queued' as const,
         userMessageId: message.id,
         tags: turnTags,
         ...(gatewayAttribution.mode !== 'direct'
@@ -284,12 +288,22 @@ export class TurnStartupService {
           }
           : {}),
         ...(mode === 'background' ? { taskDescription: content } : {}),
-      }, secretEnvelope);
+      };
+      // Only thread the authoritative-cap limits when admission is active, so
+      // the no-admission path keeps its original two-argument call (ctx-xrrc).
+      turn = admissionLimits
+        ? await executionDeps.db.createTurnWithSecretEnvelope(turnInsert, secretEnvelope, admissionLimits)
+        : await executionDeps.db.createTurnWithSecretEnvelope(turnInsert, secretEnvelope);
     } catch (err) {
       concurrencyReservation?.release();
       await executionDeps.db.deleteMessage(message.id).catch((deleteErr) => {
         this.deps.logger.error('[TurnStartupService] failed to rollback user message %s:', message.id, deleteErr);
       });
+      // ctx-xrrc: the authoritative in-transaction cap lost the race — surface
+      // it as the same typed 429 the fast-path admission would have returned.
+      if (err instanceof QueueCapExceededError) {
+        throw new QueueFullError(err.scope, err.agentId, err.queued, err.limit);
+      }
       throw err;
     }
 
