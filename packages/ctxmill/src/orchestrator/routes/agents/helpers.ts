@@ -152,7 +152,7 @@ export function toAgentResponse(agent: StoredAgent): Agent {
 }
 
 export function toApiAgentTurn(
-  turn: { id: string; agentId: string; conversationId: string | null; sandboxSessionId: string | null; status: string; mode: string; taskDescription: string | null; startedAt: number; completedAt: number | null; error: string | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; gatewayMode?: string | null; gatewayCorrelationId?: string | null; usageReconciledAt?: number | null; tags?: Record<string, string> | null },
+  turn: { id: string; agentId: string; conversationId: string | null; sandboxSessionId: string | null; status: string; mode: string; taskDescription: string | null; queuedAt: number; startedAt: number; completedAt: number | null; error: string | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; gatewayMode?: string | null; gatewayCorrelationId?: string | null; usageReconciledAt?: number | null; tags?: Record<string, string> | null },
   sandboxSession?: {
     status: string;
     restoreAttempts?: number | null;
@@ -171,6 +171,7 @@ export function toApiAgentTurn(
     ...(sandboxSession?.status ? { sandboxStatus: sandboxSession.status } : {}),
     status,
     mode: turn.mode || 'interactive',
+    queuedAt: turn.queuedAt,
     startedAt: turn.startedAt,
     ...(turn.completedAt != null ? { completedAt: turn.completedAt } : {}),
     ...(turn.error ? { error: turn.error } : {}),

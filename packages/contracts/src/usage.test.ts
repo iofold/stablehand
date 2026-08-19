@@ -69,6 +69,7 @@ describe('usage-bearing API boundaries', () => {
     conversationId: 'conversation-1',
     status: 'COMPLETED',
     mode: 'interactive',
+    queuedAt: 1,
     startedAt: 1,
   } as const;
 

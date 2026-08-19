@@ -12,6 +12,7 @@ import {
   IngestQueueFullError,
   type CanonicalIngestAdmission,
 } from '../canonical-ingest-admission.js';
+import { TriggerListResponseSchema, TriggerSchema } from '@ctxmill/contracts';
 
 export interface TriggerRouteOptions {
   triggerManager: EventTriggerManager;
@@ -88,7 +89,7 @@ export async function triggerRoutes(
         throw err;
       }
 
-      return reply.status(201).send(trigger);
+      return reply.status(201).send(TriggerSchema.parse(trigger));
     },
   );
 
@@ -97,7 +98,7 @@ export async function triggerRoutes(
     '/',
     async (request: FastifyRequest) => {
       const query = request.query as { agentId?: string };
-      return triggerManager.list(query.agentId);
+      return TriggerListResponseSchema.parse(triggerManager.list(query.agentId));
     },
   );
 
@@ -113,7 +114,7 @@ export async function triggerRoutes(
       if (!trigger) {
         return reply.status(404).send({ error: 'Trigger not found' });
       }
-      return trigger;
+      return TriggerSchema.parse(trigger);
     },
   );
 
@@ -174,7 +175,7 @@ export async function triggerRoutes(
         return reply.status(404).send({ error: 'Trigger not found' });
       }
 
-      return updated;
+      return TriggerSchema.parse(updated);
     },
   );
 

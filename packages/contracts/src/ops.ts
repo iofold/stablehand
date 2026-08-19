@@ -99,6 +99,19 @@ export const FeedbackAckSchema = z.strictObject({
 });
 export type FeedbackAck = z.infer<typeof FeedbackAckSchema>;
 
+// ── /api/triggers CRUD (T5) ───────────────────────────────────────────
+export const TriggerSchema = z.strictObject({
+  id: z.string(),
+  agentId: z.string(),
+  eventType: z.string(),
+  selector: z.record(z.string(), z.unknown()).optional(),
+  taskTemplate: z.string(),
+  enabled: z.boolean(),
+  createdAt: EpochMillisSchema,
+});
+export type Trigger = z.infer<typeof TriggerSchema>;
+export const TriggerListResponseSchema = z.array(TriggerSchema);
+
 // ── Typed throttle bodies (U6) ────────────────────────────────────────
 // Convention (S12/R3): `error` is the human sentence, `code` the machine
 // token; every throttle mirrors its Retry-After header as `retryAfterSec`.

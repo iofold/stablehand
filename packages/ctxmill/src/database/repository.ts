@@ -1458,6 +1458,10 @@ export class DatabaseRepository {
         .set({
           status: 'running',
           sandboxSessionId: sanitizedSessionId,
+          // ctx-iqzy T2: startedAt = execution start. Restamp on the
+          // queued->running edge only; re-activation of a running turn
+          // must not move it.
+          startedAt: sql`CASE WHEN ${this.schema.turns.status} = 'queued' THEN ${Date.now()} ELSE ${this.schema.turns.startedAt} END`,
         })
         .where(and(
           eq(this.schema.turns.id, sanitizedTurnId),
@@ -3000,6 +3004,8 @@ export class DatabaseRepository {
           sandboxSessionId: sanitizedSandboxSessionId,
           deliveryOwnerId: sanitizedOwnerId,
           deliveryFenceToken: fenceToken,
+          // ctx-iqzy T2: execution start, stamped on the queued->running edge.
+          startedAt: sql`CASE WHEN ${this.schema.turns.status} = 'queued' THEN ${Date.now()} ELSE ${this.schema.turns.startedAt} END`,
         })
         .where(and(
           eq(this.schema.turns.id, sanitizedTurnId),
@@ -5764,12 +5770,13 @@ export class DatabaseRepository {
     turnId: string;
     agentId: string;
     conversationId: string | null;
-    startedAt: number;
+    queuedAt: number;
     sessionStatus: string | null;
   }>> {
     const bounded = Math.max(1, Math.min(Math.trunc(limit), 200));
+    // ctx-iqzy T2: queue ordering/fairness is by admission time (queuedAt).
     const result = await this.db.execute(sql`
-      SELECT t.id AS turn_id, t.agent_id, t.conversation_id, t.started_at,
+      SELECT t.id AS turn_id, t.agent_id, t.conversation_id, t.queued_at,
              s.status AS session_status
       FROM turns t
       LEFT JOIN sandbox_sessions s
@@ -5780,16 +5787,16 @@ export class DatabaseRepository {
           SELECT 1 FROM turns r
           WHERE r.conversation_id = t.conversation_id
             AND r.completed_at IS NULL
-            AND (r.status = 'running' OR r.started_at < t.started_at)
+            AND (r.status = 'running' OR r.queued_at < t.queued_at)
         )
-      ORDER BY t.started_at ASC, t.id ASC
+      ORDER BY t.queued_at ASC, t.id ASC
       LIMIT ${bounded}
     `);
     return Array.from(result as Iterable<Record<string, unknown>>).map((row) => ({
       turnId: String(row.turn_id),
       agentId: String(row.agent_id),
       conversationId: row.conversation_id === null ? null : String(row.conversation_id),
-      startedAt: Number(row.started_at),
+      queuedAt: Number(row.queued_at),
       sessionStatus: row.session_status === null ? null : String(row.session_status),
     }));
   }
@@ -5806,9 +5813,10 @@ export class DatabaseRepository {
       .where(and(
         eq(this.schema.turns.status, 'queued'),
         isNull(this.schema.turns.completedAt),
-        lt(this.schema.turns.startedAt, cutoffMs),
+        // ctx-iqzy T2: queue age is measured from admission, not execution.
+        lt(this.schema.turns.queuedAt, cutoffMs),
       ))
-      .orderBy(asc(this.schema.turns.startedAt))
+      .orderBy(asc(this.schema.turns.queuedAt))
       .limit(Math.max(1, Math.min(Math.trunc(limit), 500)));
     return rows;
   }
@@ -5832,7 +5840,7 @@ export class DatabaseRepository {
   /** Oldest queued turn age in ms (null when the queue is empty). */
   async getOldestQueuedTurnAgeMs(): Promise<number | null> {
     const [row] = await this.db
-      .select({ oldest: sql<number | null>`min(${this.schema.turns.startedAt})` })
+      .select({ oldest: sql<number | null>`min(${this.schema.turns.queuedAt})` })
       .from(this.schema.turns)
       .where(and(
         eq(this.schema.turns.status, 'queued'),

@@ -463,7 +463,9 @@ export async function turnRoutes(
           ...(turn.sandboxSessionId ? { sandboxSessionId: turn.sandboxSessionId } : {}),
           status: 'cancelled',
           error: TURN_CANCELLED_MESSAGE,
-          durationMs: Date.now() - turn.startedAt,
+          // ctx-iqzy T3: durationMs is EXECUTION time. A turn cancelled while
+          // still queued never executed — its startedAt is the insert default.
+          durationMs: turn.status === 'queued' ? 0 : Date.now() - turn.startedAt,
         });
       }
 

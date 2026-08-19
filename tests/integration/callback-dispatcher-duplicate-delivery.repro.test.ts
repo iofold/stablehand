@@ -66,11 +66,14 @@ describe('ctx-4p34 callback outbox duplicate delivery', () => {
     });
 
     // Replica A: its first delivery hangs (a slow customer endpoint), the rest
-    // return immediately.
+    // return immediately. Batch order is unspecified (UPDATE...RETURNING), so
+    // record WHICH row A is stalled inside.
     let callsOnA = 0;
-    const dispatcherA = new CallbackDispatcher(testDb.repo, 5_000, vi.fn(async (_url, init) => {
+    let stalledUrlOnA = '';
+    const dispatcherA = new CallbackDispatcher(testDb.repo, 5_000, vi.fn(async (url, init) => {
       recordPost(init);
       if (++callsOnA === 1) {
+        stalledUrlOnA = String(url);
         slowEndpointEntered();
         await slowEndpoint;
       }
@@ -105,13 +108,14 @@ describe('ctx-4p34 callback outbox duplicate delivery', () => {
     expect(claimed[0].count).toBe(3);
 
     // The lease lapses for the rows A has not reached yet while it is stalled
-    // on hook-0 — the 60s lease against a batch that can legitimately run
-    // ~500s. hook-0 (in flight) keeps the lease its per-row renewal just gave
-    // it; POSTs are <=10s, so a fresh 60s lease cannot expire under one.
+    // inside one of them — the 60s lease against a batch that can legitimately
+    // run ~500s. The in-flight row keeps the lease its per-row renewal just
+    // gave it (POSTs are <=10s; a fresh 60s lease cannot expire under one) —
+    // the mid-POST residual window is documented, not what this test pins.
     await testDb.conn.pgClient`
       UPDATE callback_outbox
       SET claim_expires_at = floor(extract(epoch from clock_timestamp()) * 1000)::bigint - 1
-      WHERE status = 'in_progress' AND callback_url <> 'https://example.com/hook-0'
+      WHERE status = 'in_progress' AND callback_url <> ${stalledUrlOnA}
     `;
 
     // Any other scanner now re-claims rows whose HTTP requests A has either
@@ -131,6 +135,9 @@ describe('ctx-4p34 callback outbox duplicate delivery', () => {
       duplicated,
       `outbox rows POSTed more than once: ${JSON.stringify([...postsPerDelivery])}`,
     ).toEqual([]);
-    expect(posted).toHaveLength(deliveryIds.length);
+    // Count only this test's rows — under the full suite, leftover pending
+    // outbox rows from earlier files are legitimately delivered by B too.
+    const ownPosts = posted.filter((id) => deliveryIds.includes(id));
+    expect(ownPosts).toHaveLength(deliveryIds.length);
   });
 });

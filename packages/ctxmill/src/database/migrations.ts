@@ -387,6 +387,12 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS usage_reconciled_at BIGINT`;
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS next_message_seq BIGINT NOT NULL DEFAULT 0`;
   await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS terminal_published_seq BIGINT`;
+  // ctx-iqzy T2: queued_at = queue-admission time; started_at is restamped at
+  // activation and means execution start. Backfill legacy rows from the old
+  // startedAt (which WAS admission time before this change).
+  await sql`ALTER TABLE turns ADD COLUMN IF NOT EXISTS queued_at BIGINT`;
+  await sql`UPDATE turns SET queued_at = started_at WHERE queued_at IS NULL`;
+  await sql`ALTER TABLE turns ALTER COLUMN queued_at SET NOT NULL`;
   // Hard-cut the former recovery-only names to general delivery ownership.
   await sql`
     DO $$
@@ -740,8 +746,25 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       selector_hash TEXT NOT NULL,
       task_template TEXT NOT NULL,
       enabled BOOLEAN NOT NULL DEFAULT true,
-      created_at TEXT NOT NULL
+      created_at BIGINT NOT NULL
     )
+  `;
+  // ctx-iqzy T5: created_at was an ISO-8601 string in a TEXT column — the only
+  // ISO timestamp in the persisted schema. Convert in place to epoch-ms.
+  await sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'event_triggers'
+          AND column_name = 'created_at'
+          AND data_type = 'text'
+      ) THEN
+        ALTER TABLE event_triggers
+          ALTER COLUMN created_at TYPE BIGINT
+          USING (extract(epoch FROM created_at::timestamptz) * 1000)::bigint;
+      END IF;
+    END $$;
   `;
 
   // ── 10b. trigger_firings (→ event_triggers) ────────────────────────

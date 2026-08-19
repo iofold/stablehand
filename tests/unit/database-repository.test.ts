@@ -2499,7 +2499,7 @@ describe('DatabaseRepository', () => {
         selector: { b: 2, a: 1 },
         taskTemplate: 'First',
         enabled: true,
-        createdAt: new Date().toISOString(),
+        createdAt: Date.now(),
       });
 
       await expect(repo.saveTrigger({
@@ -2509,7 +2509,7 @@ describe('DatabaseRepository', () => {
         selector: { a: 1, b: 2 },
         taskTemplate: 'Second',
         enabled: true,
-        createdAt: new Date().toISOString(),
+        createdAt: Date.now(),
       })).rejects.toSatisfy((err: unknown) => isUniqueConstraintViolation(err, 'idx_event_triggers_signature'));
 
       await expect(repo.saveTrigger({
@@ -2519,7 +2519,7 @@ describe('DatabaseRepository', () => {
         selector: { a: 1, b: 2 },
         taskTemplate: 'Third',
         enabled: true,
-        createdAt: new Date().toISOString(),
+        createdAt: Date.now(),
       })).resolves.toMatchObject({
         id: 'trigger-signature-3',
       });
@@ -6794,7 +6794,7 @@ describe('DatabaseRepository', () => {
         selector: null,
         taskTemplate: 'run',
         enabled: true,
-        createdAt: new Date().toISOString(),
+        createdAt: Date.now(),
       });
       const first = await repo.recordTriggerFiring(trigger.id, 123);
       const duplicate = await repo.recordTriggerFiring(trigger.id, 123);

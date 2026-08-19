@@ -739,11 +739,11 @@ describe('database migration baseline guard', () => {
     `;
     await conn.pgClient`
       INSERT INTO turns (
-        id, agent_id, conversation_id, mode, status, started_at, completed_at, tags
+        id, agent_id, conversation_id, mode, status, queued_at, started_at, completed_at, tags
       )
       VALUES
-        ('turn-1', 'agent-1', 'conversation-1', 'interactive', 'completed', 1, 20, '{}'),
-        ('turn-open', 'agent-1', 'conversation-1', 'interactive', 'running', 2, NULL, '{}')
+        ('turn-1', 'agent-1', 'conversation-1', 'interactive', 'completed', 1, 1, 20, '{}'),
+        ('turn-open', 'agent-1', 'conversation-1', 'interactive', 'running', 2, 2, NULL, '{}')
     `;
     await conn.pgClient`
       INSERT INTO messages (

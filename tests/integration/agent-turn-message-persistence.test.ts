@@ -523,6 +523,7 @@ describe('Agent turn message persistence integration', () => {
       userMessageId: userMessage.id,
       mode: 'interactive',
       status: 'queued',
+      queuedAt: 20,
       startedAt: 20,
     });
     // Stranded-shaped queued row (no user message) still fails honestly.
@@ -585,6 +586,7 @@ describe('Agent turn message persistence integration', () => {
       userMessageId: userMessage.id,
       mode: 'interactive',
       status: 'queued',
+      queuedAt: 20,
       startedAt: 20,
     }, TEST_TURN_SECRET_CODEC.seal(turnId, {}));
 
@@ -666,6 +668,7 @@ describe('Agent turn message persistence integration', () => {
       userMessageId: userMessage.id,
       mode: 'interactive',
       status: 'queued',
+      queuedAt: Date.now() + 60_000,
       startedAt: Date.now() + 60_000,
     }, TEST_TURN_SECRET_CODEC.seal(turnId, {}));
 

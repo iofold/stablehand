@@ -17,8 +17,8 @@ export interface EventTrigger {
   taskTemplate: string;
   /** Whether this trigger is active. */
   enabled: boolean;
-  /** ISO 8601 timestamp of creation. */
-  createdAt: string;
+  /** Creation time, epoch milliseconds (ctx-iqzy T5). */
+  createdAt: number;
 }
 
 /**

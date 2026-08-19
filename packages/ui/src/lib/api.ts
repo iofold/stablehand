@@ -77,6 +77,8 @@ import {
   type CatalogTool,
   type SystemSettings,
   type EventStatsResponse,
+  TriggerListResponseSchema,
+  type Trigger,
 } from '@ctxmill/contracts';
 
 const API_BASE = '/api';
@@ -470,18 +472,11 @@ export async function deleteAgent(id: string): Promise<void> {
 
 // ── Trigger operations ──────────────────────────────────────────────
 
-export interface Trigger {
-  id: string;
-  agentId: string;
-  eventType: string;
-  selector?: Record<string, unknown>;
-  taskTemplate: string;
-  enabled: boolean;
-  createdAt?: number;
-}
+export type { Trigger };
 
 export async function fetchTriggers(agentId?: string): Promise<Trigger[]> {
-  return apiFetch<Trigger[]>(withQuery(`${API_BASE}/triggers`, { agentId }));
+  const response = await apiFetch<unknown>(withQuery(`${API_BASE}/triggers`, { agentId }));
+  return TriggerListResponseSchema.parse(response);
 }
 
 export async function createTrigger(data: {

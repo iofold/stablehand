@@ -68,6 +68,7 @@ describe('TriggersPage', () => {
       eventType: 'turn.completed',
       taskTemplate: 'summarize',
       enabled: true,
+      createdAt: 1_755_000_000_000,
     }]);
     fetchEventTypesMock.mockResolvedValue({ types: ['turn.completed'] });
     updateTriggerMock.mockResolvedValue({ id: 'trigger-1' } as never);
@@ -247,6 +248,7 @@ describe('TriggersPage', () => {
       taskTemplate: 'summarize',
       selector: { kind: 'invoice' },
       enabled: true,
+      createdAt: 1_755_000_000_000,
     }]);
 
     act(() => {

@@ -176,6 +176,8 @@ export const TurnSchema = z.strictObject({
   sandboxStatus: SandboxSessionStatusSchema.optional(),
   status: TurnStatusSchema,
   mode: z.enum(['interactive', 'background']),
+  // ctx-iqzy T2: queue-admission time; startedAt is execution start.
+  queuedAt: EpochMillisecondsSchema,
   startedAt: EpochMillisecondsSchema,
   completedAt: EpochMillisecondsSchema.optional(),
   error: z.string().optional(),

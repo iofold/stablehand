@@ -112,7 +112,15 @@ async function invokeEmit(
 
 describe('trigger update route selector contract', () => {
   it('uses explicit null to clear a selector', async () => {
-    const update = vi.fn().mockResolvedValue({ id: 'trigger-1', selector: undefined });
+    const update = vi.fn().mockResolvedValue({
+      id: 'trigger-1',
+      agentId: 'agent-1',
+      eventType: 'custom.test',
+      taskTemplate: 'do it',
+      enabled: true,
+      createdAt: 1_755_000_000_000,
+      selector: undefined,
+    });
     const handler = await registerUpdateHandler(update);
 
     const response = await invoke(handler, { selector: null });

@@ -443,6 +443,9 @@ export class AgentTurnService {
         status,
         error,
         ...(currentSandboxSessionId ? { sandboxSessionId: currentSandboxSessionId } : {}),
+        // ctx-iqzy T3: execution duration. The in-memory execute-start
+        // coincides with the persisted startedAt restamped at activation, so
+        // the live path agrees with the crash-rebuild/reconciler paths.
         durationMs: Date.now() - startedAt,
         ...(turnUsage ? { usage: turnUsage } : {}),
         ...(deliveryContext

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 
 import { builtinToolNames } from '../../tool/builtin/index.js';
 import { resolveToolLocation } from '../../tool/metadata.js';
@@ -110,11 +111,21 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
           location: resolveToolLocation(toolDef),
         };
 
-        if (toolDef.input !== undefined) {
-          if (typeof toolDef.input === 'object' && toolDef.input !== null && 'toJSON' in toolDef.input) {
-            entry.inputSchema = (toolDef.input as { toJSON(): Record<string, unknown> }).toJSON();
-          } else if (typeof toolDef.input === 'object' && toolDef.input !== null) {
-            entry.inputSchema = toolDef.input as Record<string, unknown>;
+        if (toolDef.input !== undefined && typeof toolDef.input === 'object' && toolDef.input !== null) {
+          const input = toolDef.input;
+          if ('toJSON' in input) {
+            entry.inputSchema = (input as { toJSON(): Record<string, unknown> }).toJSON();
+          } else if (typeof (input as { safeParse?: unknown }).safeParse === 'function') {
+            // A live Zod schema is a runtime validator, not a JSON schema.
+            // Convert to real JSON Schema; omit when the schema is not
+            // representable (previously the raw object's internals leaked).
+            try {
+              entry.inputSchema = z.toJSONSchema(input as z.ZodType) as Record<string, unknown>;
+            } catch {
+              // unrepresentable — omit
+            }
+          } else if (!Array.isArray(input)) {
+            entry.inputSchema = input as Record<string, unknown>;
           }
         }
 

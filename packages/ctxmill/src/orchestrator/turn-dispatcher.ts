@@ -18,7 +18,7 @@ export interface DispatchCandidate {
   turnId: string;
   agentId: string;
   conversationId: string | null;
-  startedAt: number;
+  queuedAt: number;
   sessionStatus: string | null;
 }
 
@@ -153,7 +153,7 @@ export class TurnDispatcher {
         const servedA = this.lastServedByAgent.get(a.agentId) ?? 0;
         const servedB = this.lastServedByAgent.get(b.agentId) ?? 0;
         if (servedA !== servedB) return servedA - servedB;
-        return a.startedAt - b.startedAt || a.turnId.localeCompare(b.turnId);
+        return a.queuedAt - b.queuedAt || a.turnId.localeCompare(b.turnId);
       });
 
       const now = this.now();

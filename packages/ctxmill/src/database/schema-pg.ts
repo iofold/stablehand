@@ -92,6 +92,9 @@ export const turns = pgTable('turns', {
   taskDescription: text('task_description'),
   status: text('status').$type<TurnStatus>().notNull().default('queued'),
   userMessageId: text('user_message_id'),
+  // ctx-iqzy T2: queue-admission time (insert). startedAt is restamped at
+  // activation and means execution start; until activation it equals queuedAt.
+  queuedAt: bigint('queued_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   startedAt: bigint('started_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   completedAt: bigint('completed_at', { mode: 'number' }),
   error: text('error'),
@@ -357,7 +360,7 @@ export const eventTriggers = pgTable('event_triggers', {
   selectorHash: text('selector_hash').notNull(),
   taskTemplate: text('task_template').notNull(),
   enabled: boolean('enabled').notNull().default(true),
-  createdAt: text('created_at').notNull(),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
 }, (table) => ({
   agentIdx: index('idx_event_triggers_agent').on(table.agentId),
   eventTypeIdx: index('idx_event_triggers_event_type').on(table.eventType),

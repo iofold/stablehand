@@ -132,7 +132,7 @@ export class EventTriggerManager {
    * Register a new trigger. Persists to DB.
    */
   async register(
-    input: Omit<EventTrigger, 'id' | 'createdAt'> & { id?: string; createdAt?: string },
+    input: Omit<EventTrigger, 'id' | 'createdAt'> & { id?: string; createdAt?: number },
   ): Promise<EventTrigger> {
     const existing = this.findBySignature(input.agentId, input.eventType, input.selector);
     if (existing) {
@@ -146,7 +146,7 @@ export class EventTriggerManager {
       selector: input.selector,
       taskTemplate: input.taskTemplate,
       enabled: input.enabled ?? true,
-      createdAt: input.createdAt ?? new Date().toISOString(),
+      createdAt: input.createdAt ?? Date.now(),
     };
 
     let savedTrigger: EventTrigger;

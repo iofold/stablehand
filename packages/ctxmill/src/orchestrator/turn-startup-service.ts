@@ -506,7 +506,7 @@ export class TurnStartupService {
       // ingest). Claim the delivery lease here — the fenced activation path
       // republishes deliveryContext.userMessage idempotently — exactly the
       // old boot-redispatch semantics, minus the boot barrier.
-      const preBoot = turn.startedAt < this.processStartedAtMs;
+      const preBoot = turn.queuedAt < this.processStartedAtMs;
       let deliveryContext: TurnDeliveryContext | undefined;
       let releaseLease: (() => Promise<void>) | undefined;
       let leaseSignal: AbortSignal | undefined;
@@ -596,6 +596,8 @@ export class TurnStartupService {
       conversationId: turn.conversationId ?? '',
       status: 'error',
       error: 'Queued turn expired before dispatch (queue_expired). Please retry.',
+      // ctx-iqzy T3: the turn never executed; queue residency is not duration.
+      durationMs: 0,
     });
   }
 
