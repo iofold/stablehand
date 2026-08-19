@@ -590,8 +590,8 @@ describe('listFiles', () => {
 
   it('calls correct URL with path param and returns entries', async () => {
     const entries = [
-      { name: 'readme.md', type: 'file', size: 12 },
-      { name: 'src', type: 'directory', size: 0 },
+      { name: 'readme.md', type: 'file', sizeBytes: 12 },
+      { name: 'src', type: 'directory', sizeBytes: 0 },
     ];
     mockJson.mockResolvedValue({ entries });
 
@@ -617,7 +617,7 @@ describe('listFiles', () => {
   });
 
   it('rejects malformed file entries', async () => {
-    mockJson.mockResolvedValue({ entries: [{ name: 'bad.txt', type: 'file', size: -1 }] });
+    mockJson.mockResolvedValue({ entries: [{ name: 'bad.txt', type: 'file', sizeBytes: -1 }] });
 
     await expect(listFiles('a1', '/')).rejects.toThrow();
   });
@@ -625,7 +625,7 @@ describe('listFiles', () => {
 
 describe('readFile', () => {
   it('calls with encoded path param', async () => {
-    mockJson.mockResolvedValue({ path: '/file.txt', content: '', size: 0 });
+    mockJson.mockResolvedValue({ path: '/file.txt', content: '', sizeBytes: 0 });
     await readFile('a1', '/file.txt');
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/agents/a1/files/read?path=%2Ffile.txt',
@@ -634,7 +634,7 @@ describe('readFile', () => {
   });
 
   it('calls correct URL with path param and returns file data', async () => {
-    const fileData = { path: '/data/report.csv', content: 'col1,col2\n1,2', size: 14 };
+    const fileData = { path: '/data/report.csv', content: 'col1,col2\n1,2', sizeBytes: 14 };
     mockJson.mockResolvedValue(fileData);
 
     const result = await readFile('a1', '/data/report.csv');
@@ -645,7 +645,7 @@ describe('readFile', () => {
   });
 
   it('includes conversationId when provided', async () => {
-    mockJson.mockResolvedValue({ path: '/file.txt', content: '', size: 0 });
+    mockJson.mockResolvedValue({ path: '/file.txt', content: '', sizeBytes: 0 });
     await readFile('a1', '/file.txt', 'xyz');
 
     const calledUrl = (mockFetch.mock.calls[0] as string[])[0];
@@ -668,7 +668,7 @@ describe('readFile', () => {
   });
 
   it('rejects responses missing the canonical path', async () => {
-    mockJson.mockResolvedValue({ content: 'hello', size: 5 });
+    mockJson.mockResolvedValue({ content: 'hello', sizeBytes: 5 });
 
     await expect(readFile('a1', '/file.txt')).rejects.toThrow();
   });
@@ -754,7 +754,7 @@ describe('uploadWorkspaceTarball', () => {
 
 describe('file mutations', () => {
   it('builds update and delete queries through the shared query encoder', async () => {
-    mockJson.mockResolvedValue({ path: 'notes/a file.txt', size: 7 });
+    mockJson.mockResolvedValue({ path: 'notes/a file.txt', sizeBytes: 7 });
     await updateFile('a1', 'notes/a file.txt', 'updated', 'conversation 1');
     expect(mockFetch).toHaveBeenCalledWith('/api/agents/a1/files?conversationId=conversation+1', expect.objectContaining({
       method: 'PUT',
@@ -768,21 +768,21 @@ describe('file mutations', () => {
   });
 
   it('parses canonical create and update responses', async () => {
-    mockJson.mockResolvedValueOnce({ path: 'notes/new.txt', size: 3 });
+    mockJson.mockResolvedValueOnce({ path: 'notes/new.txt', sizeBytes: 3 });
     await expect(createFile('a1', 'notes/new.txt', 'new')).resolves.toEqual({
       path: 'notes/new.txt',
-      size: 3,
+      sizeBytes: 3,
     });
 
-    mockJson.mockResolvedValueOnce({ path: 'notes/new.txt', size: 7 });
+    mockJson.mockResolvedValueOnce({ path: 'notes/new.txt', sizeBytes: 7 });
     await expect(updateFile('a1', 'notes/new.txt', 'updated')).resolves.toEqual({
       path: 'notes/new.txt',
-      size: 7,
+      sizeBytes: 7,
     });
   });
 
   it('rejects malformed write responses', async () => {
-    mockJson.mockResolvedValue({ path: 'notes/new.txt', size: -1 });
+    mockJson.mockResolvedValue({ path: 'notes/new.txt', sizeBytes: -1 });
 
     await expect(createFile('a1', 'notes/new.txt', 'new')).rejects.toThrow();
     await expect(updateFile('a1', 'notes/new.txt', 'updated')).rejects.toThrow();
