@@ -483,6 +483,10 @@ importers:
         version: 5.9.3
 
   packages/shared:
+    dependencies:
+      '@ctxmill/contracts':
+        specifier: workspace:*
+        version: link:../contracts
     devDependencies:
       typescript:
         specifier: ^5.8.0

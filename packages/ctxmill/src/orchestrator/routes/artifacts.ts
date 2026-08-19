@@ -5,6 +5,7 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
 import { ArtifactRegistrationService } from '../../artifact/registration-service.js';
 import { validateArtifactRegistrationFields } from '../../artifact/validation.js';
+import { ArtifactListResponseSchema, ArtifactSchema } from '@ctxmill/contracts';
 
 export interface ArtifactRouteOptions {
   artifactStore: ArtifactStore;
@@ -69,11 +70,10 @@ export async function artifactRoutes(
     if (turnId) {
       const artifacts = await repository.listArtifactsForTurn(turnId);
       // ctx-k6ad: a scoped key sees only its agent's (and unowned) rows.
-      return reply.send({
-        artifacts: boundAgentId
-          ? artifacts.filter((a) => visibleToBound(a.agentId, boundAgentId))
-          : artifacts,
-      });
+      const visible = boundAgentId
+        ? artifacts.filter((a) => visibleToBound(a.agentId, boundAgentId))
+        : artifacts;
+      return reply.send(ArtifactListResponseSchema.parse({ artifacts: visible, total: visible.length }));
     }
 
     // ctx-k6ad: a scoped key is pinned to its own agent; the query param is
@@ -86,7 +86,7 @@ export async function artifactRoutes(
         Number(offset) || 0,
         search,
       );
-      return reply.send(result);
+      return reply.send(ArtifactListResponseSchema.parse(result));
     }
 
     const artifacts = await repository.listArtifactsForAgent(
@@ -94,7 +94,7 @@ export async function artifactRoutes(
       Number(limit) || 100,
       Number(offset) || 0,
     );
-    return reply.send({ artifacts });
+    return reply.send(ArtifactListResponseSchema.parse({ artifacts, total: artifacts.length }));
   });
 
   app.get('/:id', { config: { capability: 'artifacts:read' } }, async (req, reply) => {
@@ -104,7 +104,8 @@ export async function artifactRoutes(
     if (!artifact || !visibleToBound(artifact.agentId, boundAgentId)) {
       return reply.status(404).send({ error: 'Artifact not found' });
     }
-    return reply.send(artifact);
+    // ctx-iqzy S10: the entity route emits exactly the contract shape.
+    return reply.send(ArtifactSchema.parse(artifact));
   });
 
   app.get('/:id/download', { config: { capability: 'artifacts:read' } }, async (req, reply) => {
@@ -330,19 +331,8 @@ export async function artifactRoutes(
       return reply.status(500).send({ error: 'Artifact metadata activation failed', artifactId });
     }
 
-    return reply.status(201).send({
-      id: artifact.id,
-      agentId: artifact.agentId,
-      name: artifact.name,
-      mimeType: artifact.mimeType,
-      sizeBytes: artifact.sizeBytes,
-      storageKey: artifact.storageKey,
-      bucket: artifact.bucket,
-      status: artifact.status,
-      kind: artifact.kind,
-      metadata: artifact.metadata,
-      sha256: artifact.sha256,
-    });
+    // ctx-iqzy S10: the 201 body is the full artifact entity, not a subset.
+    return reply.status(201).send(ArtifactSchema.parse(artifact));
   });
 
   app.delete('/:id', async (req, reply) => {
@@ -363,7 +353,7 @@ export async function artifactRoutes(
     } catch (err) {
       app.log.warn('Failed to delete S3 object %s: %s', artifact.storageKey, err);
       await repository.markArtifactDeleteFailed(id);
-      return reply.status(503).send({ error: 'Artifact object delete failed', id });
+      return reply.status(503).send({ error: 'Artifact object delete failed', artifactId: id });
     }
 
     await repository.deleteArtifact(id);

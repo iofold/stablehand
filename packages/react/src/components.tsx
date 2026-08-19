@@ -459,7 +459,7 @@ export function CtxmillHITL({
   onResolve: (action: 'approve' | 'reject' | 'submit', data?: unknown) => void | Promise<void>;
   disabled?: boolean;
 }) {
-  const reason = typeof request.args.reason === 'string' ? request.args.reason : request.toolCallName;
+  const reason = typeof request.args.reason === 'string' ? request.args.reason : request.toolName;
   return (
     <div style={{ ...styles.card, borderColor: palette.warn, margin: '0 14px 14px' }}>
       <div style={{ color: palette.warn, fontWeight: 800, marginBottom: 6 }}>Human approval required</div>

@@ -377,6 +377,9 @@ export const ToolCallStateSchema = z.strictObject({
   error: z.string().optional(),
   status: z.enum(['pending', 'running', 'complete', 'error']),
   durationMs: z.number().nonnegative().optional(),
+  // Subagent annotation (ctx-5myn), same as MessagePart tool_call entries.
+  parentToolCallId: ToolCallIdSchema.optional(),
+  agentName: z.string().optional(),
 });
 
 export const MessagePartSchema = z.discriminatedUnion('type', [
@@ -650,7 +653,8 @@ export const ArtifactListInputSchema = z.strictObject({
 
 export const ArtifactListResponseSchema = z.strictObject({
   artifacts: z.array(ArtifactSchema),
-  total: z.number().int().nonnegative().optional(),
+  // ctx-iqzy S10: always present; for filtered lists it is the filtered count.
+  total: z.number().int().nonnegative(),
 });
 
 export const ArtifactUploadUrlInputSchema = z.strictObject({

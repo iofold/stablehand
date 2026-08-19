@@ -39,45 +39,24 @@ export interface ApiTokenUsage {
 /** Sandbox session counts grouped by container lifecycle state. */
 export type ApiSandboxSessionStatusCounts = Record<SandboxSessionStatus, number>;
 
+// ctx-iqzy S18: @ctxmill/contracts is the sole declaration of these wire
+// shapes. `z.input` gives the producer-side (unbranded) view, so internal
+// serializers keep assigning plain strings.
+import type { z } from 'zod';
+import type {
+  MessagePartSchema,
+  MessageSchema,
+  ToolCallStateSchema,
+} from '@ctxmill/contracts';
+
 /** Message inside a GET /api/agents/:id/conversations/:cid/snapshot response. */
-export interface ApiMessage {
-  id: string;
-  conversationId?: string;
-  agentId?: string;
-  turnId?: string;
-  messageSeq?: number;
-  messageRevision: number;
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
-  toolCallId?: string;
-  toolCalls?: ApiToolCallState[];
-  parts?: ApiMessagePart[];
-  createdAt: number;
-}
+export type ApiMessage = z.input<typeof MessageSchema>;
 
 /** Ordered content part within a message. Preserves text ↔ tool_call interleaving. */
-export type ApiMessagePart =
-  | { type: 'text'; content: string }
-  // parentToolCallId/agentName mark a call that ran inside a subagent: the
-  // spawning Task tool call's id and the subagent's display identity
-  // (ctx-5myn). Parts stay flat; the UI computes nesting.
-  | { type: 'tool_call'; id: string; name: string; args: string; result?: string; error?: string; status: ApiToolCallState['status']; durationMs?: number; parentToolCallId?: string; agentName?: string };
+export type ApiMessagePart = z.input<typeof MessagePartSchema>;
 
-/** Tool call state tracked during streaming */
-export interface ApiToolCallState {
-  id: string;
-  name: string;
-  args: string;
-  result?: string;
-  error?: string;
-  status: 'pending' | 'running' | 'complete' | 'error';
-  /** Harness-measured execution time; absent when the harness does not report one. */
-  durationMs?: number;
-  /** Set when this call ran inside a subagent: the spawning Task call's id (ctx-5myn). */
-  parentToolCallId?: string;
-  /** Subagent display identity (e.g. claude subagent_type). */
-  agentName?: string;
-}
+/** Tool call state tracked during streaming. */
+export type ApiToolCallState = z.input<typeof ToolCallStateSchema>;
 
 /** A2UI component block rendered via the a2ui-render tool */
 export interface ApiA2UIBlock {
@@ -86,7 +65,11 @@ export interface ApiA2UIBlock {
   props: Record<string, unknown>;
 }
 
-/** HITL interrupt payload */
+/**
+ * HITL interrupt payload on the agent SSE stream (INTERRUPT_REQUEST). Not an
+ * entity mirror: the durable interrupt entity is contracts InterruptSchema
+ * (PK `id`), while this event payload keeps `interruptId` as a cross-ref.
+ */
 export interface ApiInterruptPayload {
   interruptId: string;
   turnId: string;
