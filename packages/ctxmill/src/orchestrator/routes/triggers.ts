@@ -8,10 +8,16 @@ import {
 } from '@ctxmill/contracts';
 import { TriggerConflictError, type EventTriggerManager } from '../../events/trigger-manager.js';
 import type { DatabaseRepository } from '../../database/repository.js';
+import {
+  IngestQueueFullError,
+  type CanonicalIngestAdmission,
+} from '../canonical-ingest-admission.js';
 
 export interface TriggerRouteOptions {
   triggerManager: EventTriggerManager;
   db: DatabaseRepository;
+  /** ctx-bh1u: sheds external emits with a typed 429 when the ingest lane is deep. */
+  ingestAdmission?: CanonicalIngestAdmission;
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -25,7 +31,7 @@ export async function triggerRoutes(
   app: FastifyInstance,
   opts: TriggerRouteOptions,
 ): Promise<void> {
-  const { triggerManager, db } = opts;
+  const { triggerManager, db, ingestAdmission } = opts;
 
   // POST /api/triggers — Create a new trigger
   app.post(
@@ -243,6 +249,27 @@ export async function triggerRoutes(
           error: `Forbidden: this key cannot emit event type '${validated.data.type}'`,
           required_capability: 'triggers:emit',
         });
+      }
+      // ctx-bh1u: refuse at the ingress when the canonical lane is backed up,
+      // BEFORE the emit — so a shed caller owns the retry with nothing enqueued.
+      if (ingestAdmission) {
+        try {
+          await ingestAdmission.check();
+        } catch (error) {
+          if (error instanceof IngestQueueFullError) {
+            return reply
+              .status(error.statusCode)
+              .header('Retry-After', String(error.retryAfterSec))
+              .send({
+                error: error.code,
+                message: error.message,
+                depth: error.depth,
+                limit: error.limit,
+                retryAfterSec: error.retryAfterSec,
+              });
+          }
+          throw error;
+        }
       }
       await triggerManager.emitCustomEventAsync(
         validated.data.type,

@@ -24,6 +24,7 @@ import {
   type ModelGatewayStatusConfig,
 } from './routes/model-gateway.js';
 import { triggerRoutes } from './routes/triggers.js';
+import { createCanonicalIngestAdmission } from './canonical-ingest-admission.js';
 import { scheduleRoutes } from './routes/schedules.js';
 import { sandboxRoutes } from './routes/sandbox.js';
 import type { EventTriggerManager } from '../events/trigger-manager.js';
@@ -329,7 +330,19 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     }
   }
   if (triggerManager) {
-    await app.register(triggerRoutes, { prefix: '/api/triggers', triggerManager, db });
+    // ctx-bh1u: back the external emit ingress with a depth-gauged 429 so a
+    // stalled canonical lane sheds load instead of growing without bound.
+    const canonicalLog = opts.canonicalLog;
+    const settingsService = opts.settingsService;
+    const ingestAdmission = canonicalLog && settingsService
+      ? createCanonicalIngestAdmission({
+          depth: () => canonicalLog.depth,
+          settings: async () => ({
+            maxIngestQueueDepth: (await settingsService.getAll()).maxIngestQueueDepth,
+          }),
+        })
+      : undefined;
+    await app.register(triggerRoutes, { prefix: '/api/triggers', triggerManager, db, ingestAdmission });
   }
   if (opts.scheduleService) {
     await app.register(scheduleRoutes, {

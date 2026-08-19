@@ -8,6 +8,7 @@ export const DEFAULT_MAX_GLOBAL_CONTAINERS        = 20;
 export const DEFAULT_QUEUE_TIMEOUT_MS             = 600_000;
 export const DEFAULT_MAX_QUEUED_TURNS_GLOBAL      = 1_000;
 export const DEFAULT_MAX_QUEUED_TURNS_PER_AGENT   = 100;
+export const DEFAULT_MAX_INGEST_QUEUE_DEPTH       = 10_000;
 export const DEFAULT_QUEUED_TURN_TIMEOUT_MS       = 1_800_000;
 export const DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT = 20;
 export const DEFAULT_MAX_TRIGGER_DEPTH            = 5;
@@ -26,6 +27,7 @@ export const SETTINGS_KEYS = {
   queueTimeoutMs:              'queueTimeoutMs',
   maxQueuedTurnsGlobal:        'maxQueuedTurnsGlobal',
   maxQueuedTurnsPerAgent:      'maxQueuedTurnsPerAgent',
+  maxIngestQueueDepth:         'maxIngestQueueDepth',
   queuedTurnTimeoutMs:         'queuedTurnTimeoutMs',
   maxConcurrentSessionsPerAgent: 'maxConcurrentSessionsPerAgent',
   maxTriggerDepth:             'maxTriggerDepth',
@@ -47,6 +49,7 @@ export const ENV_KEYS: Record<SettingsKey, string> = {
   queueTimeoutMs:            'CTXMILL_QUEUE_TIMEOUT_MS',
   maxQueuedTurnsGlobal:      'CTXMILL_MAX_QUEUED_TURNS_GLOBAL',
   maxQueuedTurnsPerAgent:    'CTXMILL_MAX_QUEUED_TURNS_PER_AGENT',
+  maxIngestQueueDepth:       'CTXMILL_MAX_INGEST_QUEUE_DEPTH',
   queuedTurnTimeoutMs:       'CTXMILL_QUEUED_TURN_TIMEOUT_MS',
   maxConcurrentSessionsPerAgent: 'CTXMILL_MAX_CONCURRENT_SESSIONS_PER_AGENT',
   maxTriggerDepth:           'CTXMILL_MAX_TRIGGER_DEPTH',
@@ -66,6 +69,7 @@ export interface SystemSettings {
   queueTimeoutMs:              number;
   maxQueuedTurnsGlobal:        number;
   maxQueuedTurnsPerAgent:      number;
+  maxIngestQueueDepth:         number;
   queuedTurnTimeoutMs:         number;
   maxConcurrentSessionsPerAgent: number;
   maxTriggerDepth:             number;
@@ -121,6 +125,7 @@ export class SystemSettingsService {
       queueTimeoutMs:            parseIntSetting(raw[SETTINGS_KEYS.queueTimeoutMs],            envInt('queueTimeoutMs', DEFAULT_QUEUE_TIMEOUT_MS)),
       maxQueuedTurnsGlobal:      parseIntSetting(raw[SETTINGS_KEYS.maxQueuedTurnsGlobal],      envInt('maxQueuedTurnsGlobal', DEFAULT_MAX_QUEUED_TURNS_GLOBAL)),
       maxQueuedTurnsPerAgent:    parseIntSetting(raw[SETTINGS_KEYS.maxQueuedTurnsPerAgent],    envInt('maxQueuedTurnsPerAgent', DEFAULT_MAX_QUEUED_TURNS_PER_AGENT)),
+      maxIngestQueueDepth:       parseIntSetting(raw[SETTINGS_KEYS.maxIngestQueueDepth],       envInt('maxIngestQueueDepth', DEFAULT_MAX_INGEST_QUEUE_DEPTH)),
       queuedTurnTimeoutMs:       parseIntSetting(raw[SETTINGS_KEYS.queuedTurnTimeoutMs],       envInt('queuedTurnTimeoutMs', DEFAULT_QUEUED_TURN_TIMEOUT_MS)),
       maxConcurrentSessionsPerAgent: parseIntSetting(raw[SETTINGS_KEYS.maxConcurrentSessionsPerAgent], envInt('maxConcurrentSessionsPerAgent', DEFAULT_MAX_CONCURRENT_RUNS_PER_AGENT)),
       maxTriggerDepth:           parseIntSetting(raw[SETTINGS_KEYS.maxTriggerDepth],           envInt('maxTriggerDepth', DEFAULT_MAX_TRIGGER_DEPTH)),

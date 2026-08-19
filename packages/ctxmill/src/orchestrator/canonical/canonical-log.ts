@@ -59,6 +59,17 @@ export class CanonicalLog {
   // (and interleaving the projector's per-turn text state). Chaining onto a
   // tail promise makes emission order == seq order == fan-out order.
   private ingestTail: Promise<unknown> = Promise.resolve();
+  // Depth of the ingest lane: chained-but-not-yet-settled ingests. The lane is
+  // otherwise an opaque promise chain with nothing measurable; this gauge lets
+  // the external emit ingress (ctx-bh1u) shed load with a typed 429 before the
+  // lane grows without bound. Internal producers never consult it — they must
+  // never be dropped — so the cap lives at the route, not in ingest().
+  private pendingIngests = 0;
+
+  /** Number of ingests chained but not yet settled (ctx-bh1u backpressure gauge). */
+  get depth(): number {
+    return this.pendingIngests;
+  }
 
   constructor(private readonly deps: CanonicalLogDeps) {}
 
@@ -71,9 +82,12 @@ export class CanonicalLog {
     // Chain synchronously (before any await) so the queue order matches the
     // order emit() called us. `.catch` on the tail keeps one failed ingest
     // from wedging the lane, while the returned promise still rejects.
+    this.pendingIngests += 1;
     const run = this.ingestTail.then(() => this.ingestSerial(eventName, payload, context));
     this.ingestTail = run.catch(() => undefined);
-    return run;
+    return run.finally(() => {
+      this.pendingIngests -= 1;
+    });
   }
 
   private async ingestSerial(

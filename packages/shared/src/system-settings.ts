@@ -17,6 +17,7 @@ export const SYSTEM_SETTING_BOUNDS = {
   queueTimeoutMs:                   { min: 5_000, max: 1_800_000, integer: true },
   maxQueuedTurnsGlobal:             { min: 1, max: 100_000, integer: true },
   maxQueuedTurnsPerAgent:           { min: 1, max: 10_000, integer: true },
+  maxIngestQueueDepth:              { min: 100, max: 1_000_000, integer: true },
   queuedTurnTimeoutMs:              { min: 60_000, max: 86_400_000, integer: true },
   maxConcurrentSessionsPerAgent:    { min: 1, max: 20, integer: true },
   maxTriggerDepth:                  { min: 1, max: 20, integer: true },
