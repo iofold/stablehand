@@ -30,6 +30,27 @@ Browser `EventSource` cannot set custom headers, so `GET /api/agents/:id/stream`
 
 Capability scoping is not resource or tenant isolation. Keep reverse-proxy auth, network allowlists, TLS, and rate limits in front of any shared deployment. Sandbox ConnectRPC callbacks are additionally protected by session-scoped HMAC credentials derived from `CTXMILL_CALLBACK_TOKEN_SECRET` or `CTXMILL_API_TOKEN`, but the ConnectRPC surface should still remain on private networks.
 
+### Breaking changes — 2026-08-19 contract normalization
+
+One breaking cut, no deprecated aliases (ctx-iqzy). Integrators — including Pilot — update in a single step:
+
+- `GET /health` / `GET /api/health`: `timestamp` is now an epoch-milliseconds integer (was the API's sole ISO string); `sandbox` keys are camelCase (`executionMode`, `totalCreated`, `maxGlobalContainers`).
+- `GET /api/sandbox/metrics`: camelCase keys — `executionMode`, `totalCreated`, `byHarness`, `averageLifetimeMs`, `maxGlobalContainers`.
+- `GET /api/config`: `system.uptime` → `system.uptimeMs`.
+- Artifact signed URLs: `expiresIn` → `expiresInSec` in both responses and in the `download-url` query parameter.
+- Agent `httpTools`: `timeout` → `timeoutMs` (integer milliseconds, minimum `100`); stored agent definitions were migrated in place.
+- Workspace file routes: `size` → `sizeBytes`; the read-too-large error carries `maxSizeBytes`.
+- Schedules: `nextRun` → `nextRunAt`.
+- Messages: `createdAt` is epoch-milliseconds only (the ISO union is gone).
+- Triggers: `createdAt` is served as an epoch-milliseconds integer.
+- Turns: new `queuedAt` (queue-admission time); `startedAt` now means execution start (it previously recorded admission time). `sandboxSessionId`, `completedAt`, `error`, and `taskDescription` are null-and-present. The background turn-start response no longer includes `sandboxSessionId`.
+- Interrupts: the entity primary key is `id` (was `interruptId`; event/webhook payloads keep `interruptId` as the cross-reference); `toolCallName` → `toolName`; resolve actions are `approve` | `reject` only (`submit` removed); query param `include_resolved` → `includeResolved`.
+- Webhooks: payload `toolCallName` → `toolName`; `turn.completed` `status` now uses the REST TurnStatus values verbatim (`COMPLETED` | `ERROR` | `CANCELLED` — was lowercase); new subscribable builtin events `turn.cancelled`, `artifact.deleted`, `agent.deleted`.
+- Errors: `required_capability` → `requiredCapability`; validation failures carry `issues: [{ path, message }]`; the 413 payload-too-large and invalid-custom-event bodies use the standard `{ error, code, ... }` envelope; `POST /api/catalogs/tools/test` rejects invalid bodies with the standard envelope; `POST /api/triggers/emit` can now shed load with `429 ingest_queue_full`.
+- Deletes: `DELETE /api/artifacts/:id` and `DELETE /api/triggers/:id` return `204 No Content` (previously JSON bodies).
+
+Turn and conversation lifecycle statuses were always served SCREAMING_CASE by REST; earlier revisions of this document wrongly showed lowercase values in examples. That is a documentation fix, not a wire change.
+
 ## 2. Quick Reference Table
 
 | METHOD | Path | Description |
@@ -142,30 +163,35 @@ Capability scoping is not resource or tenant isolation. Keep reverse-proxy auth,
   - `{ conversations: [...] }`
   - `{ artifacts: [...], total }`
   - `{ schedules: [...] }`
-  - `{ items: [...], total }`
+  - `{ keys: [...] }`
   - `{ events: [...], nextCursor }`
   - `{ interrupts: [...] }`
 
 ### Error format
 
-Most errors use:
+The standard envelope is:
 
 ```json
-{ "error": "message", "detail": "optional detail" }
+{ "error": "Human-readable message", "code": "machine_token" }
 ```
 
-Some endpoints also add endpoint-specific fields such as `details`, `turnId`, `sandboxSessionId`, `agentId`, `validEvents`, `activeSessions`, `size`, or `maxSize`.
+Grammar:
 
-Scoped authorization failures add `required_capability`:
+- `error` is always the human-readable sentence; `code` is the stable machine token. Simple 400/404s may carry `{ "error": ... }` alone; machine-actionable errors always include `code`.
+- Validation failures add `issues`: an array of `{ "path": "...", "message": "..." }`.
+- Throttles add `retryAfterSec`, mirroring the `Retry-After` header.
+- Endpoint-specific context keys are camelCase, for example `turnId`, `sandboxSessionId`, `agentId`, `artifactId`, `validEvents`, `activeSessions`, `sizeBytes`, `maxSizeBytes`, `detail`.
+
+Scoped authorization failures add `requiredCapability`:
 
 ```json
 {
   "error": "Forbidden: this route requires the 'events:read' capability",
-  "required_capability": "events:read"
+  "requiredCapability": "events:read"
 }
 ```
 
-`required_capability: null` means the route requires the master token.
+`requiredCapability: null` means the route requires the master token.
 
 ### Status codes
 
@@ -202,12 +228,23 @@ Useful exported types from `@ctxmill/shared`:
 - API resources: `Agent`, `Turn`, `ConversationSummary`, `Message`
 - Streaming: `AgentSessionEvent`, `AgentSessionEventType`, `MessageCommittedEvent`
 
+### Field conventions
+
+- **Identifiers:** every entity's primary key is `id`; cross-references are `<entity>Id` (`agentId`, `turnId`, `sandboxSessionId`, ...). Ids are opaque strings — never parse or construct them. API-key ids carry a `key_` prefix and their bearer tokens a `cmk_` prefix; both are still opaque.
+- **Timestamps:** integer epoch-milliseconds UTC with an `At` suffix (`createdAt`, `startedAt`, `expiresAt`). Sole exception: the `X-Webhook-Timestamp` delivery header is Unix **seconds** (signing convention); webhook payload `timestamp` fields are epoch-milliseconds like everything else.
+- **Durations:** milliseconds with an `Ms` suffix (`durationMs`, `uptimeMs`, `averageLifetimeMs`). Sanctioned seconds fields always carry a `Sec` suffix: `retryAfterSec` (mirrors `Retry-After`), `expiresInSec` (signed-URL convention), `timeoutSec`/`defaultTimeoutSec` (container limits).
+- **Sizes:** bytes with a `Bytes` suffix (`sizeBytes`, `maxSizeBytes`, `totalBytes`, `maxBytes`). `memoryMb` is mebibytes (MiB).
+- **Enums:** lifecycle machine states are SCREAMING_CASE — turns `QUEUED | RUNNING | COMPLETED | ERROR | CANCELLED`, sandbox sessions `ACTIVE | CHECKPOINTED | RESTORING | TERMINATED`, conversations `ACTIVE | CHECKPOINTED | RESTORING | COMPLETED | ERROR | CANCELLED | IDLE`. Everything else is lowercase_snake (`pending`, `resolved`, `thumbs_up`). Webhook payloads use the REST values verbatim. Accepted legacy word-form: tool-call `status` uses `complete`, not `completed`.
+- **Null vs omitted:** entity fields with no value are `null` and present; a field is omitted only when it does not apply to that projection. No sentinel values.
+- **Turn timing:** `queuedAt` is queue-admission time; `startedAt` is execution start; `durationMs` = `completedAt − startedAt`.
+- **`checkpointAt`:** on turn readback this is the sandbox-session row's `updatedAt` while the session is `CHECKPOINTED` — a proxy for checkpoint time, not an independently stamped instant.
+
 ### Validation ranges
 
 Per-agent sandbox resource limits:
 
 - `cpus`: `0.5` to `4.0`
-- `memoryMb`: integer `256` to `4096`
+- `memoryMb`: integer `256` to `4096` (MiB)
 - `pidsLimit`: integer `64` to `512`
 - `timeoutSec`: integer `60` to `3600`
 
@@ -224,23 +261,33 @@ Per-agent sandbox resource limits:
 ```json
 {
   "status": "ok",
-  "timestamp": "2026-04-03T12:00:00.000Z",
+  "timestamp": 1712140000000,
   "sandbox": {
-    "execution_mode": "sandbox",
+    "executionMode": "sandbox",
     "containers": {
       "active": 1,
       "queued": 0,
       "peak": 4,
-      "total_created": 25
+      "totalCreated": 25
     },
     "limits": {
-      "max_global_containers": 20
+      "maxGlobalContainers": 20
     }
+  },
+  "modelGateway": {
+    "enabled": true,
+    "state": "healthy",
+    "lagMs": 120,
+    "awaitingTurns": 0,
+    "lastError": null
   }
 }
 ```
 
-- **Notes:** `/api/health` returns the same payload.
+- **Notes:** `/api/health` returns the same payload. `timestamp` is epoch
+  milliseconds. The `sandbox` arm is present only when sandbox container
+  management is enabled; the `modelGateway` arm only when the model gateway
+  is configured.
 
 #### `GET /api/health`
 
@@ -259,7 +306,7 @@ Per-agent sandbox resource limits:
 {
   "system": {
     "version": "0.1.0",
-    "uptime": 123456,
+    "uptimeMs": 123456,
     "dbPath": ".ctxmill"
   },
   "agentDefaults": {
@@ -273,7 +320,7 @@ Per-agent sandbox resource limits:
 }
 ```
 
-- **Notes:** `uptime` is milliseconds since process start. `authentication.mode`
+- **Notes:** `uptimeMs` is milliseconds since process start. `authentication.mode`
   is `enforced` or `disabled`. This route is master-only, so extensions should
   probe a capability-bearing endpoint they actually use instead of treating
   config as scoped-key introspection.
@@ -289,7 +336,7 @@ Per-agent sandbox resource limits:
 ```json
 [
   {
-    "id": "agent_123",
+    "id": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
     "name": "Support Agent",
     "status": "idle",
     "harness": "langgraph",
@@ -334,7 +381,7 @@ Per-agent sandbox resource limits:
       "endpoint": "https://crm.example.com/api/customers/lookup",
       "method": "POST",
       "headers": { "X-App": "ctxmill" },
-      "timeout": 15000
+      "timeoutMs": 15000
     }
   ],
   "description": "Customer support assistant",
@@ -353,13 +400,13 @@ Per-agent sandbox resource limits:
 
 ```json
 {
-  "id": "agent_123",
+  "id": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "name": "Support Agent",
   "harness": "langgraph",
   "harnessConfig": { "model": "gpt-5.4-mini" },
   "systemPrompt": "You help customers troubleshoot CTXMill deployments.",
   "tools": ["web_search", "crm_lookup"],
-  "workspaceDir": "/data/agents/agent_123/base",
+  "workspaceDir": "/data/agents/1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e/base",
   "resourceLimits": {
     "cpus": 1,
     "memoryMb": 1024,
@@ -372,7 +419,9 @@ Per-agent sandbox resource limits:
 - **Notes:**
   - `name`, `harness`, `harnessConfig`, `systemPrompt`, and `tools` are required.
   - `model` and `modelConfig` are rejected.
-  - `httpTools` entries must include `name`, `description`, and `endpoint`.
+  - `httpTools` entries must include `name`, `description`, and `endpoint`. `timeoutMs` is integer milliseconds with a minimum of `100`.
+  - An invalid body returns `400` with `code: "invalid_agent_definition"` (or `"invalid_agent_update"` on PATCH) and `issues: [{ "path": "...", "message": "..." }]`.
+  - An invalid `harnessConfig` returns `400` with `code: "invalid_harness_config"` and `issues: [{ "path": "...", "message": "..." }]`.
   - If workspaces are enabled, CTXMill creates and seeds a base workspace automatically.
 
 #### `GET /api/agents/:id`
@@ -383,7 +432,7 @@ Per-agent sandbox resource limits:
 
 ```json
 {
-  "id": "agent_123",
+  "id": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "name": "Support Agent",
   "harness": "langgraph",
   "harnessConfig": { "model": "gpt-5.4-mini" },
@@ -430,7 +479,7 @@ Per-agent sandbox resource limits:
 
 ```json
 {
-  "id": "agent_123",
+  "id": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "description": "Updated description",
   "resourceLimits": {
     "cpus": 2,
@@ -464,7 +513,7 @@ Per-agent sandbox resource limits:
 ```json
 {
   "content": "Summarize the last 24 hours of production alerts.",
-  "conversationId": "conv_123"
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20"
 }
 ```
 
@@ -473,9 +522,9 @@ Per-agent sandbox resource limits:
 
 ```json
 {
-  "messageId": "msg_123",
-  "conversationId": "conv_123",
-  "turnId": "turn_123"
+  "messageId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04-m3",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04"
 }
 ```
 
@@ -486,14 +535,16 @@ Per-agent sandbox resource limits:
     `CUSTOM name: ctxmill.turn.pending` before the canonical `RUN_STARTED`.
 - **Queue rejections** (applies to every turn-creating route — this one,
   `POST /api/agents/:id/turns`, and trigger-driven starts):
-  - `429` with body `{ "code": "queue_full", "scope": "global" | "agent",
-    "queued": <n>, "limit": <n>, "retryAfterSec": 5 }` and a `Retry-After`
-    header when the global or per-agent queued-turn cap is reached.
-    Rejection happens **before any write**: no message and no turn row are
-    created, and the caller owns the retry — nothing is half-accepted.
-  - `503` with body `{ "code": "dispatch_stalled", "retryAfterSec": 15 }`
-    when turns are queued but the dispatcher has not completed a pass
-    recently. Accepted turns are durable and survive restarts.
+  - `429` with body `{ "error": <human message>, "code": "queue_full",
+    "scope": "global" | "agent", "agentId": <id>, "queued": <n>,
+    "limit": <n>, "retryAfterSec": 5 }` and a `Retry-After` header when the
+    global or per-agent queued-turn cap is reached. Rejection happens
+    **before any write**: no message and no turn row are created, and the
+    caller owns the retry — nothing is half-accepted.
+  - `503` with body `{ "error": <human message>, "code": "dispatch_stalled",
+    "retryAfterSec": 15 }` when turns are queued but the dispatcher has not
+    completed a pass recently. Accepted turns are durable and survive
+    restarts.
 
 #### `POST /api/agents/:id/turns`
 
@@ -511,18 +562,17 @@ Per-agent sandbox resource limits:
 ```
 
 - **Query params:** None.
-- **Response:**
+- **Response (`201`):**
 
 ```json
 {
-  "turnId": "turn_456",
-  "conversationId": "conv_456",
-  "sandboxSessionId": null
+  "turnId": "4e8a2c17-95bd-4f60-a3b9-6c1d7e0f5a28",
+  "conversationId": "f0c1b2a3-6d5e-4c4b-9a8f-7e6d5c4b3a21"
 }
 ```
 
 - **Notes:**
-  - Updates the agent status to `running` and returns before the run completes.
+  - Updates the agent status to `running` and returns before the run completes. No sandbox session exists yet at accept time, so the response carries only the turn and conversation identities; read `sandboxSessionId` back from the turn once dispatch assigns one.
   - `sandboxSecrets` is optional and scoped to the created turn. CTXMill carries the exact map on that turn's `DeliverTurn` RPC as immutable harness context. Harness adapters pass it explicitly to the relevant model or child-process environment without mutating the daemon's stable process environment.
   - To support queued restart and checkpointed HITL continuation, CTXMill retains an authenticated encrypted envelope while the turn is open and deletes it atomically when terminal finalization succeeds. Plaintext is never written to task messages, agent records, container startup configuration, events, or checkpoints.
   - Use per-agent stored secrets for model/provider credentials initialized when a persistent harness session opens. Use per-turn values for short-lived integration credentials consumed by that turn.
@@ -538,7 +588,7 @@ Per-agent sandbox resource limits:
 ```json
 {
   "cancelled": true,
-  "turnId": "turn_123"
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04"
 }
 ```
 
@@ -553,24 +603,36 @@ Per-agent sandbox resource limits:
 ```json
 {
   "turn": {
-    "id": "turn_123",
-    "agentId": "agent_123",
-    "conversationId": "conv_123",
+    "id": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+    "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+    "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+    "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f",
+    "status": "RUNNING",
     "mode": "interactive",
     "taskDescription": "Summarize alerts",
+    "queuedAt": 1712139999000,
     "startedAt": 1712140000000,
     "completedAt": null,
-    "error": null
+    "error": null,
+    "usage": null
   },
   "messages": [
     {
-      "id": "msg_1",
+      "id": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04-m0",
       "role": "user",
-      "content": "Summarize alerts"
+      "content": "Summarize alerts",
+      "messageRevision": 0,
+      "createdAt": 1712140000000
     }
   ]
 }
 ```
+
+- **Notes:** `queuedAt` is queue-admission time; `startedAt` is execution
+  start. `sandboxSessionId`, `completedAt`, `error`, and `taskDescription`
+  are null-and-present when they have no value. When present, `checkpointAt`
+  is the sandbox-session row's `updatedAt` while that session is
+  `CHECKPOINTED` (a proxy for checkpoint time).
 
 ### d. Turns and sandbox lifecycle
 
@@ -584,17 +646,19 @@ Per-agent sandbox resource limits:
 {
   "turns": [
     {
-      "id": "turn_123",
-      "agentId": "agent_123",
-      "conversationId": "conv_123",
-      "sandboxSessionId": "sbx_123",
+      "id": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+      "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+      "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+      "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f",
       "sandboxStatus": "CHECKPOINTED",
-      "status": "completed",
+      "status": "COMPLETED",
       "mode": "interactive",
       "taskDescription": "Summarize alerts",
+      "queuedAt": 1712139999000,
       "startedAt": 1712140000000,
       "completedAt": 1712140015000,
-      "error": null
+      "error": null,
+      "usage": null
     }
   ]
 }
@@ -608,7 +672,7 @@ Per-agent sandbox resource limits:
 - **Response:**
 
 ```json
-{ "sandboxSessionId": "sbx_123", "status": "CHECKPOINTED" }
+{ "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f", "status": "CHECKPOINTED" }
 ```
 
 - **Notes:**
@@ -624,13 +688,13 @@ Per-agent sandbox resource limits:
 - **Success response:**
 
 ```json
-{ "sandboxSessionId": "sbx_123", "status": "ACTIVE", "restoreAttempts": 0 }
+{ "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f", "status": "ACTIVE", "restoreAttempts": 0 }
 ```
 
 - **Async success response (`202`):**
 
 ```json
-{ "sandboxSessionId": "sbx_123", "status": "RESTORING", "restoreAttempts": 0 }
+{ "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f", "status": "RESTORING", "restoreAttempts": 0 }
 ```
 
 - **Error responses:**
@@ -646,7 +710,7 @@ Per-agent sandbox resource limits:
   "detail": "connect ECONNREFUSED",
   "status": "CHECKPOINTED",
   "restoreAttempts": 1,
-  "sandboxSessionId": "sbx_123"
+  "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f"
 }
 ```
 
@@ -668,18 +732,22 @@ Per-agent sandbox resource limits:
 ```json
 [
   {
-    "id": "conv_123",
-    "agentId": "agent_123",
-    "status": "running",
+    "id": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+    "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+    "status": "ACTIVE",
     "mode": "interactive",
     "turnCount": 2,
     "messageCount": 5,
     "taskDescription": "Summarize alerts",
     "startedAt": 1712140000000,
+    "completedAt": null,
     "updatedAt": 1712140010000,
-    "latestTurnId": "turn_123",
-    "sandboxSessionId": "sbx_123",
-    "sandboxStatus": "ACTIVE"
+    "latestTurnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+    "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f",
+    "totalTokens": 1840,
+    "knownCostUsd": null,
+    "incompleteCostTurnCount": 1,
+    "tags": {}
   }
 ]
 ```
@@ -693,14 +761,20 @@ Per-agent sandbox resource limits:
 ```json
 [
   {
-    "id": "sbx_123",
-    "conversationId": "conv_123",
-    "agentId": "agent_123",
+    "id": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f",
+    "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+    "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
     "status": "ACTIVE",
     "harnessName": "langgraph",
-    "containerName": "ctxmill-agent-123",
+    "containerName": "ctxmill-session-3f9a2c1e",
+    "containerId": "9f8e7d6c5b4a",
+    "checkpointRef": null,
     "createdAt": 1712140000000,
-    "lastActivityAt": 1712140050000
+    "updatedAt": 1712140050000,
+    "lastActivityAt": 1712140050000,
+    "restoreOwnerId": null,
+    "restoreFenceToken": 0,
+    "restoreLeaseExpiresAt": null
   }
 ]
 ```
@@ -714,17 +788,25 @@ Per-agent sandbox resource limits:
 
 - **Description:** Opens a live SSE stream for one agent.
 - **Request body:** None.
-- **Query params:** None.
+- **Query params:** `cursor` (optional zero-padded event cursor from a
+  conversation snapshot; replay starts strictly after it).
 - **Response:** `text/event-stream`.
 - **Notes:**
   - Sends an initial `CONNECTED` event immediately, carrying `latestSeq`.
   - Streams the canonical AG-UI vocabulary (ADR-015): spec frame types plus
     `CUSTOM{name:'ctxmill.*'}` for orchestrator signals, with stable
     `${turnId}-m${n}` message ids.
-  - Accepts the `Last-Event-ID` header for replay. The event id is a
-    zero-padded durable global seq (e.g. `000000000042`); replay is served
-    from the persisted event log (works past any in-memory cap and across
-    orchestrator restarts).
+  - **Identity mapping:** AG-UI spec frames identify the run with the
+    spec-owned names `runId`/`threadId`, and `runId` = `turnId`,
+    `threadId` = `conversationId`. The `CUSTOM name: ctxmill.*` events on the
+    same stream use the canonical CTXMill names `turnId`/`conversationId`
+    directly.
+  - Accepts the `Last-Event-ID` header for replay. The SSE `id:` (and the
+    snapshot `eventCursor`) is the durable global event `seq` rendered as a
+    zero-padded string (e.g. `000000000042`); the padding is load-bearing —
+    it keeps string comparison consistent with numeric order for
+    lexicographic resume. Replay is served from the persisted event log
+    (works past any in-memory cap and across orchestrator restarts).
   - Also emits `CUSTOM name: ctxmill.sandbox_session.snapshot` events for
     active sandbox sessions when the connection opens.
   - `/api/events` rows for the run stream carry the canonical frame
@@ -734,14 +816,17 @@ Per-agent sandbox resource limits:
 Example initial frames:
 
 ```text
-data: {"type":"CONNECTED","agentId":"agent_123","timestamp":1712140000000}
+data: {"type":"CONNECTED","agentId":"1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e","latestSeq":41,"timestamp":1712140000000}
 
-data: {"type":"CUSTOM","name":"ctxmill.sandbox_session.snapshot","agentId":"agent_123","conversationId":"conv_123","sandboxSessionId":"sbx_123","activeTurnId":null,"status":"ACTIVE","harnessName":"langgraph","containerName":"ctxmill-sandbox-sbx_123","timestamp":1712140001000}
+data: {"type":"CUSTOM","name":"ctxmill.sandbox_session.snapshot","agentId":"1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e","conversationId":"d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20","sandboxSessionId":"b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f","activeTurnId":null,"status":"ACTIVE","harnessName":"langgraph","containerName":"ctxmill-session-3f9a2c1e","timestamp":1712140001000}
 
 id: 000000000042
-data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversationId":"conv_123","timestamp":1712140002000}
+data: {"type":"RUN_STARTED","runId":"7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04","threadId":"d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20","timestamp":1712140002000}
 
 ```
+
+`RUN_STARTED` is a strict AG-UI frame: it carries only `runId`, `threadId`,
+and `timestamp` (with `runId` = turn id and `threadId` = conversation id).
 
 ### f. Conversations & Messages
 
@@ -754,8 +839,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 ```json
 [
   {
-    "id": "conv_123",
-    "agentId": "agent_123",
+    "id": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+    "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
     "createdAt": 1712140000000,
     "updatedAt": 1712140050000
   }
@@ -774,24 +859,28 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 {
   "conversations": [
     {
-      "id": "conv_123",
-      "agentId": "agent_123",
-      "status": "completed",
+      "id": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+      "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+      "status": "COMPLETED",
       "mode": "interactive",
       "turnCount": 2,
       "messageCount": 5,
       "taskDescription": "Summarize alerts",
       "startedAt": 1712140000000,
+      "completedAt": 1712140050000,
       "updatedAt": 1712140050000,
-      "latestTurnId": "turn_123",
+      "latestTurnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
       "sandboxSessionId": null,
-      "sandboxStatus": null
+      "totalTokens": 1840,
+      "knownCostUsd": 0.0042,
+      "incompleteCostTurnCount": 0,
+      "tags": {}
     }
   ]
 }
 ```
 
-- **Notes:** Sandbox session statuses are uppercase (`ACTIVE`, `CHECKPOINTED`, `RESTORING`, `TERMINATED`) when a response includes sandbox state. Conversation lifecycle status fields remain lower-case (`running`, `suspended`, `completed`, `error`, `idle`).
+- **Notes:** Conversation status is the SCREAMING_CASE lifecycle projection `ACTIVE | CHECKPOINTED | RESTORING | COMPLETED | ERROR | CANCELLED | IDLE` (sandbox-session statuses use `ACTIVE | CHECKPOINTED | RESTORING | TERMINATED`). `knownCostUsd` is `null` when no turn carries cost data — distinct from a real `0`.
 
 #### `GET /api/agents/:id/conversations/:convId/snapshot`
 
@@ -801,18 +890,18 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 ```json
 {
-  "conversationId": "conv_123",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "eventCursor": "000000000042",
   "messages": [
     {
-      "id": "msg_1",
+      "id": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04-m0",
       "role": "user",
       "content": "Summarize alerts",
       "messageRevision": 0,
       "createdAt": 1712140000000
     },
     {
-      "id": "msg_2",
+      "id": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04-m1",
       "role": "assistant",
       "content": "Here is the summary...",
       "messageRevision": 1,
@@ -830,7 +919,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 }
 ```
 
-- **Notes:** Returns `404` if the conversation does not belong to the agent. `eventCursor` is an opaque, zero-padded durable event sequence; clients must not derive their own boundary.
+- **Notes:** Returns `404` if the conversation does not belong to the agent. `eventCursor` is the zero-padded string form of the numeric durable event `seq` — the same form the SSE `id:` lines and `Last-Event-ID` use. Treat it as opaque and pass it back verbatim: the zero padding is load-bearing for lexicographic resume, and clients must not derive their own boundary. Tool-call `status` values in message `toolCalls` use the accepted legacy word-form `complete` (not `completed`).
 
 ### g. Human-in-the-Loop (interrupts)
 
@@ -848,10 +937,10 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 {
   "interrupts": [
     {
-      "interruptId": "int_123",
-      "agentId": "agent_123",
-      "turnId": "turn_123",
-      "sandboxSessionId": "sbx_123",
+      "id": "9d7c5b3a-1e2f-4b8c-a4d6-8f0e2c4a6b8d",
+      "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+      "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+      "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f",
       "toolCallId": "tc_1",
       "toolName": "approve_invoice",
       "args": { "invoiceId": "inv_9" },
@@ -872,19 +961,19 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Description:** Lists pending interrupts; can also include durable DB-backed pending records.
 - **Query params:**
-  - `include_resolved=true|false`
+  - `includeResolved=true|false`
 - **Response:**
 
 ```json
 {
   "interrupts": [
     {
-      "interruptId": "int_123",
-      "turnId": "turn_123",
-      "sandboxSessionId": "sbx_123",
-      "agentId": "agent_123",
+      "id": "9d7c5b3a-1e2f-4b8c-a4d6-8f0e2c4a6b8d",
+      "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+      "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f",
+      "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
       "toolCallId": "tc_1",
-      "toolCallName": "approve_invoice",
+      "toolName": "approve_invoice",
       "args": { "invoiceId": "inv_9" },
       "createdAt": 1712140000000,
       "status": "pending"
@@ -893,7 +982,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 }
 ```
 
-- **Notes:** `include_resolved=true` merges in durable pending records that are not currently in memory.
+- **Notes:** `includeResolved=true` merges in durable pending records that are not currently in memory. `status` is one of `pending`, `resolved`, `resume_failed`, `timed_out`.
 
 #### `POST /api/agents/:id/interrupt`
 
@@ -903,7 +992,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 ```json
 {
   "action": "approve",
-  "interruptId": "int_123",
+  "interruptId": "9d7c5b3a-1e2f-4b8c-a4d6-8f0e2c4a6b8d",
   "data": { "comment": "Approved by ops" }
 }
 ```
@@ -918,12 +1007,17 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Response (`202` when the sandbox session is being resumed asynchronously):**
 
 ```json
-{ "accepted": true, "resuming": true, "action": "approve" }
+{
+  "accepted": true,
+  "resuming": true,
+  "action": "approve",
+  "resumeAttemptId": "9c1d3e5f-7a2b-4c8d-9e0f-1a3b5c7d9e2f"
+}
 ```
 
 - **Notes:**
-  - Allowed actions: `approve`, `reject`, `submit`
-  - `submit` is normalized to `approve`
+  - Allowed actions: `approve`, `reject`
+  - An already-resolved interrupt returns `{ "alreadyResolved": true, "action": <recorded action or null> }`; the recorded `resolvedAction` vocabulary is `approve | reject | suspend | timeout`
   - Returns `404` when the interrupt does not belong to that agent
 
 ### h. Files & Workspace
@@ -939,8 +1033,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 ```json
 {
   "entries": [
-    { "name": "README.md", "type": "file", "size": 1240 },
-    { "name": "notes", "type": "directory", "size": 4096 }
+    { "name": "README.md", "type": "file", "sizeBytes": 1240 },
+    { "name": "notes", "type": "directory", "sizeBytes": 4096 }
   ]
 }
 ```
@@ -961,12 +1055,13 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 {
   "path": "README.md",
   "content": "# Workspace\n",
-  "size": 12
+  "sizeBytes": 12
 }
 ```
 
 - **Notes:**
-  - Max file size is `50 KB`.
+  - Max file size is `50 KB`. Larger files return `400` with
+    `{ "error": "File too large", "code": "file_too_large", "sizeBytes": <actual>, "maxSizeBytes": 51200 }`.
   - Returns `400` for directories.
 
 #### `POST /api/agents/:id/files`
@@ -985,7 +1080,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Response:**
 
 ```json
-{ "path": "notes/todo.txt", "size": 19 }
+{ "path": "notes/todo.txt", "sizeBytes": 19 }
 ```
 
 - **Notes:** Parent directories are created automatically.
@@ -1006,7 +1101,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 - **Response:**
 
 ```json
-{ "path": "notes/todo.txt", "size": 36 }
+{ "path": "notes/todo.txt", "sizeBytes": 36 }
 ```
 
 - **Notes:** Returns `404` if the file does not exist.
@@ -1028,12 +1123,15 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   - `Content-Type: application/gzip` or `application/x-gzip`
 - **Query params:**
   - `force=true` to kill active sandbox sessions first
-- **Response:**
+- **Response (`201`):**
 
 ```json
 {
-  "files": ["README.md", "src/index.ts"],
-  "totalBytes": 18234
+  "revision": 3,
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "fileCount": 12,
+  "totalBytes": 18234,
+  "appliedAt": 1712140000000
 }
 ```
 
@@ -1105,8 +1203,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 ```json
 {
-  "id": "wh_123",
-  "agentId": "agent_123",
+  "id": "5e3a1c9b-7d6f-4e2a-b8c0-4d2f6a8e0c1b",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "url": "https://example.com/ctxmill/webhook",
   "events": ["turn.started", "custom.eval.verdict"],
   "hasSecret": true,
@@ -1127,8 +1225,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 ```json
 [
   {
-    "id": "wh_123",
-    "agentId": "agent_123",
+    "id": "5e3a1c9b-7d6f-4e2a-b8c0-4d2f6a8e0c1b",
+    "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
     "url": "https://example.com/ctxmill/webhook",
     "events": ["turn.started", "turn.completed"],
     "hasSecret": true,
@@ -1174,8 +1272,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 ```json
 {
-  "conversationId": "conv_123",
-  "messageId": "msg_9",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+  "messageId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04-m1",
   "type": "thumbs_up",
   "comment": "Good answer"
 }
@@ -1186,9 +1284,9 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 ```json
 {
-  "feedbackId": "fb_123",
+  "feedbackId": "6b8d0f2a-4c6e-4a8b-9d1c-3e5a7c9e1b4d",
   "type": "thumbs_up",
-  "turnId": "turn_123"
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04"
 }
 ```
 
@@ -1268,28 +1366,29 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
   - `limit` (default `100`)
   - `offset` (default `0`)
   - `search` (global listing only)
-- **Response:**
-  - with `turnId`: `{ artifacts: [...] }`
-  - with `agentId`: `{ artifacts: [...] }`
-  - without `agentId`: `{ artifacts: [...], total }`
+- **Response:** always `{ artifacts: [...], total }`; for filtered lists,
+  `total` is the filtered count.
 
 ```json
 {
   "artifacts": [
     {
-      "id": "art_123",
-      "agentId": "agent_123",
-      "turnId": "turn_123",
+      "id": "3a1c5e7f-2b4d-4d6e-9c8b-0f1e2d3c4b5a",
+      "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+      "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+      "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
       "name": "summary.pdf",
       "mimeType": "application/pdf",
       "sizeBytes": 23456,
-      "storageKey": "artifacts/art_123/summary.pdf",
+      "storageKey": "artifacts/3a1c5e7f-2b4d-4d6e-9c8b-0f1e2d3c4b5a/summary.pdf",
       "bucket": "ctxmill-artifacts",
       "kind": "eval_report",
       "metadata": { "suite": "weekly" },
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "status": "active",
-      "createdAt": 1712140000000
+      "expiresAt": null,
+      "createdAt": 1712140000000,
+      "updatedAt": 1712140000000
     }
   ],
   "total": 1
@@ -1316,13 +1415,13 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Description:** Returns a signed download URL.
 - **Query params:**
-  - `expiresIn` seconds, capped at `86400`
+  - `expiresInSec` seconds, capped at `86400`
 - **Response:**
 
 ```json
 {
   "url": "https://storage.example.com/signed-download",
-  "expiresIn": 3600,
+  "expiresInSec": 3600,
   "name": "summary.pdf",
   "mimeType": "application/pdf",
   "sizeBytes": 23456
@@ -1338,7 +1437,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 ```json
 {
-  "agentId": "agent_123",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "name": "summary.pdf",
   "mimeType": "application/pdf",
   "sizeBytes": 23456,
@@ -1353,10 +1452,10 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 ```json
 {
-  "artifactId": "art_123",
+  "artifactId": "3a1c5e7f-2b4d-4d6e-9c8b-0f1e2d3c4b5a",
   "uploadUrl": "https://storage.example.com/signed-upload",
-  "storageKey": "artifacts/art_123/summary.pdf",
-  "expiresIn": 3600
+  "storageKey": "artifacts/3a1c5e7f-2b4d-4d6e-9c8b-0f1e2d3c4b5a/summary.pdf",
+  "expiresInSec": 3600
 }
 ```
 
@@ -1364,15 +1463,14 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 #### `DELETE /api/artifacts/:id`
 
-- **Description:** Soft-deletes artifact metadata and attempts to remove the backing object.
+- **Description:** Deletes artifact metadata and removes the backing object.
 - **Query params:** None.
-- **Response:**
-
-```json
-{ "deleted": true, "id": "art_123" }
-```
-
-- **Notes:** Returns `404` if the artifact does not exist.
+- **Response:** no body.
+- **Notes:** Returns `204` on success and `404` if the artifact does not
+  exist. If the backing object cannot be removed, returns `503` with
+  `{ "error": "Artifact object delete failed", "artifactId": <id> }` and
+  leaves the metadata row in `delete_failed`. Deletion emits the
+  `artifact.deleted` event.
 
 ### n. Events (`/api/events`)
 
@@ -1395,10 +1493,10 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
     {
       "seq": 912,
       "type": "turn.completed",
-      "agentId": "agent_123",
-      "turnId": "turn_123",
-      "conversationId": "conversation_123",
-      "payload": "{\"turnId\":\"turn_123\",\"status\":\"completed\"}",
+      "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+      "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+      "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+      "payload": "{\"turnId\":\"7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04\",\"status\":\"COMPLETED\"}",
       "createdAt": 1712140000000
     }
   ],
@@ -1424,7 +1522,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
     "tool_call.started": 60
   },
   "topAgents": [
-    { "agentId": "agent_123", "count": 40 }
+    { "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e", "count": 40 }
   ],
   "recentRate": 2.4
 }
@@ -1453,9 +1551,9 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 ```json
 {
-  "agentId": "agent_123",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "eventType": "turn.completed",
-  "selector": { "status": "completed" },
+  "selector": { "status": "COMPLETED" },
   "taskTemplate": "Review output from turn {{turnId}}",
   "enabled": true
 }
@@ -1474,17 +1572,18 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 ```json
 [
   {
-    "id": "trig_123",
-    "agentId": "agent_123",
+    "id": "2f4e6d8c-0a1b-4c3d-9e5f-7a9b1d3f5c7e",
+    "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
     "eventType": "turn.completed",
-    "selector": { "status": "completed" },
+    "selector": { "status": "COMPLETED" },
     "taskTemplate": "Review output from turn {{turnId}}",
-    "enabled": true
+    "enabled": true,
+    "createdAt": 1712140000000
   }
 ]
 ```
 
-- **Notes:** Filter server-side with `agentId` when you only need one agent's triggers.
+- **Notes:** Filter server-side with `agentId` when you only need one agent's triggers. `createdAt` is epoch milliseconds.
 
 #### `GET /api/triggers/:id`
 
@@ -1513,13 +1612,8 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 
 - **Description:** Deletes a trigger.
 - **Query params:** None.
-- **Response:**
-
-```json
-{ "ok": true }
-```
-
-- **Notes:** Returns `404` if not found.
+- **Response:** no body.
+- **Notes:** Returns `204` on success and `404` if not found.
 
 #### `POST /api/triggers/emit`
 
@@ -1529,7 +1623,7 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 ```json
 {
   "type": "custom.build.completed",
-  "agentId": "agent_123",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "payload": { "buildId": "b_9", "status": "success" }
 }
 ```
@@ -1541,14 +1635,46 @@ data: {"type":"RUN_STARTED","runId":"turn_123","threadId":"conv_123","conversati
 { "ok": true, "type": "custom.build.completed" }
 ```
 
-- **Errors:** An oversized payload returns `413` with the canonical body:
+- **Errors:**
+  - An oversized payload returns `413` with the standard envelope:
 
 ```json
 {
-  "error": "custom_event_payload_too_large",
+  "error": "Custom event payload exceeds 32768 bytes",
+  "code": "custom_event_payload_too_large",
   "maxBytes": 32768
 }
 ```
+
+  - An invalid body returns `400` with validation issues:
+
+```json
+{
+  "error": "Invalid custom event",
+  "code": "invalid_custom_event",
+  "issues": [
+    { "path": "type", "message": "Invalid custom event name" }
+  ]
+}
+```
+
+  - When the canonical ingest lane is backed up, the emit is refused at the
+    ingress with `429` and a `Retry-After` header, **before** anything is
+    enqueued — the caller owns the retry:
+
+```json
+{
+  "error": "Canonical ingest lane is full (2000/2000 pending). Retry later.",
+  "code": "ingest_queue_full",
+  "depth": 2000,
+  "limit": 2000,
+  "retryAfterSec": 5
+}
+```
+
+    This is the same envelope family as the turn-start throttles
+    (`queue_full`, `dispatch_stalled`): `error` is the human sentence,
+    `code` the machine token, and `retryAfterSec` mirrors `Retry-After`.
 
 - **Notes:** `type` must match `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`. `payload` must be a JSON object and may not exceed 32 KiB (32,768 bytes) after UTF-8 JSON serialization. `agentId` is optional for global trigger events, but must be supplied for delivery to agent-scoped webhook subscriptions. Events are durably persisted before the success response. Bundled clients can call `client.events.emitCustom(...)`.
 
@@ -1567,7 +1693,7 @@ history identical for manual and scheduled emissions.
 
 ```json
 {
-  "agentId": "agent_123",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "name": "weekly-canary",
   "cronExpression": "0 9 * * 1",
   "timezone": "America/New_York",
@@ -1581,8 +1707,8 @@ history identical for manual and scheduled emissions.
 
 ```json
 {
-  "id": "sched_123",
-  "agentId": "agent_123",
+  "id": "8a6c4e2d-3b5f-4d7a-8c9e-1f3d5b7a9c0e",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
   "name": "weekly-canary",
   "cronExpression": "0 9 * * 1",
   "timezone": "America/New_York",
@@ -1592,7 +1718,8 @@ history identical for manual and scheduled emissions.
   "createdAt": 1785081600000,
   "updatedAt": 1785081600000,
   "lastFiredAt": null,
-  "nextRun": 1785157200000
+  "missedFireCount": 0,
+  "nextRunAt": 1785157200000
 }
 ```
 
@@ -1603,11 +1730,11 @@ history identical for manual and scheduled emissions.
 
 - **Description:** Lists every persisted schedule in creation order.
 - **Response:** `{ "schedules": [...] }`.
-- **Notes:** Every item includes a server-computed `nextRun` Unix timestamp in milliseconds. It is `null` when the schedule is disabled.
+- **Notes:** Every item includes a server-computed `nextRunAt` epoch-milliseconds timestamp. It is `null` when the schedule is disabled.
 
 #### `GET /api/schedules/:id`
 
-- **Description:** Gets one schedule, including `nextRun`.
+- **Description:** Gets one schedule, including `nextRunAt`.
 - **Response:** schedule object.
 - **Notes:** Returns `404` if not found.
 
@@ -1616,7 +1743,7 @@ history identical for manual and scheduled emissions.
 - **Description:** Atomically persists a non-empty partial update, then stops/replaces the affected Croner job.
 - **Request body:** Any non-empty subset of `name`, `cronExpression`, `timezone`, `eventType`, `payload`, or `enabled`.
 - **Response:** updated schedule object.
-- **Notes:** Schedule scope is immutable: an omitted `agentId` remains global, and a supplied `agentId` cannot be reassigned. Disabling a schedule stops future fires and returns `nextRun: null`. The same validation and error statuses as create apply.
+- **Notes:** Schedule scope is immutable: an omitted `agentId` remains global, and a supplied `agentId` cannot be reassigned. Disabling a schedule stops future fires and returns `nextRunAt: null`. The same validation and error statuses as create apply.
 
 #### `DELETE /api/schedules/:id`
 
@@ -1687,6 +1814,9 @@ history identical for manual and scheduled emissions.
 - **Notes:**
   - The tool must exist and support execution.
   - Time limit is `30s`.
+  - An invalid body returns `400` with the standard envelope
+    `{ "error": <human message>, "code": "invalid_tool_test_request" }`,
+    not a success-flagged test result.
 
 ### r. Sandbox Metrics (`/api/sandbox`)
 
@@ -1698,20 +1828,20 @@ history identical for manual and scheduled emissions.
 
 ```json
 {
-  "execution_mode": "sandbox",
+  "executionMode": "sandbox",
   "containers": {
     "active": 2,
     "queued": 1,
     "peak": 5,
-    "total_created": 37,
-    "by_harness": {
+    "totalCreated": 37,
+    "byHarness": {
       "langgraph": 20,
       "claude-agents": 17
     },
-    "average_lifetime_ms": 84213
+    "averageLifetimeMs": 84213
   },
   "limits": {
-    "max_global_containers": 20
+    "maxGlobalContainers": 20
   }
 }
 ```
@@ -1721,7 +1851,7 @@ history identical for manual and scheduled emissions.
 ### s. Scoped Access Keys (`/api/keys`)
 
 All key-management routes require the master `CTXMILL_API_TOKEN`. A scoped key
-receives `403` with `required_capability: null` on these routes, even if it holds
+receives `403` with `requiredCapability: null` on these routes, even if it holds
 every grant.
 
 #### `POST /api/keys`
@@ -1743,7 +1873,7 @@ every grant.
 
 ```json
 {
-  "id": "key_123",
+  "id": "key_e5d3c1b9-a7f6-4c4e-8b2a-0d9c7e5f3a1b",
   "name": "artifact-gallery-prod",
   "capabilities": ["artifacts:read", "webhooks:manage"],
   "note": "Production artifact gallery",
@@ -1761,7 +1891,7 @@ every grant.
   and must start alphanumeric. `capabilities` contains 1–32 unique valid grants.
   `expiresAt` is `null`, omitted, or a future epoch-millisecond timestamp. `note`
   is optional and at most 1024 characters.
-- **Errors:** `400` for an invalid request and `409` for a duplicate name.
+- **Errors:** `400` with `code: "invalid_api_key_request"` and `issues: [{ "path": "...", "message": "..." }]` for an invalid request; `409` for a duplicate name.
 - **Security:** CTXMill stores only the SHA-256 token hash. Losing the returned
   token requires rotation; it cannot be fetched later.
 
@@ -1775,7 +1905,7 @@ every grant.
 {
   "keys": [
     {
-      "id": "key_123",
+      "id": "key_e5d3c1b9-a7f6-4c4e-8b2a-0d9c7e5f3a1b",
       "name": "artifact-gallery-prod",
       "capabilities": ["artifacts:read", "webhooks:manage"],
       "note": "Production artifact gallery",
@@ -1817,8 +1947,11 @@ data: <json>
 - **Initial connect event:**
 
 ```json
-{ "type": "CONNECTED", "agentId": "agent_123", "timestamp": 1712140000000 }
+{ "type": "CONNECTED", "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e", "latestSeq": 41, "timestamp": 1712140000000 }
 ```
+
+`latestSeq` is the newest durable event sequence at connect time; compare it
+with your last processed cursor to decide whether replay is needed.
 
 - **Common event types:**
   - `RUN_STARTED`
@@ -1873,15 +2006,23 @@ Notes on actual stream behavior today:
 
 ### Event examples
 
+AG-UI spec frames (`RUN_*`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `STATE_DELTA`,
+`MESSAGES_SNAPSHOT`) are strict: they identify the run only through the
+spec-owned `runId`/`threadId` pair, where `runId` = `turnId` and
+`threadId` = `conversationId`. The `CUSTOM name: ctxmill.*` events use the
+canonical `turnId`/`conversationId` names directly. Spec frames also keep the
+spec-owned field name `toolCallName`; ctxmill-owned surfaces (REST, webhooks,
+`ctxmill.*` custom events) use `toolName`.
+
 `ctxmill.turn.pending`
 
 ```json
 {
   "type": "CUSTOM",
   "name": "ctxmill.turn.pending",
-  "runId": "turn_123",
-  "conversationId": "conv_123",
-  "agentId": "agent_123",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "mode": "interactive",
   "timestamp": 1712140000000
 }
@@ -1892,12 +2033,8 @@ Notes on actual stream behavior today:
 ```json
 {
   "type": "RUN_STARTED",
-  "runId": "turn_123",
-  "threadId": "conv_123",
-  "conversationId": "conv_123",
-  "sandboxSessionId": "sbx_123",
-  "agentId": "agent_123",
-  "mode": "interactive",
+  "runId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "threadId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "timestamp": 1712140000000
 }
 ```
@@ -1907,9 +2044,9 @@ Notes on actual stream behavior today:
 ```json
 {
   "type": "TEXT_MESSAGE_CONTENT",
-  "runId": "turn_123",
-  "conversationId": "conv_123",
-  "messageId": "msg_2",
+  "runId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "threadId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+  "messageId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04-m1",
   "delta": "Here is the summary...",
   "timestamp": 1712140000100
 }
@@ -1920,10 +2057,10 @@ Notes on actual stream behavior today:
 ```json
 {
   "type": "TOOL_CALL_START",
-  "runId": "turn_123",
+  "runId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "threadId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "toolCallId": "tc_1",
   "toolCallName": "artifact_search",
-  "args": { "query": "alerts" },
   "timestamp": 1712140000200
 }
 ```
@@ -1933,9 +2070,10 @@ Notes on actual stream behavior today:
 ```json
 {
   "type": "TOOL_CALL_ARGS",
-  "runId": "turn_123",
+  "runId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "threadId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "toolCallId": "tc_1",
-  "args": "{\"query\":\"alerts\"}",
+  "delta": "{\"query\":\"alerts\"}",
   "timestamp": 1712140000201
 }
 ```
@@ -1945,9 +2083,9 @@ Notes on actual stream behavior today:
 ```json
 {
   "type": "TOOL_CALL_RESULT",
-  "runId": "turn_123",
+  "runId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "threadId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "toolCallId": "tc_1",
-  "toolCallName": "artifact_search",
   "result": "2 matching artifacts",
   "durationMs": 180,
   "timestamp": 1712140000400
@@ -1960,9 +2098,10 @@ Notes on actual stream behavior today:
 {
   "type": "CUSTOM",
   "name": "ctxmill.message.committed",
-  "runId": "turn_123",
-  "turnId": "turn_123",
-  "conversationId": "conv_123",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+  "messageId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04-m1",
   "messageSeq": 4,
   "role": "assistant",
   "content": "Here is the summary...",
@@ -1976,18 +2115,22 @@ Notes on actual stream behavior today:
 ```json
 {
   "type": "RUN_FINISHED",
-  "runId": "turn_123",
-  "conversationId": "conv_123",
+  "runId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "threadId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "status": "completed",
-  "durationMs": 600,
+  "usage": null,
   "timestamp": 1712140000600
 }
 ```
 
+`RUN_FINISHED.status` uses the AG-UI-side lowercase vocabulary
+`completed | error | cancelled`; REST and webhooks serve the SCREAMING
+TurnStatus.
+
 ### JavaScript example
 
 ```js
-const agentId = "agent_123";
+const agentId = "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e";
 const es = new EventSource(`http://localhost:3002/api/agents/${agentId}/stream`);
 
 es.onmessage = (event) => {
@@ -2004,14 +2147,14 @@ es.onmessage = (event) => {
       process.stdout.write(payload.delta || "");
       break;
     case "TOOL_CALL_START":
-      console.log("tool start", payload.toolCallName, payload.args);
+      console.log("tool start", payload.toolCallName);
       break;
     case "TOOL_CALL_RESULT":
-      console.log("tool result", payload.content);
+      console.log("tool result", payload.result);
       break;
     case "CUSTOM":
       if (payload.name === "ctxmill.interrupt.requested") {
-        console.log("approval required", payload.interruptId);
+        console.log("approval required", payload.interruptId, payload.toolName);
       }
       break;
     case "RUN_FINISHED":
@@ -2032,6 +2175,7 @@ es.onerror = (err) => {
 
 - `turn.started`
 - `turn.completed`
+- `turn.cancelled`
 - `tool_call.started`
 - `tool_call.completed`
 - `interrupt.requested`
@@ -2041,6 +2185,8 @@ es.onerror = (err) => {
 - `feedback.received`
 - `budget.threshold`
 - `artifact.created`
+- `artifact.deleted`
+- `agent.deleted`
 - any experimental extension event matching `^custom\.[a-z0-9][a-z0-9_.-]{0,126}$`
 
 ### Delivery format
@@ -2056,14 +2202,18 @@ Webhook deliveries are HTTP `POST` requests with:
 
 Body = raw JSON payload for the event.
 
+Note the unit split: the `X-Webhook-Timestamp` **header** is Unix seconds (a
+signing convention), while every `timestamp` field **inside** payloads is
+epoch milliseconds like the rest of the API.
+
 `turn.started` example payload:
 
 ```json
 {
-  "turnId": "turn_123",
-  "sandboxSessionId": "sbx_123",
-  "agentId": "agent_123",
-  "conversationId": "conv_123",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "mode": "interactive",
   "taskDescription": "Summarize alerts",
   "timestamp": 1712140000000
@@ -2074,25 +2224,43 @@ Body = raw JSON payload for the event.
 
 ```json
 {
-  "turnId": "turn_123",
-  "sandboxSessionId": "sbx_123",
-  "agentId": "agent_123",
-  "conversationId": "conv_123",
-  "status": "completed",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "sandboxSessionId": "b61b41f2-7c3d-4a5e-8f90-1a2b3c4d5e6f",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+  "status": "COMPLETED",
   "durationMs": 1500,
+  "usage": null,
   "timestamp": 1712140001500
 }
 ```
+
+`status` is the REST TurnStatus verbatim: `COMPLETED`, `ERROR`, or
+`CANCELLED` (an `error` string accompanies `ERROR`). `durationMs` is
+execution time (`completedAt − startedAt`).
+
+`turn.cancelled` example payload:
+
+```json
+{
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+  "timestamp": 1712140001200
+}
+```
+
+`conversationId` is `null` when the cancelled turn had no conversation.
 
 `tool_call.started` example payload:
 
 ```json
 {
-  "turnId": "turn_123",
-  "agentId": "agent_123",
-  "conversationId": "conv_123",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "toolCallId": "tc_1",
-  "toolCallName": "artifact_search",
+  "toolName": "artifact_search",
   "args": { "query": "alerts" },
   "timestamp": 1712140000200
 }
@@ -2102,10 +2270,10 @@ Body = raw JSON payload for the event.
 
 ```json
 {
-  "turnId": "turn_123",
-  "agentId": "agent_123",
-  "conversationId": "conv_123",
-  "messageId": "msg_123",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
+  "messageId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04-m3",
   "messageSeq": 3,
   "role": "assistant",
   "content": "The run completed successfully.",
@@ -2117,9 +2285,9 @@ Body = raw JSON payload for the event.
 
 ```json
 {
-  "artifactId": "art_123",
-  "agentId": "agent_123",
-  "turnId": "turn_123",
+  "artifactId": "3a1c5e7f-2b4d-4d6e-9c8b-0f1e2d3c4b5a",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
   "name": "summary.pdf",
   "mimeType": "application/pdf",
   "sizeBytes": 23456,
@@ -2133,14 +2301,36 @@ Body = raw JSON payload for the event.
 present, it follows the same authority rules as the artifact metadata returned
 by the REST API.
 
+`artifact.deleted` example payload:
+
+```json
+{
+  "artifactId": "3a1c5e7f-2b4d-4d6e-9c8b-0f1e2d3c4b5a",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "timestamp": 1712140001300
+}
+```
+
+Webhooks are agent-scoped, so a delivered `artifact.deleted` always carries a
+concrete `agentId`; deletions of unowned artifacts have no subscriber.
+
+`agent.deleted` example payload:
+
+```json
+{
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "timestamp": 1712140001400
+}
+```
+
 Experimental `custom.*` example payload:
 
 ```json
 {
   "type": "custom.eval.verdict",
-  "agentId": "agent_123",
-  "turnId": "turn_123",
-  "conversationId": "conv_123",
+  "agentId": "1c8e7a6b-4b0d-4f3a-9e5c-2a7d9b1f4c6e",
+  "turnId": "7b3f9d25-8c41-4c9e-b16a-3e5d8f2a9c04",
+  "conversationId": "d2aa387f-59f2-4e33-8a3c-5b1e9d4c7f20",
   "payload": {
     "verdict": "pass",
     "evidence": { "suite": "weekly" }
@@ -2182,7 +2372,7 @@ const agent = await fetch(`${base}/api/agents`, {
 const stream = new EventSource(`${base}/api/agents/${agent.id}/stream`);
 stream.onmessage = (e) => {
   const payload = JSON.parse(e.data);
-  if (payload.type === "TEXT_MESSAGE_CONTENT") process.stdout.write(payload.content || "");
+  if (payload.type === "TEXT_MESSAGE_CONTENT") process.stdout.write(payload.delta || "");
 };
 
 const send = await fetch(`${base}/api/agents/${agent.id}/message`, {
@@ -2220,7 +2410,7 @@ await fetch(`http://localhost:3002/api/agents/${agentId}/interrupt`, {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     action: "approve",
-    interruptId: interrupt.interruptId,
+    interruptId: interrupt.id,
     data: { approvedBy: "ops@example.com" }
   })
 });

@@ -118,12 +118,12 @@ When an agent calls `request-approval`, the AG-UI stream emits:
   "name": "ctxmill.interrupt.requested",
   "interruptId": "interrupt-id",
   "toolCallId": "tool-call-id",
-  "toolCallName": "request-approval",
+  "toolName": "request-approval",
   "args": { "reason": "Deploy to production?" }
 }
 ```
 
-`useCtxmillChat` exposes this as `pendingHitl`. Calling `resolveHitl('approve')`, `resolveHitl('reject')`, or `resolveHitl('submit', data)` posts to CTXMill's interrupt resolution endpoint and resumes the paused run.
+`useCtxmillChat` exposes this as `pendingHitl`. Calling `resolveHitl('approve')` or `resolveHitl('reject')` posts to CTXMill's interrupt resolution endpoint and resumes the paused run. `approve` and `reject` are the only accepted actions; the former `submit` action was removed.
 
 ## Sample App
 

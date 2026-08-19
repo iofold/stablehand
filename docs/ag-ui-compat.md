@@ -185,7 +185,7 @@ Durable HITL pauses use the same AG-UI custom-event mechanism:
   "name": "ctxmill.interrupt.requested",
   "interruptId": "interrupt-id",
   "toolCallId": "tool-call-id",
-  "toolCallName": "request-approval",
+  "toolName": "request-approval",
   "args": { "reason": "Approve the deployment?" }
 }
 ```

@@ -21,8 +21,11 @@ Replaces the entire base workspace for the specified agent.
 - **201 Created**: Workspace replaced successfully.
   ```json
   {
-    "files": 12,
-    "totalBytes": 1048576
+    "revision": 3,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "fileCount": 12,
+    "totalBytes": 1048576,
+    "appliedAt": 1712140000000
   }
   ```
 - **400 Bad Request**: Extraction failed due to validation errors or the agent has no workspace configured.

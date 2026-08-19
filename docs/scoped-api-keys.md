@@ -143,8 +143,8 @@ introspection endpoint.
 Authorization failures are designed for startup diagnostics:
 
 - `401` means the token is missing, unknown, expired, or revoked.
-- `403` with `required_capability: "events:read"` names a missing grant.
-- `403` with `required_capability: null` means the route is master-only.
+- `403` with `requiredCapability: "events:read"` names a missing grant.
+- `403` with `requiredCapability: null` means the route is master-only.
 
 `CtxmillApiError.requiredCapability` exposes the same value to client users.
 Do not fall back to the master token when a capability is missing; ask the
@@ -186,9 +186,9 @@ For each extension key, verify all of the following:
    capabilities, expiration, and `Active` status.
 2. One representative request for every requested capability succeeds.
 3. A request requiring an omitted capability returns `403` and the expected
-   `required_capability`.
+   `requiredCapability`.
 4. A master-only request such as `GET /api/config` returns `403` with
-   `required_capability: null`.
+   `requiredCapability: null`.
 5. If event emission is prefix-limited, an in-prefix event persists with
    `keyId` provenance and an out-of-prefix event has no side effect.
 6. After revocation, normal requests return `401` and open streams close within
