@@ -84,6 +84,10 @@ export const ApiKeyCreateInputSchema = z.strictObject({
   capabilities: z.array(CapabilitySchema).min(1).max(32),
   note: z.string().max(1024).optional(),
   expiresAt: z.number().int().positive().nullable().optional(),
+  // ctx-k6ad: bind the key to one agent. When set, the key can only read and
+  // write that agent's artifacts (no-oracle 404 on cross-agent). NULL/omitted
+  // = operator key with all-agents reach (unchanged legacy behaviour).
+  agentId: z.string().min(1).nullable().optional(),
 }).superRefine((value, ctx) => {
   const duplicate = value.capabilities.find(
     (capability, index) => value.capabilities.indexOf(capability) !== index,
@@ -115,6 +119,8 @@ export const ApiKeySchema = z.strictObject({
   name: z.string(),
   capabilities: z.array(z.string()),
   note: z.string().nullable(),
+  /** ctx-k6ad: bound agent, or null for an operator/all-agents key. */
+  agentId: z.string().nullable(),
   status: ApiKeyStatusSchema,
   createdAt: z.number().int(),
   createdBy: z.string().nullable(),

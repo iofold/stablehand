@@ -613,6 +613,8 @@ export const apiKeys = pgTable('api_keys', {
   tokenHash: text('token_hash').notNull().unique(),
   capabilities: text('capabilities').array().notNull().$type<string[]>(),
   note: text('note'),
+  // ctx-k6ad: NULL = operator/all-agents key; set = scoped to one agent.
+  agentId: text('agent_id'),
   createdAt: bigint('created_at', { mode: 'number' }).notNull().$defaultFn(() => Date.now()),
   createdBy: text('created_by'),
   expiresAt: bigint('expires_at', { mode: 'number' }),

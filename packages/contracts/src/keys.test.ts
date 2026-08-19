@@ -115,6 +115,7 @@ describe('api key response schemas', () => {
     name: 'ext-evals',
     capabilities: ['events:read'],
     note: null,
+    agentId: null,
     status: 'active',
     createdAt: 1,
     createdBy: 'master',

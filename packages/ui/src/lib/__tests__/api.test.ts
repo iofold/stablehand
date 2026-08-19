@@ -144,6 +144,7 @@ describe('access key contracts', () => {
     name: 'artifact-gallery',
     capabilities: ['artifacts:read'],
     note: null,
+    agentId: null,
     status: 'active',
     createdAt: 1,
     createdBy: 'master',

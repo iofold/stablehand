@@ -28,9 +28,19 @@ export async function artifactRoutes(
   const registrationService = opts.registrationService
     ?? new ArtifactRegistrationService({ repository, eventBus });
 
-  const resolveArtifactForRead = async (id: string) => {
+  // ctx-k6ad: mirror the gRPC no-oracle rule (orchestrator-service.ts:701).
+  // A key scoped to an agent may only reach that agent's artifacts; unowned
+  // rows (agentId null) stay resolvable; a cross-agent hit resolves to
+  // undefined so callers report 404 rather than leaking existence.
+  const visibleToBound = (
+    artifactAgentId: string | null | undefined,
+    boundAgentId: string | null,
+  ): boolean => !boundAgentId || !artifactAgentId || artifactAgentId === boundAgentId;
+
+  const resolveArtifactForRead = async (id: string, boundAgentId: string | null) => {
     const artifact = await repository.getArtifact(id);
     if (!artifact) return undefined;
+    if (!visibleToBound(artifact.agentId, boundAgentId)) return undefined;
     if (artifact.status !== 'pending_upload') {
       return artifact;
     }
@@ -54,13 +64,23 @@ export async function artifactRoutes(
       offset?: string;
       search?: string;
     };
+    const boundAgentId = req.apiPrincipal?.agentId ?? null;
 
     if (turnId) {
       const artifacts = await repository.listArtifactsForTurn(turnId);
-      return reply.send({ artifacts });
+      // ctx-k6ad: a scoped key sees only its agent's (and unowned) rows.
+      return reply.send({
+        artifacts: boundAgentId
+          ? artifacts.filter((a) => visibleToBound(a.agentId, boundAgentId))
+          : artifacts,
+      });
     }
 
-    if (!agentId) {
+    // ctx-k6ad: a scoped key is pinned to its own agent; the query param is
+    // ignored so it can neither enumerate all agents nor target another.
+    const effectiveAgentId = boundAgentId ?? agentId;
+
+    if (!effectiveAgentId) {
       const result = await repository.listAllArtifacts(
         Number(limit) || 100,
         Number(offset) || 0,
@@ -70,7 +90,7 @@ export async function artifactRoutes(
     }
 
     const artifacts = await repository.listArtifactsForAgent(
-      agentId,
+      effectiveAgentId,
       Number(limit) || 100,
       Number(offset) || 0,
     );
@@ -79,8 +99,9 @@ export async function artifactRoutes(
 
   app.get('/:id', { config: { capability: 'artifacts:read' } }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const boundAgentId = req.apiPrincipal?.agentId ?? null;
     const artifact = await repository.getArtifact(id);
-    if (!artifact) {
+    if (!artifact || !visibleToBound(artifact.agentId, boundAgentId)) {
       return reply.status(404).send({ error: 'Artifact not found' });
     }
     return reply.send(artifact);
@@ -89,7 +110,7 @@ export async function artifactRoutes(
   app.get('/:id/download', { config: { capability: 'artifacts:read' } }, async (req, reply) => {
     const { id } = req.params as { id: string };
 
-    const artifact = await resolveArtifactForRead(id);
+    const artifact = await resolveArtifactForRead(id, req.apiPrincipal?.agentId ?? null);
     if (!artifact) {
       return reply.status(404).send({ error: 'Artifact not found' });
     }
@@ -114,7 +135,7 @@ export async function artifactRoutes(
     const { id } = req.params as { id: string };
     const { expiresIn } = req.query as { expiresIn?: string };
 
-    const artifact = await resolveArtifactForRead(id);
+    const artifact = await resolveArtifactForRead(id, req.apiPrincipal?.agentId ?? null);
     if (!artifact) {
       return reply.status(404).send({ error: 'Artifact not found' });
     }
@@ -146,7 +167,12 @@ export async function artifactRoutes(
       sha256?: unknown;
     };
 
-    if (!body?.agentId || !body.name || !body.mimeType) {
+    // ctx-k6ad: a scoped key can only create artifacts for its own agent —
+    // the caller-supplied agentId is overridden, never trusted.
+    const boundAgentId = req.apiPrincipal?.agentId ?? null;
+    const uploadAgentId = boundAgentId ?? body?.agentId;
+
+    if (!uploadAgentId || !body.name || !body.mimeType) {
       return reply.status(400).send({ error: 'agentId, name, and mimeType are required' });
     }
     const registrationFields = validateArtifactRegistrationFields(body);
@@ -165,7 +191,7 @@ export async function artifactRoutes(
     // Pre-register the artifact in DB so callers can reference it by ID immediately
     await registrationService.register({
       id: artifactId,
-      agentId: body.agentId,
+      agentId: uploadAgentId,
       name: body.name,
       mimeType: body.mimeType,
       sizeBytes: body.sizeBytes ?? 0,
@@ -213,7 +239,10 @@ export async function artifactRoutes(
       return reply.status(400).send({ error: 'No file provided' });
     }
 
-    const agentId = fields.agentId;
+    // ctx-k6ad: a scoped key can only create artifacts for its own agent —
+    // the multipart agentId field is overridden, never trusted.
+    const boundAgentId = req.apiPrincipal?.agentId ?? null;
+    const agentId = boundAgentId ?? fields.agentId;
     const nameOverride = fields.name;
 
     const name = nameOverride || filename;
@@ -319,7 +348,7 @@ export async function artifactRoutes(
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
 
-    const artifact = await resolveArtifactForRead(id);
+    const artifact = await resolveArtifactForRead(id, req.apiPrincipal?.agentId ?? null);
     if (!artifact) {
       return reply.status(404).send({ error: 'Artifact not found' });
     }

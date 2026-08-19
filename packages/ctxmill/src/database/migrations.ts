@@ -1011,6 +1011,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       token_hash TEXT NOT NULL UNIQUE,
       capabilities TEXT[] NOT NULL,
       note TEXT,
+      agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
       created_at BIGINT NOT NULL,
       created_by TEXT,
       expires_at BIGINT,
@@ -1018,6 +1019,8 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       revoked_at BIGINT
     )
   `;
+  // ctx-k6ad: bind a key to one agent (NULL = operator/all-agents key).
+  await sql`ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE`;
 
   // ── 18b. budget_policies (tag-based budget policies) ───────────────
   await sql`

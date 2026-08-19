@@ -16,6 +16,8 @@ export interface ApiKeyPrincipal {
   keyId: string;
   name: string;
   capabilities: readonly string[];
+  /** ctx-k6ad: agent this key is scoped to, or null for an all-agents key. */
+  agentId: string | null;
 }
 
 /** Storage seam for scoped keys; implemented by the database repository. */

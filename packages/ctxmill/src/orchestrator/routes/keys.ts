@@ -31,6 +31,7 @@ function toPublicApiKey(row: ApiKeyRow, now = Date.now()): ApiKey {
     name: row.name,
     capabilities: row.capabilities,
     note: row.note ?? null,
+    agentId: row.agentId ?? null,
     status: apiKeyStatus(row, now),
     createdAt: row.createdAt,
     createdBy: row.createdBy ?? null,
@@ -42,6 +43,10 @@ function toPublicApiKey(row: ApiKeyRow, now = Date.now()): ApiKey {
 
 function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
+}
+
+function isForeignKeyViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23503';
 }
 
 function invalidBody(reply: FastifyReply, issues: { path: PropertyKey[]; message: string }[]): FastifyReply {
@@ -70,12 +75,16 @@ export async function apiKeyRoutes(app: FastifyInstance, opts: ApiKeyRouteOption
         note: parsed.data.note ?? null,
         createdBy: 'master',
         expiresAt: parsed.data.expiresAt ?? null,
+        agentId: parsed.data.agentId ?? null,
       });
       const body: ApiKeyCreated = { ...toPublicApiKey(row), token };
       return reply.header('Cache-Control', 'no-store').status(201).send(body);
     } catch (err) {
       if (isUniqueViolation(err)) {
         return reply.status(409).send({ error: `An api key named '${parsed.data.name}' already exists` });
+      }
+      if (isForeignKeyViolation(err)) {
+        return reply.status(400).send({ error: `Unknown agent '${parsed.data.agentId}' for scoped key` });
       }
       throw err;
     }

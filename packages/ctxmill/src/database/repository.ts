@@ -5741,6 +5741,7 @@ export class DatabaseRepository {
     note?: string | null;
     createdBy?: string | null;
     expiresAt?: number | null;
+    agentId?: string | null;
   }): Promise<ApiKeyRow> {
     return this.insertOne(
       this.db.insert(this.schema.apiKeys).values(data).returning(),
