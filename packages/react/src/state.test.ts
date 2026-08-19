@@ -87,7 +87,7 @@ describe('@ctxmill/react chat reducer', () => {
         conversationId: 'conversation-1',
         interruptId: 'interrupt-1',
         toolCallId: 'tool-1',
-        toolCallName: 'request-approval',
+        toolName: 'request-approval',
         args: { reason: 'Ship it' },
         timestamp: 5,
       },
@@ -109,7 +109,7 @@ describe('@ctxmill/react chat reducer', () => {
       conversationId: 'conversation-1',
       agentId: 'agent-1',
       toolCallId: 'tool-1',
-      toolCallName: 'request-approval',
+      toolName: 'request-approval',
       args: { reason: 'Ship it' },
     });
   });
@@ -227,7 +227,7 @@ describe('@ctxmill/react chat reducer', () => {
       conversationId: 'conversation-1',
       agentId: 'agent-1',
       toolCallId: 'tool-1',
-      toolCallName: 'request-approval',
+      toolName: 'request-approval',
       args: {},
     };
     const state = {
