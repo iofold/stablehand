@@ -39,14 +39,14 @@ COPY packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
 COPY packages/proto/gen/ packages/proto/gen/
 COPY packages/ui/src/ packages/ui/src/
 
-# Build shared first (composite project, used by both orchestrator and UI)
+# Build strict runtime contracts first (shared re-exports contract types)
+RUN pnpm --filter @ctxmill/contracts build
+
+# Build shared (composite project, used by both orchestrator and UI)
 RUN cd packages/shared && npx tsc --build
 
 # Build proto (compile .ts to .js so Node 22 strip-only mode can handle enums)
 RUN cd packages/proto && npx tsc -p tsconfig.build.json
-
-# Build strict runtime contracts consumed by the sandbox daemon
-RUN pnpm --filter @ctxmill/contracts build
 
 # Build canonical manifest parsing consumed by the orchestrator
 RUN pnpm --filter @ctxmill/manifest build

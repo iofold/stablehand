@@ -42,9 +42,9 @@ COPY packages/ctxmill/src/ packages/ctxmill/src/
 COPY packages/sandbox-daemon/src/ packages/sandbox-daemon/src/
 COPY packages/proto/ packages/proto/
 
+RUN pnpm --filter @ctxmill/contracts build
 RUN cd packages/shared && npx tsc --build
 RUN cd packages/proto && npx tsc -p tsconfig.build.json
-RUN pnpm --filter @ctxmill/contracts build
 RUN pnpm --filter @ctxmill/manifest build
 RUN pnpm --filter @ctxmill/sandbox-daemon build
 RUN pnpm --filter ctxmill build
