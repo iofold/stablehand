@@ -7020,9 +7020,16 @@ export class DatabaseRepository {
       input.leaseDurationMs,
       'sandboxSessionRestore.claim.leaseDurationMs',
     );
-    const maxAttempts = validatePositiveSafeInteger(
-      input.maxAttempts,
-      'sandboxSessionRestore.claim.maxAttempts',
+    // Clamp to int4 max: restore_attempts is INTEGER, and a larger bound in
+    // the prepared-statement parameter overflows the inferred column type
+    // (found live by the ctx-cn9c unbounded-kill claim). Semantically identical
+    // — restore_attempts is always tiny.
+    const maxAttempts = Math.min(
+      validatePositiveSafeInteger(
+        input.maxAttempts,
+        'sandboxSessionRestore.claim.maxAttempts',
+      ),
+      2_147_483_647,
     );
     try {
       const [claimed] = await this.db

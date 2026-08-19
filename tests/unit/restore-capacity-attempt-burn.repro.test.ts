@@ -232,4 +232,22 @@ describe('ctx-2mm8: capacity errors burn the restore budget', () => {
       maxAttempts: MAX_RESTORE_ATTEMPTS,
     })).toBeDefined();
   });
+
+  it('accepts an unbounded maxAttempts claim against the real int4 column (ctx-cn9c kill path)', async () => {
+    // The checkpointed-kill path claims with Number.MAX_SAFE_INTEGER so a kill
+    // is never gated by restore exhaustion. Found live: the raw value overflows
+    // the prepared-statement parameter type inferred from the INTEGER column;
+    // the repository clamps to int4 max. This exercises the real SQL.
+    const session = await seedCheckpointedSession('unbounded-claim');
+    await testDb.conn.pgClient`
+      UPDATE sandbox_sessions SET restore_attempts = ${MAX_RESTORE_ATTEMPTS}
+      WHERE id = ${session.id}
+    `;
+    expect(await repo.claimSandboxSessionRestore({
+      sandboxSessionId: session.id,
+      ownerId: 'kill-probe',
+      leaseDurationMs: 60_000,
+      maxAttempts: Number.MAX_SAFE_INTEGER,
+    })).toBeDefined();
+  });
 });
