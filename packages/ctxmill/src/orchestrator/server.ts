@@ -206,7 +206,7 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
   const healthHandler = async () => {
     const response: Record<string, unknown> = {
       status: 'ok',
-      timestamp: new Date().toISOString(),
+      timestamp: Date.now(),
     };
 
     // Include sandbox container metrics
@@ -262,11 +262,11 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
 
   // ── Config endpoint ──────────────────────────────────────
   app.get('/api/config', async () => {
-    const startTime = process.uptime() * 1000;
+    const uptimeMs = Math.round(process.uptime() * 1000);
     return {
       system: {
         version: process.env.npm_package_version ?? '0.1.0',
-        uptime: startTime,
+        uptimeMs,
         dbPath: opts.dataDir ?? '.ctxmill',
       },
       agentDefaults: {

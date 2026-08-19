@@ -48,7 +48,7 @@ export const ScheduleSchema = z.strictObject({
   updatedAt: EpochMillisSchema,
   lastFiredAt: EpochMillisSchema.nullable(),
   missedFireCount: z.number().int().nonnegative(),
-  nextRun: z.number().int().nonnegative().nullable(),
+  nextRunAt: EpochMillisSchema.nullable(),
 });
 
 export const ScheduleListResponseSchema = z.strictObject({

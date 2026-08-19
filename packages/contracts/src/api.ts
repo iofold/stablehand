@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { EpochMillisSchema as EpochMillisecondsSchema } from './time.js';
+import { DurationMsSchema, EpochMillisSchema as EpochMillisecondsSchema } from './time.js';
 
 import {
   AgentIdSchema,
@@ -406,7 +406,7 @@ export const MessageSchema = z.strictObject({
   toolCallId: ToolCallIdSchema.nullable().optional(),
   toolCalls: z.array(ToolCallStateSchema).nullable().optional(),
   parts: z.array(MessagePartSchema).nullable().optional(),
-  createdAt: z.union([z.string(), EpochMillisecondsSchema]),
+  createdAt: EpochMillisecondsSchema,
 });
 
 export const MessageListResponseSchema = z.array(MessageSchema);
@@ -658,12 +658,12 @@ export const ArtifactUploadUrlResponseSchema = z.strictObject({
   artifactId: ArtifactIdSchema,
   uploadUrl: z.string().url(),
   storageKey: z.string().trim().min(1),
-  expiresIn: z.number().int().positive(),
+  expiresInSec: z.number().int().positive(),
 });
 
 export const ArtifactDownloadUrlResponseSchema = z.strictObject({
   url: z.string().url(),
-  expiresIn: z.number().int().positive(),
+  expiresInSec: z.number().int().positive(),
   name: z.string(),
   mimeType: z.string(),
   sizeBytes: z.number().int().nonnegative(),
@@ -756,7 +756,7 @@ export const WebhookListResponseSchema = z.array(WebhookSchema);
 
 export const HealthResponseSchema = z.strictObject({
   status: z.literal('ok'),
-  timestamp: z.string(),
+  timestamp: EpochMillisecondsSchema,
   sandbox: z.strictObject({
     execution_mode: z.literal('sandbox'),
     containers: z.strictObject({
@@ -782,7 +782,7 @@ export const HealthResponseSchema = z.strictObject({
 export const ConfigResponseSchema = z.strictObject({
   system: z.strictObject({
     version: z.string(),
-    uptime: z.number().nonnegative(),
+    uptimeMs: DurationMsSchema,
     dbPath: z.string(),
   }),
   agentDefaults: z.strictObject({

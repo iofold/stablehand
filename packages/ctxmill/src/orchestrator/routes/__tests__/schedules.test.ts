@@ -21,7 +21,7 @@ const stored = {
   updatedAt: 1,
   lastFiredAt: null,
   missedFireCount: 0,
-  nextRun: 2,
+  nextRunAt: 2,
 };
 
 async function createApp(overrides: Record<string, unknown> = {}) {
@@ -45,7 +45,7 @@ describe('schedule routes', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('returns canonical list and item responses with nextRun', async () => {
+  it('returns canonical list and item responses with nextRunAt', async () => {
     const { app } = await createApp();
     apps.push(app);
 
@@ -53,7 +53,7 @@ describe('schedule routes', () => {
     const one = await app.inject({ method: 'GET', url: '/api/schedules/schedule-1' });
 
     expect(ScheduleListResponseSchema.parse(list.json()).schedules).toHaveLength(1);
-    expect(ScheduleSchema.parse(one.json()).nextRun).toBe(2);
+    expect(ScheduleSchema.parse(one.json()).nextRunAt).toBe(2);
   });
 
   it('validates Croner grammar and IANA timezones before persistence', async () => {

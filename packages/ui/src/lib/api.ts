@@ -637,7 +637,7 @@ export async function deleteArtifact(id: string): Promise<void> {
   await apiFetch(`${API_BASE}/artifacts/${id}`, { method: 'DELETE' });
 }
 
-export async function requestArtifactUploadUrl(agentId: string, name: string, mimeType: string, sizeBytes: number): Promise<{ artifactId: string; uploadUrl: string; storageKey: string; expiresIn: number }> {
+export async function requestArtifactUploadUrl(agentId: string, name: string, mimeType: string, sizeBytes: number): Promise<{ artifactId: string; uploadUrl: string; storageKey: string; expiresInSec: number }> {
   return apiMutate(`${API_BASE}/artifacts/upload-url`, 'POST', {
     agentId,
     name,

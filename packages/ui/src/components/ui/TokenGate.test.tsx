@@ -17,7 +17,7 @@ describe('TokenGate', () => {
     window.localStorage.clear();
     useApiAuthStore.setState({ token: '', authRequired: false });
     mockJson.mockResolvedValue({
-      system: { version: 'test', uptime: 1, dbPath: '.ctxmill' },
+      system: { version: 'test', uptimeMs: 1, dbPath: '.ctxmill' },
       agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
       authentication: { mode: 'enforced' },
     });

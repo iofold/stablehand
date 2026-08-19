@@ -1619,7 +1619,7 @@ function formatSchedules(data: unknown): string {
     timezone: getString(schedule, 'timezone'),
     event: getString(schedule, 'eventType'),
     enabled: getString(schedule, 'enabled'),
-    nextRun: getString(schedule, 'nextRun'),
+    nextRunAt: formatTime(getNumber(schedule, 'nextRunAt')),
   }));
   return table(rows, [
     ['id', 'ID', 12],
@@ -1629,7 +1629,7 @@ function formatSchedules(data: unknown): string {
     ['timezone', 'TIMEZONE', 24],
     ['event', 'EVENT', 36],
     ['enabled', 'ENABLED', 8],
-    ['nextRun', 'NEXT RUN', 16],
+    ['nextRunAt', 'NEXT RUN', 24],
   ]);
 }
 

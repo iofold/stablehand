@@ -253,7 +253,7 @@ export function SettingsPage() {
                 <ConfigRow label="Version" value={config?.system?.version} />
                 <ConfigRow
                   label="Uptime"
-                  value={config?.system?.uptime != null ? formatUptime(config.system.uptime) : undefined}
+                  value={config?.system?.uptimeMs != null ? formatUptime(config.system.uptimeMs) : undefined}
                 />
                 <ConfigRow label="Data Directory" value={config?.system?.dbPath} mono />
               </div>

@@ -38,7 +38,7 @@ describe('SettingsPage setting limits', () => {
     root = createRoot(container);
 
     fetchConfigMock.mockResolvedValue({
-      system: { version: 'test', uptime: 1_000, dbPath: '/tmp/test.db' },
+      system: { version: 'test', uptimeMs: 1_000, dbPath: '/tmp/test.db' },
       agentDefaults: { harness: 'test', temperature: 0, maxTokens: 100 },
       authentication: { mode: 'enforced' },
     });

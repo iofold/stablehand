@@ -6,14 +6,17 @@ export type ToolCallState = ApiToolCallState;
 export type MessagePart = ApiMessagePart;
 export type Message = ApiMessage;
 
-function normalizeCreatedAt(value: unknown): string {
+// ctx-iqzy T1: the wire is epoch-ms only; tolerate a legacy ISO string by
+// converting rather than passing it through.
+function normalizeCreatedAt(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return new Date(value).toISOString();
-  }
-  if (typeof value === 'string' && value.length > 0) {
     return value;
   }
-  return new Date().toISOString();
+  if (typeof value === 'string' && value.length > 0) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
 }
 
 function stringifyToolArgs(value: unknown): string {
@@ -374,7 +377,7 @@ function normalizeAuthoritativeMessageUpdate(
         : existing?.toolCallId
           ? { toolCallId: existing.toolCallId }
           : {}),
-      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      createdAt: existing?.createdAt ?? Date.now(),
     },
     toolCallIds,
   };
@@ -484,7 +487,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       role: 'user',
       content,
       parts: [{ type: 'text', content }],
-      createdAt: new Date().toISOString(),
+      createdAt: Date.now(),
     };
     set((state) => ({
       messages: [...state.messages, msg],
@@ -521,7 +524,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
       role: 'system',
       content,
       parts: [{ type: 'text', content }],
-      createdAt: new Date().toISOString(),
+      createdAt: Date.now(),
     };
     set((prev) => ({ messages: [...prev.messages, msg] }));
   },
@@ -853,7 +856,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
               role: 'system',
               content: label,
               parts: [{ type: 'text', content: label }],
-              createdAt: new Date().toISOString(),
+              createdAt: Date.now(),
             };
             set((prev) => ({ messages: [...prev.messages, msg] }));
           }
@@ -1024,7 +1027,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           role: 'system',
           content: `Error: ${errorMsg}`,
           parts: [{ type: 'text', content: `Error: ${errorMsg}` }],
-          createdAt: new Date().toISOString(),
+          createdAt: Date.now(),
         };
         set((prev) => ({
           messages: [...prev.messages, msg],

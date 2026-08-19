@@ -190,7 +190,7 @@ describe('access key contracts', () => {
 
   it('requires the authentication mode in config responses', async () => {
     const config = {
-      system: { version: 'test', uptime: 1, dbPath: '.ctxmill' },
+      system: { version: 'test', uptimeMs: 1, dbPath: '.ctxmill' },
       agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
       authentication: { mode: 'enforced' },
     };

@@ -20,7 +20,7 @@ const schedule = {
   updatedAt: 2,
   lastFiredAt: null,
   missedFireCount: 0,
-  nextRun: 3,
+  nextRunAt: 3,
 };
 
 describe('schedule contracts', () => {

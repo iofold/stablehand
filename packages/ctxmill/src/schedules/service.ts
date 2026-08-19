@@ -401,22 +401,22 @@ export class ScheduleService {
   }
 
   private project(row: ScheduleRow): Schedule {
-    let nextRun: number | null = null;
+    let nextRunAt: number | null = null;
     if (row.enabled) {
       const active = this.jobs.get(row.id);
       if (active) {
-        nextRun = active.nextRun()?.getTime() ?? null;
+        nextRunAt = active.nextRun()?.getTime() ?? null;
       } else {
         let probe: Cron | undefined;
         try {
           probe = new Cron(row.cronExpression, { paused: true, timezone: row.timezone });
-          nextRun = probe.nextRun()?.getTime() ?? null;
+          nextRunAt = probe.nextRun()?.getTime() ?? null;
         } finally {
           probe?.stop();
         }
       }
     }
-    return ScheduleSchema.parse({ ...row, nextRun });
+    return ScheduleSchema.parse({ ...row, nextRunAt });
   }
 
   private stopJob(id: string): void {

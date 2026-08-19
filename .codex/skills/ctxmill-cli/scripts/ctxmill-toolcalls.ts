@@ -17,7 +17,7 @@ interface ToolCallSummary {
   error?: string;
   messageId?: string;
   messageRole?: string;
-  createdAt?: string;
+  createdAt?: number;
   events: JsonRecord[];
 }
 

@@ -253,7 +253,7 @@ export async function resolveInterrupt(
 export async function getEvents(
   request: APIRequestContext,
   filters: { type?: string; agentId?: string; limit?: number } = {},
-): Promise<Array<{ id: string; type: string; payload: string; agentId?: string; createdAt: string }>> {
+): Promise<Array<{ id: string; type: string; payload: string; agentId?: string; createdAt: number }>> {
   const params = new URLSearchParams();
   if (filters.type) params.set('type', filters.type);
   if (filters.agentId) params.set('agentId', filters.agentId);

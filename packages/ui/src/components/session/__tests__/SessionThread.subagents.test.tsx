@@ -32,7 +32,7 @@ describe('SessionThread subagent grouping and collapse', () => {
     messageRevision: 0,
     role: 'assistant',
     content: '',
-    createdAt: new Date().toISOString(),
+    createdAt: Date.now(),
     parts,
   } as Message);
 

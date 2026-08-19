@@ -31,6 +31,7 @@ function makeTurn(overrides: Record<string, unknown> = {}): AgentTurn {
     conversationId: 'conv-1',
     status: 'COMPLETED',
     mode: 'background',
+    queuedAt: 1_700_000_000_000,
     startedAt: 1_700_000_000_000,
     completedAt: 1_700_000_001_000,
     conversationMessageCount: 1,

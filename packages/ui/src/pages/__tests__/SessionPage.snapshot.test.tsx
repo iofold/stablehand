@@ -147,7 +147,7 @@ describe('SessionPage conversation snapshot boundary', () => {
         messageRevision: 0,
         role: 'assistant',
         content: 'authoritative history',
-        createdAt: '2026-07-19T00:00:00.000Z',
+        createdAt: 1_784_419_200_000,
       }],
     }));
     await flushEffects();

@@ -7,7 +7,7 @@ import * as contracts from './index.js';
 describe('@ctxmill/contracts', () => {
   it('requires the server authentication mode in the config boundary', () => {
     const config = {
-      system: { version: '1.0.0', uptime: 10, dbPath: '.ctxmill' },
+      system: { version: '1.0.0', uptimeMs: 10, dbPath: '.ctxmill' },
       agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
       authentication: { mode: 'enforced' },
     };

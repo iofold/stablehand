@@ -65,8 +65,8 @@ describe('ScheduleService', () => {
 
     expect([...jobs.keys()]).toEqual(['schedule-1']);
     await expect(service.list()).resolves.toEqual([
-      { ...active, nextRun: 10_000 },
-      { ...disabled, nextRun: null },
+      { ...active, nextRunAt: 10_000 },
+      { ...disabled, nextRunAt: null },
     ]);
     await service.stop();
   });

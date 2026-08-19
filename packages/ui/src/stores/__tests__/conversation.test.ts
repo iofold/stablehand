@@ -61,7 +61,7 @@ describe('conversation store', () => {
     expect(messages[0].role).toBe('user');
     expect(messages[0].content).toBe('hello');
     expect(messages[0].id).toEqual(expect.any(String));
-    expect(messages[0].createdAt).toEqual(expect.any(String));
+    expect(messages[0].createdAt).toEqual(expect.any(Number));
   });
 
   it('addUserMessage appends multiple messages in order', () => {
@@ -94,7 +94,7 @@ describe('conversation store', () => {
         messageRevision: 0,
         role: 'assistant' as const,
         content: 'loaded',
-        createdAt: '2026-01-01T00:00:00Z',
+        createdAt: 1_767_225_600_000,
       },
     ];
     getStore().loadMessages(loaded);
@@ -109,7 +109,7 @@ describe('conversation store', () => {
         parts: [{ type: 'text', content: 'loaded' }],
         toolCallId: undefined,
         toolCalls: undefined,
-        createdAt: '2026-01-01T00:00:00Z',
+        createdAt: 1_767_225_600_000,
       },
     ]);
     expect(state.isStreaming).toBe(false);
@@ -127,7 +127,7 @@ describe('conversation store', () => {
       role: 'assistant',
       content: 'Authoritative REST projection',
       parts: [{ type: 'text', content: 'Authoritative REST projection' }],
-      createdAt: new Date().toISOString(),
+      createdAt: Date.now(),
     }]);
     expect(getStore().messageRevisions.get('persisted-1')).toBe(2);
 
@@ -955,7 +955,7 @@ describe('conversation store', () => {
       ],
     }, 'fallback');
 
-    expect(message.createdAt).toBe(new Date(1710000000000).toISOString());
+    expect(message.createdAt).toBe(1710000000000);
     expect(message.toolCalls).toEqual([
       {
         id: 'tc-1',

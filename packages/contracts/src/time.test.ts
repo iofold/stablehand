@@ -17,18 +17,6 @@ import { z } from 'zod';
 import * as contracts from './index.js';
 
 const LEGACY_DEBT = new Set([
-  // T1: vestigial string|number union (SQLite era)
-  'ConversationSnapshotResponseSchema.messages.createdAt',
-  'MessageListResponseSchema.createdAt',
-  'MessageSchema.createdAt',
-  'TurnDetailResponseSchema.messages.createdAt',
-  // T4: the API's only ISO timestamp
-  'HealthResponseSchema.timestamp',
-  // U1/T7: bare ms uptime
-  'ConfigResponseSchema.system.uptime',
-  // U2/T6: bare seconds expiry
-  'ArtifactDownloadUrlResponseSchema.expiresIn',
-  'ArtifactUploadUrlResponseSchema.expiresIn',
   // U3: bare ms timeout beside timeoutSec (rename tracked with a data migration)
   'AgentCreateInputSchema.httpTools.timeout',
   'AgentListResponseSchema.httpTools.timeout',

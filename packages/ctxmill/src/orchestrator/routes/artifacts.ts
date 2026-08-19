@@ -133,7 +133,7 @@ export async function artifactRoutes(
 
   app.get('/:id/download-url', { config: { capability: 'artifacts:read' } }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { expiresIn } = req.query as { expiresIn?: string };
+    const { expiresInSec } = req.query as { expiresInSec?: string };
 
     const artifact = await resolveArtifactForRead(id, req.apiPrincipal?.agentId ?? null);
     if (!artifact) {
@@ -144,12 +144,12 @@ export async function artifactRoutes(
       return reply.status(409).send({ error: 'Artifact upload is not confirmed', status: artifact.status });
     }
 
-    const ttl = Math.min(Number(expiresIn) || 3600, 86400);
+    const ttl = Math.min(Number(expiresInSec) || 3600, 86400);
     const url = await artifactStore.getSignedDownloadUrl(artifact.storageKey, ttl);
 
     return reply.send({
       url,
-      expiresIn: ttl,
+      expiresInSec: ttl,
       name: artifact.name,
       mimeType: artifact.mimeType,
       sizeBytes: artifact.sizeBytes,
@@ -208,7 +208,7 @@ export async function artifactRoutes(
       artifactId,
       uploadUrl,
       storageKey,
-      expiresIn: ttl,
+      expiresInSec: ttl,
     });
   });
 

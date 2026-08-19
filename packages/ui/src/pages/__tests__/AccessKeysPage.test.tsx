@@ -38,7 +38,7 @@ const activeKey = {
 };
 
 const enforcedConfig = {
-  system: { version: 'test', uptime: 1_000, dbPath: '/tmp/test.db' },
+  system: { version: 'test', uptimeMs: 1_000, dbPath: '/tmp/test.db' },
   agentDefaults: { harness: 'langgraph', temperature: 0.7, maxTokens: 4096 },
   authentication: { mode: 'enforced' as const },
 };

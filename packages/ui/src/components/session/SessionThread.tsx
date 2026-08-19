@@ -496,7 +496,7 @@ export function SessionThread({
                 messageRevision: 0,
                 role: 'assistant',
                 content: streamingContent,
-                createdAt: new Date().toISOString(),
+                createdAt: Date.now(),
               }}
               isStreaming
             />

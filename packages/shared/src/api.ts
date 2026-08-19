@@ -52,7 +52,7 @@ export interface ApiMessage {
   toolCallId?: string;
   toolCalls?: ApiToolCallState[];
   parts?: ApiMessagePart[];
-  createdAt: string | number;
+  createdAt: number;
 }
 
 /** Ordered content part within a message. Preserves text ↔ tool_call interleaving. */

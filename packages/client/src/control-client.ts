@@ -626,14 +626,14 @@ export class CtxmillControlClient {
         }),
       downloadUrl: (
         artifactId: string,
-        expiresIn?: number,
+        expiresInSec?: number,
         requestOptions: CtxmillRequestOptions = {},
       ) =>
         this.transport.request({
           method: 'GET',
           path: queryPath(
             `/artifacts/${segment(artifactId, 'artifactId')}/download-url`,
-            { expiresIn: expiresIn?.toString() },
+            { expiresInSec: expiresInSec?.toString() },
           ),
           responseSchema: ArtifactDownloadUrlResponseSchema,
           ...requestOptions,
