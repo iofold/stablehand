@@ -4,6 +4,9 @@ import type { DatabaseRepository, CallbackOutboxRow } from '../database/reposito
 /** Retry delay schedule in milliseconds: attempt 1 -> immediate, 2 -> 5s, 3 -> 30s, 4 -> 5min, 5 -> 30min. */
 const RETRY_DELAYS_MS = [0, 5_000, 30_000, 5 * 60_000, 30 * 60_000];
 
+/** Per-row claim lease renewed at the top of each delivery (ctx-4p34); mirrors DEFAULT_CLAIM_LEASE_MS. */
+const CLAIM_LEASE_MS = 60_000;
+
 /** Compute the delay for a given attempt number (1-based). */
 export function getRetryDelay(attempt: number): number {
   if (attempt <= 0) return 0;
@@ -32,10 +35,15 @@ export class CallbackDispatcher {
   private db: DatabaseRepository;
   private pollIntervalMs: number;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private running = false;
+  /** ctx-4p34: single-flight guard — a tick that fires while a pass is still
+   * in flight returns immediately instead of starting an overlapping scan. */
+  private passActive = false;
 
   /** Pluggable fetch for testing. Defaults to global fetch. */
   fetchFn: (url: string, init: RequestInit) => Promise<Response>;
+
+  /** ctx-4p34: optional operator hook fired when a delivery is dead-lettered. */
+  onDeadLetter?: (entry: CallbackOutboxRow) => void;
 
   constructor(
     db: DatabaseRepository,
@@ -80,7 +88,6 @@ export class CallbackDispatcher {
    */
   start(): void {
     if (this.timer) return;
-    this.running = true;
     this.timer = setInterval(() => {
       this.processPending().catch((err) =>
         console.error('[CallbackDispatcher] poll error:', err),
@@ -93,7 +100,6 @@ export class CallbackDispatcher {
    * Stop the background polling loop.
    */
   stop(): void {
-    this.running = false;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -106,16 +112,25 @@ export class CallbackDispatcher {
    * Returns the number of entries processed.
    */
   async processPending(): Promise<number> {
-    const now = Date.now();
-    const pending = await this.db.claimPendingCallbacks(50, now);
-    let processed = 0;
+    // ctx-4p34: single-flight. Without this, every poll tick starts a fresh
+    // overlapping scan while a slow batch is still delivering, and the same
+    // process re-claims and re-delivers a row whose lease lapsed mid-batch.
+    if (this.passActive) return 0;
+    this.passActive = true;
+    try {
+      const now = Date.now();
+      const pending = await this.db.claimPendingCallbacks(50, now);
+      let processed = 0;
 
-    for (const entry of pending) {
-      await this.deliver(entry);
-      processed++;
+      for (const entry of pending) {
+        await this.deliver(entry);
+        processed++;
+      }
+
+      return processed;
+    } finally {
+      this.passActive = false;
     }
-
-    return processed;
   }
 
   /**
@@ -124,6 +139,13 @@ export class CallbackDispatcher {
    * On failure: increments attempts and schedules next retry (or marks as failed).
    */
   private async deliver(entry: CallbackOutboxRow): Promise<boolean> {
+    // ctx-4p34: renew the claim before spending the ~10s delivery window on it.
+    // If a re-claimer has taken the row (lease lapsed earlier in the batch),
+    // bow out without re-POSTing — the new owner delivers it exactly once.
+    if (entry.claimedAt != null) {
+      const held = await this.db.renewCallbackClaim(entry.id, entry.claimedAt, CLAIM_LEASE_MS);
+      if (!held) return false;
+    }
     try {
       const body = JSON.stringify(entry.payload);
       const headers: Record<string, string> = {
@@ -160,16 +182,31 @@ export class CallbackDispatcher {
 
       // Non-2xx response
       const errorText = `HTTP ${response.status}: ${response.statusText}`;
-      const nextAttempt = entry.attempts + 1;
-      const delay = getRetryDelay(nextAttempt + 1);
-      await this.db.markCallbackFailed(entry.id, errorText, Date.now() + delay, entry.claimedAt);
+      await this.recordFailure(entry, errorText);
       return false;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      const nextAttempt = entry.attempts + 1;
-      const delay = getRetryDelay(nextAttempt + 1);
-      await this.db.markCallbackFailed(entry.id, errorMsg, Date.now() + delay, entry.claimedAt);
+      await this.recordFailure(entry, errorMsg);
       return false;
+    }
+  }
+
+  /**
+   * Persist a failed attempt and, when it is terminal, make the dead-letter
+   * visible (ctx-4p34) — previously a row hit status='failed' with no log,
+   * event, or route, violating the "degraded, never silent" promise.
+   */
+  private async recordFailure(entry: CallbackOutboxRow, errorText: string): Promise<void> {
+    const nextAttempt = entry.attempts + 1;
+    const isFinal = nextAttempt >= entry.maxAttempts;
+    const delay = getRetryDelay(nextAttempt + 1);
+    await this.db.markCallbackFailed(entry.id, errorText, Date.now() + delay, entry.claimedAt);
+    if (isFinal) {
+      this.onDeadLetter?.(entry);
+      console.error(
+        `[CallbackDispatcher] dead-letter: delivery ${entry.id} to ${entry.callbackUrl} `
+        + `permanently failed after ${nextAttempt} attempts: ${errorText}`,
+      );
     }
   }
 }

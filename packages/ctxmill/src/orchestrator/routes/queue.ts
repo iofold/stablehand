@@ -4,7 +4,7 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import type { TurnDispatcher } from '../turn-dispatcher.js';
 
 export interface QueueRouteOptions {
-  db: Pick<DatabaseRepository, 'countQueuedTurns' | 'getOldestQueuedTurnAgeMs'>;
+  db: Pick<DatabaseRepository, 'countQueuedTurns' | 'getOldestQueuedTurnAgeMs' | 'countFailedCallbacks'>;
   dispatcher?: Pick<TurnDispatcher, 'isStalled' | 'getLastPassCompletedAt'>;
 }
 
@@ -16,19 +16,22 @@ export async function queueRoutes(app: FastifyInstance, opts: QueueRouteOptions)
   const { db, dispatcher } = opts;
 
   app.get('/status', async () => {
-    const [counts, oldestAgeMs] = await Promise.all([
+    const [counts, oldestAgeMs, deadLetteredCallbacks] = await Promise.all([
       db.countQueuedTurns(''),
       db.getOldestQueuedTurnAgeMs(),
+      db.countFailedCallbacks(),
     ]);
     const stalled = dispatcher ? dispatcher.isStalled() : null;
     return {
       queuedTurns: counts.global,
       oldestQueuedAgeMs: oldestAgeMs,
+      // ctx-4p34: dead-lettered deliveries were invisible; surface them here.
+      deadLetteredCallbacks,
       dispatcher: {
         stalled,
         lastPassCompletedAt: dispatcher?.getLastPassCompletedAt() ?? null,
       },
-      state: stalled && counts.global > 0 ? 'degraded' : 'healthy',
+      state: (stalled && counts.global > 0) || deadLetteredCallbacks > 0 ? 'degraded' : 'healthy',
     };
   });
 }

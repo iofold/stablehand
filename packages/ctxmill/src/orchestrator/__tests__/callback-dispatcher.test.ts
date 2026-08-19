@@ -45,6 +45,10 @@ function createMockDb() {
     getCallbacksForAgent: vi.fn(async (agentId: string) => {
       return Array.from(store.values()).filter((r) => r.agentId === agentId);
     }),
+    renewCallbackClaim: vi.fn(async (id: string, _claimedAt: number, _leaseMs: number) => {
+      const row = store.get(id);
+      return row?.status === 'in_progress';
+    }),
     getWebhookForAgent: vi.fn(async () => undefined),
     /** Expose internal store for assertions */
     _store: store,

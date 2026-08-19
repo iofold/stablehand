@@ -5614,6 +5614,34 @@ export class DatabaseRepository {
     });
   }
 
+  /**
+   * ctx-4p34: renew the per-row delivery claim (shaped like
+   * renewTurnDeliveryLease). Extends the lease only while this dispatcher still
+   * owns the row (claimedAt unchanged, still in_progress); returns false if a
+   * re-claimer has taken it, so the caller skips the row without re-POSTing.
+   */
+  async renewCallbackClaim(id: string, claimedAt: number, leaseMs: number): Promise<boolean> {
+    const [row] = await this.db
+      .update(this.schema.callbackOutbox)
+      .set({ claimExpiresAt: Date.now() + leaseMs })
+      .where(and(
+        eq(this.schema.callbackOutbox.id, id),
+        eq(this.schema.callbackOutbox.status, 'in_progress'),
+        eq(this.schema.callbackOutbox.claimedAt, claimedAt),
+      ))
+      .returning({ id: this.schema.callbackOutbox.id });
+    return row != null;
+  }
+
+  /** ctx-4p34: count dead-lettered (permanently failed) callbacks for /status. */
+  async countFailedCallbacks(): Promise<number> {
+    const [row] = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(this.schema.callbackOutbox)
+      .where(eq(this.schema.callbackOutbox.status, 'failed'));
+    return row?.count ?? 0;
+  }
+
   async createWebhook(data: WebhookInsert): Promise<WebhookRow> {
     const sanitizedData = sanitizeTypedDbValue(data, 'webhooks.insert');
     return this.insertOne(
