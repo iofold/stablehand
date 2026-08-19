@@ -171,7 +171,7 @@ function unauthorized(reply: FastifyReply) {
 function forbiddenMissingCapability(reply: FastifyReply, required: string) {
   return reply.code(403).send({
     error: `Forbidden: this route requires the '${required}' capability`,
-    required_capability: required,
+    requiredCapability: required,
   });
 }
 
@@ -180,7 +180,7 @@ function forbiddenMasterOnly(reply: FastifyReply) {
   // master-only forever; a forgotten annotation can only narrow access.
   return reply.code(403).send({
     error: 'Forbidden: this route requires the master API token',
-    required_capability: null,
+    requiredCapability: null,
   });
 }
 

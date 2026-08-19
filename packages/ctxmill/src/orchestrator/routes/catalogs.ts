@@ -138,12 +138,11 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Body: unknown }>('/tools/test', async (request, reply): Promise<TestToolResponse> => {
     if (!isTestToolRequestBody(request.body)) {
-      reply.code(400);
-
-      return ToolTestResponseSchema.parse({
-        success: false,
+      // ctx-iqzy S12: a rejected request gets the standard error envelope,
+      // not a success-flagged ToolTestResponse.
+      return reply.code(400).send({
         error: 'Invalid request body: toolName must be a string and input must be an object when provided',
-        durationMs: 0,
+        code: 'invalid_tool_test_request',
       });
     }
 

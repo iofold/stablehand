@@ -62,13 +62,13 @@ export async function interruptRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Querystring: { include_resolved?: string };
+        Querystring: { includeResolved?: string };
       }>,
       reply: FastifyReply,
     ) => {
       const { id } = request.params;
-      const query = request.query as { include_resolved?: string } | undefined;
-      const includeResolved = query?.include_resolved === 'true';
+      const query = request.query as { includeResolved?: string } | undefined;
+      const includeResolved = query?.includeResolved === 'true';
 
       const inMemory = interrupts.getPendingForAgent(id);
       const pending: Array<{

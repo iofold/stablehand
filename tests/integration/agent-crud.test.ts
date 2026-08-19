@@ -278,7 +278,8 @@ describe('Agent CRUD & related endpoints', () => {
       expect(res.statusCode).toBe(400);
       const body = res.json();
       expect(body.error).toContain('Invalid harnessConfig');
-      expect(Array.isArray(body.details)).toBe(true);
+      expect(body.code).toBe('invalid_harness_config');
+      expect(Array.isArray(body.issues)).toBe(true);
     });
 
     it('lists available harnesses when the selected harness is unknown', async () => {

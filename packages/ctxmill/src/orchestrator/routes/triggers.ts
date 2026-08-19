@@ -191,7 +191,8 @@ export async function triggerRoutes(
       if (!removed) {
         return reply.status(404).send({ error: 'Trigger not found' });
       }
-      return { ok: true };
+      // ctx-iqzy S16: hard deletes return 204.
+      return reply.status(204).send();
     },
   );
 
@@ -221,7 +222,8 @@ export async function triggerRoutes(
         && serializedJsonByteLength(body.payload) > CUSTOM_EVENT_PAYLOAD_MAX_BYTES
       ) {
         const error: CustomEventPayloadTooLargeError = {
-          error: 'custom_event_payload_too_large',
+          error: `Custom event payload exceeds ${CUSTOM_EVENT_PAYLOAD_MAX_BYTES} bytes`,
+          code: 'custom_event_payload_too_large',
           maxBytes: CUSTOM_EVENT_PAYLOAD_MAX_BYTES,
         };
         return reply.status(413).send(error);
@@ -230,7 +232,8 @@ export async function triggerRoutes(
       const validated = CustomEventEmitInputSchema.safeParse(body);
       if (!validated.success) {
         return reply.status(400).send({
-          error: 'invalid_custom_event',
+          error: 'Invalid custom event',
+          code: 'invalid_custom_event',
           issues: validated.error.issues.map((issue) => ({
             path: issue.path.join('.'),
             message: issue.message,
@@ -248,7 +251,7 @@ export async function triggerRoutes(
       if (principal && !emitGrantAllows(principal.capabilities, validated.data.type)) {
         return reply.status(403).send({
           error: `Forbidden: this key cannot emit event type '${validated.data.type}'`,
-          required_capability: 'triggers:emit',
+          requiredCapability: 'triggers:emit',
         });
       }
       // ctx-bh1u: refuse at the ingress when the canonical lane is backed up,

@@ -294,9 +294,8 @@ describe('Events and Triggers Integration', () => {
         method: 'DELETE',
         url: `/api/triggers/${triggerId}`,
       });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(body.ok).toBe(true);
+      // ctx-iqzy S16: hard deletes return 204 with no body.
+      expect(res.statusCode).toBe(204);
     });
 
     it('GET /api/triggers/:id returns 404 after deletion', async () => {
@@ -431,7 +430,7 @@ describe('Events and Triggers Integration', () => {
           },
         });
         expect(res.statusCode).toBe(400);
-        expect(res.json()).toMatchObject({ error: 'invalid_custom_event' });
+        expect(res.json()).toMatchObject({ code: 'invalid_custom_event' });
       });
 
       it('POST /api/triggers/emit rejects payloads above 32 KiB with a typed 413', async () => {
@@ -445,7 +444,8 @@ describe('Events and Triggers Integration', () => {
         });
         expect(res.statusCode).toBe(413);
         expect(res.json()).toEqual({
-          error: 'custom_event_payload_too_large',
+          error: `Custom event payload exceeds ${32 * 1024} bytes`,
+          code: 'custom_event_payload_too_large',
           maxBytes: 32 * 1024,
         });
       });

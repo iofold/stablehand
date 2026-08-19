@@ -374,6 +374,7 @@ export async function artifactRoutes(
       agentId: artifact.agentId ?? null,
       timestamp: Date.now(),
     });
-    return reply.send({ deleted: true, id });
+    // ctx-iqzy S16: hard deletes return 204, like agents and webhooks.
+    return reply.status(204).send();
   });
 }

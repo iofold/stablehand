@@ -50,7 +50,7 @@ async function createBundle(flags: Flags): Promise<string> {
   await collect(results, 'agent', `/api/agents/${encodeURIComponent(agentId)}`);
   await collect(results, 'turns', `/api/agents/${encodeURIComponent(agentId)}/turns`);
   await collect(results, 'conversations', `/api/agents/${encodeURIComponent(agentId)}/conversations/summary`);
-  await collect(results, 'interrupts', `/api/agents/${encodeURIComponent(agentId)}/interrupts?include_resolved=true`);
+  await collect(results, 'interrupts', `/api/agents/${encodeURIComponent(agentId)}/interrupts?includeResolved=true`);
   await collect(results, 'events', `/api/events?agentId=${encodeURIComponent(agentId)}&limit=${encodeURIComponent(flagString(flags, 'events-limit') ?? '200')}${sinceQuery(flags)}`);
 
   if (turnId) {

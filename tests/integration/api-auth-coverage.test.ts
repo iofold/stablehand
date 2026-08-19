@@ -201,7 +201,7 @@ describe('API auth route coverage', () => {
       });
       expect(res.statusCode, `${route.method} ${route.url}`).toBe(403);
       expect(res.json(), `${route.method} ${route.url}`).toMatchObject({
-        required_capability: null,
+        requiredCapability: null,
       });
     }
   });

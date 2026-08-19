@@ -617,7 +617,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
 
     const includeResolvedResponse = await app.inject({
       method: 'GET',
-      url: '/api/agents/agent-1/interrupts?include_resolved=true',
+      url: '/api/agents/agent-1/interrupts?includeResolved=true',
     });
 
     expect(includeResolvedResponse.statusCode).toBe(200);

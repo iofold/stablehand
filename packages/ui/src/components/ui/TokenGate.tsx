@@ -38,7 +38,7 @@ export function TokenGate() {
         && !Array.isArray(caught.body)
         ? caught.body as Record<string, unknown>
         : null;
-      if (caught instanceof ApiError && caught.status === 403 && body?.required_capability === null) {
+      if (caught instanceof ApiError && caught.status === 403 && body?.requiredCapability === null) {
         setError('Scoped keys cannot unlock the dashboard. Enter the master CTXMILL_API_TOKEN.');
       } else {
         setError('Token was not accepted.');

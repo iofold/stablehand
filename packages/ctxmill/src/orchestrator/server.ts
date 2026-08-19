@@ -213,15 +213,15 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     if (opts.containerManager) {
       const metrics = opts.containerManager.getMetrics();
       response.sandbox = {
-        execution_mode: 'sandbox',
+        executionMode: 'sandbox',
         containers: {
           active: metrics.active,
           queued: metrics.queued,
           peak: metrics.peak,
-          total_created: metrics.totalCreated,
+          totalCreated: metrics.totalCreated,
         },
         limits: {
-          max_global_containers: metrics.maxGlobalContainers,
+          maxGlobalContainers: metrics.maxGlobalContainers,
         },
       };
     }
@@ -229,12 +229,12 @@ export async function createServer(opts: ServerOptions): Promise<FastifyInstance
     // Gateway spend ingestion health (ctx-iou3): a stalled pipeline
     // under-counts budgets and analytics, so it belongs on /health.
     try {
-      response.model_gateway = await summarizeModelGatewayHealth(
+      response.modelGateway = await summarizeModelGatewayHealth(
         db,
         opts.modelGateway ?? { enabled: false },
       );
     } catch (gatewayHealthError) {
-      response.model_gateway = {
+      response.modelGateway = {
         enabled: opts.modelGateway?.enabled ?? false,
         state: 'degraded',
         lagMs: null,

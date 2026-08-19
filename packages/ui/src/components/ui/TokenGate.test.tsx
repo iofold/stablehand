@@ -86,7 +86,7 @@ describe('TokenGate', () => {
   it('explains that a scoped key cannot unlock master-only dashboard access', async () => {
     mockJson.mockResolvedValue({
       error: 'Forbidden: this route requires the master API token',
-      required_capability: null,
+      requiredCapability: null,
     });
     mockFetch.mockResolvedValue({ ok: false, status: 403, json: mockJson });
     act(() => useApiAuthStore.getState().setAuthRequired(true));

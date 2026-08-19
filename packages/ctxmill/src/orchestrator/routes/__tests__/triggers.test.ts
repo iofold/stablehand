@@ -165,7 +165,7 @@ describe('trigger emit scoped-key namespace enforcement', () => {
       statusCode: 403,
       responseBody: {
         error: "Forbidden: this key cannot emit event type 'custom.eval.verdict'",
-        required_capability: 'triggers:emit',
+        requiredCapability: 'triggers:emit',
       },
     });
     expect(emitCustomEventAsync).not.toHaveBeenCalled();

@@ -636,10 +636,12 @@ describe('@ctxmill/contracts', () => {
     })).toThrow();
     expect(() => contracts.CustomEventPayloadSchema.parse([])).toThrow();
     expect(contracts.CustomEventPayloadTooLargeErrorSchema.parse({
-      error: 'custom_event_payload_too_large',
+      error: 'Custom event payload exceeds 32768 bytes',
+      code: 'custom_event_payload_too_large',
       maxBytes: 32 * 1024,
     })).toEqual({
-      error: 'custom_event_payload_too_large',
+      error: 'Custom event payload exceeds 32768 bytes',
+      code: 'custom_event_payload_too_large',
       maxBytes: 32 * 1024,
     });
 

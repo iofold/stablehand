@@ -24,10 +24,11 @@ export const AGENT_MANAGED_METADATA_FIELDS: ReadonlySet<string> = new Set([
   'workspaceContent',
 ]);
 
-export function safeError(message: string, err: unknown): { error: string; detail?: string } {
+export function safeError(message: string, err: unknown): { error: string; code: string; detail?: string } {
   console.error('[agents] endpoint error:', err);
   const detail = err instanceof Error ? err.message : String(err);
-  return { error: message, detail };
+  // ctx-iqzy S12/R3: machine-actionable errors carry a code.
+  return { error: message, code: 'internal_error', detail };
 }
 
 export async function chownRecursive(dir: string, uid: number, gid: number): Promise<void> {
@@ -221,7 +222,8 @@ export function validateHarnessConfigInput(
       status: 400,
       body: {
         error: `Invalid harnessConfig for harness "${harnessName}"`,
-        details: [{ message: 'harnessConfig must be an object' }],
+        code: 'invalid_harness_config',
+        issues: [{ path: 'harnessConfig', message: 'harnessConfig must be an object' }],
       },
     };
   }
@@ -242,7 +244,12 @@ export function validateHarnessConfigInput(
       status: 400,
       body: {
         error: `Invalid harnessConfig for harness "${harnessName}"`,
-        details: parseResult.error.issues,
+        code: 'invalid_harness_config',
+        // ctx-iqzy S12/R3: canonical validation shape — never raw Zod issues.
+        issues: parseResult.error.issues.map((issue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+        })),
       },
     };
   }

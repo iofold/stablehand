@@ -321,7 +321,7 @@ async function interruptCommand(action: string | undefined, agentId: string | un
   requireArg(agentId, 'agentId');
   switch (action) {
     case 'list': {
-      const query = hasFlag(flags, 'include-resolved') ? '?include_resolved=true' : '';
+      const query = hasFlag(flags, 'include-resolved') ? '?includeResolved=true' : '';
       return getCommand('interrupts list', 'GET', `/api/agents/${encodeURIComponent(agentId)}/interrupts${query}`, formatInterrupts, flags);
     }
     case 'resolve': {
@@ -1375,7 +1375,7 @@ function formatSandboxMetrics(data: unknown): string {
   if (!isRecord(data)) return JSON.stringify(data, null, 2);
   const containers = isRecord(data.containers) ? data.containers : {};
   return [
-    `execution_mode: ${String(data.execution_mode ?? 'unknown')}`,
+    `executionMode: ${String(data.executionMode ?? 'unknown')}`,
     `active: ${String(containers.active ?? '?')}`,
     `queued: ${String(containers.queued ?? '?')}`,
     `peak: ${String(containers.peak ?? '?')}`,

@@ -220,7 +220,7 @@ describe('scoped api keys (WO-5)', () => {
       expect(res.statusCode).toBe(403);
       expect(res.json()).toEqual({
         error: 'Forbidden: this route requires the master API token',
-        required_capability: null,
+        requiredCapability: null,
       });
     }, storeWith(principal));
   });
@@ -249,7 +249,7 @@ describe('scoped api keys (WO-5)', () => {
       expect(res.statusCode).toBe(403);
       expect(res.json()).toEqual({
         error: "Forbidden: this route requires the 'triggers:emit' capability",
-        required_capability: 'triggers:emit',
+        requiredCapability: 'triggers:emit',
       });
     }, storeWith(principal));
   });

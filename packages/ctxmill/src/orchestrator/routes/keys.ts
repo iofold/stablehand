@@ -54,6 +54,12 @@ function invalidBody(reply: FastifyReply, issues: { path: PropertyKey[]; message
   const path = issue?.path.length ? `${issue.path.join('.')}: ` : '';
   return reply.status(400).send({
     error: `Invalid api key request: ${path}${issue?.message ?? 'invalid request'}`,
+    code: 'invalid_api_key_request',
+    // ctx-iqzy S12/R3: canonical validation shape.
+    issues: issues.map((entry) => ({
+      path: entry.path.join('.'),
+      message: entry.message,
+    })),
   });
 }
 

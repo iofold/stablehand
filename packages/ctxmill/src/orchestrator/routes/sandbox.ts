@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { SandboxMetricsResponseSchema } from '@ctxmill/contracts';
 import type { SandboxContainerManager } from '../../sandbox/container-manager.js';
 
 export interface SandboxRouteOptions {
@@ -19,19 +20,19 @@ export async function sandboxRoutes(
   // GET /api/sandbox/metrics
   app.get('/metrics', async () => {
     const metrics = containerManager.getMetrics();
-    return {
-      execution_mode: 'sandbox',
+    return SandboxMetricsResponseSchema.parse({
+      executionMode: 'sandbox',
       containers: {
         active: metrics.active,
         queued: metrics.queued,
         peak: metrics.peak,
-        total_created: metrics.totalCreated,
-        by_harness: metrics.byHarness,
-        average_lifetime_ms: metrics.averageLifetimeMs,
+        totalCreated: metrics.totalCreated,
+        byHarness: metrics.byHarness,
+        averageLifetimeMs: metrics.averageLifetimeMs,
       },
       limits: {
-        max_global_containers: metrics.maxGlobalContainers,
+        maxGlobalContainers: metrics.maxGlobalContainers,
       },
-    };
+    });
   });
 }

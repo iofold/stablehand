@@ -94,7 +94,7 @@ function errorFields(body: unknown): {
   const code = typeof body.code === 'string' ? body.code : undefined;
   const detailCandidate = body.detail ?? body.error ?? body.message;
   const detail = typeof detailCandidate === 'string' ? detailCandidate : undefined;
-  const required = body.required_capability;
+  const required = body.requiredCapability;
   const requiredCapability = required === null
     ? null
     : typeof required === 'string' && CAPABILITY_VERB_SET.has(required)

@@ -103,10 +103,9 @@ describe('POST /api/catalogs/tools/test', () => {
 
     expect(res.statusCode).toBe(400);
 
-    const body = res.json() as ToolTestErrorResponse;
-    expect(body.success).toBe(false);
+    const body = res.json() as { error: string; code: string };
+    expect(body.code).toBe('invalid_tool_test_request');
     expect(body.error).toContain('Invalid request body');
-    expect(body.durationMs).toBe(0);
   });
 
   it('returns 400 for an empty request body', async () => {
@@ -118,10 +117,10 @@ describe('POST /api/catalogs/tools/test', () => {
 
     expect(res.statusCode).toBe(400);
 
-    const body = res.json() as ToolTestErrorResponse;
-    expect(body.success).toBe(false);
+    // ctx-iqzy S12: rejected requests use the standard error envelope.
+    const body = res.json() as { error: string; code: string };
+    expect(body.code).toBe('invalid_tool_test_request');
     expect(body.error).toContain('Invalid request body');
-    expect(body.durationMs).toBe(0);
   });
 
   it('uses an empty object default when input is omitted', async () => {

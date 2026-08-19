@@ -508,7 +508,7 @@ describe('CtxmillControlClient', () => {
   ) => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
       error: 'Forbidden',
-      required_capability: requiredCapability,
+      requiredCapability,
     }, 403));
     const client = new clientModule.CtxmillControlClient({
       apiBase: 'https://ctxmill.test/api',

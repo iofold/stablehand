@@ -71,7 +71,9 @@ export const CustomEventEmitResponseSchema = z.strictObject({
 });
 
 export const CustomEventPayloadTooLargeErrorSchema = z.strictObject({
-  error: z.literal('custom_event_payload_too_large'),
+  // ctx-iqzy S12/R3: `error` is the human sentence, `code` the machine token.
+  error: z.string(),
+  code: z.literal('custom_event_payload_too_large'),
   maxBytes: z.literal(CUSTOM_EVENT_PAYLOAD_MAX_BYTES),
 });
 
@@ -767,20 +769,22 @@ export const WebhookListResponseSchema = z.array(WebhookSchema);
 export const HealthResponseSchema = z.strictObject({
   status: z.literal('ok'),
   timestamp: EpochMillisecondsSchema,
+  // ctx-iqzy S13: camelCase like every other surface (was the API's one
+  // snake_case island alongside /api/sandbox/metrics).
   sandbox: z.strictObject({
-    execution_mode: z.literal('sandbox'),
+    executionMode: z.literal('sandbox'),
     containers: z.strictObject({
       active: z.number().int().nonnegative(),
       queued: z.number().int().nonnegative(),
       peak: z.number().int().nonnegative(),
-      total_created: z.number().int().nonnegative(),
+      totalCreated: z.number().int().nonnegative(),
     }),
     limits: z.strictObject({
-      max_global_containers: z.number().int().positive(),
+      maxGlobalContainers: z.number().int().positive(),
     }),
   }).optional(),
   // Optional so the client keeps accepting servers predating the arm.
-  model_gateway: z.strictObject({
+  modelGateway: z.strictObject({
     enabled: z.boolean(),
     state: z.enum(['disabled', 'initializing', 'healthy', 'degraded']),
     lagMs: z.number().nonnegative().nullable(),
@@ -808,17 +812,17 @@ export const ConfigResponseSchema = z.strictObject({
 export type ConfigResponse = z.infer<typeof ConfigResponseSchema>;
 
 export const SandboxMetricsResponseSchema = z.strictObject({
-  execution_mode: z.literal('sandbox'),
+  executionMode: z.literal('sandbox'),
   containers: z.strictObject({
     active: z.number().int().nonnegative(),
     queued: z.number().int().nonnegative(),
     peak: z.number().int().nonnegative(),
-    total_created: z.number().int().nonnegative(),
-    by_harness: z.record(z.string(), z.number().int().nonnegative()),
-    average_lifetime_ms: z.number().nonnegative(),
+    totalCreated: z.number().int().nonnegative(),
+    byHarness: z.record(z.string(), z.number().int().nonnegative()),
+    averageLifetimeMs: DurationMsSchema,
   }),
   limits: z.strictObject({
-    max_global_containers: z.number().int().positive(),
+    maxGlobalContainers: z.number().int().positive(),
   }),
 });
 
