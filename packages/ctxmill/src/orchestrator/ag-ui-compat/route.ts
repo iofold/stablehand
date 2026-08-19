@@ -4,7 +4,7 @@ import type { DatabaseRepository } from '../../database/repository.js';
 import type { TypedEventBus } from '../../events/bus.js';
 import type { PreparedTurnStart, TurnStartupService } from '../turn-startup-service.js';
 import { sendTurnStartError } from '../turn-start-errors.js';
-import { writeSseHead } from '../sse.js';
+import { BoundedSseWriter, formatSeqId, parseSeqId, writeSseHead } from '../sse.js';
 import type { AGUIMessage, AGUIMessageRole, AGUIRunAgentInput } from './types.js';
 import type { CanonicalLog } from '../canonical/canonical-log.js';
 import type { PersistedFrame } from '../canonical/frames.js';
@@ -188,22 +188,13 @@ export async function agUiCompatRoutes(
     }
     const activeTurn = turn;
 
+    // Resume where the client left off when it presents a durable seq id;
+    // legacy/unknown ids replay the whole turn tail (parity with /:id/stream).
+    const resumeAfterSeq = parseSeqId(
+      request.headers['last-event-id'] as string | undefined,
+    ) ?? 0;
+
     writeSseHead(reply);
-
-    const writeEvent = (event: Record<string, unknown>): void => {
-      if (reply.raw.writableEnded || reply.raw.destroyed) {
-        return;
-      }
-      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-    };
-
-    const allMessages = await db.getMessages(conversationId);
-    writeEvent({
-      type: 'MESSAGES_SNAPSHOT',
-      runId: activeTurn.id,
-      threadId: conversationId,
-      messages: allMessages.map(toAGUIMessage),
-    });
 
     const unsubscribers: Array<() => void> = [];
     let cleanedUp = false;
@@ -221,7 +212,36 @@ export async function agUiCompatRoutes(
       for (const unsubscribe of unsubscribers) {
         unsubscribe();
       }
+      writer.close();
     };
+
+    const endStream = (): void => {
+      cleanup();
+      if (!reply.raw.writableEnded && !reply.raw.destroyed) {
+        reply.raw.end();
+      }
+    };
+
+    // Bounded per-client writes: a consumer that stops reading is capped and
+    // disconnected rather than growing this response's buffer without limit
+    // (ctx-psax) — the same writer the agent SSE route uses.
+    const writer = new BoundedSseWriter(reply, () => endStream());
+
+    const writeEvent = (event: Record<string, unknown>, seq?: number): void => {
+      if (reply.raw.writableEnded || reply.raw.destroyed) {
+        return;
+      }
+      const eventId = seq === undefined ? '' : `id: ${formatSeqId(seq)}\n`;
+      writer.write(`${eventId}data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    const allMessages = await db.getMessages(conversationId);
+    writeEvent({
+      type: 'MESSAGES_SNAPSHOT',
+      runId: activeTurn.id,
+      threadId: conversationId,
+      messages: allMessages.map(toAGUIMessage),
+    });
 
     if (!canonicalLog) {
       writeEvent({
@@ -231,8 +251,7 @@ export async function agUiCompatRoutes(
         message: 'canonical event log not configured',
         timestamp: Date.now(),
       });
-      reply.raw.end();
-      cleanup();
+      endStream();
       return reply;
     }
 
@@ -242,36 +261,57 @@ export async function agUiCompatRoutes(
       const frameMatchesRun = (frame: PersistedFrame): boolean =>
         frame.turnId === activeTurn.id || (!frame.turnId && frame.agentId === id && frame.conversationId === conversationId);
 
-      const writeFrame = (frame: PersistedFrame): void => {
-        writeEvent(frame.body as Record<string, unknown>);
+      let lastDeliveredSeq = resumeAfterSeq;
+      let replayComplete = false;
+      const pending: PersistedFrame[] = [];
+
+      // Single delivery path for replayed and live frames: the seq guard drops
+      // whatever both paths carry, and RUN_FINISHED tears down from either.
+      const deliver = (frame: PersistedFrame): void => {
+        if (frame.seq <= lastDeliveredSeq) {
+          return;
+        }
+        lastDeliveredSeq = frame.seq;
+        writeEvent(frame.body as Record<string, unknown>, frame.seq);
+        if (frame.type === 'RUN_FINISHED') {
+          endStream();
+        }
       };
 
-      // Durable tail replay. Reconnects reproduce in-flight partials with
-      // stable ids (ctx-4fs); fresh runs pick up the frames prepareTurnStart
-      // persisted before this subscription existed (ctxmill.turn.pending,
-      // user.message) so clients get provisioning feedback immediately —
-      // dispatch is requested only below, so nothing can slip between
-      // this replay and the live subscription.
-      for (const frame of await canonicalLog.replayTurnTail(activeTurn.id)) {
-        if (frame.channel === 'run') {
-          writeFrame(frame);
-        }
-      }
-
+      // Subscribe before querying the durable tail, buffering live frames until
+      // the replay is on the wire (subscribeDurable's register-then-query
+      // ordering, single-turn case). Subscribing afterwards drops anything that
+      // commits while the query is in flight: durably persisted, on nobody's
+      // wire (ctx-psax). The fresh-run path cannot hit that window — dispatch is
+      // requested only below — but reconnects to a live turn do.
       unsubscribers.push(canonicalLog.subscribe((frames) => {
         for (const frame of frames) {
           if (frame.channel !== 'run' || !frameMatchesRun(frame)) {
             continue;
           }
-          writeFrame(frame);
-          if (frame.type === 'RUN_FINISHED') {
-            cleanup();
-            if (!reply.raw.writableEnded && !reply.raw.destroyed) {
-              reply.raw.end();
-            }
+          if (replayComplete) {
+            deliver(frame);
+          } else {
+            pending.push(frame);
           }
         }
       }));
+
+      // Durable tail replay. Reconnects reproduce in-flight partials with
+      // stable ids (ctx-4fs), resuming from Last-Event-ID when the client has
+      // one; fresh runs pick up the frames prepareTurnStart persisted before
+      // this subscription existed (ctxmill.turn.pending, user.message) so
+      // clients get provisioning feedback immediately.
+      for (const frame of await canonicalLog.replayTurnTail(activeTurn.id, resumeAfterSeq)) {
+        if (frame.channel === 'run') {
+          deliver(frame);
+        }
+      }
+      replayComplete = true;
+      for (const frame of pending) {
+        deliver(frame);
+      }
+      pending.length = 0;
     }
 
     const sendHeartbeat = async (): Promise<void> => {
@@ -293,10 +333,7 @@ export async function agUiCompatRoutes(
           authorizationCheckInFlight = false;
         }
         if (!live) {
-          cleanup();
-          if (!reply.raw.writableEnded && !reply.raw.destroyed) {
-            reply.raw.end();
-          }
+          endStream();
           return;
         }
       }

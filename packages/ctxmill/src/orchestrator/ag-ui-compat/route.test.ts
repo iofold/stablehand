@@ -111,6 +111,7 @@ describe('AG-UI compatibility transcript projection', () => {
     const revalidate = vi.fn().mockResolvedValue(false);
     const request = {
       params: { id: 'agent-1' },
+      headers: {},
       body: {
         runId: 'run-1',
         threadId: 'thread-1',

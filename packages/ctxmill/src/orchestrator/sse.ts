@@ -46,10 +46,103 @@ export function writeSseHead(reply: FastifyReply): void {
 const MAX_HEARTBEAT_FAILURES = 3;
 export type StreamAuthorizationCheck = () => Promise<boolean>;
 
+/** Why a bounded writer gave up on its client. */
+export type SseWriterDisconnectReason = 'slow-client' | 'write-error';
+
+/**
+ * One SSE client's write path: a bounded queue in front of the response
+ * stream. A consumer that stops reading is capped at MAX_QUEUE_SIZE pending
+ * chunks and then disconnected, instead of growing the stream's buffer without
+ * limit. Owners supply `onDisconnect` to tear down their own bookkeeping.
+ */
+export class BoundedSseWriter {
+  private readonly queue: string[] = [];
+  private draining = false;
+  private readonly drainWaiters = new Set<(connected: boolean) => void>();
+  private closed = false;
+
+  constructor(
+    private readonly reply: FastifyReply,
+    private readonly onDisconnect: (
+      reason: SseWriterDisconnectReason,
+      error?: unknown,
+    ) => void,
+  ) {
+    reply.raw.on('drain', () => this.flushOnDrain());
+  }
+
+  /** True while the socket is back-pressured or chunks are still queued. */
+  get backlogged(): boolean {
+    return this.draining || this.queue.length > 0;
+  }
+
+  write(data: string): void {
+    if (this.closed) return;
+
+    if (this.backlogged) {
+      if (this.queue.length >= MAX_QUEUE_SIZE) {
+        console.warn('[SSE] Disconnecting slow client');
+        this.onDisconnect('slow-client');
+      } else {
+        this.queue.push(data);
+      }
+      return;
+    }
+
+    try {
+      if (this.reply.raw.write(data) === false) {
+        this.draining = true;
+      }
+    } catch (writeErr) {
+      this.onDisconnect('write-error', writeErr);
+    }
+  }
+
+  /**
+   * Null when the socket is already caught up; otherwise a promise resolving
+   * true once it drains, or false if the client went away first.
+   */
+  waitForDrain(): Promise<boolean> | null {
+    if (this.closed || !this.backlogged) {
+      return null;
+    }
+    return new Promise((resolve) => {
+      this.drainWaiters.add(resolve);
+    });
+  }
+
+  /** Stop writing and release anyone waiting on drain. */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.resolveDrainWaiters(false);
+  }
+
+  private flushOnDrain(): void {
+    if (this.closed) return;
+    while (this.queue.length > 0) {
+      const item = this.queue[0]!;
+      const ok = this.reply.raw.write(item);
+      this.queue.shift();
+      if (!ok) {
+        // Back-pressured again, wait for next drain
+        return;
+      }
+    }
+    this.draining = false;
+    this.resolveDrainWaiters(true);
+  }
+
+  private resolveDrainWaiters(connected: boolean): void {
+    for (const resolve of this.drainWaiters) {
+      resolve(connected);
+    }
+    this.drainWaiters.clear();
+  }
+}
+
 interface ConnectionState {
-  queue: string[];
-  draining: boolean;
-  drainWaiters: Set<(connected: boolean) => void>;
+  writer: BoundedSseWriter;
   lastEventTime: number;
   consecutiveHeartbeatFailures: number;
   agentId: string;
@@ -153,10 +246,21 @@ export class SSEManager {
     authorizationCheck: StreamAuthorizationCheck | null,
   ): void {
     const clientId = randomUUID();
+    const writer = new BoundedSseWriter(reply, (reason, error) => {
+      if (reason === 'write-error') {
+        console.debug('[SSE] Write failed for agent', agentId, '— client likely disconnected', error);
+        this.unsubscribe(agentId, reply);
+        return;
+      }
+      this.unsubscribe(agentId, reply);
+      try {
+        reply.raw.end();
+      } catch (endErr) {
+        console.debug('[SSE] Failed to end slow client connection', endErr);
+      }
+    });
     const state: ConnectionState = {
-      queue: [],
-      draining: false,
-      drainWaiters: new Set(),
+      writer,
       lastEventTime: Date.now(),
       consecutiveHeartbeatFailures: 0,
       agentId,
@@ -183,28 +287,6 @@ export class SSEManager {
 
     // Listen for errors on the raw stream
     reply.raw.on('error', () => this.unsubscribe(agentId, reply));
-
-    // Listen for drain to flush queued items
-    reply.raw.on('drain', () => {
-      const st = this.connectionState.get(reply);
-      if (!st) return;
-      if (st.queue.length === 0) {
-        st.draining = false;
-        this.resolveDrainWaiters(st, true);
-        return;
-      }
-      while (st.queue.length > 0) {
-        const item = st.queue[0];
-        const ok = reply.raw.write(item);
-        st.queue.shift();
-        if (!ok) {
-          // Back-pressured again, wait for next drain
-          return;
-        }
-      }
-      st.draining = false;
-      this.resolveDrainWaiters(st, true);
-    });
 
     // Send heartbeat comment every 15s to keep connection alive
     const interval = setInterval(() => {
@@ -279,9 +361,7 @@ export class SSEManager {
       clearInterval(state.durableTail.pollInterval);
       state.durableTail.pollInterval = null;
     }
-    if (state) {
-      this.resolveDrainWaiters(state, false);
-    }
+    state?.writer.close();
     this.connectionState.delete(reply);
 
     // Emit client disconnected event
@@ -313,7 +393,7 @@ export class SSEManager {
         this.wakeDurableTail(reply);
         continue;
       }
-      this.writeToClient(agentId, reply, data);
+      this.writeToClient(reply, data);
     }
   }
 
@@ -371,7 +451,6 @@ export class SSEManager {
               );
             }
             this.writeToClient(
-              state.agentId,
               reply,
               `id: ${formatSeqId(frame.seq)}\ndata: ${JSON.stringify(frame.event)}\n\n`,
             );
@@ -396,52 +475,14 @@ export class SSEManager {
   }
 
   private waitForDrain(reply: FastifyReply): Promise<boolean> | null {
-    const state = this.connectionState.get(reply);
-    if (!state || (!state.draining && state.queue.length === 0)) {
-      return null;
-    }
-    return new Promise((resolve) => {
-      state.drainWaiters.add(resolve);
-    });
+    return this.connectionState.get(reply)?.writer.waitForDrain() ?? null;
   }
 
-  private resolveDrainWaiters(state: ConnectionState, connected: boolean): void {
-    for (const resolve of state.drainWaiters) {
-      resolve(connected);
-    }
-    state.drainWaiters.clear();
-  }
-
-  private writeToClient(agentId: string, reply: FastifyReply, data: string): void {
+  private writeToClient(reply: FastifyReply, data: string): void {
     const state = this.connectionState.get(reply);
-    if (state) {
-      state.lastEventTime = Date.now();
-    }
-
-    if (state && (state.queue.length > 0 || state.draining)) {
-      if (state.queue.length >= MAX_QUEUE_SIZE) {
-        console.warn('[SSE] Disconnecting slow client');
-        this.unsubscribe(agentId, reply);
-        try {
-          reply.raw.end();
-        } catch (endErr) {
-          console.debug('[SSE] Failed to end slow client connection', endErr);
-        }
-      } else {
-        state.queue.push(data);
-      }
-      return;
-    }
-
-    try {
-      const ok = reply.raw.write(data);
-      if (ok === false && state) {
-        state.draining = true;
-      }
-    } catch (writeErr) {
-      console.debug('[SSE] Write failed for agent', agentId, '— client likely disconnected', writeErr);
-      this.unsubscribe(agentId, reply);
-    }
+    if (!state) return;
+    state.lastEventTime = Date.now();
+    state.writer.write(data);
   }
 
   /**
