@@ -82,7 +82,7 @@ Relevant code:
 
 ### 4. Event Bus, Canonical Log, and Triggers
 
-CTXMill uses a typed in-process event bus plus a durable canonical event spine. Internal events are projected by `CanonicalProjector`, batch-persisted to `event_store` by `CanonicalLog`, and only then fanned out to live SSE clients. Browser reconnects replay from durable global sequence ids rather than volatile in-memory history.
+CTXMill uses a typed in-process event bus plus a durable canonical event spine. Internal events are projected by `CanonicalProjector`, batch-persisted to `event_store` by `CanonicalLog`, and only then fanned out to live SSE clients. On the agent SSE route, browser reconnects replay from durable global sequence ids rather than volatile in-memory history. The AG-UI compat route does not yet support cursor-based reconnect replay — a reconnect there can miss frames (tracked as ctx-psax).
 
 User-emitted custom events are persisted with their original type and payload and still drive trigger matching. Run-channel events are projected into canonical AG-UI frames for native SSE streams. The pre-canonical `?wire=legacy` escape hatch was removed (W6c, 2026-07-10); the canonical vocabulary is the only wire.
 
@@ -229,7 +229,7 @@ Relevant code:
 2. The orchestrator creates or reuses a conversation, starts a run, and invokes the selected agent harness.
 3. The sandbox daemon yields streamed events over gRPC.
 4. The orchestrator persists messages, tool calls, turn state, and canonical event frames.
-5. SSE streams canonical AG-UI frames to subscribed clients, replaying by durable seq on reconnect.
+5. SSE streams canonical AG-UI frames to subscribed clients, replaying by durable seq on reconnect (agent SSE route; the AG-UI compat route lacks reconnect replay — ctx-psax).
 6. If the run requests approval, the run is interrupted and later resumed when the user responds.
 
 ### Triggered background flow
