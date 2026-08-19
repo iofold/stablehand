@@ -88,7 +88,7 @@ export function useSSE(
               interruptId: interrupt.data.interruptId,
               turnId: interrupt.data.turnId,
               agentId: interrupt.data.agentId ?? latestAgentIdRef.current ?? '',
-              toolCallName: interrupt.data.toolCallName,
+              toolName: interrupt.data.toolName,
               args: interrupt.data.args,
               toolCallId: interrupt.data.toolCallId,
               ...(interrupt.data.sandboxSessionId

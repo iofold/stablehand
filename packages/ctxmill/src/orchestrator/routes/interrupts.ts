@@ -53,7 +53,7 @@ export async function interruptRoutes(
 
     return {
       interrupts: page.interrupts.map((row) => ({
-        interruptId: row.id,
+        id: row.id,
         agentId: row.agentId,
         turnId: row.turnId,
         sandboxSessionId: row.sandboxSessionId,

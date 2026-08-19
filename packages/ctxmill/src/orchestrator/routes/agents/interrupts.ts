@@ -72,23 +72,23 @@ export async function interruptRoutes(
 
       const inMemory = interrupts.getPendingForAgent(id);
       const pending: Array<{
-        interruptId: string;
+        id: string;
         turnId: string;
         sandboxSessionId?: string;
         agentId: string;
         toolCallId: string;
-        toolCallName: string;
+        toolName: string;
         args: Record<string, unknown>;
         createdAt: number;
         status: string;
         resumeError?: string;
       }> = inMemory.map((entry) => ({
-        interruptId: entry.info.interruptId,
+        id: entry.info.interruptId,
         turnId: entry.turnId,
         ...(entry.info.sandboxSessionId ? { sandboxSessionId: entry.info.sandboxSessionId } : {}),
         agentId: id,
         toolCallId: entry.info.toolCallId,
-        toolCallName: entry.info.toolCallName,
+        toolName: entry.info.toolName,
         args: entry.info.args,
         createdAt: entry.info.createdAt,
         status: 'pending' as const,
@@ -101,16 +101,16 @@ export async function interruptRoutes(
           : actionableInterrupts.filter(({ interrupt, resumeAttempt }) =>
               interrupt.status !== 'resolved' || resumeAttempt?.status === 'failed',
             );
-        const seenIds = new Set(pending.map((entry) => entry.interruptId));
+        const seenIds = new Set(pending.map((entry) => entry.id));
         for (const { interrupt, resumeAttempt } of dbRows) {
           if (!seenIds.has(interrupt.id)) {
             pending.push({
-              interruptId: interrupt.id,
+              id: interrupt.id,
               turnId: interrupt.turnId,
               ...(interrupt.sandboxSessionId ? { sandboxSessionId: interrupt.sandboxSessionId } : {}),
               agentId: interrupt.agentId,
               toolCallId: interrupt.toolCallId,
-              toolCallName: interrupt.toolName,
+              toolName: interrupt.toolName,
               args: interrupt.args as Record<string, unknown>,
               createdAt: interrupt.createdAt,
               status: resumeAttempt?.status === 'failed' ? 'resume_failed' : interrupt.status as 'pending',
@@ -132,7 +132,7 @@ export async function interruptRoutes(
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Body: { action: 'approve' | 'reject' | 'submit'; interruptId: string; data?: unknown };
+        Body: { action: 'approve' | 'reject'; interruptId: string; data?: unknown };
       }>,
       reply: FastifyReply,
     ) => {
@@ -141,16 +141,16 @@ export async function interruptRoutes(
 
       if (
         !body ||
-        (body.action !== 'approve' && body.action !== 'reject' && body.action !== 'submit') ||
+        (body.action !== 'approve' && body.action !== 'reject') ||
         typeof body.interruptId !== 'string' ||
         body.interruptId.trim() === ''
       ) {
         return reply.status(400).send({
-          error: 'action is required and must be "approve", "reject", or "submit", and interruptId is required',
+          error: 'action is required and must be "approve" or "reject", and interruptId is required',
         });
       }
 
-      const resolveAction: 'approve' | 'reject' = body.action === 'submit' ? 'approve' : body.action as 'approve' | 'reject';
+      const resolveAction: 'approve' | 'reject' = body.action as 'approve' | 'reject';
       const dbInterrupt = await db.getInterruptById(body.interruptId);
       const turnId = dbInterrupt?.turnId ?? interrupts.findTurnIdByInterruptId(body.interruptId);
 

@@ -221,7 +221,7 @@ export async function startDev() {
               agentId: ctx.agentId,
               conversationId: ctx.conversationId ?? '',
               toolCallId: ctx.requestId,
-              toolCallName: tool.name,
+              toolName: tool.name,
               args: args as Record<string, unknown>,
               requiresApproval: true,
               timestamp: Date.now(),

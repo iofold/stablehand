@@ -40,7 +40,7 @@ export interface CtxmillInterruptRequest {
   conversationId: string;
   agentId: string;
   toolCallId: string;
-  toolCallName: string;
+  toolName: string;
   args: Record<string, unknown>;
 }
 
@@ -116,7 +116,7 @@ export function getInterruptRequest(
     conversationId: request.conversationId,
     agentId: request.agentId,
     toolCallId: request.toolCallId,
-    toolCallName: request.toolCallName,
+    toolName: request.toolName,
     args: request.args,
   };
 }

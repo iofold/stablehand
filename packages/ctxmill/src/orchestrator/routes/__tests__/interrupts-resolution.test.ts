@@ -596,14 +596,14 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     expect(defaultResponse.statusCode).toBe(200);
     expect(defaultResponse.json().interrupts).toEqual([
       expect.objectContaining({
-        interruptId: 'pending-1',
+        id: 'pending-1',
         turnId: 'turn-pending-1',
         sandboxSessionId: 'sess-1',
-        toolCallName: 'send_email',
+        toolName: 'send_email',
         status: 'pending',
       }),
       expect.objectContaining({
-        interruptId: 'failed-1',
+        id: 'failed-1',
         turnId: 'turn-failed-1',
         sandboxSessionId: 'sess-1',
         status: 'resume_failed',
@@ -611,7 +611,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
       }),
     ]);
     expect(defaultResponse.json().interrupts[0]).not.toHaveProperty('sessionId');
-    expect(defaultResponse.json().interrupts[0]).not.toHaveProperty('toolName');
+    expect(defaultResponse.json().interrupts[0]).not.toHaveProperty('toolCallName');
     expect(getActionableInterruptsForAgent).toHaveBeenCalledTimes(1);
     expect(getActionableInterruptsForAgent).toHaveBeenLastCalledWith('agent-1');
 
@@ -621,7 +621,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
     });
 
     expect(includeResolvedResponse.statusCode).toBe(200);
-    expect(includeResolvedResponse.json().interrupts.map((row: { interruptId: string }) => row.interruptId)).toEqual([
+    expect(includeResolvedResponse.json().interrupts.map((row) => row.id)).toEqual([
       'pending-1',
       'resolved-1',
       'failed-1',

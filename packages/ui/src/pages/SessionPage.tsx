@@ -251,10 +251,10 @@ export function SessionPage() {
             if (mounted && Array.isArray(pendingInterrupts) && pendingInterrupts.length > 0) {
               const first = [...pendingInterrupts].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))[0];
               useInterruptStore.getState().setPending({
-                interruptId: first.interruptId,
+                interruptId: first.id,
                 turnId: first.turnId,
                 agentId: id!,
-                toolCallName: first.toolCallName,
+                toolName: first.toolName,
                 args: first.args,
                 toolCallId: first.toolCallId,
                 ...(first.sandboxSessionId ? { sandboxSessionId: first.sandboxSessionId } : {}),
@@ -337,9 +337,9 @@ export function SessionPage() {
     if (!id || !interrupt?.interruptId) return;
     setError(null);
     try {
-      const toolCallName = interrupt?.toolCallName || '';
+      const toolName = interrupt?.toolName || '';
       useConversationStore.getState().addSystemMessage(
-        `✓ Approved${toolCallName ? `: ${toolCallName}` : ''}`,
+        `✓ Approved${toolName ? `: ${toolName}` : ''}`,
       );
       await sendInterrupt(id, {
         interruptId: interrupt.interruptId,
@@ -350,15 +350,15 @@ export function SessionPage() {
       console.debug('[Session] Failed to send approval:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolCallName]);
+  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolName]);
 
   const handleReject = useCallback(async () => {
     if (!id || !interrupt?.interruptId) return;
     setError(null);
     try {
-      const toolCallName = interrupt?.toolCallName || '';
+      const toolName = interrupt?.toolName || '';
       useConversationStore.getState().addSystemMessage(
-        `✗ Rejected${toolCallName ? `: ${toolCallName}` : ''}`,
+        `✗ Rejected${toolName ? `: ${toolName}` : ''}`,
       );
       await sendInterrupt(id, {
         interruptId: interrupt.interruptId,
@@ -369,7 +369,7 @@ export function SessionPage() {
       console.debug('[Session] Failed to send rejection:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolCallName]);
+  }, [id, clearInterrupt, interrupt?.interruptId, interrupt?.toolName]);
 
   const handleDocSubmit = useCallback(
     async (content: string) => {
@@ -378,7 +378,7 @@ export function SessionPage() {
       try {
         await sendInterrupt(id, {
           interruptId: interrupt.interruptId,
-          action: 'submit',
+          action: 'approve',
           data: { content },
         });
         clearInterrupt();
@@ -397,7 +397,7 @@ export function SessionPage() {
       try {
         await sendInterrupt(id, {
           interruptId: interrupt.interruptId,
-          action: 'submit',
+          action: 'approve',
           data: values,
         });
         clearInterrupt();
@@ -507,14 +507,14 @@ export function SessionPage() {
           {/* HITL interrupt components */}
           {interrupt && id && (
             <div className="mx-auto w-full max-w-3xl px-4 pb-2">
-              {interrupt.toolCallName === 'edit_document' ? (
+              {interrupt.toolName === 'edit_document' ? (
                 <EditableDocument
                   title={(interrupt.args.title as string) ?? 'Review Document'}
                   content={(interrupt.args.content as string) ?? ''}
                   onSubmit={handleDocSubmit}
                   onCancel={() => clearInterrupt()}
                 />
-              ) : interrupt.toolCallName === 'request_fields' ? (
+              ) : interrupt.toolName === 'request_fields' ? (
                 <FieldRequestForm
                   title={(interrupt.args.title as string) ?? 'Additional Information'}
                   fields={
@@ -524,9 +524,9 @@ export function SessionPage() {
                 />
               ) : (
                 <ApprovalCard
-                  title={`Approve: ${interrupt.toolCallName}`}
-                  description={`The agent wants to execute "${interrupt.toolCallName}".`}
-                  action={interrupt.toolCallName}
+                  title={`Approve: ${interrupt.toolName}`}
+                  description={`The agent wants to execute "${interrupt.toolName}".`}
+                  action={interrupt.toolName}
                   details={interrupt.args}
                   onApprove={handleApprove}
                   onReject={handleReject}

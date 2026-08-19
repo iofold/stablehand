@@ -260,7 +260,7 @@ describe('conversation store', () => {
       agentId: 'agent-1',
       turnId: 'turn-1',
       interruptId: 'interrupt-1',
-      toolCallName: 'search',
+      toolName: 'search',
       toolCallId: 'tc-1',
       args: { q: 'ctxmill' },
     }));
@@ -269,7 +269,7 @@ describe('conversation store', () => {
       agentId: 'agent-1',
       interruptId: 'interrupt-1',
       turnId: 'turn-1',
-      toolCallName: 'search',
+      toolName: 'search',
       toolCallId: 'tc-1',
       args: { q: 'ctxmill' },
     });
@@ -376,7 +376,7 @@ describe('conversation store', () => {
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TEXT_MESSAGE_START', { role: 'assistant' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"test"}' }));
     handleSSEEvent(makeEvent('TOOL_CALL_END', { toolCallId: 'tc1' }));
     handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'found it' }));
@@ -398,7 +398,7 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"ctxmill"}' }));
     handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
     handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
@@ -431,7 +431,7 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"ctxmill"}' }));
     handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
       messageId: 'message-late-result',
@@ -481,7 +481,7 @@ describe('conversation store', () => {
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
     handleSSEEvent(makeEvent('TOOL_CALL_START', {
       toolCallId: 'tc1',
-      toolCallName: 'bash',
+      toolName: 'bash',
     }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', {
       toolCallId: 'tc1',
@@ -545,7 +545,7 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"test"}' }));
     handleSSEEvent(makeEvent('TOOL_CALL_END', { toolCallId: 'tc1' }));
     handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'found it' }));
@@ -613,7 +613,7 @@ describe('conversation store', () => {
 
     await flushStreamingContent();
 
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"ctxmill"}' }));
     handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'result payload' }));
     handleSSEEvent(makeEvent('CUSTOM', { name: 'ctxmill.message.committed',
@@ -650,7 +650,7 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'first result' }));
     const baselineCommit = makeEvent('CUSTOM', {
       name: 'ctxmill.message.committed',
@@ -673,7 +673,7 @@ describe('conversation store', () => {
     handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { messageId: 'stream-2', delta: 'Need one more check.' }));
     await flushStreamingContent();
     handleSSEEvent(makeEvent('TEXT_MESSAGE_END', { messageId: 'stream-2' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc2', toolCallName: 'lookup' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc2', toolName: 'lookup' }));
     handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc2', result: 'second result' }));
 
     const revisionOne = makeEvent('CUSTOM', {
@@ -700,7 +700,7 @@ describe('conversation store', () => {
     handleSSEEvent(makeEvent('TEXT_MESSAGE_CONTENT', { messageId: 'stream-3', delta: 'Final check.' }));
     await flushStreamingContent();
     handleSSEEvent(makeEvent('TEXT_MESSAGE_END', { messageId: 'stream-3' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc3', toolCallName: 'read' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc3', toolName: 'read' }));
     handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc3', result: 'third result' }));
     handleSSEEvent(makeEvent('CUSTOM', {
       name: 'ctxmill.message.updated',
@@ -855,7 +855,7 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'search' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolName: 'search' }));
     handleSSEEvent(makeEvent('TOOL_CALL_ARGS', { toolCallId: 'tc1', delta: '{"q":"ctxmill"}' }));
     handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: 'done' }));
 
@@ -891,7 +891,7 @@ describe('conversation store', () => {
     const { handleSSEEvent } = getStore();
 
     handleSSEEvent(makeEvent('RUN_STARTED', { runId: 'r1' }));
-    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolCallName: 'fail' }));
+    handleSSEEvent(makeEvent('TOOL_CALL_START', { toolCallId: 'tc1', toolName: 'fail' }));
     handleSSEEvent(makeEvent('TOOL_CALL_RESULT', { toolCallId: 'tc1', result: '', error: 'boom' }));
 
     expect(getStore().messages).toHaveLength(0);

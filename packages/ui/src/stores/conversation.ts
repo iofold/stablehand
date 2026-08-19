@@ -748,7 +748,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
         flushPendingDelta();
         const tc: ToolCallState = {
           id: (event.toolCallId as string) || nextId(),
-          name: (event.toolCallName as string) || 'unknown',
+          name: (event.toolName as string) || 'unknown',
           args: '',
           status: 'running',
           ...(typeof event.parentToolCallId === 'string'
@@ -874,7 +874,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => {
           interruptId,
           turnId,
           agentId: (event.agentId as string) || '',
-          toolCallName: (event.toolCallName as string) || '',
+          toolName: (event.toolName as string) || '',
           args: (event.args as Record<string, unknown>) || {},
           toolCallId: (event.toolCallId as string) || '',
           ...((event.sandboxSessionId as string) ? { sandboxSessionId: event.sandboxSessionId as string } : {}),

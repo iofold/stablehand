@@ -145,7 +145,7 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
     expect(resolution.action).toBe('reject');
   });
 
-  it('submit action maps to approve with data passed through', async () => {
+  it('rejects legacy submit; approve carries data through', async () => {
     const agentId = await createAgent('submit-test');
     const turn = await createTurn(agentId);
     const turnId = turn.id;
@@ -157,14 +157,21 @@ describe('Interrupt endpoint (POST /api/agents/:id/interrupt)', () => {
 
     const submitData = { content: 'edited doc' };
 
-    const res = await app.inject({
+    // ctx-iqzy S3 hard cut: 'submit' is no longer a resolve action.
+    const legacySubmit = await app.inject({
       method: 'POST',
       url: `/api/agents/${agentId}/interrupt`,
       payload: { action: 'submit', interruptId, data: submitData },
     });
+    expect(legacySubmit.statusCode).toBe(400);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/agents/${agentId}/interrupt`,
+      payload: { action: 'approve', interruptId, data: submitData },
+    });
 
     expect(res.statusCode).toBe(200);
-    // submit is mapped to approve on the response
     expect(res.json()).toEqual({ resolved: true, action: 'approve' });
 
     const resolution = await pendingPromise;

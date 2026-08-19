@@ -635,3 +635,57 @@ async function canonicalizeSubscriptionsAndDeliveries(sql: postgres.Sql): Promis
       AND webhook_id IS NULL
   `;
 }
+
+export const INTERRUPT_TOOL_NAME_MIGRATION_ID = 'interrupt-tool-name-contract';
+export const INTERRUPT_TOOL_NAME_MIGRATION_VERSION = 1;
+
+/**
+ * ctx-iqzy S1 (Wave 3): the ctxmill-owned event vocabulary names the tool
+ * `toolName` (the call is `toolCallId`); `toolCallName` remains only on the
+ * protocol-owned AG-UI TOOL_CALL_* run frames. Rewrites durable history the
+ * same way the canonical-event-contracts migration did — inverse direction,
+ * and deliberately NOT touching run-channel AG-UI frames.
+ */
+export async function canonicalizeInterruptToolName(sql: postgres.Sql): Promise<void> {
+  const [applied] = await sql`
+    SELECT version
+    FROM ctxmill_schema_version
+    WHERE id = ${INTERRUPT_TOOL_NAME_MIGRATION_ID}
+  `;
+  if (Number(applied?.version ?? 0) >= INTERRUPT_TOOL_NAME_MIGRATION_VERSION) {
+    return;
+  }
+
+  // Baseline bus-shaped rows (pre-canonical) and ctxmill CUSTOM frames.
+  await sql`
+    UPDATE event_store
+    SET payload = (
+      (payload::jsonb - 'toolCallName')
+      || jsonb_build_object('toolName', payload::jsonb->'toolCallName')
+    )::text
+    WHERE payload::jsonb ? 'toolCallName'
+      AND (
+        type IN ('run.tool_started', 'run.tool_result', 'run.interrupted', 'turn.interrupted', 'interrupt.requested')
+        OR (type = 'CUSTOM' AND payload::jsonb->>'name' LIKE 'ctxmill.%')
+      )
+  `;
+
+  // Undelivered webhook bodies still carry the projected payload keys.
+  await sql`
+    UPDATE callback_outbox
+    SET payload = (payload - 'toolCallName')
+      || jsonb_build_object('toolName', payload->'toolCallName')
+    WHERE status IN ('pending', 'in_progress')
+      AND payload ? 'toolCallName'
+  `;
+
+  await sql`
+    INSERT INTO ctxmill_schema_version (id, version, baseline)
+    VALUES (
+      ${INTERRUPT_TOOL_NAME_MIGRATION_ID},
+      ${INTERRUPT_TOOL_NAME_MIGRATION_VERSION},
+      'data-migration'
+    )
+    ON CONFLICT (id) DO UPDATE SET version = ${INTERRUPT_TOOL_NAME_MIGRATION_VERSION}
+  `;
+}

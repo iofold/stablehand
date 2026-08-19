@@ -501,16 +501,25 @@ export const SandboxSessionActionResponseSchema = z.strictObject({
   restoreAttempts: z.number().int().nonnegative().optional(),
 });
 
+// ctx-iqzy S3: the single interrupt vocabularies. Status covers both the
+// agent-scoped view and the durable cross-agent inbox; action is what a
+// resolution can record.
+export const InterruptStatusSchema = z.enum(['pending', 'resolved', 'resume_failed', 'timed_out']);
+export const InterruptActionSchema = z.enum(['approve', 'reject', 'suspend', 'timeout']);
+
 export const InterruptSchema = z.strictObject({
-  interruptId: InterruptIdSchema,
+  // ctx-iqzy S2: entity PK is `id` like every other resource; event/webhook
+  // payloads keep `interruptId` as the cross-reference name.
+  id: InterruptIdSchema,
   turnId: TurnIdSchema,
-  sandboxSessionId: SandboxSessionIdSchema.optional(),
+  sandboxSessionId: SandboxSessionIdSchema.nullable(),
   agentId: AgentIdSchema,
   toolCallId: ToolCallIdSchema,
-  toolCallName: z.string(),
+  // ctx-iqzy S1: names the tool; the call is toolCallId.
+  toolName: z.string(),
   args: UnknownRecordSchema,
   createdAt: EpochMillisecondsSchema,
-  status: z.enum(['pending', 'resolved', 'resume_failed', 'timed_out']),
+  status: InterruptStatusSchema,
   resumeError: z.string().optional(),
 });
 
@@ -518,25 +527,19 @@ export const InterruptListResponseSchema = z.strictObject({
   interrupts: z.array(InterruptSchema),
 });
 
-export const InterruptRecordStatusSchema = z.enum([
-  'pending',
-  'resolved',
-  'timed_out',
-]);
-
 export const InterruptRecordSchema = z.strictObject({
-  interruptId: InterruptIdSchema,
+  id: InterruptIdSchema,
   agentId: AgentIdSchema,
   turnId: TurnIdSchema,
   sandboxSessionId: SandboxSessionIdSchema.nullable(),
   toolCallId: ToolCallIdSchema,
   toolName: z.string().trim().min(1),
   args: UnknownRecordSchema,
-  status: InterruptRecordStatusSchema,
+  status: InterruptStatusSchema,
   createdAt: EpochMillisecondsSchema,
   expiresAt: EpochMillisecondsSchema,
   resolvedAt: EpochMillisecondsSchema.nullable(),
-  resolvedAction: z.string().nullable(),
+  resolvedAction: InterruptActionSchema.nullable(),
 });
 
 export const InterruptRecordListInputSchema = z.strictObject({
@@ -553,7 +556,7 @@ export const InterruptRecordListResponseSchema = z.strictObject({
 
 export const InterruptResolveInputSchema = z.strictObject({
   interruptId: z.string().trim().min(1),
-  action: z.enum(['approve', 'reject', 'submit']),
+  action: z.enum(['approve', 'reject']),
   data: z.unknown().optional(),
 });
 

@@ -55,9 +55,9 @@ const TOOL_RESULT_EVENT_MAX_LENGTH = 500;
  * fails JSON.parse and the render block is dropped without any error surfacing.
  * TableView and chart payloads routinely exceed the cap.
  */
-export function toolResultForEvent(toolCallName: string, result: unknown): string {
+export function toolResultForEvent(toolName: string, result: unknown): string {
   const serialized = String(result);
-  return isA2UIRenderTool(toolCallName) ? serialized : serialized.slice(0, TOOL_RESULT_EVENT_MAX_LENGTH);
+  return isA2UIRenderTool(toolName) ? serialized : serialized.slice(0, TOOL_RESULT_EVENT_MAX_LENGTH);
 }
 
 /** Extended AG-UI event fields used when extracting tool/message data. */
@@ -69,7 +69,7 @@ interface TextContentEvent {
 
 interface ToolCallStartEvent {
   type: 'TOOL_CALL_START';
-  toolCallName: string;
+  toolName: string;
   toolCallId?: string;
   args?: Record<string, unknown>;
 }
@@ -78,7 +78,7 @@ interface ToolCallResultEvent {
   type: 'TOOL_CALL_RESULT';
   result: unknown;
   toolCallId?: string;
-  toolCallName?: string;
+  toolName?: string;
   durationMs?: number;
 }
 
@@ -889,14 +889,14 @@ export class AgentTurnService {
           const subagentName = typeof e.agentName === 'string' ? e.agentName : undefined;
           pendingToolCalls.set(tcId, {
             id: tcId,
-            name: (e.toolCallName as string) || 'unknown',
+            name: (e.toolName as string) || 'unknown',
             args: toolArgs,
             status: 'running',
           });
           streamingParts.push({
             type: 'tool_call',
             id: tcId,
-            name: (e.toolCallName as string) || 'unknown',
+            name: (e.toolName as string) || 'unknown',
             args: toolArgs,
             status: 'running',
             ...(parentToolCallId ? { parentToolCallId } : {}),
@@ -1067,7 +1067,7 @@ export class AgentTurnService {
           });
         }
 
-        if (event.type === 'TOOL_CALL_START' && 'toolCallName' in event) {
+        if (event.type === 'TOOL_CALL_START' && 'toolName' in event) {
           const toolStart = event as unknown as ToolCallStartEvent;
           const rawStart = event as Record<string, unknown>;
           emitTurnEvent('tool_call.started', {
@@ -1075,7 +1075,7 @@ export class AgentTurnService {
             agentId,
             conversationId,
             toolCallId: toolStart.toolCallId ?? '',
-            toolCallName: toolStart.toolCallName,
+            toolName: toolStart.toolName,
             args: toolStart.args ?? {},
             ...(typeof rawStart.parentToolCallId === 'string'
               ? { parentToolCallId: rawStart.parentToolCallId }
@@ -1091,16 +1091,16 @@ export class AgentTurnService {
           const toolResult = event as unknown as ToolCallResultEvent;
           const toolCallId = toolResult.toolCallId ?? '';
           const knownToolName = toolCallId ? pendingToolCalls.get(toolCallId)?.name : undefined;
-          const toolCallName = toolResult.toolCallName && toolResult.toolCallName.length > 0
-            ? toolResult.toolCallName
+          const toolName = toolResult.toolName && toolResult.toolName.length > 0
+            ? toolResult.toolName
             : knownToolName ?? '';
           emitTurnEvent('tool_call.completed', {
             turnId,
             agentId,
             conversationId,
             toolCallId,
-            toolCallName,
-            result: toolResultForEvent(toolCallName, toolResult.result),
+            toolName,
+            result: toolResultForEvent(toolName, toolResult.result),
             durationMs: toolResult.durationMs ?? 0,
             timestamp: Date.now(),
           } as unknown as EventMap['tool_call.completed']);

@@ -63,7 +63,7 @@ describe('CanonicalProjector (ADR-015)', () => {
       conversationId: requested.conversationId,
       interruptId: requested.interruptId,
       toolCallId: requested.toolCallId,
-      toolCallName: requested.toolCallName,
+      toolName: requested.toolName,
       args: requested.args,
       timestamp: requested.timestamp,
     })[0]?.body).toEqual(requested);
@@ -114,7 +114,7 @@ describe('CanonicalProjector (ADR-015)', () => {
       agentId: 'agent-1',
       conversationId: a2ui.threadId,
       toolCallId: (a2ui.block as Record<string, unknown>).id,
-      toolCallName: 'a2ui-render',
+      toolName: 'a2ui-render',
       result: JSON.stringify(a2ui.block),
       durationMs: 0,
       timestamp: a2ui.timestamp,
@@ -178,7 +178,7 @@ describe('CanonicalProjector (ADR-015)', () => {
     // Tool start closes the message; the next chunk opens turn-1-m2.
     const toolFrames = projector.project('tool_call.started', {
       turnId: 'turn-1', agentId: 'agent-1', conversationId: 'conv-1',
-      toolCallId: 'tc-1', toolCallName: 'bash', args: { cmd: 'ls' }, timestamp: T,
+      toolCallId: 'tc-1', toolName: 'bash', args: { cmd: 'ls' }, timestamp: T,
     });
     expect(toolFrames.map((frame) => frame.type)).toEqual(['TEXT_MESSAGE_END', 'TOOL_CALL_START', 'TOOL_CALL_ARGS']);
     expect(toolFrames[0]!.body.messageId).toBe('turn-1-m1');
@@ -254,7 +254,7 @@ describe('CanonicalProjector (ADR-015)', () => {
     const projector = new CanonicalProjector();
     const frames = projector.project('tool_call.completed', {
       turnId: 'turn-1', agentId: 'agent-1', conversationId: 'conv-1',
-      toolCallId: 'tc-1', toolCallName: 'a2ui-render',
+      toolCallId: 'tc-1', toolName: 'a2ui-render',
       result: JSON.stringify({ component: 'Chart', props: { series: [1] } }),
       timestamp: T,
     });
@@ -309,13 +309,13 @@ describe('CanonicalProjector (ADR-015)', () => {
     const projector = new CanonicalProjector();
     const interrupted = projector.project('interrupt.requested', {
       turnId: 'turn-1', agentId: 'agent-1', conversationId: 'conv-1',
-      toolCallId: 'tc-1', toolCallName: 'send_email', args: {}, interruptId: 'turn-1', timestamp: T,
+      toolCallId: 'tc-1', toolName: 'send_email', args: {}, interruptId: 'turn-1', timestamp: T,
     });
     expect(interrupted).toHaveLength(1);
     expect(interrupted[0]).toEqual(expect.objectContaining({ type: 'CUSTOM', channel: 'run', turnId: 'turn-1' }));
     expect(interrupted[0]!.body.name).toBe('ctxmill.interrupt.requested');
-    expect(interrupted[0]!.body.toolCallName).toBe('send_email');
-    expect(interrupted[0]!.body).not.toHaveProperty('toolName');
+    expect(interrupted[0]!.body.toolName).toBe('send_email');
+    expect(interrupted[0]!.body).not.toHaveProperty('toolCallName');
     expect(interrupted[0]!.body).not.toHaveProperty('subtype');
     expect(interrupted[0]!.body).not.toHaveProperty('runId');
     expect(interrupted[0]!.body).not.toHaveProperty('threadId');

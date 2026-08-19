@@ -24,7 +24,7 @@ export type EventMap = {
     agentId: string;
     conversationId: string;
     toolCallId: string;
-    toolCallName: string;
+    toolName: string;
     args: Record<string, unknown>;
     requiresApproval?: boolean;
     /**
@@ -41,7 +41,7 @@ export type EventMap = {
     agentId: string;
     conversationId: string;
     toolCallId: string;
-    toolCallName: string;
+    toolName: string;
     result: string;
     durationMs: number;
     error?: string;
@@ -53,7 +53,7 @@ export type EventMap = {
     agentId: string;
     conversationId: string;
     toolCallId: string;
-    toolCallName: string;
+    toolName: string;
     args: Record<string, unknown>;
     interruptId: string;
     timestamp: number;

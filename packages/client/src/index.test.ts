@@ -35,7 +35,7 @@ describe('CtxmillControlClient', () => {
       updatedAt: 1,
       lastFiredAt: null,
   missedFireCount: 0,
-      nextRun: 2,
+      nextRunAt: 2,
     };
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ schedules: [schedule] }))
@@ -740,7 +740,7 @@ describe('CtxmillAgUiClient', () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(streamFromText([
       'data: {"type":"RUN_STARTED","runId":"turn-1","threadId":"conversation-1","timestamp":1}',
       '',
-      'data: {"type":"CUSTOM","name":"ctxmill.interrupt.requested","agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","interruptId":"interrupt-1","toolCallId":"tool-call-1","toolCallName":"request-approval","args":{"reason":"publish"},"timestamp":2}',
+      'data: {"type":"CUSTOM","name":"ctxmill.interrupt.requested","agentId":"agent-1","turnId":"turn-1","conversationId":"conversation-1","interruptId":"interrupt-1","toolCallId":"tool-call-1","toolName":"request-approval","args":{"reason":"publish"},"timestamp":2}',
       '',
     ].join('\n')), {
       status: 200,
@@ -767,7 +767,7 @@ describe('CtxmillAgUiClient', () => {
       conversationId: 'conversation-1',
       agentId: 'agent-1',
       toolCallId: 'tool-call-1',
-      toolCallName: 'request-approval',
+      toolName: 'request-approval',
       args: { reason: 'publish' },
     });
   });
@@ -795,7 +795,7 @@ describe('CtxmillAgUiClient', () => {
   it('lists durable interrupts across agents through the control client', async () => {
     const response = {
       interrupts: [{
-        interruptId: 'interrupt-1',
+        id: 'interrupt-1',
         agentId: 'agent-1',
         turnId: 'turn-1',
         sandboxSessionId: 'session-1',
@@ -854,7 +854,7 @@ describe('CtxmillAgUiClient', () => {
         artifactId: 'artifact-1',
         uploadUrl: 'https://storage.test/upload',
         storageKey: artifact.storageKey,
-        expiresIn: 3600,
+        expiresInSec: 3600,
       }))
       .mockResolvedValueOnce(jsonResponse(artifact));
     const client = new clientModule.CtxmillControlClient({

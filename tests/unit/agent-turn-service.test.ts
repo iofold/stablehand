@@ -933,7 +933,7 @@ describe('AgentTurnService', () => {
 
   it('flushes pending tool-call state when the stream ends before a result arrives', async () => {
     const events: StreamEvent[] = [
-      { type: 'TOOL_CALL_START', timestamp: 1, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'search' },
+      { type: 'TOOL_CALL_START', timestamp: 1, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
       { type: 'TOOL_CALL_END', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1' },
       { type: 'RUN_FINISHED', timestamp: 3, runId: 'run-1' },
     ];
@@ -958,10 +958,10 @@ describe('AgentTurnService', () => {
   it('persists assistant and tool messages separately for tool-use turns', async () => {
     const events: StreamEvent[] = [
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', delta: 'Let me check.' },
-      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'search' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
       { type: 'TOOL_CALL_ARGS', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', args: '{"q":"test"}' },
       { type: 'TOOL_CALL_END', timestamp: 4, runId: 'run-1', toolCallId: 'tc-1' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'search', result: 'Found 3 results', durationMs: 42 },
+      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search', result: 'Found 3 results', durationMs: 42 },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 6, runId: 'run-1', messageId: 'm1', delta: 'Based on the results:' },
       makeCommittedEvent({ timestamp: 7, content: 'Based on the results:' }),
       { type: 'RUN_FINISHED', timestamp: 8, runId: 'run-1' },
@@ -1019,10 +1019,10 @@ describe('AgentTurnService', () => {
   it('updates both persisted assistant tool-call projections after later tool results', async () => {
     const events: StreamEvent[] = [
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', delta: 'Checking.' },
-      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'search' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'search', result: 'first', durationMs: 1 },
-      { type: 'TOOL_CALL_START', timestamp: 4, runId: 'run-1', toolCallId: 'tc-2', toolCallName: 'lookup' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc-2', toolCallName: 'lookup', result: 'second', durationMs: 1 },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search', result: 'first', durationMs: 1 },
+      { type: 'TOOL_CALL_START', timestamp: 4, runId: 'run-1', toolCallId: 'tc-2', toolName: 'lookup' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc-2', toolName: 'lookup', result: 'second', durationMs: 1 },
       { type: 'RUN_FINISHED', timestamp: 6, runId: 'run-1' },
     ];
 
@@ -1047,14 +1047,14 @@ describe('AgentTurnService', () => {
     const eventBus = createEventBusMock();
     const events: StreamEvent[] = [
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', delta: 'Checking.' },
-      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'search' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'search', result: 'first', durationMs: 1 },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search', result: 'first', durationMs: 1 },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 4, runId: 'run-1', messageId: 'm2', delta: 'Need one more check.' },
-      { type: 'TOOL_CALL_START', timestamp: 5, runId: 'run-1', toolCallId: 'tc-2', toolCallName: 'lookup' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 6, runId: 'run-1', toolCallId: 'tc-2', toolCallName: 'lookup', result: 'second', durationMs: 1 },
+      { type: 'TOOL_CALL_START', timestamp: 5, runId: 'run-1', toolCallId: 'tc-2', toolName: 'lookup' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 6, runId: 'run-1', toolCallId: 'tc-2', toolName: 'lookup', result: 'second', durationMs: 1 },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 7, runId: 'run-1', messageId: 'm3', delta: 'Final check.' },
-      { type: 'TOOL_CALL_START', timestamp: 8, runId: 'run-1', toolCallId: 'tc-3', toolCallName: 'read' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 9, runId: 'run-1', toolCallId: 'tc-3', toolCallName: 'read', result: 'third', durationMs: 1 },
+      { type: 'TOOL_CALL_START', timestamp: 8, runId: 'run-1', toolCallId: 'tc-3', toolName: 'read' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 9, runId: 'run-1', toolCallId: 'tc-3', toolName: 'read', result: 'third', durationMs: 1 },
       { type: 'RUN_FINISHED', timestamp: 10, runId: 'run-1' },
     ];
 
@@ -1205,7 +1205,7 @@ describe('AgentTurnService', () => {
         timestamp: 1,
         runId: 'run-1',
         toolCallId: 'tc-running',
-        toolCallName: 'bash',
+        toolName: 'bash',
         args: { command: 'sleep 300' },
       },
     ]);
@@ -1586,10 +1586,10 @@ describe('AgentTurnService', () => {
 
       await executeEvents([
         { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', delta: 'Let me check.' },
-        { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'search' },
+        { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search' },
         { type: 'TOOL_CALL_ARGS', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', args: '{"q":"test"}' },
         { type: 'TOOL_CALL_END', timestamp: 4, runId: 'run-1', toolCallId: 'tc-1' },
-        { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'search', result: 'Found 3 results', durationMs: 42 },
+        { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc-1', toolName: 'search', result: 'Found 3 results', durationMs: 42 },
         { type: 'TEXT_MESSAGE_CONTENT', timestamp: 6, runId: 'run-1', messageId: 'm1', delta: 'Based on the results:' },
         makeCommittedEvent({ timestamp: 7, content: 'Based on the results:' }),
         { type: 'RUN_FINISHED', timestamp: 8, runId: 'run-1' },
@@ -1655,7 +1655,7 @@ describe('AgentTurnService', () => {
           timestamp: 1,
           runId: 'run-1',
           toolCallId: 'tc-1',
-          toolCallName: 'search',
+          toolName: 'search',
           args: { query: 'alpha' },
         },
       ], { deps: { eventBus } });
@@ -1665,7 +1665,7 @@ describe('AgentTurnService', () => {
           turnId: 'run-1',
           agentId: 'agent-1',
           toolCallId: 'tc-1',
-          toolCallName: 'search',
+          toolName: 'search',
           args: { query: 'alpha' },
         }),
       ]);
@@ -1682,7 +1682,7 @@ describe('AgentTurnService', () => {
           timestamp: 1,
           runId: 'run-1',
           toolCallId: 'tc-1',
-          toolCallName: 'search',
+          toolName: 'search',
           result: longResult,
           durationMs: 25,
         },
@@ -1691,14 +1691,14 @@ describe('AgentTurnService', () => {
       expect(toolResults).toHaveLength(1);
       expect(toolResults[0]).toMatchObject({
         toolCallId: 'tc-1',
-        toolCallName: 'search',
+        toolName: 'search',
         durationMs: 25,
       });
       expect(toolResults[0].result).toHaveLength(500);
       expect(toolResults[0].result).toBe('x'.repeat(500));
     });
 
-    it('backfills tool_call.completed toolCallName from the matching TOOL_CALL_START event', async () => {
+    it('backfills tool_call.completed toolName from the matching TOOL_CALL_START event', async () => {
       const eventBus = new TypedEventBus();
       const toolResults = collectEvents(eventBus, 'tool_call.completed');
 
@@ -1708,7 +1708,7 @@ describe('AgentTurnService', () => {
           timestamp: 1,
           runId: 'run-1',
           toolCallId: 'tc-1',
-          toolCallName: 'search',
+          toolName: 'search',
           args: { query: 'alpha' },
         },
         {
@@ -1722,10 +1722,10 @@ describe('AgentTurnService', () => {
       ], { deps: { eventBus } });
 
       expect(toolResults).toHaveLength(1);
-      expect(toolResults[0].toolCallName).toBe('search');
+      expect(toolResults[0].toolName).toBe('search');
     });
 
-    it('uses an empty string for tool_call.completed toolCallName when no start event is available', async () => {
+    it('uses an empty string for tool_call.completed toolName when no start event is available', async () => {
       const eventBus = new TypedEventBus();
       const toolResults = collectEvents(eventBus, 'tool_call.completed');
 
@@ -1741,13 +1741,13 @@ describe('AgentTurnService', () => {
       ], { deps: { eventBus } });
 
       expect(toolResults).toHaveLength(1);
-      expect(toolResults[0].toolCallName).toBe('');
+      expect(toolResults[0].toolName).toBe('');
     });
 
     it('does not throw when eventBus is not provided', async () => {
       const events: StreamEvent[] = [
         { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', delta: 'hi' },
-        { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolCallName: 'x' },
+        { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc-1', toolName: 'x' },
         { type: 'TOOL_CALL_RESULT', timestamp: 3, runId: 'run-1', toolCallId: 'tc-1', result: 'y', durationMs: 1 },
       ];
 

@@ -374,7 +374,7 @@ describe('fetchInterrupts', () => {
       sandboxSessionId: 'sandbox-1',
       agentId: 'a1',
       toolCallId: 'tc-1',
-      toolCallName: 'approve',
+      toolName: 'approve',
       args: { ok: true },
       status: 'pending',
       createdAt: 1,

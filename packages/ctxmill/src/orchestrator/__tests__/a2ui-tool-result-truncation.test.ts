@@ -58,7 +58,7 @@ describe('a2ui-render tool results survive the event-path truncation cap', () =>
 
     const frames = projector.project('tool_call.completed', {
       ...TOOL_EVENT,
-      toolCallName: 'mcp__ctxmill__a2ui-render',
+      toolName: 'mcp__ctxmill__a2ui-render',
       result: toolResultForEvent('mcp__ctxmill__a2ui-render', result),
       durationMs: 5,
     });
@@ -77,7 +77,7 @@ describe('a2ui-render tool results survive the event-path truncation cap', () =>
 
     const frames = projector.project('tool_call.completed', {
       ...TOOL_EVENT,
-      toolCallName: 'mcp__ctxmill__a2ui-render',
+      toolName: 'mcp__ctxmill__a2ui-render',
       result: tableViewResult(12).slice(0, 500),
       durationMs: 5,
     });

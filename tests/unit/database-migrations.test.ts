@@ -434,7 +434,7 @@ describe('database migration baseline guard', () => {
       conversationId: 'conversation-1',
       interruptId: 'interrupt-1',
       toolCallId: 'tool-call-1',
-      toolCallName: 'Bash',
+      toolName: 'Bash',
       args: {},
       timestamp: 11,
     });
@@ -473,7 +473,7 @@ describe('database migration baseline guard', () => {
       agentId: 'agent-1',
       conversationId: 'conversation-1',
       toolCallId: 'tool-call-1',
-      toolCallName: 'Bash',
+      toolName: 'Bash',
       args: {},
       timestamp: 14,
     });

@@ -177,7 +177,7 @@ export const InterruptRequestedEventSchema = z.strictObject({
   sandboxSessionId: SandboxSessionIdSchema.optional(),
   interruptId: InterruptIdSchema,
   toolCallId: ToolCallIdSchema,
-  toolCallName: z.string(),
+  toolName: z.string(),
   args: UnknownRecordSchema,
   timestamp: EpochMillisSchema,
 });

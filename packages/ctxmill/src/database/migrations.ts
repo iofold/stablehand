@@ -2,6 +2,7 @@ import type postgres from 'postgres';
 import {
   CANONICAL_EVENT_CONTRACTS_MIGRATION_ID,
   CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION,
+  canonicalizeInterruptToolName,
   canonicalizePersistedEventContracts,
   TEXT_MESSAGE_END_CONTRACT_MIGRATION_ID,
   TEXT_MESSAGE_END_CONTRACT_MIGRATION_VERSION,
@@ -1300,6 +1301,7 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
       )
   `;
   await canonicalizePersistedEventContracts(sql);
+  await canonicalizeInterruptToolName(sql);
 
   // Adopt only terminal history that already contains the complete frame set
   // for the durable turn outcome. Rows without proof stay pending and are

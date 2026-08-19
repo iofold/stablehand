@@ -296,12 +296,12 @@ export async function sendInterrupt(agentId: string, input: InterruptResolveInpu
 }
 
 export type PendingInterrupt = {
-  interruptId: string;
+  id: string;
   turnId: string;
   sandboxSessionId?: string;
   agentId: string;
   toolCallId: string;
-  toolCallName: string;
+  toolName: string;
   args: Record<string, unknown>;
   status: string;
   createdAt?: number;

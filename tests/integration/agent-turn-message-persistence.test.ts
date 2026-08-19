@@ -135,10 +135,10 @@ describe('Agent turn message persistence integration', () => {
   it('persists messages in OpenAI standard format with interleaved tool calls', async () => {
     const messages = await executeAndReadMessages([
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', delta: 'Let me check.' },
-      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolCallName: 'search' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolName: 'search' },
       { type: 'TOOL_CALL_ARGS', timestamp: 3, runId: 'run-1', toolCallId: 'tc1', args: '{"q":"test"}' },
       { type: 'TOOL_CALL_END', timestamp: 4, runId: 'run-1', toolCallId: 'tc1' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc1', result: 'Found 3 results', toolCallName: 'search' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc1', result: 'Found 3 results', toolName: 'search' },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 6, runId: 'run-1', messageId: 'm1', delta: 'Based on the results:' },
       makeCommittedEvent({ timestamp: 7, content: 'Based on the results:' }),
       { type: 'RUN_FINISHED', timestamp: 8, runId: 'run-1' },
@@ -171,14 +171,14 @@ describe('Agent turn message persistence integration', () => {
   it('persists parallel tool calls correctly', async () => {
     const messages = await executeAndReadMessages([
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', delta: 'Checking both.' },
-      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolCallName: 'search' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolName: 'search' },
       { type: 'TOOL_CALL_ARGS', timestamp: 3, runId: 'run-1', toolCallId: 'tc1', args: '{"q":"alpha"}' },
-      { type: 'TOOL_CALL_START', timestamp: 4, runId: 'run-1', toolCallId: 'tc2', toolCallName: 'weather' },
+      { type: 'TOOL_CALL_START', timestamp: 4, runId: 'run-1', toolCallId: 'tc2', toolName: 'weather' },
       { type: 'TOOL_CALL_ARGS', timestamp: 5, runId: 'run-1', toolCallId: 'tc2', args: '{"city":"SF"}' },
       { type: 'TOOL_CALL_END', timestamp: 6, runId: 'run-1', toolCallId: 'tc1' },
       { type: 'TOOL_CALL_END', timestamp: 7, runId: 'run-1', toolCallId: 'tc2' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 8, runId: 'run-1', toolCallId: 'tc1', result: 'Alpha result', toolCallName: 'search' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 9, runId: 'run-1', toolCallId: 'tc2', result: 'Sunny, 72°F', toolCallName: 'weather' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 8, runId: 'run-1', toolCallId: 'tc1', result: 'Alpha result', toolName: 'search' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 9, runId: 'run-1', toolCallId: 'tc2', result: 'Sunny, 72°F', toolName: 'weather' },
       makeCommittedEvent({ timestamp: 10, content: '' }),
       { type: 'RUN_FINISHED', timestamp: 11, runId: 'run-1' },
     ]);
@@ -209,10 +209,10 @@ describe('Agent turn message persistence integration', () => {
   it('persists each tool_call part on exactly one assistant message (ctx-hb4b)', async () => {
     const messages = await executeAndReadMessages([
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', delta: 'Let me compute.' },
-      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolCallName: 'search' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolName: 'search' },
       { type: 'TOOL_CALL_ARGS', timestamp: 3, runId: 'run-1', toolCallId: 'tc1', args: '{"q":"2+2"}' },
       { type: 'TOOL_CALL_END', timestamp: 4, runId: 'run-1', toolCallId: 'tc1' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc1', result: '4', toolCallName: 'search' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 5, runId: 'run-1', toolCallId: 'tc1', result: '4', toolName: 'search' },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 6, runId: 'run-1', messageId: 'm1', delta: 'The answer is 4.' },
       makeCommittedEvent({ timestamp: 7, content: 'The answer is 4.' }),
       { type: 'RUN_FINISHED', timestamp: 8, runId: 'run-1' },
@@ -235,13 +235,13 @@ describe('Agent turn message persistence integration', () => {
   it('keeps text between tool calls on the flushed message only (ctx-hb4b)', async () => {
     const messages = await executeAndReadMessages([
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: 'run-1', messageId: 'm1', delta: 'First lookup.' },
-      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolCallName: 'search' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: 'run-1', toolCallId: 'tc1', toolName: 'search' },
       { type: 'TOOL_CALL_END', timestamp: 3, runId: 'run-1', toolCallId: 'tc1' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 4, runId: 'run-1', toolCallId: 'tc1', result: 'A', toolCallName: 'search' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 4, runId: 'run-1', toolCallId: 'tc1', result: 'A', toolName: 'search' },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 5, runId: 'run-1', messageId: 'm1', delta: 'Now the weather.' },
-      { type: 'TOOL_CALL_START', timestamp: 6, runId: 'run-1', toolCallId: 'tc2', toolCallName: 'weather' },
+      { type: 'TOOL_CALL_START', timestamp: 6, runId: 'run-1', toolCallId: 'tc2', toolName: 'weather' },
       { type: 'TOOL_CALL_END', timestamp: 7, runId: 'run-1', toolCallId: 'tc2' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 8, runId: 'run-1', toolCallId: 'tc2', result: 'Sunny', toolCallName: 'weather' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 8, runId: 'run-1', toolCallId: 'tc2', result: 'Sunny', toolName: 'weather' },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 9, runId: 'run-1', messageId: 'm1', delta: 'All done.' },
       makeCommittedEvent({ timestamp: 10, content: 'All done.' }),
       { type: 'RUN_FINISHED', timestamp: 11, runId: 'run-1' },
@@ -292,17 +292,17 @@ describe('Agent turn message persistence integration', () => {
     const turnRegistry = new TestTurnRegistry(harness.bus);
     const events: StreamEvent[] = [
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 1, runId: turn.id, messageId: 'm1', delta: 'First lookup.' },
-      { type: 'TOOL_CALL_START', timestamp: 2, runId: turn.id, toolCallId: 'tc1', toolCallName: 'search' },
+      { type: 'TOOL_CALL_START', timestamp: 2, runId: turn.id, toolCallId: 'tc1', toolName: 'search' },
       { type: 'TOOL_CALL_END', timestamp: 3, runId: turn.id, toolCallId: 'tc1' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 4, runId: turn.id, toolCallId: 'tc1', result: 'A', toolCallName: 'search' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 4, runId: turn.id, toolCallId: 'tc1', result: 'A', toolName: 'search' },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 5, runId: turn.id, messageId: 'm2', delta: 'Now the weather.' },
-      { type: 'TOOL_CALL_START', timestamp: 6, runId: turn.id, toolCallId: 'tc2', toolCallName: 'weather' },
+      { type: 'TOOL_CALL_START', timestamp: 6, runId: turn.id, toolCallId: 'tc2', toolName: 'weather' },
       { type: 'TOOL_CALL_END', timestamp: 7, runId: turn.id, toolCallId: 'tc2' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 8, runId: turn.id, toolCallId: 'tc2', result: 'Sunny', toolCallName: 'weather' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 8, runId: turn.id, toolCallId: 'tc2', result: 'Sunny', toolName: 'weather' },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 9, runId: turn.id, messageId: 'm3', delta: 'One final lookup.' },
-      { type: 'TOOL_CALL_START', timestamp: 10, runId: turn.id, toolCallId: 'tc3', toolCallName: 'search' },
+      { type: 'TOOL_CALL_START', timestamp: 10, runId: turn.id, toolCallId: 'tc3', toolName: 'search' },
       { type: 'TOOL_CALL_END', timestamp: 11, runId: turn.id, toolCallId: 'tc3' },
-      { type: 'TOOL_CALL_RESULT', timestamp: 12, runId: turn.id, toolCallId: 'tc3', result: 'C', toolCallName: 'search' },
+      { type: 'TOOL_CALL_RESULT', timestamp: 12, runId: turn.id, toolCallId: 'tc3', result: 'C', toolName: 'search' },
       { type: 'TEXT_MESSAGE_CONTENT', timestamp: 13, runId: turn.id, messageId: 'm4', delta: 'Done.' },
       makeCommittedEvent({
         timestamp: 14,

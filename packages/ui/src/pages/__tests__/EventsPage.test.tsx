@@ -146,7 +146,7 @@ describe('EventsPage', () => {
           conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
-            toolCallName: 'search_docs',
+            toolName: 'search_docs',
             args: { query: 'checkpoint restore failures', limit: 5 },
             requiresApproval: true,
           }),
@@ -159,7 +159,7 @@ describe('EventsPage', () => {
           conversationId: null,
           createdAt: Date.now(),
           payload: JSON.stringify({
-            toolCallName: 'search_docs',
+            toolName: 'search_docs',
             content: 'Found checkpoint lifecycle notes and restore retry guidance.',
             durationMs: 1240,
           }),

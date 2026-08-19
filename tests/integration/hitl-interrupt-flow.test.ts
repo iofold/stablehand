@@ -51,7 +51,7 @@ describe('HITL Interrupt Lifecycle', () => {
            turnId: 'run-1',
            agentId: 'agent-1',
            toolCallId: 'tc-1',
-           toolCallName: 'send_email',
+           toolName: 'send_email',
            args: { to: 'user@example.com', body: 'Hello' },
            interruptId: expect.any(String),
          }),

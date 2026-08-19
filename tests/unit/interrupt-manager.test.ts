@@ -610,7 +610,7 @@ describe('InterruptManager', () => {
        expect(events[0].turnId).toBe('run-1');
        expect(events[0].agentId).toBe('agent-1');
        expect(events[0].toolCallId).toBe('tc-1');
-       expect(events[0].toolCallName).toBe('bash');
+       expect(events[0].toolName).toBe('bash');
        expect(events[0].args).toEqual({ cmd: 'ls' });
        expect(events[0].timestamp).toBeTypeOf('number');
 

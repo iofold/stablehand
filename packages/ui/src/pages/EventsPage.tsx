@@ -170,21 +170,21 @@ function extractSummary(type: string, payload: unknown): string {
       return truncateSummary(`${role[0]?.toUpperCase() ?? 'M'}${role.slice(1)} message ended`);
     }
     case 'TOOL_CALL_START': {
-      const toolName = stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
+      const toolName = stringField(parsed, 'toolName') ?? stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
       const approval = parsed.requiresApproval === true ? ' approval required' : '';
       return truncateSummary(`Tool started: ${toolName}${approval}${summarizeToolArgs(parseRecordField(parsed, 'args'))}`);
     }
     case 'TOOL_CALL_ARGS': {
-      const toolName = stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
+      const toolName = stringField(parsed, 'toolName') ?? stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
       const args = parseRecordField(parsed, 'args') ?? parseRecordField(parsed, 'delta');
       return truncateSummary(`Tool args: ${toolName}${summarizeToolArgs(args)}`);
     }
     case 'TOOL_CALL_END': {
-      const toolName = stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
+      const toolName = stringField(parsed, 'toolName') ?? stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
       return truncateSummary(`Tool ended: ${toolName}`);
     }
     case 'TOOL_CALL_RESULT': {
-      const toolName = stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
+      const toolName = stringField(parsed, 'toolName') ?? stringField(parsed, 'toolCallName') ?? stringField(parsed, 'toolCallId') ?? 'tool';
       const duration = formatEventDuration(numberField(parsed, 'durationMs'));
       const error = stringField(parsed, 'error');
       if (error) {

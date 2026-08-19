@@ -81,7 +81,7 @@ export const TurnCompletedWebhookPayloadSchema = z.strictObject({
 export const ToolCallStartedWebhookPayloadSchema = z.strictObject({
   ...turnIdentity,
   toolCallId: ToolCallIdSchema,
-  toolCallName: z.string(),
+  toolName: z.string(),
   args: z.record(z.string(), z.unknown()),
   requiresApproval: z.boolean().optional(),
   timestamp: TimestampSchema,
@@ -90,7 +90,7 @@ export const ToolCallStartedWebhookPayloadSchema = z.strictObject({
 export const ToolCallCompletedWebhookPayloadSchema = z.strictObject({
   ...turnIdentity,
   toolCallId: ToolCallIdSchema,
-  toolCallName: z.string(),
+  toolName: z.string(),
   result: z.string(),
   durationMs: z.number().int().nonnegative(),
   error: z.string().optional(),
@@ -102,7 +102,7 @@ export const InterruptRequestedWebhookPayloadSchema = z.strictObject({
   sandboxSessionId: SandboxSessionIdSchema.optional(),
   interruptId: InterruptIdSchema,
   toolCallId: ToolCallIdSchema,
-  toolCallName: z.string(),
+  toolName: z.string(),
   args: z.record(z.string(), z.unknown()),
   timestamp: TimestampSchema,
 });

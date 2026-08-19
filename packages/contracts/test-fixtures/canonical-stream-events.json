@@ -105,11 +105,11 @@
     "sandboxSessionId": "sandbox-1",
     "interruptId": "interrupt-1",
     "toolCallId": "tool-call-2",
-    "toolCallName": "post-journal",
     "args": {
       "journalId": "journal-1"
     },
-    "timestamp": 11
+    "timestamp": 11,
+    "toolName": "post-journal"
   },
   {
     "type": "CUSTOM",

@@ -136,7 +136,7 @@ export class CanonicalProjector {
             runId: p.turnId,
             threadId: p.conversationId,
             toolCallId: p.toolCallId,
-            toolCallName: p.toolCallName,
+            toolCallName: p.toolName,
             ...(p.parentToolCallId ? { parentToolCallId: p.parentToolCallId } : {}),
             ...(p.agentName ? { agentName: p.agentName } : {}),
             timestamp: p.timestamp,
@@ -170,7 +170,7 @@ export class CanonicalProjector {
             timestamp: p.timestamp,
           }),
         ];
-        const a2uiBlock = !p.error && isA2UIRenderTool(p.toolCallName) && typeof p.result === 'string'
+        const a2uiBlock = !p.error && isA2UIRenderTool(p.toolName) && typeof p.result === 'string'
           ? parseA2UIRenderBlock(p.toolCallId, p.result)
           : null;
         if (a2uiBlock) {
@@ -266,6 +266,7 @@ export class CanonicalProjector {
             return [this.runFrame(type, p.agentId, p.turnId, p.conversationId, {
               ...identity,
               toolCallId: event.toolCallId,
+              // Harness-emitted AG-UI event: protocol keys in and out.
               toolCallName: event.toolCallName,
               ...(typeof event.parentMessageId === 'string'
                 ? { parentMessageId: event.parentMessageId }

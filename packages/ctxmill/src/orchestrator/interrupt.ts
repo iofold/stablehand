@@ -42,7 +42,7 @@ interface PendingEntry {
 export interface PendingInterrupt {
   interruptId: string;
   toolCallId: string;
-  toolCallName: string;
+  toolName: string;
   args: Record<string, unknown>;
   createdAt: number;
   sandboxSessionId?: string;
@@ -106,7 +106,7 @@ export class InterruptManager {
     conversationId: string | undefined,
     sandboxSessionId: string | undefined,
     toolCallId: string,
-    toolCallName: string,
+    toolName: string,
     args: Record<string, unknown>,
     interruptId: string,
     createdAt: number,
@@ -122,7 +122,7 @@ export class InterruptManager {
       conversationId: conversationId ?? turnId,
       ...(sandboxSessionId ? { sandboxSessionId } : {}),
       toolCallId,
-      toolCallName,
+      toolName,
       args,
       interruptId,
       timestamp: createdAt,
@@ -139,7 +139,7 @@ export class InterruptManager {
     interruptId: string,
     agentId: string,
     toolCallId: string,
-    toolCallName: string,
+    toolName: string,
     args: Record<string, unknown>,
     createdAt: number,
     timeoutMs: number,
@@ -168,7 +168,7 @@ export class InterruptManager {
 
       this.pending.set(turnId, {
         resolve: wrappedResolve,
-        info: { interruptId, toolCallId, toolCallName, args, createdAt, sandboxSessionId, conversationId },
+        info: { interruptId, toolCallId, toolName, args, createdAt, sandboxSessionId, conversationId },
         agentId,
         timeoutId,
         hasLiveWaiter,
@@ -234,7 +234,7 @@ export class InterruptManager {
     turnId: string,
     agentId: string,
     toolCallId: string,
-    toolCallName: string,
+    toolName: string,
     args: Record<string, unknown>,
     timeoutMs: number = 300_000,
     sandboxSessionId?: string,
@@ -245,7 +245,7 @@ export class InterruptManager {
       turnId,
       agentId,
       toolCallId,
-      toolCallName,
+      toolName,
       args,
       timeoutMs,
       sandboxSessionId,
@@ -279,7 +279,7 @@ export class InterruptManager {
     turnId: string,
     agentId: string,
     toolCallId: string,
-    toolCallName: string,
+    toolName: string,
     args: Record<string, unknown>,
     timeoutMs: number,
     sandboxSessionId: string | undefined,
@@ -318,7 +318,7 @@ export class InterruptManager {
       turnId,
       agentId,
       toolCallId,
-      toolName: toolCallName,
+      toolName: toolName,
       args,
       timeoutMs,
       createdAt: now,
@@ -410,7 +410,7 @@ export class InterruptManager {
         interruptId,
         agentId,
         toolCallId,
-        toolCallName,
+        toolName,
         args,
         now,
         timeoutMs,
@@ -424,7 +424,7 @@ export class InterruptManager {
         conversationId,
         sandboxSessionId,
         toolCallId,
-        toolCallName,
+        toolName,
         args,
         interruptId,
         now,

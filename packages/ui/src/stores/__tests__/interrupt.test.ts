@@ -15,7 +15,7 @@ describe('interrupt store', () => {
       interruptId: 'interrupt-1',
       turnId: 'turn-1',
       agentId: 'a1',
-      toolCallName: 'shell',
+      toolName: 'shell',
       args: { cmd: 'ls' },
       toolCallId: 'tc1',
     };
@@ -30,7 +30,7 @@ describe('interrupt store', () => {
       interruptId: 'interrupt-1',
       turnId: 'turn-1',
       agentId: 'a1',
-      toolCallName: 'shell',
+      toolName: 'shell',
       args: {},
       toolCallId: 'tc1',
     });
@@ -45,7 +45,7 @@ describe('interrupt store', () => {
       interruptId: 'interrupt-1',
       turnId: 'turn-1',
       agentId: 'a1',
-      toolCallName: 'shell',
+      toolName: 'shell',
       args: {},
       toolCallId: 'tc1',
     });

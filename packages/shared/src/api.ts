@@ -91,7 +91,7 @@ export interface ApiInterruptPayload {
   interruptId: string;
   turnId: string;
   agentId: string;
-  toolCallName: string;
+  toolName: string;
   args: Record<string, unknown>;
   toolCallId: string;
   sandboxSessionId?: string;
