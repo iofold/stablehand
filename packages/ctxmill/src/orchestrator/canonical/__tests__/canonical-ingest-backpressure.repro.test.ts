@@ -158,7 +158,9 @@ describe('ctx-bh1u canonical ingest backpressure', () => {
     expect(shed.statusCode).toBe(429);
     expect(shed.headers['retry-after']).toBe('5');
     const body = shed.json();
-    expect(body.error).toBe('ingest_queue_full');
+    // ctx-iqzy S12: turn-start envelope family — error=human, code=machine.
+    expect(body.code).toBe('ingest_queue_full');
+    expect(body.error).toContain('ingest lane is full');
     expect(body.retryAfterSec).toBe(5);
     // Nothing extra entered the lane — the shed request enqueued no frame.
     expect(spine.canonicalLog.depth).toBe(CAP);

@@ -169,7 +169,8 @@ export const SandboxSessionStatusSchema = z.enum([
 export const TurnSchema = z.strictObject({
   id: TurnIdSchema,
   agentId: AgentIdSchema,
-  conversationId: ConversationIdSchema,
+  // ctx-iqzy S7: null when the turn has no conversation — never '' sentinels.
+  conversationId: ConversationIdSchema.nullable(),
   sandboxSessionId: SandboxSessionIdSchema.optional(),
   sandboxStatus: SandboxSessionStatusSchema.optional(),
   status: TurnStatusSchema,
@@ -479,6 +480,9 @@ export const SandboxSessionSchema = z.strictObject({
   lastActivityAt: EpochMillisecondsSchema,
   restoreAttempts: z.number().int().nonnegative().nullable().optional(),
   lastRestoreError: z.string().nullable().optional(),
+  // ctx-sf2n: durable checkpoint-failure evidence (ctx-vsf8) is operator-relevant.
+  checkpointFailures: z.number().int().nonnegative().nullable().optional(),
+  lastCheckpointError: z.string().nullable().optional(),
   restoreOwnerId: z.string().nullable(),
   restoreFenceToken: z.number().int().nonnegative(),
   restoreLeaseExpiresAt: EpochMillisecondsSchema.nullable(),

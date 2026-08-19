@@ -257,12 +257,14 @@ export async function triggerRoutes(
           await ingestAdmission.check();
         } catch (error) {
           if (error instanceof IngestQueueFullError) {
+            // ctx-iqzy S12: same envelope family as the turn-start throttles —
+            // `error` is the human text, `code` is the machine token.
             return reply
               .status(error.statusCode)
               .header('Retry-After', String(error.retryAfterSec))
               .send({
-                error: error.code,
-                message: error.message,
+                error: error.message,
+                code: error.code,
                 depth: error.depth,
                 limit: error.limit,
                 retryAfterSec: error.retryAfterSec,

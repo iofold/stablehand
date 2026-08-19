@@ -1495,7 +1495,7 @@ function formatMessages(data: unknown): string {
     return {
       id: getString(message, 'id'),
       role: getString(message, 'role'),
-      created: getString(message, 'createdAt'),
+      created: formatTime(getNumber(message, 'createdAt')),
       toolCalls,
       content: getString(message, 'content'),
     };

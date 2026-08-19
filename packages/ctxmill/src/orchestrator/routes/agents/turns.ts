@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
-import { SandboxSecretsSchema } from '@ctxmill/contracts';
+import { SandboxSecretsSchema, SandboxSessionActionResponseSchema } from '@ctxmill/contracts';
 
 import {
   ActiveTurnSuspendError,
@@ -670,7 +670,8 @@ export async function turnRoutes(
             agent.id,
             { background: true },
           );
-          return reply.status(202).send(restore);
+          // ctx-sf2n: keep the 202 body honest against the action contract.
+          return reply.status(202).send(SandboxSessionActionResponseSchema.parse(restore));
         }
 
         const restored = await sessionManager.restoreSession(sandboxSessionId, buildAgentDefinition(agent), agent.id);

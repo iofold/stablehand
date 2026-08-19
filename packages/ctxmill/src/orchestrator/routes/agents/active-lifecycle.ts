@@ -1,19 +1,45 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
+import {
+  SandboxSessionListResponseSchema,
+  SandboxSessionSchema,
+} from '@ctxmill/contracts';
 
+import type { SandboxSessionRow } from '../../../database/repository.js';
 import type { ActiveLifecycleRouteOptions } from './types.js';
 
 function isActiveStatus(status: string | undefined): boolean {
   return status === undefined || status === 'active';
 }
 
-function publicSandboxSession<T extends Record<string, unknown>>(
-  session: T,
-): Omit<T, 'runtimeDefinitionHash'> {
-  return Object.fromEntries(
-    Object.entries(session).filter(
-      ([key]) => key !== 'runtimeDefinitionHash',
-    ),
-  ) as Omit<T, 'runtimeDefinitionHash'>;
+/**
+ * ctx-sf2n: explicit contract projection. The previous strip-one-key filter
+ * leaked every future DB column into the response (checkpointFailures /
+ * lastCheckpointError broke the strict-parsing UI and SDK the moment a
+ * session existed). Picking exactly the contract fields makes new columns
+ * private by default; the parse at the reply site keeps the route honest.
+ */
+function toApiSandboxSession(session: SandboxSessionRow): z.input<typeof SandboxSessionSchema> {
+  return {
+    id: session.id,
+    conversationId: session.conversationId,
+    agentId: session.agentId,
+    containerName: session.containerName,
+    containerId: session.containerId,
+    status: session.status,
+    harnessName: session.harnessName,
+    checkpointRef: session.checkpointRef,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    lastActivityAt: session.lastActivityAt,
+    restoreAttempts: session.restoreAttempts,
+    lastRestoreError: session.lastRestoreError,
+    checkpointFailures: session.checkpointFailures,
+    lastCheckpointError: session.lastCheckpointError,
+    restoreOwnerId: session.restoreOwnerId,
+    restoreFenceToken: session.restoreFenceToken,
+    restoreLeaseExpiresAt: session.restoreLeaseExpiresAt,
+  };
 }
 
 export async function activeConversationRoutes(
@@ -80,8 +106,8 @@ export async function activeSandboxSessionRoutes(
       })
       : await db.getActiveSandboxSessions();
     return reply.send(
-      activeSandboxSessions.map((session) =>
-        publicSandboxSession(session),
+      SandboxSessionListResponseSchema.parse(
+        activeSandboxSessions.map((session) => toApiSandboxSession(session)),
       ),
     );
   });

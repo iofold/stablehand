@@ -166,7 +166,7 @@ export function toApiAgentTurn(
   return {
     id: turn.id,
     agentId: turn.agentId,
-    conversationId: turn.conversationId ?? '',
+    conversationId: turn.conversationId ?? null,
     ...(turn.sandboxSessionId ? { sandboxSessionId: turn.sandboxSessionId } : {}),
     ...(sandboxSession?.status ? { sandboxStatus: sandboxSession.status } : {}),
     status,
