@@ -143,6 +143,21 @@ const WEBHOOK_PAYLOAD_FIELDS = {
     'sha256',
     'timestamp',
   ],
+  'artifact.deleted': [
+    'artifactId',
+    'agentId',
+    'timestamp',
+  ],
+  'turn.cancelled': [
+    'turnId',
+    'agentId',
+    'conversationId',
+    'timestamp',
+  ],
+  'agent.deleted': [
+    'agentId',
+    'timestamp',
+  ],
 } as const satisfies Record<BuiltinWebhookEventName, readonly string[]>;
 
 export function buildWebhookPayload(
@@ -151,13 +166,21 @@ export function buildWebhookPayload(
 ): Record<string, unknown> {
   const webhookPayload: Record<string, unknown> = {};
   for (const field of WEBHOOK_PAYLOAD_FIELDS[eventType]) {
-    webhookPayload[field] = eventType === 'turn.completed' && field === 'usage'
-      ? materializeTurnUsage(
+    if (eventType === 'turn.completed' && field === 'usage') {
+      webhookPayload[field] = materializeTurnUsage(
         payload.usage && typeof payload.usage === 'object'
           ? payload.usage as Record<string, unknown>
           : null,
-      )
-      : payload[field];
+      );
+      continue;
+    }
+    // ctx-iqzy S4: webhooks carry the same SCREAMING TurnStatus REST serves;
+    // the internal bus payload keeps the lowercase storage value.
+    if (eventType === 'turn.completed' && field === 'status' && typeof payload.status === 'string') {
+      webhookPayload[field] = payload.status.toUpperCase();
+      continue;
+    }
+    webhookPayload[field] = payload[field];
   }
   return webhookPayload;
 }

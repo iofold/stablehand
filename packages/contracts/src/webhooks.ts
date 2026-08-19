@@ -71,7 +71,8 @@ export const TurnStartedWebhookPayloadSchema = z.strictObject({
 export const TurnCompletedWebhookPayloadSchema = z.strictObject({
   ...turnIdentity,
   sandboxSessionId: SandboxSessionIdSchema.optional(),
-  status: z.enum(['completed', 'error', 'cancelled']),
+  // ctx-iqzy S4: the same TurnStatus values REST serves — no lowercase shadow copy.
+  status: z.enum(['COMPLETED', 'ERROR', 'CANCELLED']),
   error: z.string().optional(),
   durationMs: z.number().int().nonnegative(),
   usage: TurnUsageSchema.nullable(),
@@ -174,6 +175,27 @@ export const ArtifactCreatedWebhookPayloadSchema = z.strictObject({
   timestamp: TimestampSchema,
 });
 
+// ctx-iqzy S20: previously-invisible lifecycle events, now subscribable.
+export const ArtifactDeletedWebhookPayloadSchema = z.strictObject({
+  artifactId: z.string(),
+  // Webhooks are per-agent: unowned-artifact deletions have no subscriber,
+  // so a delivered payload always carries a concrete agentId.
+  agentId: z.string(),
+  timestamp: TimestampSchema,
+});
+
+export const TurnCancelledWebhookPayloadSchema = z.strictObject({
+  turnId: TurnIdSchema,
+  agentId: AgentIdSchema,
+  conversationId: ConversationIdSchema.nullable().optional(),
+  timestamp: TimestampSchema,
+});
+
+export const AgentDeletedWebhookPayloadSchema = z.strictObject({
+  agentId: AgentIdSchema,
+  timestamp: TimestampSchema,
+});
+
 /** @experimental Extension-to-extension custom webhook envelope. */
 export const CustomWebhookPayloadSchema = z.looseObject({
   type: CustomEventNameSchema,
@@ -196,6 +218,9 @@ export const WEBHOOK_PAYLOAD_SCHEMAS = {
   'feedback.received': FeedbackReceivedWebhookPayloadSchema,
   'budget.threshold': BudgetThresholdWebhookPayloadSchema,
   'artifact.created': ArtifactCreatedWebhookPayloadSchema,
+  'artifact.deleted': ArtifactDeletedWebhookPayloadSchema,
+  'turn.cancelled': TurnCancelledWebhookPayloadSchema,
+  'agent.deleted': AgentDeletedWebhookPayloadSchema,
 } as const satisfies Readonly<Record<BuiltinWebhookEventName, z.ZodType>>;
 
 export const WebhookPayloadSchema = z.union([
@@ -210,6 +235,9 @@ export const WebhookPayloadSchema = z.union([
   FeedbackReceivedWebhookPayloadSchema,
   BudgetThresholdWebhookPayloadSchema,
   ArtifactCreatedWebhookPayloadSchema,
+  ArtifactDeletedWebhookPayloadSchema,
+  TurnCancelledWebhookPayloadSchema,
+  AgentDeletedWebhookPayloadSchema,
   CustomWebhookPayloadSchema,
 ]);
 

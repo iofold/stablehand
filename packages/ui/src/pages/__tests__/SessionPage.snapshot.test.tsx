@@ -86,7 +86,7 @@ describe('SessionPage conversation snapshot boundary', () => {
 
     useConversationStore.getState().reset();
     useAgentsStore.setState({
-      agents: [makeAgentFixture({ status: 'active', harness: 'test', harnessConfig: {} })],
+      agents: [makeAgentFixture({ status: 'idle', harness: 'test', harnessConfig: {} })],
       loading: false,
       error: null,
     });

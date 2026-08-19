@@ -361,7 +361,6 @@ describe('Turn API lifecycle', () => {
       expect(retryResponse.json()).toMatchObject({
         turnId: expect.any(String),
         conversationId: expect.any(String),
-        sandboxSessionId: null,
       });
 
       releaseOriginalResponse.resolve();

@@ -77,7 +77,7 @@ describe('CtxmillControlClient', () => {
       tools: [],
       description: 'Updated description',
       workspaceDir: null,
-      status: 'active',
+      status: 'idle',
       manifest: null,
       metadata: null,
       createdAt: 1,

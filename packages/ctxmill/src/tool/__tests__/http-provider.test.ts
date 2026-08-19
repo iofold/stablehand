@@ -116,12 +116,12 @@ describe('HTTPToolProvider – fail-closed config validation', () => {
 
   it('rejects non-positive timeout values', () => {
     expect(() => new HTTPToolProvider([
-      validEndpoint({ timeout: 0 }),
-    ])).toThrow(/"timeout" must be a positive finite number/);
+      validEndpoint({ timeoutMs: 0 }),
+    ])).toThrow(/"timeoutMs" must be a positive finite number/);
 
     expect(() => new HTTPToolProvider([
-      validEndpoint({ timeout: -1 }),
-    ])).toThrow(/"timeout" must be a positive finite number/);
+      validEndpoint({ timeoutMs: -1 }),
+    ])).toThrow(/"timeoutMs" must be a positive finite number/);
   });
 
   it('rejects malformed headers (non-string values)', () => {

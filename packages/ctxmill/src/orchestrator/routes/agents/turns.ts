@@ -30,7 +30,6 @@ type TurnStartApiResponse = {
   turnId: string;
   conversationId: string;
   messageId?: string;
-  sandboxSessionId?: null;
 };
 
 class IdempotencyConflictError extends Error {
@@ -402,7 +401,6 @@ export async function turnRoutes(
         const response: TurnStartApiResponse = {
           turnId: start.turnId,
           conversationId: start.conversationId,
-          sandboxSessionId: null,
         };
         if (ledger) {
           await db.completeTurnStartRequest(ledger.id, ledger.requestHash, response);
@@ -484,9 +482,11 @@ export async function turnRoutes(
       }
 
       if (eventBus) {
-        eventBus.emitCustom('turn.cancelled', id, {
+        // ctx-iqzy S20: first-class, webhook-subscribable lifecycle event.
+        eventBus.emit('turn.cancelled', {
           turnId,
           agentId: id,
+          conversationId: turn.conversationId ?? null,
           timestamp: Date.now(),
         });
       }

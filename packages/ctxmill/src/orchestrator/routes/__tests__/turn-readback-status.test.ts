@@ -19,8 +19,8 @@ describe('toApiAgentTurn', () => {
     const turn = toApiAgentTurn(baseTurn, { status: 'TERMINATED' }, 1);
 
     expect(turn.status).toBe('RUNNING');
-    expect(turn.completedAt).toBeUndefined();
-    expect(turn.error).toBeUndefined();
+    expect(turn.completedAt).toBeNull();
+    expect(turn.error).toBeNull();
   });
 
   it('still reports completed turns from the turn row', () => {

@@ -85,7 +85,9 @@ export const RunStartedEventSchema = z.strictObject({
 export const RunFinishedEventSchema = z.strictObject({
   type: z.literal('RUN_FINISHED'),
   ...RunFrameIdentity,
-  status: z.string().optional(),
+  // ctx-iqzy S4: typed. Only successful turns reach RUN_FINISHED today; the
+  // wider enum keeps historical frame replay parseable.
+  status: z.enum(['completed', 'error', 'cancelled']).optional(),
   usage: TurnUsageSchema.nullable(),
 });
 

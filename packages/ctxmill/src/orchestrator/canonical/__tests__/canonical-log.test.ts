@@ -145,6 +145,17 @@ const EVENT_MAP_SAMPLES: { [K in EventName]: EventMap[K] } = {
     agentId: 'agent-1',
     timestamp: 1_000,
   },
+  'turn.cancelled': {
+    turnId: 'turn-1',
+    agentId: 'agent-1',
+    conversationId: 'conv-1',
+    timestamp: 1_000,
+  },
+  'artifact.deleted': {
+    artifactId: 'artifact-1',
+    agentId: 'agent-1',
+    timestamp: 1_000,
+  },
   'client.connected': {
     agentId: 'agent-1',
     clientId: 'client-1',

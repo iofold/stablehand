@@ -102,9 +102,9 @@ describe('AgentCard', () => {
     expect(counts?.textContent).not.toContain('3');
   });
 
-  it('maps unknown agent status values with no active sessions to idle', () => {
+  it('renders idle status with no active sessions', () => {
     act(() => {
-      root.render(<AgentCard agent={{ ...baseAgent, status: 'legacy-status' }} />);
+      root.render(<AgentCard agent={{ ...baseAgent, status: 'idle' }} />);
     });
 
     expect(statusLabel()).toContain('Idle');
@@ -122,7 +122,7 @@ describe('AgentCard', () => {
     act(() => {
       root.render(<AgentCard agent={{
         ...baseAgent,
-        status: 'legacy-status',
+        status: 'idle',
         sandboxSessionsByStatus: {
           ACTIVE: 1,
           CHECKPOINTED: 0,

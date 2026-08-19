@@ -67,10 +67,14 @@ describe('usage-bearing API boundaries', () => {
     id: 'turn-1',
     agentId: 'agent-1',
     conversationId: 'conversation-1',
+    sandboxSessionId: null,
     status: 'COMPLETED',
     mode: 'interactive',
     queuedAt: 1,
     startedAt: 1,
+    completedAt: 2,
+    error: null,
+    taskDescription: null,
   } as const;
 
   it('accepts budget tags and gateway attribution on turns', () => {
@@ -126,7 +130,7 @@ describe('usage-bearing API boundaries', () => {
       turnId: 'turn-1',
       agentId: 'agent-1',
       conversationId: 'conversation-1',
-      status: 'completed',
+      status: 'COMPLETED',
       durationMs: 1,
       usage: null,
       timestamp: 2,

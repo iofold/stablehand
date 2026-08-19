@@ -121,6 +121,17 @@ export type EventMap = {
     agentId: string;
     timestamp: number;
   };
+  'turn.cancelled': {
+    turnId: string;
+    agentId: string;
+    conversationId?: string | null;
+    timestamp: number;
+  };
+  'artifact.deleted': {
+    artifactId: string;
+    agentId: string | null;
+    timestamp: number;
+  };
   'client.connected': {
     agentId: string;
     clientId: string;

@@ -188,7 +188,7 @@ describe('File endpoint integration tests', () => {
     const body = res.json();
     expect(body.path).toBe('README.md');
     expect(body.content).toBe('# Test Agent\nThis is a test workspace.');
-    expect(body.size).toBeGreaterThan(0);
+    expect(body.sizeBytes).toBeGreaterThan(0);
   });
 
   it('reads exact hidden diagnostics files from the conversation workspace', async () => {

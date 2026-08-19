@@ -665,18 +665,19 @@ export async function canonicalizeInterruptToolName(sql: postgres.Sql): Promise<
     )::text
     WHERE payload::jsonb ? 'toolCallName'
       AND (
-        type IN ('run.tool_started', 'run.tool_result', 'run.interrupted', 'turn.interrupted', 'interrupt.requested')
+        type IN ('run.tool_started', 'run.tool_result', 'run.interrupted', 'turn.interrupted', 'interrupt.requested', 'tool_call.started', 'tool_call.completed')
         OR (type = 'CUSTOM' AND payload::jsonb->>'name' LIKE 'ctxmill.%')
       )
   `;
 
-  // Undelivered webhook bodies still carry the projected payload keys.
+  // Webhook bodies carry the projected payload keys; rewrite every row so
+  // durable history holds a single vocabulary (delivered/failed rows are
+  // inert but stay consistent for audit readers).
   await sql`
     UPDATE callback_outbox
     SET payload = (payload - 'toolCallName')
       || jsonb_build_object('toolName', payload->'toolCallName')
-    WHERE status IN ('pending', 'in_progress')
-      AND payload ? 'toolCallName'
+    WHERE payload ? 'toolCallName'
   `;
 
   await sql`

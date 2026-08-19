@@ -367,10 +367,11 @@ export async function artifactRoutes(
     }
 
     await repository.deleteArtifact(id);
-    eventBus?.emit('custom', {
-      type: 'artifact.deleted',
-      agentId: artifact.agentId ?? 'global',
-      payload: { artifactId: id },
+    // ctx-iqzy S20: first-class, webhook-subscribable lifecycle event
+    // (artifact.created has been subscribable since WO-2; deletion was not).
+    eventBus?.emit('artifact.deleted', {
+      artifactId: id,
+      agentId: artifact.agentId ?? null,
       timestamp: Date.now(),
     });
     return reply.send({ deleted: true, id });

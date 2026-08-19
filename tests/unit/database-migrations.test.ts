@@ -6,6 +6,7 @@ import {
 import { createDatabase, type DatabaseConnection } from '../../packages/ctxmill/src/database/connection.js';
 import {
   CANONICAL_EVENT_CONTRACTS_MIGRATION_ID,
+  INTERRUPT_TOOL_NAME_MIGRATION_ID,
   CANONICAL_EVENT_CONTRACTS_MIGRATION_VERSION,
   MIGRATION_ADVISORY_LOCK_ID,
   runMigrations,
@@ -281,7 +282,7 @@ describe('database migration baseline guard', () => {
     await runMigrations(conn.pgClient);
     await conn.pgClient`
       DELETE FROM ctxmill_schema_version
-      WHERE id = ${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}
+      WHERE id IN (${CANONICAL_EVENT_CONTRACTS_MIGRATION_ID}, ${INTERRUPT_TOOL_NAME_MIGRATION_ID})
     `;
 
     await conn.pgClient`

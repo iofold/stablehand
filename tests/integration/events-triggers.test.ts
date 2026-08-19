@@ -606,7 +606,7 @@ describe('Events and Triggers Integration', () => {
           enabled: true,
           lastFiredAt: null,
         });
-        expect(created.json().nextRun).toEqual(expect.any(Number));
+        expect(created.json().nextRunAt).toEqual(expect.any(Number));
 
         // Persisted while the scheduler is down: elapsed fire times are not replayed.
         await new Promise((resolve) => setTimeout(resolve, 1_100));
@@ -672,7 +672,7 @@ describe('Events and Triggers Integration', () => {
         expect(disabled.statusCode).toBe(200);
         expect(disabled.json()).toMatchObject({
           enabled: false,
-          nextRun: null,
+          nextRunAt: null,
         });
         expect(disabled.json().lastFiredAt).toEqual(expect.any(Number));
       } finally {

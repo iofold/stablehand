@@ -85,6 +85,8 @@ export const KNOWN_BUS_EVENT_NAMES: readonly string[] = [
   'budget.threshold',
   'feedback.received',
   'artifact.created',
+  'artifact.deleted',
+  'turn.cancelled',
   'agent.created',
   'agent.deleted',
   'client.connected',

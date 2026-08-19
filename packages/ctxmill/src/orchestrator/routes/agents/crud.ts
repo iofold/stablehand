@@ -757,12 +757,16 @@ export async function crudRoutes(
         if (key in sandboxSessionsByStatus) sandboxSessionsByStatus[key]++;
       }
 
-      return reply.send(buildAgentSummary(agent, {
-        allTurns,
-        activeTurns,
-        conversationCount: conversations.length,
-        sandboxSessionsByStatus,
-      }, { sse, interrupts }));
+      return reply.send({
+        ...buildAgentSummary(agent, {
+          allTurns,
+          activeTurns,
+          conversationCount: conversations.length,
+          sandboxSessionsByStatus,
+        }, { sse, interrupts }),
+        // ctx-iqzy S11: the list rows carry lastActivity; the detail must too.
+        lastActivity: sse.getLastActivity(agent.id) ?? null,
+      });
     },
   );
 }

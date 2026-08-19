@@ -591,7 +591,7 @@ describe('Pilot integration', () => {
             method: 'PATCH',
             inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
             headers: { 'X-Tenant': 'pilot' },
-            timeout: 1_500,
+            timeoutMs: 1_500,
             authentication: { type: 'bearer', secretName: 'PILOT_API_KEY' },
           }],
         },
@@ -602,7 +602,7 @@ describe('Pilot integration', () => {
         description: 'Search a remote Pilot endpoint',
         inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
         headers: { 'X-Tenant': 'pilot' },
-        timeout: 1_500,
+        timeoutMs: 1_500,
         authentication: { type: 'bearer', secretName: 'PILOT_API_KEY' },
       }]);
     });
@@ -658,7 +658,7 @@ describe('Pilot integration', () => {
             agentId: params.agentId,
             conversationId: params.conversationId,
             toolCallId: 'tool-1',
-            toolCallName: 'remote-search',
+            toolName: 'remote-search',
             args: { query: 'pilot shipment 42' },
             timestamp: 222,
           });
@@ -732,7 +732,7 @@ describe('Pilot integration', () => {
            eventType: 'tool_call.started',
            body: expect.objectContaining({
              turnId,
-             toolCallName: 'remote-search',
+             toolName: 'remote-search',
              args: { query: 'pilot shipment 42' },
            }),
          }),
@@ -766,7 +766,7 @@ describe('Pilot integration', () => {
             turnId,
             sandboxSessionId: `sandbox-${turnId}`,
             agentId: 'agent-1',
-            status: 'cancelled',
+            status: 'CANCELLED',
           }),
         }),
       ]));

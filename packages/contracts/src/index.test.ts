@@ -311,7 +311,7 @@ describe('@ctxmill/contracts', () => {
   it('validates durable cross-agent interrupt records without resolution data', () => {
     const response = contracts.InterruptRecordListResponseSchema.parse({
       interrupts: [{
-        interruptId: 'interrupt-1',
+        id: 'interrupt-1',
         agentId: 'agent-1',
         turnId: 'turn-1',
         sandboxSessionId: null,
@@ -509,7 +509,7 @@ describe('@ctxmill/contracts', () => {
       conversationId: 'conversation-1',
       interruptId: 'interrupt-1',
       toolCallId: 'tool-call-1',
-      toolCallName: 'request-approval',
+      toolName: 'request-approval',
       args: { reason: 'publish' },
       timestamp: 1,
     })).toMatchObject({ name: 'ctxmill.interrupt.requested' });
@@ -593,7 +593,7 @@ describe('@ctxmill/contracts', () => {
       interruptId: 'interrupt-1',
       timestamp: 1,
       toolCallId: 'tool-call-1',
-      toolCallName: 'request-approval',
+      toolName: 'request-approval',
       args: {},
     })).toMatchObject({ interruptId: 'interrupt-1' });
 
@@ -666,7 +666,7 @@ describe('@ctxmill/contracts', () => {
       },
       'turn.completed': {
         ...identities,
-        status: 'completed',
+        status: 'COMPLETED',
         durationMs: 10,
         usage: null,
         timestamp: 2,
@@ -674,14 +674,14 @@ describe('@ctxmill/contracts', () => {
       'tool_call.started': {
         ...identities,
         toolCallId: 'tool-call-1',
-        toolCallName: 'search',
+        toolName: 'search',
         args: { query: 'April' },
         timestamp: 3,
       },
       'tool_call.completed': {
         ...identities,
         toolCallId: 'tool-call-1',
-        toolCallName: 'search',
+        toolName: 'search',
         result: '{"ok":true}',
         durationMs: 12,
         timestamp: 4,
@@ -690,7 +690,7 @@ describe('@ctxmill/contracts', () => {
         ...identities,
         interruptId: 'interrupt-1',
         toolCallId: 'tool-call-2',
-        toolCallName: 'approve',
+        toolName: 'approve',
         args: {},
         timestamp: 5,
       },
@@ -760,6 +760,21 @@ describe('@ctxmill/contracts', () => {
         kind: 'eval_report',
         sha256: 'a'.repeat(64),
         timestamp: 11,
+      },
+      'artifact.deleted': {
+        artifactId: 'artifact-1',
+        agentId: 'agent-1',
+        timestamp: 12,
+      },
+      'turn.cancelled': {
+        turnId: 'turn-1',
+        agentId: 'agent-1',
+        conversationId: 'conversation-1',
+        timestamp: 13,
+      },
+      'agent.deleted': {
+        agentId: 'agent-1',
+        timestamp: 14,
       },
     } as const;
 
@@ -848,7 +863,7 @@ describe('@ctxmill/contracts', () => {
     })).resolves.toMatchObject({
       valid: true,
       payload: {
-        status: 'completed',
+        status: 'COMPLETED',
         turnId: 'turn-fixture-1',
       },
     });

@@ -174,16 +174,18 @@ export const TurnSchema = z.strictObject({
   agentId: AgentIdSchema,
   // ctx-iqzy S7: null when the turn has no conversation — never '' sentinels.
   conversationId: ConversationIdSchema.nullable(),
-  sandboxSessionId: SandboxSessionIdSchema.optional(),
+  // ctx-iqzy S6/R1: entity fields with no value are null and always present;
+  // omission is reserved for projection enrichments below.
+  sandboxSessionId: SandboxSessionIdSchema.nullable(),
   sandboxStatus: SandboxSessionStatusSchema.optional(),
   status: TurnStatusSchema,
   mode: z.enum(['interactive', 'background']),
   // ctx-iqzy T2: queue-admission time; startedAt is execution start.
   queuedAt: EpochMillisecondsSchema,
   startedAt: EpochMillisecondsSchema,
-  completedAt: EpochMillisecondsSchema.optional(),
-  error: z.string().optional(),
-  taskDescription: z.string().optional(),
+  completedAt: EpochMillisecondsSchema.nullable(),
+  error: z.string().nullable(),
+  taskDescription: z.string().nullable(),
   conversationMessageCount: z.number().int().nonnegative().optional(),
   restoreAttempts: z.number().int().nonnegative().nullable().optional(),
   lastRestoreError: z.string().nullable().optional(),
@@ -215,7 +217,7 @@ export const AgentSchema = z.strictObject({
   tools: z.array(z.string()),
   description: z.string().nullable(),
   workspaceDir: z.string().nullable(),
-  status: z.string(),
+  status: z.enum(['idle', 'running']),
   manifest: UnknownRecordSchema.nullable(),
   metadata: UnknownRecordSchema.nullable(),
   createdAt: EpochMillisecondsSchema,
@@ -726,6 +728,9 @@ export const BUILTIN_WEBHOOK_EVENT_NAMES = [
   'feedback.received',
   'budget.threshold',
   'artifact.created',
+  'artifact.deleted',
+  'turn.cancelled',
+  'agent.deleted',
 ] as const;
 
 export const BuiltinWebhookEventNameSchema = z.enum(BUILTIN_WEBHOOK_EVENT_NAMES);

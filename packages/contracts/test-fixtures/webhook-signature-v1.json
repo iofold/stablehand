@@ -1,15 +1,15 @@
 {
   "timestamp": "1784304000",
-  "rawBody": "{\"turnId\":\"turn-fixture-1\",\"sandboxSessionId\":\"sandbox-fixture-1\",\"agentId\":\"agent-fixture-1\",\"conversationId\":\"conversation-fixture-1\",\"status\":\"completed\",\"durationMs\":1200,\"usage\":null,\"timestamp\":1784304000000}",
+  "rawBody": "{\"turnId\":\"turn-fixture-1\",\"sandboxSessionId\":\"sandbox-fixture-1\",\"agentId\":\"agent-fixture-1\",\"conversationId\":\"conversation-fixture-1\",\"status\":\"COMPLETED\",\"durationMs\":1200,\"usage\":null,\"timestamp\":1784304000000}",
   "currentSecret": "ctxmill_fixture_current_secret",
   "previousSecret": "ctxmill_fixture_previous_secret",
-  "currentSignature": "v1=b91d515c235a0b1ce75ab9c735bca115ef943038c0f8aadde0a93df9c5a48a17",
-  "previousSignature": "v1=4d6daab118889e6e64c2f9703dd0a19f99a2fae699e11110086fe895cb70feb3",
+  "currentSignature": "v1=0f39ae93ac61fe71d848f64264433304f56e72aae41f3ed0e01939c459a38e35",
+  "previousSignature": "v1=3198d0fc22bc66202a07188d24ac0756a0b4311b4c745b84293327e2c7d969dd",
   "headers": {
     "X-Delivery-Id": "delivery-fixture-1",
     "X-Event-Type": "turn.completed",
     "X-Agent-Id": "agent-fixture-1",
     "X-Webhook-Timestamp": "1784304000",
-    "X-Webhook-Signature": "v1=b91d515c235a0b1ce75ab9c735bca115ef943038c0f8aadde0a93df9c5a48a17"
+    "X-Webhook-Signature": "v1=0f39ae93ac61fe71d848f64264433304f56e72aae41f3ed0e01939c459a38e35"
   }
 }
