@@ -84,7 +84,7 @@ describe('HTTPToolProvider – timeout with AbortController', () => {
     ) as unknown as typeof fetch;
 
     const provider = new HTTPToolProvider(
-      [makeEndpoint({ timeout: 100 })],
+      [makeEndpoint({ timeoutMs: 100 })],
       { fetchFn },
     );
 

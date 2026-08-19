@@ -47,7 +47,7 @@ export function FileViewer({ agentId, filePath, onClose, conversationId, onFileD
         const data = await readFile(agentId, filePath, conversationId);
         if (!mounted) return;
         setContent(data.content ?? '');
-        setSize(data.size ?? 0);
+        setSize(data.sizeBytes ?? 0);
       } catch (err) {
         if (mounted) setError(String(err));
       } finally {
@@ -89,7 +89,7 @@ export function FileViewer({ agentId, filePath, onClose, conversationId, onFileD
     try {
       const result = await updateFile(agentId, filePath, editContent, conversationId);
       setContent(editContent);
-      setSize(result.size);
+      setSize(result.sizeBytes);
       setEditing(false);
       onFileSaved?.(filePath);
     } catch (err) {

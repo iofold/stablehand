@@ -81,8 +81,8 @@ export function mapAgentHttpToolsToConfigs(agentDef: AgentDefinition): HttpEndpo
     if (isStringRecord(tool.headers)) {
       config.headers = tool.headers;
     }
-    if (typeof tool.timeout === 'number') {
-      config.timeout = tool.timeout;
+    if (typeof tool.timeoutMs === 'number') {
+      config.timeoutMs = tool.timeoutMs;
     }
     const authentication = toHttpAuthentication(tool.authentication);
     if (authentication) {

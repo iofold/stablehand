@@ -103,7 +103,9 @@ export const HttpToolDefinitionSchema = z.strictObject({
   method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']).optional(),
   inputSchema: UnknownRecordSchema.optional(),
   headers: StringRecordSchema.optional(),
-  timeout: z.number().int().positive().optional(),
+  // Milliseconds; min guards the seconds-vs-ms foot-gun (resourceLimits.timeoutSec
+  // sits two keys away and IS seconds).
+  timeoutMs: z.number().int().min(100).optional(),
   authentication: z.strictObject({
     type: z.enum(['bearer', 'api-key']),
     secretName: z.string().trim().min(1),
@@ -678,14 +680,14 @@ export const FileListResponseSchema = z.strictObject({
   entries: z.array(z.strictObject({
     name: z.string(),
     type: z.enum(['file', 'directory']),
-    size: z.number().int().nonnegative(),
+    sizeBytes: z.number().int().nonnegative(),
   })),
 });
 
 export const FileReadResponseSchema = z.strictObject({
   path: z.string(),
   content: z.string(),
-  size: z.number().int().nonnegative(),
+  sizeBytes: z.number().int().nonnegative(),
 });
 
 export const FileWriteInputSchema = z.strictObject({
@@ -696,7 +698,7 @@ export const FileWriteInputSchema = z.strictObject({
 
 export const FileWriteResponseSchema = z.strictObject({
   path: z.string(),
-  size: z.number().int().nonnegative(),
+  sizeBytes: z.number().int().nonnegative(),
 });
 
 export const WorkspaceReplaceResponseSchema = z.strictObject({

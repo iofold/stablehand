@@ -26,7 +26,7 @@ export interface HttpEndpointConfig {
   /** Static headers to include on every request. */
   headers?: Record<string, string>;
   /** Request timeout in milliseconds (default: 30 000). */
-  timeout?: number;
+  timeoutMs?: number;
   /** Optional authentication configuration. */
   authentication?: HttpAuthConfig;
   /** Mark this tool as programmatic (default: false). */
@@ -69,8 +69,8 @@ function assertValidEndpointConfig(ep: HttpEndpointConfig, index: number): void 
       `HTTPToolProvider: ${where} has invalid HTTP method "${String(ep.method)}" (allowed: ${HTTP_METHODS.join(', ')})`,
     );
   }
-  if (ep.timeout !== undefined && (typeof ep.timeout !== 'number' || !Number.isFinite(ep.timeout) || ep.timeout <= 0)) {
-    throw new Error(`HTTPToolProvider: ${where} "timeout" must be a positive finite number`);
+  if (ep.timeoutMs !== undefined && (typeof ep.timeoutMs !== 'number' || !Number.isFinite(ep.timeoutMs) || ep.timeoutMs <= 0)) {
+    throw new Error(`HTTPToolProvider: ${where} "timeoutMs" must be a positive finite number`);
   }
   if (ep.headers !== undefined) {
     if (typeof ep.headers !== 'object' || ep.headers === null || Array.isArray(ep.headers)) {
@@ -231,7 +231,8 @@ export class HTTPToolProvider implements ToolProvider {
         description: ep.description,
         input: zodInput,
         location: 'orchestrator',
-        timeout: ep.timeout ?? DEFAULT_TIMEOUT,
+        // Internal ToolDefinition keeps `timeout` (registry-internal, not the public API field).
+        timeout: ep.timeoutMs ?? DEFAULT_TIMEOUT,
         programmatic: ep.programmatic ?? false,
         handler: async (
           input: unknown,
@@ -257,7 +258,7 @@ export class HTTPToolProvider implements ToolProvider {
       throw new Error(`HTTPToolProvider: unknown tool "${toolName}"`);
     }
 
-    const timeout = ep.timeout ?? DEFAULT_TIMEOUT;
+    const timeout = ep.timeoutMs ?? DEFAULT_TIMEOUT;
 
     // Build headers
     const headers: Record<string, string> = {

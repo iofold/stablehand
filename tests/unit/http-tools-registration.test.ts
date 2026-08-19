@@ -42,7 +42,7 @@ function createHttpTool(overrides: Record<string, unknown> = {}): Record<string,
     headers: {
       'X-Test': 'true',
     },
-    timeout: 5000,
+    timeoutMs: 5000,
     authentication: {
       type: 'bearer',
       secretName: 'API_TOKEN',
@@ -128,7 +128,7 @@ describe('http tools registration lifecycle', () => {
         headers: {
           'X-Test': 'true',
         },
-        timeout: 5000,
+        timeoutMs: 5000,
         authentication: {
           type: 'bearer',
           secretName: 'API_TOKEN',
@@ -145,7 +145,7 @@ describe('http tools registration lifecycle', () => {
             method: undefined,
             inputSchema: undefined,
             headers: undefined,
-            timeout: undefined,
+            timeoutMs: undefined,
             authentication: undefined,
           }),
         ],

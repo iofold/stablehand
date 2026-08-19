@@ -68,7 +68,7 @@ export async function fileRoutes(
               return {
                 name: entry.name,
                 type: entry.isDirectory() ? ('directory' as const) : ('file' as const),
-                size,
+                sizeBytes: size,
               };
             }),
         );
@@ -110,8 +110,9 @@ export async function fileRoutes(
         if (fileStat.size > 50 * 1024) {
           return reply.status(400).send({
             error: 'File too large',
-            size: fileStat.size,
-            maxSize: 50 * 1024,
+            code: 'file_too_large',
+            sizeBytes: fileStat.size,
+            maxSizeBytes: 50 * 1024,
           });
         }
 
@@ -119,7 +120,7 @@ export async function fileRoutes(
         return reply.send({
           path: query.path,
           content,
-          size: fileStat.size,
+          sizeBytes: fileStat.size,
         });
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -155,7 +156,7 @@ export async function fileRoutes(
         await mkdir(dirname(targetFile), { recursive: true });
         await writeFile(targetFile, body.content, 'utf-8');
         const fileStat = await stat(targetFile);
-        return reply.status(201).send({ path: body.path, size: fileStat.size });
+        return reply.status(201).send({ path: body.path, sizeBytes: fileStat.size });
       } catch (err) {
         return reply.status(400).send(safeError('Cannot create file', err));
       }
@@ -191,7 +192,7 @@ export async function fileRoutes(
 
         await writeFile(targetFile, body.content, 'utf-8');
         const updatedStat = await stat(targetFile);
-        return reply.send({ path: body.path, size: updatedStat.size });
+        return reply.send({ path: body.path, sizeBytes: updatedStat.size });
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           return reply.status(404).send({ error: 'File not found' });

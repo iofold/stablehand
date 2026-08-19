@@ -491,7 +491,7 @@ describe('HTTP tool registration', () => {
             required: ['query'],
           },
           headers: { 'X-Test': '1' },
-          timeout: 1234,
+          timeoutMs: 1234,
           authentication: { type: 'bearer', secretName: 'REMOTE_API_KEY' },
         }],
       },
@@ -508,7 +508,7 @@ describe('HTTP tool registration', () => {
         required: ['query'],
       },
       headers: { 'X-Test': '1' },
-      timeout: 1234,
+      timeoutMs: 1234,
       authentication: { type: 'bearer', secretName: 'REMOTE_API_KEY' },
     }]);
   });

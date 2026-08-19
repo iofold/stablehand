@@ -16,20 +16,10 @@ import { z } from 'zod';
 
 import * as contracts from './index.js';
 
-const LEGACY_DEBT = new Set([
-  // U3: bare ms timeout beside timeoutSec (rename tracked with a data migration)
-  'AgentCreateInputSchema.httpTools.timeout',
-  'AgentListResponseSchema.httpTools.timeout',
-  'AgentPatchInputSchema.httpTools.timeout',
-  'AgentSchema.httpTools.timeout',
-  'HttpToolDefinitionSchema.timeout',
-  // U4: bare byte sizes
-  'FileListResponseSchema.entries.size',
-  'FileReadResponseSchema.size',
-  'FileWriteResponseSchema.size',
-  // U9/T8 (ScheduleSchema.nextRun) is name-only debt this walker cannot
-  // detect — tracked in the Wave-3 plan, not here.
-]);
+// Wave 3 emptied this list (2026-08-19). It exists so future violations have
+// exactly one escape hatch — a named, reviewed entry here — and the
+// self-cleaning assertion below deletes entries the moment they are fixed.
+const LEGACY_DEBT = new Set<string>([]);
 
 type Violation = string;
 

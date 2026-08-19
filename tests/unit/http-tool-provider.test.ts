@@ -105,7 +105,7 @@ describe('HTTPToolProvider – registration', () => {
 
   it('should set timeout from endpoint config', async () => {
     const provider = new HTTPToolProvider(
-      [makeEndpoint({ timeout: 5000 })],
+      [makeEndpoint({ timeoutMs: 5000 })],
       { fetchFn: mockFetch() },
     );
 
@@ -397,7 +397,7 @@ describe('HTTPToolProvider – timeout handling', () => {
     ) as unknown as typeof fetch;
 
     const provider = new HTTPToolProvider(
-      [makeEndpoint({ timeout: 50 })],
+      [makeEndpoint({ timeoutMs: 50 })],
       { fetchFn },
     );
 

@@ -1273,6 +1273,32 @@ export async function runMigrations(sql: postgres.Sql): Promise<void> {
   // Run persisted-data hard cuts only after every additive column/index step
   // above has normalized older baseline/v1 schemas.
   await canonicalizePersistedToolPolicies(sql);
+
+  // ctx-iqzy U3: stored http-tool definitions rename timeout -> timeoutMs
+  // (value was always milliseconds). Idempotent; runs before any agent
+  // definition is read.
+  await sql`
+    UPDATE agents
+    SET metadata = jsonb_set(
+      metadata,
+      '{httpTools}',
+      (
+        SELECT jsonb_agg(
+          CASE
+            WHEN tool ? 'timeout'
+              THEN (tool - 'timeout') || jsonb_build_object('timeoutMs', tool->'timeout')
+            ELSE tool
+          END
+        )
+        FROM jsonb_array_elements(metadata->'httpTools') AS tool
+      )
+    )
+    WHERE jsonb_typeof(metadata->'httpTools') = 'array'
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(metadata->'httpTools') AS t
+        WHERE t ? 'timeout'
+      )
+  `;
   await canonicalizePersistedEventContracts(sql);
 
   // Adopt only terminal history that already contains the complete frame set

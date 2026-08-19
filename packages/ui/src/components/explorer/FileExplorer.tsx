@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 interface FileEntry {
   name: string;
   type: 'file' | 'directory';
-  size: number;
+  sizeBytes: number;
 }
 
 interface TreeNode extends FileEntry {
