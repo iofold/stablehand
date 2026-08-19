@@ -345,10 +345,11 @@ export const BackgroundTurnStartInputSchema = z.strictObject({
   tags: TagsSchema.optional(),
 });
 
+// ctx-iqzy: no sandbox session exists at accept time; the response carries
+// only the turn/conversation identities. Read sandboxSessionId from the turn.
 export const BackgroundTurnStartResponseSchema = z.strictObject({
   turnId: TurnIdSchema,
   conversationId: ConversationIdSchema,
-  sandboxSessionId: SandboxSessionIdSchema.nullable(),
 });
 
 export const ConversationTurnStartInputSchema = z.strictObject({
@@ -680,11 +681,6 @@ export const ArtifactDownloadUrlResponseSchema = z.strictObject({
   name: z.string(),
   mimeType: z.string(),
   sizeBytes: z.number().int().nonnegative(),
-});
-
-export const ArtifactDeleteResponseSchema = z.strictObject({
-  deleted: z.literal(true),
-  id: ArtifactIdSchema,
 });
 
 export const FileListResponseSchema = z.strictObject({

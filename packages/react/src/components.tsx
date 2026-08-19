@@ -456,7 +456,8 @@ export function CtxmillHITL({
   disabled,
 }: {
   request: CtxmillInterruptRequest;
-  onResolve: (action: 'approve' | 'reject' | 'submit', data?: unknown) => void | Promise<void>;
+  // ctx-iqzy: 'submit' was removed server-side; approve/reject only.
+  onResolve: (action: 'approve' | 'reject', data?: unknown) => void | Promise<void>;
   disabled?: boolean;
 }) {
   const reason = typeof request.args.reason === 'string' ? request.args.reason : request.toolName;
@@ -608,7 +609,7 @@ export function useCtxmillChat(options: UseCtxmillChatOptions) {
     }
   }, [agentId, client]);
 
-  const resolveHitl = useCallback(async (action: 'approve' | 'reject' | 'submit', data?: unknown) => {
+  const resolveHitl = useCallback(async (action: 'approve' | 'reject', data?: unknown) => {
     const request = stateRef.current.pendingHitl;
     if (!request) return;
     await client.resolveInterrupt({

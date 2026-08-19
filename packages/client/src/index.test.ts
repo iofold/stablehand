@@ -208,7 +208,6 @@ describe('CtxmillControlClient', () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({
       turnId: 'turn-1',
       conversationId: 'conversation-1',
-      sandboxSessionId: null,
     }));
     const client = new clientModule.CtxmillControlClient({
       apiBase: 'https://ctxmill.test/api',

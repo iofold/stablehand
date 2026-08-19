@@ -320,8 +320,9 @@ describe('HTTP tool registration', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
       error: 'Invalid agent definition',
-      details: [expect.objectContaining({
-        path: ['httpTools', 0, 'endpoint'],
+      code: 'invalid_agent_definition',
+      issues: [expect.objectContaining({
+        path: 'httpTools.0.endpoint',
       })],
     });
     expect(createAgent).not.toHaveBeenCalled();

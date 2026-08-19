@@ -792,7 +792,7 @@ describe('file mutations', () => {
 describe('artifact uploads', () => {
   it('authenticates orchestrator upload URL requests', async () => {
     useApiAuthStore.getState().setToken('secret-token');
-    mockJson.mockResolvedValue({ artifactId: 'art-1', uploadUrl: 'https://s3/upload', storageKey: 'k', expiresIn: 60 });
+    mockJson.mockResolvedValue({ artifactId: 'art-1', uploadUrl: 'https://s3/upload', storageKey: 'k', expiresInSec: 60 });
 
     await requestArtifactUploadUrl('a1', 'report.txt', 'text/plain', 10);
 

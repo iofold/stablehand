@@ -328,8 +328,9 @@ async function interruptCommand(action: string | undefined, agentId: string | un
       const interruptId = flagString(flags, 'interrupt', 'interrupt-id');
       const actionValue = flagString(flags, 'action') ?? 'approve';
       requireArg(interruptId, 'interruptId via --interrupt');
-      if (!['approve', 'reject', 'submit'].includes(actionValue)) {
-        throw new UsageError('--action must be approve, reject, or submit');
+      // ctx-iqzy: 'submit' was removed server-side; approve/reject only.
+      if (!['approve', 'reject'].includes(actionValue)) {
+        throw new UsageError('--action must be approve or reject');
       }
       const body: JsonRecord = { action: actionValue, interruptId };
       const data = flagString(flags, 'data');

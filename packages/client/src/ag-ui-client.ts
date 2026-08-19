@@ -53,7 +53,8 @@ export interface CtxmillA2UIBlock {
 export interface ResolveInterruptInput extends CtxmillRequestOptions {
   agentId: string;
   interruptId: string;
-  action: 'approve' | 'reject' | 'submit';
+  // ctx-iqzy: 'submit' was removed server-side; approve/reject only.
+  action: 'approve' | 'reject';
   data?: unknown;
 }
 

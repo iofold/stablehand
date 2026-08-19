@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
+  ActiveConversationListResponseSchema,
   SandboxSessionListResponseSchema,
   SandboxSessionSchema,
 } from '@ctxmill/contracts';
@@ -56,7 +57,8 @@ export async function activeConversationRoutes(
       return reply.status(400).send({ error: 'Only status=active is supported' });
     }
     const activeConversations = await db.getActiveConversationSummaries();
-    return reply.send(activeConversations);
+    // ctx-iqzy R4: parse at the reply site keeps the route on-contract.
+    return reply.send(ActiveConversationListResponseSchema.parse(activeConversations));
   });
 
   // Cross-agent recent conversations, newest activity first. One request for

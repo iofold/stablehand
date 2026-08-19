@@ -1,6 +1,5 @@
 import {
   AgentCreateInputSchema,
-  ArtifactDeleteResponseSchema,
   ArtifactDownloadUrlResponseSchema,
   ArtifactListResponseSchema,
   ArtifactSchema,
@@ -645,7 +644,8 @@ export class CtxmillControlClient {
         this.transport.request({
           method: 'DELETE',
           path: `/artifacts/${segment(artifactId, 'artifactId')}`,
-          responseSchema: ArtifactDeleteResponseSchema,
+          // ctx-iqzy: DELETE returns 204 No Content.
+          responseSchema: VoidResponseSchema,
           ...requestOptions,
         }),
     };

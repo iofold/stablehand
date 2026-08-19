@@ -273,9 +273,14 @@ export async function crudRoutes(
     ) => {
       const parsedBody = AgentCreateInputSchema.safeParse(request.body);
       if (!parsedBody.success) {
+        // ctx-iqzy S12/R3: canonical validation shape, no raw Zod issues.
         return reply.status(400).send({
           error: 'Invalid agent definition',
-          details: parsedBody.error.issues,
+          code: 'invalid_agent_definition',
+          issues: parsedBody.error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
+          })),
         });
       }
       const body: AgentCreateInput = parsedBody.data;
@@ -438,9 +443,14 @@ export async function crudRoutes(
       const { id } = request.params;
       const parsedBody = AgentPatchInputSchema.safeParse(request.body);
       if (!parsedBody.success) {
+        // ctx-iqzy S12/R3: canonical validation shape, no raw Zod issues.
         return reply.status(400).send({
           error: 'Invalid agent update',
-          details: parsedBody.error.issues,
+          code: 'invalid_agent_update',
+          issues: parsedBody.error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
+          })),
         });
       }
       const body: AgentPatchInput = parsedBody.data;

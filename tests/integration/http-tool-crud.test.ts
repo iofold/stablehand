@@ -223,7 +223,8 @@ describe('HTTP tool CRUD via agent API', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
       error: 'Invalid agent definition',
-      details: [expect.objectContaining({ path: ['httpTools', 0, 'name'] })],
+      code: 'invalid_agent_definition',
+      issues: [expect.objectContaining({ path: 'httpTools.0.name' })],
     });
   });
 
@@ -236,7 +237,8 @@ describe('HTTP tool CRUD via agent API', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
       error: 'Invalid agent definition',
-      details: [expect.objectContaining({ path: ['httpTools', 0, 'description'] })],
+      code: 'invalid_agent_definition',
+      issues: [expect.objectContaining({ path: 'httpTools.0.description' })],
     });
   });
 
@@ -249,7 +251,8 @@ describe('HTTP tool CRUD via agent API', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({
       error: 'Invalid agent definition',
-      details: [expect.objectContaining({ path: ['httpTools', 0, 'endpoint'] })],
+      code: 'invalid_agent_definition',
+      issues: [expect.objectContaining({ path: 'httpTools.0.endpoint' })],
     });
   });
 
