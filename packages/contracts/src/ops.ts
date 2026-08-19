@@ -1,0 +1,140 @@
+import { z } from 'zod';
+
+import { DurationMsSchema, EpochMillisSchema } from './time.js';
+
+/**
+ * Operational/uncontracted-surface schemas (ctx-iqzy S11/U6, "contract or it
+ * doesn't ship"): queue status, system settings, event stats, tool catalog,
+ * feedback ack, and the typed throttle (429/503) error bodies. Routes parse
+ * their responses through these at the reply site; the UI imports them
+ * instead of keeping mirror types.
+ */
+
+// ── GET /api/queue/status ─────────────────────────────────────────────
+export const QueueStatusResponseSchema = z.strictObject({
+  queuedTurns: z.number().int().nonnegative(),
+  oldestQueuedAgeMs: DurationMsSchema.nullable(),
+  /** ctx-4p34: permanently failed webhook deliveries (dead letters). */
+  deadLetteredCallbacks: z.number().int().nonnegative(),
+  dispatcher: z.strictObject({
+    stalled: z.boolean().nullable(),
+    lastPassCompletedAt: EpochMillisSchema.nullable(),
+  }),
+  state: z.enum(['healthy', 'degraded']),
+});
+export type QueueStatusResponse = z.infer<typeof QueueStatusResponseSchema>;
+
+// ── GET/PUT /api/settings ─────────────────────────────────────────────
+// Field list must match @ctxmill/shared SYSTEM_SETTING_BOUNDS; a drift test
+// in the orchestrator asserts the two key sets are identical.
+export const SystemSettingsSchema = z.strictObject({
+  maxWorkspaceTarBytes: z.number().int().positive(),
+  maxTarUploadBytes: z.number().int().positive(),
+  idleTimeoutMs: DurationMsSchema,
+  turnTimeoutMs: DurationMsSchema,
+  reconciliationIntervalMs: DurationMsSchema,
+  maxGlobalContainers: z.number().int().positive(),
+  queueTimeoutMs: DurationMsSchema,
+  maxQueuedTurnsGlobal: z.number().int().positive(),
+  maxQueuedTurnsPerAgent: z.number().int().positive(),
+  maxIngestQueueDepth: z.number().int().positive(),
+  queuedTurnTimeoutMs: DurationMsSchema,
+  maxConcurrentSessionsPerAgent: z.number().int().positive(),
+  maxTriggerDepth: z.number().int().positive(),
+  defaultCpus: z.number().positive(),
+  /** MiB, despite the Mb spelling (documented unit exception). */
+  defaultMemoryMb: z.number().int().positive(),
+  defaultPidsLimit: z.number().int().positive(),
+  defaultTimeoutSec: z.number().int().positive(),
+});
+export type SystemSettings = z.infer<typeof SystemSettingsSchema>;
+
+// ── GET /api/events/stats + /api/events/types ─────────────────────────
+export const EventStatsResponseSchema = z.strictObject({
+  total: z.number().int().nonnegative(),
+  byType: z.record(z.string(), z.number().int().nonnegative()),
+  topAgents: z.array(z.strictObject({
+    agentId: z.string().nullable(),
+    count: z.number().int().nonnegative(),
+  })),
+  /** Events per minute over the trailing five minutes. */
+  recentRate: z.number().nonnegative(),
+});
+export type EventStatsResponse = z.infer<typeof EventStatsResponseSchema>;
+
+export const EventTypesResponseSchema = z.strictObject({
+  types: z.array(z.string()),
+});
+export type EventTypesResponse = z.infer<typeof EventTypesResponseSchema>;
+
+// ── GET /api/catalogs/tools + POST /api/catalogs/tools/test ──────────
+export const CatalogToolSchema = z.strictObject({
+  name: z.string(),
+  description: z.string().optional(),
+  source: z.enum(['local', 'mcp', 'composio']),
+  inputSchema: z.record(z.string(), z.unknown()).optional(),
+  requiresApproval: z.boolean().optional(),
+  secrets: z.array(z.string()).optional(),
+  /** True when the tool is implicitly attached to every agent. */
+  builtin: z.boolean().optional(),
+  /** Where the tool actually executes at runtime. */
+  location: z.enum(['sandbox', 'orchestrator', 'daemon']).optional(),
+});
+export type CatalogTool = z.infer<typeof CatalogToolSchema>;
+export const CatalogToolListResponseSchema = z.array(CatalogToolSchema);
+
+export const ToolTestResponseSchema = z.strictObject({
+  success: z.boolean(),
+  result: z.string().optional(),
+  error: z.string().optional(),
+  durationMs: DurationMsSchema,
+});
+export type ToolTestResponse = z.infer<typeof ToolTestResponseSchema>;
+
+// ── POST /api/agents/:id/feedback ─────────────────────────────────────
+export const FeedbackAckSchema = z.strictObject({
+  feedbackId: z.string(),
+  type: z.string(),
+  turnId: z.string().nullable(),
+});
+export type FeedbackAck = z.infer<typeof FeedbackAckSchema>;
+
+// ── Typed throttle bodies (U6) ────────────────────────────────────────
+// Convention (S12/R3): `error` is the human sentence, `code` the machine
+// token; every throttle mirrors its Retry-After header as `retryAfterSec`.
+const throttleBase = {
+  error: z.string(),
+  retryAfterSec: z.number().int().positive(),
+};
+
+export const QueueFullErrorBodySchema = z.strictObject({
+  ...throttleBase,
+  code: z.literal('queue_full'),
+  scope: z.enum(['global', 'agent']),
+  agentId: z.string(),
+  queued: z.number().int().nonnegative(),
+  limit: z.number().int().nonnegative(),
+});
+export const DispatchStalledErrorBodySchema = z.strictObject({
+  ...throttleBase,
+  code: z.literal('dispatch_stalled'),
+});
+export const IngestQueueFullErrorBodySchema = z.strictObject({
+  ...throttleBase,
+  code: z.literal('ingest_queue_full'),
+  depth: z.number().int().nonnegative(),
+  limit: z.number().int().nonnegative(),
+});
+export const ConcurrencyLimitErrorBodySchema = z.strictObject({
+  ...throttleBase,
+  code: z.literal('concurrency_limit_reached'),
+  agentId: z.string(),
+  maxConcurrent: z.number().int().positive(),
+});
+export const ThrottleErrorBodySchema = z.discriminatedUnion('code', [
+  QueueFullErrorBodySchema,
+  DispatchStalledErrorBodySchema,
+  IngestQueueFullErrorBodySchema,
+  ConcurrencyLimitErrorBodySchema,
+]);
+export type ThrottleErrorBody = z.infer<typeof ThrottleErrorBodySchema>;

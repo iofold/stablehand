@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { EventStatsResponseSchema, EventTypesResponseSchema } from '@ctxmill/contracts';
 import type { DatabaseRepository } from '../../database/repository.js';
 
 export interface EventRouteOptions {
@@ -72,12 +73,12 @@ export async function eventRoutes(
         break;
     }
 
-    return db.getEventStats(since);
+    return EventStatsResponseSchema.parse(await db.getEventStats(since));
   });
 
   // GET /api/events/types — distinct event types
   app.get('/types', { config: { capability: 'events:read' } }, async () => {
     const types = await db.getEventTypes();
-    return { types };
+    return EventTypesResponseSchema.parse({ types });
   });
 }

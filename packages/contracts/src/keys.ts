@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { EpochMillisSchema } from './time.js';
+
 import { CUSTOM_EVENT_NAME_PATTERN } from './api.js';
 
 /**
@@ -122,11 +124,11 @@ export const ApiKeySchema = z.strictObject({
   /** ctx-k6ad: bound agent, or null for an operator/all-agents key. */
   agentId: z.string().nullable(),
   status: ApiKeyStatusSchema,
-  createdAt: z.number().int(),
+  createdAt: EpochMillisSchema,
   createdBy: z.string().nullable(),
-  expiresAt: z.number().int().nullable(),
-  lastUsedAt: z.number().int().nullable(),
-  revokedAt: z.number().int().nullable(),
+  expiresAt: EpochMillisSchema.nullable(),
+  lastUsedAt: EpochMillisSchema.nullable(),
+  revokedAt: EpochMillisSchema.nullable(),
 });
 
 export type ApiKey = z.infer<typeof ApiKeySchema>;

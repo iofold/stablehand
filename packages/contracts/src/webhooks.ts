@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { EpochMillisSchema } from './time.js';
+
 import {
   ArtifactKindSchema,
   ArtifactSha256Schema,
@@ -36,7 +38,9 @@ export const CtxmillWebhookHeadersSchema = z.strictObject({
   'X-Webhook-Signature': z.string().regex(/^v1=[0-9a-f]{64}$/),
 });
 
-const TimestampSchema = z.number().int().nonnegative();
+// Payload timestamps are epoch-MILLISECONDS (unlike the X-Webhook-Timestamp
+// signing header, which is unix seconds — see WEBHOOK_TIMESTAMP_TOLERANCE_SEC).
+const TimestampSchema = EpochMillisSchema;
 
 const turnIdentity = {
   turnId: TurnIdSchema,

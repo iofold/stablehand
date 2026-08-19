@@ -4,6 +4,7 @@ import {
   validateSystemSettingValue,
   type SystemSettingBounds,
 } from '@ctxmill/shared';
+import { SystemSettingsSchema } from '@ctxmill/contracts';
 import type { SettingsKey, SystemSettings, SystemSettingsService } from '../../settings/service.js';
 import { SETTINGS_KEYS } from '../../settings/service.js';
 
@@ -22,7 +23,8 @@ function serializeSettings(settings: SystemSettings): SystemSettings {
   for (const field of SETTINGS_FIELDS) {
     serialized[field] = settings[field];
   }
-  return serialized;
+  // ctx-iqzy R4: the reply must satisfy the public contract.
+  return SystemSettingsSchema.parse(serialized) as SystemSettings;
 }
 
 export async function settingsRoutes(

@@ -4,6 +4,8 @@ export * from './budgets.js';
 export * from './events.js';
 export * from './harness.js';
 export * from './ids.js';
+export * from './time.js';
+export * from './ops.js';
 export * from './keys.js';
 export * from './usage.js';
 export * from './model-gateway.js';

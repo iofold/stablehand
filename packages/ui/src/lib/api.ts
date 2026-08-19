@@ -69,6 +69,14 @@ import {
   type SandboxSession,
   type Turn,
   type TurnDetailResponse,
+  QueueStatusResponseSchema,
+  CatalogToolListResponseSchema,
+  SystemSettingsSchema,
+  EventStatsResponseSchema,
+  type QueueStatusResponse,
+  type CatalogTool,
+  type SystemSettings,
+  type EventStatsResponse,
 } from '@ctxmill/contracts';
 
 const API_BASE = '/api';
@@ -239,20 +247,12 @@ export async function fetchRecentConversations(options: {
   return ConversationSummaryListResponseSchema.parse(response);
 }
 
-const QueueStatusSchema = z.object({
-  queuedTurns: z.number().int().nonnegative(),
-  oldestQueuedAgeMs: z.number().nullable(),
-  dispatcher: z.object({
-    stalled: z.boolean(),
-    lastPassCompletedAt: z.number().nullable(),
-  }),
-  state: z.string(),
-});
-export type QueueStatus = z.infer<typeof QueueStatusSchema>;
+// ctx-iqzy R4: the contract is the single declaration — no UI mirror.
+export type QueueStatus = QueueStatusResponse;
 
 export async function fetchQueueStatus(): Promise<QueueStatus> {
   const response = await apiFetch<unknown>(`${API_BASE}/queue/status`);
-  return QueueStatusSchema.parse(response);
+  return QueueStatusResponseSchema.parse(response);
 }
 
 export async function fetchConversationSnapshot(
@@ -509,19 +509,11 @@ export async function deleteTrigger(id: string): Promise<void> {
 
 // ── Catalog operations ──────────────────────────────────────────────
 
-export interface CatalogTool {
-  name: string;
-  description?: string;
-  source: 'local' | 'mcp' | 'composio';
-  inputSchema?: Record<string, unknown>;
-  requiresApproval?: boolean;
-  secrets?: string[];
-  builtin?: boolean;
-  location?: 'sandbox' | 'orchestrator' | 'daemon';
-}
+export type { CatalogTool };
 
 export async function fetchCatalogTools(): Promise<CatalogTool[]> {
-  return apiFetch<CatalogTool[]>(`${API_BASE}/catalogs/tools`);
+  const response = await apiFetch<unknown>(`${API_BASE}/catalogs/tools`);
+  return CatalogToolListResponseSchema.parse(response);
 }
 
 export async function testTool(toolName: string, input?: Record<string, unknown>): Promise<{
@@ -562,34 +554,18 @@ export async function revokeApiKey(id: string): Promise<ApiKey> {
 
 // ── Workspace Size Limit Settings ───────────────────────────
 
-export interface SystemSettings {
-  maxWorkspaceTarBytes:        number;
-  maxTarUploadBytes:           number;
-  idleTimeoutMs:               number;
-  turnTimeoutMs:               number;
-  reconciliationIntervalMs:    number;
-  maxGlobalContainers:         number;
-  queueTimeoutMs:              number;
-  maxQueuedTurnsGlobal:        number;
-  maxQueuedTurnsPerAgent:      number;
-  maxIngestQueueDepth:         number;
-  queuedTurnTimeoutMs:         number;
-  maxConcurrentSessionsPerAgent: number;
-  maxTriggerDepth:             number;
-  defaultCpus:                 number;
-  defaultMemoryMb:             number;
-  defaultPidsLimit:            number;
-  defaultTimeoutSec:           number;
-}
+export type { SystemSettings };
 
 export async function fetchSettings(): Promise<SystemSettings> {
-  return apiFetch<SystemSettings>(`${API_BASE}/settings`);
+  const response = await apiFetch<unknown>(`${API_BASE}/settings`);
+  return SystemSettingsSchema.parse(response);
 }
 
 export async function updateSettings(
   partial: Partial<SystemSettings>,
 ): Promise<SystemSettings> {
-  return apiMutate<SystemSettings>(`${API_BASE}/settings`, 'PUT', partial);
+  const response = await apiMutate<unknown>(`${API_BASE}/settings`, 'PUT', partial);
+  return SystemSettingsSchema.parse(response);
 }
 
 // ── Event Log operations ────────────────────────────────────────────
@@ -597,19 +573,16 @@ export async function updateSettings(
 export type EventRecord = PersistedEvent;
 export type EventsResponse = EventListResponse;
 
-export interface EventStats {
-  total: number;
-  byType: Record<string, number>;
-  topAgents: Array<{ agentId: string; count: number }>;
-  recentRate: number;
-}
+// Contract type: topAgents.agentId is nullable — the old mirror said string.
+export type EventStats = EventStatsResponse;
 
 export async function fetchEvents(params?: EventListInput): Promise<EventsResponse> {
   return apiFetch<EventsResponse>(withQuery(`${API_BASE}/events`, params));
 }
 
 export async function fetchEventStats(range?: string): Promise<EventStats> {
-  return apiFetch<EventStats>(withQuery(`${API_BASE}/events/stats`, { range }));
+  const response = await apiFetch<unknown>(withQuery(`${API_BASE}/events/stats`, { range }));
+  return EventStatsResponseSchema.parse(response);
 }
 
 export async function fetchEventTypes(): Promise<{ types: string[] }> {

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { EpochMillisSchema as EpochMillisecondsSchema } from './time.js';
+
 import {
   AgentIdSchema,
   ArtifactIdSchema,
@@ -20,7 +22,6 @@ import { TurnUsageSchema } from './usage.js';
 
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const StringRecordSchema = z.record(z.string(), z.string());
-const EpochMillisecondsSchema = z.number().int().nonnegative();
 
 export const ARTIFACT_METADATA_MAX_BYTES = 16 * 1024;
 export const CUSTOM_EVENT_PAYLOAD_MAX_BYTES = 32 * 1024;

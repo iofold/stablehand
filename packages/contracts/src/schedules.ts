@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { EpochMillisSchema } from './time.js';
+
 import {
   CustomEventNameSchema,
   CustomEventPayloadSchema,
@@ -42,9 +44,9 @@ export const ScheduleSchema = z.strictObject({
   eventType: CustomEventNameSchema,
   payload: CustomEventPayloadSchema,
   enabled: z.boolean(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-  lastFiredAt: z.number().int().nonnegative().nullable(),
+  createdAt: EpochMillisSchema,
+  updatedAt: EpochMillisSchema,
+  lastFiredAt: EpochMillisSchema.nullable(),
   missedFireCount: z.number().int().nonnegative(),
   nextRun: z.number().int().nonnegative().nullable(),
 });

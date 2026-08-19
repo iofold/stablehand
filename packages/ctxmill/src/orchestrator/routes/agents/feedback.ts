@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { FeedbackAckSchema } from '@ctxmill/contracts';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { EventMap } from '../../../events/bus.js';
@@ -90,11 +91,11 @@ export async function feedbackRoutes(
 
       await eventBus?.emitAsync('feedback.received', eventPayload);
 
-      return reply.status(201).send({
+      return reply.status(201).send(FeedbackAckSchema.parse({
         feedbackId,
         type: body.type,
-        turnId,
-      });
+        turnId: turnId ?? null,
+      }));
     },
   );
 }

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { QueueStatusResponseSchema } from '@ctxmill/contracts';
 
 import type { DatabaseRepository } from '../../database/repository.js';
 import type { TurnDispatcher } from '../turn-dispatcher.js';
@@ -22,7 +23,7 @@ export async function queueRoutes(app: FastifyInstance, opts: QueueRouteOptions)
       db.countFailedCallbacks(),
     ]);
     const stalled = dispatcher ? dispatcher.isStalled() : null;
-    return {
+    return QueueStatusResponseSchema.parse({
       queuedTurns: counts.global,
       oldestQueuedAgeMs: oldestAgeMs,
       // ctx-4p34: dead-lettered deliveries were invisible; surface them here.
@@ -32,6 +33,6 @@ export async function queueRoutes(app: FastifyInstance, opts: QueueRouteOptions)
         lastPassCompletedAt: dispatcher?.getLastPassCompletedAt() ?? null,
       },
       state: (stalled && counts.global > 0) || deadLetteredCallbacks > 0 ? 'degraded' : 'healthy',
-    };
+    });
   });
 }

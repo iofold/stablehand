@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-const EpochMillisecondsSchema = z.number().int().nonnegative();
+import { EpochMillisSchema as EpochMillisecondsSchema } from './time.js';
+
 const CountSchema = z.number().int().nonnegative();
 const UsdSchema = z.number().finite().nonnegative();
 

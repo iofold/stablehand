@@ -17,6 +17,7 @@ const baseSettings: SystemSettings = {
   maxTriggerDepth: 5,
   maxQueuedTurnsGlobal: 1_000,
   maxQueuedTurnsPerAgent: 100,
+  maxIngestQueueDepth: 10_000,
   queuedTurnTimeoutMs: 1_800_000,
   defaultCpus: 1,
   defaultMemoryMb: 1024,

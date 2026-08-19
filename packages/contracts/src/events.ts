@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { EpochMillisSchema } from './time.js';
+
 import {
   AgentIdSchema,
   ConversationIdSchema,
@@ -10,18 +12,14 @@ import {
   TurnIdSchema,
 } from './ids.js';
 import { TurnUsageSchema } from './usage.js';
+import { ToolCallStateSchema } from './api.js';
 
 const UnknownRecordSchema = z.record(z.string(), z.unknown());
 const TimestampSchema = z.number().int().nonnegative().optional();
 
-const StreamToolCallStateSchema = z.strictObject({
-  id: ToolCallIdSchema,
-  name: z.string(),
-  args: z.string(),
-  result: z.string().optional(),
-  error: z.string().optional(),
-  status: z.enum(['pending', 'running', 'complete', 'error']),
-});
+// ctx-iqzy S18: one tool-call-state vocabulary — the stream reuses the REST
+// schema (durationMs is optional, so frames emitted before completion parse).
+const StreamToolCallStateSchema = ToolCallStateSchema;
 
 const StreamMessagePartSchema = z.discriminatedUnion('type', [
   z.strictObject({
@@ -43,7 +41,9 @@ const StreamMessagePartSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-export const AgUiMessageSchema = z.strictObject({
+export // Role vocabulary includes 'developer' (AG-UI protocol-owned; REST MessageSchema
+// deliberately excludes it — ctx-iqzy S18 documented divergence).
+const AgUiMessageSchema = z.strictObject({
   id: MessageIdSchema,
   role: z.enum(['developer', 'system', 'assistant', 'user', 'tool']),
   content: z.string().optional(),
@@ -51,7 +51,7 @@ export const AgUiMessageSchema = z.strictObject({
   toolCallId: ToolCallIdSchema.optional(),
   toolCalls: z.array(StreamToolCallStateSchema).optional(),
   parts: z.array(StreamMessagePartSchema).optional(),
-  createdAt: z.number().int().nonnegative().optional(),
+  createdAt: EpochMillisSchema.optional(),
 });
 
 export const AgUiToolSchema = z.strictObject({
@@ -165,7 +165,7 @@ export const TurnPendingEventSchema = z.strictObject({
   conversationId: ConversationIdSchema,
   mode: z.enum(['interactive', 'background']),
   taskDescription: z.string().optional(),
-  timestamp: z.number().int().nonnegative(),
+  timestamp: EpochMillisSchema,
 });
 
 export const InterruptRequestedEventSchema = z.strictObject({
@@ -179,7 +179,7 @@ export const InterruptRequestedEventSchema = z.strictObject({
   toolCallId: ToolCallIdSchema,
   toolCallName: z.string(),
   args: UnknownRecordSchema,
-  timestamp: z.number().int().nonnegative(),
+  timestamp: EpochMillisSchema,
 });
 
 export const InterruptResolvedEventSchema = z.strictObject({
@@ -191,7 +191,7 @@ export const InterruptResolvedEventSchema = z.strictObject({
   sandboxSessionId: SandboxSessionIdSchema.optional(),
   interruptId: InterruptIdSchema,
   action: z.enum(['approve', 'reject', 'suspend', 'timeout']),
-  timestamp: z.number().int().nonnegative(),
+  timestamp: EpochMillisSchema,
 });
 
 export const MessageCommittedEventSchema = z.strictObject({
@@ -207,7 +207,7 @@ export const MessageCommittedEventSchema = z.strictObject({
   parts: z.array(StreamMessagePartSchema).optional(),
   toolCalls: z.array(StreamToolCallStateSchema).optional(),
   toolCallId: ToolCallIdSchema.optional(),
-  timestamp: z.number().int().nonnegative(),
+  timestamp: EpochMillisSchema,
 });
 
 export const MessageUpdatedEventSchema = z.strictObject({
@@ -223,7 +223,7 @@ export const MessageUpdatedEventSchema = z.strictObject({
   content: z.string(),
   parts: z.array(StreamMessagePartSchema).optional(),
   toolCalls: z.array(StreamToolCallStateSchema).optional(),
-  timestamp: z.number().int().nonnegative(),
+  timestamp: EpochMillisSchema,
 });
 
 export const A2UiRenderEventSchema = z.strictObject({
@@ -249,7 +249,7 @@ export const SandboxSessionSnapshotEventSchema = z.strictObject({
   status: z.enum(['ACTIVE', 'RESTORING']),
   harnessName: z.string(),
   containerName: z.string().nullable(),
-  timestamp: z.number().int().nonnegative(),
+  timestamp: EpochMillisSchema,
 });
 
 export const GenericCustomEventSchema = z.strictObject({
@@ -289,7 +289,7 @@ export const ConnectedEventSchema = z.strictObject({
   type: z.literal('CONNECTED'),
   agentId: AgentIdSchema,
   latestSeq: z.number().int().nonnegative(),
-  timestamp: z.number().int().nonnegative(),
+  timestamp: EpochMillisSchema,
 });
 
 export const AgentStreamEventSchema = z.union([

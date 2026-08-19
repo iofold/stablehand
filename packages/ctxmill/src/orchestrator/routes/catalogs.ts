@@ -3,30 +3,16 @@ import type { FastifyInstance } from 'fastify';
 import { builtinToolNames } from '../../tool/builtin/index.js';
 import { resolveToolLocation } from '../../tool/metadata.js';
 import type { ToolContext } from '@ctxmill/sandbox-daemon';
-
-interface CatalogToolResponse {
-  name: string;
-  description?: string;
-  source: 'local' | 'mcp' | 'composio';
-  inputSchema?: Record<string, unknown>;
-  requiresApproval?: boolean;
-  secrets?: string[];
-  /** True when the tool is implicitly attached to every agent (no manifest declaration needed). */
-  builtin?: boolean;
-  /** Execution location: where the tool actually runs at runtime. */
-  location?: 'sandbox' | 'orchestrator' | 'daemon';
-}
+import {
+  CatalogToolListResponseSchema,
+  ToolTestResponseSchema,
+  type CatalogTool as CatalogToolResponse,
+  type ToolTestResponse as TestToolResponse,
+} from '@ctxmill/contracts';
 
 interface TestToolRequestBody {
   toolName: string;
   input?: Record<string, unknown>;
-}
-
-interface TestToolResponse {
-  success: boolean;
-  result?: string;
-  error?: string;
-  durationMs: number;
 }
 
 const TOOL_TEST_TIMEOUT_MS = 30_000;
@@ -136,18 +122,18 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    return Array.from(seen.values());
+    return CatalogToolListResponseSchema.parse(Array.from(seen.values()));
   });
 
   app.post<{ Body: unknown }>('/tools/test', async (request, reply): Promise<TestToolResponse> => {
     if (!isTestToolRequestBody(request.body)) {
       reply.code(400);
 
-      return {
+      return ToolTestResponseSchema.parse({
         success: false,
         error: 'Invalid request body: toolName must be a string and input must be an object when provided',
         durationMs: 0,
-      };
+      });
     }
 
     const { toolName, input = {} } = request.body;
@@ -155,11 +141,11 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
     const provider = app.toolDefinitionRegistry.getProvider(toolName);
 
     if (!tool || !provider || !provider.execute) {
-      return {
+      return ToolTestResponseSchema.parse({
         success: false,
         error: !tool || !provider ? `Tool not found: ${toolName}` : `Tool provider does not support execution: ${toolName}`,
         durationMs: 0,
-      };
+      });
     }
 
     const executeFn: (toolName: string, args: unknown, ctx: ToolContext) => Promise<string> = provider.execute.bind(provider);
@@ -171,19 +157,19 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
         TOOL_TEST_TIMEOUT_MS,
       );
 
-      return {
+      return ToolTestResponseSchema.parse({
         success: true,
         result,
         durationMs: Date.now() - startedAt,
-      };
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
-      return {
+      return ToolTestResponseSchema.parse({
         success: false,
         error: message,
         durationMs: Date.now() - startedAt,
-      };
+      });
     }
   });
 

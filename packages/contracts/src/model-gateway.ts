@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-const EpochMillisecondsSchema = z.number().int().nonnegative();
+import { DurationMsSchema, EpochMillisSchema as EpochMillisecondsSchema } from './time.js';
+
 
 export const ModelGatewayStatusSchema = z.strictObject({
   enabled: z.boolean(),
@@ -10,7 +11,7 @@ export const ModelGatewayStatusSchema = z.strictObject({
   watermarkAt: EpochMillisecondsSchema.nullable(),
   lastAttemptAt: EpochMillisecondsSchema.nullable(),
   lastSuccessAt: EpochMillisecondsSchema.nullable(),
-  lagMs: EpochMillisecondsSchema.nullable(),
+  lagMs: DurationMsSchema.nullable(),
   lastError: z.string().nullable(),
   pendingCalls: z.number().int().nonnegative(),
   unpricedCalls: z.number().int().nonnegative(),
