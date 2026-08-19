@@ -8,6 +8,7 @@ import {
   SandboxSessionNotFoundError,
 } from '../../session-manager/session-lifecycle-service.js';
 import { classifyRestoreFailure } from '../../session-manager/restore-retry-policy.js';
+import { SessionRestoreBudgetExhaustedError } from '../../session-manager/session-recovery-coordinator.js';
 import type { TurnSecrets } from '../../session-manager/turn-secrets.js';
 import { TURN_CANCELLED_MESSAGE, isTurnCancelled } from '../../turn-cancellation.js';
 import { TurnFinalizer } from '../../turn-finalizer.js';
@@ -686,6 +687,21 @@ export async function turnRoutes(
           return reply.status(409).send({
             error: 'Sandbox session not checkpointed',
             status: err.status,
+            sandboxSessionId,
+          });
+        }
+
+        // ctx-2mm8: budget exhaustion is not a generic retryable failure — the
+        // common cause is a full host, so surface it as 503 capacity, not a 502
+        // that implies the checkpoint is broken.
+        if (err instanceof SessionRestoreBudgetExhaustedError) {
+          const current = await db.getSandboxSession(sandboxSessionId);
+          return reply.status(503).send({
+            error: 'Restore budget exhausted',
+            code: 'restore_budget_exhausted',
+            detail: err.message,
+            status: current?.status ?? 'CHECKPOINTED',
+            restoreAttempts: current?.restoreAttempts ?? null,
             sandboxSessionId,
           });
         }

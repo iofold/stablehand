@@ -36,6 +36,7 @@ export interface SandboxSessionRestoreLease {
   fail(
     toStatus: 'CHECKPOINTED' | 'TERMINATED',
     error: string,
+    options?: { refundAttempt?: boolean },
   ): Promise<SandboxSessionRow | undefined>;
   stop(): Promise<void>;
 }
@@ -212,12 +213,12 @@ export async function acquireSandboxSessionRestoreLease(
         runtime,
       );
     },
-    fail: async (toStatus, error) => {
+    fail: async (toStatus, error, options) => {
       if (!await waitForRenewal()) return undefined;
       return deps.db.failSandboxSessionRestore(
         sandboxSessionId,
         fence,
-        { toStatus, error },
+        { toStatus, error, refundAttempt: options?.refundAttempt },
       );
     },
     stop,

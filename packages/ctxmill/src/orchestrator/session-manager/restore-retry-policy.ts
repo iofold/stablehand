@@ -1,5 +1,7 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 
+import { ContainerLimitError } from '../../sandbox/container-semaphore.js';
+
 /**
  * Restore retry policy per ADR 013.
  *
@@ -20,8 +22,23 @@ export const RESTORE_JOIN_MAX_POLLS = 120;
  */
 export const RESTORE_BACKOFF_MS: readonly number[] = [5_000, 15_000, 45_000];
 
-/** A short, machine-classifiable category for the failure. */
-export type RestoreFailureCategory = 'retryable' | 'non_retryable';
+/**
+ * A short, machine-classifiable category for the failure. 'capacity' means the
+ * host was full (no free container slot) — the checkpoint is fine, so the
+ * attempt must NOT consume the restore budget (ctx-2mm8).
+ */
+export type RestoreFailureCategory = 'retryable' | 'non_retryable' | 'capacity';
+
+/**
+ * ctx-2mm8: a restore failure caused by container-slot saturation, not by the
+ * session. Mirrors ctx-vsf8's isCheckpointSizeError classifier.
+ */
+export function isCapacityError(err: unknown): boolean {
+  return (
+    err instanceof ContainerLimitError
+    || (err instanceof ConnectError && err.code === Code.ResourceExhausted)
+  );
+}
 
 export interface RestoreFailureClassification {
   category: RestoreFailureCategory;
@@ -72,6 +89,15 @@ export function isInvalidCheckpointError(err: unknown): err is InvalidCheckpoint
 export function classifyRestoreFailure(err: unknown): RestoreFailureClassification {
   if (isInvalidCheckpointError(err)) {
     return { category: 'non_retryable', message: err.message };
+  }
+
+  // ctx-2mm8: capacity before the generic ConnectError/Error arms — a full
+  // host is not a broken session and must not spend the restore budget.
+  if (isCapacityError(err)) {
+    return {
+      category: 'capacity',
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
 
   if (err instanceof ConnectError) {

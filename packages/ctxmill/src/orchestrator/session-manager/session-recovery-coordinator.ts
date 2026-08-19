@@ -34,7 +34,9 @@ import { getGrpcCallbackSandboxSecrets } from '../grpc/callback-auth.js';
 import {
   decideRestoreOutcome,
   InvalidCheckpointError,
+  isCapacityError,
   MAX_RESTORE_ATTEMPTS,
+  RESTORE_BACKOFF_MS,
   RESTORE_JOIN_MAX_POLLS,
   RESTORE_JOIN_POLL_MS,
 } from './restore-retry-policy.js';
@@ -111,6 +113,23 @@ export class SessionRestoreInProgressError extends Error {
       cause === undefined ? undefined : { cause },
     );
     this.name = 'SessionRestoreInProgressError';
+  }
+}
+
+/**
+ * ctx-2mm8: the restore budget is spent (restore_attempts >= MAX). Distinct
+ * from SessionRestoreInProgressError so the caller is not told a peer owns the
+ * restore when in fact the session ran out of attempts. The message names the
+ * likely cause (a full host burning attempts is the common case pre-fix).
+ */
+export class SessionRestoreBudgetExhaustedError extends Error {
+  constructor(readonly sandboxSessionId: string, cause?: unknown) {
+    super(
+      `Restore budget exhausted for sandbox session ${sandboxSessionId} `
+      + '(container capacity or repeated restore failures)',
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = 'SessionRestoreBudgetExhaustedError';
   }
 }
 
@@ -391,6 +410,17 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       MAX_RESTORE_ATTEMPTS,
     );
     if (!restoreLease) {
+      // ctx-2mm8: a failed claim means either a peer owns the restore or the
+      // budget is spent. Read the row to name the real cause instead of always
+      // reporting "restored by another worker".
+      const current = await this.deps.db.getSandboxSession(sessionId);
+      if (
+        current
+        && current.status === 'CHECKPOINTED'
+        && (current.restoreAttempts ?? 0) >= MAX_RESTORE_ATTEMPTS
+      ) {
+        throw new SessionRestoreBudgetExhaustedError(sessionId);
+      }
       throw new SessionRestoreInProgressError(sessionId);
     }
     const restoreAttempt = Math.max(
@@ -569,11 +599,16 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
       return record;
     } catch (err) {
       const outcome = decideRestoreOutcome(err, restoreAttempt);
+      // ctx-2mm8: a capacity refusal (full host) must not spend the budget — a
+      // healthy checkpoint would otherwise be permanently poisoned by three
+      // busy moments. Refund the claim's increment atomically under the fence.
+      const isCapacity = outcome.classification.category === 'capacity';
       let failed: SandboxSessionRow | undefined;
       try {
         failed = await restoreLease.fail(
           outcome.toStatus === 'TERMINATED' ? 'TERMINATED' : 'CHECKPOINTED',
           outcome.classification.message,
+          isCapacity ? { refundAttempt: true } : undefined,
         );
       } catch (failureError) {
         this.deps.logger.warn(
@@ -628,6 +663,9 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     let attemptsSoFar = Math.max(0, dbSession.restoreAttempts ?? 0);
     let currentRow = dbSession;
     let lastError: unknown;
+    // ctx-2mm8: capacity refusals are refunded, so they are bounded by this
+    // local counter rather than the persisted restore budget.
+    let capacityRetries = 0;
 
     while (attemptsSoFar < MAX_RESTORE_ATTEMPTS) {
       const attemptNumber = attemptsSoFar + 1;
@@ -693,6 +731,45 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
           err instanceof SessionRestoreInProgressError && err.cause !== undefined
             ? err.cause
             : err;
+
+        // ctx-2mm8: capacity refusals refund the attempt, so persisted attempts
+        // stay flat and the "not admitted" progress guard below would abort
+        // immediately. Pace and bound capacity retries with a local counter
+        // instead — the budget was never spent, so this cannot poison a
+        // healthy session.
+        if (isCapacityError(classifiedError)) {
+          capacityRetries += 1;
+          if (capacityRetries > RESTORE_BACKOFF_MS.length) {
+            this.deps.logger.warn(
+              `${TAG} session ${sessionId} restore gave up after ${capacityRetries - 1} capacity refusals`,
+            );
+            throw classifiedError;
+          }
+          const delayMs = RESTORE_BACKOFF_MS[capacityRetries - 1];
+          this.deps.logger.info(
+            `${TAG} session ${sessionId} restore deferred by container capacity `
+            + `(refusal ${capacityRetries}); sleeping ${delayMs}ms before retry`,
+          );
+          await sleep(delayMs);
+          const afterCapacity = await this.deps.db.getSandboxSession(sessionId);
+          if (!afterCapacity) {
+            throw new Error(
+              `Sandbox session ${sessionId} disappeared during capacity backoff`,
+              { cause: err },
+            );
+          }
+          if (afterCapacity.status !== 'CHECKPOINTED') {
+            return this.doRecover(
+              afterCapacity.conversationId,
+              agentDef,
+              afterCapacity.agentId,
+              afterCapacity,
+            );
+          }
+          currentRow = afterCapacity;
+          continue;
+        }
+
         const persistedAttempts = Math.max(
           0,
           persisted.restoreAttempts ?? 0,
@@ -751,7 +828,9 @@ export class SessionRecoveryCoordinator implements SessionReconciler {
     if (lastError !== undefined) {
       throw lastError;
     }
-    throw new Error(`Restore retry budget exhausted for session ${sessionId}`);
+    // ctx-2mm8: name budget exhaustion distinctly so the route does not report
+    // a generic retryable restore failure for a session that ran out of budget.
+    throw new SessionRestoreBudgetExhaustedError(sessionId);
   }
 
   private async rollbackCreatedContainer(

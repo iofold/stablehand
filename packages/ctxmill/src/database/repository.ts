@@ -7173,6 +7173,10 @@ export class DatabaseRepository {
     failure: {
       toStatus: 'CHECKPOINTED' | 'TERMINATED';
       error: string;
+      // ctx-2mm8: refund the attempt the claim incremented when the failure
+      // was capacity (a full host, not a broken session). Atomic inside this
+      // fenced UPDATE so it cannot race a concurrent claim.
+      refundAttempt?: boolean;
     },
   ): Promise<SandboxSessionRow | undefined> {
     const [failed] = await this.db
@@ -7187,6 +7191,9 @@ export class DatabaseRepository {
         ),
         restoreOwnerId: null,
         restoreLeaseExpiresAt: null,
+        ...(failure.refundAttempt
+          ? { restoreAttempts: sql`GREATEST(${this.schema.sandboxSessions.restoreAttempts} - 1, 0)` }
+          : {}),
         updatedAt: databaseClockMs(),
         lastActivityAt: databaseClockMs(),
       })
