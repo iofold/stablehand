@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
-import type {
-  DatabaseRepository,
-  InterruptResumeAttemptRow,
-  TurnDeliveryLeaseRow,
+import {
+  MAX_INTERRUPT_RESUME_ATTEMPTS,
+  type DatabaseRepository,
+  type InterruptResumeAttemptRow,
+  type TurnDeliveryLeaseRow,
 } from '../database/repository.js';
 import { unrefTimer } from '../util/timing.js';
 import type {
@@ -25,12 +26,20 @@ const DEFAULT_LEASE_MS = 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const DEFAULT_HEARTBEAT_MS = 20_000;
 const DEFAULT_SCAN_LIMIT = 50;
+/**
+ * ctx-eu6a: cap on simultaneous in-flight resume attempts per scan, matching
+ * the equivalently expensive idle-checkpoint bound
+ * (MAX_CONCURRENT_IDLE_CHECKPOINTS). Overflow defers to the next poll rather
+ * than restoring 50 sandboxes at once.
+ */
+const MAX_CONCURRENT_INTERRUPT_RESUMES = 3;
 
 export type InterruptResumeAttemptStore = Pick<
   DatabaseRepository,
   | 'getTurn'
   | 'getSandboxSession'
   | 'getRecoverableInterruptResumeAttempts'
+  | 'getExhaustedInterruptResumeAttempts'
   | 'claimInterruptResumeDelivery'
   | 'renewTurnDeliveryLease'
   | 'releaseTurnDeliveryLease'
@@ -153,6 +162,10 @@ export class InterruptResumeAttemptWorker {
     }
 
     const scan = (async () => {
+      await this.sweepExhausted();
+      if (this.stopping) {
+        return;
+      }
       const attempts = await this.deps.db.getRecoverableInterruptResumeAttempts(
         this.scanLimit,
       );
@@ -162,6 +175,11 @@ export class InterruptResumeAttemptWorker {
       for (const attempt of attempts) {
         if (this.stopping) {
           return;
+        }
+        // ctx-eu6a: bound the fan-out. Overflow rows are left for the next
+        // poll rather than launching every eligible restore at once.
+        if (this.inFlight.size >= MAX_CONCURRENT_INTERRUPT_RESUMES) {
+          break;
         }
         this.launch(attempt);
       }
@@ -192,6 +210,32 @@ export class InterruptResumeAttemptWorker {
       this.pollTimer = undefined;
     }
     await this.drain();
+  }
+
+  /**
+   * ctx-eu6a: move budget-exhausted pending attempts to a terminal 'failed'
+   * state with an operator-visible error, so they stop sitting invisibly at
+   * the head of the recovery queue.
+   */
+  private async sweepExhausted(): Promise<void> {
+    const exhausted = await this.deps.db.getExhaustedInterruptResumeAttempts(
+      this.scanLimit,
+    );
+    for (const attempt of exhausted) {
+      if (this.stopping) {
+        return;
+      }
+      const failed = await this.deps.db.failUnclaimedInterruptResumeAttempt(
+        attempt.id,
+        `resume budget exhausted after ${attempt.attempts} attempts: ${attempt.lastError ?? 'unknown error'}`,
+      );
+      if (failed) {
+        this.deps.logger.error(
+          `${TAG} resume attempt ${attempt.id} (turn ${attempt.turnId}) exhausted `
+          + `after ${attempt.attempts} attempts; marked failed: ${attempt.lastError ?? ''}`,
+        );
+      }
+    }
   }
 
   private launch(attempt: InterruptResumeAttemptRow): void {
@@ -225,6 +269,26 @@ export class InterruptResumeAttemptWorker {
       if (!failed) {
         this.deps.logger.warn(
           `${TAG} could not fail unclaimed attempt ${attempt.id}; ownership changed`,
+        );
+      }
+      return;
+    }
+
+    // ctx-eu6a: retry budget. A row that has burned its attempts is terminated
+    // here instead of re-driving an expensive restore forever (defense in depth
+    // — the recovery scan already excludes it; this also covers enqueue()).
+    if (attempt.attempts >= MAX_INTERRUPT_RESUME_ATTEMPTS) {
+      const failed = await this.deps.db.failUnclaimedInterruptResumeAttempt(
+        attempt.id,
+        `resume budget exhausted after ${attempt.attempts} attempts: ${attempt.lastError ?? 'unknown error'}`,
+      );
+      if (failed) {
+        this.deps.logger.error(
+          `${TAG} resume attempt ${attempt.id} exhausted after ${attempt.attempts} attempts; marked failed`,
+        );
+      } else {
+        this.deps.logger.warn(
+          `${TAG} could not fail exhausted attempt ${attempt.id}; ownership changed`,
         );
       }
       return;

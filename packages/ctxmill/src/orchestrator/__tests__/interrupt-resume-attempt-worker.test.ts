@@ -97,6 +97,7 @@ function createDb(overrides: Record<string, unknown> = {}) {
       id: 'sandbox-old',
       status: 'ACTIVE',
     }),
+    getExhaustedInterruptResumeAttempts: vi.fn().mockResolvedValue([]),
     getRecoverableInterruptResumeAttempts: vi.fn().mockResolvedValue([]),
     claimInterruptResumeDelivery: vi.fn().mockImplementation(async (
       input: { ownerId: string },
@@ -390,6 +391,7 @@ describe('InterruptResumeAttemptWorker fenced ownership', () => {
   it('does not launch candidates returned after shutdown begins', async () => {
     const scan = createDeferred<InterruptResumeAttemptRow[]>();
     const db = createDb({
+      getExhaustedInterruptResumeAttempts: vi.fn().mockResolvedValue([]),
       getRecoverableInterruptResumeAttempts: vi.fn().mockImplementation(
         async () => scan.promise,
       ),

@@ -296,6 +296,7 @@ function createDurableStore(options: {
       },
     ),
     failUnclaimedInterruptResumeAttempt: vi.fn(),
+    getExhaustedInterruptResumeAttempts: vi.fn().mockResolvedValue([]),
     getRecoverableInterruptResumeAttempts: vi.fn().mockImplementation(
       async () => [attempt],
     ),

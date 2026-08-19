@@ -60,6 +60,7 @@ function createRouteDb(overrides: Record<string, unknown> = {}) {
       resumeAttempt: defaultAttempt,
     }),
     retryFailedInterruptResumeAttempt: vi.fn().mockResolvedValue(defaultAttempt),
+    getExhaustedInterruptResumeAttempts: vi.fn().mockResolvedValue([]),
     getRecoverableInterruptResumeAttempts: vi.fn().mockResolvedValue([]),
     claimInterruptResumeDelivery: vi.fn().mockImplementation(async (input: {
       sandboxSessionId: string;
@@ -362,6 +363,7 @@ describe('interrupt resolution route (ctx-8nnu, ctx-qjnz, ctx-aac)', () => {
       updatedAt: Date.now(),
     };
     const db = createRouteDb({
+      getExhaustedInterruptResumeAttempts: vi.fn().mockResolvedValue([]),
       getRecoverableInterruptResumeAttempts: vi.fn().mockResolvedValue([staleAttempt]),
       claimInterruptResumeDelivery: vi.fn().mockImplementation(async (input: {
         ownerId: string;

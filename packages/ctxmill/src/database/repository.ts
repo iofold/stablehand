@@ -1,4 +1,4 @@
-import { eq, sql, gt, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike, type SQL } from 'drizzle-orm';
+import { eq, sql, gt, gte, lt, lte, and, or, desc, asc, inArray, isNotNull, isNull, ilike, type SQL } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { DrizzleDb } from './connection.js';
@@ -199,6 +199,10 @@ export class SandboxSessionStatusConflictError extends Error {
  * count+insert. Distinct from MIGRATION_ADVISORY_LOCK_ID (424242).
  */
 export const TURN_QUEUE_ADMISSION_LOCK_ID = 424243;
+
+/** ctx-eu6a: retry budget for interrupt resume attempts and its backoff step. */
+export const MAX_INTERRUPT_RESUME_ATTEMPTS = 3;
+export const INTERRUPT_RESUME_BACKOFF_STEP_MS = 15_000;
 
 /**
  * Thrown by createTurnWithSecretEnvelope when the authoritative in-transaction
@@ -5438,11 +5442,19 @@ export class DatabaseRepository {
   async getRecoverableInterruptResumeAttempts(
     limit = 50,
   ): Promise<InterruptResumeAttemptRow[]> {
+    // ctx-eu6a: pending AND failed rows are recoverable (a transient delivery
+    // failure should self-heal, not wait for a human), but only under a retry
+    // budget and a per-attempt backoff — previously pending rows were re-driven
+    // by every 15s scan forever and failed rows were never re-driven at all.
     return this.db
       .select()
       .from(this.schema.interruptResumeAttempts)
       .where(or(
-        eq(this.schema.interruptResumeAttempts.status, 'pending'),
+        and(
+          inArray(this.schema.interruptResumeAttempts.status, ['pending', 'failed']),
+          lt(this.schema.interruptResumeAttempts.attempts, MAX_INTERRUPT_RESUME_ATTEMPTS),
+          sql`${this.schema.interruptResumeAttempts.updatedAt} < ${databaseClockMs()} - LEAST(${this.schema.interruptResumeAttempts.attempts}, 3) * ${INTERRUPT_RESUME_BACKOFF_STEP_MS}`,
+        ),
         and(
           eq(this.schema.interruptResumeAttempts.status, 'in_progress'),
           sql<boolean>`NOT EXISTS (
@@ -5466,6 +5478,26 @@ export class DatabaseRepository {
         asc(this.schema.interruptResumeAttempts.updatedAt),
         asc(this.schema.interruptResumeAttempts.id),
       )
+      .limit(Math.max(1, Math.min(Math.trunc(limit), 500)));
+  }
+
+  /**
+   * ctx-eu6a: pending/failed attempts that have exhausted the retry budget.
+   * These are excluded from the recovery scan; the worker sweeps them to a
+   * terminal 'failed' state so they surface to operators instead of sitting
+   * invisibly stuck at the head of the pending queue.
+   */
+  async getExhaustedInterruptResumeAttempts(
+    limit = 50,
+  ): Promise<InterruptResumeAttemptRow[]> {
+    return this.db
+      .select()
+      .from(this.schema.interruptResumeAttempts)
+      .where(and(
+        eq(this.schema.interruptResumeAttempts.status, 'pending'),
+        gte(this.schema.interruptResumeAttempts.attempts, MAX_INTERRUPT_RESUME_ATTEMPTS),
+      ))
+      .orderBy(asc(this.schema.interruptResumeAttempts.updatedAt))
       .limit(Math.max(1, Math.min(Math.trunc(limit), 500)));
   }
 
