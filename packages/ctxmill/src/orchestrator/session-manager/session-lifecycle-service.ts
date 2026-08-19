@@ -30,6 +30,7 @@ import type {
   SessionReconnectionRegistration,
   SessionReconciler,
 } from './ports.js';
+import { acquireSandboxSessionRestoreLease } from '../sandbox-session-restore-lease.js';
 import { SessionRecoveryCoordinator } from './session-recovery-coordinator.js';
 import { SessionStatusCoordinator } from './session-status-coordinator.js';
 import type { SessionStateStore } from './session-state-store.js';
@@ -148,6 +149,10 @@ export interface SessionLifecycleServiceDeps {
     | 'renewSandboxSessionLifecycleOperation'
     | 'markSandboxSessionLifecycleOperationExecuting'
     | 'cancelSandboxSessionLifecycleOperation'
+    | 'claimSandboxSessionRestore'
+    | 'renewSandboxSessionRestoreLease'
+    | 'completeSandboxSessionRestore'
+    | 'failSandboxSessionRestore'
   >;
   statusCoordinator: SessionStatusCoordinator;
   containerManager: Pick<SandboxContainerManager, 'getContainer' | 'removeContainer' | 'stopContainer'>;
@@ -637,6 +642,43 @@ export class SessionLifecycleService {
     await this.terminateSession(sessionId, 'reset', {});
   }
 
+  /**
+   * ctx-cn9c: terminate a CHECKPOINTED session under the restore fence. A kill
+   * must never be blocked by restore-attempt exhaustion (that is exactly when
+   * killing a poisoned session matters), so the claim runs with an unbounded
+   * attempt budget. No live restore owner -> the same conflict error the ACTIVE
+   * path throws.
+   */
+  private async terminateCheckpointedSession(sessionId: string): Promise<void> {
+    let lease;
+    try {
+      lease = await acquireSandboxSessionRestoreLease(
+        { db: this.deps.db, logger: this.deps.logger },
+        sessionId,
+        Number.MAX_SAFE_INTEGER,
+      );
+    } catch (err) {
+      if (err instanceof LiveSandboxSessionConflictError) {
+        throw new SandboxSessionLifecycleConflictError(sessionId, 'terminate');
+      }
+      throw err;
+    }
+    if (!lease) {
+      throw new SandboxSessionLifecycleConflictError(sessionId, 'terminate');
+    }
+    try {
+      await this.deps.lifecyclePolicy.cancelIdleTimeout(sessionId);
+      // Sets status=TERMINATED and clears container_id/container_name under the
+      // fence, satisfying "clear session runtime resources" for free.
+      await lease.fail('TERMINATED', 'killed by api request');
+      this.deps.stateStore.deleteQueue(sessionId);
+      this.deps.stateStore.markTurnInactive(sessionId);
+      this.deps.logger.info(`${TAG} checkpointed session ${sessionId} killed`);
+    } finally {
+      await lease.stop();
+    }
+  }
+
   private async terminateSession(
     sessionId: string,
     operation: 'terminate' | 'reset',
@@ -647,6 +689,14 @@ export class SessionLifecycleService {
       const persisted = await this.deps.db.getSandboxSession(sessionId);
       if (!persisted || persisted.status === 'TERMINATED') {
         return;
+      }
+      // ctx-cn9c: a CHECKPOINTED session has no ACTIVE lifecycle owner to
+      // acquire, so the normal terminate path can never mint one and 500s
+      // ("owned by another worker") though nothing owns it. The state machine
+      // permits CHECKPOINTED -> TERMINATED; use the restore lease — the
+      // canonical fenced owner of CHECKPOINTED transitions — to reach it.
+      if (persisted.status === 'CHECKPOINTED') {
+        return await this.terminateCheckpointedSession(sessionId);
       }
     }
     this.deps.logger.info(`${TAG} killing session ${sessionId}`);

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   RestoreConflictError,
+  SandboxSessionLifecycleConflictError,
   SandboxSessionNotFoundError,
   SessionLifecycleService,
   type SessionLifecycleServiceDeps,
@@ -85,6 +86,21 @@ function createHarness(rows: SandboxSessionRow[] = [makeRow(), makeRow()]) {
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
+  // ctx-cn9c: restore-lease methods the checkpointed-kill path uses.
+  const claimSandboxSessionRestore = vi.fn(async (input: { ownerId: string }) => ({
+    ...makeRow(),
+    restoreOwnerId: input.ownerId,
+    restoreFenceToken: 1,
+  }));
+  const failSandboxSessionRestore = vi.fn(async (
+    _id: string,
+    _fence: unknown,
+    change: { toStatus: string },
+  ) => ({ ...makeRow(), status: change.toStatus, containerId: null, containerName: null }));
+  const renewSandboxSessionRestoreLease = vi.fn().mockResolvedValue(true);
+  const completeSandboxSessionRestore = vi.fn().mockResolvedValue(undefined);
+  const cancelIdleTimeout = vi.fn().mockResolvedValue(undefined);
+
   const deps: SessionLifecycleServiceDeps = {
     stateStore: stateStore as never,
     recoveryCoordinator: { recoverOrReconnect } as never,
@@ -93,10 +109,14 @@ function createHarness(rows: SandboxSessionRow[] = [makeRow(), makeRow()]) {
     db: {
       getSandboxSession,
       getSandboxSessionByConversation,
+      claimSandboxSessionRestore,
+      renewSandboxSessionRestoreLease,
+      completeSandboxSessionRestore,
+      failSandboxSessionRestore,
     } as never,
     statusCoordinator: { transition } as never,
     containerManager: {} as never,
-    lifecyclePolicy: {} as never,
+    lifecyclePolicy: { cancelIdleTimeout } as never,
     workspaceDiffService: {} as never,
     logger,
     parsePendingRequestPayload: vi.fn(),
@@ -113,6 +133,8 @@ function createHarness(rows: SandboxSessionRow[] = [makeRow(), makeRow()]) {
     stateStore,
     record,
     logger,
+    claimSandboxSessionRestore,
+    failSandboxSessionRestore,
   };
 }
 
@@ -360,5 +382,41 @@ describe('SessionLifecycleService.restoreSession', () => {
 
     expect(harness.transition).not.toHaveBeenCalled();
     expect(harness.recoverOrReconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe('ctx-cn9c: killing a CHECKPOINTED session', () => {
+  it('terminates a checkpointed session via the restore lease', async () => {
+    const checkpointed = makeRow({ status: 'CHECKPOINTED', restoreAttempts: 3 });
+    const harness = createHarness([checkpointed]);
+
+    await expect(harness.service.killSession('sandbox-1')).resolves.toBeUndefined();
+
+    // A kill must never be gated by restore-attempt exhaustion.
+    expect(harness.claimSandboxSessionRestore).toHaveBeenCalledWith(
+      expect.objectContaining({ maxAttempts: Number.MAX_SAFE_INTEGER }),
+    );
+    expect(harness.failSandboxSessionRestore).toHaveBeenCalledWith(
+      'sandbox-1',
+      expect.anything(),
+      expect.objectContaining({ toStatus: 'TERMINATED' }),
+    );
+    expect(harness.stateStore.deleteQueue).toHaveBeenCalledWith('sandbox-1');
+    expect(harness.stateStore.markTurnInactive).toHaveBeenCalledWith('sandbox-1');
+  });
+
+  it('throws the lifecycle conflict when the restore is owned elsewhere', async () => {
+    const harness = createHarness([makeRow({ status: 'CHECKPOINTED' })]);
+    harness.claimSandboxSessionRestore.mockResolvedValueOnce(undefined as never);
+
+    await expect(harness.service.killSession('sandbox-1'))
+      .rejects.toBeInstanceOf(SandboxSessionLifecycleConflictError);
+  });
+
+  it('is idempotent once the session is already TERMINATED', async () => {
+    const harness = createHarness([makeRow({ status: 'TERMINATED' })]);
+
+    await expect(harness.service.killSession('sandbox-1')).resolves.toBeUndefined();
+    expect(harness.claimSandboxSessionRestore).not.toHaveBeenCalled();
   });
 });
