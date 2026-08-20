@@ -1,0 +1,28 @@
+{
+  "apiBase": "http://localhost:3002/api",
+  "concurrency": 4,
+  "turnTimeoutSec": 3600,
+  "resourceLimits": { "cpus": 2, "memoryMb": 2048, "pidsLimit": 256, "timeoutSec": 3600 },
+  "cells": {
+    "lg-luna": {
+      "harness": "langgraph",
+      "harnessConfig": { "provider": "openai", "model": "gpt-5.6-luna", "reasoning": "medium", "useResponsesApi": true }
+    },
+    "lg-terra": {
+      "harness": "langgraph",
+      "harnessConfig": { "provider": "openai", "model": "gpt-5.6-terra", "reasoning": "medium", "useResponsesApi": true }
+    },
+    "pi-luna": {
+      "harness": "pi-agent",
+      "harnessConfig": { "provider": "openai", "model": "gpt-5.6-luna", "reasoning": true, "thinkingLevel": "medium" }
+    },
+    "pi-terra": {
+      "harness": "pi-agent",
+      "harnessConfig": { "provider": "openai", "model": "gpt-5.6-terra", "reasoning": true, "thinkingLevel": "medium" }
+    },
+    "claude-sonnet5": {
+      "harness": "claude-agents",
+      "harnessConfig": { "model": "claude-sonnet-5" }
+    }
+  }
+}
