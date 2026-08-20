@@ -135,6 +135,41 @@ describe('LangGraph provider model configuration', () => {
     ]);
   });
 
+  it('uses the Responses API with structured reasoning when useResponsesApi is set, even through a gateway', async () => {
+    const config = makeConfig('openai');
+    config.harnessConfigJson = JSON.stringify({
+      provider: 'openai',
+      model: 'gpt-5.6-terra',
+      reasoning: 'medium',
+      useResponsesApi: true,
+    });
+    config.secrets = {
+      CTXMILL_MODEL_GATEWAY_ENABLED: 'true',
+      CTXMILL_MODEL_GATEWAY_URL: 'http://litellm:4000',
+      CTXMILL_MODEL_GATEWAY_RUNTIME_KEY: 'runtime-key',
+      CTXMILL_MODEL_GATEWAY_REVISION: 'dev1-1',
+    };
+    const session = await new LangGraphHarness().openSession(config);
+    const buildModel = Reflect.get(session, 'buildModelFromConfig') as (
+      secrets: Readonly<Record<string, string>>,
+      turnId?: string,
+    ) => Promise<unknown>;
+
+    try {
+      await buildModel(config.secrets, 'turn-1');
+    } finally {
+      await session.close();
+    }
+
+    expect(constructorCalls.openai).toEqual([
+      expect.objectContaining({
+        useResponsesApi: true,
+        reasoning: { effort: 'medium' },
+      }),
+    ]);
+    expect(constructorCalls.openai[0]).not.toHaveProperty('modelKwargs');
+  });
+
   it('routes an implicit OpenAI branch through the gateway with opaque turn correlation', async () => {
     const config = makeConfig('openai');
     config.harnessConfigJson = JSON.stringify({

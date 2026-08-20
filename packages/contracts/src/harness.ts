@@ -103,6 +103,10 @@ export const LangGraphConfigSchema = z.strictObject({
   maxTokens: z.number().int().positive().optional(),
   topP: z.number().min(0).max(1).optional(),
   reasoning: OpenAIReasoningSchema.optional(),
+  // OpenAI Responses API instead of chat-completions. Required for gpt-5.6+
+  // models when combining tools with reasoning (OpenAI rejects that pairing
+  // on chat-completions unless reasoning_effort is 'none').
+  useResponsesApi: z.boolean().optional(),
   setup: HarnessSetupSchema.optional(),
   subagents: z.array(LangGraphSubagentSchema).optional(),
   middleware: z.array(z.string().min(1)).optional(),
@@ -113,6 +117,14 @@ export const LangGraphConfigSchema = z.strictObject({
       code: 'custom',
       path: ['reasoning'],
       message: 'reasoning is supported only by the OpenAI LangGraph provider',
+    });
+  }
+
+  if (config.useResponsesApi !== undefined && config.provider !== 'openai') {
+    context.addIssue({
+      code: 'custom',
+      path: ['useResponsesApi'],
+      message: 'useResponsesApi is supported only by the OpenAI LangGraph provider',
     });
   }
 

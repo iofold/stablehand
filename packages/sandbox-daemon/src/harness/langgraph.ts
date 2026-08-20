@@ -650,8 +650,9 @@ class LangGraphSession implements HarnessSession {
     maxTokens?: number;
     topP?: number;
     reasoning?: 'off' | 'low' | 'medium' | 'high';
+    useResponsesApi?: boolean;
   }, secrets: ResolvedSecrets, turnId?: string): Promise<BaseLanguageModel> {
-    const { provider, model, apiKeyRef, baseUrl, temperature, maxTokens, topP, reasoning } = config;
+    const { provider, model, apiKeyRef, baseUrl, temperature, maxTokens, topP, reasoning, useResponsesApi } = config;
     const connection = resolveHarnessModelConnection({
       provider,
       apiKeyRef,
@@ -699,11 +700,14 @@ class LangGraphSession implements HarnessSession {
             }
           : undefined,
         modelName: model,
+        ...(useResponsesApi ? { useResponsesApi: true } : {}),
         ...(temperature != null ? { temperature } : {}),
         ...(maxTokens != null ? { maxTokens } : {}),
         ...(topP != null ? { topP } : {}),
+        // The raw reasoning_effort kwarg exists for chat-completions-shaped
+        // gateways; the Responses API takes the structured reasoning param.
         ...(reasoning
-          ? connection.baseUrl
+          ? connection.baseUrl && !useResponsesApi
             ? { modelKwargs: { reasoning_effort: reasoningEffort } }
             : { reasoning: { effort: reasoningEffort } }
           : {}),
@@ -745,6 +749,9 @@ class LangGraphSession implements HarnessSession {
             temperature: config.temperature,
             maxTokens: config.maxTokens,
             reasoning: config.reasoning,
+            ...((config.provider ?? this.harnessConfig.provider) === 'openai'
+              ? { useResponsesApi: this.harnessConfig.useResponsesApi }
+              : {}),
           }, secrets, turnId);
         }
 
