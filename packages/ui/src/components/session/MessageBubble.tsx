@@ -180,7 +180,10 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
           )}
         >
           {renderAsNdjson ? (
-            <pre data-testid="assistant-ndjson-output">
+            <pre
+              data-testid="assistant-ndjson-output"
+              className="whitespace-pre-wrap break-words"
+            >
               <code>{cleanContent}</code>
             </pre>
           ) : (

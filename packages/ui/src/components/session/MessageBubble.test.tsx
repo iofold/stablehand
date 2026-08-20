@@ -51,6 +51,8 @@ describe('MessageBubble', () => {
     const output = container.querySelector('[data-testid="assistant-ndjson-output"]');
     expect(output?.textContent).toBe(content);
     expect(output?.tagName).toBe('PRE');
+    expect(output?.classList.contains('whitespace-pre-wrap')).toBe(true);
+    expect(output?.classList.contains('break-words')).toBe(true);
     expect(container.querySelector('del')).toBeNull();
   });
 
