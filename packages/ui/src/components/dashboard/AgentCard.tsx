@@ -19,6 +19,7 @@ import type {
   AgentBudgetStatus,
   ModelGatewayStatus,
 } from '@ctxmill/contracts';
+import { harnessLabel } from '@/lib/harness';
 
 interface AgentCardProps {
   agent: Agent;
@@ -195,7 +196,7 @@ export function AgentCard({
           <div className="flex items-center gap-2">
             {agent.harness && (
               <span className="rounded bg-surface-700/60 px-1.5 py-0.5 text-[10px] font-medium text-surface-300 uppercase tracking-wider">
-                {agent.harness}
+                {harnessLabel(agent.harness)}
               </span>
             )}
             <span className="font-mono text-xs text-surface-400">

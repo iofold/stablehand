@@ -6,6 +6,7 @@ import {
 import type { Agent, ConversationSummary } from '@ctxmill/contracts';
 import { StatusBadge } from '@/components/dashboard/StatusBadge';
 import { cn } from '@/lib/utils';
+import { harnessLabel } from '@/lib/harness';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 import { formatCompactNumber, formatTimestamp } from '@/lib/format';
 import { describeConversationCostRollup } from '@/lib/usage-cost';
@@ -193,7 +194,7 @@ export function AgentOverviewTab({
                 <p className="text-label mb-1.5">Model</p>
                 <p className="font-mono text-sm text-surface-300">{(agent.harnessConfig as Record<string, unknown>)?.model as string || 'Unknown'}</p>
               </div>
-              <ConfigField label="Harness" value={agent.harness ?? undefined} mono />
+              <ConfigField label="Harness" value={agent.harness ? harnessLabel(agent.harness) : undefined} mono />
               <ConfigField label="Workspace" value={agent.workspaceDir ?? undefined} mono />
               <ConfigField
                 label="Tools"

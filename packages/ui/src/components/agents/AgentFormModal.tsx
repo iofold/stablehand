@@ -19,6 +19,7 @@ import {
   serializeManifestYAML,
   validateManifest,
 } from '@ctxmill/manifest';
+import { harnessLabel } from '@/lib/harness';
 
 interface AgentFormModalProps {
   open: boolean;
@@ -440,7 +441,7 @@ export function AgentFormModal({ open, onClose, agent }: AgentFormModalProps) {
             >
               {CTXMILL_HARNESS_NAMES.map((option) => (
                 <option key={option} value={option}>
-                  {option}
+                  {harnessLabel(option)}
                 </option>
               ))}
             </select>

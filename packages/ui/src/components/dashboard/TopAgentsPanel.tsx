@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { AnalyticsAgentActivity } from '@ctxmill/contracts';
 import { formatCompactNumber } from '@/lib/format';
+import { harnessLabel } from '@/lib/harness';
 import { RelativeTime } from '@/components/ui/RelativeTime';
 
 export interface TopAgentsPanelProps {
@@ -42,7 +43,7 @@ export function TopAgentsPanel({ agents, loading, windowLabel }: TopAgentsPanelP
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-surface-200">{agent.name}</div>
                     <div className="text-xs text-surface-500">
-                      {agent.harness}
+                      {harnessLabel(agent.harness)}
                       {agent.lastActivityAt !== null && (
                         <> · <RelativeTime timestamp={agent.lastActivityAt} /></>
                       )}
