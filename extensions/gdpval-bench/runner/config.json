@@ -49,7 +49,7 @@
       "harness": "claude-agents",
       "harnessConfig": {
         "model": "claude-sonnet-5",
-        "maxTurns": 80
+        "maxTurns": 150
       }
     }
   }
