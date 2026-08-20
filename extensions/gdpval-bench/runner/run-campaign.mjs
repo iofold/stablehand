@@ -53,8 +53,11 @@ async function runTask(t, idx) {
   const outDir = join(resultsDir, t.taskId);
   const metaPath = join(outDir, 'meta.json');
   if (existsSync(metaPath)) {
-    const prev = JSON.parse(readFileSync(metaPath, 'utf8'));
-    if (prev.status === 'COMPLETED' && prev.t0?.pass) { console.log(`[${short}] cached, skipping`); return prev; }
+    // Tolerate truncated metas (e.g. written during a disk-full window).
+    try {
+      const prev = JSON.parse(readFileSync(metaPath, 'utf8'));
+      if (prev.status === 'COMPLETED' && prev.t0?.pass) { console.log(`[${short}] cached, skipping`); return prev; }
+    } catch { /* treat as uncached */ }
   }
   mkdirSync(join(outDir, 'deliverables'), { recursive: true });
 
