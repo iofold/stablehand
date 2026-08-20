@@ -40,7 +40,7 @@ export async function artifactRoutes(
 
   const resolveArtifactForRead = async (id: string, boundAgentId: string | null) => {
     const artifact = await repository.getArtifact(id);
-    if (!artifact) return undefined;
+    if (!artifact || artifact.status === 'deleted') return undefined;
     if (!visibleToBound(artifact.agentId, boundAgentId)) return undefined;
     if (artifact.status !== 'pending_upload') {
       return artifact;
@@ -101,7 +101,11 @@ export async function artifactRoutes(
     const { id } = req.params as { id: string };
     const boundAgentId = req.apiPrincipal?.agentId ?? null;
     const artifact = await repository.getArtifact(id);
-    if (!artifact || !visibleToBound(artifact.agentId, boundAgentId)) {
+    if (
+      !artifact
+      || artifact.status === 'deleted'
+      || !visibleToBound(artifact.agentId, boundAgentId)
+    ) {
       return reply.status(404).send({ error: 'Artifact not found' });
     }
     // ctx-iqzy S10: the entity route emits exactly the contract shape.

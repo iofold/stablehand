@@ -15,12 +15,12 @@ type UploadUrlResponse = {
   artifactId: string;
   uploadUrl: string;
   storageKey: string;
-  expiresIn: number;
+  expiresInSec: number;
 };
 
 type DownloadUrlResponse = {
   url: string;
-  expiresIn: number;
+  expiresInSec: number;
   name: string;
   mimeType: string;
   sizeBytes: number;
@@ -34,7 +34,6 @@ type ArtifactRecord = {
   sizeBytes: number;
   storageKey: string;
   status: string;
-  deletedAt: string | null;
   bucket?: string;
 };
 
@@ -78,8 +77,8 @@ async function deleteAgent(agentId: string) {
 
 async function deleteArtifact(artifactId: string) {
   const response = await liveApiFetch(`${ARTIFACTS_BASE}/${artifactId}`, { method: 'DELETE' });
-  expect([200, 404]).toContain(response.status);
-  if (response.status === 200) {
+  expect([204, 404]).toContain(response.status);
+  if (response.status === 204) {
     deletedArtifactIds.add(artifactId);
   }
 }
@@ -132,7 +131,7 @@ describe('Artifact REST API Integration', () => {
 
     expect(data.artifactId).toBeTruthy();
     expect(data.storageKey).toBe(`artifacts/${data.artifactId}/test-upload.txt`);
-    expect(data.expiresIn).toBe(3600);
+    expect(data.expiresInSec).toBe(3600);
 
     const uploadUrl = new URL(data.uploadUrl);
     expect(uploadUrl.host).toBe('localhost:9000');
@@ -214,7 +213,7 @@ describe('Artifact REST API Integration', () => {
     const pendingMetadata: ArtifactRecord = await pendingMetadataResponse.json();
     expect(pendingMetadata.status).toBe('pending_upload');
 
-    const downloadResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}/download-url?expiresIn=120`);
+    const downloadResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}/download-url?expiresInSec=120`);
     expect(downloadResponse.status).toBe(200);
 
     const metadataResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
@@ -230,7 +229,7 @@ describe('Artifact REST API Integration', () => {
     expect(metadata.status).toBe('active');
 
     const downloadData: DownloadUrlResponse = await downloadResponse.json();
-    expect(downloadData.expiresIn).toBe(120);
+    expect(downloadData.expiresInSec).toBe(120);
     expect(downloadData.name).toBe('round-trip.txt');
     expect(downloadData.mimeType).toBe('text/plain');
     expect(downloadData.sizeBytes).toBe(Buffer.byteLength(fileContent));
@@ -256,16 +255,11 @@ describe('Artifact REST API Integration', () => {
       method: 'DELETE',
     });
 
-    expect(deleteResponse.status).toBe(200);
+    expect(deleteResponse.status).toBe(204);
     deletedArtifactIds.add(uploadData.artifactId);
-    expect(await deleteResponse.json()).toEqual({ deleted: true, id: uploadData.artifactId });
 
     const deletedMetadataResponse = await liveApiFetch(`${ARTIFACTS_BASE}/${uploadData.artifactId}`);
-    expect(deletedMetadataResponse.status).toBe(200);
-
-    const deletedMetadata: ArtifactRecord = await deletedMetadataResponse.json();
-    expect(deletedMetadata.status).toBe('deleted');
-    expect(deletedMetadata.id).toBe(uploadData.artifactId);
+    expect(deletedMetadataResponse.status).toBe(404);
   });
 
   it('returns 404 for a missing artifact', async () => {

@@ -314,4 +314,46 @@ describe('artifact routes', () => {
     expect(repository.markArtifactDeleteFailed).toHaveBeenCalledWith('artifact-1');
     expect(repository.deleteArtifact).not.toHaveBeenCalled();
   });
+
+  it('hides deleted tombstones from reads and repeated deletes', async () => {
+    const artifact = {
+      id: 'artifact-1',
+      agentId: 'agent-1',
+      turnId: null,
+      conversationId: null,
+      name: 'report.txt',
+      mimeType: 'text/plain',
+      sizeBytes: 12,
+      storageKey: 'artifacts/artifact-1/report.txt',
+      bucket: 'artifacts',
+      kind: null,
+      metadata: null,
+      sha256: null,
+      status: 'deleted',
+      expiresAt: null,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const repository = {
+      getArtifact: vi.fn().mockResolvedValue(artifact),
+      markArtifactDeleting: vi.fn().mockResolvedValue({ ...artifact, status: 'deleting' }),
+      deleteArtifact: vi.fn().mockResolvedValue(artifact),
+    };
+    const artifactStore = {
+      deleteObject: vi.fn().mockResolvedValue(undefined),
+    };
+    const app = await createApp(repository, artifactStore);
+    apps.push(app);
+
+    const [readResponse, deleteResponse] = await Promise.all([
+      app.inject({ method: 'GET', url: '/api/artifacts/artifact-1' }),
+      app.inject({ method: 'DELETE', url: '/api/artifacts/artifact-1' }),
+    ]);
+
+    expect(readResponse.statusCode).toBe(404);
+    expect(deleteResponse.statusCode).toBe(404);
+    expect(repository.markArtifactDeleting).not.toHaveBeenCalled();
+    expect(repository.deleteArtifact).not.toHaveBeenCalled();
+    expect(artifactStore.deleteObject).not.toHaveBeenCalled();
+  });
 });
