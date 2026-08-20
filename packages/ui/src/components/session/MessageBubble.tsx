@@ -1,6 +1,7 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { cn } from '@/lib/utils';
 import type { Message } from '@/stores/conversation';
 import { FeedbackButtons } from './FeedbackButtons';
@@ -13,6 +14,17 @@ interface MessageBubbleProps {
   conversationId?: string;
 }
 
+const MESSAGE_SANITIZE_SCHEMA = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    span: [
+      ...(defaultSchema.attributes?.span ?? []),
+      ['className', 'hi'],
+    ],
+  },
+};
+
 function messageTime(createdAt: string | number | undefined): { short: string; full: string } | null {
   if (createdAt == null) return null;
   const date = new Date(createdAt);
@@ -21,6 +33,23 @@ function messageTime(createdAt: string | number | undefined): { short: string; f
     short: date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     full: date.toLocaleString(),
   };
+}
+
+function isMultilineNdjson(content: string): boolean {
+  const lines = content
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+
+  if (lines.length < 2) return false;
+
+  return lines.every((line) => {
+    try {
+      const value: unknown = JSON.parse(line);
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
+    } catch {
+      return false;
+    }
+  });
 }
 
 export function MessageBubble({ message, isStreaming, agentId, conversationId }: MessageBubbleProps) {
@@ -103,6 +132,7 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
   const cleanContent = message.content;
 
   const hasTextContent = cleanContent.length > 0;
+  const renderAsNdjson = !isStreaming && isMultilineNdjson(cleanContent);
 
   if (!hasTextContent) return null;
 
@@ -146,11 +176,21 @@ export function MessageBubble({ message, isStreaming, agentId, conversationId }:
             /* Strong/emphasis */
             '[&_strong]:text-surface-100 [&_strong]:font-semibold',
             '[&_em]:text-surface-300',
+            '[&_.hi]:text-accent-300 [&_.hi]:font-medium',
           )}
         >
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
-            {cleanContent}
-          </ReactMarkdown>
+          {renderAsNdjson ? (
+            <pre data-testid="assistant-ndjson-output">
+              <code>{cleanContent}</code>
+            </pre>
+          ) : (
+            <ReactMarkdown
+              remarkPlugins={[[remarkGfm, { singleTilde: false }]]}
+              rehypePlugins={[rehypeRaw, [rehypeSanitize, MESSAGE_SANITIZE_SCHEMA]]}
+            >
+              {cleanContent}
+            </ReactMarkdown>
+          )}
           {isStreaming && (
             <span className="typing-cursor" />
           )}
