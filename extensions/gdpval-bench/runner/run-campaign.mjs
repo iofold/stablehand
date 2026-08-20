@@ -166,11 +166,19 @@ async function runTask(t, idx) {
   return meta;
 }
 
-const results = await mapLimit(tasks, CONFIG.concurrency, (t, i) =>
-  runTask(t, i).catch((err) => {
+const results = await mapLimit(tasks, CONFIG.concurrency, async (t, i) => {
+  try {
+    let r = await runTask(t, i);
+    if (r.status !== 'COMPLETED') {
+      console.log(`[${t.taskId.slice(0, 8)}] retrying once (status ${r.status})`);
+      r = await runTask(t, i);
+    }
+    return r;
+  } catch (err) {
     console.error(`[${t.taskId.slice(0, 8)}] RUNNER ERROR: ${err.message}`);
     return { taskId: t.taskId, status: 'RUNNER_ERROR', error: err.message };
-  }));
+  }
+});
 
 const done = results.filter((r) => r.status === 'COMPLETED').length;
 const t0pass = results.filter((r) => r.t0?.pass).length;
