@@ -29,7 +29,9 @@ async function judgeCall(system, user, schemaName, schema) {
       model: JUDGE_MODEL,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       reasoning_effort: 'low',
-      max_completion_tokens: 4000,
+      // Reasoning tokens count against this cap on chat-completions; rubric
+      // outputs with 20+ items were truncating at 4000 -> JSON parse errors.
+      max_completion_tokens: 16000,
       response_format: {
         type: 'json_schema',
         json_schema: { name: schemaName, strict: true, schema },
@@ -38,7 +40,15 @@ async function judgeCall(system, user, schemaName, schema) {
   });
   if (!res.ok) throw new Error(`judge ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
-  return JSON.parse(data.choices[0].message.content);
+  try {
+    return JSON.parse(data.choices[0].message.content);
+  } catch {
+    throw new Error(`judge returned unparseable content (finish=${data.choices[0].finish_reason})`);
+  }
+}
+
+async function judgeCallRetry(...a) {
+  try { return await judgeCall(...a); } catch { return judgeCall(...a); }
 }
 
 const PAIRWISE_SCHEMA = {
@@ -52,7 +62,7 @@ export async function pairwise(taskPrompt, oursText, goldText, k = 3) {
   for (let i = 0; i < k; i++) {
     const oursFirst = i % 2 === 0;
     const [aText, bText] = oursFirst ? [oursText, goldText] : [goldText, oursText];
-    const out = await judgeCall(
+    const out = await judgeCallRetry(
       `You are an exacting domain expert comparing two candidate deliverables for the same professional assignment. ${UNTRUSTED_NOTE}`,
       `ASSIGNMENT:\n${taskPrompt}\n\n<deliverable_A>\n${aText}\n</deliverable_A>\n\n<deliverable_B>\n${bText}\n</deliverable_B>\n\nWhich deliverable better fulfils the assignment as professional work product? Judge completeness, correctness, and fitness for the stated purpose. Answer A, B, or tie.`,
       'pairwise_verdict', PAIRWISE_SCHEMA,
@@ -84,7 +94,7 @@ export async function rubric(taskPrompt, rubricItems, oursText, k = 3) {
   const itemList = rubricItems.map((r) => `- id=${r.rubric_item_id} [${r.score >= 0 ? '+' : ''}${r.score}] ${r.criterion}`).join('\n');
   const runs = [];
   for (let i = 0; i < k; i++) {
-    runs.push(await judgeCall(
+    runs.push(await judgeCallRetry(
       `You are an exacting grader applying a rubric checklist to a professional deliverable. ${UNTRUSTED_NOTE}`,
       `ASSIGNMENT:\n${taskPrompt}\n\nRUBRIC ITEMS:\n${itemList}\n\n<deliverable>\n${oursText}\n</deliverable>\n\nFor EVERY rubric item id, decide whether the deliverable meets the criterion. Be strict: partially met is not met.`,
       'rubric_verdict', RUBRIC_SCHEMA,
