@@ -42,7 +42,7 @@
     "croner": "10.0.1",
     "dockerode": "^4.0.9",
     "drizzle-orm": "^0.45.2",
-    "fastify": "^5.10.0",
+    "fastify": "^5.12.1",
     "glob": "^11.0.0",
     "postgres": "^3.4.8",
     "tar-stream": "^3.1.8",
