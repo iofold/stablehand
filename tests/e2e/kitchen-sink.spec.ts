@@ -209,7 +209,7 @@ test.describe('Kitchen Sink — Multi-Agent Chain @extended', () => {
   // ── 1. Dashboard shows all 3 agents ────────────────────────
 
   test('dashboard displays all 3 kitchen-sink agents', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?tab=agents');
     await page.waitForLoadState('networkidle');
 
     // Wait for agent cards to render

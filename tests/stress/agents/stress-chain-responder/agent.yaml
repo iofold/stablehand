@@ -22,4 +22,4 @@ spec:
     policy: allow
     names:
       - read
-  mode: interactive
+  mode: both

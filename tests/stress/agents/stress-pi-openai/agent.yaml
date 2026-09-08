@@ -29,4 +29,4 @@ spec:
     names:
       - read
       - bash
-  mode: interactive
+  mode: both

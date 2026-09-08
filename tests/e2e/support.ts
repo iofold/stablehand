@@ -233,8 +233,19 @@ export async function getInterrupts(
 }>> {
   const response = await request.get(`${API_BASE}/api/agents/${agentId}/interrupts`);
   expect(response.ok()).toBeTruthy();
-  const body = await response.json();
-  return body.interrupts ?? [];
+  const body = (await response.json()) as {
+    interrupts?: Array<{ id: string; interruptId?: string } & Record<string, unknown>>;
+  };
+  // ctx-iqzy S2: the entity PK is `id`; keep the helper's `interruptId` view for callers.
+  return (body.interrupts ?? []).map((entry) => ({
+    ...(entry as unknown as {
+      turnId: string;
+      sandboxSessionId?: string;
+      toolName: string;
+      args: Record<string, unknown>;
+    }),
+    interruptId: entry.interruptId ?? entry.id,
+  }));
 }
 
 export async function resolveInterrupt(

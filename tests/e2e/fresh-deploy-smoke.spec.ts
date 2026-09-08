@@ -34,7 +34,7 @@ test.describe('Fresh deploy smoke @extended', () => {
   });
 
   test('dashboard shows the imported smoke agent', async ({ page }) => {
-    await page.goto('/', { waitUntil: 'networkidle' });
+    await page.goto('/?tab=agents', { waitUntil: 'networkidle' });
 
     const agentCard = page.getByTestId('agent-card').filter({
       has: page.getByText(agentName, { exact: true }),

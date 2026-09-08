@@ -54,7 +54,7 @@ test.describe('Required release gate smoke @smoke', () => {
   });
 
   test('dashboard and agent files tab render without strict console errors @smoke', async ({ page }) => {
-    await page.goto('/', { waitUntil: 'networkidle' });
+    await page.goto('/?tab=agents', { waitUntil: 'networkidle' });
 
     const agentCard = page.getByTestId('agent-card').filter({
       has: page.getByText(agentName, { exact: true }),

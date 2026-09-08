@@ -42,7 +42,7 @@ test.describe('Visual regression @extended', () => {
   });
 
   test('dashboard page', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?tab=agents');
     await page.waitForLoadState('networkidle');
 
     const agentCard = page.getByTestId('agent-card').filter({

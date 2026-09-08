@@ -54,7 +54,7 @@ test.describe('Five-Minute Journey (E2E-01) @extended', () => {
     // ---------------------------------------------------------------
     // 1. Dashboard — navigate to root and see agent cards
     // ---------------------------------------------------------------
-    await page.goto('/');
+    await page.goto('/?tab=agents');
     await page.waitForLoadState('networkidle');
 
     const firstCard = page.getByTestId('agent-card').filter({

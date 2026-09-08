@@ -28,4 +28,4 @@ spec:
     policy: deny
     names:
       - execute
-  mode: interactive
+  mode: both

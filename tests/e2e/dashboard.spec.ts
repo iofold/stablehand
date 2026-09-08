@@ -21,7 +21,7 @@ test.describe('Dashboard', () => {
   });
 
   test('renders dashboard with agent cards @smoke', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?tab=agents');
     await page.waitForLoadState('networkidle');
 
     const agentCard = page.getByTestId('agent-card').filter({
@@ -32,7 +32,7 @@ test.describe('Dashboard', () => {
   });
 
   test('clicking agent card navigates to agent detail @extended', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?tab=agents');
     await page.waitForLoadState('networkidle');
 
     const agentCard = page.getByTestId('agent-card').filter({
