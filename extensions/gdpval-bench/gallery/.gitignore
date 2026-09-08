@@ -3,3 +3,5 @@ site/
 verdicts.jsonl
 serve.log
 taskids.txt
+index.html
+files/
