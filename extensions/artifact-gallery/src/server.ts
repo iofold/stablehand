@@ -149,7 +149,9 @@ async function ensureWebhooks(): Promise<void> {
   const known = new Set(index.webhookAgentIds);
   const agentIds = new Set(Object.values(index.entries).map((entry) => entry.agentId));
   for (const agentId of agentIds) {
-    if (known.has(agentId)) continue;
+    // Artifacts uploaded outside an agent turn carry agentId null; there is no
+    // agent to register against, so skip instead of POSTing /agents/null/webhooks.
+    if (!agentId || known.has(agentId)) continue;
     const res = await api(`/api/agents/${agentId}/webhooks`, {
       method: 'POST',
       body: JSON.stringify({
